@@ -72,3 +72,16 @@ def test_a_stage_attempt_killed_before_any_check_is_not_one_of_its_three(rig):
     _dead_attempt(r, "test", ["TS-1"], {})
     out = r.report_and_complete()
     assert out.get("ok") is True and r.state()["stage"] == "deliver", out
+
+
+def test_a_passing_attempt_whose_completion_never_came_does_not_block(rig):
+    """Killed after the last passing check, before stage_complete: the next attempt of
+    the stage supersedes it and the stage completes."""
+    r = rig
+    r.create()
+    r.drive(until="test")
+    r.v1("report-tests", "--artifact", r.artifact("rep", r.report()))
+    _dead_attempt(r, "test", ["TS-1"], {"TS-1": True})
+    out = r.report_and_complete()
+    assert out.get("ok") is True and r.state()["stage"] == "deliver", out
+

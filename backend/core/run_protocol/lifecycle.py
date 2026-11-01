@@ -266,9 +266,18 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         complete = set(previous["results"]) == set(previous["check_ids"]) \
             and all(value is True for value in previous["results"].values())
         # A passing land / RF attempt waits for its land event or the next step; a
-        # new attempt supersedes it. Anything else is genuinely unfinished.
-        if not (complete and previous["stage"] in ("land", "deliver")):
+        # new attempt supersedes it. A passing attempt of another stage whose
+        # stage_complete never came (its process stopped in between) is superseded by
+        # the next attempt of the same stage and not counted as one of its attempts.
+        # Anything else is unfinished (documents.close_interrupted_attempt closes a
+        # half-recorded one first).
+        if not complete:
             raise LifecycleError("previous stage_attempt is incomplete")
+        if previous["stage"] not in ("land", "deliver"):
+            if previous["stage"] != stage:
+                raise LifecycleError("previous stage_attempt is incomplete")
+            run.setdefault("interrupted_attempts", {})[stage] = \
+                run.get("interrupted_attempts", {}).get(stage, 0) + 1
     expected = run["stage_attempts"].get(stage, 0) + 1
     if event["attempt"] != expected:
         raise LifecycleError(f"stage_attempt must be sequential ({expected})")

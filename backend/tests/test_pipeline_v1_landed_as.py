@@ -112,6 +112,8 @@ def test_a_person_confirms_what_the_engine_cannot_show(rig):
                                 at=_now(), ordinal=NEXT,
                                 payload={"commits": {"repo": landed},
                                          "request_id": request["request_id"]})
+    wrong = r.v1("accept-finding", "--request", request["request_id"])
+    assert wrong.get("ok") is False and "not one this command runs" in str(wrong), wrong
     out = r.v1("landed-as", "--request", request["request_id"])
     assert out.get("ok") is True, out
     raw = _run_json(r)

@@ -2214,8 +2214,11 @@ class RunEngine:
         return {"request": request, "path": str(path)}
 
     @_one_operation
-    def execute_authorized_action(self, request_id: str) -> dict[str, Any]:
-        """Consume the person's approval (its ``auth`` event), then perform one action."""
+    def execute_authorized_action(self, request_id: str, *,
+                                  expected_action: str | None = None) -> dict[str, Any]:
+        """Consume the person's approval (its ``auth`` event), then perform one action.
+        *expected_action*: the action the command is for (``landed-as --request`` runs
+        only a confirm_landed request; the other commands never run one)."""
         from core.run_protocol import auth, findings, landing, retention
 
         path = self.run_dir / "artifacts" / "authorized-requests" / f"{request_id}.json"
@@ -2227,6 +2230,10 @@ class RunEngine:
             raise EngineError("authorization request was prepared by another owner session")
         action = request.get("action")
         bindings = request.get("bindings")
+        if expected_action is not None \
+                and (expected_action == "confirm_landed") != (action == "confirm_landed"):
+            raise EngineError(f"request {request_id} is a {action} request, not one this "
+                              "command runs")
         if action == "accept_finding":
             normalized = bindings if isinstance(bindings, Mapping) else {}
             rows = {row["canonical_id"]: row for row in
@@ -2237,8 +2244,18 @@ class RunEngine:
                 raise EngineError("accept-finding request is stale")
         elif action == "confirm_landed":
             normalized = bindings if isinstance(bindings, Mapping) else {}
-            # still abandoned, not recorded, each commit still on its branch
-            self._landed_as_check(normalized.get("commits") or {})
+            # still abandoned, not recorded, each commit still on its branch, and the
+            # engine finds what the person was shown
+            _resolved, problem = self._landed_as_check(normalized.get("commits") or {})
+            if (problem or "the commits carry the reviewed change") \
+                    != normalized.get("engine_check"):
+                raise EngineError("confirm_landed request is stale: the engine's check of "
+                                  "these commits changed since the person was asked; "
+                                  "prepare a new request")
+            if any(row.get("request_id") == request_id
+                   for row in self.projection().get("auth_consumed", {}).values()):
+                # approved and consumed, then the process stopped before recording it
+                return self._record_confirmed_landing(request_id, normalized)
         elif action == "discard_snapshot":
             normalized = bindings if isinstance(bindings, Mapping) else {}
             repo_name = normalized.get("repo_name")
@@ -2266,11 +2283,9 @@ class RunEngine:
             raise EngineError(str(exc)) from exc
         consumed = done["consumed"]
         if action == "confirm_landed":
-            self.store.append_new(
-                writer=self.authority.writer("cli"), kind="landed_as", at=_now(),
-                ordinal=NEXT, payload={"commits": dict(normalized["commits"]),
-                                       "request_id": request_id})
-            self._settle()
+            return {**self._record_confirmed_landing(request_id, normalized),
+                    "auth_event_id": consumed["payload"]["auth_event_id"],
+                    "consumed_event_id": consumed["event_id"]}
         if action == "discard_snapshot":
             retention.discard_snapshot(
                 consumption=done["consumption"], run_id=self.run_id,
@@ -2284,6 +2299,17 @@ class RunEngine:
         return {"auth_event_id": consumed["payload"]["auth_event_id"],
                 "consumed_event_id": consumed["event_id"],
                 "action": action, "state": self.projection()}
+
+    def _record_confirmed_landing(self, request_id: str,
+                                  bindings: Mapping[str, Any]) -> dict[str, Any]:
+        """The landed_as a person confirmed, bound to its consumed request."""
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="landed_as", at=_now(),
+            ordinal=NEXT, payload={"commits": dict(bindings["commits"]),
+                                   "request_id": request_id})
+        self._settle(); self.write_projection()
+        return {"action": "confirm_landed", "landed_as": dict(bindings["commits"]),
+                "state": self.projection()}
 
     WORKTREE_STAGES = frozenset({"plan", "build", "review", "test", "deliver"})
 

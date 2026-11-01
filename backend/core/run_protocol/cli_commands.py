@@ -433,7 +433,8 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         if args.request:
             if args.commits:
                 raise ValueError("landed-as --request takes no commits (the request binds them)")
-            return {"ok": True, **engine.execute_authorized_action(args.request)}
+            return {"ok": True, **engine.execute_authorized_action(
+                args.request, expected_action="confirm_landed")}
         if not args.commits:
             raise ValueError("landed-as needs [REPO=]COMMIT")
         if args.prepare:
@@ -479,7 +480,8 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
                 action=action, target=target, note=args.note)}
         if target or args.note:
             raise ValueError("--request cannot be combined with prepare-only options")
-        return {"ok": True, **engine.execute_authorized_action(args.request)}
+        return {"ok": True, **engine.execute_authorized_action(args.request,
+                                                              expected_action=action)}
     raise ValueError(f"unknown command {args.command}")
 
 
