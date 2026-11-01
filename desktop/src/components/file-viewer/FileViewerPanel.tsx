@@ -29,7 +29,10 @@ import { layoutViewportWidth, clientToCssScale, APP_ZOOM_EVENT } from '../../uti
 export const PANEL_CONSTANTS = {
   DEFAULT_WIDTH: 500,
   MIN_WIDTH: 320,
-  MAX_WIDTH: 900,
+  /** The responsive DEFAULT never opens wider than this (a first open on an ultra-wide
+   *  screen is not a third of it). It is NOT a drag ceiling: dragging and expand go as
+   *  wide as the window allows while chat keeps CHAT_MIN_HEALTHY (availableCanvasMax). */
+  DEFAULT_MAX_WIDTH: 900,
   STORAGE_KEY: 'fileViewerPanelWidth',
   /** Responsive default = this fraction of the viewport width, clamped to MIN/MAX.
    *  Chat stays the majority pane; Canvas is wide enough for decks/tables. This is
@@ -52,8 +55,9 @@ export const PANEL_CONSTANTS = {
 
 /** The viewport-aware ceiling for the Canvas panel width: never so wide that the
  *  chat pane drops below CHAT_MIN_HEALTHY. Subtracts the left sidebar + the chat
- *  reserve + the right gap from the window width, then bounds to [MIN_WIDTH, MAX_WIDTH].
- *  clamp order is `max(MIN_WIDTH, min(MAX_WIDTH, available))` — MIN_WIDTH is the HARD
+ *  reserve + the right gap from the window width, floored at MIN_WIDTH. No fixed px
+ *  ceiling: on a wide screen the Canvas can take everything chat does not need.
+ *  clamp is `max(MIN_WIDTH, available)` — MIN_WIDTH is the HARD
  *  floor (Canvas must stay usable), so on a narrow window (<~962px) the chat reserve
  *  yields and chat gets < CHAT_MIN_HEALTHY. That is deliberate (physical reality); do
  *  NOT assert "chat ≥ CHAT_MIN_HEALTHY unconditionally".
@@ -67,10 +71,7 @@ export function availableCanvasMax(viewportWidth: number): number {
     LAYOUT_CONSTANTS.SHEET_INSET -
     PANEL_CONSTANTS.CHAT_MIN_HEALTHY -
     PANEL_CONSTANTS.RIGHT_GAP;
-  return Math.max(
-    PANEL_CONSTANTS.MIN_WIDTH,
-    Math.min(PANEL_CONSTANTS.MAX_WIDTH, available),
-  );
+  return Math.max(PANEL_CONSTANTS.MIN_WIDTH, available);
 }
 
 /** Clamp a Canvas width (CSS px) to [MIN_WIDTH, live viewport-aware ceiling]. The ONE
@@ -83,16 +84,15 @@ function clampToCeiling(w: number): number {
   );
 }
 
-/** clamp(MIN, fraction×viewport, availableCanvasMax) — the responsive default before
- *  any drag. The ceiling is availableCanvasMax (viewport-aware), NOT raw MAX_WIDTH, so
- *  the default never starves chat. */
+/** clamp(MIN, fraction×viewport, min(DEFAULT_MAX_WIDTH, availableCanvasMax)) — the
+ *  responsive default before any drag: never starves chat, never opens huge. */
 function responsiveDefaultWidth(): number {
   if (typeof window === 'undefined') return PANEL_CONSTANTS.DEFAULT_WIDTH;
   const vw = layoutViewportWidth();
   const raw = Math.round(PANEL_CONSTANTS.DEFAULT_FRACTION * vw);
   return Math.max(
     PANEL_CONSTANTS.MIN_WIDTH,
-    Math.min(availableCanvasMax(vw), raw),
+    Math.min(PANEL_CONSTANTS.DEFAULT_MAX_WIDTH, availableCanvasMax(vw), raw),
   );
 }
 
@@ -233,13 +233,11 @@ function FileViewerPanelImpl({
   }, []);
   const revealWidth = entered ? width : Math.min(PANEL_CONSTANTS.MIN_WIDTH, width);
   // The live drag ceiling (viewport-aware) — exposed as aria-valuemax so a
-  // screen-reader user hears the REACHABLE max, not the raw MAX_WIDTH (which
-  // setLiveWidth's clamp will never let the width reach on a normal window). Read at
-  // render time; refreshes on any re-render (good enough — the panel is not a
-  // frequently-resized target, and it is strictly more honest than a fixed 900).
+  // screen-reader user hears the REACHABLE max. Read at render time; refreshes on any
+  // re-render (good enough — the panel is not a frequently-resized target).
   const dragCeiling =
     typeof window === 'undefined'
-      ? PANEL_CONSTANTS.MAX_WIDTH
+      ? PANEL_CONSTANTS.DEFAULT_MAX_WIDTH
       : availableCanvasMax(layoutViewportWidth());
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
@@ -276,8 +274,7 @@ function FileViewerPanelImpl({
   const toggleExpand = useCallback(() => {
     if (!expanded) {
       preExpandWidthRef.current = width;
-      // Expand snaps to the WIDEST width that still keeps chat healthy, NOT raw
-      // MAX_WIDTH — otherwise "expand for review" starves chat on a normal window.
+      // Expand snaps to the WIDEST width that still keeps chat healthy.
       setWidth(availableCanvasMax(layoutViewportWidth()));
       setExpanded(true);
     } else {
@@ -421,8 +418,8 @@ function FileViewerPanelImpl({
   // panel no longer feeds the count up (that was Gate-1 Defect 3, a second writer).
   const [counts, setCounts] = useState<{ total: number; neu: number; upd: number }>({ total: 0, neu: 0, upd: 0 });
 
-  // Clamp helper — the viewport-aware ceiling (availableCanvasMax, NOT raw
-  // MAX_WIDTH) so a width can never starve chat. The layout width is read LIVE (per
+  // Clamp helper — the viewport-aware ceiling (availableCanvasMax) so a width can
+  // never starve chat. The layout width is read LIVE (per
   // call, never cached) so the ceiling stays correct if the window resizes mid-drag.
   const clampWidth = clampToCeiling;
   // setLiveWidth — the per-FRAME path: update the visual width ONLY, no persist.
@@ -519,8 +516,8 @@ function FileViewerPanelImpl({
   // Responsive default follows the viewport — recompute on window resize, but ONLY
   // when the user has NOT manually sized the panel (no localStorage) — a dragged
   // width is authoritative and immune to resize. Gate-1 CRITICAL fixes:
-  //  · `!expanded`  — expand snaps width to MAX_WIDTH via setWidth (NOT persistWidth,
-  //    so it never persists); recomputing during expand would clobber MAX_WIDTH and
+  //  · `!expanded`  — expand snaps width to the ceiling via setWidth (NOT persistWidth,
+  //    so it never persists); recomputing during expand would clobber it and
   //    leave a stale preExpandWidthRef.
   //  · `entered`    — the mount reveal eases MIN→width via a CSS width transition;
   //    a mid-animation setWidth restarts/janks it.

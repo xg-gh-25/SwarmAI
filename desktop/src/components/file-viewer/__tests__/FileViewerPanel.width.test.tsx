@@ -6,7 +6,7 @@
  * responsive default: first open (no localStorage) = clamp(320, 0.34*innerWidth,
  * 900); a user-dragged width (localStorage present) stays authoritative and is
  * immune to window resize; the resize recompute is gated on (entered && !expanded
- * && no-stored-value) so it never clobbers expand-mode MAX_WIDTH or the reveal
+ * && no-stored-value) so it never clobbers the expand width or the reveal
  * animation (Gate-1 CRITICAL #1/#2).
  *
  * FileViewer + CanvasOutputRail are leaf-stubbed. jsdom window.innerWidth = 1024
@@ -33,13 +33,13 @@ const baseProps = {
   onRevealCanvas: vi.fn(),
 };
 
-const { MIN_WIDTH, MAX_WIDTH, STORAGE_KEY, DEFAULT_FRACTION } = PANEL_CONSTANTS;
+const { MIN_WIDTH, DEFAULT_MAX_WIDTH, STORAGE_KEY, DEFAULT_FRACTION } = PANEL_CONSTANTS;
 // Responsive default the component computes; asserted against the source formula
 // (availableCanvasMax + the constant) so the test tracks the source and can't
 // silently drift. The ceiling is availableCanvasMax(innerW) (viewport-aware, reserves
-// chat), NOT raw MAX_WIDTH — that is the BUG2 fix under test.
+// chat); the default alone also stays under DEFAULT_MAX_WIDTH.
 const respW = (innerW: number) =>
-  Math.max(MIN_WIDTH, Math.min(availableCanvasMax(innerW), Math.round(DEFAULT_FRACTION * innerW)));
+  Math.max(MIN_WIDTH, Math.min(DEFAULT_MAX_WIDTH, availableCanvasMax(innerW), Math.round(DEFAULT_FRACTION * innerW)));
 
 function setInnerWidth(px: number) {
   Object.defineProperty(window, 'innerWidth', { value: px, writable: true, configurable: true });
@@ -73,7 +73,7 @@ describe('FileViewerPanel — responsive default width (run_b2d228f6)', () => {
     const w = panelWidth();
     expect(w).toBe(respW(2000));       // tracks the constant
     expect(w).toBeGreaterThan(MIN_WIDTH);
-    expect(w).toBeLessThan(MAX_WIDTH); // proves this case exercises the mid-range, not a clamp edge
+    expect(w).toBeLessThan(DEFAULT_MAX_WIDTH); // proves this case exercises the mid-range, not a clamp edge
     expect(w).not.toBe(500);           // NOT the old fixed default
   });
 
@@ -83,10 +83,10 @@ describe('FileViewerPanel — responsive default width (run_b2d228f6)', () => {
     expect(panelWidth()).toBe(MIN_WIDTH); // 0.34*640 = 217.6 clamped up to 320
   });
 
-  it('AC1c: ultra-wide clamps to MAX_WIDTH ceiling (DEFAULT_FRACTION*3840 > 900)', () => {
+  it('AC1c: on ultra-wide the DEFAULT opens at DEFAULT_MAX_WIDTH (DEFAULT_FRACTION*3840 > 900)', () => {
     setInnerWidth(3840);
     render(<FileViewerPanel {...baseProps} />);
-    expect(panelWidth()).toBe(MAX_WIDTH); // 0.34*3840 = 1305.6 clamped down to 900
+    expect(panelWidth()).toBe(DEFAULT_MAX_WIDTH); // 0.34*3840 = 1305.6, the default opens at 900
   });
 
   it('AC2: a stored (user-dragged) width is used verbatim, ignoring the responsive default', () => {
@@ -118,10 +118,10 @@ describe('FileViewerPanel — responsive default width (run_b2d228f6)', () => {
   });
 
   // ── BUG2 fix: viewport-aware ceiling reserves chat width ───────────────────
-  it('AC4: the width ceiling is availableCanvasMax (viewport-aware), NOT raw MAX_WIDTH', () => {
+  it('AC4: the width ceiling is availableCanvasMax (viewport-aware)', () => {
     // At 1000px the fraction (0.34*1000=340) is what wins for the DEFAULT — but the
-    // POINT under test is the ceiling itself: availableCanvasMax(1000)=352 < MAX_WIDTH
-    // 900. The panel can never reach MAX_WIDTH here (that would leave chat 1000-150-900-12
+    // POINT under test is the ceiling itself: availableCanvasMax(1000)=352 < DEFAULT_MAX_WIDTH
+    // 900. The panel can never reach 900 here (that would leave chat 1000-150-900-12
     // = -62). The stored/drag paths (AC4b, DRAG-clamped) are where the ceiling BINDS a
     // too-wide request; this case pins the default + the ceiling's value.
     setInnerWidth(1000);
@@ -129,7 +129,7 @@ describe('FileViewerPanel — responsive default width (run_b2d228f6)', () => {
     expect(panelWidth()).toBe(respW(1000)); // default (fraction wins at 1000)
     expect(panelWidth()).toBeLessThanOrEqual(availableCanvasMax(1000));
     expect(availableCanvasMax(1000)).toBe(352);
-    expect(availableCanvasMax(1000)).toBeLessThan(MAX_WIDTH); // ceiling < raw MAX
+    expect(availableCanvasMax(1000)).toBeLessThan(DEFAULT_MAX_WIDTH);
   });
 
   it('AC4b: a stored width WIDER than currently fits is clamped DOWN to availableCanvasMax at read time (Finding 2)', () => {
@@ -144,9 +144,23 @@ describe('FileViewerPanel — responsive default width (run_b2d228f6)', () => {
 
   it('AC4c: on a wide window the stored width IS honored verbatim (clamp is a ceiling, not a rewrite)', () => {
     localStorage.setItem(STORAGE_KEY, '720');
-    setInnerWidth(2000); // avail = 2000-150-480-12 = 900 (MAX_WIDTH) → 720 fits, honored
+    setInnerWidth(2000); // avail = 2000-150-6-480-12 → 720 fits, honored
     render(<FileViewerPanel {...baseProps} />);
     expect(panelWidth()).toBe(720);
+  });
+
+  it('AC4e: on a wide screen a drag and a stored width go past 900: the only ceiling keeps chat healthy', () => {
+    localStorage.setItem(STORAGE_KEY, '1500');
+    setInnerWidth(2560);
+    render(<FileViewerPanel {...baseProps} />);
+    expect(availableCanvasMax(2560)).toBeGreaterThan(1500);
+    expect(panelWidth()).toBe(1500);                       // a stored wide width is honored
+    const handle = screen.getByTestId('panel-resize-handle');
+    fireEvent.mouseDown(handle, { clientX: 2000 });
+    fireEvent.mouseMove(document, { clientX: 0 });         // drag far left
+    fireEvent.mouseUp(document);
+    expect(panelWidth()).toBe(availableCanvasMax(2560));   // as wide as chat allows
+    expect(2560 - panelWidth()).toBeGreaterThanOrEqual(PANEL_CONSTANTS.CHAT_MIN_HEALTHY);
   });
 
   it('AC4d: MIN_WIDTH is the hard floor — a tiny window yields chat below CHAT_MIN_HEALTHY (physical reality)', () => {
