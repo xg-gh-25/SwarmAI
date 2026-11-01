@@ -474,7 +474,7 @@ MEMORY.md is the curated long-term memory file:
 - **Distillation**: Primary: code-driven via `DistillationTriggerHook` (regex extraction at session close). Fallback: flag file triggers agent `s_memory-distill` skill at next session start
 - **DailyActivity extraction**: Code-enforced via `DailyActivityExtractionHook` at session close (rule-based `SummarizationPipeline`, no LLM)
 - **DailyActivity loading**: Last 2 files by filename date (handles weekend gaps), ephemeral, 2K token cap per file
-- **One-click save**: `POST /api/memory/save-session` → LLM extraction via `memory_extractor.py` (Bedrock Sonnet)
+- **One-click save**: removed 2026-11-01 (button and `POST /api/memory/save-session`): CDF reads every session at its end.
 - **Auto-commit**: `WorkspaceAutoCommitHook` at session close with smart conventional commit messages (replaced per-turn commits)
 
 ### 5.7.1 Session Lifecycle Hooks (Code-Enforced Memory Pipeline)

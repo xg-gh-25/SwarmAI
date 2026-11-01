@@ -18,11 +18,12 @@
  * - Streaming uses the established two-level status design: header pulse for the
  *   message state, and the tail bee for activity/rest; no third progress signal.
  * - min-w-0 overflow constraint on content (prevents flex overflow)
- * - Save-to-Memory button on the last assistant message (hover-to-reveal,
- *   next to the Copy button) with per-session status tracking
- * - Compact Context button on the last assistant message (hover-to-reveal,
- *   after Save-to-Memory) — conditionally visible when contextWarning
- *   level is 'warn' or 'critical', with urgency coloring at critical level
+ * - Copy button, and a Compact Context button on the last assistant message
+ *   (hover-to-reveal) when contextWarning level is 'warn' or 'critical', with
+ *   urgency coloring at critical level. Continue is on the last message's error
+ *   card only (an interrupted or failed turn).
+ * - The ending waits while the session's background agents still run
+ *   (`waitingOnAgents`): their results come back into the turn first.
  *
  * Content and header share the flexible column beside the compact 24px avatar.
  *
@@ -59,9 +60,7 @@ import { AssistantHeader } from './AssistantHeader';
 import { StreamingBee } from './StreamingBee';
 import { CompactChip, compactRunningLabel } from './CompactNotice';
 import { toCompactionInfo } from '../compaction';
-import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
-import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { isOt01DiagEnabled } from '../../../utils/diagFlags';
 import { useLinger } from '../../../hooks/useLinger';
@@ -194,7 +193,7 @@ export interface AssistantMessageViewProps {
   /** The context compactions of this turn (TabView): a running one is the bee's line
    *  while the turn streams; each is otherwise one quiet line under the turn. */
   compactions?: Message[];
-  /** The current session ID for the save API call */
+  /** The current session ID (Compact) */
   sessionId?: string;
   /** Whether this is the last assistant message in the session */
   isLastAssistant?: boolean;
@@ -207,22 +206,18 @@ export interface AssistantMessageViewProps {
   headerLive?: boolean;
   /** Context warning from the backend context monitor (per-session, display mirror) */
   contextWarning?: ContextWarning | null;
-  /** Callback to send a continuation prompt when model stopped prematurely */
+  /** Background agents of this session still run and this is the last assistant
+   *  message: the turn's end has not come back yet, so its ending (RESULT, cards,
+   *  next steps, Copy / Compact) waits (TabView, backgroundAgentsStore). */
+  waitingOnAgents?: boolean;
+  /** Send a continuation prompt: offered on the last message's error card only (an
+   *  interrupted or failed turn), never under a normal answer. */
   onContinue?: () => void;
   /** Callback for a terminal error whose existing action can be retried. */
   onRetryError?: () => void;
   /** Read-only render (History preview) — forces interactive blocks inert. */
   readOnly?: boolean;
 }
-
-/** Map of memory save status to Material Symbols icon names. */
-const MEMORY_ICON_MAP: Record<MemorySaveStatus, string> = {
-  idle: 'neurology',
-  loading: 'progress_activity',
-  saved: 'check_circle',
-  empty: 'neurology',
-  error: 'error',
-};
 
 export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   message,
@@ -240,6 +235,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   afterSteer = false,
   headerLive = false,
   contextWarning,
+  waitingOnAgents = false,
   onContinue,
   onRetryError,
   readOnly,
@@ -257,7 +253,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // The turn's ONE ending clock: when it turns false, the WORKING fold, the RESULT
   // and every ending card land in the same frame, instead of one jump per timer.
   const settling = useLinger(!!isStreaming);
-  const ended = !settling;
+  // Background agents still running: the stream ended, the turn did not.
+  const ended = !settling && !waitingOnAgents;
   const chooseProcess = useCallback((id: string, open: boolean) => {
     setProcessChoice((prev) => new Map(prev).set(id, open));
   }, []);
@@ -271,11 +268,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     noteTimerRef.current = setTimeout(() => setActionNote(null), 4000);
   }, []);
   useEffect(() => () => { if (noteTimerRef.current) clearTimeout(noteTimerRef.current); }, []);
-
-  // Per-session memory save state
-  const { statusMap, toastMap, save: saveMemory, reset: resetMemory } = useMemorySave();
-  const memorySaveStatus: MemorySaveStatus = sessionId ? (statusMap[sessionId] || 'idle') : 'idle';
-  const memoryToastMessage = sessionId ? (toastMap[sessionId] || null) : null;
 
   // Compact button local state
   const [compactStatus, setCompactStatus] = useState<'idle' | 'loading' | 'done'>('idle');
@@ -336,20 +328,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [extractMessageText]);
-
-  const handleSaveMemory = useCallback(() => {
-    if (sessionId && memorySaveStatus !== 'loading') {
-      saveMemory(sessionId);
-    }
-  }, [sessionId, memorySaveStatus, saveMemory]);
-
-  // Show the memory-save result under this message when it completes.
-  useEffect(() => {
-    if (!isLastAssistant || !sessionId || !memoryToastMessage) return;
-    const severity = memorySaveStatus === 'saved' ? 'success' : memorySaveStatus === 'error' ? 'error' : 'info';
-    showNote(severity, memoryToastMessage);
-    resetMemory(sessionId);
-  }, [memoryToastMessage, isLastAssistant, sessionId, memorySaveStatus, showNote, resetMemory]);
 
   // Compact button visibility: only on last assistant, not streaming, with active warning
   const showCompactButton = isLastAssistant
@@ -544,15 +522,13 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             retryAfter: (message as Message & { retryAfter?: number }).retryAfter,
           }}
           onRetry={errorCode === 'QUEUE_TIMEOUT' ? onRetryError : undefined}
+          onContinue={isLastAssistant ? onContinue : undefined}
         />
       </div>,
     );
   }
 
   const copiedLabel = tf(t, 'chat.message.copied', 'Copied!');
-  const saveTitle = tf(t, 'chat.message.saveTitle', 'Save to Memory');
-  const savedLabel = tf(t, 'chat.message.saved', 'Saved!');
-  const savingLabel = tf(t, 'chat.message.saving', 'Saving...');
 
   return (
     <ReadOnlyContext.Provider value={!!readOnly}>
@@ -598,9 +574,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           Only on the latest successful answer (older or interrupted suggestions are stale). */}
       {!readOnly && ending && !message.isError && isLastAssistant && <NextSteps steps={view.nextSteps} />}
 
-      {/* Action buttons — appear on hover below content, hidden while streaming.
-          Hidden entirely in read-only (History preview) — Copy/Save/Compact/
-          Continue are all side-effecting controls that don't belong there. */}
+      {/* Action buttons — appear on hover below content, hidden until the turn ends
+          (stream done and no background agent of this turn still running). Hidden
+          entirely in read-only (History preview). Continue lives on the error card. */}
       {!readOnly && ended && allText.length > 0 && (
         <div className="opacity-0 group-hover/msg:opacity-100 transition-opacity mt-1 flex items-center gap-2">
           {/* Copy button (unchanged) */}
@@ -615,34 +591,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             </span>
             {copied ? copiedLabel : tf(t, 'chat.message.copy', 'Copy')}
           </button>
-
-          {/* Save to Memory button — only on last assistant message */}
-          {isLastAssistant && sessionId && (
-            <button
-              type="button"
-              onClick={handleSaveMemory}
-              disabled={memorySaveStatus === 'loading'}
-              className={clsx(
-                'btn-sm transition-colors hover:bg-[var(--color-hover)]',
-                memorySaveStatus === 'saved'
-                  ? 'text-green-500 hover:text-green-400'
-                  : memorySaveStatus === 'error'
-                    ? 'text-red-500 hover:text-red-400'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
-                memorySaveStatus === 'loading' && 'opacity-50 cursor-not-allowed'
-              )}
-              title={memorySaveStatus === 'saved' ? savedLabel : memorySaveStatus === 'loading' ? savingLabel : saveTitle}
-              aria-label={saveTitle}
-            >
-              <span className={clsx(
-                'material-symbols-outlined icon-xs',
-                memorySaveStatus === 'loading' && 'animate-spin'
-              )}>
-                {MEMORY_ICON_MAP[memorySaveStatus]}
-              </span>
-              {memorySaveStatus === 'saved' ? savedLabel : memorySaveStatus === 'loading' ? savingLabel : tf(t, 'chat.message.save', 'Save')}
-            </button>
-          )}
 
           {/* Compact Context button — only when context warning is active */}
           {showCompactButton && (
@@ -676,27 +624,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
             </button>
           )}
 
-          {/* Continue button — allows user to request continuation when model stopped prematurely.
-              Only shown on the last assistant message when not an error. */}
-          {isLastAssistant && onContinue && !message.isError && (
-            <button
-              type="button"
-              onClick={onContinue}
-              className="btn-sm btn-ghost transition-colors"
-              title={tf(t, 'chat.message.continueTitle', 'Continue — ask {{name}} to continue its response', { name: ASSISTANT_NAME })}
-              aria-label={tf(t, 'chat.message.continueAria', 'Continue response')}
-              data-testid="continue-button"
-            >
-              <span className="material-symbols-outlined icon-xs">
-                play_arrow
-              </span>
-              {tf(t, 'chat.message.continue', 'Continue')}
-            </button>
-          )}
         </div>
       )}
 
-      {/* Result of this message's Compact / Save action (always visible, not hover-gated). */}
+      {/* Result of this message's Compact action (always visible, not hover-gated). */}
       {actionNote && (
         <div
           role={actionNote.severity === 'error' ? 'alert' : 'status'}

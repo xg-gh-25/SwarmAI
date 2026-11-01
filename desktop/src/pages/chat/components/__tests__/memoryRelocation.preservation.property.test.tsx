@@ -7,7 +7,6 @@
  * Methodology: observation-first — test what the code currently does.
  *
  * Preservation A: Copy button always present on non-streaming assistant messages
- * Preservation B: No Save-to-Memory button in non-last assistant messages
  * Preservation D: Streaming hides action buttons
  *
  * **Validates: Requirements 3.1, 3.2, 3.5, 3.6**
@@ -85,35 +84,6 @@ describe('Preservation Property Tests — Memory Save Button Relocation', () => 
         const copyBtn = screen.getByTitle('Copy message');
         expect(copyBtn).toBeDefined();
         expect(copyBtn.textContent).toContain('Copy');
-
-        unmount();
-      }),
-      { numRuns: 50 },
-    );
-  });
-
-  /**
-   * Preservation B: No Save-to-Memory button in non-last assistant messages
-   *
-   * For any assistant message rendered WITHOUT isLastAssistant=true, there
-   * should be no "Save to Memory" button. On unfixed code, AssistantMessageView
-   * never has a save button, so this passes trivially. After the fix, this
-   * ensures non-last messages still don't show the save button.
-   *
-   * **Validates: Requirements 3.1**
-   */
-  it('Preservation B: No Save-to-Memory button on non-last assistant messages', () => {
-    fc.assert(
-      fc.property(messageTextArb, fc.boolean(), (text, isStreaming) => {
-        const msg = makeAssistantMessage(text);
-        // Render without isLastAssistant (or with isLastAssistant=false)
-        const { unmount } = render(
-          <ToastProvider><AssistantMessageView message={msg} isStreaming={isStreaming} /></ToastProvider>,
-        );
-
-        // No Save-to-Memory button should exist
-        const saveBtn = screen.queryByTitle('Save to Memory');
-        expect(saveBtn).toBeNull();
 
         unmount();
       }),

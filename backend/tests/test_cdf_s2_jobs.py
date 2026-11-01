@@ -106,18 +106,6 @@ def test_hook_only_queues(conn, monkeypatch) -> None:
     assert _state(conn, "s9")[0] == "queued"
 
 
-def test_save_to_memory_only_queues(conn, monkeypatch) -> None:
-    from routers import memory
-    recorded = []
-    monkeypatch.setattr("core.session_inputs.record_session_input",
-                        lambda *a, **k: recorded.append(a) or "input:1")
-    response = asyncio.run(memory.save_session_to_memory(
-        memory.SaveSessionRequest(session_id="s7", since_message_idx=0)))
-    assert response.status == "queued" and response.total_saved == 0
-    assert recorded and recorded[0][:3] == ("s7", "user_message", "user")
-    assert _state(conn, "s7")[0] == "queued"
-
-
 def test_transcript_sync_reads_sent_rows_in_order(tmp_path, monkeypatch) -> None:
     from core.ingestion.sources import s2_session
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))

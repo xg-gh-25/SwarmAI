@@ -846,6 +846,7 @@ function TabViewImpl({
                   afterSteer={steerFlags.get(msg.id)?.afterSteer}
                   headerLive={steerFlags.get(msg.id)?.headerLive}
                   contextWarning={idx === lastAssistantIdx ? contextWarning : null}
+                  waitingOnAgents={idx === lastAssistantIdx && bgRunning.length > 0}
                   onCancelQueued={msg.isQueued && tabId ? () => onCancelQueued(tabId, msg.id) : undefined}
                   onRetrySend={msg.sendState === 'failed' && tabId && onRetrySend ? () => onRetrySend(tabId, msg.id) : undefined}
                   onContinue={idx === lastAssistantIdx && !isStreaming ? onContinue : undefined}

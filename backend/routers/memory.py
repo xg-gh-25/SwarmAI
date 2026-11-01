@@ -1,14 +1,14 @@
-"""Memory health, compliance, and one-click save API endpoints.
+"""Memory health and compliance API endpoints.
 
-Exposes DailyActivity extraction metrics, memory pipeline health,
-and LLM-powered session memory extraction for the frontend 🧠 button.
+Exposes DailyActivity extraction metrics and memory pipeline health. (The one-click
+"Save to Memory" endpoint is gone with its button, 2026-11-01: CDF reads every
+session at its end anyway.)
 
 Key public symbols:
 
 - ``router``  — FastAPI APIRouter mounted at ``/api``.
 - ``GET /api/memory-compliance``       — Returns extraction metrics.
 - ``GET /api/memory-health``           — Returns full memory pipeline health.
-- ``POST /api/memory/save-session``    — One-click: record user intent and run S2.
 """
 
 from __future__ import annotations
@@ -17,10 +17,8 @@ import asyncio
 import logging
 from datetime import date
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -133,62 +131,6 @@ async def get_memory_health():
         health["status"] = "error"
 
     return health
-
-
-# ---------------------------------------------------------------------------
-# One-click "Save to Memory" endpoint
-# ---------------------------------------------------------------------------
-
-
-class SaveSessionRequest(BaseModel):
-    """Request body for POST /api/memory/save-session."""
-
-    session_id: str
-    since_message_idx: int = 0
-
-
-class SaveSessionResponse(BaseModel):
-    """Response body for POST /api/memory/save-session."""
-
-    status: str  # "queued" | "error" ("saved" / "empty" no longer sent: S2 runs as a job)
-    entries: dict[str, int] = {}
-    total_saved: int = 0
-    next_message_idx: int = 0
-    message: Optional[str] = None
-
-
-@router.post("/memory/save-session", response_model=SaveSessionResponse)
-async def save_session_to_memory(req: SaveSessionRequest):
-    """Record the button click as user evidence, then run both S2 passes.
-
-    Save to Memory receives no elevated trust. The trusted user-utterance pass and
-    the full-session main pass use the same source and pipeline rules as session end.
-    ``since_message_idx`` remains in the response contract but S2 always reads the
-    complete transcript.
-    """
-    from core.ingestion import s2_jobs
-    from core.session_inputs import record_session_input
-
-    try:
-        await asyncio.to_thread(
-            record_session_input, req.session_id, "user_message", "user",
-            "用户要求保存本会话", ref="save-to-memory")
-        from core.ingestion.sources.s7_review import current_sdk_session_id
-        await asyncio.to_thread(s2_jobs.request, req.session_id, "save_button",
-                                sdk_session_id=current_sdk_session_id(req.session_id))
-    except Exception as exc:
-        logger.error("Save to Memory could not queue session %s: %s",
-                     req.session_id, exc, exc_info=True)
-        return SaveSessionResponse(
-            status="error", entries={}, total_saved=0,
-            next_message_idx=req.since_message_idx,
-            message=f"Could not queue: {type(exc).__name__}. Please try again.")
-    # Extraction runs in the CDF worker (design §12 r16.13); results show in Flow.
-    return SaveSessionResponse(
-        status="queued", entries={}, total_saved=0,
-        next_message_idx=req.since_message_idx,
-        message="Queued: CDF reads this session in the background; see Flow for results.",
-    )
 
 
 @router.get("/recall/coverage")

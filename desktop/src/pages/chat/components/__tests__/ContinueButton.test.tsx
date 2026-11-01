@@ -1,25 +1,15 @@
 /**
- * Tests for the Continue button in AssistantMessageView.
+ * Tests for the Continue button.
  *
- * The Continue button allows users to request continuation when the model
- * issues a premature end_turn mid-response. It appears on the last
- * assistant message when not streaming and not an error.
+ * Continue asks the agent to go on after a turn stopped early, so it is on the last
+ * message's error card (an interrupted or failed turn), never under a normal answer;
+ * a card that has its own fix (sign-in, retry, ...) gets none.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { MessageBubble } from '../MessageBubble';
 import type { Message } from '../../../../types';
-
-// Mock dependencies that AssistantMessageView imports
-vi.mock('../../../../hooks/useMemorySave', () => ({
-  useMemorySave: () => ({
-    statusMap: {},
-    toastMap: {},
-    save: vi.fn(),
-    reset: vi.fn(),
-  }),
-}));
 
 vi.mock('../../../../services/chat', () => ({
   chatService: { compactContext: vi.fn() },
@@ -48,89 +38,56 @@ const mockErrorMessage: Message = {
 };
 
 describe('Continue Button', () => {
-  it('renders Continue button on last assistant message when onContinue provided', () => {
-    const onContinue = vi.fn();
-    render(
-      <MessageBubble
-        message={mockAssistantMessage}
-        isLastAssistant={true}
-        isStreaming={false}
-        onContinue={onContinue}
-      />
-    );
-
-    const button = screen.getByTestId('continue-button');
-    expect(button).toBeDefined();
-    expect(button.textContent).toContain('Continue');
+  it('is not under a normal answer, even on the last message', () => {
+    render(<MessageBubble message={mockAssistantMessage} isLastAssistant isStreaming={false}
+                          onContinue={vi.fn()} />);
+    expect(screen.queryByTestId('continue-button')).toBeNull();
   });
 
-  it('calls onContinue when clicked', () => {
+  it('is on the last message\'s interrupted card and sends continue', () => {
     const onContinue = vi.fn();
-    render(
-      <MessageBubble
-        message={mockAssistantMessage}
-        isLastAssistant={true}
-        isStreaming={false}
-        onContinue={onContinue}
-      />
-    );
-
+    render(<MessageBubble message={mockErrorMessage} isLastAssistant isStreaming={false}
+                          onContinue={onContinue} />);
     const button = screen.getByTestId('continue-button');
+    expect(button.textContent).toContain('Continue');
     fireEvent.click(button);
     expect(onContinue).toHaveBeenCalledOnce();
   });
 
-  it('does NOT render when streaming', () => {
-    const onContinue = vi.fn();
-    render(
-      <MessageBubble
-        message={mockAssistantMessage}
-        isLastAssistant={true}
-        isStreaming={true}
-        onContinue={onContinue}
-      />
-    );
+  it('is on a timeout card too', () => {
+    render(<MessageBubble message={{ ...mockErrorMessage, errorCode: 'AGENT_TIMEOUT' }}
+                          isLastAssistant isStreaming={false} onContinue={vi.fn()} />);
+    expect(screen.getByTestId('continue-button')).toBeDefined();
+  });
 
+  it('is not on a card that has its own fix', () => {
+    for (const code of ['CREDENTIALS_EXPIRED', 'ACCOUNT_NOT_CONNECTED', 'QUEUE_TIMEOUT',
+                        'RATE_LIMIT_EXCEEDED', 'SERVICE_UNAVAILABLE']) {
+      const { unmount } = render(
+        <MessageBubble message={{ ...mockErrorMessage, errorCode: code }} isLastAssistant
+                       isStreaming={false} onContinue={vi.fn()} />);
+      expect(screen.queryByTestId('continue-button'), code).toBeNull();
+      unmount();
+    }
+  });
+
+  it('is not on an older message\'s error card', () => {
+    render(<MessageBubble message={mockErrorMessage} isLastAssistant={false} isStreaming={false}
+                          onContinue={vi.fn()} />);
     expect(screen.queryByTestId('continue-button')).toBeNull();
   });
 
-  it('does NOT render when message is an error', () => {
-    const onContinue = vi.fn();
-    render(
-      <MessageBubble
-        message={mockErrorMessage}
-        isLastAssistant={true}
-        isStreaming={false}
-        onContinue={onContinue}
-      />
-    );
-
+  it('is not shown without onContinue', () => {
+    render(<MessageBubble message={mockErrorMessage} isLastAssistant isStreaming={false} />);
     expect(screen.queryByTestId('continue-button')).toBeNull();
   });
+});
 
-  it('does NOT render when not the last assistant message', () => {
-    const onContinue = vi.fn();
-    render(
-      <MessageBubble
-        message={mockAssistantMessage}
-        isLastAssistant={false}
-        isStreaming={false}
-        onContinue={onContinue}
-      />
-    );
-
-    expect(screen.queryByTestId('continue-button')).toBeNull();
-  });
-
-  it('does NOT render when onContinue is not provided', () => {
-    render(
-      <MessageBubble
-        message={mockAssistantMessage}
-        isLastAssistant={true}
-        isStreaming={false}
-      />
-    );
-
-    expect(screen.queryByTestId('continue-button')).toBeNull();
+describe('Save to Memory', () => {
+  it('is gone from the action row', () => {
+    render(<MessageBubble message={mockAssistantMessage} isLastAssistant isStreaming={false}
+                          sessionId="s1" onContinue={vi.fn()} />);
+    expect(screen.queryByTitle('Save to Memory')).toBeNull();
+    expect(screen.queryByText('Save')).toBeNull();
   });
 });

@@ -44,11 +44,13 @@ export interface MessageBubbleProps {
   afterSteer?: boolean;
   headerLive?: boolean;
   contextWarning?: ContextWarning | null;
+  /** Background agents still run for this (last) message's session: see AssistantMessageView. */
+  waitingOnAgents?: boolean;
   /** Called when user cancels a queued message. Only relevant for user messages with isQueued=true. */
   onCancelQueued?: () => void;
   /** Re-send a user message the backend never accepted (sendState 'failed'). */
   onRetrySend?: () => void;
-  /** Called when user clicks Continue to request agent continuation */
+  /** Continue on the last message's error card (see AssistantMessageView). */
   onContinue?: () => void;
   /** Called by the assistant's local terminal-error card when retry is available. */
   onRetryError?: () => void;
@@ -73,6 +75,7 @@ function MessageBubbleImpl({
   afterSteer,
   headerLive,
   contextWarning,
+  waitingOnAgents,
   onCancelQueued,
   onRetrySend,
   onContinue,
@@ -108,6 +111,7 @@ function MessageBubbleImpl({
       afterSteer={afterSteer}
       headerLive={headerLive}
       contextWarning={contextWarning}
+      waitingOnAgents={waitingOnAgents}
       onContinue={onContinue}
       onRetryError={onRetryError}
       readOnly={readOnly}

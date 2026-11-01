@@ -6,7 +6,8 @@
  * no turn streams; it goes when they end; another session's agents do not show; a
  * click brings the first running agent's row into view; with no turn running it has a
  * Stop for those agents (onStopBackground), none while a turn streams; and the bee
- * keeps flying while they run with no turn streaming (the tab never looks finished).
+ * keeps flying while they run with no turn streaming (the tab never looks finished);
+ * while one runs the last answer is told to hold its ending (waitingOnAgents).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, act } from '@testing-library/react';
@@ -22,8 +23,9 @@ vi.mock('react-i18next', () => ({
     (typeof d === 'string' ? d.replace('{{count}}', String(o?.count ?? '')) : k) }),
 }));
 vi.mock('../MessageBubble', () => ({
-  MessageBubble: ({ message }: { message: Message }) => (
-    <div data-testid={`bubble-${message.id}`}><div data-agent-id="ag1">agent row</div></div>),
+  MessageBubble: ({ message, waitingOnAgents }: { message: Message; waitingOnAgents?: boolean }) => (
+    <div data-testid={`bubble-${message.id}`} data-waiting={String(!!waitingOnAgents)}>
+      <div data-agent-id="ag1">agent row</div></div>),
 }));
 vi.mock('../WelcomeScreen', () => ({ WelcomeScreen: () => <div data-testid="welcome" /> }));
 vi.mock('../../../../components/chat', () => ({ ChatErrorMessage: () => <div /> }));
@@ -67,6 +69,22 @@ describe('TabView — background agents line', () => {
     expect(focused).toEqual(['ag1']);
     act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'ag1', status: 'completed' }]); });
     expect(queryByTestId('background-agents-line')).toBeNull();
+  });
+
+  it('the last answer waits for its ending while one runs; an older one never does', async () => {
+    messageStoreRegistry.getOrCreate('A').replace([
+      { id: 'a0', role: 'assistant', timestamp: new Date().toISOString(), content: [{ type: 'text', text: 'old' }] },
+      { id: 'u1', role: 'user', timestamp: new Date().toISOString(), content: [{ type: 'text', text: 'go' }] },
+      { id: 'a1', role: 'assistant', timestamp: new Date().toISOString(), content: [{ type: 'text', text: 'started 5' }] },
+    ] as Message[]);
+    const { getByTestId } = render(<TabView {...props} />);
+    await afterActivation();
+    expect(getByTestId('bubble-a1').dataset.waiting).toBe('false');
+    act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'ag1', status: 'running' }]); });
+    expect(getByTestId('bubble-a1').dataset.waiting).toBe('true');
+    expect(getByTestId('bubble-a0').dataset.waiting).toBe('false');
+    act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'ag1', status: 'completed' }]); });
+    expect(getByTestId('bubble-a1').dataset.waiting).toBe('false');
   });
 
   it('does not paint an empty injected placeholder before its first background-finished block', async () => {

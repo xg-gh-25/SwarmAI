@@ -16,6 +16,10 @@
  *                             (the pre-flight's expiry, or a sign-in error mid-turn)
  * - `ACCOUNT_NOT_CONNECTED` — nothing was ever connected: said as it is (not as an
  *                             expiry), with a button to the account page
+ * - any other code (an interrupted turn, a timeout, a failed call) — a Continue button
+ *   when `onContinue` is given (the last message only): the turn stopped early, so
+ *   this is where asking it to go on belongs. A card with its own action above
+ *   (sign-in, connect, retry, rate-limit countdown, service down) gets none.
  *
  * Key exports:
  * - `ChatErrorMessage`      — React component
@@ -26,6 +30,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHealth } from '../../contexts/HealthContext';
 import { fixSignIn, openSettings } from '../common/settingsEvents';
+import { ASSISTANT_NAME } from '../../pages/chat/assistantName';
 
 export interface ChatErrorMessageProps {
   error: {
@@ -37,9 +42,17 @@ export interface ChatErrorMessageProps {
   };
   /** Callback for QUEUE_TIMEOUT retry — re-sends the saved message when a slot opens. */
   onRetry?: () => void;
+  /** Ask the agent to continue (sends "continue"); shown unless the card has its own action. */
+  onContinue?: () => void;
 }
 
-export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
+/** Codes whose card already carries the one action that fixes it: no Continue. */
+const OWN_ACTION_CODES = new Set([
+  'CREDENTIALS_EXPIRED', 'ACCOUNT_NOT_CONNECTED', 'QUEUE_TIMEOUT', 'RATE_LIMIT_EXCEEDED',
+  'SERVICE_UNAVAILABLE',
+]);
+
+export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessageProps) {
   const { t } = useTranslation();
   const { triggerHealthCheck } = useHealth();
 
@@ -144,6 +157,15 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
           className="mt-3 btn-md btn-primary transition-colors"
         >
           ↻ Retry when slot opens
+        </button>
+      )}
+      {onContinue && !(error.code && OWN_ACTION_CODES.has(error.code)) && (
+        <button type="button" onClick={onContinue} data-testid="continue-button"
+          aria-label={t('chat.message.continueAria', 'Continue response')}
+          className="mt-3 btn-md btn-secondary transition-colors"
+          title={t('chat.message.continueTitle', { name: ASSISTANT_NAME, defaultValue: 'Continue — ask {{name}} to continue its response' })}>
+          <span className="material-symbols-outlined icon-xs">play_arrow</span>
+          {t('chat.message.continue', 'Continue')}
         </button>
       )}
     </div>

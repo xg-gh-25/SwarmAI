@@ -368,7 +368,7 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 │  [SDK-MANAGED] Claude SDK remembers everything within the session   │
 │  [USER-TRIGGERED] "save memory" → s_save-memory → locked_write.py  │
 │  [USER-TRIGGERED] "save activity" → s_save-activity → Write tool   │
-│  [USER-TRIGGERED] 🧠 button → POST /api/memory/save-session        │
+│  [USER-TRIGGERED] (🧠 save button removed 2026-11-01)              │
 │       → memory_extractor.py → LLM extraction → locked_write.py     │
 │                                                                     │
 │  No automatic memory writes during session — SDK handles context    │
@@ -436,7 +436,7 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 | EVOLUTION.md loading | `CONTEXT_FILES` P8 → `ContextDirectoryLoader` | No — code-enforced |
 | DailyActivity loading | `_build_system_prompt()` directory scan | No — code-enforced |
 | Resume context injection | `context_injector.build_resume_context()` | No — code-enforced |
-| One-click 🧠 save | `POST /api/memory/save-session` → `memory_extractor.py` | No — backend API |
+| One-click 🧠 save | removed 2026-11-01 (CDF reads every session at its end) | — |
 | User "save memory" | Agent invokes `s_save-memory` skill | Yes — but user-initiated |
 | User "save activity" | Agent invokes `s_save-activity` skill | Yes — but user-initiated |
 
@@ -696,7 +696,7 @@ backend/
 │   ├── distillation_hook.py         # DistillationTriggerHook
 │   └── evolution_maintenance_hook.py# EvolutionMaintenanceHook
 ├── routers/
-│   └── memory.py                    # /api/memory-compliance, /api/memory/save-session
+│   └── memory.py                    # /api/memory-compliance, /api/memory-health
 ├── context/                         # Default templates
 │   ├── SWARMAI.md ... PROJECTS.md   # 11 source file templates + EVOLUTION_CHANGELOG.jsonl
 │   ├── BOOTSTRAP.md                 # First-run onboarding template

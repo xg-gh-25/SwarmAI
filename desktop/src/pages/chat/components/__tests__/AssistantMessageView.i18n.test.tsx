@@ -1,10 +1,10 @@
 /**
  * AssistantMessageView action row × the REAL i18n runtime (no react-i18next mock).
  *
- * What is tested: under zh the Copy / Save / Continue buttons, their titles and
- * aria-labels are Chinese (they were hardcoded English); under en the text is
- * exactly what it was before, so existing label/title queries keep working; the
- * Continue title names the assistant from ASSISTANT_NAME.
+ * What is tested: under zh the Copy button (answer) and the Continue button (error
+ * card of the last message), their titles and aria-labels are Chinese; under en the
+ * text is what it was before; the Continue title names the assistant from
+ * ASSISTANT_NAME.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
@@ -24,9 +24,11 @@ const message: Message = {
   id: 'm1', role: 'assistant', timestamp: new Date().toISOString(), isError: false,
   content: [{ type: 'text', text: 'Done.' }],
 };
+const interrupted: Message = { ...message, id: 'm2', isError: true, content: [] };
 const renderRow = () => render(
   <ToastProvider>
-    <AssistantMessageView message={message} isLastAssistant sessionId="s1" onContinue={() => {}} />
+    <AssistantMessageView message={message} isLastAssistant={false} sessionId="s1" />
+    <AssistantMessageView message={interrupted} isLastAssistant sessionId="s1" onContinue={() => {}} />
   </ToastProvider>,
 );
 
@@ -37,7 +39,6 @@ describe('message action row — localized', () => {
     await act(async () => { await i18n.changeLanguage('zh'); });
     renderRow();
     expect(screen.getByTitle('复制这条回复').textContent).toContain('复制');
-    expect(screen.getByLabelText('存入记忆').textContent).toContain('保存');
     const cont = screen.getByTestId('continue-button');
     expect(cont.getAttribute('aria-label')).toBe('继续回复');
     expect(cont.getAttribute('title')).toBe('继续：让 Swarm 接着回答');
@@ -47,7 +48,6 @@ describe('message action row — localized', () => {
   it('en: the text is what it always was', () => {
     renderRow();
     expect(screen.getByTitle('Copy message').textContent).toContain('Copy');
-    expect(screen.getByLabelText('Save to Memory').textContent).toContain('Save');
     expect(screen.getByTestId('continue-button').getAttribute('aria-label')).toBe('Continue response');
   });
 });
