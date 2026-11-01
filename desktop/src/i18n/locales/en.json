@@ -1823,6 +1823,18 @@
         "steps": "Failed steps {{failed}} / {{total}} · the Judge scores pipeline runs only; a native run shows who stepped in here",
         "host": "answered by the agent"
       },
+      "hostAnswers": {
+        "title": "Answered for you by the agent that dispatched it ({{count}})",
+        "noText": "(the card's text was not kept)",
+        "why": "why: {{why}}",
+        "class": {
+          "question": "a question about the task",
+          "decision": "a pipeline decision",
+          "hive_local": "a command on the Hive",
+          "run_authorization": "a run authorization on the Hive",
+          "unknown": "unknown kind"
+        }
+      },
       "tag": {
         "answer": "Answer the question",
         "awaiting": "Accept · {{what}}"

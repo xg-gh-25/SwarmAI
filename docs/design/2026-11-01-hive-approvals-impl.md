@@ -48,7 +48,7 @@ related: docs/design/2026-10-31-hive-approvals-person-and-host.md · docs/design
 - `swarm_out.answer(..., answered_by)`：面板的路由写 `person`，聊天卡片转交写 `person`，CLI `answer` 写 `host`。
 - `swarm_out_wait_card.answer_as_host(session, dispatch, request, answers, why)`：要求卡是这个会话建的、`dispatched_from == session`（H5）、
   类别在 `HOST_CLASSES`、回答映射到卡上的选项；写 `answered_by: host`，卡上记 `forward: {status: forwarded, by: host, why}`；同时记进这一单的
-  `commands`（"host 处理了 <类别>：<选项>，理由"，H8，面板和交付总结里能看到）。
+  `commands`（类别、卡上问了什么、选了什么、理由，H8）；`/runs/{id}/result` 带 `host_answers`，单子详情的"自主"页逐条列出（2026-11-01 补：最初只写不读）。
 - ops 表加 `ask.answer_host`（调用方 owner_agent，经 CLI）；`run_owner_gate` 照旧拒绝命令里直接调 Swarm Out 的回答路由。
 - CLI `escalate <dispatch> <request> --why`：记一条"host 交上来"，这个等待进 Needs You（阻塞），写明是哪个会话交上来的、为什么。
 - Needs You：host 派的单，"交给人"的类别、已 `escalate` 的、owner 会话已不存在的、host 类别但 10 分钟没人处理的，各成一条，写明归哪个会话；
@@ -111,6 +111,10 @@ pipeline conformance k1–k5、swarm_out 各套件、attention、cdf provenance�
 - pipeline 看板的卡片不显示 `host_decisions`（Swarm Out 的结果里有 `host_handled`）。
 
 ## 5. 不在这次
+
+- **叫醒派单会话（XG 2026-11-01 接受不做）：** 没有按事件叫醒空闲会话的机制，所以 agent 只在它正跟着这一单（`watch`、下一条消息的接续块）
+  时处理等待；派完单就结束这一轮的，等待 10 分钟后进 Needs You，由人答。"agent 替你管"只在它守着的时候成立。
+- **接管：** Swarm Out 没有接管功能，派单会话固定；会话不在了，等待交给人（H5 的"接管以后归新的 owner"没有对应的入口）。
 
 - 设计 §4 第 1 层（Hive 上把外部内容当数据的防注入能力）另起设计；第 2、3 层由本次的结构化回答、`shown_sha256`、类别拒收覆盖。
 - "人签名"（ToDo 69fa7b1c）。

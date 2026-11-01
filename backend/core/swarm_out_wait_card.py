@@ -374,10 +374,14 @@ async def answer_as_host(session: Optional[str], dispatch_id: str, request_id: s
                                    answered_by="host", **kwargs)
         except swarm_out.SwarmOutError as e:
             raise CardError(str(e)) from None
-        pick = kwargs.get("option_id") or kwargs.get("decision") or kwargs.get("answers")
+        # what the person reads afterwards: the card's own words (its first line is the
+        # marker naming the run), and the label picked
+        asked = "\n\n".join(t.split("\n", 1)[1] if "\n" in t else t
+                             for t in (rec.get("questions") or {}).keys())
+        pick = " · ".join(str(v).strip() for v in answers.values()) if isinstance(answers, dict) else ""
         rec["forward"] = {"status": "forwarded", "by": "host", "why": why, "at": _now()}
         _save(rec)
-    swarm_out_actor.record_wait_answer(dispatch_id, session, request_id, cls, pick, why)
+    swarm_out_actor.record_wait_answer(dispatch_id, session, request_id, cls, pick, why, asked=asked)
     logger.info("swarm_out_wait_card: the host answered %s %s (%s)", dispatch_id, request_id, cls)
     return rec["forward"]
 

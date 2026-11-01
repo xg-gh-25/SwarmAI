@@ -141,12 +141,17 @@ def record(dispatch_id: str, a: Actor, command: str) -> None:
     swarm_out_settle._update(dispatch_id, change)
 
 
+#: how much of what was asked a kept answer line holds (the card's text, Hive-written)
+MAX_ASKED_CHARS = 400
+
+
 def record_wait_answer(dispatch_id: str, session: Optional[str], request_id: str,
-                       cls: Optional[str], pick: Any, why: str) -> None:
+                       cls: Optional[str], pick: Any, why: str, asked: str = "") -> None:
     """Keep one line for a wait the dispatching agent answered itself (design
-    2026-10-31-hive-approvals §2.3 H8): which wait, its class, what it picked and why. The
-    panel shows it with the agent's other commands, and the run's summary counts it as
-    handled by the host, never as the person stepping in."""
+    2026-10-31-hive-approvals §2.3 H8): which wait, its class, what was asked, what it
+    picked and why. ``host_answers`` reads them back for the run's autonomy tab, so the
+    person can see afterwards what the agent decided for them; the run's summary counts
+    them as handled by the host, never as the person stepping in."""
     from core import swarm_out_settle
     shown = pick if isinstance(pick, str) else json.dumps(pick, ensure_ascii=False)[:400]
 
@@ -154,12 +159,26 @@ def record_wait_answer(dispatch_id: str, session: Optional[str], request_id: str
         cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
         cmds.append({"by": "agent", "session": session, "command": "answer_wait",
                      "request_id": request_id, "class": cls, "pick": shown, "why": why,
+                     "asked": str(asked or "")[:MAX_ASKED_CHARS],
                      "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         rec["commands"] = cmds[-MAX_COMMANDS:]
     try:
         swarm_out_settle._update(dispatch_id, change)
     except swarm_out_settle.SettleError:
         logging.getLogger(__name__).warning("swarm_out_actor: the answer on %s was not kept", dispatch_id)
+
+
+def host_answers(dispatch_id: str) -> list[dict[str, Any]]:
+    """The waits the dispatching agent answered on this run, oldest first: when, the
+    wait's class, what was asked, what it picked and why (``record_wait_answer``)."""
+    from core import swarm_out_settle
+    try:
+        rec = swarm_out_settle.load(dispatch_id)
+    except swarm_out_settle.SettleError:
+        return []
+    cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
+    return [{k: c.get(k) for k in ("at", "request_id", "class", "asked", "pick", "why")}
+            for c in cmds if isinstance(c, dict) and c.get("command") == "answer_wait"]
 
 
 def _counted(cmds: list) -> int:

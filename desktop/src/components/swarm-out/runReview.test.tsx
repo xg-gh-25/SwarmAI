@@ -494,6 +494,24 @@ describe('the big card', () => {
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
+  it('the autonomy tab lists what the dispatching agent answered for the person, and why', async () => {
+    const base = run('x1', 'awaiting').result!;
+    svc.result.mockResolvedValue({ ...record({ ...base, work: { ...base.work, host_handled: 2 } }), host_answers: [
+      { at: ENDED, request_id: 'q-1', class: 'question', asked: 'Which DB?', pick: 'sqlite', why: 'the task says local only' },
+      { at: ENDED, request_id: 'ap-1', class: 'hive_local', asked: 'chmod 777 /opt/app', pick: 'Approve', why: 'the build needs it' },
+    ] } as never);
+    card(run('x1', 'awaiting'));
+    fireEvent.click(screen.getByTestId('swarm-out-review-tab-autonomy'));
+    const rows = await screen.findAllByTestId('swarm-out-review-host-answer');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('Which DB?');
+    expect(rows[0].textContent).toContain('sqlite');
+    expect(rows[0].textContent).toContain('the task says local only');
+    expect(rows[1].textContent).toContain('a command on the Hive');
+    // listed: the bare count is not shown beside it
+    expect(screen.queryByTestId('swarm-out-review-human-host')).toBeNull();
+  });
+
   it('a refresh that fails says so', async () => {
     svc.result.mockResolvedValue(withFile());
     svc.refresh.mockRejectedValueOnce(new Error('down'));

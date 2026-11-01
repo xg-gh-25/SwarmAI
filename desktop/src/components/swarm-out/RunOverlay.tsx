@@ -34,7 +34,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'r
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { swarmOutService, type SwarmOutAction, type SwarmOutAsk, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAction, type SwarmOutAsk, type SwarmOutHostAnswer, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { Stats } from './LiveDispatches';
 import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { SectionLabel, Tabs } from '../overlay';
@@ -66,8 +66,44 @@ function detailOf(e: unknown, fallback: string): string {
   return m && m.length < 300 ? m : fallback;
 }
 
-/** The autonomy tab: a pipeline run's five Judge rows, else who stepped in and how. */
-function AutonomyTab({ res }: { res: SwarmOutResult | null }) {
+/** What the agent that dispatched the run answered for the person, oldest first: what
+ *  was asked, what it picked and why (design 2026-10-31-hive-approvals H8). Everything
+ *  but the reason was written by the Hive, and is shown as plain text. */
+function HostAnswers({ answers, now }: { answers: SwarmOutHostAnswer[]; now: number }) {
+  const { t } = useTranslation();
+  if (answers.length === 0) return null;
+  return (
+    <div className="mt-6 flex flex-col gap-3" data-testid="swarm-out-review-host-answers">
+      <SectionLabel>{t('swarmOut.review.hostAnswers.title', { count: answers.length })}</SectionLabel>
+      {answers.map((a, i) => (
+        <div key={`${a.request_id ?? ''}-${i}`} className="flex flex-col gap-0.5 text-[12.5px]" data-testid="swarm-out-review-host-answer">
+          <div className="whitespace-pre-wrap line-clamp-3 text-[var(--color-text-secondary)]">{a.asked || t('swarmOut.review.hostAnswers.noText')}</div>
+          <div>
+            <span className="font-semibold">→ {a.pick || '—'}</span>
+            {a.why && <span className={muted}> · {t('swarmOut.review.hostAnswers.why', { why: a.why })}</span>}
+          </div>
+          <div className={`text-[11.5px] ${muted}`}>
+            {t(`swarmOut.review.hostAnswers.class.${a.class ?? 'unknown'}`, { defaultValue: a.class ?? '' })}
+            {a.at ? ` · ${ago(a.at, now)}` : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The autonomy tab: a pipeline run's five Judge rows, else who stepped in and how; then
+ *  what the dispatching agent answered for the person. */
+function AutonomyTab({ res, answers, now }: { res: SwarmOutResult | null; answers: SwarmOutHostAnswer[]; now: number }) {
+  return (
+    <>
+      <AutonomyBody res={res} hostListed={answers.length > 0} />
+      <HostAnswers answers={answers} now={now} />
+    </>
+  );
+}
+
+function AutonomyBody({ res, hostListed }: { res: SwarmOutResult | null; hostListed: boolean }) {
   const { t } = useTranslation();
   if (!res) return <div className={muted}>{t('swarmOut.review.noResult')}</div>;
   const judge = runJudge(res);
@@ -103,8 +139,9 @@ function AutonomyTab({ res }: { res: SwarmOutResult | null }) {
   const cells: [string, number][] = [
     ['approved', h.approved], ['denied', h.denied], ['answered', h.answered_questions],
     ['said', h.said ?? 0], ['unanswered', h.unanswered],
-    // what the dispatching agent answered itself: shown, never counted as the person's
-    ...((res.work.host_handled ?? 0) > 0 ? [['host', res.work.host_handled ?? 0] as [string, number]] : []),
+    // what the dispatching agent answered itself: never counted as the person's; a
+    // count only when its answers are not listed below (an older record)
+    ...(!hostListed && (res.work.host_handled ?? 0) > 0 ? [['host', res.work.host_handled ?? 0] as [string, number]] : []),
   ];
   return (
     <div data-testid="swarm-out-review-autonomy" data-kind="human">
@@ -536,6 +573,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   const [full, setFull] = useState<SwarmOutResult | null>(null);
   const [fullRead, setFullRead] = useState(false);
   const [fullFailed, setFullFailed] = useState(false);
+  const [hostAnswers, setHostAnswers] = useState<SwarmOutHostAnswer[]>([]);
   const [fetchKey, setFetchKey] = useState(0);
   // an answer half given in a wait card: kept like a half-written correction
   const [askDirty, setAskDirty] = useState(false);
@@ -566,8 +604,10 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   keepsRef.current = keeps;
   useEffect(() => {
     let alive = true;
-    setFull(null); setFullRead(false); setFullFailed(false);
-    swarmOutService.result(id).then((rec) => { if (alive) { setFull(rec.record?.result ?? null); setFullRead(true); } })
+    setFull(null); setFullRead(false); setFullFailed(false); setHostAnswers([]);
+    swarmOutService.result(id).then((rec) => {
+      if (alive) { setFull(rec.record?.result ?? null); setHostAnswers(rec.host_answers ?? []); setFullRead(true); }
+    })
       .catch(() => { if (alive) setFullFailed(true); });
     return () => { alive = false; };
   }, [id, endedAt, fetchKey]);
@@ -714,7 +754,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
             <div className="flex-1 md:overflow-auto px-5 py-5" role="tabpanel">
               {tab === 'deliverable' && <DeliverableTab r={r} full={full} fullRead={fullRead} fullFailed={fullFailed} onRetry={() => setFetchKey((k) => k + 1)}
                 waits={waits.length} />}
-              {tab === 'autonomy' && <AutonomyTab res={res} />}
+              {tab === 'autonomy' && <AutonomyTab res={res} answers={hostAnswers} now={now} />}
               {tab === 'process' && (
                 <div className="flex flex-col gap-1 text-[12.5px]" data-testid="swarm-out-review-process">
                   {res ? [...workLines(res), executionLine(res), checksLine(res), gateLine(res)].filter(Boolean).map((l) => <div key={l!}>{l}</div>)

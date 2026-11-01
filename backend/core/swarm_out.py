@@ -1634,10 +1634,12 @@ def _log_row_of(dispatch_id: str) -> dict[str, Any]:
 
 async def run_result(dispatch_id: str) -> dict[str, Any]:
     """The whole kept record of one run (with the reply), for the panel only."""
-    from core import swarm_out_results
+    from core import swarm_out_actor, swarm_out_results
     await asyncio.to_thread(_log_row_of, dispatch_id)
     rec = await asyncio.to_thread(swarm_out_results.load, dispatch_id)
-    return {"dispatch_id": dispatch_id, "record": _shown_checks(rec)}
+    # the waits the dispatching agent answered itself (design 2026-10-31-hive-approvals H8)
+    answers = await asyncio.to_thread(swarm_out_actor.host_answers, dispatch_id)
+    return {"dispatch_id": dispatch_id, "record": _shown_checks(rec), "host_answers": answers}
 
 
 def _shown_checks(rec: Any) -> Any:

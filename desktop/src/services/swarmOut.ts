@@ -206,11 +206,25 @@ export interface SwarmOutLessons {
   digests?: string[];
 }
 
+/** A wait the agent that dispatched the run answered itself (backend
+ *  swarm_out_actor.host_answers): what was asked (the Hive's words, plain text), the
+ *  option it picked and why. */
+export interface SwarmOutHostAnswer {
+  at: string | null;
+  request_id: string | null;
+  class: string | null;
+  asked: string | null;
+  pick: string | null;
+  why: string | null;
+}
+
 /** The whole kept record of one run (GET /swarm-out/runs/{id}/result). */
 export interface SwarmOutResultRecord {
   dispatch_id: string;
   record: { result: SwarmOutResult | null; fetch_error: string | null; checked_at: string | null;
     fetched_at: string | null } | null;
+  /** an older backend sends none */
+  host_answers?: SwarmOutHostAnswer[];
 }
 
 export interface SwarmOutQuestion {

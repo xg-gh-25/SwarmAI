@@ -1823,6 +1823,18 @@
         "steps": "失败步骤 {{failed}} / {{total}} · Judge 只给 pipeline run 打分；native run 看这里的介入明细",
         "host": "agent 代答"
       },
+      "hostAnswers": {
+        "title": "派单的 agent 替你答的（{{count}}）",
+        "noText": "（没有留下卡片原文）",
+        "why": "理由：{{why}}",
+        "class": {
+          "question": "任务里的问题",
+          "decision": "pipeline 的决定",
+          "hive_local": "Hive 上的命令",
+          "run_authorization": "Hive 上 run 的授权",
+          "unknown": "未知类别"
+        }
+      },
       "tag": {
         "answer": "回答问题",
         "awaiting": "验收 · {{what}}"

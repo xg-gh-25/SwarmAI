@@ -30,6 +30,7 @@ import time
 import pytest
 
 from core import approval_class as ac
+from core.swarm_out_actor import record_wait_answer as _REAL_RECORD
 
 # ── H1: the class ───────────────────────────────────────────────────────────
 
@@ -398,7 +399,7 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(swarm_out, "list_runs", list_runs)
     monkeypatch.setattr(swarm_out, "snapshot", lambda: {"runs": [ROW], "asks": asks, "answered": []})
     monkeypatch.setattr(swarm_out, "answer", answer)
-    monkeypatch.setattr(swarm_out_actor, "record_wait_answer", lambda *a: kept.append(a))
+    monkeypatch.setattr(swarm_out_actor, "record_wait_answer", lambda *a, **kw: kept.append(a))
     return sent, kept
 
 
@@ -937,3 +938,20 @@ def test_escalate_matches_the_wait_on_the_runs_own_hive(tmp_path, monkeypatch):
     monkeypatch.setattr(swarm_out, "list_runs", list_runs)
     with pytest.raises(wc.CardError, match="no open wait"):
         asyncio.run(wc.escalate(SESSION, DID, "q-1", "unsure"))
+
+
+
+def test_what_the_agent_answered_is_kept_with_what_was_asked_and_shown_on_the_run(host, tmp_path, monkeypatch):
+    from core import swarm_out, swarm_out_actor, swarm_out_wait_card as wc
+    monkeypatch.setattr(swarm_out_actor, "record_wait_answer", _REAL_RECORD)
+    for rid, pick in (("q-1", "A"), ("ap-1", "Approve")):
+        asyncio.run(wc.card(DID, rid))
+        _host_answer(rid, pick, why="the task says so")
+    kept = swarm_out_actor.host_answers(DID)
+    assert [(k["request_id"], k["class"], k["pick"], k["why"]) for k in kept] == [
+        ("q-1", "question", "A", "the task says so"), ("ap-1", "hive_local", "Approve", "the task says so")]
+    assert kept[0]["asked"] == "How long?"
+    assert "sudo make install" in kept[1]["asked"] and DID not in kept[1]["asked"]   # no marker line
+    monkeypatch.setattr(swarm_out, "_log_row_of", lambda d: ROW)
+    out = asyncio.run(swarm_out.run_result(DID))
+    assert out["host_answers"] == kept

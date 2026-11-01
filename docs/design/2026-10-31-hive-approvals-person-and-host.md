@@ -3,7 +3,7 @@ title: Hive 审批 —— 按责任链：谁派的单，谁负责、谁审批
 created: 2026-10-31
 updated: 2026-11-01
 project: SwarmAI
-status: r2 implemented（2026-11-01，见 2026-11-01-hive-approvals-impl.md）；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
+status: r2 P0–P2 implemented（2026-11-01，见 2026-11-01-hive-approvals-impl.md）；未做：§2.3 叫醒（XG 接受不做，见 impl §5）、§3（Swarm Run 未建）、§4 第 1 层；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
 tags: [swarm-out, hive, approval, host, governance, accountability]
 related:
   - docs/design/2026-10-31-swarm-out-hive-decisions.md（pipeline 决定的快照和回答）
@@ -87,8 +87,8 @@ related:
 - **搞不定才往上：** owner agent 觉得这其实是在问人的意图、或者没把握、或者已经超出它这一单的授权，就 `escalate`，进 Needs You，标明"host <session 标题> 交上来的"。
   超出授权的类别（"交给人"那几类）不经过 owner agent，直接进 Needs You，同样标明是哪个 host session 的单子，因为人问责的对象仍然是那个 host session。
 - **owner session 不在了**（tab 关了、被丢弃）：Conductor 把它的等待交给人，标明原来归谁。接管以后归新的 owner。
-- **向人交代：** host 在 worker 上处理过的每一件事都记下（谁、什么类别、答了什么），进 owner session 的交付总结；Swarm Run 里进 lead run 的 REPORT。人问责 host，
-  host 拿得出账。
+- **向人交代：** host 在 worker 上处理过的每一件事都记下（谁、什么类别、问了什么、答了什么、为什么），进 owner session 的交付总结；Swarm Run 里进 lead run 的 REPORT。人问责 host，
+  host 拿得出账。实现：每次回答记进这一单的结算记录，单子详情的"自主"页逐条列出（`swarm_out_actor.host_answers`）。
 
 ### 2.4 回答的人一路如实记录
 
