@@ -28,6 +28,7 @@
 # Format: one test file per line (relative to backend/), '#' comments ignored.
 
 test_adaptive_timeout.py
+test_app_registry.py  # generated App files match their sources (the backend build refuses stale ones)
 test_bvt_admission.py
 test_code_intel_filter_scope.py  # only a repo-local git filter program stops the callers report
 test_context_brain_health.py
