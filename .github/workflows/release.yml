@@ -143,9 +143,13 @@ jobs:
 
       - name: Build Tauri app
         working-directory: ./desktop
-        run: bash scripts/tauri-build.sh --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        # Linux: linuxdeploy ships an old strip that fails on ubuntu-24.04's libraries
+        # (DT_RELR sections), so it is told not to strip; --verbose keeps its own output
+        # in the log, which tauri otherwise reduces to "failed to run linuxdeploy".
+        run: bash scripts/tauri-build.sh --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} ${{ runner.os == 'Linux' && '--verbose' || '' }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          NO_STRIP: ${{ runner.os == 'Linux' && 'true' || '' }}
 
       # Installer + updater bundle + its minisign .sig, under names unique across targets
       # (both macOS builds would otherwise ship a SwarmAI.app.tar.gz).
