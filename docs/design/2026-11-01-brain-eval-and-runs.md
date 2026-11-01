@@ -3,8 +3,8 @@ title: Brain 只管知识；run 归执行它的地方 — Brain Eval 两个问�
 created: 2026-11-01
 updated: 2026-11-01
 project: SwarmAI
-status: design r4（XG 2026-11-01：Brain 里不放 run；自主度放 Swarm Out / Pipelines；Pipelines overlay 一起改）
-mockup: Knowledge/Designs/mockups/2026-11-01-brain-eval-and-runs.html（工作区内，r4）
+status: design r5（XG 2026-11-01：大卡片用 B；Pipelines 列所有 pipeline run 并标本机 / Hive；统计区可视化，含 run 分布；token 单位 M）
+mockup: Knowledge/Designs/mockups/2026-11-01-brain-eval-and-runs.html（工作区内，r5）
 follows: 2026-10-30-brain-runs-one-card.md, 2026-10-31-swarm-out-run-review.md, 2026-10-31-cdf-health.md
 ---
 # Brain 只管知识；run 归执行它的地方
@@ -91,7 +91,36 @@ Pipelines、Swarm Out、audit 的 Autonomy 一维都用它。
 **放在哪**：Pipelines 和 Swarm Out 的标题行各一句：`30 天 · 结束 N 个 · 没人插手 M 个 ·
 平均插手 x 次`；每一行有自主度一个词（全自主 / 插手 N 次）；大卡片的自主度 tab 列逐次明细。
 
-## 4. Pipelines overlay：Swarm Out 的列表 + 大卡片
+## 4. Pipelines overlay：统计区 + Swarm Out 的列表 + 大卡片
+
+Pipelines 列**所有 pipeline run，不管在哪跑**：本机的（`run.json`）和 Hive 上跑的（Swarm Out 的
+run 里 `result.pipeline.run_id` 非空的那些；Hive 上的 native run 不在这里，在 Swarm Out）。
+Hive 的 pipeline run 两边都有：Swarm Out 管派单和收单，Pipelines 看所有 pipeline 的结果。
+
+### 4.0 统计区（r5，XG：可视化、含 run 分布、token 单位 M）
+
+一个筛选行放在最上面（全部 / 本机 / Hive · Brain ▾），统计区和下面的列表都跟着它变。
+
+- **Run 分布**：大数 Total，下面两行 本机 N（占比）、Hive N（占比 · 各 Hive 名和数）；右边一张按天
+  （数据满 14 天后按周）的堆叠柱，本机 / Hive 两色。配色用 dataviz 的分类色第 1、2 位（深色底
+  `#111318` 上校验全过：本机 `#3987e5`，Hive `#d95926`），列表行里的位置标签用同一个颜色。
+- **五个指标**，一行，每个一个大数 + 一句和什么比（有上一期才比；不到 3 周不画趋势，只写"自 <日期>
+  起"）：
+
+| 指标 | 大数 | 小字 | 点开的下钻图 |
+|---|---|---|---|
+| 交付了吗 | 交付 / 总数（%）：本机落地 + 手工落地 + Hive 通过 | 落地 · 手工落地 · 没落地 · 丢弃 | 每天的结局堆叠 |
+| 自主吗 | 没人插手的个数 / 已结束 | 平均插手几次 | 插手按回答 / 纠偏 / 救场堆叠（分类色 1–3，校验全过） |
+| 质量稳吗 | 有 BLOCK 的 run 数 | 哪几维 BLOCK（状态色 + ⚠ 图标 + 文字） | 五维 × PASS / WARN / BLOCK 矩阵 |
+| 快吗 | 中位时长（分钟） | P90 · 统计了几个 | 每个 run 一个点，按 profile 分行，竖线是中位 |
+| 贵吗 | 每次交付的 token（M） | 总 token（M）· 花费 $（有记录的 n / N，没有就写"没记录"） | 每个 run 的 token 柱，标出最贵的 |
+
+- token 一律以 M 显示（`684M`、`0.4M`），不显示 k 或原始数。时长用中位数不用平均（一个跑了几小时的
+  run 会把平均拉歪）；花费按"每次交付"算，没交付的花费也算进去。
+- 每张下钻图的点 / 柱点了打开那个 run 的大卡片；hover 显示那个 run 的标题和数（dataviz 的交互层）。
+- 2026-11-01 实数（mockup 用的）：12 个 run（本机 8，Hive 4：demo 3、explorer 1）；交付 9 / 12；
+  有 BLOCK 的 2 个（run_3fe60e51 Speed，run_8a1af4d4 Quality + Speed）；本机中位 42 分钟、最长
+  116 分钟；本机 token 共 684M，每次交付 114M；`cost_usd` 一个都没记录。
 
 ### 4.1 列表
 
@@ -102,8 +131,10 @@ Pipelines、Swarm Out、audit 的 Autonomy 一维都用它。
 - 分区：**等你**（等你回答 > 待你确认 > 停住了，按等了多久）永远在上面；**在跑**；**最近完成**
   （默认折叠，分页）。"Needs you" 就是"等你"分区的行数（今天的格子和置顶区已经是同一个定义，
   `needs_you`，只是字段名叫 `aborted_count`，`routers/pipelines.py:402`；顺手改名）。
-- 一行：状态点 · 标题（一行截断）· Brain · profile · 自主度一个词 · 要你做的事（一个动词标签）·
-  等了多久 · 常驻"打开会话 ↗"。时长、token、步骤不在行里（去大卡片）。
+- 一行：状态点 · 标题（一行截断）· **位置（本机 / Hive 名，和分布图同色）** · Brain · profile ·
+  自主度一个词 · 要你做的事（一个动词标签）· 等了多久 · 常驻"打开会话 ↗"。时长、token、步骤不在
+  行里（去大卡片）。
+- 点一行：本机 run 打开 §4.2 的新外壳；Hive run 打开 Swarm Out 的 `RunOverlay`（带 asks 和列表顺序）。
 
 ### 4.2 大卡片（取代 420px 抽屉）
 
@@ -142,7 +173,8 @@ Judge 五维）· 过程（stage 和重跑）· 花费 · 教训（REFLECT lesso
 - CDF health 按（去处, 项目）抽样；`cognition_level.used` 按项目过滤。
 - `GET /api/pipelines/{id}/view`；本机 run 的 `actions` 按状态给（对应 `swarm_out_settle.derive`）；
   人专用的"确认已落地"路由。
-- `GET /api/pipelines/analytics` 的标题行数字（落地、没人插手、平均插手、花费）和"等你"的排序。
+- `GET /api/pipelines/analytics` 扩成统计区要的数：分布（按天 / 周 × 本机 / 各 Hive）、五个指标和
+  它们的下钻序列，合进 Hive 的 pipeline run（读 Swarm Out 的 run 记录），以及"等你"的排序。
 
 ## 7. 不做
 
@@ -166,7 +198,7 @@ Judge 五维）· 过程（stage 和重跑）· 花费 · 教训（REFLECT lesso
 
 ## 9. 要 XG 定的
 
-1. 大卡片用 B？
+1. ~~大卡片用 B~~ 已定（XG r5）。
 2. 这是跨模块的改动（audit 计数、Swarm Out、Pipelines、Brain Hub、CDF health 抽样）：直接改，还是
    走 pipeline？
 
