@@ -172,6 +172,37 @@ class DocumentStore:
         return [str(source), str(rendered)]
 
 
+def close_interrupted_attempt(store: AuditStore, *, at: str) -> bool:
+    """Close a stage attempt a stopped process left open (its checks only half
+    recorded), so the run can go on: every check it did not record gets ``cause:
+    interrupted``, and the fold closes the attempt without counting it as one of the
+    stage's attempts (``lifecycle._failed_stage``). Called by each place that opens an
+    attempt, right before it does, inside the run's operation lock: an attempt still
+    open then belongs to no running operation (the lock is a flock, released when its
+    process dies), and opening a second attempt over it is refused by the fold. True
+    when it closed one."""
+    from core.run_protocol import lifecycle
+    try:
+        state = lifecycle.fold(store.read_events(), store.authority,
+                               allow_pending_transition=True)
+    except lifecycle.LifecycleError:
+        return False        # no run lifecycle in this log (a bare store): nothing to close
+    attempt = state.get("open_attempt")
+    if not attempt or set(attempt["results"]) == set(attempt["check_ids"]):
+        return False                    # nothing open, or complete (a land waits for it)
+    for check_id in attempt["check_ids"]:
+        if check_id not in attempt["results"]:
+            store.append_new(
+                writer=store.authority.writer("cli"), kind="check", at=at,
+                stage=attempt["stage"], attempt=attempt["attempt"],
+                payload={"stage_attempt_event_id": attempt["event_id"],
+                         "check_id": check_id, "passed": False,
+                         "detail": "interrupted: the process running this attempt stopped "
+                                   "before it recorded this check",
+                         "cause": "interrupted"})
+    return True
+
+
 def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str | None,
                    context: checks.CheckContext, at: str, attempt: int,
                    check_ids: list[str] | None = None,
@@ -186,6 +217,7 @@ def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str 
     roster = list(check_ids) if check_ids is not None else [
         spec.check_id for spec in checks.stage_checks(profile, stage, variant)]
     forced = dict(forced or {})
+    close_interrupted_attempt(store, at=at)
     attempt_event, _ = store.append_new(
         writer=store.authority.writer("cli"), kind="stage_attempt", at=at,
         stage=stage, attempt=attempt, payload={"check_ids": roster},

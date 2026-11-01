@@ -103,6 +103,8 @@ def prepare_request(
         raise LandingError(f"--note is limited to {auth.NOTE_MAX} characters")
     guard_ids = (["LG-3", "LG-4"] if action == "land_skip_tests"
                  else ["LG-1", "LG-3", "LG-4"])
+    from core.run_protocol.documents import close_interrupted_attempt
+    close_interrupted_attempt(store, at=at)
     prior_attempts = [event for event in store.read_events()
                       if event.get("kind") == "stage_attempt" and event.get("stage") == "land"]
     attempt_number = len(prior_attempts) + 1

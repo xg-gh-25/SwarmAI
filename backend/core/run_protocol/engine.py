@@ -29,7 +29,7 @@ from core.run_protocol import checks, git_tree, lifecycle, review, validation_re
 from core.run_protocol import answers as answer_protocol
 from core.run_protocol import findings as finding_protocol
 from core.run_protocol.infra import InfrastructureError
-from core.run_protocol.documents import DocumentStore, complete_stage
+from core.run_protocol.documents import DocumentStore, close_interrupted_attempt, complete_stage
 from core.run_protocol.events import EventAuthority
 from core.run_protocol.store import NEXT, AuditStore, StoreError
 
@@ -1899,7 +1899,25 @@ class RunEngine:
         2026-10-31 §3 change 4). Each commit must be in its repo's integration branch
         and carry this run's change: its patch is the one the latest REVIEW completion
         recorded (file by file, ``_patch_paths_changed``; the run's REPORT files aside).
-        Anything else is refused with what differs."""
+        When that cannot be shown (it differs, or the run is older than recorded review
+        bases), it is refused with what the engine found; a person may then confirm it
+        (``prepare_authorized_action("confirm_landed")``)."""
+        resolved, problem = self._landed_as_check(commits)
+        if problem:
+            raise EngineError(problem + "; a person can confirm it instead: landed-as "
+                              "--prepare with the same commits, then landed-as --request "
+                              "<request id> (asks the person)")
+        self.store.append_new(writer=self.authority.writer("cli"), kind="landed_as",
+                              at=_now(), ordinal=NEXT, payload={"commits": resolved})
+        self._settle(); self.write_projection()
+        return {"landed_as": resolved, "state": self.projection()}
+
+    def _landed_as_check(self, commits: Mapping[str, str]) -> tuple[dict[str, str], str | None]:
+        """(repo -> full sha, None) when every commit is on its integration branch and
+        carries the reviewed change; (…, what the engine found) when a commit is on the
+        branch but its change cannot be shown to be the run's. Raises for anything a
+        person cannot confirm either: a run not abandoned or already recorded, a missing
+        repo, a name that is no commit, a commit not on the branch."""
         state = self.projection()
         if state["status"] != "abandoned":
             raise EngineError("landed-as is for an abandoned run")
@@ -1918,6 +1936,7 @@ class RunEngine:
                 reviewed = event.get("payload") or {}
         reserved = f".aidlc/deliverables/{self.run_id}/"
         resolved: dict[str, str] = {}
+        problems: list[str] = []
         for name in expected:
             root = self.contract["repo_roots"][name]
             try:
@@ -1929,27 +1948,25 @@ class RunEngine:
                                     branch], capture_output=True, text=True, timeout=60)
             if probe.returncode != 0:
                 raise EngineError(f"{name}: {sha[:12]} is not on {branch}")
+            resolved[name] = sha
             # the commit must carry the change REVIEW completed on; the run branch's tip
             # proves nothing (an uncommitted run leaves it at the commit it started from)
             base = (reviewed.get("bases") or {}).get(name)
             tree = (reviewed.get("code_trees") or {}).get(name)
             if not base or not tree:
-                raise EngineError(f"{name}: the run recorded no reviewed change with its base "
-                                  "(a run from before reviews recorded bases), so no commit "
-                                  "can be checked against it")
+                problems.append(f"{name}: the run recorded no reviewed change with its base "
+                                "(a run from before reviews recorded bases), so the engine "
+                                f"cannot check that {sha[:12]} carries it")
+                continue
             # a root commit's parent is the empty tree
             parent = _git(root, "rev-list", "--parents", "-n", "1", sha).split()[1:2] \
                 or [_git(root, "hash-object", "-t", "tree", "/dev/null")]
             differ = [path for path in _patch_paths_changed(root, base, tree, parent[0], sha)
                       if not path.startswith(reserved)]
             if differ:
-                raise EngineError(f"{name}: {sha[:12]} does not carry the reviewed change; it "
-                                  "differs in " + ", ".join(differ[:20]))
-            resolved[name] = sha
-        self.store.append_new(writer=self.authority.writer("cli"), kind="landed_as",
-                              at=_now(), ordinal=NEXT, payload={"commits": resolved})
-        self._settle(); self.write_projection()
-        return {"landed_as": resolved, "state": self.projection()}
+                problems.append(f"{name}: {sha[:12]} does not carry the reviewed change; it "
+                                "differs in " + ", ".join(differ[:20]))
+        return resolved, ("; ".join(problems) if problems else None)
 
     @_one_operation
     def restore(self) -> dict[str, Any]:
@@ -2168,6 +2185,12 @@ class RunEngine:
             if row is None:
                 raise EngineError("accept-finding references an unknown canonical finding")
             bindings = {"canonical_id": target, "state_hash": findings.state_hash(row)}
+        elif action == "confirm_landed":
+            # the person says an abandoned run's change landed as these commits, where
+            # the engine could not show it (design 2026-11-01 landed-as by a person)
+            resolved, problem = self._landed_as_check(json.loads(target))
+            bindings = {"commits": resolved,
+                        "engine_check": problem or "the commits carry the reviewed change"}
         elif action == "discard_snapshot":
             if target not in self.contract["expected_repos"]:
                 raise EngineError("discard-snapshot names a repo this run does not have")
@@ -2212,6 +2235,10 @@ class RunEngine:
             row = rows.get(canonical_id)
             if row is None or findings.state_hash(row) != normalized.get("state_hash"):
                 raise EngineError("accept-finding request is stale")
+        elif action == "confirm_landed":
+            normalized = bindings if isinstance(bindings, Mapping) else {}
+            # still abandoned, not recorded, each commit still on its branch
+            self._landed_as_check(normalized.get("commits") or {})
         elif action == "discard_snapshot":
             normalized = bindings if isinstance(bindings, Mapping) else {}
             repo_name = normalized.get("repo_name")
@@ -2238,6 +2265,12 @@ class RunEngine:
         except landing.LandingError as exc:
             raise EngineError(str(exc)) from exc
         consumed = done["consumed"]
+        if action == "confirm_landed":
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="landed_as", at=_now(),
+                ordinal=NEXT, payload={"commits": dict(normalized["commits"]),
+                                       "request_id": request_id})
+            self._settle()
         if action == "discard_snapshot":
             retention.discard_snapshot(
                 consumption=done["consumption"], run_id=self.run_id,
@@ -3659,6 +3692,7 @@ class RunEngine:
         resumed = self._resume_normal_landing(message=message)
         if resumed is not None:
             return resumed
+        close_interrupted_attempt(self.store, at=_now())
         attempt = self._next_attempt("land")
         guard_ids = ["DV-1", "LG-1", "LG-3", "LG-4"]
         opened, _ = self.store.append_new(

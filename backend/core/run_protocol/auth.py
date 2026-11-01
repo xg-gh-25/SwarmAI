@@ -21,7 +21,8 @@ from typing import Any, Mapping
 
 from core.run_protocol.identifiers import IdentifierError, validate_run_id
 
-ACTIONS = frozenset({"land", "land_skip_tests", "discard_snapshot", "accept_finding"})
+ACTIONS = frozenset({"land", "land_skip_tests", "discard_snapshot", "accept_finding",
+                     "confirm_landed"})
 _HEX40 = set("0123456789abcdef")
 _HEX64 = set("0123456789abcdef")
 
@@ -74,6 +75,18 @@ def normalize_bindings(action: str, value: Any) -> dict[str, Any]:
         if not isinstance(cid, str) or not cid.startswith("CF-"):
             raise AuthorizationError("accept_finding needs canonical_id")
         return {"canonical_id": cid, "state_hash": _sha(value.get("state_hash"), 64, "state_hash")}
+    if action == "confirm_landed":
+        # an abandoned run's change is on main as these commits, by a person's word
+        if not isinstance(value, Mapping) or set(value) != {"commits", "engine_check"} \
+                or not isinstance(value.get("commits"), Mapping) or not value["commits"] \
+                or not isinstance(value.get("engine_check"), str):
+            raise AuthorizationError("confirm_landed binds exactly commits and engine_check")
+        commits = {}
+        for repo, sha in sorted(value["commits"].items()):
+            if not isinstance(repo, str) or not repo:
+                raise AuthorizationError("confirm_landed names a repo per commit")
+            commits[repo] = _sha(sha, 40, "commit")
+        return {"commits": commits, "engine_check": value["engine_check"][:600]}
     raise AuthorizationError(f"unknown action {action!r}")
 
 

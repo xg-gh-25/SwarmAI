@@ -252,7 +252,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # an abandoned run's change is on main all the same, as these commits (repo ->
     # sha), checked by the engine against the run's own change (design 2026-10-31 §3
     # change 4): the run stays abandoned, nobody needs to act on it
-    "landed_as": _spec("cli", ("ordinal",), None, {"commits": dict}),
+    # request_id: set when a person confirmed it (an authorized confirm_landed action)
+    "landed_as": _spec("cli", ("ordinal",), None, {"commits": dict}, {"request_id": str}),
     "restore": _spec("cli", ("ordinal",), None, {"snapshot_exists": bool}),
     # hook: the daemon's required_approval count (D4)
     "metric": _spec(("cli", "hook"), ("stage", "payload.name", "attempt"), "payload.name",

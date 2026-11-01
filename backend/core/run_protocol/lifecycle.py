@@ -51,7 +51,7 @@ BASE_MOVED_PREFIX = "base_moved:"
 # event without ``cause`` is classified by its detail's prefix, which works only when
 # the detail stayed inline (``_cause_of``).
 CHECK_CAUSES = frozenset({"not_evaluated", "base_moved", "merge_conflict",
-                          "review_reopened"})
+                          "review_reopened", "interrupted"})
 # how often TEST may send the run back to REVIEW (S6-2)
 REVIEW_REOPEN_CAP = 2
 # how often a landing may send the run back to REVIEW because the change at landing is
@@ -316,10 +316,20 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
     run["open_attempt"] = None
     cause = {cid: _cause_of(attempt, cid) for cid in failed}
     # a guard recorded "not evaluated" did not fail on its own: classify by the rest
-    evaluated = {cid for cid in failed if cause[cid] != "not_evaluated"}
+    evaluated = {cid for cid in failed if cause[cid] not in ("not_evaluated", "interrupted")}
+    if not evaluated and any(cause[cid] == "interrupted" for cid in failed):
+        # the process that ran this attempt died before it finished; the next operation
+        # closed it (engine._close_interrupted_attempt). Nothing failed on its own: it
+        # is not one of the stage's attempts and moves nothing
+        run.setdefault("interrupted_attempts", {})[stage] = \
+            run.get("interrupted_attempts", {}).get(stage, 0) + 1
+        if stage == "land":
+            run["last_land_intent"], run["last_report_render"] = None, None
+        return
     failed = evaluated or failed
+    lost = run.get("interrupted_attempts", {}).get(stage, 0)
     if stage == "deliver":
-        if failed <= RF_CHECKS and number >= 3 and run.get("reflect") is None:
+        if failed <= RF_CHECKS and number - lost >= 3 and run.get("reflect") is None:
             run["reflect"] = "degraded"    # lessons drop to zero; DELIVER continues
         return                             # a DV-1 attempt is simply retried
     if stage == "land":
@@ -340,11 +350,11 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
             run["review_reopened_failures"] = run.get("review_reopened_failures", 0) + 1
         elif failed & {"LG-1", "LG-4"}:
             if number - run.get("base_moved_failures", 0) \
-                    - run.get("review_reopened_failures", 0) >= 3:
+                    - run.get("review_reopened_failures", 0) - lost >= 3:
                 conflict = cause.get("LG-4") == "merge_conflict"
                 _set_pending(run, "land_conflict" if conflict else "final_stale")
         return
-    if number - run["attempt_base"].get(stage, 0) >= 3:
+    if number - run["attempt_base"].get(stage, 0) - lost >= 3:
         run["stages"][run["stage"]] = "degraded"
         _set_pending(run, "checks_exhausted")
         run["stage"] = "deliver"
@@ -359,7 +369,8 @@ def _cause_of(attempt: Mapping[str, Any], check_id: str) -> str | None:
     if recorded:
         return recorded
     detail = (attempt.get("details") or {}).get(check_id, "")
-    for prefix, name in (("not evaluated", "not_evaluated"), (BASE_MOVED_PREFIX, "base_moved"),
+    for prefix, name in (("interrupted", "interrupted"), ("not evaluated", "not_evaluated"),
+                         (BASE_MOVED_PREFIX, "base_moved"),
                          ("merge_conflict", "merge_conflict")):
         if detail.startswith(prefix):
             return name
@@ -442,6 +453,7 @@ def _review_reopen(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     run["stage"] = "review"
     for stage in ("review", "test"):
         run["attempt_base"][stage] = run["stage_attempts"].get(stage, 0)
+        run.setdefault("interrupted_attempts", {})[stage] = 0   # counted from the base
     _schedule(run, event, "active")
 
 
@@ -475,6 +487,7 @@ def _human_answer(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     # attempt numbers only grow (they are part of event identity); the stage cap
     # counts the attempts made since the person answered
     run["attempt_base"][run["stage"]] = run["stage_attempts"].get(run["stage"], 0)
+    run.setdefault("interrupted_attempts", {})[run["stage"]] = 0
     _schedule(run, event, "active")
 
 
@@ -779,6 +792,18 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             raise LifecycleError("landed_as is recorded once, on an abandoned run")
         if not commits or not all(_commit_sha(sha) for sha in commits.values()):
             raise LifecycleError("landed_as requires full commit SHAs")
+        request_id = event["payload"].get("request_id")
+        if request_id is not None:
+            # a person's confirmation: its request bound exactly these commits and its
+            # one-use authorization was consumed
+            request = run["land_requests"].get(request_id) or {}
+            bound = ((request.get("request") or {}).get("bindings") or {}).get("commits")
+            consumed = any(row.get("request_id") == request_id
+                           and row.get("action") == "confirm_landed"
+                           for row in run["auth_consumed"].values())
+            if request.get("action") != "confirm_landed" or bound != commits or not consumed:
+                raise LifecycleError("landed_as by a person needs its consumed confirm_landed "
+                                     "authorization for the same commits")
         run["landed_as"] = dict(commits)
     elif kind == "restore":
         if run.get("landed_as"):

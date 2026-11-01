@@ -431,8 +431,9 @@ def v1_land_card(command: str) -> "str | None":
     push reasons and whether tests are skipped. None when it cannot be read."""
     from core.run_owner_gate import parse_cli_calls
     calls, _single = parse_cli_calls(command)
+    from core.run_owner_gate import AFTER_APPROVAL
     call = next((c for c in calls if c.get("tool") == "pipeline_v1"
-                 and c.get("sub") in {"run-land", "accept-finding", "discard-snapshot"}), None)
+                 and c.get("sub") in AFTER_APPROVAL), None)
     if call is None:
         return None
     argv = call.get("argv") or []
@@ -455,7 +456,13 @@ def v1_land_card(command: str) -> "str | None":
     request = payload["request"]
     lines = [f"Pipeline v1 {request['action']} — run {run_id}, request {request_id}"]
     repos = (request.get("bindings") or {}).get("repos")
-    if isinstance(repos, dict):
+    if request.get("action") == "confirm_landed":
+        # the person says the run's change landed as these commits
+        bound = request.get("bindings") or {}
+        for name, sha in sorted((bound.get("commits") or {}).items()):
+            lines.append(f"{name}: landed as {sha}")
+        lines.append(f"engine check: {str(bound.get('engine_check'))[:400]}")
+    elif isinstance(repos, dict):
         for name, row in sorted(repos.items()):
             lines.append(f"{name}: code {row['code_tree'][:12]} → delivery "
                          f"{row['delivery_tree'][:12]}")
@@ -485,16 +492,16 @@ def _v1_cli(args: str) -> str:
 def _is_v1_land_request(command: str) -> bool:
     """True for an executed Pipeline v1 action that consumes human authorization."""
     from core import pipeline_command
+    from core.run_owner_gate import AFTER_APPROVAL
     if not pipeline_command.mentions(command) or "--request" not in command or not any(
-            name in command for name in ("run-land", "accept-finding", "discard-snapshot")):
+            name in command for name in AFTER_APPROVAL):
         return False
     from core.run_owner_gate import parse_cli_calls
     calls, _single = parse_cli_calls(command)
     if not calls and _gate_shell_segments(command, []) is None:
         return True
     for call in calls:
-        if call.get("tool") != "pipeline_v1" or call.get("sub") not in {
-                "run-land", "accept-finding", "discard-snapshot"}:
+        if call.get("tool") != "pipeline_v1" or call.get("sub") not in AFTER_APPROVAL:
             continue
         argv = call.get("argv") or []
         values = []

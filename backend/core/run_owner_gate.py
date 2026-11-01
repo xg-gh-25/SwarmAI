@@ -94,7 +94,7 @@ _USER_ONLY_AGENT_CONFIRM_RE = re.compile(r"/project-agent/confirm\b|/api/ddd/run
 # are generated from that table (docs/design/2026-10-31-swarm-out-ops-registry.md §5.2).
 # Actions the person approves first: handled by the
 # phase="approved" registration, after dangerous_command_gate.
-AFTER_APPROVAL = frozenset({"run-land", "accept-finding", "discard-snapshot"})
+AFTER_APPROVAL = frozenset({"run-land", "accept-finding", "discard-snapshot", "landed-as"})
 _DECIDE_TIMEOUT = 4.0
 # Variables that change where / whether the CLI isolates: never set on a call.
 _SUBST = ("$(", "`", "<(", ">(")
@@ -549,7 +549,7 @@ def _with_session(command: str, sid: str) -> "str | None":
     return f"{head}{_SESSION_ENV}={shlex.quote(sid)} {rest}"
 
 
-_APPROVED_ACTIONS = frozenset({"run-land", "accept-finding", "discard-snapshot"})
+_APPROVED_ACTIONS = AFTER_APPROVAL
 
 
 # ── session_worktree: hand it the session and the turn (no ownership rules) ──

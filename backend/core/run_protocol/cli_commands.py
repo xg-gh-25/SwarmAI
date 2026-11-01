@@ -181,7 +181,12 @@ def parser() -> argparse.ArgumentParser:
     landed_as = sub.add_parser("landed-as")
     landed_as.add_argument("--project", required=True)
     landed_as.add_argument("--run-id", required=True)
-    landed_as.add_argument("commits", nargs="+", metavar="[REPO=]COMMIT")
+    landed_as.add_argument("commits", nargs="*", metavar="[REPO=]COMMIT")
+    # when the engine cannot show the commit carries the run's change, a person may:
+    # --prepare writes the one-use request, --request <id> asks the person and records it
+    landed_mode = landed_as.add_mutually_exclusive_group()
+    landed_mode.add_argument("--prepare", action="store_true")
+    landed_mode.add_argument("--request")
     decision_request = sub.add_parser("decision-request")
     decision_request.add_argument("--project", required=True)
     decision_request.add_argument("--run-id", required=True)
@@ -425,6 +430,15 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
                         "error": f"abandoned, but landed-as was refused: {exc}"}
         return out
     if args.command == "landed-as":
+        if args.request:
+            if args.commits:
+                raise ValueError("landed-as --request takes no commits (the request binds them)")
+            return {"ok": True, **engine.execute_authorized_action(args.request)}
+        if not args.commits:
+            raise ValueError("landed-as needs [REPO=]COMMIT")
+        if args.prepare:
+            return {"ok": True, **engine.prepare_authorized_action(
+                action="confirm_landed", target=json.dumps(_commit_args(args.commits)))}
         return {"ok": True, **engine.landed_as(_commit_args(args.commits))}
     if args.command == "decision-request":
         return {"ok": True, **engine.request_decision(
