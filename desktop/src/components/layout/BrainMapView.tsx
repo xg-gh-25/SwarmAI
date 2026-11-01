@@ -1,59 +1,49 @@
 /**
  * BrainMapView — the bodies of a Brain's detail tabs that read the Brain map data.
  * The tabs mirror the parts of the map (Overview, Needs you, Brain (DDD), Project
- * Agent, Conductor · Runs, Reflect · Evolution, Eval); clicking a map part opens its
- * tab.
- *   BrainMapView      Overview: the Brain map, and beside it Needs you + Eval summary
- *   BrainNeedsView    Needs you: Runs and what Need You holds for the Brain
+ * Agent, Reflect · Evolution, Eval); clicking a map part opens its tab.
+ *   BrainMapView      Overview: the Brain map, and beside it Needs you + the two Eval numbers
+ *   BrainNeedsView    Needs you: what waits on the person in this Brain itself
  *   BrainAgentView    Project Agent: what a Hive run reads, ask for a change, and Start a Run
- *   BrainRunsView     Conductor · Runs: the Chat tab and Hive lanes, each Run one card
- *   BrainEvalView     Eval: the five dimensions, UNKNOWN where nobody measures
+ *   BrainEvalView     Eval: is the knowledge healthy, was it used (two numbers, two sections)
  *   BrainAddKnowledge Brain (DDD): add files / folders / links / repos, distilled in chat
  * The tab bar, header and the Brain (DDD) / Reflect bodies live in BrainHub.
  *
- * Reads only records that already exist: the brain detail + what it learned this week
- * (cached ddd hooks), the 30-day pipeline analytics (one cached query, the same payload the
- * Pipelines overlay reads) and, on the tabs that show them, the Hive runs Swarm Out
- * reads (GET /api/swarm-out/runs, polled while shown). Nothing here is a sample: what
- * nobody records is UNKNOWN or "—" (design docs/design/2026-10-30-brain-runs-one-card.md).
- * The Project Agent definition is real: project-agent.yaml, a skeleton at creation and
- * drafted from the DDD, kept current by the agent. ProjectAgentView shows it read-only;
- * a change goes to the agent in chat (nothing is confirmed).
- * Submitting a request is real: it goes to chat as a pipeline Run request.
+ * A Brain holds knowledge only (design docs/design/2026-11-01-brain-eval-and-runs.md §2):
+ * the Runs that use it, their waits, autonomy and cost are in Pipelines and Swarm Out,
+ * so nothing here reads a Run. Eval reads GET /ddd/brains/{name}/eval (core/brain_eval):
+ * what nobody measured says "not measured", a sample too small says "too few (n)",
+ * never 0. The Project Agent definition is real: project-agent.yaml, a skeleton at
+ * creation and drafted from the DDD, kept current by the agent. ProjectAgentView shows it
+ * read-only; a change goes to the agent in chat. Submitting a request is real: it goes
+ * to chat as a pipeline Run request.
  *
- * Exports: BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView,
+ * Exports: BrainMapView, BrainNeedsView, BrainAgentView, BrainEvalView,
  *          BrainAddKnowledge, BrainTab, MapPanel
  */
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { useBrainDetail, useBrainKnowledge, type BrainDetail, type ProjectAgent, type SectionKey } from '../../services/ddd';
-import { pipelinesService, type PipelineAnalytics, type PipelineRunSummary } from '../../services/pipelines';
-import type { SwarmOutRun } from '../../services/swarmOut';
-import { RunCard } from '../swarm-out/LiveDispatches';
-import { runTone as hiveTone } from '../swarm-out/tone';
-import { useRuns } from '../swarm-out/live';
-import { LocalRunCard } from './LocalRunCard';
-import { Stat, SectionLabel, StatusBadge, Hint } from '../overlay';
+import {
+  useBrainDetail, useBrainEval, useBrainKnowledge, type BrainDetail, type BrainEvalReport, type ProjectAgent, type SectionKey,
+} from '../../services/ddd';
+import { SectionLabel, StatusBadge, Hint } from '../overlay';
 import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from './BrainMap';
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import { ProjectAgentView } from './ProjectAgentView';
 import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { openOverlayAt } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
-import {
-  sectionCounts, projectRuns, runTone, needsYouItems, type RunTone, needsCount, brainEval, brainHiveRuns, hiveLive, humanPerRun,
-} from './brainMapModel';
+import { sectionCounts, needsYouItems, needsCount } from './brainMapModel';
 
 /** The detail tabs of a Brain: one per part of the Brain map, plus Overview. */
-export type BrainTab = 'overview' | 'needs' | 'brain' | 'agent' | 'runs' | 'reflect' | 'eval';
+export type BrainTab = 'overview' | 'needs' | 'brain' | 'agent' | 'reflect' | 'eval';
 /** Where the Hub home may land inside a Brain (kept for its callers). */
 export type MapPanel = 'need' | 'agent' | 'add';
 
 type Dispatch = (msg: string, opts?: { autoSend?: boolean }) => boolean;
 
-/** Pipelines, opened on one Run's drawer (its question, its report). */
+/** Pipelines, opened on one Run (a missed-use row). */
 function openRun(id: string) { openOverlayAt('pipeline', id); }
 function openNeedYou() { window.dispatchEvent(new CustomEvent('swarm:show-needs-you')); }
 
@@ -71,31 +61,12 @@ function useSend(onDispatch?: Dispatch, onRequestClose?: () => void) {
 function useBrainData(name: string) {
   const { data: detail = null } = useBrainDetail(name);
   const { data: knowledge = null } = useBrainKnowledge(name, 'week');
-  const { data: analytics = null } = useQuery<PipelineAnalytics>({
-    queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
-  });
-  const runs = useMemo(() => projectRuns(analytics, name), [analytics, name]);
-  const needs = useMemo(() => needsYouItems(runs, detail?.pendingBySource), [runs, detail]);
-  const ev = useMemo(() => brainEval(runs, detail, knowledge), [runs, detail, knowledge]);
-  return { detail, runs, needs, ev };
-}
-
-/** This Brain's Hive runs (Swarm Out), polled while the tab is shown. */
-function useBrainHiveRuns(name: string) {
-  const { data, failed, reload } = useRuns(false);
-  const hive = useMemo(() => brainHiveRuns(data?.runs, name), [data, name]);
-  return { hive, loaded: !!data, failed: failed && !data, reload };
+  const needs = useMemo(() => needsYouItems(detail?.pendingBySource), [detail]);
+  return { detail, needs, learnedWeek: knowledge ? knowledge.counts.week : null };
 }
 
 /** Status dots on the map, from the same records as the numbers. */
-/** A Hive run's dot on the map, in the local Runs' tones. */
-function hiveDot(r: SwarmOutRun): RunTone {
-  const t = hiveTone(r);
-  return t === 'busy' ? 'running' : t === 'ok' ? 'landed' : t === 'error' ? 'failed'
-    : t === 'attention' && r.state === 'waiting' ? 'needs' : 'stopped';
-}
-
-function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: SwarmOutRun[], ev: ReturnType<typeof brainEval>): BrainMapProps['tones'] {
+function mapTones(detail: BrainDetail | null, learnedWeek: number | null): BrainMapProps['tones'] {
   const has = (k: SectionKey) => (detail?.sections.find((s) => s.key === k)?.members.length ?? 0) > 0;
   const base = (k: SectionKey): MapTone => (has(k) ? 'ok' : 'attention');
   const pa = detail?.projectAgent;
@@ -107,9 +78,7 @@ function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: 
     delivery: base('delivery'),
     refresher: base('refresher'),
     agent: pa === undefined ? undefined : pa === null ? 'attention' : pa.problems.length ? 'needs' : 'ok',
-    conductor: runs.some((r) => r.needsYou) || hive.some((r) => r.state === 'waiting') ? 'needs'
-      : runs.some((r) => r.status === 'running') || hive.some(hiveLive) ? 'busy' : runs.length || hive.length ? 'ok' : undefined,
-    reflect: ev.brain.learnedWeek ? 'ok' : undefined,
+    reflect: learnedWeek ? 'ok' : undefined,
   };
 }
 
@@ -129,14 +98,9 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
   onRequestClose?: () => void;
 }) {
   const { t } = useTranslation();
-  const { detail, runs, needs, ev } = useBrainData(name);
-  const { hive } = useBrainHiveRuns(name);
+  const { detail, needs, learnedWeek } = useBrainData(name);
+  const { data: ev = null } = useBrainEval(name);
   const needN = needsCount(needs);
-  // both lanes' Runs, newest first (the map draws the first twelve)
-  const dots = useMemo(() => [
-    ...runs.map((r) => ({ at: Date.parse(r.updatedAt || r.createdAt), id: r.id, title: r.requirement || r.id, tone: runTone(r) })),
-    ...hive.map((r) => ({ at: Date.parse(r.sent_at), id: r.dispatch_id, title: `${r.title} (Hive ${r.hive})`, tone: hiveDot(r) })),
-  ].sort((x, y) => (y.at || 0) - (x.at || 0)).map(({ id, title, tone }) => ({ id, title, tone })), [runs, hive]);
   const send = useSend(onDispatch, onRequestClose);
 
   const open = (target: BrainMapTarget) => {
@@ -167,14 +131,11 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
         <BrainMap
           version="DDD"
           counts={sectionCounts(detail)}
-          runs={dots}
-          lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, hive: hive.filter(hiveLive).length }}
-          sources={{ chat: runs.length, hive: hive.length }}
           needs={needN}
-          reflect={{ week: ev.brain.learnedWeek }}
+          reflect={{ week: learnedWeek }}
           agentLine={agentLine(detail?.projectAgent, t)}
-          evalLine={t('ui.BrainMapView.evalLine', { landed: ev.runs.landed, total: ev.runs.total })}
-          tones={mapTones(detail, runs, hive, ev)}
+          evalLine={ev ? healthLine(ev, t) : undefined}
+          tones={mapTones(detail, learnedWeek)}
           onOpen={open}
         />
         <div className="flex flex-wrap items-center justify-center gap-4 pt-1 text-meta text-[var(--color-text-muted)]">
@@ -184,7 +145,6 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
           <StatusBadge tone="primary">{t('ui.BrainMapView.legendRunning')}</StatusBadge>
           <span className="text-[var(--color-border)]">|</span>
           <LineKey v="--color-primary">{t('ui.BrainMapView.lineRequest')}</LineKey>
-          <LineKey v="--color-text-muted">{t('ui.BrainMapView.lineRun')}</LineKey>
           <LineKey v="--color-status-success">{t('ui.BrainMapView.lineKnowledge')}</LineKey>
           <LineKey v="--color-status-warning" dashed>{t('ui.BrainMapView.lineWaits')}</LineKey>
         </div>
@@ -229,7 +189,6 @@ function NeedList({ items }: { items: ReturnType<typeof needsYouItems>; onGoTo?:
             <div className="text-small line-clamp-2">{it.title}</div>
             <div className="text-meta text-[var(--color-text-muted)] truncate">{it.detail}</div>
           </div>
-          {it.kind === 'run' && <button className="btn-sm btn-secondary shrink-0" onClick={() => openRun(it.id)}>{t('ui.BrainMapView.answer')}</button>}
           {it.kind === 'other' && <button className="btn-sm btn-secondary shrink-0" onClick={openNeedYou}>{t('ui.BrainMapView.open')}</button>}
         </div>
       ))}
@@ -237,16 +196,43 @@ function NeedList({ items }: { items: ReturnType<typeof needsYouItems>; onGoTo?:
   );
 }
 
-const pct = (x: number | null) => (x == null ? 'UNKNOWN' : `${Math.round(x * 100)}%`);
-const num = (x: number | null, unit = '') => (x == null ? 'UNKNOWN' : `${x}${unit}`);
+const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-function EvalSummary({ ev, onOpen }: { ev: ReturnType<typeof brainEval>; onOpen: () => void }) {
+/** The healthy rate as one line (the map's Eval part). */
+function healthLine(ev: BrainEvalReport, t: TFunction): string {
+  const h = ev.health;
+  if (h.scored == null) return t('ui.BrainMapView.notMeasured');
+  if (h.rate == null) return t('ui.BrainMapView.tooFew', { n: h.scored });
+  return t('ui.BrainMapView.healthyLine', { pct: pct(h.rate) });
+}
+
+/** The two Eval questions' headline numbers: what they are, and what they compare to. */
+function headlines(ev: BrainEvalReport | null, t: TFunction) {
+  const h = ev?.health, u = ev?.used;
+  const health = !h || h.scored == null
+    ? { big: '—', vs: t('ui.BrainMapView.notMeasured'), tone: 'muted' as const }
+    : h.rate == null
+      ? { big: '—', vs: t('ui.BrainMapView.tooFew', { n: h.scored }), tone: 'muted' as const }
+      : { big: pct(h.rate), vs: t('ui.BrainMapView.healthyVs', { target: pct(h.target), n: h.scored, since: day(h.since) }),
+          tone: h.rate >= h.target ? 'ok' as const : 'warn' as const };
+  const used = !u
+    ? { big: '—', vs: t('ui.BrainMapView.notMeasured'), tone: 'muted' as const }
+    : u.runs === 0
+      ? { big: '—', vs: t('ui.BrainMapView.usedNoRuns'), tone: 'muted' as const }
+      : { big: `${u.citing} / ${u.runs}`,
+          vs: u.rate == null ? t('ui.BrainMapView.usedVsFew', { n: u.runs }) : t('ui.BrainMapView.usedVs', { pct: pct(u.rate) }),
+          tone: 'muted' as const };
+  return { health, used };
+}
+
+const day = (iso: string | null) => (iso ? iso.slice(5, 10) : '—');
+const VS_TONE = { ok: 'text-[var(--color-status-success)]', warn: 'text-[var(--color-status-warning)]', muted: 'text-[var(--color-text-muted)]' };
+
+function EvalSummary({ ev, onOpen }: { ev: BrainEvalReport | null; onOpen: () => void }) {
   const { t } = useTranslation();
-  const rows: [string, string, string?][] = [
-    [t('ui.BrainMapView.sumRunsLanded'), `${ev.runs.landed} / ${ev.runs.total}`],
-    [t('ui.BrainMapView.averageCycle'), num(ev.runs.avgCycleMin, t('ui.BrainMapView.minUnit'))],
-    [t('ui.BrainMapView.sumKnowledge'), ev.brain.recentActivity == null ? 'UNKNOWN' : `+${ev.brain.recentActivity}`],
-    [t('ui.BrainMapView.tokens'), ev.runs.tokens == null ? 'UNKNOWN' : `${Math.round(ev.runs.tokens / 1000)}k`],
+  const { health, used } = headlines(ev, t);
+  const rows: [string, { big: string; vs: string; tone: keyof typeof VS_TONE }][] = [
+    [t('ui.BrainMapView.qHealthy'), health], [t('ui.BrainMapView.qUsed'), used],
   ];
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]" data-testid="bm-eval-summary">
@@ -254,17 +240,19 @@ function EvalSummary({ ev, onOpen }: { ev: ReturnType<typeof brainEval>; onOpen:
         <span className="text-small font-semibold">{t('ui.BrainMapView.evalTitle')}</span>
         <button className="text-meta text-[var(--color-primary)]" onClick={onOpen} data-testid="bm-eval-open">{t('ui.BrainMapView.evalAll')}</button>
       </div>
-      {rows.map(([k, v, cls]) => (
-        <div key={k} className="flex items-center justify-between px-3 py-1.5 border-t border-[var(--color-border)] text-small">
-          <span className="text-[var(--color-text-muted)]">{k}</span>
-          <span className={`font-semibold ${v === 'UNKNOWN' ? 'text-[var(--color-text-muted)]' : cls ?? ''}`}>{v}</span>
+      {rows.map(([k, v]) => (
+        <div key={k} className="px-3 py-1.5 border-t border-[var(--color-border)]">
+          <div className="flex items-baseline justify-between text-small">
+            <span className="text-[var(--color-text-muted)]">{k}</span>
+            <span className="font-semibold tabular-nums">{v.big}</span>
+          </div>
+          <div className={`text-meta ${VS_TONE[v.tone]}`}>{v.vs}</div>
         </div>
       ))}
     </div>
   );
 }
 
-/** Delivery tab: the Project Agent and Start a Run on the left, the Runs on the right. */
 /** Needs you tab: everything waiting on the person, full width. */
 export function BrainNeedsView({ name, onGoTo }: { name: string; onGoTo: (t: BrainTab) => void }) {
   const { t } = useTranslation();
@@ -283,41 +271,28 @@ export function BrainNeedsView({ name, onGoTo }: { name: string; onGoTo: (t: Bra
 export function BrainAgentView({ name, onDispatch, onRequestClose }: {
   name: string; onDispatch?: Dispatch; onRequestClose?: () => void;
 }) {
-  const { detail, runs } = useBrainData(name);
+  const { detail } = useBrainData(name);
   const send = useSend(onDispatch, onRequestClose);
   return (
     <div className="p-4 max-w-[1180px]" data-testid="bm-panel-agent">
-      <AgentPanel name={name} runs={runs}
+      <AgentPanel name={name}
         delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []}
         agent={detail ? detail.projectAgent : undefined} onDispatch={send} />
     </div>
   );
 }
 
-/** Conductor · Runs tab: the Chat tab lane and the Hive lane, each Run one card. */
-export function BrainRunsView({ name, onRequestClose }: {
+/** Eval tab: the two numbers on top, then the two questions, stacked full width. */
+export function BrainEvalView({ name, onOpenFile }: {
   name: string;
-  /** the host overlay's close: a file opened from a run's big card opens in the Canvas */
-  onRequestClose?: () => void;
+  /** open a workspace file in the Canvas (the host closes the Hub first) */
+  onOpenFile?: (workspaceRelPath: string) => void;
 }) {
-  const { runs } = useBrainData(name);
-  const hive = useBrainHiveRuns(name);
-  return (
-    <div className="p-4 max-w-[1240px]" data-testid="bm-panel-runs">
-      <RunsPanel name={name} runs={runs} hive={hive} onRequestClose={onRequestClose} />
-    </div>
-  );
-}
-
-/** Eval tab: every dimension, full width. */
-export function BrainEvalView({ name }: { name: string }) {
-  const { ev, runs } = useBrainData(name);
-  const { hive, loaded } = useBrainHiveRuns(name);
-  const human = useMemo(() => humanPerRun(runs, hive), [runs, hive]);
+  const { data: ev = null, isError } = useBrainEval(name);
   return (
     <div className="p-4" data-testid="bm-panel-eval">
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
-        <EvalPanel ev={ev} human={human} hiveLoaded={loaded} />
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
+        <EvalPanel ev={ev} failed={isError && !ev} onOpenFile={onOpenFile} />
       </div>
     </div>
   );
@@ -381,16 +356,14 @@ function AgentNone({ onGenerate }: { onGenerate: () => void }) {
   );
 }
 
-function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
-  name: string; runs: PipelineRunSummary[]; delivery: string[];
+function AgentPanel({ name, delivery, agent, onDispatch }: {
+  name: string; delivery: string[];
   agent?: ProjectAgent | null; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
 }) {
   const { t } = useTranslation();
   const [req, setReq] = useState('');
   const [title, setTitle] = useState('');
   const [sent, setSent] = useState<string | null>(null);
-  const profiles = runs.reduce<Record<string, number>>((m, r) => { if (r.profile) m[r.profile] = (m[r.profile] ?? 0) + 1; return m; }, {});
-  const usual = Object.entries(profiles).sort((a, b) => b[1] - a[1])[0]?.[0];
 
   const send = async (msg: string, label: string) => {
     if (onDispatch?.(msg)) { setSent(t('ui.BrainMapView.sentChat', { label })); return; }
@@ -412,10 +385,6 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
       {agent === undefined ? (
         <div>
           <SectionLabel>{t('ui.BrainMapView.deliveryDef')}</SectionLabel>
-          <div className="text-small mt-1">
-            {t('ui.BrainMapView.usualProfile')} <b>{usual ?? '--'}</b>
-            <span className="text-[var(--color-text-muted)]"> {t('ui.BrainMapView.fromRuns', { count: runs.length })}</span>
-          </div>
           <div className="text-meta text-[var(--color-text-muted)] mt-1 truncate">
             {t('ui.BrainMapView.deliveryFiles')} {delivery.length ? delivery.join(', ') : t('ui.BrainMapView.none')}
           </div>
@@ -442,73 +411,133 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
   );
 }
 
-const RUN_GRID = { gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))' };
-
-function RunsPanel({ name, runs, hive, onRequestClose }: {
-  name: string; runs: PipelineRunSummary[]; onRequestClose?: () => void;
-  hive: { hive: SwarmOutRun[]; loaded: boolean; failed: boolean; reload: () => void };
-}) {
-  const { t } = useTranslation();
-  const live = hive.hive.filter(hiveLive).length;
-  const going = runs.filter((r) => r.status === 'running' || r.needsYou).length;
+/** One fact of a section: a label and its value ("—" when not measured). */
+function Fact({ label, value, testId }: { label: string; value: string; testId?: string }) {
   return (
-    <div className="flex flex-col gap-4">
-      <Hint>{t('ui.BrainMapView.runsHint')}</Hint>
-      <Lane title={t('ui.BrainMapView.laneChat')} meta={t('ui.BrainMapView.runCount', { count: runs.length }) + (going ? ` · ${t('ui.BrainMapView.going', { count: going })}` : '')} testId="bm-lane-chat">
-        {runs.length === 0 ? <div className="text-meta text-[var(--color-text-muted)]">{t('ui.BrainMapView.noRuns')}</div> : (
-          <div className="grid gap-3" style={RUN_GRID}>
-            {runs.map((r) => <LocalRunCard key={r.id} r={r} brain={name} />)}
-          </div>
-        )}
-      </Lane>
-      <Lane title="Hive" meta={hive.loaded ? t('ui.BrainMapView.runCount', { count: hive.hive.length }) + (live ? ` · ${t('ui.BrainMapView.going', { count: live })}` : '') : ''} testId="bm-lane-hive">
-        {hive.failed ? <div className="text-meta text-[var(--color-text-muted)]" data-testid="bm-hive-unreadable">{t('ui.BrainMapView.hiveUnreadable')}</div>
-          : !hive.loaded ? <div className="text-meta text-[var(--color-text-muted)]">{t('ui.BrainMapView.hiveReading')}</div>
-          : hive.hive.length === 0 ? <div className="text-meta text-[var(--color-text-muted)]" data-testid="bm-hive-empty">{t('ui.BrainMapView.hiveEmpty')}</div>
-          : (
-            <div className="grid gap-3" style={RUN_GRID}>
-              {hive.hive.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={hive.reload} onLeave={onRequestClose} />)}
-            </div>
-          )}
-      </Lane>
+    <span className="text-small text-[var(--color-text-secondary)]" data-testid={testId}>
+      {label}<b className="ml-1.5 font-semibold text-[var(--color-text)] tabular-nums">{value}</b>
+    </span>
+  );
+}
+
+/** A list of things to handle under a section (title, why), each row one click. */
+function ToDo({ title, children, testId }: { title: string; children: React.ReactNode; testId: string }) {
+  return (
+    <div className="mt-3" data-testid={testId}>
+      <div className="text-meta font-semibold text-[var(--color-text-muted)] mb-1">{title}</div>
+      {children}
     </div>
   );
 }
 
-function Lane({ title, meta, testId, children }: { title: string; meta: string; testId: string; children: React.ReactNode }) {
-  return (
-    <section data-testid={testId}>
-      <div className="flex items-baseline gap-2 mb-2">
-        <span className="text-small font-semibold">{title}</span>
-        <span className="text-meta text-[var(--color-text-muted)] tabular-nums">{meta}</span>
-      </div>
-      {children}
-    </section>
-  );
-}
+const ROW = 'grid w-full text-left gap-4 px-2 py-1.5 rounded-md hover:bg-[var(--color-hover)]';
+const ROW_COLS = { gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.2fr)' };
 
-function EvalPanel({ ev, human, hiveLoaded }: {
-  ev: ReturnType<typeof brainEval>; human: { avg: number | null; runs: number }; hiveLoaded: boolean;
+function EvalPanel({ ev, failed, onOpenFile }: {
+  ev: BrainEvalReport | null; failed: boolean; onOpenFile?: (path: string) => void;
 }) {
-  const { t } = useTranslation();
-  const grid = 'grid grid-cols-2 gap-2 mt-1';
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language?.startsWith('zh');
+  if (failed) return <div className="text-small text-[var(--color-text-muted)]" data-testid="bm-eval-failed">{t('ui.BrainMapView.evalUnreadable')}</div>;
+  if (!ev) return <div className="text-small text-[var(--color-text-muted)]">{t('ui.BrainMapView.evalReading')}</div>;
+  const { health, used } = headlines(ev, t);
+  const h = ev.health, u = ev.used;
+  const none = t('ui.BrainMapView.notMeasured');
+  const dups = h.duplicates == null ? none : String(h.duplicates.extra);
+  const gaps = h.gaps == null ? none : h.gaps.oldest_days == null ? String(h.gaps.open)
+    : t('ui.BrainMapView.gapsOldest', { n: h.gaps.open, days: h.gaps.oldest_days });
+  const wu = u.written_used;
+  const wuText = wu == null ? none
+    : wu.mature_written === 0 ? t('ui.BrainMapView.writtenUsedYoung', { days: wu.window_days })
+    : wu.rate == null ? t('ui.BrainMapView.tooFew', { n: wu.mature_written })
+    : `${pct(wu.rate)} (${wu.mature_used} / ${wu.mature_written})`;
+  const tops = [
+    { k: t('ui.BrainMapView.qHealthy'), v: health, id: 'bm-eval-top-health' },
+    { k: t('ui.BrainMapView.qUsed'), v: used, id: 'bm-eval-top-used' },
+  ];
   return (
-    <div className="flex flex-col gap-3">
-      <Hint>{t('ui.BrainMapView.evalHint')}</Hint>
-      <div><SectionLabel>{t('ui.BrainMapView.runs30')}</SectionLabel><div className={grid}>
-        <Stat label={t('ui.BrainMapView.landed')} value={`${ev.runs.landed} / ${ev.runs.total}`} hint={t('ui.BrainMapView.completion', { pct: pct(ev.runs.completionRate) })} />
-        <Stat label={t('ui.BrainMapView.needNow')} value={ev.runs.needsYou} tone={ev.runs.needsYou ? 'error' : undefined} />
-        <Stat label={t('ui.BrainMapView.averageCycle')} value={num(ev.runs.avgCycleMin, t('ui.BrainMapView.minUnit'))} />
-        <Stat label={t('ui.BrainMapView.tokens')} value={ev.runs.tokens == null ? 'UNKNOWN' : `${Math.round(ev.runs.tokens / 1000)}k`} hint={t('ui.BrainMapView.tokensHint')} />
-      </div></div>
-      <div><SectionLabel>{t('ui.BrainMapView.projectAgent')}</SectionLabel><div className={grid}>
-        <Stat label={t('ui.BrainMapView.humanPerRun')} value={human.avg == null ? 'UNKNOWN' : String(Math.round(human.avg * 10) / 10)}
-          hint={human.runs ? (hiveLoaded ? t('ui.BrainMapView.humanOverBoth', { count: human.runs }) : t('ui.BrainMapView.humanOverLocal', { count: human.runs })) : t('ui.BrainMapView.humanNone')} />
-      </div></div>
-      <div><SectionLabel>{t('ui.BrainMapView.brain')}</SectionLabel><div className={grid}>
-        <Stat label={t('ui.BrainMapView.knowledgeEntries')} value={ev.brain.entries} hint={t('ui.BrainMapView.changes30', { n: num(ev.brain.recentActivity) })} />
-        <Stat label={t('ui.BrainMapView.helpsRuns')} value="UNKNOWN" hint={t('ui.BrainMapView.notMeasured')} />
-      </div></div>
+    <div className="flex flex-col" data-testid="bm-eval">
+      <div className="grid grid-cols-2 pb-4 border-b border-[var(--color-border)]">
+        {tops.map(({ k, v, id }, i) => (
+          <div key={id} className={i ? 'pl-6 border-l border-[var(--color-border)]' : ''} data-testid={id}>
+            <div className="text-meta font-semibold text-[var(--color-text-muted)]">{k}</div>
+            <div className="text-display font-semibold tabular-nums mt-1">{v.big}</div>
+            <div className={`text-small ${VS_TONE[v.tone]}`}>{v.vs}</div>
+          </div>
+        ))}
+      </div>
+
+      <section className="py-4 border-b border-[var(--color-border)]" data-testid="bm-eval-health">
+        <h3 className="text-body font-semibold">{t('ui.BrainMapView.qHealthy')}</h3>
+        <div className="text-small text-[var(--color-text-muted)] max-w-[900px]">{t('ui.BrainMapView.healthHow', { min: h.min_sample })}</div>
+        <div className="flex flex-wrap gap-8 mt-2.5">
+          <Fact label={t('ui.BrainMapView.factEntries')} value={h.entries == null ? none : h.entries.toLocaleString()} />
+          <Fact label={t('ui.BrainMapView.factDuplicates')} value={dups} testId="bm-eval-dups" />
+          <Fact label={t('ui.BrainMapView.factGaps')} value={gaps} testId="bm-eval-gaps" />
+        </div>
+        {h.flagged.length > 0 && (
+          <ToDo title={t('ui.BrainMapView.toHandle', { n: h.flagged_total ?? h.flagged.length })} testId="bm-eval-flagged">
+            {h.flagged.map((f) => (
+              <button key={f.unit_id} className={ROW} style={ROW_COLS} onClick={() => onOpenFile?.(f.rel)}
+                title={`${f.rel}:${f.line}`} data-testid={`bm-eval-flag-${f.unit_id}`}>
+                <span className="truncate text-small">
+                  <span className={`text-meta px-1.5 mr-1.5 rounded ${f.verdict === 'withdraw'
+                    ? 'text-[var(--color-status-error)] bg-[color-mix(in_srgb,var(--color-status-error)_13%,transparent)]'
+                    : 'text-[var(--color-status-warning)] bg-[color-mix(in_srgb,var(--color-status-warning)_13%,transparent)]'}`}>{f.verdict}</span>
+                  {f.title}
+                </span>
+                <span className="truncate text-meta text-[var(--color-text-muted)]">
+                  {(zh ? f.reason_zh : f.reason_en) || '—'} · {f.rel.split('/').pop()}:{f.line}
+                </span>
+              </button>
+            ))}
+          </ToDo>
+        )}
+        {h.duplicates && h.duplicates.shown.length > 0 && (
+          <ToDo title={t('ui.BrainMapView.dupList', { n: h.duplicates.groups })} testId="bm-eval-duplist">
+            {h.duplicates.shown.map((d) => (
+              <button key={d.head + d.places[0].rel} className={ROW} style={ROW_COLS} onClick={() => onOpenFile?.(d.places[0].rel)}>
+                <span className="truncate text-small">{d.head}</span>
+                <span className="truncate text-meta text-[var(--color-text-muted)]">
+                  {d.places.map((p) => `${p.rel.split('/').pop()}:${p.line}`).join(' · ')}
+                </span>
+              </button>
+            ))}
+          </ToDo>
+        )}
+      </section>
+
+      <section className="pt-4" data-testid="bm-eval-used">
+        <h3 className="text-body font-semibold">{t('ui.BrainMapView.qUsed')}</h3>
+        <div className="text-small text-[var(--color-text-muted)] max-w-[900px]">{t('ui.BrainMapView.usedHow', { days: ev.window_days })}</div>
+        <div className="flex flex-wrap gap-8 mt-2.5">
+          <Fact label={t('ui.BrainMapView.factWrittenUsed', { days: wu?.window_days ?? 14 })} value={wuText} testId="bm-eval-written-used" />
+          <Fact label={t('ui.BrainMapView.factMissed')} value={u.missed_total == null ? none : String(u.missed_total)} />
+        </div>
+        {u.missed && u.missed.length > 0 && (
+          <ToDo title={t('ui.BrainMapView.missedList', { n: u.missed_total ?? u.missed.length })} testId="bm-eval-missed">
+            {u.missed.map((m) => (
+              <button key={m.unit_id} className={ROW} style={ROW_COLS} onClick={() => openRun(m.run_id)}>
+                <span className="truncate text-small">{m.title}</span>
+                <span className="truncate text-meta text-[var(--color-text-muted)]">{m.run_id}</span>
+              </button>
+            ))}
+          </ToDo>
+        )}
+        {u.shown.length > 0 && (
+          <ToDo title={t('ui.BrainMapView.runsCited', { n: u.runs })} testId="bm-eval-runs">
+            {u.shown.map((r) => (
+              <button key={r.run_id} className={ROW} style={ROW_COLS} onClick={() => openRun(r.run_id)} data-testid={`bm-eval-run-${r.run_id}`}>
+                <span className="truncate text-small">{r.requirement || r.run_id}</span>
+                <span className="truncate text-meta text-[var(--color-text-muted)]">
+                  {r.cited.length ? t('ui.BrainMapView.cited', { n: r.cited.length }) + ' · ' + r.cited.map((c) => c.head).join(' · ')
+                    : t('ui.BrainMapView.citedNone')}
+                </span>
+              </button>
+            ))}
+          </ToDo>
+        )}
+      </section>
     </div>
   );
 }

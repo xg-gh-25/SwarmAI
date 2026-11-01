@@ -1,19 +1,18 @@
 /**
  * BrainMapView + BrainHubHome tests — the Map view of one Brain and the Hub home.
- * Services are mocked at the boundary (ddd hooks, pipeline analytics). Checks: the
- * map shows real counts and this brain's Runs only; clicking map parts opens the
- * matching panel or the Browse view; Needs you lists Runs + escalations; the Project
- * Agent submits to chat through onDispatch; the map, Runs and Eval draw only what
- * exists (Chat tab and Hive, no mock); a local Run's card has the Hive card's cells;
- * the needs count is one count; Eval says UNKNOWN for what nobody measures; the Hub
- * home filters, queues and opens.
+ * Services are mocked at the boundary (ddd hooks). Checks: the map shows real counts
+ * and no Run (a Brain holds knowledge only: no Conductor, no run dots, no sources);
+ * clicking map parts opens the matching panel or the Browse view; Needs you lists the
+ * Brain's own items and never a Run; the Project Agent submits to chat through
+ * onDispatch; the needs count is one count; Eval shows two numbers and two sections,
+ * "not measured" / "too few (n)" instead of a number nobody has; a local Run's card has
+ * the Hive card's cells; the Hub home queues and opens, without Runs.
  */
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockAnalytics = vi.fn();
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({ data: mockAnalytics() }),
+  useQuery: () => ({ data: undefined }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 const DETAIL = {
@@ -25,24 +24,38 @@ const DETAIL = {
 };
 const KNOWLEDGE = { brain: 'P', since: 'week', layers: [], gaps: [], counts: { week: 1, all: 4 },
   withdrawn: { count: 0, items: [] } };
+const EVAL = {
+  project: 'P', computed_at: '2026-11-01T04:00:00Z', window_days: 30,
+  health: {
+    target: 0.9, min_sample: 10, rate: 0.8919, scored: 37, since: '2026-10-29T08:34:00Z',
+    counts: { useful: 33, weak: 4, withdraw: 0 },
+    flagged: [{ unit_id: 'cand-w.unit', dest: 'DDD', title: 'A weak entry', verdict: 'weak', klass: 'lookup',
+      reason_en: 'only names one commit', reason_zh: '只绑定到一次提交', by_person: false,
+      rel: 'Projects/P/2-understanding/TECH.md', line: 7 }],
+    flagged_total: 1, entries: 1931,
+    duplicates: { groups: 0, extra: 0, shown: [] },
+    gaps: { open: 93, oldest_days: 2, oldest_title: 'Old gap' },
+  },
+  used: {
+    min_sample: 10, runs: 8, citing: 3, rate: null, since: '2026-10-25T00:00:00Z',
+    shown: [{ run_id: 'run_c', created_at: '2026-10-31T00:00:00Z', requirement: 'Fix the cap',
+      cited: [{ id: 'abcd1234', head: 'Caps count bytes', rel: 'Projects/P/2-understanding/TECH.md', line: 3 }], other_refs: 1 }],
+    missed: [{ unit_id: 'u1', run_id: 'run_m', at: '2026-10-31T00:00:00Z', title: 'Same as an entry' }], missed_total: 1,
+    written_used: { rate: null, mature_written: 0, mature_used: 0, young_written: 1344, window_days: 14 },
+  },
+};
+let evalData: unknown = EVAL;
 vi.mock('../../services/ddd', () => ({
   useBrainDetail: () => ({ data: DETAIL }),
   useBrainKnowledge: () => ({ data: KNOWLEDGE }),
+  useBrainEval: () => ({ data: evalData, isError: false }),
   useRunnerAgent: () => ({ data: null }),
   getStarterKind: () => Promise.resolve({ path: '', role: 'DISTILL', why: '', roots: [] }),
 }));
-vi.mock('../../services/pipelines', () => ({ pipelinesService: { fetchAnalytics: vi.fn() } }));
-const hiveRuns = vi.fn();
-vi.mock('../../services/swarmOut', () => ({ swarmOutService: { runs: () => hiveRuns() } }));
-const hiveRun = (id: string, brain: string, o: Record<string, unknown> = {}) => ({
-  dispatch_id: id, hive_id: 'h1', hive: 'worker-1', session_id: null, title: `Hive ${id}`, origin: 'swarm-out',
-  sent_at: new Date(Date.now() - 3600_000).toISOString(), state: 'running', running: true, waiting: false,
-  project_agent: { brain, mode: 'change', profile: 'bugfix', revision: 'r1', delivery: 'bundle', acceptance: null }, ...o,
-});
 
-import { BrainMapView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge, BrainNeedsView } from './BrainMapView';
+import { BrainMapView, BrainAgentView, BrainEvalView, BrainAddKnowledge, BrainNeedsView } from './BrainMapView';
 import { BrainHubHome } from './BrainHubHome';
-import { OpenSessionContext } from '../swarm-out/openSession';
+import { LocalRunCard } from './LocalRunCard';
 
 const run = (id: string, o: Record<string, unknown> = {}) => ({
   id, requirement: `Req ${id}`, status: 'completed', profile: 'bugfix', progress: '8/8', cycleTimeMin: 10,
@@ -53,75 +66,54 @@ const run = (id: string, o: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
-  hiveRuns.mockResolvedValue({ runs: [], asks: [], errors: [] });
-  mockAnalytics.mockReturnValue({
-    window: '30d', overall: {}, trend: [],
-    byProject: [
-      { project: 'P', runs: [run('run_1', { needsYou: true, pauseKind: 'decision', status: 'running' }), run('run_2')] },
-      { project: 'Other', runs: [run('run_9')] },
-    ],
-  });
+  evalData = EVAL;
+  (DETAIL as Record<string, unknown>).pendingBySource = { paused_run: 1, escalation: 1 };
 });
 
 describe('BrainMapView', () => {
-  it('draws the map with real counts and only this brain\'s Runs', () => {
+  it('draws the map with real counts and no Run: no Conductor, no sources, no run dots', () => {
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
     expect(screen.getByTestId('brain-map')).toBeTruthy();
     expect(screen.getByTestId('bm-sec-knowledge').textContent).toContain('2 entries');
     expect(screen.getByTestId('bm-brain').textContent).toContain('DDD');   // no git version: a Brain need not be in git
-    expect(screen.getByTestId('bm-run-run_1')).toBeTruthy();
-    expect(screen.queryByTestId('bm-run-run_9')).toBeNull();
-    expect(screen.getByTestId('bm-you').textContent).toContain('1');   // the 1 Run waiting on you
+    expect(screen.queryByTestId('bm-conductor')).toBeNull();
+    expect(screen.queryByTestId('bm-src-chat')).toBeNull();
+    expect(screen.queryByTestId('bm-src-hive')).toBeNull();
+    expect(document.querySelector('[data-testid^="bm-run-"]')).toBeNull();
+    // the escalation is the Brain's; the waiting Run is not
+    expect(screen.getByTestId('bm-you').textContent).toContain('1');
     expect(screen.getByTestId('bm-you').getAttribute('aria-label')).toBe('You: 1 need you');
   });
 
-  it('Needs you sits beside the map, and the Needs you tab lists the same', () => {
+  it('Needs you sits beside the map with the Brain\'s own items, and the Needs you tab lists the same', () => {
     const onGoTo = vi.fn();
     render(<BrainMapView name="P" onGoTo={onGoTo} />);
-    expect(screen.getByTestId('bm-need-run_1')).toBeTruthy();
-    expect(screen.getByTestId('bm-eval-summary').textContent).toContain('1 / 2');
-    expect(screen.getByTestId('bm-eval-summary').textContent).not.toContain('Sinking');   // entries no longer decay
+    expect(screen.getByTestId('bm-need-escalations')).toBeTruthy();
+    expect(screen.queryByTestId('bm-need-runs-unlisted')).toBeNull();
+    expect(screen.getByTestId('bm-eval-summary').textContent).toContain('89%');
+    expect(screen.getByTestId('bm-eval-summary').textContent).toContain('3 / 8');
     cleanup();
     render(<BrainNeedsView name="P" onGoTo={onGoTo} />);
-    expect(screen.getByTestId('bm-need-run_1')).toBeTruthy();
+    expect(screen.getByTestId('bm-need-escalations')).toBeTruthy();
   });
 
-  it('an escalation for this Brain is listed and opens Need You; a Run opens on its own drawer', () => {
-    (DETAIL as Record<string, unknown>).pendingBySource = { escalation: 1, paused_run: 1 };
-    const shown: CustomEvent[] = [];
-    const listen = (e: Event) => shown.push(e as CustomEvent);
+  it('an escalation for this Brain opens Need You', () => {
+    const shown: string[] = [];
+    const listen = (e: Event) => shown.push(e.type);
     window.addEventListener('swarm:show-needs-you', listen);
-    window.addEventListener('swarm:show-pipeline', listen);
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
     expect(screen.getByTestId('bm-need-escalations').textContent).toContain('1 escalation to decide');
     fireEvent.click(screen.getByTestId('bm-need-escalations').querySelector('button')!);
-    fireEvent.click(screen.getByTestId('bm-need-run_1').querySelector('button')!);
-    expect(shown.map((e) => e.type)).toEqual(['swarm:show-needs-you', 'swarm:show-pipeline']);
-    expect(shown[1].detail).toEqual({ runId: 'run_1' });
+    expect(shown).toEqual(['swarm:show-needs-you']);
     window.removeEventListener('swarm:show-needs-you', listen);
-    window.removeEventListener('swarm:show-pipeline', listen);
-    delete (DETAIL as Record<string, unknown>).pendingBySource;
   });
 
-  it('the map draws what exists: Chat tab and Hive with their counts, nothing labelled mock', async () => {
-    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P'), hiveRun('d9', 'Other')], asks: [], errors: [] });
-    render(<BrainMapView name="P" onGoTo={vi.fn()} />);
-    await waitFor(() => expect(screen.getByTestId('bm-src-hive').textContent).toBe('Hive 1'));
-    expect(screen.getByTestId('bm-src-chat').textContent).toBe('Chat tab 2');
-    expect(screen.queryByTestId('bm-src-2')).toBeNull();
-    expect(screen.getByTestId('bm-conductor').textContent).toContain('Chat tab 1 · Hive 1 going');
-    expect(screen.getByTestId('bm-run-d1')).toBeTruthy();
-    expect(screen.queryByTestId('bm-run-d9')).toBeNull();
-    expect(screen.getByTestId('brain-map-view').textContent?.toLowerCase()).not.toContain('mock');
-  });
-
-  it('one needs count: a newly read repository counts on the map and in the panel, as in the header', () => {
+  it('one needs count: a newly read repository counts on the map and in the panel, a waiting Run does not', () => {
     (DETAIL as Record<string, unknown>).pendingBySource = { paused_run: 1, escalation: 1, local_root: 1 };
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
-    expect(screen.getByTestId('bm-need-count').textContent).toBe('3');   // the Run, the escalation, the repository
-    expect(screen.getByTestId('bm-you').textContent).toContain('3');
+    expect(screen.getByTestId('bm-need-count').textContent).toBe('2');   // the escalation, the repository
+    expect(screen.getByTestId('bm-you').textContent).toContain('2');
     expect(screen.getByTestId('bm-need-repos').textContent).toContain('1 repository newly read');
-    delete (DETAIL as Record<string, unknown>).pendingBySource;
   });
 
   it('each map part opens its tab', () => {
@@ -132,60 +124,28 @@ describe('BrainMapView', () => {
     expect(go('bm-brain')).toBe('brain');
     expect(go('bm-sec-gates')).toBe('brain');
     expect(go('bm-agent')).toBe('agent');
-    expect(go('bm-src-hive')).toBe('runs');
-    expect(go('bm-conductor')).toBe('runs');
     expect(go('bm-reflect')).toBe('reflect');
     expect(go('bm-eval')).toBe('eval');
   });
 
-  it('the map shows status dots and its arrows say what they mean', () => {
+  it('the map shows status dots, its arrows say what they mean, and Eval its health', () => {
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
     const map = screen.getByTestId('brain-map');
-    for (const label of ['drafts, you submit', 'writes rules after your OK', 'writes knowledge', 'each Run uses this version']) {
-      expect(map.textContent).toContain(label);
-    }
-    // a Run waits on you -> the Conductor dot says so; Gates has no files -> attention;
-    // the Brain learned one entry this week -> ok, and says how many
-    expect(screen.getByTestId('bm-conductor').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('needs');
+    for (const label of ['reads', 'writes rules after your OK', 'writes knowledge']) expect(map.textContent).toContain(label);
+    expect(map.textContent).not.toContain('each Run uses this version');
     expect(screen.getByTestId('bm-sec-gates').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('attention');
     expect(screen.getByTestId('bm-reflect').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('ok');
     expect(screen.getByTestId('bm-reflect').textContent).toContain('1 learned this week');
-  });
-
-  it('Conductor · Runs: a Chat tab lane and a Hive lane of this Brain only, no mock lane', async () => {
-    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P'), hiveRun('d9', 'Other')], asks: [], errors: [] });
-    render(<BrainRunsView name="P" />);
-    expect(screen.getByTestId('bm-runcard-run_2')).toBeTruthy();
-    expect(screen.queryByTestId('bm-runcard-run_9')).toBeNull();
-    const hive = screen.getByTestId('bm-lane-hive');
-    await waitFor(() => expect(hive.querySelectorAll('[data-testid="swarm-out-run"]')).toHaveLength(1));
-    expect(hive.textContent).toContain('Hive d1');
-    expect(hive.textContent).not.toContain('Hive d9');
-    expect(screen.getByTestId('bm-panel-runs').textContent).not.toContain('Local Worker');
-    expect(screen.getByTestId('bm-panel-runs').textContent?.toLowerCase()).not.toContain('mock');
-  });
-
-  it('a Hive card in a Brain\'s Runs tab opens its session through the overlay\'s opener', async () => {
-    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P', { session_id: 'sess_1' }), hiveRun('d2', 'P', { session_id: null })], asks: [], errors: [] });
-    const open = vi.fn();
-    render(<OpenSessionContext.Provider value={open}><BrainRunsView name="P" /></OpenSessionContext.Provider>);
-    const hive = screen.getByTestId('bm-lane-hive');
-    await waitFor(() => expect(hive.querySelectorAll('[data-testid="swarm-out-run-open-button"]')).toHaveLength(1));
-    fireEvent.click(hive.querySelector('[data-testid="swarm-out-run-open-button"]')!);
-    expect(open).toHaveBeenCalledWith('sess_1', 'Hive d1 · worker-1', false);
+    expect(screen.getByTestId('bm-eval').textContent).toContain('89% useful');
   });
 
   it('a local Run card shows the Hive card\'s cells, and — for what the Run did not record', () => {
-    mockAnalytics.mockReturnValue({
-      window: '30d', overall: {}, trend: [],
-      byProject: [{ project: 'P', runs: [
-        run('run_2', { activeS: 600, finishedAt: '2026-10-29T10:00:00Z', humanDecisions: 2, costUsd: 1.234,
-          billedTokens: 4_800_000, rework: 1, landing: 'landed',
-          audit: [{ dim: 'Run Isolation', verdict: 'PASS', detail: 'isolated' }, { dim: 'Speed', verdict: 'WARN', detail: '10 min' }] }),
-        run('run_3', { notLanded: true, landing: 'not_landed', notLandedReason: 'final_stale' }),
-      ] }],
-    });
-    render(<BrainRunsView name="P" />);
+    render(<div>
+      <LocalRunCard brain="P" r={run('run_2', { activeS: 600, finishedAt: '2026-10-29T10:00:00Z', humanDecisions: 2, costUsd: 1.234,
+        billedTokens: 4_800_000, rework: 1, landing: 'landed',
+        audit: [{ dim: 'Run Isolation', verdict: 'PASS', detail: 'isolated' }, { dim: 'Speed', verdict: 'WARN', detail: '10 min' }] }) as never} />
+      <LocalRunCard brain="P" r={run('run_3', { notLanded: true, landing: 'not_landed', notLandedReason: 'final_stale' }) as never} />
+    </div>);
     const full = screen.getByTestId('bm-runcard-run_2');
     const cell = (card: HTMLElement, k: string) => card.querySelector(`[data-testid="swarm-out-stat-${k}"]`)?.textContent ?? '';
     expect(cell(full, 'cost')).toContain('$1.23');
@@ -201,23 +161,45 @@ describe('BrainMapView', () => {
     expect(bare.querySelector('[data-testid="bm-runcard-ended"]')?.textContent).toContain('final_stale');
   });
 
-  it('Eval: no mock section; human decisions per Run from local and Hive records', async () => {
-    mockAnalytics.mockReturnValue({
-      window: '30d', overall: {}, trend: [],
-      byProject: [{ project: 'P', runs: [run('run_2', { humanDecisions: 2 }), run('run_3')] }],
-    });
-    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P', { state: 'stopped',
-      result: { work: { human: { approved: 3, denied: 0, unanswered: 5, answered_questions: 1 } } } })], asks: [], errors: [] });
+  it('Eval: two numbers on top, then the two questions; no run statistics', () => {
+    const open = vi.fn();
+    render(<BrainEvalView name="P" onOpenFile={open} />);
+    const top = screen.getByTestId('bm-eval-top-health');
+    expect(top.textContent).toContain('89%');
+    expect(top.textContent).toContain('target 90% · 37 scored, since 10-29');
+    expect(screen.getByTestId('bm-eval-top-used').textContent).toContain('3 / 8');
+    expect(screen.getByTestId('bm-eval-top-used').textContent).toContain('too few to rate (8)');
+    expect(screen.getByTestId('bm-eval-gaps').textContent).toContain('93 · oldest 2 d');
+    expect(screen.getByTestId('bm-eval-written-used').textContent).toContain('nothing written 14 days ago yet');
+    // an entry to handle opens its file in the Canvas
+    fireEvent.click(screen.getByTestId('bm-eval-flag-cand-w.unit'));
+    expect(open).toHaveBeenCalledWith('Projects/P/2-understanding/TECH.md');
+    expect(screen.getByTestId('bm-eval-flagged').textContent).toContain('TECH.md:7');
+    // a missed use opens its run in Pipelines
+    const shown: CustomEvent[] = [];
+    const listen = (e: Event) => shown.push(e as CustomEvent);
+    window.addEventListener('swarm:show-pipeline', listen);
+    fireEvent.click(screen.getByTestId('bm-eval-missed').querySelector('button')!);
+    expect(shown[0].detail).toEqual({ runId: 'run_m' });
+    window.removeEventListener('swarm:show-pipeline', listen);
+    const text = screen.getByTestId('bm-panel-eval').textContent ?? '';
+    for (const gone of ['Landed', 'Tokens', 'Average cycle', 'Human decisions', 'UNKNOWN']) expect(text).not.toContain(gone);
+  });
+
+  it('Eval: a store nobody could read says not measured, a small sample says too few, never a number', () => {
+    evalData = { ...EVAL,
+      health: { ...EVAL.health, rate: null, scored: null, counts: null, flagged: [], duplicates: null, gaps: null, entries: null },
+      used: { ...EVAL.used, runs: 0, citing: 0, shown: [], missed: null, missed_total: null, written_used: null } };
     render(<BrainEvalView name="P" />);
-    const panel = screen.getByTestId('bm-panel-eval');
-    await waitFor(() => expect(panel.textContent).toContain('over 2 Runs that recorded them, local and Hive'));
-    expect(panel.textContent).toContain('Human decisions per Run3');   // (2 + 4) / 2
-    expect(panel.textContent).toContain('UNKNOWN');
-    expect(panel.textContent?.toLowerCase()).not.toContain('mock');
-    expect(panel.textContent).not.toContain('Change requests');
-    expect(panel.textContent).not.toContain('Queue wait');
-    expect(panel.textContent).not.toContain('Sinking');             // entries no longer decay
-    expect(panel.textContent).not.toContain('Reclaimable noise');
+    expect(screen.getByTestId('bm-eval-top-health').textContent).toContain('not measured');
+    expect(screen.getByTestId('bm-eval-top-used').textContent).toContain('no Run wrote requirements or a design');
+    expect(screen.getByTestId('bm-eval-dups').textContent).toContain('not measured');
+    expect(screen.queryByTestId('bm-eval-flagged')).toBeNull();
+    cleanup();
+    evalData = { ...EVAL, health: { ...EVAL.health, rate: null, scored: 3 } };
+    render(<BrainEvalView name="P" />);
+    expect(screen.getByTestId('bm-eval-top-health').textContent).toContain('too few to rate (3)');
+    expect(screen.getByTestId('bm-eval-top-health').textContent).not.toContain('%');
   });
 
   it('the Project Agent page submits a request to chat and shows no mock intake', async () => {
@@ -350,8 +332,8 @@ describe('BrainHubHome', () => {
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: true, delivery: true, refresher: false },
     health: { pending: 0, liveRun: false, lastChangeRelative: '--', ...h }, ...o,
   });
-  // P: a Run needs you (analytics above, and the attention channel's paused_run).
-  // Q: an escalation and two failing jobs. R: running. S: being born. T: quiet.
+  // P: a Run waits on you (the attention channel's paused_run): not the Brain's.
+  // Q: an escalation and two failing jobs. R: a Run going. S: being born. T: quiet.
   const brains = [
     brain('T', { description: 'Quiet one', learnedWeek: 0 }),
     brain('S', { setupState: 'setting-up', learnedWeek: 2 }),
@@ -365,23 +347,23 @@ describe('BrainHubHome', () => {
     render(<BrainHubHome brains={brains as never} selfName="P" onOpen={vi.fn()} />);
     expect(screen.getByTestId('hub-count').textContent).toBe('5 Brains');
     expect(screen.getByTestId('hub-ambient').textContent).toContain('+9 learned this week');
-    // each item once: P's Run (counted by the attention channel, not again from the
-    // analytics) + Q's escalation + Q's 2 failing jobs; the worst one sets the band's tone
-    expect(screen.getByTestId('hub-open-count').textContent).toBe('4 open items');
+    // each Brain item once: Q's escalation + Q's 2 failing jobs; P's waiting Run is
+    // Pipelines', not a Brain's; the worst one sets the band's tone
+    expect(screen.getByTestId('hub-open-count').textContent).toBe('3 open items');
     expect(screen.getByTestId('hub-attention').getAttribute('data-tone')).toBe('urgent');
     const chips = screen.getAllByTestId(/^hub-chip-/).map((c) => c.textContent);
-    expect(chips).toEqual(['1 Run waiting', '1 escalation to decide', '2 other items']);
+    expect(chips).toEqual(['1 escalation to decide', '2 other items']);
     expect(order()).toEqual(['hub-card-P', 'hub-card-Q', 'hub-card-R', 'hub-card-S', 'hub-card-T']);
     expect([...screen.getByTestId('brainhub-builtin-wall').children].map((c) => c.getAttribute('data-testid')))
       .toEqual(['hub-card-P']);
-    expect(screen.getByTestId('hub-signal-P').textContent).toBe('A Run needs you');
-    expect(screen.getByTestId('hub-signal-P').getAttribute('data-tone')).toBe('urgent');
+    expect(screen.queryByTestId('hub-signal-P')).toBeNull();          // a waiting Run is not the Brain's status
     expect(screen.getByTestId('hub-card-P').querySelector('[data-testid="dddcard-self-tag"]')).toBeTruthy();
     expect(screen.getByTestId('hub-desc-Q').textContent).toContain('No description yet');
     expect(screen.getByTestId('hub-signal-Q').textContent).toBe('1 escalation to decide');
-    expect(screen.getByTestId('hub-signal-R').getAttribute('data-tone')).toBe('live');
+    expect(screen.queryByTestId('hub-signal-R')).toBeNull();          // nor a Run going
     expect(screen.queryByTestId('hub-signal-T')).toBeNull();          // a quiet Brain shows no status
-    expect(screen.getByTestId('hub-eval').textContent).toContain('1 of 1 finished Runs landed');
+    expect(screen.queryByTestId('hub-eval')).toBeNull();              // no run statistics in the Hub
+    expect(screen.queryByTestId('hub-conductor')).toBeNull();
   });
 
   it('Review opens the queue, whose buttons open the right place; cards never move or filter out', () => {
@@ -392,19 +374,15 @@ describe('BrainHubHome', () => {
     expect(order()).toEqual(['hub-card-P', 'hub-card-Q', 'hub-card-R', 'hub-card-S', 'hub-card-T']);
     const shown: CustomEvent[] = [];
     const listen = (e: Event) => shown.push(e as CustomEvent);
-    window.addEventListener('swarm:show-pipeline', listen);
     window.addEventListener('swarm:show-needs-you', listen);
-    fireEvent.click(screen.getByTestId('hub-need-go-run_1'));            // that Run's drawer
-    expect(shown[0].type).toBe('swarm:show-pipeline');
-    expect(shown[0].detail).toEqual({ runId: 'run_1' });
+    expect(screen.queryByTestId('hub-need-go-run_1')).toBeNull();
     expect(screen.getByTestId('hub-need-Q-escalations').textContent).toContain('1 escalation to decide');
     fireEvent.click(screen.getByTestId('hub-need-go-Q-escalations'));    // Need You overlay
-    expect(shown[1].type).toBe('swarm:show-needs-you');
+    expect(shown[0].type).toBe('swarm:show-needs-you');
     expect(screen.getByTestId('hub-need-Q-jobs').textContent).toContain('2 other items in Need You');
     fireEvent.click(screen.getByTestId('hub-need-go-Q-jobs'));           // Need You overlay
-    expect(shown[2].type).toBe('swarm:show-needs-you');
+    expect(shown[1].type).toBe('swarm:show-needs-you');
     expect(onOpen).not.toHaveBeenCalled();
-    window.removeEventListener('swarm:show-pipeline', listen);
     window.removeEventListener('swarm:show-needs-you', listen);
     fireEvent.click(screen.getByTestId('hub-needs-toggle'));
     expect(screen.queryByTestId('hub-needs')).toBeNull();

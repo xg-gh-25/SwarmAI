@@ -295,8 +295,8 @@ describe('BrainHub — Gallery (AC3)', () => {
     // SwarmAI is pending==0 → calm card → presence bar + boxed cheap grid are GONE
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
     expect(screen.getByTestId('dddcard-SwarmAI').textContent).not.toContain('sinking');
-    // the card keeps its one signal line (SwarmAI: a Run in progress) and stays clickable
-    expect(screen.getByTestId('dddcard-SwarmAI').textContent).toContain('Run in progress');
+    // a Run in progress is not the Brain's status (Pipelines / Swarm Out): no signal line
+    expect(screen.getByTestId('dddcard-SwarmAI').textContent).not.toContain('Run in progress');
   });
 
   it('renders NO recall-heat / crown / ref_count number anywhere (R30#4)', async () => {
@@ -377,7 +377,7 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
   it('the tabs are the parts of the Brain map plus Distribute; Brain (DDD) shows the docs, then the files', async () => {
     await openBrain();
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent?.replace(/\d+$/, ''));
-    expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'Conductor · Runs', 'What it learned', 'Eval', 'Distribute']);
+    expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'What it learned', 'Eval', 'Distribute']);
     expect(screen.getByTestId('brainhub-overview')).toBeTruthy();
     expect(screen.getByTestId('brainhub-browse')).toBeTruthy();
     // search sits in this tab, next to what it searches; the tab bar is navigation only

@@ -1064,6 +1064,26 @@ async def get_brain(name: str) -> dict:
     return detail
 
 
+@router.get("/brains/{name}/eval")
+async def get_brain_eval(name: str, refresh: bool = False) -> dict:
+    """Brain Eval (design 2026-11-01-brain-eval-and-runs §2.2): is the Brain's knowledge
+    healthy, and was it used. Read-only; a snapshot kept a few minutes
+    (``core.brain_eval.snapshot``), ``refresh`` recomputes it."""
+    from config import get_swarmws
+    from core import brain_eval
+
+    def _eval():
+        project_dir = _resolve_brain_dir(name)
+        if project_dir is None:
+            return None
+        return brain_eval.snapshot(project_dir.name, workspace=Path(get_swarmws()), refresh=refresh)
+
+    result = await executors.run_nav(_eval)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+    return result
+
+
 # ─── What the Brain learned (design 2026-10-30-brain-change-feed) ─────────────
 #
 # The CDF-written entries of the Brain's main files, by layer and type, newest first,

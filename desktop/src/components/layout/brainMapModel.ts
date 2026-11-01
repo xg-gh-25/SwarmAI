@@ -1,27 +1,21 @@
 /**
  * brainMapModel — pure builders for the Brain map (Brain Hub detail "Map" view and
  * the Hub map above the card wall). No React, no fetch: every number comes from a
- * record the backend already produced (GET /ddd/brains[/{name}], GET /ddd/brains/{name}/
- * knowledge, GET /pipelines/analytics, GET /swarm-out/runs). A
- * value nobody measures is `null` (shown as UNKNOWN), never a guess.
+ * record the backend already produced (GET /ddd/brains[/{name}]). A Brain holds
+ * knowledge only: Runs, their waits and their autonomy live in Pipelines and Swarm Out
+ * (design docs/design/2026-11-01-brain-eval-and-runs.md §2), so nothing here reads a Run.
  *
  * Exports:
  *   SECTION_ORDER        the six DDD sections, map order
  *   sectionCounts        per-section count line from a BrainDetail
- *   projectRuns          this brain's Runs from the 30-day analytics payload
- *   runTone              Run status -> map dot tone
- *   needsYouItems        one queue: everything waiting on you in one Brain (needsCount: its total)
- *   brainHiveRuns        the Hive runs of one brain (30 days); hiveLive: one that is going
- *   humanPerRun          human decisions per Run, local and Hive
- *   brainEval            the Eval numbers for one brain (null = not measured)
+ *   needsYouItems        one queue: what waits on you in one Brain (needsCount: its total)
+ *   brainPending         a Brain's own waiting items (Need You's count without its Runs)
  *   hubSummary           Brain Hub home totals across all brains
  *   hubNeeds             Brain Hub home: everything waiting on you, all brains
  *   pendingSplit         health.pending split by source (Runs / escalations / jobs)
  *   brainSignal          the one signal a Hub card shows, and its sort rank
  */
-import type { BrainDetail, BrainKnowledge, BrainSummary, GeneralBrain, SectionKey } from '../../services/ddd';
-import type { SwarmOutRun } from '../../services/swarmOut';
-import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
+import type { BrainDetail, BrainSummary, GeneralBrain, SectionKey } from '../../services/ddd';
 
 export const SECTION_ORDER: { key: SectionKey; label: string }[] = [
   { key: 'identity', label: 'Identity' },
@@ -45,26 +39,8 @@ export function sectionCounts(detail: BrainDetail | null): Record<SectionKey, st
   return out;
 }
 
-/** This brain's Runs in the last 30 days, newest first. */
-export function projectRuns(a: PipelineAnalytics | null | undefined, name: string): PipelineRunSummary[] {
-  const g = a?.byProject.find((p) => p.project === name);
-  return (g?.runs ?? []).slice().sort((x, y) => (y.updatedAt || '').localeCompare(x.updatedAt || ''));
-}
-
-export type RunTone = 'running' | 'needs' | 'landed' | 'failed' | 'stopped';
-
-export function runTone(r: PipelineRunSummary): RunTone {
-  if (r.needsYou) return 'needs';
-  if (r.status === 'running') return 'running';
-  if (r.status === 'completed') return r.notLanded ? 'failed' : 'landed';
-  // an abandoned run whose change is on main all the same (backend landed_as)
-  if (r.status === 'abandoned' && r.landedAs) return 'landed';
-  if (r.status === 'failed' || r.status === 'abandoned') return 'failed';
-  return 'stopped';
-}
-
 export interface NeedItem {
-  kind: 'run' | 'other';
+  kind: 'other';
   id: string;
   title: string;
   detail: string;
@@ -72,121 +48,42 @@ export interface NeedItem {
   count: number;
 }
 
-/** Everything in this brain that waits for a person, in one list: Runs, then one row per
- *  kind the attention channel holds that the Runs do not name (escalations, failing
- *  jobs, newly read repositories, Runs not listed, anything else). The rows' counts add
- *  up to the Brain header's count (the attention channel's pending), so the header, the
- *  map's You and this list agree. The Project Agent never waits on the person: the
- *  agent keeps it current and fixes its problems (design 2026-11-01-project-agent-simple). */
-export function needsYouItems(
-  runs: PipelineRunSummary[],
-  bySource?: Record<string, number>,
-): NeedItem[] {
+/** What waits for a person in this Brain itself, one row per kind the attention channel
+ *  holds: escalations, failing jobs, newly read repositories, anything else. A Run waiting
+ *  on you is not the Brain's: it is in Need You and in Pipelines / Swarm Out. The rows'
+ *  counts add up to the Brain header's count (``brainPending``), so the header, the map's
+ *  You and this list agree. The Project Agent never waits on the person: the agent keeps
+ *  it current and fixes its problems (design 2026-11-01-project-agent-simple). */
+export function needsYouItems(bySource?: Record<string, number>): NeedItem[] {
   const items: NeedItem[] = [];
-  for (const r of runs) {
-    if (!r.needsYou) continue;
-    const why = r.pauseKind === 'decision' ? 'a question is waiting'
-      : r.pauseKind === 'stopped' ? 'stopped, needs a resume'
-      : r.checkpointReason || 'waiting on you';
-    items.push({ kind: 'run', id: r.id, title: r.requirement || r.id, detail: `${r.id} · ${why}`, count: 1 });
-  }
-  // what the attention channel holds that the lists above do not name one by one
-  if (bySource) {
-    const split = pendingSplit({ health: { pending: 0 } as BrainSummary['health'], pendingBySource: bySource });
-    const listedRuns = items.filter((i) => i.kind === 'run').length;
-    const rest: [string, number, string, string][] = [
-      ['runs-unlisted', split.runs - listedRuns, plural(split.runs - listedRuns, 'more Run waiting', 'more Runs waiting'), 'open Need You to answer'],
-      ['escalations', split.escalations, `${plural(split.escalations, 'escalation')} to decide`, 'open Need You to answer'],
-      ['jobs', split.jobs, plural(split.jobs, 'failing job'), 'open Need You to triage'],
-      ['repos', split.repos, `${plural(split.repos, 'repository', 'repositories')} newly read`, 'the Brain started reading it; open Need You to see it'],
-      ['other', split.other, plural(split.other, 'other item'), 'open Need You'],
-    ];
-    for (const [id, n, title, detail] of rest) if (n > 0) items.push({ kind: 'other', id, title, detail, count: n });
-  }
+  if (!bySource) return items;
+  const split = pendingSplit({ health: { pending: 0 } as BrainSummary['health'], pendingBySource: bySource });
+  const rest: [string, number, string, string][] = [
+    ['escalations', split.escalations, `${plural(split.escalations, 'escalation')} to decide`, 'open Need You to answer'],
+    ['jobs', split.jobs, plural(split.jobs, 'failing job'), 'open Need You to triage'],
+    ['repos', split.repos, `${plural(split.repos, 'repository', 'repositories')} newly read`, 'the Brain started reading it; open Need You to see it'],
+    ['other', split.other, plural(split.other, 'other item'), 'open Need You'],
+  ];
+  for (const [id, n, title, detail] of rest) if (n > 0) items.push({ kind: 'other', id, title, detail, count: n });
   return items;
 }
 
 /** How many waiting items a needs list stands for. */
 export const needsCount = (items: NeedItem[]): number => items.reduce((s, i) => s + i.count, 0);
 
-/** The Hive runs (Swarm Out) whose Project Agent is this Brain, sent in the last 30 days,
- *  newest first. The Brain is the dispatch record's, else the run's result's. */
-export function brainHiveRuns(runs: SwarmOutRun[] | null | undefined, name: string, now = Date.now()): SwarmOutRun[] {
-  const since = now - 30 * 24 * 3600 * 1000;
-  return (runs ?? [])
-    .filter((r) => (r.project_agent?.brain ?? r.result?.project_agent?.brain) === name)
-    .filter((r) => { const t = Date.parse(r.sent_at); return !Number.isNaN(t) && t >= since; })
-    .sort((x, y) => Date.parse(y.sent_at) - Date.parse(x.sent_at));
-}
-
-/** A Hive run that is going: running, or waiting on the person. */
-export const hiveLive = (r: SwarmOutRun): boolean => r.state === 'running' || r.state === 'waiting';
-
-/** Human decisions per Run, over every Run that recorded them: a local Run's
- *  human_decisions, a Hive run's approvals + denials + answered questions. */
-export function humanPerRun(local: PipelineRunSummary[], hive: SwarmOutRun[]): { avg: number | null; runs: number } {
-  const n: number[] = [];
-  for (const r of local) if (r.humanDecisions != null) n.push(r.humanDecisions);
-  for (const r of hive) {
-    const h = r.result?.work?.human;
-    if (h) n.push(h.approved + h.denied + h.answered_questions);
-  }
-  return { avg: n.length ? n.reduce((a, b) => a + b, 0) / n.length : null, runs: n.length };
-}
-
-export interface BrainEval {
-  runs: { total: number; landed: number; completionRate: number | null; avgCycleMin: number | null; tokens: number | null; needsYou: number };
-  /** learnedWeek: entries CDF wrote into the Brain in the last 7 days (null: not loaded) */
-  brain: { entries: number; recentActivity: number | null; learnedWeek: number | null };
-}
-
-export function brainEval(
-  runs: PipelineRunSummary[], detail: BrainDetail | null, learned: BrainKnowledge | null,
-): BrainEval {
-  const landed = runs.filter((r) => r.status === 'completed' && !r.notLanded);
-  const done = runs.filter((r) => r.status !== 'running');
-  const cyc = runs.map((r) => r.cycleTimeMin).filter((x): x is number => typeof x === 'number');
-  const tok = runs.map((r) => r.tokensActual);
-  const knowledge = detail?.sections.find((s) => s.key === 'knowledge');
-  return {
-    runs: {
-      total: runs.length,
-      landed: landed.length,
-      completionRate: done.length ? landed.length / done.length : null,
-      avgCycleMin: cyc.length ? Math.round(cyc.reduce((a, b) => a + b, 0) / cyc.length) : null,
-      // a total is only honest when every Run was measured
-      tokens: tok.length && tok.every((t) => typeof t === 'number') ? (tok as number[]).reduce((a, b) => a + b, 0) : null,
-      needsYou: runs.filter((r) => r.needsYou).length,
-    },
-    brain: {
-      entries: knowledge?.entries.length ?? 0,
-      recentActivity: detail?.health?.recentActivity ?? null,
-      learnedWeek: learned ? learned.counts.week : null,
-    },
-  };
-}
-
 export interface HubSummary {
   brains: number;
-  /** items waiting on a person: the attention channel's count (Runs, escalations,
-   *  failing jobs) */
+  /** items waiting on a person in the Brains themselves (``brainPending``) */
   needsYou: number;
-  /** brains with a Run in progress */
-  running: number;
   /** brains whose setup is recorded as setting-up */
   born: number;
   /** entries CDF wrote in the last 7 days (each Brain's learnedWeek, the General Brain's
    *  included), summed; null = no Brain reported it (an older daemon) */
   learned: number | null;
   learnedBrains: number;
-  /** last 30 days: Runs that landed, and Runs that finished (landed or not) */
-  landed: number;
-  finished: number;
-  /** Runs running now (all lanes are the chat tab today) */
-  liveRuns: number;
 }
 
-/** How much an open item asks of the person, most first: a Run or an escalation is
+/** How much an open item asks of the person, most first: an escalation is
  *  blocked on them; a failing job waits for a review; a Brain being born is setup; a
  *  repository a Brain started reading is a
  *  notice. Only urgent and review carry a warm color on the Hub. */
@@ -195,16 +92,13 @@ export const SEVERITY_ORDER: Severity[] = ['urgent', 'review', 'setup', 'notice'
 
 export interface HubNeed {
   brain: string;
-  /** run: one Run (from the analytics); runs: Runs waiting that the analytics did
-   *  not list; escalations / jobs / repos: counted per brain */
-  kind: 'run' | 'runs' | 'escalations' | 'jobs' | 'repos';
+  /** escalations / jobs / repos: counted per brain */
+  kind: 'escalations' | 'jobs' | 'repos';
   id: string;
   text: string;
   /** how many items this row stands for (a per-brain count, or 1) */
   count: number;
   severity: Severity;
-  /** ISO time it started waiting (Runs only) */
-  since: string | null;
   /** the built-in General Brain (opened by its own view, never by the name) */
   builtin?: boolean;
 }
@@ -220,73 +114,56 @@ export function pendingSplit(b: Pick<BrainSummary, 'health' | 'pendingBySource'>
   return { runs, escalations, jobs, repos, other: total - runs - escalations - jobs - repos };
 }
 
+/** A Brain's own waiting items: the attention channel's count without the Runs waiting
+ *  on you (those are Pipelines' and Swarm Out's). */
+export function brainPending(b: Pick<BrainSummary, 'health' | 'pendingBySource'>): number {
+  const s = pendingSplit(b);
+  return s.escalations + s.jobs + s.repos + s.other;
+}
+
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** Every item across all brains that waits for a person: Runs oldest first, then
- *  escalations and failing jobs.
- *  Each item is counted once: the attention channel's count per source, with the
- *  Runs named from the analytics where it lists them. */
-export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | undefined,
-  _general?: GeneralBrain | null): HubNeed[] {
+/** Every item across all brains that waits for a person in the Brain itself:
+ *  escalations, then failing jobs and other items, then newly read repositories. Each
+ *  is counted once, from the attention channel's count per source. */
+export function hubNeeds(brains: BrainSummary[], _general?: GeneralBrain | null): HubNeed[] {
   const out: HubNeed[] = [];
-  const runs: HubNeed[] = [];
   for (const b of brains) {
     const split = pendingSplit(b);
-    const listed = (a?.byProject.find((g) => g.project === b.name)?.runs ?? []).filter((r) => r.needsYou);
-    for (const r of listed) {
-      const why = r.pauseKind === 'decision' ? 'question' : r.pauseKind === 'stopped' ? 'stopped' : 'waiting';
-      runs.push({ brain: b.name, kind: 'run', id: r.id, text: `Run ${why}: ${r.requirement || r.id}`,
-        since: r.updatedAt || null, count: 1, severity: 'urgent' });
-    }
-    const unlisted = split.runs - listed.length;
     const row = (kind: HubNeed['kind'], count: number, severity: Severity, text: string) =>
-      out.push({ brain: b.name, kind, id: `${b.name}-${kind}`, text, since: null, count, severity });
-    if (unlisted > 0) row('runs', unlisted, 'urgent', `${plural(unlisted, 'Run')} waiting on you`);
+      out.push({ brain: b.name, kind, id: `${b.name}-${kind}`, text, count, severity });
     if (split.escalations) row('escalations', split.escalations, 'urgent', `${plural(split.escalations, 'escalation')} to decide`);
     if (split.jobs + split.other) row('jobs', split.jobs + split.other, 'review', `${plural(split.jobs + split.other, 'other item')} in Need You`);
     if (split.repos) row('repos', split.repos, 'notice', `now reads ${plural(split.repos, 'new repository', 'new repositories')}`);
   }
-  runs.sort((x, y) => (x.since || '').localeCompare(y.since || ''));
-  const order: HubNeed['kind'][] = ['runs', 'escalations', 'jobs', 'repos'];
+  const order: HubNeed['kind'][] = ['escalations', 'jobs', 'repos'];
   out.sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind));
-  return [...runs, ...out];
+  return out;
 }
 
-export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
-  general?: GeneralBrain | null): HubSummary {
-  const known = new Set(brains.map((b) => b.name));
-  const runs = (a?.byProject ?? []).filter((g) => known.has(g.project)).flatMap((g) => g.runs);
+export function hubSummary(brains: BrainSummary[], general?: GeneralBrain | null): HubSummary {
   const reported = [...brains, ...(general ? [general] : [])].filter((b) => typeof b.learnedWeek === 'number');
   return {
     brains: brains.length,
-    // the attention channel already counts waiting Runs (paused_run): never add them twice
-    needsYou: brains.reduce((s, b) => s + (b.health.pending ?? 0), 0),
-    running: brains.filter((b) => b.health.liveRun).length,
+    needsYou: brains.reduce((s, b) => s + brainPending(b), 0),
     born: brains.filter((b) => b.setupState === 'setting-up').length,
     learned: reported.length ? reported.reduce((s, b) => s + (b.learnedWeek ?? 0), 0) : null,
     learnedBrains: reported.filter((b) => (b.learnedWeek ?? 0) > 0).length,
-    landed: runs.filter((r) => r.status === 'completed' && !r.notLanded).length,
-    finished: runs.filter((r) => r.status !== 'running').length,
-    liveRuns: runs.filter((r) => r.status === 'running').length,
   };
 }
 
-/** A card's status: an open item's severity, `live` for a Run in progress, `calm`
- *  when nothing is going on (the card then shows no status at all). */
-export type BrainSignalTone = Severity | 'live' | 'calm';
+/** A card's status: an open item's severity, `calm` when nothing waits (the card then
+ *  shows no status at all). A Run's state is not the Brain's (Pipelines / Swarm Out). */
+export type BrainSignalTone = Severity | 'calm';
 export interface BrainSignal { tone: BrainSignalTone; text: string; rank: number }
 
 /** The ONE most pressing thing to say about a brain on its Hub card: what blocks on the
- *  person, then what waits for a review, a Run in progress, setup, a notice. */
-export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): BrainSignal {
-  const runs = a?.byProject.find((g) => g.project === b.name)?.runs ?? [];
+ *  person, then what waits for a review, setup, a notice. */
+export function brainSignal(b: BrainSummary): BrainSignal {
   const split = pendingSplit(b);
-  const runNeeds = Math.max(runs.filter((r) => r.needsYou).length, split.runs);
-  if (runNeeds) return { tone: 'urgent', rank: 0, text: runNeeds === 1 ? 'A Run needs you' : `${runNeeds} Runs need you` };
   if (split.escalations) return { tone: 'urgent', rank: 0, text: `${plural(split.escalations, 'escalation')} to decide` };
   if (split.jobs + split.other) return { tone: 'review', rank: 1, text: `${plural(split.jobs + split.other, 'item')} in Need You` };
   if (b.projectAgentStatus === 'invalid') return { tone: 'review', rank: 1, text: 'Project Agent has problems' };
-  if (b.health.liveRun) return { tone: 'live', rank: 2, text: 'Run in progress' };
   if (b.setupState === 'setting-up') return { tone: 'setup', rank: 3, text: bornText(b.setupProgress) };
   if (split.repos) return { tone: 'notice', rank: 4, text: `Reads ${plural(split.repos, 'new repository', 'new repositories')}` };
   return { tone: 'calm', rank: 5, text: '' };

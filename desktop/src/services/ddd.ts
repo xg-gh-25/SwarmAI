@@ -447,6 +447,37 @@ export async function getBrainKnowledge(name: string, since: KnowledgeRange): Pr
   return resp.data;
 }
 
+/** GET /ddd/brains/{name}/eval (core/brain_eval): is the Brain's knowledge healthy, and
+ *  was it used. Keys are the backend's (snake_case). A rate below the minimum sample is
+ *  null with its count; a store that could not be read is null, never 0. */
+export interface BrainEvalFlagged {
+  unit_id: string; dest: string; title: string; verdict: 'weak' | 'withdraw'; klass: string | null;
+  reason_en: string; reason_zh: string; by_person: boolean; rel: string; line: number;
+}
+export interface BrainEvalCited { id: string; head: string; rel: string; line: number }
+export interface BrainEvalReport {
+  project: string; computed_at: string; window_days: number;
+  health: {
+    target: number; min_sample: number; rate: number | null; scored: number | null; since: string | null;
+    counts: { useful: number; weak: number; withdraw: number } | null;
+    flagged: BrainEvalFlagged[]; flagged_total?: number;
+    entries: number | null;
+    duplicates: { groups: number; extra: number; shown: { head: string; places: { rel: string; line: number }[] }[] } | null;
+    gaps: { open: number; oldest_days: number | null; oldest_title: string | null } | null;
+  };
+  used: {
+    min_sample: number; runs: number; citing: number; rate: number | null; since: string | null;
+    shown: { run_id: string; created_at: string | null; requirement: string; cited: BrainEvalCited[]; other_refs: number }[];
+    missed: { unit_id: string; run_id: string; at: string; title: string }[] | null; missed_total: number | null;
+    written_used: { rate: number | null; mature_written: number; mature_used: number; young_written: number; window_days: number } | null;
+  };
+}
+
+export async function getBrainEval(name: string): Promise<BrainEvalReport> {
+  const resp = await api.get<BrainEvalReport>(`/ddd/brains/${encodeURIComponent(name)}/eval`);
+  return resp.data;
+}
+
 /** GET …/distribution — live declared reach + output state (read-only). */
 export async function getDistribution(name: string): Promise<DistributionState> {
   const resp = await api.get<DistributionState>(
@@ -521,6 +552,16 @@ export function useBrainKnowledge(name: string | null, since: KnowledgeRange = '
   return useQuery<BrainKnowledge>({
     queryKey: ['brain-knowledge', name, since],
     queryFn: () => getBrainKnowledge(name as string, since),
+    enabled: !!name,
+    staleTime: BRAIN_STALE_MS,
+  });
+}
+
+/** Cached GET /ddd/brains/{name}/eval (the backend keeps a snapshot too). */
+export function useBrainEval(name: string | null) {
+  return useQuery<BrainEvalReport>({
+    queryKey: ['brain-eval', name],
+    queryFn: () => getBrainEval(name as string),
     enabled: !!name,
     staleTime: BRAIN_STALE_MS,
   });

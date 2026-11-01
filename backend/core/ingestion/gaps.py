@@ -38,6 +38,7 @@ SECTION = "What to Watch For"
 _PREFIX = re.compile(r"^- \[([^\]\s]+)\] ")
 _KIND = re.compile(r"gap kind:\s*([a-z_]+)")
 _TICKED = re.compile(r"^- \[[xX]\]")
+_COMMENT = re.compile(r"<!--.*?-->", re.S)
 _OPEN_CHILD = re.compile(r"\n[ \t]+- \[ \]")
 _TITLE = re.compile(r"\*\*(.+?)\*\*")
 _NOTE_UNSAFE = re.compile(r"<!--|-->|[\r\n]+|(?i:cand):")
@@ -120,6 +121,21 @@ def open_gap_ids(project: str | None) -> set[str]:
     is capped; what it may close is not (the cap is about the run's attention, and the
     list recomputed later would not be the one shown once another gap is written)."""
     return {str(_gap_id(unit)) for unit in _open_units(project)}
+
+
+_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+def all_open_gaps(project: str | None) -> list[dict[str, str]]:
+    """Every open gap of *project* (not capped), each with the last date on its first
+    line (``date``, its attribution; "" when none): how many are open and how old the
+    oldest is."""
+    out = []
+    for unit in _open_units(project):
+        # the entry's own line: a following line the parser kept with it is not its date
+        dates = _DATE.findall(_COMMENT.sub("", unit.text).strip().split("\n", 1)[0])
+        out.append({**_view(unit), "date": dates[-1] if dates else ""})
+    return out
 
 
 def open_gaps(project: str | None, query: str = "") -> list[dict[str, str]]:
@@ -294,5 +310,5 @@ def _close_declared(conn: sqlite3.Connection, unit_id: str | None = None) -> int
     return closed
 
 
-__all__ = ["open_gaps", "open_gap_ids", "close_gap", "close_declared", "is_closed_gap",
+__all__ = ["all_open_gaps", "open_gaps", "open_gap_ids", "close_gap", "close_declared", "is_closed_gap",
            "run_query", "SECTION"]

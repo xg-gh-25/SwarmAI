@@ -14,7 +14,7 @@
  * Clicking the title or Open opens the Run's drawer in Pipelines.
  *
  * Data: PipelineRunSummary (GET /api/pipelines/analytics → routers.pipelines._summary).
- * Exports: LocalRunCard, localRunStats, localJudge, localTone
+ * Exports: LocalRunCard, localRunStats, localJudge, localTone, runTone, RunTone
  */
 import { useTranslation } from 'react-i18next';
 import i18n from '../../i18n';
@@ -24,7 +24,6 @@ import { JudgeTag } from '../swarm-out/JudgeTag';
 import { DIMENSIONS, type RunJudge, type Verdict } from '../swarm-out/shapes';
 import { durationText, tokenCount, when, type RunStat } from '../swarm-out/live';
 import { TONE_VAR, type Tone } from '../swarm-out/tone';
-import { runTone, type RunTone } from './brainMapModel';
 import { openOverlayAt } from '../../utils/overlayTarget';
 
 /** A local Run's state in Swarm Out's colours: green landed, blue running, amber waits on
@@ -82,6 +81,19 @@ function endedText(r: PipelineRunSummary): { text: string; tone: Tone } {
 }
 
 const muted = 'text-[var(--color-text-muted)]';
+
+export type RunTone = 'running' | 'needs' | 'landed' | 'failed' | 'stopped';
+
+/** A local Run's status as a tone. */
+export function runTone(r: PipelineRunSummary): RunTone {
+  if (r.needsYou) return 'needs';
+  if (r.status === 'running') return 'running';
+  if (r.status === 'completed') return r.notLanded ? 'failed' : 'landed';
+  // an abandoned run whose change is on main all the same (backend landed_as)
+  if (r.status === 'abandoned' && r.landedAs) return 'landed';
+  if (r.status === 'failed' || r.status === 'abandoned') return 'failed';
+  return 'stopped';
+}
 
 export function LocalRunCard({ r, brain }: { r: PipelineRunSummary; brain: string }) {
   const { t } = useTranslation();

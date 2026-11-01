@@ -19,12 +19,13 @@
  * Reuses: the app Canvas via swarm:open-file. No new tree/editor/modal built.
  *
  * Brain Hub (2026-10-25): the Gallery is the Hub home (BrainHubHome: a summary row
- * whose counts filter the cards, one Needs-you queue, one card per brain, and a
- * Conductor / Eval footer). A brain opens on a two-line header (icon, name as the
- * Brain switcher, status; description; More menu) and seven tabs that mirror the
- * parts of the Brain map: Overview (the map, Needs you, Eval summary) · Needs you ·
- * Brain (DDD) (Add knowledge, docs, files) · Project Agent (definition, Start a Run) ·
- * Conductor · Runs · What it learned (BrainLearnedView: CDF's entries, Withdraw) · Eval. Clicking a map
+ * whose counts filter the cards, one Needs-you queue, one card per brain). A brain
+ * opens on a two-line header (icon, name as the Brain switcher, status; description;
+ * More menu) and six tabs that mirror the parts of the Brain map: Overview (the map,
+ * Needs you, Eval summary) · Needs you · Brain (DDD) (Add knowledge, docs, files) ·
+ * Project Agent (definition, Start a Run) · What it learned (BrainLearnedView: CDF's
+ * entries, Withdraw) · Eval. A Brain holds knowledge only: its Runs are in Pipelines and
+ * Swarm Out (design 2026-11-01-brain-eval-and-runs §2). Clicking a map
  * part opens its tab. The last tab, Distribute, ships the Brain out (an internal git
  * package or an external GitHub repo). `defaultView` picks the first
  * detail view (default 'overview').
@@ -34,7 +35,6 @@ import { Trans, useTranslation } from 'react-i18next';
 // the app's i18next instance (initialised in src/i18n, imported by main.tsx)
 import i18n from 'i18next';
 import { Tabs } from '../overlay';
-import { useQuery } from '@tanstack/react-query';
 import {
   useBrainsWithPinned, useBrainDetail, useBrainKnowledge, useDistribution,
   aggregateTypeCounts,
@@ -53,14 +53,13 @@ import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 import { OverlayError } from './OverlayState';
 import {
-  BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge,
+  BrainMapView, BrainNeedsView, BrainAgentView, BrainEvalView, BrainAddKnowledge,
   type BrainTab, type MapPanel,
 } from './BrainMapView';
 import { BrainHubHome, Flower } from './BrainHubHome';
 import { GeneralBrainView } from './GeneralBrainView';
 import { BrainLearnedView } from './BrainLearnedView';
-import { bornText, hubSummary } from './brainMapModel';
-import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
+import { bornText, brainPending } from './brainMapModel';
 import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { takeOverlayTarget } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -78,7 +77,7 @@ import { BackToHubButton } from './BackToHubButton';
 type Mode = 'gallery' | 'detail' | 'general';
 /** the built-in General Brain's name (backend project_agent.GENERAL_BRAIN) */
 const GENERAL_NAME = 'General';
-/** The detail views: the seven tabs (one per part of the Brain map, plus Overview)
+/** The detail views: the six tabs (one per part of the Brain map, plus Overview)
  *  and Distribute, the last step of a Brain's lifecycle (ship it out). */
 type DetailView = BrainTab | 'distribute';
 /** Each tab's label is the i18n key ui.BrainHub.tab_<key>. */
@@ -87,7 +86,6 @@ const TABS: { key: DetailView }[] = [
   { key: 'needs' },
   { key: 'brain' },
   { key: 'agent' },
-  { key: 'runs' },
   { key: 'reflect' },
   { key: 'eval' },
   { key: 'distribute' },
@@ -227,11 +225,8 @@ function BrainDetailShell(
 ) {
   const { t } = useTranslation();
   const summary = brains?.find((b) => b.name === name);
-  const { data: analytics = null } = useQuery<PipelineAnalytics>({
-    queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
-  });
-  // same count as the map's You: each Run waiting, each Need-You item
-  const needs = summary ? hubSummary([summary], analytics).needsYou : 0;
+  // same count as the map's You: the Brain's own waiting items (its Runs are Pipelines')
+  const needs = summary ? brainPending(summary) : 0;
 
   // close THIS overlay BEFORE dispatching swarm:open-file so the Canvas isn't
   // rendered under the host (the swarmws z-index precedent)
@@ -270,9 +265,8 @@ function BrainDetailShell(
           <BrainView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} addOpen={addOpen} />
         )}
         {detailView === 'agent' && <BrainAgentView name={name} onDispatch={onDispatch} onRequestClose={onRequestClose} />}
-        {detailView === 'runs' && <BrainRunsView name={name} onRequestClose={onRequestClose} />}
         {detailView === 'reflect' && <BrainLearnedView name={name} />}
-        {detailView === 'eval' && <BrainEvalView name={name} />}
+        {detailView === 'eval' && <BrainEvalView name={name} onOpenFile={shellOpenFile} />}
         {detailView === 'distribute' && <DistributeView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} />}
       </div>
     </div>

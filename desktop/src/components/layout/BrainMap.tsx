@@ -1,9 +1,9 @@
 /**
  * BrainMap — the Brain map picture: the six DDD sections as a hex flower around the
- * Brain, with You (review & judge), the Project Agent, where Runs come from (a chat
- * tab on this machine, a Hive), the one
- * Run Conductor, Reflect / Evolution and Eval laid out around it, and arrows that
- * say who does what. Each arrow's meaning is written ON the map, in a label pill
+ * Brain, with You (review & judge), the Project Agent, Reflect / Evolution and Eval laid
+ * out around it, and arrows that say who does what. A Brain holds knowledge only: the
+ * Runs that use it are in Pipelines and Swarm Out, not on the map (design
+ * 2026-11-01-brain-eval-and-runs §2.1). Each arrow's meaning is written ON the map, in a label pill
  * beside the line ("drafts, you submit", "writes rules after your OK"), coloured by what
  * it carries (a request, the Run flow, knowledge written, a rule waiting for your OK), and each
  * part carries a status dot (healthy / attention / needs you) and one line of what
@@ -17,32 +17,27 @@
  */
 import { useTranslation } from 'react-i18next';
 import type { SectionKey } from '../../services/ddd';
-import { SECTION_ORDER, type RunTone } from './brainMapModel';
+import { SECTION_ORDER } from './brainMapModel';
 
-export type BrainMapTarget = 'need' | 'agent' | 'runs' | 'reflect' | 'eval' | 'browse';
+export type BrainMapTarget = 'need' | 'agent' | 'reflect' | 'eval' | 'browse';
 /** A part's status dot: healthy, attention, needs you, busy; undefined = no dot. */
 export type MapTone = 'ok' | 'attention' | 'needs' | 'busy';
 
 export interface BrainMapProps {
   version: string;
   counts: Record<SectionKey, string>;
-  runs: { id: string; title: string; tone: RunTone }[];
-  /** Runs going now (running or waiting on you), per lane */
-  lanes: { chat: number; hive: number };
-  /** Runs in the last 30 days, per lane: the source pills' counts */
-  sources: { chat: number; hive: number };
   needs: number;
   /** entries learned in the last 7 days (null: not loaded yet) */
   reflect: { week: number | null };
   /** one line under the Project Agent and Eval titles (status / headline number) */
   agentLine?: string;
   evalLine?: string;
-  /** status dots per part (section keys, plus agent / conductor / reflect) */
-  tones?: Partial<Record<SectionKey | 'agent' | 'conductor' | 'reflect', MapTone>>;
+  /** status dots per part (section keys, plus agent / reflect) */
+  tones?: Partial<Record<SectionKey | 'agent' | 'reflect', MapTone>>;
   onOpen: (t: BrainMapTarget, section?: SectionKey) => void;
 }
 
-const W = 720, H = 600;
+const W = 720, H = 490;
 const C = { x: 360, y: 246 };
 const HR = 50;
 const HD = Math.sqrt(3) * HR + 6;
@@ -50,11 +45,9 @@ const ANG: Record<SectionKey, number> = {
   identity: -120, knowledge: -60, gates: 0, capabilities: 60, refresher: 120, delivery: 180,
 };
 const P = {
-  agent: { x: 92, y: 246 }, conductor: { x: 360, y: 500 }, evo: { x: 622, y: 412 },
+  agent: { x: 92, y: 246 }, evo: { x: 622, y: 412 },
   need: { x: 70, y: 56 }, eval: { x: 620, y: 56 },
 };
-/** where a Brain's Runs come from: a chat tab on this machine, or a Hive (Swarm Out) */
-const SRC = [{ key: 'chat', nameKey: 'ui.BrainMap.srcChat' }, { key: 'hive', nameKey: 'ui.BrainMap.srcHive' }] as const;
 
 function secPos(k: SectionKey) {
   const a = (ANG[k] * Math.PI) / 180;
@@ -73,13 +66,6 @@ function toward(c: { x: number; y: number }, p: { x: number; y: number }, r: num
   return { x: c.x + (dx / l) * r, y: c.y + (dy / l) * r };
 }
 
-const RUN_FILL: Record<RunTone, string> = {
-  running: 'fill-[var(--color-primary)]',
-  needs: 'fill-[var(--color-status-error)]',
-  landed: 'fill-[var(--color-status-success)]',
-  failed: 'fill-[var(--color-status-warning)]',
-  stopped: 'fill-[var(--color-text-muted)]',
-};
 const DOT_FILL: Record<MapTone, string> = {
   ok: 'fill-[var(--color-status-success)]',
   attention: 'fill-[var(--color-status-warning)]',
@@ -140,14 +126,12 @@ function Part({ label, onClick, testid, children }: {
   );
 }
 
-export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect, agentLine, evalLine, tones = {}, onOpen }: BrainMapProps) {
+export function BrainMap({ version, counts, needs, reflect, agentLine, evalLine, tones = {}, onOpen }: BrainMapProps) {
   const { t } = useTranslation();
   const d = secPos('delivery'), k = secPos('knowledge'), g = secPos('gates');
   // outlines: the muted text colour (the border colour sinks into a dark card), and a
   // fixed width on screen however wide the map is drawn
   const box = 'fill-[var(--color-card)] stroke-[color-mix(in_srgb,var(--color-text-muted)_70%,transparent)] group-hover:stroke-[var(--color-primary)] group-focus:stroke-[var(--color-primary)]';
-  const shown = runs.slice(0, 12);
-  const cTop = P.conductor.y - 50;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={t('ui.BrainMap.mapAria')} data-testid="brain-map"
       className="block mx-auto max-w-[860px]">
@@ -160,23 +144,17 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
         ))}
       </defs>
 
-      {/* faint Eval reads: it scores the Brain and the Runs, offline */}
+      {/* faint Eval reads: it scores the Brain's knowledge and Reflect's writes */}
       <path d={`M${P.eval.x - 20},${P.eval.y + 26} L${C.x + 40},${C.y - HD - 34}`} fill="none" style={{ stroke: 'var(--color-text-muted)' }}
         strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeDasharray="1 5" strokeLinecap="round" />
       <path d={`M${P.eval.x},${P.eval.y + 26} L${P.evo.x},${P.evo.y - 58}`} fill="none" style={{ stroke: 'var(--color-text-muted)' }}
         strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeDasharray="1 5" strokeLinecap="round" />
 
       <Arrow a={{ x: P.agent.x + 72, y: P.agent.y }} b={{ x: d.x - HR + 4, y: d.y }} label={t('ui.BrainMap.arrowReads')} lx={(P.agent.x + 72 + d.x - HR) / 2} ly={P.agent.y - 16} flow="request" />
-      <Arrow a={{ x: P.agent.x, y: P.agent.y + 38 }} b={{ x: P.conductor.x - 132, y: cTop + 6 }} label={t('ui.BrainMap.arrowDrafts')} lx={150} ly={372} flow="request" />
-      <Arrow a={{ x: C.x, y: C.y + HD * 0.87 + HR - 2 }} b={{ x: C.x, y: cTop }} label={t('ui.BrainMap.arrowUsesVersion')} lx={C.x} ly={(C.y + HD * 0.87 + HR + cTop) / 2} />
-      <Arrow a={{ x: P.conductor.x + 132, y: P.conductor.y - 4 }} b={{ x: P.evo.x - 58, y: P.evo.y + 14 }} label={t('ui.BrainMap.arrowReport')} lx={540} ly={474} />
       {/* around Gates, so it plainly ends at Knowledge (not under the Gates hex) */}
       <Arrow a={{ x: P.evo.x + 26, y: P.evo.y - 61 }} via={[{ x: P.evo.x + 26, y: k.y }]} b={{ x: k.x + HR * 0.87 + 3, y: k.y }}
         label={t('ui.BrainMap.arrowWritesKnowledge')} lx={P.evo.x + 26} ly={262} flow="learn" />
       <Arrow a={{ x: P.evo.x - 40, y: P.evo.y - 42 }} b={toward(g, P.evo, HR * 0.92)} label={t('ui.BrainMap.arrowWritesRules')} dashed lx={552} ly={330} flow="approve" />
-      {SRC.map((_, i) => (
-        <Arrow key={i} a={{ x: 112, y: 446 + i * 44 }} b={{ x: P.conductor.x - 132, y: P.conductor.y - 6 + i * 14 }} flow="request" />
-      ))}
 
       {/* the DDD flower */}
       <Part label={t('ui.BrainMap.brainAria')} onClick={() => onOpen('browse')} testid="bm-brain">
@@ -196,39 +174,13 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
         );
       })}
 
-      {/* Project Agent + sources */}
+      {/* Project Agent */}
       <Part label={t('ui.BrainMap.agentTitle')} onClick={() => onOpen('agent')} testid="bm-agent">
         <rect x={P.agent.x - 72} y={P.agent.y - 38} width={144} height={76} rx={10} className={box} {...OUTLINE} />
         <Dot x={P.agent.x - 58} y={P.agent.y - 24} tone={tones.agent} />
         <text x={P.agent.x} y={P.agent.y - 12} textAnchor="middle" className={TITLE}>{t('ui.BrainMap.agentTitle')}</text>
         <text x={P.agent.x} y={P.agent.y + 6} textAnchor="middle" className={SUB}>{t('ui.BrainMap.agentSub')}</text>
         {agentLine && <text x={P.agent.x} y={P.agent.y + 24} textAnchor="middle" className={SUB}>{agentLine}</text>}
-      </Part>
-      {SRC.map((s, i) => (
-        <Part key={s.key} label={t('ui.BrainMap.srcAria', { name: t(s.nameKey), n: sources[s.key] })} onClick={() => onOpen('runs')} testid={`bm-src-${s.key}`}>
-          <rect x={18} y={432 + i * 44} width={94} height={28} rx={14} className={box} {...OUTLINE} />
-          <text x={65} y={450 + i * 44} textAnchor="middle" className="text-small fill-[var(--color-text)]">
-            {t(s.nameKey)} <tspan className="fill-[var(--color-text-muted)]">{sources[s.key]}</tspan>
-          </text>
-        </Part>
-      ))}
-
-      {/* the one Conductor + this brain's Runs */}
-      <Part label={t('ui.BrainMap.conductorTitle')} onClick={() => onOpen('runs')} testid="bm-conductor">
-        <rect x={P.conductor.x - 132} y={cTop} width={264} height={104} rx={10} className={box} {...OUTLINE} />
-        <Dot x={P.conductor.x - 118} y={cTop + 14} tone={tones.conductor} />
-        <text x={P.conductor.x} y={cTop + 22} textAnchor="middle" className={TITLE}>{t('ui.BrainMap.conductorTitle')}</text>
-        <text x={P.conductor.x} y={cTop + 40} textAnchor="middle" className={SUB}>
-          {lanes.chat + lanes.hive ? t('ui.BrainMap.conductorGoing', { chat: lanes.chat, hive: lanes.hive }) : t('ui.BrainMap.conductorIdle')}
-        </text>
-        {shown.map((r, i) => (
-          <circle key={r.id} cx={P.conductor.x - 99 + i * 18} cy={cTop + 80} r={6.5} className={RUN_FILL[r.tone]} data-testid={`bm-run-${r.id}`}>
-            <title>{r.title}</title>
-          </circle>
-        ))}
-        {shown.length === 0 && (
-          <text x={P.conductor.x} y={cTop + 84} textAnchor="middle" className={SUB}>{t('ui.BrainMap.conductorNoRuns')}</text>
-        )}
       </Part>
 
       {/* Reflect / Evolution */}

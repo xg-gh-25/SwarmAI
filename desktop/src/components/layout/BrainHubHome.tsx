@@ -14,32 +14,20 @@
  * Library, on General's), not here. Design: s_frontend-design's design-judgment.md
  * (one thing stands out, color only for what needs action, separate with whitespace).
  *
- * Data: the gallery summaries and the General Brain already fetched by BrainHub, and
- * the 30-day pipeline analytics (the same cached query the Brain map uses).
+ * Data: the gallery summaries and the General Brain already fetched by BrainHub. A
+ * Brain holds knowledge only: Runs, their waits and their stats are in Pipelines and
+ * Swarm Out (design 2026-11-01-brain-eval-and-runs §2), not here.
  * Exports: BrainHubHome, Flower (the six-petal icon, also in the Brain header)
  */
 import { useMemo, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 // the app's i18next instance (initialised in src/i18n, imported by main.tsx)
 import i18n from 'i18next';
 import type { BrainSummary, GeneralBrain, SectionKey } from '../../services/ddd';
-import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import {
   SECTION_ORDER, SEVERITY_ORDER, brainSignal, hubNeeds, hubSummary,
   type BrainSignalTone, type HubNeed, type Severity,
 } from './brainMapModel';
-import { openOverlayAt } from '../../utils/overlayTarget';
-
-/** "5m" / "3h" / "2d" since an ISO time; '' when unparseable. */
-function waited(iso: string, now = Date.now()): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return '';
-  const min = Math.max(0, Math.floor((now - t) / 60000));
-  if (min < 60) return `${min}m`;
-  const h = Math.floor(min / 60);
-  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
-}
 
 type OpenTarget = { view?: 'map' | 'review'; panel?: 'need' | 'add' | 'agent' };
 
@@ -81,7 +69,6 @@ function Dot({ tone }: { tone: BrainSignalTone }) {
   const cls: Record<BrainSignalTone, string> = {
     urgent: 'bg-[var(--color-status-error)]',
     review: 'bg-[var(--color-status-warning)]',
-    live: 'bg-[var(--color-primary)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-primary)_25%,transparent)]',
     setup: 'border-[1.5px] border-[var(--color-text-muted)]',
     notice: 'bg-[var(--color-text-faint)]',
     calm: '',
@@ -91,7 +78,6 @@ function Dot({ tone }: { tone: BrainSignalTone }) {
 
 /** The attention band's breakdown: one chip per kind of open item. */
 const CHIP: Record<string, { label: (n: number) => string }> = {
-  runs: { label: (n) => i18n.t('ui.BrainHubHome.chipRuns', { count: n }) },
   escalations: { label: (n) => i18n.t('ui.BrainHubHome.chipEscalations', { count: n }) },
   jobs: { label: (n) => i18n.t('ui.BrainHubHome.chipJobs', { count: n }) },
   repos: { label: (n) => i18n.t('ui.BrainHubHome.chipRepos', { count: n }) },
@@ -100,7 +86,7 @@ const CHIP: Record<string, { label: (n: number) => string }> = {
 function chipsOf(needs: HubNeed[]) {
   const by = new Map<string, { severity: Severity; count: number }>();
   for (const n of needs) {
-    const key = n.kind === 'run' ? 'runs' : n.kind;
+    const key = n.kind;
     const got = by.get(key);
     if (got) got.count += n.count;
     else by.set(key, { severity: n.severity, count: n.count });
@@ -194,15 +180,11 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
 }) {
   const { t } = useTranslation();
   const [queueOpen, setQueueOpen] = useState(false);
-  const { data: analytics = null } = useQuery<PipelineAnalytics>({
-    queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
-  });
-
-  const sum = useMemo(() => hubSummary(brains, analytics, general), [brains, analytics, general]);
+  const sum = useMemo(() => hubSummary(brains, general), [brains, general]);
   // the queue reads most pressing first (a stable sort keeps hubNeeds' order inside a severity)
-  const needs = useMemo(() => [...hubNeeds(brains, analytics, general)]
+  const needs = useMemo(() => [...hubNeeds(brains, general)]
     .sort((x, y) => SEVERITY_ORDER.indexOf(x.severity) - SEVERITY_ORDER.indexOf(y.severity)),
-  [brains, analytics, general]);
+  [brains, general]);
   const chips = useMemo(() => chipsOf(needs), [needs]);
   const open = needs.reduce((s, n) => s + n.count, 0);
   const worst = chips[0]?.severity;
@@ -214,16 +196,13 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
   const hasCounts = brains.some((b) => b.typeCounts);
 
   const openNewBrain = () => window.dispatchEvent(new CustomEvent('swarm:show-new-brain'));
-  /** Each open item opens where it is handled: a Run on its Pipelines drawer, a newly read
-   *  repository on the Brain's map, the rest (escalations, failing jobs, Runs the
-   *  analytics did not list) in Need You. */
+  /** Each open item opens where it is handled: a newly read repository on the Brain's
+   *  map, the rest (escalations, failing jobs) in Need You. */
   const goNeed = (n: HubNeed) => {
     if (n.builtin) onOpenGeneral?.();
-    else if (n.kind === 'run') openOverlayAt('pipeline', n.id);
     else if (n.kind === 'repos') onOpen(n.brain, { view: 'map' });
     else window.dispatchEvent(new CustomEvent('swarm:show-needs-you'));
   };
-  const openPipelines = () => window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
   /** A Projects/ Brain that carries the built-in General Brain's name (made before the
    *  name was reserved): its card says so, since dispatch treats the name as General. */
   const shadowed = (b: BrainSummary) => !!general?.shadowed && b.name.toLowerCase() === 'general';
@@ -233,7 +212,7 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
       icon={<Flower b={b} size={36} />} name={b.name}
       tag={b.name === selfName ? t('ui.BrainHubHome.selfTag') : undefined} tagId="dddcard-self-tag"
       description={b.description} facts={brainFacts(b)}
-      signal={shadowed(b) ? { tone: 'review', text: t('ui.BrainHubHome.shadowedName') } : brainSignal(b, analytics)} />
+      signal={shadowed(b) ? { tone: 'review', text: t('ui.BrainHubHome.shadowedName') } : brainSignal(b)} />
   );
   const generalCard = general && (
     <BrainCard key="builtin-general" id="builtin-general" onClick={() => onOpenGeneral?.()} label={t('ui.BrainHubHome.openBrain', { name: 'General' })}
@@ -289,9 +268,8 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
                   <Dot tone={n.severity} />
                   <span className="font-semibold shrink-0">{n.builtin ? t('ui.BrainHubHome.builtInBrain', { name: n.brain }) : n.brain}</span>
                   <span className="flex-1 min-w-0 truncate text-[var(--color-text-secondary)]">{n.text}</span>
-                  {n.since && <span className="text-meta text-[var(--color-text-muted)] shrink-0">{waited(n.since)}</span>}
                   <button className="btn-sm btn-secondary shrink-0" data-testid={`hub-need-go-${n.id}`} onClick={() => goNeed(n)}>
-                    {n.kind === 'run' ? t('ui.BrainHubHome.answer') : t('ui.BrainHubHome.open')}
+                    {t('ui.BrainHubHome.open')}
                   </button>
                 </div>
               ))}
@@ -316,14 +294,6 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
         </div>
       )}
 
-      <div className="mt-9 pt-3 flex items-center justify-between border-t border-[var(--color-border)] text-small text-[var(--color-text-muted)]">
-        <button className="hover:text-[var(--color-text)]" onClick={openPipelines} data-testid="hub-conductor">
-          {t('ui.BrainHubHome.conductor', { n: sum.liveRuns })}
-        </button>
-        <span data-testid="hub-eval">
-          {t('ui.BrainHubHome.evalLabel')} {sum.finished ? t('ui.BrainHubHome.evalLanded', { landed: sum.landed, finished: sum.finished }) : t('ui.BrainHubHome.evalNone')}
-        </span>
-      </div>
     </div>
   );
 }

@@ -92,7 +92,8 @@ def stalls(conn: sqlite3.Connection, *, now: datetime | None = None) -> list[str
 
 
 def north_star(conn: sqlite3.Connection, *, now: datetime | None = None,
-               window: timedelta = NORTH_STAR_WINDOW) -> dict[str, Any]:
+               window: timedelta = NORTH_STAR_WINDOW,
+               project: str | None = None) -> dict[str, Any]:
     """Of the entries CDF wrote, how many were read or cited within *window* of the write.
 
     An entry is mature once *window* has passed since its write; only mature entries
@@ -100,7 +101,9 @@ def north_star(conn: sqlite3.Connection, *, now: datetime | None = None,
     injected every turn, the project DDDs, and Knowledge. "Recalled" (shown by recall
     or ``knowledge find``) is reported apart from "used" (read with Read/Grep or
     ``knowledge get``, or cited as evidence). For the per-turn files, ``injected_now``
-    counts the entries the current injection selection holds."""
+    counts the entries the current injection selection holds. *project* keeps only the
+    entries written into that project's DDD (``Projects/<project>/``): a Brain's own
+    written-then-used rate (Brain Eval)."""
     current = _now(now)
     writes = _rows(conn, "SELECT unit_id,target_path,created_at FROM ingestion_writes "
                          "WHERE op_kind='ingestion_unit' AND step='done' AND unit_id IS NOT NULL")
@@ -125,7 +128,10 @@ def north_star(conn: sqlite3.Connection, *, now: datetime | None = None,
             if "#cand:" in identity:
                 injected.add((path, identity.rsplit("#cand:", 1)[-1]))
     groups: dict[str, Counter] = defaultdict(Counter)
+    prefix = f"Projects/{project}/" if project else None
     for unit_id, path, created in writes:
+        if prefix is not None and not str(path or "").startswith(prefix):
+            continue
         written = _parse(created)
         if written is None:
             continue

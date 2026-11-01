@@ -73,6 +73,21 @@ Pipelines，Hive run 在 Swarm Out。
   `ingestion_writes.target_path` 的 `Projects/<P>/` 过滤）。
 - 不放"给了 `[DDD:P]` 提示后去读了"：`knowledge_usage_report.py:113-118` 读任何 DDD 都算，不分项目。
 
+### 2.3 实现（r6）
+
+- 后端 `core/brain_eval.py` + `GET /api/ddd/brains/{name}/eval`（缓存 10 分钟，`refresh` 重算）。
+  "知识健康"读 `cdf_health.db` 的 verdicts（`project = P`、dest ∈ {DDD, GAP}、30 天）；"要处理"只列
+  仍在主文件里的 weak / withdraw（按 `cand:` 标记定位文件和行，已撤下的不列）；重复用
+  `content_signature`（去掉标记）跨四个主文件比；gap 用 `gaps.all_open_gaps`（不截断，按条目首行的
+  日期算最老）。
+- "用上了"里的"仍有效"= 引用的 id 现在在这个 Brain 的主文件里（`addressing` 的 doc 单元）。设计写
+  的"评审判有用"没做：引用的是 recall id，评审记的是 CDF 单元 id，两者对不上，硬对会造假。
+  run 取 30 天内写过 REQUIREMENTS / DESIGN_SPEC 的。漏用 = S3 单元 `action='reinforce'` 且
+  `project = P`。写入后被用 = `status.north_star(project=P)`。
+- 点"要处理"的条目在 Canvas 打开它的文件；Canvas 没有跳到行的接口，行号写在行里（`TECH.md:7`）。
+- Brain Hub 首页也按这条规则改：等你的队列、卡片状态只放 Brain 自己的事（上报、job、仓库），去掉
+  底部的 Conductor / Eval 落地数。Brain 头部的数 = Need You 减去等你的 run（`brainPending`）。
+
 ## 3. 自主度：一个口径，放在 run 待的地方
 
 **插手 = run 需要你才能走下去或走对**（XG r3：review、approve、judge 不算）。后端一个函数，
