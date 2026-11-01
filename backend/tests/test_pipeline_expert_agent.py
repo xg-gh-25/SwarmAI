@@ -206,3 +206,17 @@ def test_budget_gate_sets_the_cap_only_once(tmp_path):
     for _ in range(pea.EXPERT_TOOL_CAP + 1 - 2):
         assert _run(g, _call()) == {}
     assert _denied(_run(g, _call()))
+
+
+def test_expert_cap_refuses_a_link_out_of_the_store_and_a_non_regular_file(tmp_path):
+    import os
+    d = tmp_path / "state" / "pipeline_agent_audit" / "runs" / "run_x" / "blobs"
+    d.mkdir(parents=True)
+    outside = tmp_path / "big.txt"
+    outside.write_text("x\n" * 50_000)
+    link = d / ("d" * 64)
+    link.symlink_to(outside)
+    assert pea.expert_cap(str(link)) == pea.EXPERT_TOOL_CAP
+    fifo = d / ("e" * 64)
+    os.mkfifo(fifo)
+    assert pea.expert_cap(str(fifo)) == pea.EXPERT_TOOL_CAP     # never opened: no hang

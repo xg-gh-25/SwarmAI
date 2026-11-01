@@ -147,12 +147,28 @@ def expert_cap(path: str) -> int:
     that is not a readable prompt blob keeps EXPERT_TOOL_CAP."""
     if not is_prompt_blob(path):
         return EXPERT_TOOL_CAP
+    import stat
+    limit = EXPERT_TOOL_CAP_MAX * READ_PAGE_BYTES     # past this the cap is the max anyway
     try:
-        data = open(path, "rb").read()
+        real = os.path.realpath(path)
+        st = os.stat(real)
+        if not is_prompt_blob(real) or not stat.S_ISREG(st.st_mode):
+            return EXPERT_TOOL_CAP          # a link out of the blob store, a FIFO, a device
+        if st.st_size > limit:
+            return EXPERT_TOOL_CAP_MAX
+        lines = size = 0
+        last = b"\n"
+        with open(real, "rb") as handle:
+            while chunk := handle.read(1 << 20):
+                lines += chunk.count(b"\n")
+                size += len(chunk)
+                last = chunk[-1:]
+                if size > limit:
+                    return EXPERT_TOOL_CAP_MAX
     except OSError:
         return EXPERT_TOOL_CAP
-    lines = data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
-    pages = max(math.ceil(lines / READ_PAGE_LINES), math.ceil(len(data) / READ_PAGE_BYTES))
+    lines += 1 if size and last != b"\n" else 0
+    pages = max(math.ceil(lines / READ_PAGE_LINES), math.ceil(size / READ_PAGE_BYTES))
     return min(EXPERT_TOOL_CAP + pages, EXPERT_TOOL_CAP_MAX)
 
 

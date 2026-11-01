@@ -3642,7 +3642,8 @@ class RunEngine:
         """Main moved past a repo's run base: rebase that worktree onto it (S6-1). The
         code tree then changes, so LG-1 asks for a TEST report on the new tree
         (``report-tests``). A sync that changed the run's own patch (a conflict
-        resolution) is new code no review saw: LG-4 fails with ``patch_changed``.
+        resolution) is new code no review saw: ``patch_changed`` (LG-4 fails with it,
+        or, after the run's one DELIVER reopen, LG-1 lets it land and says so).
         ``_synced_repos``: the repos this call rebased onto a moved main."""
         self._synced_repos: set[str] = set()
         for entry in self._active_entries():
@@ -3753,13 +3754,23 @@ class RunEngine:
                 out[name] = hit
         return out
 
+    def _last_lg1_carried(self) -> bool:
+        """The most recent LG-1 passed by carrying a TEST report over a main move."""
+        last = None
+        for event in self.store.read_events():
+            payload = event.get("payload") or {}
+            if event.get("kind") == "check" and payload.get("check_id") == "LG-1":
+                last = payload
+        return bool(last and last.get("passed")
+                    and checks.CARRIED_MARK in str(last.get("detail") or ""))
+
     def _carried_test_trees(self, moves: "Mapping[str, Mapping[str, Any]] | None"
                             ) -> dict[str, str]:
         """repo -> the TEST report tree that still stands after the sync (design 2026-11-01-
         pipeline-delivery-friction E2): main moved under a fresh report by commits that
-        change none of the run's own files, and the rebase kept the run's patch (a changed
-        patch never gets here: LG-4 fails with it). LG-1 accepts that report; the REPORT
-        says the tests ran before main moved."""
+        change none of the run's own files, and the rebase kept the run's patch (the
+        landing passes no moves when the sync changed the patch). LG-1 accepts that
+        report; the REPORT and the Quality cell say the tests ran before main moved."""
         return {name: str(move["report_tree"]) for name, move in (moves or {}).items()
                 if move.get("overlap") == []}
 
@@ -3875,13 +3886,16 @@ class RunEngine:
             # a review that did not run is noted, never what stops the landing)
             past_reopen = (state.get("deliver_reopens", 0) >= lifecycle.DELIVER_REOPEN_CAP
                            and "review" in lifecycle.PROFILE_STAGES[self.contract["profile"]])
-            if carry_error is not None and carry_error.code == "patch_changed" and past_reopen:
+            patch_changed = carry_error is not None and carry_error.code == "patch_changed"
+            if patch_changed and past_reopen:
                 carry_error = None      # LG-1 lets that difference land, and says so
             repos = self.effective_repos()
             code_trees = tree.build_code_trees(
                 repos, self.run_id, git_tree.write_tree, git_tree.list_reserved)
             context = self.check_context()
-            moves = self._main_moves(before_sync) if carry_error is None else None
+            # a sync that changed the run's own patch never carries the old report
+            moves = self._main_moves(before_sync) \
+                if carry_error is None and not patch_changed else None
             carried = self._carried_test_trees(moves)
             run_facts = {**dict(context.run), "code_trees": code_trees,
                          "carried_test_trees": carried,
@@ -3919,6 +3933,14 @@ class RunEngine:
                     lg1_detail = (f"{lifecycle.BASE_MOVED_PREFIX} main moved and the run "
                                   f"was rebased onto it ({', '.join(sorted(self._synced_repos))}"
                                   f"); test the synced tree again | {lg1_detail}")[:1500]
+                    lg1_cause = "base_moved"
+                elif self._last_lg1_carried():
+                    # the previous landing carried the report over a main move and then
+                    # did not commit (a refused commit): the synced tree still needs its
+                    # tests, and that is still main's move, not the run's own failure
+                    lg1_detail = (f"{lifecycle.BASE_MOVED_PREFIX} the last landing kept the "
+                                  "TEST report across main's move and did not commit; test "
+                                  f"the synced tree again | {lg1_detail}")[:1500]
                     lg1_cause = "base_moved"
             if lg1_passed and carried:
                 lg1_detail = (f"{lg1_detail}; {checks.CARRIED_MARK} " + ", ".join(

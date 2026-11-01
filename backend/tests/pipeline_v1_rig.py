@@ -277,7 +277,12 @@ class Rig:
                                                   "input": {"file_path": prompt_file}}]}},
             {"type": "user", "isSidechain": True, "message": {
                 "role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_read",
-                                             "content": "(prompt)"}]}})
+                                             # the whole file, numbered as Read returns it
+                                             "content": "\n".join(
+                                                 f"{n:>6}\t{line}" for n, line in enumerate(
+                                                     Path(prompt_file).read_text(
+                                                         encoding="utf-8").splitlines(), 1))
+                                             }]}})
         transcript.write_text("\n".join(json.dumps(r) for r in (
             {"type": "user", "isSidechain": True,
              "message": {"role": "user", "content": prompt}},

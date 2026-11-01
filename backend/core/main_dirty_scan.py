@@ -135,7 +135,19 @@ def _changed_in(worktree: str) -> "set[str]":
         return set()
     if p.returncode != 0:
         return set()
-    return {entry[3:] for entry in p.stdout.split("\0") if len(entry) > 3}
+    out: "set[str]" = set()
+    entries = p.stdout.split("\0")
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        if len(entry) > 3:
+            out.add(entry[3:])
+            if entry[0] in "RC" or entry[1] in "RC":
+                i += 1              # a rename / copy: the next record is its old path
+                if i < len(entries) and entries[i]:
+                    out.add(entries[i])
+        i += 1
+    return out
 
 
 def _without_siblings(changed: "list[str]", mains: "dict[str, bool]", own: "set[str]",
@@ -158,6 +170,11 @@ def _without_siblings(changed: "list[str]", mains: "dict[str, bool]", own: "set[
         except Exception:  # noqa: BLE001 -- fail open: report everything
             logger.debug("main_dirty_scan: sibling lookup failed", exc_info=True)
             return changed, 0
+    # a path this session wrote stays listed, whoever else wrote it too
+    for path in list((mine or {}).get("_files_written") or ()):
+        if isinstance(path, str):
+            theirs.discard(os.path.realpath(path))
+            theirs.discard(path)
     kept = [path for path in changed if path not in theirs]
     return kept, len(changed) - len(kept)
 
@@ -190,12 +207,10 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
         if not run_dir.is_dir():
             return None, None, None
         mains = {}
-        own: "set[str]" = set()       # the run's own changed files, repo-relative
         for _name, path in run["worktrees"]:
             m = rw.main_of(path)
             if m is not None:
                 mains[os.path.realpath(str(m))] = True
-            own |= _changed_in(str(path))
         seen = _load_seen(run_dir)
         reported = seen.get(REPORTED_KEY) if isinstance(seen.get(REPORTED_KEY), dict) else {}
         dirty = False
@@ -218,8 +233,14 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
         if reported:
             seen[REPORTED_KEY] = reported
         save = seen if dirty else None
-        changed, others = _without_siblings(changed, mains, own, session_context)
-        again = _without_siblings(again, mains, own, session_context)[0]
+        if changed or again:          # the run's own files: read only when needed
+            own: "set[str]" = set()
+            for _name, path in run["worktrees"]:
+                own |= _changed_in(str(path))
+            changed, others = _without_siblings(changed, mains, own, session_context)
+            again = _without_siblings(again, mains, own, session_context)[0]
+        else:
+            others = 0
         tail = (" still changing, reported before: " + ", ".join(
             os.path.basename(p) for p in again[:MAX_LISTED])
             + (f" (+{len(again) - MAX_LISTED} more)" if len(again) > MAX_LISTED else "") + "."

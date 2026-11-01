@@ -222,6 +222,11 @@ def test_main_moving_by_unrelated_commits_lands_without_testing_again(rig):
     assert lg1["passed"] and "tests carried over a main move" in str(lg1["detail"]), lg1
     report = (r.engine().run_dir / "REPORT.md").read_text()
     assert "Tests were not run again after main moved" in report
+    quality = next(line for line in report.splitlines() if line.startswith("| Quality |"))
+    assert quality.startswith("| Quality | WARN |"), quality
+    import json
+    audit = json.loads((r.engine().run_dir / "run_audit.json").read_text())
+    assert "tests not run again after main moved" in audit["summary"]["quality"]["open"], audit["summary"]["quality"]
 
 
 def test_a_carried_report_needs_the_report_on_the_tree_before_the_sync(rig):

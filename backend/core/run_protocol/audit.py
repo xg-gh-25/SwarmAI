@@ -220,30 +220,33 @@ def _answer_sources(event_rows) -> dict[str, int]:
     return out
 
 
-def _tests_carried(event_rows) -> "str | None":
-    """The latest passed LG-1 detail that carried a TEST report over a main move (E2)."""
-    from core.run_protocol.checks import CARRIED_MARK
+def _last_passed_lg1(event_rows) -> "str | None":
+    """The detail of the LAST passed LG-1: the check of the landing that went through
+    (an earlier pass whose commit failed is superseded by it)."""
     found = None
     for event in event_rows:
         payload = event.get("payload") or {}
-        detail = payload.get("detail")
         if event.get("kind") == "check" and payload.get("check_id") == "LG-1" \
-                and payload.get("passed") and isinstance(detail, str) and CARRIED_MARK in detail:
-            found = detail[detail.index(CARRIED_MARK):]
+                and payload.get("passed"):
+            found = payload.get("detail") if isinstance(payload.get("detail"), str) else ""
     return found
+
+
+def _marked(event_rows, mark: str) -> "str | None":
+    detail = _last_passed_lg1(event_rows) or ""
+    return detail[detail.index(mark):] if mark in detail else None
+
+
+def _tests_carried(event_rows) -> "str | None":
+    """The landing's LG-1 carried a TEST report over a main move (E2): its note."""
+    from core.run_protocol.checks import CARRIED_MARK
+    return _marked(event_rows, CARRIED_MARK)
 
 
 def _landed_unreviewed(event_rows) -> "str | None":
-    """The latest passed LG-1 detail that let a change no review saw land (N1)."""
+    """The landing's LG-1 let a change no review saw land (N1): its note."""
     from core.run_protocol.checks import UNREVIEWED_MARK
-    found = None
-    for event in event_rows:
-        payload = event.get("payload") or {}
-        detail = payload.get("detail")
-        if event.get("kind") == "check" and payload.get("check_id") == "LG-1" \
-                and payload.get("passed") and isinstance(detail, str) and UNREVIEWED_MARK in detail:
-            found = detail[detail.index(UNREVIEWED_MARK):]
-    return found
+    return _marked(event_rows, UNREVIEWED_MARK)
 
 
 def _review_coverage(event_rows) -> list[dict[str, Any]]:
@@ -426,6 +429,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     # red at the run's base too, by the agent's report (D6): not a pass, not the run's
     red_at_base = sum(int((test_events.get(name) or {}).get("payload", {})
                           .get("n_pre_existing") or 0) for name in expected)
+    # the landing kept a TEST report across a main move, or let an unreviewed
+    # difference land (E2 / N1): said in the Quality cell, never a PASS
+    carried, unreviewed = _tests_carried(event_rows), _landed_unreviewed(event_rows)
     # "closed" is findings.is_closed (the closure table): a finding closed by a reported
     # test counts only once R2 judged the test ADEQUATE, a reviewed-only HIGH never
     confirmed = sum(row.get("status") == "closed_proven" and row.get("r2_status") == "ADEQUATE"
@@ -439,7 +445,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     elif landing in {"no_code", "not_landed"}:
         quality_verdict = "N/A"
     elif landing == "human_override" or passed < required or closed < len(findings) \
-            or open_checks or not_run or red_at_base:
+            or open_checks or not_run or red_at_base or carried or unreviewed:
         quality_verdict = "WARN"
     else:
         quality_verdict = "PASS"
@@ -449,7 +455,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "findings_closed": closed,
                "findings_confirmed": confirmed, "findings_total": len(findings),
                "open": _open_lines(open_checks, [row["canonical_id"] for row in findings
-                                                 if push_effect(row)])}
+                                                 if push_effect(row)])
+               + (["tests not run again after main moved"] if carried else [])
+               + (["landed a difference no review saw"] if unreviewed else [])}
 
     # Interventions (design 2026-11-01-brain-eval-and-runs §3; core.run_interventions):
     # the person's answers and rescues (a person's landing). Accepting a finding is review,

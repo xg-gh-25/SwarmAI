@@ -148,3 +148,21 @@ def test_another_live_session_s_files_outside_the_run_are_not_listed(
     assert "shared.py" in report, report
     assert "theirs.py" not in report.split("(1 more changed by")[0], report
     assert "1 more changed by another live session" in report, report
+
+
+def test_a_file_this_session_wrote_stays_listed_even_if_another_wrote_it_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, engine = _start_v1_run(tmp_path, monkeypatch)
+    (repo / "both.py").write_text("x = 0\n", encoding="utf-8")
+    _git(repo, "add", "both.py"); _git(repo, "commit", "-qm", "one file")
+    path = str(Path(repo).resolve() / "both.py")
+    mine = {"sdk_session_id": "session-v1", "_files_written": {path}}
+    other = {"_files_written": {path}}
+    from core import shared_checkout
+    monkeypatch.setattr(shared_checkout, "_live_contexts",
+                        lambda: [("session-v1", mine), ("other-session", other)])
+    reporter = create_main_dirty_reporter(mine)
+    assert _invoke(reporter) == {}
+    (repo / "both.py").write_text("x = 1\n", encoding="utf-8")
+    assert "both.py" in _context(_invoke(reporter))

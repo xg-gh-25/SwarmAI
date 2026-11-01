@@ -115,3 +115,18 @@ def test_a_whole_read_that_hit_the_cap_is_still_short():
     assert rows[0]["read_pct"] == 100 and rows[0]["budget_hit"] and not rows[0]["complete"]
     passed, detail = checks.evaluate("RV-6", _ctx([_answer("security", 1, 100, 100, 30, 25)]))
     assert not passed and "stopped at its 25-call cap" in detail
+
+
+def test_the_report_reads_only_the_landing_s_own_lg1():
+    """A carried LG-1 whose commit then failed is superseded by the LG-1 of the landing
+    that went through: the REPORT does not say tests were carried when they were not."""
+    from core.run_protocol import audit
+    from core.run_protocol.checks import CARRIED_MARK
+
+    def lg1(passed, detail):
+        return {"kind": "check", "payload": {"check_id": "LG-1", "passed": passed,
+                                             "detail": detail}}
+    carried = lg1(True, f"test reports bind the current code; {CARRIED_MARK} repo (main a->b)")
+    assert audit._tests_carried([carried]) is not None
+    assert audit._tests_carried([carried, lg1(False, "stale"),
+                                 lg1(True, "test reports bind the current code")]) is None

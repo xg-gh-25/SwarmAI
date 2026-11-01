@@ -115,8 +115,12 @@ def test_deliver_sends_the_run_back_once(rig):
     assert "reopened" not in out and r.state().get("landing") == "landed", out
     report = (r.engine().run_dir / "REPORT.md").read_text()
     assert "Landed with a difference no review saw" in report
+    assert "repo:backend/core/mod.py" in report        # it names what no review saw
     quality = next(line for line in report.splitlines() if line.startswith("| Quality |"))
     assert quality.startswith("| Quality | WARN |"), quality
+    import json
+    audit = json.loads((r.engine().run_dir / "run_audit.json").read_text())
+    assert "landed a difference no review saw" in audit["summary"]["quality"]["open"], audit["summary"]["quality"]
 
 
 def test_only_doc_files_differ_review_completes_itself(rig):

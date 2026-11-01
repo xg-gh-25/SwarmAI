@@ -324,7 +324,9 @@ def _report_check(check_id: str, context: CheckContext) -> Result:
     LG-1 also refuse a TEST report with a failed command (the agent reported a failure,
     so the change is not delivered). LG-1 also accepts the report a landing carried over
     a main move (``run["carried_test_trees"]``, set by the engine only when main's new
-    commits change none of the run's files and the rebase kept the run's patch)."""
+    commits change none of the run's files and the rebase kept the run's patch), and,
+    after the run's one DELIVER reopen, a change that differs from the reviewed one
+    (named in its detail; the REPORT says no review saw it)."""
     from core.run_protocol.validation_report import latest
     stage = "test" if check_id in ("TS-1", "LG-1") else (
         "build")
@@ -360,9 +362,14 @@ def _report_check(check_id: str, context: CheckContext) -> Result:
             # the run already went back to REVIEW once from DELIVER: what differs since
             # lands, said in the REPORT (design 2026-11-01-pipeline-delivery-friction N1;
             # SOUL P5: a review that did not run is noted, never what stops the landing)
-            return True, (f"{stage} reports bind the current code; {UNREVIEWED_MARK} the "
-                          "change differs from the reviewed one (changed in DELIVER after "
-                          "the run's one incremental review from DELIVER)")
+            changed = context.run.get("changed_since_review") or {}
+            files = [f"{repo}:{path}" for repo, paths in sorted(changed.items())
+                     for path in paths or ()] if isinstance(changed, Mapping) else []
+            shown = ", ".join(files[:20]) + (f" (+{len(files) - 20} more)"
+                                             if len(files) > 20 else "")
+            return True, (f"{stage} reports bind the current code; {UNREVIEWED_MARK} "
+                          f"{shown or 'the change'} (changed in DELIVER after the run's "
+                          "one incremental review from DELIVER)")
         problems += unreviewed
     return _result(not problems, f"{stage} reports bind the current code" if not problems
                    else "; ".join(problems))
