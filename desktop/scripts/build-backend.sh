@@ -45,9 +45,30 @@ echo "Target platform: $TARGET"
 # Ensure output directory exists
 mkdir -p "$OUTPUT_DIR"
 
+# One build at a time per output directory. A second build deletes and rewrites
+# the binary the first one is still verifying (rm -rf "$OUTPUT_BINARY_DIR" below),
+# and the first one's probe then dies (SIGKILL, no output) or packages a mix of
+# both. The lock is a directory (mkdir is atomic; macOS has no flock) holding the
+# owner's pid; a lock whose owner is gone is taken over.
+BUILD_LOCK="$OUTPUT_DIR/.build.lock"
+_release_build_lock() {
+    if [ "$(cat "$BUILD_LOCK/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$BUILD_LOCK"; fi
+}
+if ! mkdir "$BUILD_LOCK" 2>/dev/null; then
+    holder="$(cat "$BUILD_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+        echo "❌ Another backend build is running (pid $holder) and writes the same output directory."
+        echo "   Wait for it to finish, then re-run."
+        exit 1
+    fi
+    rm -rf "$BUILD_LOCK"
+    mkdir "$BUILD_LOCK"
+fi
+echo "$$" > "$BUILD_LOCK/pid"
+
 # Create temporary build directory
 BUILD_DIR=$(mktemp -d)
-trap "rm -rf $BUILD_DIR" EXIT
+trap 'rm -rf "$BUILD_DIR"; _release_build_lock' EXIT
 
 # Refresh the bundled C034 guardian assets (script, standalone guard.py, plist
 # template) from their sources of truth so the .app never ships stale copies.
@@ -134,7 +155,7 @@ echo "Verifying local modules are importable..."
 IMPORT_PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/swarmai-import-probe.XXXXXX")"
 # A failing import exits the script (errexit) before the rm below — extend the
 # EXIT trap so the probe dir never leaks.
-trap 'rm -rf "$BUILD_DIR" "${IMPORT_PROBE_DIR:-}"' EXIT
+trap 'rm -rf "$BUILD_DIR" "${IMPORT_PROBE_DIR:-}"; _release_build_lock' EXIT
 SWARMAI_MODE=subprocess SWARM_DATA_DIR="$IMPORT_PROBE_DIR" \
 DATABASE_TYPE=sqlite python -c "
 import sys

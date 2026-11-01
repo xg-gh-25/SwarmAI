@@ -226,15 +226,21 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         # 180s: PyInstaller one-file mode extracts 200MB+ to temp on first run.
         # On macOS, uvicorn import alone takes ~88s during extraction (measured 2026-06-07).
         # On CI runners with slow I/O, this can be even longer.
-        if not _wait_for_health(port, timeout=180):
-            print("❌ Binary failed to start within 180s")
-            # Dump captured stdout for diagnosis
+        if not _wait_for_health(port, timeout=180, proc=proc):
             if proc.poll() is not None:
-                print(f"  Process exited with code {proc.returncode}")
+                print(f"❌ Binary exited before it became healthy (code {proc.returncode})")
+                if proc.returncode == -9:
+                    print("  SIGKILL from outside the probe: another build rewriting the "
+                          "binary while it ran, or the OS killing it")
+            else:
+                print("❌ Binary failed to start within 180s")
+            # Dump captured stdout for diagnosis
             drain_thread.join(timeout=2)
             out = b"".join(captured_output)
             if out:
                 print(f"  Last output:\n{out.decode('utf-8', errors='replace')[-2000:]}")
+            else:
+                print("  (the binary printed nothing)")
             return [], ["binary_startup"], []
 
         # Verify capabilities via the binary's Python environment
@@ -301,10 +307,12 @@ def _isolated_probe_env(base: "os._Environ | dict", port: int, probe_home: str) 
     return env
 
 
-def _wait_for_health(port: int, timeout: int = 30) -> bool:
-    """Poll health endpoint until ready."""
+def _wait_for_health(port: int, timeout: int = 30, proc: subprocess.Popen | None = None) -> bool:
+    """Poll health endpoint until ready; stop early once *proc* has exited."""
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False
         try:
             url = f"http://127.0.0.1:{port}/health"
             req = urllib.request.Request(url, method="GET")
