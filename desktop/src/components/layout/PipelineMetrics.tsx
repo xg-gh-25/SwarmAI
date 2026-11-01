@@ -180,7 +180,7 @@ export function PipelineMetrics({ rows, now, onOpen }: { rows: PipelineRow[]; no
           : (
             <table className="text-small tabular-nums" data-testid="pipeline-drill-quality-matrix">
               <thead><tr className={muted}><th className="text-left font-normal pr-6">{t('ui.PipelineOverlay.m.dimension')}</th>
-                <th className="font-normal px-3">PASS</th><th className="font-normal px-3">WARN</th><th className="font-normal px-3">BLOCK</th></tr></thead>
+                <th className="font-normal px-3">{t('ui.PipelineOverlay.m.verdictPass')}</th><th className="font-normal px-3">{t('ui.PipelineOverlay.m.verdictWarn')}</th><th className="font-normal px-3">{t('ui.PipelineOverlay.m.verdictBlock')}</th></tr></thead>
               <tbody>{qua.matrix.map((m) => (
                 <tr key={m.dim}><td className="pr-6 py-0.5">{m.dim}</td>
                   <td className="px-3 text-center" style={{ color: m.PASS ? 'var(--color-status-success)' : undefined }}>{m.PASS || '·'}</td>
@@ -213,6 +213,7 @@ export function PipelineMetrics({ rows, now, onOpen }: { rows: PipelineRow[]; no
 
 /** Each run's time as a dot on its profile's row, the median as a line; a dot opens its run. */
 function SpeedStrip({ points, median, onOpen }: { points: { key: string; title: string; profile: string; min: number }[]; median: number | null; onOpen: (k: string) => void }) {
+  const { t } = useTranslation();
   const profiles = [...new Set(points.map((p) => p.profile))];
   const max = Math.max(...points.map((p) => p.min), 1);
   const W = 640, row = 28, left = 90;
@@ -226,12 +227,12 @@ function SpeedStrip({ points, median, onOpen }: { points: { key: string; title: 
           <text x={0} y={i * row + 18} className="text-meta" style={{ fill: 'var(--color-text-muted)' }}>{p} {points.filter((q) => q.profile === p).length}</text>
           {points.filter((q) => q.profile === p).map((q) => (
             <circle key={q.key} cx={x(q.min)} cy={i * row + 14} r={5} style={{ fill: 'var(--viz-1)', stroke: 'var(--color-card)', strokeWidth: 2, cursor: 'pointer' }}
-              onClick={() => onOpen(q.key)} data-testid="pipeline-speed-dot"><title>{`${q.title} · ${q.min} min`}</title></circle>
+              onClick={() => onOpen(q.key)} data-testid="pipeline-speed-dot"><title>{t('ui.PipelineOverlay.m.dotTitle', { title: q.title, n: q.min })}</title></circle>
           ))}
         </g>
       ))}
       <text x={x(0)} y={profiles.length * row + 16} className="text-meta" style={{ fill: 'var(--color-text-muted)' }}>0</text>
-      <text x={x(max)} y={profiles.length * row + 16} textAnchor="end" className="text-meta" style={{ fill: 'var(--color-text-muted)' }}>{max} min</text>
+      <text x={x(max)} y={profiles.length * row + 16} textAnchor="end" className="text-meta" style={{ fill: 'var(--color-text-muted)' }}>{t('ui.PipelineOverlay.m.minutes', { n: max })}</text>
     </svg>
   );
 }

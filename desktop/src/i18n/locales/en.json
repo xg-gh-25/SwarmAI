@@ -4579,6 +4579,11 @@
       "tabRunsWaiting_other": "Runs · {{count}} waiting",
       "whereAll": "All",
       "m": {
+        "verdictPass": "PASS",
+        "verdictWarn": "WARN",
+        "verdictBlock": "BLOCK",
+        "minutes": "{{n}} min",
+        "dotTitle": "{{title}} · {{n}} min",
         "since_one": "Since {{since}} · {{count}} pipeline run",
         "since_other": "Since {{since}} · {{count}} pipeline runs",
         "distribution": "Run distribution",

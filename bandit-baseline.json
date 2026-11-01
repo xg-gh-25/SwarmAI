@@ -4,13 +4,12 @@
     "severity": "high",
     "confidence": "high"
   },
-  "count": 7,
+  "count": 6,
   "fingerprints": [
     "0f1e862ee88037a106f4dc90b61329609b9ec772fe613a9b24a1baffb8dbb2b5",
     "32a8598efef7ed8d7a4eff97a582c6c305b83fa157c6d5bcb02c4e52df351214",
     "43fc32e85018f1cd7e6958eae4016174e3cd16ac76855d6a5eadb8a78851661b",
     "7c04331cab1e6cf30ca7d29a38d8eec60a95526df824cf5f0a8dd34ec6cc70e2",
-    "8dbc8caa2e96cf79afcd97e6cb8bf5dcc5272e505fe50bcaf1a79b8cae56e344",
     "8e5017f339b933c30ae91ddb12b695d7c35c52093be8dc6ce5f345b850570cf1",
     "f9fbf45868a551ec39993202046e33a9e58c9e4d83e715371c43f0cc14949276"
   ],
@@ -18,7 +17,7 @@
     "0f1e862ee88037a106f4dc90b61329609b9ec772fe613a9b24a1baffb8dbb2b5": {
       "test_id": "B602",
       "file": "backend/jobs/executor.py",
-      "line": 1080,
+      "line": 1070,
       "text": "subprocess call with shell=True identified, security issue."
     },
     "32a8598efef7ed8d7a4eff97a582c6c305b83fa157c6d5bcb02c4e52df351214": {
@@ -42,7 +41,7 @@
     "8e5017f339b933c30ae91ddb12b695d7c35c52093be8dc6ce5f345b850570cf1": {
       "test_id": "B602",
       "file": "backend/scripts/eval_runner.py",
-      "line": 683,
+      "line": 684,
       "text": "subprocess call with shell=True identified, security issue."
     },
     "f9fbf45868a551ec39993202046e33a9e58c9e4d83e715371c43f0cc14949276": {

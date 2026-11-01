@@ -4579,6 +4579,11 @@
       "tabRunsWaiting_other": "Runs · {{count}} 等你",
       "whereAll": "全部",
       "m": {
+        "verdictPass": "通过",
+        "verdictWarn": "警告",
+        "verdictBlock": "阻断",
+        "minutes": "{{n}} 分钟",
+        "dotTitle": "{{title}} · {{n}} 分钟",
         "since_one": "自 {{since}} 起 · {{count}} 个 pipeline run",
         "since_other": "自 {{since}} 起 · {{count}} 个 pipeline run",
         "distribution": "Run 分布",
