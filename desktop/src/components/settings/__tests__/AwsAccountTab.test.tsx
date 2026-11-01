@@ -20,8 +20,10 @@ const mockCheck = vi.fn();
 const mockSetFleet = vi.fn();
 const mockTemplate = vi.fn();
 const mockCreateVpc = vi.fn();
+const mockUseForChat = vi.fn();
 vi.mock('../../../services/awsAccount', () => ({
   awsAccountService: {
+    useForChat: (...a: unknown[]) => mockUseForChat(...a),
     get: (...a: unknown[]) => mockGet(...a),
     verify: (...a: unknown[]) => mockVerify(...a),
     check: (...a: unknown[]) => mockCheck(...a),
@@ -47,6 +49,17 @@ vi.mock('../../awsAccount/ConnectAccount', () => ({
     connectProps.current = p;
     return <div data-testid="connect-stub" data-start={String(p.start)} />;
   },
+}));
+const desktop = { on: false };
+vi.mock('../../../services/tauri', () => ({ isDesktop: () => desktop.on }));
+const mockListAccounts = vi.fn();
+vi.mock('../../../services/hive', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hive')>()),
+  hiveService: { listAccounts: (...a: unknown[]) => mockListAccounts(...a) },
+}));
+vi.mock('../hiveComponents', () => ({
+  AccountCard: ({ account }: { account: { id: string } }) => <div data-testid={`hive-account-${account.id}`} />,
+  AddAccountDialog: () => <div data-testid="add-hive-account" />,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string, o?: Record<string, string>) => (o?.name ? `${k}:${o.name}` : k) }),
@@ -76,8 +89,10 @@ const fleet = (over = {}) => ({
 });
 
 beforeEach(() => {
-  for (const m of [mockGet, mockVerify, mockCheck, mockSetFleet, mockTemplate, mockUpdateConfig, mockSetAuthMethod, mockCreateVpc]) m.mockReset();
+  for (const m of [mockGet, mockVerify, mockCheck, mockSetFleet, mockTemplate, mockUpdateConfig, mockSetAuthMethod, mockCreateVpc, mockUseForChat, mockListAccounts]) m.mockReset();
   connectProps.current = null;
+  desktop.on = false;
+  mockListAccounts.mockResolvedValue([]);
 });
 
 describe('AwsAccountTab', () => {
@@ -88,8 +103,10 @@ describe('AwsAccountTab', () => {
     expect(screen.getByText('533267412361')).toBeInTheDocument();
     expect(screen.getByTestId('aws-account-all-ready')).toBeInTheDocument();
     expect(screen.queryByTestId('aws-account-gaps')).toBeNull();
-    expect(screen.queryByTestId('aws-account-remedy')).toBeNull();
     expect(screen.queryByTestId('aws-account-sign-in')).toBeNull();
+    // connected: no primary button, "change account" is a link on the state line
+    expect(screen.getByTestId('aws-account-change')).toHaveTextContent('settings.awsAccount.change');
+    expect(screen.queryByTestId('aws-account-terminal')).toBeNull();
   });
 
   it('lists only the capabilities that are not ready', async () => {
@@ -115,7 +132,7 @@ describe('AwsAccountTab', () => {
     mockVerify.mockResolvedValue(view({ state: 'account_mismatch' }));
     mockCheck.mockResolvedValue(view({ state: 'connected' }));
     render(<AwsAccountTab />);
-    fireEvent.click(await screen.findByText('settings.awsAccount.verify'));
+    fireEvent.click(await screen.findByTestId('aws-account-verify-now'));
     await waitFor(() => expect(screen.getByTestId('aws-account-state')).toHaveTextContent('account_mismatch'));
     fireEvent.click(screen.getByText('settings.awsAccount.check'));
     await waitFor(() => expect(screen.getByTestId('aws-account-state')).toHaveTextContent('connected'));
@@ -136,8 +153,9 @@ describe('AwsAccountTab', () => {
     mockGet.mockResolvedValue(view({ state: 'unconnected', account: null, capabilities: null }));
     render(<AwsAccountTab />);
     expect(await screen.findByTestId('aws-account-remedy')).toHaveTextContent('remedy.unconnected');
-    expect(screen.getByText('settings.awsAccount.verify').closest('button')).toBeDisabled();
-    expect(screen.getByText('settings.awsAccount.check').closest('button')).toBeDisabled();
+    expect(screen.queryByText('settings.awsAccount.verify')).toBeNull();
+    expect(screen.queryByText('settings.awsAccount.check')).toBeNull();
+    expect(screen.queryByTestId('aws-account-region')).toBeNull();
     expect(screen.getByTestId('aws-account-change')).toHaveTextContent('settings.awsAccount.connect');
     expect(screen.queryByTestId('hive-fleet')).toBeNull();
   });
@@ -215,12 +233,11 @@ describe('AwsAccountTab', () => {
   });
 
   it('chat on a key can be moved back to the account once Bedrock works', async () => {
-    mockGet.mockResolvedValueOnce(view({ chat_via: 'bedrock_key' })).mockResolvedValue(view());
-    mockUpdateConfig.mockResolvedValue({});
-    mockSetAuthMethod.mockResolvedValue(undefined);
+    mockGet.mockResolvedValue(view({ chat_via: 'bedrock_key' }));
+    mockUseForChat.mockResolvedValue(view());
     render(<AwsAccountTab />);
     fireEvent.click(await screen.findByText('settings.awsAccount.chatUseAccount'));
-    await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith({ use_bedrock: true, auth_method: 'ada' }));
+    await waitFor(() => expect(mockUseForChat).toHaveBeenCalledWith(view().account));
     await waitFor(() => expect(screen.queryByTestId('aws-account-chat-switch')).toBeNull());
   });
 
@@ -256,3 +273,106 @@ describe('AwsAccountTab', () => {
   });
 });
 
+
+describe('AwsAccountTab — the merged page (design 2026-11-01-settings-account-merge)', () => {
+  const terminal = { kind: 'terminal' as const, command: 'mwinit -f', title: 'Midway sign-in' };
+
+  it('an expired ADA sign-in types the backend\'s command into the terminal, then verify is next', async () => {
+    desktop.on = true;
+    mockGet.mockResolvedValue(view({ state: 'needs_login',
+      remediation: { message: 'm', fix_text: 'f', settings_tab: 'aws-account', action: terminal } }));
+    const seen: unknown[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('swarm:terminal-run', on);
+    render(<AwsAccountTab />);
+    const btn = await screen.findByTestId('aws-account-terminal');
+    expect(btn.className).toContain('btn-primary');
+    fireEvent.click(btn);
+    window.removeEventListener('swarm:terminal-run', on);
+    expect(seen).toEqual([{ command: 'mwinit -f', title: 'Midway sign-in' }]);
+    expect(screen.getByTestId('aws-account-terminal-hint')).toBeInTheDocument();
+    expect(screen.getByTestId('aws-account-verify-now').className).toContain('btn-primary');
+  });
+
+  it('changing the main region writes aws_region and checks the account there', async () => {
+    mockGet.mockResolvedValue(view({ region: 'us-east-1' }));
+    mockUpdateConfig.mockResolvedValue({});
+    mockCheck.mockResolvedValue(view({ region: 'eu-west-1' }));
+    render(<AwsAccountTab />);
+    await screen.findByTestId('aws-account-region');
+    fireEvent.click(screen.getByText('US East (N. Virginia)'));
+    fireEvent.click(await screen.findByText('EU (Ireland)'));
+    await waitFor(() => expect(mockUpdateConfig).toHaveBeenCalledWith({ aws_region: 'eu-west-1' }));
+    await waitFor(() => expect(mockCheck).toHaveBeenCalled());
+  });
+
+  const acc = (id: string, role: string, hiveCount: number) => ({ id, role, hiveCount }) as never;
+
+  it('with a SwarmAI account, only other accounts that still hold Hives are listed, no add', async () => {
+    desktop.on = true;
+    mockGet.mockResolvedValue(view());
+    mockListAccounts.mockResolvedValue([acc('swarmai', 'swarmai', 2), acc('old', 'other', 1), acc('empty', 'other', 0)]);
+    render(<AwsAccountTab />);
+    expect(await screen.findByTestId('hive-account-old')).toBeInTheDocument();
+    expect(screen.queryByTestId('hive-account-swarmai')).toBeNull();
+    expect(screen.queryByTestId('hive-account-empty')).toBeNull();
+    expect(screen.getByTestId('aws-account-hive-accounts')).toHaveTextContent('settings.awsAccount.otherHives');
+    expect(screen.queryByText('settings.awsAccount.addHiveAccount')).toBeNull();
+  });
+
+  it('without one, the legacy Hive accounts stay exactly as the old tab had them, with Add', async () => {
+    desktop.on = true;
+    mockGet.mockResolvedValue(view({ state: 'unconnected', account: null, capabilities: null }));
+    mockListAccounts.mockResolvedValue([acc('mine', 'own', 0)]);
+    render(<AwsAccountTab />);
+    expect(await screen.findByTestId('hive-account-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('aws-account-hive-accounts')).toHaveTextContent('settings.awsAccount.hiveAccounts');
+    fireEvent.click(screen.getByText('settings.awsAccount.addHiveAccount'));
+    expect(screen.getByTestId('add-hive-account')).toBeInTheDocument();
+  });
+});
+
+describe('AwsAccountTab — after the review', () => {
+  const terminal = { kind: 'terminal' as const, command: 'mwinit -f', title: 'Midway sign-in' };
+  const expired = () => view({ state: 'needs_login',
+    remediation: { message: 'm', fix_text: 'f', settings_tab: 'aws-account', action: terminal } });
+
+  it('says what is broken once: no hand instructions next to the button', async () => {
+    desktop.on = true;
+    mockGet.mockResolvedValue(expired());
+    render(<AwsAccountTab />);
+    expect(await screen.findByTestId('aws-account-remedy')).toHaveTextContent('settings.awsAccount.remedy.expired_ada');
+    expect(screen.queryByText('settings.awsAccount.remedy.needs_login_ada')).toBeNull();
+  });
+
+  it('after the chat line typed the command, "verify again" is the next step here too', async () => {
+    desktop.on = true;
+    const ev = await import('../../common/settingsEvents');
+    ev.markTerminalRun();
+    mockGet.mockResolvedValue(expired());
+    render(<AwsAccountTab />);
+    expect((await screen.findByTestId('aws-account-verify-now')).className).toContain('btn-primary');
+    expect(screen.getByTestId('aws-account-terminal').className).not.toContain('btn-primary');
+  });
+
+  it('an unverified account has "verify again" as its one primary action', async () => {
+    mockGet.mockResolvedValue(view({ state: 'unverified' }));
+    render(<AwsAccountTab />);
+    expect((await screen.findByTestId('aws-account-verify-now')).className).toContain('btn-primary');
+  });
+
+  it('a sign-in request from the chat line goes straight into the in-app sign-in', async () => {
+    const ev = await import('../../common/settingsEvents');
+    ev.openSignIn();
+    mockGet.mockResolvedValue(view({ state: 'needs_login', account: { ...view().account!, source: 'sso' } }));
+    render(<AwsAccountTab />);
+    expect(await screen.findByTestId('connect-stub')).toHaveAttribute('data-start', 'sso');
+  });
+
+  it('on the desktop the main region is offered even without an account', async () => {
+    desktop.on = true;
+    mockGet.mockResolvedValue(view({ state: 'unconnected', account: null, capabilities: null }));
+    render(<AwsAccountTab />);
+    expect(await screen.findByTestId('aws-account-region')).toBeInTheDocument();
+  });
+});

@@ -5,6 +5,8 @@
  * connect or change it, check its capabilities, and set how many Hives it runs.
  */
 import api from './api';
+import { settingsService } from './settings';
+import { systemService } from './system';
 
 const USER_ACTION = { headers: { 'X-Swarm-User-Action': 'aws-account' } };
 
@@ -57,14 +59,25 @@ export interface AwsAccountView {
     sso?: { start_url: string | null; sso_region: string | null; role: string | null } | null;
   } | null;
   chat_via: 'aws' | 'bedrock_key' | 'anthropic';
+  /** the main region: Bedrock, cloud storage, voice, the default for new Hives */
+  region?: string;
   capabilities: (Record<'bedrock' | 'hive' | 'storage' | 'voice', Capability> & { checked_at?: string }) | null;
   profile_file: string;
   supported: boolean;
-  /** what the credential banner says when this account needs the user (else null) */
-  remediation?: { message: string; fix_text: string; settings_tab: string } | null;
+  /** what the credential banner says if the credentials stop working: for the account
+   *  when it needs the user (else null); without an account in use (no record, a Hive),
+   *  always the fix for the legacy sign-in method — the banner shows only on "expired" */
+  remediation?: { message: string; fix_text: string; settings_tab: string; action?: RemediationAction } | null;
   /** the Hive count and status (null on a Hive, or when it could not be read) */
   hive?: FleetStatus | null;
 }
+
+/** The one-click fix for a sign-in problem (backend core/auth_remediation `action`; design
+ *  2026-11-01-settings-account-merge §4.2). A terminal command is built by the backend only. */
+export type RemediationAction =
+  | { kind: 'terminal'; command: string; title: string }
+  | { kind: 'sign_in' }
+  | { kind: 'settings'; tab: string };
 
 /** One profile found on this machine (stage 1: what its configuration says). */
 export interface DetectRow {
@@ -176,6 +189,13 @@ export const awsAccountService = {
   /** create the region's default VPC (the Hive check found none), then check it again */
   async createDefaultVpc(region: string): Promise<AwsAccountView> {
     return (await api.post<AwsAccountView>('/aws-account/default-vpc', { region }, USER_ACTION)).data;
+  },
+  /** Chat goes through this account's Bedrock again (from a Bedrock API key). */
+  async useForChat(account: NonNullable<AwsAccountView['account']>): Promise<AwsAccountView> {
+    const method = account.source === 'ada' ? 'ada' : 'sso';
+    await settingsService.updateAPIConfiguration({ use_bedrock: true, auth_method: method });
+    await systemService.setAuthMethod(method, account.context ?? undefined);
+    return this.get();
   },
   async setFleet(body: { desired_count?: number; instance_type?: string; region?: string; dismissed?: boolean }): Promise<AwsAccountView> {
     return (await api.put<AwsAccountView>('/aws-account/hive-fleet', body, USER_ACTION)).data;

@@ -39,7 +39,6 @@ const COMMON = resolve(__dirname, '../components/common');
 // App.tsx:126-148. These render OUTSIDE LayoutProvider — none may consume
 // shell-only context. Keep in sync with App.tsx's root render block.
 const ROOT_MOUNTED_COMPONENTS: Record<string, string> = {
-  CredentialBanner: `${COMMON}/CredentialBanner.tsx`,
   BackendUpgradeBanner: `${COMMON}/BackendUpgradeBanner.tsx`,
   UpdateNotification: `${COMMON}/UpdateNotification.tsx`,
   ShutdownOverlay: `${COMMON}/ShutdownOverlay.tsx`,

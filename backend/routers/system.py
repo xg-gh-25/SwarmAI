@@ -612,7 +612,8 @@ async def _verify_anthropic_api(config: dict) -> dict:
     if not api_key:
         return _auth_error(
             "No Anthropic API key configured", "missing_key",
-            "Enter your Anthropic API key in the setup wizard or Settings → AI & Models."
+            "Anthropic keys are no longer offered: choose a Bedrock API key or connect "
+            "the AWS account (Settings → LLM Models / Swarm AWS Account)."
         )
 
     base_url = config.get("anthropic_base_url") or "https://api.anthropic.com"

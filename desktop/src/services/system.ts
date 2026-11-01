@@ -275,27 +275,6 @@ export const systemService = {
     await api.delete('/system/onboarding-complete');
   },
 
-  /**
-   * Get Core Engine growth metrics for the dashboard.
-   * Returns memory effectiveness, DDD health, session stats.
-   */
-  async getEngineMetrics(): Promise<EngineMetrics> {
-    try {
-      const response = await api.get<Record<string, unknown>>('/system/engine-metrics');
-      return deepSnakeToCamel(response.data) as EngineMetrics;
-    } catch {
-      return {
-        collectedAt: '',
-        engineLevel: { current: 'unknown', l3Progress: '0/0', l3Features: {}, levels: {} },
-        memory: { status: 'error' },
-        dddSuggestions: [],
-        dddHealth: { projects: [] },
-        contextHealth: { findings: [] },
-        hooks: { available: false },
-        sessions: {},
-      };
-    }
-  },
   // ── Workspace Backup & Sync ──
 
   /** Get backup status: last_backup, repo_url, schedule, enabled. */
@@ -519,18 +498,3 @@ export interface RestoreEvent {
 
 // ============== Engine Metrics Types ==============
 
-export interface EngineMetrics {
-  collectedAt: string;
-  engineLevel: {
-    current: string;
-    l3Progress: string;
-    l3Features: Record<string, boolean>;
-    levels: Record<string, string>;
-  };
-  memory: Record<string, unknown>;
-  dddSuggestions: Array<Record<string, string>>;
-  dddHealth: { projects: Array<Record<string, unknown>> };
-  contextHealth: { findings: Array<Record<string, string>>; lastCheck?: string };
-  hooks: Record<string, unknown>;
-  sessions: Record<string, unknown>;
-}

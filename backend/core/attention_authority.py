@@ -810,7 +810,7 @@ def _collect_aws_account() -> list[AttentionItem]:
     fewer Hives than the person asked for is one REVIEW item until they say "later"
     (``hive_fleet.dismissed``), never more than once at a time. Reads the record and the
     last Hive status the account page or the reconcile loop computed; a click opens
-    Settings → SwarmAI Account (``context.kind`` aws_account). Read-only; fail-soft."""
+    Settings → Swarm AWS Account (``context.kind`` aws_account). Read-only; fail-soft."""
     items: list[AttentionItem] = []
     try:
         from core import aws_account
@@ -827,7 +827,7 @@ def _collect_aws_account() -> list[AttentionItem]:
             items.append(AttentionItem(
                 id=f"aws_account:{state}", source="aws_account", tier=TIER_BLOCKING, brain=None,
                 title=title, summary=acct, detail=_one_line(fix, 400),
-                dispatch={"message": _prompt("Open Settings → SwarmAI Account: " + title.lower() + "."),
+                dispatch={"message": _prompt("Open Settings → Swarm AWS Account: " + title.lower() + "."),
                           "context": ctx}))
         from hive import fleet
         st = fleet.last_status() or {}
@@ -837,11 +837,11 @@ def _collect_aws_account() -> list[AttentionItem]:
                      if st["state"] == "short" else "Hives cannot be created in this account")
             detail = (str((st.get("capability") or {}).get("detail") or "")
                       if st["state"] == "cannot_build" else
-                      "Create them on the SwarmAI Account page, or choose Later.")
+                      "Create them on the Swarm AWS Account page, or choose Later.")
             items.append(AttentionItem(
                 id="aws_account:hive", source="aws_account", tier=TIER_REVIEW, brain=None,
                 title=title, summary=acct, detail=_one_line(detail, 400),
-                dispatch={"message": _prompt("Open Settings → SwarmAI Account: " + title.lower() + "."),
+                dispatch={"message": _prompt("Open Settings → Swarm AWS Account: " + title.lower() + "."),
                           "context": ctx}))
     except Exception as exc:
         logger.warning("attention: aws_account source failed: %s", exc)

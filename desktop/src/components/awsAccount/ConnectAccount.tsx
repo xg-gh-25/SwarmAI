@@ -28,7 +28,6 @@ import {
 import { systemService } from '../../services/system';
 import { settingsService } from '../../services/settings';
 import { openExternal } from '../../utils/openExternal';
-import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 
 const ACCOUNT_RE = /^\d{12}$/;
 const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
@@ -403,13 +402,7 @@ export default function ConnectAccount({
           <p className="text-sm text-[var(--color-text-secondary)]">{t('awsConnect.oldHives.cannotKeep')}</p>
         )}
         <p className="mt-3 text-sm text-[var(--color-text-muted)]">
-          {t('awsConnect.oldHives.deleteFirst')}{' '}
-          {mode === 'settings' && (
-            <button type="button" className="underline" data-testid="connect-open-hive-page"
-              onClick={() => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: 'hive' } }))}>
-              {t('awsConnect.oldHives.openHivePage')}
-            </button>
-          )}
+          {t('awsConnect.oldHives.deleteFirst')}
         </p>
         {errorBox}
         {exits({ back: true })}
@@ -897,34 +890,47 @@ function MoreWays({ rows, busy, errorBox, regionField, onProfile, onKeys, onInst
   );
 }
 
-// ── chat only: a Bedrock API key or an Anthropic key ─────────────────────────
+// ── chat only: a Bedrock API key ─────────────────────────────────────────────
+// (No Anthropic key since 2026-11-01, design 2026-11-01-settings-account-merge §3: the
+// backend still runs one an older install set up.)
 
 function ChatOnly({ region, context, onDone, exits }: {
   region: string; context: 'internal' | 'external'; onDone: () => void; exits: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [kind, setKind] = useState<'bedrock_api_key' | 'apikey'>('bedrock_api_key');
+  return (
+    <div data-testid="connect-chat">
+      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('awsConnect.chat.title')}</h2>
+      <p className="text-[var(--color-text-muted)] mb-6">{t('awsConnect.chat.lead')}</p>
+      <BedrockKeyForm region={region} context={context} onDone={onDone} />
+      {exits}
+    </div>
+  );
+}
+
+/** Paste a Bedrock API key: verified with the not-yet-stored key first, stored (secret
+ *  store) and made the chat path only after it worked. Used by the wizard's "chat only"
+ *  and Settings → LLM Models. */
+export function BedrockKeyForm({ region, context, onDone, compact = false }: {
+  region: string; context: 'internal' | 'external'; onDone: () => void; compact?: boolean;
+}) {
+  const { t } = useTranslation();
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const run = async () => {
     setBusy(true); setFailed(null);
-    // verify first with the not-yet-stored key; store only after it worked
-    const update: Record<string, unknown> = kind === 'apikey'
-      ? { use_bedrock: false, aws_region: region, auth_method: 'apikey' }
-      : { use_bedrock: true, aws_region: region, auth_method: 'bedrock_api_key' };
-    const secret = kind === 'apikey' ? { anthropic_api_key: key.trim() } : { aws_bearer_token_bedrock: key.trim() };
+    const update: Record<string, unknown> = { use_bedrock: true, aws_region: region, auth_method: 'bedrock_api_key' };
     try {
-      const res = await systemService.verifyAuth({ ...update, ...secret });
+      const res = await systemService.verifyAuth({ ...update, aws_bearer_token_bedrock: key.trim() });
       if (!res.success) {
         setFailed(res.fixHint || res.error || t('awsConnect.chat.failed'));
         return;
       }
-      if (kind === 'apikey') await systemService.persistApiKey(key.trim());
-      else await systemService.persistBearerToken(key.trim());
+      await systemService.persistBearerToken(key.trim());
       setKey('');
       await settingsService.updateAPIConfiguration(update);
-      await systemService.setAuthMethod(kind, context);
+      await systemService.setAuthMethod('bedrock_api_key', context);
       onDone();
     } catch (e) {
       setFailed(e instanceof Error ? e.message : String(e));
@@ -933,29 +939,17 @@ function ChatOnly({ region, context, onDone, exits }: {
     }
   };
   return (
-    <div data-testid="connect-chat">
-      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('awsConnect.chat.title')}</h2>
-      <p className="text-[var(--color-text-muted)] mb-6">{t('awsConnect.chat.lead')}</p>
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        {(['bedrock_api_key', 'apikey'] as const).map((k) => (
-          <button key={k} type="button" onClick={() => setKind(k)} data-testid={`connect-chat-${k}`}
-            className={`text-left p-4 rounded-lg border ${kind === k ? 'border-[var(--color-primary)]' : 'border-[var(--color-border)]'}`}>
-            <span className="block font-medium text-[var(--color-text)]">{t(`awsConnect.chat.${k}.title`)}</span>
-            <span className="block mt-1 text-sm text-[var(--color-text-secondary)]">{t(`awsConnect.chat.${k}.desc`)}</span>
-          </button>
-        ))}
-      </div>
-      <textarea value={key} onChange={(e) => setKey(e.target.value)} rows={3} autoComplete="off"
+    <div data-testid="bedrock-key-form">
+      <textarea value={key} onChange={(e) => setKey(e.target.value)} rows={compact ? 2 : 3} autoComplete="off"
         placeholder={t('awsConnect.chat.paste')} className={inputCls} data-testid="connect-chat-key" />
       {failed && <p className="mt-3 text-sm text-[var(--color-error)]" data-testid="connect-chat-failed">{failed}</p>}
-      <div className="mt-6 flex items-center gap-4">
-        <button type="button" className="btn-lg btn-primary disabled:opacity-50" disabled={!key.trim() || busy}
-          onClick={() => void run()} data-testid="connect-chat-go">
+      <div className={`${compact ? 'mt-3' : 'mt-6'} flex items-center gap-4`}>
+        <button type="button" className={`${compact ? 'btn-md' : 'btn-lg'} btn-primary disabled:opacity-50`}
+          disabled={!key.trim() || busy} onClick={() => void run()} data-testid="connect-chat-go">
           {busy ? t('awsConnect.verifying') : t('awsConnect.chat.go')}
         </button>
         <span className="text-xs text-[var(--color-text-muted)]">{t('awsConnect.chat.stored')}</span>
       </div>
-      {exits}
     </div>
   );
 }

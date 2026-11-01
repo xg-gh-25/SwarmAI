@@ -1,83 +1,69 @@
 /**
- * Settings page tab layout wrapper.
+ * Settings page tab layout wrapper (design docs/design/2026-11-01-settings-account-merge.md §3).
  *
- * 10 tabs (9 in non-desktop builds — Hive Accounts is desktop-only): General, SwarmAI
- * Account (the one AWS account, read-only for now), AI & Models, Channels, Hive Accounts, Backup, Core Engine, System, Capabilities, About.
- * Skills + MCP Servers moved OUT to the first-class "Capabilities" nav card/overlay
- * (CapabilitiesOverlay, run_b5d98151) — user-facing ability browsing lives there now,
- * not in a Settings data-table. The "Capabilities" tab here is the runtime OS-eval
- * readout (dev diagnostics), a DIFFERENT surface from the Capabilities domain.
- * The Hive Accounts tab is the slim AWS-account-config surface;
- * fleet/instance MANAGEMENT lives in the first-class "Hive" nav card (HiveFleetOverlay,
- * run_b450108e) — R27 dual-entry convergence, shared components (settings/hiveComponents).
- * Supports initialTab prop so sidebar icons can deep-link to a specific tab.
+ * 7 tabs: General, Swarm AWS Account (the one AWS account: sign-in, main region,
+ * capabilities, Hive count, Hives left in other accounts), LLM Models (how the model is
+ * called and which model), Channels, Backup, System, About. The old Hive Accounts tab moved
+ * into Swarm AWS Account; Core Engine and the runtime Capabilities readout were removed
+ * (XG, 2026-11-01). Skills + MCP Servers live in the "Capabilities" nav card, Hive fleet
+ * management in the "Hive" nav card. Tab ids are kept ("aws-account", "ai-models") so
+ * deep links keep working. Supports initialTab so sidebar icons can deep-link to a tab.
  */
 import { Tabs } from '../overlay';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import GeneralTab from './GeneralTab';
 import AIModelsTab from './AIModelsTab';
 import ChannelsTab from './ChannelsTab';
 import SystemTab from './SystemTab';
-import CapabilitiesTab from './CapabilitiesTab';
-import EngineMetricsTab from './EngineMetricsTab';
 import AboutTab from './AboutTab';
-import HiveTab from './HiveTab';
 import AwsAccountTab from './AwsAccountTab';
 import BackupTab from './BackupTab';
-import { isDesktop } from '../../services/tauri';
 
 /**
  * Width tiers:
- * - '6xl'   — max-w-5xl 1024px (card grids: Engine)
- * - '4xl'   — max-w-3xl 768px  (forms: General, AI, Channels, etc.)
+ * - '4xl'   — max-w-3xl 768px  (every tab)
  * ('full' is retained in WIDTH_CLASSES for any future full-bleed tab; no tab uses it
  *  now that Skills moved to the Capabilities overlay.)
  */
 const ALL_TABS = [
   { id: 'general', label: 'General', icon: 'settings', width: '4xl' as const },
-  { id: 'aws-account', label: 'SwarmAI Account', icon: 'account_circle', width: '4xl' as const },
-  { id: 'ai-models', label: 'AI & Models', icon: 'smart_toy', width: '4xl' as const },
+  { id: 'aws-account', label: 'Swarm AWS Account', icon: 'account_circle', width: '4xl' as const },
+  { id: 'ai-models', label: 'LLM Models', icon: 'smart_toy', width: '4xl' as const },
   { id: 'channels', label: 'Channels', icon: 'forum', width: '4xl' as const },
-  { id: 'hive', label: 'Hive Accounts', icon: 'cloud', desktopOnly: true, width: '4xl' as const },
   { id: 'backup', label: 'Backup', icon: 'cloud_upload', width: '4xl' as const },
-  { id: 'engine', label: 'Core Engine', icon: 'psychology', width: '6xl' as const },
   { id: 'system', label: 'System', icon: 'dns', width: '4xl' as const },
-  { id: 'capabilities', label: 'Capabilities', icon: 'verified', width: '4xl' as const },
   { id: 'about', label: 'About', icon: 'info', width: '4xl' as const },
 ] as const;
 
 const WIDTH_CLASSES = {
   'full': 'p-6',
-  '6xl': 'max-w-5xl mx-auto p-6',
   '4xl': 'max-w-3xl mx-auto p-6',
 } as const;
 
 type TabId = typeof ALL_TABS[number]['id'];
+
+/** Tab ids that no longer exist → where their content went (old deep links). */
+const MOVED: Record<string, TabId> = { hive: 'aws-account', engine: 'general', capabilities: 'general' };
+
+function resolveTab(id: string | undefined): TabId | null {
+  const target = id && id in MOVED ? MOVED[id] : id;
+  return ALL_TABS.find((t) => t.id === target)?.id ?? null;
+}
 
 interface SettingsTabsProps {
   initialTab?: string;
 }
 
 export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
-  // Hive management (deploy/stop/delete) is desktop-only — a Hive instance
-  // should not be able to create/destroy other Hives or manage AWS accounts.
-  const TABS = useMemo(() => {
-    const desktop = isDesktop();
-    return ALL_TABS.filter(t => !('desktopOnly' in t && t.desktopOnly) || desktop);
-  }, []);
+  const TABS = ALL_TABS;
 
-  const [activeTab, setActiveTab] = useState<TabId>(() => {
-    const valid = TABS.find(t => t.id === initialTab);
-    return valid ? valid.id : 'general';
-  });
+  const [activeTab, setActiveTab] = useState<TabId>(() => resolveTab(initialTab) ?? 'general');
 
   // Update when initialTab prop changes (e.g., sidebar navigation)
   useEffect(() => {
-    if (initialTab) {
-      const valid = TABS.find(t => t.id === initialTab);
-      if (valid) setActiveTab(valid.id);
-    }
-  }, [initialTab, TABS]);
+    const valid = resolveTab(initialTab);
+    if (valid) setActiveTab(valid);
+  }, [initialTab]);
 
   return (
     <div className="flex flex-col h-full">
@@ -97,11 +83,8 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
               {activeTab === 'aws-account' && <AwsAccountTab />}
               {activeTab === 'ai-models' && <AIModelsTab />}
               {activeTab === 'channels' && <ChannelsTab />}
-              {activeTab === 'hive' && <HiveTab />}
               {activeTab === 'backup' && <BackupTab />}
-              {activeTab === 'engine' && <EngineMetricsTab />}
               {activeTab === 'system' && <SystemTab />}
-              {activeTab === 'capabilities' && <CapabilitiesTab />}
               {activeTab === 'about' && <AboutTab />}
             </>
           );

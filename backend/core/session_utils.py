@@ -343,7 +343,7 @@ _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         r"(?:ExpiredToken(?:Exception)?|bedrock.{0,40}(?:bearer|token)|(?:bearer|token).{0,40}(?:expired|invalid)|AWS_BEARER_TOKEN_BEDROCK)",
         "Your Bedrock API key (bearer token) has expired or isn't working.",
         "Bedrock bearer tokens are short-lived (max 12h). Generate a new one and "
-        "update it in Settings → AI & Models, then send your message again.",
+        "update it in Settings → LLM Models, then send your message again.",
     ),
     (
         # Anthropic-direct auth failure at runtime — a key valid at setup but
@@ -352,7 +352,8 @@ _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         # signal. Map to an actionable, provider-correct message (never mwinit).
         r"(?:authentication_error|invalid.{0,20}(?:api[_-]?key|x-api-key)|\b401\b|permission_error|Unauthorized)",
         "Your API key isn't working.",
-        "Update your Anthropic API key in Settings → AI & Models, then send your message again.",
+        "Anthropic keys are no longer offered: in Settings → LLM Models choose a Bedrock "
+        "API key or Bedrock through the Swarm AWS account, then send your message again.",
     ),
 ]
 

@@ -1147,8 +1147,8 @@
       }
     },
     "awsAccount": {
-      "title": "SwarmAI 账号",
-      "lead": "对话（Bedrock）、Hive、云存储和语音都用这一个 AWS 账号。",
+      "title": "Swarm AWS Account",
+      "lead": "SwarmAI 用这一个 AWS 账号调用 Bedrock、建 Hive、存文件、做语音。",
       "loading": "加载中…",
       "loadFailed": "账号信息加载失败。",
       "state": {
@@ -1171,7 +1171,9 @@
         "needs_login": "登录已过期。重新登录后再核实。",
         "account_mismatch": "凭证属于另一个账号。修好登录，或者更换账号。",
         "unverified": "SwarmAI 还没能确认这个账号。",
-        "unconnected": "还没有连接 AWS 账号。只有用 key 的对话能用。"
+        "unconnected": "还没有连接 AWS 账号。只有用 key 的对话能用。",
+        "expired_ada": "Midway 登录已过期：重新登录之前，对话、Hive 和语音都用不了。",
+        "expired": "AWS 登录已过期：重新登录之前，对话、Hive 和语音都用不了。"
       },
       "unsupported": "这种登录方式在后续版本支持；账号先显示在这里，暂不使用。",
       "capabilities": "能力",
@@ -1210,7 +1212,28 @@
       "chatNotOnAccount": "对话现在用{{via}}，不用这个账号。",
       "chatUseAccount": "对话改用这个账号",
       "giveTemplate": "把权限模板交给账号管理员。",
-      "retry": "重试"
+      "retry": "重试",
+      "mainRegion": "主区域",
+      "mainRegionLead": "Bedrock、云存储、语音和新 Hive 的默认区域。",
+      "terminalHint": "在终端里按回车运行 {{command}}，按提示完成登录（输 PIN、碰安全钥匙，或在浏览器里确认），然后点「重新核实」。",
+      "stateDetail": "原因",
+      "otherHives": "别的账号里的 Hive",
+      "hiveAccounts": "Hive 账号",
+      "addHiveAccount": "添加账号",
+      "noHiveAccounts": "还没有 Hive 账号。",
+      "checking": "正在这个区域检查账号…"
+    },
+    "modelProvider": {
+      "heading": "LLM Models",
+      "title": "从哪里调用模型",
+      "aws": "Bedrock，经 Swarm AWS Account",
+      "awsNone": "先在 Swarm AWS Account 连接账号。",
+      "key": "Bedrock API key",
+      "keyLead": "只用于对话；Hive、云存储、语音仍需要 Swarm AWS Account。",
+      "anthropic": "Anthropic API key（旧设置）",
+      "anthropicLead": "仍然能用。选上面任意一项即可换掉，以后不再提供。",
+      "signInIsThere": "AWS 登录和主区域在 {{page}} 里改。",
+      "cancel": "取消"
     }
   },
   "canvas": {
@@ -2787,14 +2810,10 @@
     },
     "chat": {
       "title": "先只用对话",
-      "lead": "粘贴一把 key 就能开始对话。Hive、云存储和语音要连上 AWS 账号后才能用，以后在设置里随时连。",
+      "lead": "粘贴一把 Bedrock API key 就能开始对话。Hive、云存储和语音要连上 AWS 账号后才能用，以后在设置里随时连。",
       "bedrock_api_key": {
         "title": "Bedrock API key",
         "desc": "在 AWS 控制台的 Bedrock 页面生成。"
-      },
-      "apikey": {
-        "title": "Anthropic key",
-        "desc": "不用 AWS，直接调 Anthropic。"
       },
       "paste": "粘贴 key",
       "go": "检查并开始",
@@ -2807,8 +2826,7 @@
       "keepMeans": "保留：它们留在旧账号里，只能停止、删除和查看，不计入新账号。",
       "keep": "保留它们，然后更换",
       "cannotKeep": "SwarmAI 没有这些 Hive 所在账号的可用登录，所以不能保留。",
-      "deleteFirst": "也可以先在 Hive 页删除它们，再更换。",
-      "openHivePage": "打开 Hive 页"
+      "deleteFirst": "也可以先在左侧的 Hive 卡片里删除它们，再更换。"
     },
     "verified": {
       "title": "账号已连接",
@@ -2922,5 +2940,23 @@
       "ready": "完成"
     },
     "wizard": "安装向导"
+  },
+  "credentialBanner": {
+    "generic": "凭证不能用了。",
+    "blocked": "重新登录之前，对话、Hive 和语音都用不了。",
+    "inTerminal": "在终端登录",
+    "signInAgain": "重新登录",
+    "openSettings": "打开设置",
+    "copy": "复制命令",
+    "copied": "已复制",
+    "accountSettings": "账号设置",
+    "waiting": "在下面的终端里按回车运行 {{command}}，再按提示完成（输 PIN、碰安全钥匙，或在浏览器里确认）。",
+    "waitingSub": "登录完成后自动接上，不用重启。",
+    "checkNow": "已完成，检查一下",
+    "checkAgain": "重新检查",
+    "done": "已重新登录 · {{account}}",
+    "resend": "刚才没发出去的消息可以重新发送。",
+    "dismiss": "先收起，状态变了再出现",
+    "doneNoAccount": "已重新登录。"
   }
 }

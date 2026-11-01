@@ -23,11 +23,19 @@ class Remediation(TypedDict):
     message: str       # what's wrong (user-facing, one line)
     fix_text: str      # how to fix it, specific to the method
     settings_tab: str  # deep-link target so the UI can offer an in-app button
+    # The one-click fix (design docs/design/2026-11-01-settings-account-merge.md §4.2):
+    #   {"kind": "terminal", "command": "...", "title": "..."}: the app types the command
+    #       into a new SwarmAI terminal (no Enter: the person runs it);
+    #   {"kind": "sign_in"}: the account page runs the in-app sign-in again;
+    #   {"kind": "settings", "tab": "..."}: open that settings tab.
+    # Commands come only from the fixed strings here (or core.aws_account for a
+    # profile name it validated); the frontend never builds one.
+    action: dict
 
 
-# Deep-link target for the in-app auth panel (Settings → AI & Models).
+# Deep-link target for the model settings (Settings → LLM Models).
 _SETTINGS_TAB = "ai-models"
-# Settings → SwarmAI Account (the one AWS account, core/aws_account.py).
+# Settings → Swarm AWS Account (the one AWS account, core/aws_account.py).
 _ACCOUNT_TAB = "aws-account"
 
 _REMEDIATION: dict[str, Remediation] = {
@@ -37,9 +45,10 @@ _REMEDIATION: dict[str, Remediation] = {
         # person's default AWS profile
         "fix_text": (
             "Refresh your Amazon credentials: run `mwinit -f` in a terminal, then "
-            "re-verify in Settings → SwarmAI Account."
+            "re-verify in Settings → Swarm AWS Account."
         ),
-        "settings_tab": _SETTINGS_TAB,
+        "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "terminal", "command": "mwinit -f", "title": "Midway sign-in"},
     },
     # The SwarmAI account signs in with ADA (core/aws_account, source=ada): the daemon
     # runs ada itself, so a valid Midway is all it needs.
@@ -50,6 +59,7 @@ _REMEDIATION: dict[str, Remediation] = {
             "(SwarmAI fetches fresh credentials itself)."
         ),
         "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "terminal", "command": "mwinit -f", "title": "Midway sign-in"},
     },
     # The SwarmAI account is a profile from ~/.aws (core/aws_account.py, source=profile).
     "profile": {
@@ -60,32 +70,36 @@ _REMEDIATION: dict[str, Remediation] = {
             "Account), then send your message again."
         ),
         "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "settings", "tab": _ACCOUNT_TAB},
     },
     # The SwarmAI account signs in to AWS SSO inside the app (core/aws_signin).
     "sso_app": {
         "message": "Your AWS SSO sign-in has expired.",
         "fix_text": (
-            "Sign in again in Settings → SwarmAI Account (Sign in again), then send "
+            "Sign in again in Settings → Swarm AWS Account (Sign in again), then send "
             "your message again."
         ),
         "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "sign_in"},
     },
     # The SwarmAI account uses AWS login through the AWS CLI (sessions last up to 12 hours).
     "aws_login": {
         "message": "Your AWS login session has ended.",
         "fix_text": (
-            "Sign in again in Settings → SwarmAI Account (AWS login sessions last at "
+            "Sign in again in Settings → Swarm AWS Account (AWS login sessions last at "
             "most 12 hours), then send your message again."
         ),
         "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "sign_in"},
     },
     "access_keys": {
         "message": "Your AWS access keys aren't working.",
         "fix_text": (
             "The access keys were deactivated or deleted. Enter new ones in Settings → "
-            "SwarmAI Account (Change account), then send your message again."
+            "Swarm AWS Account (Change account), then send your message again."
         ),
         "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "settings", "tab": _ACCOUNT_TAB},
     },
     # The SwarmAI account's record points at something gone or invalid (a deleted
     # profile, ada no longer installed, an invalid role).
@@ -93,35 +107,40 @@ _REMEDIATION: dict[str, Remediation] = {
         "message": "SwarmAI can't sign in to its AWS account.",
         "fix_text": (
             "The sign-in it was set up with no longer works (see Settings → SwarmAI "
-            "Account for the reason). Fix it there or in AI & Models, then send your "
+            "Account for the reason). Fix it there or in LLM Models, then send your "
             "message again."
         ),
         "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "settings", "tab": _ACCOUNT_TAB},
     },
     # The credentials resolved belong to another AWS account than the SwarmAI one.
     "account_mismatch": {
         "message": "Your AWS credentials belong to a different account than your SwarmAI account.",
         "fix_text": (
             "Fix the sign-in so it reaches the SwarmAI account, or check the account "
-            "in Settings → SwarmAI Account."
+            "in Settings → Swarm AWS Account."
         ),
         "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "settings", "tab": _ACCOUNT_TAB},
     },
     "sso": {
         "message": "Your AWS credentials aren't working.",
         "fix_text": (
             "Refresh your AWS SSO session: run `aws sso login` in a terminal, "
-            "then re-verify in Settings → AI & Models."
+            "then re-verify in Settings → Swarm AWS Account."
         ),
-        "settings_tab": _SETTINGS_TAB,
+        "settings_tab": _ACCOUNT_TAB,
+        "action": {"kind": "terminal", "command": "aws sso login", "title": "AWS SSO sign-in"},
     },
     "apikey": {
         "message": "No working Anthropic API key.",
         "fix_text": (
-            "Enter or update your Anthropic API key in Settings → AI & Models, "
-            "then send your message again."
+            "Anthropic keys are no longer offered: in Settings → LLM Models choose a "
+            "Bedrock API key or Bedrock through the Swarm AWS account, then send your "
+            "message again."
         ),
         "settings_tab": _SETTINGS_TAB,
+        "action": {"kind": "settings", "tab": _SETTINGS_TAB},
     },
     "iam_role": {
         "message": "The instance IAM role can't access Bedrock.",
@@ -130,15 +149,17 @@ _REMEDIATION: dict[str, Remediation] = {
             "enable Bedrock model access for the region), then re-verify."
         ),
         "settings_tab": _SETTINGS_TAB,
+        "action": {"kind": "settings", "tab": _SETTINGS_TAB},
     },
     "bedrock_api_key": {
         "message": "Your Bedrock API key isn't working.",
         "fix_text": (
             "Your Bedrock bearer token has expired or is invalid. Generate a new "
-            "short-term key (max 12h) and enter it in Settings → AI & Models, then "
+            "short-term key (max 12h) and enter it in Settings → LLM Models, then "
             "send your message again."
         ),
         "settings_tab": _SETTINGS_TAB,
+        "action": {"kind": "settings", "tab": _SETTINGS_TAB},
     },
 }
 
@@ -147,10 +168,11 @@ _REMEDIATION: dict[str, Remediation] = {
 _FALLBACK: Remediation = {
     "message": "Your credentials aren't working.",
     "fix_text": (
-        "Open Settings → AI & Models to check your authentication, then send "
-        "your message again."
+        "Connect an AWS account in Settings → Swarm AWS Account (or enter a Bedrock API "
+        "key in Settings → LLM Models), then send your message again."
     ),
-    "settings_tab": _SETTINGS_TAB,
+    "settings_tab": _ACCOUNT_TAB,
+    "action": {"kind": "settings", "tab": _ACCOUNT_TAB},
 }
 
 

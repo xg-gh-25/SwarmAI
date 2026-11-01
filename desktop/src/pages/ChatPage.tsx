@@ -35,7 +35,7 @@ import { skillsService } from '../services/skills';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
 import { tasksService } from '../services/tasks';
-import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../components/common';
+import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary, CredentialBanner } from '../components/common';
 import { useSystemToasts } from '../hooks/useSystemToasts';
 import { useHealth } from '../contexts/HealthContext';
 import { deriveBackendLiveness } from '../hooks/useHealthMonitor';
@@ -2790,6 +2790,10 @@ export default function ChatPage() {
         canvasOpen={canvas.isOpen}
         onOpenCanvas={() => window.dispatchEvent(new CustomEvent('swarm:open-canvas'))}
       />
+
+      {/* The sign-in problem line, in flow under the tab bar (design 2026-11-01-settings-
+          account-merge §4.1); hidden while Settings is open, which shows the same state. */}
+      <ErrorBoundary fallback={null}><CredentialBanner hidden={activeOverlay === 'settings'} /></ErrorBoundary>
 
       {/* 🔔 Alerts pill — portaled into the left-sidebar slot (run_2bdc68ad).
           Rendered here (not in the sidebar) so it uses ChatPage's live poll +

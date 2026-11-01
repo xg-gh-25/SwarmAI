@@ -10,7 +10,7 @@ from core.auth_remediation import remediation_for
 class TestRemediation:
     def test_ada_mentions_ada_or_mwinit(self):
         r = remediation_for("ada")
-        assert r["settings_tab"] == "ai-models"
+        assert r["settings_tab"] == "aws-account"   # sign-in lives on the account page now
         assert "ada credentials update" in r["fix_text"].lower() or "mwinit" in r["fix_text"].lower()
 
     def test_sso_says_aws_sso_login_not_mwinit(self):
@@ -21,9 +21,10 @@ class TestRemediation:
     def test_apikey_points_to_settings_not_aws(self):
         r = remediation_for("apikey")
         assert "mwinit" not in r["fix_text"].lower()
-        assert "aws" not in r["fix_text"].lower()
-        # points the user at the in-app key entry
-        assert "key" in r["fix_text"].lower()
+        # Anthropic keys are no longer offered: it points at the two choices that are
+        # (design 2026-11-01-settings-account-merge §3), on the LLM Models page
+        assert "llm models" in r["fix_text"].lower() and "bedrock api key" in r["fix_text"].lower()
+        assert r["settings_tab"] == "ai-models"
 
     def test_iam_role_mentions_iam(self):
         r = remediation_for("iam_role")

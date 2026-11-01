@@ -13,7 +13,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider, useToast } from './contexts/ToastContext';
 import type { ToastSeverity } from './types';
 import { HealthProvider } from './contexts/HealthContext';
-import { BackendStartupOverlay, BackendUpgradeBanner, CredentialBanner, UpdateNotification, ShutdownOverlay } from './components/common';
+import { BackendStartupOverlay, BackendUpgradeBanner, UpdateNotification, ShutdownOverlay } from './components/common';
 import { getApiBaseUrl, isDesktop } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
@@ -151,10 +151,6 @@ export default function App() {
               Sibling to the overlay — overlay dismissal is independent of
               upgrade lifetime (see daemon-startup-timeout-regression fix). */}
           {!isDev && isDesktop() && <ErrorBoundary fallback={null}><BackendUpgradeBanner /></ErrorBoundary>}
-          {/* Credential-expiry banner — health-poll driven (reads health.auth).
-              Not gated on isDev/isDesktop: expired creds matter in every mode
-              and the data comes from /health, not a Tauri event. */}
-          <ErrorBoundary fallback={null}><CredentialBanner /></ErrorBoundary>
           {/* Update notification — Desktop only (Tauri plugin imports) */}
           {!isDev && isDesktop() && <ErrorBoundary fallback={null}><UpdateNotification /></ErrorBoundary>}
           {/* swarm:toast document-event → ToastContext bridge — always mounted (not

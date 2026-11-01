@@ -14,6 +14,7 @@ import TerminalPanel from '../terminal/TerminalPanel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { terminalLocation } from '../../stores/terminalLocation';
 import { keyOfCwd } from '../../stores/TerminalStore';
+import { openShellWithCommand } from '../../stores/terminalRun';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 // BrainHubDemoOverlay retired (M2): brain-hub migrated to the OverlayHost registry
 // (overlaySurfaces.tsx). File kept dormant until M5 (its test still renders it).
@@ -22,7 +23,7 @@ import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
 // CMBrainOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // LibraryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
-import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
+import { OPEN_SETTINGS_EVENT, TERMINAL_RUN_EVENT } from '../common/settingsEvents';
 import { openExternal } from '../../utils/openExternal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
@@ -841,10 +842,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId, setSettingsTab } = useLayout();
   const { openOverlay } = useOverlay();
 
-  // CredentialBanner is mounted at the app root (outside LayoutProvider), so its
-  // "Open Settings" deep-link can't call setSettingsTab directly — it dispatches
-  // OPEN_SETTINGS_EVENT, which we handle here (inside the providers that own the
-  // settings surface). Harmless no-op if this shell isn't mounted (onboarding).
+  // Components that cannot reach the layout context (the credential banner, Need-You
+  // rows, the account pages) dispatch OPEN_SETTINGS_EVENT (common/settingsEvents), which
+  // we handle here, inside the providers that own the settings surface.
   // Settings is now a host overlay (M3-tail): set the deep-link tab, then openOverlay
   // (which fires the efferent BACK_TO_CHAT so any legacy overlay closes too).
   useEffect(() => {
@@ -875,6 +875,17 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     };
     window.addEventListener(EXPLORER_OPEN_TERMINAL, onOpenTerminal);
     return () => window.removeEventListener(EXPLORER_OPEN_TERMINAL, onOpenTerminal);
+  }, [openTerminal]);
+
+  // The one-click sign-in (credential banner, account page): stores/terminalRun.
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      const detail = (e as CustomEvent<{ command?: string; title?: string }>).detail;
+      if (!detail?.command) return;
+      openShellWithCommand(openTerminal, detail.command, detail.title);
+    };
+    window.addEventListener(TERMINAL_RUN_EVENT, onRun);
+    return () => window.removeEventListener(TERMINAL_RUN_EVENT, onRun);
   }, [openTerminal]);
 
 

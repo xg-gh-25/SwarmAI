@@ -209,7 +209,7 @@ def _update_record(**fields: Any) -> None:
 def get_chat_via(config: Any = None) -> str:
     """Which path chat takes: ``aws`` (Bedrock on this account), ``bedrock_key`` or
     ``anthropic``. The settings that choose it are ``use_bedrock`` and ``auth_method``
-    (the wizard's "chat only", AI & Models): it is read from them here, the one reader,
+    (the wizard's "chat only", LLM Models): it is read from them here, the one reader,
     so no consumer can disagree with another (design §5.1: no separate ``chat`` key)."""
     config = config if config is not None else _cfg()
     if not config.get("use_bedrock", True):
@@ -222,7 +222,7 @@ def get_chat_via(config: Any = None) -> str:
 def region(config: Any = None) -> str:
     """The main region (design §5.1): Bedrock, cloud storage, voice, eval judges, the
     default for new Hives. Written as ``aws_region`` (a connect writes it from the record,
-    AI & Models changes it), with the record's ``region`` only as the fall-back when it
+    the Swarm AWS Account page changes it), with the record's ``region`` only as the fall-back when it
     is unset; every consumer reads it here, never either value itself, so no two can
     disagree."""
     config = config if config is not None else _cfg()
@@ -1144,6 +1144,7 @@ def view() -> dict:
         "state_detail": (rec or {}).get("state_detail"),
         "account": public,
         "chat_via": get_chat_via(),
+        "region": region(),   # the main region (Settings → Swarm AWS Account writes aws_region)
         "capabilities": (rec or {}).get("capabilities"),
         "profile_file": str(profile_file()),
         "supported": rec is None or rec.get("source") in RESOLVABLE_SOURCES,
@@ -1152,8 +1153,47 @@ def view() -> dict:
 
 
 def _remediation(state: str) -> Optional[dict]:
-    """What the credential banner tells the user, for a state that needs them."""
-    if state not in (NEEDS_LOGIN, MISMATCH) or not active():
-        return None
+    """What the credential banner tells the user when the credentials do not work (it
+    shows only on health's "expired"). With the account in use: for a state that needs
+    them, else nothing. Without it (no record, a source this build cannot resolve, a
+    Hive): the fix for the legacy sign-in method (``auth_method``), so those users keep
+    the method-aware text and one-click action (design 2026-11-01 §4.2)."""
     from core.auth_remediation import remediation_for
-    return dict(remediation_for("account_mismatch" if state == MISMATCH else remediation_method()))
+    if is_hive_mode():   # a Hive signs in with its instance role, whatever auth_method says
+        return dict(remediation_for("iam_role"))
+    if not active():
+        return dict(remediation_for(_cfg().get("auth_method")))
+    if state not in (NEEDS_LOGIN, MISMATCH):
+        return None
+    method = "account_mismatch" if state == MISMATCH else remediation_method()
+    out = dict(remediation_for(method))
+    if method == "profile":
+        cmd = _profile_login_command(get_record() or {})
+        if cmd:
+            out["action"] = {"kind": "terminal", "command": cmd, "title": "AWS sign-in"}
+    return out
+
+
+#: a profile name that may be typed into a shell as one word (design 2026-11-01 §4.2)
+#: ASCII only, no leading "-" (never an option), at most 64 characters, used with fullmatch
+_SAFE_PROFILE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}")
+
+
+def _profile_login_command(rec: dict) -> Optional[str]:
+    """``aws sso login --profile <name>`` for a profile-sourced record whose name is safe
+    to type into a shell; None otherwise (the banner then opens the account page). Only
+    an SSO profile signs in this way; any other profile has no login command."""
+    name = str(rec.get("profile") or "")
+    if not _SAFE_PROFILE.fullmatch(name) or not _profile_is_sso(name):
+        return None
+    return f"aws sso login --profile {name}"
+
+
+def _profile_is_sso(name: str) -> bool:
+    """Whether ~/.aws/config gives *name* an SSO sign-in (sso_session or sso_start_url)."""
+    try:
+        cp = _user_aws_config()
+    except (configparser.Error, OSError):
+        return False
+    sec = "default" if name == "default" else f"profile {name}"
+    return cp.has_section(sec) and (cp.has_option(sec, "sso_session") or cp.has_option(sec, "sso_start_url"))

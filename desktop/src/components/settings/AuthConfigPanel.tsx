@@ -8,6 +8,7 @@ import { useState, useEffect } from 'react';
 import { systemService, VerifyAuthResponse, AuthHintResponse } from '../../services/system';
 import { settingsService } from '../../services/settings';
 import { Dropdown } from '../common';
+import { AWS_REGION_OPTIONS } from '../awsAccount/regions';
 
 type AuthMethod = 'sso' | 'ada' | 'apikey' | 'bedrock_api_key';
 
@@ -17,14 +18,6 @@ interface AuthConfigPanelProps {
   onVerifyFail?: () => void;
 }
 
-const AWS_REGION_OPTIONS = [
-  { id: 'us-east-1', name: 'US East (N. Virginia)', description: 'us-east-1' },
-  { id: 'us-west-2', name: 'US West (Oregon)', description: 'us-west-2' },
-  { id: 'eu-west-1', name: 'EU (Ireland)', description: 'eu-west-1' },
-  { id: 'eu-central-1', name: 'EU (Frankfurt)', description: 'eu-central-1' },
-  { id: 'ap-northeast-1', name: 'Asia Pacific (Tokyo)', description: 'ap-northeast-1' },
-  { id: 'ap-southeast-1', name: 'Asia Pacific (Singapore)', description: 'ap-southeast-1' },
-];
 
 export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }: AuthConfigPanelProps) {
   const [method, setMethod] = useState<AuthMethod>('sso');

@@ -22,7 +22,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AttentionEntry } from '../../services/attention';
 import { getOverlayCtxBridge } from './overlayRegistry';
-import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
+import { OPEN_SETTINGS_EVENT } from '../common/settingsEvents';
 
 /** True for an item that opens the Swarm Out tab instead of filling the chat. */
 export function opensSwarmOut(it: AttentionEntry): boolean {

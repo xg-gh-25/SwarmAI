@@ -16,7 +16,7 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../../contexts/ToastContext';
 import { awsAccountService } from '../../services/awsAccount';
-import { OPEN_SETTINGS_EVENT } from './CredentialBanner';
+import { OPEN_SETTINGS_EVENT } from './settingsEvents';
 
 export const SEEN_KEY = 'swarmai.accountConnectedNotice';
 const RETRY_MS = 20_000;

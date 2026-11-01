@@ -2,7 +2,7 @@
  * hiveComponents — the shared Hive UI building blocks, extracted from HiveTab.tsx
  * (run_b450108e, R4/R27) so BOTH surfaces consume ONE source:
  *   • HiveFleetOverlay (layout/) — the first-class SYSTEM-zone Fleet workbench
- *   • HiveTab (settings/) — slimmed to AWS-account config
+ *   • Settings → Swarm AWS Account — the Hives left in other accounts (AccountCard)
  *
  * Extraction is behavior-preserving: every export below is moved verbatim from the
  * former HiveTab.tsx (deploy progress, instance card, auth display, account card,

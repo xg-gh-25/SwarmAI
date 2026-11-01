@@ -130,7 +130,7 @@ def test_remediation_names_the_new_sources(cfg, source, method):
     cfg.update({"use_bedrock": True, "auth_method": "sso"})
     assert aa.remediation_method(cfg) == method
     from core.auth_remediation import remediation_for
-    assert "SwarmAI Account" in remediation_for(method)["fix_text"]
+    assert "Swarm AWS Account" in remediation_for(method)["fix_text"]
 
 
 # ── the route, and the Hives of the old account ───────────────────────────────

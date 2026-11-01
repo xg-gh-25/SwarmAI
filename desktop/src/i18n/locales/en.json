@@ -1147,8 +1147,8 @@
       }
     },
     "awsAccount": {
-      "title": "SwarmAI Account",
-      "lead": "One AWS account for chat (Bedrock), Hive, cloud storage and voice.",
+      "title": "Swarm AWS Account",
+      "lead": "SwarmAI uses this one AWS account to call Bedrock, build Hives, store files and run voice.",
       "loading": "Loading…",
       "loadFailed": "Could not load the account.",
       "state": {
@@ -1171,7 +1171,9 @@
         "needs_login": "The sign-in has expired. Sign in again, then verify again.",
         "account_mismatch": "The credentials belong to another account. Fix the sign-in or change the account.",
         "unverified": "SwarmAI could not confirm this account yet.",
-        "unconnected": "No AWS account is connected. Chat runs only if it uses a key."
+        "unconnected": "No AWS account is connected. Chat runs only if it uses a key.",
+        "expired_ada": "Your Midway sign-in has expired: chat, Hives and voice can't run until you sign in again.",
+        "expired": "Your AWS sign-in has expired: chat, Hives and voice can't run until you sign in again."
       },
       "unsupported": "This sign-in method arrives in a later version; the account is shown but not used yet.",
       "capabilities": "Capabilities",
@@ -1210,7 +1212,28 @@
       "chatNotOnAccount": "Chat uses {{via}}, not this account.",
       "chatUseAccount": "Use this account for chat",
       "giveTemplate": "Give the permission template to the account's administrator.",
-      "retry": "Try again"
+      "retry": "Try again",
+      "mainRegion": "Main region",
+      "mainRegionLead": "Bedrock, cloud storage, voice and the default for new Hives.",
+      "terminalHint": "In the terminal: press Enter to run {{command}}, follow its prompts (PIN and security key, or a browser page), then choose Verify again.",
+      "stateDetail": "Why",
+      "otherHives": "Hives in other accounts",
+      "hiveAccounts": "Hive accounts",
+      "addHiveAccount": "Add account",
+      "noHiveAccounts": "No Hive accounts yet.",
+      "checking": "Checking the account in this region…"
+    },
+    "modelProvider": {
+      "heading": "LLM Models",
+      "title": "Where the model is called from",
+      "aws": "Bedrock, through the Swarm AWS account",
+      "awsNone": "Connect an account on the Swarm AWS Account page first.",
+      "key": "Bedrock API key",
+      "keyLead": "Chat only; Hives, cloud storage and voice still need the Swarm AWS account.",
+      "anthropic": "Anthropic API key (old setting)",
+      "anthropicLead": "Still works. Pick one of the choices above to change it; it is no longer offered.",
+      "signInIsThere": "AWS sign-in and the main region are set on the {{page}} page.",
+      "cancel": "Cancel"
     }
   },
   "canvas": {
@@ -2787,14 +2810,10 @@
     },
     "chat": {
       "title": "Chat only for now",
-      "lead": "Paste one key and chat works now. Hive, cloud storage and voice need an AWS account; connect one in Settings any time.",
+      "lead": "Paste a Bedrock API key and chat works now. Hive, cloud storage and voice need an AWS account; connect one in Settings any time.",
       "bedrock_api_key": {
         "title": "Bedrock API key",
         "desc": "Made on the Bedrock page of the AWS console."
-      },
-      "apikey": {
-        "title": "Anthropic key",
-        "desc": "No AWS: calls Anthropic directly."
       },
       "paste": "Paste the key",
       "go": "Check and start",
@@ -2807,8 +2826,7 @@
       "keepMeans": "Keep them: they stay in the old account and can only be stopped, deleted and read. They do not count toward the new account.",
       "keep": "Keep them and change",
       "cannotKeep": "SwarmAI has no working sign-in for the account these Hives are in, so they cannot be kept.",
-      "deleteFirst": "Or delete them on the Hive page first, then change.",
-      "openHivePage": "Open the Hive page"
+      "deleteFirst": "Or delete them in the Hive card on the left first, then change."
     },
     "verified": {
       "title": "Account connected",
@@ -2922,5 +2940,23 @@
       "ready": "Ready"
     },
     "wizard": "Setup Wizard"
+  },
+  "credentialBanner": {
+    "generic": "Your credentials aren't working.",
+    "blocked": "Chat, Hives and voice can't run until you sign in again.",
+    "inTerminal": "Open terminal to sign in",
+    "signInAgain": "Sign in again",
+    "openSettings": "Open settings",
+    "copy": "Copy command",
+    "copied": "Copied",
+    "accountSettings": "Account settings",
+    "waiting": "In the terminal below: press Enter to run {{command}}, then follow its prompts (PIN and security key, or a browser page).",
+    "waitingSub": "SwarmAI picks it up by itself when you're done.",
+    "checkNow": "Done, check now",
+    "checkAgain": "Check again",
+    "done": "Signed in again · {{account}}",
+    "resend": "A message that didn't go out can be sent again.",
+    "dismiss": "Hide until it changes",
+    "doneNoAccount": "Signed in again."
   }
 }

@@ -1,153 +1,198 @@
 /**
- * Global banner that surfaces a non-working credential state.
+ * The sign-in problem line at the top of the chat (design
+ * docs/design/2026-11-01-settings-account-merge.md §4).
  *
- * HEALTH-POLL driven: reads `health.auth` from {@link useHealth}. Renders ONLY
- * when `auth === 'expired'` (definitive) — `valid` / `unknown` / undefined →
- * nothing (fail-open on transient/startup ambiguity).
+ * Shows ONLY on health's definitive `auth === 'expired'` (valid / unknown → nothing). It is
+ * one in-flow line under the chat tab bar, never a floating box over the tabs or over
+ * Settings: ChatPage hides it while Settings is open, because the account page shows the
+ * same state there.
  *
- * METHOD-AWARE (was hardcoded `mwinit -f`): when the SwarmAI AWS account is what
- * needs the user, its own remediation (GET /api/aws-account `remediation`) is shown
- * and the button opens Settings → SwarmAI Account. Otherwise the fix instruction
- * matches the user's auth method (fetched once from auth-hint), so an external SSO
- * user sees `aws sso login`, an Anthropic-direct user is pointed at Settings —
- * never an Amazon-internal command they can't run. Also offers a one-click
- * "Open Settings" deep-link to Settings → AI & Models so the fix is in-app.
+ * What it says and its one button come from the backend (`GET /api/aws-account`
+ * `remediation`, core/auth_remediation + core/aws_account): for the account in use and,
+ * without one, for the legacy sign-in method, so there is one wording for everyone.
+ *   - action `terminal`: "Sign in in terminal" opens a new SwarmAI terminal with the
+ *     command typed in, no Enter (the person presses it, then the PIN / security key).
+ *     The line then waits: it asks the backend to verify again, one request at a time,
+ *     5 s after each answer, for up to 5 minutes, and says when it worked. While
+ *     Settings is open it stops asking; shown again, it asks at once and goes on.
+ *   - action `sign_in`: opens the account page straight into the in-app sign-in.
+ *   - action `settings`: opens that settings tab.
+ * Outside the desktop app (no terminal) a terminal action becomes "Copy command".
+ * × hides it until the credentials work again; then every state resets for the next expiry.
  *
- * PLACEMENT: this banner is mounted at the APP ROOT (all modes, ungated) so it
- * can surface expiry during onboarding/loading too. It therefore must NOT depend
- * on LayoutContext (which only exists inside ThreeColumnLayout) — calling
- * useLayout() here threw "useLayout must be used within a LayoutProvider" and
- * crashed the whole app at boot (regression from the method-aware rework). The
- * "Open Settings" deep-link is dispatched as a `swarm:open-settings` window event
- * that the app shell (ThreeColumnLayoutInner) listens for; when the shell isn't
- * mounted yet (onboarding), the click is a harmless no-op (no settings modal to
- * open there anyway).
- *
- * Note: in API-key (Anthropic-direct) mode the backend no longer runs the AWS
- * STS check, so `auth` is never 'expired' for those users — this banner is a
- * Bedrock-path (ada/sso/iam) concern in practice.
+ * Context-free on purpose (no layout / overlay hooks): ChatPage passes `hidden`.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useHealth } from '../../contexts/HealthContext';
-import { systemService } from '../../services/system';
-import { awsAccountService } from '../../services/awsAccount';
+import { awsAccountService, type AwsAccountView, type RemediationAction } from '../../services/awsAccount';
+import { isDesktop } from '../../services/tauri';
+import { markTerminalRun, openSettings, openSignIn, runInTerminal } from './settingsEvents';
 
-// Deep-link event: the app shell (ThreeColumnLayoutInner) listens for this and
-// opens Settings on the given tab. Decouples this root-mounted banner from
-// LayoutContext (which only exists inside the app shell) — see file docstring.
-export const OPEN_SETTINGS_EVENT = 'swarm:open-settings';
+type Remedy = NonNullable<AwsAccountView['remediation']>;
 
-type Method = 'ada' | 'sso' | 'apikey' | 'iam_role' | 'bedrock_api_key';
+const POLL_MS = 5_000;
+const WAIT_MAX_MS = 5 * 60_000;
 
-// Frontend mirror of backend auth_remediation.remediation_for — kept minimal.
-// `configured` = whether ANY credential signal was detected. When false, the
-// user never set creds up (NoCredentialsError → auth='expired' too), so the
-// copy must say CONFIGURE, not "expired/refresh" for a session they never had (F2).
-function remediation(
-  method: Method | undefined,
-  configured: boolean,
-): { title: string; body: React.ReactNode } {
-  if (!configured) {
-    return {
-      title: 'No credentials configured',
-      body: <>Set up authentication in Settings → AI &amp; Models to get started.</>,
-    };
-  }
-  switch (method) {
-    case 'ada':
-      return {
-        title: 'AWS credentials need refreshing',
-        body: <>Run <code className="px-1 py-0.5 rounded bg-[var(--color-bg)] font-mono">mwinit -f</code> in a terminal, then re-verify below.</>,
-      };
-    case 'sso':
-      return {
-        title: 'AWS SSO session expired',
-        body: <>Run <code className="px-1 py-0.5 rounded bg-[var(--color-bg)] font-mono">aws sso login</code> in a terminal, then re-verify below.</>,
-      };
-    case 'iam_role':
-      return {
-        title: 'Instance role can\'t access Bedrock',
-        body: <>Add <code className="px-1 py-0.5 rounded bg-[var(--color-bg)] font-mono">bedrock:InvokeModel</code> to the IAM role policy.</>,
-      };
-    case 'apikey':
-      return {
-        title: 'Anthropic API key not working',
-        body: <>Update your API key in Settings → AI &amp; Models.</>,
-      };
-    case 'bedrock_api_key':
-      return {
-        title: 'Bedrock API key not working',
-        body: <>Your bearer token expired (max 12h). Generate a new one and enter it in Settings → AI &amp; Models.</>,
-      };
-    default:
-      return {
-        title: 'Credentials aren\'t working',
-        body: <>Check your authentication in Settings → AI &amp; Models.</>,
-      };
-  }
-}
+const keyOf = (r: Remedy | null) => (r ? `${r.message}|${JSON.stringify(r.action ?? null)}` : '');
 
-export default function CredentialBanner() {
+export default function CredentialBanner({ hidden = false }: { hidden?: boolean }) {
+  const { t } = useTranslation();
   const { health } = useHealth();
-  const [method, setMethod] = useState<Method | undefined>(undefined);
-  // undefined until the hint resolves; then true iff ANY credential was detected.
-  const [configured, setConfigured] = useState<boolean>(true);
-  // The SwarmAI account's own remediation (backend core/aws_account + auth_remediation)
-  // when it is the account that needs the user; it wins over the environment guess.
-  const [account, setAccount] = useState<{ message: string; fix_text: string; settings_tab: string } | null>(null);
+  const expired = health.auth === 'expired';
+  const [remedy, setRemedy] = useState<Remedy | null>(null);
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [phase, setPhase] = useState<'idle' | 'waiting' | 'stopped' | 'done'>('idle');
+  const [doneAccount, setDoneAccount] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const waitStarted = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);       // the next verify
+  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);   // the success line
+  const inFlight = useRef(false);
+  const alive = useRef(true);
 
-  // Fetch the active method once when the banner becomes relevant.
   useEffect(() => {
-    if (health.auth !== 'expired') return;
+    alive.current = true;   // StrictMode mounts twice: set again on every mount
+    return () => {
+      alive.current = false;
+      if (timer.current) clearTimeout(timer.current);
+      if (doneTimer.current) clearTimeout(doneTimer.current);
+    };
+  }, []);
+
+  // What to say: read once each time the credentials turn expired. When they work
+  // again, everything resets (a dismissal, a wait, a stop), so the next expiry starts fresh.
+  useEffect(() => {
+    if (!expired) {
+      setDismissed(null);
+      setPhase((p) => (p === 'done' ? p : 'idle'));
+      return;
+    }
     let cancelled = false;
     awsAccountService.get()
-      .then((v) => { if (!cancelled) setAccount(v.remediation ?? null); })
-      .catch(() => { /* older backend: the hint below decides */ });
-    systemService.getAuthHint()
-      .then((h) => {
-        if (cancelled) return;
-        setMethod(h.suggestedMethod as Method);
-        // No ada/sso/apikey signal → the user never configured creds (a
-        // NoCredentialsError, not an expiry). Show "configure", not "refresh".
-        // EXCEPT Hive/iam_role: has_ada_dir/has_sso_cache are forced false on
-        // Hive but the IAM instance role IS a valid credential — it's always
-        // "configured" (there's no in-app setup for it), so never show the
-        // configure copy for it (Gate-2 HIGH regression fix).
-        const isIamRole = h.suggestedMethod === 'iam_role' || h.runMode === 'hive';
-        setConfigured(isIamRole || Boolean(h.hasAdaDir || h.hasSsoCache || h.hasApiKey));
-      })
-      .catch(() => { /* fall back to the generic remediation */ });
+      .then((v) => { if (!cancelled) setRemedy(v.remediation ?? null); })
+      .catch(() => { /* nothing to say beyond the generic line */ });
     return () => { cancelled = true; };
-  }, [health.auth]);
+  }, [expired]);
 
-  // Render ONLY on a definitive expired signal. valid/unknown/undefined → nothing.
-  if (health.auth !== 'expired') return null;
+  const stopTimer = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
 
-  const { title, body } = account
-    ? { title: account.message, body: <>{account.fix_text}</> }
-    : remediation(method, configured);
-  const tab = account?.settings_tab ?? 'ai-models';
+  // one verify at a time; the next one 5 s after the answer, for up to 5 minutes
+  const check = useCallback(async () => {
+    if (inFlight.current) return;
+    stopTimer();
+    inFlight.current = true;
+    try {
+      const v = await awsAccountService.verify();
+      if (!alive.current) return;
+      if (v.state === 'connected') {
+        setDoneAccount(v.account?.account_id ?? null);
+        setDismissed(keyOf(remedy));   // health may say "expired" until its next sample
+        setPhase('done');
+        if (doneTimer.current) clearTimeout(doneTimer.current);
+        doneTimer.current = setTimeout(() => { if (alive.current) setPhase('idle'); }, 2_000);
+        return;
+      }
+    } catch { /* not yet */ } finally {
+      inFlight.current = false;
+    }
+    if (!alive.current) return;
+    if (Date.now() - waitStarted.current >= WAIT_MAX_MS) { setPhase('stopped'); return; }
+    timer.current = setTimeout(() => void check(), POLL_MS);
+  }, [stopTimer, remedy]);
+
+  const startWaiting = () => {
+    waitStarted.current = Date.now();
+    setPhase('waiting');
+    stopTimer();
+    timer.current = setTimeout(() => void check(), POLL_MS);
+  };
+
+  // Hidden (Settings open) or valid again: stop asking. Shown again while still
+  // waiting: ask again right away, then keep going.
+  useEffect(() => {
+    if (hidden || !expired) { stopTimer(); return; }
+    if (phase === 'waiting' && !timer.current && !inFlight.current) void check();
+  }, [hidden, expired, phase, stopTimer, check]);
+
+  const act = (a: RemediationAction | undefined) => {
+    if (!a || a.kind === 'settings') { openSettings(a?.tab ?? remedy?.settings_tab ?? 'aws-account'); return; }
+    if (a.kind === 'sign_in') { openSignIn(); return; }
+    if (!isDesktop()) {
+      void navigator.clipboard?.writeText(a.command).then(() => setCopied(true)).catch(() => {});
+      return;
+    }
+    runInTerminal(a.command, a.title);
+    markTerminalRun();
+    startWaiting();
+  };
+
+  if (hidden) return null;
+  if (phase === 'done') {
+    return (
+      <div role="status" data-testid="credential-banner-done"
+        className="shrink-0 flex items-center gap-3 px-4 py-2 text-sm border-b border-green-500/30 bg-green-500/10">
+        <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+        <span className="text-[var(--color-text)]">
+          {doneAccount ? t('credentialBanner.done', { account: doneAccount }) : t('credentialBanner.doneNoAccount')}
+        </span>
+        <span className="text-[var(--color-text-secondary)]">{t('credentialBanner.resend')}</span>
+      </div>
+    );
+  }
+  if (!expired) return null;
+  if (dismissed !== null && dismissed === keyOf(remedy)) return null;
+
+  const action = remedy?.action;
+  const terminal = action?.kind === 'terminal' ? action : null;
+  const waiting = phase === 'waiting' && terminal;
+  const label = !action || action.kind === 'settings' ? t('credentialBanner.openSettings')
+    : action.kind === 'sign_in' ? t('credentialBanner.signInAgain')
+    : isDesktop() ? t('credentialBanner.inTerminal') : copied ? t('credentialBanner.copied') : t('credentialBanner.copy');
 
   return (
-    <div
-      className="fixed top-3 left-1/2 -translate-x-1/2 z-50 max-w-md px-4 py-2.5 rounded-lg shadow-lg bg-[var(--color-card)] border border-[var(--color-error,#ef4444)] text-sm"
-      role="alert"
-      aria-live="assertive"
-    >
-      <div className="flex items-start gap-2">
-        <span className="text-[var(--color-error,#ef4444)] font-medium shrink-0">{title}</span>
-        <span className="text-[var(--color-text-muted)]">{body}</span>
-      </div>
-      <div className="mt-2 flex justify-end">
-        <button
-          onClick={() => window.dispatchEvent(
-            new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab } }),
+    <div role="alert" aria-live="assertive" data-testid="credential-banner"
+      className={`shrink-0 flex items-center gap-3 px-4 py-2 text-sm border-b ${waiting
+        ? 'border-blue-500/30 bg-blue-500/10' : 'border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10'}`}>
+      <span className={`w-2 h-2 rounded-full shrink-0 ${waiting ? 'bg-blue-400' : 'bg-[var(--color-warning)]'}`} />
+      <span className="flex-1 min-w-0 truncate">
+        {waiting ? (
+          <>
+            <span className="text-[var(--color-text)]">{t('credentialBanner.waiting', { command: terminal.command })}</span>
+            <span className="ml-2 text-[var(--color-text-secondary)]">{t('credentialBanner.waitingSub')}</span>
+          </>
+        ) : (
+          <>
+            <span className="text-[var(--color-text)]">{remedy?.message ?? t('credentialBanner.generic')}</span>
+            <span className="ml-2 text-[var(--color-text-secondary)]" title={remedy?.fix_text}>
+              {terminal ? t('credentialBanner.blocked') : remedy?.fix_text}
+            </span>
+          </>
+        )}
+      </span>
+      {waiting ? (
+        <button type="button" className="btn-sm btn-secondary shrink-0" data-testid="credential-banner-check"
+          onClick={() => void check()}>{t('credentialBanner.checkNow')}</button>
+      ) : (
+        <>
+          <button type="button" className="btn-sm btn-primary shrink-0" data-testid="credential-banner-action"
+            onClick={() => (phase === 'stopped' && terminal ? startWaiting() : act(action))}>
+            {phase === 'stopped' && terminal ? t('credentialBanner.checkAgain') : label}
+          </button>
+          {action?.kind === 'terminal' && (
+            <button type="button" className="shrink-0 underline text-[var(--color-text-secondary)]"
+              data-testid="credential-banner-settings" onClick={() => openSettings('aws-account')}>
+              {t('credentialBanner.accountSettings')}
+            </button>
           )}
-          className="btn-sm btn-primary"
-        >
-          Open Settings
-        </button>
-      </div>
+        </>
+      )}
+      <button type="button" aria-label={t('credentialBanner.dismiss')} data-testid="credential-banner-dismiss"
+        className="shrink-0 px-1 text-[var(--color-text-muted)]"
+        onClick={() => { stopTimer(); setPhase('idle'); setDismissed(keyOf(remedy)); }}>×</button>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 /**
- * AI & Models settings tab.
- *
- * Auth method selection + region + verify + model list + default model.
- * Uses shared AuthConfigPanel for the auth section.
+ * Settings → LLM Models (design docs/design/2026-11-01-settings-account-merge.md §3):
+ * where the model is called from (ModelProvider), thinking, the model list and the
+ * default model. AWS sign-in is on the Swarm AWS Account page. Outside the desktop app
+ * (a Hive's web UI) the old AuthConfigPanel stays here: on a Hive it is the only place
+ * to see the instance role, change the region or switch to a Bedrock key.
  */
 import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,6 +12,8 @@ import { settingsService } from '../../services/settings';
 import type { BedrockModel, SettingsConfig } from '../../services/settings';
 import { Dropdown } from '../common';
 import AuthConfigPanel from './AuthConfigPanel';
+import ModelProvider from './ModelProvider';
+import { isDesktop } from '../../services/tauri';
 
 const THINKING_MODE_OPTIONS = [
   { id: 'adaptive', name: 'Adaptive', description: 'Model decides when to think deeply' },
@@ -194,10 +197,10 @@ export default function AIModelsTab() {
         }`}>{message.text}</div>
       )}
 
-      {/* Authentication */}
+      {/* Where the model is called from (sign-in itself: Swarm AWS Account) */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">AWS Account</h2>
-        <AuthConfigPanel mode="settings" />
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">{t('settings.modelProvider.heading')}</h2>
+        {isDesktop() ? <ModelProvider /> : <AuthConfigPanel mode="settings" />}
       </section>
 
       {/* Thinking */}

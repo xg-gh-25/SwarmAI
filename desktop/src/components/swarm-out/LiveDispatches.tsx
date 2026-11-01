@@ -32,7 +32,7 @@
  */
 import { useEffect, useState } from 'react';
 import { awsAccountService, type FleetStatus } from '../../services/awsAccount';
-import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
+import { OPEN_SETTINGS_EVENT } from '../common/settingsEvents';
 import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
 import { type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun } from '../../services/swarmOut';

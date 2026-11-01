@@ -81,6 +81,8 @@ export interface OpenTerminalOptions {
   args?: string[];
   cols?: number;
   rows?: number;
+  /** Tab title; default "zsh" / "zsh N" by its number within the location. */
+  title?: string;
 }
 
 // Default shell — platform-aware so the terminal works on all desktop targets
@@ -173,7 +175,7 @@ class TerminalStore {
     ) + 1;
     const tab: TerminalTab = {
       id,
-      title: titleOf(file, slot),
+      title: opts.title ?? titleOf(file, slot),
       cwd: opts.cwd,
       locKey,
       slot,
@@ -192,6 +194,39 @@ class TerminalStore {
     this.tabs.set(id, tab);
     this.notify();
     return tab;
+  }
+
+  /**
+   * Type *text* into shell *id* once it has started, WITHOUT Enter (design
+   * docs/design/2026-11-01-settings-account-merge.md §4.3): the person reads it and runs
+   * it. "Started" = its first output, then *quietMs* with no more output (a login shell
+   * prints its profile's output and the prompt last); if it never goes quiet, *maxMs*
+   * after the open. Written before that, the bytes are read by the startup scripts (an
+   * update prompt, compinit's question) or echoed twice. Control characters (CR, LF,
+   * ^C, ESC …) are stripped, so this can never run anything by itself.
+   */
+  typeWhenReady(id: string, text: string, quietMs = 400, maxMs = 5000): void {
+    const tab = this.tabs.get(id);
+    if (!tab) return;
+    // eslint-disable-next-line no-control-regex
+    const line = text.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+    if (!line) return;
+    let quiet: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (quiet) clearTimeout(quiet);
+      clearTimeout(cap);
+      sub.dispose();
+      const t = this.tabs.get(id);
+      if (t && t.status === 'running') t.pty.write(line);
+    };
+    const sub = tab.pty.onData(() => {
+      if (quiet) clearTimeout(quiet);
+      quiet = setTimeout(finish, quietMs);
+    });
+    const cap = setTimeout(finish, maxMs);
   }
 
   /** Shells opened at location *locKey*, in insertion order. */
