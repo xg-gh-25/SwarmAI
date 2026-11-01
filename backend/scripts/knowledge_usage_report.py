@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 _DDD_PATH = re.compile(r"/Projects/[^/\s\"']+/(?:2-understanding/|[^/\s\"']*-archive[^/\s\"']*\.md)")
-_KNOWLEDGE_CMD = re.compile(r"\bknowledge\s+(find|get|map)\b")
+_KNOWLEDGE_CMD = re.compile(r"\b(?:knowledge|cognition)\s+(find|get|map)\b")
 # the hint block's heading (session_router); a transcript may store its dash escaped
 _HINT_PARTS = ("## Project DDD", "[DDD:")
 _HINT_RE = re.compile(r"## Project DDD \S+ \[DDD:")

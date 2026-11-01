@@ -16,6 +16,13 @@ on its own and cite what it found:
   each with ``path:line`` and its id; the ones that do not fit are named.
 - ``get(project, ref)`` — one unit by id or ``path:line``.
 - ``projects()`` — every project and whether it has a DDD (``knowledge map --projects``).
+- ``brain_root(name)`` — the Brain's dir: a project's dir, or ``Knowledge/Library`` for the
+  built-in General Brain. Every function above takes a Brain name, so ``General`` has a unit
+  table, a map and ids like a project DDD (cognition entrance design §1.3 item 6): its
+  top-level ``*.md`` files are its documents (the same set as CDF's ``brain_files``), the
+  ``*.md`` files of its subfolders its corpus. ``project_root`` stays the project's dir only:
+  its other callers mean a ``Projects/`` folder, and the General Brain has none (a project
+  dir would let Brain CRUD act on it).
 
 Layout comes only from ``ddd_paths`` / ``DDD_CANONICAL_DOCS``; nothing here knows a
 directory name, so a layout change cannot leave it describing the old tree. Only files
@@ -91,6 +98,22 @@ def project_root(project: str) -> Optional[Path]:
     return base
 
 
+def is_general(name: str) -> bool:
+    from core.project_agent import is_general_name
+    return is_general_name(name)
+
+
+def brain_root(name: str) -> Optional[Path]:
+    """The Brain's dir: ``Knowledge/Library`` for the General Brain (its name in any case),
+    else ``project_root(name)``. None when it does not exist or is a symlink."""
+    if is_general(name):
+        from core.project_agent import general_brain_dir
+        from core.project_registry import get_swarmws
+        lib = general_brain_dir(get_swarmws())
+        return lib if lib.is_dir() and not lib.is_symlink() else None
+    return project_root(name)
+
+
 def _inside(path: Path, root: Path) -> bool:
     try:
         return path.resolve().is_relative_to(root.resolve())
@@ -149,7 +172,23 @@ def _tree_files(root: Path, top: Path, store: str, skipped: list[str]) -> list[t
     return out
 
 
-def _all_files(root: Path, skipped: list[str]) -> list[tuple[str, str, Path]]:
+def _general_docs(root: Path) -> list[tuple[str, str, Path]]:
+    """The General Brain's documents: its top-level ``*.md`` (CDF's ``brain_files``)."""
+    return [("doc", p.name, p) for p in sorted(root.glob("*.md")) if _readable_file(p, root)]
+
+
+def _general_corpus(root: Path, skipped: list[str]) -> list[tuple[str, str, Path]]:
+    """The ``*.md`` files of the General Brain's subfolders (not hidden, not links)."""
+    out: list[tuple[str, str, Path]] = []
+    for d in sorted(root.iterdir()):
+        if d.is_dir() and not d.is_symlink() and not d.name.startswith("."):
+            out += _tree_files(root, d, "corpus", skipped)
+    return out
+
+
+def _all_files(root: Path, skipped: list[str], general: bool = False) -> list[tuple[str, str, Path]]:
+    if general:
+        return _general_docs(root) + _general_corpus(root, skipped)
     from core.ddd_paths import data_contract_dir, ddd_path
     return (_doc_files(root)
             + _tree_files(root, ddd_path(root, "knowledge"), "corpus", skipped)
@@ -188,12 +227,16 @@ def _file_units(store: str, doc: str, path: Path, root: Path, text: str) -> list
 
 
 def ddd_units(project: str) -> UnitTable:
-    """Every unit of *project*'s DDD (see the module docstring). Never raises."""
-    root = project_root(project)
-    table = UnitTable(root.name if root is not None else project, root)   # its own spelling
+    """Every unit of *project*'s DDD, or of the General Brain (see the module docstring).
+    Never raises."""
+    root = brain_root(project)
+    general = is_general(project)
+    from core.project_agent import GENERAL_BRAIN
+    name = GENERAL_BRAIN if general else (root.name if root is not None else project)  # its own spelling
+    table = UnitTable(name, root)
     if root is None:
         return table
-    for store, doc, path in _all_files(root, table.skipped):
+    for store, doc, path in _all_files(root, table.skipped, general):
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
@@ -269,7 +312,7 @@ def ddd_map(project: str, size: str = "full", budget: Optional[int] = None) -> s
     The first line, the how-to lines and that count are always shown, so a budget
     smaller than they are yields just them.
     Empty string for a project with no dir. Never raises."""
-    root = project_root(project)
+    root = brain_root(project)
     if root is None:
         return ""
     try:
@@ -282,9 +325,13 @@ def ddd_map(project: str, size: str = "full", budget: Optional[int] = None) -> s
 def _map(project: str, root: Path, size: str, budget: Optional[int]) -> str:
     from core.ddd_paths import CAPABILITIES_DIR, GATES_DIR, ASSETS_DIR, ddd_path
     skipped: list[str] = []
-    head = [f"DDD of project {project}: {root}"]
+    general = is_general(project)
+    if general:
+        from core.project_agent import GENERAL_BRAIN
+        project = GENERAL_BRAIN
+    head = [f"General Brain ({project}): {root}" if general else f"DDD of project {project}: {root}"]
     rows: list[str] = []
-    docs = _doc_files(root)
+    docs = _general_docs(root) if general else _doc_files(root)
     if not docs:
         rows.append("(no DDD documents yet)")
     for store, doc, path in docs:
@@ -304,7 +351,17 @@ def _map(project: str, root: Path, size: str, budget: Optional[int]) -> str:
             if n > SUBHEAD_OVER:
                 for sline, stitle, sn in subs:
                     rows.append(f"    L{sline} ### {stitle} ({_k(sn)})")
-    if size == "full":
+    if size == "full" and general:
+        corpus = _general_corpus(root, skipped)
+        if corpus:
+            rows.append(f"{root}/ subfolders (reference, {len(corpus)} files)")
+            for _s, rel, p in corpus:
+                try:
+                    rows.append(f"  {rel} ({_k(p.stat().st_size)})")
+                except OSError:
+                    continue
+        rows += [f"(not read: {s})" for s in skipped]
+    elif size == "full":
         corpus = _tree_files(root, ddd_path(root, "knowledge"), "corpus", skipped)
         if corpus:
             rows.append(f"{ddd_path(root, 'knowledge')}/ (deep reference, {len(corpus)} files)")
@@ -446,14 +503,19 @@ def get(project: str, ref: str) -> Optional[Unit]:
 
 
 def projects() -> list[tuple[str, Optional[Path], bool]]:
-    """(name, project dir, has DDD documents) for every project, by name."""
+    """(name, dir, has documents): the General Brain first, then every project by name.
+    A ``Projects/`` folder carrying the General Brain's name is not listed: that name
+    always means the General Brain."""
+    from core.project_agent import GENERAL_BRAIN
     from core.project_registry import get_projects_dir
-    root = get_projects_dir()
     out = []
+    lib = brain_root(GENERAL_BRAIN)
+    out.append((GENERAL_BRAIN, lib, bool(lib is not None and _general_docs(lib))))
+    root = get_projects_dir()
     if not root.is_dir():
         return out
     for d in sorted(root.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
+        if not d.is_dir() or d.name.startswith(".") or is_general(d.name):
             continue
         out.append((d.name, d, bool(_doc_files(d))))
     return out

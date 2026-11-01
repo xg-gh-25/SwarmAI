@@ -6535,7 +6535,7 @@ def create_governance_file_gate() -> Callable[..., Any]:
     return governance_file_gate
 
 
-_KNOWLEDGE_WORD_RE = re.compile(r"knowledge(?:_cli)?|addressing")
+_KNOWLEDGE_WORD_RE = re.compile(r"knowledge(?:_cli)?|addressing|cognition")
 
 
 def knowledge_command_denial(command: str) -> "str | None":

@@ -86,6 +86,7 @@ CAPABILITY_MANIFEST = [
     # named so the agent's on-demand DDD lookup cannot vanish from the binary unseen
     ("addressing",          "core.addressing",               "critical"),
     ("knowledge_cli",       "core.knowledge_cli",            "critical"),
+    ("cognition",           "core.cognition",                "critical"),
     # the CDF worker is reached only through a lazy import in main.py's lifespan
     ("ingestion_worker",    "core.ingestion.worker",         "critical"),
     ("manifest_loader",     "core.manifest_loader",          "critical"),

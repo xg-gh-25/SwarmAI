@@ -483,6 +483,22 @@ def _render_ui_context_section(editor_context: Optional[dict]) -> str:
     return "\n".join(lines)
 
 
+def with_cognition_gate(session_env: "dict | None", channel_context: "dict | None") -> "dict | None":
+    """*session_env* plus ``knowledge_cli.OFF_ENV`` for a channel conversation in which
+    recall is not allowed: anything but the owner's own private chat, judged by
+    ``session_router._channel_recall_allowed``, the one rule push recall uses (cognition
+    entrance design §3.4). The subprocess environment is fixed at spawn; a channel
+    session's chat type and owner are too (a prewarmed owner unit is adopted only into the
+    owner's private chat, channels/gateway). A desktop tab (no channel_context) is left as is."""
+    if not channel_context:
+        return session_env
+    from .knowledge_cli import OFF_ENV
+    from .session_router import _channel_recall_allowed
+    if _channel_recall_allowed(channel_context):
+        return session_env
+    return {**(session_env or {}), OFF_ENV: "1"}
+
+
 def with_app_session_id(session_env: "dict | None", session_context: "dict | None") -> "dict | None":
     """*session_env* plus ``SWARM_APP_SESSION_ID`` = the app session id, except for a
     prewarmed unit's temporary id: its subprocess env is fixed at spawn and survives
@@ -2595,6 +2611,7 @@ class PromptBuilder:
             # refuses in a non-owner channel session; the Bash handler denies it too.
             from core.knowledge_cli import RESTRICTED_ENV
             session_env = {**(session_env or {}), RESTRICTED_ENV: "1"}
+        session_env = with_cognition_gate(session_env, channel_context)
         if _restricted:
             # every outbound connection of the CLI: public addresses only (DNS rebinding)
             from core import egress_proxy

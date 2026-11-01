@@ -747,6 +747,9 @@ class ChannelGateway:
                 "channel_id": channel.get("id", ""),
                 "is_group": False,
                 "is_owner": True,
+                # the unit is for the owner's private chat, and adopted only there (below):
+                # its environment (fixed at spawn) follows that chat's recall rule
+                "chat_type": "im",
                 "sender_identity": SenderIdentity(
                     external_id=owner_id,
                     display_name="Owner",
@@ -780,6 +783,14 @@ class ChannelGateway:
         owner adopts it (any other sender gets a session built for their own tier)."""
         return bool(self._prewarmed_session_id) and sender_identity is not None and \
             sender_identity.is_owner and sender_identity.external_id == self._prewarmed_owner_id
+
+    def _adopts_prewarm(self, is_new_session: bool, is_owner: bool, chat_type: str,
+                        sender_identity: Optional[SenderIdentity]) -> bool:
+        """A new session of the owner's private chat takes the prewarmed unit. Only that
+        chat: the unit was spawned for it, and its system prompt and environment (fixed at
+        spawn) follow that chat's rules, which a group conversation's are stricter than."""
+        return (is_new_session and is_owner and chat_type == "im"
+                and self._prewarm_is_for(sender_identity))
 
     async def _try_adopt_prewarmed(self, session_id: str) -> bool:
         """Adopt the pre-warmed unit for a real session. Returns True on success."""
@@ -1734,7 +1745,8 @@ class ChannelGateway:
         # and we have a pre-warmed IDLE subprocess, adopt it to skip
         # the ~4s CLI spawn latency.
         prewarm_adopted = False
-        if is_new_session and is_owner and self._prewarm_is_for(sender_identity):
+        if self._adopts_prewarm(is_new_session, is_owner, msg.metadata.get("chat_type", ""),
+                                sender_identity):
             prewarm_adopted = await self._try_adopt_prewarmed(session_id)
 
         # Log inbound message to channel_messages ---------------------------------

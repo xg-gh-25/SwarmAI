@@ -10,8 +10,10 @@ system Python:
   argument is a flag or absent, which is how launchd and Tauri start it).
 - ``pipeline-v1 <args>`` — the pipeline CLI (``core/run_protocol/cli_main.py``). Not supported on
   Windows: it says so and exits 2.
-- ``knowledge map | find | get`` — read a project's DDD (or the Library) on demand, whole
-  units with ``path:line`` and an id (``core/knowledge_cli.py``; knowledge addressing design).
+- ``cognition map | find | get`` (also ``knowledge``) — read the whole brain on demand: a
+  Brain (a project's DDD or the General Brain), Knowledge/, MEMORY, EVOLUTION, TIMELINE, the
+  context files, sessions, code; whole units with ``path:line`` and an id
+  (``core/knowledge_cli.py``, ``core/cognition.py``; cognition entrance design).
 - ``hook <event> --host <host>`` — a coding agent host's hook (Claude Code, ...) hands
   its event JSON on stdin (``core/host_hooks.py``). Always exits 0: it never blocks
   the host.
@@ -120,9 +122,9 @@ def run_pipeline_v1(argv: "list[str]") -> int:
 
 # ── knowledge ─────────────────────────────────────────────────────────────────
 
-def run_knowledge(argv: "list[str]") -> int:
+def run_knowledge(argv: "list[str]", prog: str = "knowledge") -> int:
     from core.knowledge_cli import main as knowledge_main
-    return knowledge_main(argv)
+    return knowledge_main(argv, prog=prog)
 
 
 # ── aws-credentials ───────────────────────────────────────────────────────────
@@ -480,8 +482,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return run_pipeline_v1(argv[1:])
     if argv and argv[0] == "hook":
         return run_hook(argv[1:])
-    if argv and argv[0] == "knowledge":
-        return run_knowledge(argv[1:])
+    if argv and argv[0] in ("cognition", "knowledge"):
+        return run_knowledge(argv[1:], prog=argv[0])
     if argv and argv[0] == "ingest":
         return run_ingest(argv[1:])
     if argv and argv[0] == "aws-credentials":
