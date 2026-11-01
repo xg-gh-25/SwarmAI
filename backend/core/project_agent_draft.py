@@ -53,8 +53,8 @@ _COMMAND_KINDS = ("ci_run", "make", "just", "npm_script", "tox_env", "nox_sessio
 _TEXT_MAX = 400
 _DRAFT_DIR = ".artifacts/project-agent"
 
-#: the proposal format the drafting agent reads; its keys come from the template
-#: (core/project_agent_standard.TEMPLATE), so the agent sees the same fields as the form
+#: the proposal format the drafting agent reads; its keys come from the standard
+#: (core/project_agent_standard.PROPOSAL_KEYS)
 PROPOSAL_CONTRACT: dict[str, Any] = {
     "format": "one JSON object; every key is optional; every judged row names a source",
     "source": ("a Brain document (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md, AGENTS.md, "
@@ -513,8 +513,9 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
            project_dir: Path) -> None:
     """Keep in the new draft *doc* what the earlier draft *old* holds and the proposal
     does not decide (design 2026-10-29-project-agent-standard-template §6.3): the judged
-    fields and every mode the proposal does not name. A standard mode keeps its judged fields
-    and the rows a person left; checks of a repo bound since are added. Gates are not
+    fields and every mode the proposal does not name. A standard mode keeps every key the
+    agent set on it and the rows it left; a repo bound since joins its repos and brings
+    its checks. Gates are not
     kept (every gate is enforced again), and a skill no mode lists goes to the default
     mode."""
     from core.project_agent import normalize
@@ -544,10 +545,19 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
                 doc["modes"].append(om)
             continue
         standard_whens = {std.standard_when(nm["id"], r) for r in (True, False)} if nm["id"] in std.MODES else set()
-        # an earlier draft's profile / profile_rules are not carried: no longer read
-        for k in ("when", "skills", "source", "gates"):
-            if k in om and not (k == "when" and om[k] in standard_whens):
-                nm[k] = om[k]
+        # every key the earlier definition set on the mode is carried (the agent's own
+        # edits: a when, repos, skills, gates, a key the standard does not name), except
+        # its id, a standard `when` (rewritten to the Brain's shape) and retired keys
+        for k, v in om.items():
+            if k in ("id", "setup", "validations") or k in std.RETIRED_MODE_KEYS:
+                continue
+            if k == "when" and v in standard_whens:
+                continue
+            if k == "repos" and isinstance(v, list):
+                # the repos the agent chose stay chosen; a repo bound since is added
+                known = set(_str_list_of(oi.get("repos")))
+                v = list(v) + [r for r in nm.get("repos") or [] if r not in v and r not in known]
+            nm[k] = v
         for k in ("setup", "validations"):
             if isinstance(om.get(k), list):
                 # the repos the earlier draft already decided for (a row a person dropped
@@ -566,6 +576,10 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
     if loose:
         target = next(m for m in doc["modes"] if m["id"] == doc["default_mode"])
         target["skills"] = list(target.get("skills") or []) + loose
+
+
+def _str_list_of(v: Any) -> list[str]:
+    return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
 
 
 def survey_skills(project_dir: Path) -> list[dict[str, str]]:

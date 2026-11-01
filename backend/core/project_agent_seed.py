@@ -8,6 +8,8 @@ keeps each user's copy current. On every workspace start ``seed_shipped`` places
 - the definition still has the bytes this product last wrote (its sha256 equals the
   one recorded in ``.project-agent-shipped.json`` beside it): replace it with the
   newly shipped one;
+- the definition holds what the shipped one holds once retired keys and comments are
+  set aside (the retired confirmation step rewrote it so): replace it;
 - anything else — the agent or the person edited it, or it was never written by this
   seeder: leave it alone.
 
@@ -76,11 +78,26 @@ def place(shipped: bytes, brain_dir: Path) -> str:
         if recorded != new:
             _write(state, json.dumps({"sha256": new}).encode())
         return "current"
-    if recorded is not None and current == recorded:
+    if (recorded is not None and current == recorded) or _same_definition(target, shipped):
+        # still the shipped bytes, or the shipped content with only retired keys and
+        # comments added (the retired confirmation step rewrote it that way)
         _write(target, shipped)
         _write(state, json.dumps({"sha256": new}).encode())
         return "updated"
     return "kept"
+
+
+def _same_definition(target: Path, shipped: bytes) -> bool:
+    """*target* holds what *shipped* holds once retired keys are dropped: only comments,
+    key order and retired keys differ."""
+    import yaml
+    from core.project_agent_standard import ordered
+    try:
+        a = yaml.safe_load(target.read_text(encoding="utf-8"))
+        b = yaml.safe_load(shipped.decode("utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return False
+    return isinstance(a, dict) and isinstance(b, dict) and ordered(a) == ordered(b)
 
 
 def seed_shipped(workspace: Path) -> dict[str, str]:

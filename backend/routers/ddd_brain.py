@@ -563,7 +563,7 @@ def build_brain_state(
         "setupState": read_setup_state(project_dir),
         # {done, total} checks from the last P6 --record while setting up, else None
         "setupProgress": read_setup_progress(project_dir),
-        # draft (waits for the person) | reviewed | invalid | None (no project-agent.yaml)
+        # ready (a Hive task can run on it) | invalid (the agent fixes it) | None (no file)
         "projectAgentStatus": project_agent_status(project_dir),
         "health": health,
         "typeCounts": stats["typeCounts"],

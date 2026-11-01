@@ -81,6 +81,7 @@ def _make_ddd(
     numbered_layout: bool = False,
     project_agent: str | None = "schema: 2\nstatus: draft\nplacements: [chat-tab]\n"
                                 "identity: {summary: a test brain}\n"
+                                "intake: {handles: [answer a question about the brain]}\n"
                                 "modes:\n  - {id: research, when: a question, profile: research}\n"
                                 "default_mode: research\n",
 ) -> Path:
@@ -578,7 +579,7 @@ def test_untyped_bold_bullet_is_not_an_entry(tmp_path):
     (d / "TECH.md").write_text(render_skeleton("TECH.md", "OldTech")
                                + "\n- **Language:** _e.g., Python 3.12_\n")
     report = gate.verify_project(d)
-    assert "TECH.md holds no typed entry" in _detail_of(report, "knowledge/content")
+    assert "TECH.md section(s) with no entry and no gap" in _detail_of(report, "knowledge/content")
 
 
 def test_structure_detail_names_the_heading_to_rename(tmp_path):

@@ -26,6 +26,7 @@ import {
   buildBrainManifest,
   previewSections,
   validateBrainName,
+  defaultBrainName,
   type PreviewSection,
 } from '../../utils/newBrainDispatch';
 
@@ -133,10 +134,12 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
   // boolean guards the deferred close; a refusal keeps the launcher open).
   // autoSend: clicking Create IS the send — the person already reviewed the form;
   // making them press Send again on a generated prompt was a second, empty step.
+  // a name left empty comes from the material (zero-touch: nothing waits for the person)
+  const fallbackName = useMemo(() => defaultBrainName(items, existingNames), [items, existingNames]);
   const handleCreate = useCallback(() => {
     if (validateBrainName(name, existingNames)) return;
     const manifest = buildBrainManifest(
-      name,
+      name.trim() || fallbackName,
       items.map(({ value, kind, role }) => ({ value, kind, role })),
     );
     // Gate-2 #13: a THROWING onDispatch (addTab/CustomEvent could raise) must be
@@ -160,12 +163,12 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
       // any reopen without the visible form ever rendering empty during the fade.
       requestAnimationFrame(() => requestAnimationFrame(() => { close(); clearForm(); }));
     }
-  }, [name, items, existingNames, onDispatch, close, clearForm]);
+  }, [name, fallbackName, items, existingNames, onDispatch, close, clearForm]);
 
   const filled = useMemo(() => previewSections(items), [items]);
   const assetCount = items.filter((it) => it.role === 'GOVERN').length;
 
-  const canCreate = !!name.trim() && !nameError;
+  const canCreate = !nameError;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col" data-testid="new-brain-overlay">
@@ -179,7 +182,7 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
               data-testid="new-brain-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder={t('ui.NewBrainOverlay.namePlaceholder')}
+              placeholder={fallbackName}
               aria-invalid={!!nameError}
               aria-describedby="new-brain-name-help"
               className={`w-full h-10 bg-[var(--color-input-bg)] border rounded-lg px-3 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] ${
@@ -193,7 +196,7 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
 
           <div>
             <div className="text-small font-semibold text-[var(--color-text)]">{t('ui.NewBrainOverlay.preview')}</div>
-            <BrainPreview name={name} filled={filled} />
+            <BrainPreview name={name.trim() || fallbackName} filled={filled} />
             <div className="text-small" data-testid="new-brain-assets">
               {assetCount > 0
                 ? <>{t('ui.NewBrainOverlay.governsBefore')}<span className="font-semibold">{assetCount}</span>{t('ui.NewBrainOverlay.governsAfter', { count: assetCount })}</>

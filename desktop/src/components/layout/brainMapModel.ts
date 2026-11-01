@@ -196,7 +196,7 @@ export const SEVERITY_ORDER: Severity[] = ['urgent', 'review', 'setup', 'notice'
 export interface HubNeed {
   brain: string;
   /** run: one Run (from the analytics); runs: Runs waiting that the analytics did
-   *  not list; escalations / jobs / repos: counted per brain; agent: a draft */
+   *  not list; escalations / jobs / repos: counted per brain */
   kind: 'run' | 'runs' | 'escalations' | 'jobs' | 'repos';
   id: string;
   text: string;
@@ -299,6 +299,8 @@ const NEXT_STEP: Record<string, string> = {
   'Knowledge': 'create the four docs',
   'Knowledge/structure': 'add the missing sections',
   'Knowledge/content': 'write the first knowledge',
+  'Knowledge/format': 'fix the entry format',
+  'Knowledge/references': 'fix the broken references',
   'Gates': 'add the gates folder',
   'Capabilities': 'add the skills',
   'Delivery Contract': 'bind the repo',

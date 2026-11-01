@@ -945,6 +945,10 @@ async def get_admission_state_endpoint():
         # synced project-agent.yaml says (core/project_agent.RESERVED_ACTIONS); an older
         # one read them from the file, so a Host sends a Brain's task only when this is set
         "fixed_reserved": True,
+        # a dispatched task waits for nobody: a command the danger rules match, an
+        # off-machine call or a reserved action is denied at once on a pinned session
+        # (core/security_hooks); a Host dispatches only to a daemon that says so
+        "zero_touch": True,
     }
 
 

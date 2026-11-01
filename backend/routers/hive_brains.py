@@ -189,6 +189,17 @@ async def prepare_work(body: WorkBody) -> dict:
     return order
 
 
+@router.get("/work/{work_id}")
+async def work_order(work_id: str) -> dict:
+    """Whether the order exists, a session start took it, and the session it named
+    (core/hive_workspace.order_state). Hive only."""
+    _hive_only()
+    from core import hive_workspace
+    if not hive_workspace.WORK_ID_RE.fullmatch(work_id or ""):
+        raise HTTPException(status_code=422, detail="not a work id")
+    return await asyncio.to_thread(hive_workspace.order_state, _workspace(), work_id)
+
+
 @router.post("/work/{work_id}/release")
 async def release_work(work_id: str) -> dict:
     """The Host settled the task: remove its worktrees, ``Hive/work/<work_id>/`` and

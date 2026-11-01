@@ -2,7 +2,11 @@
 
 Design docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md §2.1. Every run is
 dispatched by an agent (the App has no dispatch), and the agent that dispatched it
-answers for it: it may accept, re-send, stop, land and discard it, like the person. A
+answers for it: it may accept, re-send, stop, land and discard it, like the person, and
+it answers its Hive's waits of the classes it answers for (``swarm_out answer``; design
+2026-10-31-hive-approvals). Nothing on the path waits for the person (design
+2026-11-01-brain-to-hive-zero-touch): a dispatched Hive session denies at once what
+would be the person's to approve. A
 command says who gave it (``by``: ``agent`` from the CLI, ``person`` from the App; a
 request that says nothing is an agent's, so a bare call gets the agent's limits). For an
 agent the routes refuse what is the person's to decide:
@@ -15,12 +19,19 @@ agent the routes refuse what is the person's to decide:
   (``ended_at``); stop only while it runs (``row_blocker``);
 - "landed by hand" at all: it settles the run and releases its workspace with any
   commits not landed yet; an agent lands commits with ``return_land``;
-- landing commits that change the repository's protected paths (``approve_protected``);
 - re-sending with a correction more than ``MAX_AGENT_RERUNS`` times (``reserve_rerun``
-  counts it under the run's lock before it is sent);
+  counts it under the run's lock before it is sent): after that the agent takes the
+  task over or discards it;
 - discarding while something would be lost: code not landed, a file not placed in the
   Brain, lessons not in, the run running, waiting or its Hive not answering, or its
-  result not final (``discard_blocker``).
+  result not final (``discard_blocker``). A run whose Hive never started its session
+  (``not_started``) has nothing to lose.
+
+Landing commits that change the repository's protected paths is never an agent's,
+whatever its request says (the land route ignores ``approve_protected`` from an agent):
+those paths guard the agent itself or run code on this machine, so a Hive's change to
+them stays the person's. The agent re-runs the task asking the Hive to leave them out,
+or makes the change itself in its own session.
 
 Every agent command is recorded in the run's settle record (``commands``: by, session,
 time, command, reason), which the panel shows as "accepted by the agent: <reason>".
@@ -71,8 +82,7 @@ def actor(by: Optional[str], session: Optional[str], why: Optional[str]) -> Acto
     return Actor("person" if by == "person" else "agent", sid, clean)
 
 
-def check(a: Actor, command: str, *, dispatch_id: str = "",
-          approve_protected: bool = False) -> None:
+def check(a: Actor, command: str, *, dispatch_id: str = "") -> None:
     """Raise ActorError when an agent may not give *command* now (module docstring);
     the discard check needs the run's row and is ``discard_blocker``."""
     if not a.agent:
@@ -81,9 +91,6 @@ def check(a: Actor, command: str, *, dispatch_id: str = "",
         raise ActorError(f"unknown command {command!r}")
     if not a.why:
         raise ActorError("say why (--why): the person sees the reason for each command an agent gives")
-    if command == "return_land" and approve_protected:
-        raise ActorError("these commits change paths the repository protects: the person approves "
-                         "landing them (ask them, or they land it from the Swarm Out panel)")
 
 
 
@@ -207,8 +214,8 @@ def reserve_rerun(dispatch_id: str, a: Actor) -> Optional[str]:
     def change(rec: dict[str, Any]):
         cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
         if _counted(cmds) >= MAX_AGENT_RERUNS:
-            raise ActorError(f"an agent has re-sent this run {MAX_AGENT_RERUNS} times already: ask the "
-                             "person whether to try again, change the task, or discard it")
+            raise ActorError(f"an agent has re-sent this run {MAX_AGENT_RERUNS} times already: take "
+                             "the task over yourself, or discard the run saying why")
         cmds.append({"by": "agent", "session": a.session, "command": "rerun", "why": a.why, "at": at})
         rec["commands"] = cmds[-MAX_COMMANDS:]
     try:
@@ -232,7 +239,7 @@ def release_rerun(dispatch_id: str, at: Optional[str]) -> None:
 
 
 #: what each ``settle.why_not`` item means for a discard
-_LOST = {"code": "commits that came back are not landed (land them or ask the person)",
+_LOST = {"code": "commits that came back are not landed (land them first)",
          "files": "files that came back are not placed in the Brain yet",
          "lessons": "the run's lessons are not in yet"}
 
@@ -245,14 +252,16 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
     from core.swarm_out_settle import _final
     if not isinstance(row, dict):
         return "the run is not in the list of runs now; try again in a moment"
+    if row.get("state_reason") == "not_started":
+        return None                    # its Hive never started the session: nothing came back
     if row.get("running") is not False or row.get("waiting") or row.get("state") == "unknown":
         # running None: its Hive did not answer the probe, so a turn may be running there
-        return "the run is still running or waiting, or its Hive is not answering: stop it first, or ask the person"
+        return "the run is still running or waiting, or its Hive is not answering: stop it first, or wait"
     res = row.get("result")
     if not _final(res if isinstance(res, dict) else None):
         return "its final result is not here yet"
     settle = row.get("settle") if isinstance(row.get("settle"), dict) else {}
     lost = [_LOST[w] for w in (settle.get("why_not") or []) if w in _LOST]
     if lost:
-        return "; ".join(lost) + ": ask the person before discarding"
+        return "; ".join(lost) + ": take them first"
     return None

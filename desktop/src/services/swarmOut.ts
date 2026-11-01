@@ -110,7 +110,8 @@ export interface SwarmOutAgent {
   mode: string;
   revision: string;
   profile: string;
-  delivery: string;
+  /** only on a run dispatched before 2026-11-01 (a bundle is the one delivery there is) */
+  delivery?: string;
   acceptance: string;
   /** what comes back: an answer, a document, or commits (absent before run-spec r4) */
   returns?: 'answer' | 'document' | 'commits';

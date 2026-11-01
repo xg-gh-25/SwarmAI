@@ -31,9 +31,9 @@ CMD = ('cd ~/.swarm-ai/SwarmWS && "$SWARM_BACKEND_BIN" py -m scripts.swarm_out d
        '--title "SwarmAI weekly report" --brief "x" --brain SwarmAI --task-file /tmp/t.md --acceptance a --revision r')
 
 
-def H(name, status="running", reachable=True, saturated=False, streaming=0, mem=40.0):
+def H(name, status="running", reachable=True, saturated=False, streaming=0, mem=40.0, capable=True):
     return {"name": name, "status": status, "reachable": reachable, "saturated": saturated,
-            "streaming": streaming, "memory_percent": mem}
+            "streaming": streaming, "memory_percent": mem, "capable": capable}
 
 
 def test_a_hive_holding_a_run_that_waits_on_the_person_is_not_idle():
@@ -70,6 +70,12 @@ def test_pick_hive_is_deterministic_and_refuses_when_none_can_take_it():
     for none in ([], [H("s", status="stopped")], [H("u", reachable=False)], [H("f", saturated=True)],
                  [H("n", streaming=None)]):
         with pytest.raises(swarm_out.SwarmOutError, match="no running Hive"):
+            swarm_out.pick_hive(none)
+    # zero-touch Z6: a Hive whose version lacks a required capability is never picked,
+    # even when it is the idle one; with none capable, the agent is told to update one
+    assert swarm_out.pick_hive([H("old", capable=False), H("new", streaming=2)]) == ("new", "only_free")
+    for none in ([H("old", capable=False)], [H("unknown", capable=None)]):
+        with pytest.raises(swarm_out.SwarmOutError, match="update one"):
             swarm_out.pick_hive(none)
 
 

@@ -125,7 +125,9 @@ def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             "state": row.get("state"), "state_reason": row.get("state_reason"), "stage": row.get("stage"),
             "result_status": row.get("result_status"),
             "ended": res.get("ended"), "ended_at": res.get("ended_at"), "returns": agent.get("returns"),
-            "actions": [a.get("key") for a in (row.get("actions") or []) if isinstance(a, dict)],
+            # each offered command with how it works now (accept: land / manual / verdict)
+            "actions": [{"key": a.get("key"), "variant": a.get("variant")}
+                        for a in (row.get("actions") or []) if isinstance(a, dict)],
             "why_not": (row.get("settle") or {}).get("why_not") if isinstance(row.get("settle"), dict) else None,
             "waits": waits}
 

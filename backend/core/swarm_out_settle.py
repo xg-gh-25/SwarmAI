@@ -295,8 +295,8 @@ def _actions(stage: str, alive: bool, accept: Optional[str],
     ``alive``: the run's Hive session can still take a message; ``accept``: how accept
     works here (``land`` / ``manual`` / ``verdict``), None when it cannot; ``reason``:
     the run's ``state_reason``. Waiting on an answer, ``answer`` is a hint, not a
-    command (the answer is given on the wait card: design 2026-10-31-swarm-out-single-
-    loop-fixes §2.3); after an answer the Hive refused, opening the session to answer
+    command (the dispatching agent answers with ``swarm_out answer``, the person in the
+    panel's wait card); after an answer the Hive refused, opening the session to answer
     there leads; after an answer sent and not yet taken there is nothing to do but wait."""
     session = [_act("open_session")] if alive else []
     if stage == "running":

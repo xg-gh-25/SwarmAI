@@ -216,8 +216,6 @@ def home_section(doc: str, etype: str) -> str:
         if etype in SECTION_TYPES.get((doc, s), ()):
             return s
     raise KeyError(f"no section of {doc} takes [{etype}]")
-# The PRODUCT sections a person is asked about when no evidence covers them (§5.6).
-ASK_SECTIONS = ("Vision", "Non-Goals", "Success Criteria")
 
 
 def locate_section(section: str) -> tuple[str, str] | None:
@@ -246,14 +244,21 @@ def typed_entries(text: str) -> list:
     return out
 
 
-def unexplained_product_sections(product_text: str, improvement_text: str) -> list[str]:
-    """PRODUCT sections that hold no typed entry and have no gap — a What to Watch For
-    entry whose title starts with the section name as whole words ("Vision: no
-    evidence yet"). The one rule shared by the P6 gate and the bootstrap writer. A gap
-    is an ordinary guideline: if decay archives it, its section is unexplained again."""
+#: the docs whose every section needs an entry or a gap: what the Brain is and how it is
+#: built; IMPROVEMENT holds the gaps, PROJECT is the person's live state
+GAP_DOCS = ("PRODUCT.md", "TECH.md")
+
+
+def unexplained_sections(doc: str, doc_text: str, improvement_text: str) -> list[str]:
+    """Sections of *doc* (one of ``GAP_DOCS``) that hold no typed entry and have no gap
+    — a What to Watch For entry whose title starts with the section name as whole words
+    ("Vision: no evidence yet"). The one rule shared by the P6 gate and the bootstrap
+    writer: a Brain with no material is complete once every such section is a gap, so
+    nobody is asked. A gap is an ordinary guideline: if decay archives it, its section
+    is unexplained again."""
     watch = [e.title for e in typed_entries(improvement_text)
              if normalize_heading(e.section) == normalize_heading(GAP_SECTION[1])]
-    filled = {normalize_heading(e.section) for e in typed_entries(product_text)}
-    return [s for s in skeleton_sections("PRODUCT.md")
+    filled = {normalize_heading(e.section) for e in typed_entries(doc_text)}
+    return [s for s in skeleton_sections(doc)
             if normalize_heading(s) not in filled
             and not any(starts_with_section(t, s) for t in watch)]

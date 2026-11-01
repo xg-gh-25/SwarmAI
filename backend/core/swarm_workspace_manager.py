@@ -1230,6 +1230,13 @@ class SwarmWorkspaceManager:
             except Exception as e:  # noqa: BLE001
                 logger.warning("Shipped Project Agents skipped (non-fatal): %s: %s",
                                type(e).__name__, e)
+            # what the retired confirmation step left on disk (a no-op once clean)
+            try:
+                from core.project_agent_migrate import migrate
+                migrate(root)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Project Agent migration skipped (non-fatal): %s: %s",
+                               type(e).__name__, e)
 
         await anyio.to_thread.run_sync(_provision)
         logger.info("Ensured default project '%s' at %s", DEFAULT_PROJECT_NAME, project_dir)
@@ -2549,7 +2556,8 @@ class SwarmWorkspaceManager:
     # ── Project CRUD ─────────────────────────────────────────────────────
 
     async def create_project(
-        self, project_name: str, workspace_path: str = None, source: str = "user"
+        self, project_name: str, workspace_path: str = None, source: str = "user",
+        assets: "Optional[list[str]]" = None,
     ) -> dict:
         """Create a new project under Projects/.
 
@@ -2577,6 +2585,9 @@ class SwarmWorkspaceManager:
                 uses DEFAULT_WORKSPACE_CONFIG path (expanded).
             source: Who initiated the creation — "user", "agent", "system",
                 or "migration". Recorded in the initial update_history entry.
+            assets: What the Brain is created to govern (the New Brain form's GOVERN
+                items, a repository URL or a local path each): kept in the setup
+                record, and P6 checks each is bound.
 
         Returns:
             dict with enriched project metadata: id, name, description,
@@ -2626,6 +2637,11 @@ class SwarmWorkspaceManager:
         await anyio.to_thread.run_sync(
             lambda: project_dir.mkdir(parents=True, exist_ok=True)
         )
+        # A NEW project starts its setup (P0..P6) at once: a create that fails below
+        # still leaves a Brain that can be continued (the Brain Hub shows it as being
+        # born until the P6 gate records `ready`, core.ddd_setup_state)
+        await anyio.to_thread.run_sync(
+            lambda: write_setup_state(project_dir, "setting-up", assets=assets or []))
 
         # Write .project.json via the shared helper
         await anyio.to_thread.run_sync(
@@ -2646,9 +2662,6 @@ class SwarmWorkspaceManager:
         from core.project_agent_draft import ensure_skeleton
         await anyio.to_thread.run_sync(lambda: ensure_skeleton(project_dir))
 
-        # A NEW project starts its setup (P0..P6): the Brain Hub shows it as being
-        # born until the P6 gate records `ready` (core.ddd_setup_state).
-        await anyio.to_thread.run_sync(lambda: write_setup_state(project_dir, "setting-up"))
         # Update in-memory UUID index
         self._uuid_index[project_id] = project_dir
 

@@ -63,7 +63,8 @@ RETIRED_KEYS: tuple[str, ...] = (
     "placements", "confidence", "sources")
 _RETIRED_IDENTITY = ("in_scope", "out_of_scope")
 _RETIRED_INTAKE = ("proposed_aliases",)
-_RETIRED_MODE = ("placements", "delivery", "pr_remote", "reserved_for_human", "profile", "profile_rules")
+RETIRED_MODE_KEYS: tuple[str, ...] = ("placements", "delivery", "pr_remote", "reserved_for_human",
+                                     "profile", "profile_rules")
 
 HEADER = ("# Project Agent definition: how a Hive run does this Brain's work.\n"
           "# The agent keeps it current; a dispatch uses the latest. Nothing in it is confirmed.\n"
@@ -106,16 +107,17 @@ def ordered(doc: dict[str, Any]) -> dict[str, Any]:
     if isinstance(d.get("intake"), dict):
         d["intake"] = _order(d["intake"], INTAKE_ORDER, _RETIRED_INTAKE)
     if isinstance(d.get("modes"), list):
-        d["modes"] = [_order(m, MODE_ORDER, _RETIRED_MODE) if isinstance(m, dict) else m for m in d["modes"]]
+        d["modes"] = [_order(m, MODE_ORDER, RETIRED_MODE_KEYS) if isinstance(m, dict) else m for m in d["modes"]]
     return d
 
 
 def is_skeleton(doc: dict[str, Any]) -> bool:
-    """A definition code wrote and no one has drafted yet: it has neither a summary nor
-    typical requests. P6 reports it, so a Brain is not ready on it."""
+    """A definition not drafted yet: it lacks a summary or typical requests, so a Hive
+    run gets no project line and routing has nothing to compare a task with.
+    ``core.project_agent.dispatch_problems`` reports it (P6 and admission alike)."""
     ident = doc.get("identity") if isinstance(doc.get("identity"), dict) else {}
     intake = doc.get("intake") if isinstance(doc.get("intake"), dict) else {}
     has_summary = isinstance(ident.get("summary"), str) and bool(ident["summary"].strip())
     handles = intake.get("handles")
     has_handles = isinstance(handles, list) and any(isinstance(h, str) and h.strip() for h in handles)
-    return not has_summary and not has_handles
+    return not has_summary or not has_handles

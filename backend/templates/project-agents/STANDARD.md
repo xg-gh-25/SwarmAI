@@ -31,7 +31,7 @@ Only what a Hive run reads.
 | Field | What it is for |
 |---|---|
 | `identity.summary` | One sentence: what the work in this Brain usually is. The first line of the run's project section, and what routing shows. |
-| `intake.handles` | 3-5 typical requests, one sentence each. Routing compares a new task with them. |
+| `intake.handles` | 3-8 typical requests, one sentence each. Routing compares a new task with them. |
 | `intake.repos` | The repos the Brain binds (`bindings.yaml`). |
 | `modes[].id` / `when` | One kind of work and the kind of request it handles. The agent picks the mode whose `when` matches the task. |
 | `modes[].repos` | The repos this mode works in; the Hive clones them. |

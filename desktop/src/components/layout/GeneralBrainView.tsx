@@ -4,8 +4,8 @@
  *
  * General is not a Projects/ DDD: its knowledge is the Markdown in Knowledge/Library and
  * its Project Agent is the Runner Agent, for tasks that belong to no Brain. The page
- * answers one decision: can such a task go out (is the Runner Agent confirmed)? So it
- * has four blocks — what it is, its knowledge, the Runner Agent's form, then what it
+ * answers one decision: can such a task go out (is the Runner Agent ready)? So it
+ * has four blocks — what it is, its knowledge, the Runner Agent's definition, then what it
  * learned (the CDF entries in Knowledge/Library, with Withdraw) — and
  * none of a DDD's tabs, and no delete or rename: it is built in.
  *

@@ -572,16 +572,21 @@ def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] =
     reachable, not saturated; the fewest of this Host's runs still open there
     (``open_runs`` by Hive name: a run waiting on the person is not streaming but still
     holds its Hive), then the fewest streaming sessions, then the lowest memory, then the
-    name. Deterministic. Raises SwarmOutError when none can take a task. ``reason`` is a
+    name; only a Hive whose version has ``REQUIRED_CAPS`` (``capable``). Deterministic.
+    Raises SwarmOutError when none can take a task. ``reason`` is a
     code the card words (core/swarm_out_card, the desktop card): ``only_free``, ``idle``
     (nothing open, nothing streaming) or ``least_busy:<n>`` (n: the larger of the two);
     a named Hive's is ``named``."""
     held = open_runs or {}
-    ok = [h for h in hives if h.get("status") == "running" and h.get("reachable") is True
+    up = [h for h in hives if h.get("status") == "running" and h.get("reachable") is True
           and h.get("saturated") is False and isinstance(h.get("streaming"), int)]
+    ok = [h for h in up if h.get("capable") is True]
+    if not ok and up:
+        raise SwarmOutError("no running Hive has this version yet: update one with no open runs "
+                            "(update-hive), then send the task")
     if not ok:
         raise SwarmOutError("no running Hive can take a task now (none is running, reachable "
-                            "and not full); start one from the Hive card")
+                            "and not full): start a stopped one (start-hive)")
     ok.sort(key=lambda h: (held.get(str(h.get("name")), 0), h["streaming"],
                            h["memory_percent"] if isinstance(h.get("memory_percent"), (int, float)) else 101.0,
                            str(h.get("name"))))
@@ -642,7 +647,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     except task_spec.SpecError as e:
         raise SwarmOutError(str(e)) from None
     if not seen_revision or spec["revision"] != seen_revision:
-        raise SwarmOutError(f"{brain}'s Project Agent changed since it was shown; show the spec again")
+        raise SwarmOutError(f"{brain}'s Project Agent changed since spec returned it; run spec again")
     reasons = task_spec.admit(spec)
     if reasons:
         # refused at intake: before a Hive is chosen or the Brain synced (dispatch-center §2)
@@ -690,7 +695,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     except httpx.HTTPError as e:
         raise SwarmOutError(f"{brain} could not be synced to {inst['name']}: the Hive did not answer "
                             f"({type(e).__name__}); nothing was sent") from None
-    agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "delivery", "acceptance", "gates")}
+    agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "acceptance", "gates")}
     # the dispatch's id first: a pipeline task's run is named after it, so the project
     # section can name the run the Hive creates with the session (run-spec §4.2)
     dispatch_id = new_dispatch_id()
@@ -743,6 +748,17 @@ async def _require_work_orders(inst: dict[str, Any]) -> None:
         # longer carries them: it could let push or a release through without the person
         raise SwarmOutError(f"Hive {inst['name']}'s version does not keep the reserved actions "
                             "for the person; update it once")
+    if body.get("zero_touch") is not True:
+        # an older Hive asks the person about a dangerous command and waits; a dispatched
+        # task waits for nobody (design 2026-11-01-brain-to-hive-zero-touch)
+        raise SwarmOutError(f"Hive {inst['name']}'s version waits for a person on a dispatched "
+                            "task; update it once")
+
+
+#: what a Hive's admission state must say before it takes a Brain's task
+#: (``_require_work_orders``); ``fleet`` reports it as ``capable``, and ``pick_hive``
+#: chooses only such a Hive
+REQUIRED_CAPS = ("work_orders", "fixed_reserved", "zero_touch")
 
 
 #: hang guard for sending one repository's bundle to a Hive
@@ -831,10 +847,13 @@ async def _start_session(client: httpx.AsyncClient, message: str,
                              timeout=httpx.Timeout(HTTP_TIMEOUT_S, read=SESSION_ID_WAIT_S)) as r:
         if r.status_code != 200:
             if project_agent and r.status_code in (400, 422):
-                # routers/chat.py refuses a pin it cannot make (the Hive's copy is not
-                # this revision): the Hive's own text is never shown
-                raise SwarmOutError("the Hive refused the Project Agent pin (its copy of the Brain "
-                                    "is not the revision sent); send it again")
+                # routers/chat.py refuses a pin it cannot make. The Brain was synced
+                # just before, so its copy is the host's: the two compute the revision
+                # differently, which sending again would only repeat. The Hive's own
+                # text is never shown
+                raise SwarmOutError("the Hive computes a different revision of the Brain than this "
+                                    "host (its version differs): update the Hive; the task was not "
+                                    "sent")
             raise SwarmOutError(f"the Hive refused the task (HTTP {r.status_code})")
         async for line in r.aiter_lines():
             if not line.startswith("data:"):
@@ -1232,8 +1251,14 @@ def run_state(row: dict[str, Any], hive_status: Optional[str],
     from a failed or stopped one."""
     if hive_status == "gone":
         return "stopped", "hive_gone"
+    if hive_status == "updating":
+        # back once the update ends: not stopped, so nothing settles on it meanwhile
+        return "unknown", "hive_updating"
     if hive_status is not None and hive_status != "running":
         return "stopped", "hive_stopped"
+    if row.get("not_started"):
+        # its Hive has no started session for the order (``_find_sessions``)
+        return "stopped", "not_started"
     if not row.get("session_id"):
         return "unknown", "no_session_id"
     if has_open_decision:
@@ -1413,6 +1438,110 @@ async def run_refresh_loop() -> None:
         await asyncio.sleep(REFRESH_EVERY_S)
 
 
+#: a dispatch younger than this may still be naming its session: not asked about yet
+FIND_SESSION_AFTER_S = 2 * SESSION_ID_WAIT_S
+
+
+async def _order_state(hive_id: str, work_id: str) -> Optional[dict[str, Any]]:
+    """The Hive's answer about one work order (GET /api/hive/work/{id}), or None when
+    it did not answer properly (an older Hive has no such route)."""
+    try:
+        inst = await _instance(hive_id)
+        async with _client(inst, PROBE_TIMEOUT_S) as client:
+            r = await client.get(f"/api/hive/work/{work_id}")
+        d = r.json() if r.status_code == 200 else None
+    except Exception as e:                          # unreachable, timed out, not JSON
+        logger.warning("swarm_out: work order probe failed (%s)", type(e).__name__)
+        return None
+    if not isinstance(d, dict) or not isinstance(d.get("exists"), bool):
+        return None
+    sid = d.get("session_id")
+    return {"exists": d["exists"], "claimed": d.get("claimed") is True,
+            "session_id": sid if isinstance(sid, str) and KEY_RE.match(sid) else None}
+
+
+def _found_session(dispatch_id: str) -> Optional[str]:
+    """The session ``_find_sessions`` found for a dispatch whose id never came back
+    (kept in its settle record), or None."""
+    from core import swarm_out_settle
+    try:
+        found = swarm_out_settle.load(dispatch_id).get("session_found")
+    except swarm_out_settle.SettleError:
+        return None
+    return found if isinstance(found, str) and KEY_RE.match(found) else None
+
+
+def _lost_rows(rows: list[dict[str, Any]], status_of: dict[str, Optional[str]],
+               now: float) -> list[dict[str, Any]]:
+    """The open rows with no session id whose Hive is asked about its work order now
+    (file reads only: run off the event loop)."""
+    from core import swarm_out_settle
+    todo = []
+    for r in rows:
+        if r.get("session_id") or status_of.get(r.get("hive_id")) != "running":
+            continue
+        try:
+            rec = swarm_out_settle.load(r["dispatch_id"])
+        except (swarm_out_settle.SettleError, KeyError):
+            rec = {}
+        if rec.get("settled") or rec.get("abandoned_at"):
+            continue
+        found = rec.get("session_found")
+        if isinstance(found, str) and KEY_RE.match(found):
+            r["session_id"] = found
+            continue
+        if rec.get("not_started") is True:
+            todo.append(r)                 # asked again: a slow start may claim it later
+            continue
+        try:
+            sent = calendar.timegm(time.strptime(str(r.get("sent_at")), "%Y-%m-%dT%H:%M:%SZ"))
+        except (ValueError, OverflowError):
+            continue
+        if now - sent >= FIND_SESSION_AFTER_S:
+            todo.append(r)
+    return todo
+
+
+def _keep_found(dispatch_id: str, session_id: Optional[str]) -> None:
+    """Record what the Hive said about a lost session: the session that claimed the
+    order, or (None) that the order is still unclaimed."""
+    from core import swarm_out_settle
+
+    def change(rec: dict[str, Any]) -> None:
+        if session_id:
+            rec["session_found"] = session_id
+            rec.pop("not_started", None)
+        else:
+            rec["not_started"] = True
+    try:
+        swarm_out_settle._update(dispatch_id, change)
+    except swarm_out_settle.SettleError:
+        pass
+
+
+async def _find_sessions(rows: list[dict[str, Any]], status_of: dict[str, Optional[str]]) -> None:
+    """A dispatch whose session id never came back (the Hive took too long to name it):
+    ask its running Hive about the work order. Claimed with a session → that session is
+    kept in the run's settle record, and every reader of the run's log row gets it
+    (``_log_row_of``), so the run's commands work on it; an order that exists and is not
+    claimed → ``not_started`` on this refresh (nothing ran yet, the agent may discard
+    it). A not-started run is asked again on every refresh until the order is claimed,
+    because a slow start can still claim it: the row says ``not_started`` only when this
+    refresh's answer said so. No order at all (released, a rebuilt Hive) or no answer →
+    the row stays unknown: a session may have run."""
+    todo = await asyncio.to_thread(_lost_rows, rows, status_of, time.time())
+    answers = await asyncio.gather(*(_order_state(r["hive_id"], r["dispatch_id"]) for r in todo))
+    for r, st in zip(todo, answers):
+        if st is None:
+            continue
+        if st["claimed"] and st["session_id"]:
+            r["session_id"] = st["session_id"]
+            await asyncio.to_thread(_keep_found, r["dispatch_id"], st["session_id"])
+        elif st["exists"] and not st["claimed"]:
+            r["not_started"] = True
+            await asyncio.to_thread(_keep_found, r["dispatch_id"], None)
+
+
 async def run_row(dispatch_id: str) -> Optional[dict[str, Any]]:
     """One run's row as ``/runs`` has it now (state, settle, result), or None."""
     data = await list_runs(SNAPSHOT_FRESH_S)
@@ -1468,6 +1597,7 @@ async def _compute_runs() -> dict[str, Any]:
     for key in [k for k in _FIRST_SEEN if k not in seen and (
             k[0] in read_ok or status_of.get(k[0], "gone") not in ("running", None))]:
         del _FIRST_SEEN[key]                       # gone from a Hive that was read
+    await _find_sessions(rows, status_of)
     open_asks = {(a["hive_id"], a.get("session_id")) for a in asks if not a.get("refused")}
     open_decisions = {(a["hive_id"], a.get("session_id")) for a in asks
                       if not a.get("refused") and a.get("kind") == "decision"}
@@ -1626,8 +1756,14 @@ async def discard_run(dispatch_id: str, note: str = "") -> dict[str, Any]:
 
 
 def _log_row_of(dispatch_id: str) -> dict[str, Any]:
+    """The dispatch log's row, with the session ``_find_sessions`` found when the log has
+    none (the Hive named it too late): every command on the run reads the run here."""
     for r in _read_log():
         if r.get("dispatch_id") == dispatch_id:
+            if not r.get("session_id"):
+                found = _found_session(dispatch_id)
+                if found:
+                    return {**r, "session_id": found}
             return r
     raise SwarmOutError(f"no dispatch {dispatch_id!r}")
 
@@ -1668,7 +1804,7 @@ async def refresh_result(dispatch_id: str) -> dict[str, Any]:
 
 
 FLEET_KEYS = ("name", "status", "version", "region", "instance_type",
-              "reachable", "streaming", "saturated", "memory_percent")
+              "reachable", "streaming", "saturated", "memory_percent", "capable", "open_runs")
 
 
 def _count(v: Any, low: int) -> Optional[int]:
@@ -1702,7 +1838,8 @@ async def _admission(hive_id: str) -> Optional[dict[str, Any]]:
     if streaming is None or not isinstance(saturated, bool):
         return None
     return {"streaming": streaming, "saturated": saturated,
-            "memory_percent": _percent(d.get("memory_percent"))}
+            "memory_percent": _percent(d.get("memory_percent")),
+            "capable": all(d.get(c) is True for c in REQUIRED_CAPS)}
 
 
 async def fleet() -> dict[str, Any]:
@@ -1719,15 +1856,19 @@ async def fleet() -> dict[str, Any]:
     running = [h for h in found if h["status"] == "running"]
     probes = dict(zip([h["id"] for h in running],
                       await asyncio.gather(*(_admission(h["id"]) for h in running))))
+    held = await asyncio.to_thread(open_runs_by_hive)
     out = []
     for h in found:
         row = {k: h.get(k) for k in ("name", "status", "version", "region", "instance_type")}
+        row["open_runs"] = held.get(str(h.get("name")), 0)
         if h["status"] == "running":
             p = probes.get(h["id"])
             row.update({"reachable": p is not None, "streaming": p and p["streaming"],
-                        "saturated": p and p["saturated"], "memory_percent": p and p["memory_percent"]})
+                        "saturated": p and p["saturated"], "memory_percent": p and p["memory_percent"],
+                        "capable": p["capable"] if p else None})
         else:
-            row.update({"reachable": None, "streaming": None, "saturated": None, "memory_percent": None})
+            row.update({"reachable": None, "streaming": None, "saturated": None, "memory_percent": None,
+                        "capable": None})
         out.append({k: row[k] for k in FLEET_KEYS})
     return {"hives": out, "running": len(running)}
 

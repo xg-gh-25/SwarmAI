@@ -73,7 +73,7 @@ async def create_project(request: ProjectCreate):
     expanded_path = await _get_workspace_path()
     try:
         metadata = await swarm_workspace_manager.create_project(
-            request.name, expanded_path
+            request.name, expanded_path, assets=request.assets
         )
     except ValueError as exc:
         detail = str(exc)

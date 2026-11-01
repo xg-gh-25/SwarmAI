@@ -2003,8 +2003,8 @@ def create_dangerous_command_gate(
         # irreversible external op (C041), rm/mv of DDD/Library/.context
         # (run_a456640f), a v1 authorization).
         hit = _danger_match(command, patterns, cwd)
-        # An action the session's Project Agent reserves for a person (§8.1): asked
-        # every time, never answered from the approval cache.
+        # An action the product reserves for a person (core.project_agent.RESERVED_ACTIONS):
+        # its class is the person's, so on a dispatched task it is denied at once (below).
         reserved_action = None
         from core.project_agent_session import current_pin
         pin = await current_pin(session_context)
@@ -2022,8 +2022,8 @@ def create_dangerous_command_gate(
             reserved_action = _is_reserved_action(command, pin.get("reserved") or [])
             if reserved_action and hit is None:
                 hit = {"rule": "reserved_action", "match": _excerpt(command),
-                       "why": f"the {pin.get('brain')} Project Agent reserves "
-                              f"'{reserved_action}' for you: asked every time"}
+                       "why": f"'{reserved_action}' is reserved for the person: a dispatched "
+                              "task never does it"}
         is_dangerous = hit is not None
         # A command that discards uncommitted working-tree changes (reset --hard,
         # checkout -- <path>, restore, clean -f, worktree remove --force, …) is asked
@@ -2056,6 +2056,24 @@ def create_dangerous_command_gate(
                     logger.warning("[DISCARD] gated: %s", command[:80])
         if not is_dangerous or hit is None:
             return {"decision": "approve"}
+
+        # A dispatched task (a session pinned to a Project Agent) waits for nobody but the
+        # agent that dispatched it (design 2026-11-01-brain-to-hive-zero-touch): a wait of
+        # a class that agent answers for (core/approval_class.HOST_CLASSES, decided from the
+        # rules the command trips) is posted for it below; anything else would be the
+        # person's to approve, and nobody is asked, so it is denied at once with the rule
+        # (a reserved action included): the session does it another way or reports it.
+        if pin and not pin.get("broken"):
+            from core import approval_class as _ac
+            if _approval_class_of(command, patterns, cwd, hit, reserved_action) not in _ac.HOST_CLASSES:
+                reason = (f"Command denied: {_reason_text(hit)}. This is a dispatched task, so "
+                          "nobody is asked; do it another way, or say in your result why it "
+                          "could not be done.")
+                logger.warning("[DENIED] dispatched task (rule %s): %s", hit["rule"], command[:80])
+                _log_prompt(hit, "deny", input_data, session_key, reason)
+                return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                               "permissionDecision": "deny",
+                                               "permissionDecisionReason": reason}}
 
         # Auto-deny when human approval is disabled
         if not enable_human_approval:
@@ -2213,15 +2231,28 @@ def create_external_approval_gate(
         # except, under a Project Agent that reserves external messages for a person,
         # an MCP tool whose name says nothing about what it does (§8.1), unless the
         # user classified it themselves.
+        from core.project_agent_session import current_pin
+        pin = await current_pin(session_context)
         if classify(tool_name, overrides=user_overrides) is not RiskClass.EXTERNAL:
-            from core.project_agent_session import current_pin
             from core.tool_risk import is_unknown_mcp
-            pin = await current_pin(session_context)
             # a broken pin may hide a reservation: asked too (fail closed)
             reserves = bool(pin) and (bool(pin.get("broken"))
                                       or "send_external_message" in (pin.get("reserved") or []))
             if not (reserves and is_unknown_mcp(tool_name) and user_overrides(tool_name) is None):
                 return {"decision": "approve"}
+
+        # A dispatched task waits for nobody but the agent that dispatched it (design
+        # 2026-11-01-brain-to-hive-zero-touch): an off-machine call is the person's to
+        # approve (approval_class.OFF_MACHINE), and nobody is asked, so it is denied at
+        # once and no wait is created.
+        if pin and not pin.get("broken"):
+            logger.warning("[DENIED] External tool on a dispatched task: %s", tool_name)
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"External tool {tool_name} denied: it has off-machine side effects and "
+                    "this is a dispatched task, so nobody is asked; say in your result what "
+                    "should be sent.")}}
 
         # Gate-1 B4: without a tool_use_id we cannot correlate a durable approval
         # (idempotency key is (session_id, tool_call_id)). Approve + skip tracking

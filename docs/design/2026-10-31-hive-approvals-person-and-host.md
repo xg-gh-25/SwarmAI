@@ -4,6 +4,7 @@ created: 2026-10-31
 updated: 2026-11-01
 project: SwarmAI
 status: r2 P0–P2 implemented（2026-11-01，见 2026-11-01-hive-approvals-impl.md）；未做：§2.3 叫醒（XG 接受不做，见 impl §5）、§3（Swarm Run 未建）、§4 第 1 层；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
+superseded_in_part: 派出去的会话上，归人的那类等待不再发出、当场拒绝（2026-11-01-brain-to-hive-zero-touch r3，XG 2026-11-01「我们要 zero-touch」）；host 类的回答路径不变
 tags: [swarm-out, hive, approval, host, governance, accountability]
 related:
   - docs/design/2026-10-31-swarm-out-hive-decisions.md（pipeline 决定的快照和回答）

@@ -319,6 +319,16 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "brain_setup_resume":
+            # a New Brain whose setup session ended: continued in an ordinary chat
+            # session on this daemon, with every hook (zero-touch §1)
+            from .handlers.brain_setup_resume import run as run_resume
+            from .paths import PROJECTS_DIR
+            out = run_resume(PROJECTS_DIR)
+            result = JobResult(job_id=job.id, timestamp=start, status=out["status"],
+                               summary=out["summary"][:500],
+                               duration_seconds=(datetime.now(timezone.utc) - start).total_seconds())
+
         elif job.type == "library_freshness":
             from .handlers.library_freshness import run_library_freshness
             fresh_result = run_library_freshness()

@@ -97,7 +97,9 @@ def _row(dispatch_id: str) -> dict[str, Any]:
     except swarm_out.SwarmOutError as e:
         raise ReturnError(str(e)) from None
     agent = row.get("project_agent")
-    if not isinstance(agent, dict) or agent.get("delivery") != "bundle":
+    # a bundle is the one delivery there is; only a run from the retired branch-pr
+    # delivery says otherwise (a row from before 2026-11-01 records "bundle")
+    if not isinstance(agent, dict) or agent.get("delivery", "bundle") != "bundle":
         raise ReturnError("this run did not go out under a Project Agent that delivers a bundle")
     from core import hive_bundle
     if not hive_bundle.SESSION_RE.fullmatch(str(row.get("session_id") or "")):
@@ -430,9 +432,14 @@ _SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "
          "-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=", "-c", "filter.lfs.required=false")
 
 
-def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False) -> dict[str, Any]:
-    """Land the prepared tip the person or the dispatching agent approved (an agent never
-    with ``approve_protected``: core/swarm_out_actor). The commit is built from objects only
+def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
+         allow_git_exec: bool = True) -> dict[str, Any]:
+    """Land the prepared tip the person or the dispatching agent approved; commits that
+    change the repository's protected paths need ``approve_protected``, and the landed
+    commit's message names those paths. The agent's landing (the route passes
+    ``approve_protected`` False and ``allow_git_exec`` False for it) refuses every
+    protected path; ``allow_git_exec`` names the git hooks and filters in the refusal,
+    which run code on this machine. The commit is built from objects only
     (``merge-tree --write-tree`` of the branch and the tip over the reviewed base, then
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
     main checkout fast-forwards to it, which runs no hook either."""
@@ -441,9 +448,16 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False) 
     repo = Path(state["repo"])
     if _git(repo, "rev-parse", "--verify", "--quiet", f"{state['ref']}^{{commit}}").stdout.decode().strip() != tip:
         raise ReturnError("the ref of these commits moved since they were shown; review them again")
+    git_exec = [p for p in state["protected_files"] if _is_protected(p, list(GIT_PROTECTED))]
+    if git_exec and not allow_git_exec:
+        raise ReturnError("these commits change files that make this machine run code (git hooks, "
+                          "filters, submodules): " + ", ".join(git_exec[:10])
+                          + "; an agent does not land them: re-run asking the Hive to leave them out")
     if state["protected_files"] and not approve_protected:
-        raise ReturnError("the commits change protected paths; approve those separately: "
-                          + ", ".join(state["protected_files"][:10]))
+        raise ReturnError("the commits change protected paths (they guard the agent or run code "
+                          "here): " + ", ".join(state["protected_files"][:10])
+                          + "; an agent does not land them: re-run asking the Hive to leave them "
+                          "out, or make the change yourself; the person may approve them")
     if state["files_total"] > len(state["files"]):
         raise ReturnError(f"the commits change {state['files_total']} files, more than the review shows; "
                           f"land them by hand from {state['ref']}")
@@ -464,6 +478,9 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False) 
     title = " ".join(str(row.get("title") or "").split())[:72] or "a Hive run"
     msg = (f"hive: {title}\n\nThe commits of a Hive run ({row.get('hive')}, dispatch {dispatch_id}), "
            f"reviewed and squashed on this machine. The Hive's own commits are at {state['ref']}.")
+    if state["protected_files"]:
+        msg += ("\n\nChanges protected paths: " + ", ".join(state["protected_files"][:20])
+                + (" …" if len(state["protected_files"]) > 20 else ""))
     try:   # the repository's own author and trailer ([landing] in .swarmai/pipeline.toml)
         settings = landing_settings(str(repo), branch)
     except LandingError as e:
@@ -490,5 +507,6 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False) 
     state.update({"status": "landed", "landed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                   "landed": new, "landed_tip": tip})
     _save(dispatch_id, key, state)
-    return {"landed": True, "head": new[:12], "into": branch.replace("refs/heads/", "")}
+    return {"landed": True, "head": new[:12], "into": branch.replace("refs/heads/", ""),
+            "protected_files": state["protected_files"][:20]}
 

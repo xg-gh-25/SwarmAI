@@ -57,10 +57,10 @@ sections, not a competing structure. The full canonical shape:
 
 | # | Section | OWN/GOVERN | Concrete members | Provisioned by CREATE? |
 |---|---------|-----------|------------------|:---:|
-| ① | **IDENTITY & MANIFEST** | OWN | project dir + `.project.json`, `aim.json` (declares the 3 native skills), `AGENTS.md` (the ONE unified README), `.crux_template.md` | ✅ dir + `.project.json` + the 3 manifests |
+| ① | **IDENTITY & MANIFEST** | OWN | project dir + `.project.json`, `aim.json` (declares the 2 native skills), `AGENTS.md` (the ONE unified README), `.crux_template.md` | ✅ dir + `.project.json` + the 3 manifests |
 | ② | **KNOWLEDGE** | OWN | **the 4 docs (PRODUCT/TECH/IMPROVEMENT/PROJECT.md) + `Knowledge/`** — 冷启动 + judgment BORN here as prose | ✅ the 4 docs |
 | ③ | **GATES** (the moat) | OWN | `gates/<gate>.py|sh` + tests + `gates/context/includes/*denied*.json` — executable terminus of matured judgment | ✅ `gates/` + `context/includes/` empty dir (`.gitkeep`); **content accretes** as judgment matures (养成 ladder) |
-| ④ | **CAPABILITIES** | OWN | `skills/` — the **3 default DDD-native skills COPIED IN** + project-specific skills that accrete | ✅ `skills/` with the **3 native skills copied from `backend/templates/ddd-skills/`**; project-specific capabilities accrete |
+| ④ | **CAPABILITIES** | OWN | `skills/` — the **2 default DDD-native skills COPIED IN** + project-specific skills that accrete | ✅ `skills/` with the **2 native skills copied from `backend/templates/ddd-skills/`**; project-specific capabilities accrete |
 | ⑤ | **DELIVERY CONTRACT** | GOVERN | **`bindings.yaml`** — full delivery 全貌 per repo: build_system · version_set · branch · deploy_pipeline (ref) · review_path · refresh_policy · auto_send (all DATA) | ⬜ by **BIND**, not CREATE (repo shape is unknown at create) |
 | ⑥ | **CODE-INTEL REFRESHER** | GOVERN | a self-contained mechanism that REGENERATES the code-intel projection from code (ship the refresher, not the projection) | ✅ `REFRESHER.md` marker (shape-neutral: states it activates on BIND, no-op for a no-repo project); **live refresher accretes** |
 
@@ -128,10 +128,10 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 
 | Phase | Do | Exit-gate (must pass to proceed) |
 |-------|----|----------------------------------|
-| **P0 — DEFINE (资产定形)** ⭐ | Before touching content, write the **governed-asset inventory**: `0..N` assets, each with a `kind` (`code-repo` / `data-source` / `skill-set` / `document-corpus` / `external-service` / `process` / …). This one decision determines the shape of ⑤ and whether ⑥ does anything. | An explicit asset list exists (a 0-asset pure-knowledge brain is a valid, complete answer — write "0 assets"). |
-| **P1 — CREATE** | `create_project` scaffolds the six-section skeleton (the four docs come from the one skeleton, `backend/templates/ddd-skeleton/`) + copies the native skills. Then replace the placeholder `description` in `aim.json` with one sentence on what this Brain is and for whom: its Brain Hub card and its package show it. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
-| **P2 — KNOWLEDGE (the moat)** | **A repo is bound (P3) before P2:** the survey and `bootstrap-apply` only see repos the brain owns, so entries citing an unbound repo are all rejected and the person gets asked what the README already says. Learn the material, then write typed entries — the model judges, a deterministic tool writes. **P2a** survey the repos (`artifact_cli bind` does it; else `artifact_cli survey`) and read the DISTILL material whole. **P2b** get the format (`artifact_cli entry-contract`), then write `.artifacts/bootstrap/bootstrap-entries.json` section by section (§ "Writing a new brain's first entries" below). **P2c** `artifact_cli bootstrap-apply` checks and writes them; fix what it rejects and re-run. **P2d** ask the person only about the PRODUCT sections it reports in `ask` (at most 3 questions); every section left without evidence gets a gap. Never invent content to fill a section. | P6 ②: every skeleton section present (structure); PRODUCT, TECH and IMPROVEMENT each hold a typed entry, and every empty PRODUCT section has its gap (content). |
-| **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets. Run it right after P1, before P2** (the bind surveys the repo P2 reads). Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
+| **P0 — DEFINE (资产定形)** ⭐ | Before touching content, write the **governed-asset inventory**: `0..N` assets, each with a `kind` (`code-repo` / `data-source` / `skill-set` / `document-corpus` / `external-service` / `process` / …). From New Brain it is the form's GOVERN items: take them as they are, nobody is asked. This one decision determines the shape of ⑤ and whether ⑥ does anything. | An explicit asset list exists (a 0-asset pure-knowledge brain is a valid, complete answer — write "0 assets"). |
+| **P1 — CREATE** | `create_project` (with the P0 list as `assets`, kept in the setup record so P6 checks each is bound) scaffolds the six-section skeleton (the four docs come from the one skeleton, `backend/templates/ddd-skeleton/`) + copies the native skills. Then replace the placeholder `description` in `aim.json` with one sentence on what this Brain is and for whom: its Brain Hub card and its package show it. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
+| **P2 — KNOWLEDGE (the moat)** | **A repo is bound (P3) before P2:** the survey and `bootstrap-apply` only see repos the brain owns, so entries citing an unbound repo are all rejected and the person gets asked what the README already says. Learn the material, then write typed entries — the model judges, a deterministic tool writes. **P2a** survey the repos (`artifact_cli bind` does it; else `artifact_cli survey`) and read the DISTILL material whole. **P2b** get the format (`artifact_cli entry-contract`), then write `.artifacts/bootstrap/bootstrap-entries.json` section by section (§ "Writing a new brain's first entries" below). **P2c** `artifact_cli bootstrap-apply` checks and writes them; fix what it rejects and re-run. **P2d** every PRODUCT or TECH section it reports in `need_gap` gets its gap ("<Section>: no evidence yet"): nobody is asked, and the person fills a gap whenever they like. Never invent content to fill a section. | P6 ②: every skeleton section present (structure); every PRODUCT and TECH section holds an entry or a gap, and IMPROVEMENT holds a typed entry (content). |
+| **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets. Run it right after P1, before P2** (the bind surveys the repo P2 reads). Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ checks the assets create recorded). 0-asset → ⑤ is N/A, which passes. |
 | **P3b — PROJECT AGENT** ⭐ | **Every brain.** Draft `project-agent.yaml` (next to `bindings.yaml`, section ⑤) with `artifact_cli project-agent-draft` from what this brain now knows — see "Generating the Project Agent" below. Creating the Brain already wrote a skeleton (the standard modes and the repos' checks; the reserved actions are fixed by the product and are not in the file); drafting fills in the judged fields. Nothing is confirmed: the agent keeps it current and a dispatch uses the latest. | P6 ⑤ Project Agent check (the same validator the tool uses): valid → PASS; missing, invalid or still a skeleton (no summary, no typical requests) → FAIL. |
 | **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph, or `bind --local` reads a local checkout in place and builds its graph in a child; the reindex job keeps both current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + a code graph that opens, holds indexed files and was built from the brain's own repo → PASS; not bound yet / empty / foreign → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
@@ -209,7 +209,7 @@ each item to the skill that owns that write, with that skill's rules:
 | DISTILL (file, doc) | Read it; sediment only what passes the admission gate into PRODUCT / TECH / IMPROVEMENT / PROJECT, additively, each entry with a source pointer | this Brain's `s_ddd-persist` |
 | DISTILL (link) | Make a knowledge card first, then distill from it | `s_learn-content` → `s_ddd-persist` |
 | SHELF (folder) | Mount it in the Library for recall; do not copy it into the docs | `s_library` |
-| GOVERN (repo, data source) | Add it as an asset: P3 bind + P4 code-intel; if it changes how the Brain delivers, revise `project-agent.yaml` and ask the person to confirm | this skill, P3 / P3b / P4 |
+| GOVERN (repo, data source) | Add it as an asset: P3 bind + P4 code-intel (the bind redrafts `project-agent.yaml`; tell the person what changed in it) | this skill, P3 / P3b / P4 |
 
 A change to ③ Gates or to the Delivery rules is a proposal for the person, never a
 direct write. Report what was added, what was skipped and why, and what could not be
@@ -255,8 +255,9 @@ From the user's message, determine:
   SHELF (a folder of documents: mount it in the Library).
   The person can change the role.
 
-If the user doesn't provide a name, ask:
-> "What would you like to name this project?"
+If the user gives no name, name it from the material (the first governed repository or
+folder, else the first file's title, else `Brain-<yyyymmdd>`) without asking; New Brain
+does the same before it sends the request.
 
 **Name normalization:** If the provided name is not PascalCase (e.g., `ai_ready_repo`, `my-app`), note it informatively but accept their choice:
 > "Note: Convention suggests `AiReadyRepo`. Using `ai_ready_repo` as specified."
@@ -264,11 +265,11 @@ If the user doesn't provide a name, ask:
 #### Step 2: Validate
 
 ```bash
-# Check no duplicate name in Projects/
-test -e "Projects/ProjectName" && echo "EXISTS" || echo "AVAILABLE"
+# Check no duplicate name in Projects/ (from the workspace root)
+test -e "$HOME/.swarm-ai/SwarmWS/Projects/ProjectName" && echo "EXISTS" || echo "AVAILABLE"
 ```
 
-**If name already exists:** Tell the user and suggest an alternative.
+**If name already exists:** use the next free one (`<Name>-2`, …) and say so.
 **If name is "SwarmAI":** Tell the user this name is reserved for the default project.
 
 #### Step 3: Create + REGISTER the project (never a raw mkdir)
@@ -287,12 +288,13 @@ six-section skeleton — no path/CWD guessing, no manual `mkdir`):
 
 ```bash
 # Register + scaffold in one call. 201 = created (it starts as setting-up in Brain Hub).
-# 409 = a Brain with that name ALREADY EXISTS: stop and ask the person for another name.
+# "assets": the P0 list (a repository URL or a local path each); [] for a pure-knowledge brain.
+# 409 = a Brain with that name ALREADY EXISTS: create "<Name>-2" (then -3, …) instead.
 # Never write into the existing one — that is another Brain's knowledge.
-# 400 = the name breaks the naming rule; show the message and ask for another name.
+# 400 = the name breaks the naming rule: make it valid (letters, numbers, - _ .) and retry.
 curl -sS -X POST "http://127.0.0.1:${SWARM_BACKEND_PORT:-18321}/api/projects" \
   -H 'Content-Type: application/json' \
-  -d '{"name": "ProjectName"}'
+  -d '{"name": "ProjectName", "assets": ["https://github.com/acme/app.git"]}'
 ```
 
 - **Importing an EXISTING code dir that lacks `.project.json`?** Do NOT use the create API
@@ -402,20 +404,13 @@ writing: nothing was added to it. Tell them so in their words ("you have already
 in PRODUCT.md, so I added nothing there"), show the entries you would have added, and
 add the ones they accept through `s_ddd-persist`.
 
-#### Step 6: Ask only about the gaps (P2d)
+#### Step 6: A gap for every section without evidence (P2d)
 
-The report's `ask` lists the PRODUCT sections among Vision, Non-Goals and Success
-Criteria that still have no entry. Ask about those only — never about what the evidence
-already answers — at most three questions in one AskUserQuestion:
-- each question says why it is asked ("I found nothing in <repo> about what it will not do");
-- an option is a real hint from the material, naming where it came from; never a guess;
-- one option is always "Not sure yet — note it as a gap";
-- no survey (a pure-knowledge brain) → ask in free text.
-
-A typed answer becomes an entry with `"sources": ["user"]`; a picked hint cites its file
-too (`["user", "<file>#…"]`); "not sure" becomes a gap ("<Section>: no evidence yet").
-Every section in `need_gap` needs its entry or its gap before P6 passes. Re-run
-`bootstrap-apply`, then P6 `--record`.
+The report's `need_gap` lists the PRODUCT and TECH sections that still have no entry.
+Nobody is asked: write a gap for each ("<Section>: no evidence yet", in IMPROVEMENT §
+What to Watch For, saying what was looked at), re-run `bootstrap-apply`, then P6
+`--record`. The Brain Hub shows the gaps; the person fills one whenever they like, and a
+later session's knowledge replaces it.
 
 #### Step 7: (No index refresh needed)
 
@@ -516,7 +511,6 @@ its codeIntel graph. Do NOT hand-assemble a `"$SWARM_BACKEND_BIN" py -c` loop �
 entrypoint(`bind_repo` used to be reachable only via a prose recipe):
 
 ```bash
-cd "$SWARM_REPO_ROOT" && source backend/.venv/bin/activate   # or cd to your checkout
 "$SWARM_BACKEND_BIN" py -m scripts.artifact_cli bind --project AIDLC
 ```
 
@@ -617,7 +611,6 @@ binding via a `sync_back` map `{repo-relative-doc → SwarmWS-relative-target}`;
 no-op. Call the helper — never diff by hand:
 
 ```bash
-cd "$SWARM_REPO_ROOT" && source backend/.venv/bin/activate   # or cd to your checkout
 "$SWARM_BACKEND_BIN" py -c "
 from pathlib import Path
 from core.ddd_bindings import load_bindings, sync_back

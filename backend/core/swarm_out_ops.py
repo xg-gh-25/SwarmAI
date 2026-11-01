@@ -120,7 +120,10 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.instance.get", "GET", f"{_HV}/instances/{{instance_id}}", _P, "read"),
     _op("hive.delete", "DELETE", f"{_HV}/instances/{{instance_id}}", _P, "irreversible"),
     _op("hive.stop", "POST", f"{_HV}/instances/{{instance_id}}/stop", _P, "change"),
-    _op("hive.start", "POST", f"{_HV}/instances/{{instance_id}}/start", _P, "off_machine"),
+    # starting a stopped Hive resumes a machine the person already has: the dispatching
+    # agent may, when no Hive runs (zero-touch §1); creating, deleting, replacing one is
+    # the person's
+    _op("hive.start", "POST", f"{_HV}/instances/{{instance_id}}/start", _PO, "off_machine"),
     _op("hive.latest_version", "GET", f"{_HV}/latest-version", _PO, "read"),
     _op("hive.update", "POST", f"{_HV}/instances/{{instance_id}}/update", _PO, "change"),
     _op("hive.reset_password", "POST", f"{_HV}/instances/{{instance_id}}/reset-password", _P,
@@ -165,6 +168,7 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.serve.brain_list", "GET", f"{_HV}/brains", (HOST,), "read"),
     _op("hive.serve.repo", "PUT", f"{_HV}/repos", (HOST,), "change"),
     _op("hive.serve.work", "POST", f"{_HV}/work", (HOST,), "change"),
+    _op("hive.serve.work_order", "GET", f"{_HV}/work/{{work_id}}", (HOST,), "read"),
     _op("hive.serve.work_release", "POST", f"{_HV}/work/{{work_id}}/release", (HOST,), "irreversible"),
     _op("hive.serve.bundle", "GET", f"{_HV}/bundles/{{session_id}}/{{key}}", (HOST,), "read"),
     _op("hive.serve.usage", "GET", f"{_HV}/usage", (HOST,), "read"),
@@ -240,7 +244,9 @@ def person_only_match(text: str) -> "Op | None":
 #: to any of them from a command
 AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
                            "run.rerun", "run.stop", "run.discard",
-                           "ask.answer_host", "ask.escalate"})
+                           "ask.answer_host", "ask.escalate",
+                           # only when no Hive takes this Host's runs: the CLI checks it
+                           "hive.start"})
 
 
 @lru_cache(maxsize=1)

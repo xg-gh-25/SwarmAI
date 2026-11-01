@@ -66,8 +66,8 @@ def test_the_actions_kept_for_the_person_are_the_products(tmp_path):
         "schema: 2\nreserved_for_human: []\nmodes:\n- id: a\n  when: w\n  reserved_for_human: [push]\n"
         "default_mode: a\n")
     pa = load_project_agent(tmp_path)
-    assert pa["reservedForHuman"] == sorted(RESERVED_ACTIONS)
-    assert pa["modes"][0]["reservedForHuman"] == sorted(RESERVED_ACTIONS)
+    assert pa["reservedForHuman"] == sorted(RESERVED_ACTIONS)        # listed once, for the whole Brain
+    assert "reservedForHuman" not in pa["modes"][0] and "sourcePaths" not in pa
 
 
 def test_missing_is_none_and_malformed_never_raises(tmp_path):
@@ -85,14 +85,27 @@ def test_delivery_section_lists_the_project_agent(tmp_path):
     assert _section_members(tmp_path, "delivery") == ["bindings.yaml", "project-agent.yaml"]
 
 
-def test_p6_gate_passes_any_valid_definition(tmp_path):
+READY = """\
+schema: 2
+status: draft
+placements: [cloud]
+identity: {summary: Card payments API}
+intake: {handles: [fix a refund bug]}
+modes:
+  - {id: research, when: a question}
+default_mode: research
+"""
+
+
+def test_p6_gate_passes_any_dispatchable_definition(tmp_path):
     mod = _verify_mod()
     name, status, _ = mod._check_project_agent(tmp_path)
     assert (name, status) == ("⑤ Project Agent", mod.STATUS_FAIL)       # every Brain has one
-    (tmp_path / "project-agent.yaml").write_text(GOOD)
-    assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PASS      # a draft is no longer waiting
-    (tmp_path / "project-agent.yaml").write_text(GOOD.replace("placements: [chat-tab]", "placements: [cloud]"))
-    assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PASS      # placements is not read
+    (tmp_path / "project-agent.yaml").write_text(READY)
+    # a draft and an unknown placements value are no longer read
+    assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PASS
+    (tmp_path / "project-agent.yaml").write_text(GOOD)                  # schema 1: no Hive task runs on it
+    assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_FAIL
     (tmp_path / "project-agent.yaml").write_text("schema: 2\nmodes: []\n")
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_FAIL
 
@@ -102,7 +115,7 @@ def test_status_for_the_hub_home(tmp_path):
     from routers import ddd_brain as m
     assert project_agent_status(tmp_path) is None
     f = tmp_path / "project-agent.yaml"
-    f.write_text(GOOD)
+    f.write_text(READY)
     assert project_agent_status(tmp_path) == "ready"
     assert m._brain_summary(tmp_path)["projectAgentStatus"] == "ready"
     f.write_text("schema: 2\nmodes: []\n")

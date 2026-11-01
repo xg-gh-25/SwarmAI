@@ -285,22 +285,22 @@ def _check_knowledge(d: Path) -> list[tuple[str, str, str]]:
         out.append((f"{name}/structure", STATUS_PASS, "every skeleton section present"))
 
     problems: list[str] = []
-    # A doc that is still the skeleton holds no entry, so this also catches it.
-    # PROJECT.md may stay empty: its live sections are the user's to fill.
-    empty_docs = [doc for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md")
-                  if not sk.typed_entries(texts[doc])]
-    for doc in empty_docs:
-        problems.append(f"{doc} holds no typed entry (- [type] **title**)")
-    # The same rule the bootstrap writer reports gaps by (core.ddd_skeleton).
-    unexplained = sk.unexplained_product_sections(texts["PRODUCT.md"], texts["IMPROVEMENT.md"])
-    if unexplained and "PRODUCT.md" not in empty_docs:
-        problems.append("PRODUCT section(s) empty with no gap in IMPROVEMENT § What to Watch "
-                        f"For: {', '.join(unexplained)}")
+    # PRODUCT and TECH: every section holds an entry or a gap (the same rule the
+    # bootstrap writer reports gaps by, core.ddd_skeleton), so a Brain with no material
+    # is complete once its gaps are written and nobody is asked. IMPROVEMENT holds the
+    # gaps; PROJECT.md may stay empty: its live sections are the user's to fill.
+    for doc in sk.GAP_DOCS:
+        unexplained = sk.unexplained_sections(doc, texts[doc], texts["IMPROVEMENT.md"])
+        if unexplained:
+            problems.append(f"{doc} section(s) with no entry and no gap in IMPROVEMENT § "
+                            f"What to Watch For: {', '.join(unexplained)}")
+    if not sk.typed_entries(texts["IMPROVEMENT.md"]):
+        problems.append("IMPROVEMENT.md holds no typed entry (- [type] **title**)")
     if problems:
         out.append((f"{name}/content", STATUS_FAIL, "; ".join(problems)))
     else:
         out.append((f"{name}/content", STATUS_PASS,
-                    "typed entries present; empty PRODUCT sections are recorded as gaps"))
+                    "every PRODUCT and TECH section holds an entry or a gap"))
     out.append(_check_format(d, texts))
     out.append(_check_references(d))
     return out
@@ -389,11 +389,63 @@ def _check_capabilities(d: Path, aim: dict[str, Any] | None) -> tuple[str, str, 
     return ("④ Capabilities", STATUS_PASS, "skills/ present (no domain skills declared)")
 
 
+def _created_assets(d: Path) -> list[str]:
+    """What the New Brain form said this Brain governs (``.artifacts/setup.json``
+    ``assets``, written by create_project): a repository URL or a local path each."""
+    try:
+        body = json.loads((d / ".artifacts" / "setup.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    got = body.get("assets") if isinstance(body, dict) else None
+    return [a.strip() for a in got if isinstance(a, str) and a.strip()] if isinstance(got, list) else []
+
+
+def _norm_ref(v: str) -> str:
+    """One key for one repository however it is written: a local path (it starts with
+    ``/``, ``~`` or ``.``) resolved; a remote as ``host/org/repo`` lowercased, from
+    ``https://host/org/repo(.git)``, ``ssh://user@host/...``, ``git@host:org/repo`` or a
+    bare ``host/org/repo``."""
+    v = v.strip().rstrip("/")
+    if v.startswith(("/", "~", ".")):
+        try:
+            return str(Path(v).expanduser().resolve())
+        except (OSError, RuntimeError):
+            return v
+    if v.endswith(".git"):
+        v = v[:-4]
+    v = v.split("://", 1)[1] if "://" in v else v
+    v = v.split("@", 1)[1] if "@" in v.split("/", 1)[0] else v
+    if ":" in v.split("/", 1)[0]:                        # scp form host:org/repo (a port too)
+        host, _, rest = v.partition(":")
+        rest = rest.split("/", 1)[1] if rest.split("/", 1)[0].isdigit() and "/" in rest else rest
+        v = f"{host}/{rest}"
+    return v.lower()
+
+
+def _unbound_assets(d: Path, raw: dict[str, Any]) -> list[str]:
+    """The created-with assets bindings.yaml does not bind: none of its bindings' clone
+    or worktree, nor a governed asset's url / path / name, is that asset."""
+    known: set[str] = set()
+    for b in raw.get("bindings") or []:
+        if isinstance(b, dict):
+            known |= {_norm_ref(str(b[k])) for k in ("clone", "worktree") if b.get(k)}
+    for a in _governed_assets(raw):
+        known |= {_norm_ref(str(a[k])) for k in ("url", "path", "source") if a.get(k)}
+        if a.get("name"):
+            known.add(str(a["name"]))
+    return [x for x in _created_assets(d) if _norm_ref(x) not in known and x not in known]
+
+
 def _check_delivery(d: Path, assets: list[dict[str, Any]]) -> tuple[str, str, str]:
-    """⑤ DELIVERY CONTRACT: if the brain governs assets, bindings.yaml must exist.
+    """⑤ DELIVERY CONTRACT: if the brain governs assets, bindings.yaml must exist, and
+    every asset the New Brain form named (P0's list, in the setup record) is bound.
 
     A 0-asset pure-knowledge brain has no ⑤ — that is COMPLETE, not missing (N/A).
     """
+    unbound = _unbound_assets(d, _read_bindings_raw(d))
+    if unbound:
+        return ("⑤ Delivery Contract", STATUS_FAIL,
+                "created to govern, not bound yet (P3 bind): " + ", ".join(unbound[:5]))
     has_bindings = (d / "bindings.yaml").exists()
     if not has_bindings and not assets:
         return ("⑤ Delivery Contract", STATUS_NA, "0-asset pure-knowledge brain — no ⑤ (complete)")
@@ -431,7 +483,7 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     ci = _find_code_intel(d)
     if ci is None:
         return ("⑥ Refresher/code-intel", STATUS_PENDING,
-                "governs a code-repo but no code graph built yet — bind the repo, or confirm its local checkout in Brain Hub, to build it (not a failure)")
+                "governs a code-repo but no code graph built yet — bind the repo (or its local checkout: bind --local) to build it (not a failure)")
     try:
         from core.code_intel import repo_root_is_owned
     except ImportError:  # portable run: presence is all that can be seen
@@ -456,27 +508,28 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     if not repo_root_is_owned(d, root):
         return ("⑥ Refresher/code-intel", STATUS_PENDING,
                 f"code graph {ci.name} was built from a repo this brain does not own "
-                f"({root}) — bind the brain's own repo or confirm its checkout in Brain Hub")
+                f"({root}) — bind the brain's own repo (or its local checkout: bind --local)")
     return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph {ci.name}: {nodes} files indexed")
 
 
 # The Project Agent validator. Guarded single-source import, the same pattern as
 # CANONICAL_DOCS: None only when this gate runs portable, off a SwarmAI host.
 try:
-    from core.project_agent import validate as _validate_project_agent
+    from core.project_agent import dispatch_problems as _project_agent_problems
 except ImportError:
-    _validate_project_agent = None
+    _project_agent_problems = None
 
 
 def _check_project_agent(d: Path) -> tuple[str, str, str]:
     """⑤ PROJECT AGENT: project-agent.yaml, drafted at P3b from the Brain's knowledge.
 
-    Missing → FAIL (every Brain has one; draft it with ``artifact_cli
-    project-agent-draft``). A skeleton (written by code when the Brain was created: no
-    summary, no typical requests) → FAIL until the drafting step fills it in. Present with any problem ``core.project_agent.validate``
-    reports for this Brain (either schema; names checked against the Brain on disk) →
-    FAIL. Valid → PASS: nothing is confirmed (design 2026-11-01-project-agent-simple).
-    Off a SwarmAI host the validator is not importable and only the shape is checked.
+    The rule is ``core.project_agent.dispatch_problems``, the one admission uses for a
+    Hive task, so a Brain this check passes is admitted and the reverse: missing,
+    unparsable, any ``validate`` problem, schema 1, not drafted yet (no summary or no
+    typical requests), a command whose source is not there, a code-change mode with no
+    check → FAIL. The agent fixes what it names; nothing is confirmed (design
+    2026-11-01-project-agent-simple). Off a SwarmAI host the rule is not importable and
+    only the shape is checked.
     """
     name = "⑤ Project Agent"
     p = d / "project-agent.yaml"
@@ -490,30 +543,28 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
         return (name, STATUS_FAIL, f"project-agent.yaml could not be parsed: {type(exc).__name__}")
     if not isinstance(doc, dict):
         return (name, STATUS_FAIL, "project-agent.yaml is not a mapping")
-    # a skeleton (code wrote it when the Brain was created) is not a draft yet: the
-    # drafting step has not filled in a summary or typical requests (same test as
-    # core.project_agent_standard.is_skeleton, inlined so the gate runs portable)
+    modes = doc.get("modes") if doc.get("schema") == 2 else None
+    detail = (f"{len(modes)} modes, default {doc.get('default_mode')}" if isinstance(modes, list)
+              else "one mode (schema 1)")
+    if _project_agent_problems is not None:
+        try:
+            problems = _project_agent_problems(d)
+        except ImportError:      # a partial install: the reference checks are unavailable
+            problems = None
+        if problems is not None:
+            if problems:
+                return (name, STATUS_FAIL, "; ".join(problems[:5]))
+            return (name, STATUS_PASS, f"ready · {detail}")
+    # portable: the shape only (the same skeleton test as
+    # core.project_agent_standard.is_skeleton)
     ident = doc.get("identity") if isinstance(doc.get("identity"), dict) else {}
     intake = doc.get("intake") if isinstance(doc.get("intake"), dict) else {}
     handles = intake.get("handles") if isinstance(intake.get("handles"), list) else []
-    if (doc.get("schema") == 2 and not str(ident.get("summary") or "").strip()
-            and not any(isinstance(h, str) and h.strip() for h in handles)):
-        return (name, STATUS_FAIL, "project-agent.yaml is a skeleton with no summary and no typical "
-                                   "requests — draft it (artifact_cli project-agent-draft, "
+    if doc.get("schema") == 2 and (not str(ident.get("summary") or "").strip()
+                                   or not any(isinstance(h, str) and h.strip() for h in handles)):
+        return (name, STATUS_FAIL, "project-agent.yaml is not drafted yet: it needs a summary "
+                                   "and typical requests (artifact_cli project-agent-draft, "
                                    "s_project-manager P3b)")
-    problems = None
-    if _validate_project_agent is not None:
-        try:
-            problems = _validate_project_agent(doc, d)
-        except ImportError:      # a partial install: the reference checks are unavailable
-            problems = None
-    if problems is not None:
-        if problems:
-            return (name, STATUS_FAIL, "; ".join(problems[:5]))
-        modes = doc.get("modes") if doc.get("schema") == 2 else None
-        detail = (f"{len(modes)} modes, default {doc.get('default_mode')}" if isinstance(modes, list)
-                  else "one mode (schema 1)")
-        return (name, STATUS_PASS, f"ready · {detail}")
     if doc.get("schema") == 2 and not (isinstance(doc.get("modes"), list) and doc["modes"]):
         return (name, STATUS_FAIL, "not a supported value: modes []")
     detail = (f"{len(doc['modes'])} modes" if doc.get("schema") == 2 else "one mode (schema 1)")

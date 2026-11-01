@@ -237,6 +237,18 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Brain setup resume: a New Brain whose setup session ended is continued as one
+    # agent task (jobs/handlers/brain_setup_resume; nothing waits for "Continue setup") ---
+    Job(
+        id="brain-setup-resume",
+        name="Continue Brain Setups",
+        type="brain_setup_resume",
+        schedule="15 5-10 * * 1-5",     # hourly in the weekday job window (UTC 5-10); stalled = idle 2 hours
+        enabled=True,
+        category="system",
+        config={},
+    ),
+
     # --- DDD Auto-Refresh (detect stale project docs, generate proposals) ---
     Job(
         id="ddd-refresh",

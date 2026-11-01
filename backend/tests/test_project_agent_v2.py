@@ -78,7 +78,7 @@ def test_v2_parses_with_v1_keys_from_the_default_mode(tmp_path):
     assert pa["validations"][0]["command"] == "pytest -q"
     assert pa["reviewFocus"][0]["area"] == "security"
     research = pa["modes"][1]
-    assert research["reservedForHuman"] == sorted(RESERVED_ACTIONS)  # the product's
+    assert pa["reservedForHuman"] == sorted(RESERVED_ACTIONS)  # the product's, listed once
     assert research["gates"] == ["no_git_push"]                      # inherited
     assert pa["revision"] and len(pa["revision"]) == 64
 
@@ -145,6 +145,10 @@ def test_p6_uses_the_same_validator(tmp_path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     b = _brain(tmp_path)
+    # the same rule as admission (core.project_agent.dispatch_problems): a command whose
+    # source is not there fails P6 too
+    assert mod._check_project_agent(b)[1] == mod.STATUS_FAIL
+    (b / "ci.yml").write_text("on: push\n")
     name, status, detail = mod._check_project_agent(b)
     assert status == mod.STATUS_PASS and "2 modes, default code-change" in detail
     (b / "project-agent.yaml").write_text(yaml.safe_dump(_with_mode(gates={"enforce": []})))

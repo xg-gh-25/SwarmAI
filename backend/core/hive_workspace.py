@@ -463,6 +463,23 @@ def load(workspace: Path, work_id: str) -> Optional[dict[str, Any]]:
     return order if isinstance(order, dict) and order.get("work_id") == work_id else None
 
 
+def order_state(workspace: Path, work_id: str) -> dict[str, Any]:
+    """What the Host may ask about one of its orders (GET /api/hive/work/{id}): whether
+    it exists, whether a session start took it (``claimed``) and the session it named.
+    The Host asks for a dispatch that never learned its session id: claimed with a
+    session, it follows that session; no order, or one never claimed, means the task never
+    started (design 2026-11-01-brain-to-hive-zero-touch §2 item 8)."""
+    order = load(workspace, work_id)
+    if order is None:
+        return {"exists": False, "claimed": False, "session_id": None}
+    try:
+        claimed = _order_path(work_id, ".claim").is_file()
+    except WorkError:
+        claimed = False
+    sid = order.get("session_id")
+    return {"exists": True, "claimed": claimed, "session_id": sid if isinstance(sid, str) else None}
+
+
 def claim(work_id: str) -> bool:
     """Take the order for one session start (atomic: the ``.claim`` file is created
     exclusively); False when there is no order or a start took it already."""

@@ -138,14 +138,14 @@ def _actor(body: "Optional[ActorBody]"):
                                  body.why if body else None)
 
 
-async def _allowed(actor, command: str, dispatch_id: str, approve_protected: bool = False,
+async def _allowed(actor, command: str, dispatch_id: str,
                    ended_at: Optional[str] = None) -> None:
     """Refuse (403) what an agent may not do on this run now (core/swarm_out_actor): the
     request's own limits, then the run's row as /runs has it (which session dispatched
     it, what the panel offers on it, for a discard what would be lost)."""
     from core import swarm_out_actor
     try:
-        swarm_out_actor.check(actor, command, dispatch_id=dispatch_id, approve_protected=approve_protected)
+        swarm_out_actor.check(actor, command, dispatch_id=dispatch_id)
     except swarm_out_actor.ActorError as e:
         raise HTTPException(status_code=403, detail=str(e))
     if not actor.agent:
@@ -202,15 +202,17 @@ async def return_prepare(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
 
 @router.post("/runs/{dispatch_id}/return/land")
 async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
-    """Land the prepared commits: the panel's button, or the dispatching agent's command
-    (never for protected paths: core/swarm_out_actor)."""
+    """Land the prepared commits: the panel's button, or the dispatching agent's command.
+    An agent never lands protected paths, whatever its request says: they guard the
+    agent itself or run code on this machine, so a Hive's change to them is the
+    person's (the agent re-runs without them, or makes the change itself)."""
     _require_desktop()
     import asyncio
     from core import hive_return
     actor = _actor(body)
-    await _allowed(actor, "return_land", dispatch_id, approve_protected=body.approve_protected)
+    await _allowed(actor, "return_land", dispatch_id)
     out = await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
-                        body.approve_protected)
+                        body.approve_protected and not actor.agent, not actor.agent)
     _recorded(actor, "return_land", dispatch_id)
     return out
 

@@ -197,12 +197,15 @@ def test_dry_run_writes_nothing(brain: Path) -> None:
     assert not (brain / ap.REJECTED_FILE).exists()
 
 
-def test_the_report_names_what_to_ask_and_what_needs_a_gap(brain: Path) -> None:
+def test_the_report_names_what_needs_a_gap_and_asks_nothing(brain: Path) -> None:
     report = _run(brain, GOOD)
-    # Vision has an entry, Non-Goals has a gap; Success Criteria has neither
-    assert report["ask"] == ["Success Criteria"]
-    assert set(report["need_gap"]) == {"What Makes It Different", "Strategic Priorities",
-                                       "Success Criteria"}
+    # Vision has an entry, Non-Goals has a gap; Success Criteria has neither. Nobody is
+    # asked: every PRODUCT and TECH section without evidence gets its gap
+    assert "ask" not in report
+    product = {"What Makes It Different", "Strategic Priorities", "Success Criteria"}
+    assert product <= set(report["need_gap"])
+    tech = set(report["need_gap"]) - product
+    assert tech <= set(sk.skeleton_sections("TECH.md"))
 
 
 def test_section_table_matches_the_skeleton() -> None:
@@ -210,7 +213,6 @@ def test_section_table_matches_the_skeleton() -> None:
         assert section in sk.skeleton_sections(doc), (doc, section)
     for doc, live in sk.USER_ONLY_SECTIONS.items():
         assert not any((doc, s) in sk.SECTION_TYPES for s in live)
-    assert all(sk.locate_section(s) is not None for s in sk.ASK_SECTIONS)
 
 
 # ── I10: fixture repo → survey → fixed entries → apply → P6 ─────────────────
@@ -218,9 +220,11 @@ def test_section_table_matches_the_skeleton() -> None:
 def test_end_to_end_a_fixed_entries_file_makes_p6_pass_knowledge(brain: Path) -> None:
     survey.survey_project(brain)
     assert (brain / survey.SURVEY_REL).is_file()
+    # every PRODUCT and TECH section the entries leave empty gets its gap
+    missing = _run(brain, GOOD, dry_run=True)["need_gap"]
+    assert {"What Makes It Different", "Strategic Priorities", "Success Criteria"} <= set(missing)
     gaps = [{"kind": "gap", "section": "What to Watch For", "title": f"{s}: no evidence yet",
-             "what": "The repo says nothing about it."}
-            for s in ("What Makes It Different", "Strategic Priorities", "Success Criteria")]
+             "what": "The repo says nothing about it."} for s in missing]
     report = _run(brain, GOOD + gaps)
     assert report["rejected"] == [] and report["need_gap"] == []
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "s_project-manager" / "scripts"))

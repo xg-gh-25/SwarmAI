@@ -12,6 +12,7 @@ import {
   validateBrainName,
   buildAddKnowledgePrompt,
   buildResumeSetupPrompt,
+  defaultBrainName,
   type StarterItem,
 } from '../newBrainDispatch';
 
@@ -114,15 +115,25 @@ describe('buildBrainManifest', () => {
     expect(p).toContain('"Untitled Brain"');
   });
 
-  it('asks for the generated Project Agent, unreachable/conflicts, and the ready hand-off', () => {
+  it('sets the Brain up asking nothing: gaps, the drafted Project Agent, the ready hand-off', () => {
     const p = buildBrainManifest('X', items);
     expect(p).toContain('s_project-manager');
     expect(p).toContain('P3b');
-    expect(p).toContain('project-agent.yaml');
-    expect(p).toContain('pipeline profiles');
+    expect(p).toContain('project-agent-draft');
+    expect(p.toLowerCase()).toContain('ask me nothing');
     expect(p.toLowerCase()).toContain('cannot reach');
     expect(p.toLowerCase()).toContain('conflict');
     expect(p).toContain('Brain Hub');
+    // zero-touch: nothing in it waits for the person
+    expect(p.toLowerCase()).not.toMatch(/confirm|ask me (only|for)|for me to resolve|stop and ask/);
+    expect(p).toContain('P1 create');
+  });
+
+  it('passes the GOVERN items to create as its assets', () => {
+    const p = buildBrainManifest('X', [{ value: 'https://github.com/acme/pay.git', role: 'GOVERN' },
+                                       { value: '~/notes.md', role: 'DISTILL' }]);
+    expect(p).toContain('["https://github.com/acme/pay.git"]');
+    expect(buildBrainManifest('X', [])).toContain('no assets');
   });
 });
 
@@ -138,11 +149,26 @@ describe('buildAddKnowledgePrompt / buildResumeSetupPrompt', () => {
     expect(p).toContain('- ~/docs/runbook.md');
     for (const s of ['s_ddd-persist', 's_learn-content', 's_library', 'proposal for me to review', '--record']) expect(p).toContain(s);
   });
-  it('a resume verifies first and redoes nothing', () => {
+  it('a resume verifies first, binds before knowledge, and redoes nothing', () => {
     const p = buildResumeSetupPrompt('Acme');
     expect(p).toContain('P6 check first');
     expect(p).toContain('Do not redo');
     expect(p).toContain('--record');
+    expect(p.indexOf('P3 bind')).toBeLessThan(p.indexOf('P2 knowledge'));
+    expect(p.toLowerCase()).not.toContain('confirm');
+  });
+
+  it('defaultBrainName names an unnamed Brain from its material', () => {
+    const day = new Date('2026-11-01T10:00:00Z');
+    expect(defaultBrainName([{ value: 'https://github.com/acme/pay-api.git', role: 'GOVERN' }], [], day)).toBe('pay-api');
+    expect(defaultBrainName([{ value: '~/docs/Runbook.md', role: 'DISTILL' },
+                             { value: '/Users/me/code/billing', role: 'GOVERN' }], [], day)).toBe('billing');
+    expect(defaultBrainName([{ value: 'https://x.com/a/note.md', role: 'SHELF' }], [], day)).toBe('note');
+    expect(defaultBrainName([], [], day)).toBe('Brain-20261101');
+    expect(defaultBrainName([{ value: '/x/billing', role: 'GOVERN' }], ['billing', 'Billing-2'], day)).toBe('billing-3');
+    expect(defaultBrainName([{ value: '/x/支付', role: 'GOVERN' }], [], day)).toBe('Brain-20261101');
+    expect(defaultBrainName([{ value: '/x/general', role: 'GOVERN' }], [], day)).toBe('Brain-20261101');
+    for (const n of [defaultBrainName([{ value: '//', role: 'GOVERN' }], [], day)]) expect(validateBrainName(n)).toBeNull();
   });
 });
 

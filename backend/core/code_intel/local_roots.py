@@ -44,7 +44,8 @@ REGISTRY_NAME = "local_roots.json"
 # turns each into CONFIRMED and nothing writes it any more.
 PENDING, CONFIRMED = "pending", "confirmed"
 MIGRATION_KEY = "r4_owned"
-_LOCAL_MODES = frozenset({"", "daemon"})
+# "subprocess": the backend the desktop app starts as its child (Windows, Linux)
+_LOCAL_MODES = frozenset({"", "daemon", "subprocess"})
 # Credential locations under $HOME: never a root, nor anything inside one.
 _CREDENTIAL_DIRS = (".ssh", ".aws", ".gnupg", ".password-store", ".config", "Library")
 

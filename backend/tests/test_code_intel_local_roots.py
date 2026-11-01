@@ -151,3 +151,28 @@ def test_bind_local_files_the_entry_under_the_projects_own_name(env, capsys, mon
     assert entries("demo") == []
     with pytest.raises(SystemExit):
         cli._bind_local("NoSuchBrain", str(env["repo"]))
+
+
+def test_bind_local_records_the_checkout_as_a_binding_bound_in_place(env, capsys, monkeypatch):
+    """zero-touch R3.3: the rest of the Brain (Project Agent, a Hive task, P6) finds the
+    checkout in bindings.yaml; recording it twice adds nothing; a bind never clones over it."""
+    import yaml
+    import scripts.artifact_cli as cli
+    from core.ddd_bindings import bind_project
+    from core.project_agent import repo_roots
+    monkeypatch.setattr("core.code_intel.build.spawn_build", lambda *a, **k: None)
+    cli._bind_local("Demo", str(env["repo"]))
+    cli._bind_local("Demo", str(env["repo"]))
+    rows = yaml.safe_load((env["project"] / "bindings.yaml").read_text())["bindings"]
+    assert [(r["repo"], r["worktree"]) for r in rows] == [("app", str(env["repo"].resolve()))]
+    assert repo_roots(env["project"]) == {"app": env["repo"].resolve()}
+    out = bind_project("Demo")
+    assert [(o.repo, o.status, o.worktree) for o in out] == [("app", "bound", str(env["repo"].resolve()))]
+    assert (env["repo"] / "README.md").exists() or any(env["repo"].iterdir())   # untouched
+
+
+def test_the_desktop_sidecar_is_a_local_mode(monkeypatch):
+    from core.code_intel.local_roots import local_mode
+    for mode, ok in (("", True), ("daemon", True), ("subprocess", True), ("hive", False)):
+        monkeypatch.setenv("SWARMAI_MODE", mode)
+        assert local_mode() is ok, mode

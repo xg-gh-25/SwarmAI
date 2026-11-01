@@ -418,7 +418,6 @@ def _mode_view(m: dict[str, Any], d: dict[str, Any]) -> dict[str, Any]:
         "setup": _rows(m.get("setup"), ("command", "source", "repo", "cwd")),
         "validations": _rows(m.get("validations"), ("id", "command", "source", "repo", "cwd")),
         "skills": _str_list(m.get("skills")),
-        "reservedForHuman": sorted(RESERVED_ACTIONS),
         "gates": _str_list(m["gates"].get("enforce")) if isinstance(m.get("gates"), dict)
         and "enforce" in m["gates"] else _str_list((d.get("gates") or {}).get("enforce")),
     }
@@ -463,53 +462,56 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "validations": default["validations"] if default else [],
         "revision": revision(project_dir),
         "problems": validate(doc, project_dir),
-        "sourcePaths": _source_paths(d, project_dir),
+        # the typical requests routing compares a task with (core/task_spec.route)
+        "handles": [h for h in _str_list(intake.get("handles"))][:8],
     }
 
 
-def _source_paths(d: dict[str, Any], project_dir: Path) -> dict[str, str]:
-    """{source as written: absolute path} for every source of the definition that
-    resolves to a file — a Brain document, ``<repo>:<path>``, or (key
-    ``<repo>:<path>``) a setup / validations row's file in its repo — so the review
-    card can open it. Sources that do not resolve are left out."""
-    from core.brain_bootstrap.repo_read import confine
-    from core.ddd_paths import ddd_path
-    from core.project_registry import DDD_CANONICAL_DOCS
-    roots = repo_roots(project_dir)
-    out: dict[str, str] = {}
+#: the standard mode that changes a bound repo's code: it needs a check to run
+CODE_CHANGE_MODE = "code-change"
 
-    def add(src: Any, repo: Optional[str] = None) -> None:
-        if not isinstance(src, str) or not src:
-            return
-        key = f"{repo}:{src}" if repo else src
-        if key in out:
-            return
-        name, sep, rel = key.partition(":")
-        if sep and name in roots:
-            p = confine(roots[name], rel)
-        elif src in DDD_CANONICAL_DOCS:
-            p = ddd_path(project_dir, src)
-        else:
-            p = confine(project_dir, src)
-        if p is not None and p.is_file():
-            out[key] = str(p)
 
-    ident = d.get("identity") if isinstance(d.get("identity"), dict) else {}
-    add(ident.get("source"))
-    for w in _list_of_dicts(d.get("watches")):
-        add(w.get("source"))
+def dispatch_problems(project_dir: Path, mode: Optional[str] = None) -> list[str]:
+    """Why this Brain's definition cannot run a Hive task (empty: it can): its problems
+    (``validate``), schema 1, a definition not drafted yet (no summary or no typical
+    requests), a ``setup`` / ``validations`` command whose source is not there, a
+    code-change mode with no check command. With *mode*, the source and check rules
+    look at that mode only (a dispatch runs one mode). The one rule the P6 gate and
+    admission (core/task_spec.admit) both use, so a Brain P6 calls ready is admitted
+    and the reverse; whoever finds a problem is the agent, which fixes the file."""
+    from core.project_agent_standard import is_skeleton
+    project_dir = Path(project_dir)
+    p = project_dir / PROJECT_AGENT_FILE
+    if not p.is_file() or p.is_symlink():
+        return [f"no {PROJECT_AGENT_FILE}"]
+    try:
+        raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return [f"{PROJECT_AGENT_FILE} could not be parsed"]
+    if not isinstance(raw, dict):
+        return [f"{PROJECT_AGENT_FILE} is not a mapping"]
+    out = list(validate(raw, project_dir))
+    if raw.get("schema", 1) != 2:
+        out.append("the definition is schema 1: rewrite it with modes (schema 2)")
+        return out
+    if is_skeleton(raw):
+        out.append("not drafted yet: it needs a summary and typical requests "
+                   "(artifact_cli project-agent-draft)")
+    out.extend(source_problems(project_dir, mode))
+    d = normalize(raw)
     for m in _modes(d):
-        add(m.get("source"))
-        for key in ("setup", "validations"):
-            for row in _list_of_dicts(m.get(key)):
-                add(row.get("source"), row.get("repo") if isinstance(row.get("repo"), str) else None)
+        if mode is not None and m.get("id") != mode:
+            continue
+        if m.get("id") == CODE_CHANGE_MODE and not _list_of_dicts(m.get("validations")):
+            out.append(f"modes[{CODE_CHANGE_MODE}] changes code and has no check command "
+                       "(validations)")
     return out
 
 
 def project_agent_status(project_dir: Path) -> str | None:
-    """The one word the Brain Hub home needs: ``ready``, ``invalid`` (the file has
-    problems; the agent fixes them), or None (no file)."""
-    pa = load_project_agent(project_dir)
-    if pa is None:
+    """The one word the Brain Hub home needs: ``ready`` (a Hive task can run on it),
+    ``invalid`` (``dispatch_problems`` found something; the agent fixes it), or None
+    (no file)."""
+    if load_project_agent(project_dir) is None:
         return None
-    return "invalid" if pa.get("problems") else "ready"
+    return "invalid" if dispatch_problems(project_dir) else "ready"

@@ -132,7 +132,8 @@ def test_the_spec_comes_from_the_definition(ws):
                            "sha": None, "dirty": None, "checkout": None, "error": None, "access": "write"}]
     # every repository of the Brain goes, whatever the mode (research declares none)
     assert [r["name"] for r in _build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research")["repos"]] == ["lib"]
-    assert s["delivery"] == "bundle" and s["revision"] and not s["problems"]
+    assert "delivery" not in s and s["revision"] and not s["problems"]       # a bundle is the one delivery
+    assert s["reserved"] == ["open_pr", "publish_release", "push", "send_external_message"]
     assert s["skills"] == ["s_lib-release"] and s["skills_not_here"] == ["s_lib-desk"]
     s = _build(ws, "Lib", "x", "y", mode="code-change", execution="pipeline:trivial",
                why="  touches the   signer API ")
@@ -192,7 +193,7 @@ def test_admission_names_each_rule(ws):
     bad = _brain(ws, "NoSource")
     (bad / "ci.yml").unlink()
     refusals = ts.admit(_build(ws, "NoSource", "x", ""))
-    assert any("no source in the repository" in r and "ci.yml" in r for r in refusals)
+    assert any("source ci.yml not found" in r for r in refusals)
     assert refusals[-1].startswith("the task has no acceptance")       # the design's order
     # schema 1 never goes to a Hive (its repositories are not in a mode)
     v1 = {"default_profile": "bugfix", "landing": {"approval": "human"}}
@@ -320,7 +321,7 @@ def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypa
     assert calls["sync"] == ["Lib"] and out["brain_sync"].startswith("restored 2")
     # a definition changed since the person was shown it
     calls = _fake_hive(monkeypatch, digest)
-    with pytest.raises(so.SwarmOutError, match="changed since it was shown"):
+    with pytest.raises(so.SwarmOutError, match="changed since spec returned it"):
         asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision="0" * 64))
     assert calls["dispatch"] == []
 
@@ -333,9 +334,9 @@ def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypat
 
     async def fleet():
         return {"hives": [{"name": "busy", "status": "running", "reachable": True, "saturated": False,
-                           "streaming": 2, "memory_percent": 10.0},
+                           "streaming": 2, "memory_percent": 10.0, "capable": True},
                           {"name": "calm", "status": "running", "reachable": True, "saturated": False,
-                           "streaming": 0, "memory_percent": 50.0}]}
+                           "streaming": 0, "memory_percent": 50.0, "capable": True}]}
     monkeypatch.setattr(so, "fleet", fleet)
     asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision=rev,
                                  brief="  fix   the\nthing  "))
@@ -357,7 +358,7 @@ def test_a_refused_spec_or_an_old_hive_sends_nothing(ws, monkeypatch):
     d = _brain(ws)
     (d / "ci.yml").unlink()                              # admission refuses it
     calls = _fake_hive(monkeypatch, None)
-    with pytest.raises(so.SwarmOutError, match="no source in the repository"):
+    with pytest.raises(so.SwarmOutError, match="source ci.yml not found"):
         asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "x", "y", execution="native", returns="commits", seen_revision=revision(d)))
     ok = _brain(ws, "Ok")
     calls = _fake_hive(monkeypatch, None, supported=False)
@@ -429,9 +430,11 @@ def test_the_real_dispatch_posts_the_pin_and_the_project_section(monkeypatch, tm
     assert row["session_id"] == "s1" and row["project_agent"] == agent
     assert posted["project_agent"] == {"brain": "Lib", "mode": "m", "revision": "r" * 64}
     assert "## Project Agent: Lib" in posted["message"] and posted["message"].endswith("the task")
-    with pytest.raises(so.SwarmOutError, match="refused the Project Agent pin") as e:
+    with pytest.raises(so.SwarmOutError, match="computes a different revision") as e:
         asyncio.run(so.dispatch("h", "t", "x", "swarm-out", [], segment="", agent={**agent, "revision": "stale"}))
     assert "hive text" not in str(e.value)
+    # the Brain was synced just before: sending again would only repeat it (zero-touch F6)
+    assert "send it again" not in str(e.value) and "update the Hive" in str(e.value)
 
 
 def test_the_general_brain_revision_is_the_same_on_a_hive(ws, tmp_path):

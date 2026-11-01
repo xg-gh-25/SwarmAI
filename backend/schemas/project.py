@@ -75,6 +75,9 @@ class ProjectCreate(BaseModel):
     """POST /api/projects request body."""
 
     name: str = Field(..., min_length=1, max_length=100)
+    # what the Brain is created to govern (the New Brain form's GOVERN items: a
+    # repository URL or a local path each); P6 checks each is bound
+    assets: Optional[list[str]] = Field(None, max_length=20)
 
 
 class ProjectUpdate(BaseModel):

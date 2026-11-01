@@ -780,3 +780,16 @@ def test_a_gate_file_whose_name_does_not_travel_is_reported(tmp_path):
     (b / "3-gates" / "_credentials_patterns.py").write_text("X = 1\n")
     problems = pa.validate(yaml.safe_load((b / "project-agent.yaml").read_text()), b)
     assert any("_credentials_patterns.py is not used" in p for p in problems)
+
+
+def test_an_install_removes_the_retired_check_file(tmp_path):
+    """zero-touch R4.4: an older host shipped .project-agent-check.json; the file is no
+    longer packed, and a Hive install drops the copy it still has."""
+    host, hive = tmp_path / "host", tmp_path / "hive"
+    files = bs.collect(_brain(host), False)
+    assert ".project-agent-check.json" not in files
+    target = hive / "Projects" / "Lib"
+    target.mkdir(parents=True)
+    (target / ".project-agent-check.json").write_text('{"ok": true}')
+    bs.install(hive, "Lib", files, bs.content_digest(files))
+    assert not (target / ".project-agent-check.json").exists()

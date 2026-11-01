@@ -113,6 +113,9 @@ class _PM:
     def remove_pending_request(self, request_id):
         pass
 
+    def pop_decided_by(self, request_id):
+        return "host"
+
     def approve_command(self, session_key, command):
         self.approved.append(command)
 
@@ -131,13 +134,15 @@ def _bash(gate, command, tool_use_id="t1"):
     return asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": command}}, tool_use_id, None))
 
 
-def test_a_reserved_action_is_asked_every_time_even_when_approved_before():
+def test_a_reserved_action_on_a_dispatched_task_is_denied_and_nobody_is_asked():
+    """zero-touch Z3: even with a cached approval, and with nobody asked."""
     pm = _PM(decision="approve", cached=True)
     gate = create_dangerous_command_gate(_ctx(PIN), "s-pa", pm, True)
-    assert _bash(gate, "git push origin main") == {"decision": "approve"}
-    assert _bash(gate, "git push origin main") == {"decision": "approve"}
-    assert len(pm.asked) == 2 and "Project Agent reserves 'push'" in pm.asked[0]["reason"]
-    assert pm.approved == []                                    # never stored for reuse
+    for _ in range(2):
+        out = _bash(gate, "git push origin main")
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "'push' is reserved for the person" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert pm.asked == [] and pm.approved == []
 
 
 def test_a_denied_reserved_action_is_refused():
@@ -155,16 +160,16 @@ def test_without_a_project_agent_nothing_changes():
     assert _bash(gate, "npm publish") == {"decision": "approve"} and pm.asked == []
 
 
-def test_an_unknown_mcp_tool_is_asked_when_external_messages_are_reserved(monkeypatch):
+def test_an_unknown_mcp_tool_is_denied_on_a_dispatched_task(monkeypatch):
     import core.tool_risk as tr
     monkeypatch.setattr(tr, "user_overrides", lambda name: None)
     name = "mcp__crm__zap_record"                               # no verb the taxonomy knows
     pm = _PM()
     gate = create_external_approval_gate(_ctx(PIN), "s-pa", pm, True)
-    asyncio.run(gate({"tool_name": name, "tool_input": {}}, "t1", None))
-    assert len(pm.asked) == 1
-    asyncio.run(gate({"tool_name": "mcp__crm__get_record", "tool_input": {}}, "t2", None))
-    assert len(pm.asked) == 1                                   # a read verb is still a read
+    out = asyncio.run(gate({"tool_name": name, "tool_input": {}}, "t1", None))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny" and pm.asked == []
+    out = asyncio.run(gate({"tool_name": "mcp__crm__get_record", "tool_input": {}}, "t2", None))
+    assert out == {"decision": "approve"} and pm.asked == []    # a read verb is still a read
     pm2 = _PM()
     plain = create_external_approval_gate(_ctx(None), "s-x", pm2, True)
     asyncio.run(plain({"tool_name": name, "tool_input": {}}, "t3", None))

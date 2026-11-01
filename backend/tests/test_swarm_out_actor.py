@@ -41,7 +41,7 @@ def test_a_request_that_does_not_say_person_is_an_agents():
 def test_a_person_is_never_limited(state):
     p = act.actor("person", None, "")
     for cmd in act.COMMANDS:
-        act.check(p, cmd, dispatch_id=DID, approve_protected=True)
+        act.check(p, cmd, dispatch_id=DID)
 
 
 def test_an_agent_must_say_why(state):
@@ -49,10 +49,8 @@ def test_an_agent_must_say_why(state):
         act.check(_agent(""), "accept", dispatch_id=DID)
 
 
-def test_an_agent_does_not_land_protected_paths(state):
+def test_an_agent_may_give_return_land(state):
     act.check(_agent(), "return_land", dispatch_id=DID)
-    with pytest.raises(act.ActorError, match="protects"):
-        act.check(_agent(), "return_land", dispatch_id=DID, approve_protected=True)
 
 
 def test_an_agents_command_is_kept_with_its_session_and_reason(state):
@@ -239,17 +237,20 @@ def test_the_verdict_route_takes_an_agents_accept_only_on_the_final_result(clien
     assert len(seen) == 1
 
 
-def test_the_land_route_refuses_an_agent_protected_landing(client, monkeypatch):
+def test_the_land_route_never_lets_an_agent_land_protected_paths(client, monkeypatch):
     c, _ = client
     from core import hive_return
     landed: list = []
     monkeypatch.setattr(hive_return, "land", lambda *a: landed.append(a) or {"landed": True})
     _rows(monkeypatch, _offer("accept", "discard", accept="land"))
     body = {**AGENT, "key": "k", "tip": "t"}
-    assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json={**body, "approve_protected": True}).status_code == 403
-    assert landed == []
+    assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json={**body, "approve_protected": True}).status_code == 200
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
-    assert landed == [(DID, "k", "t", False)]
+    # whatever an agent's request says, its landing takes no protected path
+    assert landed == [(DID, "k", "t", False, False), (DID, "k", "t", False, False)]
+    assert c.post(f"/api/swarm-out/runs/{DID}/return/land",
+                  json={"by": "person", "key": "k", "tip": "t"}).status_code == 200
+    assert landed[-1] == (DID, "k", "t", False, True)
 
 
 def test_the_dispatch_route_passes_the_dispatching_session(state, monkeypatch):

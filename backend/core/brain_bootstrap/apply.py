@@ -49,10 +49,10 @@ skipped, so a re-run is safe. ``applied.json`` (each written entry: its rendered
 and full source list) is written BEFORE the doc, so a crash in between can only leave
 a recorded line that is not in the doc yet — which the next run writes — never a
 written line the next run would mistake for someone else's. ``rejected.json`` holds
-this run's refusals (a refused run writes its reason there too). The report also names the PRODUCT sections
-still without evidence: ``ask`` (Vision, Non-Goals, Success Criteria — ask the person,
-at most three questions) and ``need_gap`` (every PRODUCT section that P6 will fail
-until it holds an entry or a gap).
+this run's refusals (a refused run writes its reason there too). The report also names
+the PRODUCT and TECH sections still without evidence: ``need_gap`` (every section P6
+will fail until it holds an entry or a gap). Nobody is asked: a section with no evidence
+gets its gap, which the Brain Hub shows.
 
 Reader of what this writes: ``ddd_entry_lifecycle.parse_entries`` (the entries), the P6
 gate (content check), CDF's baseline later (``taint``). When CDF replaces this writer
@@ -321,7 +321,7 @@ def entry_contract(project_dir: str | Path | None = None, *,
             "gap": {"fields": sorted(_GAP_KEYS), "required": list(_KIND_REQUIRED["gap"]),
                     "section": GAP_SECTION[1],
                     "title_convention": "<Section>: no evidence yet — the form that marks a "
-                                        "PRODUCT section as explained (need_gap)"},
+                                        "PRODUCT or TECH section as explained (need_gap)"},
         },
         "values": {
             "text": "every field is text, except sources and the list fields below",
@@ -440,11 +440,11 @@ def apply_entries(project_dir: str | Path, entries_path: str | Path | None = Non
                   dry_run: bool = False, today: date | None = None) -> dict:
     """Validate and (unless *dry_run*) write the entries file. Returns the report:
     ``{status, written: {doc: n}, already_present, rejected: [{index, title, reason}],
-    refused_docs: {doc: reason}, ask, need_gap}``; ``status`` is ``refused`` when the
+    refused_docs: {doc: reason}, need_gap}``; ``status`` is ``refused`` when the
     brain is not setting up or the entries file cannot be read (nothing written)."""
     from core.ddd_paths import ddd_path
     from core.ddd_setup_state import read_setup_state
-    from core.ddd_skeleton import unexplained_product_sections, ASK_SECTIONS
+    from core.ddd_skeleton import GAP_DOCS, unexplained_sections
 
     project_dir = Path(project_dir)
     name = project_dir.name
@@ -549,10 +549,12 @@ def apply_entries(project_dir: str | Path, entries_path: str | Path | None = Non
         except OSError:
             return ""
 
-    unexplained = unexplained_product_sections(_doc_text("PRODUCT.md"), _doc_text("IMPROVEMENT.md"))
+    improvement = _doc_text("IMPROVEMENT.md")
+    unexplained = [s for doc in GAP_DOCS
+                   for s in unexplained_sections(doc, _doc_text(doc), improvement)]
     report = {"status": "dry-run" if dry_run else "applied", "written": written,
               "already_present": already, "rejected": rejected, "refused_docs": refused_docs,
-              "ask": [s for s in ASK_SECTIONS if s in unexplained], "need_gap": unexplained}
+              "need_gap": unexplained}
     if not dry_run:
         _write_json(project_dir / REJECTED_FILE, rejected)
     return report

@@ -403,7 +403,7 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
     const text = req.trim();
     if (!text) return;
     const runTitle = title.trim() || (text.length > 60 ? text.slice(0, 57).replace(/\s+\S*$/, '') + '…' : text);
-    send(`Use the pipeline on ${name} for this change. Pick the profile from its Project Agent (project-agent.yaml).\nTitle: ${runTitle}\nRequirement: ${text}`, runTitle);
+    send(`Use the pipeline on ${name} for this change; choose its profile from the change itself.\nTitle: ${runTitle}\nRequirement: ${text}`, runTitle);
     setReq(''); setTitle('');
   };
 

@@ -64,6 +64,10 @@ export function ProjectAgentView({ brain, agent, onRevise }: {
       </div>
       {problems.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-error)]" data-testid="bm-agent-problems">{problems.join(' · ')}</div>}
       {agent.summary && <p className="mt-3 text-small" data-testid="pa-summary">{agent.summary}</p>}
+      {(agent.handles ?? []).length > 0 && (
+        <div className="mt-2 text-meta" data-testid="pa-handles">
+          <span className="text-[var(--color-text-muted)]">{t('ui.ProjectAgentView.typicalRequests')} </span>{(agent.handles ?? []).join(' · ')}
+        </div>)}
 
       <div className="mt-4 space-y-4" data-testid="pa-modes">
         {modes.map((m) => (
@@ -82,7 +86,7 @@ export function ProjectAgentView({ brain, agent, onRevise }: {
       </div>
 
       <div className="mt-4 text-meta text-[var(--color-text-muted)] space-y-1" data-testid="pa-guards">
-        <div>{t('ui.ProjectAgentView.alwaysAsks', { actions: reserved.map((a) => (RESERVED_LABEL[a] ? t(RESERVED_LABEL[a]) : a)).join(', ') })}</div>
+        <div>{t('ui.ProjectAgentView.neverOnHive', { actions: reserved.map((a) => (RESERVED_LABEL[a] ? t(RESERVED_LABEL[a]) : a)).join(', ') })}</div>
         {(agent.gates ?? []).length > 0 && <div>{t('ui.ProjectAgentView.gates', { gates: (agent.gates ?? []).join(', ') })}</div>}
       </div>
       {(agent.reviewFocus ?? []).length > 0 && (

@@ -8,12 +8,13 @@
  * Brain Hub). These two helpers are the whole non-UI logic, kept pure so they
  * are unit-testable without React.
  *
- * What the brain governs is not asked: it is the GOVERN items (none = a
- * pure-knowledge brain). The Project Agent is not asked either: the agent
- * generates it from the DDD at P3b and the person reviews it.
+ * Nothing on the way waits for the person (design 2026-11-01-brain-to-hive-zero-touch):
+ * what the brain governs is the GOVERN items (none = a pure-knowledge brain), a name
+ * left empty comes from the material (defaultBrainName), sections without evidence
+ * become gaps, and the agent drafts and keeps the Project Agent itself.
  *
  * @exports classifyStarterItem, buildBrainManifest, previewSections, StarterRole,
- *          StarterItem, StarterKind, detectKind, PreviewSection
+ *          StarterItem, StarterKind, detectKind, PreviewSection, defaultBrainName
  */
 
 /** The three roles a starter item can play — sorted BY TYPE (a rule, no LLM). */
@@ -125,6 +126,41 @@ export function validateBrainName(raw: string, existing: string[] = []): string 
   return null;
 }
 
+/** A name from a URL or path: its last segment, without `.git` or a file extension. */
+function nameFrom(value: string): string {
+  const v = value.trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
+  const last = v.split(/[\\/]/).pop() || '';
+  return last.replace(/\.git$/i, '').replace(/\.[A-Za-z0-9]{1,6}$/, '');
+}
+
+/** Cleaned to what validateBrainName takes: letters, numbers, spaces, - _ . */
+function cleanName(raw: string): string {
+  return raw.replace(/[^a-zA-Z0-9 _.-]+/g, '-').replace(/^[^a-zA-Z0-9]+/, '').slice(0, 100).trim();
+}
+
+/**
+ * The Brain's name when the person left it empty: the first GOVERN item's name
+ * (a repository or folder), else the first other item's, else `Brain-<yyyymmdd>`;
+ * `-2`, `-3`, … when an existing Brain has it. Always a name validateBrainName takes.
+ */
+export function defaultBrainName(items: Pick<StarterItem, 'value' | 'role'>[], existing: string[] = [],
+                                 today: Date = new Date()): string {
+  const ordered = [...items.filter((i) => i.role === 'GOVERN'), ...items.filter((i) => i.role !== 'GOVERN')];
+  let base = '';
+  for (const it of ordered) {
+    base = cleanName(nameFrom(it.value));
+    if (base && !validateBrainName(base)) break;
+    base = '';
+  }
+  if (!base) {
+    const d = today.toISOString().slice(0, 10).replace(/-/g, '');
+    base = `Brain-${d}`;
+  }
+  let name = base;
+  for (let n = 2; validateBrainName(name, existing); n += 1) name = `${base.slice(0, 95)}-${n}`;
+  return name;
+}
+
 export type PreviewSection =
   | 'identity' | 'knowledge' | 'gates' | 'capabilities' | 'delivery' | 'refresher';
 
@@ -177,22 +213,22 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
     lines.push('');
   }
 
+  const governed = items.filter((it) => it.role === 'GOVERN').map((it) => it.value.trim());
   lines.push(
-    'Set it up with me: run the s_project-manager setup (P0 confirm the governed assets, ' +
-      'artifact_cli classify-starter for a folder whose role is unclear → P1 create → P3 bind each repo ' +
+    'Set it up yourself and ask me nothing: run the s_project-manager setup (P1 create, passing ' +
+      (governed.length ? `the GOVERN items above as its assets (${JSON.stringify(governed)}); ` : 'no assets; ') +
+      'artifact_cli classify-starter for a folder whose role is unclear → P3 bind each repo ' +
       'first, which also surveys it: a local path with `artifact_cli bind --project <name> --local <path> ' +
       '--source new-brain` (read in place, owned at once, its graph built in the background), a URL with ' +
       '`artifact_cli bind` → P2 read the survey and the material whole, write the first typed ' +
       'entries section by section into bootstrap-entries.json, write them with artifact_cli ' +
-      'bootstrap-apply (fix what it rejects), ask me only about the PRODUCT sections it reports without ' +
-      'evidence (with a "not sure yet" choice) and record the rest as gaps → ' +
-      'P3b generate the Project Agent (project-agent.yaml) from this knowledge, ' +
-      'using only the pipeline profiles, and show it to me to confirm or change → P4 code graph ' +
-      'for a repo → P5 skills → P6 verify). Surface anything you cannot reach (login-walled links, ' +
-      'missing paths) or any conflicts between sources for me to resolve. If the name is taken ' +
-      '(create returns 409), stop and ask me for another name. Run P6 with --record. Whether or not it ' +
-      'passes, tell me what was written, which sections are gaps and what is still open; when it passes, ' +
-      'open Brain Hub for me and tell me the brain is ready.',
+      'bootstrap-apply (fix what it rejects), and give every PRODUCT or TECH section it reports without ' +
+      'evidence its gap → P3b draft the Project Agent (artifact_cli project-agent-draft) from this ' +
+      'knowledge → P4 code graph for a repo → P5 skills → P6 verify). Record anything you cannot reach ' +
+      '(login-walled links, missing paths) as a gap, and resolve conflicts between sources by the more ' +
+      'specific, more recent one, noting it. If the name is taken (create returns 409), use the next free ' +
+      `name ("${trimmedName}-2", …). Run P6 with --record. Then tell me what was written, which sections ` +
+      'are gaps and what is still open, open Brain Hub for me and tell me the brain is ready.',
   );
   return lines.join('\n');
 }
@@ -245,9 +281,10 @@ export function buildResumeSetupPrompt(name: string): string {
     '',
     'Run the P6 check first (s_project-manager verify_ddd_complete.py --project ' +
       `"${name.trim()}") to see which phases are missing, then finish only those, in order: ` +
-      'P2 knowledge (survey, entries, bootstrap-apply), P3 bind, P3b the Project Agent (show it to me ' +
-      'to confirm), P4 code graph, ' +
-      'P5 skills. Do not redo or overwrite what is already written. Finish with P6 --record, ' +
+      'P3 bind (each repository the Brain governs, before any knowledge is written), P2 knowledge ' +
+      '(survey, entries, bootstrap-apply; every PRODUCT or TECH section without evidence gets a gap), ' +
+      'P3b the Project Agent (artifact_cli project-agent-draft), P4 code graph, P5 skills. Ask me ' +
+      'nothing. Do not redo or overwrite what is already written. Finish with P6 --record, ' +
       'then open Brain Hub for me and tell me it is ready.',
   ].join('\n');
 }

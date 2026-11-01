@@ -425,9 +425,28 @@ def _bind_local(project: str, path: str, *, source: str = "agent") -> None:
         except OSError as e:
             print(json.dumps({"warning": f"the graph build could not start: {e}; the "
                               "hourly code-intel job builds it"}), file=sys.stderr)
+    # the rest of the Brain finds its repositories in bindings.yaml (the Project Agent's
+    # code-change mode and checks, a Hive task's repositories, P6): record it there,
+    # then learn it and redraft the Project Agent like a cloned repo (cmd_bind)
+    from core import local_binding
+    learned = agent = None
+    try:
+        local_binding.record(projects / project, Path(entry["path"]))
+    except (OSError, ValueError) as e:
+        print(json.dumps({"warning": f"not recorded in bindings.yaml: {e}"}), file=sys.stderr)
+    else:
+        from core.brain_bootstrap.doc_index import sync_project
+        try:
+            learned = _summarize_learned(sync_project(projects / project))
+        except Exception as e:  # noqa: BLE001 — reported, never undoes the bind
+            learned = {"error": f"{type(e).__name__}: {e}"}
+        from core.project_agent_draft import refresh_draft
+        r = refresh_draft(projects / project)
+        agent = None if r is None else {"written": r.get("written"), "problems": r.get("problems")}
     print(json.dumps({"project": project, "local_root": entry, "added": added,
                       "graph": "building in a child process" if building else
-                               "built by the hourly code-intel job"}, indent=2))
+                               "built by the hourly code-intel job",
+                      "learned": learned, "project_agent": agent}, indent=2, default=str))
 
 
 def _summarize_learned(sync: dict) -> dict:

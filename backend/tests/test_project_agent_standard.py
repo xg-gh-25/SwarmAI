@@ -229,3 +229,13 @@ def test_a_standard_mode_of_the_other_shape_is_never_proposed_in(tmp_path):
     doc, dropped = pad.build(without, {"modes": [{"id": "code-change", "when": "x", "source": "TECH.md"}]})
     assert "code-change" not in [m["id"] for m in doc["modes"]] and any("no bound repo" in d for d in dropped)
 
+
+
+def test_a_shipped_copy_differing_only_by_retired_keys_is_replaced(tmp_path):
+    """zero-touch R4.2: the retired confirmation rewrote the shipped Runner with a status
+    and a new header; the seeder treats that copy as still the product's."""
+    from core.project_agent_seed import place
+    shipped = b"schema: 2\nidentity: {summary: General}\nintake: {handles: [x]}\nmodes:\n- {id: research, when: q}\n"
+    (tmp_path / "project-agent.yaml").write_bytes(b"# Confirmed on the Brain Hub review card\nstatus: reviewed\n" + shipped)
+    assert place(shipped, tmp_path) == "updated"
+    assert (tmp_path / "project-agent.yaml").read_bytes() == shipped

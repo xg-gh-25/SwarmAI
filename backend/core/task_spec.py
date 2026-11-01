@@ -33,8 +33,8 @@ from typing import Any, Optional
 
 import yaml
 
-from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, _bindings, _list_of_dicts,
-                                _mode_view, _skills, normalize, revision, source_problems, validate)
+from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, RESERVED_ACTIONS, _bindings, _list_of_dicts,
+                                _mode_view, _skills, dispatch_problems, normalize, revision, validate)
 from core.project_agent_session import PinError, brain_dir
 
 MAX_ACCEPTANCE_CHARS = 2000
@@ -238,18 +238,17 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         "execution_why": " ".join((why or "").split())[:MAX_WHY_CHARS],
         "task": (task or "").strip(), "acceptance": " ".join((acceptance or "").split()),
         # what comes back is decided by ``returns``; a bundle is the one delivery there is
-        "placement": placement, "repos": repos, "delivery": "bundle",
+        "placement": placement, "repos": repos,
         "revision": revision(d),
-        "reserved": view["reservedForHuman"], "gates": view["gates"],
+        "reserved": sorted(RESERVED_ACTIONS), "gates": view["gates"],
         "skills": usable, "skills_not_here": [s for s in view["skills"] if s not in usable],
         "setup": view["setup"], "validations": view["validations"],
         "watches": [{"area": _line(w.get("area")), "why": _line(w.get("why"))}
                     for w in _list_of_dicts(n.get("watches"))],
         "summary": _line(identity.get("summary")),
-        "problems": validate(raw, d),
-        "schema": raw.get("schema", 1),
-        # each setup / validation command's source must be in the repository (host only)
-        "source_problems": source_problems(d, mid) if placement == "hive" else [],
+        # a Hive task needs a definition P6 calls ready, for this mode (host only: the
+        # sources live in the repositories): the agent fixes what it names
+        "problems": dispatch_problems(d, mid) if placement == "hive" else validate(raw, d),
     }
 
 
@@ -300,13 +299,6 @@ def admit(spec: dict[str, Any]) -> list[str]:
             # no Hive reaches a private network (dispatch-center §2.2): refused before a
             # question is asked or anything is sent
             out.append(PRIVATE_REFUSAL + "; ".join(spec["private"][:4]))
-        if spec["schema"] != 2:
-            out.append("the definition is schema 1: rewrite it with modes (schema 2) first")
-        if spec.get("source_problems"):
-            # nothing is confirmed (design 2026-11-01-project-agent-simple): the agent
-            # fixes the definition and dispatches again
-            out.append("fix the Project Agent first, a command has no source in the repository: "
-                       + "; ".join(spec["source_problems"][:3]))
         for r in spec["repos"]:
             if not str(r["url"]).startswith(("https://", "git@", "ssh://")):
                 out.append(f"{r['name']} has no remote a Hive can clone ({r['url']!r})")

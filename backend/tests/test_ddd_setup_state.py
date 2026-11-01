@@ -112,3 +112,24 @@ def test_the_first_open_check_is_recorded_fail_first(tmp_path):
     body = json.loads((tmp_path / SETUP_FILE).read_text())
     assert body["open"] == ["② Knowledge/content", "⑥ Refresher"]
     assert read_setup_progress(tmp_path)["next"] == "② Knowledge/content"
+
+
+def test_the_assets_a_brain_is_created_with_are_kept_across_writes(tmp_path):
+    """zero-touch R1.5 / R2.1: create records what the New Brain form said the Brain
+    governs; the P6 record keeps it; P6 fails until each is bound."""
+    from core.ddd_setup_state import read_setup_assets
+    from core.swarm_workspace_manager import SwarmWorkspaceManager
+    (tmp_path / "Projects").mkdir()
+    url = "https://github.com/acme/app.git"
+    asyncio.run(SwarmWorkspaceManager().create_project("Gov", str(tmp_path), assets=[url]))
+    b = tmp_path / "Projects" / "Gov"
+    assert read_setup_assets(b) == [url]
+    write_setup_state(b, "setting-up", counts={"PASS": 3})           # a P6 --record
+    assert read_setup_assets(b) == [url]
+    gate = _verify_mod()
+    name, status, detail = gate._check_delivery(b, [])
+    assert status == gate.STATUS_FAIL and "github.com/acme/app" in detail
+    (b / "bindings.yaml").write_text(
+        "bindings:\n  - repo: app\n    kind: external\n    clone: https://github.com/acme/app\n"
+        "    delivery_contract: {remote_kind: github-pr, branch: main, review_path: pr, auto_send: manual-push}\n")
+    assert gate._check_delivery(b, [])[1] == gate.STATUS_PASS        # .git and case do not matter

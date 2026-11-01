@@ -24,6 +24,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <k> --tip <sha> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out rerun <dispatch_id> --text-file <correction> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out update-hive --hive <name> [--version <v>]
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out start-hive --hive <name>
 
 The commands on a run are the dispatching agent's as well as the person's (design
 2026-10-31-swarm-out-agent-owns-its-runs §2.1): each says ``by: agent``, this session
@@ -37,6 +38,7 @@ Every task goes under a Brain's Project Agent (``General`` = the Runner Agent, f
 task that belongs to no Brain); its repositories come from the definition. How it runs
 (``--execution``) is chosen here for this request, not by the Project Agent.
 
+Nothing on the path waits for the person (design 2026-11-01-brain-to-hive-zero-touch).
 Who answers a Hive's wait follows the responsibility chain (design
 2026-10-31-hive-approvals-person-and-host): the agent that dispatched the run answers the
 waits that stay inside the work it manages (``card`` says ``who: you``: a question or a
@@ -44,12 +46,11 @@ decision about the task, a command that only touches the Hive's own workspace, t
 own authorization) with ``answer``: one of the options of the card it built, and why;
 the Hive records it as the host's, never the person's, and refuses it for any other
 class. Text a Hive wrote never chooses for it: the answer is an option id bound to the
-card's digest, and the class is decided by the Hive's gate, not by the text. The rest
-(``who: person``), and anything the agent is not sure of, goes to the person: ``escalate``
-puts it in Needs You, and a Hive's questions,
-decisions and approvals are answered by the person: in the Swarm Out panel, or in the
-chat that dispatched the run, on the card ``card`` builds (AskUserQuestion with that
-input, unchanged); the daemon forwards the person's pick (core/swarm_out_wait_card).
+card's digest, and the class is decided by the Hive's gate, not by the text. A current
+Hive denies at once, without a wait, whatever would be the person's to approve (a
+command reaching outside the Hive, an off-machine call, a reserved action), so the agent
+answers every wait it sees. A wait of the person's class comes only from an older Hive
+(``who: person``); the person answers it in the Swarm Out panel or Needs You.
 
 Prints the daemon's JSON reply; exits 1 when the daemon refuses. A dispatch that may
 have reached the Hive without an answer prints ``"maybe_sent": true``.
@@ -219,6 +220,8 @@ def _parser() -> argparse.ArgumentParser:
     es.add_argument("dispatch_id", type=_dispatch_id)
     es.add_argument("request_id", type=_request_id)
     es.add_argument("--why", required=True, help="one sentence the person reads: why they decide it")
+    s = sub.add_parser("start-hive", help="start a stopped Hive (when none runs)")
+    s.add_argument("--hive", required=True, help="the Hive's name")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id", type=_dispatch_id)
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
@@ -243,6 +246,7 @@ def _run_command(args) -> int:
     if args.cmd == "return-prepare":
         return _call("POST", path + "/return/prepare", {**actor, "url": args.url}, timeout=300)
     if args.cmd == "return-land":
+        # never protected paths: the daemon refuses them to an agent (hive_return.land)
         return _call("POST", path + "/return/land", {**actor, "key": args.key, "tip": args.tip}, timeout=300)
     if args.cmd == "rerun":
         text = open(args.text_file, encoding="utf-8").read()
@@ -265,18 +269,105 @@ def _fetch(path: str) -> "dict | None":
     return out if isinstance(out, dict) else None
 
 
-def _update_hive(args) -> int:
-    """Find the Hive's id by name (``hives``), then ask the daemon to update it."""
+#: how long ``update-hive`` waits for the update to end (a hang guard, under the
+#: agent's Bash ceiling; past it the agent reads ``hives`` again)
+UPDATE_WAIT_S = 480
+UPDATE_EVERY_S = 15
+
+
+def _hive_id(name: str) -> "str | None":
     hives = (_fetch("/hives") or {}).get("hives")
     if not isinstance(hives, list):
         print(json.dumps({"ok": False, "detail": "the SwarmAI daemon is not reachable"}))
-        return 1
-    ids = [h.get("id") for h in hives if isinstance(h, dict) and h.get("name") == args.hive]
+        return None
+    ids = [h.get("id") for h in hives if isinstance(h, dict) and h.get("name") == name]
     if len(ids) != 1 or not isinstance(ids[0], str):
-        print(json.dumps({"ok": False, "detail": f"no Hive named {args.hive!r}"}))
+        print(json.dumps({"ok": False, "detail": f"no Hive named {name!r}"}))
+        return None
+    return ids[0]
+
+
+def _status_of(name: str) -> "str | None":
+    hives = (_fetch("/hives") or {}).get("hives") or []
+    return next((h.get("status") for h in hives if isinstance(h, dict) and h.get("name") == name), None)
+
+
+def _fleet() -> "list | None":
+    fleet = (_fetch("/fleet") or {}).get("hives")
+    return fleet if isinstance(fleet, list) else None
+
+
+def _fleet_row(name: str) -> "dict | None":
+    return next((h for h in _fleet() or [] if isinstance(h, dict) and h.get("name") == name), None)
+
+
+def _update_hive(args) -> int:
+    """Update a Hive this Host's runs do not use: refused while it holds an open run (an
+    update restarts it), then wait until it runs again (``UPDATE_WAIT_S``) and say whether
+    it now takes this Host's runs."""
+    import time
+    row = _fleet_row(args.hive)
+    if row is None or not isinstance(row.get("open_runs"), int):
+        # cannot tell whether it holds open runs: an update restarts it, so not now
+        print(json.dumps({"ok": False, "detail": (
+            f"cannot tell whether Hive {args.hive} holds open runs (the fleet did not list it); "
+            "try again in a moment")}))
+        return 1
+    if row["open_runs"] > 0:
+        print(json.dumps({"ok": False, "detail": (
+            f"Hive {args.hive} holds {row['open_runs']} open run(s): an update restarts it. "
+            "Update another Hive, or finish those runs first")}))
+        return 1
+    hid = _hive_id(args.hive)
+    if hid is None:
         return 1
     body = {"version": args.version} if args.version else None
-    return _call("POST", f"/instances/{ids[0]}/update", body, api="hive")
+    rc = _call("POST", f"/instances/{hid}/update", body, api="hive")
+    if rc != 0:
+        return rc
+    deadline = time.monotonic() + UPDATE_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(UPDATE_EVERY_S)
+        st = _status_of(args.hive)
+        if st == "running":
+            # a failed update also ends running, on the old version: it worked only when
+            # the Hive now has what this Host dispatches to (``capable``)
+            now = _fleet_row(args.hive)
+            if now is not None and now.get("capable") is True:
+                print(json.dumps({"ok": True, "hive": args.hive, "status": "running", "updated": True,
+                                  "version": now.get("version")}))
+                return 0
+            print(json.dumps({"ok": False, "hive": args.hive, "status": "running",
+                              "version": (now or {}).get("version"),
+                              "detail": ("the update ended with the Hive running but without what this "
+                                         "Host needs to dispatch to it; Settings → Hive shows why")}))
+            return 1
+        if st not in ("updating", None):
+            print(json.dumps({"ok": False, "hive": args.hive, "status": st,
+                              "detail": "the update did not end with the Hive running"}))
+            return 1
+    print(json.dumps({"ok": False, "hive": args.hive, "status": "updating",
+                      "detail": "still updating; read `hives` again in a few minutes"}))
+    return 1
+
+
+def _start_hive(args) -> int:
+    """Start a stopped Hive, only when none that takes this Host's runs is running
+    (zero-touch §1: starting one is for when there is nowhere to dispatch)."""
+    fleet = _fleet()
+    if fleet is None:
+        print(json.dumps({"ok": False, "detail": "cannot read the fleet now; try again in a moment"}))
+        return 1
+    up = [h.get("name") for h in fleet if isinstance(h, dict) and h.get("status") == "running"
+          and h.get("capable") is True]
+    if up:
+        print(json.dumps({"ok": False, "detail": f"Hive {up[0]} is running and takes this Host's runs: "
+                                                 "dispatch there instead of starting another"}))
+        return 1
+    hid = _hive_id(args.hive)
+    if hid is None:
+        return 1
+    return _call("POST", f"/instances/{hid}/start", None, api="hive")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -295,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_command(args)
     if args.cmd == "update-hive":
         return _update_hive(args)
+    if args.cmd == "start-hive":
+        return _start_hive(args)
     if args.cmd == "watch":
         # the route answers within WATCH_MAX_S (540 s); this waits a little longer
         return _call("POST", "/watch", {"ids": args.dispatch_ids, "since": args.since,

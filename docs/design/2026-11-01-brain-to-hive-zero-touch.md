@@ -1,10 +1,10 @@
 ---
 title: 从新建 Brain 到 Hive 单落地，不等人
-status: r1 design
+status: r3 implemented (merged with 2026-10-31-hive-approvals: who answers a wait comes from its approval class)
 created: 2026-11-01
 updated: 2026-11-01
 owner: XG
-related: 2026-11-01-project-agent-simple.md, 2026-10-31-swarm-out-agent-owns-its-runs.md, 2026-10-31-swarm-run.md
+related: 2026-11-01-project-agent-simple.md, 2026-10-31-swarm-out-agent-owns-its-runs.md, 2026-10-31-swarm-run.md, 2026-10-31-hive-approvals-person-and-host.md
 ---
 
 # 从新建 Brain 到 Hive 单落地，不等人
@@ -21,8 +21,8 @@ related: 2026-11-01-project-agent-simple.md, 2026-10-31-swarm-out-agent-owns-its
 |---|---|---|
 | 起 Brain 的名字 | 名字可以不填：取第一个 GOVERN 项（仓库名或文件夹名），没有就取第一份资料的标题，再不行用 `Brain-<日期>`；重名自动加 `-2`。表单上照样可以改。 | 本机重命名就能改回 |
 | 最多 3 个 PRODUCT 问题 | 不问。没有证据的段落记成缺口，P6 通过，缺口在 Brain Hub 上显示，人想补随时补（§2 第 4 条） | 缺口是"不知道"，不是错的内容 |
-| Hive 的问题、决定、危险命令批准 | 由派单的 agent 回答，按它自己的权限（XG 2026-10-31：谁派谁负责）：它在本机不问人就能做的，在 Hive 上也能批；超出权限的，**默认拒绝**，并写明原因，不再转去问人。四个留给人的动作在 Hive 上直接拒绝，不产生等待（Hive 只交 bundle，用不到它们）。 | 拒绝只会让这一步做不成；做不成的，agent 自己接管或者修正重跑 |
-| 碰到受保护路径的落地 | agent 落到本机 main，在落地记录和对话里写明碰了哪些受保护路径 | 本机提交可以撤回；离开本机仍然靠 push |
+| Hive 的问题、决定、危险命令批准 | 由派单的 agent 回答，按它自己的权限（XG 2026-10-31：谁派谁负责）。每个等待带一个 approval class（`core/approval_class`，由触发的规则决定，不靠模型判断）：问题、决定、只动 Hive 自己工作区的命令、run 自己的授权，归派单 agent，用 `swarm_out card` / `answer` 回答，记作 host 的答复；其余（离开 Hive 的、对外的、不可逆的、删不可替代数据的、四个留给人的动作）在派出去的会话上**直接拒绝**，写明原因，不产生等待，不再转去问人。只有不带新能力的旧 Hive 还会出这类等待，host 不再给它派新单。 | 拒绝只会让这一步做不成；做不成的，agent 自己接管或者修正重跑 |
+| 碰到受保护路径的落地 | agent 不落地受保护路径：让 Hive 去掉这些文件重做；任务确实要改它们时，agent 在本机自己改（自己测、自己审）。人仍然可以在面板上批准落地 | 受保护路径守着 agent 自己，或会在本机执行代码（hooks、`.claude/**`、`.swarmai/**`、CI 脚本）；Hive 改的版本不能凭 agent 自己填的标记落地（security 审查，2026-11-01） |
 | push | 不在这条路上。单子做到"落到本机 + 经验进 Brain"就结束 | 没有一步等它 |
 | 启动已停的 Hive | 先挑在跑的 Hive；一台都没有时，agent 自己启动一台（`hive.start` 对派单 agent 开放） | 启动只是恢复已有机器；新建、删除、拿密码仍然只给人 |
 | 第三次重跑 | 不再问人。两次修正都不行，agent 自己接管来做；做不了就丢弃，并记下原因（Swarm Run §0"常事自己解决"） | 丢弃前照样检查代码、文件、经验都已取回 |
@@ -70,9 +70,9 @@ related: 2026-11-01-project-agent-simple.md, 2026-10-31-swarm-out-agent-owns-its
 ## 3. 不变式（最终测试集）
 
 - **Z1** 新建 Brain：不填名字、不回答任何问题，P6 也能通过，得到一个能派单的 Brain。
-- **Z2** 派单路径上，没有哪个问人的地方能让一个 run 停住：Hive 的每一种等待，派单 agent 都能用一条命令答复；agent 超出权限时得到的是拒绝，不是"去问人"。
+- **Z2** 派单路径上，没有哪个问人的地方能让一个 run 停住：派出去的会话产生的每个等待，类别都在 `HOST_CLASSES` 里，派单 agent 用 `answer` 一条命令答复；其余当场拒绝，不是"去问人"。
 - **Z3** 四个留给人的动作在 Hive 上直接拒绝，不产生等待；在任何默认值下都不会被批准。
-- **Z4** agent 能批的危险命令，等于它在本机不问人就能执行的命令（同一个判断函数）；本机要问人的，在 Hive 上一律拒绝。
+- **Z4** 危险命令里会归人批准的（类别不在 `HOST_CLASSES`，由 `_approval_class_of` 从命令触发的所有规则算出），在派出去的会话上一律当场拒绝，从不发出等待。
 - **Z5** 准入和 P6 对同一份定义给出同样的判断（同一个函数）。
 - **Z6** 挑 Hive 不会挑中没有 `fixed_reserved` 的 Hive。
 - **Z7** 迁移前先备份；迁移后所有现有定义都通过准入，没有 `status` 字段，也没有 `.project-agent-check.json`。
@@ -85,3 +85,4 @@ related: 2026-11-01-project-agent-simple.md, 2026-10-31-swarm-out-agent-owns-its
 - **审查：** security（Z2–Z4 改变了谁来回答 Hive 的等待）和 correctness，各一轮，最多两轮。
 - **落地顺序：** 先改 host，Hive 的改动（四个留给人的动作直接拒绝）随新版 Hive 包发出；host 只派给带新能力标记的 Hive（与 `fixed_reserved` 一样，在 admission-state 里声明）。旧 Hive 由 agent 自己更新。
 - **会失去的：** 人不再收到 Hive 中途的问题。想看可以看面板和历史，每个答复都带原因。
+- **r3 合并（2026-11-01）：** 这份设计实现时，`2026-10-31-hive-approvals` 已先落地（等待带 approval class，派单 agent 回答 host 类，其余给人）。合并后答复路径用它的（`card` / `answer`，Hive 端按类别拒收 agent 越权的答复）；本设计只在一点上改它：派出去的会话上，归人的那类等待不再发出，当场拒绝。r2 里自己写的 `answer_run` / `waits` / "agent 只能拒绝" 不再需要，已删。

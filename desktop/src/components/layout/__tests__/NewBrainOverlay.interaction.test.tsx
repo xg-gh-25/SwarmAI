@@ -70,14 +70,20 @@ describe('NewBrainOverlay', () => {
     expect(await screen.findByTestId('new-brain-overlay')).toBeTruthy();
   });
 
-  it('Create is disabled with no name, enabled once named', async () => {
-    renderContent(() => true);
+  it('Create works with no name: the Brain is named from its material (zero-touch)', async () => {
+    const onDispatch = vi.fn(() => true);
+    renderContent(onDispatch);
     openOverlay();
     await screen.findByTestId('new-brain-overlay');
     const create = screen.getByTestId('new-brain-create') as HTMLButtonElement;
-    expect(create.disabled).toBe(true);
-    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Acme Payments' } });
     expect(create.disabled).toBe(false);
+    const input = screen.getByTestId('new-brain-material-input');
+    fireEvent.change(input, { target: { value: 'github.com/acme/payments' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect((screen.getByTestId('new-brain-name') as HTMLInputElement).placeholder).toBe('payments');
+    fireEvent.click(create);
+    expect(onDispatch).toHaveBeenCalledTimes(1);
+    expect(onDispatch.mock.calls[0][0] as string).toContain('"payments"');
   });
 
   it('a name the backend would refuse is caught in the form, and Create stays off', async () => {
@@ -159,7 +165,8 @@ describe('NewBrainOverlay', () => {
     expect(prompt).toContain('it governs 1 asset');
     expect(prompt).toContain('github.com/acme/payments');
     expect(prompt).toContain('s_project-manager');
-    expect(prompt).toContain('project-agent.yaml');
+    expect(prompt).toContain('project-agent-draft');
+    expect(prompt).toContain('["github.com/acme/payments"]');
   });
 
   it('F4: does NOT close when onDispatch returns false (no tab landed)', async () => {

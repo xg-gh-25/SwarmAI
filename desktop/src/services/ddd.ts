@@ -180,8 +180,6 @@ export interface AgentMode {
   setup: AgentCommand[];
   validations: AgentCommand[];
   skills: string[];
-  /** the product's: the same for every Brain and mode */
-  reservedForHuman: string[];
   gates: string[];
 }
 
@@ -192,8 +190,10 @@ export interface ProjectAgent {
   schema?: number;
   summary?: string;
   reviewFocus?: { area: string; why: string; source: string }[];
-  /** the product's: what a Project Agent session always asks the person for */
+  /** the product's, the same for every Brain: what a Hive run never does (the person's) */
   reservedForHuman?: string[];
+  /** typical requests: routing compares a task with them */
+  handles?: string[];
   gates?: string[];
   repos?: string[];
   modes?: AgentMode[];
@@ -203,8 +203,6 @@ export interface ProjectAgent {
    *  a dispatch records */
   revision?: string | null;
   problems: string[];
-  /** {source as written: absolute path} for the sources that resolve to a file */
-  sourcePaths?: Record<string, string>;
 }
 
 // ── What the Brain learned (design 2026-10-30-brain-change-feed) ─────────────

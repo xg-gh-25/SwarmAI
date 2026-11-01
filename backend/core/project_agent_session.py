@@ -39,7 +39,7 @@ from typing import Any, Optional
 
 import yaml
 
-from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, _list_of_dicts, _mode_view,
+from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, RESERVED_ACTIONS, _list_of_dicts, _mode_view,
                                 gates_snapshot, general_brain_dir, normalize, revision, validate)
 
 logger = logging.getLogger(__name__)
@@ -122,7 +122,7 @@ def make_pin(workspace: Path, brain: str, mode: Optional[str] = None,
     if before != digest:
         raise PinError(f"{brain}'s gates changed while the session was being pinned; try again")
     if seen_revision and rev != seen_revision:
-        raise PinError(f"{brain}'s Project Agent changed since it was shown")
+        raise PinError(f"{brain}'s Project Agent is not the revision the host sent")
     n = normalize(doc)
     modes = {m.get("id"): m for m in _list_of_dicts(n.get("modes"))}
     mid = mode or n.get("default_mode")
@@ -130,7 +130,7 @@ def make_pin(workspace: Path, brain: str, mode: Optional[str] = None,
         raise PinError(f"{brain}'s Project Agent has no mode {mid!r}")
     view = _mode_view(modes[mid], n)
     pin = {"brain": brain, "mode": mid, "revision": rev,
-           "reserved": view["reservedForHuman"], "gates": view["gates"], "gates_digest": digest}
+           "reserved": sorted(RESERVED_ACTIONS), "gates": view["gates"], "gates_digest": digest}
     if ex is not None:
         pin["execution"] = ex
     return pin

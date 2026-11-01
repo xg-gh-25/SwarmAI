@@ -650,9 +650,20 @@ def bind_project(
         return []
 
     doc = load_bindings(bindings_path)  # raises ValueError (named field) on a malformed doc
+    # a binding whose worktree is one of the project's own local checkouts
+    # (core/local_binding) is bound in place: never cloned over
+    try:
+        from core.code_intel.local_roots import confirmed
+        local = {str(Path(r).resolve()) for r in confirmed(project_name)}
+    except Exception:  # noqa: BLE001 — off the desktop there are no local roots
+        local = set()
 
     outcomes: list[BindOutcome] = []
     for b in doc.bindings:
+        if b.worktree and str(Path(b.worktree).expanduser().resolve()) in local:
+            outcomes.append(BindOutcome(repo=b.repo, kind=b.kind, status="bound",
+                                        worktree=str(Path(b.worktree).expanduser().resolve())))
+            continue
         try:
             r = bind_repo(b, worktree_root)
             outcomes.append(BindOutcome(

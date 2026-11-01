@@ -10,7 +10,7 @@ import httpx
 
 from core import hive_workspace as hw
 
-ADMISSION = {"saturated": False, "work_orders": True, "fixed_reserved": True}
+ADMISSION = {"saturated": False, "work_orders": True, "fixed_reserved": True, "zero_touch": True}
 
 
 def order_for(body: dict) -> dict:

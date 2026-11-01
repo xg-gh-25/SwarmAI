@@ -83,7 +83,7 @@ _AGENT_IRREVERSIBLE = {"task.dispatch", "run.accept", "run.return_land",
                        "run.discard",
                        # the dispatching agent's own answer to a wait it answers for (design
                        # 2026-10-31-hive-approvals): the Hive takes it only for those classes
-                       "ask.answer_host"}
+                       "ask.answer_host", "hive.start"}
 
 
 def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
@@ -248,6 +248,7 @@ _CLI_ARGS = {
     "card": ["so_0123456789ab", "req1"],
     "answer": ["so_0123456789ab", "req1", "--pick", "A", "--why", "w"],
     "escalate": ["so_0123456789ab", "req1", "--why", "w"],
+    "start-hive": ["--hive", "h1"],
     "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
     "stop": ["so_0123456789ab", "--why", "w"],
     "return-prepare": ["so_0123456789ab", "--why", "w", "--url", "https://x/y.git"],
@@ -264,8 +265,15 @@ def test_cli_calls_only_owner_agent_ops(monkeypatch):
     sub = next(a for a in cli._parser()._actions if a.dest == "cmd")
     assert set(sub.choices) == set(_CLI_ARGS), "a new CLI subcommand: add it here"
     calls: list = []
+    fetched: list = []
     monkeypatch.setenv("SWARM_APP_SESSION_ID", "s-abc123")
-    monkeypatch.setattr(cli, "_fetch", lambda path: {"hives": [{"id": "inst1", "name": "h1"}]})
+    monkeypatch.setattr(cli, "UPDATE_EVERY_S", 0)
+    # /fleet: h1 takes this Host's runs once updated (capable) and is not running now,
+    # so start-hive may start it; /hives: it runs again after the update
+    monkeypatch.setattr(cli, "_fetch", lambda path: fetched.append(path) or {
+        "hives": [{"id": "inst1", "name": "h1", "open_runs": 0, "capable": True,
+                   "status": "stopped" if path == "/fleet" else "running"}],
+        "runs": [{"dispatch_id": "so_0123456789ab", "hive_id": "inst1", "session_id": "s1"}], "asks": []})
     monkeypatch.setattr(cli, "_call", lambda method, path, *a, api="swarm-out", **k:
                         calls.append((method, f"/api/{api}{path}")) or 0)
     for name, args in _CLI_ARGS.items():

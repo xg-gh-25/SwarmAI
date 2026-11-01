@@ -11,7 +11,7 @@ module holds both sides so they share one whitelist and one digest:
   sees the same units (and the same ``unit_id`` values) as on the host; every
   file of ``3-gates/`` and of each domain skill under ``4-capabilities/`` (byte caches
   and archives excluded). The General Brain is ``Knowledge/Library``: its ``**/*.md``
-  plus its definition and source check. Private context, ``.artifacts/``, code graphs,
+  plus its definition. Private context, ``.artifacts/``, code graphs,
   binary assets and anything a secret-name rule matches never travel.
 - **The digest** (``content_digest``): sha256 over the sorted (path, sha256(bytes))
   pairs, so the same content always has the same digest, however it is packed, and a
@@ -60,6 +60,9 @@ TOP_FILES = frozenset({"AGENTS.md", "SYSTEM_PROMPT.md", "CONTEXT.md", "REFRESHER
                        "project-agent.yaml", "bindings.yaml",
                        "aim.json", ".project.json"})
 GENERAL_FILES = frozenset({"project-agent.yaml"})
+#: files an older host shipped that a Brain install removes (the retired confirmation's
+#: source check)
+RETIRED_FILES = (".project-agent-check.json",)
 _SKIP_PARTS = frozenset({"__pycache__", ".git", "node_modules", ".DS_Store"})
 _SKIP_SUFFIXES = (".pyc", ".pyo", ".lock", ".tmp")
 
@@ -397,6 +400,8 @@ def install(workspace: Path, brain: str, files: dict[str, bytes], digest: str) -
         for rel in _walk(root, general):
             if rel not in files:
                 _remove(root_fd, rel)
+        for rel in RETIRED_FILES:          # no longer shipped, so _walk no longer sees it
+            _remove(root_fd, rel)
         from core.project_agent import revision
         record = {"digest": digest, "revision": revision(root),
                   "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
