@@ -134,10 +134,24 @@ export interface PipelineRunSummary {
   billedTokens: number | null;
   costUsd: number | null;
   humanDecisions: number | null;
+  /** how often a person stepped in, by kind (core/run_interventions); null when the
+   *  chat store could not be read (total unknown) or an older daemon */
+  interventions: RunInterventions | null;
   landing: string | null;
   notLandedReason: string | null;
   rework: number | null;
   audit: { dim: string; verdict: string; detail: string }[];
+}
+
+/** Answers, corrections (messages into its session while it ran) and rescues (a
+ *  person's landing); total null when the corrections are unknown. */
+export interface RunInterventions { answers: number; corrections: number | null; rescues: number; total: number | null }
+
+function interventionsOf(v: unknown): RunInterventions | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.answers !== 'number' || typeof o.rescues !== 'number') return null;
+  return { answers: o.answers, rescues: o.rescues, corrections: num(o.corrections), total: num(o.total) };
 }
 
 export interface PipelineProjectGroup {
@@ -221,7 +235,7 @@ export function landedAsOf(value: unknown): Record<string, string> | null {
   return Object.keys(out).length ? out : null;
 }
 
-function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
+export function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
   return {
     id: r.id as string,
     requirement: (r.requirement as string) ?? '',
@@ -245,6 +259,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     billedTokens: num(r.billed_tokens),
     costUsd: num(r.cost_usd),
     humanDecisions: num(r.human_decisions),
+    interventions: interventionsOf(r.interventions),
     landing: typeof r.landing === 'string' ? r.landing : null,
     notLandedReason: typeof r.not_landed_reason === 'string' ? r.not_landed_reason : null,
     rework: num(r.rework),
@@ -362,35 +377,94 @@ export const pipelinesService = {
   async fetchRunDetail(runId: string): Promise<PipelineRunDetail | null> {
     try {
       const { data } = await api.get<Record<string, unknown>>(`/pipelines/${runId}`);
-      if (!data || !data.id) return null;
-      return {
-        id: data.id as string,
-        project: (data.project as string) ?? '',
-        requirement: (data.requirement as string) ?? '',
-        status: (data.status as string) ?? '',
-        profile: (data.profile as string) ?? '',
-        cycleTimeMin: (data.cycle_time_min as number | null) ?? null,
-        reportMd: (data.report_md as string) ?? '',
-        reportPath: (data.report_path as string | null) ?? null,
-        reflectLessons: (data.reflect_lessons as string[]) ?? [],
-        commits: ((data.commits as Record<string, unknown>[]) ?? []).map((c) => ({
-          repo: (c.repo as string) ?? '',
-          sha: (c.sha as string) ?? '',
-          files: (c.files as string[]) ?? [],
-        })),
-        checkpointReason: (data.checkpoint_reason as string | null) ?? null,
-        pauseKind: (data.pause_kind as PipelinePauseKind) ?? null,
-        decision: decisionToCamel(data.decision),
-        ownerSessionId: (data.owner_session_id as string | null) ?? null,
-        needsYou: data.needs_you === true,
-        landedAs: landedAsOf(data.landed_as),
-        continuePrompt: (data.continue_prompt as string) ?? '',
-        createdAt: (data.created_at as string) ?? '',
-        updatedAt: (data.updated_at as string) ?? '',
-        auditCard: (data.audit_card as string | null) ?? null,
-      };
+      return detailToCamel(data);
     } catch {
       return null;
     }
   },
+
+  /** Everything a local run's big card shows (GET /pipelines/{id}/view). Throws on a
+   *  failed read (the card says so and offers a retry); null for a run that is gone. */
+  async fetchRunView(runId: string): Promise<PipelineRunView | null> {
+    try {
+      const { data } = await api.get<Record<string, unknown>>(`/pipelines/${runId}/view`);
+      const detail = detailToCamel(data?.detail);
+      if (!data || !detail || !data.summary) return null;
+      const iv = data.interventions as Record<string, unknown> | null;
+      const list = (v: unknown) => (Array.isArray(v) ? v as Record<string, unknown>[] : []);
+      return {
+        summary: runSummaryToCamel(data.summary as Record<string, unknown>),
+        detail,
+        stages: list(data.stages).map((x) => ({ name: String(x.name ?? ''), status: typeof x.status === 'string' ? x.status : null,
+          attempts: num(x.attempts) })),
+        interventions: iv ? {
+          answers: list(iv.answers).map((a) => ({ at: typeof a.at === 'string' ? a.at : null, optionId: typeof a.option_id === 'string' ? a.option_id : null,
+            question: typeof a.question === 'string' ? a.question : null })),
+          corrections: Array.isArray(iv.corrections) ? list(iv.corrections).map((c) => ({ at: String(c.at ?? ''), text: String(c.text ?? '') })) : null,
+          rescues: list(iv.rescues).map((x) => ({ at: typeof x.at === 'string' ? x.at : null, kind: String(x.kind ?? '') })),
+        } : null,
+        acceptance: list(data.acceptance).map((a) => ({ id: String(a.id ?? ''), text: String(a.text ?? '') })),
+        actions: list(data.actions).filter((a) => typeof a.key === 'string')
+          .map((a) => ({ key: a.key as PipelineCommand, primary: a.primary === true })),
+      };
+    } catch (e) {
+      if ((e as { response?: { status?: number } })?.response?.status === 404) return null;
+      throw e;
+    }
+  },
+
+  /** A person says an abandoned run's change is on main as these commits (repo ->
+   *  commit). Throws on a refusal (409: the engine says what it found). */
+  async confirmLanded(runId: string, commits: Record<string, string>): Promise<Record<string, string>> {
+    const { data } = await api.post<Record<string, unknown>>(`/pipelines/${runId}/confirm-landed`, { commits });
+    return landedAsOf(data?.landed_as) ?? {};
+  },
 };
+
+/** A command a local run's state offers (backend routers/pipelines.run_actions). */
+export type PipelineCommand = 'answer' | 'resume' | 'continue' | 'confirm_landed' | 'cancel' | 'open_session';
+
+export interface PipelineRunView {
+  summary: PipelineRunSummary;
+  detail: PipelineRunDetail;
+  stages: { name: string; status: string | null; attempts: number | null }[];
+  /** each time a person stepped in; corrections null when the chat store was unreadable */
+  interventions: {
+    answers: { at: string | null; optionId: string | null; question: string | null }[];
+    corrections: { at: string; text: string }[] | null;
+    rescues: { at: string | null; kind: string }[];
+  } | null;
+  acceptance: { id: string; text: string }[];
+  actions: { key: PipelineCommand; primary: boolean }[];
+}
+
+function detailToCamel(raw: unknown): PipelineRunDetail | null {
+  const data = raw as Record<string, unknown> | null | undefined;
+  if (!data || !data.id) return null;
+  return {
+    id: data.id as string,
+    project: (data.project as string) ?? '',
+    requirement: (data.requirement as string) ?? '',
+    status: (data.status as string) ?? '',
+    profile: (data.profile as string) ?? '',
+    cycleTimeMin: (data.cycle_time_min as number | null) ?? null,
+    reportMd: (data.report_md as string) ?? '',
+    reportPath: (data.report_path as string | null) ?? null,
+    reflectLessons: (data.reflect_lessons as string[]) ?? [],
+    commits: ((data.commits as Record<string, unknown>[]) ?? []).map((c) => ({
+      repo: (c.repo as string) ?? '',
+      sha: (c.sha as string) ?? '',
+      files: (c.files as string[]) ?? [],
+    })),
+    checkpointReason: (data.checkpoint_reason as string | null) ?? null,
+    pauseKind: (data.pause_kind as PipelinePauseKind) ?? null,
+    decision: decisionToCamel(data.decision),
+    ownerSessionId: (data.owner_session_id as string | null) ?? null,
+    needsYou: data.needs_you === true,
+    landedAs: landedAsOf(data.landed_as),
+    continuePrompt: (data.continue_prompt as string) ?? '',
+    createdAt: (data.created_at as string) ?? '',
+    updatedAt: (data.updated_at as string) ?? '',
+    auditCard: (data.audit_card as string | null) ?? null,
+  };
+}

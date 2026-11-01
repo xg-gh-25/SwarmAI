@@ -3,21 +3,13 @@
  * Properties: counts come from the detail as-is; a Brain holds knowledge only, so
  * its needs-you queue, the Hub's queue, its count and its card signal hold the Brain's
  * own waiting items (escalations, jobs, repositories) and never a Run (design
- * 2026-11-01-brain-eval-and-runs §2.1); a local Run's tone (LocalRunCard).
+ * 2026-11-01-brain-eval-and-runs §2.1).
  */
 import { describe, it, expect } from 'vitest';
 import type { BrainDetail } from '../../services/ddd';
-import type { PipelineRunSummary } from '../../services/pipelines';
 import { sectionCounts, needsYouItems, needsCount, hubSummary, hubNeeds, brainSignal, brainPending } from './brainMapModel';
-import { runTone } from './LocalRunCard';
 import type { GeneralBrain } from '../../services/ddd';
 
-const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
-  id: 'run_a', requirement: 'Fix it', status: 'completed', profile: 'bugfix', progress: '8/8',
-  cycleTimeMin: 20, tokensActual: 1000, createdAt: '', updatedAt: '2026-10-20T00:00:00Z',
-  pauseKind: null, needsYou: false, landedAs: null, checkpointReason: null, ownerSessionId: null,
-  notLanded: false, reportPath: null, auditCard: null, ...o,
-});
 const detail = {
   name: 'P', kind: 'knowledge',
   sections: [
@@ -35,17 +27,6 @@ describe('brainMapModel', () => {
     expect(c.delivery).toBe('1 file');
     expect(c.identity).toBe('--');
     expect(sectionCounts(null).knowledge).toBe('--');
-  });
-
-  it('runTone: needs-you wins, a completion that did not land is not "landed"', () => {
-    expect(runTone(run({ status: 'running', needsYou: true }))).toBe('needs');
-    expect(runTone(run({ status: 'running' }))).toBe('running');
-    expect(runTone(run({ status: 'completed' }))).toBe('landed');
-    expect(runTone(run({ status: 'completed', notLanded: true }))).toBe('failed');
-    // abandoned, but its change is on main all the same (backend landed_as)
-    expect(runTone(run({ status: 'abandoned', landedAs: { repo: 'a'.repeat(40) } }))).toBe('landed');
-    expect(runTone(run({ status: 'abandoned' }))).toBe('failed');
-    expect(runTone(run({ status: 'paused' }))).toBe('stopped');
   });
 
   it('needsYouItems: the Brain\'s own waiting items, one counted row per kind; a waiting Run is not one', () => {

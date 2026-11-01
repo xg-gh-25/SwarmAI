@@ -1,52 +1,49 @@
 /**
- * PipelineOverlay — the WORK-zone "Pipeline" retro-analytics dashboard. A
- * structural mirror of JobsRunsOverlay (fullscreen Modal + fetch-once + absolute
- * detail drawer), but RETROSPECTIVE, not live: chat is the natural real-time
- * surface for a running pipeline (XG, run_f8494370), so this card gives the
- * system + human an OVERALL cognition of every pipeline run — health, cycle-time,
- * mode, measured tokens, by project/DDD, plus trends — and lets you resume
- * an aborted/paused run.
+ * PipelineOverlay — every pipeline run, wherever it ran (design
+ * docs/design/2026-11-01-brain-eval-and-runs.md §4): this machine's runs and the Hive
+ * runs Swarm Out dispatched that ran a pipeline (a Hive's native runs stay in Swarm Out).
  *
- * Opens on `swarm:show-pipeline` (via useExclusiveOverlay → single-overlay mux +
- * back-to-chat). ONE screen shows BOTH the global summary + trend AND the
- * by-project grouping (XG: 全局 + by project 都得一眼看到). Click a run → an
- * absolute right-side detail drawer (z-10, not a flex sibling, so the roster never
- * compresses) that fetches GET /api/pipelines/{run_id} → REPORT retro + reflect
- * lessons + related commits.
+ * Two tabs under one filter row (everywhere / this machine / Hive, and a Brain made
+ * from the rows, with counts; switching tabs keeps it):
+ * - **Runs** (default): Swarm Out's list. Waiting for you (to answer > to confirm or
+ *   accept > stopped, the longest waiting first) always on top, Running, Done (folded,
+ *   paged). A row: status dot, title, where it ran (this machine or the Hive's name, in
+ *   the distribution chart's colours), Brain, profile, the one autonomy word, what it
+ *   asks of you, how long it waited, and Open session. The tab's label carries the
+ *   waiting count; no row of totals (a number never shows twice).
+ * - **Metrics**: PipelineMetrics (the run distribution and five measures with their
+ *   drill-down charts).
+ * A click on a row opens its big card: a local run the new shell (PipelineRunCard,
+ * GET /pipelines/{id}/view, its commands from the backend), a Hive run Swarm Out's card
+ * (RunOverlay, with its asks). J / K in a card walk the runs waiting for you there.
  *
- * NO LIVE POLLING — fetches the analytics payload ONCE on open (it is a retro
- * surface; a running pipeline's live state lives in its chat tab). One trend
- * window: the last 30 days (runs idle longer carry no meaning, Gawan 2026-10-23).
+ * Data: the 30-day analytics (one cached overlay query: this machine's runs) and Swarm
+ * Out's runs (polled every 30 s while open, as Swarm Out reads them). Writes go through
+ * the run's own routes; a run only moves when its session drives it, so answering,
+ * resuming and continuing open the owner session with a continue prompt
+ * (docs/design/pipeline-v1-human-loop.md). Local state only (never MessageStore).
  *
- * WRITES use protocol-aware backend endpoints: Resume appends a v1 ``resume``
- * event, a decision click appends the run's ``human_answer``, and Cancel appends v1
- * ``abandon``. A run only moves when its session drives it, so Resume / Continue /
- * answering open the owner session with a "continue" prompt in its composer
- * (docs/design/pipeline-v1-human-loop.md).
- *
- * Local state ONLY — never MessageStore / active-tab mutation (OT01 safety).
- *
- * @exports PipelineOverlay
+ * @exports PipelineContent, PipelineContentProps
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
-import i18n from 'i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
-import api, { classifyLoadError } from '../../services/api';
-import {
-  pipelinesService,
-  type PipelineAnalytics,
-  type PipelineProjectGroup,
-  type PipelineRunSummary,
-  type PipelineRunDetail,
-  type PipelinePauseKind,
-} from '../../services/pipelines';
-import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
-import { Stat as StatCard, SectionLabel, StatusBadge, type Tone } from '../overlay';
+import { classifyLoadError } from '../../services/api';
+import type { PipelineAnalytics } from '../../services/pipelines';
+import type { SwarmOutRun } from '../../services/swarmOut';
+import { Tabs } from '../overlay';
 import { OverlayError } from './OverlayState';
 import { takeOverlayTarget } from '../../utils/overlayTarget';
+import { useRuns } from '../swarm-out/live';
+import { Dot } from '../swarm-out/LiveDispatches';
+import { RunOverlay } from '../swarm-out/RunOverlay';
+import { useOpenRun } from '../swarm-out/openSession';
+import { ago } from '../swarm-out/runReview';
+import { TONE_VAR, type Tone } from '../swarm-out/tone';
+import { PipelineRunCard } from './PipelineRunCard';
+import { PipelineMetrics } from './PipelineMetrics';
+import { allRows, autonomyOf, brainChips, filterRows, sections, type PipelineRow, type RowFilter } from './pipelineRows';
 
 export interface PipelineContentProps {
   /** Hand a prompt to a chat tab (land+activate a tab, THEN inject). Returns true
@@ -60,669 +57,193 @@ export interface PipelineContentProps {
   onContinue?: (sessionId: string, prompt: string) => Promise<boolean>;
 }
 
-/** The one analytics window (backend run_index.RUN_WINDOW_DAYS). */
-type Window = '30d';
-
-function fmtCycle(min: number | null): string {
-  if (min == null) return '—';
-  if (min < 60) return `${min}m`;
-  return `${(min / 60).toFixed(1)}h`;
-}
-
-function fmtTokens(n: number | null): string {
-  if (n === null || n <= 0) return '—';      // never measured: unknown, not zero
-  if (n >= 1000) return `${(n / 1000).toFixed(0)}k`;
-  return String(n);
-}
-
-/** Only a stopped run (Stop / closed tab) or one whose worktree failed can Resume:
- *  a run waiting for a decision is answered, an idle one is continued. */
-function isResumable(pauseKind: PipelinePauseKind): boolean {
-  return pauseKind === 'stopped' || pauseKind === 'worktree';
-}
-
-/** Runs the user has to act on (the pinned region and the focus filter): the
- *  backend's one definition, so the count and the rows always agree. */
-function needsYou(r: { needsYou: boolean }): boolean {
-  return r.needsYou;
-}
-
-/** The "continue" prompt put in the owner session's composer: the backend's text
- *  (it names the pipeline command), with the user's answer in front. */
-function continuePrompt(base: string, answered?: string): string {
-  return answered ? `${answered} ${base}` : base;
-}
-
-/** What the drawer says about a run that needs the user (i18n keys). */
-const PAUSE_NOTE: Partial<Record<NonNullable<PipelinePauseKind>, string>> = {
-  stopped: 'ui.PipelineOverlay.noteStopped',
-  worktree: 'ui.PipelineOverlay.noteWorktree',
-  idle: 'ui.PipelineOverlay.noteIdle',
+const muted = 'text-[var(--color-text-muted)]';
+const WHERE_FILL = { local: 'var(--viz-1)', hive: 'var(--viz-2)' } as const;
+const DONE_PAGE = 20;
+const STAGE_TONE: Record<PipelineRow['stage'], Tone> = {
+  needs_answer: 'attention', awaiting: 'attention', stopped: 'error', running: 'busy', done: 'unknown',
 };
 
-/** Open a run's REPORT.md in Canvas. Mirrors the swarmws overlay precedent
- *  (overlaySurfaces.tsx): close the overlay FIRST (so Canvas isn't rendered under
- *  the host, z-index), THEN dispatch swarm:open-file with the workspace-relative
- *  path — useCanvasHost resolves it via /workspace/file/resolve and renders it.
- *  NOTE: no double-rAF here (that's only for chat-inject, which must wait for a tab
- *  to activate); open-file is a synchronous document event. */
-function openReportInCanvas(reportPath: string, close: () => void) {
-  close();
-  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: reportPath } }));
+function rowTone(r: PipelineRow): Tone {
+  if (r.stage !== 'done') return STAGE_TONE[r.stage];
+  return r.outcome === 'landed' || r.outcome === 'manual' ? 'ok' : r.outcome === 'discarded' ? 'unknown' : 'error';
+}
+
+const TAG_STYLE = {
+  answer: { background: TONE_VAR.attention, color: 'var(--color-bg)' },
+  soft: { color: TONE_VAR.attention, background: `color-mix(in srgb, ${TONE_VAR.attention} 13%, transparent)` },
+  stopped: { color: TONE_VAR.error, background: `color-mix(in srgb, ${TONE_VAR.error} 13%, transparent)` },
+} as const;
+
+function HiveOpen({ r }: { r: SwarmOutRun }) {
+  const { t } = useTranslation();
+  const open = useOpenRun(r);
+  if (!open) return null;
+  return (
+    <button type="button" className="btn-sm btn-ghost whitespace-nowrap" data-testid="pipeline-row-open"
+      onClick={(e) => { e.stopPropagation(); open(); }}>{t('swarmOut.review.cmd.open.name')} ↗</button>
+  );
+}
+
+function Row({ r, now, onOpen, onOpenSession }: {
+  r: PipelineRow; now: number; onOpen: () => void; onOpenSession: (r: PipelineRow) => void;
+}) {
+  const { t } = useTranslation();
+  const word = autonomyOf(r);
+  const tone = rowTone(r);
+  const where = r.where === 'local' ? t('ui.PipelineOverlay.local') : r.hive ?? 'Hive';
+  return (
+    <div role="button" tabIndex={0} onClick={onOpen} aria-label={r.title}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
+      className="grid items-center gap-2.5 px-2.5 py-[7px] rounded-lg hover:bg-[var(--color-hover)] cursor-pointer min-w-0"
+      style={{ gridTemplateColumns: '10px minmax(0,1fr) auto auto auto 44px' }}
+      data-testid={`pipeline-run-${r.key}`} data-stage={r.stage} data-where={r.where}>
+      <Dot tone={tone} className={tone === 'busy' ? 'swarm-out-icon--busy' : ''} />
+      <div className="min-w-0">
+        <div className="text-body truncate" title={r.title}>{r.title}</div>
+        <div className={`text-meta truncate ${muted}`}>
+          <span data-testid="pipeline-row-where" style={{ color: WHERE_FILL[r.where] }}>{where}</span>
+          {[r.brain, r.profile, r.runId].filter(Boolean).map((x) => ` · ${x}`).join('')}
+        </div>
+      </div>
+      {word ? <span className="text-meta px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" data-testid="pipeline-row-autonomy"
+        style={{ color: word.full ? TONE_VAR.ok : TONE_VAR.attention, borderColor: `color-mix(in srgb, ${word.full ? TONE_VAR.ok : TONE_VAR.attention} 45%, var(--color-border))` }}>
+        {word.full ? t('swarmOut.review.autonomy.full') : t('swarmOut.review.autonomy.steppedIn', { count: word.n })}</span> : <span />}
+      {r.task ? <span className="text-small px-[9px] py-[2px] rounded-md whitespace-nowrap font-semibold" data-testid="pipeline-row-tag"
+        style={r.task === 'answer' ? TAG_STYLE.answer : r.task === 'stopped' || r.task === 'resume' ? TAG_STYLE.stopped : TAG_STYLE.soft}>
+        {t(`ui.PipelineOverlay.task_${r.task}`)}</span>
+        : <span className={`text-small ${muted}`}>{t(`ui.PipelineOverlay.outcome_${r.stage === 'running' ? 'running' : r.outcome}`)}</span>}
+      <span className="flex items-center">
+        {r.where === 'hive' && r.hive_run ? <HiveOpen r={r.hive_run} />
+          : r.ownerSessionId ? <button type="button" className="btn-sm btn-ghost whitespace-nowrap" data-testid="pipeline-row-open"
+            onClick={(e) => { e.stopPropagation(); onOpenSession(r); }}>{t('swarmOut.review.cmd.open.name')} ↗</button> : null}
+      </span>
+      <span className={`text-meta text-right tabular-nums ${muted}`}>{ago(r.since, now)}</span>
+    </div>
+  );
 }
 
 export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   const { t } = useTranslation();
-  const window: Window = '30d';
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  // "Running now" = live active runs (NOT window-filtered analytics — a long run
-  // created before the window would be missed, and analytics doesn't strip zombies).
-  // fetchActivePipelines hits /pipelines?active=true, which excludes terminal
-  // zombies stage-based (Gate-1 #2). null until loaded.
-  // A (needs-you focus): clicking the "Needs you" stat收窄 the whole view to just
-  // needs-you runs. When true, the常驻 top Needs-you区 hides (it would double-show)
-  // and the by-project groups are filtered to needs-you rows only.
-  const [needsYouFocus, setNeedsYouFocus] = useState(false);
-
-  // Analytics (per window) + the running count, through the shared overlay queries
-  // (overlayQueries): a reopen inside the freshness window or after a nav hover shows
-  // the cached view at once. NO polling — retro surface.
   const qc = useQueryClient();
-  const analyticsQ = overlayQuery.pipelineAnalytics(window);
+  const analyticsQ = overlayQuery.pipelineAnalytics('30d');
   const aQuery = useQuery(analyticsQ);
   const analytics: PipelineAnalytics | null = aQuery.data ?? null;
-  const loading = aQuery.isFetching;
   const loadErr: unknown = aQuery.isError && !aQuery.data ? aQuery.error : null;
-  const rQuery = useQuery(overlayQuery.pipelineRunning());
-  const runningNow: number | null = rQuery.data ?? null;   // read fail → shows —
-  const setAnalytics = useCallback(
-    (a: PipelineAnalytics) => qc.setQueryData(analyticsQ.queryKey, a),
+  const hive = useRuns(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(id); }, []);
+
+  const [tab, setTab] = useState<'runs' | 'metrics'>('runs');
+  const [filter, setFilter] = useState<RowFilter>({ where: 'all', brain: null });
+  const [donePage, setDonePage] = useState(0);
+  const [showDone, setShowDone] = useState(false);
+  const [open, setOpen] = useState<{ key: string; order: string[] } | null>(null);
+
+  const rows = useMemo(() => allRows(analytics?.byProject, hive.data?.runs, hive.data?.asks ?? []),
+    [analytics, hive.data]);
+  const shown = useMemo(() => filterRows(rows, filter), [rows, filter]);
+  const chips = useMemo(() => brainChips(filterRows(rows, { ...filter, brain: null })), [rows, filter]);
+  const s = useMemo(() => sections(shown), [shown]);
+  const reload = useCallback(() => { void qc.invalidateQueries({ queryKey: analyticsQ.queryKey }); hive.reload(); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qc, window],
-  );
-  const retry = useCallback(() => { void aQuery.refetch(); void rQuery.refetch(); }, [aQuery, rQuery]);
+    [qc, hive.reload]);
 
-  // Open the detail drawer → fetch that run's retrospective.
-  const openRun = useCallback((runId: string) => {
-    setSelectedRunId(runId);
-    setDetail(null);
-    setDetailLoading(true);
-    void pipelinesService.fetchRunDetail(runId).then((d) => {
-      setDetail(d);
-      setDetailLoading(false);
-    });
-  }, []);
+  const openKey = useCallback((key: string) => {
+    const row = rows.find((r) => r.key === key || r.runId === key);
+    if (!row) return;
+    setOpen({ key: row.key, order: s.you.filter((r) => r.where === row.where).map((r) => r.key) });
+  }, [rows, s.you]);
 
-  // Hand the run to its session: open it with a continue prompt, close the overlay.
-  // False → the drawer says where to continue instead (no tab could be opened).
-  const continueRun = useCallback(async (run: PipelineRunDetail, owner: string | null,
-                                         answered?: string): Promise<boolean> => {
-    const sessionId = owner ?? run.ownerSessionId;
-    if (!sessionId || !onContinue) return false;
-    const landed = await onContinue(sessionId, continuePrompt(run.continuePrompt, answered));
-    if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
-    return landed;
+  // opened AT a run (Brain Hub, Need You): its card, once the rows have it
+  const [target] = useState(() => takeOverlayTarget('pipeline'));
+  useEffect(() => { if (target && rows.length && !open) openKey(target); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [target, rows.length]);
+
+  const openSession = useCallback(async (r: PipelineRow) => {
+    if (r.ownerSessionId && onContinue && await onContinue(r.ownerSessionId, '')) close();
   }, [onContinue, close]);
 
-  // Opened AT a Run (Brain Hub's "Answer"): show that Run's drawer, with its question.
-  useEffect(() => {
-    const id = takeOverlayTarget('pipeline');
-    if (id) openRun(id);
-  }, [openRun]);
-
-  const refreshDetail = useCallback(async (runId: string) => {
-    const [a, d] = await Promise.all([pipelinesService.fetchAnalytics(window),
-                                      pipelinesService.fetchRunDetail(runId)]);
-    setAnalytics(a);
-    setDetail(d);
-  }, [window, setAnalytics]);
-
-  /** 'continued' (owner session opened), 'done' (state changed, open its chat
-   *  yourself) or 'failed' (the run's state changed under us). */
-  const handleResume = useCallback(async (run: PipelineRunDetail): Promise<ActionOutcome> => {
-    let owner: string | null;
-    try {
-      ({ ownerSessionId: owner } = await pipelinesService.resumeRun(run.id));
-    } catch {
-      return 'failed';
-    }
-    if (await continueRun(run, owner)) return 'continued';
-    await refreshDetail(run.id);
-    return 'done';
-  }, [continueRun, refreshDetail]);
-
-  const handleAnswer = useCallback(async (run: PipelineRunDetail, optionId: string): Promise<ActionOutcome> => {
-    const decision = run.decision;
-    if (!decision) return 'failed';
-    let owner: string | null;
-    try {
-      ({ ownerSessionId: owner } = await pipelinesService.answerDecision(
-        run.id, decision.requestId, optionId));
-    } catch {
-      await refreshDetail(run.id);
-      return 'failed';
-    }
-    const choice = decision.options.find((o) => o.id === optionId)?.choice ?? optionId;
-    const answered = `I answered decision ${decision.requestId} on the dashboard: ${optionId} — ${choice}.`;
-    if (await continueRun(run, owner, answered)) return 'continued';
-    await refreshDetail(run.id);
-    return 'done';
-  }, [continueRun, refreshDetail]);
-
-  const handleContinue = useCallback(async (run: PipelineRunDetail): Promise<ActionOutcome> => (
-    (await continueRun(run, null)) ? 'continued' : 'done'
-  ), [continueRun]);
-
-  const handleCancel = useCallback(async (runId: string): Promise<boolean> => {
-    try {
-      await api.patch(`/pipelines/${runId}/cancel`);
-      // reflect locally: re-fetch analytics for the current window. (A window
-      // toggle mid-flight self-heals — the window effect re-fetches on toggle and
-      // cancel is a rare terminal action; not worth a ref-based guard here.)
-      const a = await pipelinesService.fetchAnalytics(window);
-      setAnalytics(a);
-      setSelectedRunId(null);
-      setDetail(null);
-      return true;
-    } catch {
-      // B7: was a silent no-op — user clicked Cancel, PATCH failed, nothing
-      // happened. Return false so the drawer can surface the failure.
-      return false;
-    }
-  }, [window, setAnalytics]);
-
-  const o = analytics?.overall;
+  const openRow = open ? rows.find((r) => r.key === open.key) : undefined;
+  const section = (key: string, title: string, n: number, accent?: string) => (
+    <div className="flex items-baseline gap-2 mt-4 mb-1.5" data-testid={`pipeline-section-${key}`}>
+      <h3 className="m-0 text-body font-semibold" style={accent ? { color: accent } : undefined}>{title}</h3>
+      <span className={`text-small tabular-nums ${muted}`}>{n}</span>
+    </div>
+  );
+  const row = (r: PipelineRow) => <Row key={r.key} r={r} now={now} onOpen={() => openKey(r.key)} onOpenSession={openSession} />;
+  const doneShown = s.done.slice(0, (donePage + 1) * DONE_PAGE);
+  const segment = (key: RowFilter['where'], label: string) => (
+    <button key={key} type="button" role="radio" aria-checked={filter.where === key} onClick={() => setFilter((f) => ({ ...f, where: key, brain: null }))}
+      data-testid={`pipeline-where-${key}`}
+      className={`px-2.5 h-7 rounded-md text-small ${filter.where === key ? 'font-semibold text-[var(--color-text)] bg-[color-mix(in_srgb,var(--color-text)_8%,transparent)]' : muted}`}>{label}</button>
+  );
 
   return (
     <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pipeline-overlay">
-        {/* Sub-header: the one window, stated (shared WorkbenchToolbar). */}
-        <WorkbenchToolbar
-          loading={loading}
-          left={
-            <span className="text-small text-[var(--color-text-muted)]">
-              {/* One window: runs idle for over 30 days carry no meaning (run_index). */}
-              {t('ui.PipelineOverlay.window')}
-            </span>
-          }
-        />
-
-        {/* Body: scrollable — overall strip + trend + by-project groups (one screen) */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4">
-          {/* Overall summary strip */}
-          {o && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" data-testid="pipeline-overall">
-              <Stat label={t('ui.PipelineOverlay.statRuns')} value={String(o.totalRuns)} />
-              <Stat label={t('ui.PipelineOverlay.statCompletion')} value={o.totalRuns ? `${Math.round(o.completionRate * 100)}%` : '—'} />
-              <Stat label={t('ui.PipelineOverlay.statAvgCycle')} value={fmtCycle(o.avgCycleMin)} />
-              <Stat label={t('ui.PipelineOverlay.statTokens')} value={fmtTokens(o.tokensActual)} />
-              {/* AC5(A): Needs you is a clickable FILTER — click → focus the view to
-                  just needs-you runs; click again to clear. */}
-              <Stat label={t('ui.PipelineOverlay.needsYou')} value={o.abortedCount > 0 ? String(o.abortedCount) : '0'}
-                    accent={o.abortedCount > 0}
-                    onClick={o.abortedCount > 0 ? () => setNeedsYouFocus((f) => !f) : undefined}
-                    active={needsYouFocus}
-                    testid="pipeline-needsyou-stat" />
-              {/* AC4: replaced the unreadable "Profiles g69 f109…" ciphertext with a
-                  useful live metric — how many pipelines are running RIGHT NOW
-                  (window-independent, zombie-excluded). */}
-              <Stat label={t('ui.PipelineOverlay.statRunningNow')} value={runningNow == null ? '—' : String(runningNow)} />
-            </div>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-[var(--color-border)]">
+        <Tabs value={tab} onChange={setTab} testid="pipeline-tabs" items={[
+          { key: 'runs', label: s.you.length ? t('ui.PipelineOverlay.tabRunsWaiting', { count: s.you.length }) : t('ui.PipelineOverlay.tabRuns'), testid: 'pipeline-tab-runs' },
+          { key: 'metrics', label: t('ui.PipelineOverlay.tabMetrics'), testid: 'pipeline-tab-metrics' },
+        ]} />
+        <span className={`text-small ${muted}`}>{t('ui.PipelineOverlay.window')}</span>
+        <div className="ml-auto flex flex-wrap items-center gap-2" data-testid="pipeline-filter">
+          <div role="radiogroup" aria-label={t('ui.PipelineOverlay.whereLabel')} className="inline-flex gap-0.5 rounded-lg p-[3px] bg-[color-mix(in_srgb,var(--color-text)_5%,transparent)]">
+            {segment('all', t('ui.PipelineOverlay.whereAll'))}{segment('local', t('ui.PipelineOverlay.local'))}{segment('hive', 'Hive')}
+          </div>
+          {chips.length > 1 && (
+            <select value={filter.brain ?? ''} onChange={(e) => setFilter((f) => ({ ...f, brain: e.target.value || null }))}
+              aria-label={t('ui.PipelineOverlay.brainFilter')} data-testid="pipeline-brain-filter"
+              className="h-7 rounded-md border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2 text-small">
+              <option value="">{t('ui.PipelineOverlay.brainAll')}</option>
+              {chips.map((c) => <option key={c.brain} value={c.brain}>{c.brain} ({c.count})</option>)}
+            </select>
           )}
-
-          {/* Trend sparkline (compact bars — throughput per week) */}
-          {analytics && analytics.trend.length > 0 && (
-            <div data-testid="pipeline-trend">
-              <div className="mb-1"><SectionLabel>{t('ui.PipelineOverlay.trend')}</SectionLabel></div>
-              <div className="flex items-end gap-1 h-12">
-                {analytics.trend.map((pt) => {
-                  const max = Math.max(...analytics.trend.map((x) => x.runs), 1);
-                  return (
-                    <div key={pt.week} className="flex-1 flex flex-col items-center justify-end" title={t('ui.PipelineOverlay.trendBar', { week: pt.week, runs: pt.runs, done: pt.completed })}>
-                      <div className="w-full rounded-t bg-primary/40" style={{ height: `${(pt.runs / max) * 100}%`, minHeight: 2 }} />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Fetch failure (B2) — distinct from "no runs", with Retry. */}
-          {!!loadErr && !loading && (
-            <OverlayError
-              testid="pipeline-load-error"
-              retryTestid="pipeline-load-retry"
-              message={classifyLoadError(loadErr, 'pipeline analytics')}
-              onRetry={retry}
-              className="mx-auto my-8 max-w-sm"
-            />
-          )}
-          {/* AC6(B): pinned cross-project "Needs you" region — the most-painful runs
-              (paused-decision + abandoned) surfaced at the TOP so the user never hunts
-              through project groups for them. Hidden while A-focus is active (the whole
-              list is already needs-you then — would double-show). */}
-          {analytics && !needsYouFocus && (() => {
-            const needy = analytics.byProject.flatMap((g) =>
-              g.runs
-                .filter(needsYou)
-                .map((r) => ({ run: r, project: g.project })));
-            if (needy.length === 0) return null;
-            return (
-              <div className="rounded-md border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]" data-testid="pipeline-needsyou-region">
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
-                  <span className="material-symbols-outlined icon-sm text-[var(--color-status-error)]">priority_high</span>
-                  <span className="text-body text-[var(--color-text)]">{t('ui.PipelineOverlay.needsYou')}</span>
-                  <span data-testid="pipeline-needsyou-count" className="text-meta tabular-nums text-[var(--color-status-error)]">{needy.length}</span>
-                </div>
-                <div>
-                  {needy.map(({ run, project }) => (
-                    <RunRow key={run.id} r={run} onOpenRun={openRun} close={close} showProject={project} />
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* By-project groups */}
-          {analytics && analytics.byProject.length === 0 && !loading && !loadErr && (
-            <div className="text-center py-10 text-body text-[var(--color-text-faint)]">
-              {t('ui.PipelineOverlay.empty')}
-            </div>
-          )}
-          {analytics?.byProject.map((g, idx) => (
-            <ProjectGroup key={g.project} group={g} onOpenRun={openRun} close={close}
-                          defaultExpanded={idx === 0} needsYouOnly={needsYouFocus} />
-          ))}
         </div>
-
-        {/* Detail drawer — absolute right overlay (roster never compresses) */}
-        {selectedRunId && (
-          <RunDetailDrawer
-            runId={selectedRunId}
-            detail={detail}
-            loading={detailLoading}
-            onClose={() => { setSelectedRunId(null); setDetail(null); }}
-            onResume={handleResume}
-            onAnswer={handleAnswer}
-            onContinue={handleContinue}
-            onCancel={handleCancel}
-            hostClose={close}
-          />
-        )}
-    </div>
-  );
-}
-
-function Stat({ label, value, sub, accent, onClick, active, testid }: {
-  label: string; value: string; sub?: string; accent?: boolean;
-  onClick?: () => void; active?: boolean; testid?: string;
-}) {
-  // One stat look across the nav overlays (components/overlay Stat). The Needs-you
-  // stat is also a filter: the card sits in a plain button, ringed while active.
-  const card = <StatCard label={label} value={value} hint={sub} tone={accent ? 'error' : undefined} />;
-  return onClick
-    ? <button type="button" onClick={onClick} data-testid={testid} aria-pressed={active}
-        className={`w-full text-left rounded-lg ${active ? 'ring-2 ring-[var(--color-status-error)]' : ''}`}>{card}</button>
-    : <div data-testid={testid}>{card}</div>;
-}
-
-/** Status → pill {label, dot color, text color}. "Needs you" is DERIVED, not a raw
- *  status: a v1 pause kind, or an abandoned run the backend says needs you (its
- *  ``needs_you``: not a user cancel, and its change did not land elsewhere); else the
- *  raw status. Kept consistent with statusDot's colors so the pill and any dot never
- *  disagree. */
-function statusPill(s: string, pauseKind: PipelinePauseKind, notLanded = false,
-  needsYou = true, landedAs: Record<string, string> | null = null): { label: string; tone: Tone } {
-  if (pauseKind === 'decision') return { label: i18n.t('ui.PipelineOverlay.pillDecision'), tone: 'error' };
-  if (pauseKind === 'stopped') return { label: i18n.t('ui.PipelineOverlay.pillStopped'), tone: 'warning' };
-  if (pauseKind === 'worktree') return { label: i18n.t('ui.PipelineOverlay.pillWorktree'), tone: 'warning' };
-  if (pauseKind === 'idle') return { label: i18n.t('ui.PipelineOverlay.pillIdle'), tone: 'warning' };
-  if (s === 'abandoned' && landedAs) return { label: i18n.t('ui.PipelineOverlay.pillLandedOutside'), tone: 'success' };
-  if (s === 'abandoned') return needsYou ? { label: i18n.t('ui.PipelineOverlay.pillNeedsYou'), tone: 'error' } : { label: i18n.t('ui.PipelineOverlay.pillAbandoned'), tone: 'neutral' };
-  // completed but its change is not on main (the pipeline gives no push verdict)
-  if (s === 'completed' && notLanded) return { label: i18n.t('ui.PipelineOverlay.pillNotLanded'), tone: 'warning' };
-  if (s === 'completed') return { label: i18n.t('ui.PipelineOverlay.pillCompleted'), tone: 'success' };
-  if (s === 'running') return { label: i18n.t('ui.PipelineOverlay.pillRunning'), tone: 'primary' };
-  if (s === 'paused') return { label: i18n.t('ui.PipelineOverlay.pillPaused'), tone: 'warning' };
-  return { label: s || i18n.t('ui.PipelineOverlay.pillUnknown'), tone: 'neutral' };
-}
-
-/** One run row — shared by the ProjectGroup roster AND the pinned Needs-you region.
- *  Status pill + requirement (hover title) + optional project tag + profile/cycle/token
- *  + a report button (only when reportPath exists) that opens REPORT.md in Canvas. */
-function RunRow({ r, onOpenRun, close, showProject }: {
-  r: PipelineRunSummary; onOpenRun: (id: string) => void; close: () => void; showProject?: string;
-}) {
-  const { t } = useTranslation();
-  const pill = statusPill(r.status, r.pauseKind, r.notLanded, r.needsYou, r.landedAs);
-  return (
-    <div
-      data-testid={`pipeline-run-${r.id}`}
-      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-hover)] transition-colors border-b border-[var(--color-border)] last:border-b-0"
-    >
-      {/* Status pill (dot + label) — replaces the bare color dot (AC2) */}
-      <span className="shrink-0 w-36"><StatusBadge tone={pill.tone}>{pill.label}</StatusBadge></span>
-      {/* Requirement — click opens the detail drawer; title shows the full text (AC7/D) */}
-      <button
-        type="button"
-        onClick={() => onOpenRun(r.id)}
-        title={r.requirement || r.id}
-        className="text-small text-[var(--color-text)] truncate flex-1 min-w-0 text-left"
-      >
-        {showProject && <span className="text-[var(--color-text-faint)]">{showProject} · </span>}
-        {r.requirement || r.id}
-      </button>
-      <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">{r.profile}</span>
-      {/* Run-time column (run_0e68e235): when this run last updated (= finish time
-          for a terminal run). Rows arrive newest-first from the backend
-          (summaries.sort updated_at reverse). Absolute stamp, no "N ago" (fmtTs). */}
-      <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-32 text-right whitespace-nowrap" title={r.updatedAt || r.createdAt}>{fmtTs(r.updatedAt || r.createdAt)}</span>
-      <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-12 text-right whitespace-nowrap">{fmtCycle(r.cycleTimeMin)}</span>
-      {/* wide enough for "2727k/165k": a narrower column overflowed onto the report icon */}
-      <span data-testid={`pipeline-run-tokens-${r.id}`} className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0 w-24 text-right whitespace-nowrap">
-        {fmtTokens(r.tokensActual)}
-      </span>
-      {/* Report button (AC2) — only when this run has a REPORT.md. Opens it in Canvas. */}
-      {r.reportPath ? (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); openReportInCanvas(r.reportPath as string, close); }}
-          data-testid={`pipeline-run-report-${r.id}`}
-          title={t('ui.PipelineOverlay.openReport')}
-          className="material-symbols-outlined icon-sm text-primary hover:text-primary/80 shrink-0"
-        >
-          description
-        </button>
-      ) : (
-        <span className="w-4 shrink-0" aria-hidden />
-      )}
-      {isResumable(r.pauseKind) && (
-        <span className="material-symbols-outlined icon-xs text-[var(--color-status-error)] shrink-0" title={t('ui.PipelineOverlay.resumable')}>play_circle</span>
-      )}
-    </div>
-  );
-}
-
-function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsYouOnly = false }: {
-  group: PipelineProjectGroup; onOpenRun: (id: string) => void; close: () => void;
-  defaultExpanded?: boolean; needsYouOnly?: boolean;
-}) {
-  // Only the first (most-active) group opens by default — with 750 runs in one
-  // project, all-expanded was a wall of buttons on open. The header shows the
-  // rollup; click to drill in. In needs-you focus, filter rows to needs-you only.
-  const rows = needsYouOnly
-    ? group.runs.filter(needsYou)
-    : group.runs;
-  // In focus mode, force-expand (the point is to SEE the needy runs) and drop
-  // groups that have none.
-  const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const isOpen = needsYouOnly ? true : expanded;
-  if (needsYouOnly && rows.length === 0) return null;
-  return (
-    <div className="rounded-md border border-[var(--color-border)]" data-testid={`pipeline-project-${group.project}`}>
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        disabled={needsYouOnly}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default"
-      >
-        <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">
-          {isOpen ? 'expand_more' : 'chevron_right'}
-        </span>
-        <span className="text-body text-[var(--color-text)]">{group.project}</span>
-        <span className="text-meta text-[var(--color-text-faint)] tabular-nums">
-          {t('ui.PipelineOverlay.groupSummary', { runs: group.runCount, rate: Math.round(group.completionRate * 100), avg: fmtCycle(group.avgCycleMin) })}
-        </span>
-        {group.abortedCount > 0 && (
-          <span className="text-meta tabular-nums text-[var(--color-status-error)]">· {t('ui.PipelineOverlay.groupNeedYou', { count: group.abortedCount })}</span>
-        )}
-      </button>
-      {isOpen && (
-        <div className="border-t border-[var(--color-border)]">
-          {rows.map((r) => (
-            <RunRow key={r.id} r={r} onOpenRun={onOpenRun} close={close} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-type ActionOutcome = 'continued' | 'done' | 'failed';
-
-function RunDetailDrawer({
-  runId, detail, loading, onClose, onResume, onAnswer, onContinue, onCancel, hostClose,
-}: {
-  runId: string;
-  detail: PipelineRunDetail | null;
-  loading: boolean;
-  onClose: () => void;
-  onResume: (run: PipelineRunDetail) => Promise<ActionOutcome>;
-  onAnswer: (run: PipelineRunDetail, optionId: string) => Promise<ActionOutcome>;
-  onContinue: (run: PipelineRunDetail) => Promise<ActionOutcome>;
-  onCancel: (runId: string) => Promise<boolean>;
-  /** Host-owned overlay close — the report button closes the WHOLE overlay (not just
-   *  the drawer) before dispatching swarm:open-file, so Canvas isn't under the host. */
-  hostClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const [resumeErr, setResumeErr] = useState(false);
-  const [resuming, setResuming] = useState(false);
-  const [cancelErr, setCancelErr] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [answering, setAnswering] = useState<string | null>(null);
-  const [answerErr, setAnswerErr] = useState(false);
-  // An action changed the run but no chat tab could be opened for it: say where.
-  const [openChatNote, setOpenChatNote] = useState(false);
-  return (
-    <OverlayDrawer widthPx={420} maxWidthPct={90} z={10} testid="pipeline-run-drawer" stopPropagation={false}>
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-        <span className="text-small font-mono text-[var(--color-text-muted)] truncate flex-1">{runId}</span>
-        <button onClick={onClose} className="material-symbols-outlined icon-md text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
-        {loading && <div className="text-small text-[var(--color-text-faint)]">{t('hiveFleet.loading')}</div>}
-        {!loading && !detail && <div className="text-small text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.detailNotFound')}</div>}
-        {detail && (() => {
-          // Conclusion-first header (run_403a5864): the STATUS is the verdict — promote
-          // it to a colored pill (reuse statusPill, the SAME one the list row uses, so
-          // pill + list never disagree). The requirement is the prominent subject; the
-          // rest (profile · cycle · finish-time) is demoted secondary meta. Timestamp is
-          // FINISH (updatedAt, fallback createdAt) to match the list row for this run —
-          // was createdAt/START, a list-vs-drawer inconsistency.
-          const pill = statusPill(detail.status, detail.pauseKind, false, detail.needsYou, detail.landedAs);
-          const noteKey = detail.pauseKind ? PAUSE_NOTE[detail.pauseKind] : undefined;
-          const note = noteKey ? t(noteKey) : undefined;
-          return (
-          <>
-            <div>
-              <div className="flex items-start gap-2">
-                <div className="text-body text-[var(--color-text)] flex-1 min-w-0">{detail.requirement}</div>
-                <span className="shrink-0"><StatusBadge tone={pill.tone} testid="pipeline-detail-status">{pill.label}</StatusBadge></span>
-              </div>
-              <div className="text-meta tabular-nums text-[var(--color-text-faint)] mt-1">
-                {detail.project} · {detail.profile} · {fmtCycle(detail.cycleTimeMin)} · {fmtTs(detail.updatedAt || detail.createdAt)}
-              </div>
-            </div>
 
-            {/* The paused ⏸ banner: the run's own reason, only while it is not done. */}
-            {note ? (
-              <div data-testid="pipeline-pause-note"
-                   className="rounded border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] px-2 py-1.5 text-meta text-[var(--color-text)]">
-                ⏸ {note}
-              </div>
-            ) : detail.checkpointReason && !detail.decision
-                && detail.status !== 'completed' && (
-              <div className="rounded border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] px-2 py-1.5 text-meta text-[var(--color-text)]">
-                ⏸ {detail.checkpointReason}
-              </div>
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+        {!!loadErr && (
+          <OverlayError testid="pipeline-load-error" retryTestid="pipeline-load-retry"
+            message={classifyLoadError(loadErr, 'pipeline analytics')} onRetry={() => { void aQuery.refetch(); }}
+            className="mx-auto my-8 max-w-sm" />
+        )}
+        {hive.failed && !hive.data && <div className={`text-small mb-2 ${muted}`} data-testid="pipeline-hive-unreadable">{t('ui.PipelineOverlay.hiveUnreadable')}</div>}
+        {tab === 'metrics' ? <PipelineMetrics rows={shown} now={now} onOpen={openKey} /> : (
+          <div data-testid="pipeline-run-list">
+            {analytics && rows.length === 0 && !loadErr && <div className="text-center py-10 text-body text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.empty')}</div>}
+            {section('you', t('swarmOut.review.section.you'), s.you.length, s.you.length ? TONE_VAR.attention : undefined)}
+            {s.you.length === 0 ? <div className={`px-2.5 text-small ${muted}`}>{t('swarmOut.waiting.none')}</div>
+              : <div className="flex flex-col">{s.you.map(row)}</div>}
+            {section('running', t('swarmOut.review.section.running'), s.running.length)}
+            {s.running.length === 0 ? <div className={`px-2.5 text-small ${muted}`}>{t('swarmOut.groups.runningEmpty')}</div>
+              : <div className="flex flex-col">{s.running.map(row)}</div>}
+            <button type="button" className="flex items-baseline gap-2 mt-4 mb-1.5" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}
+              data-testid="pipeline-section-done">
+              <span className="text-body font-semibold">{t('ui.PipelineOverlay.sectionDone')}</span>
+              <span className={`text-small tabular-nums ${muted}`}>{s.done.length}</span>
+              <span className={`text-small ${muted}`}>{showDone ? t('swarmOut.review.fold') : t('swarmOut.review.unfold')}</span>
+            </button>
+            {showDone && <div className="flex flex-col">{doneShown.map(row)}</div>}
+            {showDone && s.done.length > doneShown.length && (
+              <button type="button" className="text-left px-2.5 py-1.5 text-small text-[var(--color-primary)]" onClick={() => setDonePage((p) => p + 1)}
+                data-testid="pipeline-done-more">{t('ui.PipelineOverlay.moreDone', { count: s.done.length - doneShown.length })} ›</button>
             )}
-
-            {/* The pending human decision: the question and one button per option.
-                A click records the answer, then opens the run's chat to continue. */}
-            {detail.decision && (
-              <div data-testid="pipeline-decision"
-                   className="rounded-md border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] px-2.5 py-2 space-y-2">
-                <div className="text-meta uppercase tracking-wide text-[var(--color-status-error)]">{t('ui.PipelineOverlay.needsDecision')}</div>
-                <div className="text-body text-[var(--color-text)]">{detail.decision.question}</div>
-                {detail.decision.whyEvidenceInsufficient && (
-                  <div className="text-meta text-[var(--color-text-muted)]">{detail.decision.whyEvidenceInsufficient}</div>
-                )}
-                <div className="space-y-1.5">
-                  {detail.decision.options.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      disabled={answering !== null}
-                      data-testid={`pipeline-decision-option-${opt.id}`}
-                      onClick={async () => {
-                        setAnswerErr(false);
-                        setOpenChatNote(false);
-                        setAnswering(opt.id);
-                        const outcome = await onAnswer(detail, opt.id);
-                        if (outcome !== 'continued') setAnswering(null);
-                        if (outcome === 'failed') setAnswerErr(true);
-                        if (outcome === 'done') setOpenChatNote(true);
-                      }}
-                      className="w-full text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 py-1.5 hover:border-primary/60 transition-colors disabled:opacity-50"
-                    >
-                      <div className="text-small text-[var(--color-text)]">
-                        {opt.id} — {opt.choice}
-                        {opt.reversible === false && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">{t('ui.PipelineOverlay.irreversible')}</span>}
-                        {opt.risk === 'high' && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">{t('ui.PipelineOverlay.highRisk')}</span>}
-                      </div>
-                      {opt.consequence && <div className="text-meta text-[var(--color-text-muted)]">{opt.consequence}</div>}
-                    </button>
-                  ))}
-                </div>
-                <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.answerInChat')}</div>
-              </div>
-            )}
-            {answerErr && (
-              <div data-testid="pipeline-answer-error" className="text-meta text-[var(--color-status-error)]">
-                {t('ui.PipelineOverlay.answerError')}
-              </div>
-            )}
-            {openChatNote && (
-              <div data-testid="pipeline-open-chat-note" className="text-meta text-[var(--color-text-muted)]">
-                {t('ui.PipelineOverlay.openChatNote', { id: detail.id })}
-              </div>
-            )}
-
-            {/* Action row */}
-            <div className="flex gap-2">
-              {isResumable(detail.pauseKind) && (
-                <button
-                  disabled={resuming}
-                  onClick={async () => {
-                    setResumeErr(false);
-                    setOpenChatNote(false);
-                    setResuming(true);
-                    const outcome = await onResume(detail);
-                    if (outcome !== 'continued') setResuming(false);
-                    if (outcome === 'failed') setResumeErr(true);
-                    if (outcome === 'done') setOpenChatNote(true);
-                  }}
-                  data-testid="pipeline-resume-btn"
-                  className="btn-sm btn-soft transition-colors disabled:opacity-50"
-                >
-                  <span className="material-symbols-outlined icon-xs">play_arrow</span>{resuming ? t('ui.PipelineOverlay.resuming') : t('ui.PipelineOverlay.resume')}
-                </button>
-              )}
-              {detail.pauseKind === 'idle' && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setOpenChatNote(false);
-                    if ((await onContinue(detail)) !== 'continued') setOpenChatNote(true);
-                  }}
-                  data-testid="pipeline-continue-btn"
-                  className="btn-sm btn-soft transition-colors"
-                >
-                  <span className="material-symbols-outlined icon-xs">forum</span>{t('ui.PipelineOverlay.continueInChat')}
-                </button>
-              )}
-              {(detail.status === 'running' || detail.status === 'paused') && (
-                <button
-                  disabled={cancelling}
-                  onClick={async () => {
-                    setCancelErr(false);
-                    setCancelling(true);
-                    const ok = await onCancel(detail.id);
-                    // On success the drawer unmounts (onCancel clears selectedRunId/
-                    // detail) — only touch local state on the FAILURE path, or we'd
-                    // setState on an unmounting component (Gate-2 LOW).
-                    if (!ok) { setCancelling(false); setCancelErr(true); }
-                  }}
-                  data-testid="pipeline-cancel-btn"
-                  className="btn-sm btn-danger disabled:opacity-50"
-                >
-                  <span className="material-symbols-outlined icon-xs">cancel</span>{cancelling ? t('ui.PipelineOverlay.cancelling') : t('common.button.cancel')}
-                </button>
-              )}
-            </div>
-            {resumeErr && (
-              <div data-testid="pipeline-resume-error" className="text-meta text-[var(--color-status-error)]">
-                {t('ui.PipelineOverlay.resumeError')}
-              </div>
-            )}
-            {cancelErr && (
-              <div data-testid="pipeline-cancel-error" className="text-meta text-[var(--color-status-error)]">
-                {t('ui.PipelineOverlay.cancelError')}
-              </div>
-            )}
-
-            {detail.auditCard && (
-              <pre
-                data-testid="pipeline-detail-audit-card"
-                className="whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2 text-meta leading-relaxed text-[var(--color-text-muted)] font-mono"
-              >
-                {detail.auditCard}
-              </pre>
-            )}
-
-            {/* Reflect lessons */}
-            {detail.reflectLessons.length > 0 && (
-              <div>
-                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">{t('ui.PipelineOverlay.reflect')}</div>
-                <ul className="space-y-1">
-                  {detail.reflectLessons.map((l, i) => (
-                    <li key={i} className="text-meta text-[var(--color-text-muted)] leading-snug">• {l}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* Related commits */}
-            {detail.commits.length > 0 && (
-              <div>
-                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">{t('ui.PipelineOverlay.commits')}</div>
-                {detail.commits.map((c, i) => (
-                  <div key={i} className="text-meta font-mono text-[var(--color-text-muted)]">
-                    <span className="text-primary">{c.sha}</span> · {c.files.length} file{c.files.length === 1 ? '' : 's'}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* REPORT.md → Canvas (AC3): the full retro is big markdown that read as
-                a wall of grey text inline. Open it in Canvas (rendered markdown, full
-                screen) instead of dumping it here. Button only when a report exists. */}
-            {detail.reportPath && (
-              <button
-                type="button"
-                onClick={() => openReportInCanvas(detail.reportPath as string, hostClose)}
-                data-testid="pipeline-detail-report-btn"
-                className="btn-sm btn-soft transition-colors"
-              >
-                <span className="material-symbols-outlined icon-xs">description</span>{t('ui.PipelineOverlay.viewReport')}
-              </button>
-            )}
-          </>
-          );
-        })()}
+          </div>
+        )}
       </div>
-    </OverlayDrawer>
+
+      {open && openRow?.where === 'local' && (
+        <PipelineRunCard id={open.key} order={open.order} onSelect={(key) => setOpen((o) => (o ? { ...o, key } : o))}
+          onClose={() => setOpen(null)} onContinue={onContinue} onReload={reload} onLeave={close} />
+      )}
+      {open && openRow?.where === 'hive' && hive.data && (
+        <RunOverlay runs={hive.data.runs} asks={hive.data.asks ?? []} order={open.order} id={open.key} now={now}
+          onSelect={(key) => setOpen((o) => (o ? { ...o, key } : o))}
+          onSettled={(key) => setOpen((o) => (o ? { ...o, order: o.order.filter((x) => x !== key) } : o))}
+          onClose={() => setOpen(null)} onFileOpened={close} onReload={reload} />
+      )}
+    </div>
   );
 }

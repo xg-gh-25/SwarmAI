@@ -183,6 +183,23 @@ Judge 五维）· 过程（stage 和重跑）· 花费 · 教训（REFLECT lesso
 - 本机的问题（`PipelineDecision`，`pipelines.ts:38-44`）和 Hive 的问题（`SwarmOutAsk` decision，
   `swarmOut.ts:233-249`）形状不同：adapter 把前者换成问题卡要的样子，测一次回答的来回。
 
+### 4.3 实现（r6）
+
+- 行：`layout/pipelineRows.ts` 一种行，两个 adapter（本机 `PipelineRunSummary`、Hive 的 Swarm Out run，只收
+  `result.pipeline.run_id` 非空的）。分区、Brain 筛选、分布和五个指标都在这里算（纯函数，有测试）。没有扩
+  `GET /api/pipelines/analytics`：两个来源前端已经各读一份（analytics、Swarm Out 的 runs），合并和计数在一处做，
+  不让后端再去读 Swarm Out 的记录。`aborted_count` 没改名：新界面不读它了。
+- 大卡片：`layout/PipelineRunCard.tsx` 外壳照 `RunOverlay`，读 `GET /api/pipelines/{id}/view`；命令只渲染后端的
+  `actions`（`routers/pipelines.run_actions`）。问题在命令面板里直接答（本机的选项形状），没套 Swarm Out 的
+  `SwarmOutWaitCard`。"确认已落地"开一个大输入框写提交（`仓库=提交`），走
+  `POST /api/pipelines/{id}/confirm-landed`（`RunEngine.confirm_landed_by_person`：和聊天里那条路写同样的记录，
+  算一次救场；run_owner_gate 不让命令调它）。Hive 行打开 Swarm Out 的 `RunOverlay`。J / K 只走同一种外壳里
+  等你的单。
+- 指标：`layout/PipelineMetrics.tsx`。颜色是 `index.css` 的 `--viz-1..3`（dataviz 分类色 1–3，浅色底
+  `#f8fafc`、深色底 `#111318` 都过了校验；浅色的第 3 色对比度 2.69:1，所以图都带图例和数）。悬停用 SVG
+  `<title>`，点点 / 柱打开那个 run。
+- `layout/LocalRunCard.tsx` 删了：Brain 不再放 run，它没有别的使用方。
+
 ## 5. Swarm Out：只加自主度
 
 标题行加 §3 那一句，行里的自主度一词改用新口径（不再算权限的批准 / 拒绝）。列表、大卡片、

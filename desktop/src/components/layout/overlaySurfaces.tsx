@@ -214,9 +214,12 @@ registerOverlay({
 
 registerOverlay({
   id: 'pipeline',
-  render: ({ close, dispatchPrompt, resumeSession }) => (
-    <PipelineContent onDispatch={dispatchPrompt ?? (() => false)} close={close}
-                     onContinue={(sessionId, prompt) => continueInSession(sessionId, prompt, resumeSession)} />
+  render: ({ close, dispatchPrompt, resumeSession, openHiveSession }) => (
+    // a Hive pipeline run's card opens its session as Swarm Out's does
+    <OpenSessionContext.Provider value={overlaySessionOpener(close, openHiveSession)}>
+      <PipelineContent onDispatch={dispatchPrompt ?? (() => false)} close={close}
+                       onContinue={(sessionId, prompt) => continueInSession(sessionId, prompt, resumeSession)} />
+    </OpenSessionContext.Provider>
   ),
 });
 

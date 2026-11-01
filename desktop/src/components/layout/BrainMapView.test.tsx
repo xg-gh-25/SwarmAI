@@ -55,15 +55,7 @@ vi.mock('../../services/ddd', () => ({
 
 import { BrainMapView, BrainAgentView, BrainEvalView, BrainAddKnowledge, BrainNeedsView } from './BrainMapView';
 import { BrainHubHome } from './BrainHubHome';
-import { LocalRunCard } from './LocalRunCard';
 
-const run = (id: string, o: Record<string, unknown> = {}) => ({
-  id, requirement: `Req ${id}`, status: 'completed', profile: 'bugfix', progress: '8/8', cycleTimeMin: 10,
-  tokensActual: null, createdAt: '', updatedAt: '2026-10-20', pauseKind: null, needsYou: false,
-  checkpointReason: null, ownerSessionId: null, notLanded: false, reportPath: null, auditCard: null,
-  finishedAt: null, activeS: null, billedTokens: null, costUsd: null, humanDecisions: null, landing: null,
-  notLandedReason: null, rework: null, audit: [], ...o,
-});
 
 beforeEach(() => {
   evalData = EVAL;
@@ -137,28 +129,6 @@ describe('BrainMapView', () => {
     expect(screen.getByTestId('bm-reflect').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('ok');
     expect(screen.getByTestId('bm-reflect').textContent).toContain('1 learned this week');
     expect(screen.getByTestId('bm-eval').textContent).toContain('89% useful');
-  });
-
-  it('a local Run card shows the Hive card\'s cells, and — for what the Run did not record', () => {
-    render(<div>
-      <LocalRunCard brain="P" r={run('run_2', { activeS: 600, finishedAt: '2026-10-29T10:00:00Z', humanDecisions: 2, costUsd: 1.234,
-        billedTokens: 4_800_000, rework: 1, landing: 'landed',
-        audit: [{ dim: 'Run Isolation', verdict: 'PASS', detail: 'isolated' }, { dim: 'Speed', verdict: 'WARN', detail: '10 min' }] }) as never} />
-      <LocalRunCard brain="P" r={run('run_3', { notLanded: true, landing: 'not_landed', notLandedReason: 'final_stale' }) as never} />
-    </div>);
-    const full = screen.getByTestId('bm-runcard-run_2');
-    const cell = (card: HTMLElement, k: string) => card.querySelector(`[data-testid="swarm-out-stat-${k}"]`)?.textContent ?? '';
-    expect(cell(full, 'cost')).toContain('$1.23');
-    expect(cell(full, 'tokens')).toContain('4.8M');
-    expect(cell(full, 'human')).toContain('2');
-    expect(cell(full, 'rework')).toContain('1');
-    expect(full.querySelector('[data-testid="judge-tag"]')).toBeTruthy();
-    expect(full.querySelector('[data-testid="bm-runcard-brain"]')?.textContent).toContain('P');
-    const bare = screen.getByTestId('bm-runcard-run_3');
-    for (const k of ['time', 'human', 'cost', 'tokens']) expect(cell(bare, k)).toContain('—');
-    expect(bare.querySelector('[data-testid="swarm-out-stat-rework"]')).toBeNull();
-    expect(bare.querySelector('[data-testid="judge-tag"]')).toBeNull();
-    expect(bare.querySelector('[data-testid="bm-runcard-ended"]')?.textContent).toContain('final_stale');
   });
 
   it('Eval: two numbers on top, then the two questions; no run statistics', () => {

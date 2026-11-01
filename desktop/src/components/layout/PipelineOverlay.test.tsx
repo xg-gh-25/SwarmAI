@@ -1,439 +1,225 @@
 import type React from 'react';
 /**
- * Tests for PipelineOverlay — the WORK-zone retro-analytics dashboard (run_f8494370).
+ * PipelineOverlay — every pipeline run, wherever it ran (design
+ * docs/design/2026-11-01-brain-eval-and-runs.md §4).
  *
- * Covers:
- * - opens on `swarm:show-pipeline`, fetches analytics ONCE, renders overall strip
- *   + by-project groups one screen (AC5).
- * - clicking a run opens the detail drawer → fetchRunDetail (AC6).
- * - a run waiting for a decision shows the question; a click records the answer and
- *   continues in the owner session (docs/design/pipeline-v1-human-loop.md);
- * - Resume only on a stopped run, then continues in the owner session; an idle run
- *   offers "Continue in its chat"; no Resume on a decision / crash residue / completed.
- * - Cancel calls PATCH /pipelines/{id}/cancel (AC6).
- * - NO polling: fetchAnalytics called once per open (not on an interval).
+ * Questions, one per test:
+ * - does the Runs tab list this machine's runs and the Hive pipeline runs (a native Hive
+ *   run stays out), each tagged where it ran, waiting-for-you on top, the tab's label
+ *   carrying the waiting count?
+ * - does the filter (where, Brain) hold across the two tabs?
+ * - does a local row open the big card, whose commands come from the backend, and do
+ *   answering, resuming, cancelling and confirming a landing go through the run's routes
+ *   (the run's session continues it)?
+ * - does a Hive row open Swarm Out's card, and does a run the overlay was opened at open?
+ * - does the Metrics tab show the distribution and switch between the five measures?
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { screen, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react';
+import { screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 
 const fetchAnalytics = vi.fn();
-const fetchRunDetail = vi.fn();
-const fetchActivePipelines = vi.fn();
+const fetchRunView = vi.fn();
 const resumeRun = vi.fn();
 const answerDecision = vi.fn();
+const confirmLanded = vi.fn();
 vi.mock('../../services/pipelines', () => ({
   pipelinesService: {
     fetchAnalytics: (w: string) => fetchAnalytics(w),
-    fetchRunDetail: (id: string) => fetchRunDetail(id),
-    fetchActivePipelines: () => fetchActivePipelines(),
+    fetchRunView: (id: string) => fetchRunView(id),
+    fetchActivePipelines: () => Promise.resolve([]),
     resumeRun: (id: string) => resumeRun(id),
     answerDecision: (id: string, req: string, opt: string) => answerDecision(id, req, opt),
+    confirmLanded: (id: string, c: Record<string, string>) => confirmLanded(id, c),
   },
 }));
-
 const apiPatch = vi.fn();
 vi.mock('../../services/api', () => ({
   default: { patch: (url: string) => apiPatch(url) },
+  classifyLoadError: () => 'load error',
 }));
+let HIVE: { runs: unknown[]; asks: unknown[] } | null = null;
+vi.mock('../swarm-out/live', async (orig) => ({
+  ...(await orig<typeof import('../swarm-out/live')>()),
+  useRuns: () => ({ data: HIVE, failed: false, reload: () => {} }),
+}));
+vi.mock('../swarm-out/RunOverlay', () => ({
+  RunOverlay: ({ id }: { id: string }) => <div data-testid="hive-card">{id}</div>,
+}));
+let TARGET: string | null = null;
+vi.mock('../../utils/overlayTarget', () => ({ takeOverlayTarget: () => { const t = TARGET; TARGET = null; return t; } }));
 
 import { PipelineContent } from './PipelineOverlay';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
 import { render as __render } from '@testing-library/react';
-// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
-// per render, so no cache carries over between tests.
 const renderQ = (ui: React.ReactElement) =>
   __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
+const run = (o: Record<string, unknown>) => ({
+  id: 'run_x', requirement: 'Req', status: 'completed', profile: 'full', progress: '8/8', cycleTimeMin: 20,
+  tokensActual: null, createdAt: '2026-10-31T10:00:00Z', updatedAt: '2026-10-31T10:20:00Z', pauseKind: null,
+  needsYou: false, landedAs: null, checkpointReason: null, ownerSessionId: 'owner-1', notLanded: false,
+  reportPath: null, auditCard: null, finishedAt: '2026-10-31T10:20:00Z', activeS: null, billedTokens: 2_000_000,
+  costUsd: null, humanDecisions: 0, interventions: { answers: 0, corrections: 0, rescues: 0, total: 0 },
+  landing: 'landed', notLandedReason: null, rework: 0, audit: [], ...o,
+});
 const ANALYTICS = {
-  window: '30d',
-  overall: {
-    totalRuns: 3, completed: 2, completionRate: 0.667, avgCycleMin: 12.0,
-    tokensActual: 55000, profileMix: { full: 2, goal: 1 }, abortedCount: 1,
-  },
-  trend: [{ week: '2026-07-27', runs: 2, completed: 1, avgCycleMin: 10, tokens: 30000 }],
+  window: '30d', overall: {}, trend: [],
   byProject: [
-    {
-      project: 'SwarmAI', runCount: 2, completionRate: 0.5, avgCycleMin: 12, abortedCount: 1,
-      runs: [
-        { id: 'run_done1', requirement: 'Ship feature X', status: 'completed', profile: 'full',
-          progress: '8/8', cycleTimeMin: 12, tokensActual: 30000,
-          createdAt: '2026-08-01T10:00:00+00:00', updatedAt: '2026-08-01T10:12:00+00:00',
-          pauseKind: null, needsYou: false, checkpointReason: null,
-          reportPath: 'Projects/SwarmAI/.artifacts/runs/run_done1/REPORT.md' },
-        { id: 'run_paused1', requirement: 'Aborted thing', status: 'paused', profile: 'goal',
-          progress: '3/6', cycleTimeMin: null, tokensActual: 5000,
-          createdAt: '2026-08-01T09:00:00+00:00', updatedAt: '2026-08-01T09:30:00+00:00',
-          pauseKind: 'decision', needsYou: true, checkpointReason: 'Gate 1 BLOCK: needs decision',
-          reportPath: null },
-      ],
-    },
-    {
-      project: 'CMHK_SalesIntel', runCount: 1, completionRate: 1, avgCycleMin: 8, abortedCount: 0,
-      runs: [
-        { id: 'run_cmhk1', requirement: 'Report gen', status: 'completed', profile: 'bugfix',
-          progress: '8/8', cycleTimeMin: 8, tokensActual: 20000,
-          createdAt: '2026-07-30T10:00:00+00:00', updatedAt: '2026-07-30T10:08:00+00:00',
-          pauseKind: null, needsYou: false, checkpointReason: null, reportPath: null },
-      ],
-    },
+    { project: 'SwarmAI', runs: [
+      run({ id: 'run_done', requirement: 'Ship feature X' }),
+      run({ id: 'run_ask', requirement: 'Pick storage', status: 'paused', pauseKind: 'decision', needsYou: true, landing: null }),
+      run({ id: 'run_drop', requirement: 'Dropped one', status: 'abandoned', needsYou: true, landing: null }),
+    ] },
+    { project: 'AIDLC', runs: [run({ id: 'run_aidlc', requirement: 'Other brain' })] },
   ],
 };
-
-const DETAIL = {
-  id: 'run_paused1', project: 'SwarmAI', requirement: 'Aborted thing', status: 'paused',
-  profile: 'goal', cycleTimeMin: null, reportMd: '', reportPath: null, reflectLessons: [],
-  commits: [], checkpointReason: 'Gate 1 BLOCK: needs decision',
-  pauseKind: 'decision', ownerSessionId: 'owner-1',
-  continuePrompt: 'Continue pipeline run run_paused1 (project SwarmAI): run `"$SWARM_BACKEND_BIN" pipeline-v1 status --project SwarmAI --run-id run_paused1` first, then carry on from its current stage.',
-  decision: {
-    requestId: 'q1', kind: 'design_tradeoff', question: 'Which storage?',
-    whyEvidenceInsufficient: 'both fit',
-    options: [
-      { id: 'a', choice: 'files', consequence: 'simple', reversible: true, risk: 'low' },
-      { id: 'b', choice: 'sqlite', consequence: 'migration', reversible: false, risk: 'high' },
-    ],
+const hiveRun = (id: string, pipeline: boolean) => ({
+  dispatch_id: id, hive_id: 'h1', hive: 'demo', session_id: null, title: `Hive ${id}`, origin: 'swarm-out',
+  sent_at: '2026-10-31T09:00:00Z', waiting: false, running: false, state: 'stopped', stage: 'accepted',
+  project_agent: { brain: 'SwarmAI', mode: 'change', profile: 'bugfix', revision: 'r', delivery: 'bundle', acceptance: null },
+  settle: { settled: { at: '2026-10-31T10:00:00Z', outcome: 'passed', released: true } },
+  result: { ended: 'completed', ended_at: '2026-10-31T09:30:00Z', tokens: null, cost_usd: null,
+    pipeline: pipeline ? { run_id: `run_${id}`, profile: 'bugfix', status: 'completed', landing: 'landed', landed_sha: null, audit: [] } : null,
+    work: { human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 0, said: 0 }, repos: [], changes: [], files: [], files_omitted: 0,
+      steps: { total: 0, failed: 0, agents: 0, by_tool: {} } } },
+});
+const VIEW = (o: Record<string, unknown> = {}) => ({
+  summary: run({ id: 'run_ask', status: 'paused', pauseKind: 'decision', needsYou: true }),
+  detail: {
+    id: 'run_ask', project: 'SwarmAI', requirement: 'Pick storage', status: 'paused', profile: 'full', cycleTimeMin: null,
+    reportMd: '', reportPath: null, reflectLessons: ['a lesson'], commits: [], checkpointReason: null, pauseKind: 'decision',
+    ownerSessionId: 'owner-1', needsYou: true, landedAs: null, createdAt: '2026-10-31T10:00:00Z', updatedAt: '',
+    auditCard: null, continuePrompt: 'Continue pipeline run run_ask (project SwarmAI)',
+    decision: { requestId: 'q1', kind: null, question: 'Which storage?', whyEvidenceInsufficient: null,
+      options: [{ id: 'a', choice: 'files', consequence: 'simple', reversible: true, risk: 'low' }] },
   },
-  createdAt: '2026-08-01T09:00:00+00:00', updatedAt: '2026-08-01T09:30:00+00:00',
-  auditCard: null,
-};
-const STOPPED = { ...DETAIL, pauseKind: 'stopped', decision: null, checkpointReason: 'user_stop' };
+  stages: [{ name: 'evaluate', status: 'completed', attempts: 1 }, { name: 'build', status: 'open', attempts: 2 }],
+  interventions: { answers: [], corrections: [{ at: '2026-10-31T10:05:00', text: 'use the other table' }], rescues: [] },
+  acceptance: [{ id: 'R1.1', text: 'a stored row → it reads back' }],
+  actions: [{ key: 'answer', primary: true }, { key: 'cancel', primary: false }, { key: 'open_session', primary: false }],
+  ...o,
+});
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 beforeEach(() => {
+  HIVE = { runs: [hiveRun('d1', true), hiveRun('native', false)], asks: [] };
   fetchAnalytics.mockResolvedValue(ANALYTICS);
-  // status-aware: return a detail matching the requested run's status so the
-  // drawer's resumable/cancel affordances reflect the real run.
-  fetchRunDetail.mockImplementation((id: string) => {
-    if (id === 'run_done1') {
-      return Promise.resolve({ ...DETAIL, id: 'run_done1', status: 'completed',
-        cycleTimeMin: 12, checkpointReason: null,
-        reportPath: 'Projects/SwarmAI/.artifacts/runs/run_done1/REPORT.md' });
-    }
-    return Promise.resolve(DETAIL);
-  });
-  // Running now: two runs, one running + one paused → count = 1.
-  fetchActivePipelines.mockResolvedValue([
-    { id: 'run_r', status: 'running' }, { id: 'run_p', status: 'paused' },
-  ]);
+  fetchRunView.mockResolvedValue(VIEW());
   resumeRun.mockResolvedValue({ ownerSessionId: 'owner-1' });
   answerDecision.mockResolvedValue({ ownerSessionId: 'owner-1' });
+  confirmLanded.mockResolvedValue({ '': 'abc1234' });
   apiPatch.mockResolvedValue({});
 });
 
-function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true),
-                       onContinue = vi.fn().mockResolvedValue(true)) {
-  // M4: PipelineContent renders immediately (host owns open + fresh mount per open).
-  renderQ(<PipelineContent onDispatch={onDispatch} close={() => {}} onContinue={onContinue} />);
-  return { onDispatch, onContinue };
-}
-
-async function openPausedRun() {
-  await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-  const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-  fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
-  await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
-}
+const open = (onContinue = vi.fn().mockResolvedValue(true), close = vi.fn()) => {
+  renderQ(<PipelineContent onDispatch={() => true} close={close} onContinue={onContinue} />);
+  return { onContinue, close };
+};
 
 describe('PipelineOverlay', () => {
-  it('fetches analytics once on open and renders overall + by-project (one screen)', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-overall')).toBeInTheDocument());
-    // overall strip
-    expect(screen.getByTestId('pipeline-overall').textContent).toContain('67%'); // completion
-    // BOTH projects visible (global + by-project one screen)
-    expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument();
-    expect(screen.getByTestId('pipeline-project-CMHK_SalesIntel')).toBeInTheDocument();
-    // fetched exactly once (no polling)
-    expect(fetchAnalytics).toHaveBeenCalledTimes(1);
+  it('lists every pipeline run, tagged where it ran, waiting for you on top', async () => {
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
+    const you = screen.getByTestId('pipeline-section-you').nextElementSibling as HTMLElement;
+    expect(within(you).getAllByRole('button', { name: /Pick storage|Dropped one/ }).map((b) => b.getAttribute('data-testid')))
+      .toEqual(['pipeline-run-run_ask', 'pipeline-run-run_drop']);      // to answer before to confirm
+    expect(screen.getByTestId('pipeline-tab-runs').textContent).toContain('2');
+    expect(within(screen.getByTestId('pipeline-run-run_ask')).getByTestId('pipeline-row-tag').textContent).toBe('Answer');
+    expect(within(screen.getByTestId('pipeline-run-run_drop')).getByTestId('pipeline-row-tag').textContent).toBe('Confirm it landed');
+    fireEvent.click(screen.getByTestId('pipeline-section-done'));
+    expect(within(screen.getByTestId('pipeline-run-d1')).getByTestId('pipeline-row-where').textContent).toBe('demo');
+    expect(within(screen.getByTestId('pipeline-run-run_done')).getByTestId('pipeline-row-where').textContent).toBe('This machine');
+    expect(screen.queryByTestId('pipeline-run-native')).toBeNull();     // a native Hive run stays in Swarm Out
+    expect(screen.queryByTestId('pipeline-overall')).toBeNull();        // no row of totals
   });
 
-  it('collapses all groups except the first (no 750-button wall on open)', async () => {
-    renderAndOpen();
-    // first group (SwarmAI) expanded → its run buttons render
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_done1')).toBeInTheDocument());
-    // second group (CMHK_SalesIntel) collapsed → its run button is NOT rendered until clicked
-    expect(screen.queryByTestId('pipeline-run-run_cmhk1')).toBeNull();
-    // expand it → now its run appears
-    fireEvent.click(screen.getByTestId('pipeline-project-CMHK_SalesIntel').querySelector('button')!);
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_cmhk1')).toBeInTheDocument());
+  it('the filter holds across the tabs', async () => {
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pipeline-where-hive'));
+    expect(screen.queryByTestId('pipeline-run-run_ask')).toBeNull();
+    fireEvent.click(screen.getByTestId('pipeline-tab-metrics'));
+    expect(screen.getByTestId('pipeline-dist-total').textContent).toBe('1');
+    fireEvent.click(screen.getByTestId('pipeline-where-all'));
+    fireEvent.change(screen.getByTestId('pipeline-brain-filter'), { target: { value: 'AIDLC' } });
+    expect(screen.getByTestId('pipeline-dist-total').textContent).toBe('1');
+    fireEvent.click(screen.getByTestId('pipeline-tab-runs'));
+    fireEvent.click(screen.getByTestId('pipeline-section-done'));
+    expect(screen.getByTestId('pipeline-run-run_aidlc')).toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-run-run_done')).toBeNull();
   });
 
-  it('renders a run-time column (updatedAt) on each run row', async () => {
-    renderAndOpen();
-    const row = await screen.findByTestId('pipeline-run-run_done1');
-    // fmtTs('2026-08-01T10:12:00+00:00') → 'YYYY-MM-DD HH:MM' (local); assert the
-    // date portion is present (the exact HH:MM is timezone-dependent in CI).
-    expect(row.textContent).toContain('2026-08-01');
+  it('a local row opens its big card; answering continues in its session', async () => {
+    const { onContinue, close } = open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pipeline-run-run_ask'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-card-commands')).toBeInTheDocument());
+    expect(fetchRunView).toHaveBeenCalledWith('run_ask');
+    expect(screen.getByTestId('pipeline-card-acceptance').textContent).toContain('a stored row → it reads back');
+    expect(screen.getByTestId('pipeline-card-position').textContent).toContain('1 / 2');
+    expect(screen.getByTestId('pipeline-card-cmd-cancel')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pipeline-card-tab-autonomy'));
+    expect(screen.getByTestId('pipeline-card-autonomy').textContent).toContain('use the other table');
+    fireEvent.click(screen.getByTestId('pipeline-card-option-a'));
+    await waitFor(() => expect(answerDecision).toHaveBeenCalledWith('run_ask', 'q1', 'a'));
+    await waitFor(() => expect(onContinue).toHaveBeenCalled());
+    expect(onContinue.mock.calls[0][0]).toBe('owner-1');
+    expect(onContinue.mock.calls[0][1]).toContain('I answered decision q1');
+    expect(onContinue.mock.calls[0][1]).toContain('Continue pipeline run run_ask');
+    await waitFor(() => expect(close).toHaveBeenCalled());
   });
 
-  it('does not poll — analytics fetched once, not on an interval', async () => {
-    vi.useFakeTimers();
-    renderAndOpen();
-    await act(async () => { await Promise.resolve(); });
-    act(() => { vi.advanceTimersByTime(60000); });
-    expect(fetchAnalytics).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
+  it('resume, cancel and confirm landed go through the run\'s routes', async () => {
+    open(vi.fn().mockResolvedValue(false));
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
+    fetchRunView.mockResolvedValue(VIEW({ actions: [{ key: 'resume', primary: true }, { key: 'cancel', primary: false }] }));
+    fireEvent.click(screen.getByTestId('pipeline-run-run_ask'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-card-cmd-resume')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pipeline-card-cmd-resume'));
+    await waitFor(() => expect(resumeRun).toHaveBeenCalledWith('run_ask'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-card-note')).toBeInTheDocument());   // no tab took it: says where
+    fireEvent.click(screen.getByTestId('pipeline-card-cmd-cancel'));
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/pipelines/run_ask/cancel'));
+    fireEvent.click(screen.getByTestId('pipeline-card-close'));
+
+    fetchRunView.mockResolvedValue(VIEW({ actions: [{ key: 'confirm_landed', primary: true }],
+      detail: { ...VIEW().detail, id: 'run_drop', decision: null } }));
+    fireEvent.click(screen.getByTestId('pipeline-run-run_drop'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-card-cmd-confirm_landed')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pipeline-card-cmd-confirm_landed'));
+    const box = screen.getByTestId('pipeline-card-confirm-input') as HTMLTextAreaElement;
+    expect(box.rows).toBeGreaterThanOrEqual(4);                        // a big box for what the person writes
+    const submit = screen.getByTestId('pipeline-card-confirm-submit') as HTMLButtonElement;
+    fireEvent.change(box, { target: { value: 'not a commit' } });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(box, { target: { value: 'repo=abc1234' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(confirmLanded).toHaveBeenCalledWith('run_drop', { repo: 'abc1234' }));
   });
 
-  it('has one window: no year-to-date toggle', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(fetchAnalytics).toHaveBeenCalledWith('30d'));
-    expect(screen.queryByTestId('pipeline-window-ytd')).toBeNull();
+  it('a Hive row opens Swarm Out\'s card; a run the overlay was opened at opens', async () => {
+    TARGET = 'run_ask';
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-card')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pipeline-card-close'));
+    fireEvent.click(screen.getByTestId('pipeline-section-done'));
+    fireEvent.click(screen.getByTestId('pipeline-run-d1'));
+    expect(screen.getByTestId('hive-card').textContent).toBe('d1');
   });
 
-  it('opens the detail drawer on run click and fetches its retro', async () => {
-    // a paused run with no decision document shows its pause reason
-    fetchRunDetail.mockResolvedValueOnce({ ...DETAIL, decision: null });
-    renderAndOpen();
-    // run_paused1 is a needs-you run → appears in BOTH the pinned Needs-you region
-    // and its project group. Click the row inside the project group (scoped).
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
-    expect(fetchRunDetail).toHaveBeenCalledWith('run_paused1');
-    await waitFor(() => expect(screen.getByText(/Gate 1 BLOCK/)).toBeInTheDocument());
-  });
-
-  it('drawer header shows a colored verdict pill + FINISH time (run_403a5864)', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
-    // (1) verdict pill: DETAIL is paused + reason 'Gate 1 BLOCK' = a decision-pause →
-    //     statusPill renders "needs you" in the error tone (colored, not buried mono).
-    const pill = await screen.findByTestId('pipeline-detail-status');
-    expect(pill.textContent).toMatch(/needs you/i);
-    expect(pill.getAttribute('data-tone')).toBe('error');
-    // (2) timestamp = FINISH (updatedAt), NOT start (createdAt) — matches the list
-    //     row for the same run. fmtTs renders in LOCAL time, so compute both stamps
-    //     the same way (TZ-agnostic) and assert finish shown / start not shown.
-    const p = (n: number) => String(n).padStart(2, '0');
-    const fmt = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
-    const finish = fmt('2026-08-01T09:30:00+00:00');  // updatedAt
-    const start = fmt('2026-08-01T09:00:00+00:00');    // createdAt
-    const drawer = screen.getByTestId('pipeline-run-drawer');
-    expect(drawer.textContent).toContain(finish);
-    expect(drawer.textContent).not.toContain(start);
-  });
-
-  it('Resume on a stopped run calls the v1 resume endpoint, then continues in its owner session', async () => {
-    fetchRunDetail.mockResolvedValueOnce(STOPPED);
-    const { onDispatch, onContinue } = renderAndOpen();
-    await openPausedRun();
-    expect(screen.getByTestId('pipeline-pause-note').textContent).toMatch(/Stopped/);
-    fireEvent.click(await screen.findByTestId('pipeline-resume-btn'));
-    await waitFor(() => expect(resumeRun).toHaveBeenCalledWith('run_paused1'));
-    await waitFor(() => expect(onContinue).toHaveBeenCalledWith(
-      'owner-1', expect.stringContaining('Continue pipeline run run_paused1')));
-    expect(onDispatch).not.toHaveBeenCalled();
-  });
-
-  it('when no chat tab can be opened, Resume says where to continue', async () => {
-    fetchRunDetail.mockResolvedValue(STOPPED);
-    renderAndOpen(vi.fn(), vi.fn().mockResolvedValue(false));
-    await openPausedRun();
-    fireEvent.click(await screen.findByTestId('pipeline-resume-btn'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-open-chat-note')).toBeInTheDocument());
-  });
-
-  it('Cancel calls PATCH /pipelines/{id}/cancel', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    fireEvent.click(within(grp.getByTestId('pipeline-run-run_paused1')).getByTitle('Aborted thing'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-cancel-btn')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pipeline-cancel-btn'));
-    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/pipelines/run_paused1/cancel'));
-  });
-
-  it('a run waiting for a decision shows the question and its options, not Resume', async () => {
-    renderAndOpen();
-    await openPausedRun();
-    const card = await screen.findByTestId('pipeline-decision');
-    expect(card.textContent).toContain('Which storage?');
-    expect(within(card).getByTestId('pipeline-decision-option-b').textContent).toMatch(/irreversible/);
-    expect(screen.queryByTestId('pipeline-resume-btn')).toBeNull();
-  });
-
-  it('clicking an option records the answer, then continues in the owner session', async () => {
-    const { onContinue } = renderAndOpen();
-    await openPausedRun();
-    fireEvent.click(await screen.findByTestId('pipeline-decision-option-b'));
-    await waitFor(() => expect(answerDecision).toHaveBeenCalledWith('run_paused1', 'q1', 'b'));
-    await waitFor(() => expect(onContinue).toHaveBeenCalledWith(
-      'owner-1', expect.stringContaining('I answered decision q1 on the dashboard: b — sqlite.')));
-  });
-
-  it('a stale answer shows an error and no continue prompt', async () => {
-    answerDecision.mockRejectedValueOnce(new Error('409'));
-    const { onContinue } = renderAndOpen();
-    await openPausedRun();
-    fireEvent.click(await screen.findByTestId('pipeline-decision-option-a'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-answer-error')).toBeInTheDocument());
-    expect(onContinue).not.toHaveBeenCalled();
-  });
-
-  it('an idle run offers "Continue in its chat"', async () => {
-    fetchRunDetail.mockResolvedValueOnce({ ...DETAIL, status: 'running', pauseKind: 'idle',
-                                           decision: null, checkpointReason: null });
-    const { onContinue } = renderAndOpen();
-    await openPausedRun();
-    expect(screen.queryByTestId('pipeline-resume-btn')).toBeNull();
-    fireEvent.click(await screen.findByTestId('pipeline-continue-btn'));
-    await waitFor(() => expect(onContinue).toHaveBeenCalledWith(
-      'owner-1', expect.stringContaining('run_paused1')));
-  });
-
-  it('a completed run has no Resume button (not resumable)', async () => {
-    renderAndOpen();
-    // run_done1 is completed (not needs-you) → single row in its group.
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_done1')).toBeInTheDocument());
-    fireEvent.click(within(screen.getByTestId('pipeline-run-run_done1')).getByTitle('Ship feature X'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-drawer')).toBeInTheDocument());
-    expect(screen.queryByTestId('pipeline-resume-btn')).toBeNull();
-  });
-
-  // ── run_929024a8 redesign ACs ──────────────────────────────────────────────
-
-  it('AC1: states the time window explicitly (last 30 days)', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByText(/Showing runs from the last 30 days/)).toBeInTheDocument());
-  });
-
-  it('the Needs-you header counts exactly the rows it lists (one definition: needsYou)', async () => {
-    const stopped = { ...ANALYTICS.byProject[0].runs[0], id: 'run_stop1', status: 'paused',
-      pauseKind: 'stopped', needsYou: true, reportPath: null };
-    fetchAnalytics.mockResolvedValue({
-      ...ANALYTICS, overall: { ...ANALYTICS.overall, abortedCount: 0 },
-      byProject: [{ ...ANALYTICS.byProject[0], runs: [ANALYTICS.byProject[0].runs[0], stopped] }],
-    });
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-needsyou-region')).toBeInTheDocument());
-    const region = screen.getByTestId('pipeline-needsyou-region');
-    expect(within(region).getByTestId('pipeline-needsyou-count').textContent).toBe('1');
-    expect(within(region).getByTestId('pipeline-run-run_stop1')).toBeTruthy();
-    expect(within(region).queryByTestId('pipeline-run-run_done1')).toBeNull();
-  });
-
-  it('the token column never wraps or overflows onto the report button', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-tokens-run_done1')).toBeInTheDocument());
-    const cell = screen.getByTestId('pipeline-run-tokens-run_done1');
-    expect(cell.className).toContain('whitespace-nowrap');
-    expect(cell.className).toContain('w-24');
-  });
-
-  it('AC4: shows "Running now" (from active pipelines), NOT the profile ciphertext', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-overall')).toBeInTheDocument());
-    const strip = screen.getByTestId('pipeline-overall').textContent!;
-    expect(strip).toContain('Running now');
-    expect(strip).toContain('1'); // one running in the active mock
-    // the old unreadable "g2 f1"-style ciphertext must be gone
-    expect(strip).not.toMatch(/[gfbdurt]\d+\s+[gfbdurt]\d+/);
-    expect(strip).not.toContain('Profiles');
-  });
-
-  it('AC2: a run with a report shows a report button that opens Canvas (close + swarm:open-file)', async () => {
-    const close = vi.fn();
-    renderQ(<PipelineContent onDispatch={vi.fn().mockReturnValue(true)} close={close} />);
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    // run_done1 HAS a reportPath; run_paused1 does NOT
-    expect(grp.getByTestId('pipeline-run-report-run_done1')).toBeInTheDocument();
-    expect(within(grp.getByTestId('pipeline-run-run_paused1')).queryByTestId('pipeline-run-report-run_paused1')).toBeNull();
-    fireEvent.click(grp.getByTestId('pipeline-run-report-run_done1'));
-    expect(close).toHaveBeenCalledTimes(1);
-    const ev = dispatchSpy.mock.calls.map((c) => c[0]).find((e) => (e as Event).type === 'swarm:open-file') as CustomEvent;
-    expect(ev).toBeTruthy();
-    expect(ev.detail.path).toBe('Projects/SwarmAI/.artifacts/runs/run_done1/REPORT.md');
-    dispatchSpy.mockRestore();
-  });
-
-  it('AC3: detail drawer opens report in Canvas via a button, not an inline <pre>', async () => {
-    const close = vi.fn();
-    renderQ(<PipelineContent onDispatch={vi.fn().mockReturnValue(true)} close={close} />);
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    fireEvent.click(within(grp.getByTestId('pipeline-run-run_done1')).getByTitle('Ship feature X'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-detail-report-btn')).toBeInTheDocument());
-    const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
-    fireEvent.click(screen.getByTestId('pipeline-detail-report-btn'));
-    expect(close).toHaveBeenCalled();
-    const ev = dispatchSpy.mock.calls.map((c) => c[0]).find((e) => (e as Event).type === 'swarm:open-file') as CustomEvent;
-    expect(ev.detail.path).toBe('Projects/SwarmAI/.artifacts/runs/run_done1/REPORT.md');
-    dispatchSpy.mockRestore();
-  });
-
-  it('AC5/AC6: pinned Needs-you region by default; clicking the stat focuses the list to needs-you', async () => {
-    renderAndOpen();
-    // B: pinned region present by default, listing the decision-paused run
-    await waitFor(() => expect(screen.getByTestId('pipeline-needsyou-region')).toBeInTheDocument());
-    const region = within(screen.getByTestId('pipeline-needsyou-region'));
-    expect(region.getByTestId('pipeline-run-run_paused1')).toBeInTheDocument();
-    // A: click the Needs you stat → region hides (would double-show) + groups filter
-    fireEvent.click(screen.getByTestId('pipeline-needsyou-stat'));
-    await waitFor(() => expect(screen.queryByTestId('pipeline-needsyou-region')).toBeNull());
-    // the completed run is filtered OUT of the focused view; the needs-you run remains
-    expect(screen.queryByTestId('pipeline-run-run_done1')).toBeNull();
-    expect(screen.getByTestId('pipeline-run-run_paused1')).toBeInTheDocument();
-    // CMHK group has no needs-you run → dropped entirely
-    expect(screen.queryByTestId('pipeline-project-CMHK_SalesIntel')).toBeNull();
-    // click again → restore
-    fireEvent.click(screen.getByTestId('pipeline-needsyou-stat'));
-    await waitFor(() => expect(screen.getByTestId('pipeline-needsyou-region')).toBeInTheDocument());
-  });
-
-  it('AC5(pill): a decision-paused run renders a "needs your decision" status pill, a completed run "completed"', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const grp = within(screen.getByTestId('pipeline-project-SwarmAI'));
-    expect(within(grp.getByTestId('pipeline-run-run_paused1')).getByText('needs your decision')).toBeInTheDocument();
-    expect(within(grp.getByTestId('pipeline-run-run_done1')).getByText('completed')).toBeInTheDocument();
-  });
-
-  it('a completed run whose change did not land shows "not landed", not "completed"', async () => {
-    const unverified = structuredClone(ANALYTICS);
-    unverified.byProject[0].runs[0] = { ...unverified.byProject[0].runs[0], notLanded: true };
-    fetchAnalytics.mockResolvedValue(unverified);
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const row = within(within(screen.getByTestId('pipeline-project-SwarmAI')).getByTestId('pipeline-run-run_done1'));
-    expect(row.getByText('not landed')).toBeInTheDocument();
-    expect(row.queryByText('completed')).toBeNull();
-  });
-
-  it('an abandoned run reads the backend\'s needs_you; one whose change landed elsewhere says so', async () => {
-    const runs = structuredClone(ANALYTICS);
-    runs.byProject[0].runs[0] = { ...runs.byProject[0].runs[0], status: 'abandoned',
-      needsYou: false, landedAs: { swarmai: 'a'.repeat(40) } } as typeof runs.byProject[0]['runs'][0];
-    runs.byProject[0].runs[1] = { ...runs.byProject[0].runs[1], status: 'abandoned',
-      pauseKind: null, needsYou: false } as typeof runs.byProject[0]['runs'][0];
-    fetchAnalytics.mockResolvedValue(runs);
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
-    const landed = within(within(screen.getByTestId('pipeline-project-SwarmAI')).getByTestId('pipeline-run-run_done1'));
-    expect(landed.getByText('landed outside the pipeline')).toBeInTheDocument();
-    expect(landed.queryByText('needs you')).toBeNull();
-    const cancelled = within(within(screen.getByTestId('pipeline-project-SwarmAI')).getByTestId('pipeline-run-run_paused1'));
-    expect(cancelled.getByText('abandoned')).toBeInTheDocument();
-  });
-});
-
-
-describe('run audit card', () => {
-  it('renders the backend-provided five-dimension card verbatim', async () => {
-    fetchRunDetail.mockResolvedValueOnce({
-      ...DETAIL,
-      auditCard: 'Run Audit · run_paused1\nQuality        PASS · 2/2 verification',
-    });
-    renderAndOpen();
-    await screen.findByText('Ship feature X');
-    fireEvent.click(screen.getByText('Ship feature X'));
-    const card = await screen.findByTestId('pipeline-detail-audit-card');
-    expect(card.textContent).toContain('Quality        PASS · 2/2 verification');
+  it('Metrics: the distribution, and the five measures each with its chart', async () => {
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('pipeline-tab-metrics'));
+    expect(screen.getByTestId('pipeline-dist-total').textContent).toBe('5');
+    expect(screen.getByTestId('pipeline-dist-hive').textContent).toContain('demo 1');
+    expect(screen.getByTestId('pipeline-measure-delivery').textContent).toContain('3 / 5');
+    expect(screen.getByTestId('pipeline-drill-delivery')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('pipeline-measure-cost'));
+    expect(screen.getByTestId('pipeline-drill-cost')).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-measure-cost').textContent).toContain('M');
+    fireEvent.click(screen.getByTestId('pipeline-measure-speed'));
+    fireEvent.click(screen.getAllByTestId('pipeline-speed-dot')[0]);
+    await waitFor(() => expect(screen.getByTestId('pipeline-card')).toBeInTheDocument());
   });
 });

@@ -164,8 +164,7 @@ function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed
 }
 
 /** The card's facts as cells (label over value), wrapping to as many columns as fit; a
- *  strong cell (the total cost, the billed tokens) reads a size up. Also the cells of a
- *  local Run's card (layout/LocalRunCard), so the two cards read the same. */
+ *  strong cell (the total cost, the billed tokens) reads a size up. */
 export function Stats({ stats, testId = 'swarm-out-run-numbers', min = 104 }: { stats: RunStat[]; testId?: string; min?: number }) {
   return (
     <dl className="mt-2 mb-0 grid gap-x-3 gap-y-1.5 pt-2 border-t border-[var(--color-border)]"
