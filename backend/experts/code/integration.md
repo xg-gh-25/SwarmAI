@@ -21,21 +21,13 @@ pass all tests but have zero callers in production.
 This is the symmetric check to correctness: correctness asks "is this code right?"
 Integration asks "does anyone call this code?"
 
-Output: JSON objects, one finding per line.
-
-```json
-{"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"integration","summary":"...","fix":"...","fingerprint":"path:line:integration","specialist":"integration"}
-```
-
-Required: severity, confidence, path, category, summary, specialist.
-Optional: line, fix, fingerprint, evidence.
-If no findings: output `NO FINDINGS` and nothing else.
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS.
 
 ---
 
 ## Confidence Scoring
 
-Every finding MUST include confidence (1-10):
+How sure you are before you report a finding (when it is not certain, say so in its claim):
 - 9-10: Grep'd codebase, confirmed 0 callers, traced full call chain
 - 7-8: Function exists, likely no caller based on module structure
 - 5-6: Possible dead code but may have dynamic/deferred caller

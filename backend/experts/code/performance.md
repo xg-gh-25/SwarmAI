@@ -18,21 +18,13 @@ collections, or frontend rendering paths.
 **Also check, in your domain:**
 hook no-op path scaling — O(n) in steady state, shared executor/pool contention — blocking >5s on shared pool starves latency-sensitive consumers, fix-removes-failure-mode regression — newly-successful path consumes shared resources. These are proven perf patterns.
 
-Output: JSON objects, one finding per line.
-
-```json
-{"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"performance","summary":"...","fix":"...","fingerprint":"path:line:performance","specialist":"performance"}
-```
-
-Required: severity, confidence, path, category, summary, specialist.
-Optional: line, fix, fingerprint, evidence.
-If no findings: output `NO FINDINGS` and nothing else.
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS.
 
 ---
 
 ## Confidence Scoring
 
-Every finding MUST include confidence (1-10):
+How sure you are before you report a finding (when it is not certain, say so in its claim):
 - 9-10: Measured or obvious O(n^2) with known data scale
 - 7-8: Clear pattern match (N+1, blocking async, unbounded query)
 - 5-6: Potential issue — depends on data volume

@@ -26,21 +26,13 @@ server-verified principal; assert `attacker sets user_alias=<victim> in body →
 expect 403`. These are proven vulnerability patterns. **If the changeset is an
 LLM / agent system (see the Agent-Safety category below), ALSO apply the Agent-Safety category.**
 
-Output: JSON objects, one finding per line.
-
-```json
-{"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"security","summary":"...","fix":"...","fingerprint":"path:line:security","specialist":"security","exploit":"attacker does X via Y to achieve Z"}
-```
-
-Required: severity, confidence, path, category, summary, specialist, exploit.
-Optional: line, fix, fingerprint, evidence.
-If no findings: output `NO FINDINGS` and nothing else.
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS.
 
 ---
 
 ## Confidence Scoring
 
-Every finding MUST include confidence (1-10):
+How sure you are before you report a finding (when it is not certain, say so in its claim):
 - 9-10: Constructed concrete exploit scenario with specific input
 - 7-8: High confidence — known vulnerability pattern in reachable code
 - 5-6: Moderate — pattern exists but exploit path unclear
@@ -50,9 +42,9 @@ Every finding MUST include confidence (1-10):
 Modifiers: +3 concrete exploit, +2 user-reachable path, +2 similar vuln fixed before
 (IMPROVEMENT.md), -2 internal-only endpoint, -4 test/doc file.
 
-**CRITICAL:** Every finding MUST include an `exploit` field describing the attack:
+**CRITICAL:** Every finding names the attack in its claim:
 "Attacker does [action] via [vector] to achieve [impact]." Without a concrete
-exploit scenario, the finding is speculation — rate confidence accordingly.
+exploit scenario, the finding is speculation: say so in the claim.
 
 ---
 

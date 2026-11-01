@@ -44,18 +44,9 @@ Trace the full user path one level downstream:
 - Backend accepts params → does the downstream service accept those exact params?
 - Output goes to a template → is the output escaped for the target format?
 
-## Output Format
+## Output
 
-```json
-{
-  "agent": "ux",
-  "findings": [
-    {"severity": "critical|important|suggestion", "description": "...", "check": "ux_review|e2e_trace"}
-  ],
-  "ux_review": {"checks": 5, "findings": [...]},
-  "e2e_trace": {"paths_traced": N, "bugs_found": M, "findings": [...]}
-}
-```
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS. Name which check found each one (the UX review or the E2E trace) in its claim.
 
 ## Focus: User-Visible Bugs (Not Hypothetical Misuse)
 

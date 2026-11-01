@@ -27,21 +27,13 @@ cross-service parameter mismatch, cross-language serialization format,
 multi-shape function returns — different consumers assume different shapes,
 live vs reload parity, slice partition, cache key / ETag misses an input.
 
-Output: JSON objects, one finding per line.
-
-```json
-{"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"api-contract","summary":"...","fix":"...","fingerprint":"path:line:api-contract","specialist":"api-contract"}
-```
-
-Required: severity, confidence, path, category, summary, specialist.
-Optional: line, fix, fingerprint, evidence.
-If no findings: output `NO FINDINGS` and nothing else.
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS.
 
 ---
 
 ## Confidence Scoring
 
-Every finding MUST include confidence (1-10):
+How sure you are before you report a finding (when it is not certain, say so in its claim):
 - 9-10: Verified by reading both producer and consumer code
 - 7-8: Clear contract violation (type change, field removal, missing field)
 - 5-6: Potential breaking change — depends on caller usage

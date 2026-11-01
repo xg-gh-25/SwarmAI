@@ -26,21 +26,13 @@ Proven pattern: state-machine completeness violations (unreachable states, untri
 a stale subprocess, streaming loss on tab switch, spinner-hang
 (3 occurrences of same stuck-state bug).
 
-Output: JSON objects, one finding per line.
-
-```json
-{"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"state-machine","summary":"...","fix":"...","fingerprint":"path:line:state-machine","specialist":"state-machine"}
-```
-
-Required: severity, confidence, path, category, summary, specialist.
-Optional: line, fix, fingerprint, evidence, mitigation.
-If no findings: output `NO FINDINGS` and nothing else.
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS.
 
 ---
 
 ## Confidence Scoring
 
-Every finding MUST include confidence (1-10):
+How sure you are before you report a finding (when it is not certain, say so in its claim):
 - 9-10: Identified specific state with no exit path, or transition with no trigger
 - 7-8: Pattern matches known state machine failure class (from past incidents)
 - 5-6: Plausible transition issue, needs runtime verification
@@ -146,14 +138,8 @@ not its live one, once a newer cycle runs.
 
 ## Examples of HIGH findings
 
-```json
-{"severity":"HIGH","confidence":9,"path":"hooks/useChatStreamingLifecycle.ts","line":142,"category":"state-machine","summary":"isStreaming stuck: disconnect timeout handler mutates ref directly (tabState.isStreaming = false) but never triggers React re-render. State CHANGE without state PROPAGATION.","fix":"Use setIsStreaming(false) which triggers setPendingStreamTabs → re-render","specialist":"state-machine"}
-```
+- HIGH · `hooks/useChatStreamingLifecycle.ts:142`: isStreaming stuck: disconnect timeout handler mutates ref directly (tabState.isStreaming = false) but never triggers React re-render. State CHANGE without state PROPAGATION. Fix: Use setIsStreaming(false) which triggers setPendingStreamTabs → re-render
 
-```json
-{"severity":"HIGH","confidence":9,"path":"core/session_unit.py","line":320,"category":"state-machine","summary":"STREAMING state has no recovery path if subprocess crashes (SIGKILL). Process dies → no exit event → state stuck at STREAMING forever.","fix":"Add TTL-based state recovery: if STREAMING for >60s with no stdout activity, force-transition to DEAD","specialist":"state-machine"}
-```
+- HIGH · `core/session_unit.py:320`: STREAMING state has no recovery path if subprocess crashes (SIGKILL). Process dies → no exit event → state stuck at STREAMING forever. Fix: Add TTL-based state recovery: if STREAMING for >60s with no stdout activity, force-transition to DEAD
 
-```json
-{"severity":"MED","confidence":7,"path":"components/chat/MessageBubbles.tsx","line":89,"category":"state-machine","summary":"Voice 'interrupted' state declared in enum but no code path ever sets it. Orphan state suggests incomplete implementation.","fix":"Either implement the interrupt trigger (user speaks while AI is responding) or remove the state from the enum","specialist":"state-machine"}
-```
+- MED · `components/chat/MessageBubbles.tsx:89`: Voice 'interrupted' state declared in enum but no code path ever sets it. Orphan state suggests incomplete implementation. Fix: Either implement the interrupt trigger (user speaks while AI is responding) or remove the state from the enum

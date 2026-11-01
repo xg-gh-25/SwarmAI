@@ -23,21 +23,13 @@ Proven pattern: Three-pool isolation fix (2026-05-20), OOM cascade (4 tabs,
 2026-04-12), health endpoint hang (pool exhaustion), cross-turn bleed (pipe flush
 race), job scheduler blocking default pool.
 
-Output: JSON objects, one finding per line.
-
-```json
-{"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"concurrency","summary":"...","fix":"...","fingerprint":"path:line:concurrency","specialist":"concurrency"}
-```
-
-Required: severity, confidence, path, category, summary, specialist.
-Optional: line, fix, fingerprint, evidence, mitigation.
-If no findings: output `NO FINDINGS` and nothing else.
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS.
 
 ---
 
 ## Confidence Scoring
 
-Every finding MUST include confidence (1-10):
+How sure you are before you report a finding (when it is not certain, say so in its claim):
 - 9-10: Identified specific shared resource with measured contention path
 - 7-8: Pattern matches known concurrent failure class
 - 5-6: Plausible race condition, needs load testing to confirm
@@ -144,14 +136,8 @@ with long-running operations → health endpoint starves.
 
 ## Examples of HIGH findings
 
-```json
-{"severity":"HIGH","confidence":9,"path":"backend/jobs/executor.py","line":156,"category":"concurrency","summary":"subprocess.run(timeout=480s) on default asyncio thread pool. Pool has 8 workers shared with health endpoint aiosqlite. 4 concurrent jobs = pool exhaustion = health endpoint hangs = Tauri 'not responding'.","fix":"Use dedicated _job_executor = ThreadPoolExecutor(4) instead of default pool","specialist":"concurrency"}
-```
+- HIGH · `backend/jobs/executor.py:156`: subprocess.run(timeout=480s) on default asyncio thread pool. Pool has 8 workers shared with health endpoint aiosqlite. 4 concurrent jobs = pool exhaustion = health endpoint hangs = Tauri 'not responding'. Fix: Use dedicated _job_executor = ThreadPoolExecutor(4) instead of default pool
 
-```json
-{"severity":"HIGH","confidence":9,"path":"core/session_unit.py","line":892,"category":"concurrency","summary":"_retry_with_resume() bypasses _acquire_slot() — spawns subprocess without checking alive_count >= max_tabs. Under OOM pressure, retry creates unbounded processes.","fix":"Check alive_count >= max_tabs in retry path, same as normal spawn","specialist":"concurrency"}
-```
+- HIGH · `core/session_unit.py:892`: _retry_with_resume() bypasses _acquire_slot() — spawns subprocess without checking alive_count >= max_tabs. Under OOM pressure, retry creates unbounded processes. Fix: Check alive_count >= max_tabs in retry path, same as normal spawn
 
-```json
-{"severity":"MED","confidence":7,"path":"core/session_router.py","line":234,"category":"concurrency","summary":"compute_max_tabs() reads RSS from /proc without lock. If called from eviction loop AND spawn path simultaneously, the RSS measurement is stale by the time the spawn decision executes.","fix":"Serialize compute_max_tabs calls via _spawn_lock, or accept staleness with safety margin","specialist":"concurrency"}
-```
+- MED · `core/session_router.py:234`: compute_max_tabs() reads RSS from /proc without lock. If called from eviction loop AND spawn path simultaneously, the RSS measurement is stale by the time the spawn decision executes. Fix: Serialize compute_max_tabs calls via _spawn_lock, or accept staleness with safety margin
