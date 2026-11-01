@@ -106,6 +106,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
                       # review compares the run's own patch after main moved (design
                       # 2026-10-31 §3 change 3)
                       "bases": dict,
+                      # reask_of: the handout whose unreadable answer this re-asks
+                      "reask_of": str,
                       "spawn_prompt": str, "spawn_sha": str, "knowledge_items": list, "knowledge_project": str}),
     # a host hook saw an expert spawned with exactly a handout's spawn prompt
     # (standalone §4.3, handout-by-file design §3.2)

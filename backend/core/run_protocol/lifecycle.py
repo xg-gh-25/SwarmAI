@@ -333,7 +333,8 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
             if run["base_moved_failures"] >= BASE_MOVED_CAP:
                 _set_pending(run, "base_kept_moving")
         elif failed <= {"LG-1", "LG-4"} \
-                and all(cause[cid] == "review_reopened" for cid in failed):
+                and all(cause[cid] == "review_reopened" for cid in failed) \
+                and run.get("deliver_reopens", 0) < DELIVER_REOPEN_CAP:
             # the change differs from the reviewed one and the run goes back to REVIEW
             # (its review_reopen follows): not one of the run's 3 landing failures
             run["review_reopened_failures"] = run.get("review_reopened_failures", 0) + 1
@@ -553,6 +554,9 @@ def _land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             or (run["status"] == "completed" and run.get("landing") == "not_landed")
         if not allowed:
             raise LifecycleError("human override is illegal from this status/landing")
+        if run.get("landed_as"):
+            raise LifecycleError("the run's change already landed (landed_as): it is not "
+                                 "landed again")
         old = run["status"]
         run["landing"], run["reason"] = "human_override", None
         run["human_decisions"] += 1

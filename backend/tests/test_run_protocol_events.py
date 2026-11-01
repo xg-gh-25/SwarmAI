@@ -125,6 +125,7 @@ CASES.update({
                      "payload.request_id", "q2"),
     "land": ({"ordinal": 1}, "ordinal", 2),
     "abandon": ({"ordinal": 1}, "ordinal", 2),
+    "landed_as": ({"ordinal": 1}, "ordinal", 2),
     "restore": ({"ordinal": 1}, "ordinal", 2),
     "metric": ({"stage": "test", "attempt": 1, "payload": {"name": "tokens"}},
                "payload.name", "wall_seconds"),

@@ -203,37 +203,51 @@ def _in_visit(events: Sequence[Mapping[str, Any]], start: int) -> set[Any]:
 
 def review_phase(events: Sequence[Mapping[str, Any]],
                  rows: Sequence[Mapping[str, Any]]) -> str:
-    """Where the current visit's review stands: ``fix`` (its first fixing pass, or the
-    first round, is still to come), ``high`` (one pass and its R2 are done and a HIGH /
-    CRITICAL raised in this visit is still open: one more pass, for those only) or
-    ``closed`` (no more fixing passes in this visit). A fixing pass is one review-address
-    with items (its address events share an attempt); it is done once no R2 is pending,
-    no address is without its R2 and no R2 line waits to be asked again."""
+    """Where the current visit's review stands: ``fix`` (its first round, or its first
+    fixing pass, is still to come), ``wait`` (the first pass is made and its R2 has not
+    answered yet), ``high`` (that R2 answered and a HIGH / CRITICAL raised in this visit
+    is still open: one more pass, for those only) or ``closed`` (no more fixing passes
+    in this visit). A fixing pass is counted when its R2 is handed out: one batch of R2
+    handouts (one review-address writes them with one ``at``), never an R2 re-dispatch
+    of a wrong word; an address no R2 covers yet (a pass that stopped half way) is not
+    a pass, and the next one completes it. Its R2 is still out while one is pending, an
+    address of this visit has none, or a line waits to be asked again; only this
+    visit's addresses are looked at."""
     start = visit_start(events)
     passes: list[Any] = []
     for event in events[start:]:
-        if event.get("kind") == "address" and event.get("attempt") not in passes:
-            passes.append(event.get("attempt"))
-    # a pass's R2 is not done while one is pending, an address has none, or a line
-    # used a word its finding does not take (it is asked once more)
-    in_flight = bool(passes) and bool(pending_r2(events) or uncovered_addresses(events)
-                                      or r2_redispatch_targets(events))
-    done = len(passes) - (1 if in_flight else 0)
+        if event.get("kind") == "handout" and event.get("stage") == "review" \
+                and event.get("round") == 2 \
+                and not (event.get("payload") or {}).get("redispatch_of") \
+                and event.get("at") not in passes:
+            passes.append(event.get("at"))
     here = _in_visit(events, start)
     mine = [row for row in rows if row.get("answer_event_id") in here]
-    if done >= 2:
+    if len(passes) >= 2:
         return "closed"
-    if done == 1:
-        if len(passes) >= 2:
-            return "high"           # the HIGH pass is waiting for its R2
+    if len(passes) == 1:
+        if _r2_out(events, start):
+            return "wait"
         return "high" if any(_open_high(row) for row in mine) else "closed"
     series = first_round_series(events, start)
     answered = bool(series) and all(answer_of(events, s[-1]["event_id"]) is not None
                                     for s in series.values())
-    if not passes and answered and not unusable_reasks(events) \
+    if answered and not unusable_reasks(events) \
             and not any(not fd.is_closed(row) for row in mine):
         return "closed"             # the first round found nothing to fix
     return "fix"
+
+
+def _r2_out(events: Sequence[Mapping[str, Any]], start: int) -> bool:
+    """Whether an R2 of this visit's addresses is still out (pending, missing, or a
+    line to ask again)."""
+    addressed = {(event.get("payload") or {}).get("canonical_id") for event in events[start:]
+                 if event.get("kind") == "address"}
+    waiting = {cid for ids in pending_r2(events).values() for cid in ids}
+    waiting |= set(uncovered_addresses(events))
+    waiting |= {cid for _answer, wrong in r2_redispatch_targets(events).values()
+                for cid in wrong}
+    return bool(addressed & waiting)
 
 
 def _open_high(row: Mapping[str, Any]) -> bool:
@@ -244,8 +258,8 @@ def _open_high(row: Mapping[str, Any]) -> bool:
 def fixable(events: Sequence[Mapping[str, Any]],
             rows: Sequence[Mapping[str, Any]]) -> tuple[str, set[str]]:
     """(the visit's phase, the findings a fixing pass may still address): in ``fix``
-    every finding this visit raised, in ``high`` its open HIGH / CRITICAL ones, in
-    ``closed`` none, each widened by its ±10-line cluster, which a pass fixes as one
+    every finding this visit raised, in ``wait`` / ``high`` its open HIGH / CRITICAL
+    ones (a pass on them is refused until that R2 answers), in ``closed`` none, each widened by its ±10-line cluster, which a pass fixes as one
     (plan_fix_handoff) whatever review raised the mates. ``address_refusal`` and
     ``close_with`` both read this, so what ``findings`` says to fix is what a pass
     accepts."""
@@ -255,6 +269,7 @@ def fixable(events: Sequence[Mapping[str, Any]],
     here = _in_visit(events, visit_start(events))
     by_id = {row["canonical_id"]: row for row in rows}
     mine = {cid for cid, row in by_id.items() if row.get("answer_event_id") in here}
+    # while the first pass's R2 is out, what may follow it is the HIGH pass
     base = mine if phase == "fix" else {cid for cid in mine if _open_high(by_id[cid])}
     allowed = set(base)
     for cluster in cluster_findings([row for row in rows if row["status"] != "refuted"]):
@@ -273,6 +288,9 @@ def address_refusal(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[
         return ("this review's fixing passes are done (one pass and its R2, and no HIGH "
                 "left open): the open findings are residual risks in the REPORT; complete "
                 "REVIEW (stage-complete)")
+    if phase == "wait":
+        return ("this review's fixing pass is made and its R2 has not answered yet: spawn "
+                "it (next lists it); a second pass is only for a HIGH that R2 leaves open")
     by_id = {row["canonical_id"]: row for row in rows}
     outside = sorted(cid for cid in finding_ids if cid in by_id and cid not in allowed)
     if not outside:
@@ -615,13 +633,14 @@ class ReviewOrchestrator:
                 incremental_from: Mapping[str, Any] | None = None,
                 knowledge_items: Sequence[str] = (),
                 knowledge_project: str | None = None,
-                bases: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                bases: Mapping[str, Any] | None = None,
+                reask_of: str | None = None) -> dict[str, Any]:
         spec, prepared = self.handout_spec(
             expert_id=expert_id, stage=stage, round=round, attempt=attempt, at=at,
             expert_instructions=expert_instructions, review_input=review_input,
             finding_ids=finding_ids, code_trees=code_trees,
             incremental_from=incremental_from, knowledge_items=knowledge_items,
-            knowledge_project=knowledge_project, bases=bases)
+            knowledge_project=knowledge_project, bases=bases, reask_of=reask_of)
         spec = dict(spec)
         event, _ = self.store.append_new(writer=self.store.authority.writer("cli"),
                                          kind=spec.pop("kind"), at=spec.pop("at"),
@@ -647,6 +666,7 @@ class ReviewOrchestrator:
                      allowed_status: Mapping[str, Sequence[str]] | None = None,
                      redispatch_of: str | None = None,
                      bases: Mapping[str, Any] | None = None,
+                     reask_of: str | None = None,
                      ) -> tuple[dict[str, Any], dict[str, Any]]:
         """The handout event spec (for ``store.append_batch`` / ``append_new``) and what
         ``handout_written`` needs once it is on disk. Writes nothing: a prompt that fails
@@ -688,6 +708,8 @@ class ReviewOrchestrator:
                 payload["bases"] = {k: v for k, v in bases.items() if k in code_trees and v}
         if incremental_from:
             payload["incremental_from"] = dict(incremental_from)
+        if reask_of:            # a first-round review asked again (its answer was unreadable)
+            payload["reask_of"] = reask_of
         if knowledge_items:     # the PROJECT KNOWLEDGE entries this prompt carries (§3.4)
             payload["knowledge_items"] = list(knowledge_items)
         if knowledge_project:   # the DDD whose units a finding may also cite (addressing §2.5)

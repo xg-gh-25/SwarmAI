@@ -123,6 +123,15 @@ def test_an_open_high_after_r2_gets_one_more_pass_for_high_only(rig):
     assert last.get("ok") is False and "fixing passes are done" in last["error"], last
 
 
+def test_a_second_pass_before_the_first_r2_answers_is_refused(rig):
+    r = rig()
+    (low,) = _r1(r, _finding("LOW", 2, "nit"))
+    out = _fix_and_address(r, [low], "one")
+    assert out.get("ok") is True, out
+    again = _fix_and_address(r, [low], "two")
+    assert again.get("ok") is False and "has not answered yet" in again["error"], again
+
+
 def test_an_edit_after_the_closed_review_must_be_restored(rig):
     r = rig()
     (low,) = _r1(r, _finding("LOW", 2, "nit"))
@@ -151,13 +160,13 @@ def test_a_review_test_reopened_is_a_new_visit_with_its_own_pass(rig):
                      "inc-0")
     new = [row["canonical_id"] for row in _rows(r) if row["canonical_id"] != low]
     lines = _findings(r)
-    assert lines[new[0]].startswith("fix it"), lines
-    out = _fix_and_address(r, new, "two")
-    assert out.get("ok") is True, out
+    assert lines[new[0]].startswith("fix it") and lines[low].startswith("residual"), lines
     # a finding of the first visit is that visit's residual, not this one's to fix
     old = r.v1("review-address", "--artifact", r.artifact("addr-old", {
-        "pass": 3, "items": [{"finding_id": low, "hunk": "@@ -2 +2 @@ x"}]}))
+        "pass": 2, "items": [{"finding_id": low, "hunk": "@@ -2 +2 @@ x"}]}))
     assert old.get("ok") is False and "earlier review" in old["error"], old
+    out = _fix_and_address(r, new, "two")
+    assert out.get("ok") is True, out
 
 
 BROKEN = ('Two problems.\n{"finding_id":"CF-00000000","status":"RESOLVED","note":"x"}\n'

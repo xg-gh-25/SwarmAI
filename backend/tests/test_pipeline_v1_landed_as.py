@@ -40,7 +40,11 @@ def _run_json(r: Rig) -> dict:
 def test_landed_as_takes_only_the_run_s_own_change_on_main(rig):
     from core import pipeline_metrics as pm
     r = rig
+    start = _git(r.repo, "rev-parse", "HEAD")       # what the run's branch starts at
     _abandoned(r)
+    # the commit the run started from is on main but carries none of its change
+    first = r.v1("landed-as", start)
+    assert first.get("ok") is False and "does not carry the reviewed change" in first["error"]
     assert pm.needs_you("abandoned", None, _run_json(r).get("reason"), _run_json(r).get("landed_as"))
     other = r.commit_on_main({"docs/elsewhere.md": "not the run's change\n"})
     refused = r.v1("landed-as", other)
@@ -64,6 +68,8 @@ def test_landed_as_takes_only_the_run_s_own_change_on_main(rig):
     assert again.get("ok") is False and "already recorded" in again["error"], again
     restore = r.v1("restore")
     assert restore.get("ok") is False, restore
+    again_land = r.v1("run-land", "--prepare")
+    assert again_land.get("ok") is False and "already landed" in again_land["error"], again_land
 
 
 def test_abandon_with_landed_as_records_both(rig):

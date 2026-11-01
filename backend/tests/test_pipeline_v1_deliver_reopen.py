@@ -106,6 +106,8 @@ def test_deliver_sends_the_run_back_once(rig):
     r.drive(until="deliver")
     r.edit({"backend/core/mod.py": "def add(a, b):\n    return b + a  # two\n"})
     r.v1("report-tests", "--artifact", r.artifact("report", r.report()))
+    step = r.v1("status")["next"]
+    assert "landing already went back to REVIEW once" in step["why"], step
     out = r.v1("land", "--message", MESSAGE)
     assert out.get("ok") is False and "reopened" not in out, out
     assert "never reviewed" in str(out.get("failed")), out
@@ -165,3 +167,7 @@ def test_the_patch_comparison_counts_only_the_run_s_own_edits(tmp_path):
     assert _patch_paths_changed(str(repo), base1, reviewed, base2, spaced) == ["b.py"]
     extra = tree({"b.py": "def f():\n    return 2\n", "d.py": "new\n"})
     assert _patch_paths_changed(str(repo), base1, reviewed, base2, extra) == ["d.py"]
+    # names git would quote or a header split would misread
+    odd = tree({"my b/f.py": "x\n", "é.py": "y\n"})
+    assert _patch_paths_changed(str(repo), base1, reviewed, base2, odd) == sorted(
+        ["d.py", "my b/f.py", "é.py"])

@@ -16,6 +16,7 @@ import re
 import logging
 import os
 import secrets
+import shlex
 import subprocess
 import time
 import uuid
@@ -62,20 +63,28 @@ def _patch_paths_changed(root: str, then_base: str, then_tree: str, now_base: st
     """The paths whose part of the run's patch differs between (then_base -> then_tree)
     and (now_base -> now_tree), compared file by file as LG-1's patch id does: line
     numbers and blob ids aside, every other byte counts (whitespace and indentation
-    included). A path in one patch only counts; renames are a delete plus an add."""
-    def per_file(base: str, tree: str) -> dict[str, str]:
-        out: dict[str, list[str]] = {}
-        current = None
-        for line in _git(root, "diff-tree", "-p", "--binary", "--no-renames", base,
-                         tree).splitlines():
-            if line.startswith("diff --git "):
-                current = line
-                out[current] = []
-            elif current is not None and not line.startswith("index "):
-                out[current].append(re.sub(r"^@@ -[0-9,]+ \+[0-9,]+ @@", "@@", line))
-        return {head.split(" b/", 1)[-1]: "\n".join(body) for head, body in out.items()}
-    then, now = per_file(then_base, then_tree), per_file(now_base, now_tree)
-    return sorted(path for path in set(then) | set(now) if then.get(path) != now.get(path))
+    included). A path in one patch only counts; renames are a delete plus an add. Paths
+    come from git's NUL-separated list, never parsed out of a diff header (a space or a
+    quoted non-ASCII name would be misread)."""
+    def names(base: str, tree: str) -> set[str]:
+        try:            # unstripped (as _tree_paths): a leading space survives
+            out = subprocess.run(["git", "-C", str(root), "diff-tree", "-r", "-z",
+                                  "--name-only", "--no-renames", base, tree], check=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 timeout=60).stdout
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise EngineError(f"git diff-tree failed: {exc}") from exc
+        return {p for p in out.split("\0") if p}
+
+    def patch(base: str, tree: str, path: str) -> str:
+        body = _git(root, "--literal-pathspecs", "diff-tree", "-p", "--binary",
+                    "--no-renames", base, tree, "--", path).splitlines()
+        return "\n".join(re.sub(r"^@@ -[0-9,]+ \+[0-9,]+ @@", "@@", line) for line in body
+                         if not line.startswith(("index ", "diff --git ")))
+    then, now = names(then_base, then_tree), names(now_base, now_tree)
+    return sorted(path for path in then | now if path not in then or path not in now
+                  or patch(then_base, then_tree, path) != patch(now_base, now_tree, path))
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -934,8 +943,10 @@ class RunEngine:
             payload = event.get("payload") or {}
             if event.get("stage") != "review":
                 continue
+            # a re-ask reviews its original's trees, which already counted when handed out
             if event.get("kind") in ("stage_complete", "handout") \
-                    and isinstance(payload.get("code_trees"), dict):
+                    and isinstance(payload.get("code_trees"), dict) \
+                    and not payload.get("reask_of"):
                 last = payload["code_trees"]
                 last_bases = payload.get("bases") if isinstance(payload.get("bases"), dict) \
                     else {}
@@ -1886,8 +1897,8 @@ class RunEngine:
         """Record that an abandoned run's change is on main as *commits* (repo -> rev;
         a single-repo run may give ``{"": rev}``), so nobody is asked to act on it (design
         2026-10-31 §3 change 4). Each commit must be in its repo's integration branch
-        and carry this run's change: it is the run's own branch tip, or its patch is the
-        one the latest REVIEW completion recorded (file by file, ``_patch_paths_changed``).
+        and carry this run's change: its patch is the one the latest REVIEW completion
+        recorded (file by file, ``_patch_paths_changed``; the run's REPORT files aside).
         Anything else is refused with what differs."""
         state = self.projection()
         if state["status"] != "abandoned":
@@ -1901,9 +1912,6 @@ class RunEngine:
         if set(given) != set(expected):
             raise EngineError(f"landed-as needs one commit per repo: {sorted(expected)}")
         branches = self._recorded_branches()
-        run_branches = {row.get("repo_name"): row.get("branch")
-                        for row in self._read_json(self._retention_path(), {}).get(
-                            "worktrees", []) if isinstance(row, Mapping)}
         reviewed: dict[str, Any] = {}
         for event in self.store.read_events():
             if event.get("kind") == "stage_complete" and event.get("stage") == "review":
@@ -1921,24 +1929,22 @@ class RunEngine:
                                     branch], capture_output=True, text=True, timeout=60)
             if probe.returncode != 0:
                 raise EngineError(f"{name}: {sha[:12]} is not on {branch}")
-            tip = None
-            if run_branches.get(name):
-                try:
-                    tip = _git(root, "rev-parse", "--verify", run_branches[name])
-                except EngineError:
-                    tip = None
-            if tip != sha:
-                base = (reviewed.get("bases") or {}).get(name)
-                tree = (reviewed.get("code_trees") or {}).get(name)
-                if not base or not tree:
-                    raise EngineError(f"{name}: {sha[:12]} is not the run's branch tip and "
-                                      "the run recorded no reviewed change to compare it with")
-                differ = [path for path in _patch_paths_changed(root, base, tree,
-                                                                f"{sha}^", sha)
-                          if not path.startswith(reserved)]
-                if differ:
-                    raise EngineError(f"{name}: {sha[:12]} does not carry the reviewed change; "
-                                      "it differs in " + ", ".join(differ[:20]))
+            # the commit must carry the change REVIEW completed on; the run branch's tip
+            # proves nothing (an uncommitted run leaves it at the commit it started from)
+            base = (reviewed.get("bases") or {}).get(name)
+            tree = (reviewed.get("code_trees") or {}).get(name)
+            if not base or not tree:
+                raise EngineError(f"{name}: the run recorded no reviewed change with its base "
+                                  "(a run from before reviews recorded bases), so no commit "
+                                  "can be checked against it")
+            # a root commit's parent is the empty tree
+            parent = _git(root, "rev-list", "--parents", "-n", "1", sha).split()[1:2] \
+                or [_git(root, "hash-object", "-t", "tree", "/dev/null")]
+            differ = [path for path in _patch_paths_changed(root, base, tree, parent[0], sha)
+                      if not path.startswith(reserved)]
+            if differ:
+                raise EngineError(f"{name}: {sha[:12]} does not carry the reviewed change; it "
+                                  "differs in " + ", ".join(differ[:20]))
             resolved[name] = sha
         self.store.append_new(writer=self.authority.writer("cli"), kind="landed_as",
                               at=_now(), ordinal=NEXT, payload={"commits": resolved})
@@ -2021,6 +2027,9 @@ class RunEngine:
         if not lifecycle.caps(self.contract["profile"]).lands_code:
             raise EngineError(RESEARCH_LANDS_NOTHING)
         state = self.projection()
+        if state.get("landed_as"):
+            raise EngineError(f"the run's change already landed as {state['landed_as']}: "
+                              "nothing to land")
         if self.contract["mode"] == "isolated" and set(self.effective_repos()) != set(self.contract["expected_repos"]):
             if state["status"] == "abandoned" or (
                     state["status"] == "completed" and state.get("landing") == "not_landed"):
@@ -3064,16 +3073,18 @@ class RunEngine:
                     + (context.run.get("changed_since_review") or {}).get(name, [])
                     if moved else [last[name], trees[name]])
             mine = []
-            for line in _git(root, "diff", "--numstat", "--no-renames", *span).splitlines():
+            for line in _git(root, "--literal-pathspecs", "diff", "--numstat", "--no-renames",
+                             *span).splitlines():
                 ins, delete, path = line.split("\t", 2)
                 mine.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
                              "deletions": int(delete) if delete.isdigit() else 0,
                              "is_test": "/tests/" in path or path.startswith("tests/")})
             changed += mine
-            diff = _git(root, "diff", "--no-ext-diff", "--no-renames", *span)
+            diff = _git(root, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-renames",
+                        *span)
             if moved:
-                before = _git(root, "diff", "--no-ext-diff", "--no-renames", then_bases[name],
-                              last[name], "--", *span[3:])
+                before = _git(root, "--literal-pathspecs", "diff", "--no-ext-diff",
+                              "--no-renames", then_bases[name], last[name], "--", *span[3:])
                 diffs.append(f"## {name}: main moved under the run and its own patch changed "
                              "in these files (a conflict resolution, or an edit)\n### the "
                              "run's patch of them now\n" + diff + "\n### the same files as "
@@ -3082,6 +3093,8 @@ class RunEngine:
                 diffs.append(f"## {name} (changed since the last review)\n" + diff)
             # the guidance is the run's base version, as for R1 (§3.5.2)
             per_repo[name] = {"root": root, "base": self._fork_base(name, root), "diff": diff,
+                              # main moved: callers of the run's own change, not main's
+                              "callers_base": run_bases[name] if moved else None,
                               "paths": [row["path"] for row in mine if not row["is_test"]
                                         and not row["path"].endswith(_DOC_SUFFIXES)]}
         r1 = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
@@ -3096,7 +3109,8 @@ class RunEngine:
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         handouts = []
         knowledge = self._expert_knowledge(changed)
-        callers = self._callers_block({name: {"root": item["root"], "base": last[name],
+        callers = self._callers_block({name: {"root": item["root"],
+                                              "base": item.get("callers_base") or last[name],
                                               "tree": trees[name]}
                                        for name, item in per_repo.items()})
         for expert in roster:
@@ -3158,7 +3172,7 @@ class RunEngine:
                 review_input=self._reask_notice(answer or {}) + original,
                 code_trees=payload.get("code_trees"),
                 incremental_from=payload.get("incremental_from"),
-                bases=payload.get("bases"),
+                bases=payload.get("bases"), reask_of=handout["event_id"],
                 knowledge_items=payload.get("knowledge_items") or (),
                 knowledge_project=payload.get("knowledge_project")))
             reviewers.append({"id": expert, "reason": "its answer could not be read: asked "
@@ -3196,6 +3210,9 @@ class RunEngine:
         code (design 2026-10-31 §3 change 1)."""
         rows = review.ReviewOrchestrator(self.store, self.run_dir).findings(events)
         phase = review.review_phase(events, rows)
+        if phase == "wait":
+            return ("the code changed while this review's R2 is out: wait for it (next "
+                    "lists the handout); after it, a second pass is only for an open HIGH")
         if phase != "closed":
             return ("the code changed after this review's first round: review-address the "
                     "findings the change fixes, so R2 reviews it (" + ("open HIGH / "
@@ -3207,8 +3224,9 @@ class RunEngine:
         steps = []
         for name, paths in sorted((context.run.get("unreviewed") or {}).items()):
             if name in repos and last.get(name):
-                steps.append(f"git -C {repos[name]} restore --source={last[name]} "
-                             "--worktree -- " + " ".join(paths[:20]))
+                steps.append(f"git -C {shlex.quote(str(repos[name]))} --literal-pathspecs "
+                             f"restore --source={last[name]} --worktree -- "
+                             + " ".join(shlex.quote(path) for path in paths[:20]))
         return ("this review's fixing passes are done and the code changed after it; no "
                 "review will see that change, so it cannot land. Restore the reviewed code ("
                 + ("; ".join(steps) or "the files changed since the last review")

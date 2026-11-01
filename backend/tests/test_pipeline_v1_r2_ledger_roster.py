@@ -11,9 +11,9 @@ is made with ``record_fix_handoff`` (the event-by-event writer):
   each with the hunk of its own address event;
 - with such an address uncovered, ``next`` names it, REVIEW cannot complete (RV-5), and
   ``review-address`` with no items dispatches its R2;
-- a new R2 handout for an expert carries the findings of that expert's unanswered one
-  (which then waits like ``next`` says); an UNANSWERED line is re-askable after a later
-  answer of the same expert; accepted / refuted findings are never sent to R2 again;
+- a second fixing pass waits for the first pass's R2 (one pass per visit, design
+  2026-10-31); an UNANSWERED line stays re-askable meanwhile; accepted / refuted
+  findings are never sent to R2 again;
 - a pass prepared on a log that moved, or refused by the ledger, writes nothing.
 """
 from __future__ import annotations
@@ -84,38 +84,38 @@ def _answer(r: Rig, handout: dict, finding_id: str, word: str, tool: str) -> Non
         {"finding_id": finding_id, "status": word, "note": "n"}) + "\nNO FINDINGS", tool)
 
 
-def test_a_new_r2_handout_carries_the_unanswered_one(rig):
+def test_a_second_pass_waits_for_the_first_pass_s_r2(rig):
+    """One fixing pass per visit (design 2026-10-31 §3 change 1): while its R2 is out, a
+    second pass is refused and writes nothing; the first R2 stays the one to spawn."""
     ids = _at_review(rig)
     first = rig.v1("review-address", "--artifact", rig.artifact("a", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
          "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]}))
     assert first.get("ok") is True, first
+    before = len(rig.events())
     second = rig.v1("review-address", "--artifact", rig.artifact("b", {"pass": 2, "items": [
         {"finding_id": ids["docs"], "hunk": "@@ docstring"}]}))
-    assert second.get("ok") is True, second
-    latest = _r2_handouts(rig)[-1]
-    assert sorted(latest["payload"]["finding_ids"]) == sorted(ids.values())
-    again = rig.v1("review-address", "--artifact", rig.artifact("c", {"pass": 3, "items": [
-        {"finding_id": ids["behavior"], "hunk": "@@ x"}]}))
-    assert again.get("ok") is False and "not answered yet" in again.get("error", ""), again
+    assert second.get("ok") is False and "has not answered yet" in second["error"], second
+    assert len(rig.events()) == before
+    assert _r2_handouts(rig)[-1]["payload"]["finding_ids"] == [ids["behavior"]]
     from core.run_protocol import review
     assert review.uncovered_addresses(rig.events()) == []
 
 
-def test_an_unanswered_line_stays_re_askable_after_a_later_answer(rig):
+def test_an_unanswered_line_stays_re_askable_while_a_second_pass_is_refused(rig):
     from core.run_protocol import review
     ids = _at_review(rig)
     out = rig.v1("review-address", "--artifact", rig.artifact("a", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
          "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]}))
     _answer(rig, out["handouts"][0], ids["behavior"], "RESOLVED", "r2-0")   # not allowed
-    out = rig.v1("review-address", "--artifact", rig.artifact("b", {"pass": 2, "items": [
+    refused = rig.v1("review-address", "--artifact", rig.artifact("b", {"pass": 2, "items": [
         {"finding_id": ids["docs"], "hunk": "@@ docstring"}]}))
-    (handout,) = out["handouts"]
-    assert handout and _r2_handouts(rig)[-1]["payload"]["finding_ids"] == [ids["docs"]]
-    _answer(rig, handout, ids["docs"], "RESOLVED", "r2-1")
+    assert refused.get("ok") is False and "has not answered yet" in refused["error"], refused
     targets = review.r2_redispatch_targets(rig.events())
     assert [set(wrong) for _answer_id, wrong in targets.values()] == [{ids["behavior"]}], targets
+    redo = rig.v1("review-address", "--artifact", rig.artifact("c", {"pass": 2, "items": []}))
+    assert redo.get("ok") is True and redo["handouts"], redo
 
 
 def test_accepted_or_refuted_findings_are_never_sent_to_r2_again():
