@@ -1,9 +1,9 @@
 ---
 title: DailyActivity, Timeline and ToDo — one job each
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 project: SwarmAI
-status: design r3 (premise review folded in; r3: a model never closes the person's work)
+status: design r4 (r3: a model never closes the person's work; r4: the summary creates no ToDo)
 follows: 2026-10-31-extraction-at-task-end.md, 2026-10-31-daily-activity-useful.md
 ---
 # DailyActivity, Timeline and ToDo — one job each
@@ -49,23 +49,32 @@ follow-up list.
   hook's open list, `earlier_row`'s follow-ups, `_legacy_records`' Next parsing,
   `da_resummarize`'s follow-up handling, the context-health "stale Next: build" check.
 
-**D2 — ToDo: the only store of work still to do; one producer from sessions.**
-- The producer is the DailyActivity summarizer (the post-session hook), not S7. It runs
-  about two minutes after a session goes quiet, for every desktop session; S7 runs an
-  hour later and its admission rules exclude exactly this content ("the state of the
-  moment is not knowledge", "record nothing" without citable evidence). The worker Hive
-  does not register this hook (`session_hooks.register_default_hooks`), so no ToDo is
-  written where nobody sees it.
-- The summarizer is shown **every** open ToDo (pending, overdue, in_discussion: id and
-  whole title) and answers with items, as many as the session left open (a cap of
-  three dropped real open work on 2026-10-31, so there is none): a new one (title + a description that
-  stands alone: what, why, where it stopped, session and day), `same` as an open ToDo
-  (nothing written), or `done` naming an open ToDo the session finished. `done` goes
-  through the guard the lifecycle hook already uses (`db.todos.update_if`: only an
-  active ToDo with no review state moves, to `review_state='completed'`; a person's
-  Confirm sets `handled`), so a Confirm or Reject made meanwhile wins.
-- A new ToDo is `source_type='ai_detected'`, `status='pending'`. `_find_duplicate`
-  also counts `overdue`. Release steps are never ToDos (the prompt says so; D4).
+**D2 — ToDo: the only store of work still to do.**
+
+> **r4 (XG, 2026-11-01): the summary creates no ToDo.** A ToDo has two ways in: the
+> person asks for one in a session, or the agent in the session records work decided
+> for later and says so in its reply (`s_radar-todo`, at most two per session). The
+> summarizer keeps one ToDo job: `done` sends an open ToDo the session finished to
+> review. Why, measured on the live workspace 2026-11-01: the hook runs 120 s after a
+> session goes quiet, not when it ends, so one still-working session wrote 18 ToDos in
+> 32 minutes (its own current steps, "wait for the 5 BUILD sub-agents"); 46 were
+> written that day from 8 sessions; a later check of every model-written ToDo found
+> most already done when written or not wanted. A summary reading the transcript
+> afterwards cannot tell "half done" from "decided for later"; the agent in the
+> session can, and the person sees it. Continuity needs no ToDo: the row says where
+> the work stopped (D1). (r3 had the summarizer write `new` ToDos; the bullets below
+> are updated to r4.)
+
+- The DailyActivity summarizer (the post-session hook) creates no ToDo. It is shown
+  **every** open ToDo (pending, overdue, in_discussion: id and whole title) and answers
+  only `done`, naming an open ToDo the session finished; anything else is dropped
+  (`summarization._valid_todos`, schema enum `["done"]`). `done` goes through the guard
+  the lifecycle hook already uses (`db.todos.update_if`: only an active ToDo with no
+  review state moves, to `review_state='completed'`; a person's Confirm sets
+  `handled`), so a Confirm or Reject made meanwhile wins. The worker Hive does not
+  register this hook (`session_hooks.register_default_hooks`).
+- A ToDo the agent writes in a session goes through the backend create gate
+  (`ai_detected`) or the radar CLI (`chat`); release steps are never ToDos (D4).
 - The other writers of open work are removed: S7's `follow_up` gap kind and the event
   unit's `follow_up` field (contracts_v2). The other gap kinds (debt, risk,
   deferred_finding, process_issue) stay in the project's IMPROVEMENT: they are

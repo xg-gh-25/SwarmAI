@@ -43,8 +43,8 @@ def test_the_role(as_role):
 
 
 def test_a_worker_registers_only_the_extraction_hook(as_role, tmp_path, monkeypatch):
-    """...so a worker Hive writes no DailyActivity and no ToDo: the ToDo producer is the
-    DailyActivity hook (design 2026-10-31-continue-lookback-todo D2)."""
+    """...so a worker Hive writes no DailyActivity and sends no ToDo to review (that is
+    the DailyActivity hook, design 2026-10-31-continue-lookback-todo D2)."""
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
     from core.session_hooks import SessionLifecycleHookManager, register_default_hooks
     full = ["daily_activity_extraction", "cdf_v2_session_extraction", "workspace_auto_commit",

@@ -20,8 +20,8 @@ Per day file:
 
 Days are rebuilt in order and, within a day, sessions in the order they started, in
 batches of ``--jobs``. A rebuilt row is history: it is shown no ToDos and its ToDo
-actions are not applied (work left open lives in the ToDos, design
-2026-10-31-continue-lookback-todo D2). Only sessions that already have a row or block
+actions are not applied (design 2026-10-31-continue-lookback-todo D2). Only sessions
+that already have a row or block
 somewhere are rebuilt. A row that is already complete (written by the model, same
 message count) is not asked again, so a second run redoes only what failed.
 

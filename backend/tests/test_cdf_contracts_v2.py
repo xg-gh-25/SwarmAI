@@ -125,8 +125,9 @@ def test_routing_touches_no_filesystem_from_a_read_only_cwd(tmp_path, monkeypatc
 
 
 def test_open_work_is_no_cdf_unit():
-    """Design 2026-10-31-continue-lookback-todo D2: work left for later is a ToDo, so a
-    follow_up gap and an event's follow_up field are refused; the other gap kinds stay."""
+    """Design 2026-10-31-continue-lookback-todo D2: work left for later is not a CDF
+    unit, so a follow_up gap and an event's follow_up field are refused; the other gap
+    kinds stay."""
     import pydantic
     import pytest as _pytest
     from core.ingestion import contracts_v2 as C

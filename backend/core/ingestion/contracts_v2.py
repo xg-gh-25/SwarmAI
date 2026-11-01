@@ -59,8 +59,9 @@ Scope = str  # "user" | "agent" | "world" | "project:<name>"
 EvidenceAnchor = Annotated[str, Field(min_length=3, pattern=r"^(event|finding|run_event|doc|commit|unit|metric|web):.+")]
 ReferenceKind = Literal["learned", "analysis", "design", "spec", "note", "link"]
 # A gap is a weak point of the project that stays until fixed. Work a session leaves
-# for later is not a gap: it is a ToDo, written by the session's activity summary
-# (design 2026-10-31-continue-lookback-todo D2).
+# for later is not a gap: the session's activity row says where it stopped, and a ToDo
+# is written by the person or the agent in the session (design
+# 2026-10-31-continue-lookback-todo D2).
 GapKind = Literal["debt", "risk", "deferred_finding", "process_issue"]
 
 
@@ -218,7 +219,7 @@ class EventUnit(_Unit):
     def _no_follow_up(cls, data):
         """A payload stored, or sent by a Hive, before follow_up was removed (design
         2026-10-31-continue-lookback-todo D2) still carries the key (null when unset):
-        it is dropped, so the event stays valid. Open work is a ToDo now."""
+        it is dropped, so the event stays valid. Open work is not a CDF unit."""
         if isinstance(data, dict) and "follow_up" in data:
             data = {k: v for k, v in data.items() if k != "follow_up"}
         return data

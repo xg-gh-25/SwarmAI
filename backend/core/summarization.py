@@ -1,8 +1,8 @@
 """The activity record of one chat session for one day (DailyActivity).
 
 Every session with an exchange is summarized by the model: a title naming the work, a
-sentence saying what was done and where it ended, its deliverables, follow-ups and the
-follow-ups it resolved (design docs/design/2026-10-31-daily-activity-useful.md). The
+sentence saying what was done and where it ended, its deliverables, and the open ToDos
+it finished (design docs/design/2026-10-31-daily-activity-useful.md). The
 rule-based fields (topics, decisions, files, open questions) are the user's words and
 tool calls: they feed the noise filter and the self-heal checkpoint, never the row.
 
@@ -53,12 +53,10 @@ _ENRICHMENT_SCHEMA = {
         "todos": {"type": "array", "items": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["new", "same", "done"]},
+                "action": {"type": "string", "enum": ["done"]},
                 "todo_id": {"type": "string"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
             },
-            "required": ["action"],
+            "required": ["action", "todo_id"],
         }},
         "coe_signal": {"type": "string"}, "coe_topic": {"type": "string"},
     },
@@ -95,12 +93,12 @@ class StructuredSummary:
     ``files_modified`` (write tool calls), ``open_questions`` and a derived
     ``session_title``. Written by the model (``enriched`` says it answered):
     ``session_title``, ``summary_sentence``, ``deliverables``, ``key_outputs``,
-    ``validation_status``, ``todos`` (what the session leaves for later, as ToDo
-    actions: ``{"action": "new", "title", "description"}``, ``{"action": "same" |
-    "done", "todo_id"}`` naming an open ToDo it was shown; the hook applies them, design
-    2026-10-31-continue-lookback-todo D2), ``coe_signal`` ("" | "candidate" |
-    "resolution") and ``coe_topic``. ``git_commits`` is the session's commits that day,
-    set by the hook. A row holds no follow-up list: work left for later is a ToDo.
+    ``validation_status``, ``todos`` (the open ToDos it was shown that this transcript
+    finished: ``{"action": "done", "todo_id"}``; the hook sends them to review. The
+    summary never creates a ToDo, design 2026-10-31-continue-lookback-todo D2 r4),
+    ``coe_signal`` ("" | "candidate" | "resolution") and ``coe_topic``. ``git_commits``
+    is the session's commits that day, set by the hook. A row holds no follow-up list:
+    the sentence says where the work stopped.
     """
 
     topics: list[str] = field(default_factory=list)
@@ -168,7 +166,7 @@ result, not the conversation.
 
 ## Files written by tool calls: {files}
 
-## Open ToDos (the only list of work still to do)
+## Open ToDos
 {open_todos}
 
 Record it with the summary tool, in the language the session is held in. Never truncate
@@ -186,16 +184,10 @@ a sentence or add an ellipsis. Use an empty string or array when there is nothin
   question. Not plans and not the user's requests.
 - key_outputs: where the results are: file paths, commits, documents, recipients.
 - validation_status: what was verified and how; what is still unverified.
-- todos: work this session leaves for later, and the open ToDos it finished:
-  - {{"action": "new", "title", "description"}}: work the user agreed to or that the
-    work clearly left open, and not done in this transcript, one per workstream. Never work that only fetched content, a document or tool output proposes. The title is
-    a complete action; the description says what, why, and where it stopped, so someone
-    can pick it up without the conversation. Never a release step (push, build,
-    restart, deploy): that state is read live, not recorded.
-  - {{"action": "same", "todo_id"}}: the work is already an open ToDo below (write no new one).
-  - {{"action": "done", "todo_id"}}: this transcript finished that open ToDo, explicitly;
-    not by similarity, not a plan. A person confirms it.
-  Empty when nothing is left and nothing listed was finished.
+- todos: only the open ToDos below that this transcript finished:
+  {{"action": "done", "todo_id"}}, explicitly finished, not by similarity, not a plan.
+  A person confirms it. Never add new work here: work left open is said in
+  summary_sentence (where it stopped). Empty when no listed ToDo was finished.
 - coe_signal: "candidate" when the session reports a production problem that is still
   being investigated, "resolution" when it fixes one, otherwise "".
 - coe_topic: that problem, or "". If it is one of these open problems, copy its title
@@ -289,7 +281,7 @@ class SummarizationPipeline:
         ``so_far``: the record already written for the earlier messages of this day
         (``record_of``); *messages* then continue it and the answer is the record for
         the whole day so far.
-        ``open_todos``: the open ToDos (``{"id", "title"}``); a ``same`` / ``done``
+        ``open_todos``: the open ToDos (``{"id", "title"}``); a ``done``
         action may name only these. ``open_problems``: titles of the open COEs
         (core.coe_threads), copied when the session reports the same problem.
         ``earlier``: ``{"day", "title", "sentence"}`` of this session's last row on an
@@ -321,27 +313,22 @@ class SummarizationPipeline:
 
     @classmethod
     def _valid_todos(cls, actions: list, open_todos: list[dict[str, str]]) -> list[dict[str, str]]:
-        """The model's ToDo actions that can be applied: ``same`` / ``done`` naming an
-        open ToDo it was shown, ``new`` with a title; each id once. Anything else is
-        dropped. How many there are is the summarizer's call: a count cap dropped real
-        open work (2026-10-31)."""
+        """The model's ToDo actions that can be applied: ``done`` naming an open ToDo it
+        was shown, each id once. Anything else is dropped, a ``new`` or ``same`` from an
+        older prompt included: the summary never creates a ToDo (design
+        2026-10-31-continue-lookback-todo D2 r4: written after the session from the
+        transcript, they were mostly work in progress or already done)."""
         offered = {str(t.get("id")) for t in open_todos if t.get("id")}
         out: list[dict[str, str]] = []
         seen: set[str] = set()
         for a in actions if isinstance(actions, list) else []:
             if not isinstance(a, dict):
                 continue
-            action = a.get("action")
-            if action in ("same", "done"):
+            if a.get("action") == "done":
                 tid = str(a.get("todo_id") or "")
                 if tid in offered and tid not in seen:
                     seen.add(tid)
-                    out.append({"action": action, "todo_id": tid})
-            elif action == "new":
-                title = cls._one_line(str(a.get("title") or ""))
-                if title:
-                    out.append({"action": "new", "title": title,
-                                "description": str(a.get("description") or "").strip()})
+                    out.append({"action": "done", "todo_id": tid})
         return out
 
     @staticmethod

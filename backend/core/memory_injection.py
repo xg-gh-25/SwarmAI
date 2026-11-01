@@ -98,8 +98,8 @@ def _upgrade_record(record: dict) -> dict:
 
 
 def _row(day: date, record: dict) -> str:
-    """One session row: date, time, title, what was done and where it stopped. Work
-    left for later is a ToDo, never a line here (design 2026-10-31-continue-lookback-todo)."""
+    """One session row: date, time, title, what was done and where it stopped. No
+    follow-up list (design 2026-10-31-continue-lookback-todo)."""
     title = str(record.get("title") or "Untitled").strip()
     sentence = str(record.get("summary_sentence") or "").strip()
     head = f"- {day.isoformat()} {record.get('timestamp', '')} {title}".rstrip()

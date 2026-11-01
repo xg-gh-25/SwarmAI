@@ -231,13 +231,14 @@ When user says "add a todo for X" during conversation:
 
 ### AI-detected todos (source_type=`ai_detected`) — not written by this skill
 
-An `ai_detected` ToDo is one a model writes after the fact from a session transcript:
-the session's activity summary records the work the session left open, after the
-session goes quiet. The backend writes it through one gate (credentials redacted;
-refused when the injection scanner flags its text), which this CLI cannot apply, so
-`add` does not accept `--source-type ai_detected`. A ToDo you create during a chat,
-with the user there, is a `chat` ToDo; give it `--description` (why, and what
-triggered it), `--next-step` and `--files`.
+An `ai_detected` ToDo is one a model writes without the user in the loop. The backend
+writes it through one gate (credentials redacted; refused when the injection scanner
+flags its text), which this CLI cannot apply, so `add` does not accept
+`--source-type ai_detected`. Nothing writes one after a session: the activity summary
+only sends an open ToDo the session finished to review, it never creates one (a ToDo
+written later from the transcript was mostly work still in progress or already done).
+A ToDo you create during a chat, with the user there, is a `chat` ToDo; give it
+`--description` (why, and what triggered it), `--next-step` and `--files`.
 
 ### Meeting todos (source_type=`meeting`)
 
@@ -255,6 +256,11 @@ triggered it), `--next-step` and `--files`.
 Only `next_step` is required. Everything else is optional.
 
 ## Proactive ToDo Detection
+
+A ToDo has two ways in: the user asks for one in a session, or you, the agent in the
+session, record work that was decided to be done later and say so in your reply. No
+ToDo is written after the session. So when a session leaves real work for later, this
+is the only moment it gets recorded: decide it here, with the rules below.
 
 ### The Regret Test
 

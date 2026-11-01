@@ -3,8 +3,9 @@
 Two files per local day:
 
 1. **Markdown** (``YYYY-MM-DD.md``) — the human-readable record, indexed for recall:
-   one block per session (title, summary, Delivered, Outputs, Validation). Work left
-   for later is a ToDo, not a line here (design 2026-10-31-continue-lookback-todo).
+   one block per session (title, summary, Delivered, Outputs, Validation). The summary
+   says where the work stopped; there is no follow-up list (design
+   2026-10-31-continue-lookback-todo).
 2. **JSONL sidecar** (``YYYY-MM-DD.jsonl``) — one JSON line per session with the
    structured fields; read by the prompt injection, the COE threads and the session
    statistics.

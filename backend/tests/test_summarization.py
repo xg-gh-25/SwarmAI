@@ -299,10 +299,8 @@ class TestModelWrittenRecord:
         assert summary.session_title == "解析器修复"
         assert summary.summary_sentence == "修好了解析器的空行崩溃，测试全绿。"
         assert summary.deliverables == ["commit abc: parser skips blank lines"]
-        # only offered ids, each once; a new title on one line
-        assert summary.todos == [
-            {"action": "new", "title": "给解析器补 边界测试", "description": "空行之外"},
-            {"action": "done", "todo_id": "t-open"}]
+        # only a done naming an offered id, once; new and same are dropped
+        assert summary.todos == [{"action": "done", "todo_id": "t-open"}]
         assert summary.coe_signal == ""                # unknown value reset
 
     @pytest.mark.asyncio
@@ -328,8 +326,8 @@ class TestModelWrittenRecord:
         prompt = prompts[0]
         assert "Already recorded on 2026-10-30: DB migration: Half the tables moved." in prompt
         assert "## Conversation on 2026-10-31:" in prompt
-        assert "where it ended" in prompt and "at most" not in prompt.split("todos:")[1].split("same")[0]
-        assert "Never a release step" in prompt          # release state is read live (D4)
+        assert "where it ended" in prompt
+        assert '"action": "new"' not in prompt           # the summary creates no ToDo (D2 r4)
         assert "follow-up" not in prompt.lower()
 
     @pytest.mark.asyncio
@@ -392,27 +390,35 @@ class TestModelWrittenRecord:
         monkeypatch.setattr(sm, "_CHUNK_TOKENS", 20)
         base = {"title": "t", "summary_sentence": "s", "deliverables": [], "key_outputs": [],
                 "validation_status": "", "coe_signal": "", "coe_topic": ""}
-        replies = iter([{**base, "todos": [{"action": "new", "title": "PART-ONE-WORK"}]},
-                        {**base, "todos": [{"action": "new", "title": "part two work"}]}])
+        replies = iter([{**base, "todos": [{"action": "done", "todo_id": "t-one"}]},
+                        {**base, "todos": [{"action": "done", "todo_id": "t-two"}]}])
         prompts: list[str] = []
         monkeypatch.setattr(SummarizationPipeline, "_call_enrichment_llm",
                             staticmethod(lambda prompt: prompts.append(prompt) or next(replies)))
-        summary = await pipeline.summarize([_user("a" * 80), _assistant("b" * 80)])
-        assert len(prompts) == 2 and "PART-ONE-WORK" not in prompts[1].split("## Conversation")[0]
-        assert [t["title"] for t in summary.todos] == ["PART-ONE-WORK", "part two work"]
+        offered = [{"id": "t-one", "title": "one"}, {"id": "t-two", "title": "two"}]
+        summary = await pipeline.summarize([_user("a" * 80), _assistant("b" * 80)],
+                                           open_todos=offered)
+        assert len(prompts) == 2 and '"todo_id"' not in prompts[1].split("## Conversation")[0]
+        assert [t["todo_id"] for t in summary.todos] == ["t-one", "t-two"]
 
-    def test_every_new_todo_is_kept_whole_and_only_offered_ids(self):
-        long = "why " * 800
-        actions = [{"action": "new", "title": f"work {i}", "description": long} for i in range(5)] + [
-            {"action": "new", "title": "   "}, {"action": "bogus", "todo_id": "a"}, "junk",
-            {"action": "same", "todo_id": "a"}, {"action": "done", "todo_id": "a"},
-            {"action": "done", "todo_id": "b"}]
+    def test_only_a_done_naming_an_offered_todo_is_kept(self):
+        """The summary creates no ToDo (design 2026-10-31-continue-lookback-todo D2 r4):
+        new and same are dropped, a done must name an offered id, each id once."""
+        actions = [{"action": "new", "title": "work 1", "description": "why"},
+                   {"action": "same", "todo_id": "a"}, {"action": "bogus", "todo_id": "a"}, "junk",
+                   {"action": "done", "todo_id": "a"}, {"action": "done", "todo_id": "a"},
+                   {"action": "done", "todo_id": "b"}]
         out = SummarizationPipeline._valid_todos(actions, [{"id": "a", "title": "x"}])
-        new = [a for a in out if a["action"] == "new"]
-        assert [a["title"] for a in new] == [f"work {i}" for i in range(5)]
-        assert all(a["description"] == long.strip() for a in new)      # never cut
-        assert [a for a in out if a["action"] != "new"] == [{"action": "same", "todo_id": "a"}]
+        assert out == [{"action": "done", "todo_id": "a"}]
         assert SummarizationPipeline._valid_todos("not a list", []) == []
+
+    def test_the_schema_and_prompt_offer_only_done(self):
+        from core.summarization import _ENRICHMENT_PROMPT, _ENRICHMENT_SCHEMA
+        item = _ENRICHMENT_SCHEMA["properties"]["todos"]["items"]
+        assert item["properties"]["action"]["enum"] == ["done"]
+        assert set(item["properties"]) == {"action", "todo_id"}
+        assert '"action": "new"' not in _ENRICHMENT_PROMPT
+        assert '"action": "same"' not in _ENRICHMENT_PROMPT
 
     def test_the_schema_asks_only_for_fields_with_a_reader(self):
         from core.summarization import _ENRICHMENT_SCHEMA
