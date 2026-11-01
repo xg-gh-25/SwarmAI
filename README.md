@@ -40,7 +40,7 @@ SwarmAI is built for one purpose: **compounding.** Every task should leave the s
 
 SwarmAI has **one brain**. This is a deliberate choice against "many brains", the common design where every agent in a team carries its own memory and its own role.
 
-- **Many Brains, one mind.** Each project has a **Brain** (a DDD: the project's domain knowledge kept as one standard set of documents), and a built-in **General Brain** holds what belongs to no single project. They are the knowledge of one mind, not separate agents. Chat, the pipeline, content, Eval and every remote run read the same Brain.
+- **Many Brains, one mind.** Each project has a **Brain** (a DDD: the project's domain knowledge kept as one standard set of documents), and a built-in **General Brain** holds what belongs to no single project. They are the knowledge of one mind, not separate agents: one cognitive system, with domain-scoped Brains that share one set of rules for how knowledge is written, checked and used. Chat, the pipeline, content, Eval and every remote run read the same Brain.
 - **The brain learns from every session by itself.** When a session ends, the agent that did the work reads back its own record and declares what changed its judgment: a correction you made, a decision, a lesson, a pitfall. **CDF** (the Cognitive Distillation Flow, SwarmAI's learning pipeline) checks the facts behind each one and files it in the right place. Nobody has to say "remember this".
 - **Hives and reviewers are hands, not brains.** A worker Hive gets a copy of the Brain, does the work, writes no cognition of its own and sends every lesson home. Review experts start with fresh context and keep no memory, which is what keeps them honest critics.
 - **Why one brain.** Compounding needs one place where value adds up. With many brains, knowledge splits and drifts, every hand-off loses context, and you end up as the integrator. With one brain, a lesson learned on any Hive improves the next task everywhere, there is one place where things wait for you (**Needs You**), and one set of numbers says whether it is getting better.
@@ -55,7 +55,7 @@ SwarmAI has **one brain**. This is a deliberate choice against "many brains", th
 
 A Brain has one six-section structure (Identity · Knowledge · Gates · Capabilities · Delivery · Refresher), the same for every domain, governing `0..N` assets: a code repo, a data source, a document corpus, or nothing at all. Brain Hub shows every Brain, what it knows and what it learned this week. Each Brain carries a **Project Agent**, its standard definition of how work runs. Code intelligence builds itself once a Brain has a repo.
 
-The **Autonomous Pipeline** is the optional delivery mode for code. It owns the two ends: the front end understands the need (EVALUATE with Gate-0, THINK, PLAN), and the back end guards quality (REVIEW with Gate-2, TEST, DELIVER, REFLECT). How the code is written is the agent's call; whether it is done is decided by deterministic checks.
+The **Autonomous Pipeline** is the optional delivery mode for code. It owns the two ends: the front end understands the need (EVALUATE with Gate-0, THINK, PLAN), and the back end guards quality (REVIEW with Gate-2, TEST, DELIVER, REFLECT). How the code is written is the agent's call; whether it is done is decided by deterministic checks. Each link has its own check: the intent by the requirements and Gate-0, the change by a test that fails on the defect and passes on the fix, the result by expert review, and what the run learned by REFLECT, which turns it into a lesson or a closed gap.
 
 ![Autonomous Pipeline v1](./assets/readme/autonomous-pipeline.png)
 
@@ -67,7 +67,7 @@ The **Autonomous Pipeline** is the optional delivery mode for code. It owns the 
 
 ### 3 · Cognitive self-evolution: the write side and the read side
 
-**Write side.** Every source (sessions, pipeline runs, Hive runs, outside signals, code changes) enqueues into one inbox, and one worker decides each item in five steps. The agent with the context decides the meaning; code checks only facts. A Brain's main files hold only what is in force: every change is an add, an override or a withdrawal, and history is kept outside the main files. Nothing decays on a timer. Only your own words or a measurement may enter the files read in every session.
+**Write side.** Every source (sessions, pipeline runs, Hive runs, outside signals, code changes) enqueues into one inbox, and one worker decides each item in five steps. The agent with the context decides the meaning; code checks only facts. A Brain's main files hold only what is in force: every change is an add, an override or a withdrawal, and history is kept outside the main files. Nothing decays on a timer, but validity is still checked: every new commit is scanned and an entry the code has made false is retired (the only automatic retirement), a judge that took no part in writing scores samples of what was kept, and every real mistake is traced to whether stale knowledge caused it. Only your own words or a measurement may enter the files read in every session.
 
 ![Cognitive Distillation Flow](./assets/readme/cdf-flow.png)
 
@@ -82,7 +82,7 @@ The **Autonomous Pipeline** is the optional delivery mode for code. It owns the 
 | **Repository guidance** | The first time a session touches a repo: its own `AGENTS.md`, review patterns and lessons from earlier runs. |
 | **A pipeline run's knowledge** | Files the run writes for its stages (product and decisions for EVALUATE; tech, improvement and lessons for THINK and PLAN; project knowledge for the reviewer), with ids its documents must cite. |
 
-Every unit arrives whole: recall decides which entries to show, never how much of one.
+Every unit arrives whole: recall decides which entries to show, never how much of one. Because the every-turn files are injected whole, their size and the time to first token are measured; when they grow, entries are consolidated by declaration, never cut.
 
 ---
 
