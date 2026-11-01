@@ -468,7 +468,8 @@ def _test_commands(run_dir: Optional[str]) -> list[dict[str, str]]:
     for repo, rows in sorted(reports.items()) if isinstance(reports, dict) else []:
         for row in rows if isinstance(rows, list) else []:
             if isinstance(row, dict) and isinstance(row.get("command"), str):
-                result = row.get("result") if row.get("result") in ("pass", "fail", "not_run") else "other"
+                result = row.get("result") if row.get("result") in (
+                    "pass", "fail", "not_run", "pre_existing") else "other"
                 out.append({"repo": str(repo)[:100], "command": row["command"][:MAX_SUMMARY_COMMAND],
                             "result": result})
     return out[:MAX_SUMMARY_TESTS]

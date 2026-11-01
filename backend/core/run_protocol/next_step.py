@@ -293,7 +293,8 @@ def next_step(engine, *, previous_stage: str | None = None,
                    why=("write and test the change your own way, "
                         "then pass your report on stdin: "
                         '{"reports": [{"repo", "commands": [{"command", "cwd", "result": '
-                        '"pass|fail|not_run", "reason"}], "tests_changed", "rationale"}]}'
+                        '"pass|fail|not_run|pre_existing", "reason"}], "tests_changed", '
+                        '"rationale"}]}'
                         if stage in _CODE_STAGES else
                         "run the final verification on this tree yourself (do not change "
                         "code in TEST), then pass the report on stdin in the same shape"))

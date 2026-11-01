@@ -238,6 +238,7 @@ def _checks(blocks: list[dict], agent: Optional[dict],
         said = [r for cmd, r in reported if _runs(cmd, _norm(v["command"]))]
         if said:
             out.append({"id": v["id"], "status": {"pass": "ran", "fail": "errored",
+                                                  "pre_existing": "errored",
                                                   "not_run": "not_seen"}.get(said[-1], "unknown")})
             continue
         hits = [e for cmd, e in calls if _runs(cmd, _norm(v["command"]))]

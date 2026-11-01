@@ -5,8 +5,9 @@ The pipeline does not run or observe tests. BUILD and TEST end with
 ``stage-complete --artifact -`` carrying ``{"reports": [<one per repo>]}``:
 
     {"repo": "<expected repo name>",
-     "commands": [{"command": "...", "cwd": "...", "result": "pass|fail|not_run",
-                   "reason": "..."}],          # reason required for fail / not_run
+     "commands": [{"command": "...", "cwd": "...",
+                   "result": "pass|fail|not_run|pre_existing",
+                   "reason": "..."}],          # reason required unless pass
      "tests_changed": ["path", ...],            # tests added or changed
      "rationale": "why these tests show the change is right",
      "risk": ["security"]}                      # optional (§3.5.2): dispatches security
@@ -26,7 +27,10 @@ from typing import Any, Mapping, Sequence
 
 # review: a fix's tests, reported for a ``reported_test`` proof (S6-2)
 STAGES = frozenset({"build", "review", "test"})
-RESULTS = ("pass", "fail", "not_run")
+# pre_existing: it ran and failed the same way on the run's base (red before the run;
+# design 2026-11-01-pipeline-delivery-friction D6): like not_run it does not block, and
+# the REPORT lists it apart, as the agent's statement
+RESULTS = ("pass", "fail", "not_run", "pre_existing")
 MAX_COMMANDS = 50
 MAX_TESTS = 200
 MAX_COMMAND_CHARS = 2_000
@@ -119,7 +123,9 @@ def event_payload(stage: str, report: Mapping[str, Any], code_tree: str) -> dict
     counts = {r: sum(1 for c in report["commands"] if c["result"] == r) for r in RESULTS}
     return {"stage": stage, "repo": report["repo"], "code_tree": code_tree,
             "n_pass": counts["pass"], "n_fail": counts["fail"],
-            "n_not_run": counts["not_run"], "report_json": json.dumps(
+            "n_not_run": counts["not_run"],
+            **({"n_pre_existing": counts["pre_existing"]} if counts["pre_existing"] else {}),
+            "report_json": json.dumps(
                 report, ensure_ascii=False, sort_keys=True)}
 
 

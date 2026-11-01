@@ -186,7 +186,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "validation_report": _spec("cli", ("ordinal",), "payload.repo",
                                {"stage": str, "repo": str, "code_tree": str,
                                 "n_pass": int, "n_fail": int, "n_not_run": int,
-                                "report_json": (str, dict)}),
+                                "report_json": (str, dict)},
+                               # red at the run's base too (D6); absent when none
+                               {"n_pre_existing": int}),
     "stage_attempt": _spec("cli", ("stage", "attempt"), "stage",
                            {"check_ids": list}),
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),

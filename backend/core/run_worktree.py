@@ -1358,6 +1358,9 @@ def release(run_id: str, run_state: dict, mains: "dict[str, Path]", reason: str,
                             "ledger": str(ledger) if ledger else None})
         except WorktreeError as exc:
             results.append({"repo": name, "ok": False, "error": exc.message})
+    # the run's base copies (pipeline-v1 base-tree, friction design D6) go with it
+    from core.run_protocol import base_tree
+    base_tree.remove(run_id)
     return results
 
 

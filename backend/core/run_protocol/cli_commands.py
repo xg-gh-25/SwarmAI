@@ -167,6 +167,11 @@ def parser() -> argparse.ArgumentParser:
     review_proof.add_argument("--project", required=True)
     review_proof.add_argument("--run-id", required=True)
     review_proof.add_argument("--artifact", required=True)
+    # the run's base as files, to run a failing test there (friction design D6)
+    base_tree = sub.add_parser("base-tree")
+    base_tree.add_argument("--project", required=True)
+    base_tree.add_argument("--run-id", required=True)
+    base_tree.add_argument("--repo", required=True)
     report_tests = sub.add_parser("report-tests")      # a TEST report in DELIVER (S6-1)
     report_tests.add_argument("--project", required=True)
     report_tests.add_argument("--run-id", required=True)
@@ -411,6 +416,12 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         return {"ok": True, **engine.review_address(_json_arg(args.artifact))}
     if args.command == "report-tests":
         return engine.report_tests(_json_arg(args.artifact))
+    if args.command == "base-tree":
+        from core.run_protocol import base_tree as base_tree_protocol
+        try:
+            return {"ok": True, **base_tree_protocol.extract(engine, args.repo)}
+        except base_tree_protocol.BaseTreeError as exc:
+            return {"ok": False, "error": str(exc)}
     if args.command == "review-proof":
         return {"ok": True, **engine.review_proof(_json_arg(args.artifact))}
     if args.command == "land":
