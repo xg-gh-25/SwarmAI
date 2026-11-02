@@ -22,3 +22,12 @@ data = signer.loads(token)          # raises BadSignature if the token was chang
 JWT libraries put the algorithm in the token header, so a forged token can ask to be
 verified with `none` or a weaker algorithm. A tokensign token carries no algorithm
 field: the server alone decides the digest, so that attack does not exist.
+
+## Installing
+
+```sh
+pip install tokensign
+```
+
+Then check the install: `python -m tokensign --selftest` prints `ok`. The current release
+is 2.1.0.

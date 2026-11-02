@@ -32,11 +32,11 @@
      "signals": [
       "root-readme"
      ],
-     "bytes": 797,
+     "bytes": 946,
      "last_commit": null,
      "included": true,
      "reason": "inlined whole",
-     "text": "# tokensign\n\ntokensign signs data so that a value sent through an untrusted channel (a cookie, a\nquery string, a link in an email) can be checked when it comes back: if anyone changed\nit, `loads()` refuses it.\n\ntokensign does not encrypt. A signed value is readable by anyone who holds it, so never\nput a secret in one.\n\n## Usage\n\n```python\nfrom tokensign import Signer\n\nsigner = Signer(secret_key=\"change-me\")\ntoken = signer.dumps({\"user\": 42})\ndata = signer.loads(token)          # raises BadSignature if the token was changed\n```\n\n## How it compares\n\nJWT libraries put the algorithm in the token header, so a forged token can ask to be\nverified with `none` or a weaker algorithm. A tokensign token carries no algorithm\nfield: the server alone decides the digest, so that attack does not exist.\n"
+     "text": "# tokensign\n\ntokensign signs data so that a value sent through an untrusted channel (a cookie, a\nquery string, a link in an email) can be checked when it comes back: if anyone changed\nit, `loads()` refuses it.\n\ntokensign does not encrypt. A signed value is readable by anyone who holds it, so never\nput a secret in one.\n\n## Usage\n\n```python\nfrom tokensign import Signer\n\nsigner = Signer(secret_key=\"change-me\")\ntoken = signer.dumps({\"user\": 42})\ndata = signer.loads(token)          # raises BadSignature if the token was changed\n```\n\n## How it compares\n\nJWT libraries put the algorithm in the token header, so a forged token can ask to be\nverified with `none` or a weaker algorithm. A tokensign token carries no algorithm\nfield: the server alone decides the digest, so that attack does not exist.\n\n## Installing\n\n```sh\npip install tokensign\n```\n\nThen check the install: `python -m tokensign --selftest` prints `ok`. The current release\nis 2.1.0.\n"
     },
     {
      "path": "docs/design.md",
