@@ -544,11 +544,9 @@ def test_the_record_shows_what_was_said_and_which_tools_were_used():
                                   {"type": "tools_used", "tools": "Read x1", "failed": 1}]
 
 
-def test_the_prompt_states_when_each_destination_is_written():
+def test_the_prompt_speaks_of_the_record_not_a_fork():
+    """When each destination is written: test_cdf_extraction_structure (the standard)."""
     prompt = s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", "")
-    for needle in ("rule in one sentence", "exactly one problem", "what came of it",
-                   "changes how a later judgment"):
-        assert needle in prompt, needle
     assert "your own context" not in prompt                      # no fork: the record is all it reads
 
 

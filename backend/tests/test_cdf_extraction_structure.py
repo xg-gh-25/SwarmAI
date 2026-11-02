@@ -86,3 +86,19 @@ def test_a_report_prepared_before_the_contract_changed_does_not_fail_delivery():
     assert checks._evaluate_check("RF-1", SimpleNamespace(run={"reflect_report": report}))[0] is True
     broken = {k: v for k, v in report.items() if k != "gaps"}      # not the five-part form
     assert checks._evaluate_check("RF-1", SimpleNamespace(run={"reflect_report": broken}))[0] is False
+
+
+def test_when_each_destination_is_written_is_one_standard_for_every_door():
+    """The write condition of each destination lives once, in the knowledge standard: the
+    session review renders it, a new Brain's entry contract carries it."""
+    from core import knowledge_standard as ks
+    from core.brain_bootstrap import apply
+    from core.ingestion.sources import s7_review
+    assert len(ks.WRITE_WHEN) == 4 and set(ks.WRITE_WHEN) <= set(ks.sentences())
+    prompt = " ".join(s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", "").split())
+    contract = apply.entry_contract("P")
+    for sentence in ks.WRITE_WHEN:
+        assert " ".join(sentence.split()) in prompt, sentence
+        assert sentence in contract["knowledge_standard"], sentence
+    import inspect
+    assert "exactly one problem" not in inspect.getsource(s7_review)    # no second copy

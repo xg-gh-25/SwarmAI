@@ -11,6 +11,9 @@ One copy, read by every extractor:
 Nothing checks an entry against it: it is what the extractor reads, not a gate.
 
 - ``KEEP_ONLY_IF``, ``STANDS_ALONE``, ``NOT_KNOWLEDGE`` — the sentences, plain text
+- ``WRITE_WHEN`` — when each destination is written; when its condition does not hold,
+  nothing is written there (the fields it needs are required by the unit contract,
+  ``contracts_v2``: applicability, a gap's proposed_next)
 - ``sentences()`` — all of them, in order
 - ``item(n, text)`` — one numbered prompt item, wrapped the way S7 lays its list out
 """
@@ -37,13 +40,24 @@ NOT_KNOWLEDGE = (
     "not knowledge: they stay out of a unit's text.",
 )
 
+WRITE_WHEN = (
+    "The general knowledge takes a unit only when its rule can be stated in one sentence that "
+    "still holds with every project, document and incident taken out.",
+    "A gap is exactly one problem, with a concrete next step; a note on the progress of the "
+    "work is not a gap.",
+    "An event says what was done and what came of it.",
+    "A project's knowledge takes only what changes how a later judgment in that project is "
+    "made (a decision, a model, a pitfall with the sign that it is coming); what a piece of "
+    "work did is in git and the activity record, not in the project's knowledge.",
+)
+
 #: the width S7's numbered list is wrapped to
 WIDTH = 89
 
 
 def sentences() -> list[str]:
     """Every sentence of the standard, in order."""
-    return [KEEP_ONLY_IF, STANDS_ALONE, *NOT_KNOWLEDGE]
+    return [KEEP_ONLY_IF, STANDS_ALONE, *NOT_KNOWLEDGE, *WRITE_WHEN]
 
 
 def item(n: int, text: str) -> str:

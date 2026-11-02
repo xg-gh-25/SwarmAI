@@ -375,6 +375,8 @@ def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, reco
     # the knowledge standard every door extracts to (core/knowledge_standard); item 7 sets
     # this record's own rules between its sentences
     keep, stands = ks.item(2, ks.KEEP_ONLY_IF), ks.item(3, ks.STANDS_ALONE)
+    write_when = ks.item(6, " ".join(["Each destination is written only when its condition "
+                                      "holds; when it does not, write nothing there.", *ks.WRITE_WHEN]))
     stays = ks.item(7, " ".join([
         "Record what stays true, as it stands at the end of this record.", ks.NOT_KNOWLEDGE[0],
         "A problem the record leaves open at its end is a gap; one opened and solved within it "
@@ -413,16 +415,7 @@ concluded is in what you said; that is what to record from.
    that you are about to make it again, true in any project. Not the story of this
    incident: the incident's particulars (the screen, API, file or project it happened in)
    go in a unit of their own for that project, when they are worth keeping.
-6. Each destination is written only when its condition holds; when it does not, write
-   nothing there:
-   - the general knowledge: you can state the rule in one sentence that still holds with
-     every project, document and incident taken out;
-   - a gap: exactly one problem, with a concrete next step; a note on the progress of
-     the work is not a gap;
-   - an event: what was done and what came of it;
-   - a project's knowledge: only what changes how a later judgment in that project is
-     made (a decision, a model, a pitfall with the sign that it is coming). What this
-     session did is in git and the daily activity, not in the project's knowledge.
+{write_when}
 {stays}
 8. Per kind of work:
 {_EXAMPLES}
