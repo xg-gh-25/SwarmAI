@@ -149,7 +149,12 @@ proposal upstream (an issue or PR to SwarmAI).
     valid whole: what is there is in force, and what is not in force is not there. A change
     is an addition, an override or a withdrawal, decided when the new knowledge comes in —
     mechanically, or by the context that made the new decision — never by a later re-judging
-    pass. What was replaced or removed, when and why, is recorded outside the main files.
+    pass. Its quality is made when it is extracted, at every door (a new Brain's first
+    entries, CDF): the sources read whole and the valuable knowledge taken out to one
+    standard. Checks stay light (the deterministic ones on shape and evidence); no per-entry
+    review or stacked model judgment makes up for a weak extraction, and when knowledge falls
+    short the fix goes into what the extractor reads and the standard it extracts to.
+    What was replaced or removed, when and why, is recorded outside the main files.
     Its worth is measured by outcome: whether it holds what it should, and nothing stale.
   - **Recall boundaries.** The **active project's** DDD is recallable on demand (FTS5/BM25,
     `cognition find` reaches its older `*-archive.md` shards too) — reference I
