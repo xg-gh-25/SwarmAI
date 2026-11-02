@@ -6,7 +6,8 @@ single heavy command (a large repository's type check) once went over the unit's
 6 GB limit: the kernel killed that command and systemd's default OOMPolicy=stop then
 stopped the whole service, ending every run on the Hive. The unit keeps the service
 running when one of its processes is killed for memory (OOMPolicy=continue: the command
-fails, the agent sees it), and sizes its limit from the machine, not a fixed number."""
+fails, the agent sees it). A Hive's machine is there for its runs: the service has no
+memory cap or CPU quota of its own; the daemon's spawn budget decides admission."""
 from __future__ import annotations
 
 import re
@@ -35,7 +36,8 @@ def test_a_command_killed_for_memory_does_not_stop_the_hive():
     assert _service().get("OOMPolicy") == "continue"
 
 
-def test_the_memory_limit_is_a_share_of_the_machine_with_room_for_the_system():
-    m = re.fullmatch(r"(\d+)%", _service().get("MemoryMax", ""))
-    assert m, "MemoryMax is a percentage of the machine's memory, not a fixed size"
-    assert 50 <= int(m.group(1)) <= 90
+def test_the_service_may_use_the_whole_machine():
+    svc = _service()
+    assert svc.get("MemoryMax", "infinity") == "infinity"
+    for key in ("MemoryHigh", "CPUQuota", "MemorySwapMax"):
+        assert key not in svc, f"{key}: a Hive's machine is there for its runs"
