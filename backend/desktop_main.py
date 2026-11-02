@@ -58,7 +58,13 @@ def run_py(argv: "list[str]") -> int:
     """``py <script> [args]`` | ``py -m <module> [args]`` | ``py -c <code> [args]`` |
     ``py - [args]`` (program on stdin). Behaves like ``python`` for these forms: ``sys.argv``
     is set the same way, the script's directory goes first on ``sys.path``, ``SystemExit``
-    keeps its code. A module this program does not carry is named on stderr (exit 1)."""
+    keeps its code. A module this program does not carry is named on stderr (exit 1).
+
+    One difference from ``python``: for ``-m``, ``-c`` and ``-`` the working directory goes
+    LAST on ``sys.path``, not first, so a module this program carries always wins over one
+    of the same name in the working directory (an agent often runs ``py -m scripts.<x>``
+    inside a cloned repository that has its own ``scripts`` package). A module only the
+    working directory has is still found."""
     try:
         return _run_py(argv)
     except ModuleNotFoundError as exc:
@@ -71,6 +77,13 @@ def run_py(argv: "list[str]") -> int:
         return 1
 
 
+def _append_cwd() -> None:
+    """The working directory after this program's own modules (see ``run_py``)."""
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.append(cwd)
+
+
 def _run_py(argv: "list[str]") -> int:
     import runpy
     if not argv:
@@ -80,7 +93,7 @@ def _run_py(argv: "list[str]") -> int:
     head, rest = argv[0], argv[1:]
     if head == "-":
         sys.argv = ["-", *rest]
-        sys.path.insert(0, os.getcwd())
+        _append_cwd()
         exec(compile(sys.stdin.read(), "<stdin>", "exec"), {"__name__": "__main__"})  # noqa: S102 — `python -`
         return 0
     if head == "-m":
@@ -88,7 +101,7 @@ def _run_py(argv: "list[str]") -> int:
             print("py -m: a module name is required", file=sys.stderr)
             return 64
         sys.argv = [rest[0], *rest[1:]]
-        sys.path.insert(0, os.getcwd())
+        _append_cwd()
         runpy.run_module(rest[0], run_name="__main__", alter_sys=True)
         return 0
     if head == "-c":
@@ -96,7 +109,7 @@ def _run_py(argv: "list[str]") -> int:
             print("py -c: code is required", file=sys.stderr)
             return 64
         sys.argv = ["-c", *rest[1:]]
-        sys.path.insert(0, os.getcwd())
+        _append_cwd()
         exec(compile(rest[0], "<string>", "exec"), {"__name__": "__main__"})  # noqa: S102 — `python -c`
         return 0
     script = os.path.abspath(head)

@@ -171,3 +171,38 @@ def test_no_product_code_looks_for_a_system_python():
         assert 'which("python3")' not in s, p
     build = (BACKEND.parent / "desktop" / "scripts" / "build-backend.sh").read_text()
     assert 'cat > "$BUILD_DIR/desktop_main.py"' not in build   # one entry file, tracked
+
+
+def _hijack_dir(tmp_path):
+    """A working directory holding a ``scripts`` package whose ``artifact_cli`` writes a
+    marker: the shape of any Python repo an agent works in that has a ``scripts/`` package."""
+    d = tmp_path / "repo"
+    (d / "scripts").mkdir(parents=True)
+    (d / "scripts" / "__init__.py").write_text("")
+    marker = tmp_path / "hijacked"
+    (d / "scripts" / "artifact_cli.py").write_text(
+        f"open({str(marker)!r}, 'w').write('x')\nprint('HIJACKED')\n")
+    return d, marker
+
+
+def test_py_m_runs_the_bundled_module_not_one_in_the_working_directory(tmp_path):
+    # `py -m scripts.<x>` is how product rules run backend scripts, often from inside a
+    # cloned repository: a `scripts` package there must not replace the bundled one
+    d, marker = _hijack_dir(tmp_path)
+    r = _shim("py", "-m", "scripts.artifact_cli", "--help", cwd=d)
+    assert not marker.exists(), r.stdout + r.stderr
+    assert r.returncode == 0 and "HIJACKED" not in r.stdout
+    assert "bind" in r.stdout          # the real artifact_cli lists its subcommands
+
+
+def test_py_c_imports_the_bundled_package_first(tmp_path):
+    d, marker = _hijack_dir(tmp_path)
+    r = _shim("py", "-c", "import scripts.artifact_cli as m, sys; print(m.__file__)", cwd=d)
+    assert r.returncode == 0, r.stderr
+    assert not marker.exists() and str(d) not in r.stdout
+
+
+def test_py_m_still_finds_a_module_only_the_working_directory_has(tmp_path):
+    (tmp_path / "only_here.py").write_text("print('ran from cwd')\n")
+    r = _shim("py", "-m", "only_here", cwd=tmp_path)
+    assert r.returncode == 0 and r.stdout.strip() == "ran from cwd"
