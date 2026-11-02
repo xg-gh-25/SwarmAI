@@ -22,7 +22,7 @@ removing one bumps it)::
               api_contracts: [{path, ref, format, items}],
               commands: [{source, kind, name, command, runs?, flags?}], commands_note,
               code_shape: {structure, graph_clusters} | {unavailable},
-              history: {hotspots: [{file, kind, count, commits}],
+              history: {hotspots: [{file, kind, count, commits, test?}],
                         changelog: {path, sections: [{heading, text}]} | null},
               conventions: {configs: [{path, tool, options}], guides: [path]},
               errors?: {part: message}}]}
@@ -122,6 +122,34 @@ def owned_repos(project_dir: str | Path) -> list[dict]:
 
 
 # ── parts ────────────────────────────────────────────────────────────────────
+
+#: script and interface-definition files: code a fix touches, though code intel has no
+#: parser for them (``_NON_SOURCE_EXTENSIONS`` lists them for that reason)
+_CODE_WITHOUT_PARSER = frozenset({".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+                                  ".graphql", ".proto", ".thrift"})
+
+
+def code_hotspots(hotspots: list[dict]) -> list[dict]:
+    """The hot spots that are code: not a document, data, asset or lock file (a file that
+    is only edited alongside a fix, like a size ratchet or a generated bundle), not in a
+    vendored, generated or fixture directory. A test file stays, tagged ``test: true``.
+    (fixing-spec 2026-11-02-new-brain-setup G4)"""
+    from core.code_intel.analysis import is_test_path
+    from core.code_intel.parser import _NON_SOURCE_EXTENSIONS, is_skipped_location
+    out = []
+    for h in hotspots:
+        f = h["file"]
+        ext = os.path.splitext(f)[1].lower()
+        if (_docs.is_doc(f) or not ext
+                or (ext in _NON_SOURCE_EXTENSIONS and ext not in _CODE_WITHOUT_PARSER)
+                or is_skipped_location(f)
+                or any(rr.is_skipped_dir(d) or d.lower() in _docs._NOT_DOC_DIRS
+                       for d in f.split("/")[:-1])):
+            continue
+        out.append({**h, "test": True} if is_test_path(f, "") else h)
+    return out
+
+
 
 def _code_shape(db_path: Path | None) -> dict:
     if db_path is None:
@@ -333,8 +361,7 @@ def survey_repo(name: str, root: str | Path, db_path: Path | None = None) -> dic
                               {"unavailable": "code shape could not be computed"})
     out["history"] = {
         # Code that keeps needing fixes; documents edited alongside a fix are not hot spots.
-        "hotspots": _part("hotspots", lambda: [h for h in rr.git_gotchas(root, commits=commits)
-                                               if not _docs.is_doc(h["file"])], []),
+        "hotspots": _part("hotspots", lambda: code_hotspots(rr.git_gotchas(root, commits=commits)), []),
         "changelog": _part("changelog", lambda: _changelog(root, docs), None),
     }
     out["conventions"] = _part("conventions", lambda: _conventions(root, files, docs, out["packages"]),

@@ -374,7 +374,7 @@ with knowledge nobody stated.
 | TECH Architecture | ARCHITECTURE / design documents; the entry points |
 | TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility, entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |
 | TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` = the CI / Makefile / package.json that declares it) |
-| TECH Runtime Traps | each `history.hotspots` file with its commit subjects; security / bugfix CHANGELOG entries; SECURITY.md |
+| TECH Runtime Traps | each `history.hotspots` file not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries; SECURITY.md |
 | IMPROVEMENT What Worked | usually empty at birth |
 | IMPROVEMENT What Failed | reverts and repeated fixes, citing the commits' files |
 | IMPROVEMENT What to Watch For | gaps only: what has no evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |

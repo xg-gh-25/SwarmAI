@@ -1122,15 +1122,17 @@ cases:
       \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |\n| TECH Conventions\
       \ | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` =\
       \ the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots` file\
-      \ with its commit subjects; security / bugfix CHANGELOG entries; SECURITY.md |\n| IMPROVEMENT What Worked\
-      \ | usually empty at birth |\n| IMPROVEMENT What Failed | reverts and repeated fixes, citing the commits'\
-      \ files |\n| IMPROVEMENT What to Watch For | gaps only: what has no evidence (untested entry points, a doc\
-      \ that disagrees with the code, an empty PRODUCT section) |\n| PROJECT Recent Decisions | accepted ADRs and\
-      \ design-document decisions (`why`, `rejected_alternatives`) |\n| PROJECT Current Focus / Open Items / Blocked\
-      \ By | the person's live state: never written here |\n\nGood: *\"[pitfall] Changing the default digest invalidates\
-      \ every issued token … Applies\nwhen upgrading or configuring the digest\"* — a trigger, a consequence, a\
-      \ source.\nBad: *\"[model] Uses Python\"* (a fact any file listing shows), *\"[guideline] The README\nexplains\
-      \ usage\"* (a restatement), a version number, a count, \"currently working on …\",\nanything no source supports."
+      \ not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap\
+      \ it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
+      \ SECURITY.md |\n| IMPROVEMENT What Worked | usually empty at birth |\n| IMPROVEMENT What Failed | reverts\
+      \ and repeated fixes, citing the commits' files |\n| IMPROVEMENT What to Watch For | gaps only: what has no\
+      \ evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |\n| PROJECT\
+      \ Recent Decisions | accepted ADRs and design-document decisions (`why`, `rejected_alternatives`) |\n| PROJECT\
+      \ Current Focus / Open Items / Blocked By | the person's live state: never written here |\n\nGood: *\"[pitfall]\
+      \ Changing the default digest invalidates every issued token … Applies\nwhen upgrading or configuring the\
+      \ digest\"* — a trigger, a consequence, a source.\nBad: *\"[model] Uses Python\"* (a fact any file listing\
+      \ shows), *\"[guideline] The README\nexplains usage\"* (a restatement), a version number, a count, \"currently\
+      \ working on …\",\nanything no source supports."
   expected_trajectory:
   - Read entry-contract.json
   - Read survey.json
@@ -1187,7 +1189,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 12bb9be9f8b0f728
+  validated_by_4gate: de884f4d083c8c95
 - id: OFF_BRAIN_FIRST_ENTRIES_ADR
   category: ddd
   dimension: cognition
@@ -1245,15 +1247,17 @@ cases:
       \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |\n| TECH Conventions\
       \ | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` =\
       \ the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots` file\
-      \ with its commit subjects; security / bugfix CHANGELOG entries; SECURITY.md |\n| IMPROVEMENT What Worked\
-      \ | usually empty at birth |\n| IMPROVEMENT What Failed | reverts and repeated fixes, citing the commits'\
-      \ files |\n| IMPROVEMENT What to Watch For | gaps only: what has no evidence (untested entry points, a doc\
-      \ that disagrees with the code, an empty PRODUCT section) |\n| PROJECT Recent Decisions | accepted ADRs and\
-      \ design-document decisions (`why`, `rejected_alternatives`) |\n| PROJECT Current Focus / Open Items / Blocked\
-      \ By | the person's live state: never written here |\n\nGood: *\"[pitfall] Changing the default digest invalidates\
-      \ every issued token … Applies\nwhen upgrading or configuring the digest\"* — a trigger, a consequence, a\
-      \ source.\nBad: *\"[model] Uses Python\"* (a fact any file listing shows), *\"[guideline] The README\nexplains\
-      \ usage\"* (a restatement), a version number, a count, \"currently working on …\",\nanything no source supports."
+      \ not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap\
+      \ it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
+      \ SECURITY.md |\n| IMPROVEMENT What Worked | usually empty at birth |\n| IMPROVEMENT What Failed | reverts\
+      \ and repeated fixes, citing the commits' files |\n| IMPROVEMENT What to Watch For | gaps only: what has no\
+      \ evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |\n| PROJECT\
+      \ Recent Decisions | accepted ADRs and design-document decisions (`why`, `rejected_alternatives`) |\n| PROJECT\
+      \ Current Focus / Open Items / Blocked By | the person's live state: never written here |\n\nGood: *\"[pitfall]\
+      \ Changing the default digest invalidates every issued token … Applies\nwhen upgrading or configuring the\
+      \ digest\"* — a trigger, a consequence, a source.\nBad: *\"[model] Uses Python\"* (a fact any file listing\
+      \ shows), *\"[guideline] The README\nexplains usage\"* (a restatement), a version number, a count, \"currently\
+      \ working on …\",\nanything no source supports."
   expected_trajectory:
   - Read entry-contract.json
   - Read survey.json
@@ -1316,7 +1320,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 17d395d142d0815e
+  validated_by_4gate: aff42a92dc7fa037
 - id: OFF_BRAIN_FIRST_ENTRIES_KNOWLEDGE
   category: ddd
   dimension: cognition
@@ -1371,15 +1375,17 @@ cases:
       \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |\n| TECH Conventions\
       \ | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` =\
       \ the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots` file\
-      \ with its commit subjects; security / bugfix CHANGELOG entries; SECURITY.md |\n| IMPROVEMENT What Worked\
-      \ | usually empty at birth |\n| IMPROVEMENT What Failed | reverts and repeated fixes, citing the commits'\
-      \ files |\n| IMPROVEMENT What to Watch For | gaps only: what has no evidence (untested entry points, a doc\
-      \ that disagrees with the code, an empty PRODUCT section) |\n| PROJECT Recent Decisions | accepted ADRs and\
-      \ design-document decisions (`why`, `rejected_alternatives`) |\n| PROJECT Current Focus / Open Items / Blocked\
-      \ By | the person's live state: never written here |\n\nGood: *\"[pitfall] Changing the default digest invalidates\
-      \ every issued token … Applies\nwhen upgrading or configuring the digest\"* — a trigger, a consequence, a\
-      \ source.\nBad: *\"[model] Uses Python\"* (a fact any file listing shows), *\"[guideline] The README\nexplains\
-      \ usage\"* (a restatement), a version number, a count, \"currently working on …\",\nanything no source supports."
+      \ not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap\
+      \ it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
+      \ SECURITY.md |\n| IMPROVEMENT What Worked | usually empty at birth |\n| IMPROVEMENT What Failed | reverts\
+      \ and repeated fixes, citing the commits' files |\n| IMPROVEMENT What to Watch For | gaps only: what has no\
+      \ evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |\n| PROJECT\
+      \ Recent Decisions | accepted ADRs and design-document decisions (`why`, `rejected_alternatives`) |\n| PROJECT\
+      \ Current Focus / Open Items / Blocked By | the person's live state: never written here |\n\nGood: *\"[pitfall]\
+      \ Changing the default digest invalidates every issued token … Applies\nwhen upgrading or configuring the\
+      \ digest\"* — a trigger, a consequence, a source.\nBad: *\"[model] Uses Python\"* (a fact any file listing\
+      \ shows), *\"[guideline] The README\nexplains usage\"* (a restatement), a version number, a count, \"currently\
+      \ working on …\",\nanything no source supports."
   expected_trajectory:
   - Read entry-contract.json
   - Read handbook.md
@@ -1437,4 +1443,4 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: c5dec5d8b768749d
+  validated_by_4gate: 87f1978bb624353b

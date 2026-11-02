@@ -362,9 +362,12 @@ def test_recall_all_passes_the_project_to_the_library_leg(repo: Path, kdb) -> No
 def test_documents_fixed_alongside_code_are_not_hotspots(repo: Path) -> None:
     for i in range(2):
         _write(repo, "docs/guide.md", f"# Guide\n\nrev {i}\n")
-        _git(repo, "commit", "-q", "-am", f"fix: guide typo {i}")
+        _write(repo, "scripts/limits.tsv", f"a\t{i}\n")   # a ratchet edited with each fix
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", f"fix: guide typo {i}")
     hot = {h["file"] for h in survey.survey_repo("acme", repo)["history"]["hotspots"]}
     assert "docs/guide.md" not in hot and "src/a.py" in hot
+    assert "scripts/limits.tsv" not in hot
 
 
 def test_specs_endpoints(repo: Path, tmp_path: Path, monkeypatch) -> None:
@@ -628,3 +631,16 @@ def test_the_root_readme_and_agent_guide_are_read_before_better_linked_docs(tmp_
     assert "README.zh-CN.md" not in inlined[:2]
     agents = next(d for d in out if d["path"] == "AGENTS.md")
     assert agents["tier"] == 1 and "root-agent-guide" in agents["signals"]
+
+
+# ── fix hot spots are code (fixing-spec 2026-11-02 G4) ─────────────────────────
+
+def test_hotspots_keep_code_and_tag_tests_but_drop_data_and_bookkeeping_files():
+    from core.brain_bootstrap.survey import code_hotspots
+    files = ["src/a.ts", "scripts/run.sh", "test/a.test.ts", "test/fixtures/goldens/x.json",
+             "llms-full.txt", "scripts/limits.tsv", "vendor/lib/x.ts", "proto/api.proto"]
+    hs = [{"file": f, "kind": "repeated_fix", "count": 2, "commits": []} for f in files]
+    out = {h["file"]: h for h in code_hotspots(hs)}
+    assert sorted(out) == ["proto/api.proto", "scripts/run.sh", "src/a.ts", "test/a.test.ts"]
+    assert out["test/a.test.ts"]["test"] is True
+    assert "test" not in out["src/a.ts"]
