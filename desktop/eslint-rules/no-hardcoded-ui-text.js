@@ -56,6 +56,7 @@ export const EXCEPTIONS = [
   { text: 'MB', reason: 'unit symbol after a number' },
   { text: 'GB', reason: 'unit symbol after a number' },
   { text: 'v', reason: 'version prefix, as in v2.3.0' },
+  { text: '~/SwarmAI-Repos', reason: 'a folder path (placeholder), the same in every language' },
 ];
 
 /** Patterns allowed as they are. Each with its reason. */

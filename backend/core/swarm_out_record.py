@@ -249,7 +249,9 @@ def funnel(row: dict, rec: dict, d: dict) -> dict[str, Any]:
             from core import hive_files
             placed = [p.get("local") for p in hive_files.placed(row["dispatch_id"])
                       if isinstance(p, dict) and p.get("local")]
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — the line shows without the placed file
+            logger.warning("swarm_out_record: placed files of %s unreadable (%s)",
+                           row.get("dispatch_id"), type(exc).__name__)
             placed = []
 
     def last(*decisions: str) -> Optional[dict]:

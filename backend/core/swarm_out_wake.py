@@ -86,7 +86,9 @@ async def _idle(router: Any, session: str) -> bool:
         return False
     try:
         return await session_pending.count_pending(session) == 0
-    except Exception:  # noqa: BLE001 — not knowing is not idle
+    except Exception as exc:  # noqa: BLE001 — not knowing is not idle
+        logger.warning("swarm_out_wake: queued messages of %s unreadable (%s)", session[:8],
+                       type(exc).__name__)
         return False
 
 
