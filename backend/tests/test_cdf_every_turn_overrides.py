@@ -289,3 +289,21 @@ def test_a_text_the_user_withdrew_stays_out_even_when_its_own_file_still_says_it
     decision = run_unit_v2(_row(_cog(title="Exports", what=body), source="S7", tainted=False),
                            cdf_env["workspace"])
     assert (decision.decision, decision.reason) == ("reject", "withdrawn")
+
+
+def test_a_user_quoted_unit_is_checked_before_it_retires_any_every_turn_entry(cdf_env, monkeypatch):
+    """Round 2: a unit grounded on a real but unrelated user quote passed the floor and
+    retired a measured entry without the isolated check; every target it retires is asked."""
+    from core.ingestion import user_check
+    from core.ingestion.api import connect_rw
+    connect_rw().close()
+    path = _memory(cdf_env, _MEM_ENTRY)
+    _set_basis(_MEM_CAND, "measured")
+    monkeypatch.setattr(pipeline_v2, "_user_texts", lambda unit, row: ["use pnpm here"])
+    monkeypatch.setattr(user_check, "grounds", lambda claim, texts, **_: user_check.Verdict(
+        "deleting a branch" not in claim, "checked"))
+    unit = _cog(title="Use pnpm", what="Use pnpm for installs in this workspace.", user_quote="use pnpm",
+                overrides=[_ref(cdf_env, path, "deleting a branch")])
+    decision = run_unit_v2(_row(unit, source="S7", tainted=False), cdf_env["workspace"])
+    assert not decision.version_vector.get("overrides")
+    assert decision.version_vector["override_refused"][-1]["reason"] == "user_check"

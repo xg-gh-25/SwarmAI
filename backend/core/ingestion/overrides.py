@@ -63,8 +63,9 @@ class Checked:
     refused: list[dict] = field(default_factory=list)      # {ref, reason}
     older: bool = False                                     # the unit is older than a target
     closes: list[str] = field(default_factory=list)        # targets retired as closed (gaps)
-    # (anchor, entry text) of targets that rest on the user's words: retired only when the
-    # isolated user check finds the user's words replace them (pipeline_v2)
+    # (anchor, entry text) of every-turn / General Brain targets of a unit resting on the
+    # user's words, or that rest on them: retired only when the isolated user check finds
+    # the user's words replace them (pipeline_v2)
     ask_user: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -259,7 +260,10 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
             continue
         if entry.anchor not in out.targets:
             out.targets.append(entry.anchor)
-            if rests_on_user:
+            if rests_on_user or basis == "user":
+                # a unit resting on a user quote is asked whether those words replace the
+                # entry, whatever the entry rests on: injected text can pair a real,
+                # unrelated quote with an override
                 out.ask_user.append((entry.anchor, entry.text))
     if not local:
         return out
