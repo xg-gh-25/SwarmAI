@@ -333,7 +333,7 @@ def _single_grep_n(command: str) -> bool:
     """Whether *command* is one grep / rg call with line numbers and no other command:
     only then is a bare ``N:`` line of its output a line of the one file it reads."""
     import shlex
-    if any(sep in command for sep in (";", "&&", "||", "|", "\n")):
+    if any(sep in command for sep in (";", "&", "|", "\n", "`", "$(")):
         return False
     try:
         tokens = shlex.split(command)
@@ -342,6 +342,8 @@ def _single_grep_n(command: str) -> bool:
     if not tokens or tokens[0] not in {"grep", "egrep", "rg"}:
         return False
     flags = [t for t in tokens[1:] if t.startswith("-") and not t.startswith("--")]
+    if "--no-filename" in tokens or any("h" in f[1:] for f in flags):
+        return False            # several files' lines would print without their names
     return "--line-number" in tokens or any("n" in f[1:] for f in flags)
 
 

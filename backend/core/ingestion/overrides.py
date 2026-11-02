@@ -53,8 +53,14 @@ logger = logging.getLogger(__name__)
 
 APPLIED_EVENT = "override_applied"
 _DATE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
-_CAND = re.compile(r"cand:(cand-[0-9a-f]+)\.unit")
+# an entry's CDF id comes from its own marker comment (units.cand_id), never from a
+# cand id its text happens to cite
 MIN_HEAD = 12     # normalized characters of a declared first line that must match
+
+
+def _cand(text: str) -> str | None:
+    from .units import cand_id
+    return cand_id(text)
 
 
 @dataclass
@@ -248,15 +254,15 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
             else:
                 out.refused.append({"ref": ref, "reason": why})
             continue
-        cand = _CAND.search(entry.text)
+        cand = _cand(entry.text)
         if cand is None:
             out.refused.append({"ref": ref, "reason": "human_written"})
             continue
-        rests_on_user = _target_basis(conn, cand.group(1)) == "user"
+        rests_on_user = _target_basis(conn, cand) == "user"
         if rests_on_user and basis != "user":
             out.refused.append({"ref": ref, "reason": "weaker_than_target"})
             continue
-        if not _said_later(conn, out, ref, entry.text, cand.group(1), new_said):
+        if not _said_later(conn, out, ref, entry.text, cand, new_said):
             continue
         if entry.anchor not in out.targets:
             out.targets.append(entry.anchor)
@@ -281,15 +287,15 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
                                 or ("not_found" if not units else "ambiguous")})
             continue
         unit = units[0]
-        cand = _CAND.search(unit.text)
+        cand = _cand(unit.text)
         if cand is None:
             out.refused.append({"ref": ref, "reason": "human_written"})
             continue
-        anchor = _cdf_anchor(workspace, unit.path, cand.group(1))
+        anchor = _cdf_anchor(workspace, unit.path, cand)
         if anchor is None:
             out.refused.append({"ref": ref, "reason": "not_found"})
             continue
-        if not _said_later(conn, out, ref, unit.text, cand.group(1), new_said):
+        if not _said_later(conn, out, ref, unit.text, cand, new_said):
             continue
         if anchor not in out.targets:
             out.targets.append(anchor)
@@ -336,12 +342,12 @@ def check_session_own(conn: sqlite3.Connection, *, workspace: Path, project: str
         if entry is None:
             out.refused.append({"ref": ref, "reason": why})
             continue
-        cand = _CAND.search(entry.text)
+        cand = _cand(entry.text)
         if cand is None:
             out.refused.append({"ref": ref, "reason": "human_written"})
             continue
         row = conn.execute("SELECT source_ref, unit_kind, COALESCE(source_v2, source) "
-                           "FROM ingestion_inbox WHERE id=?", (cand.group(1),)).fetchone()
+                           "FROM ingestion_inbox WHERE id=?", (cand,)).fetchone()
         if row is not None and row[1] == "gap" and is_open_gap(entry):
             # a gap closes when an event says it is done, whichever session opened it:
             # the work that finishes a gap is usually done in a later conversation. Only

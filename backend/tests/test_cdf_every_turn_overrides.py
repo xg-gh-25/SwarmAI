@@ -307,3 +307,58 @@ def test_a_user_quoted_unit_is_checked_before_it_retires_any_every_turn_entry(cd
     decision = run_unit_v2(_row(unit, source="S7", tainted=False), cdf_env["workspace"])
     assert not decision.version_vector.get("overrides")
     assert decision.version_vector["override_refused"][-1]["reason"] == "user_check"
+
+
+# ── an entry is the one its own marker comment names, never a cand id in its text ──
+
+def test_an_entry_is_named_by_its_marker_comment_not_a_cand_id_in_its_text(tmp_path):
+    """Entries cite other entries in prose ("Kept: cand:cand-…"); the identity is the
+    writer's own marker comment, the last one, which may carry more fields."""
+    from core.ingestion.units import cand_marker, parse_units
+    ws = tmp_path / "ws"
+    (ws / ".context").mkdir(parents=True)
+    p = ws / ".context" / "MEMORY.md"
+    p.write_text("# Memory\n\n## Guidelines\n\n"
+                 "- [guideline] **Keep the newer one** Kept: cand:cand-bbbbbbbbbbbbbbbbbbbbbbbb.unit "
+                 "as the survivor. <!-- cand:cand-aaaaaaaaaaaaaaaaaaaaaaaa.unit | project_hint:\"x\" -->\n",
+                 encoding="utf-8")
+    (unit,) = [u for u in parse_units(p, root=ws) if u.identity.startswith("cand:")]
+    assert unit.identity == "cand:cand-aaaaaaaaaaaaaaaaaaaaaaaa.unit"
+    assert cand_marker("text cand:cand-x.unit and no comment") is None
+
+
+def test_the_basis_read_for_a_target_is_its_own_entrys(cdf_env):
+    """A cand id of an inferred entry in a user-grounded entry's text must not make the
+    target look inferred (it would skip weaker_than_target and the isolated check)."""
+    real, other = "cand-cccccccccccccccccccccccc", "cand-dddddddddddddddddddddddd"
+    path = _memory(cdf_env, f"- [guideline] **Always ask before deleting a branch** See {other}.unit "
+                            f"(cand:{other}.unit). <!-- cand:{real}.unit -->")
+    _set_basis(real, "user")
+    _set_basis(other, "inferred")
+    out = _check_global(cdf_env, _ref(cdf_env, path, "deleting a branch"), store="MEMORY", basis="measured")
+    assert (out.targets, out.refused[0]["reason"]) == ([], "weaker_than_target")
+
+
+def test_a_long_entry_can_still_be_retired_after_the_isolated_check(cdf_env, monkeypatch):
+    """The check takes at most user_check.MAX_CLAIM_CHARS; an entry longer than that could
+    never be retired. The claim shows the start of a long entry and stays within it."""
+    from core.ingestion import user_check
+    from core.ingestion.api import connect_rw
+    connect_rw().close()
+    long_body = "The user wants a question before any branch is deleted. " * 60
+    path = _memory(cdf_env, f"- [guideline] **Always ask before deleting a branch** {long_body}"
+                            f"<!-- cand:{_MEM_CAND}.unit -->")
+    _set_basis(_MEM_CAND, "user")
+    monkeypatch.setattr(pipeline_v2, "_user_texts", lambda unit, row: ["no need to ask before deleting merged branches"])
+    seen = []
+
+    def grounds(claim, texts, **_):
+        seen.append(len(claim))
+        return user_check.Verdict(len(claim) <= user_check.MAX_CLAIM_CHARS, "checked")
+    monkeypatch.setattr(user_check, "grounds", grounds)
+    unit = _cog(title="Merged branches may be deleted without asking",
+                what="Delete merged branches without asking first.", user_quote="no need to ask before deleting merged branches",
+                overrides=[_ref(cdf_env, path, "deleting a branch")])
+    decision = run_unit_v2(_row(unit, source="S7", tainted=False), cdf_env["workspace"])
+    assert seen and max(seen) <= user_check.MAX_CLAIM_CHARS
+    assert decision.version_vector.get("overrides") == [f".context/MEMORY.md#Guidelines#cand:{_MEM_CAND}.unit"]

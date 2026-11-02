@@ -22,7 +22,23 @@ from core.ddd_entry_lifecycle import (
     parse_entries,
 )
 
-_CAND = re.compile(r"\bcand:([A-Za-z0-9_.:-]+)\b")
+# The writer's identity marker: a comment that begins with ``cand:<id>`` (it may carry
+# more fields, ``<!-- cand:<id> | project_hint:"…" -->``). Entries cite other entries in
+# their text ("Kept: cand:cand-….unit"), so a bare ``cand:`` anywhere is not an identity.
+_MARKER = re.compile(r"<!--\s*cand:([A-Za-z0-9_.:-]+?)\s*(?:\|[^>]*?)?-->")
+
+
+def cand_marker(text: str) -> str | None:
+    """The id the entry's own marker comment names (the last one), or None."""
+    found = _MARKER.findall(text or "")
+    return found[-1] if found else None
+
+
+def cand_id(text: str) -> str | None:
+    """The CDF candidate id (``cand-<hex>``) of the entry's own marker, or None."""
+    marker = cand_marker(text)
+    m = re.fullmatch(r"(cand-[0-9a-f]+)\.unit", marker or "")
+    return m.group(1) if m else None
 _H2 = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _H3 = re.compile(r"^###\s+([CKO]\d+|[^\n]+?)\s*$", re.MULTILINE)
 
@@ -102,8 +118,8 @@ def _unit(path: str, section: str, text: str, offsets: _Offsets, start: int,
           taint: str | None = None) -> Unit:
     raw = text.encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
-    marker = _CAND.search(text)
-    identity = f"cand:{marker.group(1)}" if marker else baseline.get(digest, digest)
+    marker = cand_marker(text)
+    identity = f"cand:{marker}" if marker else baseline.get(digest, digest)
     byte_start = offsets(start)
     return Unit(path=path, section=section, byte_start=byte_start,
                 byte_end=byte_start + len(raw), identity=identity,

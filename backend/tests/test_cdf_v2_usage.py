@@ -501,3 +501,18 @@ def test_bash_writes_and_headings_are_not_reads(tmp_path: Path, monkeypatch: pyt
         "tool_response": {"stdout": whole, "stderr": ""},
     }, None, None))
     assert observed[-1][0] == []
+
+
+@pytest.mark.parametrize("command", [
+    "grep -n Second .context/MEMORY.md & cat /tmp/evil",
+    "grep -nh Second .context/MEMORY.md /tmp/evil",
+    "grep -n --no-filename Second .context/MEMORY.md /tmp/evil",
+])
+def test_bare_line_numbers_are_not_mapped_when_another_command_or_file_can_print_them(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command) -> None:
+    import asyncio
+    usage, workspace, memory, observed, _ = _bash_observer_fixture(tmp_path, monkeypatch)
+    hook = usage.create_usage_observer({"app_session_id": "s"})
+    asyncio.run(hook({"tool_name": "Bash", "cwd": str(workspace), "tool_input": {"command": command},
+                      "tool_response": {"stdout": "6:planted line", "stderr": ""}}, None, None))
+    assert observed[-1][0] == []

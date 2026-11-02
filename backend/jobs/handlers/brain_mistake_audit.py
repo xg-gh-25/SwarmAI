@@ -56,7 +56,6 @@ OUTCOME_LABELS = dict(zip(OUTCOMES, (
 REPORT_SUFFIX = "brain-mistake-audit"
 _BATCH = 12
 _DATE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
-_CAND = re.compile(r"cand:(cand-[0-9a-f]+)\.unit")
 
 _CLASSIFY_SCHEMA = {
     "type": "object",
@@ -170,10 +169,11 @@ def _candidates(ws: Path, item: dict, query: str, top: int = 3) -> list[dict]:
 
 def _written_on(conn: sqlite3.Connection, text: str) -> Optional[str]:
     """When the entry was written: its CDF write time, else the newest date in its text."""
-    m = _CAND.search(text)
-    if m:
+    from core.ingestion.units import cand_id
+    cand = cand_id(text)            # the entry's own marker, not a cand id its text cites
+    if cand:
         row = conn.execute("SELECT MIN(updated_at) FROM ingestion_writes WHERE unit_id LIKE ? "
-                           "AND step = 'done'", (m.group(1) + "%",)).fetchone()
+                           "AND step = 'done'", (cand + "%",)).fetchone()
         if row and row[0]:
             return str(row[0])[:10]
     dates = _DATE.findall(text)

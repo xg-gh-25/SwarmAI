@@ -409,8 +409,14 @@ def _ask_user_about_targets(checked, unit, row) -> None:
     texts = _user_texts(unit, row)
     for anchor, text in checked.ask_user:
         old = " ".join(re.sub(r"<!--.*?-->", " ", text, flags=re.S).split())
-        claim = (f"{_check.claim_of(unit)}\n\nThis replaces the earlier entry, which no longer "
-                 f"holds:\n{old}")
+        head = f"{_check.claim_of(unit)}\n\nThis replaces the earlier entry, which no longer holds:\n"
+        room = _check.MAX_CLAIM_CHARS - len(head)
+        if len(old) > room:
+            # the check reads at most MAX_CLAIM_CHARS: a long entry is shown by its start
+            # (title and first sentences), else it could never be retired; the check still
+            # fails closed when that start is not enough to tell
+            old = old[:max(0, room - 2)].rstrip() + " …"
+        claim = head + old
         verdict = _check.grounds(claim, texts)
         if not verdict.holds and anchor in checked.targets:
             checked.targets.remove(anchor)
@@ -650,7 +656,8 @@ def _repeat_opens(unit: Any, declared_rel: dict[str, Any], declared: Any, destin
             and declared.store == "EVOLUTION" and destination.store != "EVOLUTION"
             and not facts.cited_external and relations_v2.corrections([earlier])):
         return False
-    cand = re.search(r"cand:(cand-[0-9a-f]+)\.unit", earlier.text)
+    from .units import cand_id
+    cand = cand_id(earlier.text)
     if cand is None:
         return True                       # a correction written before CDF or by a person
     session = _get(row, "source_ref")
@@ -661,7 +668,7 @@ def _repeat_opens(unit: Any, declared_rel: dict[str, Any], declared: Any, destin
         return False                      # unknown whose it is: stays in the General Brain
     try:
         found = conn.execute("SELECT source_ref FROM ingestion_inbox WHERE id=?",
-                             (cand.group(1),)).fetchone()
+                             (cand,)).fetchone()
     except sqlite3.Error:
         return False
     finally:
