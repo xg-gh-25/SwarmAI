@@ -51,13 +51,12 @@ FETCH_TURNS = 20
 RECENT_S = 24 * 3600
 #: checks running at once, across all Hives
 MAX_CONCURRENT_CHECKS = 2
-REPORT_CHARS = 4000
 MAX_DELIVERABLES = 50
 MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 12
+SUMMARY_VERSION = 13
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -205,8 +204,20 @@ def _runs(call: str, check: str) -> bool:
 
 
 def _checks(blocks: list[dict], agent: Optional[dict],
-            tests: Optional[list[dict]] = None) -> Optional[list[dict]]:
+            tests: Optional[list[dict]] = None,
+            records: Optional[list[dict]] = None) -> Optional[list[dict]]:
     """Each check the dispatch expected (``agent.validations``, the host's own list).
+
+    With ``records`` (the Hive's check record, one line per check that
+    ``scripts/task_checks`` ran, by id: ``{id, exit, ...}``) each check's status is the
+    record's: ``ran`` for exit 0, ``errored`` for any other exit, ``unknown`` for a check
+    started and never ended, ``not_seen`` for a check with no line. The record is written
+    by the program that ran the check, so how the session's Bash calls were written and
+    what the agent's reply claims no longer decide the status. It is the Hive's record,
+    not proof: the Hive's agent runs as the same OS user and could write that file (on a
+    Hive no file is out of the agent's reach, core/hive_workspace module doc), so it
+    removes accidental misreports, not a deliberate forgery. The rest of this docstring
+    is the fallback for a Hive that keeps no record (``checks_inferred``).
 
     First from the run's own TEST report (``tests``: the commands of the session's
     pipeline summary, the record the run's REPORT shows): ``ran`` for a ``pass``,
@@ -222,6 +233,20 @@ def _checks(blocks: list[dict], agent: Optional[dict],
               and isinstance(v.get("id"), str) and _norm(v.get("command"))]
     if not wanted:
         return None
+    if records is not None:
+        last: dict[str, dict] = {}
+        for line in records:
+            if isinstance(line, dict) and isinstance(line.get("id"), str):
+                last[line["id"]] = line          # the last line of a check is its latest run
+        out = []
+        for v in wanted:
+            line = last.get(v["id"])
+            code = line.get("exit") if line else None
+            status = ("not_seen" if line is None
+                      else "unknown" if not isinstance(code, int) or isinstance(code, bool)
+                      else "ran" if code == 0 else "errored")
+            out.append({"id": v["id"], "status": status})
+        return out
     reported = [("\n".join(_norm(x) for x in str(t.get("command")).splitlines()), t.get("result"))
                 for t in tests or [] if isinstance(t, dict) and isinstance(t.get("command"), str)]
     errored = {b.get("tool_use_id"): b.get("is_error") is True for b in blocks
@@ -279,11 +304,13 @@ def _interventions(all_blocks: list) -> "tuple[int, int, int, int, int, int]":
 
 
 def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = None,
-              dispatch_id: Optional[str] = None) -> dict[str, Any]:
+              dispatch_id: Optional[str] = None,
+              check_records: Optional[list[dict]] = None) -> dict[str, Any]:
     """The result of one run from its session's rows (chronological, as the
     messages API returns them). Pure; never raises on malformed input. ``agent``: the
-    Project Agent the dispatch went under (the host's log row): its checks are looked
-    up in the run's Bash calls."""
+    Project Agent the dispatch went under (the host's log row): its checks are read from
+    ``check_records`` (the Hive's check record, ``_fetch``) when the run kept one, else
+    looked up in the run's Bash calls (``checks_inferred``)."""
     d = _Drops()
     rows = [m for m in messages if isinstance(m, dict)] if isinstance(messages, list) else []
     last_user = max((i for i, r in enumerate(rows) if _is_turn_start(r)), default=-1)
@@ -495,7 +522,14 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
 
     return {
         "ended": ended, "provisional": provisional, "outcome_recorded": bool(after_outcomes),
-        "checks": _checks(all_blocks, agent, summaries[-1].get("tests") if summaries else None),
+        "checks": _checks(all_blocks, agent, summaries[-1].get("tests") if summaries else None,
+                          check_records),
+        # the statuses were inferred from the session's command text: the Hive keeps no
+        # check record for this run (an older Hive, or a task sent without task_checks)
+        "checks_inferred": check_records is None and bool((agent or {}).get("validations")),
+        # the statuses are the Hive's own record (scripts/task_checks): the card says so,
+        # since the Hive's agent could have written that record too (``_checks``)
+        "checks_from_record": check_records is not None and bool((agent or {}).get("validations")),
         "gate_refusals": refusals,
         # older turns were not read: a check or refusal there is not seen
         "checks_partial": bool(has_more),
@@ -507,7 +541,9 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
         "active_s": round(active_ms / 1000) if outcomes else None,
         "tokens": tokens if outcomes else None,
         "cost_usd": cost, "cost_partial": cost_partial,
-        "report": report_full[:REPORT_CHARS], "report_chars": len(report_full),
+        # the whole reply: a reply is one unit, shown whole or not at all (the list view
+        # carries only its length, core/swarm_out._result_brief)
+        "report": report_full, "report_chars": len(report_full),
         "kinds": kinds,
         "work": {
             "repos": repos, "changes": changes,
@@ -548,11 +584,56 @@ def load(dispatch_id: str) -> Optional[dict]:
     return rec if isinstance(rec, dict) else None
 
 
+def _superseded(record: dict) -> None:
+    """A result that ended before the last re-send (``resent_at``, ``turn_started``) is
+    the turn the re-send replaces: it is not final (``provisional``) and says so
+    (``superseded``), so nothing accepts it while the new turn runs or before its result
+    is read. Applied at the one write point (``save``), so no reader has to remember."""
+    res = record.get("result")
+    sent = _parse_time(record.get("resent_at"))
+    if not isinstance(res, dict) or sent is None:
+        return
+    ended = _parse_time(res.get("ended_at"))
+    if ended is not None and ended < sent:
+        res["provisional"] = True
+        res["superseded"] = True
+
+
+def _later_resend(record: dict, p: Path) -> None:
+    """Keep the latest ``resent_at`` of the record being written and the one on disk."""
+    try:
+        on_disk = json.loads(p.read_text(encoding="utf-8")).get("resent_at") if p.exists() else None
+    except (OSError, ValueError, AttributeError):
+        on_disk = None
+    mine, theirs = _parse_time(record.get("resent_at")), _parse_time(on_disk)
+    if theirs is not None and (mine is None or theirs > mine):
+        # the re-send came after this record was loaded: it also restarted the
+        # "no ending recorded" timer (``turn_started``), which this copy predates
+        record["resent_at"] = on_disk
+        record["no_record_since"] = record["no_record_of"] = None
+
+
+def _parse_time(v: Any) -> Optional[datetime]:
+    if not isinstance(v, str):
+        return None
+    try:
+        t = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
 def save(record: dict) -> None:
-    """Write the record atomically (a crash leaves the old file or the new one)."""
+    """Write the record atomically (a crash leaves the old file or the new one). The
+    re-send mark is the later of this record's and the one on disk: ``turn_started``
+    writes it without the run's check lock, so a check that loaded the record before
+    the re-send and saves after it keeps the mark (``_later_resend``). Then a result older
+    than that re-send is marked superseded (``_superseded``)."""
     p = _path(record.get("dispatch_id") or "")
     if p is None:
         raise ValueError("record without a valid dispatch_id")
+    _later_resend(record, p)
+    _superseded(record)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".tmp-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -610,12 +691,16 @@ async def _fetch(row: dict) -> dict:
            "fetch_error": None, "result": prev.get("result"),
            "summary_version": prev.get("summary_version"), "lessons": prev.get("lessons"),
            "records": prev.get("records"), "no_record_since": prev.get("no_record_since"),
-           "no_record_of": prev.get("no_record_of")}
+           "no_record_of": prev.get("no_record_of"), "resent_at": prev.get("resent_at"),
+           "check_records": prev.get("check_records")}
     if not isinstance(sid, str) or not swarm_out.KEY_RE.fullmatch(sid):
         rec["fetch_error"] = "no session"
         return rec
     try:
         inst = await swarm_out._instance(row.get("hive_id") or "")
+        # the Hive's check record (scripts/task_checks), for a task sent with checks by
+        # id; kept here, because the Hive removes it with the workspace
+        await _take_check_records(row, inst, rec)
         # a Hive that keeps run records (core/hive_records): take the new entries, then
         # read only the copy kept here
         records = False
@@ -630,7 +715,11 @@ async def _fetch(row: dict) -> dict:
             # a record that does not start at the session's first turn (a session older
             # than its Hive's records): its result is still read the old way below
         current = prev.get("summary_version") == SUMMARY_VERSION
-        headers = {"If-None-Match": rec["etag"]} if rec["etag"] and rec["result"] is not None and current else {}
+        # the check record is an input of the summary too: when it changed, the
+        # messages are read again even if they did not (their ETag covers only them)
+        same_checks = rec.get("check_records") == prev.get("check_records")
+        headers = {"If-None-Match": rec["etag"]} \
+            if rec["etag"] and rec["result"] is not None and current and same_checks else {}
         async with swarm_out._client(inst) as client:
             r = await client.get(f"/api/chat/sessions/{sid}/messages",
                                  params={"turns": FETCH_TURNS}, headers=headers)
@@ -648,7 +737,7 @@ async def _fetch(row: dict) -> dict:
                 agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
                 # a summary reads Hive-written text: off the event loop
                 rec["result"] = await asyncio.to_thread(summarize, body, r.headers.get("x-has-more") == "1", agent,
-                                                        rec.get("dispatch_id"))
+                                                        rec.get("dispatch_id"), _records_of(row, rec))
                 rec["summary_version"] = SUMMARY_VERSION
                 etag = r.headers.get("etag")
                 rec["etag"] = etag[:200] if isinstance(etag, str) else None
@@ -671,6 +760,53 @@ async def _fetch(row: dict) -> dict:
     return await _keep(rec)
 
 
+#: lines of a check record taken from a Hive (a task has at most a few dozen checks,
+#: each run a few times)
+MAX_CHECK_LINES = 500
+
+
+def _records_of(row: dict, rec: dict) -> Optional[list[dict]]:
+    """The check record to read the checks from: the one kept for a task sent with
+    checks by id (an empty list when the Hive ran none yet), else None (the statuses are
+    then inferred from the session's command text)."""
+    agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
+    if agent.get("checks_by_id") is not True:
+        return None
+    got = rec.get("check_records")
+    return got if isinstance(got, list) else []
+
+
+async def _take_check_records(row: dict, inst: dict, rec: dict) -> None:
+    """Read the Hive's check record of this task (``GET /api/hive/work/<id>/checks``)
+    into ``rec["check_records"]``. A failed read keeps what an earlier check kept: the
+    record is gone from the Hive once the workspace is released."""
+    agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
+    did = row.get("dispatch_id") or ""
+    if agent.get("checks_by_id") is not True or not DISPATCH_ID_RE.fullmatch(did):
+        return
+    from core import swarm_out
+    try:
+        async with swarm_out._client(inst, swarm_out.PROBE_TIMEOUT_S) as client:
+            r = await client.get(f"/api/hive/work/{did}/checks")
+        body = r.json() if r.status_code == 200 else None
+    except Exception as e:  # noqa: BLE001 — Hive slow or unreachable: keep the kept record
+        logger.warning("swarm_out_results: check record of %s not read (%s)", did, type(e).__name__)
+        return
+    lines = body.get("checks") if isinstance(body, dict) else None
+    if not isinstance(lines, list):
+        return
+    keep = []
+    for x in lines[-MAX_CHECK_LINES:]:
+        if not isinstance(x, dict) or not isinstance(x.get("id"), str) or len(x["id"]) > 100:
+            continue
+        code = x.get("exit")
+        keep.append({"id": x["id"],
+                     "exit": code if isinstance(code, int) and not isinstance(code, bool) else None,
+                     "started_at": x.get("started_at") if isinstance(x.get("started_at"), str) else None,
+                     "ended_at": x.get("ended_at") if isinstance(x.get("ended_at"), str) else None})
+    rec["check_records"] = keep
+
+
 def _note_no_record(rec: dict) -> None:
     """Since when the kept result has said ``no_record`` (the last turn has no end
     record) for the same turn (``no_record_of``: the result's ``ended_at``): the earlier
@@ -687,11 +823,13 @@ def _note_no_record(rec: dict) -> None:
 
 
 def turn_started(dispatch_id: str) -> None:
-    """A new turn was sent into the run's session (a re-run): the kept result's
-    "no ending recorded" belongs to the turn before, so its time starts again."""
+    """A new turn was sent into the run's session (a re-run): the kept result belongs
+    to the turn before, so it is no longer final (``resent_at``, ``_superseded``), and
+    its "no ending recorded" time starts again."""
     rec = load(dispatch_id)
-    if not isinstance(rec, dict) or not rec.get("no_record_since"):
+    if not isinstance(rec, dict):
         return
+    rec["resent_at"] = datetime.now(timezone.utc).isoformat()
     rec["no_record_since"] = rec["no_record_of"] = None
     try:
         save(rec)
@@ -751,7 +889,7 @@ async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
         return False
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
     if rows:
-        rec["result"] = await asyncio.to_thread(summarize, rows, partial, agent, did)
+        rec["result"] = await asyncio.to_thread(summarize, rows, partial, agent, did, _records_of(row, rec))
         from core import hive_files
         attach_local(rec["result"], await asyncio.to_thread(hive_files.placed, did))
         rec["summary_version"] = SUMMARY_VERSION
@@ -936,7 +1074,7 @@ def _public_agent(res: dict, agent: Any, dispatch_id: Optional[str] = None) -> d
     under the row's gate names (or ``integrity``)."""
     if not isinstance(agent, dict) or not isinstance(agent.get("brain"), str):
         return {"project_agent": None, "checks": None, "gate_refusals": None, "checks_partial": False,
-                "execution_check": None}
+                "checks_inferred": False, "checks_from_record": False, "execution_check": None}
     ids = [v.get("id") for v in agent.get("validations") or [] if isinstance(v, dict)]
     got = {c.get("id"): c.get("status") for c in res.get("checks") or [] if isinstance(c, dict)}
     names = {g for g in agent.get("gates") or [] if isinstance(g, str)}
@@ -953,6 +1091,8 @@ def _public_agent(res: dict, agent: Any, dispatch_id: Optional[str] = None) -> d
                    for i in ids if isinstance(i, str)] if ids else None,
         "gate_refusals": None if ref is None else {g: _int(ref.get(g)) for g in sorted(gates) if _int(ref.get(g))},
         "checks_partial": res.get("checks_partial") is True,
+        "checks_inferred": res.get("checks_inferred") is True,
+        "checks_from_record": res.get("checks_from_record") is True,
         "execution_check": execution_check(res, agent, dispatch_id),
     }
 

@@ -1465,7 +1465,6 @@
     "detail": {
       "failed": "Can't read the details, try again later",
       "lastReply": "Last reply",
-      "fullReport": "Full text is {{count}} characters; see the Hive page",
       "noReply": "No reply text",
       "commitsOnly": " (commits only; uncommitted changes not read)",
       "moreFiles_one": "{{count}} more file",
@@ -1930,7 +1929,9 @@
         "filesOnHive_other": "{{count}} files written on the Hive",
         "checks_not_seen": "Not seen: {{list}}",
         "checks_errored": "Errored: {{list}}",
-        "checks_unknown": "No result: {{list}}"
+        "checks_unknown": "No result: {{list}}",
+        "inferred": "inferred from command text",
+        "fromRecord": "as recorded on the Hive"
       },
       "rerunBox": {
         "title": "Re-run with correction",
@@ -2000,6 +2001,13 @@
       "deliverables_one": "{{count}} deliverable",
       "deliverables_other": "{{count}} deliverables",
       "onHive": "on the Hive, not brought back",
+      "repoFile": {
+        "open": "Show the change (read only)",
+        "opening": "Opening…",
+        "binary": "Binary file: no diff to show",
+        "tooLarge": "Too large to show here",
+        "failed": "Can't show this change: {{error}}"
+      },
       "refresh": "Refresh",
       "notPlaced": "came back, but could not be put in the Brain here",
       "positionRecords": "Record {{n}} / {{total}}",
@@ -4520,7 +4528,8 @@
       "dropHint": "File will be added to chat context"
     },
     "FileViewer": {
-      "noFileOpen": "No file open"
+      "noFileOpen": "No file open",
+      "versionsNote": "The Hive's change, read only: before and after (nothing here is a file on this machine)"
     },
     "HiveFleetOverlay": {
       "addAccountFirst": "Add an AWS account first (Accounts tab) to deploy a Hive",

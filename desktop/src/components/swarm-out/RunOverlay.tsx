@@ -29,12 +29,20 @@
  * session, a file opened by a click inside it (a swarm:open-file an agent sends never
  * closes it), the Swarm Out panel going off screen, or its run disappearing. History rows
  * and a Brain's run cards open this same card.
+ *
+ * A returned repository's changed file opens its diff: the file is not on this machine,
+ * only in the commits taken back (refs/hive/…), so a click takes them back for review if
+ * they are not yet (return/prepare: nothing lands), reads both versions from git's
+ * objects (return/file) and opens them in the Canvas as a read-only versions document
+ * (swarm:open-file-versions, which only a click here sends). A binary or too large file
+ * says so on its row instead.
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { swarmOutService, type SwarmOutAction, type SwarmOutAsk, type SwarmOutHostAnswer, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAction, type SwarmOutAsk, type SwarmOutFileVersions, type SwarmOutHostAnswer, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
+import { OPEN_FILE_VERSIONS_EVENT, openFileVersions } from '../file-viewer/utils/fileVersions';
 import { Stats } from './LiveDispatches';
 import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { SectionLabel, Tabs } from '../overlay';
@@ -57,6 +65,11 @@ const btn = 'btn-md btn-secondary disabled:opacity-50';
 type Tab = 'deliverable' | 'autonomy' | 'process' | 'cost' | 'lessons';
 /** what the command panel shows: the commands, or one of them taking words or a confirmation */
 export type PanelMode = 'list' | 'rerun' | 'discard' | 'land' | 'manual';
+
+/** HTTP status of a failed api call (the api interceptor's ApiError, or axios's shape). */
+function statusOf(e: unknown): number | undefined {
+  return (e as { statusCode?: number })?.statusCode ?? (e as { response?: { status?: number } })?.response?.status;
+}
 
 function detailOf(e: unknown, fallback: string): string {
   const d = (e as { response?: { data?: { detail?: unknown } }; detail?: unknown });
@@ -186,6 +199,43 @@ function DeliverableTab({ r, full, fullRead, fullFailed, onRetry, waits }: {
   const files = full?.work.files ?? [];
   const repos = (full?.work.repos ?? []).filter((x) => x.files.length || x.commits.length);
   const report = full?.report ?? '';
+  const id = r.dispatch_id;
+  // a line on a changed file's row: opening, binary, too large, or why it failed
+  const [fileNote, setFileNote] = useState<Record<string, string>>({});
+  const opening = useRef(new Set<string>());
+  useEffect(() => { setFileNote({}); }, [id]);
+  const note = (k: string, text: string | null) => setFileNote((n) => {
+    const next = { ...n };
+    if (text) next[k] = text; else delete next[k];
+    return next;
+  });
+  const openChange = async (url: string, path: string, head: string | null) => {
+    const k = `${url}\n${path}`;
+    if (opening.current.has(k)) return;
+    opening.current.add(k);
+    note(k, t('swarmOut.review.repoFile.opening'));
+    try {
+      let v: SwarmOutFileVersions | null = null;
+      try {
+        v = await swarmOutService.returnFile(id, url, path);
+      } catch (e) {
+        if (statusOf(e) !== 409) throw e;          // 409: not taken back for review yet
+      }
+      // not taken back yet, or taken back before a later turn's commits: take them
+      // back for review (nothing lands), then read the file
+      if (!v || (head && v.tip_sha !== head)) {
+        await swarmOutService.returnPrepare(id, url);
+        v = await swarmOutService.returnFile(id, url, path);
+      }
+      if (v.binary || v.too_large) { note(k, t(v.binary ? 'swarmOut.review.repoFile.binary' : 'swarmOut.review.repoFile.tooLarge')); return; }
+      note(k, null);
+      openFileVersions({ source: `hive:${id}@${v.tip_sha.slice(0, 12)}`, path: v.path, base: v.base, tip: v.tip });
+    } catch (e) {
+      note(k, t('swarmOut.review.repoFile.failed', { error: detailOf(e, t('swarmOut.detail.failed')) }));
+    } finally {
+      opening.current.delete(k);
+    }
+  };
   return (
     <div className="flex flex-col gap-5 max-w-[880px]" data-testid="swarm-out-review-deliverable">
       {stage === 'needs_answer' && waits === 0 && (
@@ -240,11 +290,17 @@ function DeliverableTab({ r, full, fullRead, fullFailed, onRetry, waits }: {
               {x.bundle?.error && <div>{t('swarmOut.detail.bundleError', { error: x.bundle.error })}</div>}
             </div>
           )}>
-          {x.files.map((f, i) => (
-            <ItemRow key={`${i}:${f.path}`} testId="swarm-out-review-repo-file" badge={<FileTypeIcon name={baseName(f.path)} size="sm" />}
-              name={baseName(f.path)} folder={f.path.includes('/') ? dirOf(f.path) : undefined} folderTitle={f.path}
-              tail={<span className={`ml-auto pl-3 text-[11.5px] tabular-nums whitespace-nowrap ${muted}`}>+{f.added ?? '?'} −{f.deleted ?? '?'}</span>} />
-          ))}
+          {x.files.map((f, i) => {
+            const k = `${x.url ?? ''}\n${f.path}`;
+            return (
+              <ItemRow key={`${i}:${f.path}`} testId="swarm-out-review-repo-file" badge={<FileTypeIcon name={baseName(f.path)} size="sm" />}
+                name={baseName(f.path)} folder={f.path.includes('/') ? dirOf(f.path) : undefined} folderTitle={f.path}
+                link={!!x.url} rowOpens openTitle={x.url ? t('swarmOut.review.repoFile.open') : undefined}
+                onOpen={x.url ? () => { void openChange(x.url!, f.path, x.head); } : undefined}
+                tail={<span className={`ml-auto pl-3 text-[11.5px] tabular-nums whitespace-nowrap ${muted}`}>+{f.added ?? '?'} −{f.deleted ?? '?'}</span>}
+                below={fileNote[k] ? <div className={`px-3 pb-1.5 pl-9 text-[11.5px] ${muted}`} data-testid="swarm-out-review-repo-file-note">{fileNote[k]}</div> : undefined} />
+            );
+          })}
         </ItemBox>
       ))}
       {report ? (
@@ -253,7 +309,6 @@ function DeliverableTab({ r, full, fullRead, fullFailed, onRetry, waits }: {
           <RemoteContentContext.Provider value>
             <div className="mt-2 text-[14px] leading-[1.7]"><MarkdownRenderer content={report} /></div>
           </RemoteContentContext.Provider>
-          {full!.report_chars > report.length && <div className={`mt-2 text-[12px] ${muted}`}>{t('swarmOut.detail.fullReport', { count: full!.report_chars })}</div>}
         </section>
       ) : full && !files.length && !repos.length && !waits && !full.error?.message && <div className={muted}>{t('swarmOut.detail.noReply')}</div>}
     </div>
@@ -606,6 +661,10 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   const keeps = mode !== 'list' || askDirty;     // something typed that a step away would lose
   const keepsRef = useRef(keeps);
   keepsRef.current = keeps;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const askDirtyRef = useRef(askDirty);
+  askDirtyRef.current = askDirty;
   useEffect(() => {
     let alive = true;
     setFull(null); setFullRead(false); setFullFailed(false); setHostAnswers([]);
@@ -628,8 +687,21 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
       onClose();
       onFileOpened?.();
     };
+    // a changed file's diff (swarm:open-file-versions) is only ever sent by a click on
+    // this card's row, after its reads: the card steps aside unless a correction or a
+    // discard note is being typed, or an answer is half given (landing is not lost:
+    // reading a protected file before ticking it is what the diff is for)
+    const onOpenVersions = () => {
+      if (modeRef.current === 'rerun' || modeRef.current === 'discard' || askDirtyRef.current) return;
+      onClose();
+      onFileOpened?.();
+    };
     document.addEventListener('swarm:open-file', onOpenFile);
-    return () => document.removeEventListener('swarm:open-file', onOpenFile);
+    document.addEventListener(OPEN_FILE_VERSIONS_EVENT, onOpenVersions);
+    return () => {
+      document.removeEventListener('swarm:open-file', onOpenFile);
+      document.removeEventListener(OPEN_FILE_VERSIONS_EVENT, onOpenVersions);
+    };
   }, [onClose, onFileOpened]);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -682,6 +754,10 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   const facts = agentFacts(r);
   const acceptance = r.project_agent?.acceptance;
   const checks = machineChecks(r, full);
+  // the check statuses were read from the commands' text (the Hive keeps no check record)
+  const checksInferred = (full?.checks_inferred ?? r.result?.checks_inferred) === true;
+  // ... or from the Hive's own record of each run: said, since it is the Hive's word
+  const checksFromRecord = !checksInferred && (full?.checks_from_record ?? r.result?.checks_from_record) === true;
   const delivered = (res?.work.files.length ?? 0) + (full?.work.repos ?? []).filter((x) => x.commits_total > 0).length;
   const lessons = res?.lessons?.returned ?? 0;
   const running = stageOf(r) === 'running';
@@ -738,7 +814,9 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
                 {checks.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1 text-[12px]">
                     {checks.map((c) => <span key={c.key} data-testid="swarm-out-review-check" data-ok={c.ok}>
-                      <span style={{ color: c.ok ? TONE_VAR.ok : TONE_VAR.attention }}>{c.ok ? '✓' : '△'}</span> {c.text}</span>)}
+                      <span style={{ color: c.ok ? TONE_VAR.ok : TONE_VAR.attention }}>{c.ok ? '✓' : '△'}</span> {c.text}
+                      {c.key === 'checks' && checksInferred && <span className={muted} data-testid="swarm-out-review-checks-inferred"> · {t('swarmOut.review.check.inferred')}</span>}
+                      {c.key === 'checks' && checksFromRecord && <span className={muted} data-testid="swarm-out-review-checks-recorded"> · {t('swarmOut.review.check.fromRecord')}</span>}</span>)}
                   </div>
                 )}
               </div>

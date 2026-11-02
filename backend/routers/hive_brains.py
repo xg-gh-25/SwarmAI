@@ -37,6 +37,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -163,6 +164,9 @@ async def put_repo(request: Request, url: str, branch: str, sha: str) -> dict:
 class WorkBody(BaseModel):
     work_id: str = Field(max_length=40)
     repos: list[dict] = Field(default_factory=list, max_length=10)
+    # the task's setup and checks by id (core/swarm_out work_checks); only a Host that
+    # read task_checks in this daemon's admission state sends them
+    checks: Optional[dict] = None
 
 
 def session_busy(session_id: str) -> bool:
@@ -182,7 +186,8 @@ async def prepare_work(body: WorkBody) -> dict:
     _hive_only()
     from core import hive_workspace
     try:
-        order = await asyncio.to_thread(hive_workspace.prepare, _workspace(), body.work_id, body.repos)
+        order = await asyncio.to_thread(hive_workspace.prepare, _workspace(), body.work_id, body.repos,
+                                        body.checks)
     except hive_workspace.WorkError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     logger.info("hive work: prepared %s (%d repositories)", body.work_id, len(order["repos"]))
@@ -208,11 +213,32 @@ async def release_work(work_id: str) -> dict:
     _hive_only()
     from core import hive_workspace
     try:
-        done = await asyncio.to_thread(hive_workspace.release, _workspace(), work_id, session_busy)
+        # the pipeline runs the order's session owns end first, while their checkout is
+        # still there (core/pipeline_human.end_session_runs); a failure removes nothing
+        from core.pipeline_human import end_session_runs
+        done = await asyncio.to_thread(hive_workspace.release, _workspace(), work_id, session_busy,
+                                       end_session_runs)
     except hive_workspace.WorkError as exc:
         status = 409 if str(exc) == hive_workspace.ERR_BUSY else 422
         raise HTTPException(status_code=status, detail=str(exc)) from None
     return {"released": done}
+
+
+@router.get("/work/{work_id}/checks")
+async def work_checks(work_id: str) -> dict:
+    """The check record of a work order (scripts/task_checks: one line per check run,
+    with its exit code), for the Host to read the checks' statuses from. 404 for an order
+    that is not here. Hive only."""
+    _hive_only()
+    from core import hive_workspace
+    try:
+        order = await asyncio.to_thread(hive_workspace.load, _workspace(), work_id)
+    except hive_workspace.WorkError:
+        order = None
+    if order is None:
+        raise HTTPException(status_code=404, detail="no such work order")
+    lines = await asyncio.to_thread(hive_workspace.checks_record, _workspace(), work_id)
+    return {"work_id": work_id, "checks": lines}
 
 
 @router.get("/bundles/{session_id}/{key}")

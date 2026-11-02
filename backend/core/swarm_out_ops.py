@@ -89,6 +89,11 @@ _STATIC: "tuple[Op, ...]" = (
     # landed yet: the person's (an agent lands commits with return/land)
     _op("run.manual_landed", "POST", f"{_SO}/runs/{{dispatch_id}}/manual-landed", _P, "irreversible"),
     _op("run.return_prepare", "POST", f"{_SO}/runs/{{dispatch_id}}/return/prepare", _PO, "change"),
+    # both versions of one changed file the prepared review lists, from git's objects
+    # here (core/hive_return.file_versions): nothing written, nothing sent
+    # the returned file for the person's diff view; an agent reviews the change with git in
+    # this machine's checkout, so Hive-written file text reaches no agent through it
+    _op("run.return_file", "GET", f"{_SO}/runs/{{dispatch_id}}/return/file", _P, "read"),
     _op("run.return_land", "POST", f"{_SO}/runs/{{dispatch_id}}/return/land", _PO, "irreversible"),
     _op("run.rerun", "POST", f"{_SO}/runs/{{dispatch_id}}/rerun", _PO, "change"),
     _op("run.stop", "POST", f"{_SO}/runs/{{dispatch_id}}/stop", _PO, "change"),
@@ -169,6 +174,9 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.serve.repo", "PUT", f"{_HV}/repos", (HOST,), "change"),
     _op("hive.serve.work", "POST", f"{_HV}/work", (HOST,), "change"),
     _op("hive.serve.work_order", "GET", f"{_HV}/work/{{work_id}}", (HOST,), "read"),
+    # a work order's check record (scripts/task_checks), read by the Host for the
+    # checks' statuses
+    _op("hive.serve.work_checks", "GET", f"{_HV}/work/{{work_id}}/checks", (HOST,), "read"),
     _op("hive.serve.work_release", "POST", f"{_HV}/work/{{work_id}}/release", (HOST,), "irreversible"),
     _op("hive.serve.bundle", "GET", f"{_HV}/bundles/{{session_id}}/{{key}}", (HOST,), "read"),
     _op("hive.serve.usage", "GET", f"{_HV}/usage", (HOST,), "read"),

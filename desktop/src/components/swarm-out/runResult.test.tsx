@@ -275,7 +275,7 @@ describe('a run card', () => {
     expect(report.textContent).toContain('Knowledge/Reports/r.md');
     expect(report.querySelector('[role="button"], [title="Open in Canvas"]')).toBeNull();
     expect(within(overlay).getByTestId('swarm-out-review-error-message').textContent).toBe('throttled by the model');
-    expect(within(overlay).getByText('全文 600 字，去 Hive 页面看')).toBeTruthy();
+    expect(within(overlay).queryByText(/全文 .* 字/)).toBeNull();     // the whole reply is shown
     expect(within(overlay).getByTestId('swarm-out-review-repo').textContent).toContain('x.py');
     expect(vi.mocked(swarmOutService.result)).toHaveBeenCalledTimes(1);
     fireEvent.click(within(overlay).getByTestId('swarm-out-review-refresh'));

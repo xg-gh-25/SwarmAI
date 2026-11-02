@@ -152,6 +152,13 @@ export interface FileEditorCoreProps {
    *  not on typing or scrolling. A huge file whose preview falls back to the raw
    *  source reports `edit` (canvas-proprioception §3.2). */
   onViewChange?: (v: CanvasFileViewReport) => void;
+  /** Not a file on this machine (a versions document: FileViewer's `versions`): the
+   *  editor never reads `filePath` from disk (no refresh on a file change or on focus,
+   *  no Reload, no Copy path) and draws no rendered preview of the text. Use with
+   *  `readonly`. */
+  detached?: boolean;
+  /** The read-only banner's text, in place of the System Default one. */
+  readonlyNote?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -699,11 +706,14 @@ export default function FileEditorCore({
   onDirtyChange,
   closeSignal,
   onViewChange,
+  detached = false,
+  readonlyNote,
 }: FileEditorCoreProps) {
   const { t } = useTranslation();
   // The file's rendered preview, if it has one — the ONE table in ./filePreviews
   // (md / svg / ipynb / mermaid; canvas-file-types.md P3).
-  const previewKind = previewKindOf(fileName);
+  // A detached document's text is not this machine's (a Hive's change): never drawn.
+  const previewKind = detached ? null : previewKindOf(fileName);
   // Whether the initial content is small enough to draw the preview. A huge file
   // must NOT default to preview — it defaults to edit (Gate perf).
   const canPreviewInitial = !!previewKind && canDrawPreview(previewKind, initialContent);
@@ -880,7 +890,7 @@ export default function FileEditorCore({
     };
     const handler = (e: Event) => {
       const changedPath = (e as CustomEvent<{ path: string }>).detail?.path;
-      if (!changedPath) return;
+      if (!changedPath || detached) return;
       // Match: exact path, or absolute path ends with workspace-relative filePath
       const isMatch = changedPath === filePath
         || changedPath.endsWith(`/${filePath}`);
@@ -892,12 +902,12 @@ export default function FileEditorCore({
     // D1 (run_5d9178bf): subscribe via the single fileChangedBroker.
     const unsub = subscribeFileChanged(handler);
     return () => { alive = false; unsub(); clearTimeout(timer); clearTimeout(highlightTimerRef.current); };
-  }, [filePath]);
+  }, [filePath, detached]);
 
   // ── Visibility-based refetch: reload when app/tab becomes visible if >3s idle ──
   useEffect(() => {
     const handleVisibility = async () => {
-      if (document.hidden) return;
+      if (document.hidden || detached) return;
       if (Date.now() - lastFetchRef.current < 3000) return;
       if (hasUnsavedEditsRef.current) return;
       try {
@@ -924,7 +934,7 @@ export default function FileEditorCore({
       window.removeEventListener('focus', handleVisibility);
       clearTimeout(highlightTimerRef.current);
     };
-  }, [filePath]);
+  }, [filePath, detached]);
 
   // L3: Review mode — inline comments (used for both normal review and diff review)
   // filePath key enables sessionStorage persistence across tab switches (U10).
@@ -1364,6 +1374,7 @@ export default function FileEditorCore({
   /** Refetch the file from disk and apply it (with changed-line highlight).
    *  Shared by the Reload button and its unsaved-edits confirm path. */
   const doReload = useCallback(async () => {
+    if (detached) return;
     try {
       const resp = await api.get<{ content: string }>('/workspace/file', { params: { path: filePath } });
       const fresh = resp.data.content;
@@ -1384,7 +1395,7 @@ export default function FileEditorCore({
         }
       }
     } catch { /* file gone — ignore */ }
-  }, [filePath, onContentChange]);
+  }, [filePath, onContentChange, detached]);
 
   /** Discard unsaved edits AND reload from disk (Reload button's confirm path).
    *  Distinct from handleDiscardChanges (Close's path), which reverts + closes. */
@@ -1570,7 +1581,7 @@ export default function FileEditorCore({
       </button>
     );
   })();
-  const reloadBtn = (
+  const reloadBtn = detached ? null : (
     <button
       onClick={async () => {
         // Guard unsaved edits, mirroring the SSE + visibility auto-refresh paths:
@@ -1589,7 +1600,7 @@ export default function FileEditorCore({
       <span className="material-symbols-outlined icon-sm">refresh</span>
     </button>
   );
-  const copyPathBtn = (
+  const copyPathBtn = detached ? null : (
     <CopyPathButton
       path={getAbsolutePath()}
       label={iconOnly ? undefined : t('common.copy.path')}
@@ -1862,7 +1873,7 @@ export default function FileEditorCore({
             className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0"
             data-testid="readonly-banner"
           >
-            <span>{t('ui.FileEditorCore.readonlyBanner')}</span>
+            <span>{readonlyNote ?? t('ui.FileEditorCore.readonlyBanner')}</span>
           </div>
         )}
 

@@ -201,6 +201,29 @@ async def return_prepare(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     return out
 
 
+@router.get("/runs/{dispatch_id}/return/file")
+async def return_file(dispatch_id: str, url: str = "", path: str = "") -> dict[str, Any]:
+    """Both versions of one file the prepared review lists (core/hive_return.file_versions):
+    read from git's objects on this machine, nothing written. A path the review does not
+    list is 400; commits not taken back for review yet are 409."""
+    _require_desktop()
+    import asyncio
+    from core import hive_return
+    if not url or len(url) > 300:
+        raise HTTPException(status_code=400, detail="name the repository")
+    try:
+        return await asyncio.to_thread(hive_return.file_versions, dispatch_id, url, path)
+    except hive_return.ReturnPathError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except hive_return.ReturnError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except swarm_out.SwarmOutError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("swarm_out return file failed")
+        raise HTTPException(status_code=500, detail="reading the file's versions failed")
+
+
 @router.post("/runs/{dispatch_id}/return/land")
 async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     """Land the prepared commits: the panel's button, or the dispatching agent's command.

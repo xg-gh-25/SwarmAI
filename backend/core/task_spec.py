@@ -339,9 +339,13 @@ def lifecycle_caps_words(profile: str) -> bool:
     return caps(profile).requirements == "words"
 
 
-def segment(spec: dict[str, Any], run_id: Optional[str] = None) -> str:
+def segment(spec: dict[str, Any], run_id: Optional[str] = None,
+            work_id: Optional[str] = None) -> str:
     """The project section; ``run_id``: the pipeline run the Hive creates with the
-    session (run-spec §4.2), named so the agent starts in it."""
+    session (run-spec §4.2), named so the agent starts in it. ``work_id``: set when the
+    Hive runs the task's setup and checks by id (scripts/task_checks, core/swarm_out
+    ``work_checks``): the agent is told to run them through it, so each run is recorded
+    with its exit code; without it the commands are listed for the agent to run."""
     b, general = spec["brain"], spec["brain"] == GENERAL_BRAIN
     lines = [f"## Project Agent: {'Runner Agent (no Brain)' if general else b} — mode {spec['mode']}"]
     if spec["summary"] and not general:
@@ -368,11 +372,25 @@ def segment(spec: dict[str, Any], run_id: Optional[str] = None) -> str:
         lines.append(f"How: run the task through the pipeline (s_autonomous-pipeline) with profile "
                      f"`{spec['profile']}`. It was decided when the task was dispatched; use no "
                      "other profile.")
-    if spec["setup"]:
+    if work_id and (spec["setup"] or spec["validations"]):
+        run = '"$SWARM_BACKEND_BIN" py -m scripts.task_checks'
+        if spec["setup"]:
+            lines.append(f"Setup (from the repository's own CI): run `{run} setup {work_id}` once "
+                         "before building or testing; it runs these lines in their directories:")
+            lines += [f"- `{s['command']}`" + (f" (in {s['repo']}/{s['cwd']})" if s.get("repo") else "")
+                      for s in spec["setup"]]
+        if spec["validations"]:
+            lines.append(f"Before you finish, run each check through `{run} run {work_id} <id>` (one id "
+                         "per call, under a wall-clock cap): it runs the command below and records its "
+                         "exit code, which is what the card shows. Running the command yourself is not "
+                         "recorded.")
+            lines += [f"- {v['id']}: `{v['command']}`" + (f" (in {v['repo']}/{v['cwd']})" if v.get("repo") else "")
+                      for v in spec["validations"]]
+    elif spec["setup"]:
         lines.append("Setup (from the repository's own CI):")
         lines += [f"- `{s['command']}`" + (f" (in {s['repo']}/{s['cwd']})" if s.get("repo") else "")
                   for s in spec["setup"]]
-    if spec["validations"]:
+    if spec["validations"] and not work_id:
         lines.append("Before you finish, run:")
         lines += [f"- {v['id']}: `{v['command']}`" + (f" (in {v['repo']}/{v['cwd']})" if v.get("repo") else "")
                   for v in spec["validations"]]

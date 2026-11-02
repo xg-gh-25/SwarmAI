@@ -154,7 +154,7 @@ export interface SwarmOutResult {
   cost_usd: number | null;
   /** the cost may be short (a turn without a record, or older turns not read) */
   cost_partial: boolean;
-  /** /result only: the last reply (up to 4000 chars) */
+  /** /result only: the last reply, whole */
   report?: string;
   report_chars: number;
   kinds: ('pipeline' | 'code' | 'files' | 'answer')[];
@@ -186,6 +186,11 @@ export interface SwarmOutResult {
   gate_refusals?: Record<string, number> | null;
   /** older turns were not read: a check or refusal there is not seen */
   checks_partial?: boolean;
+  /** the check statuses were inferred from the commands' text (the Hive keeps no
+   *  record of its checks); absent from an older backend */
+  checks_inferred?: boolean;
+  /** The statuses are the Hive's own check record (scripts/task_checks), not proof. */
+  checks_from_record?: boolean;
   /** did the run run the way it was dispatched to (backend execution_check; run-spec
    *  §4.2): ``not_yet`` while a pipeline task's run has not shown up; null for a row
    *  from before the choice was made per dispatch */
@@ -356,6 +361,22 @@ export interface SwarmOutReturn {
   status: 'prepared' | 'landed' | 'rejected';
 }
 
+/** One changed file of a prepared review, both versions (backend
+ *  core/hive_return.file_versions): read from this machine's git objects. ``base`` /
+ *  ``tip`` null: the file does not exist on that side (added / deleted), or it is
+ *  binary or too large to show (no content then). The text is the Hive's: data only. */
+export interface SwarmOutFileVersions {
+  path: string;
+  base_sha: string;
+  tip_sha: string;
+  base: string | null;
+  tip: string | null;
+  base_exists: boolean;
+  tip_exists: boolean;
+  binary: boolean;
+  too_large: boolean;
+}
+
 /** Every command the App sends on a run is the person's: the backend limits a command
  *  that does not say so as an agent's (core/swarm_out_actor). */
 const PERSON = 'person';
@@ -366,6 +387,11 @@ export const swarmOutService = {
   async returnPrepare(dispatchId: string, url: string): Promise<SwarmOutReturn> {
     const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/prepare`, { url, by: PERSON });
     return data as SwarmOutReturn;
+  },
+  /** Both versions of one file the prepared review lists (409: not taken back yet). */
+  async returnFile(dispatchId: string, url: string, path: string): Promise<SwarmOutFileVersions> {
+    const { data } = await api.get(runPath(dispatchId, 'return/file'), { params: { url, path } });
+    return data as SwarmOutFileVersions;
   },
   async returnLand(dispatchId: string, key: string, tip: string, approveProtected: boolean):
   Promise<{ landed: boolean; head: string | null; into: string | null }> {

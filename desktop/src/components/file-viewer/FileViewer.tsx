@@ -73,6 +73,10 @@ export interface FileViewerProps {
     /** Owning session id (run_c014a4f3) — passed as session_id to GET /workspace/file
      *  so an EXTERNAL surfaced file renders read-only. Absent for internal files. */
     sessionId?: string;
+    /** A read-only versions document (utils/fileVersions): the text before and after,
+     *  carried here. NOT a file on this machine: nothing is read from or written to
+     *  `filePath`; it opens on its diff and can never be saved. */
+    versions?: { base: string | null; tip: string | null };
   };
   onClose: () => void;
   onAttachToChat?: (item: FileTreeItem) => void;
@@ -202,6 +206,8 @@ function FileViewerImpl({
          *  the OS opener needs for Open-in-System-App / Reveal / Copy-Path. Only
          *  populated for the unsupported-file meta fetch; undefined elsewhere. */
         absolutePath?: string;
+        /** A versions document (initialFile.versions): read-only text, never saved. */
+        versions?: boolean;
       }
     >
   >({}); // React 19 requires initial value
@@ -317,6 +323,19 @@ function FileViewerImpl({
       setContentError(null);
 
       try {
+        // A versions document: its text came with it. Nothing is fetched, whatever
+        // its name's type (it is shown as text, on its diff).
+        const versions = initialFile && tab.filePath === initialFile.filePath ? initialFile.versions : undefined;
+        if (versions) {
+          const content = versions.tip ?? '';
+          const size = new TextEncoder().encode(content).length;
+          contentCache.current[tab.filePath] = {
+            content, encoding: 'utf-8', size, readonly: true,
+            committedContent: versions.base ?? '', versions: true,
+          };
+          setStatusBarInfo({ fileSize: size, encoding: 'utf-8' });
+          return;
+        }
         if (isBinaryType(tab.viewType) && tab.viewType !== 'unsupported') {
           // Media (image/pdf/video/audio) STREAM from /workspace/file/raw inside
           // their renderers (Cycle C, run_b454ce39) — we no longer pull the whole
@@ -598,6 +617,8 @@ function FileViewerImpl({
     async (content: string) => {
       if (!activeTab) return;
       const cached = contentCache.current[activeTab.filePath];
+      // a versions document is not a file here: it is never written anywhere
+      if (cached?.versions) throw new Error('a versions document is read-only');
       let response;
       try {
         response = await api.put<{ revision?: string }>(
@@ -764,7 +785,31 @@ function FileViewerImpl({
     const { filePath, fileName, gitStatus } = activeTab;
     // A file whose renderer cannot show it (binary behind a text route, an image
     // this system cannot decode) is shown as the info card.
-    const viewType = cached.asCard ? 'unsupported' : activeTab.viewType;
+    const viewType = cached.asCard ? 'unsupported' : cached.versions ? 'text' : activeTab.viewType;
+
+    // --- A versions document: its diff, read-only, never saved, nothing read from disk ---
+    if (cached.versions) {
+      return (
+        <FileEditorCore
+          key={filePath}
+          filePath={filePath}
+          fileName={fileName}
+          workspaceId=""
+          initialContent={cached.content}
+          committedContent={cached.committedContent ?? ''}
+          onSave={handleSave}
+          onClose={handleCloseActive}
+          readonly
+          detached
+          readonlyNote={t('ui.FileViewer.versionsNote')}
+          initialShowDiff
+          variant={variant}
+          onDirtyChange={handleEditorDirty}
+          closeSignal={closeSignal}
+          onViewChange={onViewChange}
+        />
+      );
+    }
 
     // --- Text / Markdown / SVG: delegate to existing FileEditorCore ---
     if (viewType === 'text' || viewType === 'markdown' || viewType === 'svg') {
@@ -881,7 +926,8 @@ function FileViewerImpl({
   // The type actually shown: a text route whose file turned out binary (415) is the
   // info card, so it has no editor (no own footer, no guarded editor close).
   const shownType = activeTab == null ? null
-    : contentCache.current[activeTab.filePath]?.asCard ? 'unsupported' : activeTab.viewType;
+    : contentCache.current[activeTab.filePath]?.asCard ? 'unsupported'
+      : contentCache.current[activeTab.filePath]?.versions ? 'text' : activeTab.viewType;
   const hasOwnFooter = shownType === 'text' || shownType === 'markdown' || shownType === 'svg';
 
   // Editor types (FileEditorCore) are the ONLY ones that can be dirty; their close

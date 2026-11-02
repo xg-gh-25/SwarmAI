@@ -40,6 +40,7 @@ import { UI_COMMAND_RESULT_EVENT, type UiCommandResultDetail } from '../utils/ui
 import { isHiveTab } from '../pages/chat/swarmOut';
 import { isRemote } from '../services/remoteSession';
 import i18n from '../i18n';
+import { OPEN_FILE_VERSIONS_EVENT, versionsDocPath, type FileVersionsDetail } from '../components/file-viewer/utils/fileVersions';
 
 export interface CanvasFile {
   filePath: string;
@@ -61,6 +62,11 @@ export interface CanvasFile {
    *  selection), not the user. Auto-surface may replace an `auto` file; a user's
    *  file it never replaces. Set by the swarm:open-file handler from detail.auto. */
   auto?: boolean;
+  /** A read-only versions document (components/file-viewer/utils/fileVersions): the
+   *  text at two versions, carried here, NOT a file on this machine. FileViewer shows
+   *  its diff and never reads, saves or resolves `filePath` for it. Set only by the
+   *  swarm:open-file-versions handler (a click in the app; no ui_command reaches it). */
+  versions?: { base: string | null; tip: string | null };
 }
 
 interface CanvasTabState {
@@ -762,6 +768,41 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       document.removeEventListener('swarm:open-file', handleOpenFile);
     };
   }, [recordCommand, applyAgent, writeQuiet]);
+
+  // ── swarm:open-file-versions (DOCUMENT) — a read-only versions document ──
+  // Not a file here: nothing is resolved or read; the text rides the event. Sent only
+  // by a click in the app (the Swarm Out run card); it is not in UI_COMMAND_TABLE, so
+  // no agent or backend command sends it. Lands on the active tab, under the same
+  // unsaved-edits rule as a user's swarm:open-file.
+  useEffect(() => {
+    const handleOpenVersions = (e: Event) => {
+      const d = (e as CustomEvent<FileVersionsDetail>).detail;
+      if (!d || typeof d.source !== 'string' || typeof d.path !== 'string' || !d.source || !d.path) return;
+      const text = (v: unknown) => (typeof v === 'string' ? v : null);
+      const k = keyFor(activeTabIdRef.current);
+      // a newer swarm:open-file's resolve on this tab must not overwrite this open
+      openGenRef.current.set(k, (openGenRef.current.get(k) ?? 0) + 1);
+      const filePath = versionsDocPath(d);
+      const opened: CanvasFile = {
+        filePath, fileName: d.path.split('/').pop() || d.path,
+        versions: { base: text(d.base), tip: text(d.tip) },
+      };
+      let cur = mapRef.current.get(k) ?? EMPTY;
+      if (cur.deferred) {
+        recordCommand(k, { id: cur.deferred.cmdId, cmd: cur.deferred.cmd, result: 'ignored', reason: 'the user changed the Canvas first' });
+        writeQuiet(k, { deferred: null });
+        cur = mapRef.current.get(k) ?? EMPTY;
+      }
+      const fileChanged = cur.file?.filePath !== filePath;
+      const next = cur.fileDirty && fileChanged
+        ? { ...cur, pendingOpen: opened }
+        : { ...cur, file: opened, pendingOpen: null, canvasTab: 'artifacts' as const, ...(fileChanged ? { railed: false } : {}) };
+      mapRef.current.set(k, next);
+      setSlice(k, next);
+    };
+    document.addEventListener(OPEN_FILE_VERSIONS_EVENT, handleOpenVersions);
+    return () => document.removeEventListener(OPEN_FILE_VERSIONS_EVENT, handleOpenVersions);
+  }, [recordCommand, writeQuiet]);
 
   // ── Auto-surface (streaming-gated, fail-closed) ─────────────────────────────
   // activeTabId = the tab-scope key (run_26aa6caa) — the same stable key the rest

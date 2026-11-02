@@ -432,6 +432,80 @@ _SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "
          "-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=", "-c", "filter.lfs.required=false")
 
 
+# ── one changed file, both versions (read-only) ─────────────────────────────
+
+#: the largest version of a file shown (above it: listed, never cut)
+FILE_VERSION_MAX_BYTES = 1 << 20
+#: how far a version is looked into for a NUL byte (git's own binary test)
+_BINARY_SNIFF = 8000
+
+
+class ReturnPathError(ReturnError):
+    """The path asked for is not one of the prepared files (the route answers 400)."""
+
+
+def _listed_path(path: str) -> str:
+    """*path* as asked, when it could be a file the review lists: relative, no ``..``
+    or ``.`` segment, no control or invisible character. Whether it IS listed is
+    checked against the state."""
+    if not isinstance(path, str) or not path or len(path) > 500:
+        raise ReturnPathError("name one of the changed files")
+    if _BAD_CHARS.search(path):
+        raise ReturnPathError("that path has control or invisible characters")
+    if path.startswith("/"):
+        raise ReturnPathError("that path is absolute; name one of the changed files")
+    if any(seg in ("", ".", "..") for seg in path.split("/")):
+        raise ReturnPathError("that path is not one of the changed files")
+    return path
+
+
+def _version(repo: Path, rev: str, path: str) -> dict[str, Any]:
+    """One side of a file from git's objects only (``cat-file``: no working tree, no
+    filter, no textconv, no hook): {exists, text, binary, too_large}."""
+    spec = f"{rev}:{path}"
+    t = _git(repo, *_SAFE, "cat-file", "-t", spec)
+    if t.returncode != 0:
+        return {"exists": False, "text": None, "binary": False, "too_large": False}
+    if t.stdout.decode().strip() != "blob":         # a submodule's commit, a tree
+        return {"exists": True, "text": None, "binary": True, "too_large": False}
+    size = _out(repo, *_SAFE, "cat-file", "-s", spec)
+    if not size.isdigit():
+        raise ReturnError("git cat-file failed")
+    if int(size) > FILE_VERSION_MAX_BYTES:
+        return {"exists": True, "text": None, "binary": False, "too_large": True}
+    data = _git(repo, *_SAFE, "cat-file", "blob", spec, check=True).stdout
+    if b"\0" in data[:_BINARY_SNIFF]:
+        return {"exists": True, "text": None, "binary": True, "too_large": False}
+    return {"exists": True, "text": data.decode("utf-8", "replace"), "binary": False, "too_large": False}
+
+
+def file_versions(dispatch_id: str, url: str, path: str) -> dict[str, Any]:
+    """Both versions of one file the prepared (or landed) review lists: at the reviewed
+    base and at the Hive's tip, read from this machine's git objects only. Nothing is
+    written; a path the review does not list is refused before git is asked."""
+    _state_dir(dispatch_id)
+    path = _listed_path(path)
+    from core import hive_bundle
+    declared = _declared(_row(dispatch_id), url)
+    state = load(dispatch_id, hive_bundle.key(str(declared.get("dir"))))
+    if not state or state.get("status") not in ("prepared", "landed") or state.get("url") != url:
+        raise ReturnError("these commits were not taken back for review yet (take them back first)")
+    if path not in {f.get("path") for f in state.get("files") or [] if isinstance(f, dict)}:
+        raise ReturnPathError("that path is not one of the changed files")
+    base, tip = str(state.get("base") or ""), str(state.get("tip") or "")
+    if not _SHA_RE.fullmatch(base) or not _SHA_RE.fullmatch(tip):
+        raise ReturnError("the review's state is unreadable; take the commits back again")
+    repo = Path(state["repo"])
+    before, after = _version(repo, base, path), _version(repo, tip, path)
+    binary = before["binary"] or after["binary"]
+    too_large = not binary and (before["too_large"] or after["too_large"])
+    hide = binary or too_large
+    return {"path": path, "base_sha": base, "tip_sha": tip,
+            "base": None if hide else before["text"], "tip": None if hide else after["text"],
+            "base_exists": before["exists"], "tip_exists": after["exists"],
+            "binary": binary, "too_large": too_large}
+
+
 #: the longest landing summary taken (refused past it, never cut)
 SUMMARY_MAX = 4000
 

@@ -971,6 +971,10 @@ async def get_admission_state_endpoint():
         # names (core/project_agent_session.advance_pipeline_pin); an older daemon runs
         # it without one, so a Host sends that run only when this is set
         "pipeline_rerun": True,
+        # this daemon keeps a dispatched task's setup and checks in its work order and runs
+        # them by id (scripts/task_checks), recording each exit code; a Host sends them as
+        # data, and reads their statuses from that record, only when this is set
+        "task_checks": True,
     }
 
 

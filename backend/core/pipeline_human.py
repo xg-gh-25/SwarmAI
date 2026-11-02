@@ -15,10 +15,14 @@ Public symbols:
   Hive bridge mirrors them to the Host).
 - ``continue_prompt`` — the message that hands a run back to its owner session.
 - ``on_user_stop`` / ``on_session_lost`` — pause the session's active runs.
+- ``end_session_runs`` — abandon every unfinished run a session owns (a Hive releasing
+  a Swarm Out task's workspace, core/hive_workspace.release).
 - ``record_owner`` — sign a takeover as an ``owner_transfer`` event.
 
-Every function is fail-safe for the chat path: an error is logged and reported as
-"nothing recorded", never raised into a streaming turn.
+Every function called on the chat path is fail-safe: an error is logged and reported
+as "nothing recorded", never raised into a streaming turn. ``pending_decisions`` and
+``end_session_runs`` are not on that path and raise instead: their callers must not act
+on a run they could not read or end.
 """
 from __future__ import annotations
 
@@ -238,6 +242,55 @@ def on_user_stop(session_id: str) -> list[str]:
 def on_session_lost(session_id: str) -> list[str]:
     """The owner's tab was closed: pause its active runs."""
     return _stop(session_id, "session_lost", "owner session closed")
+
+
+def end_session_runs(session_id: str) -> list[str]:
+    """Abandon every unfinished v1 run *session_id* owns, with the reason a person's
+    Cancel records (``pipeline_metrics.USER_CANCEL_REASON``: whoever answers for the run
+    chose to drop it, so it is not a "dropped before it landed" item); the run ids ended.
+
+    For a Hive releasing a Swarm Out task (core/hive_workspace.release): the stop the
+    Host sends first pauses only an ACTIVE run, a run waiting on a decision keeps
+    waiting, and nothing else would ever end it. It must run while the task's clones
+    still exist: abandon saves each run worktree to the ledger and removes it through
+    the worktree's main checkout, which is one of those clones.
+
+    Which runs: those whose run.json names *session_id* as its owner, or names none
+    (it may be this session's); a run whose run.json names another session is that
+    session's and is not read, so a broken run of another session or project never blocks
+    this release. For each run read, the engine's owner (``owner_session``) decides. All
+    or nothing for those: a run that cannot be read, or cannot be abandoned (its worktree
+    could not be saved), raises, so the caller keeps everything it would have removed.
+    Blocking: call it off the event loop."""
+    from core import pipeline_metrics, run_index
+    from core.run_protocol import lifecycle
+    if not session_id:
+        return []
+    ended = []
+    for rf in run_index.runs(_workspace()):
+        data = rf.data
+        run_id = rf.path.parent.name
+        if not run_id.startswith("run_") or data.get("status") in _TERMINAL \
+                or "decision_cap" not in data:
+            continue
+        named = data.get("session_id")
+        if isinstance(named, str) and named and named != session_id:
+            continue                        # another session's run (its projection says so)
+        try:
+            engine = load_engine(run_id)
+            if engine is None:
+                raise LookupError(f"run {run_id} has no v1 engine")
+            if engine.owner_session() != session_id \
+                    or engine.projection()["status"] in lifecycle.TERMINAL:
+                continue
+            engine.abandon(reason=pipeline_metrics.USER_CANCEL_REASON)
+        except Exception:
+            logger.warning("pipeline_human: cannot end run %s of session %s", run_id,
+                           session_id, exc_info=True)
+            raise
+        ended.append(run_id)
+        logger.info("pipeline_human: ended %s of session %s", run_id, session_id)
+    return ended
 
 
 def record_owner(run_id: str, session_id: str) -> bool:

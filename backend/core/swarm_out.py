@@ -363,12 +363,18 @@ def _work_repos(declared: list[dict]) -> list[dict[str, Any]]:
 
 
 async def _prepare_work(client: httpx.AsyncClient, inst: dict[str, Any], work_id: str,
-                        repos: list[dict[str, Any]]) -> dict[str, Any]:
+                        repos: list[dict[str, Any]],
+                        checks: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """The Hive's ``POST /api/hive/work``: the prepared order. Raises SwarmOutError with
-    the Hive's reason (one of core/hive_workspace's fixed texts) when it is not."""
+    the Hive's reason (one of core/hive_workspace's fixed texts) when it is not.
+    ``checks``: the task's setup and checks by id (``work_checks``), sent only to a Hive
+    that runs them (admission ``task_checks``)."""
     from core import hive_workspace
+    body_out: dict[str, Any] = {"work_id": work_id, "repos": repos}
+    if checks:
+        body_out["checks"] = checks
     try:
-        r = await client.post("/api/hive/work", json={"work_id": work_id, "repos": repos},
+        r = await client.post("/api/hive/work", json=body_out,
                               timeout=httpx.Timeout(HTTP_TIMEOUT_S, read=PREPARE_TIMEOUT_S))
     except httpx.HTTPError as e:
         raise SwarmOutError(f"Hive {inst['name']} did not prepare the workspace ({type(e).__name__}); "
@@ -449,7 +455,8 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
                    repos: Optional[list] = None, *, segment: str = "",
                    agent: Optional[dict] = None, extra: Optional[dict] = None,
                    dispatch_id: Optional[str] = None,
-                   deadline: Optional[_Deadline] = None) -> dict[str, Any]:
+                   deadline: Optional[_Deadline] = None,
+                   checks: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
     repos}. ``repos``: ``[{url, ref[, sha]}]`` the task works on (core/task_repos; ``sha``:
     this machine's commit, its bundle kept on the Hive first by ``_ship_repos``).
@@ -505,7 +512,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
         deadline.budget(prepare_step, PREPARE_TIMEOUT_S, SESSION_ID_WAIT_S)   # nothing asked yet
         try:
             order = await _within(deadline, prepare_step, PREPARE_TIMEOUT_S,
-                                  lambda: _prepare_work(client, inst, dispatch_id, work),
+                                  lambda: _prepare_work(client, inst, dispatch_id, work, checks),
                                   hint="A first clone of a large repository can take this long; the Hive "
                                        "goes on building its copy, so sending the task again in a few "
                                        "minutes is usually faster")
@@ -757,6 +764,12 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     # refused before anything (the Brain included) is sent to it (run-spec §4.4)
     await _within(deadline, f"checking Hive {inst['name']}", 2 * PROBE_TIMEOUT_S,
                   lambda: _require_work_orders(inst))
+    # a Hive that runs a task's checks by id (scripts/task_checks) gets them as data and
+    # keeps a record of each run; an older one gets them as text and its statuses are
+    # inferred from the session's command text (core/swarm_out_results._checks)
+    checks_by_id = bool(spec["setup"] or spec["validations"]) and (await _within(
+        deadline, f"checking Hive {inst['name']}", 2 * PROBE_TIMEOUT_S,
+        lambda: _has_cap(inst, "task_checks"))) is True
     try:
         remote = await _within(deadline, f"reading Hive {inst['name']}'s Brains", 2 * HTTP_TIMEOUT_S,
                                lambda: brain_sync_host.hive_brains(inst))
@@ -794,17 +807,21 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     agent["execution"] = spec["execution"]["how"]
     agent["execution_why"] = spec["execution_why"]
     agent["returns"] = spec["returns"]
-    # the checks the run is expected to run: compared with its Bash calls when its
-    # result is read (core/swarm_out_results)
+    # the checks the run is expected to run: their statuses come from the Hive's check
+    # record when it runs them by id (checks_by_id below), else from its Bash calls
+    # (core/swarm_out_results._checks)
     agent["validations"] = [{"id": v["id"], "command": v["command"]} for v in spec["validations"]]
+    # read from the Hive's check record instead (core/swarm_out_results._records_of)
+    agent["checks_by_id"] = checks_by_id
     # this machine's commit of each repository, put on the Hive before the task starts
     await _ship_repos(inst, spec["repos"], deadline)
     row = await dispatch(hive_ref, title, spec["task"], origin,
                          [{"url": r["url"], "ref": r["ref"], **({"sha": r["sha"]} if r.get("sha") else {}),
                            "name": r["name"], "access": r["access"]}
                           for r in spec["repos"]],
-                         segment=task_spec.segment(spec, run_id), agent=agent, dispatch_id=dispatch_id,
-                         deadline=deadline,
+                         segment=task_spec.segment(spec, run_id, work_id=dispatch_id if checks_by_id else None),
+                         agent=agent, dispatch_id=dispatch_id, deadline=deadline,
+                         checks=work_checks(spec) if checks_by_id else None,
                          extra={"brief": " ".join((brief or "").split())[:MAX_BRIEF_CHARS],
                                 "hive_reason": hive_reason, "brain_sync": synced,
                                 # the agent session that follows the run (agent-owns-its-runs §2.1)
@@ -812,6 +829,16 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                                 "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0}
                                                for r in spec["repos"]]})
     return {**row, "brain_sync": synced}
+
+
+def work_checks(spec: dict[str, Any]) -> dict[str, Any]:
+    """A task's setup and checks as the Hive's work order takes them (core/hive_workspace
+    ``prepare``): each command with the repository and directory it runs in, a check with
+    its id. The Hive runs nothing else (scripts/task_checks)."""
+    return {"setup": [{"command": s["command"], "repo": s.get("repo") or "", "cwd": s.get("cwd") or ""}
+                      for s in spec["setup"]],
+            "validations": [{"id": v["id"], "command": v["command"], "repo": v.get("repo") or "",
+                             "cwd": v.get("cwd") or ""} for v in spec["validations"]]}
 
 
 def _session_or_none(sid: Optional[str]) -> Optional[str]:
@@ -1374,7 +1401,11 @@ def run_state(row: dict[str, Any], hive_status: Optional[str],
     if e["waiting_input"]:
         return "waiting", "waiting_input"
     if e["streaming"] or e["activity"] not in (None, "idle", "waiting_input"):
-        return "running", e["activity"] if e["activity"] not in (None, "idle") else "streaming"
+        # the reason names what runs; a Hive activity that says it waits (its own word for
+        # a queued or starting turn) is not a wait for anyone: only the branches above
+        # give a run the reason of a wait
+        a = e["activity"]
+        return "running", a if a not in (None, "idle") and not a.startswith("waiting") else "streaming"
     if e.get("background_work"):
         # the turn ended but its sub-agents or background commands still run, and their
         # end starts the turn that writes the real result: not finished yet

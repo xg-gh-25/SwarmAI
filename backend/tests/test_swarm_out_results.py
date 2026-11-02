@@ -117,9 +117,9 @@ def test_unread_older_turns_make_the_cost_partial():
     assert r["older_turns_not_read"] is True and r["cost_partial"] is True
 
 
-def test_a_long_reply_is_cut_with_its_full_length():
+def test_a_long_reply_is_kept_whole_with_its_length():
     r = summarize([U(), A(T("x" * 5000), out())])
-    assert len(r["report"]) == res.REPORT_CHARS and r["report_chars"] == 5000
+    assert r["report"] == "x" * 5000 and r["report_chars"] == 5000
 
 
 # ── summarize: what it did ────────────────────────────────────────────────────

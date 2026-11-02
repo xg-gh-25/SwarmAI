@@ -1465,7 +1465,6 @@
     "detail": {
       "failed": "读不到详情，稍后再试",
       "lastReply": "最后的回复",
-      "fullReport": "全文 {{count}} 字，去 Hive 页面看",
       "noReply": "没有回复文字",
       "commitsOnly": "（只统计 commit，未提交的改动没读）",
       "moreFiles_one": "还有 {{count}} 个文件",
@@ -1930,7 +1929,9 @@
         "filesOnHive_other": "Hive 上写了 {{count}} 个文件",
         "checks_not_seen": "没看到：{{list}}",
         "checks_errored": "报错：{{list}}",
-        "checks_unknown": "跑了但没有结果：{{list}}"
+        "checks_unknown": "跑了但没有结果：{{list}}",
+        "inferred": "按命令文本推断",
+        "fromRecord": "Hive 自己的记录"
       },
       "rerunBox": {
         "title": "修正重跑",
@@ -2000,6 +2001,13 @@
       "deliverables_one": "{{count}} 个交付物",
       "deliverables_other": "{{count}} 个交付物",
       "onHive": "在 Hive 上，没有带回",
+      "repoFile": {
+        "open": "查看改动（只读）",
+        "opening": "正在打开…",
+        "binary": "二进制文件：没有可显示的差异",
+        "tooLarge": "太大，这里不显示",
+        "failed": "无法显示这个改动：{{error}}"
+      },
       "refresh": "刷新",
       "notPlaced": "带回了，但没能放进本机的 Brain 目录",
       "positionRecords": "记录 {{n}} / {{total}}",
@@ -4520,7 +4528,8 @@
       "dropHint": "文件会加入聊天上下文"
     },
     "FileViewer": {
-      "noFileOpen": "没有打开的文件"
+      "noFileOpen": "没有打开的文件",
+      "versionsNote": "Hive 的改动，只读：改前与改后（都不是本机上的文件）"
     },
     "HiveFleetOverlay": {
       "addAccountFirst": "先添加一个 AWS 账号（在 Accounts 页）才能部署 Hive",

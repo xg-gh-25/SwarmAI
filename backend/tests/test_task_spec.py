@@ -255,9 +255,10 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
             raise sync_error
 
     async def dispatch(hive, title, task, origin, repos, *, segment, agent, extra=None, dispatch_id=None,
-                       deadline=None):
+                       deadline=None, checks=None):
         calls["dispatch"].append({"hive": hive, "task": task, "repos": repos, "segment": segment,
-                                  "agent": agent, "extra": extra, "dispatch_id": dispatch_id})
+                                  "agent": agent, "extra": extra, "dispatch_id": dispatch_id,
+                                  "checks": checks})
         return {"dispatch_id": "so_1"}
     monkeypatch.setattr(so, "_instance", instance)
     monkeypatch.setattr(host, "hive_brains", hive_brains)
@@ -267,6 +268,11 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
     async def can_prepare(inst):
         return None
     monkeypatch.setattr(so, "_require_work_orders", can_prepare)
+
+    async def has_cap(inst, cap):        # an older Hive: no checks by id (a test sets True)
+        return calls["caps"].get(cap, False)
+    calls["caps"] = {}
+    monkeypatch.setattr(so, "_has_cap", has_cap)
     return calls
 
 

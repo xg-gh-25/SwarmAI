@@ -47,13 +47,17 @@ Every failure is one of the fixed ``ERR_*`` texts, after the repository's name w
 is about one; a half-made workspace is removed (only ``Hive/work/<work_id>/``,
 ``Outputs/<work_id>/`` and the order's files).
 
-- ``prepare(workspace, work_id, repos)`` — the order; raises WorkError. Blocking (git).
+- ``prepare(workspace, work_id, repos, checks)`` — the order (with the task's checks
+                                         when sent); raises WorkError. Blocking (git).
+- ``checks_record(workspace, work_id)``  — the lines scripts/task_checks recorded.
 - ``claim(work_id)``                     — the one session start an order takes.
 - ``bind(workspace, work_id, session_id)`` — record the session that runs the order.
 - ``load(workspace, work_id)``           — the order, or None.
 - ``latest_worktree(workspace, url)``    — the newest order's clone of a repository.
-- ``release(workspace, work_id, busy)``  — remove the workspace; WorkError while ``busy``.
-- ``sweep(workspace, busy)``             — release orders idle for RETENTION_DAYS.
+- ``release(workspace, work_id, busy, end_runs)`` — end the session's pipeline runs, then
+                                         remove the workspace; WorkError while ``busy`` or
+                                         when a run could not be ended.
+- ``sweep(workspace, busy, end_runs=)``  — release orders idle for RETENTION_DAYS.
 """
 from __future__ import annotations
 
@@ -93,8 +97,9 @@ ERR_NO_REF = "the branch is not among the repository's remote branches"
 ERR_WORKTREE = "the task's copy of the repository could not be made"
 ERR_BUSY = "the session that runs this work order is still running"
 ERR_WRITE = "the workspace could not be written"
+ERR_RUNS = "the task's pipeline runs could not be ended"
 ERRORS = (ERR_BAD_ORDER, ERR_EXISTS, ERR_PATH, ERR_MIRROR, ERR_CLONE, ERR_FETCH, ERR_BUNDLE,
-          ERR_NO_COMMIT, ERR_NO_REF, ERR_WORKTREE, ERR_BUSY, ERR_WRITE)
+          ERR_NO_COMMIT, ERR_NO_REF, ERR_WORKTREE, ERR_BUSY, ERR_WRITE, ERR_RUNS)
 
 _SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 #: the only variables a git command here sees (module doc)
@@ -420,10 +425,64 @@ class _MirrorLock:
             self.f.close()
 
 
-def prepare(workspace: Path, work_id: str, repos: Any) -> dict[str, Any]:
-    """Make the work order real (module doc); the order as recorded."""
+#: bounds of a work order's checks (core/swarm_out ``work_checks``): a Project Agent
+#: declares a handful of setup lines and checks, each a CI step
+MAX_CHECK_ITEMS = 50
+MAX_CHECK_COMMAND = 8000
+CHECK_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+
+
+def _parse_checks(checks: Any, repo_names: set[str]) -> Optional[dict[str, list[dict[str, str]]]]:
+    """The order's setup and checks (scripts/task_checks runs them), or None when the
+    Host sent none. Each names a repository of this order and a plain directory inside
+    it; a check has an id of its own. Anything else refuses the whole order: a command is
+    never run somewhere the order did not name."""
+    if checks is None:
+        return None
+    if not isinstance(checks, dict) or set(checks) - {"setup", "validations"}:
+        raise WorkError(ERR_BAD_ORDER)
+    out: dict[str, list[dict[str, str]]] = {"setup": [], "validations": []}
+    ids: set[str] = set()
+    for kind in ("setup", "validations"):
+        items = checks.get(kind) or []
+        if not isinstance(items, list) or len(items) > MAX_CHECK_ITEMS:
+            raise WorkError(ERR_BAD_ORDER)
+        for it in items:
+            if not isinstance(it, dict):
+                raise WorkError(ERR_BAD_ORDER)
+            cmd, repo, cwd = it.get("command"), it.get("repo"), it.get("cwd") or ""
+            if not (isinstance(cmd, str) and cmd.strip() and len(cmd) <= MAX_CHECK_COMMAND
+                    and "\x00" not in cmd and isinstance(repo, str) and repo in repo_names
+                    and isinstance(cwd, str) and _plain_rel(cwd)):
+                raise WorkError(ERR_BAD_ORDER)
+            row = {"command": cmd, "repo": repo, "cwd": cwd}
+            if kind == "validations":
+                cid = it.get("id")
+                if not isinstance(cid, str) or not CHECK_ID_RE.fullmatch(cid) or cid in ids:
+                    raise WorkError(ERR_BAD_ORDER)
+                ids.add(cid)
+                row = {"id": cid, **row}
+            out[kind].append(row)
+    return out
+
+
+def _plain_rel(rel: str) -> bool:
+    """A relative directory with no empty, ``.`` or ``..`` part ("" is the repository
+    itself)."""
+    if rel == "":
+        return True
+    if rel.startswith("/") or "\\" in rel or "\x00" in rel:
+        return False
+    return all(part not in ("", ".", "..") for part in rel.split("/"))
+
+
+def prepare(workspace: Path, work_id: str, repos: Any, checks: Any = None) -> dict[str, Any]:
+    """Make the work order real (module doc); the order as recorded. ``checks``: the
+    task's setup and checks by id (``_parse_checks``), kept in the order for
+    scripts/task_checks."""
     ws = Path(workspace)
     items = _parse(work_id, repos)
+    order_checks = _parse_checks(checks, {r["name"] for r in items})
     d = work_dir(ws, work_id)
     if not (_plain(ws, "/".join((*WORK_ROOT, work_id))) and _plain(ws, outputs_rel(work_id))):
         raise WorkError(ERR_PATH)
@@ -445,6 +504,8 @@ def prepare(workspace: Path, work_id: str, repos: Any) -> dict[str, Any]:
         order = {"work_id": work_id, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                  "prepared_at": time.time(), "session_id": None, "repos": listed,
                  "outputs": outputs_rel(work_id)}
+        if order_checks is not None:
+            order["checks"] = order_checks
         _write_order(order)
         return order
     except WorkError:
@@ -454,6 +515,42 @@ def prepare(workspace: Path, work_id: str, repos: Any) -> dict[str, Any]:
         logger.warning("hive_workspace: preparing %s failed (%s)", work_id, type(exc).__name__)
         _remove(ws, work_id)
         raise WorkError(ERR_WRITE) from None
+
+
+#: where scripts/task_checks keeps a task's check record and logs: inside the task's
+#: own work directory, so the release removes them with it
+CHECKS_DIR = "checks"
+CHECKS_FILE = "checks.jsonl"
+#: lines of a check record read back (``checks_record``)
+MAX_RECORD_LINES = 500
+
+
+def checks_dir(workspace: Path, work_id: str) -> Path:
+    return work_dir(workspace, work_id) / CHECKS_DIR
+
+
+def checks_record(workspace: Path, work_id: str) -> list[dict[str, Any]]:
+    """The check record scripts/task_checks wrote for the order (one JSON object per
+    line), the last MAX_RECORD_LINES; [] when none was written. A line that does not read
+    is skipped."""
+    ws = Path(workspace)
+    rel = "/".join((*WORK_ROOT, work_id, CHECKS_DIR, CHECKS_FILE))
+    f = ws / rel
+    if not _plain(ws, rel) or not f.is_file():
+        return []
+    out = []
+    try:
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line in lines[-MAX_RECORD_LINES:]:
+        try:
+            x = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(x, dict):
+            out.append(x)
+    return out
 
 
 def load(workspace: Path, work_id: str) -> Optional[dict[str, Any]]:
@@ -548,12 +645,20 @@ def latest_worktree(workspace: Path, url: str) -> Optional[str]:
     return best[2] or None
 
 
-def release(workspace: Path, work_id: str, busy: Callable[[str], bool]) -> bool:
+def release(workspace: Path, work_id: str, busy: Callable[[str], bool],
+            end_runs: Optional[Callable[[str], Any]] = None) -> bool:
     """Remove the order's clones (``Hive/work/<work_id>/``, with ``hive/<work_id>``: its
     commits were sealed into the run record at each turn's end, core/hive_bundle),
     ``Outputs/<work_id>/`` and its record; the mirror and every other order are
     untouched. WorkError(ERR_BUSY) while ``busy(session_id)``; False when there was
-    nothing."""
+    nothing.
+
+    First, with ``end_runs`` (core/pipeline_human.end_session_runs, passed in so this
+    module does not depend on the pipeline), the pipeline runs the order's session owns
+    are ended: the Host's stop leaves a run waiting on a decision as it is, and once the
+    clones are gone a run worktree made from one of them can no longer be saved or
+    removed. When ``end_runs`` raises, nothing is removed: WorkError(ERR_RUNS), and the
+    Host's release is tried again later."""
     ws = Path(workspace)
     d = work_dir(ws, work_id)
     order = load(ws, work_id)
@@ -562,6 +667,13 @@ def release(workspace: Path, work_id: str, busy: Callable[[str], bool]) -> bool:
     sid = (order or {}).get("session_id")
     if isinstance(sid, str) and busy(sid):
         raise WorkError(ERR_BUSY)
+    if isinstance(sid, str) and sid and end_runs is not None:
+        try:
+            end_runs(sid)
+        except Exception as exc:  # noqa: BLE001 — any failure: the fixed text, nothing removed
+            logger.warning("hive_workspace: the runs of %s could not be ended (%s)", work_id,
+                           type(exc).__name__)
+            raise WorkError(ERR_RUNS) from None
     _remove(ws, work_id)
     return True
 
@@ -586,8 +698,10 @@ def _last_change(ws: Path, order: dict[str, Any]) -> float:
     return max(times)
 
 
-def sweep(workspace: Path, busy: Callable[[str], bool], now: Optional[float] = None) -> int:
-    """Release orders nothing changed in for RETENTION_DAYS (``_last_change``); the count."""
+def sweep(workspace: Path, busy: Callable[[str], bool], now: Optional[float] = None,
+          end_runs: Optional[Callable[[str], Any]] = None) -> int:
+    """Release orders nothing changed in for RETENTION_DAYS (``_last_change``), each with
+    ``end_runs`` (``release``); the count. An order whose runs could not be ended stays."""
     ws = Path(workspace)
     now = time.time() if now is None else now
     n = 0
@@ -596,7 +710,7 @@ def sweep(workspace: Path, busy: Callable[[str], bool], now: Optional[float] = N
         if order is None or now - _last_change(ws, order) <= RETENTION_DAYS * 86400:
             continue
         try:
-            if release(ws, wid, busy):
+            if release(ws, wid, busy, end_runs):
                 n += 1
         except (WorkError, OSError):
             continue

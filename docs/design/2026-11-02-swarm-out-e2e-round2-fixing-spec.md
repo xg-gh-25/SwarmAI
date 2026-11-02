@@ -26,7 +26,7 @@ status: r1，待 XG 确认后实施
 
 **不纳入，及原因：**
 
-- **决策归谁、怎么留痕、agent 接手后怎么结单、受保护路径怎么判：** 已在 `docs/design/2026-11-02-hive-run-decision-record.md`（r2）。E2E 里"批准落地后报冲突"那一条也归它：那次的冲突是真的（`docs/CODEBASE_METRICS.md` 的代码图那一行，Hive 写"not measured"，本机补成真实数字），由那份设计 §2.4 的结单核对加上"这条路径已重写（reauthored）"来解决，不是本 spec 再做一个检查。
+- **决策归谁、怎么留痕、受保护路径谁能落地、agent 接手后怎么结单：** 在 `docs/design/2026-11-02-hive-run-decision-record.md`（r3）。E2E 里"批准落地后报冲突"那一条也归它：那次的冲突是真的（`docs/CODEBASE_METRICS.md` 的代码图那一行，Hive 写"not measured"，本机补成真实数字）。按 r3，agent 落不了地（冲突）时，就在本机用自己的提交接手改动，再丢弃这一单；commits 已经取回到本机的 `refs/hive/`，所以丢弃不会丢东西。本 spec 不另做检查。
 - **Hive 上没有代码图**：这次唯一的后果是指标那一行写成"not measured"，本机重跑就补上了；Hive 上缺 `code_intel.impact` 时，查调用方还有 grep 可用。为每次派单建一张代码图要花时间，眼下没有测到它挡住了什么（P9），不做。
 - **Hive 没有 git 身份**：实测不成立。`core/hive_workspace.py:340-341` 已经给可写仓库设了 `user.name` / `user.email`（`SWARM_IDENTITY`），Hive 回复里的"git 没有身份"说的不对。
 
@@ -79,6 +79,8 @@ status: r1，待 XG 确认后实施
 5. **Hive 版本门槛：** 只有新版 Hive 会收到结构化的检查；`spec` 选 Hive 时把它作为一项能力（沿用"没有运行中的 Hive 有这个版本"的现有机制）。
 
 **安全。** `task_checks` 只执行 order 里 Host 声明的命令，在该单的工作目录下运行，和 agent 今天自己用 Bash 跑这些命令的权限完全一样。命令来自仓库自己的 CI，由 Host 的 Project Agent 定义传过去，Hive 的 agent 改不了。`bash -e` 跑的是常量字符串，不拼接任何外部输入。
+
+**这份记录能证明什么。** 记录由 `task_checks` 写，所以循环写法看不出来、agent 回复里自称全过这类误报不再决定状态。但它是 Hive 的记录，不是证明：Hive 上 agent 和 daemon 是同一个 OS 用户，agent 自己也能写这个文件（`core/hive_workspace` 模块文档：Hive 上没有 agent 碰不到的文件，run-spec r4.2 的选择 A）。所以它防的是无意的误报，防不了刻意伪造；要防伪造，得让 agent 换一个 OS 用户运行，那是另一份设计。验收不由这个状态决定，由 agent 或人看结果判断。
 
 **测试（先红后绿）。**
 - `task_checks setup`：一条写 `$GITHUB_PATH` 的 setup 之后，`run` 里的命令能在 PATH 上找到那个目录里的程序。去掉 GITHUB_PATH 支持时变红。

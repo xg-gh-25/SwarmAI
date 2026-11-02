@@ -21,8 +21,10 @@ def run_records_sweep() -> dict:
         out = {"removed": hive["removed"] + host["removed"], "tmp": hive["tmp"] + host["tmp"]}
         # a Hive's work orders no Host released (core/hive_workspace)
         from core import hive_workspace
+        from core.pipeline_human import end_session_runs
         from routers.hive_brains import session_busy
-        out["work_released"] = hive_workspace.sweep(get_swarmws(), session_busy)
+        out["work_released"] = hive_workspace.sweep(get_swarmws(), session_busy,
+                                                    end_runs=end_session_runs)
     except Exception as exc:  # noqa: BLE001 — a sweep failure is reported, never raised
         logger.exception("records sweep failed")
         return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
