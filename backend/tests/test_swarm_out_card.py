@@ -243,3 +243,48 @@ def test_a_non_owner_channel_session_is_refused(monkeypatch, capsys, tmp_path):
     assert res["behavior"] == "deny" and "owner" in res["message"]
     owner = create_file_access_permission_handler([str(tmp_path)])
     assert asyncio.run(owner("Bash", {"command": '"$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs'}, {}))["behavior"] == "allow"
+
+
+def test_a_dispatch_whose_output_was_redirected_is_shown_from_this_sessions_log_row(monkeypatch):
+    """A dispatch call that printed nothing (its output went to a file) but went out:
+    the card comes from the log row this session dispatched after the call started, as
+    if the id had been printed. Not this session's, sent before the call, or more than
+    one candidate: still "not sure" (a second dispatch would run the task twice)."""
+    import time
+    from datetime import datetime, timezone
+    now = time.time()
+    at = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    mine = {**ROW, "dispatch_id": "so_" + "b" * 12, "sent_at": at, "dispatched_from": "sess-a"}
+    redirected = CMD + " > /tmp/dispatch.json 2>&1"
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [ROW, mine])
+    b = card.card(redirected, "", since=now - 1, session_id="sess-a")
+    assert (b["ok"], b["dispatchId"], b["hive"]) == (True, "so_" + "b" * 12, "explorer")
+    # another session's dispatch, or none named: not this call's
+    for sid in ("sess-b", None):
+        m = card.card(redirected, "", since=now - 1, session_id=sid)
+        assert (m["ok"], m["maybeSent"]) == (False, True)
+    # sent before this call started: an earlier dispatch of this session
+    m = card.card(redirected, "", since=now + 60, session_id="sess-a")
+    assert (m["ok"], m["maybeSent"]) == (False, True)
+    # a row whose title is not this call's --title
+    other = {**mine, "title": "another task"}
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [other])
+    assert card.card(redirected, "", since=now - 1, session_id="sess-a")["maybeSent"] is True
+    # two rows that both fit: which is this call's is not known
+    twin = {**mine, "dispatch_id": "so_" + "c" * 12}
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [mine, twin])
+    assert card.card(redirected, "", since=now - 1, session_id="sess-a")["maybeSent"] is True
+
+
+@pytest.mark.usefixtures("_isolated_queue")
+def test_the_orchestrator_shows_a_redirected_dispatch_from_its_own_sessions_row(monkeypatch):
+    from datetime import datetime, timezone
+    from tests.test_tool_call_leak_guard import _drive, _make_orchestrator, _make_result_message
+    row = {**ROW, "sent_at": datetime.now(timezone.utc).isoformat(), "dispatched_from": "sess-test"}
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [row])
+    cmd = CMD + " > /tmp/dispatch.json 2>&1"
+    events, raised = asyncio.run(_drive(_make_orchestrator(), [
+        _bash("tu1", cmd), _res("tu1", ""), _make_result_message()]))
+    assert raised is None
+    (b,) = _cards(events)
+    assert (b["ok"], b["dispatchId"]) == (True, ROW["dispatch_id"])

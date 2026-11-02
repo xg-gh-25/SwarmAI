@@ -508,7 +508,8 @@ class StreamingOrchestrator:
         try:
             from .turn_products import result_text
             command, since = watch
-            block = await executors.run_in("io", _swarm_out_card.card, command, result_text(content), since)
+            block = await executors.run_in("io", _swarm_out_card.card, command, result_text(content), since,
+                                           None, self._session_id)
         except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
             logger.warning("dispatch card failed: %s", type(e).__name__)
             return []

@@ -5,7 +5,9 @@ The streaming orchestrator watches a Bash call of ``scripts.swarm_out dispatch``
 (``watched``) and, when it returns, asks ``card`` for the block. A dispatch that went
 out is shown from **this machine's dispatch log row** with the ``dispatch_id`` the call
 printed (``from_row``), never from the printed text: what the card says is what was
-sent. A refused dispatch (``{"ok": false, "detail": ...}``) is a failure card with the
+sent. A call that printed nothing (its output went to a file) is shown from the one row
+this session dispatched after the call started (``_row_of_session``), so a task that went
+out is never called "not sure". A refused dispatch (``{"ok": false, "detail": ...}``) is a failure card with the
 detail and the Brain / title the command named; it says nothing was sent. A dispatch the
 Hive may have taken without naming a session (``"maybe_sent": true``, the router's 504
 or the CLI's own timeout) says it may be running there instead.
@@ -123,19 +125,41 @@ def _sent_at(row: dict) -> Optional[float]:
         return None
 
 
-def card(command: str, output: str, since: Optional[float] = None, cwd: Optional[str] = None) -> Optional[dict]:
+def _row_of_session(command: str, since: Optional[float], session_id: Optional[str]) -> Optional[dict]:
+    """The dispatch log row of this call when it printed nothing: the one row this
+    session dispatched (``dispatched_from``) after the call started, with the call's
+    ``--title`` when it names one. None when not exactly one fits: which row is this
+    call's is then not known."""
+    if not session_id or since is None:
+        return None
+    from core import swarm_out
+    title = _args(command).get("title")
+    rows = [r for r in swarm_out._read_log()
+            if r.get("dispatched_from") == session_id
+            and (at := _sent_at(r)) is not None and at >= since - _SKEW_S
+            and (title is None or r.get("title") == title)]
+    return rows[0] if len(rows) == 1 else None
+
+
+def card(command: str, output: str, since: Optional[float] = None, cwd: Optional[str] = None,
+         session_id: Optional[str] = None) -> Optional[dict]:
     """The card for a dispatch call's result, or None when nothing is to be shown.
 
     A row is shown only when this machine's log holds its ``dispatch_id`` and, with
     ``since`` (when the call was seen, epoch seconds), it was sent after the call
     started: an older dispatch's id in the output (printed again, echoed) is no card of
-    this call. A call that printed no JSON (the Bash tool stopped it at its timeout, or
-    it was sent to the background) may still have gone out: a "not sure" card. A wrong
-    command line (argparse usage) ran nothing: no card."""
+    this call. A call that printed no JSON is shown from the row this session
+    (``session_id``) dispatched after it started, when exactly one fits (its output went
+    to a file); otherwise (the Bash tool stopped it at its timeout, or it was sent to the
+    background) it may still have gone out: a "not sure" card. A wrong command line
+    (argparse usage) ran nothing: no card."""
     got = _json_head(output)
     if got is None:
         if _USAGE_RE.search(output or ""):
             return None
+        row = _row_of_session(command, since, session_id)
+        if row is not None:
+            return from_row(row)
         a = _args(command)
         return failure("the dispatch command gave no answer (it was stopped or is still running)",
                        a.get("title"), a.get("brain"), a.get("hive"), maybe_sent=True)
