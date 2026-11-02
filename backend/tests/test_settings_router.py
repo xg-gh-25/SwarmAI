@@ -515,3 +515,20 @@ class TestNoPipelineSetting:
         assert "pipeline" not in client.get("/api/settings").json()
         disk = json.loads(_isolated_config._config_path.read_text())
         assert "pipeline" not in disk
+
+
+class TestReposDir:
+    """repos_dir (fixing-spec 2026-11-02-new-brain-setup G1): where bind --url clones.
+    A folder a repository may not be cloned into is refused at the PUT; empty resets."""
+
+    def test_a_folder_inside_swarmws_is_refused_and_empty_resets(self, client: TestClient, tmp_path, monkeypatch):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        monkeypatch.setattr("config.get_swarmws", lambda: ws)
+        bad = client.put("/api/settings", json={"repos_dir": str(ws / ".claude" / "skills")})
+        assert bad.status_code == 422 and "SwarmWS" in bad.json()["detail"]
+        assert client.put("/api/settings", json={"repos_dir": "relative/dir"}).status_code == 422
+        good = client.put("/api/settings", json={"repos_dir": str(tmp_path / "Repos")})
+        assert good.status_code == 200 and good.json()["repos_dir"] == str(tmp_path / "Repos")
+        reset = client.put("/api/settings", json={"repos_dir": ""})
+        assert reset.status_code == 200 and reset.json()["repos_dir"] == "~/SwarmAI-Repos"

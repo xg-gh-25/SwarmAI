@@ -20,7 +20,9 @@ here, on the machine that reads it.
 
 Public: ``DEFAULT_REPOS_DIR``, ``repos_dir()``, ``placement(project_dir)``,
 ``describe(project_dir)``, ``WORK_RULE``, ``PlacementError``, ``normalize_url(url)``,
-``clone_into_workspace(url, branch)``, ``relocate(project_dir, repo)``.
+``check_branch(branch)``, ``repos_dir_refusal(value)``, ``check_repos_dir()``,
+``binding_for_remote(project_dir, url)``, ``clone_into_workspace(url, branch)``,
+``relocate(project_dir, repo) -> Relocation``.
 """
 from __future__ import annotations
 
@@ -41,7 +43,8 @@ WORK_RULE = ("make code changes in a session worktree of this checkout "
 
 
 def repos_dir() -> Path:
-    """The repository workspace: ``repos_dir`` from the app config, else the default."""
+    """The repository workspace: ``repos_dir`` from the app config, else the default.
+    Where it may be is checked by ``check_repos_dir`` before anything is put there."""
     value: Optional[str] = None
     try:
         from core.app_config_manager import AppConfigManager
@@ -52,8 +55,54 @@ def repos_dir() -> Path:
     return Path(text).expanduser()
 
 
+def repos_dir_refusal(value: str) -> Optional[str]:
+    """Why *value* may not be the repository workspace, or None: it must be an absolute
+    path (``~`` allowed) and not a place a local root may not be (the home directory
+    itself, SwarmWS, the app data or bindings directory, a credential location:
+    ``local_roots._refusal``) nor a protected system path. The Settings PUT and every
+    clone or move check it, so a folder like SwarmWS's skills can never receive a clone."""
+    import os
+    text = (value or "").strip()
+    if not text:
+        return None                                   # empty: the default
+    p = Path(text).expanduser()
+    if not p.is_absolute():
+        return "give an absolute folder (or one starting with ~)"
+    real = Path(os.path.realpath(p))
+    from core.code_intel.local_roots import _refusal
+    why = _refusal(real)
+    if why:
+        return f"it would be {why}"
+    from core.library_mounts import is_protected_system_path
+    if is_protected_system_path(str(real)):
+        return "it is a protected system location"
+    return None
+
+
+def check_repos_dir() -> Path:
+    """``repos_dir()``, refused (PlacementError) when ``repos_dir_refusal`` says so."""
+    workspace = repos_dir()
+    why = repos_dir_refusal(str(workspace))
+    if why:
+        raise PlacementError(f"the repository workspace {workspace} cannot be used: {why}; "
+                             "change it in Settings > General")
+    return workspace
+
+
+def _under_bindings_root(root: Optional[Path]) -> bool:
+    if root is None:
+        return False
+    try:
+        from core.ddd_bindings import _default_bindings_root
+        return root.resolve().is_relative_to(_default_bindings_root().resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _kind(binding: Any, root: Optional[Path], workspace: Path) -> str:
-    if not getattr(binding, "worktree", None):
+    # a checkout under the bindings root is the bind-managed mirror whatever the binding
+    # says (a worktree written as a path into it, or none)
+    if not getattr(binding, "worktree", None) or _under_bindings_root(root):
         return "mirror"
     if root is not None:
         try:
@@ -78,23 +127,39 @@ def placement(project_dir: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+#: a branch name safe to show in a prompt (git ref rules, roughly: no spaces, no control
+#: characters, no leading dash, none of ~^:?*[\ and no "..")
+_BRANCH_RE = re.compile(r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/@+-]{1,200}$")
+
+
+def _shown(text: Any, limit: int = 300) -> str:
+    """*text* as one plain line for a prompt: control characters (a newline would end the
+    quoted note and start an instruction) and markdown emphasis removed."""
+    t = "".join(ch for ch in str(text) if ch.isprintable())
+    return t.replace("*", "").replace("`", "")[:limit]
+
+
 def describe(project_dir: Path) -> list[str]:
     """One line per repository for an agent on this machine: its checkout path (or why
-    there is none) and where to write code."""
+    there is none) and where to write code. Every value from bindings.yaml is shown as a
+    plain line (``_shown``); a branch name outside git's ref rules is shown as unknown."""
     from core.project_agent import repo_roots
     roots = repo_roots(Path(project_dir))
     lines = []
-    for name, p in placement(project_dir).items():
-        root = roots.get(name)
+    for raw_name, p in placement(project_dir).items():
+        name = _shown(raw_name, 100)
+        branch = p["branch"] if isinstance(p["branch"], str) and _BRANCH_RE.match(p["branch"]) else None
+        root = roots.get(raw_name)
+        root = _shown(root) if root is not None else None
         if root is None:
             lines.append(f"- {name}: no checkout on this machine (bind it: artifact_cli bind "
-                         f"--project {Path(project_dir).name} --url <remote>)")
+                         f"--project {_shown(Path(project_dir).name, 100)} --url <remote>)")
         elif p["checkout"] == "mirror":
             lines.append(f"- {name}: {root} is SwarmAI's managed mirror, not a working "
                          f"checkout; move it first: artifact_cli bind --project "
-                         f"{Path(project_dir).name} --relocate {name}")
+                         f"{_shown(Path(project_dir).name, 100)} --relocate {name}")
         else:
-            lines.append(f"- {name}: checkout {root} (branch {p['branch'] or 'unknown'}); "
+            lines.append(f"- {name}: checkout {root} (branch {branch or 'unknown'}); "
                          f"{WORK_RULE}")
     return lines
 
@@ -107,7 +172,18 @@ class PlacementError(ValueError):
 
 
 _SCHEMELESS_RE = re.compile(
-    r"^(?P<host>[A-Za-z0-9.-]+\.[A-Za-z]{2,})/(?P<path>[\w.-]+(?:/[\w.-]+)+?)(?:\.git)?/?$")
+    r"^(?P<host>[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/(?P<path>[\w.-]+(?:/[\w.-]+)+)/?$")
+
+
+def check_branch(branch: Optional[str]) -> Optional[str]:
+    """*branch* if git could take it as a branch name and not as an option, else
+    PlacementError; None stays None."""
+    if branch is None:
+        return None
+    b = branch.strip()
+    if not _BRANCH_RE.match(b) or b.endswith((".lock", "/", ".")):
+        raise PlacementError(f"{branch!r} is not a branch name")
+    return b
 
 
 def normalize_url(url: str) -> str:
@@ -119,9 +195,12 @@ def normalize_url(url: str) -> str:
     u = (url or "").strip()
     if not u:
         raise PlacementError("no URL given")
+    if any(c in u for c in "?#") or any(not ch.isprintable() or ch.isspace() for ch in u):
+        raise PlacementError("give the plain repository URL (no query, fragment or spaces)")
     m = _SCHEMELESS_RE.match(u)
     if m and "://" not in u and not u.startswith("git@"):
-        u = f"https://{m.group('host')}/{m.group('path')}.git"
+        path = m.group("path").removesuffix(".git")
+        u = f"https://{m.group('host')}/{path}.git"
     if u.lower().startswith(("https://", "http://", "ssh://")):
         parts = urlsplit(u)
         if parts.password or (parts.username and parts.scheme.lower() != "ssh"):
@@ -133,6 +212,15 @@ def normalize_url(url: str) -> str:
     except ValueError as e:
         raise PlacementError(str(e).replace("binding 'url': ", "")) from None
     if u.startswith("/") or u.lower().startswith("file://"):
+        # a local source is copied into the workspace: never one a local root may not be
+        # (SwarmWS, the app data directory, ...), or bind --url would read it by copying
+        import os
+        from urllib.parse import unquote
+        from core.code_intel.local_roots import _refusal
+        local = unquote(u[len("file://"):]) if u.lower().startswith("file://") else u
+        why = _refusal(Path(os.path.realpath(local)))
+        if why:
+            raise PlacementError(f"the source is {why}")
         return u
     if not u.lower().startswith(("https://", "ssh://", "git@")):
         raise PlacementError("give an https://, ssh:// or git@host:owner/name URL")
@@ -157,66 +245,156 @@ def _same_origin(root: Path, url: str) -> bool:
     return _same_repo(origin, url) or norm(origin) == norm(url)
 
 
+def _check_target(target: Path) -> None:
+    """Refuse a target folder a local root may not be, before anything is created there."""
+    import os
+    from core.code_intel.local_roots import _refusal
+    real = Path(os.path.realpath(target.parent)) / target.name
+    why = _refusal(real)
+    if why:
+        raise PlacementError(f"{target} would be {why}")
+
+
+def _remove_fresh(target: Path) -> None:
+    """Remove a folder this call created and could not finish (a clone cut short, a
+    branch that does not exist), so the next run does not reuse a broken checkout."""
+    import shutil
+    shutil.rmtree(target, ignore_errors=True)
+
+
+def binding_for_remote(project_dir: Path, url: str) -> Optional[str]:
+    """The name of *project_dir*'s binding whose clone source is the repository *url*
+    names, or None."""
+    from core.project_agent import _bindings
+    from core.task_repos import _same_repo
+    norm = lambda s: str(s).rstrip("/").removesuffix(".git")  # noqa: E731
+    for name, b in _bindings(Path(project_dir)).items():
+        if _same_repo(b.clone, url) or norm(b.clone) == norm(url):
+            return name
+    return None
+
+
 def clone_into_workspace(url: str, branch: Optional[str] = None) -> tuple[Path, bool]:
-    """``(checkout, cloned)``: *url* (already ``normalize_url``-ed) in the repository
-    workspace. ``<repos_dir>/<name>`` when free; the same repository already there is
-    used as it is (``cloned`` False); another repository there moves it to
-    ``<owner>-<name>``, and when that is taken too nothing is done."""
+    """``(checkout, cloned)``: *url* (already ``normalize_url``-ed; *branch* already
+    ``check_branch``-ed) in the repository workspace. ``<repos_dir>/<name>`` when free;
+    the same repository already there is used as it is (``cloned`` False; with *branch*,
+    that branch is checked out, or it is refused); another repository there moves it to
+    ``<owner>-<name>``, and when that is taken too nothing is done. Every check runs
+    before anything is created, and a clone that does not finish is removed."""
+    from core.brain_bootstrap.repo_read import git
     segs = _segments(url)
     if not segs:
         raise PlacementError("the URL names no repository")
     name = segs[-1]
     owner = segs[-2] if len(segs) > 1 else None
-    if name in ("", ".", "..") or name.startswith("."):
-        raise PlacementError(f"{name!r} is not a usable folder name")
-    workspace = repos_dir()
+    for part in (name, owner or "x"):
+        if part in ("", ".", "..") or part.startswith(".") or not re.fullmatch(r"[\w.-]+", part):
+            raise PlacementError(f"{part!r} is not a usable folder name")
+    workspace = check_repos_dir()
     candidates = [name] + ([f"{owner}-{name}"] if owner else [])
     for cand in candidates:
         target = workspace / cand
+        _check_target(target)
         if target.exists():
             if (target / ".git").exists() and _same_origin(target, url):
+                if branch and git(target, "checkout", "-q", branch, "--") is None:
+                    raise PlacementError(f"{target} holds this repository, but branch {branch!r} "
+                                         "could not be checked out there (it may not exist, or "
+                                         "the checkout has changes)")
                 return target, False
             continue
         workspace.mkdir(parents=True, exist_ok=True)
         from core.git_sync_engine import GitSyncEngine
         if not GitSyncEngine(target).git_clone(url, target):
+            _remove_fresh(target)
             raise PlacementError(f"git could not clone the repository into {target}")
-        if branch:
-            from core.brain_bootstrap.repo_read import git
-            if git(target, "checkout", "-q", branch) is None:
-                raise PlacementError(f"cloned into {target}, but branch {branch!r} does not exist")
+        if branch and git(target, "checkout", "-q", branch, "--") is None:
+            _remove_fresh(target)
+            raise PlacementError(f"branch {branch!r} does not exist in the repository; "
+                                 "nothing was kept")
         return target, True
     raise PlacementError(f"{', '.join(str(workspace / c) for c in candidates)} already hold "
                          "other repositories; bind the one you want with --local")
 
 
-def relocate(project_dir: Path, repo: str) -> Path:
+class Relocation:
+    """A done ``relocate``: ``target`` is where the checkout is now; ``undo()`` puts the
+    folder back and restores ``bindings.yaml`` (used when the step after it fails)."""
+
+    def __init__(self, project_dir: Path, mirror: Path, target: Path) -> None:
+        self.project_dir, self.mirror, self.target = project_dir, mirror, target
+
+    def undo(self) -> None:
+        import shutil
+        bak = self.project_dir / "bindings.yaml.bak"
+        if bak.is_file():
+            shutil.copy2(bak, self.project_dir / "bindings.yaml")
+        if self.target.exists() and not self.mirror.exists():
+            shutil.move(str(self.target), str(self.mirror))
+
+
+def _other_brains_on(project_dir: Path, repo: str, mirror: Path) -> list[str]:
+    """Other Brains whose binding uses the same mirror folder (it has no Brain in its
+    name, so two Brains binding one remote share it)."""
+    from core.ddd_bindings import binding_worktree
+    from core.project_agent import _bindings
+    out = []
+    for d in sorted(Path(project_dir).parent.iterdir()) if Path(project_dir).parent.is_dir() else []:
+        if d == Path(project_dir) or not (d / "bindings.yaml").is_file():
+            continue
+        for b in _bindings(d).values():
+            try:
+                if binding_worktree(b).resolve() == mirror.resolve():
+                    out.append(d.name)
+            except (ValueError, OSError):
+                continue
+    return out
+
+
+def relocate(project_dir: Path, repo: str) -> Relocation:
     """Move *repo*'s bind-managed mirror into the repository workspace and record it
     there (``bindings.yaml`` ``worktree``). Refused, with nothing moved, when the mirror
-    holds work that is not on a remote, or the binding already has its own checkout."""
+    holds work that is not on a remote, another Brain uses the same mirror, the target is
+    taken or not allowed, or the binding already has its own checkout."""
+    import shutil
     from core.ddd_bindings import _worktree_has_unsaved_work, binding_worktree
-    from core.project_agent import _bindings
-    b = _bindings(Path(project_dir)).get(repo)
+    from core.project_agent import _bindings, repo_roots
+    project_dir = Path(project_dir)
+    b = _bindings(project_dir).get(repo)
     if b is None:
-        raise PlacementError(f"{Path(project_dir).name} binds no repository named {repo!r}")
-    if b.worktree:
+        raise PlacementError(f"{project_dir.name} binds no repository named {repo!r}")
+    try:
+        mirror = binding_worktree(b) if not b.worktree else repo_roots(project_dir).get(repo)
+    except (ValueError, OSError) as e:
+        raise PlacementError(f"{repo}: {e}") from None
+    if mirror is None or not _under_bindings_root(mirror):
         raise PlacementError(f"{repo} already has its own checkout ({b.worktree})")
-    mirror = binding_worktree(b)
     if not mirror.is_dir():
         raise PlacementError(f"{repo} has no mirror on this machine; bind it with --url")
+    others = _other_brains_on(project_dir, repo, mirror)
+    if others:
+        raise PlacementError(f"{', '.join(others)} also use{'s' if len(others) == 1 else ''} "
+                             f"{mirror}; bind this Brain with --url instead (nothing was moved)")
     if _worktree_has_unsaved_work(mirror):
         raise PlacementError(f"{mirror} has uncommitted or unpushed work; nothing was moved")
-    workspace = repos_dir()
+    workspace = check_repos_dir()
     target = workspace / repo
+    _check_target(target)
     if target.exists():
         raise PlacementError(f"{target} already exists; nothing was moved")
     workspace.mkdir(parents=True, exist_ok=True)
-    import shutil
-    shutil.move(str(mirror), str(target))
+    try:
+        shutil.move(str(mirror), str(target))
+    except Exception as e:  # noqa: BLE001 — a move cut short across disks: keep the mirror
+        if mirror.is_dir() and target.exists():
+            _remove_fresh(target)
+        raise PlacementError(f"{mirror} could not be moved ({type(e).__name__}); "
+                             "nothing was changed") from None
     from core.local_binding import set_worktree
     try:
-        set_worktree(Path(project_dir), repo, target)
-    except (OSError, ValueError):
-        shutil.move(str(target), str(mirror))            # put it back: nothing half-done
-        raise
-    return target
+        set_worktree(project_dir, repo, target)
+    except Exception as e:  # noqa: BLE001 — put it back: nothing half-done
+        shutil.move(str(target), str(mirror))
+        raise PlacementError(f"bindings.yaml could not be updated ({type(e).__name__}); "
+                             "the mirror was put back") from None
+    return Relocation(project_dir, mirror, target)

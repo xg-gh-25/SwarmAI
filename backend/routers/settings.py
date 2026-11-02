@@ -324,6 +324,17 @@ async def update_app_configuration(request: Request):
     if updates.get("anthropic_base_url") == "":
         updates["anthropic_base_url"] = None
 
+    # repos_dir: where bind --url clones a Brain's repository. Empty resets the default;
+    # a folder a repository may not be cloned into (SwarmWS, the home directory itself,
+    # a credential location...) is refused here, not only at the next clone.
+    if "repos_dir" in updates:
+        from core.repo_placement import DEFAULT_REPOS_DIR, repos_dir_refusal
+        value = (updates["repos_dir"] or "").strip()
+        why = repos_dir_refusal(value)
+        if why:
+            raise HTTPException(status_code=422, detail=f"repos_dir: {why}")
+        updates["repos_dir"] = value or DEFAULT_REPOS_DIR
+
     # Compute effective state BEFORE persisting
     effective_available = updates.get(
         "available_models",

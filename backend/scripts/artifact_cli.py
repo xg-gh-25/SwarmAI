@@ -405,21 +405,70 @@ def _bind_into_workspace(args) -> None:
     (``core.repo_placement``), then read it in place like ``--local``. ``bind
     --relocate <repo>``: move a binding's bind-managed mirror into the workspace, then
     the same. Either way the Brain ends with one checkout the person can see and work in,
-    where a Hive's returned commits land (fixing-spec 2026-11-02 G1)."""
+    where a Hive's returned commits land (fixing-spec 2026-11-02 G1).
+
+    Everything that can refuse runs before anything is created or moved (the project,
+    the URL, the branch, the workspace folder, the target); a binding that already has
+    this remote is reused (a mirror is relocated, a checkout is read again); and when
+    the in-place read is refused after all, the clone is removed or the move undone."""
     from core import repo_placement as rp
     projects = _get_workspace() / "Projects"
+    project = _project_name(projects, args.project)
+    pdir = projects / project
+    source = getattr(args, "source", "agent")
+    fresh: Path | None = None
+    moved = None
     try:
         if args.url:
             url = rp.normalize_url(args.url)
-            root, cloned = rp.clone_into_workspace(url, getattr(args, "branch", None))
+            branch = rp.check_branch(getattr(args, "branch", None))
+            rp.check_repos_dir()
+            existing = rp.binding_for_remote(pdir, url)
+            kind = rp.placement(pdir).get(existing, {}).get("checkout") if existing else None
+            if existing and kind == "mirror":
+                moved = rp.relocate(pdir, existing)
+                root, cloned = moved.target, False
+            elif existing:
+                from core.project_agent import repo_roots
+                root = repo_roots(pdir).get(existing)
+                if root is None:
+                    raise rp.PlacementError(f"{existing} binds this remote but its checkout is "
+                                            "not on this machine; bind it with --local <path>")
+                cloned = False
+            else:
+                root, cloned = rp.clone_into_workspace(url, branch)
+                fresh = root if cloned else None
         else:
-            root, cloned = rp.relocate(projects / args.project, args.relocate), False
+            moved = rp.relocate(pdir, args.relocate)
+            root, cloned = moved.target, False
     except rp.PlacementError as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({"checkout": str(root), "cloned": cloned,
-                      "relocated": bool(getattr(args, "relocate", None))}), file=sys.stderr)
-    _bind_local(args.project, str(root), source=getattr(args, "source", "agent"))
+    print(json.dumps({"checkout": str(root), "cloned": cloned, "relocated": moved is not None}),
+          file=sys.stderr)
+    try:
+        _bind_local(project, str(root), source=source)
+    except SystemExit as e:
+        if e.code:                       # refused after all: leave nothing half-done
+            if fresh is not None:
+                rp._remove_fresh(fresh)
+            if moved is not None:
+                moved.undo()
+            print(json.dumps({"error": "nothing was kept: "
+                              + ("the clone was removed" if fresh else "the mirror was put back"
+                                 if moved else "no change")}), file=sys.stderr)
+        raise
+
+
+def _project_name(projects: Path, project: str) -> str:
+    """The project's directory name (exact, else the one case-insensitive match); exits 1
+    when there is none. The local-roots registry is keyed by it, the name Brain Hub reads."""
+    names = [d.name for d in projects.iterdir() if d.is_dir()] if projects.is_dir() else []
+    match = [n for n in names if n == project] or [n for n in names if n.lower() == project.lower()]
+    if len(match) != 1:
+        print(json.dumps({"error": f"no project named {project!r}"}), file=sys.stderr)
+        sys.exit(1)
+    return match[0]
 
 
 def _bind_local(project: str, path: str, *, source: str = "agent") -> None:
@@ -428,14 +477,8 @@ def _bind_local(project: str, path: str, *, source: str = "agent") -> None:
     graph is built by a detached child, so this returns at once (design
     2026-10-29-code-intel-auto D1). The Brain Hub card lists it with a Remove."""
     from core.code_intel.local_roots import LocalRootError, declare
-    # The registry is keyed by the project's directory name, the name Brain Hub reads
     projects = _get_workspace() / "Projects"
-    names = [d.name for d in projects.iterdir() if d.is_dir()] if projects.is_dir() else []
-    match = [n for n in names if n == project] or [n for n in names if n.lower() == project.lower()]
-    if len(match) != 1:
-        print(json.dumps({"error": f"no project named {project!r}"}), file=sys.stderr)
-        sys.exit(1)
-    project = match[0]
+    project = _project_name(projects, project)
     try:
         entry, added = declare(project, path, source=source)
     except LocalRootError as e:

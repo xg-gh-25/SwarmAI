@@ -176,3 +176,14 @@ def test_the_ddd_block_with_hits_also_says_where_the_code_is(tmp_path, monkeypat
                                       ("P", "signal1_project_path"), deliver=got.append)
     assert len(got) == 1 and "Quokka rule" in got[0]
     assert f"checkout {repo.resolve()}" in got[0]
+
+
+def test_a_hive_gets_no_host_repository_lines(tmp_path, monkeypatch):
+    # a Hive works in the task clones its workspace paragraph names; telling it to bind
+    # into ~/SwarmAI-Repos would be the wrong advice
+    from core.session_router import _ddd_repo_lines
+    monkeypatch.setattr("core.code_intel.local_roots.hive_mode", lambda: True)
+    monkeypatch.setattr("core.repo_placement.describe", lambda d: ["- app: checkout /x"])
+    assert _ddd_repo_lines(tmp_path) == ""
+    monkeypatch.setattr("core.code_intel.local_roots.hive_mode", lambda: False)
+    assert "checkout /x" in _ddd_repo_lines(tmp_path)

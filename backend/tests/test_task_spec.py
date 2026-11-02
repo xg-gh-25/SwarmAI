@@ -129,7 +129,7 @@ def test_the_spec_comes_from_the_definition(ws):
     assert (s["mode"], s["mode_chosen"], s["execution"], s["profile"]) == (
         "code-change", "the default mode", {"how": "native", "profile": None}, None)
     assert s["repos"] == [{"name": "lib", "url": "https://github.com/acme/lib.git", "ref": "main",
-                           "sha": None, "dirty": None, "checkout": None, "error": None, "placement": "mirror",
+                           "sha": None, "dirty": None, "checkout": None, "error": None, "checkout_kind": "mirror",
                            "access": "write"}]
     # every repository of the Brain goes, whatever the mode (research declares none)
     assert [r["name"] for r in _build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research")["repos"]] == ["lib"]

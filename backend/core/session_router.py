@@ -1894,10 +1894,15 @@ def _ddd_repo_lines(project_dir: Any) -> str:
     """Where the active project's code repositories are checked out on this machine and
     where to write code (core.repo_placement; its Project Agent records the placement):
     an agent coding natively otherwise has no way to know. Empty for a Brain with no
-    repository, and on any error (the DDD block never fails on it)."""
+    repository, on a Hive, and on any error (the DDD block never fails on it)."""
     if project_dir is None:
         return ""
     try:
+        from core.code_intel.local_roots import hive_mode
+        if hive_mode():
+            # a Hive works in the task clones its workspace paragraph names; the host's
+            # checkouts are not on this machine, and "bind it" would be the wrong advice
+            return ""
         from core.repo_placement import describe
         lines = describe(Path(project_dir))
     except Exception:  # noqa: BLE001 — a hint, never a reason to drop the DDD block

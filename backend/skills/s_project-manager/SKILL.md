@@ -468,7 +468,7 @@ hardcoded path), so the SAME lifecycle serves all three:
 | Project shape | `bindings.yaml`? | BIND/PULL | DEVELOP path | SYNC-BACK |
 |---|---|---|---|---|
 | **Internal repo** (code.amazon.com / Brazil) | yes — `kind: internal` | PULL deferred (Midway/Brazil auth) | `s_internal-brazil` (build/release) → `s_internal-crux-cr` (CR) → `s_internal-crux-review` | yes (opt-in map) |
-| **External repo** (GitHub) | yes — `kind: external` | `bind_repo` clones + indexes | normal git branch + PR + `s_expert-review` (NO CRUX, NO brazil) | yes (opt-in map) |
+| **External repo** (GitHub) | yes — `kind: external` | `bind --url` clones it into the repository workspace and reads it in place | normal git branch + PR + `s_expert-review` (NO CRUX, NO brazil) | yes (opt-in map) |
 | **No-repo project** (pure DDD docs) | **no** — never bound | N/A — stops at CREATE | N/A — DDD docs ARE the deliverable; edit them directly | N/A |
 
 The discriminator is the delivery contract's `remote_kind` (`code-amazon-cr` vs
@@ -538,6 +538,10 @@ for development does NOT mean piling repo-specific rules into global STEERING �
 repo declares its own delivery contract here (decision 7).
 
 #### Step 2: PULL + build codeIntel (one command — never hand-roll)
+
+For bindings declared by hand in Step 1 (an internal repository, or one declared before
+`--url` existed): a plain `bind` clones a binding without a `worktree` into SwarmAI's
+managed mirror, which is not a place to work. For a repository URL use Step 0.
 
 Run the `bind` subcommand — it loads the project's `bindings.yaml`, loops EVERY
 binding, clones each git-clonable repo OUTSIDE the git-tracked workspace, and builds

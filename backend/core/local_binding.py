@@ -70,12 +70,22 @@ def record(project_dir: Path, root: Path) -> str:
     doc["bindings"] = [*rows, binding_for(root, name)]
     if p.is_file():
         shutil.copy2(p, p.with_name(BINDINGS + ".bak"))
+    _replace_checked(p, doc)
+    return name
+
+
+def _replace_checked(p: Path, doc: dict[str, Any]) -> None:
+    """Write *doc* to *p* only if it loads as bindings (temp file, checked, renamed); a
+    temp file that does not load is removed, and *p* is left as it was."""
     from core.ddd_bindings import load_bindings
     tmp = p.with_name(BINDINGS + ".tmp")
     tmp.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    load_bindings(tmp)                       # what is written must load (raises ValueError)
+    try:
+        load_bindings(tmp)                   # what is written must load (raises ValueError)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.replace(p)
-    return name
 
 
 def set_worktree(project_dir: Path, repo: str, root: Path) -> None:
@@ -91,8 +101,4 @@ def set_worktree(project_dir: Path, repo: str, root: Path) -> None:
         raise ValueError(f"{BINDINGS} has no single binding named {repo!r}")
     hit[0]["worktree"] = str(root)
     shutil.copy2(p, p.with_name(BINDINGS + ".bak"))
-    from core.ddd_bindings import load_bindings
-    tmp = p.with_name(BINDINGS + ".tmp")
-    tmp.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    load_bindings(tmp)
-    tmp.replace(p)
+    _replace_checked(p, doc)

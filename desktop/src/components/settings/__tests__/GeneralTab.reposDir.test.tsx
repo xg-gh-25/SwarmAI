@@ -37,4 +37,19 @@ describe('GeneralTab repository workspace', () => {
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith({ reposDir: '~/Desktop/SwarmAI-Workspace' }));
     expect(await screen.findByText('Saved')).toBeTruthy();
   });
+
+  it('an empty field resets to the default the backend returns, and a refusal says so', async () => {
+    mockGet.mockResolvedValue({ reposDir: '~/elsewhere' });
+    mockUpdate.mockResolvedValueOnce({ reposDir: '~/SwarmAI-Repos' }).mockRejectedValueOnce(new Error('422'));
+    render(<GeneralTab />);
+    const input = await screen.findByLabelText('Repository workspace');
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('~/elsewhere'));
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith({ reposDir: '' }));
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe('~/SwarmAI-Repos'));
+    fireEvent.change(input, { target: { value: '~/.swarm-ai/SwarmWS' } });
+    fireEvent.click(screen.getByText('Save'));
+    expect(await screen.findByText('Could not save the folder')).toBeTruthy();
+  });
 });
