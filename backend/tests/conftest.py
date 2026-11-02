@@ -97,8 +97,9 @@ def _gate_cwd_is_the_repo_root(monkeypatch):
     real = _og._decide
     root = str(_P(__file__).resolve().parents[2])
 
-    def decide(sid, command, tool_input, phase="check", cwd=None):
-        return real(sid, command, tool_input, phase, cwd or root)
+    # every later parameter (who approved, ...) passes through as given
+    def decide(sid, command, tool_input, phase="check", cwd=None, *rest, **kw):
+        return real(sid, command, tool_input, phase, cwd or root, *rest, **kw)
     monkeypatch.setattr(_og, "_decide", decide)
 
 
