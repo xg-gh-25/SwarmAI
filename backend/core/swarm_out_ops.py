@@ -94,8 +94,8 @@ _STATIC: "tuple[Op, ...]" = (
     _op("run.stop", "POST", f"{_SO}/runs/{{dispatch_id}}/stop", _PO, "change"),
     _op("run.discard", "POST", f"{_SO}/runs/{{dispatch_id}}/discard", _PO, "irreversible"),
     # approvals and question answers share one route; the gate cannot read the body,
-    # so the whole route is the person's (a Conductor answering a question will be an
-    # internal call, swarm-run §5.8)
+    # so the whole route is the person's (the dispatching agent answers through
+    # ask.answer_host below, never this route)
     _op("ask.answer", "POST", f"{_SO}/asks/{{hive_id}}/{{session_id}}/{{request_id}}/answer",
         _P, "off_machine"),
     # the dispatching agent's own answer to a wait whose class it answers for, and its

@@ -1,9 +1,9 @@
 ---
 title: Hive 审批 —— 按责任链：谁派的单，谁负责、谁审批
 created: 2026-10-31
-updated: 2026-11-01
+updated: 2026-11-02
 project: SwarmAI
-status: r2 P0–P2 implemented（2026-11-01，见 2026-11-01-hive-approvals-impl.md）；未做：§2.3 叫醒（XG 接受不做，见 impl §5）、§3（Swarm Run 未建）、§4 第 1 层；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
+status: r2 P0–P2 implemented（2026-11-01，见 2026-11-01-hive-approvals-impl.md）；未做：§2.3 叫醒（2026-11-02 XG 改为要做：由 Swarm Run r7.11 的 Conductor 叫醒所有 agent 派的单，同时去掉 impl 的 10 分钟交人）、§3（Swarm Run 未建）、§4 第 1 层；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
 superseded_in_part: 派出去的会话上，归人的那类等待不再发出、当场拒绝（2026-11-01-brain-to-hive-zero-touch r3，XG 2026-11-01「我们要 zero-touch」）；host 类的回答路径不变
 tags: [swarm-out, hive, approval, host, governance, accountability]
 related:
@@ -86,6 +86,8 @@ related:
 ### 2.3 host 怎么管：owner session 负责到底
 
 > 实现与此不同：没有叫醒，靠 watch 和接续块，10 分钟没人处理进 Needs You（impl §1.2、§5）；派出去的会话上归人的类别当场拒绝，不进 Needs You（zero-touch r3）。
+> 2026-11-02（XG："谁发的谁负责，不要什么都往 human 上放"）：叫醒要做，按本节原意，由 Swarm Run r7.11 §5.5 的 Conductor 实现，对所有 agent 派的单生效；
+> 10 分钟交人随之删掉，等待进 Needs You 只剩 `escalate` 和 owner session 不在了两种。
 
 - **送到谁手里：** `owner_session`。和 Swarm Run 的叫醒同一套：`run_conversation`、`system` 来源、按事件的 `client_id`、只在会话空闲时发
   （Swarm Run §5.5）。内容是结构化字段和位置，Hive 写的问题文字按数据给出。

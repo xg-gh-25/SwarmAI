@@ -2,7 +2,7 @@
 created: 2026-11-01
 updated: 2026-11-01
 title: "Hive 审批按责任链：实现方案（对照 2026-11-01 的代码）"
-status: implemented — 已实现并经两轮专家审查（见 §4）；设计见 2026-10-31-hive-approvals-person-and-host.md
+status: implemented — 已实现并经两轮专家审查（见 §4）；设计见 2026-10-31-hive-approvals-person-and-host.md。2026-11-02：§1.2 的 10 分钟兜底和 H12 将由 Swarm Run r7.11 的 Conductor 叫醒取代（XG 改为要叫醒、不按时间交人），实现前这里的描述仍是现状
 related: docs/design/2026-10-31-hive-approvals-person-and-host.md · docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md
 ---
 
@@ -112,8 +112,10 @@ pipeline conformance k1–k5、swarm_out 各套件、attention、cdf provenance�
 
 ## 5. 不在这次
 
-- **叫醒派单会话（XG 2026-11-01 接受不做）：** 没有按事件叫醒空闲会话的机制，所以 agent 只在它正跟着这一单（`watch`、下一条消息的接续块）
-  时处理等待；派完单就结束这一轮的，等待 10 分钟后进 Needs You，由人答。"agent 替你管"只在它守着的时候成立。
+- **叫醒派单会话（XG 2026-11-01 接受不做；2026-11-02 改为要做）：** 没有按事件叫醒空闲会话的机制，所以 agent 只在它正跟着这一单（`watch`、下一条消息的接续块）
+  时处理等待；派完单就结束这一轮的，等待 10 分钟后进 Needs You，由人答。"agent 替你管"只在它守着的时候成立。2026-11-02 XG："谁发的谁负责，减少人的注意力
+  浪费。"叫醒由 Swarm Run r7.11 §5.5 的 Conductor 做，对所有 agent 派的单生效，会话忙时不计时；`attention_authority` 的 `HOST_WAIT_UNHANDLED_S` 那一支
+  随之删掉，H12 改为"host 类的等待只有 escalate 或 owner 会话不在时才进 Needs You"。
 - **接管：** Swarm Out 没有接管功能，派单会话固定；会话不在了，等待交给人（H5 的"接管以后归新的 owner"没有对应的入口）。
 
 - 设计 §4 第 1 层（Hive 上把外部内容当数据的防注入能力）另起设计；第 2、3 层由本次的结构化回答、`shown_sha256`、类别拒收覆盖。
