@@ -610,6 +610,20 @@ def test_package_manager_field_wins_and_no_lockfile_keeps_npm(tmp_path):
     assert c[("package.json", "test")] == "yarn run test"
 
 
+def test_the_source_check_of_one_package_json_sees_the_lockfile_beside_it(tmp_path):
+    # the Project Agent checks a row against the one file it names: the runner must not
+    # depend on which other files the caller listed
+    from core.brain_bootstrap.commands import parse_commands
+    from core.project_agent_draft import _declared
+    _pkg_commands(tmp_path, {"package.json": _SCRIPTS, "bun.lock": "{}",
+                             "pkg/package.json": _SCRIPTS})
+    [only] = [c for c in parse_commands(tmp_path, ["package.json"]) if c["name"] == "test"]
+    assert only["command"] == "bun run test"
+    assert _declared(tmp_path, "package.json", "bun run test", None)
+    assert _declared(tmp_path, "pkg/package.json", "(cd pkg && bun run build)", None)
+    assert not _declared(tmp_path, "package.json", "npm run test", None)
+
+
 # ── tier-1 reading order (fixing-spec 2026-11-02 G3) ───────────────────────────
 
 def test_the_root_readme_and_agent_guide_are_read_before_better_linked_docs(tmp_path):

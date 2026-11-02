@@ -20,7 +20,7 @@ from pathlib import Path
 
 import shlex
 
-from .repo_read import load_yaml, safe_read_text
+from .repo_read import confine, load_yaml, safe_read_text
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +111,12 @@ _LOCKFILES = (("bun.lock", "bun"), ("bun.lockb", "bun"), ("pnpm-lock.yaml", "pnp
 _RUNNERS = frozenset(("bun", "pnpm", "yarn", "npm"))
 
 
-def _package_runner(data: object, rel: str, files: frozenset[str]) -> str:
+def _package_runner(root: Path, data: object, rel: str) -> str:
     """The package manager that runs *rel*'s scripts: its ``packageManager`` field, else the
-    first lockfile in its directory or one above it (up to the repo root), else npm."""
+    first lockfile in its directory or one above it (up to the repo root), else npm. The
+    lockfile is looked up in the checkout itself, so every caller gets the same command
+    whichever files it was asked to parse (the Project Agent's source check parses only
+    the one package.json a row names)."""
     field = data.get("packageManager") if isinstance(data, dict) else None
     if isinstance(field, str) and field.split("@", 1)[0] in _RUNNERS:
         return field.split("@", 1)[0]
@@ -121,18 +124,19 @@ def _package_runner(data: object, rel: str, files: frozenset[str]) -> str:
     for depth in range(len(parts), -1, -1):
         base = "/".join(parts[:depth])
         for lock, runner in _LOCKFILES:
-            if (f"{base}/{lock}" if base else lock) in files:
+            found = confine(root, f"{base}/{lock}" if base else lock)
+            if found is not None and found.is_file():
                 return runner
     return "npm"
 
 
-def _package_json(root: Path, rel: str, files: frozenset[str] = frozenset()) -> list[dict]:
+def _package_json(root: Path, rel: str) -> list[dict]:
     try:
         data = json.loads(safe_read_text(root, rel) or "null")
     except ValueError:
         return []
     scripts = data.get("scripts") if isinstance(data, dict) else None
-    runner = _package_runner(data, rel, files)
+    runner = _package_runner(root, data, rel)
     prefix = "" if rel == "package.json" else f"(cd {shlex.quote(rel.rsplit('/', 1)[0])} && "
     return [{"source": rel, "kind": "npm_script", "name": name,
              "command": f"{prefix}{runner} run {name}{')' if prefix else ''}",
@@ -169,7 +173,6 @@ def _nox(root: Path, rel: str) -> list[dict]:
 def parse_commands(root: Path, files: list[str]) -> list[dict]:
     """Every declared dev command, in a fixed order (by source path, then as declared)."""
     out: list[dict] = []
-    known = frozenset(files)
     for rel in sorted(files):
         low = rel.lower()
         name = low.rsplit("/", 1)[-1]
@@ -182,7 +185,7 @@ def parse_commands(root: Path, files: list[str]) -> list[dict]:
         elif name in ("justfile", ".justfile") and "/" not in rel:
             out += _makefile(root, rel, "just")
         elif name == "package.json" and rel.count("/") <= 2 and "node_modules" not in low:
-            out += _package_json(root, rel, known)
+            out += _package_json(root, rel)
         elif low == "tox.ini":
             out += _tox(root, rel)
         elif low == "noxfile.py":
