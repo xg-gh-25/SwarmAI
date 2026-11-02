@@ -468,6 +468,9 @@ def _redaction_span(target: Path, anchor: str) -> tuple[int, int, str]:
     # the entry's metadata line, either shape (ddd_entry_lifecycle._META_RE)
     meta_start = rb"<!--\s*(?:ref|source|taint|valid_until|superseded_by):"
     metadata = _re.match(rb"\r?\n[ \t]*" + meta_start + rb"[^\r\n]*-->[ \t]*(?:\r?\n)?", data[end:])
+    # (only the line right after the unit is looked at; the unit's text already runs to
+    # a metadata line, a blank, a bullet or a heading, so a comment that merely starts
+    # like metadata is part of the unit and never reaches this match)
     if metadata:
         end += metadata.end()
         # the indented tail after the metadata line (Detail: / valid_from) is part of the

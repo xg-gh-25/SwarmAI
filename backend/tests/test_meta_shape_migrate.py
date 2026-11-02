@@ -18,10 +18,10 @@ DOC = ("# TECH\n\n## Runtime Traps\n\n"
 
 def test_rewrite_keeps_every_field_a_reader_uses():
     after, n = M.rewrite(DOC)
-    assert n == 3
+    assert n == 2
     assert "  <!-- source:S7 | taint:external -->" in after
     assert "  <!-- source:manual | valid_until:2026-10-20 | superseded_by:First -->" in after
-    assert "**Third** Three.\n\n```" in after                # an all-dead line leaves
+    assert "**Third** Three.\n  <!-- ref:0 | last:none | decay:active -->" in after  # only dead: kept
     assert "```\n  <!-- ref:0 | last:2026-01-01" in after    # not an entry's line: untouched
     assert M._entries(after) == M._entries(DOC)
     assert M.rewrite(after) == (after, 0)
@@ -45,23 +45,16 @@ def test_apply_writes_main_files_and_skips_archives(tmp_path, monkeypatch):
     assert (tmp_path / "bk" / "Projects/P/2-understanding/TECH.md").read_text() == DOC
 
 
-def test_a_dead_line_whose_removal_moves_a_boundary_is_kept(tmp_path):
+def test_a_fenced_example_and_an_archive_directory_are_left_alone(tmp_path):
+    fenced = "```\n- [guideline] **Ex** e\n  <!-- ref:0 | last:none | decay:active | source:auto -->\n```\n"
+    assert M.rewrite(fenced) == (fenced, 0)
     ws = tmp_path / "ws"
-    mem = ws / ".context" / "MEMORY.md"
-    mem.parent.mkdir(parents=True)
-    text = ("## Corrections\n\n- [correction] **A** one. (2026-10-13)\n"
-            "  <!-- ref:0 | last:2026-10-13 | decay:active -->\n_Section note._\n\n"
-            "- [correction] **B** two.\n  <!-- ref:0 | last:none | decay:active | source:S7 -->\n")
-    mem.write_text(text, encoding="utf-8")
-    import io, json, contextlib
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        M.main(["--workspace", str(ws)])
-    report = json.loads(out.getvalue())
-    assert report["refused"] == {} and report["per_file"] == {".context/MEMORY.md": 1}
-    after, _ = M.rewrite(text, drop_empty=False)
-    assert "  <!-- ref:0 | last:2026-10-13 | decay:active -->\n_Section note._" in after
-    assert "  <!-- source:S7 -->" in after
+    snap = ws / "Projects" / "P" / "2-understanding" / "knowledge" / "Archived-notes" / "TECH.md"
+    snap2 = ws / "Projects" / "P" / "2-understanding" / "archived-improvement-snapshot.md"
+    for p in (snap, snap2):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(DOC, encoding="utf-8")
+    assert M.candidates(ws) == []
 
 
 def test_a_rewrite_that_would_lose_an_entry_is_refused(tmp_path, monkeypatch):

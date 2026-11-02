@@ -64,3 +64,4 @@ def test_withdrawing_a_new_shape_entry_takes_its_metadata_line_too(tmp_path):
     start, end, _ = _redaction_span(p, "TECH.md#Runtime Traps#cand:cand-a.unit")
     removed = data[start:end].decode()
     assert "First" in removed and NEW.strip() in removed and "Second" not in removed
+

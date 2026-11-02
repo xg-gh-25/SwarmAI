@@ -490,10 +490,6 @@ def _build_learning_dashboard(root) -> dict:
         except Exception:
             pass
 
-    # Count recent entries (created in last 7 days) — approximate from ref_count=0
-    # True "new" detection would need created_date parsing; ref_count=0 is a proxy
-    # (newly added entries haven't been referenced yet).
-
     return {
         "total_entries": auto_count + manual_count + legacy_count,
         "by_source": {
