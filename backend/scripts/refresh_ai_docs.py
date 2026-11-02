@@ -21,9 +21,12 @@ Usage:
   python backend/scripts/refresh_ai_docs.py [--dry-run] [--check-staleness]
 
 Integration:
-  Called by context_health_hook on startup (daily gate) and by release preflight.
+  Nothing schedules it. It runs by hand, from `./prod.sh preflight`, and from the
+  post-session context_health_hook deep check (at most once per calendar day per
+  backend process). An unknown argument exits 2 with a usage line, writing nothing.
 """
 
+import argparse
 import re
 import shlex
 import sqlite3
@@ -298,6 +301,13 @@ def collect_metrics() -> dict:
 def _generate_metrics_block(metrics: dict) -> str:
     """Generate the metrics replacement block."""
     # Commands in "How to Verify" match what the script actually runs
+    # No built code graph on the machine that ran this reads as (0, 0): say so
+    # instead of rendering a confident-but-wrong "0 symbols, 0 edges".
+    if metrics['code_intel_symbols'] or metrics['code_intel_edges']:
+        code_graph = (f"{metrics['code_intel_symbols']:,} symbols, "
+                      f"{metrics['code_intel_edges']:,} edges")
+    else:
+        code_graph = "not measured (no code graph built where this ran)"
     return f"""| Metric | Value | How to Verify |
 |--------|-------|---------------|
 | Total commits | {metrics['commit_count']}+ | `git log --oneline | wc -l` |
@@ -313,7 +323,7 @@ def _generate_metrics_block(metrics: dict) -> str:
 | Context system | {metrics['context_loader_lines']} lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | {metrics['platform_modes']} | |
 | Background jobs | {metrics['job_count']} handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
-| Code graph | {metrics['code_intel_symbols']:,} symbols, {metrics['code_intel_edges']:,} edges | `code_intel.db` (code_nodes / code_edges tables) |"""
+| Code graph | {code_graph} | `code_intel.db` (code_nodes / code_edges tables) |"""
 
 
 def _generate_capabilities_block(metrics: dict) -> str:
@@ -471,18 +481,39 @@ def refresh(dry_run: bool = False, staleness_only: bool = False) -> dict:
     return results
 
 
-if __name__ == "__main__":
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Parse the CLI. An unknown argument exits 2 with a usage line BEFORE anything
+    runs: the old ``"--dry-run" in sys.argv`` read ignored everything else, so a typo
+    (``--check``) silently did a full write of all three docs."""
+    parser = argparse.ArgumentParser(
+        prog="refresh_ai_docs.py",
+        description="Refresh the METRICS and CAPABILITIES blocks of the AI docs.",
+        # No prefix matching: argparse would otherwise read the typo ``--check``
+        # as ``--check-staleness``. Only the exact flags below are accepted.
+        allow_abbrev=False,
+    )
+    parser.add_argument("--dry-run", action="store_true",
+                        help="report which files would change, write nothing")
+    parser.add_argument("--check-staleness", action="store_true",
+                        help="only run the prose staleness checks (exit 1 on a warning)")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point; returns the process exit code."""
+    global _SCRIPT_DEADLINE
+    args = _parse_args(argv)
     _SCRIPT_DEADLINE = time.monotonic() + _SCRIPT_TIMEOUT
 
-    dry_run = "--dry-run" in sys.argv
-    staleness_only = "--check-staleness" in sys.argv
+    dry_run = args.dry_run
+    staleness_only = args.check_staleness
 
     result = refresh(dry_run=dry_run, staleness_only=staleness_only)
 
     if staleness_only:
         n = len(result["staleness_warnings"])
         print(f"\nStaleness check: {n} warning(s)")
-        sys.exit(1 if n > 0 else 0)
+        return 1 if n > 0 else 0
 
     if result["files_updated"]:
         m = result.get("metrics", {})
@@ -494,5 +525,10 @@ if __name__ == "__main__":
     n = len(result["staleness_warnings"])
     if n > 0:
         print(f"\n⚠️  {n} staleness warning(s) — prose sections may need manual update")
-    else:
+    elif not result["files_updated"]:
         print("\nNo updates needed (markers not found or content unchanged)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

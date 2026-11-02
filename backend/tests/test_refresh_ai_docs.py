@@ -106,7 +106,15 @@ class TestCodeIntelStats:
         metrics = collect_metrics()
         block = _generate_metrics_block(metrics)
         assert "Code graph" in block
-        assert "symbols" in block and "edges" in block
+        assert ("symbols" in block and "edges" in block) or "not measured" in block
+
+    def test_metrics_block_without_code_graph_says_not_measured(self):
+        """No built graph reads as (0, 0); the block says so instead of "0 symbols"."""
+        block = _generate_metrics_block(dict(_FAKE_METRICS))
+        assert "0 symbols" not in block
+        assert "| Code graph | not measured" in block
+        measured = dict(_FAKE_METRICS, code_intel_symbols=12345, code_intel_edges=6789)
+        assert "| Code graph | 12,345 symbols, 6,789 edges |" in _generate_metrics_block(measured)
 
 
 class TestMetricsConsistency:
@@ -209,3 +217,89 @@ class TestSectionReplacement:
         result = _replace_section(content, "<!-- S -->", "<!-- E -->", "replaced")
         assert "line1" not in result
         assert "replaced" in result
+
+
+class TestCliArguments:
+    """An unknown argument is rejected before anything runs: it exits non-zero with
+    a usage line and writes no file. The old ``"--dry-run" in sys.argv`` read ignored
+    every other argument, so ``--check`` (a typo) did a full write of all three docs."""
+
+    @staticmethod
+    def _targets(tmp_path, monkeypatch):
+        """Point the three write targets at marker-carrying temp copies."""
+        rad = sys.modules["scripts.refresh_ai_docs"]
+        files = {}
+        for attr, marker in (("METRICS_FILE", "METRICS"), ("AI_CONTEXT", "CAPABILITIES"),
+                             ("AGENTS_MD", "CAPABILITIES")):
+            f = tmp_path / f"{attr}.md"
+            f.write_text(f"<!-- {marker}_START -->\nold\n<!-- {marker}_END -->\n", encoding="utf-8")
+            monkeypatch.setattr(rad, attr, f)
+            files[f] = f.read_text(encoding="utf-8")
+        return rad, files
+
+    def test_unknown_argument_exits_nonzero_and_writes_nothing(self, tmp_path, monkeypatch, capsys):
+        rad, files = self._targets(tmp_path, monkeypatch)
+        # conftest stubs refresh(); put the real one back so that, if the argument
+        # check is gone, the run really reaches the write and this test sees it.
+        real_refresh = _REAL_REFRESH
+        calls = []
+
+        def spy(*a, **k):
+            calls.append((a, k))
+            return real_refresh(*a, **k)
+
+        monkeypatch.setattr(rad, "refresh", spy)
+        monkeypatch.setattr(rad, "check_staleness", lambda: [])
+        monkeypatch.setattr(rad, "collect_metrics", lambda: _FAKE_METRICS)
+
+        try:
+            code = rad.main(["--check"])
+        except SystemExit as exc:
+            code = exc.code
+        # Files first: without the check this is the assertion that fails.
+        for f, before in files.items():
+            assert f.read_text(encoding="utf-8") == before, f"{f.name} was rewritten"
+        assert calls == [], "an unknown argument still ran the refresh"
+        assert code not in (0, None)
+        err = capsys.readouterr().err
+        assert "usage:" in err and "--check" in err
+
+    def test_known_flags_still_reach_refresh(self, monkeypatch):
+        rad = sys.modules["scripts.refresh_ai_docs"]
+        calls = []
+        monkeypatch.setattr(rad, "refresh", lambda **k: calls.append(k) or
+                            {"files_updated": [], "staleness_warnings": []})
+        assert rad.main(["--dry-run"]) == 0
+        assert rad.main(["--check-staleness"]) == 0
+        assert rad.main([]) == 0
+        assert calls == [
+            {"dry_run": True, "staleness_only": False},
+            {"dry_run": False, "staleness_only": True},
+            {"dry_run": False, "staleness_only": False},
+        ]
+
+    def test_unknown_argument_rejected_by_the_real_entry_point(self):
+        """The script run as a program rejects it too. Paired with --check-staleness
+        so that, without the check, the run is read-only (never rewrites the checkout)
+        and this test goes red on its exit code instead."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "backend/scripts/refresh_ai_docs.py", "--check", "--check-staleness"],
+            capture_output=True, text=True, cwd=REPO_ROOT, timeout=60,
+        )
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert "usage:" in result.stderr
+        assert "Staleness check:" not in result.stdout
+
+
+import scripts.refresh_ai_docs as _rad_module  # noqa: E402
+
+# Captured at import time, before conftest's autouse fixture stubs refresh().
+_REAL_REFRESH = _rad_module.refresh
+_FAKE_METRICS = {
+    "commit_count": "1", "duration_days": "1", "core_modules": "1", "core_loc": "1",
+    "total_backend_loc": "1", "test_files": "1", "hooks_count": "1", "skill_count": "1",
+    "react_components": "1", "platform_modes": "x", "pipeline_spec_lines": "1",
+    "session_unit_lines": "1", "context_loader_lines": "1", "job_count": "1",
+    "code_intel_symbols": 0, "code_intel_edges": 0, "engines": [],
+}
