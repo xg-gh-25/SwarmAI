@@ -483,3 +483,15 @@ def test_a_slow_wake_never_holds_the_refresh(env, tmp_path, monkeypatch):
         await asyncio.gather(loop, return_exceptions=True)
     asyncio.run(go())
     assert calls["refresh"] >= 5 and calls["wake"] == 1
+
+
+def test_a_discarded_run_is_not_shown_as_being_judged(env):
+    rows, _ = env
+    rows[DID] = _row("answer")
+    act.record(DID, act.actor("agent", SID, "not what was asked"), "discard")
+    st._update(DID, lambda rec: rec.update(abandoned_at=ENDED))
+    d = st.derive(rows[DID], K())
+    assert d["stage"] == "discarded"
+    gates = d["funnel"]["gates"]
+    assert gates and all(g["state"] == "done" for g in gates) and d["funnel"]["current"] is None
+    assert (gates[-1]["key"], gates[-1]["by"]) == ("judge", "agent")

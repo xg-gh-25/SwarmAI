@@ -236,7 +236,8 @@ def person_decisions(rec: dict, by_agent: bool) -> Optional[int]:
 def funnel(row: dict, rec: dict, d: dict) -> dict[str, Any]:
     """The gates the run passed and the one it is at, for the card's line: ``review``,
     ``land`` (``ref``: the commit or the first file placed), ``judge``; ``state`` is
-    ``done``, ``now`` or ``person`` (only an open ask). ``d`` is derive's verdict."""
+    ``done``, ``now`` or ``person`` (only an open ask); a discarded or expired run has
+    no gate ``now``. ``d`` is derive's verdict."""
     es = entries(rec)
     res = row.get("result") if isinstance(row.get("result"), dict) else None
     final = bool(res) and d.get("result_final", True)
@@ -284,6 +285,10 @@ def funnel(row: dict, rec: dict, d: dict) -> dict[str, Any]:
             gates.append(_gate("judge", "done", j.get("by"), j.get("at")))
         elif d.get("verdict") == "pass":
             gates.append(_gate("judge", "done", None, None))
+        elif d.get("stage") in ("discarded", "expired"):
+            # decided: discarded (by whoever did it) or gone; never "judging" any more
+            j = last("discard")
+            gates.append(_gate("judge", "done", (j or {}).get("by"), (j or {}).get("at")))
         elif review or landed:
             gates.append(_gate("judge", "now", None, None))
     current = next((g["key"] for g in gates if g["state"] != "done"), None)
