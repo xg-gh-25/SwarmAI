@@ -44,7 +44,9 @@ logger = logging.getLogger(__name__)
 #: an install / environment step (``setup``), recognised in a declared command
 _SETUP_RE = re.compile(
     r"\b(pip3? install|uv (sync|venv|pip install)|npm (ci|install)|yarn install|"
-    r"pnpm install|poetry install|bundle install|go mod download|cargo fetch)\b")
+    r"pnpm install|bun install|poetry install|bundle install|go mod download|cargo fetch)\b")
+#: an install of a tool for the whole machine, not of the repository's dependencies
+_GLOBAL_INSTALL_RE = re.compile(r"\s(-g|--global)(\s|$)|\byarn global\b")
 #: a check (``validations``), recognised in a declared command or its name
 _CHECK_RE = re.compile(
     r"\b(pytest|tox|nox|vitest|jest|mocha|go (test|vet)|cargo (test|check|clippy)|ruff|"
@@ -115,7 +117,8 @@ def _role(c: dict[str, Any]) -> str:
     text = f"{c.get('command', '')} {c.get('name', '')} {c.get('runs', '')}"
     if "${{" in c.get("command", "") or "${{" in (c.get("cwd") or ""):
         return "other"          # a GitHub expression: only runnable inside Actions
-    if c["kind"] == "ci_run" and _SETUP_RE.search(c.get("command", "")):
+    if c["kind"] == "ci_run" and _SETUP_RE.search(c.get("command", "")) \
+            and not _GLOBAL_INSTALL_RE.search(c.get("command", "")):
         return "setup"
     return "validation" if _CHECK_RE.search(text) else "other"
 

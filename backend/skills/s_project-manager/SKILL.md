@@ -178,7 +178,9 @@ You judge; a tool writes:
 4. Tell the person in one line what the definition holds (its modes). Nothing waits for
    them: a dispatch uses the latest. When you change it later, or a dispatch refuses
    it (a problem, a command whose source is not in the repository), fix it and say what
-   you changed.
+   you changed. A redraft keeps the `setup` / `validations` rows an earlier draft chose
+   for a repo, so a row written before a parsing fix (`npm run …` in a Bun repo, say)
+   stays until a proposal names that mode's commands again.
 
 A 0-asset brain gets only `research` (and the modes you propose) and no validations.
 Every brain may run on a Hive; the actions a Project Agent session asks the person for

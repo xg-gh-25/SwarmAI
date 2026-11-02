@@ -572,3 +572,36 @@ def test_a_folder_inside_another_repo_gets_none_of_its_git_facts(repo: Path) -> 
     assert inner["identity"]["head"] is None and inner["identity"]["default_branch"] is None
     assert inner["history"]["hotspots"] == []
     assert repo_read.log_commits(repo / "src") == []
+
+
+# ── package manager of package.json scripts (fixing-spec 2026-11-02 G2) ─────────
+
+def _pkg_commands(tmp_path, layout: dict[str, str]) -> dict[tuple[str, str], str]:
+    from core.brain_bootstrap.commands import parse_commands
+    for rel, text in layout.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    out = parse_commands(tmp_path, sorted(layout))
+    return {(c["source"], c["name"]): c["command"] for c in out if c["kind"] == "npm_script"}
+
+
+_SCRIPTS = json.dumps({"scripts": {"test": "x", "build": "y"}})
+
+
+def test_package_scripts_run_with_the_package_manager_the_lockfile_names(tmp_path):
+    cmds = _pkg_commands(tmp_path, {"package.json": _SCRIPTS, "bun.lock": "{}",
+                                    "pkg/package.json": _SCRIPTS})
+    assert cmds[("package.json", "test")] == "bun run test"
+    # a package without its own lockfile uses the one above it, up to the repo root
+    assert cmds[("pkg/package.json", "build")] == "(cd pkg && bun run build)"
+
+
+def test_package_manager_field_wins_and_no_lockfile_keeps_npm(tmp_path):
+    pnpm = json.dumps({"packageManager": "pnpm@9.1.0", "scripts": {"test": "x"}})
+    a = _pkg_commands(tmp_path / "a", {"package.json": pnpm, "package-lock.json": "{}"})
+    assert a[("package.json", "test")] == "pnpm run test"
+    b = _pkg_commands(tmp_path / "b", {"package.json": _SCRIPTS})
+    assert b[("package.json", "test")] == "npm run test"
+    c = _pkg_commands(tmp_path / "c", {"package.json": _SCRIPTS, "yarn.lock": ""})
+    assert c[("package.json", "test")] == "yarn run test"

@@ -1,7 +1,8 @@
 """Dev commands a repo declares, parsed — never guessed from a file's first lines.
 
 Sources: CI workflows (GitHub Actions ``run:`` steps, GitLab CI ``script:`` lines),
-Makefile and justfile targets, ``package.json`` scripts, tox environments and nox
+Makefile and justfile targets, ``package.json`` scripts (run with the package manager its
+``packageManager`` field or nearest lockfile names, else npm), tox environments and nox
 sessions. Each item is ``{source, kind, name, command}`` where ``source`` is the file
 that declares it (the evidence an entry cites). ``cwd`` is where the command runs when
 that is not the repo root: a GitHub Actions step's (or its job's default)
@@ -104,15 +105,37 @@ def _makefile(root: Path, rel: str, tool: str) -> list[dict]:
              **({"cwd": where} if where else {})} for n in seen]
 
 
-def _package_json(root: Path, rel: str) -> list[dict]:
+#: lockfile -> the package manager that wrote it, checked in this order
+_LOCKFILES = (("bun.lock", "bun"), ("bun.lockb", "bun"), ("pnpm-lock.yaml", "pnpm"),
+              ("yarn.lock", "yarn"), ("package-lock.json", "npm"))
+_RUNNERS = frozenset(("bun", "pnpm", "yarn", "npm"))
+
+
+def _package_runner(data: object, rel: str, files: frozenset[str]) -> str:
+    """The package manager that runs *rel*'s scripts: its ``packageManager`` field, else the
+    first lockfile in its directory or one above it (up to the repo root), else npm."""
+    field = data.get("packageManager") if isinstance(data, dict) else None
+    if isinstance(field, str) and field.split("@", 1)[0] in _RUNNERS:
+        return field.split("@", 1)[0]
+    parts = rel.split("/")[:-1]
+    for depth in range(len(parts), -1, -1):
+        base = "/".join(parts[:depth])
+        for lock, runner in _LOCKFILES:
+            if (f"{base}/{lock}" if base else lock) in files:
+                return runner
+    return "npm"
+
+
+def _package_json(root: Path, rel: str, files: frozenset[str] = frozenset()) -> list[dict]:
     try:
         data = json.loads(safe_read_text(root, rel) or "null")
     except ValueError:
         return []
     scripts = data.get("scripts") if isinstance(data, dict) else None
+    runner = _package_runner(data, rel, files)
     prefix = "" if rel == "package.json" else f"(cd {shlex.quote(rel.rsplit('/', 1)[0])} && "
     return [{"source": rel, "kind": "npm_script", "name": name,
-             "command": f"{prefix}npm run {name}{')' if prefix else ''}",
+             "command": f"{prefix}{runner} run {name}{')' if prefix else ''}",
              "runs": str(body)}
             for name, body in (scripts or {}).items() if isinstance(name, str)]
 
@@ -146,6 +169,7 @@ def _nox(root: Path, rel: str) -> list[dict]:
 def parse_commands(root: Path, files: list[str]) -> list[dict]:
     """Every declared dev command, in a fixed order (by source path, then as declared)."""
     out: list[dict] = []
+    known = frozenset(files)
     for rel in sorted(files):
         low = rel.lower()
         name = low.rsplit("/", 1)[-1]
@@ -158,7 +182,7 @@ def parse_commands(root: Path, files: list[str]) -> list[dict]:
         elif name in ("justfile", ".justfile") and "/" not in rel:
             out += _makefile(root, rel, "just")
         elif name == "package.json" and rel.count("/") <= 2 and "node_modules" not in low:
-            out += _package_json(root, rel)
+            out += _package_json(root, rel, known)
         elif low == "tox.ini":
             out += _tox(root, rel)
         elif low == "noxfile.py":

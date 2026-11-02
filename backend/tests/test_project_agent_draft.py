@@ -516,3 +516,14 @@ def test_a_proposed_placement_is_not_written(brain):
          "repos": ["lib"], "placements": ["chat-tab"]}]})
     assert validate(doc, brain) == []
     assert all("placements" not in m for m in doc["modes"])
+
+
+def test_bun_install_is_setup_and_a_global_install_is_not():
+    # fixing-spec 2026-11-02 G2: a CI step that installs a CLI globally does not install
+    # the repository's dependencies
+    from core.project_agent_draft import _role
+    ci = {"kind": "ci_run", "name": "deps", "source": ".github/workflows/ci.yml"}
+    assert _role({**ci, "command": "bun install --frozen-lockfile"}) == "setup"
+    assert _role({**ci, "command": 'npm install -g "@openai/codex@1"'}) != "setup"
+    assert _role({**ci, "command": "pnpm add --global turbo"}) != "setup"
+    assert _role({**ci, "command": "npm ci"}) == "setup"
