@@ -4,9 +4,9 @@
  * docs/design/2026-10-31-swarm-out-run-review.md §2.1.
  *
  * Three sections: Waiting for you (needs your answer > awaiting acceptance > stopped,
- * the longest waiting first; always on top), Running, Recently done (folded). A row is
- * its status dot, title, Brain · execution · Hive, the one autonomy word, what it asks
- * of you, how long it waited, an always-visible "Open session ↗", and "■ Stop" while it
+ * the longest waiting first; always on top), Running, Recently done (open, the latest to
+ * end first; it folds). A row is its status dot, title, Brain · execution · Hive, when it
+ * started and ended, the one autonomy word, what it asks of you, how long it waited, an always-visible "Open session ↗", and "■ Stop" while it
  * runs. No accept button on a row (accepting without looking at what came back is not
  * accepting), no inline expansion, no search: sections, order, Brain chips (made from
  * the rows, with counts) and the card's J / K reach every run.
@@ -18,7 +18,7 @@ import { Dot } from './LiveDispatches';
 import { agentFacts, brainLabel, stateLabel } from './live';
 import { useOpenRun } from './openSession';
 import { RunOverlay } from './RunOverlay';
-import { actionOf, ago, autonomyWord, brainChips, sections, stageOf, taskTag, waitingSince } from './runReview';
+import { actionOf, ago, autonomyWord, brainChips, clock, endedAt, sections, stageOf, taskTag, waitingSince } from './runReview';
 import { runTone, TONE_VAR, type Tone } from './tone';
 
 const muted = 'text-[var(--color-text-muted)]';
@@ -66,6 +66,7 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
     : stage === 'accepted' ? 'ok' : stage === 'stopped' ? 'error' : runTone(r);
   const word = autonomyWord(r.result);
   const tag = taskTag(r);
+  const ended = endedAt(r);
   const facts = agentFacts(r);
   const meta = [facts.brain, facts.none ? null : facts.agent, r.hive, r.why ? t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why }) : null]
     .filter(Boolean).join(' · ');
@@ -83,6 +84,10 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
       <div className="min-w-0">
         <div className="truncate" title={r.title}>{r.title}</div>
         <div className={`text-[11.5px] truncate ${muted}`}>{meta}</div>
+        <div className={`text-[11px] truncate tabular-nums ${muted}`} data-testid="swarm-out-row-times">
+          {[t('swarmOut.review.startedAt', { at: clock(r.sent_at, now) }),
+            ended ? t('swarmOut.review.endedAt', { at: clock(ended, now) }) : null].filter(Boolean).join(' · ')}
+        </div>
       </div>
       {word && !compact ? <span className="text-[11px] px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" style={wordStyle} data-testid="swarm-out-row-autonomy">{word.text}</span> : <span />}
       {tag ? <span className="text-[12px] px-[9px] py-[2px] rounded-md whitespace-nowrap font-semibold" style={TAG_STYLE[tag.key]} data-testid="swarm-out-row-tag">{tag.text}</span>
@@ -108,7 +113,7 @@ export function RunList({ runs, asks, answered = [], now, onReload, compact = fa
 }) {
   const { t } = useTranslation();
   const [brain, setBrain] = useState<string | null>(null);
-  const [showDone, setShowDone] = useState(false);
+  const [showDone, setShowDone] = useState(true);
   const [allRunning, setAllRunning] = useState(false);
   // the card: which run, and the order of "waiting for you" frozen when it opened
   const [open, setOpen] = useState<{ id: string; order: string[] } | null>(null);

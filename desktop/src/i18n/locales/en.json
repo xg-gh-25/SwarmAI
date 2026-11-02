@@ -1799,6 +1799,8 @@
       "placeholder": "Describe the task to send to a Hive…"
     },
     "review": {
+      "startedAt": "Started {{at}}",
+      "endedAt": "ended {{at}}",
       "ago": {
         "now": "now",
         "m": "{{n}}m",

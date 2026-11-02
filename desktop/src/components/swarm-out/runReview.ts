@@ -6,7 +6,8 @@
  * derive: ``stage``, ``actions``); nothing here decides what a person may do. This file
  * only arranges what came back:
  *  - ``sections``: Waiting for you (needs your answer > awaiting acceptance > stopped,
- *    the longest waiting first), Running, Recently done (settled in the last 24 h);
+ *    the longest waiting first), Running, Recently done (settled in the last 24 h, the
+ *    latest to end first);
  *  - ``brainChips``: the Brains the rows went under, with counts, never a fixed list;
  *  - ``autonomyWord``: the one word a row and the card's header carry (Judge verdict for
  *    a pipeline run, else how often a person stepped in);
@@ -79,6 +80,29 @@ export function waitingSince(r: SwarmOutRun, asks: SwarmOutAsk[] = []): string |
   return r.result?.ended_at ?? r.sent_at;
 }
 
+/** When the run ended on its Hive (its last turn's end): null while it runs or waits on
+ *  an answer, since that end is not final. */
+export function endedAt(r: SwarmOutRun): string | null {
+  const stage = stageOf(r);
+  if (stage === 'running' || stage === 'needs_answer') return null;
+  return r.result?.ended_at ?? null;
+}
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** A row's start or end, in local time: "09:32" today, "11-01 21:10" another day,
+ *  "2025-11-01 21:10" another year. Empty when there is no time. */
+export function clock(iso: string | null | undefined, now: number): string {
+  const t = ms(iso);
+  if (Number.isNaN(t)) return '';
+  const d = new Date(t);
+  const n = new Date(now);
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (d.toDateString() === n.toDateString()) return hm;
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return d.getFullYear() === n.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md} ${hm}`;
+}
+
 /** "4m", "2h", "1d": how long ago, at most one unit. */
 export function ago(iso: string | null | undefined, now: number): string {
   const t = ms(iso);
@@ -94,7 +118,7 @@ export interface RunSections {
   /** what waits on the person, most urgent first */
   you: SwarmOutRun[];
   running: SwarmOutRun[];
-  /** settled in the last 24 h (older ones are in the history view) */
+  /** settled in the last 24 h (older ones are in the history view), the latest to end first */
   done: SwarmOutRun[];
 }
 
@@ -120,7 +144,9 @@ export function sections(runs: SwarmOutRun[], asks: SwarmOutAsk[], now: number):
   const rank = (r: SwarmOutRun) => { const i = YOU_ORDER.indexOf(stageOf(r)); return i < 0 ? YOU_ORDER.length : i; };
   you.sort((a, b) => (rank(a) - rank(b)) || (since(a) - since(b)));
   running.sort((a, b) => since(b) - since(a));
-  done.sort((a, b) => since(b) - since(a));
+  // the latest to end on its Hive first (one with no end: when it settled, else was sent)
+  const end = (r: SwarmOutRun) => ms(r.result?.ended_at ?? r.settle?.settled?.at ?? r.sent_at);
+  done.sort((a, b) => end(b) - end(a));
   return { you, running, done };
 }
 

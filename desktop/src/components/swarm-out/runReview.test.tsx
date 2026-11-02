@@ -25,7 +25,7 @@ import { swarmOutService, type SwarmOutAction, type SwarmOutRun } from '../../se
 import { CommandPanel, RunOverlay, type PanelMode } from './RunOverlay';
 import { RunList } from './RunList';
 import { OpenSessionContext, PanelHiddenContext, useOpenRun } from './openSession';
-import { brainChips, sections } from './runReview';
+import { brainChips, clock, sections } from './runReview';
 import { activityOf } from './useSwarmOutActivity';
 import i18n from '../../i18n';
 
@@ -79,6 +79,16 @@ function run(id: string, stage: SwarmOutRun['stage'], over: Partial<SwarmOutRun>
 beforeEach(() => { vi.clearAllMocks(); svc.result.mockImplementation(() => new Promise(() => {})); });
 
 // ── sections ────────────────────────────────────────────────────────────────
+
+describe('clock', () => {
+  it('today shows the time, another day the date too, another year the year too', () => {
+    const now = new Date(2026, 10, 2, 9, 30).getTime();
+    expect(clock(new Date(2026, 10, 2, 8, 5).toISOString(), now)).toBe('08:05');
+    expect(clock(new Date(2026, 10, 1, 21, 10).toISOString(), now)).toBe('11-01 21:10');
+    expect(clock(new Date(2025, 0, 3, 7, 0).toISOString(), now)).toBe('2025-01-03 07:00');
+    expect(clock(null, now)).toBe('');
+  });
+});
 
 describe('sections', () => {
   it('waiting for you: answer, then accept, then stopped, the longest waiting first; settled runs leave', () => {
@@ -463,11 +473,27 @@ describe('the run list', () => {
     expect(screen.getByTestId('swarm-out-review-overlay')).toBeTruthy();
   });
 
-  it('a section header counts its rows; recently done is folded', () => {
-    list([run('a1', 'awaiting'), run('p1', 'accepted', { settle: { verdict: 'pass', code: 'none', why_not: [], settled: { at: '2026-10-31T11:00:00Z', outcome: 'passed', released: true } } })]);
-    expect(screen.getAllByTestId('swarm-out-row')).toHaveLength(1);
+  it('a section header counts its rows; recently done is open, the latest to end first, and folds', () => {
+    const settled = (at: string) => ({ settle: { verdict: 'pass' as const, code: 'none' as const, why_not: [], settled: { at, outcome: 'passed' as const, released: true } } });
+    const endedAt = (r: SwarmOutRun, at: string): SwarmOutRun => ({ ...r, result: { ...r.result!, ended_at: at } });
+    // p1 ended first but was accepted last: the order follows the end, not the acceptance
+    list([run('a1', 'awaiting'),
+      endedAt(run('p1', 'accepted', settled('2026-10-31T11:50:00Z')), '2026-10-31T09:00:00Z'),
+      endedAt(run('p2', 'accepted', settled('2026-10-31T11:10:00Z')), '2026-10-31T11:00:00Z')]);
+    const ids = () => screen.getAllByTestId('swarm-out-row').map((r) => r.getAttribute('data-id'));
+    expect(ids()).toEqual(['a1', 'p2', 'p1']);
+    expect(screen.getByTestId('swarm-out-section-done').getAttribute('aria-expanded')).toBe('true');
     fireEvent.click(screen.getByTestId('swarm-out-section-done'));
-    expect(screen.getAllByTestId('swarm-out-row')).toHaveLength(2);
+    expect(ids()).toEqual(['a1']);
+  });
+
+  it('every row says when it started; one that ended says when, one still running or waiting does not', () => {
+    list([run('r1', 'running'), run('n1', 'needs_answer'), run('a1', 'awaiting')]);
+    const times = Object.fromEntries(screen.getAllByTestId('swarm-out-row').map((r) =>
+      [r.getAttribute('data-id'), within(r).getByTestId('swarm-out-row-times').textContent]));
+    expect(times.r1).toBe(`Started ${clock('2026-10-31T08:00:00Z', NOW)}`);
+    expect(times.n1).toBe(`Started ${clock('2026-10-31T08:00:00Z', NOW)}`);
+    expect(times.a1).toBe(`Started ${clock('2026-10-31T08:00:00Z', NOW)} · ended ${clock(ENDED, NOW)}`);
   });
 });
 

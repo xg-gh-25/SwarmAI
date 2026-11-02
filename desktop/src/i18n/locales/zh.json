@@ -1799,6 +1799,8 @@
       "placeholder": "描述要派到 Hive 的任务…"
     },
     "review": {
+      "startedAt": "开始 {{at}}",
+      "endedAt": "结束 {{at}}",
       "ago": {
         "now": "刚刚",
         "m": "{{n}}m",

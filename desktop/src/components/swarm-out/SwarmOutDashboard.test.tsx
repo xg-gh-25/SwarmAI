@@ -144,13 +144,14 @@ describe('the run view', () => {
     expect(order).toEqual(['swarm-out-fleet', 'swarm-out-run-list']);
   });
 
-  it('puts each run in its section: waiting for you, running, recently done (folded)', async () => {
+  it('puts each run in its section: waiting for you, running, recently done (open; folds)', async () => {
     render(<SwarmOutDashboard now={NOW} />);
     await screen.findByTestId('kpi-free');
     const ids = () => screen.getAllByTestId('swarm-out-row').map((r) => `${r.getAttribute('data-stage')}:${r.getAttribute('data-id')}`);
-    expect(ids()).toEqual(['needs_answer:b', 'running:a']);
-    fireEvent.click(screen.getByTestId('swarm-out-section-done'));
+    expect(ids().slice(0, 2)).toEqual(['needs_answer:b', 'running:a']);
     expect(ids().slice(2).sort()).toEqual(['stopped:c', 'stopped:e', 'stopped:f']);   // d: sent 30 h ago
+    fireEvent.click(screen.getByTestId('swarm-out-section-done'));
+    expect(ids()).toEqual(['needs_answer:b', 'running:a']);
   });
 
   it('says what each Hive reports', async () => {

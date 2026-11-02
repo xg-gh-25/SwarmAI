@@ -151,7 +151,7 @@ describe('LiveDispatches', () => {
       asks: [{ ...approval, dispatch_title: null, possible_dispatch_title: 'Timed out' }], errors: [] });
     render(<LiveDispatches now={Date.parse('2026-10-27T03:00:00Z')} />);
     expect((await screen.findByTestId('swarm-out-ask-source')).textContent).toBe('可能属于：Timed out');
-    fireEvent.click(screen.getByTestId('swarm-out-section-done'));      // an older dispatch, never named: kept in view
+    // an older dispatch, never named: kept in view (recently done is open)
     expect(screen.getAllByTestId('swarm-out-row').map((r) => r.getAttribute('data-id'))).toEqual(['d9']);
   });
 
