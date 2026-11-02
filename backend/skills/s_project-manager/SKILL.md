@@ -334,8 +334,11 @@ First get the format: `"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli entry-con
 It is generated from the rules `bootstrap-apply` enforces: the file's shape, the fields of
 each kind, the fields each type requires and what they mean, the types each section takes,
 the source forms, the limits, and `repos.owned` — the repos this brain can cite (none, for
-a pure-knowledge brain: cite only `file:`, `url:` or `user`). Follow it; this skill does
-not repeat it. Then write
+a pure-knowledge brain: cite only `file:`, `url:` or `user`). It also carries what to
+write: `knowledge_standard` (what is worth keeping, the same standard CDF extracts to),
+for each section where its content comes from (`take_from`) and what does not belong there
+(`not`), `examples`, and `read_whole` — the documents to read in full before you write.
+Keep it open while you write; this skill does not repeat it. Then write
 `Projects/<P>/.artifacts/bootstrap/bootstrap-entries.json`. Two kinds of entry:
 
 ```json
@@ -356,36 +359,13 @@ person gave as `file:<absolute path>`, a web page as `url:`, what the person sai
 `user`. Content from a repo, file or link is written as outside content
 (`taint:external`); only `user` is not.
 
-Section by section, where to take the content from (the types each section takes are in
-the contract; they are where CDF routes that type). **A PRODUCT section holds only what
-the material states as that thing.** A design choice, a contributing or release rule, or a
-property of the code is not a priority, a criterion or a positioning just because it
-matters: it goes in the TECH or PROJECT section it belongs to, and the PRODUCT section
-gets a gap. Inferring a PRODUCT entry from it is the most common way a new brain is born
-with knowledge nobody stated.
-
-| Section | Take it from |
-|---|---|
-| PRODUCT Vision | what the material says the project is for: the README's positioning, the package description |
-| PRODUCT What Makes It Different | comparisons with alternatives the material itself makes ("unlike X, …") |
-| PRODUCT Strategic Priorities | what the material calls a priority, a goal or the order of what comes first. **Not** a design choice kept for compatibility (→ Architecture or Recent Decisions) or a rule for changes (→ Conventions). None stated → a gap |
-| PRODUCT Success Criteria | what the material says counts as success: a target, a measure, a definition of done for the project. **Not** a test or review rule for contributions (→ Conventions). None stated → a gap |
-| PRODUCT Non-Goals | what the material says is out of scope or not to be used for; else a gap |
-| TECH Architecture | ARCHITECTURE / design documents; the entry points |
-| TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility, entry point, what it depends on; `sources` = the cluster's `files` (never a graph id). When `graph_clusters.skipped` says the graph was too large to cluster: one per module in `code_shape.structure.modules` that matters (leave out test modules), what it depends on from `structure.module_edges`, the repo's own architecture or key-files index for the responsibility; `sources` = files from the module's `files` (a directory is not a source) |
-| TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` = the CI / Makefile / package.json that declares it) |
-| TECH Runtime Traps | each `history.hotspots` file not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries; SECURITY.md |
-| IMPROVEMENT What Worked | usually empty at birth |
-| IMPROVEMENT What Failed | reverts and repeated fixes, citing the commits' files |
-| IMPROVEMENT What to Watch For | gaps only: what has no evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |
-| PROJECT Recent Decisions | accepted ADRs and design-document decisions (`why`, `rejected_alternatives`) |
-| PROJECT Current Focus / Open Items / Blocked By | the person's live state: never written here |
-
-Good: *"[pitfall] Changing the default digest invalidates every issued token … Applies
-when upgrading or configuring the digest"* — a trigger, a consequence, a source.
-Bad: *"[model] Uses Python"* (a fact any file listing shows), *"[guideline] The README
-explains usage"* (a restatement), a version number, a count, "currently working on …",
-anything no source supports.
+Write section by section, each from its `take_from` in the contract (the types each
+section takes are there too; they are where CDF routes that type).
+**A PRODUCT section holds only what the material states as that thing.** A design choice, a
+contributing or release rule, or a property of the code is not a priority, a criterion or a
+positioning just because it matters: it goes in the TECH or PROJECT section it belongs to,
+and the PRODUCT section gets a gap. Inferring a PRODUCT entry from it is the most common way
+a new brain is born with knowledge nobody stated.
 
 #### Step 5: Apply (P2c)
 

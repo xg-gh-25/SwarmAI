@@ -66,7 +66,8 @@ _AFFECTED_BY = [
 _PROMPT_REPO = (
     "We just created a brain named {brain} and bound the repo in `{repo}` (inside this "
     "workspace) to it. Two files describe what you have: `{contract}` is the format the "
-    "entries must follow (the same rules bootstrap-apply checks), and `{survey}` is the "
+    "entries must follow (the same rules bootstrap-apply checks) and, per section, where "
+    "their content comes from, and `{survey}` is the "
     "survey of the repo. Read both first. The survey ranks the repo's documents in four "
     "tiers (a tier-1 document is inlined whole as `text`; read every other listed document "
     "in full with Read when you write the section it serves) and holds the commands the "
@@ -195,9 +196,7 @@ def build(workspace: Path = WORKSPACE, keys_dir: Path = KEYS,
     for brain, key in keys.items():
         repo_rel = key["material"].get("repo")
         names = [Path(repo_rel).name] if repo_rel else []
-        contract = apply.entry_contract(repo_names=names)
-        files[(_bootstrap_dir(brain) / apply.CONTRACT_FILE.name).as_posix()] = (
-            json.dumps(contract, ensure_ascii=False, indent=1) + "\n")
+        result = None
         if repo_rel:
             repo = survey.survey_repo(Path(repo_rel).name, workspace / repo_rel)
             repo["root"] = repo_rel
@@ -205,6 +204,10 @@ def build(workspace: Path = WORKSPACE, keys_dir: Path = KEYS,
                       "generated_at": GENERATED_AT, "project": brain, "repos": [repo]}
             files[(Path("Projects") / brain / survey.SURVEY_REL).as_posix()] = (
                 json.dumps(result, ensure_ascii=False, indent=1) + "\n")
+        # the contract names the survey's documents to read whole, as a bound brain's does
+        contract = apply.entry_contract(repo_names=names, survey=result)
+        files[(_bootstrap_dir(brain) / apply.CONTRACT_FILE.name).as_posix()] = (
+            json.dumps(contract, ensure_ascii=False, indent=1) + "\n")
         case = _stamped(_case(key), others)
         cases[case["id"]] = case
         others = others + [case]     # the generated cases are checked against each other too

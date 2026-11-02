@@ -509,3 +509,34 @@ def test_the_contract_carries_the_knowledge_standard_every_door_extracts_to() ->
     # session review extracts to (core/knowledge_standard): one copy, two doors
     from core import knowledge_standard as ks
     assert ap.entry_contract()["knowledge_standard"] == ks.sentences()
+
+
+def test_every_section_that_takes_entries_says_where_they_come_from() -> None:
+    # the per-section extraction standard travels with the format: the agent writing
+    # the entries reads both in one file (design 2026-11-02-new-brain-extraction-first E2)
+    c = ap.entry_contract()
+    typed = [s for s in c["sections"] if s.get("cognition_types")]
+    assert typed and all(s.get("take_from") for s in typed), [s["section"] for s in typed if not s.get("take_from")]
+    by = {(s["doc"], s["section"]): s for s in c["sections"]}
+    assert "list itself" in by[("TECH.md", "Runtime Traps")]["not"]
+    assert "Conventions" in by[("PRODUCT.md", "Success Criteria")]["not"]
+    assert c["examples"]["good"] and c["examples"]["bad"]
+
+
+def test_the_contract_names_the_documents_to_read_whole_before_writing() -> None:
+    survey = {"repos": [{"repo": "lib", "docs": [
+        {"path": "README.md", "tier": 1, "included": True},
+        {"path": "ARCHITECTURE.md", "tier": 1, "included": False},
+        {"path": "docs/design.md", "tier": 2, "included": False},
+        {"path": "TESTING.md", "tier": 3, "included": False},
+        {"path": "docs/blog/old.md", "tier": 4, "included": False}]}]}
+    c = ap.entry_contract(repo_names=["lib"], survey=survey)
+    assert [(d["repo"], d["path"]) for d in c["read_whole"]] == [
+        ("lib", "ARCHITECTURE.md"), ("lib", "docs/design.md"), ("lib", "TESTING.md")]
+    assert "read_whole" not in ap.entry_contract(repo_names=["lib"])      # no survey: nothing listed
+
+
+def test_the_skill_leaves_the_section_guide_to_the_contract() -> None:
+    skill = (Path(__file__).resolve().parents[1] / "skills" / "s_project-manager" / "SKILL.md").read_text()
+    assert "| Section | Take it from |" not in skill
+    assert "A PRODUCT section holds only what" in skill

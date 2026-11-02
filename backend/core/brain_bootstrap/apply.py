@@ -67,6 +67,7 @@ import re
 import tempfile
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from . import repo_read as rr
 
@@ -276,19 +277,38 @@ def check_entry(entry, evidence: Evidence, stamp: str) -> dict:
 
 # ── the contract ─────────────────────────────────────────────────────────────
 
+def _read_whole(survey: Any) -> list[dict]:
+    """The documents of a survey to read in full before writing: every tier-2 and tier-3
+    document, and a tier-1 document that was not inlined (over the reading budget, or
+    flagged). A tier-1 document already inlined is read in the survey itself."""
+    out = []
+    for repo in (survey or {}).get("repos") or []:
+        for d in repo.get("docs") or []:
+            if not isinstance(d, dict) or not isinstance(d.get("path"), str):
+                continue
+            tier = d.get("tier")
+            if tier in (2, 3) or (tier == 1 and not d.get("included")):
+                out.append({"repo": repo.get("repo"), "path": d["path"], "tier": tier})
+    return out
+
+
 def entry_contract(project_dir: str | Path | None = None, *,
-                   repo_names: list[str] | None = None) -> dict:
+                   repo_names: list[str] | None = None, survey: Any = None) -> dict:
     """The entry format, for the agent that writes the entries file, and the standard it
     extracts to. The format is generated from the constants ``validate`` and the renderer
     enforce (tests hold each rule to its enforcement), so it says nothing they do not;
     ``knowledge_standard`` (core/knowledge_standard, CDF's own) is what is worth writing,
-    read while writing and never checked against an entry. With *project_dir* it also names the
+    read while writing and never checked against an entry, as are each section's
+    ``take_from`` / ``not`` (ddd_skeleton.SECTION_GUIDE), the ``examples`` and
+    ``read_whole`` (the documents of *survey*, or of the brain's own survey.json, to read in
+    full before writing). With *project_dir* it also names the
     repos that brain owns — none means only ``file:``, ``url:`` and ``user`` can be
     cited; *repo_names* gives those names directly (the eval fixtures, whose brains are
     not bound). Written to ``CONTRACT_FILE`` by ``write_entry_contract``."""
     from core import knowledge_standard as ks
     from core.ddd_entry_lifecycle import COMMENT_MARKERS, TITLE_FORBIDDEN
-    from core.ddd_skeleton import GAP_SECTION, SECTION_TYPES, skeleton_sections, DOCS
+    from core.ddd_skeleton import (DOCS, GAP_SECTION, GUIDE_EXAMPLES, SECTION_GUIDE,
+                                   SECTION_TYPES, skeleton_sections)
     typed = {place: sorted(types) for place, types in SECTION_TYPES.items()}
     repos = None
     if project_dir is not None or repo_names is not None:
@@ -308,7 +328,14 @@ def entry_contract(project_dir: str | Path | None = None, *,
                 takes = {"gaps_only": True}
             else:
                 takes = {"nothing": "the person's live state"}
-            sections.append({"doc": doc, "section": name, **takes})
+            sections.append({"doc": doc, "section": name, **takes, **SECTION_GUIDE.get(place, {})})
+    if survey is None and project_dir is not None:
+        from .survey import SURVEY_REL
+        try:
+            survey = json.loads((Path(project_dir) / SURVEY_REL).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            survey = None
+    read_whole = _read_whole(survey)
     return {
         "schema": "swarmai.bootstrap-entry-contract", "version": 1,
         "file": ENTRIES_FILE.as_posix(),
@@ -349,6 +376,8 @@ def entry_contract(project_dir: str | Path | None = None, *,
         # (core/knowledge_standard): read while writing, never checked against an entry
         "knowledge_standard": ks.sentences(),
         "sections": sections,
+        "examples": GUIDE_EXAMPLES,
+        **({"read_whole": read_whole} if read_whole else {}),
         "refusals": dict(REFUSALS),
         **({} if repos is None else {"repos": repos}),
     }

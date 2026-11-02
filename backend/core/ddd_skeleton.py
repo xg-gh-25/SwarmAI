@@ -178,6 +178,59 @@ SECTION_TYPES: dict[tuple[str, str], frozenset[str]] = {
 }
 GAP_SECTION = ("IMPROVEMENT.md", "What to Watch For")
 WATCH_TYPES = frozenset({"guideline", "pitfall"})
+# Where a new Brain's first entries for each section come from, and what does not belong
+# there: the extraction standard the entry contract carries per section
+# (core/brain_bootstrap/apply.entry_contract), read while writing, never checked.
+SECTION_GUIDE: dict[tuple[str, str], dict[str, str]] = {
+    ("PRODUCT.md", "Vision"): {
+        "take_from": "what the material says the project is for: the README's positioning, the package description"},
+    ("PRODUCT.md", "What Makes It Different"): {
+        "take_from": 'comparisons with alternatives the material itself makes ("unlike X, ...")'},
+    ("PRODUCT.md", "Strategic Priorities"): {
+        "take_from": "what the material calls a priority, a goal or the order of what comes first",
+        "not": "a design choice kept for compatibility (Architecture or Recent Decisions) or a rule for "
+               "changes (Conventions); none stated: a gap"},
+    ("PRODUCT.md", "Success Criteria"): {
+        "take_from": "what the material says counts as success: a target, a measure, a definition of done "
+                     "for the project",
+        "not": "a test, review or install step for contributors or users (Conventions); none stated: a gap"},
+    ("PRODUCT.md", "Non-Goals"): {
+        "take_from": "what the material says is out of scope or not to be used for",
+        "not": "anything the material does not say is out of scope; none stated: a gap"},
+    ("TECH.md", "Architecture"): {
+        "take_from": "ARCHITECTURE and design documents; the entry points"},
+    ("TECH.md", "Key Subsystems"): {
+        "take_from": "one per code_shape.graph_clusters cluster that matters: responsibility, entry point, "
+                     "what it depends on; sources = the cluster's files (never a graph id). When "
+                     "graph_clusters.skipped says the graph was too large to cluster: one per module in "
+                     "code_shape.structure.modules that matters (leave out test modules), what it depends "
+                     "on from structure.module_edges, the repo's own architecture or key-files index for "
+                     "the responsibility; sources = files from the module's files (a directory is not a source)"},
+    ("TECH.md", "Conventions"): {
+        "take_from": "CONTRIBUTING and the conventions configs; one process per dev command (how = the "
+                     "command, sources = the CI, Makefile or package.json that declares it)"},
+    ("TECH.md", "Runtime Traps"): {
+        "take_from": "each history.hotspots file not marked test, with its commit subjects: the trap it "
+                     "shows; security and bugfix CHANGELOG entries; SECURITY.md",
+        "not": "the hot-spot list itself or which files change most (it changes with every commit)"},
+    ("IMPROVEMENT.md", "What Worked"): {
+        "take_from": "usually empty at birth"},
+    ("IMPROVEMENT.md", "What Failed"): {
+        "take_from": "reverts and repeated fixes, citing the commits' files"},
+    ("IMPROVEMENT.md", "What to Watch For"): {
+        "take_from": "gaps only: what has no evidence (untested entry points, a document that disagrees "
+                     "with the code, an empty PRODUCT or TECH section)"},
+    ("PROJECT.md", "Recent Decisions"): {
+        "take_from": "accepted ADRs and design-document decisions, with why and rejected_alternatives",
+        "not": "a rejected or proposed ADR presented as decided"},
+}
+GUIDE_EXAMPLES: dict[str, list[str]] = {
+    "good": ['[pitfall] Changing the default digest invalidates every issued token. Applies when '
+             'upgrading or configuring the digest (a trigger, a consequence, a source)'],
+    "bad": ["[model] Uses Python (a fact any file listing shows)",
+            "[guideline] The README explains usage (a restatement)",
+            "a version number, a count, \"currently working on ...\", anything no source supports"],
+}
 # The type an entry written with no [type] is given in each section: the one the
 # section's skeleton comment names first (ddd_format reads an untyped entry by it).
 _DEFAULT_TYPE: dict[tuple[str, str], str] = {

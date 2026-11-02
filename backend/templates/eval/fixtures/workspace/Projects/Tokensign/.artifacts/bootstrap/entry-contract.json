@@ -97,21 +97,25 @@
    "section": "Vision",
    "cognition_types": [
     "principle"
-   ]
+   ],
+   "take_from": "what the material says the project is for: the README's positioning, the package description"
   },
   {
    "doc": "PRODUCT.md",
    "section": "What Makes It Different",
    "cognition_types": [
     "model"
-   ]
+   ],
+   "take_from": "comparisons with alternatives the material itself makes (\"unlike X, ...\")"
   },
   {
    "doc": "PRODUCT.md",
    "section": "Strategic Priorities",
    "cognition_types": [
     "decision"
-   ]
+   ],
+   "take_from": "what the material calls a priority, a goal or the order of what comes first",
+   "not": "a design choice kept for compatibility (Architecture or Recent Decisions) or a rule for changes (Conventions); none stated: a gap"
   },
   {
    "doc": "PRODUCT.md",
@@ -119,7 +123,9 @@
    "cognition_types": [
     "guideline",
     "process"
-   ]
+   ],
+   "take_from": "what the material says counts as success: a target, a measure, a definition of done for the project",
+   "not": "a test, review or install step for contributors or users (Conventions); none stated: a gap"
   },
   {
    "doc": "PRODUCT.md",
@@ -127,7 +133,9 @@
    "cognition_types": [
     "correction",
     "pitfall"
-   ]
+   ],
+   "take_from": "what the material says is out of scope or not to be used for",
+   "not": "anything the material does not say is out of scope; none stated: a gap"
   },
   {
    "doc": "TECH.md",
@@ -135,14 +143,16 @@
    "cognition_types": [
     "decision",
     "principle"
-   ]
+   ],
+   "take_from": "ARCHITECTURE and design documents; the entry points"
   },
   {
    "doc": "TECH.md",
    "section": "Key Subsystems",
    "cognition_types": [
     "model"
-   ]
+   ],
+   "take_from": "one per code_shape.graph_clusters cluster that matters: responsibility, entry point, what it depends on; sources = the cluster's files (never a graph id). When graph_clusters.skipped says the graph was too large to cluster: one per module in code_shape.structure.modules that matters (leave out test modules), what it depends on from structure.module_edges, the repo's own architecture or key-files index for the responsibility; sources = files from the module's files (a directory is not a source)"
   },
   {
    "doc": "TECH.md",
@@ -150,7 +160,8 @@
    "cognition_types": [
     "guideline",
     "process"
-   ]
+   ],
+   "take_from": "CONTRIBUTING and the conventions configs; one process per dev command (how = the command, sources = the CI, Makefile or package.json that declares it)"
   },
   {
    "doc": "TECH.md",
@@ -158,7 +169,9 @@
    "cognition_types": [
     "correction",
     "pitfall"
-   ]
+   ],
+   "take_from": "each history.hotspots file not marked test, with its commit subjects: the trap it shows; security and bugfix CHANGELOG entries; SECURITY.md",
+   "not": "the hot-spot list itself or which files change most (it changes with every commit)"
   },
   {
    "doc": "IMPROVEMENT.md",
@@ -169,7 +182,8 @@
     "model",
     "principle",
     "process"
-   ]
+   ],
+   "take_from": "usually empty at birth"
   },
   {
    "doc": "IMPROVEMENT.md",
@@ -177,12 +191,14 @@
    "cognition_types": [
     "correction",
     "pitfall"
-   ]
+   ],
+   "take_from": "reverts and repeated fixes, citing the commits' files"
   },
   {
    "doc": "IMPROVEMENT.md",
    "section": "What to Watch For",
-   "gaps_only": true
+   "gaps_only": true,
+   "take_from": "gaps only: what has no evidence (untested entry points, a document that disagrees with the code, an empty PRODUCT or TECH section)"
   },
   {
    "doc": "PROJECT.md",
@@ -200,7 +216,9 @@
     "pitfall",
     "principle",
     "process"
-   ]
+   ],
+   "take_from": "accepted ADRs and design-document decisions, with why and rejected_alternatives",
+   "not": "a rejected or proposed ADR presented as decided"
   },
   {
    "doc": "PROJECT.md",
@@ -211,6 +229,28 @@
    "doc": "PROJECT.md",
    "section": "Blocked By",
    "nothing": "the person's live state"
+  }
+ ],
+ "examples": {
+  "good": [
+   "[pitfall] Changing the default digest invalidates every issued token. Applies when upgrading or configuring the digest (a trigger, a consequence, a source)"
+  ],
+  "bad": [
+   "[model] Uses Python (a fact any file listing shows)",
+   "[guideline] The README explains usage (a restatement)",
+   "a version number, a count, \"currently working on ...\", anything no source supports"
+  ]
+ },
+ "read_whole": [
+  {
+   "repo": "tokensign",
+   "path": "CHANGELOG.md",
+   "tier": 3
+  },
+  {
+   "repo": "tokensign",
+   "path": "CONTRIBUTING.md",
+   "tier": 3
   }
  ],
  "refusals": {
