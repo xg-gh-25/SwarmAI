@@ -7,13 +7,18 @@ listed for the agent to read whole.
 
 | tier | rule |
 |---|---|
-| 1 must read | root README; ``ARCHITECTURE*`` / ``DESIGN*``; docs the root README links to; each monorepo package's README |
+| 1 must read | root README; root ``AGENTS.md`` / ``CLAUDE.md``; ``ARCHITECTURE*`` / ``DESIGN*``; docs the root README links to; each monorepo package's README |
 | 2 design records | anything under a ``design`` / ``architecture`` / ``adr`` / ``rfc`` / ``decisions`` directory; ``NNNN-*.md`` ADRs (superseded / rejected / deprecated ones drop to tier 4) |
 | 3 rules and conventions | CONTRIBUTING, SECURITY, CODEOWNERS, CHANGELOG (and CHANGES / HISTORY / NEWS); docs linked from two or more other docs |
 | 4 the rest | by newest commit first |
 
-Within tiers 1–3: more signals first, then path. A document matching several rules
-keeps all its signals and takes the best tier.
+Within tiers 1–3: more signals first, then path; except that tier 1 starts with the
+entry documents, in this order: the root README (one: ``README.md`` if there is one, else
+the shortest root ``README.*``; a translation such as ``README.zh-CN.md`` is not it), then
+root ``AGENTS.md`` and ``CLAUDE.md``. They are what a reader opens first, and a README
+has one signal where a linked document has several, so without this they fall outside the
+reading budget. A document matching several rules keeps all its signals and takes the
+best tier.
 
 API contracts (OpenAPI / Swagger / AsyncAPI, ``.proto``, GraphQL) are not documents to
 read: each becomes a one-line-per-endpoint summary.
@@ -156,13 +161,36 @@ def links(rel: str, text: str, docs: set[str]) -> set[str]:
 
 # ── ranking ──────────────────────────────────────────────────────────────────
 
+#: root agent guides, read right after the README (in this order)
+_AGENT_GUIDES = ("agents.md", "claude.md")
+
+
+def _root_readme(doc_paths: list[str]) -> str | None:
+    """The one root README: ``README.md`` (any case) if present, else the shortest root
+    ``README.*`` (``README.zh-CN.md`` is a translation of it, not it)."""
+    roots = sorted((r for r in doc_paths if "/" not in r and _stem(r) == "readme"),
+                   key=lambda r: (r.lower() != "readme.md", len(r), r))
+    return roots[0] if roots else None
+
+
+def _entry_rank(rel: str, readme: str | None) -> int:
+    """0 for the root README, 1-2 for the root agent guides, 3 for everything else."""
+    if rel == readme:
+        return 0
+    if "/" not in rel and rel.lower() in _AGENT_GUIDES:
+        return 1 + _AGENT_GUIDES.index(rel.lower())
+    return 3
+
+
 def _signals(rel: str, dead: bool, readme_links: set[str], inbound: int,
-             package_readmes: set[str]) -> dict[int, list[str]]:
+             package_readmes: set[str], readme: str | None = None) -> dict[int, list[str]]:
     """{tier: [signal, …]} for one document."""
     sig: dict[int, list[str]] = {1: [], 2: [], 3: []}
     stem = _stem(rel)
     if "/" not in rel and stem == "readme":
-        sig[1].append("root-readme")
+        sig[1].append("root-readme" if rel == readme or readme is None else "readme-translation")
+    if "/" not in rel and rel.lower() in _AGENT_GUIDES:
+        sig[1].append("root-agent-guide")
     if stem.startswith(("architecture", "design")):
         sig[1].append("architecture-doc")
     if rel in readme_links:
@@ -212,7 +240,7 @@ def rank(root: Path, files: list[str], *, head: str | None = None,
     for src, targets in out_links.items():
         for t in targets:
             inbound[t] = inbound.get(t, 0) + 1
-    readme = next((r for r in doc_paths if "/" not in r and _stem(r) == "readme"), None)
+    readme = _root_readme(doc_paths)
     readme_links = out_links.get(readme, set()) if readme else set()
     pkg_readmes = {r for r in doc_paths
                    for p in (packages or []) if p.get("root") not in (None, ".", "")
@@ -220,7 +248,7 @@ def rank(root: Path, files: list[str], *, head: str | None = None,
     short = (head or "")[:12]
     docs: list[dict] = []
     for rel in doc_paths:
-        sig = _signals(rel, dead[rel], readme_links, inbound.get(rel, 0), pkg_readmes)
+        sig = _signals(rel, dead[rel], readme_links, inbound.get(rel, 0), pkg_readmes, readme)
         tier = next((t for t in (1, 2, 3) if sig.get(t)), 4)
         signals = [s for t in (1, 2, 3, 4) for s in sig.get(t, [])]
         docs.append({
@@ -236,7 +264,8 @@ def rank(root: Path, files: list[str], *, head: str | None = None,
         })
 
     ranked = sorted((d for d in docs if d["tier"] < 4),
-                    key=lambda d: (d["tier"], -len(d["signals"]), d["path"]))
+                    key=lambda d: (d["tier"], _entry_rank(d["path"], readme),
+                                   -len(d["signals"]), d["path"]))
     rest = sorted((d for d in docs if d["tier"] == 4), key=lambda d: d["path"])
     rest.sort(key=lambda d: d["last_commit"] or "", reverse=True)  # stable: path breaks ties
     docs = ranked + rest

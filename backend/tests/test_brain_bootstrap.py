@@ -605,3 +605,26 @@ def test_package_manager_field_wins_and_no_lockfile_keeps_npm(tmp_path):
     assert b[("package.json", "test")] == "npm run test"
     c = _pkg_commands(tmp_path / "c", {"package.json": _SCRIPTS, "yarn.lock": ""})
     assert c[("package.json", "test")] == "yarn run test"
+
+
+# ── tier-1 reading order (fixing-spec 2026-11-02 G3) ───────────────────────────
+
+def test_the_root_readme_and_agent_guide_are_read_before_better_linked_docs(tmp_path):
+    from core.brain_bootstrap import docs as _docs
+    body = "This document explains one part of the project in plain words.\n" * 14
+    files = {"README.md": body, "README.zh-CN.md": body, "AGENTS.md": body}
+    # four tier-1 docs, each linked from the README and from the other three, so each
+    # has more signals than the README itself
+    others = [f"ARCHITECTURE-{i}.md" for i in range(4)]
+    links = "".join(f"[{o}]({o})\n" for o in others)
+    files["README.md"] = body + links
+    for o in others:
+        files[o] = body + links
+    for rel, text in files.items():
+        (tmp_path / rel).write_text(text)
+    out, _ = _docs.rank(tmp_path, sorted(files), budget=3 * 1100)
+    inlined = [d["path"] for d in out if d["included"]]
+    assert inlined[:2] == ["README.md", "AGENTS.md"], inlined
+    assert "README.zh-CN.md" not in inlined[:2]
+    agents = next(d for d in out if d["path"] == "AGENTS.md")
+    assert agents["tier"] == 1 and "root-agent-guide" in agents["signals"]
