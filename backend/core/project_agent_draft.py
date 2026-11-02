@@ -593,7 +593,7 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
                 # the repos the earlier draft already decided for (a row a person dropped
                 # stays dropped); only a repo bound since brings its rows in
                 covered = {r.get("repo") for r in om[k] if isinstance(r, dict)} | set(om.get("repos") or [])
-                nm[k] = list(om[k]) + [r for r in nm.get(k) or [] if r.get("repo") not in covered]
+                nm[k] = _one_per_check(list(om[k]) + [r for r in nm.get(k) or [] if r.get("repo") not in covered])
     ids = {m["id"] for m in doc["modes"]}
     # a skill no mode lists goes to the default mode (the proposal contract), so a skill
     # added to the Brain since the earlier draft is not left out
@@ -606,6 +606,21 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
     if loose:
         target = next(m for m in doc["modes"] if m["id"] == doc["default_mode"])
         target["skills"] = list(target.get("skills") or []) + loose
+
+
+def _one_per_check(rows: list[Any]) -> list[Any]:
+    """*rows* with one row per check: a row whose command is the same as an earlier row's
+    in one spelling (``_same_command``), for the same repo and directory, is left out."""
+    seen: set[tuple] = set()
+    out = []
+    for r in rows:
+        if isinstance(r, dict) and isinstance(r.get("command"), str):
+            key = (r.get("repo"), _cwd(r.get("cwd")), _same_command(r["command"]))
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(r)
+    return out
 
 
 def _str_list_of(v: Any) -> list[str]:

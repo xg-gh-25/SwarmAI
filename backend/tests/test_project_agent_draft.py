@@ -595,3 +595,19 @@ def test_a_proposal_naming_one_check_twice_keeps_the_first_and_says_so(tmp_path)
 def test_the_contract_says_what_a_validation_is():
     text = json.dumps(pad.PROPOSAL_CONTRACT)
     assert "every change" in text and "release" in text
+
+
+def test_a_redraft_folds_a_twin_check_an_earlier_draft_kept(tmp_path):
+    # a draft written before one-spelling dedupe holds `npm test` and `npm run test`;
+    # the redraft keeps the earlier rows (merge), but only one of the twins
+    b = _brain(tmp_path, _pkg_repo(tmp_path, "npm test"))
+    assert pad.apply(b, {})["written"]
+    target = b / "project-agent.yaml"
+    doc = yaml.safe_load(target.read_text())
+    code = next(m for m in doc["modes"] if m["id"] == "code-change")
+    code["validations"].append({"id": "test", "command": "npm run test", "source": "package.json", "repo": "lib"})
+    target.write_text(yaml.safe_dump(doc, sort_keys=False))
+    r = pad.apply(b, {})
+    assert r["written"], r
+    code = next(m for m in yaml.safe_load(target.read_text())["modes"] if m["id"] == "code-change")
+    assert [v["command"] for v in code["validations"]] == ["npm test"]
