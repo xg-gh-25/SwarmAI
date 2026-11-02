@@ -12,7 +12,9 @@ only if, deterministically:
   project is the one its source fixed
   (the session's own project for S7, the run's for S3; an S3 run must have landed);
 - the id names exactly one live entry of the unit's project DDD whose first line matches
-  the declared one (so a wrong id cannot retire another entry);
+  the declared one (so a wrong id cannot retire another entry); or one CDF entry of MEMORY,
+  EVOLUTION or the General Brain, which belong to no project: then the new unit must
+  itself go to a file of that floor (``_FLOOR``), never to a project's DDD;
 - that entry was written by CDF (it carries a ``cand:`` marker): CDF never retires what a
   person wrote;
 - the new unit was said after the entry: the latest ``observed_at`` of their evidence
@@ -98,16 +100,68 @@ def _cdf_anchor(workspace: Path, path: str, cand: str) -> str | None:
     return unit.anchor if unit is not None else None
 
 
+# The files read in every turn whose CDF entries a declaration may retire, and the General
+# Brain (``relations_v2.general_brain_files``). STEERING / USER / TOOLS are the user's own.
+EVERY_TURN_TARGETS = (".context/MEMORY.md", ".context/EVOLUTION.md")
+# An entry read in every turn is retired only by a unit that itself passed the every-turn
+# floor (it goes to MEMORY or EVOLUTION); a General Brain entry also by one that goes to
+# the General Brain. A unit routed to a project's DDD did not pass that floor.
+_FLOOR = {"every_turn": frozenset({"MEMORY", "EVOLUTION"}),
+          "general": frozenset({"MEMORY", "EVOLUTION", "COMMON_DDD"})}
+
+
+def _global_entries(workspace: Path) -> list:
+    """``(entry, kind)`` of the every-turn files and the General Brain."""
+    from .relations_v2 import _entries_of, _general_entries
+    out = []
+    for rel in EVERY_TURN_TARGETS:
+        path = workspace / rel
+        if path.is_file():
+            out += [(e, "every_turn") for e in _entries_of(path, workspace)]
+    return out + [(e, "general") for e in _general_entries(workspace)]
+
+
+def _said_later(conn: sqlite3.Connection, out: Checked, ref: str, entry_text: str,
+                cand: str, new_said: str | None) -> bool:
+    """Whether the new unit was said after the entry (module doc); records the refusal."""
+    old_said = _entry_said(conn, cand)
+    if new_said and old_said:
+        if new_said < old_said:
+            out.older = True
+            out.refused.append({"ref": ref, "reason": "older_than_existing"})
+            return False
+        if new_said == old_said:
+            out.refused.append({"ref": ref, "reason": "not_later"})
+            return False
+        return True
+    dates = _DATE.findall(entry_text)
+    if new_said and dates:
+        if new_said[:10] < max(dates):
+            out.older = True
+            out.refused.append({"ref": ref, "reason": "older_than_existing"})
+            return False
+        if new_said[:10] == max(dates):
+            out.refused.append({"ref": ref, "reason": "not_later"})
+            return False
+    return True
+
+
 def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, source: str,
           declared, new_root_ids, cited_external: bool = True,
-          home: str | None = None) -> Checked:
+          home: str | None = None, destination_store: str | None = None) -> Checked:
     """The anchors a unit's declared overrides may retire (see module doc).
     *cited_external*: the unit's own evidence includes external content (a web page, a
     repo file, a peer message): such a unit never retires anything. A unit that rests on
     the agent's own inference may: the agent that made the change in that conversation is
     the one who knows what it made untrue (design 2026-10-30-cdf-agent-decides), and what
     it retires is CDF's own entry, kept in the vault and recorded. *home*: the project the source fixed (the session's own project for
-    S7, the run's for S3); a declaration about any other project is refused."""
+    S7, the run's for S3); a declaration about any other project is refused.
+
+    A declaration naming an entry of MEMORY, EVOLUTION or the General Brain belongs to no
+    project: it needs no project or home, only the floor of ``_FLOOR`` (*destination_store*
+    is where the new unit goes) and the same marker and said-later rules (design
+    2026-11-02-knowledge-reaches-judgment ②: without this the every-turn files were only
+    ever added to)."""
     from core import addressing
     from .contracts_v2 import OVERRIDE_RE, OVERRIDE_SOURCES
     from .withdrawn import normalize
@@ -118,16 +172,12 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
     if source not in OVERRIDE_SOURCES:
         out.refused = [{"ref": d, "reason": "source"} for d in declared]
         return out
-    if not project:
-        out.refused = [{"ref": d, "reason": "no_project"} for d in declared]
-        return out
     if cited_external:
         out.refused = [{"ref": d, "reason": "cited_external"} for d in declared]
         return out
-    if not home or home != project:
-        out.refused = [{"ref": d, "reason": "outside_home_project"} for d in declared]
-        return out
     new_said = _said(conn, new_root_ids)
+    glob = None
+    local: list = []
     for ref in declared:
         m = OVERRIDE_RE.match(str(ref))
         if not m:
@@ -137,6 +187,36 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
         if len(head) < MIN_HEAD:
             out.refused.append({"ref": ref, "reason": "head_too_short"})
             continue
+        if glob is None:
+            glob = _global_entries(Path(workspace))
+        hits = [(e, kind) for e, kind in glob if e.id == uid and normalize(e.head).startswith(head)]
+        if not hits:
+            local.append((ref, uid, head))
+            continue
+        if len({e.anchor for e, _ in hits}) != 1:
+            out.refused.append({"ref": ref, "reason": "ambiguous"})
+            continue
+        entry, kind = hits[0]
+        if destination_store not in _FLOOR[kind]:
+            out.refused.append({"ref": ref, "reason": "every_turn_floor"})
+            continue
+        cand = _CAND.search(entry.text)
+        if cand is None:
+            out.refused.append({"ref": ref, "reason": "human_written"})
+            continue
+        if not _said_later(conn, out, ref, entry.text, cand.group(1), new_said):
+            continue
+        if entry.anchor not in out.targets:
+            out.targets.append(entry.anchor)
+    if not local:
+        return out
+    if not project:
+        out.refused += [{"ref": ref, "reason": "no_project"} for ref, _u, _h in local]
+        return out
+    if not home or home != project:
+        out.refused += [{"ref": ref, "reason": "outside_home_project"} for ref, _u, _h in local]
+        return out
+    for ref, uid, head in local:
         units = [u for u in addressing.matches(project, uid) if u.store == "doc"
                  and _first_line(u.text).startswith(head)]
         if len(units) != 1:
@@ -151,25 +231,8 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
         if anchor is None:
             out.refused.append({"ref": ref, "reason": "not_found"})
             continue
-        old_said = _entry_said(conn, cand.group(1))
-        if new_said and old_said:
-            if new_said < old_said:
-                out.older = True
-                out.refused.append({"ref": ref, "reason": "older_than_existing"})
-                continue
-            if new_said == old_said:
-                out.refused.append({"ref": ref, "reason": "not_later"})
-                continue
-        else:
-            dates = _DATE.findall(unit.text)
-            if new_said and dates:
-                if new_said[:10] < max(dates):
-                    out.older = True
-                    out.refused.append({"ref": ref, "reason": "older_than_existing"})
-                    continue
-                if new_said[:10] == max(dates):
-                    out.refused.append({"ref": ref, "reason": "not_later"})
-                    continue
+        if not _said_later(conn, out, ref, unit.text, cand.group(1), new_said):
+            continue
         if anchor not in out.targets:
             out.targets.append(anchor)
     return out

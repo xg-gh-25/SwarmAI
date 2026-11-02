@@ -97,6 +97,15 @@ def restates(unit: dict, withdrawn: list[Record]) -> Record | None:
     return next((r for r in withdrawn if r.status in REFUSING and body in normalize(r.text)), None)
 
 
+def said_by(unit: dict, entries) -> bool:
+    """Whether an entry in force (``relations_v2.Entry``) holds the unit's body verbatim
+    (after ``normalize``), with the same body and length floor as ``restates``."""
+    body = normalize(str(unit.get("what") or unit.get("text") or ""))
+    if len(body) < MIN_RESTATED:
+        return False
+    return any(body in normalize(e.text) for e in entries)
+
+
 def nearest(unit: dict, withdrawn: list[Record], k: int = 2) -> list[Record]:
     """The *k* withdrawals closest to the unit by keyword (BM25), best first; none that share
     no word with it."""

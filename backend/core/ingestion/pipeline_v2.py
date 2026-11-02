@@ -392,7 +392,7 @@ def _check_overrides(unit, row, root, destination, corpus_project, resolved, hom
         return overrides.check(conn, workspace=Path(root), project=project, source=source,
                                declared=declared, new_root_ids=getattr(resolved, "root_ids", ()),
                                cited_external=bool(getattr(resolved, "cited_external", True)),
-                               home=home)
+                               home=home, destination_store=getattr(destination, "store", None))
     finally:
         conn.close()
 
@@ -749,19 +749,23 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         if _event_known(root, event_key):
             return _decision(unit_id, "reject", "reject", "already_exists", **done)
 
-    # what the user withdrew stays out: an exact restatement is refused
-    withdrawn_all = _withdrawn_records()
-    if withdrawn.restates(unit.model_dump(mode="json"), withdrawn_all) is not None:
-        return _decision(unit_id, "reject", "reject", "withdrawn", **done)
-
-    # the relations the producing agent declared (D1): code checks only that the id and
-    # the first line name one entry; a declaration that does not stands for nothing
     # the entries the review was shown come from the session's project; a unit scoped to
     # another project declares against that one's too: both are in force
     entries = relations_v2.pool(root, corpus_project)
     if session_home and session_home != corpus_project:
         known = {e.anchor for e in entries}       # the every-turn files are in both pools
         entries += [e for e in relations_v2.pool(root, session_home) if e.anchor not in known]
+
+    # what the user withdrew stays out: an exact restatement is refused. Not when an entry
+    # in force says it too: an override that wrote the whole current statement carried the
+    # old text forward, so saying it again is the same as that entry (relations below)
+    withdrawn_all = _withdrawn_records()
+    dumped = unit.model_dump(mode="json")
+    if withdrawn.restates(dumped, withdrawn_all) is not None and not withdrawn.said_by(dumped, entries):
+        return _decision(unit_id, "reject", "reject", "withdrawn", **done)
+
+    # the relations the producing agent declared (D1): code checks only that the id and
+    # the first line name one entry; a declaration that does not stands for nothing
     entries += relations_v2.withdrawn_entries(withdrawn_all)
     if isinstance(unit, EventUnit):
         # an event is the same as an event only (extraction-at-task-end E2): an open gap
