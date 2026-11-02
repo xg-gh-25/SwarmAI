@@ -381,16 +381,9 @@ def _print_library(hits: list, args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: "list[str] | None" = None, prog: str = "knowledge") -> int:
-    _set_prog(prog)
-    if os.environ.get(RESTRICTED_ENV):
-        _out(f"{prog}: not available in this session (a non-owner channel). Read the "
-             "shared project documents you were given instead.")
-        return 3
-    if os.environ.get(OFF_ENV):
-        _out(f"{prog}: not available in this session (a channel conversation other people "
-             "can read): the person's own knowledge is not looked up here.")
-        return 3
+def parser(prog: str = "knowledge") -> argparse.ArgumentParser:
+    """The command line: ``map`` / ``find`` / ``get`` (also read by the tests that check
+    every option an agent-facing card names exists)."""
     p = argparse.ArgumentParser(prog=prog, description=__doc__.split("\n\n")[0],
                                 allow_abbrev=False)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -412,6 +405,20 @@ def main(argv: "list[str] | None" = None, prog: str = "knowledge") -> int:
     g.add_argument("--project", help="a Brain (a project, or General); none: the context files")
     g.add_argument("ref")
     g.add_argument("--json", action="store_true")
+    return p
+
+
+def main(argv: "list[str] | None" = None, prog: str = "knowledge") -> int:
+    _set_prog(prog)
+    if os.environ.get(RESTRICTED_ENV):
+        _out(f"{prog}: not available in this session (a non-owner channel). Read the "
+             "shared project documents you were given instead.")
+        return 3
+    if os.environ.get(OFF_ENV):
+        _out(f"{prog}: not available in this session (a channel conversation other people "
+             "can read): the person's own knowledge is not looked up here.")
+        return 3
+    p = parser(prog)
     args = p.parse_args(argv)
     return {"map": _map, "find": _find, "get": _get}[args.cmd](args)
 
