@@ -369,3 +369,96 @@ def test_a_ddd_recall_hit_is_recorded_under_its_doc(tmp_path: Path, monkeypatch:
     usage.record_recalled_result(BucketedRecall("lock", buckets={"ddd": [{"doc": "TECH.md", "content": unit}]}),
                                  "s", project="P")
     assert recorded == [["Projects/P/2-understanding/TECH.md#Runtime Traps#cand:lock"]]
+
+
+def _bash_observer_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A workspace with one governed MEMORY.md, an immediate pool that counts its
+    submissions, and the recorder captured."""
+    from concurrent.futures import Future
+    from core.ingestion import usage
+
+    workspace = tmp_path / "ws"
+    memory = workspace / ".context" / "MEMORY.md"
+    memory.parent.mkdir(parents=True)
+    memory.write_text(
+        "# Memory\n\n## Guidelines\n"
+        "- [guideline] **One** First unit.\n<!-- cand:first -->\n"
+        "- [guideline] **Two** Second unit.\n<!-- cand:second -->\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("config.get_swarmws", lambda: workspace)
+    monkeypatch.setattr("core.ingestion.materializer.get_swarmws", lambda: workspace)
+    observed: list[tuple[list[str], str, str]] = []
+    monkeypatch.setattr(usage, "record_many_async", lambda anchors, kind, session: observed.append(
+        (list(anchors), kind, session)))
+    submitted: list[str] = []
+
+    class ImmediatePool:
+        def submit(self, fn, *args, **kwargs):
+            submitted.append(fn.__name__)
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except Exception as exc:
+                future.set_exception(exc)
+            return future
+
+    monkeypatch.setattr("core.executors.get_pool", lambda _name: ImmediatePool())
+    return usage, workspace, memory, observed, submitted
+
+
+def test_bash_reads_of_governed_files_are_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most reads of brain files go through Bash (sed / cat / grep), not Read: a unit whose
+    whole text is in the command's stdout was read; half a unit was not."""
+    import asyncio
+    usage, workspace, memory, observed, _ = _bash_observer_fixture(tmp_path, monkeypatch)
+    hook = usage.create_usage_observer({"app_session_id": "s-bash"})
+    whole = memory.read_text(encoding="utf-8").splitlines()[3]
+    asyncio.run(hook({
+        "tool_name": "Bash", "cwd": str(tmp_path),
+        "tool_input": {"command": f"cd {workspace}/.context && sed -n 4,4p MEMORY.md"},
+        "tool_response": {"stdout": whole + "\n", "stderr": ""},
+    }, None, None))
+    assert observed[-1] == ([".context/MEMORY.md#Guidelines#cand:first"], "read_by_agent", "s-bash")
+
+    asyncio.run(hook({
+        "tool_name": "Bash", "cwd": str(workspace),
+        "tool_input": {"command": "head -c 30 .context/MEMORY.md"},
+        "tool_response": {"stdout": whole[:20], "stderr": ""},
+    }, None, None))
+    assert observed[-1][0] == []                       # half a unit is not a read
+
+
+def test_bash_grep_n_of_one_file_maps_line_numbers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    usage, workspace, memory, observed, _ = _bash_observer_fixture(tmp_path, monkeypatch)
+    hook = usage.create_usage_observer({"app_session_id": "s-grep"})
+    asyncio.run(hook({
+        "tool_name": "Bash", "cwd": str(workspace),
+        "tool_input": {"command": f"grep -n Second '{memory}'"},
+        "tool_response": {"stdout": "6:- [guideline] **Two** Second", "stderr": ""},
+    }, None, None))
+    assert observed[-1] == ([".context/MEMORY.md#Guidelines#cand:second"], "read_by_agent", "s-grep")
+
+
+def test_bash_command_without_a_governed_path_is_never_submitted(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hook runs on every Bash call: a command naming no brain file returns before
+    any work is handed to the pool."""
+    import asyncio
+    usage, _workspace, _memory, observed, submitted = _bash_observer_fixture(tmp_path, monkeypatch)
+    hook = usage.create_usage_observer({"app_session_id": "s-none"})
+    assert asyncio.run(hook({
+        "tool_name": "Bash", "cwd": str(tmp_path),
+        "tool_input": {"command": "git status && ls src/"},
+        "tool_response": {"stdout": "- [guideline] **One** First unit.", "stderr": ""},
+    }, None, None)) == {}
+    assert submitted == [] and observed == []
+
+
+def test_usage_observer_is_registered_for_bash() -> None:
+    import inspect
+    from core import hook_builder
+    source = inspect.getsource(hook_builder)
+    block = source[source.index('"cdf_usage_observer"'):][:120]
+    assert 'matcher="Read|Grep|Bash"' in block

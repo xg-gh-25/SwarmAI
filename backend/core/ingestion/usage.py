@@ -277,8 +277,88 @@ def _observe_tool_read(input_data: Mapping[str, Any], session_id: str) -> None:
     record_many_async(anchors, "read_by_agent", session_id)
 
 
+# A Bash command can read a governed file only if it names one of these roots (or a file
+# under them, relative to a directory under them). Checked on the event loop for every
+# Bash call, so it is a plain substring test; the real resolution runs in the pool.
+_BASH_ROOT_MARKS = ("Projects/", "Knowledge/", ".context/", "MEMORY.md", "EVOLUTION.md",
+                    "TIMELINE.md", "STEERING.md", "USER.md", "TOOLS.md")
+
+
+def _bash_paths(command: str, cwd: Any) -> list[Any]:
+    """The governed files *command* names: each token that resolves to one, against the
+    call's cwd and against every directory the command ``cd``s into before it."""
+    import shlex
+    from pathlib import Path
+    from .materializer import is_governed
+
+    try:
+        tokens = shlex.split(command, comments=False, posix=True)
+    except ValueError:
+        tokens = command.split()
+    bases = [Path(str(cwd))]
+    for i, token in enumerate(tokens[:-1]):
+        if token == "cd":
+            target = Path(tokens[i + 1]).expanduser()
+            bases.append(target if target.is_absolute() else bases[0] / target)
+    found: list[Any] = []
+    for token in tokens:
+        token = token.strip("'\";|&()")
+        if not token or token.startswith("-") or any(ch in token for ch in "*?$`<>"):
+            continue
+        raw = Path(token).expanduser()
+        for candidate in ([raw] if raw.is_absolute() else [base / raw for base in bases]):
+            try:
+                if candidate.is_file() and is_governed(candidate) and candidate not in found:
+                    found.append(candidate)
+                    break
+            except OSError:
+                continue
+    return found
+
+
+def _observe_bash_read(input_data: Mapping[str, Any], session_id: str) -> None:
+    """Map one completed Bash call to the governed units its stdout shows whole.
+
+    Most reads of brain files go through Bash (``sed -n``, ``cat``, ``grep -n``), not
+    Read. A unit counts as read when its complete text is in stdout (as recall's
+    ``units_in_content``), or when a ``path:line:`` line of grep output (``line:`` when
+    the command names one file) falls inside it. Half a unit is not a read."""
+    import re
+    from config import get_swarmws
+
+    tool_input = input_data.get("tool_input") or {}
+    command = str(tool_input.get("command") or "") if isinstance(tool_input, Mapping) else ""
+    response = input_data.get("tool_response")
+    stdout = str(response.get("stdout") or "") if isinstance(response, Mapping) else str(response or "")
+    if not command or not stdout:
+        return
+    paths = _bash_paths(command, input_data.get("cwd") or get_swarmws())
+    anchors: list[str] = []
+    for path in paths:
+        for anchor, _first, _last, text in _spans(path):
+            # the unit's body without its own metadata comments: a range that stops
+            # before the `<!-- cand:... -->` line still read the whole entry
+            body = re.sub(r"<!--.*?-->", "", text, flags=re.S).strip()
+            if body and body in stdout:
+                anchors.append(anchor)
+    for raw_path, line in _grep_line_hits(stdout):
+        for path in paths:
+            if str(path).endswith(raw_path.lstrip("./")) or raw_path == str(path):
+                anchors.extend(_units_overlapping_lines(path, line, line))
+    if len(paths) == 1:
+        for text_line in stdout.splitlines():
+            match = re.match(r"^(\d+)[:-]", text_line)
+            if match:
+                number = int(match.group(1))
+                anchors.extend(_units_overlapping_lines(paths[0], number, number))
+    record_many_async(list(dict.fromkeys(anchors)), "read_by_agent", session_id)
+
+
 def create_usage_observer(session_context: Mapping[str, Any]):
-    """Create an inject-nothing, deny-nothing, non-blocking Read/Grep observer."""
+    """Create an inject-nothing, deny-nothing, non-blocking Read/Grep/Bash observer.
+
+    A Bash call is handed to the pool only when its command names a governed root
+    (``_BASH_ROOT_MARKS``); every other Bash call returns at once."""
     session_id = str(
         session_context.get("app_session_id")
         or session_context.get("sdk_session_id")
@@ -287,11 +367,18 @@ def create_usage_observer(session_context: Mapping[str, Any]):
 
     async def observer(input_data: Any, _tool_use_id: Any, _context: Any) -> dict:
         try:
-            if isinstance(input_data, Mapping) and input_data.get("tool_name") in {"Read", "Grep"}:
+            tool = input_data.get("tool_name") if isinstance(input_data, Mapping) else None
+            job = None
+            if tool in {"Read", "Grep"}:
+                job = _observe_tool_read
+            elif tool == "Bash":
+                tool_input = input_data.get("tool_input") or {}
+                command = str(tool_input.get("command") or "") if isinstance(tool_input, Mapping) else ""
+                if any(mark in command for mark in _BASH_ROOT_MARKS):
+                    job = _observe_bash_read
+            if job is not None:
                 from core import executors
-                future = executors.get_pool("io").submit(
-                    _observe_tool_read, input_data, session_id,
-                )
+                future = executors.get_pool("io").submit(job, input_data, session_id)
                 future.add_done_callback(_log_future)
         except Exception:
             logger.debug("CDF read-usage observer failed", exc_info=True)
