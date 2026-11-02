@@ -351,7 +351,7 @@ def test_a_relations_turn_that_fails_in_the_review_is_asked_again_fresh(cdf_env,
         return {"cognition_units": [_agent_correction(f"event:{users[1]}")]}, "fork-1"
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=runner)
     assert out["units"] == 1
-    assert calls == [(False, sdk), (True, "fork-1"), (True, None)]
+    assert calls == [(False, None), (True, "fork-1"), (True, None)]
     assert ("fresh-9", None) in dropped and ("fork-1", sdk) in dropped
     from core.ingestion.api import connect_ro
     conn = connect_ro()

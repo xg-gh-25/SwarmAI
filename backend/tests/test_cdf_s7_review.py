@@ -5,13 +5,14 @@ What is tested:
 - no threshold: every session a person wrote in is reviewed, one with no user message at
   all is passed over with no model call; a stretch after the person's last message is
   reviewed against that message; the session type is a fact.
-- turn one forks the session with its own model and carries the evidence index (user
+- turn one runs the session's own model on the evidence index (user
   messages in full, labelled by kind) and the record since the last review, every item
   with its anchors; units citing what they were shown are enqueued as S7, others recorded
   invalid; no unit cap; nothing new, no call.
 - turn two, in the review's own conversation: each unit with the entries it may relate
   to; the declarations it returns are set on the units (a malformed one stands for nothing).
-- a session that cannot be resumed is reviewed from its record alone; a long record is
+- the review never forks the session: it reads the record (what was said, the changed
+  files, each tool call named), never a thought or a tool input body; a long record is
   reviewed in windows; the review's conversation file is removed.
 - the job runs the review only, and moves the watermark.
 - the user's words reach EVOLUTION only through a verbatim quote; a measurement opens it.
@@ -114,7 +115,7 @@ def test_review_session_two_turns(cdf_env, tmp_path, monkeypatch, model) -> None
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=run)
     assert out["status"] == "reviewed" and out["units"] == 1 and out["invalid"] == 1
     first, second = run.calls
-    assert (first["resume"], first["fork"], first["cwd"], first["model"]) == (sdk, True, "/w", "session-model[1m]")
+    assert (first["resume"], first["fork"], first["model"]) == (None, False, "session-model[1m]")
     from core.ingestion.sources import extract_llm
     assert first["schema"] == extract_llm.unit_schema(s7_review.ALLOWED_KINDS)
     assert "event_units" in first["schema"]["properties"]
@@ -141,7 +142,7 @@ def test_review_session_two_turns(cdf_env, tmp_path, monkeypatch, model) -> None
         conn.close()
     assert [p.get("same") for p in payloads] == [entry.shown()]
     rng = json.loads(attempt[0])
-    assert attempt[1] == "ok" and rng["forked"] is True and rng["model"] == "session-model[1m]"
+    assert attempt[1] == "ok" and "forked" not in rng and rng["model"] == "session-model[1m]"
 
     again = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=out["reviewed_to"],
                                      runner=lambda *a, **k: pytest.fail("nothing new to review"))
@@ -170,24 +171,13 @@ def test_every_unit_is_enqueued(cdf_env, tmp_path, monkeypatch, model) -> None:
     assert out["units"] == 19 and out["invalid"] == 0
 
 
-def test_an_unresumable_session_is_reviewed_from_its_record(cdf_env, tmp_path, monkeypatch, model) -> None:
+def test_a_session_with_no_cli_conversation_is_reviewed_the_same_way(cdf_env, model) -> None:
     users = _conversation(cdf_env)
     run = Runner([_agent_correction(f"event:{users[1]}")], fork="record-1")
     out = s7_review.review_session(SESSION, sdk_session_id=None, watermark=None, runner=run)
     assert out["status"] == "reviewed" and out["units"] == 1
-    assert (run.calls[0]["resume"], run.calls[0]["fork"]) == (None, True)
-    assert run.calls[1]["resume"] == "record-1"
-    # a fork the CLI refuses (gone, too long): the same review from the record
-    sdk = _cli_transcript(tmp_path, monkeypatch)
-    tries = []
-
-    def refusing(resume, cwd, prompt, schema, *, fork, model):
-        tries.append((resume, fork))
-        if resume == sdk:
-            raise s7_review.Unresumable("No conversation found")
-        return {"cognition_units": []}, "record-2"
-    s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=refusing)
-    assert tries == [(sdk, True), (None, False)]
+    assert (run.calls[0]["resume"], run.calls[0]["fork"]) == (None, False)
+    assert run.calls[1]["resume"] == "record-1"            # turn two: the review's own conversation
 
 
 def test_a_long_record_is_reviewed_in_windows(cdf_env, tmp_path, monkeypatch, model) -> None:
@@ -478,9 +468,9 @@ def test_the_lead_of_a_fragment_window_is_the_message_before_its_item() -> None:
 
 
 def test_an_id_the_record_shows_for_an_item_stands_for_its_anchors(cdf_env, tmp_path, monkeypatch, model) -> None:
-    """A review cites the ids the record shows (a message id, a tool call's id) as often as
-    the anchors: each stands for its item's anchors; an id the record never showed is
-    still refused."""
+    """A review cites the ids the record shows (a message id) as often as the anchors: each
+    stands for its item's anchors; an id the record does not show (a tool call's, which the
+    review reads only as a count of tools used, or one never there) is refused."""
     sdk = _cli_transcript(tmp_path, monkeypatch)
     _record_person_message(cdf_env, "m1", "把迁移脚本审一遍")
     asyncio.run(cdf_env["db"].messages.put({"id": "a1", "session_id": SESSION, "role": "assistant",
@@ -493,9 +483,9 @@ def test_an_id_the_record_shows_for_an_item_stands_for_its_anchors(cdf_env, tmp_
     run = Runner([unit("Back up before dropping a column", ["toolu_bdrk_01ABC"]),
                   unit("A migration that drops a column loses data", ["a1"]),
                   unit("Never shown", ["toolu_bdrk_01NOPE"])],
-                 {"relations": [{"unit": 1, "relation": "new"}, {"unit": 2, "relation": "new"}]})
+                 {"relations": [{"unit": 1, "relation": "new"}]})
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=run)
-    assert out["units"] == 2 and out["invalid"] == 1
+    assert out["units"] == 1 and out["invalid"] == 2
     from core.ingestion.api import connect_ro
     conn = connect_ro()
     try:
@@ -504,3 +494,59 @@ def test_an_id_the_record_shows_for_an_item_stands_for_its_anchors(cdf_env, tmp_
     finally:
         conn.close()
     assert all(e and all(a.startswith("event:") for a in e) for e in cited), cited
+
+
+# ── what the review reads (design 2026-11-02-cdf-extraction-input) ───────────────
+
+def test_the_review_reads_the_record_and_never_forks_the_session(cdf_env, tmp_path, monkeypatch, model):
+    """A fork carries the whole session (every tool output, every thought) and pays for it
+    again at every review; the review reads the record of the window instead."""
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    users = _conversation(cdf_env)
+    asyncio.run(cdf_env["db"].messages.put({"id": "r2", "session_id": SESSION, "role": "assistant", "content": [
+        {"type": "thinking", "thinking": "a private thought"},
+        {"type": "tool_use", "id": "toolu_9", "name": "Write", "summary": "Writing: home.html",
+         "display": {"content": "<html>the whole file body</html>"}},
+        {"type": "tool_result", "tool_use_id": "toolu_9", "is_error": False, "outcome": "written"}]}))
+    monkeypatch.setattr(s7_review, "_drop_fork", lambda fork, original: None)
+    run = Runner([_agent_correction(f"event:{users[1]}")])
+    s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=run)
+    first = run.calls[0]
+    assert (first["resume"], first["fork"]) == (None, False)
+    assert first["cwd"] == str(cdf_env["workspace"])
+    record = first["prompt"].split("<session-record>")[1]
+    assert "a private thought" not in record and "the whole file body" not in record
+    assert "Writing: home.html" not in record and "Write x1" in record
+
+
+def test_the_record_shows_what_was_said_and_which_tools_were_used():
+    rows = [{"id": "a1", "role": "assistant", "content": [
+                {"type": "thinking", "thinking": "private reasoning " * 50},
+                {"type": "text", "text": "Done: the test passes."},
+                {"type": "tool_use", "id": "toolu_1", "name": "Bash", "category": "shell",
+                 "summary": "Running: pytest tests/test_x.py", "display": {"command": "x" * 3000}},
+                {"type": "tool_result", "tool_use_id": "toolu_1", "is_error": False, "outcome": "3 passed"}]},
+            {"id": "a2", "role": "assistant", "content": [{"type": "thinking", "thinking": "only this"}]},
+            {"id": "a3", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_2", "name": "Read", "summary": "Reading: a.py"},
+                {"type": "tool_result", "tool_use_id": "toolu_2", "is_error": True, "outcome": "missing"},
+                {"type": "turn_changes", "files": [{"path": "a.py", "status": "modified",
+                                                     "absolutePath": "/x/a.py", "landed": [{"gitRoot": "/x"}]}]}]},
+            {"id": "u1", "role": "user", "content": "go on"}]
+    view = s7_review.knowledge_view(rows)
+    shown = json.dumps(view)
+    assert "private reasoning" not in shown and "x" * 100 not in shown          # no thought, no input body
+    assert "Running: pytest" not in shown and "3 passed" not in shown               # no command, no outcome line
+    assert "Done: the test passes." in shown                                       # what was said, whole
+    assert [r["id"] for r in view] == ["a1", "a3", "u1"]                          # a thought-only row shows nothing
+    assert view[0]["content"][-1] == {"type": "tools_used", "tools": "Bash x1"}
+    assert view[1]["content"] == [{"type": "turn_changes", "files": [{"path": "a.py", "status": "modified"}]},
+                                  {"type": "tools_used", "tools": "Read x1", "failed": 1}]
+
+
+def test_the_prompt_states_when_each_destination_is_written():
+    prompt = s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", "")
+    for needle in ("rule in one sentence", "exactly one problem", "what came of it",
+                   "changes how a later judgment"):
+        assert needle in prompt, needle
+    assert "your own context" not in prompt                      # no fork: the record is all it reads

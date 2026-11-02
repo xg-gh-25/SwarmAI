@@ -2,14 +2,17 @@
 (design docs/design/2026-10-30-cdf-agent-decides.md; 2026-10-29-cdf-session-review.md).
 
 - Every session a person wrote in is reviewed after each quiet hour (no threshold, no
-  unit cap: D3, D10), by the session's own model (D16), in a fork of the session. A
-  stretch with no user message (a long task, a review that came mid-task) is reviewed
-  too, with the person's last message before it listed as the request it follows.
-- The fork alone sees the session as the CLI resumes it: the summary of a compacted
-  conversation plus what followed (measured 2026-10-30: a long session's fork held ~10K
-  tokens). So each review turn also carries the record of the messages since the last
-  review (``s2_session.windows``), in windows of ``WINDOW_CHARS``; a session that cannot be
-  resumed is reviewed from the same record without a fork (D4).
+  unit cap: D3, D10), by the session's own model (D16). A stretch with no user message (a
+  long task, a review that came mid-task) is reviewed too, with the person's last message
+  before it listed as the request it follows.
+- The review reads what carries knowledge, never the whole session (design
+  2026-11-02-cdf-extraction-input): the person's messages in full and the measured results
+  (the index), what the agent said, the changed files and, per message, the tools it used
+  (``knowledge_view``). Not a fork of the session: a fork carried
+  every tool output and thought of the session so far and was paid for again at every
+  review (measured 2026-11-02: up to 1.7M tokens written per call, 97% of CDF spend), and
+  it left what to read to the model. The record is cut into windows of ``WINDOW_CHARS``
+  (``s2_session.windows``).
 - Turn one: the agent writes the units (cognition, gap, reference, event), each citing
   what it rests on (the index's user messages and measured fields, or the record's
   items) and, for the user's words, a ``user_quote`` copied verbatim.
@@ -158,6 +161,88 @@ def _measured(session_id: str, rows: list[dict[str, Any]],
     return out
 
 
+# What the review reads of the agent's side: what it said, the files it changed, and per
+# message which tools it used. Not its thoughts, not a tool call's command or input, not
+# a call's outcome line: what the work concluded is in what the agent said, and the
+# record holds no tool output body; a result's measured fields are read (design
+# 2026-11-02-cdf-extraction-input).
+_UNREAD_BLOCKS = frozenset({"thinking", "redacted_thinking"})
+_TOOL_BLOCKS = frozenset({"tool_use", "tool_result"})
+_CHANGE_FIELDS = ("path", "status")
+
+
+def _tool_line(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """One line for a message's tool calls: each tool and how often, and how many failed."""
+    used: dict[str, int] = {}
+    for block in blocks:
+        if block.get("type") == "tool_use":
+            name = str(block.get("name") or "tool")
+            used[name] = used.get(name, 0) + 1
+    failed = sum(1 for b in blocks if b.get("type") == "tool_result" and b.get("is_error"))
+    line = {"type": "tools_used", "tools": ", ".join(f"{k} x{v}" for k, v in used.items())}
+    if failed:
+        line["failed"] = failed
+    return line
+
+
+def _measured_result(block: dict[str, Any]) -> dict[str, Any] | None:
+    """A tool result's measured fields (an exit code, a pass or fail count), as the one
+    thing of it the review reads; None when it has none. Shown as a tool result, so it is
+    registered as measured (``session_inputs.record_tool_result``)."""
+    from core import session_inputs
+    content = block.get("content")
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except ValueError:
+            return None
+    fields = session_inputs._measured_fields(content)
+    if not fields:
+        return None
+    measured: dict[str, Any] = {}
+    for path, value in fields:
+        *parents, leaf = path.split(".")
+        node = measured
+        for name in parents:
+            node = node.setdefault(name, {})
+        node[leaf] = value
+    return {"type": "tool_result", "tool_use_id": block.get("tool_use_id"), "content": measured}
+
+
+def knowledge_view(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*rows* as the review reads them: the person's messages and what the agent said as
+    they are; per message one line naming the tools it used, and a tool result's measured
+    fields; a file-change card as the paths and their status. A row left with nothing to
+    show is not shown."""
+    out = []
+    for row in rows:
+        content = row.get("content")
+        if row.get("role") == "user" or not isinstance(content, list):
+            out.append(row)
+            continue
+        blocks = [b for b in content if isinstance(b, dict) and b.get("type") not in _UNREAD_BLOCKS]
+        tools = [b for b in blocks if b.get("type") in _TOOL_BLOCKS]
+        shown = []
+        for block in blocks:
+            if block.get("type") in _TOOL_BLOCKS:
+                measured = _measured_result(block) if block.get("type") == "tool_result" else None
+                if measured:
+                    shown.append(measured)
+                continue
+            if block.get("type") == "turn_changes":
+                block = {"type": "turn_changes", "files": [
+                    {k: f[k] for k in _CHANGE_FIELDS if k in f}
+                    for f in block.get("files") or [] if isinstance(f, dict)]}
+            elif block.get("type") == "turn_outcome":
+                block = {k: block[k] for k in ("type", "ended", "subtype") if k in block}
+            shown.append(block)
+        if tools:
+            shown.append(_tool_line(tools))
+        if shown:
+            out.append({**row, "content": shown})
+    return out
+
+
 def _last_user_before(transcript: list[dict[str, Any]], first: dict[str, Any]) -> dict[str, Any] | None:
     """The last user row of *transcript* before *first* in send order, or None. A
     fragment of an oversized item (``part_of``) stands for the item it is part of."""
@@ -275,12 +360,14 @@ def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, reco
                       for kind in allowed if contracts_v2.UNIT_RULES.get(kind))
     window = (f" This is part {part[0]} of {part[1]} of the record since your last review."
               if part[1] > 1 else "")
-    return f"""This conversation has been quiet for an hour; it may go on later, and an earlier
-review of it may already have recorded part of it. Review the work since your last review
-and record what is worth keeping, by calling {extract_llm.TOOL_NAME}. Write nothing else.{window}
-What you record is your own knowledge from now on: you decide what is worth keeping and
-how it is put. The record of the conversation since your last review is below (your own
-context may hold only a summary of it).
+    return f"""A conversation you had with the person has been quiet for an hour; it may go on
+later, and an earlier review of it may already have recorded part of it. Review the work
+since your last review and record what is worth keeping, by calling {extract_llm.TOOL_NAME}.
+Write nothing else.{window} What you record is your own knowledge from now on: you decide
+what is worth keeping and how it is put. Below are the person's messages in full and the
+measured results (the index), then the record of the conversation since your last review:
+what you said, the files you changed and, per message, the tools you used. What you
+concluded is in what you said; that is what to record from.
 
 1. After-action review. Ask: what was intended? what actually happened? why did the two
    differ (a pitfall or a correction)? what to do next time (a guideline or a process)?
@@ -307,7 +394,17 @@ context may hold only a summary of it).
    that you are about to make it again, true in any project. Not the story of this
    incident: the incident's particulars (the screen, API, file or project it happened in)
    go in a unit of their own for that project, when they are worth keeping.
-6. Record what stays true, as it stands at the end of this record. The state of the
+6. Each destination is written only when its condition holds; when it does not, write
+   nothing there:
+   - the general knowledge: you can state the rule in one sentence that still holds with
+     every project, document and incident taken out;
+   - a gap: exactly one problem, with a concrete next step; a note on the progress of
+     the work is not a gap;
+   - an event: what was done and what came of it;
+   - a project's knowledge: only what changes how a later judgment in that project is
+     made (a decision, a model, a pitfall with the sign that it is coming). What this
+     session did is in git and the daily activity, not in the project's knowledge.
+7. Record what stays true, as it stands at the end of this record. The state of the
    moment (not pushed, needs a build, not verified yet, a count that will change) is not
    knowledge and is not written into any unit. A problem the record leaves open at its
    end is a gap; one opened and solved within it is not. Something that changed how the
@@ -319,7 +416,7 @@ context may hold only a summary of it).
    lesson. A problem still open is a gap, never a lesson. Commit hashes, run ids, version
    numbers of a document and approval dates are evidence, not knowledge: they stay out of
    a unit's text.
-7. Per kind of work:
+8. Per kind of work:
 {_EXAMPLES}
 
 {_WHERE}
@@ -517,23 +614,7 @@ def _cited(answer: Any, aliases: dict[str, list[str]]) -> Any:
     return out
 
 
-# ── the fork ─────────────────────────────────────────────────────────────────
-
-def _cwd_of(sdk_session_id: str) -> str:
-    from core.leak_transcript import find_transcript
-    path = find_transcript(sdk_session_id)
-    if path is None:
-        raise Unresumable("no CLI transcript")
-    with path.open(encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            try:
-                cwd = json.loads(line).get("cwd")
-            except ValueError:
-                continue
-            if cwd:
-                return str(cwd)
-    raise Unresumable("CLI transcript has no cwd")
-
+# ── the review's own conversation ──────────────────────────────────────────────
 
 def _drop_fork(fork_id: str | None, original_id: str | None) -> None:
     """Remove the review's own CLI transcript: one review must not leave a conversation
@@ -814,15 +895,11 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     # message (a long task, a review that came mid-task) is, against that message
     if not sig["user_messages"] and not any(r.get("role") == "user" for r in transcript):
         return {"status": "reviewed", "reviewed_to": reviewed_to, "units": 0, "reason": "no user message"}
+    rows = knowledge_view(rows)
     run = runner or sdk_runner
     from config import get_swarmws
     workspace = Path(get_swarmws())
-    resume, cwd = sdk_session_id, str(workspace)
-    if sdk_session_id:
-        try:
-            cwd = _cwd_of(sdk_session_id)
-        except Unresumable:
-            resume = None
+    cwd = str(workspace)
     model = session_model(session_id, sdk_session_id)
     project = (project_snapshot or {}).get("session_project")
     input_rows = s2_session._input_rows(session_id)
@@ -853,17 +930,13 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
             source="S7", attempt_id=f"attempt:{uuid.uuid4().hex}", extractor_version=REVIEW_VERSION,
             evidence_range={"session_id": session_id, "pass": "review", "from": watermark,
                             "to": reviewed_to, "window": number, "windows": len(chunks),
-                            "forked": bool(resume), "model": model, "session_type": session_type(sig),
+                            "model": model, "session_type": session_type(sig),
                             "signals": {k: (len(v) if isinstance(v, list) else v) for k, v in sig.items()}})
         read_by_attempt[attempt.attempt_id] = read
         fork_id = None
         try:
             with attribute("S7"):
-                try:
-                    answer, fork_id = _turn(run, resume, cwd, prompt, schema, fork=True, model=model)
-                except Unresumable:
-                    resume = None                   # reviewed from the record alone
-                    answer, fork_id = _turn(run, None, cwd, prompt, schema, fork=False, model=model)
+                answer, fork_id = _turn(run, None, cwd, prompt, schema, fork=False, model=model)
                 result = extract_llm._validate(
                     extract_llm.units_from_answer(_cited(answer, aliases), ALLOWED_KINDS), ALLOWED_KINDS)
                 bad = [u for u in result.units if not set(u.evidence) <= set(anchors)]

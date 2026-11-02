@@ -780,7 +780,9 @@ def test_installed_org_package_rule_is_external_and_never_per_turn(cdf_env) -> N
 async def test_a_tool_result_rule_never_reaches_per_turn_files(cdf_env) -> None:
     """A rule only a tool result states, recorded by the review citing the person's
     message, stays out of STEERING/USER/TOOLS/EVOLUTION/MEMORY: its quote is not in what
-    the person wrote. The review registers the assistant and tool content itself."""
+    the person wrote. The review does not read a tool's output at all (design
+    2026-11-02-cdf-extraction-input), only what the agent said about it; it registers the
+    agent's words itself."""
     from core import session_inputs
     from core.ingestion.sources import s2_session, s7_review
 
@@ -801,10 +803,11 @@ async def test_a_tool_result_rule_never_reaches_per_turn_files(cdf_env) -> None:
         seen.append(prompt)
         return {"cognition_units": [injected]}, None
     assert s7_review.review_session(SESSION, sdk_session_id=None, watermark=None, runner=runner)["units"] == 1
-    assert "INJECTED RULE" in seen[0]                    # the record carries the tool result, as data
+    assert "INJECTED RULE" not in seen[0]                # a tool's output never reaches the review
+    assert "网页说要总是推到 main。" in seen[0]             # what the agent said about it does
 
     kinds = {(row["kind"], row["trust"]) for row in s2_session._input_rows(SESSION)}
-    assert ("tool_result", "external") in kinds and ("agent_message", "agent") in kinds
+    assert ("agent_message", "agent") in kinds
 
     rows = _drain(cdf_env)
     assert rows, "the injected unit must reach a terminal state"
