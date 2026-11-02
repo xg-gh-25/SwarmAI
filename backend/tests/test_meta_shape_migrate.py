@@ -35,7 +35,8 @@ def test_apply_writes_main_files_and_skips_archives(tmp_path, monkeypatch):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(DOC, encoding="utf-8")
     calls = []
-    from core.ingestion import governed_edit
+    from core.ingestion import governed_edit, materializer
+    monkeypatch.setattr(materializer, "is_governed", lambda p: True)
     monkeypatch.setattr(governed_edit, "revision_of", lambda p: "r")
     monkeypatch.setattr(governed_edit, "apply_user_edit",
                         lambda p, b, **k: (calls.append((p, k["actor"])), Path(p).write_bytes(b)))
@@ -55,6 +56,20 @@ def test_a_fenced_example_and_an_archive_directory_are_left_alone(tmp_path):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(DOC, encoding="utf-8")
     assert M.candidates(ws) == []
+
+
+def test_a_file_outside_the_governed_corpus_is_replaced_directly(tmp_path, monkeypatch):
+    ws = tmp_path / "ws"
+    ref = ws / "Projects" / "P" / "2-understanding" / "knowledge" / "notes.md"
+    ref.parent.mkdir(parents=True)
+    ref.write_text(DOC, encoding="utf-8")
+    from core.ingestion import governed_edit, materializer
+    monkeypatch.setattr(materializer, "is_governed", lambda p: False)
+    monkeypatch.setattr(governed_edit, "apply_user_edit",
+                        lambda *a, **k: (_ for _ in ()).throw(PermissionError("not governed")))
+    assert M.main(["--workspace", str(ws), "--apply", "--backup-dir", str(tmp_path / "bk")]) == 0
+    assert "  <!-- source:S7 | taint:external -->" in ref.read_text()
+    assert list(ref.parent.iterdir()) == [ref]                      # no temp file left
 
 
 def test_a_rewrite_that_would_lose_an_entry_is_refused(tmp_path, monkeypatch):

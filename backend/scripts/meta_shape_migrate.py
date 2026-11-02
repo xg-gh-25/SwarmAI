@@ -22,8 +22,10 @@ superseded_by) are the same; the ``cand:`` markers are the same; the unit identi
 ``units.parse_units`` reads are the same. Every line stays a metadata line (one with
 only dead fields is never touched), so ``ddd_format``'s shape is unchanged. (Readers of the dead fields read their defaults afterwards:
 ``brain_graph`` shows the section instead of a last-referenced date, the duplicate
-recommender breaks ref-count ties by date. Neither field carried information.) Writes go through
-``governed_edit.apply_user_edit`` (archive first, baseline revised). ``--apply`` first
+recommender breaks ref-count ties by date. Neither field carried information.) A governed file is written
+through ``governed_edit.apply_user_edit`` (archive first, baseline revised); a DDD's
+deep-reference file (``2-understanding/knowledge/``), which is not governed, is
+replaced atomically (its backup is the record). ``--apply`` first
 copies every file it will change into a backup directory and checks each copy byte
 for byte. Dry run by default. Run it only after the running backend reads the new
 shape (an older backend reads a new-shape line as no metadata, ``taint`` included).
@@ -176,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     from core.ingestion.governed_edit import apply_user_edit, revision_of
+    from core.ingestion.materializer import is_governed
     backup = args.backup_dir or Path.home() / ".swarm-ai" / "backups" / (
         datetime.now().strftime("%Y-%m-%d-%H%M%S") + "-meta-shape")
     for path, before, _, _ in plan:
@@ -191,8 +194,13 @@ def main(argv: list[str] | None = None) -> int:
             failed[str(path.relative_to(ws))] = "changed since the plan"
             continue
         try:
-            apply_user_edit(path, after.encode("utf-8"), expected_revision=revision_of(path),
-                            actor="agent:meta-shape-migration")
+            if is_governed(path):
+                apply_user_edit(path, after.encode("utf-8"), expected_revision=revision_of(path),
+                                actor="agent:meta-shape-migration")
+            else:
+                tmp = path.with_name(f".{path.name}.meta-shape-tmp")
+                tmp.write_text(after, encoding="utf-8")
+                os.replace(tmp, path)
             written += 1
         except Exception as exc:  # noqa: BLE001 — reported per file, the rest go on
             failed[str(path.relative_to(ws))] = f"{type(exc).__name__}: {exc}"
