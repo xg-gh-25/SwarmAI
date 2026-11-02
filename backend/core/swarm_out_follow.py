@@ -238,6 +238,7 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
             if r.get("state") == "unknown" and i not in unknown_once:
                 unknown_once.add(i)              # one slow probe: read it once more
                 continue
+            unknown_once.discard(i)              # told now: the token carries what was read
             changed.append(i)
         if changed or time.monotonic() >= deadline:
             # what the caller has now been told: the current state, except a run held

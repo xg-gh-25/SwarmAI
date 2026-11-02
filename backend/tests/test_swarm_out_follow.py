@@ -104,6 +104,17 @@ def test_one_unknown_read_is_not_news_two_are(state, monkeypatch):
     assert out["changed"] and out["runs"][0]["state"] == "unknown"
 
 
+@pytest.mark.parametrize("then", [_row(A, "unknown", "hive_silent"), _row(A, "stopped", "not_held")])
+def test_a_change_after_one_unknown_read_is_told_once(state, monkeypatch, then):
+    # a run read once as unknown, then changed (still unknown, or to another state): the
+    # token carries what was told, so the next watch does not tell the same change again
+    _feed(monkeypatch, [_data(_row(A)), _data(_row(A, "unknown", "hive_silent")), _data(then)])
+    first = _watch([A])
+    assert first["changed"]
+    _feed(monkeypatch, [_data(then)])
+    assert _watch([A], since=first["token"], session="other", wait_s=0.05)["changed"] is False
+
+
 def test_since_does_not_report_the_same_change_twice(state, monkeypatch):
     done = _data(_row(A, "stopped", "idle"))
     _feed(monkeypatch, [_data(_row(A)), done])
