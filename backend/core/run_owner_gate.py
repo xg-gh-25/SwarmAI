@@ -469,8 +469,8 @@ def _user_only_deny(command: str) -> "dict | None":
 #: the route is read as a call when it is not one of the plain file writes this check
 #: knows run nothing (``_only_writes_a_file``)
 _NAMING_HINT = (" If this command only writes or edits text that names the route (code, a "
-                "test, a doc, an edit script), write that text with the Write or Edit tool "
-                "instead: this check reads commands, not the files they write.")
+                "test, a doc), make that change with the Write or Edit tool instead of a "
+                "command.")
 
 
 def _user_only_deny_of(command: str) -> "dict | None":
