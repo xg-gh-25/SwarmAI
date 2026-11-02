@@ -4,7 +4,7 @@ date: 2026-11-02
 created: 2026-11-02
 updated: 2026-11-02
 project: SwarmAI
-status: r3, simplified; waiting for XG
+status: r3, implemented
 ---
 
 # Hive tasks: the toolchain a repository's checks need
@@ -26,9 +26,12 @@ Brains on 2026-11-02.
 
 ## 2. The fix: tools are part of the definition, one helper installs them
 
-1. **The Hive package ships mise** (one static binary, pinned version, sha256 checked in
-   `hive/release.sh`) and a small script `hive/bin/task-tools`. New, updated and
-   pre-baked Hives all get both through the package; no provisioning change.
+1. **The Hive package ships a small script, `hive/bin/task-tools`.** It fetches one
+   pinned mise release on first use (Linux arm64 or x64, kept only when its sha256 is
+   the one in the script) into the user's data directory. New, updated and pre-baked
+   Hives all get the script through the package; no provisioning change. mise is not put
+   in the package itself: it would add about 60 MB (compressed) to a 15-30 MB package,
+   and the Hive needs the network to install tools anyway.
 2. **A mode may list its tools** in `project-agent.yaml`:
    ```yaml
    tools: [python@3.11, node@22, rust@stable]
@@ -49,8 +52,9 @@ Brains on 2026-11-02.
    `MISE_*`, config files pointed at empty ones, working directory outside the repo), so
    no repository or leftover config can add hooks.
 
-That is the whole change. An older Hive without `task-tools` fails that first line with
-"command not found", which says exactly what to do: update the Hive.
+`task_checks` puts the package's `hive/bin` on `PATH` for setup and checks, so the line
+finds the script. That is the whole change. An older Hive without `task-tools` fails that
+first line with "command not found", which says exactly what to do: update the Hive.
 
 ## 3. What it does not do
 
@@ -65,7 +69,7 @@ venv replaces it.
 ## 4. Work and tests
 
 One change, one commit:
-- `hive/release.sh` (mise, hash) + `hive/bin/task-tools`;
+- `hive/bin/task-tools` (the pinned mise) and `hive/bin` on `PATH` in `task_checks`;
 - `project_agent.validate` and the drafter's proposal format accept `tools`;
 - `work_checks` prepends the line; revert `e48a5689c`.
 

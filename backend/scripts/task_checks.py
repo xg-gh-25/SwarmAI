@@ -20,6 +20,11 @@ later line and check, a ``NAME=value`` (or ``NAME<<DELIM`` ... ``DELIM``) line a
 the second sets that variable. So setup copied from a CI workflow runs unchanged, on
 every repository that uses that workflow format; any other line is plain bash.
 
+The Hive package's own ``hive/bin`` (``PACKAGE_BIN``) is on ``PATH`` for setup and the
+checks. It holds ``task-tools``, which the Host puts first in setup when the mode lists
+its tools (core/task_spec): it installs them with the package's mise and adds them
+through the same two files (design 2026-11-02-hive-task-toolchain).
+
 ``run`` runs the named checks (all of them without an id), one after the other, each
 in its own directory with what setup collected. An id the order does not have is
 refused and nothing runs. Each check writes two lines to the record: one when it starts
@@ -57,6 +62,8 @@ from typing import Any, Optional
 
 ENV_FILE = "env.json"
 SETUP_FILE = "setup.jsonl"
+#: the Hive package's own commands (hive/bin: task-tools and the mise it runs)
+PACKAGE_BIN = Path(__file__).resolve().parents[2] / "hive" / "bin"
 #: lines of a check's log printed when it fails (the whole log stays in the file)
 TAIL_LINES = 40
 
@@ -225,7 +232,7 @@ def setup(work_id: str) -> int:
     ws = _workspace()
     order = _order(ws, work_id)
     cdir = _checks_dir(ws, work_id)
-    state = {"path": [], "env": {}}
+    state = {"path": [str(PACKAGE_BIN)] if PACKAGE_BIN.is_dir() else [], "env": {}}
     lines = order["checks"].get("setup") or []
     for n, item in enumerate(lines, 1):
         cwd = _dir(ws, order, item["repo"], item.get("cwd") or "")

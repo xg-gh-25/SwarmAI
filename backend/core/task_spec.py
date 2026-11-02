@@ -196,6 +196,27 @@ def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance
     return out
 
 
+#: the Hive package's command that installs a mode's tools (hive/bin/task-tools)
+TOOLS_COMMAND = "task-tools"
+
+
+def _hive_setup(view: dict[str, Any], repos: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The mode's setup on a Hive: when the mode lists ``tools``, one ``task-tools`` line
+    first, which installs them and puts them on PATH for the setup lines and checks after
+    it (design 2026-11-02-hive-task-toolchain). It runs in the repository of the mode's
+    first setup or check row (else the first repository of the task), so the work order
+    takes it like any setup line. Since setup is then never empty, the task text always
+    asks for it, and a mode with checks but no setup lines gets its tools too."""
+    if not view["tools"] or not repos:
+        return view["setup"]
+    names = [r.get("name") for r in repos]
+    row_repos = [r.get("repo") for r in [*view["setup"], *view["validations"]] if r.get("repo") in names]
+    repo = row_repos[0] if row_repos else names[0]
+    line = {"command": " ".join([TOOLS_COMMAND, *view["tools"]]), "source": "project-agent.yaml",
+            "repo": repo, "cwd": ""}
+    return [line, *view["setup"]]
+
+
 def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optional[str] = None,
           execution: Optional[str] = None, why: str = "", placement: str = "hive", *,
           returns: Optional[str] = None, needs_private: str = "") -> dict[str, Any]:
@@ -246,7 +267,8 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         "revision": revision(d),
         "reserved": sorted(RESERVED_ACTIONS), "gates": view["gates"],
         "skills": usable, "skills_not_here": [s for s in view["skills"] if s not in usable],
-        "setup": view["setup"], "validations": view["validations"],
+        "setup": _hive_setup(view, repos) if placement == "hive" else view["setup"],
+        "validations": view["validations"],
         "watches": [{"area": _line(w.get("area")), "why": _line(w.get("why"))}
                     for w in _list_of_dicts(n.get("watches"))],
         "summary": _line(identity.get("summary")),

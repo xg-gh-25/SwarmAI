@@ -36,7 +36,7 @@ import yaml
 from core.brain_bootstrap import repo_read as rr
 from core.brain_bootstrap.commands import parse_commands
 from core import project_agent_standard as std
-from core.project_agent import (PROJECT_AGENT_FILE, _MODE_ID_RE,
+from core.project_agent import (PROJECT_AGENT_FILE, _MODE_ID_RE, TOOL_RE, MAX_TOOLS,
                                 _bindings, _skills, gate_files, repo_roots, validate)
 
 logger = logging.getLogger(__name__)
@@ -344,6 +344,39 @@ class _Builder:
         self.sources.add(f"{repo}:{source}")
         return row
 
+    def tool_rows(self, where: str, items: Any, repos: list[str]) -> list[dict[str, str]]:
+        """A mode's ``tools``: ``{tool, source}`` rows, the tool as ``<tool>@<version>``
+        and the source a file of one of the mode's repos (``<repo>:<path>``) or of the
+        Brain; one row per tool name, the first one kept."""
+        if not isinstance(items, list):
+            self.drop(where, "not a list")
+            return []
+        rows: list[dict[str, str]] = []
+        names: set[str] = set()
+        for i, item in enumerate(items):
+            w = f"{where}[{i}]"
+            tool = _text(item.get("tool")) if isinstance(item, dict) else None
+            if not tool or not TOOL_RE.fullmatch(tool):
+                self.drop(w, "a tool is <tool>@<version>, e.g. python@3.11")
+                continue
+            if tool.split("@", 1)[0] in names:
+                self.drop(w, f"{tool.split('@', 1)[0]} is already listed")
+                continue
+            src = _text(item.get("source"))
+            repo, sep, rel = (src or "").partition(":")
+            if sep and repo in repos and repo in self.roots:
+                path = _normal_source(self.roots[repo], rel)
+                if path is None:
+                    self.drop(w, f"source {src!r} does not exist")
+                    continue
+                self.sources.add(f"{repo}:{path}")
+                src = path
+            elif not self.sourced(w, item):
+                continue
+            names.add(tool.split("@", 1)[0])
+            rows.append({"tool": tool, "source": src})
+        return rows[:MAX_TOOLS]
+
     def command_rows(self, where: str, items: Any, with_id: bool,
                      repos: list[str]) -> list[dict[str, str]]:
         if not isinstance(items, list):
@@ -519,6 +552,13 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
                     b.drop(f"{where}.{key}", "the mode has no repo")
                 else:
                     m[key] = b.command_rows(f"{where}.{key}", pm[key], with_id, m["repos"])
+        if "tools" in pm:
+            if mid == "research":
+                b.drop(f"{where}.tools", "the research mode runs no setup or checks")
+            elif not m.get("repos"):
+                b.drop(f"{where}.tools", "the mode has no repo")
+            else:
+                m["tools"] = b.tool_rows(f"{where}.tools", pm["tools"], m["repos"])
 
     default = p.get("default_mode") if isinstance(p.get("default_mode"), str) and p["default_mode"] in modes else None
     if p.get("default_mode") is not None and default is None:
@@ -531,7 +571,7 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
     for mid, names in assigned.items():
         modes[mid]["skills"] = names
     for m in modes.values():
-        for key in ("setup", "validations"):
+        for key in ("tools", "setup", "validations"):
             if key in m and not m[key]:
                 del m[key]
     doc["modes"] = list(modes.values())

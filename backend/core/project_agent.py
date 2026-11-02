@@ -4,7 +4,7 @@ Design: docs/design/2026-10-28-project-agent-flow.md §4.
 
 The Project Agent tells a Hive run how to do one Brain's work (design
 docs/design/2026-11-01-project-agent-simple.md). A Brain has ONE definition; the kinds
-of work inside it are **modes** (when, repos, setup, validations, skills). Shared:
+of work inside it are **modes** (when, repos, tools, setup, validations, skills). Shared:
 ``identity.summary``, ``watches``, ``gates.enforce`` (a mode only adds gates),
 ``intake.repos``, ``default_mode``.
 
@@ -65,6 +65,18 @@ def is_general_name(name: object) -> bool:
 
 _MAX_BYTES = 64 * 1024
 _MODE_ID_RE = re.compile(r"[a-z][a-z0-9-]{0,39}")
+#: a mode's ``tools`` row: ``<tool>@<version>`` as mise takes it (python@3.11, node@22,
+#: rust@stable). The Hive's hive/bin/task-tools checks the same pattern before it runs.
+TOOL_RE = re.compile(r"[a-z][a-z0-9-]{0,30}@[A-Za-z0-9][A-Za-z0-9._+-]{0,40}")
+#: at most this many tools per mode
+MAX_TOOLS = 20
+
+
+def mode_tools(m: dict[str, Any]) -> list[str]:
+    """The ``<tool>@<version>`` strings of a mode's ``tools`` rows that are well formed,
+    in order (``validate`` names the others)."""
+    return [r["tool"] for r in _list_of_dicts(m.get("tools"))
+            if isinstance(r.get("tool"), str) and TOOL_RE.fullmatch(r["tool"])][:MAX_TOOLS]
 #: files under 3-gates/ that are never part of a gate's content (byte-compiled caches)
 _GATE_SKIP_PARTS = {"__pycache__"}
 
@@ -291,6 +303,7 @@ def validate(doc: Any, project_dir: Optional[Path] = None) -> list[str]:
             mine_g = set(_str_list(m["gates"].get("enforce")))
             if shared_gates - mine_g:
                 out.append(f"{where}.gates.enforce drops {sorted(shared_gates - mine_g)} (a mode only adds)")
+        out.extend(_tool_problems(where, m.get("tools")))
         if intake_repos:
             outside = [r for r in _str_list(m.get("repos")) if r not in intake_repos]
             if outside:
@@ -302,6 +315,29 @@ def validate(doc: Any, project_dir: Optional[Path] = None) -> list[str]:
         out.extend(_reference_problems(d, Path(project_dir)))
     if doc.get("schema") != 2:
         out = _in_v1_terms(out)
+    return out
+
+
+def _tool_problems(where: str, tools: Any) -> list[str]:
+    """A mode's ``tools``: a list of ``{tool, source}`` rows, ``tool`` matching TOOL_RE,
+    one row per tool name."""
+    if tools is None:
+        return []
+    if not isinstance(tools, list):
+        return [f"{where}.tools is not a list"]
+    out: list[str] = []
+    names: set[str] = set()
+    for i, r in enumerate(tools):
+        t = r.get("tool") if isinstance(r, dict) else None
+        if not isinstance(t, str) or not TOOL_RE.fullmatch(t):
+            out.append(f"{where}.tools[{i}] is not a <tool>@<version> row (python@3.11)")
+            continue
+        name = t.split("@", 1)[0]
+        if name in names:
+            out.append(f"{where}.tools[{i}]: {name} is listed twice")
+        names.add(name)
+    if len(tools) > MAX_TOOLS:
+        out.append(f"{where}.tools has more than {MAX_TOOLS} rows")
     return out
 
 
@@ -384,7 +420,7 @@ def revision(project_dir: Path) -> Optional[str]:
 # ── source check (host only, before a dispatch) ──────────────────────────────
 
 def source_problems(project_dir: Path, mode: Optional[str] = None) -> list[str]:
-    """The ``setup`` / ``validations`` rows whose ``source`` is in neither the mode's
+    """The ``tools`` / ``setup`` / ``validations`` rows whose ``source`` is in neither the mode's
     bound repo nor the Brain; with *mode*, only that mode's rows (a dispatch runs one
     mode, so another mode's stale row does not refuse it). The sources live in the
     repositories, so this runs on the host before a dispatch (core/task_spec.admit); a
@@ -398,7 +434,7 @@ def source_problems(project_dir: Path, mode: Optional[str] = None) -> list[str]:
         if mode is not None and m.get("id") != mode:
             continue
         roots = [checkouts[r] for r in _str_list(m.get("repos")) if r in checkouts]
-        for key in ("setup", "validations"):
+        for key in ("tools", "setup", "validations"):
             for row in _list_of_dicts(m.get(key)):
                 src = str(row.get("source") or "")
                 if not src:
@@ -415,6 +451,7 @@ def _mode_view(m: dict[str, Any], d: dict[str, Any]) -> dict[str, Any]:
         "id": str(m.get("id") or ""),
         "when": str(m.get("when") or ""),
         "repos": _str_list(m.get("repos")),
+        "tools": mode_tools(m),
         "setup": _rows(m.get("setup"), ("command", "source", "repo", "cwd")),
         "validations": _rows(m.get("validations"), ("id", "command", "source", "repo", "cwd")),
         "skills": _str_list(m.get("skills")),

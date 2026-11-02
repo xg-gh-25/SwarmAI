@@ -46,6 +46,9 @@ PROPOSAL_KEYS: dict[str, Any] = {
 MODE_PROPOSAL_KEYS: dict[str, Any] = {
     "when": "the kind of intent this mode handles (a new `when` needs a source)",
     "repos": ["names from facts.repos (new modes only; code-change has them all)"],
+    "tools": ["{tool: '<tool>@<version>' (python@3.11, node@22, bun@1.4.4, rust@stable), source}: "
+              "a tool the mode's setup and checks need that a CI setup action or a version file "
+              "of the repo names (setup-python, setup-node, .nvmrc, rust-toolchain.toml, ...)"],
     "setup": ["a facts.commands id, or {command, source, repo, cwd}"],
     "validations": ["a facts.commands id, or {id, command, source, repo, cwd}"],
     "skills": ["names from facts.skills; a skill no mode lists goes to the default mode"],
@@ -54,7 +57,7 @@ MODE_PROPOSAL_KEYS: dict[str, Any] = {
 SHARED_ORDER: tuple[str, ...] = ("schema", "identity", "intake", "modes", "default_mode", "gates", "watches")
 IDENTITY_ORDER: tuple[str, ...] = ("summary", "source")
 INTAKE_ORDER: tuple[str, ...] = ("handles", "repos")
-MODE_ORDER: tuple[str, ...] = ("id", "when", "repos", "setup", "validations", "skills", "gates", "source")
+MODE_ORDER: tuple[str, ...] = ("id", "when", "repos", "tools", "setup", "validations", "skills", "gates", "source")
 
 #: keys a definition no longer has (design 2026-11-01-project-agent-simple §2): nothing
 #: reads them, and every write drops them

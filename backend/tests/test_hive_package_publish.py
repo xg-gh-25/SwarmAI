@@ -48,7 +48,7 @@ BASE = ["VERSION", "backend/main.py", "backend/pyproject.toml", "backend/core/a.
         "backend/database/a.py", "backend/routers/a.py", "backend/skills/s_x/SKILL.md",
         "backend/context/SOUL.md", "backend/hive/a.py", "desktop/dist/index.html",
         "desktop/dist/assets/a.js", "hive/swarmai-hive.sh", "hive/swarmai-hive.service",
-        "hive/Caddyfile", "hive/seed/config-hive.json",
+        "hive/Caddyfile", "hive/bin/task-tools", "hive/seed/config-hive.json",
         *[f"hive/seed/context/{n}.md" for n in ("SWARMAI", "IDENTITY", "SOUL", "AGENT", "SELF")]]
 
 

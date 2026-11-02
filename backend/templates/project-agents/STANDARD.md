@@ -36,6 +36,7 @@ Only what a Hive run reads.
 | `intake.placement` | Per repo: `remote`, `branch` and where its checkout is on the person's machine (`repos_dir:<name>`, `local` or `mirror`; a kind, never a path). Derived from the binding, never judged, and rewritten on every draft, so a relocate or a changed workspace folder changes the definition's revision (the next sync carries it). Code is written in a session worktree of that checkout, and a Hive's commits land on its branch. |
 | `modes[].id` / `when` | One kind of work and the kind of request it handles. The agent picks the mode whose `when` matches the task. |
 | `modes[].repos` | The repos this mode works in; the Hive clones them. |
+| `modes[].tools` | The tools the CI job gets from its setup actions (`setup-python`, `setup-node`, `setup-bun`, `rust-toolchain`, ...) or the repo's version files name, as `{tool: <tool>@<version>, source}` (`python@3.11`, `node@22`, `rust@stable`). On a Hive they are installed before the setup lines (`task-tools`). |
 | `modes[].setup` | Install steps run first, copied verbatim from the file the repo declares them in (`source`). |
 | `modes[].validations` | Checks the run must pass before it finishes, copied verbatim from `validations.json` or CI (`source`). |
 | `modes[].skills` | The Brain's skills the mode uses. A desktop-only skill is not listed on a Hive. |
@@ -43,7 +44,7 @@ Only what a Hive run reads.
 | `watches` | What every review of work here checks, each with the document it comes from. |
 | `default_mode` | The mode used when a task names none. |
 
-Before a dispatch the host checks that every `setup` / `validations` row's `source` is in
+Before a dispatch the host checks that every `tools` / `setup` / `validations` row's `source` is in
 the repository; a row whose source is missing refuses the dispatch until it is fixed.
 
 Keys an older definition may still carry (`status`, `reviewed_at`, `reviewed_by`,

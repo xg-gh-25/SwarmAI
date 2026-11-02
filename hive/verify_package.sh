@@ -92,6 +92,7 @@ echo "Hive config:"
 check "^hive/swarmai-hive.sh"          "swarmai-hive.sh (entry point)"
 check "^hive/swarmai-hive.service"     "swarmai-hive.service (systemd)"
 check "^hive/Caddyfile"                "Caddyfile (reverse proxy)"
+check "^hive/bin/task-tools$"          "task-tools (a task's tools)"
 
 # ── Exclusion checks (should NOT be in package) ──────────
 

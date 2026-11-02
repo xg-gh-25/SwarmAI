@@ -1,0 +1,135 @@
+#!/bin/bash
+# task-tools — give a Hive task the tools its repository's CI jobs get from their
+# setup actions (design docs/design/2026-11-02-hive-task-toolchain.md).
+#
+#   task-tools <tool>@<version> ...        e.g. task-tools python@3.11 node@22 rust@stable
+#
+# The Host puts this line first in a task's setup when its Project Agent mode lists
+# `tools` (core/task_spec), and scripts/task_checks runs it like any setup line, with
+# $GITHUB_PATH / $GITHUB_ENV. For each tool it runs `mise install`, then appends the tools' directories to
+# $GITHUB_PATH and their variables to $GITHUB_ENV, which task_checks puts in effect for
+# every later setup line and check. For python it also makes a venv in the task's own
+# checks directory, so a `pip install` stays inside the task (what setup-python gives a
+# job on its own VM).
+#
+# mise runs with a clean environment: no inherited MISE_* variable, its config files
+# pointed at empty ones, no config file name it would look for, no plugin backends, and
+# its working directory inside the task's checks directory. So neither the repository
+# nor a file another task left can add hooks, tasks or tools: the only input is the
+# arguments, checked against the pattern below (the same as core/project_agent TOOL_RE).
+# Tools install once into the user's mise data directory and are shared by later tasks.
+#
+# mise itself is one pinned release, fetched on first use into the user's data
+# directory, and its sha256 is checked against the one below every time it is used (a
+# file that does not match is replaced). To move to a newer mise: its SHASUMS256.txt
+# lines for the two Linux builds. Python here always runs isolated (-I) and from the
+# task's checks directory, so a module file in the repository is never imported.
+set -euo pipefail
+
+MISE_VERSION="2026.10.25"
+MISE_SHA256_LINUX_ARM64="bb09e88b13164ca90691a5cc042726d079f0ba26ab55527344cb173c2e83c998"
+MISE_SHA256_LINUX_X64="5d362ecc578dc7c146679b841dda949d6472cbf86ff5635db7afdca1b6b3fd87"
+
+TOOL_RE='^[a-z][a-z0-9-]{0,30}@[A-Za-z0-9][A-Za-z0-9._+-]{0,40}$'
+
+home="${HOME:-/home/$(id -un)}"
+if [ -z "${GITHUB_PATH:-}" ] || [ -z "${GITHUB_ENV:-}" ]; then
+    echo "task-tools: run it through task_checks setup (no \$GITHUB_PATH / \$GITHUB_ENV)" >&2
+    exit 2
+fi
+if [ "$#" -eq 0 ]; then
+    echo "task-tools: name at least one <tool>@<version>" >&2
+    exit 2
+fi
+for spec in "$@"; do
+    if ! [[ "$spec" =~ $TOOL_RE ]]; then
+        echo "task-tools: not a <tool>@<version>: $spec" >&2
+        exit 2
+    fi
+done
+
+# the pinned mise, checked on every use; fetched when missing or not the pinned file
+case "$(uname -s)-$(uname -m)" in
+    Linux-aarch64|Linux-arm64) asset="linux-arm64"; want="$MISE_SHA256_LINUX_ARM64" ;;
+    Linux-x86_64) asset="linux-x64"; want="$MISE_SHA256_LINUX_X64" ;;
+    *) echo "task-tools: no pinned mise for $(uname -s)-$(uname -m)" >&2; exit 127 ;;
+esac
+sha256() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
+mise="$home/.local/share/task-tools/mise-$MISE_VERSION"
+if [ ! -f "$mise" ] || [ "$(sha256 "$mise")" != "$want" ]; then
+    mkdir -p "$(dirname "$mise")"
+    tmp="$(mktemp "$mise.XXXXXX")"
+    curl -fsSL --retry 3 -o "$tmp" \
+        "https://github.com/jdx/mise/releases/download/v$MISE_VERSION/mise-v$MISE_VERSION-$asset"
+    got="$(sha256 "$tmp")"
+    if [ "$got" != "$want" ]; then
+        rm -f "$tmp"
+        echo "task-tools: mise $MISE_VERSION ($asset) has sha256 $got, expected $want" >&2
+        exit 1
+    fi
+    chmod 755 "$tmp"
+    mv -f "$tmp" "$mise"          # a whole, checked file or none, for a task beside this one
+fi
+
+work="$(cd "$(dirname "$GITHUB_PATH")" && pwd)"      # the task's checks directory
+cd "$work"                                          # never the repository (see above)
+empty="$work/mise-empty"
+mkdir -p "$empty/config"
+: > "$empty/config.toml"
+
+run_mise() {
+    (cd "$empty" && env -i \
+        PATH="/usr/local/bin:/usr/bin:/bin" HOME="$home" LANG="C.UTF-8" \
+        ${HTTPS_PROXY:+HTTPS_PROXY="$HTTPS_PROXY"} ${HTTP_PROXY:+HTTP_PROXY="$HTTP_PROXY"} \
+        ${NO_PROXY:+NO_PROXY="$NO_PROXY"} \
+        MISE_DATA_DIR="$home/.local/share/mise" MISE_CACHE_DIR="$home/.cache/mise" \
+        MISE_STATE_DIR="$home/.local/state/mise" \
+        MISE_CONFIG_DIR="$empty/config" MISE_GLOBAL_CONFIG_FILE="$empty/config.toml" \
+        MISE_SYSTEM_CONFIG_FILE="$empty/config.toml" \
+        MISE_OVERRIDE_CONFIG_FILENAMES="task-tools-none.toml" \
+        MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES="task-tools-none" \
+        MISE_DISABLE_BACKENDS="asdf,vfox" MISE_YES=1 MISE_QUIET=1 \
+        "$mise" "$@")
+}
+
+run_mise install "$@"
+env_json="$work/mise-env.json"
+run_mise env --json "$@" > "$env_json"
+
+# The tools' PATH entries (those mise puts before the clean PATH) and their variables.
+# task_checks puts the last $GITHUB_PATH line first on PATH, as GitHub does, so the
+# entries are written last-first to keep mise's order.
+venv=""
+for spec in "$@"; do
+    case "$spec" in python@*)
+        py="$(run_mise where "$spec")/bin/python3"
+        venv="$work/python"
+        [ -x "$venv/bin/python" ] || "$py" -I -m venv "$venv"
+        ;;
+    esac
+done
+/usr/bin/env python3 -I - "$env_json" "$GITHUB_PATH" "$GITHUB_ENV" "$venv" <<'EOF'
+import json, re, sys
+env_json, gh_path, gh_env, venv = sys.argv[1:5]
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# what task_checks' reader (str.splitlines) treats as a line break
+BREAKS = re.compile("[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+NEVER = ("PATH", "BASH_ENV", "ENV")
+env = json.load(open(env_json))
+clean = {"/usr/local/bin", "/usr/bin", "/bin"}
+paths = [p for p in str(env.get("PATH", "")).split(":") if p and p not in clean and not BREAKS.search(p)]
+if venv:
+    paths.insert(0, venv + "/bin")
+with open(gh_path, "a") as f:
+    for p in reversed(paths):
+        f.write(p + "\n")
+with open(gh_env, "a") as f:
+    for k, v in env.items():
+        v = str(v)
+        if (not NAME.fullmatch(k) or k in NEVER or k.startswith(("MISE_", "LD_", "DYLD_"))
+                or BREAKS.search(v)):
+            continue
+        f.write(f"{k}={v}\n")
+for p in paths:
+    print("task-tools: on PATH:", p)
+EOF
