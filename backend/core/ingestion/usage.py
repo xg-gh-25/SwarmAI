@@ -284,47 +284,81 @@ _BASH_ROOT_MARKS = ("Projects/", "Knowledge/", ".context/", "MEMORY.md", "EVOLUT
                     "TIMELINE.md", "STEERING.md", "USER.md", "TOOLS.md")
 
 
-def _bash_paths(command: str, cwd: Any) -> list[Any]:
-    """The governed files *command* names: each token that resolves to one, against the
-    call's cwd and against every directory the command ``cd``s into before it."""
+_MAX_BASH_STDOUT = 1_000_000      # characters of stdout matched; the rest is not looked at
+_SEPARATORS = {";", "&&", "||", "|", "&"}
+_WRITE_OPS = {">", ">>", "tee"}
+
+
+def _bash_paths(command: str, cwd: Any) -> tuple[list[Any], list[Any]]:
+    """``(read, bases)``: the governed files *command* names as something it reads, resolved,
+    once each, and the directories it resolved them in. A ``cd`` resolves against the
+    directory the one before it left, and the latest one is tried first. A file named as
+    the target of a redirect or ``tee`` is written, not read."""
     import shlex
     from pathlib import Path
     from .materializer import is_governed
 
     try:
-        tokens = shlex.split(command, comments=False, posix=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
     except ValueError:
         tokens = command.split()
-    bases = [Path(str(cwd))]
-    for i, token in enumerate(tokens[:-1]):
-        if token == "cd":
-            target = Path(tokens[i + 1]).expanduser()
-            bases.append(target if target.is_absolute() else bases[0] / target)
+    bases = [Path(str(cwd)).expanduser()]
     found: list[Any] = []
-    for token in tokens:
-        token = token.strip("'\";|&()")
-        if not token or token.startswith("-") or any(ch in token for ch in "*?$`<>"):
-            continue
-        raw = Path(token).expanduser()
-        for candidate in ([raw] if raw.is_absolute() else [base / raw for base in bases]):
-            try:
-                if candidate.is_file() and is_governed(candidate) and candidate not in found:
-                    found.append(candidate)
-                    break
-            except OSError:
-                continue
-    return found
+    previous = ""
+    for i, token in enumerate(tokens):
+        if previous == "cd" and token not in _SEPARATORS:
+            target = Path(token).expanduser()
+            bases.append(target if target.is_absolute() else bases[-1] / target)
+        elif (previous not in _WRITE_OPS and not (previous == "-a" and i > 1 and tokens[i - 2] == "tee")
+              and token and not token.startswith("-") and token not in _SEPARATORS
+              and not any(ch in token for ch in "*?$`<>")):
+            raw = Path(token).expanduser()
+            for base in ([None] if raw.is_absolute() else reversed(bases)):
+                candidate = raw if base is None else base / raw
+                try:
+                    if candidate.is_file() and is_governed(candidate):
+                        resolved = candidate.resolve()
+                        if resolved not in found:
+                            found.append(resolved)
+                        break
+                except OSError:
+                    continue
+        previous = token
+    return found, bases
+
+
+def _single_grep_n(command: str) -> bool:
+    """Whether *command* is one grep / rg call with line numbers and no other command:
+    only then is a bare ``N:`` line of its output a line of the one file it reads."""
+    import shlex
+    if any(sep in command for sep in (";", "&&", "||", "|", "\n")):
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] not in {"grep", "egrep", "rg"}:
+        return False
+    flags = [t for t in tokens[1:] if t.startswith("-") and not t.startswith("--")]
+    return "--line-number" in tokens or any("n" in f[1:] for f in flags)
 
 
 def _observe_bash_read(input_data: Mapping[str, Any], session_id: str) -> None:
     """Map one completed Bash call to the governed units its stdout shows whole.
 
     Most reads of brain files go through Bash (``sed -n``, ``cat``, ``grep -n``), not
-    Read. A unit counts as read when its complete text is in stdout (as recall's
-    ``units_in_content``), or when a ``path:line:`` line of grep output (``line:`` when
-    the command names one file) falls inside it. Half a unit is not a read."""
+    Read. A unit counts as read when its body (without its own metadata comments, at
+    least ``withdrawn.MIN_RESTATED`` characters, not a heading alone) is whole in stdout,
+    or a ``path:N:`` grep line names it (the path resolved as the command resolved its
+    files), or, for one ``grep -n`` / ``rg -n`` call on one file, a bare ``N:`` line
+    within that file's lines does. Half a unit, a file the command writes, and stdout past
+    ``_MAX_BASH_STDOUT`` are not reads."""
     import re
+    from pathlib import Path
     from config import get_swarmws
+    from .withdrawn import MIN_RESTATED
 
     tool_input = input_data.get("tool_input") or {}
     command = str(tool_input.get("command") or "") if isinstance(tool_input, Mapping) else ""
@@ -332,23 +366,34 @@ def _observe_bash_read(input_data: Mapping[str, Any], session_id: str) -> None:
     stdout = str(response.get("stdout") or "") if isinstance(response, Mapping) else str(response or "")
     if not command or not stdout:
         return
-    paths = _bash_paths(command, input_data.get("cwd") or get_swarmws())
+    stdout = stdout[:_MAX_BASH_STDOUT]
+    paths, bases = _bash_paths(command, input_data.get("cwd") or get_swarmws())
     anchors: list[str] = []
     for path in paths:
         for anchor, _first, _last, text in _spans(path):
             # the unit's body without its own metadata comments: a range that stops
             # before the `<!-- cand:... -->` line still read the whole entry
             body = re.sub(r"<!--.*?-->", "", text, flags=re.S).strip()
-            if body and body in stdout:
+            lines = [line for line in body.splitlines() if line.strip()]
+            if (len(body) >= MIN_RESTATED and not all(line.lstrip().startswith("#") for line in lines)
+                    and body in stdout):
                 anchors.append(anchor)
     for raw_path, line in _grep_line_hits(stdout):
-        for path in paths:
-            if str(path).endswith(raw_path.lstrip("./")) or raw_path == str(path):
-                anchors.extend(_units_overlapping_lines(path, line, line))
-    if len(paths) == 1:
+        raw = Path(raw_path).expanduser()
+        for base in ([None] if raw.is_absolute() else reversed(bases)):
+            candidate = raw if base is None else base / raw
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved in paths:
+                anchors.extend(_units_overlapping_lines(resolved, line, line))
+                break
+    if len(paths) == 1 and _single_grep_n(command):
+        total = max((last for _a, _f, last, _t in _spans(paths[0])), default=0)
         for text_line in stdout.splitlines():
             match = re.match(r"^(\d+)[:-]", text_line)
-            if match:
+            if match and 1 <= int(match.group(1)) <= total:
                 number = int(match.group(1))
                 anchors.extend(_units_overlapping_lines(paths[0], number, number))
     record_many_async(list(dict.fromkeys(anchors)), "read_by_agent", session_id)

@@ -151,3 +151,141 @@ def test_the_relation_turn_takes_the_kind_of_judgment_as_the_thing():
                                ".context/EVOLUTION.md", "Corrections Captured", _HANDBACK)
     text = " ".join(s7_review.relation_prompt([unit], [[entry]]).split())
     assert "the same particular thing is the kind of judgment that went wrong" in text
+
+
+# ── review round 1 (security / correctness): the floor rests on the unit's facts ──
+
+_MEM_CAND = "cand-aaaaaaaaaaaaaaaaaaaaaaaa"
+_MEM_ENTRY = ("- [guideline] **Always ask before deleting a branch** The user wants a question before "
+              f"any branch is deleted. <!-- cand:{_MEM_CAND}.unit -->")
+
+
+def _memory(cdf_env, *entries: str):
+    path = cdf_env["workspace"] / ".context" / "MEMORY.md"
+    path.write_text("# Memory\n\n## Guidelines\n\n" + "\n\n".join(entries) + "\n\n## Corrections\n",
+                    encoding="utf-8")
+    return path
+
+
+def _check_global(cdf_env, ref, *, store, basis="user", admitted_by=None, path=None):
+    from core.ingestion import overrides
+    from core.ingestion.api import connect_rw
+    conn = connect_rw()
+    try:
+        return overrides.check(conn, workspace=cdf_env["workspace"], project=None, source="S7",
+                               declared=[ref], new_root_ids=(), cited_external=False, home=None,
+                               destination_store=store, basis=basis, admitted_by=admitted_by,
+                               destination_path=path)
+    finally:
+        conn.close()
+
+
+def _set_basis(cand: str, basis: str):
+    from core.ingestion.api import connect_rw
+    conn = connect_rw()
+    conn.execute("INSERT INTO unit_basis(unit_id,basis,recorded_at) VALUES(?,?,'t') "
+                 "ON CONFLICT(unit_id) DO UPDATE SET basis=excluded.basis", (f"{cand}.unit", basis))
+    conn.commit()
+    conn.close()
+
+
+def test_an_inferred_or_repeat_admitted_unit_cannot_retire_an_every_turn_entry(cdf_env):
+    path = _evolution(cdf_env, _HANDBACK)
+    ref = _ref(cdf_env, path, "Deferred Hive")
+    inferred = _check_global(cdf_env, ref, store="EVOLUTION", basis="inferred")
+    repeat = _check_global(cdf_env, ref, store="EVOLUTION", basis="user", admitted_by="repeat")
+    assert (inferred.targets, inferred.refused[0]["reason"]) == ([], "every_turn_basis")
+    assert (repeat.targets, repeat.refused[0]["reason"]) == ([], "every_turn_basis")
+
+
+def test_an_every_turn_entry_is_retired_only_from_its_own_file(cdf_env):
+    path = _memory(cdf_env, _MEM_ENTRY)
+    out = _check_global(cdf_env, _ref(cdf_env, path, "deleting a branch"), store="EVOLUTION")
+    assert (out.targets, out.refused[0]["reason"]) == ([], "every_turn_floor")
+
+
+def test_a_user_grounded_target_needs_a_user_grounded_unit_and_the_isolated_check(cdf_env):
+    path = _memory(cdf_env, _MEM_ENTRY)
+    _set_basis(_MEM_CAND, "user")
+    ref = _ref(cdf_env, path, "deleting a branch")
+    measured = _check_global(cdf_env, ref, store="MEMORY", basis="measured")
+    user = _check_global(cdf_env, ref, store="MEMORY", basis="user")
+    assert (measured.targets, measured.refused[0]["reason"]) == ([], "weaker_than_target")
+    anchor = f".context/MEMORY.md#Guidelines#cand:{_MEM_CAND}.unit"
+    assert user.targets == [anchor] and [a for a, _t in user.ask_user] == [anchor]
+
+
+def test_an_unrelated_user_quote_cannot_retire_a_user_grounded_entry(cdf_env, monkeypatch):
+    """Injected text can pair a real but unrelated user quote with an override: the isolated
+    check is asked whether the user's words replace that entry, and they do not."""
+    from core.ingestion import user_check
+    from core.ingestion.api import connect_rw
+    connect_rw().close()
+    path = _memory(cdf_env, _MEM_ENTRY)
+    _set_basis(_MEM_CAND, "user")
+    monkeypatch.setattr(pipeline_v2, "_user_texts", lambda unit, row: ["use pnpm here"])
+    asked = []
+
+    def grounds(claim, texts, **_):
+        asked.append(claim)
+        return user_check.Verdict("deleting a branch" not in claim, "checked")
+    monkeypatch.setattr(user_check, "grounds", grounds)
+    unit = _cog(title="Use pnpm", what="Use pnpm for installs in this workspace.", user_quote="use pnpm",
+                overrides=[_ref(cdf_env, path, "deleting a branch")])
+    decision = run_unit_v2(_row(unit, source="S7", tainted=False), cdf_env["workspace"])
+    assert decision.decision == "write" and not decision.version_vector.get("overrides")
+    assert {"reason": "user_check"}.items() <= decision.version_vector["override_refused"][-1].items()
+    assert any("replaces the earlier entry" in c for c in asked)
+
+
+def _library(cdf_env, name, entry):
+    path = cdf_env["workspace"] / "Knowledge" / "Library" / name
+    path.write_text("# Topic\n\n## Lessons\n\n" + entry + "\n", encoding="utf-8")
+    return path
+
+
+def test_a_general_brain_entry_is_retired_from_its_own_document_or_from_above(cdf_env):
+    entry = ("- [guideline] **Prefer the vendor's CLI for exports** It keeps the format stable. "
+             "<!-- cand:cand-bbbbbbbbbbbbbbbbbbbbbbbb.unit -->")
+    path = _library(cdf_env, "exports.md", entry)
+    _set_basis("cand-bbbbbbbbbbbbbbbbbbbbbbbb", "inferred")    # most General Brain entries
+    ref = _ref(cdf_env, path, "vendor's CLI")
+    other = _check_global(cdf_env, ref, store="COMMON_DDD", basis="inferred",
+                          path="Knowledge/Library/other.md")
+    same = _check_global(cdf_env, ref, store="COMMON_DDD", basis="inferred",
+                         path="Knowledge/Library/exports.md")
+    up = _check_global(cdf_env, ref, store="MEMORY", basis="measured")
+    assert (other.targets, other.refused[0]["reason"]) == ([], "every_turn_floor")
+    assert len(same.targets) == 1 and len(up.targets) == 1
+
+
+def test_a_text_the_user_withdrew_never_comes_back_through_another_file(cdf_env, said, monkeypatch):
+    from core.ingestion.api import connect_rw
+    from core.ingestion.withdrawn import Record
+    connect_rw().close()
+    body = "Keep every export under one megabyte so the mail gateway accepts it."
+    proj = cdf_env["workspace"] / "Projects/P/2-understanding/TECH.md"
+    proj.write_text(f"# TECH\n\n## Conventions\n\n- [guideline] **Exports** {body} <!-- cand:cand-c1.unit -->\n",
+                    encoding="utf-8")
+    for status in ("withdrawn", "overridden"):
+        monkeypatch.setattr(pipeline_v2, "_withdrawn_records", lambda s=status: [
+            Record("op1", ".context/MEMORY.md", f"- [guideline] **Exports** {body}", s, "r")])
+        decision = run_unit_v2(_row(_cog(title="Exports", what=body), source="S7", tainted=False,
+                                    session_project="P"), cdf_env["workspace"])
+        assert (decision.decision, decision.reason) == ("reject", "withdrawn"), status
+
+
+def test_a_text_the_user_withdrew_stays_out_even_when_its_own_file_still_says_it(
+        cdf_env, said, monkeypatch):
+    """Only an override carries text forward; the user's withdrawal is never undone by a
+    copy of the text left in the same file."""
+    from core.ingestion.api import connect_rw
+    from core.ingestion.withdrawn import Record
+    connect_rw().close()
+    body = "Keep every export under one megabyte so the mail gateway accepts it."
+    _memory(cdf_env, f"- [guideline] **Exports again** {body} <!-- cand:cand-c2.unit -->")
+    monkeypatch.setattr(pipeline_v2, "_withdrawn_records", lambda: [
+        Record("op1", ".context/MEMORY.md", f"- [guideline] **Exports** {body}", "withdrawn", "r")])
+    decision = run_unit_v2(_row(_cog(title="Exports", what=body), source="S7", tainted=False),
+                           cdf_env["workspace"])
+    assert (decision.decision, decision.reason) == ("reject", "withdrawn")

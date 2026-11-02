@@ -178,8 +178,11 @@ def _every_turn_sizes(now: datetime) -> tuple[str, dict]:
         return "", {}
     shown = []
     for i, (name, last, first, span) in enumerate(parts):
-        before = f"{_k(first)} {span} days ago" if i == 0 else _k(first)
-        shown.append(f"{name} {_k(last)}{' tokens' if i == 0 else ''} ({before})")
+        unit = " tokens" if i == 0 else ""
+        # each file its own span; one day on record has no earlier value to show
+        before = "" if span <= 0 else f" ({_k(first)} {span} days ago)" if i == 0 or span != parts[0][3] \
+            else f" ({_k(first)})"
+        shown.append(f"{name} {_k(last)}{unit}{before}")
     return "; every-turn files: " + ", ".join(shown), measures
 
 

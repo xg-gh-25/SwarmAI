@@ -97,13 +97,26 @@ def restates(unit: dict, withdrawn: list[Record]) -> Record | None:
     return next((r for r in withdrawn if r.status in REFUSING and body in normalize(r.text)), None)
 
 
-def said_by(unit: dict, entries) -> bool:
-    """Whether an entry in force (``relations_v2.Entry``) holds the unit's body verbatim
-    (after ``normalize``), with the same body and length floor as ``restates``."""
+def restating(unit: dict, withdrawn: list[Record]) -> list[Record]:
+    """Every refusing withdrawal whose original contains the unit's body verbatim (see
+    ``restates``, which returns the first)."""
     body = normalize(str(unit.get("what") or unit.get("text") or ""))
     if len(body) < MIN_RESTATED:
-        return False
-    return any(body in normalize(e.text) for e in entries)
+        return []
+    return [r for r in withdrawn if r.status in REFUSING and body in normalize(r.text)]
+
+
+def carried_by(unit: dict, records: list[Record], entries):
+    """The one entry in force (``relations_v2.Entry``) that carried an overridden text
+    forward, or None. Only when every record is ``overridden`` (a text the user withdrew
+    never comes back, from any file) and exactly one entry in the same file as those
+    records holds the unit's body."""
+    if not records or any(r.status != "overridden" for r in records):
+        return None
+    body = normalize(str(unit.get("what") or unit.get("text") or ""))
+    files = {r.path for r in records}
+    found = [e for e in entries if e.path in files and body in normalize(e.text)]
+    return found[0] if len({e.anchor for e in found}) == 1 else None
 
 
 def nearest(unit: dict, withdrawn: list[Record], k: int = 2) -> list[Record]:

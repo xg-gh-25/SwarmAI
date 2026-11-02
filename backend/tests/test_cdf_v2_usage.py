@@ -382,8 +382,8 @@ def _bash_observer_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     memory.parent.mkdir(parents=True)
     memory.write_text(
         "# Memory\n\n## Guidelines\n"
-        "- [guideline] **One** First unit.\n<!-- cand:first -->\n"
-        "- [guideline] **Two** Second unit.\n<!-- cand:second -->\n",
+        "- [guideline] **One** First unit, long enough to be a real entry.\n<!-- cand:first -->\n"
+        "- [guideline] **Two** Second unit, long enough to be a real entry.\n<!-- cand:second -->\n",
         encoding="utf-8",
     )
     monkeypatch.setattr("config.get_swarmws", lambda: workspace)
@@ -462,3 +462,42 @@ def test_usage_observer_is_registered_for_bash() -> None:
     source = inspect.getsource(hook_builder)
     block = source[source.index('"cdf_usage_observer"'):][:120]
     assert 'matcher="Read|Grep|Bash"' in block
+
+
+def test_bash_line_numbers_count_only_for_a_single_grep_n_of_one_file(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    usage, workspace, memory, observed, _ = _bash_observer_fixture(tmp_path, monkeypatch)
+    hook = usage.create_usage_observer({"app_session_id": "s"})
+    asyncio.run(hook({
+        "tool_name": "Bash", "cwd": str(workspace),
+        "tool_input": {"command": "grep -n foo src/x.py; wc -l .context/MEMORY.md"},
+        "tool_response": {"stdout": "6:foo = 1\n7 .context/MEMORY.md", "stderr": ""},
+    }, None, None))
+    assert observed[-1][0] == []                    # grep's 6: is a line of x.py
+
+
+def test_bash_chained_cd_resolves_one_after_another(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    usage, workspace, memory, observed, _ = _bash_observer_fixture(tmp_path, monkeypatch)
+    hook = usage.create_usage_observer({"app_session_id": "s"})
+    whole = memory.read_text(encoding="utf-8").splitlines()[3]
+    asyncio.run(hook({
+        "tool_name": "Bash", "cwd": str(tmp_path),
+        "tool_input": {"command": "cd ws && cd .context && sed -n 4,4p MEMORY.md"},
+        "tool_response": {"stdout": whole, "stderr": ""},
+    }, None, None))
+    assert observed[-1][0] == [".context/MEMORY.md#Guidelines#cand:first"]
+
+
+def test_bash_writes_and_headings_are_not_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    usage, workspace, memory, observed, _ = _bash_observer_fixture(tmp_path, monkeypatch)
+    hook = usage.create_usage_observer({"app_session_id": "s"})
+    whole = memory.read_text(encoding="utf-8").splitlines()[3]
+    asyncio.run(hook({
+        "tool_name": "Bash", "cwd": str(workspace),
+        "tool_input": {"command": f"printf '{whole}' | tee -a .context/MEMORY.md"},
+        "tool_response": {"stdout": whole, "stderr": ""},
+    }, None, None))
+    assert observed[-1][0] == []

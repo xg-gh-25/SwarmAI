@@ -13,8 +13,10 @@ only if, deterministically:
   (the session's own project for S7, the run's for S3; an S3 run must have landed);
 - the id names exactly one live entry of the unit's project DDD whose first line matches
   the declared one (so a wrong id cannot retire another entry); or one CDF entry of MEMORY,
-  EVOLUTION or the General Brain, which belong to no project: then the new unit must
-  itself go to a file of that floor (``_FLOOR``), never to a project's DDD;
+  EVOLUTION or the General Brain, which belong to no project: then the new unit must go
+  to that same file over its floor, or (General Brain) to that same document
+  (``_global_refusal``); a target resting on the user's words needs a unit resting on them
+  and the isolated user check;
 - that entry was written by CDF (it carries a ``cand:`` marker): CDF never retires what a
   person wrote;
 - the new unit was said after the entry: the latest ``observed_at`` of their evidence
@@ -61,6 +63,39 @@ class Checked:
     refused: list[dict] = field(default_factory=list)      # {ref, reason}
     older: bool = False                                     # the unit is older than a target
     closes: list[str] = field(default_factory=list)        # targets retired as closed (gaps)
+    # (anchor, entry text) of targets that rest on the user's words: retired only when the
+    # isolated user check finds the user's words replace them (pipeline_v2)
+    ask_user: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _target_basis(conn: sqlite3.Connection, cand: str) -> str:
+    """The basis the target entry was written with (unit_basis); unknown counts as the
+    strongest, ``user``: an entry is never retired on a guess about what it rested on."""
+    try:
+        row = conn.execute("SELECT basis FROM unit_basis WHERE unit_id=?", (f"{cand}.unit",)).fetchone()
+    except sqlite3.Error:
+        row = None
+    return str(row[0]) if row and row[0] else "user"
+
+
+def _global_refusal(kind: str, entry, *, store: str | None, path: str | None,
+                    basis: str | None, admitted_by: str | None) -> str | None:
+    """Why a unit may not retire this every-turn or General Brain *entry*, or None.
+
+    An every-turn entry leaves only for a unit going to the same file that itself passed
+    that file's floor. A General Brain entry leaves for a unit going to its own document
+    (the same subject, as a DDD entry leaves for its project) or for one going up into
+    MEMORY / EVOLUTION over that floor."""
+    up = basis in _EVERY_TURN_BASIS and admitted_by != "repeat"
+    if kind == "every_turn":
+        if store != EVERY_TURN_TARGETS.get(entry.path):
+            return "every_turn_floor"
+        return None if up else "every_turn_basis"
+    if store == "COMMON_DDD" and path == entry.path:
+        return None
+    if store in ("MEMORY", "EVOLUTION"):
+        return None if up else "every_turn_basis"
+    return "every_turn_floor"
 
 
 def _said(conn: sqlite3.Connection, root_ids) -> str | None:
@@ -102,12 +137,11 @@ def _cdf_anchor(workspace: Path, path: str, cand: str) -> str | None:
 
 # The files read in every turn whose CDF entries a declaration may retire, and the General
 # Brain (``relations_v2.general_brain_files``). STEERING / USER / TOOLS are the user's own.
-EVERY_TURN_TARGETS = (".context/MEMORY.md", ".context/EVOLUTION.md")
-# An entry read in every turn is retired only by a unit that itself passed the every-turn
-# floor (it goes to MEMORY or EVOLUTION); a General Brain entry also by one that goes to
-# the General Brain. A unit routed to a project's DDD did not pass that floor.
-_FLOOR = {"every_turn": frozenset({"MEMORY", "EVOLUTION"}),
-          "general": frozenset({"MEMORY", "EVOLUTION", "COMMON_DDD"})}
+EVERY_TURN_TARGETS = {".context/MEMORY.md": "MEMORY", ".context/EVOLUTION.md": "EVOLUTION"}
+# What a unit must rest on to take an entry out of the files read in every turn: the same
+# floor as writing one there (design 2026-10-30-cdf-agent-decides §2 K1). A correction let
+# into EVOLUTION as a repeat (``admitted_by="repeat"``) rests on neither.
+_EVERY_TURN_BASIS = frozenset({"user", "measured"})
 
 
 def _global_entries(workspace: Path) -> list:
@@ -148,7 +182,9 @@ def _said_later(conn: sqlite3.Connection, out: Checked, ref: str, entry_text: st
 
 def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, source: str,
           declared, new_root_ids, cited_external: bool = True,
-          home: str | None = None, destination_store: str | None = None) -> Checked:
+          home: str | None = None, destination_store: str | None = None,
+          basis: str | None = None, admitted_by: str | None = None,
+          destination_path: str | None = None) -> Checked:
     """The anchors a unit's declared overrides may retire (see module doc).
     *cited_external*: the unit's own evidence includes external content (a web page, a
     repo file, a peer message): such a unit never retires anything. A unit that rests on
@@ -158,10 +194,14 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
     S7, the run's for S3); a declaration about any other project is refused.
 
     A declaration naming an entry of MEMORY, EVOLUTION or the General Brain belongs to no
-    project: it needs no project or home, only the floor of ``_FLOOR`` (*destination_store*
-    is where the new unit goes) and the same marker and said-later rules (design
+    project: it needs no project or home, but ``_global_refusal`` (*destination_store* and
+    *destination_path*: where the new unit goes; *basis*: what it rests on, ``Facts.basis``;
+    *admitted_by*: "repeat" for a correction let into EVOLUTION as a repeat), the marker
+    and said-later rules, and, for a target that rests on the user's words, a unit that
+    does too plus the isolated user check (``Checked.ask_user``; design
     2026-11-02-knowledge-reaches-judgment ②: without this the every-turn files were only
-    ever added to)."""
+    ever added to). A target the floor refuses that the project's DDD also names is
+    resolved there."""
     from core import addressing
     from .contracts_v2 import OVERRIDE_RE, OVERRIDE_SOURCES
     from .withdrawn import normalize
@@ -178,6 +218,7 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
     new_said = _said(conn, new_root_ids)
     glob = None
     local: list = []
+    floor_refused: dict[str, str] = {}      # ref -> why the global path refused it
     for ref in declared:
         m = OVERRIDE_RE.match(str(ref))
         if not m:
@@ -197,17 +238,29 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
             out.refused.append({"ref": ref, "reason": "ambiguous"})
             continue
         entry, kind = hits[0]
-        if destination_store not in _FLOOR[kind]:
-            out.refused.append({"ref": ref, "reason": "every_turn_floor"})
+        why = _global_refusal(kind, entry, store=destination_store, path=destination_path,
+                              basis=basis, admitted_by=admitted_by)
+        if why is not None:
+            if project:
+                local.append((ref, uid, head))      # the same text may be a DDD entry too
+                floor_refused[ref] = why
+            else:
+                out.refused.append({"ref": ref, "reason": why})
             continue
         cand = _CAND.search(entry.text)
         if cand is None:
             out.refused.append({"ref": ref, "reason": "human_written"})
             continue
+        rests_on_user = _target_basis(conn, cand.group(1)) == "user"
+        if rests_on_user and basis != "user":
+            out.refused.append({"ref": ref, "reason": "weaker_than_target"})
+            continue
         if not _said_later(conn, out, ref, entry.text, cand.group(1), new_said):
             continue
         if entry.anchor not in out.targets:
             out.targets.append(entry.anchor)
+            if rests_on_user:
+                out.ask_user.append((entry.anchor, entry.text))
     if not local:
         return out
     if not project:
@@ -220,7 +273,8 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
         units = [u for u in addressing.matches(project, uid) if u.store == "doc"
                  and _first_line(u.text).startswith(head)]
         if len(units) != 1:
-            out.refused.append({"ref": ref, "reason": "not_found" if not units else "ambiguous"})
+            out.refused.append({"ref": ref, "reason": floor_refused.get(ref)
+                                or ("not_found" if not units else "ambiguous")})
             continue
         unit = units[0]
         cand = _CAND.search(unit.text)

@@ -367,7 +367,8 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
 _SUPERSEDES_SOURCES: frozenset[str] = frozenset()
 
 
-def _check_overrides(unit, row, root, destination, corpus_project, resolved, home=None):
+def _check_overrides(unit, row, root, destination, corpus_project, resolved, home=None,
+                     basis=None, admitted_by=None):
     """``overrides.check`` for a cognition unit that declares overrides,
     ``overrides.check_session_own`` for an event, else None. An unreadable store refuses
     every declaration (logged): nothing is retired on a guess."""
@@ -392,9 +393,28 @@ def _check_overrides(unit, row, root, destination, corpus_project, resolved, hom
         return overrides.check(conn, workspace=Path(root), project=project, source=source,
                                declared=declared, new_root_ids=getattr(resolved, "root_ids", ()),
                                cited_external=bool(getattr(resolved, "cited_external", True)),
-                               home=home, destination_store=getattr(destination, "store", None))
+                               home=home, destination_store=getattr(destination, "store", None),
+                               basis=basis, admitted_by=admitted_by,
+                               destination_path=getattr(destination, "relative_path", None))
     finally:
         conn.close()
+
+
+def _ask_user_about_targets(checked, unit, row) -> None:
+    """Keep a target that rests on the user's words only when the isolated user check finds
+    that what the user said replaces it (decision D, extended to overrides): the unit's own
+    claim being the user's words says nothing about whether they are about that entry, and
+    injected text can pair a real, unrelated quote with an override."""
+    from . import user_check as _check
+    texts = _user_texts(unit, row)
+    for anchor, text in checked.ask_user:
+        old = " ".join(re.sub(r"<!--.*?-->", " ", text, flags=re.S).split())
+        claim = (f"{_check.claim_of(unit)}\n\nThis replaces the earlier entry, which no longer "
+                 f"holds:\n{old}")
+        verdict = _check.grounds(claim, texts)
+        if not verdict.holds and anchor in checked.targets:
+            checked.targets.remove(anchor)
+            checked.refused.append({"ref": anchor, "reason": "user_check", "detail": verdict.reason})
 
 
 def _withdrawn_records() -> list:
@@ -756,13 +776,18 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         known = {e.anchor for e in entries}       # the every-turn files are in both pools
         entries += [e for e in relations_v2.pool(root, session_home) if e.anchor not in known]
 
-    # what the user withdrew stays out: an exact restatement is refused. Not when an entry
-    # in force says it too: an override that wrote the whole current statement carried the
-    # old text forward, so saying it again is the same as that entry (relations below)
+    # what the user withdrew stays out: an exact restatement is refused. One exception: every
+    # record it restates was overridden (never withdrawn by the user) and an entry in force
+    # in that same file says it too: the override wrote the whole current statement and
+    # carried the old text forward, so the unit is the same as that entry
     withdrawn_all = _withdrawn_records()
-    dumped = unit.model_dump(mode="json")
-    if withdrawn.restates(dumped, withdrawn_all) is not None and not withdrawn.said_by(dumped, entries):
-        return _decision(unit_id, "reject", "reject", "withdrawn", **done)
+    carried = None
+    restated_by = withdrawn.restating(unit.model_dump(mode="json"), withdrawn_all)
+    if restated_by:
+        if not isinstance(unit, EventUnit):
+            carried = withdrawn.carried_by(unit.model_dump(mode="json"), restated_by, entries)
+        if carried is None:
+            return _decision(unit_id, "reject", "reject", "withdrawn", **done)
 
     # the relations the producing agent declared (D1): code checks only that the id and
     # the first line name one entry; a declaration that does not stands for nothing
@@ -783,6 +808,8 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
             refused.append({"relation": name, "ref": ref, "reason": why})
         else:
             declared_rel[name] = entry
+    if carried is not None:
+        declared_rel["same"] = carried
     admitted_by = None
     if _repeat_opens(unit, declared_rel, declared_destination, destination, facts, row):
         # the same mistake recorded in two conversations is a measurement: the repeat
@@ -829,7 +856,10 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
     # the project the source fixed, never the unit's own scope: the run's for S3, the
     # session's for S7 (a session about one project does not retire another's entries)
     home = _resolve_project(root, declared) or session_home
-    checked = _check_overrides(unit, row, root, destination, corpus_project, resolved, home)
+    checked = _check_overrides(unit, row, root, destination, corpus_project, resolved, home,
+                               basis=facts.basis, admitted_by=admitted_by)
+    if checked is not None and checked.ask_user:
+        _ask_user_about_targets(checked, unit, row)
     if checked is not None and checked.older:
         return _decision(unit_id, "reject", "reject", "older_than_existing", **done)
     result = _decision(unit_id, "write", "add", "adds" if "adds" in declared_rel else "new", **done)

@@ -143,3 +143,11 @@ def test_no_size_record_leaves_the_cdf_line_as_it_was(parts, monkeypatch):
     monkeypatch.setattr(prompt_metrics, "daily", lambda days=8, today=None: [])
     cdf = N.compute(NOW)["headline"][1]
     assert "every-turn files" not in cdf and cdf.startswith("CDF (7 days)")
+
+
+def test_one_day_of_sizes_shows_no_earlier_value(parts, monkeypatch):
+    from core import prompt_metrics
+    rows = [{"day": "2026-10-31", "files": {"Evolution Registry": {"last": 24272}}}]
+    monkeypatch.setattr(prompt_metrics, "daily", lambda days=8, today=None: list(rows))
+    cdf = N.compute(NOW)["headline"][1]
+    assert "every-turn files: EVOLUTION 24.3K tokens." in cdf and "days ago" not in cdf
