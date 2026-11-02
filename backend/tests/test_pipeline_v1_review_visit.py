@@ -9,7 +9,9 @@ What is tested, through real runs (``tests/pipeline_v1_rig.py``: CLI + hooks):
   the visit is closed (T2);
 - an edit after the closed review is code no review sees: ``review-start`` hands out
   nothing and names the restore (T3);
-- a review TEST reopened is a new visit with its own fixing pass (T4);
+- a review TEST reopened is a new visit with its own fixing pass (T4), which may also
+  address a finding an earlier visit left open, so its R2 can close it; leaving it open
+  still completes REVIEW;
 - a first-round answer that could not be read is asked again once, before REVIEW can
   complete, with the parser's reasons; never a third time (T5, T6).
 """
@@ -160,13 +162,53 @@ def test_a_review_test_reopened_is_a_new_visit_with_its_own_pass(rig):
                      "inc-0")
     new = [row["canonical_id"] for row in _rows(r) if row["canonical_id"] != low]
     lines = _findings(r)
-    assert lines[new[0]].startswith("fix it") and lines[low].startswith("residual"), lines
-    # a finding of the first visit is that visit's residual, not this one's to fix
-    old = r.v1("review-address", "--artifact", r.artifact("addr-old", {
-        "pass": 2, "items": [{"finding_id": low, "hunk": "@@ -2 +2 @@ x"}]}))
-    assert old.get("ok") is False and "earlier review" in old["error"], old
-    out = _fix_and_address(r, new, "two")
+    # the first visit's open finding is this visit's to fix too: the change TEST made may
+    # fix it, and only this visit's R2 can close it
+    assert lines[new[0]].startswith("fix it") and lines[low].startswith("fix it"), lines
+    out = _fix_and_address(r, [*new, low], "two")
     assert out.get("ok") is True, out
+    # still one pass per visit
+    again = _fix_and_address(r, new, "three")
+    assert again.get("ok") is False and "has not answered yet" in again["error"], again
+
+
+def test_a_later_visit_closes_an_earlier_visits_residual_finding(rig):
+    """The run_3d19e5fc case: a LOW left open by the first visit is fixed in TEST; the
+    review TEST reopened finds nothing new; its one pass addresses the LOW and its R2
+    closes it, instead of the finding staying open in the REPORT as residual."""
+    r = rig()
+    (low,) = _r1(r, _finding("LOW", 40, "the docstring says the opposite"))
+    out = _fix_and_address(r, [low], "one")
+    _r2(r, out, {low: "TEST_INADEQUATE"})
+    assert _findings(r)[low].startswith("residual")
+    assert r.v1("stage-complete").get("ok") is True
+    r.edit({"backend/core/mod.py": BIG.replace("b + a", "a + b  # fixed in test")})
+    assert r.report_and_complete().get("reopened") == "review"
+    started = r.v1("review-start")
+    for i, handout in enumerate(started["handouts"]):
+        r.spawn_reviewer(handout["prompt"], "NO FINDINGS", f"inc-{i}")
+    assert _findings(r)[low].startswith("fix it"), _findings(r)
+    out = _fix_and_address(r, [low], "two")
+    assert out.get("ok") is True and out.get("handouts"), out
+    _r2(r, out, {low: "ADEQUATE"}, tag="r2b")
+    assert _findings(r)[low] == "", _findings(r)
+    assert r.v1("stage-complete").get("ok") is True
+
+
+def test_a_later_visit_may_leave_an_earlier_finding_open(rig):
+    """Fixing it is allowed, not required: the visit's review completes with the earlier
+    finding still open (a residual risk in the REPORT, as before)."""
+    r = rig()
+    (low,) = _r1(r, _finding("LOW", 40, "nit"))
+    out = _fix_and_address(r, [low], "one")
+    _r2(r, out, {low: "TEST_INADEQUATE"})
+    assert r.v1("stage-complete").get("ok") is True
+    r.edit({"backend/core/mod.py": BIG.replace("b + a", "a + b  # in test")})
+    assert r.report_and_complete().get("reopened") == "review"
+    started = r.v1("review-start")
+    for i, handout in enumerate(started["handouts"]):
+        r.spawn_reviewer(handout["prompt"], "NO FINDINGS", f"inc-{i}")
+    assert r.v1("stage-complete").get("ok") is True
 
 
 BROKEN = ('Two problems.\n{"finding_id":"CF-00000000","status":"RESOLVED","note":"x"}\n'

@@ -226,7 +226,11 @@ def test_main_moving_by_unrelated_commits_lands_without_testing_again(rig):
     assert quality.startswith("| Quality | WARN |"), quality
     import json
     audit = json.loads((r.engine().run_dir / "run_audit.json").read_text())
-    assert "tests not run again after main moved" in audit["summary"]["quality"]["open"], audit["summary"]["quality"]
+    opened = audit["summary"]["quality"]["open"]
+    assert "tests not run again after main moved" in opened, audit["summary"]["quality"]
+    # one fact, one line: TS-1's "not on the final code" is the carry itself
+    assert "test report not on the final code" not in opened, opened
+    assert "tests not run again after main moved" in quality and "+1 more" not in quality, quality
 
 
 def test_a_carried_report_needs_the_report_on_the_tree_before_the_sync(rig):

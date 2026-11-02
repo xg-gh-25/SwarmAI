@@ -243,6 +243,23 @@ def _tests_carried(event_rows) -> "str | None":
     return _marked(event_rows, CARRIED_MARK)
 
 
+def _merged_into_carry(open_checks: Mapping[str, Any], carried: "str | None") -> dict[str, Any]:
+    """The open checks the Quality cell names. A TEST report carried over a main move is,
+    by construction, not on the final code tree, so TS-1's "not on the final code" and the
+    carry line say the same thing: the carry line (which says why) is shown, and it keeps
+    the WARN (main's commits can still break the run's code without touching its files).
+    TS-1 is merged only when that is all it says (every problem a stale tree, none a failed
+    command or a missing report) and LG-1 is not open; otherwise it stays."""
+    detail = str(open_checks.get("TS-1") or "")
+    # TS-1's problems (checks._report_check) are joined with "; ", which also occurs
+    # inside a stale-tree problem: tell the kinds apart by their own words
+    stale_only = ("report is for tree" in detail and "failed command" not in detail
+                  and "validation report" not in detail)
+    if carried and stale_only and "LG-1" not in open_checks:
+        return {cid: v for cid, v in open_checks.items() if cid != "TS-1"}
+    return dict(open_checks)
+
+
 def _landed_unreviewed(event_rows) -> "str | None":
     """The landing's LG-1 let a change no review saw land (N1): its note."""
     from core.run_protocol.checks import UNREVIEWED_MARK
@@ -432,6 +449,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     # the landing kept a TEST report across a main move, or let an unreviewed
     # difference land (E2 / N1): said in the Quality cell, never a PASS
     carried, unreviewed = _tests_carried(event_rows), _landed_unreviewed(event_rows)
+    shown = _merged_into_carry(open_checks, carried)
     # "closed" is findings.is_closed (the closure table): a finding closed by a reported
     # test counts only once R2 judged the test ADEQUATE, a reviewed-only HIGH never
     confirmed = sum(row.get("status") == "closed_proven" and row.get("r2_status") == "ADEQUATE"
@@ -454,7 +472,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "verification_red_at_base": red_at_base,
                "findings_closed": closed,
                "findings_confirmed": confirmed, "findings_total": len(findings),
-               "open": _open_lines(open_checks, [row["canonical_id"] for row in findings
+               "open": _open_lines(shown, [row["canonical_id"] for row in findings
                                                  if push_effect(row)])
                + (["tests not run again after main moved"] if carried else [])
                + (["landed a difference no review saw"] if unreviewed else [])}

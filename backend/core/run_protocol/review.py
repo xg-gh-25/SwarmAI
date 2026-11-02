@@ -202,13 +202,37 @@ def _in_visit(events: Sequence[Mapping[str, Any]], start: int) -> set[Any]:
     return {event.get("event_id") for event in events[start:]}
 
 
+def _visit_rows(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]],
+                start: int) -> list[Mapping[str, Any]]:
+    """The findings the visit from *start* answers for: the ones it raised, and the ones
+    an earlier visit left open that a fixing pass can address. A visit TEST or DELIVER
+    reopened reviews a change that may fix an earlier visit's residual finding (the
+    design's way to change code after a closed review is TEST); its fixing pass may then
+    address it, so its R2 can close it. Left out: a finding no pass closes (Gate-0's, one
+    whose next step is a person's or R2's word: ``plan_fix_handoff`` takes only open,
+    invalid_test and not-yet-confirmed closed_proven ones), and every earlier finding in
+    a visit a doc-only change opened (those reopens are not counted against
+    lifecycle.REVIEW_REOPEN_CAP, which is what bounds the counted visits)."""
+    here = _in_visit(events, start)
+    reopen = (events[start - 1].get("payload") or {}) if 0 < start <= len(events) else {}
+    carry = start > 0 and not reopen.get("doc_paths")
+    return [row for row in rows if row.get("answer_event_id") in here
+            or (carry and not fd.is_closed(row) and row.get("expert") != fd.GATE0_EXPERT
+                and row.get("status") in _ADDRESSABLE)]
+
+
+#: the statuses a fixing pass can address (``plan_fix_handoff``)
+_ADDRESSABLE = frozenset({"open", "invalid_test", "closed_proven"})
+
+
 def review_phase(events: Sequence[Mapping[str, Any]],
                  rows: Sequence[Mapping[str, Any]]) -> str:
     """Where the current visit's review stands: ``fix`` (its first round, or its first
     fixing pass, is still to come), ``wait`` (the first pass is made and its R2 has not
-    answered yet), ``high`` (that R2 answered and a HIGH / CRITICAL raised in this visit
-    is still open: one more pass, for those only) or ``closed`` (no more fixing passes
-    in this visit). A fixing pass is counted when its R2 is handed out: one batch of R2
+    answered yet), ``high`` (that R2 answered and a HIGH / CRITICAL raised in this visit,
+    or left open by an earlier one that a pass can address (``_visit_rows``), is still
+    open: one more pass, for those only) or ``closed`` (no more fixing passes in this
+    visit). A fixing pass is counted when its R2 is handed out: one batch of R2
     handouts (one review-address writes them with one ``at``), never an R2 re-dispatch
     of a wrong word; an address no R2 covers yet (a pass that stopped half way) is not
     a pass, and the next one completes it. Its R2 is still out while one is pending, an
@@ -222,8 +246,7 @@ def review_phase(events: Sequence[Mapping[str, Any]],
                 and not (event.get("payload") or {}).get("redispatch_of") \
                 and event.get("at") not in passes:
             passes.append(event.get("at"))
-    here = _in_visit(events, start)
-    mine = [row for row in rows if row.get("answer_event_id") in here]
+    mine = _visit_rows(events, rows, start)
     if len(passes) >= 2:
         return "closed"
     if len(passes) == 1:
@@ -259,17 +282,17 @@ def _open_high(row: Mapping[str, Any]) -> bool:
 def fixable(events: Sequence[Mapping[str, Any]],
             rows: Sequence[Mapping[str, Any]]) -> tuple[str, set[str]]:
     """(the visit's phase, the findings a fixing pass may still address): in ``fix``
-    every finding this visit raised, in ``wait`` / ``high`` its open HIGH / CRITICAL
-    ones (a pass on them is refused until that R2 answers), in ``closed`` none, each widened by its ±10-line cluster, which a pass fixes as one
+    every finding this visit raised and every one an earlier visit left open
+    (``_visit_rows``), in ``wait`` / ``high`` the open HIGH / CRITICAL ones among them (a
+    pass on them is refused until that R2 answers), in ``closed`` none, each widened by its ±10-line cluster, which a pass fixes as one
     (plan_fix_handoff) whatever review raised the mates. ``address_refusal`` and
     ``close_with`` both read this, so what ``findings`` says to fix is what a pass
     accepts."""
     phase = review_phase(events, rows)
     if phase == "closed":
         return phase, set()
-    here = _in_visit(events, visit_start(events))
     by_id = {row["canonical_id"]: row for row in rows}
-    mine = {cid for cid, row in by_id.items() if row.get("answer_event_id") in here}
+    mine = {row["canonical_id"] for row in _visit_rows(events, rows, visit_start(events))}
     # while the first pass's R2 is out, what may follow it is the HIGH pass
     base = mine if phase == "fix" else {cid for cid in mine if _open_high(by_id[cid])}
     allowed = set(base)
@@ -296,11 +319,8 @@ def address_refusal(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[
     outside = sorted(cid for cid in finding_ids if cid in by_id and cid not in allowed)
     if not outside:
         return None
-    here = _in_visit(events, visit_start(events))
-    earlier = [cid for cid in outside if by_id[cid].get("answer_event_id") not in here]
-    if len(earlier) == len(outside):
-        return ("raised in an earlier review of this run, whose passes are done (residual "
-                "risks): " + ", ".join(earlier))
+    if phase == "fix":            # every open finding is fixable now: these are closed
+        return "already closed or refuted: " + ", ".join(outside)
     return ("the second fixing pass is for open HIGH / CRITICAL findings (and their "
             "cluster) only; these are residual risks: " + ", ".join(outside))
 

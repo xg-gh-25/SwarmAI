@@ -79,3 +79,4 @@ test_hive_package_publish.py  # the Hive package published with a release carrie
 test_hive_update.py  # Hive update from the desktop: failures end running with the reason, background update, stale updates released
 test_hive_retry.py  # Retry on an errored Hive: confirmation and disk snapshots before anything holding data is deleted
 test_wide_scope.py  # the dev-box refusal of a test run wider than one change's tests (conftest)
+test_run_bvt_python.py  # run_bvt.sh runs the checkout's own venv python when it has one, else the python on PATH (CI)

@@ -89,6 +89,7 @@ LG-1（`checks.py:340-358`）要求落地的补丁（patch id，`--verbatim`，`
 - `review-address` 带 items 时拒绝，并说明原因。不带 items 的补派（RV-5 的补派、R2 用错词的重问）照旧。
 - 不需要改代码的记账照旧：`review-proof diff_assertion`、`review-proof refuted`。
 - 关闭之后又改了代码：`review-start` 不再给增量评审，`next` 说"本次访问的评审已关闭；把代码恢复到上次评审过的 tree `<tree>`"，并给出恢复命令。RV-4 不通过，REVIEW 的检查失败满 3 次走已有的 `checks_exhausted`（`lifecycle.py:337-342`）。要在评审之后改代码，正规的路是完成 REVIEW、在 TEST 里改：TEST 改代码会退回 REVIEW 开始新的访问，这有自己的上限（`REVIEW_REOPEN_CAP = 2`）。
+- 2026-11-02 补充：新的访问里，修复那一遍也可以 address 前面访问留下、还开着的发现（TEST 里的改动常常正是修它的），由这次访问的 R2 来判，判过就能关闭，不再一直作为残留风险留在 REPORT 里。只是允许，不是要求：不修也能完成 REVIEW。轮数上限不变：每次访问仍是一遍修复（HIGH 再加一遍），访问次数有上限。实现在 `review._visit_rows`。
 - 删掉 `_INCREMENTAL_CAP`，上限由访问来定。
 
 **上限**：每次访问最多 3 轮（第三轮只在有 HIGH 时出现）。整个 run 最多 1 + 2（TEST 退回）+ 1（DELIVER 退回）= 4 次访问。常见情况是 2 轮。

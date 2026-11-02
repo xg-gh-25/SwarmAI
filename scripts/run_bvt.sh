@@ -23,5 +23,9 @@ if [ "${1:-}" = "--list" ]; then
   exit 0
 fi
 echo "BVT: running ${#files[@]} curated test files"
-SWARMAI_SUITE=1 exec python -m pytest -n 0 --timeout=60 --timeout-method=thread \
+# the checkout's own venv when it has one (backend/tests/conftest.py refuses any other
+# python there; a worktree's .venv links the main checkout's), else the python on PATH (CI)
+py=python
+if [ -x .venv/bin/python ]; then py=.venv/bin/python; fi
+SWARMAI_SUITE=1 exec "$py" -m pytest -n 0 --timeout=60 --timeout-method=thread \
   -q --tb=short -p no:cacheprovider -m "not slow and not pbt" "${files[@]}"
