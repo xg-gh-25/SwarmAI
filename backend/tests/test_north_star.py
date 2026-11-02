@@ -119,3 +119,27 @@ def test_the_lifecycle_sweep_refreshes_it(monkeypatch):
     monkeypatch.setattr(N, "refresh", lambda *a, **k: calls.append(1) or {})
     asyncio.run(LifecycleManager._sweep_todos(MagicMock()))
     assert calls == [1]
+
+
+def test_the_cdf_line_carries_the_every_turn_file_sizes(parts, monkeypatch):
+    """MEMORY and EVOLUTION are injected whole with no budget; the agreed answer to a
+    clear rise is that the agent consolidates by declaration (design 2026-10-30
+    cdf-agent-decides §4). The agent can only do that if it sees the size every turn
+    (design 2026-11-02-knowledge-reaches-judgment ⑤)."""
+    from core import prompt_metrics
+    rows = [{"day": "2026-10-24", "files": {"Evolution Registry": {"last": 18078}, "Memory": {"last": 26545}}},
+            {"day": "2026-10-28", "files": {"Evolution Registry": {"last": 22958}}},
+            {"day": "2026-10-31", "files": {"Evolution Registry": {"last": 24272}, "Memory": {"last": 17917}}}]
+    monkeypatch.setattr(prompt_metrics, "daily", lambda days=8, today=None: list(rows))
+    snap = N.compute(NOW)
+    cdf = snap["headline"][1]
+    assert "every-turn files: EVOLUTION 24.3K tokens (18.1K 7 days ago), MEMORY 17.9K (26.5K)" in cdf
+    assert snap["measures"]["cdf"]["every_turn"] == {"EVOLUTION": [24272, 18078], "MEMORY": [17917, 26545]}
+    assert len(snap["headline"]) == 3
+
+
+def test_no_size_record_leaves_the_cdf_line_as_it_was(parts, monkeypatch):
+    from core import prompt_metrics
+    monkeypatch.setattr(prompt_metrics, "daily", lambda days=8, today=None: [])
+    cdf = N.compute(NOW)["headline"][1]
+    assert "every-turn files" not in cdf and cdf.startswith("CDF (7 days)")

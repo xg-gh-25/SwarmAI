@@ -6,7 +6,9 @@ it (``core.ingestion.health.overview``) and what waits on the person
 (``core.attention_authority.collect``) — are computed here into one snapshot:
 
 - ``headline``: three short lines, injected into every desktop prompt (the prompt reads
-  the file only; it never reads a database: SwarmAI TECH, system-prompt purity);
+  the file only; it never reads a database: SwarmAI TECH, system-prompt purity). The CDF
+  line ends with the sizes of MEMORY and EVOLUTION, injected whole with no budget, so the
+  agent sees a rise and consolidates by declaration (``_every_turn_sizes``);
 - ``detail``: the full picture, printed by ``python -m scripts.north_star``;
 - ``measures``: the same readings as numbers, for the C&M overlay's rail
   (``measures_for_ui``, served by ``GET /api/eval/context-health/lite``).
@@ -143,6 +145,44 @@ def _cdf(overview: dict) -> tuple[str, list[str], dict]:
     return line, detail, measures
 
 
+# The every-turn files injected whole with no budget, as prompt_metrics names their sections.
+_EVERY_TURN = (("EVOLUTION", "Evolution Registry"), ("MEMORY", "Memory"))
+SIZE_DAYS = 8          # today and the 7 days before it
+
+
+def _k(tokens: int) -> str:
+    return f"{tokens / 1000:.1f}K"
+
+
+def _every_turn_sizes(now: datetime) -> tuple[str, dict]:
+    """``("; every-turn files: EVOLUTION 24.3K tokens (18.1K 7 days ago), ...", measures)``.
+
+    MEMORY and EVOLUTION are injected whole; a clear rise is answered by the agent
+    consolidating the file by declaration (design 2026-10-30-cdf-agent-decides §4), which
+    it can do only if it sees the size in every prompt (design
+    2026-11-02-knowledge-reaches-judgment ⑤). The newest and the oldest day on record in
+    the window; "" when there is no record."""
+    from core import prompt_metrics
+    days = prompt_metrics.daily(SIZE_DAYS, today=now)
+    parts, measures = [], {}
+    for name, section in _EVERY_TURN:
+        seen = [(d["day"], (d.get("files") or {})[section]["last"]) for d in days
+                if section in (d.get("files") or {})]
+        if not seen:
+            continue
+        (first_day, first), (last_day, last) = seen[0], seen[-1]
+        measures[name] = [last, first]
+        span = (datetime.fromisoformat(last_day) - datetime.fromisoformat(first_day)).days
+        parts.append((name, last, first, span))
+    if not parts:
+        return "", {}
+    shown = []
+    for i, (name, last, first, span) in enumerate(parts):
+        before = f"{_k(first)} {span} days ago" if i == 0 else _k(first)
+        shown.append(f"{name} {_k(last)}{' tokens' if i == 0 else ''} ({before})")
+    return "; every-turn files: " + ", ".join(shown), measures
+
+
 def _needs_you(attention: dict) -> tuple[str, list[str], None]:
     items = attention.get("items") or []
     counts = attention.get("counts") or {}
@@ -157,6 +197,23 @@ def _needs_you(attention: dict) -> tuple[str, list[str], None]:
     return line, detail, None
 
 
+def _with_sizes(part: tuple[str, list[str], dict], now: datetime) -> tuple[str, list[str], dict]:
+    """The CDF part with the every-turn file sizes on its line (the headline stays three
+    lines); an unreadable size record leaves the line as it was."""
+    line, detail, measures = part
+    try:
+        sizes, numbers = _every_turn_sizes(now)
+    except Exception:  # noqa: BLE001 -- the sizes never cost the CDF line
+        logger.warning("north star: every-turn sizes unreadable", exc_info=True)
+        return part
+    if not sizes:
+        return part
+    line = line[:-1] + sizes + "." if line.endswith(".") else line + sizes
+    measures = dict(measures or {}, every_turn=numbers)
+    return line, detail + [f"  every-turn files (tokens, newest vs oldest of {SIZE_DAYS} days): "
+                           + ", ".join(f"{k} {v[0]} vs {v[1]}" for k, v in numbers.items())], measures
+
+
 def compute(now: datetime | None = None) -> dict:
     """The snapshot: ``{"at", "headline", "detail", "measures"}``. A part that cannot be
     read says so in its line and has no measures (None); it never fails the whole."""
@@ -167,7 +224,7 @@ def compute(now: datetime | None = None) -> dict:
     parts = (
         ("cognition", lambda: _cognition(__import__("core.ingestion.cognition_level",
                                                     fromlist=["level"]).level(now))),
-        ("cdf", lambda: _cdf(__import__("core.ingestion.health", fromlist=["overview"]).overview("7d", now=now))),
+        ("cdf", lambda: _with_sizes(_cdf(__import__("core.ingestion.health", fromlist=["overview"]).overview("7d", now=now)), now)),
         ("needs_you", lambda: _needs_you(_attention())),
     )
     for name, fn in parts:
