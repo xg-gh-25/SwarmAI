@@ -559,8 +559,11 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
             from core.run_protocol import reflect
             anchors = {str(anchor) for rows in report.values() for row in rows
                        for anchor in row.get("evidence", [])}
-            normalized = reflect.prepare(report, allowed_anchors=anchors)
-            ok = normalized["schema"] == reflect.SCHEMA
+            # the five-part form, each row as REFLECT keeps it (prepare_lenient): a row the
+            # contract has since come to refuse (a report prepared before the change) is
+            # recorded invalid when the report is enqueued (s3_run), never a failed delivery
+            normalized = reflect.prepare_lenient(report, allowed_anchors=anchors)
+            ok = normalized["schema"] == reflect.SCHEMA and set(report) == set(reflect.SECTIONS)
         except Exception as exc:
             logger.warning("REFLECT validation failed for %s: %s", check_id, exc)
             ok = False

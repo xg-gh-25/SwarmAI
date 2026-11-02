@@ -101,7 +101,7 @@ def _hits(monkeypatch, anchor):  # kept for importers: retrieval no longer exist
     (_cog(scope="user", user_kind="profile"), "USER", ".context/USER.md", None),
     (_cog(scope="project:widget", type="pitfall", topic="architecture"), "DDD",
      "Projects/Widget/2-understanding/TECH.md", "Runtime Traps"),
-    ({"kind": "gap", "gap_kind": "debt", "scope": "project:Widget", "title": "Open",
+    ({"kind": "gap", "proposed_next": "Look into it first.", "gap_kind": "debt", "scope": "project:Widget", "title": "Open",
       "what": "The tab does not refresh.", "evidence": ["event:e1"]}, "DDD",
      "Projects/Widget/2-understanding/IMPROVEMENT.md", "What to Watch For"),
 ])
@@ -123,7 +123,7 @@ def test_an_unknown_project_goes_to_the_general_brain_under_its_name(tmp_path, u
 
 
 def test_a_gap_of_an_unknown_project_goes_to_the_general_brains_open_gaps(tmp_path, user_words):
-    gap = {"kind": "gap", "gap_kind": "debt", "scope": "project:Nope", "title": "Open",
+    gap = {"kind": "gap", "proposed_next": "Look into it first.", "gap_kind": "debt", "scope": "project:Nope", "title": "Open",
            "what": "The tab does not refresh.", "evidence": ["event:e1"]}
     decision = run_unit_v2(_row(gap), _ws(tmp_path))
     assert (decision.destination.store, decision.destination.section) == ("COMMON_DDD", "Open Gaps")
@@ -309,7 +309,7 @@ def test_a_comment_marker_in_an_entry_is_written_as_entities():
     from core.ingestion.writer import render_unit
     decision = {"destination": DestinationV2(store="MEMORY", relative_path=".context/MEMORY.md",
                                              section="Guidelines")}
-    text = render_unit(decision, "c.unit", {"kind": "cognition", "type": "guideline",
+    text = render_unit(decision, "c.unit", {"kind": "cognition", "applicability": "When this comes up.", "type": "guideline",
                                             "title": "Strip <!-- markers -->",
                                             "what": "Remove <!-- comment --> markers before parsing."})
     lead = text.split("\n")[0]

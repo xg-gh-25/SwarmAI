@@ -15,7 +15,7 @@ from core.ingestion.sources import s4_code
 class FakeLLM:
     def extract(self, prompt):
         assert "commit:manual" in prompt and "commit:run-owned" not in prompt
-        units = [{"kind": "cognition", "type": "model", "scope": "project:P",
+        units = [{"kind": "cognition", "applicability": "When this comes up.", "type": "model", "scope": "project:P",
                   "title": "The ingestion source boundary", "what": "Sources only enqueue typed units.",
                   "why": "One writer prevents competing persistent state.",
                   "evidence": ["commit:manual"]},

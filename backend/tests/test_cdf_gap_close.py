@@ -271,7 +271,7 @@ def test_a_unit_the_same_as_a_closed_gap_is_written_again(tmp_path, monkeypatch)
     und = tmp_path / "Projects" / "Widget" / "2-understanding"
     und.mkdir(parents=True)
     improvement = und / "IMPROVEMENT.md"
-    unit = {"kind": "gap", "gap_kind": "debt", "scope": "project:Widget", "title": "Tab refresh",
+    unit = {"kind": "gap", "proposed_next": "Look into it first.", "gap_kind": "debt", "scope": "project:Widget", "title": "Tab refresh",
             "what": "The tab does not refresh after the user switches back to it.", "evidence": ["event:e1"]}
     row = {"id": "c", "unit_id": "c.unit", "unit_kind": "gap", "source_v2": "S3", "source_ref": "r",
            "extraction_pass": "main", "payload": json.dumps(unit),

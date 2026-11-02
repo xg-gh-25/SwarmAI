@@ -271,7 +271,7 @@ def test_installed_package_rule_stays_out_of_per_turn_stores(
     result = enqueue_unit(
         "S4", "repo:Demo:abc",
         {
-            "kind": "cognition", "type": "guideline", "scope": "project:Demo",
+            "kind": "cognition", "applicability": "When this comes up.", "type": "guideline", "scope": "project:Demo",
             "title": "Package-derived process", "what": "Require review before push.",
             "how": "Run the configured review gate.", "why": "Prevent unsafe delivery.",
             "evidence": [f"unit:{anchor}"],

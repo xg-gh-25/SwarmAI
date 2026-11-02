@@ -29,12 +29,15 @@ def test_layer_is_a_function_of_type_only():
 
 
 def test_conditional_fields_never_invented():
-    base = {"kind": "cognition", "scope": "world", "title": "t", "what": "w", "evidence": ["event:1"]}
+    base = {"kind": "cognition", "scope": "world", "title": "t", "what": "w", "applicability": "a",
+            "evidence": ["event:1"]}
     with pytest.raises(ValidationError):
         c.SOURCE_UNIT.validate_python({**base, "type": "decision", "why": "y"})
     c.SOURCE_UNIT.validate_python({**base, "type": "decision", "why": "y", "rejected_alternatives": "none"})
-    with pytest.raises(ValidationError):
-        c.SOURCE_UNIT.validate_python({**base, "type": "pitfall"})
+    without_trigger = {k: v for k, v in base.items() if k != "applicability"}
+    for kind in ("pitfall", "guideline", "principle"):     # every unit says when it applies
+        with pytest.raises(ValidationError):
+            c.SOURCE_UNIT.validate_python({**without_trigger, "type": kind})
     with pytest.raises(ValidationError):
         c.SOURCE_UNIT.validate_python({**base, "type": "process"})
     with pytest.raises(ValidationError):
@@ -131,7 +134,8 @@ def test_open_work_is_no_cdf_unit():
     import pydantic
     import pytest as _pytest
     from core.ingestion import contracts_v2 as C
-    base = {"kind": "gap", "scope": "project:P", "title": "t", "what": "w", "evidence": ["event:e1"]}
+    base = {"kind": "gap", "scope": "project:P", "title": "t", "what": "w", "proposed_next": "n",
+            "evidence": ["event:e1"]}
     for kind in ("debt", "risk", "deferred_finding", "process_issue"):
         assert C.SOURCE_UNIT.validate_python({**base, "gap_kind": kind}).gap_kind == kind
     with _pytest.raises(pydantic.ValidationError):

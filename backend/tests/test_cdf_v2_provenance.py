@@ -42,7 +42,7 @@ def _session_root(monkeypatch, tmp_path, session_id: str, event_id: str, content
 
 def _cognition(evidence, *, what="Keep the complete semantic claim."):
     return {
-        "kind": "cognition", "type": "guideline", "scope": "agent",
+        "kind": "cognition", "applicability": "When this comes up.", "type": "guideline", "scope": "agent",
         "title": "Complete claim", "what": what, "evidence": list(evidence),
     }
 
@@ -55,7 +55,7 @@ def _assert_tainted_route(resolved=None, monkeypatch=None) -> None:
     from core.ingestion.contracts_v2 import SOURCE_UNIT, route_unit
 
     unit = SOURCE_UNIT.validate_python({
-        "kind": "cognition", "type": "guideline", "scope": "user", "user_kind": "preference",
+        "kind": "cognition", "applicability": "When this comes up.", "type": "guideline", "scope": "user", "user_kind": "preference",
         "title": "One owner", "what": "Use one owner", "evidence": ["unit:x"],
         "user_quote": "Use one owner"})
     destination = route_unit(unit, None)

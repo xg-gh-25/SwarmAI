@@ -104,8 +104,15 @@ def enqueue_report(engine: Any) -> list[Any]:
     from core.ingestion import contracts_v2
     _anchors, root_ids = _roots(engine)
     report = engine.read_reflect_report()
-    units = [contracts_v2.SOURCE_UNIT.validate_python(raw)
-             for rows in report.values() for raw in rows]
+    # each row on its own, as REFLECT prepared it (prepare_lenient): a row the contract no
+    # longer accepts (a report prepared before the contract changed) is recorded invalid
+    # and the rest is enqueued
+    units, invalid = [], []
+    for raw in (raw for rows in report.values() for raw in rows):
+        try:
+            units.append(contracts_v2.SOURCE_UNIT.validate_python(raw))
+        except ValueError as exc:
+            invalid.append({"raw": raw, "reason": f"invalid_unit: {exc}"[:500]})
     if any(getattr(unit, "closes", None) for unit in units):
         units = _drop_closes_unless_landed(engine, units)
     if any(getattr(unit, "overrides", None) for unit in units):
@@ -118,7 +125,7 @@ def enqueue_report(engine: Any) -> list[Any]:
         read_root_ids=root_ids, project_snapshot=_snapshot(engine),
         attempt_id=attempt.attempt_id, extraction_pass="main") for unit in units]
     api_v2.record_extraction_attempt(
-        attempt, status="ok" if units else "no_unit", units_emitted=len(units))
+        attempt, status="ok" if units else "no_unit", units_emitted=len(units), invalid_units=invalid)
     return outcomes
 
 

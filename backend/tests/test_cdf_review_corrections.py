@@ -129,7 +129,7 @@ def test_the_review_names_the_skill_a_correction_is_about():
     item = extract_llm.unit_schema(s7_review.ALLOWED_KINDS)["properties"]["cognition_units"]["items"]
     assert item["properties"]["skill"]["description"] == contracts_v2.SKILL_RULE
     unit = contracts_v2.SOURCE_UNIT.validate_python(
-        {"kind": "cognition", "type": "correction", "scope": "agent", "title": "t", "what": "w",
+        {"kind": "cognition", "applicability": "When this comes up.", "type": "correction", "scope": "agent", "title": "t", "what": "w",
          "evidence": ["event:e1"], "skill": "s_pdf"})
     assert unit.skill == "s_pdf"
     prompt = s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", "")

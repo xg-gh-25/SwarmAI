@@ -157,7 +157,7 @@ def test_a_hive_lesson_reaches_the_brains_improvement_through_the_judge(cdf_env)
 
 
 def _gap(title: str, scope: str) -> dict:
-    return {"kind": "gap", "gap_kind": "risk", "scope": scope, "title": title,
+    return {"kind": "gap", "proposed_next": "Look into it first.", "gap_kind": "risk", "scope": scope, "title": title,
             "what": f"{title}: open.", "evidence": ["event:hive-local"]}
 
 

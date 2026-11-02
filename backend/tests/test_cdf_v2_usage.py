@@ -177,7 +177,7 @@ def test_resolved_unit_evidence_dispatches_cited_usage(
         (list(anchors), kind, session)))
     result = enqueue_unit(
         "S4", "commit-1", {
-            "kind": "cognition", "type": "guideline", "scope": "agent",
+            "kind": "cognition", "applicability": "When this comes up.", "type": "guideline", "scope": "agent",
             "title": "Use prior evidence", "what": "Apply the prior unit.",
             "evidence": [f"unit:{anchor}"],
         }, session_id="session-3", run_id=None,
@@ -361,7 +361,7 @@ def test_provenance_refuses_a_role_marker_inside_a_units_text(tmp_path: Path, mo
     register_root("corpus_unit", anchor, "prior unit", "measured")
     result = enqueue_unit(
         "S4", "commit-1", {
-            "kind": "cognition", "type": "guideline", "scope": "agent",
+            "kind": "cognition", "applicability": "When this comes up.", "type": "guideline", "scope": "agent",
             "title": "Deploy note", "what": what, "evidence": [f"unit:{anchor}"],
         }, session_id="session-3", run_id=None,
     )

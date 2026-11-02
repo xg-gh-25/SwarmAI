@@ -90,7 +90,7 @@ def _good_cognition(anchor="event:e1"):
     return {"type": "decision", "scope": "world",
             "title": "Use one write path", "what": "Every CDF write goes through the worker.",
             "why": "Two writers raced on MEMORY.md.", "rejected_alternatives": "none",
-            "evidence": [anchor], "how": None}
+            "applicability": "When adding a writer of MEMORY.md.", "evidence": [anchor], "how": None}
 
 
 def test_extract_asks_through_structured_and_strips(monkeypatch) -> None:

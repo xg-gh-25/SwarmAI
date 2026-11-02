@@ -3,10 +3,10 @@
 Write `artifacts/reflect.json` through `"$SWARM_BACKEND_BIN" pipeline-v1 reflect-prepare --project <P> --run-id <R> --artifact <json>`, then land. The report's keys are `delivered`, `decisions`, `corrections`, `practices`, `gaps`, each a list (any may be empty or left out; a `lessons` list is refused). An invalid entry is dropped and named in the reply's `dropped` (the rest is kept; shape: `pipeline-v1 template reflect`); REFLECT never blocks landing. Each row is one unit with no other keys:
 
 - `delivered`: what the run produced, as `{"kind": "event", "when", "title", "what", "impact" or "outcome"}`, or a cognition unit. An event may add `"closes": [<gap id>, …]`: the gaps from the `open_gaps` list of `pipeline-v1 events` that this run fixed, with `outcome` saying how each was fixed. Name only gaps the landed code really fixes; an entry naming an id that is not an open gap of this project is dropped. When the run lands, CDF withdraws those gaps and records which run closed them; a run that does not land closes nothing.
-- `decisions`: `{"kind": "cognition", "type": "decision", "scope", "title", "what", "why", "rejected_alternatives"}` (write `none` when there was no alternative).
-- `corrections`: cognition of `type` `correction` or `pitfall`; a pitfall's `applicability` says when it bites.
+- `decisions`: `{"kind": "cognition", "type": "decision", "scope", "title", "what", "why", "rejected_alternatives", "applicability"}` (write `none` when there was no alternative). Every cognition row has `applicability`: when it applies.
+- `corrections`: cognition of `type` `correction` or `pitfall`.
 - `practices`: cognition of `type` `guideline` or `process`.
-- `gaps`: `{"kind": "gap", "gap_kind": debt | risk | deferred_finding | process_issue, "scope", "title", "what"}`.
+- `gaps`: `{"kind": "gap", "gap_kind": debt | risk | deferred_finding | process_issue, "scope", "title", "what", "proposed_next"}`: the concrete next step.
 
 Every row's `evidence` cites this run's anchors (`"$SWARM_BACKEND_BIN" pipeline-v1 events --project <P> --run-id <R>` lists them). `scope` says where it belongs: `project:<P>` (its DDD, or the repo's shared file when the project has none), `world`, or `user`. A cognition unit that replaces an existing entry of the project says so in `overrides`: `["<8-character id> | <the entry's first line, copied>"]`, the id as `cognition find` / `get` printed it. CDF retires that entry once the unit is written, only if the id and first line name exactly one entry CDF wrote and this run said it later; a replacement that is only related is not an override.
 

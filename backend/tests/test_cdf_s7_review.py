@@ -385,7 +385,7 @@ def test_work_after_the_persons_last_message_is_reviewed_against_it(cdf_env, tmp
     probe = Runner([])
     s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=first["reviewed_to"], runner=probe)
     prompt = probe.calls[0]["prompt"]
-    assert "(not citable) the person's last message before this record" in prompt
+    assert "(not citable) just before this record, the person said" in prompt
     assert "把 Swarm Out 的 repo spec 安全审一遍" in prompt.split("<session-record>")[0]
     record = prompt.split("<session-record>")[1].split("</session-record>")[0]
     work = [json.loads(l) for l in record.strip().splitlines()]
@@ -462,9 +462,9 @@ def test_the_lead_of_a_fragment_window_is_the_message_before_its_item() -> None:
     user message before that item, never a later one."""
     a, big, b = _user(1, "A"), _tool(2), _user(3, "B")
     fragment = {"part_of": big["id"], "role": "assistant", "part": 1, "parts": 2, "json_fragment": "{"}
-    assert s7_review._last_user_before([a, big, b], fragment) is a
-    assert s7_review._last_user_before([a, big, b], b) is a
-    assert s7_review._last_user_before([a, big, b], a) is None
+    assert s7_review._exchange_before([a, big, b], fragment)[0] is a
+    assert s7_review._exchange_before([a, big, b], b)[0] is a
+    assert s7_review._exchange_before([a, big, b], a) == (None, [])
 
 
 def test_an_id_the_record_shows_for_an_item_stands_for_its_anchors(cdf_env, tmp_path, monkeypatch, model) -> None:
@@ -559,3 +559,21 @@ def test_the_review_prompt_carries_the_shared_knowledge_standard():
     prompt = " ".join(s7_review.build_prompt(tuple(contracts_v2.UNIT_RULES), {}, "I", "R").split())
     for sentence in ks.sentences():
         assert " ".join(sentence.split()) in prompt, sentence
+
+
+def test_a_window_sees_the_exchange_just_before_it_and_may_not_cite_it(cdf_env, tmp_path, monkeypatch, model):
+    """A window that opens with "不对" reads what it says no to: the person's last message
+    before the window and what the agent said after it, as context it cannot cite."""
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    _record_person_message(cdf_env, "m1", "做一个首页")
+    asyncio.run(cdf_env["db"].messages.put({"id": "a1", "session_id": SESSION, "role": "assistant", "content": [
+        {"type": "thinking", "thinking": "hidden"}, {"type": "text", "text": "我直接写了首页的代码。"}]}))
+    from core.ingestion.sources import s2_session
+    watermark = s7_review._key(s2_session._transcript_sync(SESSION)[-1])
+    later = _record_person_message(cdf_env, "m2", "不对，先出 mockup")
+    run = Runner([_agent_correction(f"event:{later[0]}", quote="先出 mockup")])
+    s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=watermark, runner=run)
+    index = run.calls[0]["prompt"].split("<session-record>")[0]
+    before = next(line for line in index.splitlines() if "not citable" in line)
+    assert "做一个首页" in before and "我直接写了首页的代码。" in before and "hidden" not in before
+    assert "event:" not in before                                  # nothing in it can be cited

@@ -244,22 +244,28 @@ def knowledge_view(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _last_user_before(transcript: list[dict[str, Any]], first: dict[str, Any]) -> dict[str, Any] | None:
-    """The last user row of *transcript* before *first* in send order, or None. A
-    fragment of an oversized item (``part_of``) stands for the item it is part of."""
+def _exchange_before(transcript: list[dict[str, Any]],
+                     first: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    """(the last user row of *transcript* before *first*, what the agent said after it up
+    to *first*), in send order; (None, []) when no user row comes before. A fragment of
+    an oversized item (``part_of``) stands for the item it is part of."""
     target = str(first.get("part_of") or first.get("id") or "")
-    found = None
+    found, said = None, []
     for item in transcript:
         if str(item.get("id") or "") == target:
-            return found
+            return found, said
         if item.get("role") == "user":
-            found = item
-    return None
+            found, said = item, []
+        elif found is not None:
+            said += [str(b.get("text")) for b in _blocks(item)
+                     if b.get("type") == "text" and str(b.get("text") or "").strip()]
+    return None, []
 
 
 def evidence(session_id: str, rows: list[dict[str, Any]], input_rows: list[dict[str, Any]],
              registered: tuple[str, ...],
-             lead: dict[str, Any] | None = None) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+             lead: dict[str, Any] | None = None,
+             lead_reply: list[str] | tuple[str, ...] = ()) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     """(index text, its anchors, read-set root ids) for reviewing *rows*.
 
     *registered*: the event ids ``s2_session.window_roots`` registered for the window's
@@ -267,9 +273,11 @@ def evidence(session_id: str, rows: list[dict[str, Any]], input_rows: list[dict[
     everything the review sees after the watermark plus every user root of the session.
     The index lists the user messages (in full, the words a ``user_quote`` is copied from,
     each labelled by its kind) and the measured fields; the record's own items are cited
-    by their anchors. *lead*: the last user message before *rows*, shown when *rows* hold
-    none, as context only: it is not citable, so a unit about the work cites the work, and
-    an old message cannot become the user's words for a claim it does not state."""
+    by their anchors. *lead* and *lead_reply*: the person's last message before *rows* and
+    what the agent said after it before *rows*, shown as context only (a window that opens
+    with "no" reads what it says no to; a window with no user message reads the request
+    it follows). Not citable: a unit about the work cites the work, and an old message
+    cannot become the user's words for a claim it does not state."""
     owned = [r for r in input_rows if not str(r.get("ref") or "").startswith(s2_session._S2_REF)]
     user_events = s2_session._user_events_by_message(owned)
     kinds = {str(r["event_id"]): r.get("kind") for r in owned}
@@ -292,9 +300,12 @@ def evidence(session_id: str, rows: list[dict[str, Any]], input_rows: list[dict[
         if found:
             lines.append(f"- event:{found[0]} ({found[1]}): " + json.dumps(found[2], ensure_ascii=False))
             anchors.append(f"event:{found[0]}")
-    if not users and lead and (found := said(lead)):
-        lines.append("- (not citable) the person's last message before this record, the request "
-                     "the work below follows: " + json.dumps(found[2], ensure_ascii=False))
+    if lead and (found := said(lead)):
+        before = ("- (not citable) just before this record, the person said: "
+                  + json.dumps(found[2], ensure_ascii=False))
+        if lead_reply:
+            before += "; you replied: " + json.dumps("\n".join(lead_reply), ensure_ascii=False)
+        lines.append(before)
     for anchor, path, value in _measured(session_id, rows, registered):
         lines.append(f"- {anchor} (measured {path}): {json.dumps(value, ensure_ascii=False)}")
         anchors.append(anchor)
@@ -917,9 +928,10 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
         window_rows = [r for r in window if "part_of" not in r] or window
         # one registration of the window serves the record, the evidence check and the read set
         roots = s2_session.window_roots(session_id, window)
+        lead, lead_reply = _exchange_before(transcript, window[0])
         index, anchors, read = evidence(session_id, window_rows, input_rows,
                                         tuple(dict.fromkeys(e for ids in roots for e in ids)),
-                                        _last_user_before(transcript, window[0]))
+                                        lead, lead_reply)
         record, shown_anchors, aliases = _record(window, roots, user_events)
         anchors = tuple(dict.fromkeys(anchors + shown_anchors))
         prompt = build_prompt(ALLOWED_KINDS, sig, index, record, (number, len(chunks)), projects, general)

@@ -93,6 +93,7 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
         "decisions": [{"kind": "cognition", "type": "decision", "scope": "project:<PROJECT>",
                        "title": "a choice this run made", "what": "what was chosen",
                        "why": "why it was chosen", "rejected_alternatives": "none",
+                       "applicability": "when this choice bears on later work",
                        "evidence": ["<ANCHOR>"]}],
         "corrections": [], "practices": [], "gaps": [],
     },

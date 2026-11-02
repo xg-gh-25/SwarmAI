@@ -104,7 +104,6 @@ SKILL_RULE = ('the skill this unit is about, when it is about how one skill beha
 UNIT_RULES: dict[str, tuple[str, ...]] = {
     "cognition": (
         "type=decision needs why and rejected_alternatives (write 'none' if none)",
-        "type=pitfall needs its trigger condition in applicability",
         "type=process needs how",
         "scope=user needs user_kind; user_kind only for scope=user",
     ),
@@ -165,7 +164,11 @@ class CognitionUnit(_Unit):
     what: str = Field(min_length=1)
     how: str | None = None
     why: str | None = None
-    applicability: str | None = None
+    # when it applies: a recognisable trigger. Required of every unit, so an account of
+    # what happened (which has none) is not produced as knowledge (design
+    # 2026-11-02-cdf-extraction-input); the schema every model extractor answers in
+    # carries the requirement (extract_llm.unit_schema).
+    applicability: str = Field(min_length=1)
     rejected_alternatives: str | None = None
     # which project document a scope=project:X unit belongs in (DDD_MATRIX); the
     # extractor, who has the context, says it (design 2026-10-29-cdf-refactor §3.1)
@@ -195,8 +198,6 @@ class CognitionUnit(_Unit):
             raise ValueError("same and adds exclude each other")
         if self.type == "decision" and not (self.why and self.rejected_alternatives):
             raise ValueError("decision needs why and rejected_alternatives (write 'none' if none)")
-        if self.type == "pitfall" and not self.applicability:
-            raise ValueError("pitfall needs a trigger condition in applicability")
         if self.type == "process" and not self.how:
             raise ValueError("process needs how")
         if self.scope == "user" and self.user_kind is None:
@@ -257,7 +258,9 @@ class GapUnit(_Unit):
     title: str = Field(min_length=1)
     what: str = Field(min_length=1)
     why: str | None = None
-    proposed_next: str | None = None
+    # the concrete next step: required, so a note on the progress of the work (which has
+    # none) is not produced as a gap (design 2026-11-02-cdf-extraction-input)
+    proposed_next: str = Field(min_length=1)
     same: OverrideRef | None = None      # see CognitionUnit
     adds: OverrideRef | None = None
 
