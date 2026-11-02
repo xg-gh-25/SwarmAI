@@ -131,3 +131,23 @@ def test_a_restatement_of_an_overridden_entry_that_a_live_entry_says_is_not_refu
     _evolution(cdf_env)                         # no live entry says it: still refused
     decision = run_unit_v2(_row(_class_lesson(what=body), source="S7", tainted=False), cdf_env["workspace"])
     assert (decision.decision, decision.reason) == ("reject", "withdrawn")
+
+
+# ③ one entry is one kind of judgment that went wrong, not one incident
+
+def test_the_review_writes_a_correction_as_the_kind_of_judgment_not_the_incident():
+    from core.ingestion.sources import s7_review
+    prompt = " ".join(s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", "record").split())
+    assert "the kind of judgment that went wrong" in prompt
+    assert "the incident's particulars" in prompt
+
+
+def test_the_relation_turn_takes_the_kind_of_judgment_as_the_thing():
+    from core.ingestion import relations_v2
+    from core.ingestion.sources import s7_review
+    unit = type("U", (), {"kind": "cognition", "type": "correction", "title": "Hand back only what I cannot do",
+                          "what": "Look up the operation before handing a task to the person."})()
+    entry = relations_v2.Entry("702305c2", ".context/EVOLUTION.md#Corrections Captured#cand:x",
+                               ".context/EVOLUTION.md", "Corrections Captured", _HANDBACK)
+    text = " ".join(s7_review.relation_prompt([unit], [[entry]]).split())
+    assert "the same particular thing is the kind of judgment that went wrong" in text

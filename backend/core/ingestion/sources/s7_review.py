@@ -300,7 +300,11 @@ context may hold only a summary of it).
    corrected you, verbatim, into user_quote (a correction without them is not read in
    every session); when it was about how a skill behaved, name that skill in skill. A
    correction about one document, tool or subject only (not how you work) is declared for
-   that subject, like any narrow fact.
+   that subject, like any narrow fact. A correction about how you work is written as the
+   kind of judgment that went wrong: the rule that would have prevented it and the sign
+   that you are about to make it again, true in any project. Not the story of this
+   incident: the incident's particulars (the screen, API, file or project it happened in)
+   go in a unit of their own for that project, when they are worth keeping.
 6. Record what stays true, as it stands at the end of this record. The state of the
    moment (not pushed, needs a build, not verified yet, a count that will change) is not
    knowledge and is not written into any unit. A problem the record leaves open at its
@@ -390,6 +394,10 @@ answering with the relations schema, one item per unit. For each unit:
 - When the unit completes or corrects an entry about the same particular thing, write
   the unit as the whole current statement and declare it overrides that entry, rather
   than "adds" beside it: one current entry per thing.
+- For a correction or a lesson about how you work, the same particular thing is the kind
+  of judgment that went wrong, not the incident: when an entry already states that kind,
+  the unit is "same" (it says nothing more) or the whole current statement of that kind
+  that overrides the entry (it says more); a mistake made again also declares repeats.
 - repeats (corrections only): the earlier correction of the same mistake, when you made
   it again.
 - An event an earlier review of this session recorded (marked "(this session)") that this
