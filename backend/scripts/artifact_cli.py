@@ -448,7 +448,8 @@ def _bind_into_workspace(args) -> None:
         sys.exit(1)
     root = placed.target if placed is not None else current
     print(json.dumps({"checkout": str(root), "cloned": bool(placed and placed.cloned),
-                      "relocated": bool(placed and placed.mirror is not None)}),
+                      "relocated": bool(placed and placed.mirror is not None),
+                      **({"note": placed.note} if placed is not None and placed.note else {})}),
           file=sys.stderr)
     try:
         _bind_local(project, str(root), source=source)

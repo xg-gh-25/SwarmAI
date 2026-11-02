@@ -87,7 +87,7 @@ status: r3，实施中（XG 2026-11-02：全部直接改）
 5. **已有 Brain 的迁移。**
    - binding 没有 `worktree`（checkout 在镜像里）时，P6 新增一行 PENDING："checkout is in SwarmAI's managed mirror; code returned from a Hive lands there"，并给出命令 `artifact_cli bind --project <P> --relocate <repo>`。
    - 镜像干净 → 移到 `<repos_dir>/<repo>`（同盘 rename），写入 `worktree`，注册为本地仓库。
-   - 有未提交改动或未推送的提交 → 拒绝，并说明（不搬、不删）。
+   - 镜像里有改动也照样整体搬过去，不拒绝：搬移不删除任何东西。（原设计在这里拒绝，但真实仓库证明这条判断会误伤：上游的 release tag 常指向没有任何远端分支包含的提交，「未推送」检查把它算作未保存的工作，于是一个干净的镜像也搬不动。这条检查本来是为删除准备的。）
    - 目前受影响的是 AIDLC 的 `adlc-workflows` 和 gbrain（`~/.swarm-ai/bindings/` 下只有这两个仓库目录）。
 6. **提示词和文档（G7d）。** `newBrainDispatch.ts:222-223`、`:260` 和 SKILL.md 的 P3 一行，都改成 `bind --url`，并说明它会克隆到工作区。
 
@@ -99,7 +99,7 @@ status: r3，实施中（XG 2026-11-02：全部直接改）
 - **已有同 remote 的 binding、本机却没有 checkout（手写的 binding，或另一台机器的 `worktree` 路径）时，`bind --url` 克隆进工作区，并把这条 binding 的 `worktree` 指过去**（`repo_placement.attach`），不新增第二条 binding。
 - **`--branch` 的规则。** 这次 bind 放下的 checkout（新克隆、搬进来的镜像）切到该分支；用户已经在用的 checkout 不切，只检查，分支不对就拒绝。分支名按 git 自己的规则判断（`git check-ref-format --branch`）。
 - **路径守卫按磁盘上的真实拼写比较**（`core/true_path.true_case`）。大小写不敏感的磁盘上，`~/.SSH` 就是 `~/.ssh`。`local_roots._refusal` 和 `library_inbox._is_system_path` 都先把路径换成真实拼写再比较。`file://` URL 只认本机（`file:///path` 或 `file://localhost/path`），由 `ddd_bindings.file_url_path` 统一解析。
-- **任何步骤失败都会撤回。** checkout 被登记（`declare`）之前，任何异常都会撤回：克隆删掉，镜像搬回，`bindings.yaml` 恢复为写入前的字节。跨盘搬移中途失败时，只有镜像仍完整才删掉目标；镜像已不完整就保留目标，并说明它在哪。
+- **任何步骤失败都会撤回。** checkout 被登记（`declare`）之前，任何异常都会撤回：克隆删掉，镜像搬回，`bindings.yaml` 恢复为写入前的字节。同一块盘上，搬移就是一次 rename。跨盘时先复制、再删原件：复制中断，就删掉不完整的副本，原件只被读过，没有变化；删原件中断，就保留完整的副本，继续往下走，并说明旧文件夹里剩下的部分不再使用。
 
 **测试（先红后绿；拒绝类用例断言具体错误文字）。** 新增 `tests/test_local_binding.py`（今天没有测试覆盖 `record()`）、`tests/test_artifact_cli_bind_url.py`，扩展 `tests/test_project_agent_draft.py`、`tests/test_task_spec.py`、`tests/test_brain_sync.py`：
 - `--url` 指向临时 bare repo（`file://`），`repos_dir` 指向临时目录：
@@ -114,7 +114,7 @@ status: r3，实施中（XG 2026-11-02：全部直接改）
 - `task_spec.segment`：本机运行打印 checkout 和 session worktree 规则；Hive 运行的 `task_text` 不变。
 - `code-change` 模式的仓库没有本机 checkout → 校验报 "no local checkout"。
 - `[DDD:<project>]` 提示里有 checkout 那一行。
-- `--relocate`：干净镜像被移走，`worktree` 已写入，`hive_return._checkout` 返回新路径；有未提交改动 → 拒绝，镜像原样不动。
+- `--relocate`：干净镜像被移走，`worktree` 已写入，`hive_return._checkout` 返回新路径；有未提交改动 → 原样搬过去；上游 tag 指向分支外的提交 → 照样能搬。
 - 桌面：`newBrainDispatch.test.ts` 断言 URL 资产的提示包含 `bind --project <name> --url`。
 
 ## 3. G2 命令解析不认包管理器

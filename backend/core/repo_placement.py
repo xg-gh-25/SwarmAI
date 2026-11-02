@@ -359,6 +359,7 @@ class Placed:
                  mirror: Optional[Path] = None, cloned: bool = False) -> None:
         self.project_dir, self.target = Path(project_dir), Path(target)
         self.original, self.mirror, self.cloned = original, mirror, cloned
+        self.note: Optional[str] = None
 
     def undo(self) -> None:
         import shutil
@@ -416,12 +417,34 @@ def use_branch(root: Path, branch: Optional[str], *, ours: bool) -> None:
                              f"check out {branch} there yourself, or bind without --branch")
 
 
-def _intact(checkout: Path) -> bool:
-    """*checkout* is still a whole git checkout (a move between disks cut short deletes
-    part of it)."""
-    from core.brain_bootstrap.repo_read import git
-    return (checkout / ".git").exists() and git(checkout, "rev-parse", "--verify", "-q",
-                                                "HEAD") is not None
+def _move_dir(src: Path, dst: Path) -> Optional[str]:
+    """Move the folder *src* to *dst* without losing anything in it; a note when part
+    of *src* is left behind, else None. On one disk it is a rename. Between disks it is
+    a copy, then the removal of *src*: a copy cut short is removed (*src* was only read)
+    and PlacementError says nothing was changed; a removal cut short keeps the complete
+    copy and returns the note (the leftovers of *src* are no longer used)."""
+    import errno
+    import os
+    import shutil
+    try:
+        os.rename(src, dst)
+        return None
+    except OSError as e:
+        if e.errno != errno.EXDEV:
+            raise PlacementError(f"{src} could not be moved ({type(e).__name__}); "
+                                 "nothing was changed") from None
+    try:
+        shutil.copytree(src, dst, symlinks=True)
+    except Exception as e:  # noqa: BLE001 — the source is untouched: drop the partial copy
+        _remove_fresh(dst)
+        raise PlacementError(f"{src} could not be copied to {dst} ({type(e).__name__}); "
+                             "nothing was changed") from None
+    try:
+        shutil.rmtree(src)
+    except Exception as e:  # noqa: BLE001 — the copy is complete: keep it
+        return (f"the checkout is now at {dst}; part of the old folder {src} could not be "
+                f"removed ({type(e).__name__}) and is no longer used")
+    return None
 
 
 def _other_brains_on(project_dir: Path, repo: str, mirror: Path) -> list[str]:
@@ -444,11 +467,13 @@ def _other_brains_on(project_dir: Path, repo: str, mirror: Path) -> list[str]:
 
 def relocate(project_dir: Path, repo: str) -> Placed:
     """Move *repo*'s bind-managed mirror into the repository workspace and record it
-    there (``bindings.yaml`` ``worktree``). Refused, with nothing moved, when the mirror
-    holds work that is not on a remote, another Brain uses the same mirror, the target is
-    taken or not allowed, or the binding already has its own checkout."""
+    there (``bindings.yaml`` ``worktree``). The folder moves as it is, with any work in
+    it (moving deletes nothing; ``_move_dir``). Refused, with nothing moved, when another
+    Brain uses the same mirror, the target is taken or not allowed, or the binding
+    already has its own checkout. ``Placed.note`` says when part of the old folder was
+    left behind."""
     import shutil
-    from core.ddd_bindings import _worktree_has_unsaved_work, binding_worktree
+    from core.ddd_bindings import binding_worktree
     from core.project_agent import _bindings, repo_roots
     project_dir = Path(project_dir)
     b = _bindings(project_dir).get(repo)
@@ -466,8 +491,6 @@ def relocate(project_dir: Path, repo: str) -> Placed:
     if others:
         raise PlacementError(f"{', '.join(others)} also use{'s' if len(others) == 1 else ''} "
                              f"{mirror}; bind this Brain with --url instead (nothing was moved)")
-    if _worktree_has_unsaved_work(mirror):
-        raise PlacementError(f"{mirror} has uncommitted or unpushed work; nothing was moved")
     workspace = check_repos_dir()
     target = workspace / repo
     _check_target(target)
@@ -475,23 +498,7 @@ def relocate(project_dir: Path, repo: str) -> Placed:
         raise PlacementError(f"{target} already exists; nothing was moved")
     original = _bindings_bytes(project_dir)
     workspace.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.move(str(mirror), str(target))
-    except Exception as e:  # noqa: BLE001 — a move cut short across disks
-        name = type(e).__name__
-        if _intact(mirror):                  # the mirror is whole: drop the partial copy
-            if target.exists():
-                _remove_fresh(target)
-            raise PlacementError(f"{mirror} could not be moved ({name}); "
-                                 "nothing was changed") from None
-        if target.exists():                  # the copy may be the only whole one: keep it
-            raise PlacementError(
-                f"{mirror} could not be moved ({name}) and is no longer complete; the copy "
-                f"at {target} was kept and bindings.yaml is unchanged (every commit is on "
-                "the remote: bind again with --url)") from None
-        raise PlacementError(f"{mirror} could not be moved ({name}) and is no longer "
-                             "complete; bind again with --url (every commit is on the "
-                             "remote)") from None
+    note = _move_dir(mirror, target)
     from core.local_binding import set_worktree
     try:
         set_worktree(project_dir, repo, target)
@@ -505,4 +512,6 @@ def relocate(project_dir: Path, repo: str) -> Placed:
                 f"be moved back ({type(back).__name__}); it is at {target}") from None
         raise PlacementError(f"bindings.yaml could not be updated ({name}); "
                              "the mirror was put back") from None
-    return Placed(project_dir, target, original=original, mirror=mirror)
+    placed = Placed(project_dir, target, original=original, mirror=mirror)
+    placed.note = note
+    return placed

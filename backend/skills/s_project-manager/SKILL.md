@@ -491,7 +491,7 @@ and each session's `[DDD:<project>]` note names the checkout.
 - **`mirror`:** an older Brain whose repository was cloned into SwarmAI's managed
   `~/.swarm-ai/bindings/<repo>`. It is not a place to work (a re-bind replaces it), so a
   task that returns commits is refused there; move it with
-  `bind --project <P> --relocate <repo>` (refused, nothing moved, if it holds unpushed work).
+  `bind --project <P> --relocate <repo>` (the folder moves as it is, with any work in it).
 
 #### Step 0: A repository URL: clone it into the workspace
 

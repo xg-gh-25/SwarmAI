@@ -160,9 +160,11 @@ def test_relocate_moves_a_clean_mirror_into_the_workspace(env, capsys):
     from core.repo_placement import placement
     mirror = _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
     assert placement(env["project"])["app"]["checkout"] == "mirror"
+    inode = mirror.stat().st_ino
     _bind_ok(["--relocate", "app"], capsys)
     target = (env["repos"] / "app").resolve()
     assert not mirror.exists() and (target / "m.py").is_file()
+    assert target.stat().st_ino == inode                      # one disk: a rename, not a copy
     assert repo_roots(env["project"]) == {"app": target}
     assert placement(env["project"])["app"]["checkout"] == "repos_dir:app"
     import yaml
@@ -170,12 +172,29 @@ def test_relocate_moves_a_clean_mirror_into_the_workspace(env, capsys):
     assert len(b) == 1 and b[0]["delivery_contract"]["review_path"] == "s_expert-review"
 
 
-def test_relocate_refuses_a_mirror_with_unpushed_work_and_moves_nothing(env, capsys):
+def test_relocate_moves_a_mirror_with_work_in_it_as_it_is(env, capsys):
     mirror = _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
     (mirror / "wip.py").write_text("x = 1\n")
-    code, out = _bind(["--relocate", "app"], capsys)
-    assert code == 1 and "nothing was moved" in out.err
-    assert (mirror / "wip.py").is_file() and not (env["repos"] / "app").exists()
+    _bind_ok(["--relocate", "app"], capsys)
+    assert not mirror.exists() and (env["repos"] / "app" / "wip.py").read_text() == "x = 1\n"
+
+
+def test_relocate_moves_a_clean_mirror_whose_tags_no_branch_holds(env, capsys):
+    # upstream release tags often point at commits no remote branch has: still clean
+    url = _bare_with_commit(env["tmp"] / "remotes" / "app.git")
+    src = env["tmp"] / "remotes" / "app.git-src"
+    subprocess.run(["git", "-C", str(src), "checkout", "-q", "-b", "rel"], check=True)
+    (src / "r.py").write_text("r = 1\n")
+    subprocess.run(["git", "-C", str(src), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(src), *_GIT_ID, "commit", "-q", "-m", "rel"], check=True)
+    subprocess.run(["git", "-C", str(src), "tag", "v1"], check=True)
+    subprocess.run(["git", "-C", str(src), "push", "-q", str(env["tmp"] / "remotes" / "app.git"),
+                    "v1"], check=True)
+    mirror = _mirror_binding(env, url)
+    assert subprocess.run(["git", "-C", str(mirror), "tag"], capture_output=True,
+                          text=True).stdout.strip() == "v1"
+    _bind_ok(["--relocate", "app"], capsys)
+    assert not mirror.exists() and (env["repos"] / "app" / "m.py").is_file()
 
 
 # ── what an agent is told ────────────────────────────────────────────────────
@@ -487,53 +506,75 @@ def test_a_branch_name_git_refuses_is_refused(branch):
         check_branch(branch)
 
 
-def _move_that_fails(break_mirror: bool):
-    import shutil
+def _across_disks(monkeypatch, mirror: Path) -> None:
+    import errno
+    import os
+    real = os.rename
 
-    def move(src, dst):
-        shutil.copytree(src, dst, symlinks=True)
-        if break_mirror:
-            shutil.rmtree(Path(src) / ".git")
-        raise OSError("disk went away")
-    return move
+    def rename(src, dst, *a, **k):
+        if Path(src) == mirror:
+            raise OSError(errno.EXDEV, "cross-device link")
+        return real(src, dst, *a, **k)
+    monkeypatch.setattr("os.rename", rename)
 
 
-def test_a_move_cut_short_with_the_mirror_whole_drops_the_copy(env, capsys, monkeypatch):
+def test_a_move_between_disks_copies_then_removes(env, capsys, monkeypatch):
     mirror = _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
-    monkeypatch.setattr("shutil.move", _move_that_fails(break_mirror=False))
+    _across_disks(monkeypatch, mirror)
+    _bind_ok(["--relocate", "app"], capsys)
+    assert not mirror.exists() and (env["repos"] / "app" / "m.py").is_file()
+
+
+def test_a_copy_between_disks_cut_short_keeps_the_mirror_and_no_copy(env, capsys, monkeypatch):
+    import shutil
+    mirror = _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
+    text = (env["project"] / "bindings.yaml").read_text()
+    _across_disks(monkeypatch, mirror)
+    real = shutil.copytree
+
+    def copytree(src, dst, **k):
+        real(src, dst, **k)
+        raise OSError("disk full")
+    monkeypatch.setattr("shutil.copytree", copytree)
     code, out = _bind(["--relocate", "app"], capsys)
     assert code == 1 and "nothing was changed" in out.err
-    assert mirror.is_dir() and not (env["repos"] / "app").exists()
-
-
-def test_a_move_cut_short_after_the_mirror_broke_keeps_the_copy(env, capsys, monkeypatch):
-    _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
-    text = (env["project"] / "bindings.yaml").read_text()
-    monkeypatch.setattr("shutil.move", _move_that_fails(break_mirror=True))
-    code, out = _bind(["--relocate", "app"], capsys)
-    assert code == 1 and "was kept" in out.err
-    assert (env["repos"] / "app" / ".git").exists()
+    assert (mirror / "m.py").is_file() and not (env["repos"] / "app").exists()
     assert (env["project"] / "bindings.yaml").read_text() == text
 
 
-def test_a_failed_move_back_says_where_the_checkout_is(env, capsys, monkeypatch):
+def test_a_removal_between_disks_cut_short_keeps_the_complete_copy(env, capsys, monkeypatch):
     import shutil
-    _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
-    real_move = shutil.move
-    calls = []
+    mirror = _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
+    (mirror / "wip.py").write_text("x = 1\n")
+    _across_disks(monkeypatch, mirror)
+    real = shutil.rmtree
 
-    def move(src, dst):
-        calls.append(src)
-        if len(calls) > 1:
-            raise OSError("no")
-        return real_move(src, dst)
+    def rmtree(path, *a, **k):
+        if Path(path) == mirror:
+            (mirror / "wip.py").unlink()          # part of it went, then the disk failed
+            raise OSError("I/O error")
+        return real(path, *a, **k)
+    monkeypatch.setattr("shutil.rmtree", rmtree)
+    out = _bind_ok(["--relocate", "app"], capsys)
+    from core.project_agent import repo_roots
+    assert (env["repos"] / "app" / "wip.py").read_text() == "x = 1\n"
+    assert repo_roots(env["project"]) == {"app": (env["repos"] / "app").resolve()}
+    assert "no longer used" in out.err
+
+
+def test_a_failed_move_back_says_where_the_checkout_is(env, capsys, monkeypatch):
+    _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
+
+    def no_move(src, dst):                    # the move back (the move in is a rename)
+        raise OSError("no")
 
     def broken(*a, **k):
         raise OSError("read-only")
-    monkeypatch.setattr("shutil.move", move)
+    monkeypatch.setattr("shutil.move", no_move)
     monkeypatch.setattr("core.local_binding.set_worktree", broken)
     code, out = _bind(["--relocate", "app"], capsys)
     assert code == 1 and f"it is at {env['repos'] / 'app'}" in out.err
+    assert (env["repos"] / "app" / "m.py").is_file()
 
 
 def test_any_failure_before_the_checkout_is_owned_undoes_the_clone(env, capsys, monkeypatch):
