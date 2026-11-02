@@ -149,12 +149,18 @@ r1 的前提审查找出了真问题，但 r2、r3 对每一条发现都加了�
 
 **第一次整理的结果：** EVOLUTION 73.6KB → 16.1KB（CDF 时代的 35 条纠正加旧的手写块，并成 8 个判断类别；每个类别保留最新那条的 `cand:` 标记，以后 S7 能覆盖它）。MEMORY 57.3KB → 46.2KB（4 条长篇 COE 改成短教训，完整复盘移到 Knowledge/Archives）。备份在 `~/.swarm-ai/backups/2026-11-02-cognition-consolidation/`。
 
-**遗留风险（第二轮评审的 LOW，记录、不在这次修）：**
+**第二轮评审的 LOW，后续处理（2026-11-02）：**
 
-- `_target_basis` 读的是条目里第一个 `cand:` 标记，条目正文里伪造一个标记可能让依据被读错；
-- General Brain 条目被同一文档的单元拿掉时不看依据（和 DDD 条目被本项目拿掉的规则一致）；
-- `_single_grep_n` 没有把单独的 `&` 和 `-h` 当作排除条件，不可信的 stdout 可能抬高读取计数（只影响计数）；
-- 超过 2000 字的旧条目永远过不了隔离核对，等于不能被覆盖（属于失败即关闭）。
+- 条目的身份改为由它自己的最后一个 `cand:` 标记决定（`units.cand_marker`），正文里伪造的标记不再起作用；
+- `_single_grep_n` 遇到 `;`、`&`、`|`、换行、反引号、`$(`、`-h` / `--no-filename` 时一律不计数；
+- 超过上限的旧条目，截短后再送去隔离核对，不会永远盖不掉；
+- **有意保留：** General Brain 条目被同一文档的单元拿掉时不看依据，和 DDD 条目被本项目拿掉的规则一致；要求依据会让 General Brain 重新变成只进不出。
 
-**已知、和这次无关：** main 上本来就红的 `test_missing_section_parks_without_retry_then_requeues_and_writes`、`test_i6_no_pattern_reads_what_a_unit_says`、`test_every_option_in_the_cards_exists_and_no_card_names_the_runner`。
+**当时 main 上本来就红的测试：** 三个全部修好，另外两个 repo-guidance 限长测试也一并修好。
+
+**同时清掉的尾巴：**
+
+- 月度犯错审计在模型调用失败时整轮失败（`auth_failed` 下一轮重试），不再把失败算作"未判断"；
+- C3 接受带 `event:…:` 前缀或至少 8 位唯一前缀的消息 id；
+- DDD 元数据去掉死字段 ref / last / decay：读取兼容新旧两种形状，所有写入方只写 `<!-- source:… | taint:… -->`；一次性迁移脚本 `scripts/meta_shape_migrate.py` 要在新 backend 部署之后再跑。
 
