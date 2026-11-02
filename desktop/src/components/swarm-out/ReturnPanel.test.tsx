@@ -1,4 +1,4 @@
-/** ReturnPanel: take back, review, approve (protected paths need their own tick); no reject
+/** ReturnPanel: take back, review, land (protected paths are listed, not ticked); no reject
  *  (not good enough is a re-run or a discard on the run's card). */
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
@@ -29,20 +29,19 @@ const REV = {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe('ReturnPanel', () => {
-  it('lands only the shown tip, and only after the protected paths are ticked', async () => {
+  it('lands only the shown tip; protected paths are listed and need no tick', async () => {
     returnPrepare.mockResolvedValue(REV);
     returnLand.mockResolvedValue({ landed: true, head: 'abc123', into: 'main' });
     render(<ReturnPanel dispatchId="so_1" url="https://github.com/acme/lib.git" />);
     fireEvent.click(screen.getByTestId('swarm-out-return-prepare'));
     expect((await screen.findByTestId('swarm-out-return-protected')).textContent).toContain('scripts/build.sh');
     expect(returnPrepare).toHaveBeenCalledWith('so_1', 'https://github.com/acme/lib.git');
+    expect(screen.queryByTestId('swarm-out-return-tick')).toBeNull();
     const landBtn = screen.getByTestId('swarm-out-return-land') as HTMLButtonElement;
-    expect(landBtn.disabled).toBe(true);
-    fireEvent.click(screen.getByTestId('swarm-out-return-tick'));
     expect(landBtn.disabled).toBe(false);
     fireEvent.click(landBtn);
     expect((await screen.findByTestId('swarm-out-return-done')).textContent).toContain('已落到 main');
-    expect(returnLand).toHaveBeenCalledWith('so_1', REV.key, REV.tip, true);
+    expect(returnLand).toHaveBeenCalledWith('so_1', REV.key, REV.tip);
   });
 
   it('a change with no protected path lands without a tick, and there is no reject', async () => {

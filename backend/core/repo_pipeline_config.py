@@ -15,7 +15,7 @@ trailer = ""         # one line added to every landing commit message, e.g. a Co
 link = []            # repo-relative dirs of the main checkout symlinked into a run worktree
 
 [hive_return]
-protected = []       # globs: changes a Hive run made there need their own approval
+protected = []       # globs: changes a Hive run made there are marked for the reviewer
 ```
 
 ``[hive_return] protected`` is read by ``hive_return_protected``, which fails closed

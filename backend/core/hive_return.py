@@ -18,10 +18,10 @@ here, trusting nothing the Hive reported beyond "there is a bundle with this sha
 What the person reviews: the files with their line counts, the commits (their messages
 are the Hive's text, shown as data and never put into an agent's context), and the
 files under the repository's own protected paths (``.swarmai/pipeline.toml``
-``[hive_return] protected``, read from this machine's main branch), which need their
-own approval.
+``[hive_return] protected``, read from this machine's main branch), marked so the reviewer
+reads them with care; they land with the rest, and the landed commit names them.
 
-``land(dispatch_id, key, tip, approve_protected)``: only for the tip prepared and shown;
+``land(dispatch_id, key, tip, allow_git_exec)``: only for the tip prepared and shown;
 merges the reviewed change (``base..tip``; for a later turn of the same run, what came
 after the tip that landed) onto the run's branch from objects only (no working tree, no
 hook, no filter), as one commit with a message this host writes (the Hive's commits stay at the ``refs/hive/`` ref),
@@ -543,15 +543,14 @@ def _summary(summary: Optional[str]) -> Optional[str]:
     return text or None
 
 
-def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
-         allow_git_exec: bool = True, summary: Optional[str] = None) -> dict[str, Any]:
-    """Land the prepared tip the person or the dispatching agent approved; commits that
-    change the repository's protected paths need ``approve_protected``, and the landed
-    commit's message names those paths. The agent's landing (the route passes
-    ``approve_protected`` True and ``allow_git_exec`` False for it: design
-    2026-11-02-hive-run-decision-record §2) lands the repository's protected paths it
-    reviewed and refuses the git hooks and filters (``GIT_PROTECTED``), which make git
-    run code on this machine on its own. The flow judges whether the result is the one
+def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
+         summary: Optional[str] = None) -> dict[str, Any]:
+    """Land the prepared tip the person or the dispatching agent reviewed: landing is the
+    judgment, so protected paths need no approval of their own (the landed commit's
+    message names them). The agent's landing (the route passes ``allow_git_exec`` False
+    for it: design 2026-11-02-hive-run-decision-record §2) refuses the git hooks and
+    filters (``GIT_PROTECTED``), which make git run code on this machine on its own; the
+    person may land them. The flow judges whether the result is the one
     asked for; it is not where security is enforced (that is its own work). The commit is built from objects only
     (``merge-tree --write-tree`` of the branch and the tip over the reviewed base, then
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
@@ -568,10 +567,6 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
                           "(git hooks, filters, submodules): "
                           + ", ".join(git_exec[:10])
                           + "; an agent does not land them: re-run asking the Hive to leave them out")
-    if state["protected_files"] and not approve_protected:
-        raise ReturnError("the commits change protected paths (they guard the agent or run code "
-                          "here): " + ", ".join(state["protected_files"][:10])
-                          + "; review their diff and approve them to land")
     if state["files_total"] > len(state["files"]):
         raise ReturnError(f"the commits change {state['files_total']} files, more than the review shows; "
                           f"land them by hand from {state['ref']}")

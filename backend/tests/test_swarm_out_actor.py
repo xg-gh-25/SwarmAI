@@ -245,15 +245,15 @@ def test_the_land_route_lets_an_agent_land_reviewed_protected_paths_but_never_gi
     monkeypatch.setattr(hive_return, "land", lambda *a: landed.append(a) or {"landed": True})
     _rows(monkeypatch, _offer("accept", "discard", accept="land"))
     body = {**AGENT, "key": "k", "tip": "t", "summary": "s"}
-    assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json={**body, "approve_protected": True}).status_code == 200
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
     # an agent lands the repository's protected paths it reviewed, never the git hooks
     # and filters that run code here (design 2026-11-02-hive-run-decision-record §2);
     # its summary becomes the landed commit's message body
-    assert landed == [(DID, "k", "t", True, False, "s"), (DID, "k", "t", True, False, "s")]
+    assert landed == [(DID, "k", "t", False, "s")]
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land",
                   json={"by": "person", "key": "k", "tip": "t"}).status_code == 200
-    assert landed[-1] == (DID, "k", "t", False, True, None)
+    # the person's landing needs no separate approval of protected paths either
+    assert landed[-1] == (DID, "k", "t", True, None)
 
 
 def test_the_dispatch_route_passes_the_dispatching_session(state, monkeypatch):

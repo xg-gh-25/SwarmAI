@@ -39,7 +39,6 @@ export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded, on
   const [rev, setRev] = useState<SwarmOutReturn | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ticked, setTicked] = useState(false);
   const [done, setDone] = useState<string | null>(null);
 
   const run = async (fn: () => Promise<void>) => {
@@ -47,9 +46,9 @@ export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded, on
     setError(null);
     try { await fn(); } catch (e) { setError(errText(e)); } finally { setBusy(false); }
   };
-  const prepare = () => run(async () => { setRev(await swarmOutService.returnPrepare(dispatchId, url)); setTicked(false); });
+  const prepare = () => run(async () => { setRev(await swarmOutService.returnPrepare(dispatchId, url)); });
   const land = () => run(async () => {
-    const out = await swarmOutService.returnLand(dispatchId, rev!.key, rev!.tip, ticked);
+    const out = await swarmOutService.returnLand(dispatchId, rev!.key, rev!.tip);
     setDone(out.landed ? t('swarmOut.return.landed', { into: out.into ?? 'main', head: out.head ?? '' }) : t('swarmOut.return.nothing'));
     onLanded?.();
   });
@@ -80,11 +79,6 @@ export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded, on
             <div className="mt-1.5 text-[12px] text-[var(--color-status-error)]" data-testid="swarm-out-return-protected">
               {t('swarmOut.return.protected', { count: protectedN })}
               {rev.protected_files.map((p) => <div key={p} className="font-mono text-[11.5px]">{p}</div>)}
-              <label className="mt-1 flex items-center gap-1.5 text-[12px] text-[var(--color-text)]">
-                <input type="checkbox" checked={ticked} onChange={(e) => setTicked(e.target.checked)}
-                  data-testid="swarm-out-return-tick" />
-                {t('swarmOut.return.tick')}
-              </label>
             </div>
           )}
           <div className="mt-1.5 max-h-[200px] overflow-auto">
@@ -105,7 +99,7 @@ export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded, on
             {t('swarmOut.return.fullDiff')}<span className="font-mono select-all">git diff {rev.base.slice(0, 12)} {rev.ref}</span>
           </div>
           <div className="mt-2 flex gap-2">
-            <button type="button" className={btn} disabled={busy || (protectedN > 0 && !ticked)} onClick={() => { void land(); }}
+            <button type="button" className={btn} disabled={busy} onClick={() => { void land(); }}
               data-testid="swarm-out-return-land">{t('swarmOut.return.land')}</button>
           </div>
         </div>

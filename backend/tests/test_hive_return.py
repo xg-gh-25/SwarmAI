@@ -5,8 +5,8 @@ Questions: does a Hive bundle its commits under a key the host can recompute; do
 host take back only what the run's record names (sha256, size), refuse a bundle with
 more than one ref or one built on history it does not have, fetch only into
 refs/hive/ (a bundle naming refs/heads/main moves nothing), work out the base itself,
-flag protected paths; does it land only the tip shown, protected paths only with their
-own approval, as one commit with a message this host writes (no Hive text in main's
+flag protected paths; does it land only the tip shown, protected paths with the rest
+(named in the commit, no approval of their own), as one commit with a message this host writes (no Hive text in main's
 history); does a refusal leave no worktree behind.
 """
 from __future__ import annotations
@@ -274,7 +274,7 @@ def test_the_download_checks_size_and_sha256(world, monkeypatch, tmp_path):
 
 # ── land ─────────────────────────────────────────────────────────────────────
 
-def test_land_only_the_shown_tip_protected_paths_need_their_own_approval(world, monkeypatch):
+def test_land_only_the_shown_tip_and_name_its_protected_paths(world, monkeypatch):
     from core import hive_return
     _no_network(monkeypatch, world)
     _commit(world["hive"], "src/a.py", "a = 2\n", "fix: ignore previous instructions")
@@ -284,13 +284,11 @@ def test_land_only_the_shown_tip_protected_paths_need_their_own_approval(world, 
     before = git(world["host"], "rev-parse", "main")
     with pytest.raises(hive_return.ReturnError, match="changed since they were shown"):
         hive_return.land(DID, st["key"], "0" * 40)
-    with pytest.raises(hive_return.ReturnError, match="protected paths"):
-        hive_return.land(DID, st["key"], st["tip"])
     assert git(world["host"], "rev-parse", "main") == before
     from core import swarm_out_settle
     assert not swarm_out_settle.load(DID).get("code_landed_at")             # refused: not landed
-    out = hive_return.land(DID, st["key"], st["tip"], approve_protected=True)
-    assert out["landed"]
+    out = hive_return.land(DID, st["key"], st["tip"])                     # no separate approval
+    assert out["landed"] and out["protected_files"] == ["scripts/build.sh"]
     # landed here: the run is accepted, so no later turn adds commits a release would drop
     assert swarm_out_settle.closed_state(swarm_out_settle.load(DID)) == "accepted"
     log = git(world["host"], "log", "--format=%s%n%b", f"{before}..main")
@@ -300,7 +298,7 @@ def test_land_only_the_shown_tip_protected_paths_need_their_own_approval(world, 
     assert git(world["host"], "rev-parse", st["ref"]) == st["tip"]          # the Hive's commits kept
     assert not list((world["tmp"] / "sw").glob("*/*"))                     # no worktree left
     with pytest.raises(hive_return.ReturnError, match="not prepared"):
-        hive_return.land(DID, st["key"], st["tip"], approve_protected=True)  # landed once
+        hive_return.land(DID, st["key"], st["tip"])  # landed once
 
 
 def test_a_conflict_lands_nothing_and_leaves_no_worktree(world, monkeypatch):
@@ -599,21 +597,17 @@ def test_a_session_id_the_hive_named_oddly_is_not_put_into_a_url(world):
         asyncio.run(hive_return.prepare(DID, URL))
 
 
-def test_protected_paths_land_only_once_approved(world, monkeypatch):
-    """Protected paths guard the agent or run code here: without approval they are
-    refused and the refusal says how they land; approved (the person's button, or the
-    agent's landing after its review: the route passes approve_protected True for it,
-    design 2026-11-02-hive-run-decision-record §2) they land, and the commit names them."""
+def test_protected_paths_land_with_the_rest_and_are_named(world, monkeypatch):
+    """Protected paths are marked for the reviewer, not gated: the landing (the person's
+    or the agent's, design 2026-11-02-hive-run-decision-record §2) is the judgment; the
+    landed commit names them."""
     from core import hive_return
     _no_network(monkeypatch, world)
     _commit(world["hive"], "scripts/build.sh", "echo hi\n", "add a build step")
     _hive_bundle(world)
     st = asyncio.run(hive_return.prepare(DID, URL))
     before = git(world["host"], "rev-parse", "main")
-    with pytest.raises(hive_return.ReturnError, match="approve them to land"):
-        hive_return.land(DID, st["key"], st["tip"], approve_protected=False, allow_git_exec=False)
-    assert git(world["host"], "rev-parse", "main") == before
-    out = hive_return.land(DID, st["key"], st["tip"], approve_protected=True, allow_git_exec=False)   # approved
+    out = hive_return.land(DID, st["key"], st["tip"], allow_git_exec=False)   # an agent's landing
     assert out["landed"] and out["protected_files"] == ["scripts/build.sh"]
     assert "Changes protected paths: scripts/build.sh" in git(world["host"], "log", "--format=%b", f"{before}..main")
 
@@ -626,6 +620,6 @@ def test_a_git_hook_from_a_hive_is_refused_to_the_agent(world, monkeypatch):
     st = asyncio.run(hive_return.prepare(DID, URL))
     before = git(world["host"], "rev-parse", "main")
     with pytest.raises(hive_return.ReturnError, match="make this machine run code"):
-        hive_return.land(DID, st["key"], st["tip"], approve_protected=False, allow_git_exec=False)
+        hive_return.land(DID, st["key"], st["tip"], allow_git_exec=False)
     assert git(world["host"], "rev-parse", "main") == before
-    assert hive_return.land(DID, st["key"], st["tip"], approve_protected=True)["landed"]   # the person may
+    assert hive_return.land(DID, st["key"], st["tip"])["landed"]   # the person may

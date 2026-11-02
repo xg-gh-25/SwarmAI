@@ -252,8 +252,8 @@ def test_agent_lands_protected_but_not_git_executing_paths(env, monkeypatch):
     r = c.post(f"/runs/{DID}/return/land", json={"by": "agent", "session": SID, "why": "reviewed the diff",
                                                  "key": "0123456789abcdef", "tip": "a" * 40})
     assert r.status_code == 200, r.text
-    _did, _key, _tip, approve_protected, allow_git_exec, _summary = calls[-1]
-    assert approve_protected is True and allow_git_exec is False
+    _did, _key, _tip, allow_git_exec, _summary = calls[-1]
+    assert allow_git_exec is False
     e = rc.entries(st.load(DID))[-1]
     assert (e["by"], e["decision"], e["why"]) == ("agent", "land", "reviewed the diff")
     # the git gate in land itself: hooks are refused, a reviewed protected path goes on
@@ -268,11 +268,11 @@ def test_agent_lands_protected_but_not_git_executing_paths(env, monkeypatch):
         raise hive_return.ReturnError("reached the merge")
     monkeypatch.setattr(hive_return, "_target_branch", reached)
     with pytest.raises(hive_return.ReturnError, match="git hooks"):
-        real_land(DID, "k", "t" * 40, True, False)
+        real_land(DID, "k", "t" * 40, False)
     state["protected_files"] = ["backend/core/security_hooks.py", "backend/tests/conftest.py",
                                 ".claude/settings.json"]
     with pytest.raises(hive_return.ReturnError, match="reached the merge"):
-        real_land(DID, "k", "t" * 40, True, False)
+        real_land(DID, "k", "t" * 40, False)
 
 
 # ── discarding unlanded commits that are on this host ───────────────────────

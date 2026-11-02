@@ -457,10 +457,10 @@ export const swarmOutService = {
     const { data } = await api.get(runPath(dispatchId, 'return/file'), { params: { url, path } });
     return data as SwarmOutFileVersions;
   },
-  async returnLand(dispatchId: string, key: string, tip: string, approveProtected: boolean):
+  async returnLand(dispatchId: string, key: string, tip: string):
   Promise<{ landed: boolean; head: string | null; into: string | null }> {
     const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/land`,
-      { key, tip, approve_protected: approveProtected, by: PERSON });
+      { key, tip, by: PERSON });
     return data as { landed: boolean; head: string | null; into: string | null };
   },
   /** Accept: the person's pass on the result that ended at `endedAt` (the one shown). */

@@ -19,7 +19,7 @@ describe('swarmOutService run commands', () => {
   it('sends by: person with each of them', async () => {
     const id = 'so_aaaaaaaaaaaa';
     await swarmOutService.returnPrepare(id, 'https://x/y.git');
-    await swarmOutService.returnLand(id, 'k', 't', true);
+    await swarmOutService.returnLand(id, 'k', 't');
     await swarmOutService.accept(id, '2026-10-31T00:00:00Z');
     await swarmOutService.manualLanded(id);
     await swarmOutService.rerun(id, 'fix it');
