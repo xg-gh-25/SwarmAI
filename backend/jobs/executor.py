@@ -293,7 +293,7 @@ def execute_job(
             duration = (datetime.now(timezone.utc) - start).total_seconds()
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status=audit.get("status") if audit.get("status") in ("success", "skipped") else "failed",
+                status=_audit_status(audit),
                 summary=audit.get("summary", "Brain mistake audit"),
                 output_path=audit.get("output_path"),
                 duration_seconds=duration,
@@ -2186,3 +2186,10 @@ def _write_failure_streak_alert(
         )
     except Exception as e:
         logger.error(f"Failed to write failure streak alert: {e}")
+
+
+def _audit_status(audit: dict) -> str:
+    """The job status of a brain mistake audit result: ``auth_failed`` passes through (the
+    scheduler retries it on its next tick, the circuit breaker does not count it)."""
+    status = audit.get("status")
+    return status if status in ("success", "skipped", "auth_failed") else "failed"

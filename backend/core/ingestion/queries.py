@@ -570,7 +570,8 @@ def brain_changes(conn: sqlite3.Connection, project: str | None = None,
     ``add`` / ``override`` / ``withdraw`` by CDF or the user, ``user_edit`` (a governed edit
     by the user), and ``conflict`` (a unit the judge said contradicts an entry, written
     next to it, nothing overridden). Each row: kind, at, path, head, source, reason, and
-    ``text`` -- the removed original for an override or a withdrawal. *project*: only that
+    ``text`` -- the removed original for an override or a withdrawal; a CDF write also
+    ``unit_id``. *project*: only that
     project's DDD (``Projects/<project>/``). Read-only; records live outside the main files."""
     prefix = f"Projects/{project}/" if project else ""
     def mine(path: str) -> bool:
@@ -578,12 +579,12 @@ def brain_changes(conn: sqlite3.Connection, project: str | None = None,
     out: list[dict[str, Any]] = []
     rows = conn.execute(
         """SELECT w.op_kind, w.target_path, w.anchors_absent, w.relations, w.created_at,
-                  u.action, u.reason, i.source, i.payload
+                  u.action, u.reason, i.source, i.payload, w.unit_id
            FROM ingestion_writes w
            LEFT JOIN ingestion_units u ON u.unit_id = w.unit_id
            LEFT JOIN ingestion_inbox i ON i.id = u.candidate_id
            WHERE w.step = 'done' AND w.created_at >= ? ORDER BY w.created_at""", (since,)).fetchall()
-    for op_kind, path, absent, relations, at, action, reason, source, payload in rows:
+    for op_kind, path, absent, relations, at, action, reason, source, payload, unit_id in rows:
         path = str(path or "")
         if not mine(path):
             continue
@@ -613,7 +614,8 @@ def brain_changes(conn: sqlite3.Connection, project: str | None = None,
             kind = "conflict"
         out.append({"kind": kind, "at": at, "path": path, "head": str(unit.get("title") or ""),
                     "source": str(source or ""), "reason": str(reason or ""),
-                    "text": "\n\n".join(removed) if kind == "override" else ""})
+                    "text": "\n\n".join(removed) if kind == "override" else "",
+                    "unit_id": str(unit_id or "")})
     return out
 
 

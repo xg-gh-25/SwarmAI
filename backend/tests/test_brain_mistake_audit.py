@@ -125,17 +125,64 @@ def test_the_report_compares_with_the_baseline_and_counts_the_month(cdf_env):
     assert "## 2. Changes to the brain this month" in md and "## 3. Open conflicts" in md
 
 
-def test_a_failed_model_call_is_unjudged_not_a_guess(cdf_env):
+def test_a_failed_model_call_fails_the_audit_and_keeps_the_last_report(cdf_env):
+    """A model call that fails (no answer) is not "the model could not judge": an audit
+    run while Midway had expired wrote "0 real mistakes, 113 unjudged" for 2026-10. The run
+    fails, writes nothing, and the month's report already on disk stays as it was."""
+    from core.ingestion.api import connect_rw
+    from jobs.handlers.brain_mistake_audit import run_brain_mistake_audit
+    connect_rw().close()
+    ws = _setup(cdf_env)
+    out = ws / "Knowledge/JobResults"
+    out.mkdir(parents=True, exist_ok=True)
+    kept = out / "2026-11-brain-mistake-audit.json"
+    kept.write_text('{"month": "2026-11", "table": {}, "rows": []}', encoding="utf-8")
+
+    def broken(prompt, schema):
+        raise RuntimeError("model down")
+    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=broken, now=NOW)
+    assert res["status"] == "failed" and res["output_path"] is None
+    assert "model down" in res["error"]
+    assert kept.read_text(encoding="utf-8") == '{"month": "2026-11", "table": {}, "rows": []}'
+    assert not (out / "2026-11-brain-mistake-audit.md").exists()
+
+
+def test_an_expired_sign_in_is_an_auth_failure_the_scheduler_retries(cdf_env):
+    from core.aws_account import NeedsLogin
     from core.ingestion.api import connect_rw
     from jobs.handlers.brain_mistake_audit import run_brain_mistake_audit
     connect_rw().close()
     ws = _setup(cdf_env)
 
-    def broken(prompt, schema):
-        raise RuntimeError("model down")
-    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=broken, now=NOW)
+    def expired(prompt, schema):
+        raise NeedsLogin("Midway has expired: run `mwinit -f`")
+    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=expired, now=NOW)
+    assert res["status"] == "auth_failed" and res["output_path"] is None
+
+
+def test_a_model_answer_without_an_item_is_still_unjudged(cdf_env):
+    """The model answered but left a mistake out: that one is unjudged, the report is written."""
+    from core.ingestion.api import connect_rw
+    from jobs.handlers.brain_mistake_audit import run_brain_mistake_audit
+    connect_rw().close()
+    ws = _setup(cdf_env)
+
+    def silent(prompt, schema):
+        return {"items": []} if "items" in schema["properties"] else {"match": -1, "stale": False}
+    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=silent, now=NOW)
     data = json.loads(Path(res["output_path"]).with_suffix(".json").read_text(encoding="utf-8"))
-    assert data["rows"] == [] and data["unjudged"] == len(FINDINGS)
+    assert res["status"] == "success" and data["unjudged"] == len(FINDINGS)
+
+
+def test_the_executor_passes_an_auth_failure_through(monkeypatch):
+    from jobs import executor
+    from jobs.handlers import brain_mistake_audit
+    monkeypatch.setattr(brain_mistake_audit, "run_brain_mistake_audit",
+                        lambda config=None, **_: {"status": "auth_failed", "summary": "s", "error": "e",
+                                                  "output_path": None})
+    assert executor._audit_status({"status": "auth_failed"}) == "auth_failed"
+    assert executor._audit_status({"status": "success"}) == "success"
+    assert executor._audit_status({"status": "weird"}) == "failed"
 
 
 def test_the_job_is_registered_monthly():
@@ -192,3 +239,39 @@ def test_a_correction_is_collected_whole():
     conn.execute("INSERT INTO ingestion_units VALUES ('u1', 'c1', 'written', '2026-10-15T00:00:00')")
     (item,) = audit._corrections(conn, "2026-10-01", "2026-11-01")
     assert item["mistake"].endswith("THE-DECISIVE-TAIL")
+
+
+def test_open_conflicts_are_only_those_whose_two_entries_are_both_in_force(cdf_env):
+    """The retired verify judge wrote a unit beside an entry it said it contradicts; 56
+    such pairs were listed as open in 2026-10 though most had been settled since. A pair
+    is open only while both entries are still in their files."""
+    from core.ingestion.api import connect_rw
+    from jobs.handlers.brain_mistake_audit import run_brain_mistake_audit
+    ws = _setup(cdf_env)
+    tech = cdf_env["ddd"] / "TECH.md"
+    tech.write_text(TECH + "\n- [decision] **Open pair new side** Still here. <!-- cand:cand-open.unit -->\n"
+                    "- [decision] **Old side of the open pair** Still here. <!-- cand:cand-old.unit -->\n"
+                    "- [decision] **Settled pair new side** Here. <!-- cand:cand-settled.unit -->\n",
+                    encoding="utf-8")
+    old = "Projects/P/2-understanding/TECH.md#Runtime Traps#cand:cand-old.unit"
+    gone = "Projects/P/2-understanding/TECH.md#Runtime Traps#cand:cand-gone.unit"
+    conn = connect_rw()
+    for uid, title, target in (("cand-open", "Open pair new side", old),
+                               ("cand-settled", "Settled pair new side", gone)):
+        decision = {"card3": {"hits": [{"anchor": target}]},
+                    "version_vector": {"verify": {"hits": [{"anchor": "h1", "relation": "contradicts"}]}}}
+        conn.execute("INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,"
+                     "content_hash,envelope,project_snapshot,created_at) VALUES (?,?,'S7','s','session',?,'v','h',"
+                     "'{}','{}','2026-11-10T00:00:00+00:00')", (uid, uid, json.dumps({"title": title})))
+        conn.execute("INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,action,reason,decision,"
+                     "updated_at) VALUES (?,?,'{}','written','add','contradicts',?,'2026-11-10T00:00:00+00:00')",
+                     (uid + ".unit", uid, json.dumps(decision)))
+        conn.execute("INSERT INTO ingestion_writes(op_id,op_kind,unit_id,target_path,step,created_at,updated_at) "
+                     "VALUES (?,'ingestion_unit',?,'Projects/P/2-understanding/TECH.md','done',"
+                     "'2026-11-10T00:00:00+00:00','2026-11-10T00:00:00+00:00')", ("w-" + uid, uid + ".unit"))
+    conn.commit()
+    conn.close()
+    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=_ask, now=NOW)
+    md = Path(res["output_path"]).read_text(encoding="utf-8")
+    section = md.split("## 3. Open conflicts", 1)[1]
+    assert "Open pair new side" in section and "Settled pair new side" not in section
