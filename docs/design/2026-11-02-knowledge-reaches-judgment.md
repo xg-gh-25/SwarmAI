@@ -3,7 +3,7 @@ title: 知识到达判断：补上 Bash 读取的盲区；MEMORY / EVOLUTION 按
 created: 2026-11-02
 updated: 2026-11-02
 project: SwarmAI
-status: r4 设计。r1 过了一轮零上下文前提审查；r2、r3 为回应审查加机制，加过了头；r4 只留线上真实发生过的问题对应的改动（§7）。下一步写会失败的测试
+status: 已实现（r4，2026-11-02）。代码 6 个提交，过了两轮 correctness + security 评审；第一次整理已在线上完成。实现与验证见 §9
 follows: 2026-10-30-cdf-agent-decides.md（agent 判断含义、代码核对事实、价值优先不设上限、§4 体量明显上升时由 agent 按声明合并）· 2026-10-31-cdf-health.md（C10）
 ---
 
@@ -125,3 +125,36 @@ r1 的前提审查找出了真问题，但 r2、r3 对每一条发现都加了�
 - **J4**：北极星 headline 显示 EVOLUTION、MEMORY 的当前 token 数和 7 天前的值。
 - **J5**：整理后，整理前的每个 C / K 编号都能找到，搬走的原文和备份逐字一致。
 - **J6**：聊天路径没有新增模型调用；钩子过滤耗时实测。
+
+## 9. 实现与验证（2026-11-02）
+
+**评审改变了 ② 的底线。** 第一轮安全评审证明，只看"单元去了哪个 store"挡不住两条路：靠"重犯"被放进 EVOLUTION 的推断单元，以及配一句真实但无关的用户原话的单元。所以 ② 的实际规则比 §2 写的更严：
+
+- 每轮注入的条目只能被**同一个文件**的单元拿掉；新单元必须有用户原话或测量依据，并且不是作为重犯被放进来的；
+- 被拿掉的条目如果原本是用户原话依据（没有记录的一律按用户原话处理），新单元也必须是用户原话；
+- 只要新单元是用户原话依据，就再做一次隔离核对：问"用户的话是否替换了这一条"（复用 `user_check.grounds`，只在覆盖每轮注入的条目时才会多这一次调用）；
+- General Brain 的条目，只能被写进同一份文档的单元拿掉，或者被以上述依据写进 MEMORY / EVOLUTION 的单元拿掉；
+- `restates` 的例外只对"被覆盖"的记录生效：用户撤回的文字，不能从任何文件绕回来。
+
+**不变量，逐条：**
+
+| # | 状态 | 依据 |
+|---|---|---|
+| J1 Bash 读取能记到，不涉及受管文件时钩子直接返回 | 有 | `tests/test_cdf_v2_usage.py` 的 Bash 用例；mutation 全部抓到；实测过滤 0.4µs，线程池首次 54ms、缓存后 7ms |
+| J2 每轮注入的条目可以被覆盖，人手写的不行 | 有（规则比原设计更严，见上） | `tests/test_cdf_every_turn_overrides.py`；15 个 mutation 全部抓到 |
+| J3 重述被覆盖条目：有效条目也说了就不拒；用户撤回的永远拒 | 有 | 同上，含"同一个文件里还留着副本"的用例 |
+| J4 北极星 CDF 一行显示 EVOLUTION / MEMORY 体量 | 有 | `tests/test_north_star.py`；线上读到 "EVOLUTION 24.3K tokens (18.1K 3 days ago), MEMORY 17.9K (26.5K)" |
+| J5 整理后旧编号都能找到，原文逐字一致 | 有 | 50 个编号逐个核对；搬走的块逐字在 `EVOLUTION-archive-2026-11.md` 和 `Knowledge/Archives/2026-11-02-memory-coe-registry.md`；`cognition find --in evolution` 能命中 archive |
+| J6 聊天路径不新增模型调用 | 有 | 钩子只做子串判断；隔离核对在会后复盘里，只在覆盖每轮注入条目时调用 |
+
+**第一次整理的结果：** EVOLUTION 73.6KB → 16.1KB（CDF 时代的 35 条纠正加旧的手写块，并成 8 个判断类别；每个类别保留最新那条的 `cand:` 标记，以后 S7 能覆盖它）。MEMORY 57.3KB → 46.2KB（4 条长篇 COE 改成短教训，完整复盘移到 Knowledge/Archives）。备份在 `~/.swarm-ai/backups/2026-11-02-cognition-consolidation/`。
+
+**遗留风险（第二轮评审的 LOW，记录、不在这次修）：**
+
+- `_target_basis` 读的是条目里第一个 `cand:` 标记，条目正文里伪造一个标记可能让依据被读错；
+- General Brain 条目被同一文档的单元拿掉时不看依据（和 DDD 条目被本项目拿掉的规则一致）；
+- `_single_grep_n` 没有把单独的 `&` 和 `-h` 当作排除条件，不可信的 stdout 可能抬高读取计数（只影响计数）；
+- 超过 2000 字的旧条目永远过不了隔离核对，等于不能被覆盖（属于失败即关闭）。
+
+**已知、和这次无关：** main 上本来就红的 `test_missing_section_parks_without_retry_then_requeues_and_writes`、`test_i6_no_pattern_reads_what_a_unit_says`、`test_every_option_in_the_cards_exists_and_no_card_names_the_runner`。
+
