@@ -102,3 +102,32 @@ def test_when_each_destination_is_written_is_one_standard_for_every_door():
         assert sentence in contract["knowledge_standard"], sentence
     import inspect
     assert "exactly one problem" not in inspect.getsource(s7_review)    # no second copy
+
+
+# ── turn two reuses turn one (design 2026-11-02-cdf-extraction-input §9) ─────────────
+
+def test_both_review_turns_answer_in_one_schema():
+    """Structured output is a tool whose definition is the schema, and the tool block opens
+    the cached prefix: one schema for both turns lets turn two read turn one's cache."""
+    from core.ingestion.sources import s7_review
+    schema = s7_review.review_schema()
+    assert "relations" in schema["properties"] and "relations" not in schema["required"]
+    assert {f"{k}_units" for k in s7_review.ALLOWED_KINDS} <= set(schema["required"])
+
+
+def test_the_relations_prompt_lists_each_entry_once_and_whole():
+    from core.ingestion.relations_v2 import Entry
+    from core.ingestion.sources import s7_review
+    head = "- [pitfall] **Retry with backoff** when the API returns 429."
+    shared = Entry("abcd1234", "TECH.md#Runtime Traps#cand:cand-a.unit", "TECH.md", "Runtime Traps",
+                   f"{head} <!-- cand:cand-a.unit -->\n  **Why:** quota resets per minute.")
+    other = Entry("ef015678", "TECH.md#Conventions#cand:cand-b.unit", "TECH.md", "Conventions",
+                  "- [guideline] **Log the request id** on every call. <!-- cand:cand-b.unit -->")
+    from types import SimpleNamespace
+    unit = lambda t: SimpleNamespace(kind="cognition", type="pitfall", title=t, what=t)
+    prompt = s7_review.relation_prompt([unit("U1"), unit("U2")], [[shared, other], [shared]], set())
+    assert prompt.count("quota resets per minute") == 1           # the entry once, though two units name it
+    assert prompt.count("Retry with backoff") == 1                  # its first line once, not twice
+    assert f"abcd1234 | {head}" in prompt                            # what a declaration copies
+    assert prompt.count("abcd1234 | ") == 1 and prompt.count("abcd1234") >= 3   # listed once, named per unit
+    assert "Log the request id" in prompt

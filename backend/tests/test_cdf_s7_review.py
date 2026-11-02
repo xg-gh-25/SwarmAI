@@ -89,7 +89,7 @@ class Runner:
 
     def __call__(self, resume, cwd, prompt, schema, *, fork, model):
         self.calls.append(dict(resume=resume, cwd=cwd, prompt=prompt, schema=schema, fork=fork, model=model))
-        if schema is s7_review.RELATION_SCHEMA:
+        if prompt.startswith(s7_review.RELATIONS_OPENING):
             return (self.relations or {"relations": []}), resume
         return {"cognition_units": self.units}, self.fork
 
@@ -117,7 +117,7 @@ def test_review_session_two_turns(cdf_env, tmp_path, monkeypatch, model) -> None
     first, second = run.calls
     assert (first["resume"], first["fork"], first["model"]) == (None, False, "session-model[1m]")
     from core.ingestion.sources import extract_llm
-    assert first["schema"] == extract_llm.unit_schema(s7_review.ALLOWED_KINDS)
+    assert first["schema"] == s7_review.review_schema()
     assert "event_units" in first["schema"]["properties"]
     prompt = first["prompt"]
     index, record = prompt.split("<session-record>")
@@ -129,7 +129,7 @@ def test_review_session_two_turns(cdf_env, tmp_path, monkeypatch, model) -> None
     # from its own work rests on them
     shown = [json.loads(line) for line in record.split("</session-record>")[0].strip().splitlines()]
     assert all(item["anchors"] for item in shown), shown
-    assert (second["resume"], second["fork"], second["schema"]) == ("fork-1", False, s7_review.RELATION_SCHEMA)
+    assert (second["resume"], second["fork"], second["schema"]) == ("fork-1", False, first["schema"])  # one schema
     assert entry.shown() in second["prompt"] and "Unit 1:" in second["prompt"]
     assert dropped == [("fork-1", sdk)]
 
@@ -319,7 +319,7 @@ def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
     seen = {}
 
     def runner(sdk_id, cwd, prompt, schema, **_):
-        if schema is s7_review.RELATION_SCHEMA:
+        if prompt.startswith(s7_review.RELATIONS_OPENING):
             return {"relations": []}, sdk_id
         anchor = next(line.split()[1] for line in prompt.splitlines()
                       if "(measured exit_code)" in line)

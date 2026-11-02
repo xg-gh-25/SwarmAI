@@ -108,7 +108,7 @@ def test_a_failed_relations_turn_leaves_the_units_as_new(cdf_env, tmp_path, monk
     base = run.__call__
 
     def failing(resume, cwd, prompt, schema, *, fork, model):
-        if schema is s7_review.RELATION_SCHEMA:
+        if prompt.startswith(s7_review.RELATIONS_OPENING):
             raise RuntimeError("relations turn timed out")
         return base(resume, cwd, prompt, schema, fork=fork, model=model)
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=failing)
@@ -123,7 +123,7 @@ def test_a_failed_window_enqueues_nothing_of_the_review(cdf_env, tmp_path, monke
     calls = []
 
     def runner(resume, cwd, prompt, schema, *, fork, model):
-        if schema is s7_review.RELATION_SCHEMA:
+        if prompt.startswith(s7_review.RELATIONS_OPENING):
             return {"relations": []}, resume
         calls.append(prompt)
         if len(calls) == 2:
@@ -144,7 +144,7 @@ def test_a_unit_an_earlier_window_recorded_is_not_enqueued_again(cdf_env, tmp_pa
     shown = []
 
     def runner(resume, cwd, prompt, schema, *, fork, model):
-        if schema is s7_review.RELATION_SCHEMA:
+        if prompt.startswith(s7_review.RELATIONS_OPENING):
             ref = next((line[2:].split("  (")[0] for line in prompt.splitlines()
                         if "(recorded earlier in this review)" in line), None)
             shown.append(ref)
@@ -343,8 +343,8 @@ def test_a_relations_turn_that_fails_in_the_review_is_asked_again_fresh(cdf_env,
     monkeypatch.setattr(s7_review, "_drop_fork", lambda fork, original: dropped.append((fork, original)))
 
     def runner(resume, cwd, prompt, schema, *, fork, model):
-        calls.append((schema is s7_review.RELATION_SCHEMA, resume))
-        if schema is s7_review.RELATION_SCHEMA:
+        calls.append((prompt.startswith(s7_review.RELATIONS_OPENING), resume))
+        if prompt.startswith(s7_review.RELATIONS_OPENING):
             if resume == "fork-1":
                 raise RuntimeError("review failed: success: Prompt is too long")
             return {"relations": [{"unit": 1, "relation": "new"}]}, "fresh-9"
