@@ -2,18 +2,19 @@
 
 Each bullet entry of a DDD doc or a context file can carry:
 - a type tag: [guideline], [pitfall], [decision], [model], [process], [principle], [correction]
-- a metadata comment ``<!-- ref:N | last:<date> | decay:<state> | source:… | taint:… -->``
+- a metadata comment ``<!-- source:… | taint:… -->`` (plus ``valid_until`` /
+  ``superseded_by`` when set)
 
 Nothing decays with age any more: what is in a main file is in force, and an entry
 leaves it only by an override or a withdrawal (design docs/design/2026-10-30-brain-
-driven.md §2.3). ``ref``/``last``/``decay`` stay as the fixed prefix of the metadata
-comment that many parsers key on; ``source`` and ``taint`` are the live segments.
+driven.md §2.3). So the operational fields ``ref``/``last``/``decay`` are dead: no
+writer writes them (2026-11-02). Older files and every archive shard still carry the
+old prefix ``<!-- ref:N | last:<date> | decay:<state> | …``; ``_META_RE`` reads both.
 
 Public API:
     EntryMetadata        — dataclass for per-entry state
     parse_entries(content) → list[EntryMetadata]
     split_entries(body) → list[str]  (recall's entry splitter)
-    inject_entry_metadata(content, entries) → str
     classify_entry_type(text) → str
     reclaim_duplicate_entries(...) → ReclaimReport  (exact duplicates, read-only)
 """
@@ -141,7 +142,7 @@ _TYPE_SIGNALS: dict[str, list[str]] = {
 # group(1)=type (optional), group(2)=title.
 #
 # ⚠️ This is the matcher every AUTONOMOUS lifecycle path uses (parse_entries default,
-# inject_entry_metadata, decay, reclaim). It DELIBERATELY does NOT match emoji/marker-
+# reclaim). It DELIBERATELY does NOT match emoji/marker-
 # prefixed hand-curated prose bullets (e.g. "- 🟡 **Title**") — because those paths
 # WRITE: inject stamps <!-- ref --> metadata, reclaim strips+archives. Making prose
 # parseable here would let the autonomous jobs mutate/strip XG's curated Open-Threads
@@ -212,8 +213,11 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
     return (_ENTRY_RE_PROSE if include_prose else _ENTRY_RE).match(line)
 
 # Regex for inline metadata comment
-# Matches: "  <!-- ref:N | last:YYYY-MM-DD | decay:state -->"
-# Optional: "  <!-- ref:N | last:YYYY-MM-DD | decay:state | source:auto -->"
+# Current shape: "  <!-- source:auto -->", "  <!-- source:S7 | taint:external -->".
+# Old shape (archives, files not yet migrated): the same fields after a dead prefix,
+#   "  <!-- ref:N | last:YYYY-MM-DD | decay:state | source:auto -->"; groups 1-3 are
+#   None for the current shape. The lookahead keeps a comment that starts with any
+#   other word (a cand: marker, a guidance comment) from being read as metadata.
 # Bi-temporal supersession (run_24299917): two more OPTIONAL trailing segments:
 #   "... | valid_until:YYYY-MM-DD | superseded_by:<anchor>"
 # Provenance taint (design 2026-10-27-new-brain-initial-ddd §5.5): one more OPTIONAL
@@ -229,14 +233,37 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
 # it cannot collide with a following ` | ` separator; the captured value is
 # .strip()'d at parse time to drop the space before ` -->`. (valid_until stays a
 # strict date token; the `null` sentinel + missing-field both mean "not set".)
+_META_FIELDS = ("ref", "source", "taint", "valid_until", "superseded_by")
 _META_RE = re.compile(
-    r"^\s*<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+)"
-    r"(?:\s*\|\s*source:(\w+))?"
-    r"(?:\s*\|\s*taint:(\w+))?"
-    r"(?:\s*\|\s*valid_until:([\w\-]+))?"
-    r"(?:\s*\|\s*superseded_by:([^|]+?))?"
+    r"^\s*<!--\s*(?=(?:" + "|".join(_META_FIELDS) + r"):)"
+    r"(?:ref:(\d+)\s*\|\s*last:([\w\-]+)\s*\|\s*decay:(\w+))?"
+    r"(?:\s*\|?\s*source:(\w+))?"
+    r"(?:\s*\|?\s*taint:(\w+))?"
+    r"(?:\s*\|?\s*valid_until:([\w\-]+))?"
+    r"(?:\s*\|?\s*superseded_by:([^|]+?))?"
     r"\s*-->$"
 )
+
+
+def is_meta_line(line: str) -> bool:
+    """True when *line* is an entry's metadata comment, in either shape."""
+    return bool(_META_RE.match(line))
+
+
+def meta_comment(*, source: str = "", taint: str = "", valid_until: "date | None" = None,
+                 superseded_by: "str | None" = None) -> str:
+    """THE metadata line every writer writes: only the fields that are set, in
+    ``_META_RE``'s order. "" when none is set (the entry then has no metadata line)."""
+    parts = []
+    if source:
+        parts.append(f"source:{source}")
+    if taint:
+        parts.append(f"taint:{taint}")
+    if valid_until:
+        parts.append(f"valid_until:{valid_until.isoformat()}")
+    if superseded_by:
+        parts.append(f"superseded_by:{superseded_by}")
+    return f"  <!-- {' | '.join(parts)} -->" if parts else ""
 
 # Regex for date extraction from entry text "(YYYY-MM-DD, ...)"
 _DATE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})")
@@ -263,7 +290,7 @@ def format_memory_entry(
     Returns ``(entry_line, meta_line)`` — the caller joins them with a newline. Shape:
 
         - [<type>] **<title>** — <body> (<date>[, <run_id>])
-          <!-- ref:0 | last:<date> | decay:active | source:<source> -->
+          <!-- source:<source> -->
 
     IDEMPOTENT / build-time only: this builds a NEW entry from PARTS. It never scans or
     rewrites existing entries, so the entries already in MEMORY.md are untouched. The
@@ -274,7 +301,7 @@ def format_memory_entry(
         entry_type: one of VALID_TYPES (falls back to DEFAULT_TYPE if unknown).
         title: short bold title (no surrounding ``**``; trailing ``.`` stripped here).
         body: the entry body (the durable rule). May equal or extend the title.
-        date_str: YYYY-MM-DD (the entry's date + the metadata `last:` value).
+        date_str: YYYY-MM-DD (the entry's date).
         run_id: optional provenance run id, appended as ``(date, run_id)``.
         source: metadata `source:` value (``auto`` | ``manual`` | ...).
     """
@@ -282,7 +309,7 @@ def format_memory_entry(
     clean_title = title.strip().strip("*").rstrip(".").strip() or body[:60].strip()
     prov = f"({date_str}, {run_id})" if run_id else f"({date_str})"
     entry_line = f"- [{etype}] **{clean_title}** — {body} {prov}"
-    meta_line = f"  <!-- ref:0 | last:{date_str} | decay:active | source:{source} -->"
+    meta_line = meta_comment(source=source)
     return entry_line, meta_line
 
 
@@ -309,7 +336,7 @@ def render_ddd_unit(entry: dict, *, date_str: str, source: str = "bootstrap",
 
         - [<type>] **<title>** <what> **How:** … **Why:** … **Rejected:** …
           **Applies when:** … (sources: a; b)
-          <!-- ref:0 | last:<date> | decay:active | source:<source>[ | taint:external] -->
+          <!-- source:<source>[ | taint:external] -->
 
     ``entry``: ``type`` (one of VALID_TYPES, or ``gap`` — written as ``guideline``,
     since a gap is not an ontology type), ``title``, ``what``; optional ``how``,
@@ -320,8 +347,7 @@ def render_ddd_unit(entry: dict, *, date_str: str, source: str = "bootstrap",
     line break or ``|`` (a title is also a supersession anchor); ``<!--`` / ``-->``
     anywhere.
 
-    Metadata contract (``_META_RE``): the optional segments after ``decay:`` appear in
-    this fixed order — ``source``, ``taint``, ``valid_until``, ``superseded_by`` — and
+    Metadata contract (``_META_RE``): the segments appear in this fixed order — ``source``, ``taint``, ``valid_until``, ``superseded_by`` — and
     ``source`` / ``taint`` values are single words. A comment that breaks the order is
     not read as metadata. (``format_memory_entry`` and ``canonical_entry_from_text``
     are MEMORY.md's renderers; they write no taint.)
@@ -381,7 +407,7 @@ class EntryMetadata:
     raw_text: str = ""  # Full bullet text (for archival)
     source: str = ""  # "auto" | "manual" | "" (legacy entries without tag)
     # "external" when the content came from a repo or another outside file (CDF §9);
-    # "" otherwise. Kept verbatim through to_comment / inject_entry_metadata.
+    # "" otherwise. Kept verbatim through to_comment.
     taint: str = ""
     # Bi-temporal supersession (run_24299917). When superseded_by is set, this
     # entry has been REPLACED by a newer entry (anchor = the superseding entry's
@@ -402,25 +428,11 @@ class EntryMetadata:
             self.decay_state = "active"
 
     def to_comment(self) -> str:
-        """Serialize to inline metadata HTML comment."""
-        last_str = (
-            self.last_referenced.isoformat()
-            if self.last_referenced
-            else "none"
-        )
-        base = f"  <!-- ref:{self.ref_count} | last:{last_str} | decay:{self.decay_state}"
-        if self.source:
-            base += f" | source:{self.source}"
-        if self.taint:
-            base += f" | taint:{self.taint}"
-        # Supersession segments emitted ONLY when set → a live entry's comment is
-        # byte-identical to the pre-supersession format (backward-compat guarantee).
-        if self.valid_until:
-            base += f" | valid_until:{self.valid_until.isoformat()}"
-        if self.superseded_by:
-            base += f" | superseded_by:{self.superseded_by}"
-        base += " -->"
-        return base
+        """The entry's metadata line in the current shape (``meta_comment``); "" when
+        the entry has none of its fields. ref_count / last_referenced / decay_state are
+        read from old-shape comments and never written back."""
+        return meta_comment(source=self.source, taint=self.taint,
+                            valid_until=self.valid_until, superseded_by=self.superseded_by)
 
 
 @dataclass
@@ -500,7 +512,7 @@ def _scan_entry(lines: "list[str]", start: int) -> "tuple[int, int | None, int]"
     Returns ``(text_end, meta_idx, end)`` — all exclusive line indices except
     ``meta_idx``: ``lines[start:text_end]`` is the entry text (lead + continuation),
     ``meta_idx`` the ``<!-- ref ... -->`` line or None, ``lines[start:end]`` the whole
-    span to remove. Used by parse_entries, inject_entry_metadata and both strip
+    span to remove. Used by parse_entries and both strip
     helpers, so what is read as one entry is rewritten and removed as one entry
     (design 2026-10-25-memory-write-entry-dedup §3.1).
 
@@ -697,13 +709,13 @@ def unit_id(text: str) -> str:
 
     The same for every copy of the unit wherever it is read -- a recall hit, a
     ``knowledge find`` result, a line of the doc on disk -- and stable across the
-    rewrites nobody would call an edit: comments are removed first (the
-    ``<!-- ref:… | last:… | decay:… -->`` line the decay job rewrites, and the
+    rewrites nobody would call an edit: comments are removed first (the metadata
+    line, whose dead ``ref:… | last:… | decay:…`` prefix a migration removes, and the
     ``<!-- maturity: … -->`` marker), then an entry is reduced by
     ``content_signature`` (bullet, writeback prefix, ``[type]``, bold,
     trailing attribution, case, whitespace) -- the same rule the write-side dedup uses
     for "the same lesson" -- and a block's whitespace is collapsed and lowercased.
-    Hashing the raw text instead changed the id each time decay touched an entry.
+    Hashing the raw text instead changed the id each time a metadata line changed.
     Knowledge addressing design §2.1."""
     t = _ANY_COMMENT_RE.sub(" ", text or "").strip()
     if t.startswith("- "):
@@ -779,14 +791,14 @@ def parse_entries(content: str, *, include_prose: bool = False,
             if meta_idx is not None:
                 meta_match = _META_RE.match(lines[meta_idx])
                 if meta_match:
-                    ref_count = int(meta_match.group(1))
+                    ref_count = int(meta_match.group(1) or 0)
                     last_str = meta_match.group(2)
-                    if last_str != "none":
+                    if last_str and last_str != "none":
                         try:
                             last_referenced = date.fromisoformat(last_str)
                         except ValueError:
                             last_referenced = None
-                    decay_state = meta_match.group(3)
+                    decay_state = meta_match.group(3) or "active"
                     source = meta_match.group(4) or ""
                     taint = meta_match.group(5) or ""
                     vu_str = meta_match.group(6)
@@ -828,108 +840,10 @@ def parse_entries(content: str, *, include_prose: bool = False,
     return entries
 
 
-def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
-    """Write/update inline metadata comments for entries in content.
-
-    For each entry in `entries`, finds its bullet and adds or replaces the
-    metadata comment line immediately after it.
-
-    A parsed entry (raw_text set, as parse_entries produces) is matched by its
-    OWN bullet line within its section, in document order: several entries can
-    share a title in one section (date-titled lessons), and keying them by title
-    gave every same-titled bullet the LAST entry's metadata, so a transition on
-    any other one was never written back and re-fired every pass. An entry with
-    no raw_text (built by a caller, not parsed) falls back to (title, section),
-    then title. A bullet that matches no passed entry is left untouched.
-
-    Returns updated content string.
-    """
-    if not content or not entries:
-        return content
-
-    lines = content.splitlines()
-    result_lines: list[str] = []
-    # (section, exact bullet line) -> parsed entries in document order.
-    line_map: dict[tuple[str, str], list[EntryMetadata]] = {}
-    # Fallback maps hold ONLY entries without raw_text, so a parsed entry is never
-    # matched to another bullet that merely shares its title.
-    entry_map: dict[tuple[str, str], EntryMetadata] = {}
-    title_map: dict[str, EntryMetadata] = {}
-    for e in entries:
-        if e.raw_text:
-            line_map.setdefault((e.section, e.raw_text.split("\n", 1)[0]), []).append(e)
-            continue
-        entry_map[(e.title, e.section)] = e
-        title_map.setdefault(e.title, e)
-    skip_next_meta = False
-    current_section = ""
-    i = 0
-
-    while i < len(lines):
-        line = lines[i]
-
-        # Track section headers for section-aware lookup
-        if line.startswith("## ") and not line.startswith("### "):
-            current_section = line[3:].strip()
-            result_lines.append(line)
-            i += 1
-            continue
-
-        if skip_next_meta:
-            # Check if this line is an old metadata comment to skip
-            if _META_RE.match(line):
-                i += 1
-                skip_next_meta = False
-                continue
-            skip_next_meta = False
-
-        # Check if this is an entry bullet
-        m = _ENTRY_RE.match(line)
-        if m:
-            title = m.group(2)
-            result_lines.append(line)
-
-            # Lookup: the entry's own bullet line in this section (next in
-            # document order), else the raw_text-less fallbacks.
-            queue = line_map.get((current_section, line))
-            if queue:
-                entry = queue.pop(0)
-            else:
-                entry = entry_map.get((title, current_section)) or title_map.get(title)
-            if entry:
-                # Same reading as parse_entries (_scan_entry): keep the entry text,
-                # replace its metadata line in place, keep its Detail tail after it.
-                text_end, meta_idx, span_end = _scan_entry(lines, i)
-                result_lines.extend(lines[i + 1:text_end])
-                if meta_idx is not None:
-                    result_lines.extend(lines[text_end:meta_idx])  # blank run before meta
-                result_lines.append(entry.to_comment())
-                if meta_idx is not None:
-                    result_lines.extend(lines[meta_idx + 1:span_end])
-                    i = span_end
-                else:
-                    i = text_end
-                continue
-            else:
-                i += 1
-                continue
-        else:
-            result_lines.append(line)
-            i += 1
-
-    # Preserve trailing newline
-    trailing = content.endswith("\n")
-    result = "\n".join(result_lines)
-    if trailing and not result.endswith("\n"):
-        result += "\n"
-    return result
-
-
 # Types an automated writer never auto-writes into MEMORY (route_lesson_type): a
 # principle, correction, decision or model goes through its own review path.
 _KEEP_TYPES = frozenset({"principle", "correction", "decision", "model"})
 
-# ref_count at or above this floor is treated as load-bearing → keep.
 
 
 def route_lesson_type(lesson: str) -> "tuple[str | None, str]":

@@ -489,20 +489,19 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     if store == "MEMORY":
         lead, meta = format_memory_entry(entry_type, title, body, today, source=source)
         return f"{lead} {marker}\n{meta}"
-    # The metadata comment holds only _META_RE's fields, in order (ref, last, decay,
-    # source, taint); anything else made the whole comment unreadable, so the entry's
-    # own marker carries project_hint / rerouted_from, as in a common-DDD file.
-    meta = ["ref:0", f"last:{today}", "decay:active", f"source:{source}"]
-    if marked:
-        meta.append("taint:external")
+    # The metadata comment holds only _META_RE's fields, in order (source, taint);
+    # anything else made the whole comment unreadable, so the entry's own marker
+    # carries project_hint / rerouted_from, as in a common-DDD file.
+    from core.ddd_entry_lifecycle import meta_comment
+    meta = meta_comment(source=source, taint="external" if marked else "")
     cand = [f"cand:{unit_id}"]
     if project_hint:
         cand.append(f"project_hint:{_meta_value(project_hint)}")
     rerouted = _model_value(destination, "rerouted_from")
     if rerouted:
         cand.append(f"rerouted_from:{rerouted}")
-    return (f"- [{entry_type}] **{title}** {body} <!-- {' | '.join(cand)} -->\n"
-            f"  <!-- {' | '.join(meta)} -->")
+    line = f"- [{entry_type}] **{title}** {body} <!-- {' | '.join(cand)} -->"
+    return f"{line}\n{meta}" if meta else line
 
 
 def render_unit(decision: UnitDecision | Mapping[str, Any], unit_id: str,

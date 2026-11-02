@@ -465,12 +465,14 @@ def _redaction_span(target: Path, anchor: str) -> tuple[int, int, str]:
     import re as _re
     data = target.read_bytes()
     end = unit.byte_end
-    metadata = _re.match(rb"\r?\n[ \t]*<!-- ref:[^\r\n]*-->[ \t]*(?:\r?\n)?", data[end:])
+    # the entry's metadata line, either shape (ddd_entry_lifecycle._META_RE)
+    meta_start = rb"<!--\s*(?:ref|source|taint|valid_until|superseded_by):"
+    metadata = _re.match(rb"\r?\n[ \t]*" + meta_start + rb"[^\r\n]*-->[ \t]*(?:\r?\n)?", data[end:])
     if metadata:
         end += metadata.end()
         # the indented tail after the metadata line (Detail: / valid_from) is part of the
         # entry (ddd_entry_lifecycle._scan_entry): it leaves with it
-        tail = _re.match(rb"(?:[ \t]+(?!<!-- ref:)[^\s#][^\r\n]*(?:\r?\n|$))*", data[end:])
+        tail = _re.match(rb"(?:[ \t]+(?!" + meta_start + rb")[^\s#][^\r\n]*(?:\r?\n|$))*", data[end:])
         end += tail.end() if tail else 0
     return unit.byte_start, end, unit.identity
 

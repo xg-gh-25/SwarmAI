@@ -6,7 +6,7 @@ The shape (CDF's writer, ``core.ingestion.writer._render_ddd`` through
 
 - a doc holds only the skeleton's ``##`` sections, in the skeleton's order;
 - a section holds entries ``- [type] **Title** …`` each followed by its metadata line
-  ``<!-- ref:N | last:… | decay:… -->``, and guidance comments; the entry's type is
+  ``<!-- source:… -->``, and guidance comments; the entry's type is
   one CDF may route into that section;
 - the user-only sections (PROJECT § Current Focus / Blocked By) hold whatever the
   user writes.
@@ -45,7 +45,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from core.ddd_entry_lifecycle import _ENTRY_RE, _META_RE, _scan_entry, VALID_TYPES, classify_entry_type
+from core.ddd_entry_lifecycle import _ENTRY_RE, _META_RE, _scan_entry, VALID_TYPES, classify_entry_type, meta_comment
 from core.ddd_skeleton import (USER_ONLY_SECTIONS, allowed_types, default_type, home_section,
                                load_skeleton, normalize_heading, skeleton_sections)
 
@@ -54,7 +54,6 @@ logger = logging.getLogger(__name__)
 _H2 = re.compile(r"^## (?!#)(.+?)\s*$")
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _TYPED = re.compile(r"^- \[(\w+)\] \*\*")
-_DATE = re.compile(r"\((\d{4}-\d{2}-\d{2})")
 
 
 @dataclass
@@ -223,24 +222,11 @@ def _slug(heading: str) -> str:
     return (s[:60].rstrip("-") or "section")
 
 
-_OLD_META = re.compile(r"^\s*<!-- ref:(\d+) \| last:([\w\-]+)")
-
-
 def _meta_line(block: _Block, today: str) -> str:
-    """The metadata line an entry without one gets: its count and date from a metadata
-    comment the lifecycle cannot read (an unknown field), else ref 0 and the entry's own
-    date, else today."""
-    for ln in block.lines[1:]:
-        old = _OLD_META.match(ln)
-        if old:
-            return f"  <!-- ref:{old.group(1)} | last:{old.group(2)} | decay:active | source:manual -->"
-    m = _DATE.search(block.lines[0])
-    when = m.group(1) if m else today
-    try:
-        date.fromisoformat(when)
-    except ValueError:
-        when = today
-    return f"  <!-- ref:0 | last:{when} | decay:active | source:manual -->"
+    """The metadata line an entry without one gets: a hand-moved entry, so
+    ``source:manual``. (*block* and *today* are kept for the caller's signature; the
+    dead ref/last fields they used to fill are no longer written.)"""
+    return meta_comment(source="manual")
 
 
 def _typed_entry(doc: str, canon: str, block: _Block, today: str) -> tuple[str, list[str]]:

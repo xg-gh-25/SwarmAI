@@ -113,7 +113,7 @@ cannot lose each other's entry. It only adds; it never rewrites an existing entr
 ```bash
 python3 scripts/locked_write.py --file 2-understanding/TECH.md --section "Runtime Traps" \
   --prepend "- [pitfall] **<complete title>** <claim> **Why:** <why>.
-  <!-- ref:0 | last:<YYYY-MM-DD> | decay:active | source:manual -->"
+  <!-- source:manual -->"
 ```
 
 ## Verification

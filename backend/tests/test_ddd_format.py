@@ -93,7 +93,7 @@ def test_an_entry_goes_where_cdf_routes_its_type():
     assert "**Clock skew**" in secs["Runtime Traps"]            # a pitfall never sits in Architecture
     assert "<!-- ref:3 | last:2026-02-01 | decay:active -->" in secs["Runtime Traps"]  # metadata kept
     assert "- [decision] **One process**" in secs["Architecture"]
-    assert "last:2026-01-02" in secs["Architecture"]           # dated by the entry's own date
+    assert "<!-- source:manual -->" in secs["Architecture"]     # an entry without metadata gets it
     assert "- [process] **Run tests**" in secs["Conventions"]  # a typed entry leaves its own section
     assert "- [pitfall] **Done thing** (x) it was done." in secs["Runtime Traps"]
     assert re.search(r"- \[(decision|principle)\] \*\*Uses sqlite\*\*", secs["Architecture"])
@@ -219,10 +219,10 @@ def test_a_fence_with_a_blank_line_inside_an_entry_stays_in_the_entry():
     assert again.text == res.text and again.moved == {}
 
 
-def test_an_unreadable_metadata_line_keeps_its_count_and_date():
+def test_an_unreadable_metadata_line_gets_a_readable_one():
     text = "# T\n\n## Conventions\n\n- [guideline] **G** x.\n  <!-- ref:3 | last:2026-02-02 | decay:active | weird:1 -->\n"
     res = F.normalize("TECH.md", text, brain="P", today="2026-10-29")
-    assert "<!-- ref:3 | last:2026-02-02 | decay:active | source:manual -->" in res.text
+    assert "\n  <!-- source:manual -->\n" in res.text
 
 
 def test_a_moved_section_keeps_its_heading_even_when_two_share_a_file():
@@ -260,7 +260,7 @@ def test_one_doc_failing_is_reported_and_the_others_are_written(tmp_path, monkey
     monkeypatch.setattr(governed_edit, "apply_user_edit", fail)
     report = F.apply_project(proj, apply=True)
     assert "disk full" in report["docs"]["TECH.md"]["error"]
-    assert re.search(r"- \[\w+\] \*\*Untyped\*\* decision\.\n  <!-- ref:0", (proj / "2-understanding" / "PROJECT.md").read_text(encoding="utf-8"))
+    assert re.search(r"- \[\w+\] \*\*Untyped\*\* decision\.\n  <!-- source:manual -->", (proj / "2-understanding" / "PROJECT.md").read_text(encoding="utf-8"))
 
 
 def test_dangling_references_reports_only_paths_it_can_place(tmp_path, monkeypatch):

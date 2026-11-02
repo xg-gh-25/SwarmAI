@@ -11,7 +11,6 @@ from core.ddd_entry_lifecycle import (
     EntryMetadata,
     classify_entry_type,
     parse_entries,
-    inject_entry_metadata,
 )
 
 
@@ -125,66 +124,6 @@ class TestClassifyEntryType:
         assert classify_entry_type("Something happened in the code") == "guideline"
 
 
-# ── AC3: inject_entry_metadata round-trip ────────────────────────────────────
-
-class TestInjectMetadataSameTitle:
-    """Several entries sharing one title in one section (date-titled lessons) each
-    keep their OWN metadata; a change to one is written back to that one only."""
-
-    DOC = (
-        "# Improvement\n\n## What Failed\n\n"
-        "- **2026-06-24** (session a): first lesson body.\n"
-        "  <!-- ref:0 | last:2026-06-01 | decay:active -->\n\n"
-        "- **2026-06-24** (session b): second lesson body.\n"
-        "  <!-- ref:0 | last:2026-06-02 | decay:active -->\n\n"
-        "- **2026-06-24** (session c): third lesson body.\n"
-        "  <!-- ref:0 | last:2026-06-03 | decay:active -->\n"
-    )
-
-    def test_change_to_a_middle_twin_is_written_to_that_twin_only(self):
-        entries = parse_entries(self.DOC)
-        assert [e.title for e in entries] == ["2026-06-24"] * 3
-        entries[1].decay_state = "dormant"
-        out = parse_entries(inject_entry_metadata(self.DOC, entries))
-        assert [e.decay_state for e in out] == ["active", "dormant", "active"]
-        assert [str(e.last_referenced) for e in out] == ["2026-06-01", "2026-06-02", "2026-06-03"]
-
-    def test_unpassed_twin_is_left_untouched(self):
-        entries = parse_entries(self.DOC)
-        entries[2].decay_state = "dormant"
-        out = inject_entry_metadata(self.DOC, [entries[2]])
-        assert out.count("decay:active") == 2
-        assert parse_entries(out)[2].decay_state == "dormant"
-        assert out.split("(session c)")[0] == self.DOC.split("(session c)")[0]
-
-
-class TestInjectMetadata:
-    def test_roundtrip_preserves_entries(self):
-        entries = parse_entries(SAMPLE_CONTENT)
-        result = inject_entry_metadata(SAMPLE_CONTENT, entries)
-        re_parsed = parse_entries(result)
-        assert len(re_parsed) == len(entries)
-        for orig, reparsed in zip(entries, re_parsed):
-            assert orig.title == reparsed.title
-            assert orig.ref_count == reparsed.ref_count
-            assert orig.decay_state == reparsed.decay_state
-
-    def test_inject_updates_ref_count(self):
-        entries = parse_entries(SAMPLE_CONTENT)
-        entries[0].ref_count = 10
-        result = inject_entry_metadata(SAMPLE_CONTENT, entries)
-        re_parsed = parse_entries(result)
-        assert re_parsed[0].ref_count == 10
-
-    def test_inject_adds_metadata_to_entries_without(self):
-        entries = parse_entries(SAMPLE_NO_METADATA)
-        entries[0].ref_count = 1
-        entries[0].last_referenced = date(2026, 5, 19)
-        result = inject_entry_metadata(SAMPLE_NO_METADATA, entries)
-        re_parsed = parse_entries(result)
-        assert re_parsed[0].ref_count == 1
-
-
 # ── AC7: evaluate_demotion ───────────────────────────────────────────────────
 
 class TestParseEntriesProseOptIn:
@@ -264,27 +203,6 @@ class TestParseEntriesProseOptIn:
         assert titles == ["Real entry"], f"prose matcher over-matched: {titles}"
 
 
-class TestProseIsolatedFromAutonomousPaths:
-    """run_748f14a7 Gate-2 HIGH-1 + HIGH-2 regression: the whole POINT of making prose
-    opt-in is that AUTONOMOUS write paths (inject metadata) — which use the DEFAULT
-    narrow matcher — can NEVER see or stamp curated Open-Threads prose.
-    These tests would have gone RED under the original global-widen (the shipped-then-caught bug)."""
-
-    OT = """## Open Threads
-- 🟡 **Curated thread** — hand-written, no metadata, never meant to decay.
-- 🟢 **Another thread** — also curated.
-"""
-
-    def test_inject_metadata_leaves_prose_byte_identical(self):
-        """HIGH-1: inject_entry_metadata (default narrow) must NOT stamp <!-- ref --> onto
-        emoji prose — it can't even see it. Original global-widen stamped 8 real OT bullets."""
-        from core.ddd_entry_lifecycle import parse_entries, inject_entry_metadata
-        entries = parse_entries(self.OT)  # narrow — sees nothing
-        out = inject_entry_metadata(self.OT, entries)
-        assert out == self.OT, "inject mutated curated prose (should be byte-identical no-op)"
-        assert "<!-- ref:" not in out, "metadata stamped onto prose"
-
-
 # ── Bi-temporal supersession (失效但留链, run_24299917) ──────────────────────
 #
 # A superseded DDD entry keeps its lineage: it is FILTERED from default recall and
@@ -311,11 +229,12 @@ class TestSupersession:
     def test_unmarked_comment_byte_identical_to_legacy(self):
         # The critical backward-compat guarantee: an entry with no supersession
         # emits EXACTLY today's comment shape (no valid_until/superseded_by segment).
+        # The dead ref/last/decay fields are read, never written (2026-11-02).
         e = self._entry(ref_count=3, last_referenced=date(2026, 5, 18),
                         decay_state="active", source="auto")
-        assert e.to_comment() == "  <!-- ref:3 | last:2026-05-18 | decay:active | source:auto -->"
+        assert e.to_comment() == "  <!-- source:auto -->"
         e2 = self._entry(ref_count=0, last_referenced=None, decay_state="active")
-        assert e2.to_comment() == "  <!-- ref:0 | last:none | decay:active -->"
+        assert e2.to_comment() == ""
 
     def test_legacy_comment_still_parses(self):
         # Existing on-disk comments (no new fields) must parse with None defaults.

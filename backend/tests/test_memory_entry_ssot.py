@@ -20,10 +20,9 @@ def test_format_memory_entry_canonical_shape():
     assert m.group(1) == "pitfall"
     assert m.group(2) == "the title"
     assert "(2026-08-14, run_abc123)" in entry_line
-    # Meta line matches the 4-field metadata parser.
-    assert _META_RE.match(meta_line), f"meta line not 4-field: {meta_line!r}"
-    assert "source:auto" in meta_line
-    assert "last:2026-08-14" in meta_line
+    # Meta line matches the metadata parser and carries only source.
+    assert _META_RE.match(meta_line), f"meta line not readable: {meta_line!r}"
+    assert meta_line.strip() == "<!-- source:auto -->"
 
 
 def test_format_memory_entry_unknown_type_falls_back():

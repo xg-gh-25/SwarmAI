@@ -1,7 +1,7 @@
 """DDD entry syntax: the `taint` metadata key and the one renderer (`render_ddd_unit`).
 
 Design docs/design/2026-10-27-new-brain-initial-ddd.md §5.5, invariant I3: every type
-the parser knows, plus a gap, survives render → parse_entries → inject_entry_metadata
+the parser knows, plus a gap, survives render → parse_entries → to_comment
 with its type, full title, section, source and taint intact, and the metadata stays a
 single comment line. Content read from a repo or another outside file is marked
 `taint:external` so CDF's baseline can treat it as untrusted (CDF §9).
@@ -13,7 +13,6 @@ import pytest
 from core.ddd_entry_lifecycle import (
     VALID_TYPES,
     EntryMetadata,
-    inject_entry_metadata,
     parse_entries,
     render_ddd_unit,
 )
@@ -59,16 +58,6 @@ def test_untainted_entry_has_no_taint():
     assert "taint" not in text
 
 
-def test_inject_keeps_taint_and_one_comment_line():
-    content = _doc(render_ddd_unit(_entry("pitfall"), date_str="2026-10-27", taint="external"))
-    (e,) = parse_entries(content)
-    e.ref_count = 3
-    updated = inject_entry_metadata(content, [e])
-    assert updated.count("<!--") == 1
-    (again,) = parse_entries(updated)
-    assert (again.ref_count, again.taint, again.source) == (3, "external", "bootstrap")
-
-
 def test_body_carries_the_answer_card_fields_and_sources():
     text = render_ddd_unit(_entry("decision"), date_str="2026-10-27")
     line = text.splitlines()[0]
@@ -79,7 +68,7 @@ def test_body_carries_the_answer_card_fields_and_sources():
 
 def test_legacy_comment_is_byte_identical():
     e = EntryMetadata(title="t", source="auto")
-    assert e.to_comment() == "  <!-- ref:0 | last:none | decay:active | source:auto -->"
+    assert e.to_comment() == "  <!-- source:auto -->"
 
 
 def test_taint_with_supersession_parses():
@@ -88,7 +77,10 @@ def test_taint_with_supersession_parses():
                " | valid_until:2026-10-20 | superseded_by:new way -->\n")
     (e,) = parse_entries(content)
     assert (e.taint, e.superseded_by, e.source) == ("external", "new way", "bootstrap")
-    assert e.to_comment().strip() == content.splitlines()[3].strip()
+    assert e.to_comment().strip() == ("<!-- source:bootstrap | taint:external"
+                                      " | valid_until:2026-10-20 | superseded_by:new way -->")
+    (again,) = parse_entries(content.replace(content.splitlines()[3], e.to_comment()))
+    assert (again.taint, again.superseded_by, again.valid_until) == (e.taint, e.superseded_by, e.valid_until)
 
 
 @pytest.mark.parametrize("bad", [

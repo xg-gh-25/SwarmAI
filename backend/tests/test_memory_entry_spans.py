@@ -214,15 +214,7 @@ def test_pin_parse_entries_default_reads_bullets_inside_h3():
 
 # ── Code-review findings (2026-10-25): one reading of an entry everywhere ───
 
-def test_inject_metadata_does_not_cross_a_heading():
-    """A metadata-free entry followed by ### gets its metadata right after it."""
-    from core.ddd_entry_lifecycle import inject_entry_metadata
-    doc = "## S\n- [guideline] **A** — body (2026-01-01)\n### Next\nparagraph\n- **Field**: value\n"
-    entries = parse_entries(doc)
-    out = inject_entry_metadata(doc, entries).splitlines()
-    assert out[1].startswith("- [guideline] **A**")
-    assert out[2].lstrip().startswith("<!-- ref:")
-    assert out[3:6] == ["### Next", "paragraph", "- **Field**: value"]
+
 
 
 
