@@ -17,7 +17,7 @@ channel reply (the gateway appends ``channel_text``: the whole card in a DM, its
 last line in a group; a channel cannot render the card or open the Hive tab). It is not
 conversation (core/context_injector) and is persisted as its own row.
 
-- ``watched(command)`` — the call is a Swarm Out dispatch
+- ``watched(command)`` — the call is a Swarm Out dispatch (not text inside a heredoc body)
 - ``card(command, output, since)`` — the block for its result, or None
 - ``channel_text(block, direct)`` — what a channel reply carries
 - ``from_row(row)`` / ``failure(...)`` / ``text_of(block)`` / ``hive_reason_text(code)``
@@ -37,8 +37,27 @@ _DETAIL_MAX = 600
 _FIELD_MAX = 300
 
 
+#: a heredoc's start (``<<WORD``, ``<<-'WORD'``), not a here-string (``<<<``)
+_HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _without_heredoc_bodies(command: str) -> str:
+    """The command with every heredoc's body removed: text written into a file (a
+    script, a note that quotes a dispatch command) runs nothing."""
+    out: list[str] = []
+    ends: list[str] = []
+    for line in command.split("\n"):
+        if ends:
+            if line.strip() == ends[0]:
+                ends.pop(0)
+            continue
+        out.append(line)
+        ends.extend(m.group(2) for m in _HEREDOC_RE.finditer(line))
+    return "\n".join(out)
+
+
 def watched(command: Any) -> bool:
-    return isinstance(command, str) and bool(_DISPATCH_RE.search(command))
+    return isinstance(command, str) and bool(_DISPATCH_RE.search(_without_heredoc_bodies(command)))
 
 
 def _args(command: str) -> dict[str, str]:

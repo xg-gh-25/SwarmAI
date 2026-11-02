@@ -288,3 +288,16 @@ def test_the_orchestrator_shows_a_redirected_dispatch_from_its_own_sessions_row(
     assert raised is None
     (b,) = _cards(events)
     assert (b["ok"], b["dispatchId"]) == (True, ROW["dispatch_id"])
+
+
+def test_a_dispatch_command_inside_a_heredoc_body_is_not_a_dispatch():
+    """A Bash call that writes a file whose text holds a dispatch command (a script, a
+    note) dispatches nothing: no card. The heredoc's own line, and a real dispatch after
+    the body ends, still count."""
+    line = '"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title t --brain B'
+    assert not card.watched(f"cat > /tmp/cmd.txt <<'EOF'\n{line}\nEOF")
+    assert not card.watched(f'cat > /tmp/cmd.txt <<-"END"\n\t{line}\n\tEND\npython3 x.py')
+    assert card.watched(f"cat > /tmp/t.md <<'EOF'\ntask text\nEOF\n{line}")
+    assert card.watched(f"{line} <<'EOF'\nignored\nEOF")
+    # a here-string is not a heredoc: the rest of the command is still read
+    assert card.watched(f"cat <<<word\n{line}")
