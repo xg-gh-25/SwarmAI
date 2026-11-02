@@ -1137,3 +1137,50 @@ def test_a_too_large_turn_drops_earlier_answers_before_its_own_rows(monkeypatch)
     assert len(got["rows"]) == len(rows)                       # the turn's own rows stay
     assert len(hr.later_answers([{"content": [{"type": "ask_user_question", "toolUseId": f"t{i}",
                                                 "answers": {"q": "a"}}]} for i in range(80)])) == hr.MAX_LATER_ANSWERS
+
+
+def test_a_re_sent_turn_cut_off_before_its_first_record_is_read_from_the_session(host, hive_ws, monkeypatch, tmp_path):
+    """A re-sent turn the Hive never sealed (its service was killed mid-turn): the kept
+    record still ends at the turn before the re-send. The result is then read from the
+    session's rows, where the cut-off turn shows as having no ending (``no_record``), so
+    the run can be re-run or discarded once the cut-off time has passed. Once the Hive
+    seals a turn that ended after the re-send, the record is read again."""
+    from datetime import datetime, timedelta, timezone
+    from core import hive_records as hr
+    from core import swarm_out, swarm_out_results as sor
+    monkeypatch.setattr(sor, "_dir", lambda: tmp_path / "results")
+    (tmp_path / "results").mkdir()
+
+    async def instance(ref):
+        return {"id": "h", "name": "h"}
+    monkeypatch.setattr(swarm_out, "_instance", instance)
+    first = _turn_rows("first", i="a")
+    hr.seal_turn(hive_ws, SID, first)
+    rec = asyncio.run(sor.fetch(ROW))
+    assert rec["result"]["report"] == "first"
+    sor.turn_started(DID)                                            # the re-send
+    cut = [{"id": "ub", "role": "user", "created_at": "2026-10-29T02:00:00Z",
+            "content": [{"type": "text", "text": "continue"}]},
+           {"id": "ab", "role": "assistant", "created_at": "2026-10-29T02:00:01Z", "content": [
+               {"type": "tool_use", "id": "tb", "name": "Bash", "input": {"command": "bun run typecheck"}}]}]
+    real = host.handler
+
+    def with_messages(req):
+        if req.url.path.startswith("/api/chat/sessions/"):
+            host.calls.append(req.url.path)
+            return httpx.Response(200, json=first + cut)
+        return real(req)
+    host.handler = with_messages
+    rec = asyncio.run(sor.fetch(ROW))
+    assert (rec["result"]["turns"], rec["result"]["ended"]) == (2, "no_record")
+    assert any(c.startswith("/api/chat/sessions/") for c in host.calls)
+    assert rec["no_record_since"] is not None                        # the cut-off clock runs
+    # the Hive seals a turn that ended after the re-send: the record again, not the session
+    later = (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat()
+    done = _turn_rows("second", i="c")
+    done[-1]["content"][1]["at"] = later
+    hr.seal_turn(hive_ws, SID, first + done)
+    host.calls.clear()
+    rec = asyncio.run(sor.fetch(ROW))
+    assert (rec["result"]["report"], rec["result"]["ended"]) == ("second", "completed")
+    assert not any(c.startswith("/api/chat/sessions/") for c in host.calls)

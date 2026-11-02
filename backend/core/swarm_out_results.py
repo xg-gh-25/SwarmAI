@@ -584,17 +584,23 @@ def load(dispatch_id: str) -> Optional[dict]:
     return rec if isinstance(rec, dict) else None
 
 
+def _ended_before_resend(res: Any, resent_at: Any) -> bool:
+    """The result is of the turn before the last re-send (``resent_at``): the one test
+    ``_superseded`` and the records path (``_from_records``) both use."""
+    sent = _parse_time(resent_at)
+    if not isinstance(res, dict) or sent is None:
+        return False
+    ended = _parse_time(res.get("ended_at"))
+    return ended is not None and ended < sent
+
+
 def _superseded(record: dict) -> None:
     """A result that ended before the last re-send (``resent_at``, ``turn_started``) is
     the turn the re-send replaces: it is not final (``provisional``) and says so
     (``superseded``), so nothing accepts it while the new turn runs or before its result
     is read. Applied at the one write point (``save``), so no reader has to remember."""
     res = record.get("result")
-    sent = _parse_time(record.get("resent_at"))
-    if not isinstance(res, dict) or sent is None:
-        return
-    ended = _parse_time(res.get("ended_at"))
-    if ended is not None and ended < sent:
+    if _ended_before_resend(res, record.get("resent_at")):
         res["provisional"] = True
         res["superseded"] = True
 
@@ -874,7 +880,10 @@ def attach_local(result: dict, placed: list[dict]) -> None:
 async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
     """Fill ``rec`` from the run's record kept here (core/hive_records): the record's
     state, the lessons, and the result when the record starts at the session's first turn.
-    Returns whether the result came from the record (False: read it the old way)."""
+    Returns whether the result came from the record (False: read it the old way). A
+    record whose last turn ended before the last re-send does not hold the re-sent turn
+    yet, and never will when the Hive was cut off before sealing it: the session's rows
+    show that turn (with no ending), so its result is read the old way too."""
     from core import hive_lessons, hive_records
     did = rec["dispatch_id"]
     err = pulled.get("error")
@@ -889,7 +898,10 @@ async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
         return False
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
     if rows:
-        rec["result"] = await asyncio.to_thread(summarize, rows, partial, agent, did, _records_of(row, rec))
+        result = await asyncio.to_thread(summarize, rows, partial, agent, did, _records_of(row, rec))
+        if _ended_before_resend(result, rec.get("resent_at")):
+            return False
+        rec["result"] = result
         from core import hive_files
         attach_local(rec["result"], await asyncio.to_thread(hive_files.placed, did))
         rec["summary_version"] = SUMMARY_VERSION
