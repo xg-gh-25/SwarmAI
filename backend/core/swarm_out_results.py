@@ -542,7 +542,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
         "tokens": tokens if outcomes else None,
         "cost_usd": cost, "cost_partial": cost_partial,
         # the whole reply: a reply is one unit, shown whole or not at all (the list view
-        # carries only its length, core/swarm_out._result_brief)
+        # carries only its length, ``public``)
         "report": report_full, "report_chars": len(report_full),
         "kinds": kinds,
         "work": {
