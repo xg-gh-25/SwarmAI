@@ -372,7 +372,7 @@ with knowledge nobody stated.
 | PRODUCT Success Criteria | what the material says counts as success: a target, a measure, a definition of done for the project. **Not** a test or review rule for contributions (→ Conventions). None stated → a gap |
 | PRODUCT Non-Goals | what the material says is out of scope or not to be used for; else a gap |
 | TECH Architecture | ARCHITECTURE / design documents; the entry points |
-| TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility, entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |
+| TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility, entry point, what it depends on; `sources` = the cluster's `files` (never a graph id). When `graph_clusters.skipped` says the graph was too large to cluster: one per module in `code_shape.structure.modules` that matters (leave out test modules), what it depends on from `structure.module_edges`, the repo's own architecture or key-files index for the responsibility; `sources` = files from the module's `files` (a directory is not a source) |
 | TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` = the CI / Makefile / package.json that declares it) |
 | TECH Runtime Traps | each `history.hotspots` file not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries; SECURITY.md |
 | IMPROVEMENT What Worked | usually empty at birth |

@@ -1119,11 +1119,14 @@ cases:
       \ contributions (→ Conventions). None stated → a gap |\n| PRODUCT Non-Goals | what the material says is out\
       \ of scope or not to be used for; else a gap |\n| TECH Architecture | ARCHITECTURE / design documents; the\
       \ entry points |\n| TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility,\
-      \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |\n| TECH Conventions\
-      \ | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` =\
-      \ the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots` file\
-      \ not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap\
-      \ it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
+      \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id). When `graph_clusters.skipped`\
+      \ says the graph was too large to cluster: one per module in `code_shape.structure.modules` that matters (leave\
+      \ out test modules), what it depends on from `structure.module_edges`, the repo's own architecture or key-files\
+      \ index for the responsibility; `sources` = files from the module's `files` (a directory is not a source)\
+      \ |\n| TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the\
+      \ command, `sources` = the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots`\
+      \ file not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the\
+      \ trap it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
       \ SECURITY.md |\n| IMPROVEMENT What Worked | usually empty at birth |\n| IMPROVEMENT What Failed | reverts\
       \ and repeated fixes, citing the commits' files |\n| IMPROVEMENT What to Watch For | gaps only: what has no\
       \ evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |\n| PROJECT\
@@ -1189,7 +1192,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: de884f4d083c8c95
+  validated_by_4gate: 4bbc8220e10dabcf
 - id: OFF_BRAIN_FIRST_ENTRIES_ADR
   category: ddd
   dimension: cognition
@@ -1244,11 +1247,14 @@ cases:
       \ contributions (→ Conventions). None stated → a gap |\n| PRODUCT Non-Goals | what the material says is out\
       \ of scope or not to be used for; else a gap |\n| TECH Architecture | ARCHITECTURE / design documents; the\
       \ entry points |\n| TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility,\
-      \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |\n| TECH Conventions\
-      \ | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` =\
-      \ the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots` file\
-      \ not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap\
-      \ it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
+      \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id). When `graph_clusters.skipped`\
+      \ says the graph was too large to cluster: one per module in `code_shape.structure.modules` that matters (leave\
+      \ out test modules), what it depends on from `structure.module_edges`, the repo's own architecture or key-files\
+      \ index for the responsibility; `sources` = files from the module's `files` (a directory is not a source)\
+      \ |\n| TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the\
+      \ command, `sources` = the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots`\
+      \ file not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the\
+      \ trap it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
       \ SECURITY.md |\n| IMPROVEMENT What Worked | usually empty at birth |\n| IMPROVEMENT What Failed | reverts\
       \ and repeated fixes, citing the commits' files |\n| IMPROVEMENT What to Watch For | gaps only: what has no\
       \ evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |\n| PROJECT\
@@ -1320,7 +1326,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: aff42a92dc7fa037
+  validated_by_4gate: 5c38f0f4f0c60202
 - id: OFF_BRAIN_FIRST_ENTRIES_KNOWLEDGE
   category: ddd
   dimension: cognition
@@ -1372,11 +1378,14 @@ cases:
       \ contributions (→ Conventions). None stated → a gap |\n| PRODUCT Non-Goals | what the material says is out\
       \ of scope or not to be used for; else a gap |\n| TECH Architecture | ARCHITECTURE / design documents; the\
       \ entry points |\n| TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility,\
-      \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |\n| TECH Conventions\
-      \ | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` =\
-      \ the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots` file\
-      \ not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the trap\
-      \ it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
+      \ entry point, what it depends on; `sources` = the cluster's `files` (never a graph id). When `graph_clusters.skipped`\
+      \ says the graph was too large to cluster: one per module in `code_shape.structure.modules` that matters (leave\
+      \ out test modules), what it depends on from `structure.module_edges`, the repo's own architecture or key-files\
+      \ index for the responsibility; `sources` = files from the module's `files` (a directory is not a source)\
+      \ |\n| TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the\
+      \ command, `sources` = the CI / Makefile / package.json that declares it) |\n| TECH Runtime Traps | each `history.hotspots`\
+      \ file not marked `test` with its commit subjects (a hot spot is a code file fixes keep touching; write the\
+      \ trap it shows, never the list itself, which changes with every commit); security / bugfix CHANGELOG entries;\
       \ SECURITY.md |\n| IMPROVEMENT What Worked | usually empty at birth |\n| IMPROVEMENT What Failed | reverts\
       \ and repeated fixes, citing the commits' files |\n| IMPROVEMENT What to Watch For | gaps only: what has no\
       \ evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |\n| PROJECT\
@@ -1443,4 +1452,4 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 87f1978bb624353b
+  validated_by_4gate: a62ee98f49f0a985
