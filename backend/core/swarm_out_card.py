@@ -7,7 +7,9 @@ out is shown from **this machine's dispatch log row** with the ``dispatch_id`` t
 printed (``from_row``), never from the printed text: what the card says is what was
 sent. A call that printed nothing (its output went to a file) is shown from the one row
 this session dispatched after the call started (``_row_of_session``), so a task that went
-out is never called "not sure". A refused dispatch (``{"ok": false, "detail": ...}``) is a failure card with the
+out is never called "not sure". When its ``--title`` is a shell expression (``$n`` in a
+loop), the call may have sent several and their titles are not in the command:
+``cards`` shows every row this session dispatched after the call started. A refused dispatch (``{"ok": false, "detail": ...}``) is a failure card with the
 detail and the Brain / title the command named; it says nothing was sent. A dispatch the
 Hive may have taken without naming a session (``"maybe_sent": true``, the router's 504
 or the CLI's own timeout) says it may be running there instead.
@@ -19,6 +21,7 @@ conversation (core/context_injector) and is persisted as its own row.
 
 - ``watched(command)`` — the call is a Swarm Out dispatch (not text inside a heredoc body)
 - ``card(command, output, since)`` — the block for its result, or None
+- ``cards(command, output, since)`` — every block for its result (the orchestrator's)
 - ``channel_text(block, direct)`` — what a channel reply carries
 - ``from_row(row)`` / ``failure(...)`` / ``text_of(block)`` / ``hive_reason_text(code)``
 """
@@ -144,20 +147,48 @@ def _sent_at(row: dict) -> Optional[float]:
         return None
 
 
-def _row_of_session(command: str, since: Optional[float], session_id: Optional[str]) -> Optional[dict]:
-    """The dispatch log row of this call when it printed nothing: the one row this
-    session dispatched (``dispatched_from``) after the call started, with the call's
-    ``--title`` when it names one. None when not exactly one fits: which row is this
-    call's is then not known."""
+def _expanded(value: Optional[str]) -> bool:
+    """A command-line value the shell would have expanded (``$n``, a backtick)."""
+    return value is not None and any(c in value for c in "$`")
+
+
+def _rows_of_session(command: str, since: Optional[float], session_id: Optional[str]) -> list[dict]:
+    """The rows this session dispatched (``dispatched_from``) after the call started, in
+    the order they were sent, with the call's ``--title`` when it names a literal one."""
     if not session_id or since is None:
-        return None
+        return []
     from core import swarm_out
     title = _args(command).get("title")
+    if _expanded(title):
+        title = None
     rows = [r for r in swarm_out._read_log()
             if r.get("dispatched_from") == session_id
             and (at := _sent_at(r)) is not None and at >= since - _SKEW_S
             and (title is None or r.get("title") == title)]
+    return sorted(rows, key=lambda r: _sent_at(r) or 0.0)
+
+
+def _row_of_session(command: str, since: Optional[float], session_id: Optional[str]) -> Optional[dict]:
+    """The dispatch log row of this call when it printed nothing: the one row of
+    ``_rows_of_session``. None when not exactly one fits: which row is this call's is
+    then not known."""
+    rows = _rows_of_session(command, since, session_id)
     return rows[0] if len(rows) == 1 else None
+
+
+def cards(command: str, output: str, since: Optional[float] = None, cwd: Optional[str] = None,
+          session_id: Optional[str] = None) -> list[dict]:
+    """Every card of a dispatch call's result. One, as ``card`` gives, except for a call
+    that printed no JSON and whose ``--title`` the shell expanded: such a call (a loop)
+    may have sent several tasks, so each row this session dispatched after it started is
+    a card. None of them fits: the "not sure" card, as ``card``."""
+    if (_json_head(output) is None and not _USAGE_RE.search(output or "")
+            and _expanded(_args(command).get("title"))):
+        rows = _rows_of_session(command, since, session_id)
+        if rows:
+            return [from_row(r) for r in rows]
+    block = card(command, output, since, cwd, session_id)
+    return [block] if block else []
 
 
 def card(command: str, output: str, since: Optional[float] = None, cwd: Optional[str] = None,

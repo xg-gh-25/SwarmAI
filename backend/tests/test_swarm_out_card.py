@@ -276,6 +276,38 @@ def test_a_dispatch_whose_output_was_redirected_is_shown_from_this_sessions_log_
     assert card.card(redirected, "", since=now - 1, session_id="sess-a")["maybeSent"] is True
 
 
+def test_a_loop_of_dispatches_shows_each_task_it_sent(monkeypatch):
+    """A call whose --title the shell expanded (a loop over Brains) and whose output was
+    not the CLI's JSON may have sent several tasks: each row this session dispatched
+    after it started is a card, in the order sent. A literal title keeps the one-row
+    rule; nothing sent stays "not sure"."""
+    import time
+    from datetime import datetime, timezone
+    now = time.time()
+    at = lambda dt: datetime.fromtimestamp(now + dt, timezone.utc).isoformat()  # noqa: E731
+    first = {**ROW, "dispatch_id": "so_" + "1" * 12, "title": "check A", "sent_at": at(1), "dispatched_from": "sess-a"}
+    second = {**ROW, "dispatch_id": "so_" + "2" * 12, "title": "check B", "sent_at": at(2), "dispatched_from": "sess-a"}
+    before = {**ROW, "dispatch_id": "so_" + "3" * 12, "sent_at": at(-60), "dispatched_from": "sess-a"}
+    other = {**ROW, "dispatch_id": "so_" + "4" * 12, "sent_at": at(1), "dispatched_from": "sess-b"}
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [second, before, other, first])
+    loop = ('for n in A B; do "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --brain $n '
+            '--title "check $n" --task x --acceptance y --execution native --returns answer '
+            '--revision r | python3 -c "print(1)"; done')
+    got = card.cards(loop, "A so_111111111111 demo\nB so_222222222222 demo\n", since=now, session_id="sess-a")
+    assert [(b["ok"], b["dispatchId"], b["title"]) for b in got] == [
+        (True, first["dispatch_id"], "check A"), (True, second["dispatch_id"], "check B")]
+    # a literal title with two rows that fit: still not sure which is this call's
+    literal = CMD + " > /tmp/dispatch.json 2>&1"
+    twin = [{**first, "title": ROW["title"]}, {**second, "title": ROW["title"]}]
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: twin)
+    (b,) = card.cards(literal, "", since=now, session_id="sess-a")
+    assert (b["ok"], b["maybeSent"]) == (False, True)
+    # the loop sent nothing this session can see: the "not sure" card
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [before, other])
+    (b,) = card.cards(loop, "", since=now, session_id="sess-a")
+    assert (b["ok"], b["maybeSent"]) == (False, True)
+
+
 @pytest.mark.usefixtures("_isolated_queue")
 def test_the_orchestrator_shows_a_redirected_dispatch_from_its_own_sessions_row(monkeypatch):
     from datetime import datetime, timezone

@@ -502,18 +502,19 @@ class StreamingOrchestrator:
         return events
 
     async def _dispatch_card_events(self, watch: tuple[str, float], content: Any) -> list[dict]:
-        """The swarm_out_dispatch card of a Swarm Out dispatch call's result (core/
-        swarm_out_card: from the dispatch log, or a refusal), as one persisted assistant
-        event like a pipeline stage row. Fail-safe: any error -> [] (the turn goes on)."""
+        """The swarm_out_dispatch cards of a Swarm Out dispatch call's result (core/
+        swarm_out_card.cards: from the dispatch log, or a refusal), each one persisted
+        assistant event like a pipeline stage row. Fail-safe: any error -> [] (the turn
+        goes on)."""
         try:
             from .turn_products import result_text
             command, since = watch
-            block = await executors.run_in("io", _swarm_out_card.card, command, result_text(content), since,
-                                           None, self._session_id)
+            blocks = await executors.run_in("io", _swarm_out_card.cards, command, result_text(content), since,
+                                            None, self._session_id)
         except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
             logger.warning("dispatch card failed: %s", type(e).__name__)
             return []
-        return [{"type": "assistant", "content": [block], "model": None}] if block else []
+        return [{"type": "assistant", "content": [block], "model": None} for block in blocks]
 
     def _clear_completed_sub_agents(self, message: Any) -> None:
         """Remove tracking entries for sub-agents (Agent tool) that completed.
@@ -1597,8 +1598,9 @@ class StreamingOrchestrator:
         # stage progress shown by the backend, not left to the model writing it.
         _pending_stage_watch: dict[str, str] = self._turn_carry["pending_stage_watch"]
         # tool_use_id → (command, when seen) of a Bash `scripts.swarm_out dispatch` call:
-        # its result (gone out, refused, or not sure) becomes one persisted
-        # swarm_out_dispatch card built from the dispatch log (core/swarm_out_card), not
+        # its result (gone out, refused, or not sure) becomes persisted swarm_out_dispatch
+        # cards (one per task a loop of dispatches sent) built from the dispatch log
+        # (core/swarm_out_card.cards), not
         # from what the model writes.
         _pending_dispatch_watch: dict[str, tuple[str, float]] = self._turn_carry.setdefault("pending_dispatch_watch", {})
         # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
