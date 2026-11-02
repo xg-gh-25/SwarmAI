@@ -295,6 +295,12 @@ def _git_repo(path, agents):
     return path
 
 
+def _padded(rendered, width):
+    """_render returns (block, shown keys); pad the block to *width* characters."""
+    text, keys = rendered
+    return text.ljust(width, "."), keys
+
+
 def _hook_call(rg, sid, **ti):
     import asyncio
     from unittest.mock import MagicMock
@@ -308,7 +314,7 @@ def test_one_repo_block_near_the_limit_is_shown_and_a_second_comes_next_time(tmp
     from core import repo_guidance as rg
     a, b = _git_repo(tmp_path / "a", "# A\nrule a"), _git_repo(tmp_path / "b", "# B\nrule b")
     real = rg._render
-    monkeypatch.setattr(rg, "_render", lambda root, *x, **k: real(root, *x, **k).ljust(7450, "."))
+    monkeypatch.setattr(rg, "_render", lambda root, *x, **k: _padded(real(root, *x, **k), 7450))
     out = _hook_call(rg, "near", command=f"cd {a} && cd {b}", cwd=str(a))
     assert "rule a" in out and "rule b" not in out
     assert "1 more repository not shown" in out and str(b.resolve()) in out
@@ -322,7 +328,7 @@ def test_the_omitted_repositories_line_stays_under_the_cli_limit(tmp_path, monke
     from core import repo_guidance as rg
     roots = [_git_repo(tmp_path / ("r" * 60 + str(i)), f"# R\nrule {i}") for i in range(30)]
     real = rg._render
-    monkeypatch.setattr(rg, "_render", lambda root, *x, **k: real(root, *x, **k).ljust(3000, "."))
+    monkeypatch.setattr(rg, "_render", lambda root, *x, **k: _padded(real(root, *x, **k), 3000))
     out = _hook_call(rg, "many", command=" && ".join(f"cd {r}" for r in roots), cwd=str(roots[0]))
     assert len(out) <= rg.CLI_LIMIT and "more]" in out
     rg.forget("many")
