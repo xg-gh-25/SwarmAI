@@ -408,56 +408,68 @@ def _bind_into_workspace(args) -> None:
     where a Hive's returned commits land (fixing-spec 2026-11-02 G1).
 
     Everything that can refuse runs before anything is created or moved (the project,
-    the URL, the branch, the workspace folder, the target); a binding that already has
-    this remote is reused (a mirror is relocated, a checkout is read again); and when
-    the in-place read is refused after all, the clone is removed or the move undone."""
+    the URL, the branch, the workspace folder, the target). A binding that already has
+    this remote is reused: a mirror is relocated, a checkout is read again, and one with
+    no checkout on this machine (written by hand, or from another machine) gets a clone
+    in the workspace. ``--branch`` is checked out where this bind placed the checkout and
+    only checked where the person already works. When a later step is refused (or fails
+    in any way) before the checkout is owned, everything is put back."""
     from core import repo_placement as rp
+    from core.project_agent import repo_roots
     projects = _get_workspace() / "Projects"
     project = _project_name(projects, args.project)
     pdir = projects / project
     source = getattr(args, "source", "agent")
-    fresh: Path | None = None
-    moved = None
+    placed = current = None
     try:
+        branch = rp.check_branch(getattr(args, "branch", None))
         if args.url:
             url = rp.normalize_url(args.url)
-            branch = rp.check_branch(getattr(args, "branch", None))
             rp.check_repos_dir()
             existing = rp.binding_for_remote(pdir, url)
-            kind = rp.placement(pdir).get(existing, {}).get("checkout") if existing else None
-            if existing and kind == "mirror":
-                moved = rp.relocate(pdir, existing)
-                root, cloned = moved.target, False
+            current = repo_roots(pdir).get(existing) if existing else None
+            if existing and current is None:
+                placed = rp.attach(pdir, existing, url, branch)
+            elif existing and rp.placement(pdir).get(existing, {}).get("checkout") == "mirror":
+                placed = rp.relocate(pdir, existing)
+                rp.use_branch(placed.target, branch, ours=True)
             elif existing:
-                from core.project_agent import repo_roots
-                root = repo_roots(pdir).get(existing)
-                if root is None:
-                    raise rp.PlacementError(f"{existing} binds this remote but its checkout is "
-                                            "not on this machine; bind it with --local <path>")
-                cloned = False
+                rp.use_branch(current, branch, ours=False)
             else:
                 root, cloned = rp.clone_into_workspace(url, branch)
-                fresh = root if cloned else None
+                placed = rp.Placed(pdir, root, cloned=cloned)
         else:
-            moved = rp.relocate(pdir, args.relocate)
-            root, cloned = moved.target, False
+            placed = rp.relocate(pdir, args.relocate)
+            rp.use_branch(placed.target, branch, ours=True)
     except rp.PlacementError as e:
+        if placed is not None:
+            placed.undo()
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({"checkout": str(root), "cloned": cloned, "relocated": moved is not None}),
+    root = placed.target if placed is not None else current
+    print(json.dumps({"checkout": str(root), "cloned": bool(placed and placed.cloned),
+                      "relocated": bool(placed and placed.mirror is not None)}),
           file=sys.stderr)
     try:
         _bind_local(project, str(root), source=source)
-    except SystemExit as e:
-        if e.code:                       # refused after all: leave nothing half-done
-            if fresh is not None:
-                rp._remove_fresh(fresh)
-            if moved is not None:
-                moved.undo()
+    except BaseException as e:
+        done = isinstance(e, SystemExit) and not e.code
+        if placed is not None and not done and not _owns(project, root):
+            placed.undo()
             print(json.dumps({"error": "nothing was kept: "
-                              + ("the clone was removed" if fresh else "the mirror was put back"
-                                 if moved else "no change")}), file=sys.stderr)
+                              + ("the clone was removed" if placed.cloned
+                                 else "the mirror was put back" if placed.mirror is not None
+                                 else "bindings.yaml was restored")}), file=sys.stderr)
         raise
+
+
+def _owns(project: str, root: Path) -> bool:
+    """*project* owns the checkout *root* in the local-roots registry (``declare`` went
+    through), so it must not be undone."""
+    import os
+    from core.code_intel.local_roots import entries
+    real = os.path.realpath(root)
+    return any(r.get("path") == real for r in entries(project))
 
 
 def _project_name(projects: Path, project: str) -> str:
@@ -770,7 +782,7 @@ def main() -> None:
                         help="clone the repository at URL into the repository workspace "
                              "(repos_dir, default ~/SwarmAI-Repos) and read it in place like "
                              "--local; the same repository already there is reused")
-    p_bind.add_argument("--branch", default=None, help="with --url: the branch to check out")
+    p_bind.add_argument("--branch", default=None, help="with --url or --relocate: the branch the checkout must be on (checked out where this bind places it; only checked in a checkout you already had)")
     p_bind.add_argument("--relocate", default=None, metavar="REPO",
                         help="move REPO's bind-managed mirror (~/.swarm-ai/bindings/REPO) into "
                              "the repository workspace and read it there; refused when it holds "

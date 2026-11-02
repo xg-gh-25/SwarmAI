@@ -35,8 +35,10 @@ def _is_system_path(resolved: Path) -> bool:
     which the /var root would otherwise catch). A file the user chose to drop from
     temp is fine; the guard targets /etc, /usr, /System, /var/log, ~/.ssh, etc."""
     import tempfile
+    from core.true_path import true_case
+    resolved = true_case(resolved)      # ~/.SSH is ~/.ssh on a case-insensitive disk
     s = str(resolved)
-    tmp_root = str(Path(tempfile.gettempdir()).resolve())
+    tmp_root = str(true_case(Path(tempfile.gettempdir()).resolve()))
     if s == tmp_root or s.startswith(tmp_root + "/"):
         return False
     for root in _SYSTEM_ROOTS:
@@ -44,7 +46,7 @@ def _is_system_path(resolved: Path) -> bool:
             return True
     # Home-secret dirs (credential/key stores under ~).
     try:
-        home = Path.home().resolve()
+        home = true_case(Path.home().resolve())
         if resolved == home or home in resolved.parents:
             rel = resolved.relative_to(home).as_posix()
             for secret in _HOME_SECRET_DIRS:

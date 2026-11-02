@@ -96,6 +96,10 @@ status: r3，实施中（XG 2026-11-02：全部直接改）
 - **落位写在新键 `intake.placement`，不改 `intake.repos` 的形状。** 所有读者（`project_agent.validate`、`load_project_agent`、`project_agent_draft`）都把 `intake.repos` 当名字列表读；Hive 可能跑旧版本，旧版会把对象过滤掉，再报 "not in intake.repos"。validator 本来就忽略未知键，所以新键不影响旧读者。
 - **只拒绝"commits 落进镜像"，不拒绝"本机没有 checkout"。** 没有 checkout 时，`hive_return` 交回会等到仓库绑定后再落地，不是已观测到的缺陷（P9）；落进镜像才是。拒绝放在 `task_spec.admit`（只对 `returns == commits`），没放进 P6 与准入共用的 `dispatch_problems`。
 - **派单的项目段落不变。** 目前只有 Hive 一种派单位置，Hive 端的工作区说明（`task_text`）已经写明在哪写代码；本机这一侧由 `[DDD:<project>]` 提示给出 checkout 和规则。
+- **已有同 remote 的 binding、本机却没有 checkout（手写的 binding，或另一台机器的 `worktree` 路径）时，`bind --url` 克隆进工作区，并把这条 binding 的 `worktree` 指过去**（`repo_placement.attach`），不新增第二条 binding。
+- **`--branch` 的规则。** 这次 bind 放下的 checkout（新克隆、搬进来的镜像）切到该分支；用户已经在用的 checkout 不切，只检查，分支不对就拒绝。分支名按 git 自己的规则判断（`git check-ref-format --branch`）。
+- **路径守卫按磁盘上的真实拼写比较**（`core/true_path.true_case`）。大小写不敏感的磁盘上，`~/.SSH` 就是 `~/.ssh`。`local_roots._refusal` 和 `library_inbox._is_system_path` 都先把路径换成真实拼写再比较。`file://` URL 只认本机（`file:///path` 或 `file://localhost/path`），由 `ddd_bindings.file_url_path` 统一解析。
+- **任何步骤失败都会撤回。** checkout 被登记（`declare`）之前，任何异常都会撤回：克隆删掉，镜像搬回，`bindings.yaml` 恢复为写入前的字节。跨盘搬移中途失败时，只有镜像仍完整才删掉目标；镜像已不完整就保留目标，并说明它在哪。
 
 **测试（先红后绿；拒绝类用例断言具体错误文字）。** 新增 `tests/test_local_binding.py`（今天没有测试覆盖 `record()`）、`tests/test_artifact_cli_bind_url.py`，扩展 `tests/test_project_agent_draft.py`、`tests/test_task_spec.py`、`tests/test_brain_sync.py`：
 - `--url` 指向临时 bare repo（`file://`），`repos_dir` 指向临时目录：

@@ -83,12 +83,16 @@ def db_path(root: str | Path) -> Path:
 
 def _refusal(p: Path) -> str | None:
     """Why *p* (a canonical, real path) may not be a local root, or None. No git call:
-    ``confirmed`` re-checks every entry with it each time ownership is read."""
+    ``confirmed`` re-checks every entry with it each time ownership is read. Every path
+    is compared as the disk spells it (``core.true_path``): on a case-insensitive disk
+    ``~/.SSH`` is ``~/.ssh``."""
     from config import get_app_data_dir, get_swarmws
-    home = Path(os.path.realpath(Path.home()))
-    ws = Path(os.path.realpath(get_swarmws()))
-    bindings = Path(os.path.realpath(_bindings_root()))
-    app_data = Path(os.path.realpath(get_app_data_dir()))
+    from core.true_path import true_case
+    p = true_case(p)
+    home = true_case(os.path.realpath(Path.home()))
+    ws = true_case(os.path.realpath(get_swarmws()))
+    bindings = true_case(os.path.realpath(_bindings_root()))
+    app_data = true_case(os.path.realpath(get_app_data_dir()))
     if p == home or home.is_relative_to(p):
         return "the home directory or a directory containing it"
     if p == ws or ws.is_relative_to(p):
@@ -100,7 +104,7 @@ def _refusal(p: Path) -> str | None:
     if p.is_relative_to(app_data) or app_data.is_relative_to(p):
         return "the app data directory or inside it"
     for name in _CREDENTIAL_DIRS:
-        cred = Path(os.path.realpath(home / name))
+        cred = true_case(os.path.realpath(home / name))
         if p.is_relative_to(cred):
             return f"a credential location (~/{name}) or inside it"
     return None

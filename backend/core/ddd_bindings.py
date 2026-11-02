@@ -421,6 +421,21 @@ class BindInProgress(RuntimeError):
     """Another bind of the same worktree holds its bind lock."""
 
 
+def file_url_path(url: str) -> str:
+    """The local path a ``file://`` URL names. Only ``file:///path`` and
+    ``file://localhost/path`` name this machine; any other host is refused (ValueError),
+    so a host part can never hide the path a guard has to check."""
+    from urllib.parse import unquote, urlsplit
+    parts = urlsplit(url.strip())
+    if parts.scheme.lower() != "file":
+        raise ValueError("not a file:// URL")
+    if (parts.netloc or "").lower() not in ("", "localhost"):
+        raise ValueError("a file:// URL must name this machine (file:///path)")
+    if parts.query or parts.fragment:
+        raise ValueError("a file:// URL may not carry a query or fragment")
+    return unquote(parts.path)
+
+
 def _validate_clone_source(binding: Binding) -> None:
     """Refuse a clone source that is not https, ssh or a non-protected local path.
 
@@ -436,8 +451,10 @@ def _validate_clone_source(binding: Binding) -> None:
     if lowered.startswith(("https://", "ssh://")) or _SCP_LIKE.match(clone):
         return
     if lowered.startswith("file://"):
-        from urllib.parse import unquote
-        local = unquote(clone[len("file://"):])
+        try:
+            local = file_url_path(clone)
+        except ValueError as e:
+            raise ValueError(f"binding '{binding.repo}': {e} — refusing") from None
     elif "://" in clone or "::" in clone:
         raise ValueError(
             f"binding '{binding.repo}': clone source scheme not allowed "
