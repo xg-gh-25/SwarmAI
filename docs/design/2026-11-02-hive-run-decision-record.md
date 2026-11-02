@@ -3,7 +3,7 @@ title: Hive run 的决定 — 谁能定、怎么留痕；大部分不需要人
 created: 2026-11-02
 updated: 2026-11-02
 project: SwarmAI
-status: r2 design only（无代码）。两个会话的设计合成一份：权限一节来自 Swarm Out E2E 会话（2026-11-02，四件真实任务后）的分工表，留痕一节来自本会话 r1；未送审
+status: r2.1 design only（无代码）。两个会话的设计合成一份：权限一节来自 Swarm Out E2E 会话（2026-11-02，四件真实任务后）的分工表，留痕一节来自本会话 r1；未送审
 tags: [swarm-out, hive, accountability, traceability, autonomy, zero-touch]
 related:
   - docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md（agent 对自己派的单下命令，命令带理由）
@@ -93,7 +93,10 @@ agent 结单（今天的 `manual_landed`）时，系统对这一单交回的每�
 
 - 对每个交回的 tip：把它合进本机 main（`git merge-tree`，只用对象，不碰工作区），合并结果的 tree 等于 main 的 tree。也就是说改动已经全部在 main 上了。
   这个核对对压成一个 commit 的落地、cherry-pick、agent 改了顺序都成立；按单个 commit 比 patch-id 不行，压成一个以后就对不上了。
-- 合并结果和 main 不一样的路径，每条都要有一条决策记录说明去处：`reauthored`（agent 自己重写的本机 commit，系统核对它在 main 上），或 `not_taken`（不采纳，带理由）。
+- `merge-tree` 报冲突的路径也算"和 main 不一样"，不当作核对失败直接拒绝。真实例子（2026-11-02 E2E，`so_efd0d6989e4f`）：agent cherry-pick 了 Hive 的提交，
+  之后自己又改了同一行（`docs/CODEBASE_METRICS.md`，Hive 写"not measured"，main 上换成了实测的数字），合并就冲突了。这种"拿过来以后又改过"的路径记为 `reauthored`
+  （本机 commit 是 agent 改过的那一版）。
+- 合并结果和 main 不一样的路径（包括冲突的），每条都要有一条决策记录说明去处：`reauthored`（agent 自己重写的本机 commit，系统核对它在 main 上），或 `not_taken`（不采纳，带理由）。
   没有说明的路径一条也不允许，结单被拒，拒绝信息列出这些路径。
 - 接手自己做（agent 觉得自己写比打回更快）也走同一个核对：Hive 的改动要么在 main 上，要么逐条说明去处。
 
@@ -179,7 +182,7 @@ lead run 对子单的处理就是子单决策记录里 `by: agent` 的条目。l
 | D3 | agent 的命令不带 `--why` 被拒绝（已有，回归照跑）；不要求 agent 自报"看了什么" |
 | D4 | `return-land` 对指令文件和 `GIT_PROTECTED` 的路径从不落 Hive 的字节，人和 agent 调都一样 |
 | D5 | agent 落地仓库声明的受保护路径，只在这一单上有 `diff` 看过这些路径的记录时才接受；否则拒绝并说缺什么 |
-| D6 | 结单核对：有任何交回的改动不在 main 上、又没有 `reauthored`（commit 在 main 上）或 `not_taken` 说明的路径，结单被拒并列出路径；压成一个 commit 落地、cherry-pick 落地都能通过 |
+| D6 | 结单核对：有任何交回的改动不在 main 上、又没有 `reauthored`（commit 在 main 上）或 `not_taken` 说明的路径，结单被拒并列出路径；压成一个 commit 落地、cherry-pick 落地都能通过；cherry-pick 之后 agent 又改了同一行（`merge-tree` 冲突），标 `reauthored` 后能通过，不标就被拒并列出这条路径 |
 | D7 | 交给人的每一条都有 `for_person`，原因是三项之一；Needs You 只有三种来源：`escalate`、会话不在了、`person_class` |
 | D8 | 一单超过 50 条决定时，最早的还在；旧记录（没有 `decision`、`observed`）照常显示 |
 | D9 | 列表行的"介入 N 次"只数 `by: person`，和今天的口径一样 |
@@ -202,3 +205,4 @@ lead run 对子单的处理就是子单决策记录里 `by: agent` 的条目。l
   agent 重写；`manual_landed` 交给 agent，前提是结单核对（合并 tree 等于 main，或逐条说明去处）。② 依据不再由 agent 自报：去掉 r1 的必填 `--checked`，
   改成系统记下的 `observed`（单子状态、agent 调过的 Swarm Out 命令、结单核对结果），agent 只写结论和理由；新增 `swarm_out diff`。③ 唯一待定：守护代码的改动
   要不要人先看（§2.3），默认不要。
+- r2.1（2026-11-02）：E2E 会话提供的实例：cherry-pick 以后 agent 又改了同一行，`merge-tree` 冲突。§2.4 写明冲突的路径按"和 main 不一样"处理、标 `reauthored`；D6 加这个用例。
