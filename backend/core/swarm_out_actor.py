@@ -238,6 +238,20 @@ _LOST = {"code": "commits that came back are not landed or taken back here (retu
          "lessons": "the run's lessons are not in yet"}
 
 
+def _lessons_due() -> str:
+    """When a refused discard can be tried again for lessons: a Hive sends a session's
+    lessons with its ``closed`` record once it has reviewed the session
+    (core/hive_records.seal_end), and that review waits for the session to be quiet
+    (core/ingestion/s2_jobs). Without this, a refusal minutes after the run ended reads
+    as a run that can never be discarded."""
+    from core.ingestion import s2_jobs
+    quiet = int(s2_jobs.REVIEW_DELAY.total_seconds() // 60) + 2     # + the idle hook's 120 s
+    most = int(s2_jobs.MAX_WAIT.total_seconds() // 3600)
+    return (f" (its Hive sends them when it reviews the session, about {quiet} minutes after "
+            f"the session's last turn and at most {most} hours later; `watch` reports when "
+            "they arrive, then discard again)")
+
+
 def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
     """Why an agent may not discard this run now, from its ``/runs`` row, else None.
     Discarding removes the run's Hive workspace (``Hive/work/<id>``, ``Outputs/<id>``):
@@ -263,10 +277,11 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
     why_not = list(settle.get("why_not") or [])
     if "code" in why_not and commits_here(str(row.get("dispatch_id") or ""), res):
         why_not.remove("code")       # every returned tip is in refs/hive here: nothing is lost
-    lost = [_LOST[w] for w in why_not if w in _LOST]
-    if lost:
-        return "; ".join(lost) + ": take them first"
-    return None
+    taken = [_LOST[w] for w in why_not if w in _LOST and w != "lessons"]   # the agent takes these
+    lost = ["; ".join(taken) + ": take them first"] if taken else []
+    if "lessons" in why_not:
+        lost.append(_LOST["lessons"] + _lessons_due())                      # these come by themselves
+    return "; ".join(lost) or None
 
 
 def commits_here(dispatch_id: str, res: Any) -> bool:

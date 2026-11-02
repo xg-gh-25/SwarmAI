@@ -89,6 +89,18 @@ def test_an_agent_may_not_discard_while_something_would_be_lost(row, word):
     assert word in (act.discard_blocker(row) or "")
 
 
+def test_a_lessons_refusal_says_when_they_come_and_asks_nothing_of_the_agent():
+    # a refusal minutes after the run ended must not read as a run that can never be
+    # discarded: the Hive sends the lessons after its session review, by itself
+    from core.ingestion import s2_jobs
+    why = act.discard_blocker(_run(settle={"why_not": ["lessons"]}))
+    assert f"about {int(s2_jobs.REVIEW_DELAY.total_seconds() // 60) + 2} minutes" in why
+    assert f"at most {int(s2_jobs.MAX_WAIT.total_seconds() // 3600)} hours" in why
+    assert "watch" in why and "take them first" not in why
+    both = act.discard_blocker(_run(settle={"why_not": ["files", "lessons"]}))
+    assert "not placed in the Brain yet: take them first" in both and "reviews the session" in both
+
+
 def test_an_agent_may_discard_when_only_the_verdict_is_open():
     assert act.discard_blocker(_run()) is None
     assert act.discard_blocker(_run(settle={"why_not": []})) is None
