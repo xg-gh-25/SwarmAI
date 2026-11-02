@@ -177,7 +177,7 @@ describe('what a run did, for every kind of run', () => {
   });
 
   it("the Brain and Project Agent a run went under", () => {
-    const base = { dispatch_id: 'x', hive_id: 'h', hive: 'h', session_id: 's', title: 't', origin: 'o', sent_at: ago(1), waiting: false, running: false } as SwarmOutRun;
+    const base = { dispatch_id: 'x', hive_id: 'h', hive: 'h', session_id: 's', title: 't', origin: 'o', sent_at: ago(1), state: 'stopped', state_reason: 'idle' } as SwarmOutRun;
     expect(agentFacts({ ...base, project_agent: { brain: 'SwarmAI', mode: 'build', revision: 'r3', profile: 'full', delivery: 'bundle', acceptance: 'tests green' } }))
       .toEqual({ brain: 'SwarmAI', agent: 'build · full', title: '版本 r3\n交付方式：bundle\n验收：tests green', none: false });
     expect(agentFacts({ ...base, project_agent: { brain: 'General', mode: '', revision: '', profile: '', delivery: '', acceptance: '' } }))
@@ -192,7 +192,7 @@ describe('what a run did, for every kind of run', () => {
 describe('the history by outcome', () => {
   const r = (id: string, h: number, res: SwarmOutResult | null): SwarmOutRun => ({
     dispatch_id: id, hive_id: 'h1', hive: 'explorer', session_id: `s-${id}`, title: id, origin: 'swarm-out',
-    sent_at: ago(h), waiting: false, running: false, state: 'stopped', result: res,
+    sent_at: ago(h), state: 'stopped', state_reason: 'idle', result: res,
   });
   it('a day counts each outcome; provisional and unread runs are "not known yet"', () => {
     const runs = [r('a', 1, result()), r('b', 1, result({ ended: 'error' })), r('c', 1, result({ ended: 'stopped' })),
@@ -209,7 +209,7 @@ describe('the history by outcome', () => {
 
 const RUN: SwarmOutRun = {
   dispatch_id: 'so_0123456789ab', hive_id: 'h1', hive: 'explorer', session_id: 's-1', title: 'fix the widget',
-  origin: 'swarm-out', sent_at: ago(1), waiting: false, running: false, state: 'stopped', state_reason: 'idle',
+  origin: 'swarm-out', sent_at: ago(1), state: 'stopped', state_reason: 'idle',
   result: result({ kinds: ['code'], ended: 'error', error: { code: 'MODEL_ERROR' } }, { repos: [repo()] }),
   result_status: 'fetched',
 };

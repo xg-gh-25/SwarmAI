@@ -69,9 +69,6 @@ export function capacity(fleet: SwarmOutFleet | null): { free: number; total: nu
 }
 
 const sentAt = (r: SwarmOutRun): number => Date.parse(r.sent_at);
-/** A run's state, from `state` or, from an older daemon without it, the booleans. */
-const stateOf = (r: SwarmOutRun): NonNullable<SwarmOutRun['state']> =>
-  r.state ?? (r.waiting ? 'waiting' : r.running === true ? 'running' : r.running === false ? 'stopped' : 'unknown');
 
 /** The numbers at the top of the run view: what waits on the person (and, apart, what
  *  must be settled on the Hive's own page), the free slots, what is running. */
@@ -178,7 +175,7 @@ export function lessonsLine(res: SwarmOutResult): string | null {
 
 /** What a run's state means to the person, in the words the cards use. */
 export function stateLabel(r: SwarmOutRun): string {
-  switch (stateOf(r)) {
+  switch (r.state) {
     case 'waiting': return i18n.t('swarmOut.state.waiting');
     case 'running': return r.state_reason === 'background'
       ? i18n.t('swarmOut.review.stateReason.background')
@@ -186,7 +183,9 @@ export function stateLabel(r: SwarmOutRun): string {
         ? i18n.t('swarmOut.state.runningWhy', { reason: r.state_reason }) : i18n.t('swarmOut.state.running');
     case 'stopped': return r.state_reason === 'hive_stopped' ? i18n.t('swarmOut.state.stoppedHiveOff')
       : r.state_reason === 'hive_gone' ? i18n.t('swarmOut.state.stoppedHiveGone') : i18n.t('swarmOut.state.stopped');
-    default: return r.session_unknown ? i18n.t('swarmOut.state.sessionUnknown') : i18n.t('swarmOut.state.unknown');
+    // an updating Hive is not a silent one: the person waits, the run continues after it
+    default: return r.session_unknown ? i18n.t('swarmOut.state.sessionUnknown')
+      : r.state_reason === 'hive_updating' ? i18n.t('swarmOut.state.unknownUpdating') : i18n.t('swarmOut.state.unknown');
   }
 }
 
@@ -377,7 +376,7 @@ export function interventionsOf(res: SwarmOutResult): number | null {
  *  is left out (``known``), never counted as 0. */
 export function autonomyLine(runs: SwarmOutRun[], now: number, days = 30):
   { finished: number; known: number; unattended: number; avg: number | null } {
-  const finished = inWindow(runs, now, days).filter((r) => r.result && stateOf(r) !== 'running' && !r.result.provisional);
+  const finished = inWindow(runs, now, days).filter((r) => r.result && r.state !== 'running' && !r.result.provisional);
   const known = finished.filter((r) => r.result!.work.human.said != null);
   const total = known.reduce((s, r) => s + (interventionsOf(r.result!) ?? 0), 0);
   return { finished: finished.length, known: known.length,
@@ -520,7 +519,7 @@ export function inWindow(runs: SwarmOutRun[], now: number, days: number | null):
 
 /** How a run is counted in the history: running (not in any rate), or how it ended. */
 export type HistoryOutcome = OutcomeBucket | 'running';
-export const historyOutcome = (r: SwarmOutRun): HistoryOutcome => (stateOf(r) === 'running' ? 'running' : outcomeBucket(r));
+export const historyOutcome = (r: SwarmOutRun): HistoryOutcome => (r.state === 'running' ? 'running' : outcomeBucket(r));
 
 /** How often a person stepped into a run, as the card counts it (interventionsOf). */
 const loopsOf = interventionsOf;

@@ -69,7 +69,7 @@ describe('LiveDispatches', () => {
   it('lists dispatched runs and marks the one waiting', async () => {
     runs.mockResolvedValue({
       runs: [{ dispatch_id: 'd1', hive_id: 'h1', hive: 'worker-1', session_id: 's2', title: 'Fix login',
-               origin: 'swarm-out', sent_at: '2026-10-27T02:00:00Z', waiting: true, state: 'waiting', running: false }],
+               origin: 'swarm-out', sent_at: '2026-10-27T02:00:00Z', state: 'waiting', state_reason: 'question' }],
       asks: [], errors: [],
     });
     // the Hive says the run waits but no question reached this Host: it is still listed
@@ -147,7 +147,7 @@ describe('LiveDispatches', () => {
   it('names a possible owner and marks a dispatch whose session was never named (J1)', async () => {
     runs.mockResolvedValue({
       runs: [{ dispatch_id: 'd9', hive_id: 'h1', hive: 'worker-1', session_id: null, title: 'Timed out',
-               origin: 'swarm-out', sent_at: '2026-10-27T02:00:00Z', waiting: false, session_unknown: true }],
+               origin: 'swarm-out', sent_at: '2026-10-27T02:00:00Z', state: 'unknown', state_reason: 'no_session_id', session_unknown: true }],
       asks: [{ ...approval, dispatch_title: null, possible_dispatch_title: 'Timed out' }], errors: [] });
     render(<LiveDispatches now={Date.parse('2026-10-27T03:00:00Z')} />);
     expect((await screen.findByTestId('swarm-out-ask-source')).textContent).toBe('可能属于：Timed out');

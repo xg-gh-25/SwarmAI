@@ -68,7 +68,7 @@ def test_a_stopped_hives_runs_are_stopped_and_it_is_not_asked(monkeypatch):
     monkeypatch.setattr(swarm_out, "_instance", instance)
     out = asyncio.run(swarm_out.list_runs())
     r = out["runs"][0]
-    assert (r["state"], r["state_reason"], r["running"], r["waiting"]) == ("stopped", "hive_stopped", False, False)
+    assert (r["state"], r["state_reason"]) == ("stopped", "hive_stopped") and "running" not in r
     assert asked == [] and out["errors"] == []
 
 

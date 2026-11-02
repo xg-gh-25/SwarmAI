@@ -60,7 +60,7 @@ def K():
 def _row(returns="answer", **kw):
     r = {"dispatch_id": DID, "hive_id": "h1", "session_id": "hs1", "dispatched_from": SID,
          "sent_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-         "project_agent": {"returns": returns}, "waiting": False, "running": False, "state_reason": "idle",
+         "project_agent": {"returns": returns}, "state": "stopped", "state_reason": "idle",
          "result": {"ended": "completed", "provisional": False, "ended_at": ENDED, "lessons": None,
                     "work": {"repos": []}}}
     r.update(kw)
@@ -303,7 +303,7 @@ def test_agent_discard_needs_local_commits(env, tmp_path, monkeypatch):
     key = hive_bundle.key("Hive/work/x/repos/a")
     res = {"ended": "completed", "provisional": False,
            "work": {"repos": [{"dir": "Hive/work/x/repos/a", "bundle": {"available": True}}]}}
-    row = {"dispatch_id": DID, "running": False, "waiting": False, "result": res,
+    row = {"dispatch_id": DID, "state": "stopped", "result": res,
            "settle": {"why_not": ["verdict", "code"]}}
     returns[(DID, key)] = {"status": "prepared", "repo": str(repo), "ref": f"refs/hive/{DID}/k", "tip": tip}
     assert act.discard_blocker(row) is None
@@ -379,7 +379,7 @@ def test_keep_and_revert(env, tmp_path):
     # nothing is offered that the backend refuses (what landed counts as accepted); an
     # agent reports its revert instead of discarding
     assert "discard" not in [a["key"] for a in d["actions"]]
-    assert "reverted" in (act.discard_blocker({**_annotated(rows[DID]), "running": False}) or "")
+    assert "reverted" in (act.discard_blocker({**_annotated(rows[DID]), "state": "stopped"}) or "")
     unrelated = (repo / "b.txt")
     unrelated.write_text("x\n")
     _git(repo, "add", "b.txt")
@@ -393,7 +393,7 @@ def test_keep_and_revert(env, tmp_path):
         rc.reverted(DID, _annotated(rows[DID]), "s-other", [rev], "done")
     rc.reverted(DID, _annotated(rows[DID]), SID, [rev], "reverted it")
     d = st.derive(rows[DID], K())
-    assert d["verdict"] == "reverted" and d["settles"] and d["stage"] == "discarded"
+    assert d["verdict"] == "reverted" and d["settles"] and d["stage"] == "closed" and d["why"] == "reverted"
 
 
 # ── the record ───────────────────────────────────────────────────────────────
@@ -491,7 +491,7 @@ def test_a_discarded_run_is_not_shown_as_being_judged(env):
     act.record(DID, act.actor("agent", SID, "not what was asked"), "discard")
     st._update(DID, lambda rec: rec.update(abandoned_at=ENDED))
     d = st.derive(rows[DID], K())
-    assert d["stage"] == "discarded"
+    assert d["stage"] == "closed" and d["why"] == "discarded"
     gates = d["funnel"]["gates"]
     assert gates and all(g["state"] == "done" for g in gates) and d["funnel"]["current"] is None
     assert (gates[-1]["key"], gates[-1]["by"]) == ("judge", "agent")

@@ -177,7 +177,9 @@ stopped run are labels from the result's own `ended`. `pulled_out` / `closed` /
 neither settle nor discard them, and `update-hive` refuses a Hive with open runs
 (`scripts/swarm_out.py:351-355`). That is the intended stop: restarting a Hive that may
 still be working is the person's call. The agent reads `diagnose`, and when the Hive is
-wedged it asks the person (`ask-person`) with the diagnostics attached. The person's
+wedged it tells the person in its own session what it found and that restarting or
+updating the Hive is theirs (Settings → Hive). (`ask-person` is not the channel: it is
+for a landed result the agent cannot judge.) The person's
 discard and the person's update in Settings stay available (a person's command is
 guarded by `closed_state` only, `routers/swarm_out.py:150-151`; whether it should also
 follow `actions` is a separate decision, not changed here).

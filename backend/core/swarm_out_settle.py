@@ -24,7 +24,8 @@ that holds what was decided, by the person or by the agent that dispatched the r
   told, with ``tries`` and ``next_try_at`` for the backoff / None: no Hive to tell).
 
 ``derive(row, kept)`` gives the run's ``stage`` (running, needs_answer, awaiting,
-stopped, accepted, discarded, expired) and the ``actions`` the person can take in it
+stopped, accepted, closed: with ``why`` discarded / reverted / expired / hive_gone) and
+the ``actions`` the person can take in it
 (at most one primary; "open session" while it can open; "discard" last), and whether it
 settles:
 
@@ -36,7 +37,9 @@ settles:
 - the lessons are in: the Hive's run record is closed (or the run has none) and every
   lesson it brought is queued for this machine's CDF; or nothing more is pulled (the
   Hive is stopped or gone, or no new entry for the records backstop). No one takes or
-  declines lessons (CDF design D13: they go to the CDF as they arrive).
+  declines lessons (CDF design D13: they go to the CDF as they arrive);
+- its session is known to be stopped: never while it runs, and never while its Hive does
+  not answer (``state`` unknown), unless a person discarded it.
 
 Settling tells the Hive to remove the task's workspace (``Hive/work/<id>/`` and
 ``Outputs/<id>/``), so code and files must have left it first: commits the Hive could
@@ -328,11 +331,16 @@ def closed_state(rec: dict, dispatch_id: Optional[str] = None) -> Optional[str]:
     return None
 
 
-#: the stages a person sees (design 2026-10-31-swarm-out-run-review §1.2)
-STAGES = ("running", "needs_answer", "awaiting", "stopped", "accepted", "discarded", "expired")
+#: the stages a person sees (design 2026-10-31-swarm-out-run-review §1.2). ``closed``: the
+#: run ended without being accepted; ``why`` says how (``discarded``, ``reverted``,
+#: ``expired``, ``hive_gone``). One stage, because no reader treats those endings
+#: differently (design 2026-11-02-swarm-out-hive-deaths-diagnostics-states §3 S1).
+STAGES = ("running", "needs_answer", "awaiting", "stopped", "accepted", "closed")
 #: a settle outcome -> its stage (``reverted``: the person had what landed undone)
-_OUTCOME_STAGE = {"passed": "accepted", "abandoned": "discarded", "gone": "expired", "expired": "expired",
-                  "reverted": "discarded"}
+_OUTCOME_STAGE = {"passed": "accepted", "abandoned": "closed", "gone": "closed", "expired": "closed",
+                  "reverted": "closed"}
+#: a settle outcome -> the ``why`` of its closed stage (stored outcomes keep their names)
+_OUTCOME_WHY = {"abandoned": "discarded", "gone": "hive_gone", "expired": "expired", "reverted": "reverted"}
 #: a result that ended this way delivered what it set out to (anything else, the turn
 #: limit included, stopped: design §3.2)
 _DELIVERED = ("completed",)
@@ -399,7 +407,7 @@ def interrupted(row: dict, res: Optional[dict], kept: Optional[dict]) -> bool:
     """The run stopped mid-turn: its session is not running, and its result has said
     ``no_record`` (no end record for the last turn) for INTERRUPTED_AFTER_S
     (core/swarm_out_results records since when)."""
-    if row.get("running") is not False or row.get("state") != "stopped":
+    if row.get("state") != "stopped":
         return False
     if not isinstance(res, dict) or res.get("ended") != "no_record":
         return False
@@ -415,9 +423,15 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
 
     ``stage`` and ``actions`` are what the panel shows and offers (design
     2026-10-31-swarm-out-run-review §1.2, §3.2); ``why`` says why a run stopped
-    (``no_session`` / ``no_result`` / how its result ended). The rest decides whether it
-    settles: the verdict is decided (accepted, discarded, the Hive gone), the code is
-    handled, the files the release would remove are here, the lessons are in."""
+    (``no_session`` / ``no_result`` / how its result ended) or how a ``closed`` run ended
+    (``discarded`` / ``reverted`` / ``expired`` / ``hive_gone``). The rest decides whether
+    it settles: the verdict is decided (accepted, discarded, the Hive gone), the code is
+    handled, the files the release would remove are here, the lessons are in, and its
+    session is known to be stopped (a person's discard settles unless it runs). A run
+    whose Hive does not answer (``state`` unknown) settles here only when a person
+    discarded it: settling tells the Hive to release the workspace, and a turn or
+    background work may still be going there (design
+    2026-11-02-swarm-out-hive-deaths-diagnostics-states §3 S3)."""
     from core import hive_records, swarm_out_record
     rec = load(row["dispatch_id"])
     kept = kept if isinstance(kept, dict) else {}
@@ -471,14 +485,18 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     alive = bool(row.get("session_id")) and not gone and not stopped_without_result
 
     why: Optional[str] = None
+    # the probe's view of the session (core/swarm_out.run_state); ``unknown``: its Hive did
+    # not answer, so a turn or background work may still be going there
+    state = row.get("state")
     settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else None
     if settled:
         stage = _OUTCOME_STAGE.get(settled.get("outcome"), "accepted")
+        why = _OUTCOME_WHY.get(settled.get("outcome"))
     elif abandoned:
-        stage = "discarded"                                # settles at the next look
+        stage, why = "closed", "discarded"                 # settles at the next look
     elif gone and not _final(res):
-        stage, why = "expired", "hive_gone"
-    elif row.get("waiting"):
+        stage, why = "closed", "hive_gone"
+    elif state == "waiting":
         stage = "needs_answer"
     elif not row.get("session_id"):
         stage, why = "stopped", "no_session"
@@ -486,10 +504,10 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         stage, why = "stopped", "no_result"
     elif interrupted(row, res, kept):
         stage, why = "stopped", "no_record"                # cut off: re-run it
-    elif row.get("running") or res is None or not _final(res):
+    elif state == "running" or res is None or not _final(res):
         stage = "running"
     elif verdict == "reverted":
-        stage, why = "discarded", "reverted"               # settles at the next look
+        stage, why = "closed", "reverted"                  # settles at the next look
     elif ask in ("open", "revert") or judging:
         stage, why = "awaiting", {"open": "ask_person", "revert": "revert"}.get(ask or "", "judge")
     elif verdict == "pass":
@@ -518,8 +536,11 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
                                                ask or ("judge" if why == "judge" else None)),
            "why": why, "verdict": verdict, "code": code,
            # a discarded run settles though a wait stays open on its Hive (a pipeline
-           # decision outlives the stopped chat): nothing will answer it
-           "settles": not why_not and (abandoned or not row.get("waiting")) and not row.get("running"),
+           # decision outlives the stopped chat): nothing will answer it. Never while it
+           # runs, and never while its Hive does not answer unless a person discarded it:
+           # settling tells the Hive to release the workspace, which ends the session's
+           # pipeline runs and removes what background work may still be writing
+           "settles": not why_not and (state == "stopped" or (abandoned and state != "running")),
            "why_not": why_not, "settled": settled}
     out["funnel"] = swarm_out_record.funnel(row, rec, {**out, "files_done": files_done,
                                                        "result_final": _final(res)})
@@ -574,12 +595,12 @@ def _settle_now(r: dict, d: dict) -> Optional[dict]:
 
 def _show_settled(r: dict, s: dict) -> None:
     """A settled row's stage and commands: an accepted run's session opens read-only; a
-    discarded or expired one's does not open (§3.4)."""
+    closed one's does not open (§3.4), and its ``why`` says how it ended."""
     stage = _OUTCOME_STAGE.get(s.get("outcome"), "accepted")
     alive = bool(r.get("session_id")) and r.get("state_reason") != "hive_gone"
-    r["stage"], r["actions"], r["why"] = stage, _actions(stage, alive, None), None
+    r["stage"], r["actions"], r["why"] = stage, _actions(stage, alive, None), _OUTCOME_WHY.get(s.get("outcome"))
     r["cleanup_soon"] = False
-    r["settle"] = {"verdict": s.get("verdict"), "code": s.get("code"), "why_not": [], "settled": s}
+    r["settle"] = {"code": s.get("code"), "why_not": [], "settled": s}
     from core import swarm_out_record
     rec = load(r["dispatch_id"])
     r["funnel"] = swarm_out_record.funnel(r, rec, {"stage": stage, "verdict": s.get("verdict"),
@@ -608,12 +629,11 @@ def annotate(rows: list[dict], can_tell: bool = True) -> list[dict]:
             d = derive(r, kept)
             idle = _idle_days(r, kept)
             # a run asking a question nobody answered expires too (the Hive sweeps it
-            # then); one still running does not
-            expire = idle is not None and idle >= hive_records.RETENTION_DAYS and not r.get("running")
+            # then), and so does one whose Hive no longer answers; one still running does not
+            expire = idle is not None and idle >= hive_records.RETENTION_DAYS and r.get("state") != "running"
             if not d["settles"] and not expire:
                 r["stage"], r["actions"], r["why"] = d["stage"], d["actions"], d["why"]
-                r["settle"] = {"verdict": d["verdict"], "code": d["code"], "why_not": d["why_not"],
-                               "settled": None}
+                r["settle"] = {"code": d["code"], "why_not": d["why_not"], "settled": None}
                 r["funnel"], r["person_decisions"] = d["funnel"], d["person_decisions"]
                 r["cleanup_soon"] = idle is not None and idle >= hive_records.RETENTION_DAYS - REMIND_DAYS
                 continue

@@ -55,7 +55,7 @@ import { agentFacts, checksLine, executionLine, gateLine, lessonsLine, resultErr
 import { useDialogLayer } from '../../hooks/useLayer';
 import { getOverlayCtxBridge } from '../layout/overlayRegistry';
 import { PanelHiddenContext, useOpenRun } from './openSession';
-import { actionsOf, ago, autonomyWord, commandForKey, commandMeta, machineChecks, stageOf, typingIn, waitingSince, waitsOf } from './runReview';
+import { actionsOf, ago, autonomyWord, commandForKey, commandMeta, machineChecks, STAGE_TONE, stageLabel, stageOf, typingIn, waitingSince, waitsOf } from './runReview';
 import { DIMENSIONS, DIMENSION_ROLE } from './shapes';
 import { TONE_VAR } from './tone';
 import { modKeyLabel } from '../../utils/platform';
@@ -331,11 +331,6 @@ function inScope(scope: React.RefObject<HTMLElement | null> | undefined, target:
   return !!scope.current?.contains(target);
 }
 
-const STAGE_TONE: Record<string, string> = {
-  running: TONE_VAR.busy, needs_answer: TONE_VAR.attention, awaiting: TONE_VAR.attention, stopped: TONE_VAR.error,
-  accepted: TONE_VAR.ok, discarded: 'var(--color-text-muted)', expired: 'var(--color-text-muted)',
-};
-
 /** The right column: what can be done now, as the backend said. The mode (the commands,
  *  or one of them taking words or a confirmation) is the card's, so Esc and J / K can
  *  respect it. */
@@ -435,8 +430,8 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
   const header = (
     <div className="text-[12.5px]" data-testid="swarm-out-review-stage" data-stage={stage}>
       <span className={muted}>{t('swarmOut.review.now')} </span>
-      <b style={{ color: r.state_reason === 'answer_sent' ? TONE_VAR.busy : STAGE_TONE[stage] }}>{reasonLabel ?? t(`swarmOut.review.stage.${stage}`)}</b>
-      {r.why && <span className={muted}> · {t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why })}</span>}
+      <b style={{ color: r.state_reason === 'answer_sent' ? TONE_VAR.busy : STAGE_TONE[stage] }}>{reasonLabel ?? stageLabel(stage, r.why)}</b>
+      {r.why && stage !== 'closed' && <span className={muted}> · {t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why })}</span>}
       <span className={muted}> · {ago(waitingSince(r, asks), now ?? Date.now())}</span>
       {r.cleanup_soon && <div className="mt-1 text-[12px]" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-review-cleanup">{t('swarmOut.review.cleanupSoonLong')}</div>}
     </div>

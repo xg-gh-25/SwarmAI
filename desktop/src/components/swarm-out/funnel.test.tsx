@@ -45,7 +45,7 @@ const A = (key: SwarmOutAction['key'], primary = false, variant?: SwarmOutAction
 function run(over: Partial<SwarmOutRun> = {}): SwarmOutRun {
   return {
     dispatch_id: 'so_aaaaaaaaaaaa', hive_id: 'h1', hive: 'hive-1', session_id: 'hs1', title: 'Fix the docs refresh',
-    origin: 'swarm-out', sent_at: '2026-11-02T09:20:00Z', waiting: false, running: false, state: 'stopped',
+    origin: 'swarm-out', sent_at: '2026-11-02T09:20:00Z', state: 'stopped', state_reason: 'idle',
     project_agent: { brain: 'SwarmAI', mode: 'code', revision: 'r1', profile: '', delivery: 'bundle',
       acceptance: 'Unknown flags no longer rewrite the docs', returns: 'commits' },
     result: { ended: 'completed', provisional: false, ended_at: ENDED, turns: 3,
@@ -53,7 +53,7 @@ function run(over: Partial<SwarmOutRun> = {}): SwarmOutRun {
         steps: { total: 3, failed: 0, agents: 0, by_tool: {} }, changes: [], files_omitted: 0 },
       pipeline: null, checks: null, execution_check: null } as unknown as SwarmOutRun['result'],
     stage: 'accepted', actions: [A('open_session', false, 'read_only')], why: null,
-    settle: { verdict: 'pass', code: 'landed', why_not: [], settled: null },
+    settle: { code: 'landed', why_not: [], settled: null },
     funnel: { gates: [
       { key: 'review', state: 'done', by: 'agent', at: '2026-11-02T09:52:00Z', ref: null },
       { key: 'land', state: 'done', by: 'agent', at: '2026-11-02T09:55:00Z', ref: 'e9c1b37a1aabbccddeeff0011' },
@@ -68,7 +68,7 @@ const ASK = { state: 'open' as const, decide: 'Keep the 40 kB language chunk?', 
   why: 'a tradeoff of your priorities', landed: { commits: ['4be20a1aabbccdd'], files: [] } };
 const asking = () => run({
   stage: 'awaiting', why: 'ask_person', actions: [A('keep', true), A('revert'), A('open_session')],
-  settle: { verdict: null, code: 'landed', why_not: ['verdict'], settled: null }, needs_person: true,
+  settle: { code: 'landed', why_not: ['verdict'], settled: null }, needs_person: true,
   funnel: { gates: [
     { key: 'review', state: 'done', by: 'agent', at: '2026-11-02T10:31:00Z', ref: null },
     { key: 'land', state: 'done', by: 'agent', at: '2026-11-02T10:33:00Z', ref: '4be20a1aabbccdd' },
@@ -162,7 +162,7 @@ describe('the list', () => {
   it('a run the agent works through the funnel is not waiting for you; an open ask is', () => {
     const working = run({ dispatch_id: 'so_bbbbbbbbbbbb', stage: 'awaiting', why: 'judge',
       actions: [A('accept', true, 'verdict'), A('rerun'), A('open_session'), A('discard')],
-      settle: { verdict: null, code: 'landed', why_not: ['verdict'], settled: null }, needs_person: false });
+      settle: { code: 'landed', why_not: ['verdict'], settled: null }, needs_person: false });
     const ask = { ...asking(), dispatch_id: 'so_cccccccccccc' };
     const s = sections([working, ask], [], NOW);
     expect(s.you.map((r) => r.dispatch_id)).toEqual(['so_cccccccccccc']);

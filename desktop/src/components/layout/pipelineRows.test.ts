@@ -33,7 +33,7 @@ const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
 });
 const hive = (o: Record<string, unknown> = {}, res: Record<string, unknown> | null = {}): SwarmOutRun => ({
   dispatch_id: 'd1', hive_id: 'h1', hive: 'demo', session_id: 'sess', title: 'Hive task', origin: 'swarm-out',
-  sent_at: '2026-10-31T09:00:00Z', waiting: false, running: false, state: 'stopped', stage: 'accepted',
+  sent_at: '2026-10-31T09:00:00Z', state: 'stopped', stage: 'accepted',
   project_agent: { brain: 'SwarmAI', mode: 'change', profile: 'bugfix', revision: 'r', delivery: 'bundle', acceptance: null },
   settle: { settled: { at: '2026-10-31T10:00:00Z', outcome: 'passed', released: true } },
   result: res === null ? null : {

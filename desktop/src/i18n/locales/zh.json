@@ -1609,7 +1609,8 @@
       "stoppedHiveOff": "不在跑了 · Hive 已关机",
       "stoppedHiveGone": "不在跑了 · Hive 已删除",
       "sessionUnknown": "会话未确认，可能在跑",
-      "unknown": "状态未知 · Hive 没回答"
+      "unknown": "状态未知 · Hive 没回答",
+      "unknownUpdating": "Hive 正在更新 · 更新完 run 会接着跑"
     },
     "hiveStatus": {
       "running": "运行中",
@@ -1861,8 +1862,13 @@
         "awaiting": "待验收",
         "stopped": "已停止",
         "accepted": "已通过",
+        "closed": "已关闭"
+      },
+      "closed": {
         "discarded": "已丢弃",
-        "expired": "已过期"
+        "reverted": "已撤回",
+        "expired": "已过期",
+        "hive_gone": "Hive 已不在"
       },
       "why": {
         "no_session": "Hive 没报会话",
@@ -1873,7 +1879,6 @@
         "stopped": "你按了停止",
         "gave_up": "它放弃了",
         "turn_limit": "到了轮数上限",
-        "paused": "暂停了",
         "no_terminal": "没记下怎么结束",
         "restarted": "重启过",
         "superseded": "被替换",

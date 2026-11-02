@@ -46,7 +46,7 @@ def env(tmp_path, monkeypatch):
 def _row(**kw):
     r = {"dispatch_id": DID, "hive_id": "h1", "session_id": "s1", "state": "stopped", "state_reason": "not_held",
          "sent_at": _iso(datetime.now(timezone.utc)), "project_agent": {"returns": "answer"},
-         "waiting": False, "running": False,
+         "state": "stopped",
          "result": {"ended": "completed", "provisional": False, "ended_at": NEW, "lessons": None,
                     "work": {"repos": []}}}
     r.update(kw)
@@ -95,7 +95,7 @@ def test_a_run_cut_off_mid_turn_is_stopped_with_a_rerun_once_it_has_lasted(env):
     row, kept = _cut(30)                                         # the end record may still come
     assert st.derive(row, kept)["stage"] == "running"
     row, kept = _cut(st.INTERRUPTED_AFTER_S + 60)
-    row["running"] = None                                        # not known to have stopped
+    row["state"] = "unknown"                                     # not known to have stopped
     assert st.derive(row, kept)["stage"] == "running"
 
 
@@ -116,8 +116,8 @@ def test_the_kept_record_says_since_when_there_is_no_ending():
 
 def test_a_discarded_run_settles_though_a_wait_stays_open(env):
     st.discard(DID, "not needed")
-    d = st.derive(_row(waiting=True), {"records": {"closed": True}})
-    assert d["stage"] == "discarded" and d["settles"] is True
+    d = st.derive(_row(state="waiting"), {"records": {"closed": True}})
+    assert d["stage"] == "closed" and d["why"] == "discarded" and d["settles"] is True
 
 
 # ── #4 / #6: Needs You ──────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ def test_needs_you_names_a_refused_answer_and_drops_a_discarded_runs_waits(monke
     runs = [
         {"dispatch_id": "so_r1", "hive": "h", "session_id": "s-ref", "stage": "needs_answer",
          "state_reason": "answer_refused", "title": "a"},
-        {"dispatch_id": "so_r2", "hive": "h", "session_id": "s-gone", "stage": "discarded", "title": "b"},
+        {"dispatch_id": "so_r2", "hive": "h", "session_id": "s-gone", "stage": "closed", "why": "discarded", "title": "b"},
     ]
     asks = [{"hive": "h", "session_id": "s-gone", "request_id": "q1", "kind": "decision",
              "approval_class": "decision", "asked_at": OLD}]

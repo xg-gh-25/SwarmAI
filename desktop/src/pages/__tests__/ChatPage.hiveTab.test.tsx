@@ -29,7 +29,7 @@ let relayStatus = 200;
 
 const run = (id: string, sid: string, title: string, over: Record<string, unknown> = {}) => ({
   dispatch_id: id, hive_id: 'h1', hive: 'hive-a', session_id: sid, title, origin: 'chat',
-  sent_at: new Date().toISOString(), waiting: false, running: true, state: 'running', ...over,
+  sent_at: new Date().toISOString(), state: 'running', ...over,
 });
 /** the second run, accepted: its session opens read-only (run-review §3.4) */
 let secondAccepted = false;
@@ -41,7 +41,7 @@ function answer(method: string, url: string): unknown {
   if (url === '/settings/open-tabs') return method === 'get' ? savedTabs : { status: 'ok' };
   if (url === '/swarm-out/fleet') return { hives: [{ name: 'hive-a', status: 'running', region: null, version: null, instance_type: null, reachable: true, streaming: 1, saturated: false, memory_percent: 40 }], running: 1 };
   if (url === '/swarm-out/runs') return { runs: [run('d1', 'S1', 'First run'), run('d2', 'S2', 'Second run', secondAccepted
-    ? { running: false, state: 'stopped', stage: 'accepted', actions: [{ key: 'open_session', primary: false, variant: 'read_only' }] } : {})], asks: [], errors: [] };
+    ? { state: 'stopped', stage: 'accepted', actions: [{ key: 'open_session', primary: false, variant: 'read_only' }] } : {})], asks: [], errors: [] };
   if (/^\/swarm-out\/remote\/S\d\/relay$/.test(url)) {
     if (relayStatus !== 200) throw Object.assign(new Error('relay'), { response: { status: relayStatus } });
     return { session_id: url.split('/')[3], state: null };

@@ -1751,8 +1751,6 @@ async def _compute_runs() -> dict[str, Any]:
                                   at in open_asks, at in open_decisions,
                                   at in refused_of, at in sent_of)
         r["state"], r["state_reason"] = state, reason
-        r["waiting"] = state == "waiting"
-        r["running"] = None if state == "unknown" else state == "running"
     # every prompt on the Hive is mirrored (its own jobs and web sessions too): each
     # ask names the dispatch it belongs to, or None for one this Host did not send.
     # A dispatch whose session was never named (it timed out) may own an unmatched

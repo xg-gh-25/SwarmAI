@@ -68,7 +68,7 @@ def test_every_command_is_kept_with_who_gave_it_and_why(state):
 # ── discarding: only when nothing would be lost ─────────────────────────────
 
 def _run(**kw):
-    r = {"dispatch_id": DID, "running": False, "waiting": False,
+    r = {"dispatch_id": DID, "state": "stopped",
          "result": {"ended": "completed", "provisional": False},
          "settle": {"why_not": ["verdict"]}}
     r.update(kw)
@@ -77,8 +77,8 @@ def _run(**kw):
 
 @pytest.mark.parametrize("row,word", [
     (None, "not in the list"),
-    (_run(running=True), "still running"),
-    (_run(waiting=True), "still running or waiting"),
+    (_run(state="running"), "still running"),
+    (_run(state="waiting"), "still running or waiting"),
     (_run(result={"ended": "completed", "provisional": True}), "final result"),
     (_run(result=None), "final result"),
     (_run(settle={"why_not": ["verdict", "code"]}), "not landed"),
@@ -142,7 +142,7 @@ def test_an_agent_gives_commands_only_on_runs_its_session_dispatched():
 
 
 def test_an_agent_does_not_discard_while_its_hive_is_not_answering():
-    assert "not answering" in act.discard_blocker(_run(running=None, state="unknown"))
+    assert "not answering" in act.discard_blocker(_run(state="unknown"))
 
 
 def test_two_re_sends_at_once_cannot_pass_the_limit_and_a_failed_one_does_not_count(state):

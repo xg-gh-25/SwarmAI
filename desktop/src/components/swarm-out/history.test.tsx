@@ -37,7 +37,7 @@ const result = (o: Partial<SwarmOutResult> = {}, h = human()): SwarmOutResult =>
 });
 const run = (id: string, res: SwarmOutResult | null, o: Partial<SwarmOutRun> = {}): SwarmOutRun => ({
   dispatch_id: `so_${id.padEnd(12, '0')}`, hive_id: 'h1', hive: 'explorer', session_id: `s-${id}`, title: `task ${id}`,
-  origin: 'swarm-out', sent_at: ago(1), waiting: false, running: false, state: 'stopped', state_reason: 'idle',
+  origin: 'swarm-out', sent_at: ago(1), state: 'stopped', state_reason: 'idle',
   result: res, result_status: res ? 'fetched' : 'pending', ...o,
 });
 const audit = [{ dim: 'Run Isolation', verdict: 'PASS', detail: null }, { dim: 'Quality', verdict: 'WARN', detail: null }];
@@ -50,8 +50,8 @@ const RUNS: SwarmOutRun[] = [
   run('c', result({ active_s: 10, kinds: ['code'] })),
   run('d', result({ ended: 'stopped', kinds: [], active_s: 84 })),
   run('e', result({ ended: 'error', kinds: ['files'], cost_usd: null, tokens: null })),
-  run('f', null, { state: 'unknown', running: null }),
-  run('g', null, { state: 'running', running: true }),
+  run('f', null, { state: 'unknown' }),
+  run('g', null, { state: 'running' }),
   run('h', result({ active_s: 6, tokens: { input: 1, output: 2, cache_read: null, cache_write: null } }), { sent_at: ago(24 * 20) }),
 ];
 

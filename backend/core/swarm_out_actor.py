@@ -262,9 +262,11 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
         return "the run is not in the list of runs now; try again in a moment"
     if row.get("state_reason") == "not_started":
         return None                    # its Hive never started the session: nothing came back
-    if row.get("running") is not False or row.get("waiting") or row.get("state") == "unknown":
-        # running None: its Hive did not answer the probe, so a turn may be running there
-        return "the run is still running or waiting, or its Hive is not answering: stop it first, or wait"
+    if row.get("state") != "stopped":
+        # running, waiting, or unknown: its Hive did not answer the probe, so a turn may be
+        # running there (read it with `swarm_out diagnose`)
+        return ("the run is still running or waiting, or its Hive is not answering: stop it first, "
+                "or wait (`swarm_out diagnose` says why its Hive does not answer)")
     res = row.get("result")
     if not _final(res if isinstance(res, dict) else None):
         return "its final result is not here yet"

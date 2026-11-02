@@ -18,7 +18,7 @@ import { Dot } from './LiveDispatches';
 import { agentFacts, brainLabel, stateLabel } from './live';
 import { useOpenRun } from './openSession';
 import { RunOverlay } from './RunOverlay';
-import { actionOf, ago, autonomyWord, brainChips, clock, DONE_STAGES, endedAt, funnelWord, sections, stageOf, taskTag, waitingSince } from './runReview';
+import { actionOf, ago, autonomyWord, brainChips, clock, DONE_STAGES, endedAt, funnelWord, sections, stageLabel, stageOf, taskTag, waitingSince } from './runReview';
 import { runTone, TONE_VAR, type Tone } from './tone';
 
 const muted = 'text-[var(--color-text-muted)]';
@@ -74,7 +74,9 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
   const funnel = funnelWord(r);
   const ended = endedAt(r);
   const facts = agentFacts(r);
-  const meta = [facts.brain, facts.none ? null : facts.agent, r.hive, r.why ? t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why }) : null]
+  const meta = [facts.brain, facts.none ? null : facts.agent, r.hive,
+    // a closed run's why is its stage's own name (stageLabel), not said twice
+    r.why && stage !== 'closed' ? t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why }) : null]
     .filter(Boolean).join(' · ');
   const wordStyle: React.CSSProperties = word?.kind === 'full' || word?.state === 'PASS'
     ? { color: TONE_VAR.ok, borderColor: `color-mix(in srgb, ${TONE_VAR.ok} 45%, var(--color-border))` }
@@ -100,7 +102,7 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
         : funnel ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.busy }} data-testid="swarm-out-row-funnel">{funnel}</span>
         : r.cleanup_soon ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-row-cleanup">{t('swarmOut.review.cleanupSoon')}</span>
         : stage === 'running' ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.busy }}>{stateLabel(r)}</span>
-          : <span className={`text-[12px] ${muted}`}>{t(`swarmOut.review.stage.${stage}`)}</span>}
+          : <span className={`text-[12px] ${muted}`}>{stageLabel(stage, r.why)}</span>}
       <span className="flex items-center gap-1.5">
         {stage === 'running' && actionOf(r, 'stop') && <StopButton r={r} onDone={onReload} />}
         {actionOf(r, 'open_session') && <OpenButton r={r} compact={compact} />}

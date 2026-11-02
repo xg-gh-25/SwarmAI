@@ -71,6 +71,8 @@ _STATIC: "tuple[Op, ...]" = (
     _op("run.list", "GET", f"{_SO}/runs", _PO, "read"),
     _op("run.result", "GET", f"{_SO}/runs/{{dispatch_id}}/result", _PO, "read"),
     _op("run.refresh", "POST", f"{_SO}/runs/{{dispatch_id}}/refresh", _PO, "read"),
+    # why its Hive session stopped, read over SSM with a fixed script (core/hive_diagnostics)
+    _op("run.diagnostics", "GET", f"{_SO}/runs/{{dispatch_id}}/diagnostics", _PO, "read"),
     # waits until a followed run changes (core/swarm_out_follow; agent-owns-its-runs §2.3)
     _op("run.watch", "POST", f"{_SO}/watch", _PO, "read"),
     # the chat card for one of a run's waits (core/swarm_out_wait_card): it writes only

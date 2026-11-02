@@ -37,15 +37,15 @@ const A = (key: SwarmOutAction['key'], primary = false, variant?: SwarmOutAction
 function run(over: Partial<SwarmOutRun> = {}, result: Record<string, unknown> = {}): SwarmOutRun {
   return {
     dispatch_id: 'so_round2', hive_id: 'h1', hive: 'explorer', session_id: '9db44de7-b39e-4a35-b739-85b656a04264',
-    title: 'fix the widget', origin: 'swarm-out', sent_at: '2026-10-31T08:00:00Z', waiting: false, running: false,
-    state: 'stopped',
+    title: 'fix the widget', origin: 'swarm-out', sent_at: '2026-10-31T08:00:00Z',
+    state: 'stopped', state_reason: 'idle',
     project_agent: { brain: 'Widget', mode: 'code-change', revision: 'r1', profile: '', acceptance: 'tests pass', returns: 'commits' },
     result: { ended: 'completed', provisional: false, ended_at: ENDED, turns: 1, report_chars: 0,
       work: { repos: [], files: [], human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 0, said: 0 },
         steps: { total: 3, failed: 0, agents: 0, by_tool: {} }, changes: [], files_omitted: 0 },
       pipeline: null, checks: null, execution_check: null, ...result } as unknown as SwarmOutRun['result'],
     stage: 'awaiting', actions: [A('accept', true, 'land'), A('rerun'), A('open_session'), A('discard')], why: null,
-    settle: { verdict: null, code: 'waiting', why_not: ['code'], settled: null },
+    settle: { code: 'waiting', why_not: ['code'], settled: null },
     ...over,
   };
 }

@@ -57,7 +57,7 @@ def K(closed):
 def _row(returns="answer", **kw):
     r = {"dispatch_id": DID, "hive_id": "h1", "session_id": "s1",
          "sent_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-         "project_agent": {"returns": returns}, "waiting": False, "running": False,
+         "project_agent": {"returns": returns}, "state": "stopped",
          "state_reason": "idle",
          "result": {"ended": "completed", "provisional": False, "ended_at": ENDED,
                     "lessons": None, "work": {"repos": []}}}
@@ -86,13 +86,13 @@ def A(d):
 def test_stage_order(env):
     rows, _ = env
     rows[DID] = _row()
-    d = st.derive(_row(waiting=True, running=True), K(True))
+    d = st.derive(_row(state="waiting"), K(True))
     assert d["stage"] == "needs_answer" and A(d) == ["answer:hint", "open_session", "discard"]
-    d = st.derive(_row(waiting=True, state_reason="answer_refused"), K(True))
+    d = st.derive(_row(state="waiting", state_reason="answer_refused"), K(True))
     assert d["stage"] == "needs_answer" and A(d) == ["*open_session", "discard"]
-    d = st.derive(_row(running=True, state_reason="answer_sent"), K(True))
+    d = st.derive(_row(state="running", state_reason="answer_sent"), K(True))
     assert d["stage"] == "running" and A(d) == ["open_session", "discard"]
-    d = st.derive(_row(running=True), K(True))
+    d = st.derive(_row(state="running"), K(True))
     assert d["stage"] == "running" and A(d) == ["*stop", "open_session", "discard"]
     r = _row()
     r["result"]["provisional"] = True
@@ -134,8 +134,7 @@ def test_a_result_that_did_not_deliver_is_stopped(env, ended):
     ("stopped", False, None, ["discard"], None),
     ("accepted", True, None, ["open_session:read_only"], None),
     ("accepted", False, None, [], None),
-    ("discarded", True, None, [], None),
-    ("expired", True, None, [], None),
+    ("closed", True, None, [], None),
 ])
 def test_every_stage_offers_exactly_its_row(stage, alive, accept, want, reason):
     got = st._actions(stage, alive, accept, reason)
@@ -163,14 +162,14 @@ def test_not_good_enough_is_not_a_verdict_discard_settles(env):
     st.discard(DID, "  wrong   numbers ")
     assert st.load(DID)["discard_note"] == "wrong numbers"
     d = st.derive(_row(), K(True))
-    assert d["verdict"] == "abandoned" and d["settles"] and d["stage"] == "discarded" and A(d) == []
+    assert d["verdict"] == "abandoned" and d["settles"] and d["stage"] == "closed" and d["why"] == "discarded" and A(d) == []
     with pytest.raises(st.SettleError):
         st.discard(DID)
 
 
 def test_no_session_row_ends_only_by_discarding(env):
     rows, _ = env
-    rows[DID] = _row(session_id=None, result=None, state_reason="no_session_id", running=None)
+    rows[DID] = _row(session_id=None, result=None, state_reason="no_session_id", state="unknown")
     d = st.derive(rows[DID], K(None))
     assert d["stage"] == "stopped" and d["why"] == "no_session" and A(d) == ["discard"]
     assert not d["settles"]
@@ -253,7 +252,7 @@ def test_each_condition_holds_settling_back(env):
 
 def test_hive_gone_settles_without_release(env, monkeypatch):
     rows, _ = env
-    rows[DID] = _row(result=None, state_reason="hive_gone", running=False)
+    rows[DID] = _row(result=None, state_reason="hive_gone")
     d = st.derive(rows[DID], K(None))
     assert d["verdict"] == "gone" and d["settles"]
     due = st.annotate([rows[DID]])
@@ -501,11 +500,11 @@ def test_a_stopped_run_without_a_result_can_be_discarded(env):
 
 def test_the_settling_look_shows_the_settled_stage(env):
     rows, _ = env
-    rows[DID] = _row(session_id=None, result=None, state_reason="no_session_id", running=None)
+    rows[DID] = _row(session_id=None, result=None, state_reason="no_session_id", state="unknown")
     st.discard(DID)
     r = dict(rows[DID])
     st.annotate([r])
-    assert r["settle"]["settled"]["outcome"] == "abandoned" and r["stage"] == "discarded" and r["actions"] == []
+    assert r["settle"]["settled"]["outcome"] == "abandoned" and r["stage"] == "closed" and r["why"] == "discarded" and r["actions"] == []
 
 
 # ── §3.5: expiry ─────────────────────────────────────────────────────────────
@@ -525,7 +524,7 @@ def test_an_unsettled_run_expires_after_the_retention(env, monkeypatch):
     r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 0.1)
     tell = st.annotate([r])
     assert st.load(DID)["settled"]["outcome"] == "expired"
-    assert r["stage"] == "expired" and r["actions"] == [] and r["cleanup_soon"] is False
+    assert r["stage"] == "closed" and r["why"] == "expired" and r["actions"] == [] and r["cleanup_soon"] is False
     assert [x["dispatch_id"] for x in tell] == [DID]        # its Hive is told to release
 
 
@@ -543,11 +542,11 @@ def test_a_running_run_does_not_expire_one_asking_nobody_answered_does(env, monk
     rows, _ = env
     rows[DID] = _row()
     r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 1)
-    r["running"] = True
+    r["state"] = "running"
     st.annotate([r])
     assert not st.load(DID).get("settled")
     r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 1)
-    r["waiting"] = True
+    r["state"] = "waiting"
     st.annotate([r])
     assert st.load(DID)["settled"]["outcome"] == "expired"
 

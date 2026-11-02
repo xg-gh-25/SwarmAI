@@ -1609,7 +1609,8 @@
       "stoppedHiveOff": "Not running · Hive is off",
       "stoppedHiveGone": "Not running · Hive deleted",
       "sessionUnknown": "Session not confirmed, may be running",
-      "unknown": "State unknown · the Hive didn't answer"
+      "unknown": "State unknown · the Hive didn't answer",
+      "unknownUpdating": "The Hive is updating · the run continues after it"
     },
     "hiveStatus": {
       "running": "Running",
@@ -1861,8 +1862,13 @@
         "awaiting": "Awaiting acceptance",
         "stopped": "Stopped",
         "accepted": "Accepted",
+        "closed": "Closed"
+      },
+      "closed": {
         "discarded": "Discarded",
-        "expired": "Expired"
+        "reverted": "Reverted",
+        "expired": "Expired",
+        "hive_gone": "Hive gone"
       },
       "why": {
         "no_session": "the Hive never named its session",
@@ -1873,7 +1879,6 @@
         "stopped": "you stopped it",
         "gave_up": "it gave up",
         "turn_limit": "hit the turn limit",
-        "paused": "paused",
         "no_terminal": "no ending recorded",
         "restarted": "restarted",
         "superseded": "superseded",

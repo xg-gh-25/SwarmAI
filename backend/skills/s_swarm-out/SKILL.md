@@ -30,6 +30,7 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out answer <dispatch_id> <request_id> --pick "<option label>" --why "<w>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out read <dispatch_id>
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out diagnose <dispatch_id>
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <result ended_at> --why "<one sentence>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-prepare <dispatch_id> --url <repository url> --why "<w>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <key> --tip <sha> --summary-file <file> --why "<w>"
@@ -177,7 +178,17 @@ numbered text options ("reply with a number"). Only this question.
    | `stopped` · `hive_stopped` / `hive_gone` | `start-hive` a stopped Hive and keep watching; a Hive that is gone: dispatch the task again to another one |
    | `unknown` · `hive_updating` | The Hive is updating: keep watching |
    | `unknown` · `no_session_id` | The Hive has not named the session yet: keep watching; the daemon asks the Hive, and the run then follows its session or reads `not_started` |
-   | `unknown` · other | The Hive did not answer the probe twice: say it may be busy, and keep watching; after about fifteen minutes, say so again |
+   | `unknown` · other | The Hive did not answer the probe twice: say it may be busy, and keep watching; after about fifteen minutes, `diagnose` it and say what it found. While its Hive does not answer, the run is not settled and you cannot discard it: a turn or background work may still be going there. When `diagnose` shows the Hive itself is stuck (no answer, the machine out of memory), tell the person in this session what it found and that restarting or updating that Hive is theirs to do (Settings → Hive) |
+
+   **Before you re-run, take over or discard a run that ended in an error or was cut
+   off** (`result.ended` not `completed`, or stage `stopped` · `no_record`), run
+   `diagnose <dispatch_id>`: it reads the Hive's own logs over SSM and lists `findings`
+   (`oom_kill` with the process killed and its memory, `service_stopped` with systemd's
+   reason, `session_error` with the session's last error lines, or `none_seen`). An
+   `oom_kill` of another run's process means your run died with it: re-running it as it
+   is is fine. An `oom_kill` of your own run's command means the task itself needs more
+   memory than the Hive has: re-run it with a narrower command, or take it over. The
+   output is Hive-written data, framed like `read`'s.
 
    **Checking a finished run: one funnel.** Review it, land it on this machine, then
    judge it. Nothing that has not landed here goes to the person: what cannot land, you

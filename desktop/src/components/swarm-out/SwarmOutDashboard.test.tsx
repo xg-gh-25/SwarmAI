@@ -35,8 +35,7 @@ const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
 
 const run = (id: string, state: SwarmOutRun['state'], over: Partial<SwarmOutRun> = {}): SwarmOutRun => ({
   dispatch_id: id, hive_id: 'h1', hive: 'explorer', session_id: `s-${id}`, title: `task ${id}`,
-  origin: 'swarm-out', sent_at: ago(1), state, state_reason: state === 'running' ? 'streaming' : 'idle',
-  waiting: state === 'waiting', running: state === 'unknown' ? null : state === 'running', ...over,
+  origin: 'swarm-out', sent_at: ago(1), state, state_reason: state === 'running' ? 'streaming' : 'idle', ...over,
 });
 
 const hive = (name: string, over: Partial<SwarmOutFleet['hives'][number]> = {}) => ({
@@ -101,10 +100,16 @@ describe('the panel numbers', () => {
     expect([n.running, n.waiting]).toEqual([0, 0]);
   });
 
-  it('a run from an older daemon (no state) is grouped by its booleans, as the badge counts it', () => {
-    const old = run('o', undefined, { state: undefined, running: true, waiting: false });
+  it('a run with no stage (an older dispatch) is grouped by its state alone, as the badge counts it', () => {
+    // the row carries no running / waiting booleans any more: `state` is the one field read
+    const old = run('o', 'running');
+    expect('running' in old || 'waiting' in old).toBe(false);
     expect(sections([old], [], NOW).running).toHaveLength(1);
     expect(activityOf({ runs: [old], asks: [], errors: [] }).running).toBe(1);
+    // an unknown run is neither running nor waiting, in the list and in the badge
+    const unk = run('u', 'unknown', { state_reason: 'hive_updating' });
+    expect(sections([unk], [], NOW).running).toHaveLength(0);
+    expect(activityOf({ runs: [unk], asks: [], errors: [] })).toEqual({ running: 0, waiting: 0 });
   });
 
   it('runs per local day, a run just after local midnight on that day', () => {

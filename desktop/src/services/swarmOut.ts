@@ -15,18 +15,16 @@ export interface SwarmOutRun {
   title: string;
   origin: string;
   sent_at: string;
-  waiting: boolean;
-  /** Its session is streaming on the Hive now; null when that Hive could not be asked
-   *  or the session was never named. */
-  running: boolean | null;
   /** the Hive never named the session (the dispatch timed out): it may be running */
   session_unknown?: boolean;
-  /** From the Hive's own report of the session (backend swarm_out.run_state). "stopped"
-   *  = not working now: the Host cannot tell finished from failed or stopped. */
-  state?: 'waiting' | 'running' | 'stopped' | 'unknown';
+  /** From the Hive's own report of the session (backend swarm_out.run_state), the one
+   *  field every reader of "is it running / waiting" reads. "stopped" = not working
+   *  now: the Host cannot tell finished from failed or stopped. "unknown": the Hive could
+   *  not be asked, or the session was never named. */
+  state: 'waiting' | 'running' | 'stopped' | 'unknown';
   /** why: e.g. waiting_input, question, preparing, idle, not_held, hive_stopped,
-   *  hive_silent, no_session_id */
-  state_reason?: string;
+   *  hive_silent, hive_updating (the Hive is updating), no_session_id */
+  state_reason: string;
   /** the repositories the task declared, with the directory each goes to on the Hive */
   repos?: { url: string; ref: string | null; dir: string }[];
   /** The Project Agent the task went under (this machine's own dispatch record; absent
@@ -45,7 +43,8 @@ export interface SwarmOutRun {
    *  decides nothing itself. Absent for a dispatch from before Project Agents. */
   stage?: SwarmOutStage;
   actions?: SwarmOutAction[];
-  /** why a run is stopped: no_session, no_result, hive_gone, or how its result ended */
+  /** why a run is stopped (no_session, no_result, hive_gone, or how its result ended),
+   *  or why it is closed (discarded, reverted, expired, hive_gone) */
   why?: string | null;
   settle?: SwarmOutSettle;
   /** not settled, and this Host removes its records within 3 days (bundles can no
@@ -113,7 +112,12 @@ export interface SwarmOutDecision {
   failed?: boolean;
 }
 
-export type SwarmOutStage = 'running' | 'needs_answer' | 'awaiting' | 'stopped' | 'accepted' | 'discarded' | 'expired';
+/** ``closed``: discarded, reverted, expired or its Hive gone; which one is the row's
+ *  ``why`` (design 2026-11-02-swarm-out-hive-deaths-diagnostics-states §3 S1). */
+export type SwarmOutStage = 'running' | 'needs_answer' | 'awaiting' | 'stopped' | 'accepted' | 'closed';
+
+/** Why a ``closed`` run is closed (its ``why``). */
+export type SwarmOutClosedWhy = 'discarded' | 'reverted' | 'expired' | 'hive_gone';
 
 export type SwarmOutCommand = 'accept' | 'rerun' | 'discard' | 'stop' | 'open_session' | 'answer'
   | 'keep' | 'revert';
@@ -129,9 +133,6 @@ export interface SwarmOutAction {
 }
 
 export interface SwarmOutSettle {
-  /** pass: the person's on an answer or document, or the landing for commits;
-   *  abandoned: discarded; gone: the Hive is gone and left no result; null: not yet */
-  verdict: 'pass' | 'abandoned' | 'gone' | 'expired' | 'reverted' | null;
   /** unsealed: commits the Hive could not seal into a bundle (they exist only in its
    *  workspace: land them by hand, or discarding removes them); rejected: an older
    *  Host's record */

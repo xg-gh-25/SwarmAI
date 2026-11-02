@@ -259,7 +259,7 @@ def test_a_refused_answer_marks_its_run_waiting_on_the_person(monkeypatch):
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1", "refused": True}])
     run = asyncio.run(swarm_out.list_runs())["runs"][0]
-    assert (run["waiting"], run["state_reason"]) == (True, "answer_refused")
+    assert (run["state"], run["state_reason"]) == ("waiting", "answer_refused")
 
 
 def test_a_plain_close_with_no_answer_is_not_read():
@@ -292,7 +292,7 @@ def test_a_dispatch_with_no_session_id_is_not_reported_as_stopped(monkeypatch):
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [])
     monkeypatch.setattr(swarm_out, "_session_states", live)
     out = asyncio.run(swarm_out.list_runs())
-    assert {r["dispatch_id"]: r["running"] for r in out["runs"]} == {"d1": True, "d2": None}
+    assert {r["dispatch_id"]: r["state"] for r in out["runs"]} == {"d1": "running", "d2": "unknown"}
 
 
 def test_a_running_hive_never_dispatched_to_still_shows_its_questions(monkeypatch):

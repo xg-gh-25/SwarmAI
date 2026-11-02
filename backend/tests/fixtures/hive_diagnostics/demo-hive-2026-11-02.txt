@@ -1,0 +1,87 @@
+@@ state 10 10
+Result=success
+NRestarts=2
+OOMPolicy=stop
+MemoryCurrent=677580800
+MemoryMax=6442450944
+ActiveEnterTimestamp=Mon 2026-11-02 06:28:34 UTC
+               total        used        free      shared  buff/cache   available
+Mem:           15672         832        8543         897        6296       13690
+Swap:              0           0           0
+ 09:50:10 up 70 days, 23:34,  0 users,  load average: 0.06, 0.09, 0.09
+@@ systemd 22 22
+2026-11-02T06:18:27+0000 ip-10-0-0-1.ec2.internal systemd[1]: Stopping swarmai-hive.service - SwarmAI Hive Backend...
+2026-11-02T06:18:27+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Deactivated successfully.
+2026-11-02T06:18:27+0000 ip-10-0-0-1.ec2.internal systemd[1]: Stopped swarmai-hive.service - SwarmAI Hive Backend.
+2026-11-02T06:18:27+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Consumed 2h 57min 54.524s CPU time.
+2026-11-02T06:18:27+0000 ip-10-0-0-1.ec2.internal systemd[1]: Starting swarmai-hive.service - SwarmAI Hive Backend...
+2026-11-02T06:18:30+0000 ip-10-0-0-1.ec2.internal systemd[1]: Started swarmai-hive.service - SwarmAI Hive Backend.
+2026-11-02T06:23:43+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: A process of this unit has been killed by the OOM killer.
+2026-11-02T06:23:44+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Failed with result 'oom-kill'.
+2026-11-02T06:23:44+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Consumed 5min 1.101s CPU time.
+2026-11-02T06:23:54+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Scheduled restart job, restart counter is at 1.
+2026-11-02T06:23:54+0000 ip-10-0-0-1.ec2.internal systemd[1]: Stopped swarmai-hive.service - SwarmAI Hive Backend.
+2026-11-02T06:23:54+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Consumed 5min 1.101s CPU time.
+2026-11-02T06:23:54+0000 ip-10-0-0-1.ec2.internal systemd[1]: Starting swarmai-hive.service - SwarmAI Hive Backend...
+2026-11-02T06:23:57+0000 ip-10-0-0-1.ec2.internal systemd[1]: Started swarmai-hive.service - SwarmAI Hive Backend.
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: A process of this unit has been killed by the OOM killer.
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Failed with result 'oom-kill'.
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Consumed 6min 23.053s CPU time.
+2026-11-02T06:28:30+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Scheduled restart job, restart counter is at 2.
+2026-11-02T06:28:30+0000 ip-10-0-0-1.ec2.internal systemd[1]: Stopped swarmai-hive.service - SwarmAI Hive Backend.
+2026-11-02T06:28:30+0000 ip-10-0-0-1.ec2.internal systemd[1]: swarmai-hive.service: Consumed 6min 23.053s CPU time.
+2026-11-02T06:28:30+0000 ip-10-0-0-1.ec2.internal systemd[1]: Starting swarmai-hive.service - SwarmAI Hive Backend...
+2026-11-02T06:28:34+0000 ip-10-0-0-1.ec2.internal systemd[1]: Started swarmai-hive.service - SwarmAI Hive Backend.
+@@ kernel 9 9
+2026-11-02T06:23:43+0000 ip-10-0-0-1.ec2.internal kernel: node invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=0
+2026-11-02T06:23:43+0000 ip-10-0-0-1.ec2.internal kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/system.slice/swarmai-hive.service,task_memcg=/system.slice/swarmai-hive.service,task=node,pid=3752854,uid=1001
+2026-11-02T06:23:43+0000 ip-10-0-0-1.ec2.internal kernel: Memory cgroup out of memory: Killed process 3752854 (node) total-vm:5740288kB, anon-rss:5066956kB, file-rss:41336kB, shmem-rss:0kB, UID:1001 pgtables:142680kB oom_score_adj:0
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal kernel: node invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=0
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/system.slice/swarmai-hive.service,task_memcg=/system.slice/swarmai-hive.service,task=node,pid=3754732,uid=1001
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal kernel: Memory cgroup out of memory: Killed process 3754732 (node) total-vm:5992636kB, anon-rss:5314364kB, file-rss:41360kB, shmem-rss:0kB, UID:1001 pgtables:148852kB oom_score_adj:0
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal kernel: python invoked oom-killer: gfp_mask=0x400cc0(GFP_KERNEL_ACCOUNT), order=0, oom_score_adj=0
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/system.slice/swarmai-hive.service,task_memcg=/system.slice/swarmai-hive.service,task=claude,pid=3753964,uid=1001
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal kernel: Memory cgroup out of memory: OOM victim 3753964 (claude) is already exiting. Skip killing the task
+@@ service 30 17
+2026-11-02T06:27:57+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:57,400 [3753836] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=5616MB sessions=[11111111=497MB(peak=701MB,IDLE), aaaaaaaa=5120MB(peak=5120MB,STREAMING)]
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:28:20,684 [3753836] - core.session_router - INFO - session_router.disconnect_all: killing 1 alive units
+2026-11-02T06:28:32+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: INFO:     Started server process [3763077]
+2026-11-02T06:28:32+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: INFO:     Application startup complete.
+2026-11-02T06:37:33+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:37:33,895 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=347MB sessions=[cccccccc=348MB(peak=348MB,STREAMING)]
+2026-11-02T06:38:33+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:38:33,924 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=359MB sessions=[cccccccc=359MB(peak=359MB,STREAMING)]
+2026-11-02T06:39:33+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:39:33,931 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=359MB sessions=[cccccccc=360MB(peak=360MB,IDLE)]
+2026-11-02T06:40:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:40:34,180 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=347MB sessions=[cccccccc=347MB(peak=360MB,IDLE)]
+2026-11-02T06:41:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:41:34,209 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=344MB sessions=[cccccccc=345MB(peak=360MB,IDLE)]
+2026-11-02T06:42:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:42:34,218 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=344MB sessions=[cccccccc=345MB(peak=360MB,IDLE)]
+2026-11-02T06:43:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:43:34,224 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=344MB sessions=[cccccccc=345MB(peak=360MB,IDLE)]
+2026-11-02T06:44:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:44:34,252 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=344MB sessions=[cccccccc=345MB(peak=360MB,IDLE)]
+2026-11-02T06:45:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:45:34,258 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=344MB sessions=[cccccccc=345MB(peak=360MB,IDLE)]
+2026-11-02T06:46:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:46:34,518 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=344MB sessions=[cccccccc=345MB(peak=360MB,IDLE)]
+2026-11-02T06:47:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:47:34,545 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=345MB sessions=[cccccccc=345MB(peak=360MB,IDLE)]
+2026-11-02T06:48:34+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:48:34,551 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=317MB sessions=[cccccccc=318MB(peak=360MB,IDLE)]
+2026-11-02T06:49:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:49:35,113 [3763077] - core.lifecycle_manager - INFO - lifecycle_manager.memory_sample total=317MB sessions=[cccccccc=318MB(peak=360MB,IDLE)]
+@@ session 39 24
+2026-11-02T06:23:57+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:23:57,168 [3753836] - core.session_hooks - INFO - Background hook 'ingestion_session_kick' completed for session 11111111-2222-4333-8444-555555555555
+2026-11-02T06:23:57+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:23:57,168 [3753836] - core.session_hooks - INFO - All hooks completed for session 11111111-2222-4333-8444-555555555555 in 0.0s (2 hooks)
+2026-11-02T06:25:43+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:43,949 [3753836] - core.session_router - INFO - session_router.create_unit session_id=11111111-2222-4333-8444-555555555555 agent_id=default
+2026-11-02T06:25:43+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:43,965 [3753836] - core.session_router - INFO - cold_resume_check session_id=11111111-2222-4333-8444-555555555555 state=cold sdk_session=None → is_cold_resume=True channel_resume=False
+2026-11-02T06:25:43+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:43,965 [3753836] - core.session_router - INFO - cold_resume_decision session_id=11111111-2222-4333-8444-555555555555 msg_count=39 → injecting=True (cold=True channel=False)
+2026-11-02T06:25:46+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:46,212 [3753836] - core.session_unit - INFO - spawn_perf session_id=11111111-2222-4333-8444-555555555555 lock_wait_ms=0.0 configure_ms=0.2 wrapper_aenter_ms=1167.1 total_ms=1167.3
+2026-11-02T06:25:46+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:46,212 [3753836] - core.session_unit - INFO - session_unit.spawn session_id=11111111-2222-4333-8444-555555555555 pid=3753964 mcps_configured=1
+2026-11-02T06:25:46+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:46,212 [3753836] - core.session_unit - INFO - session_unit.transition session_id=11111111-2222-4333-8444-555555555555 from=cold to=idle pid=3753964
+2026-11-02T06:25:46+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:46,212 [3753836] - core.session_unit - INFO - session_unit.transition session_id=11111111-2222-4333-8444-555555555555 from=idle to=streaming pid=3753964
+2026-11-02T06:25:46+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:46,214 [3753836] - core.streaming_orchestrator - INFO - Query sent for session 11111111-2222-4333-8444-555555555555, reading response...
+2026-11-02T06:25:48+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:25:48,828 [3753836] - core.session_router - INFO - TTFT=4882ms (first-token=thinking_start) | slot=0ms recall=n/a pre_send=1094ms spawn=1167ms send+infer=2621ms | session_id=11111111-2222-4333-8444-555555555555
+2026-11-02T06:27:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:35,456 [3753836] - core.hook_builder - INFO - stop_hook: stop_hook_active=False session=11111111-2222-4333-8444-555555555555
+2026-11-02T06:27:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:35,475 [3753836] - core.streaming_orchestrator - INFO - stream_rate calls=9 out_tokens=2973 writing_s=21.0 tok_per_s=141.9 session_id=11111111-2222-4333-8444-555555555555
+2026-11-02T06:27:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:35,475 [3753836] - core.streaming_orchestrator - INFO - session_unit.result_usage session_id=11111111-2222-4333-8444-555555555555 raw_usage={'input_tokens': 18, 'cache_creation_input_tokens': 69157, 'cache_read_input_tokens': 583754, 'output_tokens': 2973, 'output_tokens_details': {'thinking_tokens': 925}, 'server_tool_use': {'web_search_requests': 0, 'web_fetch_requests': 0}, 'service_tier': 'standard', 'cache_creation': {'ephemeral_1h_input_tokens': 69157, 'ephemeral_5m_input_tokens': 0}, 'inference_geo': '', 'iterations': [], 'speed': 'standard', 'fallback_credit': None} input_tokens=18 model=us.anthropic.claude-opus-5-5[1m] lifecycle_response=1
+2026-11-02T06:27:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:35,477 [3753836] - core.session_unit - INFO - session_unit.context_ring_debug session_id=11111111-2222-4333-8444-555555555555 usage_keys=['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens', 'output_tokens_details', 'server_tool_use', 'service_tier', 'cache_creation', 'inference_geo', 'iterations', 'speed', 'fallback_credit'] raw_total=652929 per_turn_est=80555 pct=8% turn_count=0 num_turns=10 model=us.anthropic.claude-opus-5-5[1m]
+2026-11-02T06:27:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:35,477 [3753836] - core.session_unit - INFO - session_unit.context_warning_built session_id=11111111-2222-4333-8444-555555555555 pct=8 level=ok
+2026-11-02T06:27:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:35,479 [3753836] - core.session_unit - INFO - session_unit.mcp_health_ok session_id=11111111-2222-4333-8444-555555555555 configured=1 ok=1
+2026-11-02T06:27:35+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:27:35,479 [3753836] - core.session_unit - INFO - session_unit.transition session_id=11111111-2222-4333-8444-555555555555 from=streaming to=idle pid=3753964
+2026-11-02T06:28:10+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:28:10,023 [3753836] - core.cli_stream_reader - INFO - cli_stream_reader.background_subagent_frames session_id=11111111-2222-4333-8444-555555555555 count=1
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:28:20,535 [3753836] - core.cli_stream_reader - WARNING - cli_stream_reader.stream_error session_id=11111111-2222-4333-8444-555555555555: ProcessError: Command failed with exit code 143 (exit code: 143)
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:28:20,688 [3753836] - core.session_unit - INFO - session_unit.transition session_id=11111111-2222-4333-8444-555555555555 from=idle to=dead pid=3753964
+2026-11-02T06:28:20+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3753836]: 2026-11-02 06:28:20,689 [3753836] - core.session_unit - INFO - session_unit.transition session_id=11111111-2222-4333-8444-555555555555 from=dead to=cold pid=None
+2026-11-02T06:30:03+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 06:30:03,663 [3763077] - middleware.error_handler - WARNING - Validation error on GET /api/chat/sessions/11111111-2222-4333-8444-555555555555/messages: query.limit: Input should be less than or equal to 200
+2026-11-02T07:23:05+0000 ip-10-0-0-1.ec2.internal swarmai-hive[3763077]: 2026-11-02 07:23:05,597 [3763077] - core.ingestion.worker - INFO - CDF session job 11111111-2222-4333-8444-555555555555: {'status': 'reviewed', 'reviewed_to': '2026-11-02T06:27:35.447028|99999999-8888-4777-8666-555555555555', 'units': 4, 'invalid': 0, 'session_type': 'conversation', 'windows': 1}

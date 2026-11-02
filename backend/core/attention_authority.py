@@ -799,10 +799,10 @@ def _collect_swarm_out() -> list[AttentionItem]:
         if not snap:
             return []
         runs = [r for r in snap.get("runs") or [] if isinstance(r, dict)]
-        # a discarded or expired run's waits are no one's to answer (its Hive may keep a
-        # pipeline decision open after the chat stopped)
+        # a closed run's waits (discarded, reverted, expired, its Hive gone) are no one's
+        # to answer (its Hive may keep a pipeline decision open after the chat stopped)
         closed = {r.get("session_id") for r in runs
-                  if r.get("stage") in ("discarded", "expired") and r.get("session_id")}
+                  if r.get("stage") == "closed" and r.get("session_id")}
         asks = [a for a in snap.get("asks") or [] if isinstance(a, dict) and not a.get("refused")
                 and a.get("session_id") not in closed]
         # a run a live session dispatched is that session's until it lands and the

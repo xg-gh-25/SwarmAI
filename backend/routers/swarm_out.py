@@ -513,6 +513,24 @@ async def run_result(dispatch_id: str) -> dict[str, Any]:
     return await _call(swarm_out.run_result(dispatch_id))
 
 
+@router.get("/runs/{dispatch_id}/diagnostics")
+async def run_diagnostics(dispatch_id: str) -> dict[str, Any]:
+    """Why the run's Hive session stopped, read from its Hive with a fixed read-only
+    script over SSM (core/hive_diagnostics): kernel OOM kills, the service's stops, its
+    memory, the session's error lines, and a deterministic list of findings."""
+    _require_desktop()
+    from core import hive_diagnostics
+
+    async def read() -> dict[str, Any]:
+        # a session id the read cannot use is a 400 with its reason; ``_call`` turns any
+        # other exception into a generic 500
+        try:
+            return await hive_diagnostics.read(dispatch_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+    return await _call(read())
+
+
 @router.post("/runs/{dispatch_id}/refresh")
 async def refresh_result(dispatch_id: str) -> dict[str, Any]:
     """Check one run's Hive now."""

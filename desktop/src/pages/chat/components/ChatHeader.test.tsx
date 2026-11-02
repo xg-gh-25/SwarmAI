@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { swarmOutService, type SwarmOutRuns } from '../../../services/swarmOut';
+import { swarmOutService, type SwarmOutRun, type SwarmOutRuns } from '../../../services/swarmOut';
 import { ChatHeader } from './ChatHeader';
 import { HealthContext, type HealthContextValue } from '../../../contexts/HealthContext';
 import type { OpenTab } from '../types';
@@ -202,10 +202,11 @@ describe('ChatHeader — pinned Swarm Out tab', () => {
 describe('ChatHeader — Swarm Out tab shows the Hives\' activity', () => {
   // Questions: does the tab say how many questions wait for you (amber, before the
   // running count) or else how many runs are running; does a run whose Hive could not be
-  // asked (running null) or that waits on you not count as running; does the icon
+  // asked (state unknown) or that waits on you not count as running; does the icon
   // breathe only while something runs; does an idle Hive show nothing.
-  const run = (sid: string, running: boolean | null, waiting = false) => ({
-    dispatch_id: sid, hive_id: 'h1', hive: 'w', session_id: sid, title: sid, origin: 'swarm-out', sent_at: '', waiting, running,
+  const run = (sid: string, state: SwarmOutRun['state']) => ({
+    dispatch_id: sid, hive_id: 'h1', hive: 'w', session_id: sid, title: sid, origin: 'swarm-out', sent_at: '', state,
+    state_reason: state === 'unknown' ? 'hive_silent' : 'idle',
   });
   const ask = (sid: string) => ({ kind: 'approval' as const, hive: 'w', hive_id: 'h1', session_id: sid, request_id: 'r', asked_at: '' });
   async function renderWith(data: SwarmOutRuns) {
@@ -223,21 +224,21 @@ describe('ChatHeader — Swarm Out tab shows the Hives\' activity', () => {
   }
 
   it('runs running: a quiet count and a breathing icon', async () => {
-    await renderWith({ runs: [run('a', true), run('b', true), run('c', null), run('d', false)], asks: [], errors: [] });
+    await renderWith({ runs: [run('a', 'running'), run('b', 'running'), run('c', 'unknown'), run('d', 'stopped')], asks: [], errors: [] });
     await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('2 running'));
     expect(screen.getByTestId('swarm-out-badge').className).not.toContain('swarm-out-badge--ask');
     expect(screen.getByTestId('swarm-out-icon').className).toContain('swarm-out-icon--busy');
   });
 
   it('a question waiting: the amber count wins, and a waiting run is not running', async () => {
-    await renderWith({ runs: [run('a', true), run('b', false, true)], asks: [ask('b')], errors: [] });
+    await renderWith({ runs: [run('a', 'running'), run('b', 'waiting')], asks: [ask('b')], errors: [] });
     await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('1 waiting for you'));
     expect(screen.getByTestId('swarm-out-badge').className).toContain('swarm-out-badge--ask');
     expect(screen.getByTestId('swarm-out-icon').className).toContain('swarm-out-icon--busy');
   });
 
   it('nothing running or waiting: no badge, a still icon', async () => {
-    await renderWith({ runs: [run('a', false), run('b', null)], asks: [], errors: [] });
+    await renderWith({ runs: [run('a', 'stopped'), run('b', 'unknown')], asks: [], errors: [] });
     await waitFor(() => expect(swarmOutService.runs).toHaveBeenCalled());
     expect(screen.queryByTestId('swarm-out-badge')).toBeNull();
     expect(screen.getByTestId('swarm-out-icon').className).not.toContain('swarm-out-icon--busy');

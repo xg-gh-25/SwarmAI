@@ -25,7 +25,7 @@ const res = (o: Partial<SwarmOutResult> = {}): SwarmOutResult => ({
 });
 const run = (id: string, brain: string | null, result: SwarmOutResult | null, hours = 1): SwarmOutRun => ({
   dispatch_id: id, hive_id: 'h', hive: 'explorer', session_id: 's' + id, title: id, origin: 'swarm-out',
-  sent_at: ago(hours), waiting: false, running: false, state: 'stopped', result,
+  sent_at: ago(hours), state: 'stopped', state_reason: 'idle', result,
   ...(brain ? { project_agent: { brain, mode: 'code-change', revision: 'r', profile: 'bugfix',
     delivery: 'bundle', acceptance: 'tests pass' } } : {}),
 });

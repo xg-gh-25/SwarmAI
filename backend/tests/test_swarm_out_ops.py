@@ -244,6 +244,7 @@ _CLI_ARGS = {
     "hives": [],
     "update-hive": ["--hive", "h1"],
     "read": ["so_0123456789ab"],
+    "diagnose": ["so_0123456789ab"],
     "watch": ["so_0123456789ab", "--since", "e30="],
     "card": ["so_0123456789ab", "req1"],
     "answer": ["so_0123456789ab", "req1", "--pick", "A", "--why", "w"],

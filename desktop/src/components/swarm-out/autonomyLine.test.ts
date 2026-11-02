@@ -13,7 +13,7 @@ import { autonomyLine, interventionsOf } from './live';
 const NOW = Date.parse('2026-11-01T12:00:00Z');
 const r = (id: string, human: Record<string, unknown> | null, o: Record<string, unknown> = {}): SwarmOutRun => ({
   dispatch_id: id, hive_id: 'h', hive: 'demo', session_id: 's', title: id, origin: 'swarm-out',
-  sent_at: '2026-10-31T09:00:00Z', waiting: false, running: false, state: 'stopped',
+  sent_at: '2026-10-31T09:00:00Z', state: 'stopped',
   result: human === null ? null : { provisional: false, work: { human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 0, ...human } } },
   ...o,
 }) as unknown as SwarmOutRun;

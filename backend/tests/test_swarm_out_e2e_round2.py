@@ -129,7 +129,7 @@ def _kept(tmp_path, monkeypatch, ended_at, resent_at=None):
 def _row(kept):
     row = {**ROW, "dispatched_from": SID, "project_agent": {"brain": "B", "execution": "native",
                                                             "returns": "answer"},
-           "running": False, "state": "stopped", "state_reason": "idle",
+           "state": "stopped", "state_reason": "idle",
            "result": res.public(kept)}
     return {**row, **swarm_out_settle.derive(row, kept)}
 

@@ -228,6 +228,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--hive", required=True, help="the Hive's name")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id", type=_dispatch_id)
+    dg = sub.add_parser("diagnose", help="why the run's Hive session stopped: OOM kills, service stops, "
+                                         "memory, the session's errors (read over SSM, framed as data)")
+    dg.add_argument("dispatch_id", type=_dispatch_id)
     # the funnel's last gate (design 2026-11-02-hive-run-decision-record §1): only a result
     # already on this host goes to the person, with your judgment and why you cannot decide
     ap = sub.add_parser("ask-person", help="hand a landed result you cannot judge to the person")
@@ -440,6 +443,9 @@ def main(argv: list[str] | None = None) -> int:
         return _call("POST", f"/runs/{args.dispatch_id}/card", {"request_id": args.request_id}, framed=True)
     if args.cmd == "read":
         return _call("GET", f"/runs/{args.dispatch_id}/result", framed=True)
+    if args.cmd == "diagnose":
+        # an SSM command on the Hive and its polling: up to about 90 s
+        return _call("GET", f"/runs/{args.dispatch_id}/diagnostics", timeout=150, framed=True)
     if args.cmd == "answer":
         body = {"session": _session(), "why": args.why}
         if args.answers_file:

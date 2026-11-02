@@ -56,22 +56,22 @@ const ACTIONS: Record<string, SwarmOutAction[]> = {
   awaiting: [A('accept', true, 'verdict'), A('rerun'), A('open_session'), A('discard')],
   stopped: [A('rerun', true), A('open_session'), A('discard')],
   accepted: [A('open_session', false, 'read_only')],
-  discarded: [],
+  closed: [],
 };
 
 function run(id: string, stage: SwarmOutRun['stage'], over: Partial<SwarmOutRun> = {}): SwarmOutRun {
   return {
     dispatch_id: id, hive_id: 'h1', hive: 'explorer', session_id: sid(Number(id.slice(-1)) || 0), title: `task ${id}`,
-    origin: 'swarm-out', sent_at: '2026-10-31T08:00:00Z', waiting: stage === 'needs_answer', running: stage === 'running',
-    state: stage === 'running' ? 'running' : stage === 'needs_answer' ? 'waiting' : 'stopped',
+    origin: 'swarm-out', sent_at: '2026-10-31T08:00:00Z',
+    state: stage === 'running' ? 'running' : stage === 'needs_answer' ? 'waiting' : 'stopped', state_reason: 'idle',
     project_agent: { brain: 'SwarmAI', mode: 'research', revision: 'r1', profile: '', delivery: 'document',
       acceptance: 'A report on the last 7 days', returns: 'document' },
     result: { ended: 'completed', provisional: false, ended_at: ENDED, turns: 1,
       work: { repos: [], files: [], human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 0, said: 0 },
         steps: { total: 3, failed: 0, agents: 0, by_tool: {} }, changes: [], files_omitted: 0 },
       pipeline: null, checks: null, execution_check: null } as unknown as SwarmOutRun['result'],
-    stage, actions: ACTIONS[stage ?? 'discarded'], why: null,
-    settle: { verdict: null, code: 'none', why_not: ['verdict'], settled: null },
+    stage, actions: ACTIONS[stage ?? 'closed'], why: stage === 'closed' ? 'discarded' : null,
+    settle: { code: 'none', why_not: ['verdict'], settled: null },
     ...over,
   };
 }
@@ -97,8 +97,8 @@ describe('sections', () => {
       run('a1', 'awaiting', { result: { ...run('x', 'awaiting').result!, ended_at: '2026-10-31T11:00:00Z' } }),
       run('a2', 'awaiting', { result: { ...run('x', 'awaiting').result!, ended_at: '2026-10-31T07:00:00Z' } }),
       run('q1', 'needs_answer'), run('r1', 'running'),
-      run('p1', 'accepted', { settle: { verdict: 'pass', code: 'none', why_not: [], settled: { at: '2026-10-31T11:30:00Z', outcome: 'passed', released: true } } }),
-      run('d1', 'discarded', { settle: { verdict: 'abandoned', code: 'none', why_not: [], settled: { at: '2026-10-29T11:30:00Z', outcome: 'abandoned', released: true } } }),
+      run('p1', 'accepted', { settle: { code: 'none', why_not: [], settled: { at: '2026-10-31T11:30:00Z', outcome: 'passed', released: true } } }),
+      run('d1', 'closed', { settle: { code: 'none', why_not: [], settled: { at: '2026-10-29T11:30:00Z', outcome: 'abandoned', released: true } } }),
     ];
     const s = sections(runs, [], NOW);
     expect(s.you.map((r) => r.dispatch_id)).toEqual(['q1', 'a2', 'a1', 's1']);
@@ -119,7 +119,7 @@ describe('sections', () => {
 
   it('the tab counts the runs waiting on a decision, by stage', () => {
     const d = { runs: [run('a1', 'awaiting'), run('s1', 'stopped'), run('s2', 'stopped', { actions: [A('open_session')] }), run('r1', 'running'),
-      run('p1', 'accepted', { settle: { verdict: 'pass', code: 'none', why_not: [], settled: { at: ENDED, outcome: 'passed', released: true } } })], asks: [], errors: [] };
+      run('p1', 'accepted', { settle: { code: 'none', why_not: [], settled: { at: ENDED, outcome: 'passed', released: true } } })], asks: [], errors: [] };
     expect(activityOf(d).waiting).toBe(2);       // a1, s1; s2 offers no decision; p1 is settled
     expect(activityOf(d).running).toBe(1);
   });
@@ -186,7 +186,7 @@ describe('the command panel', () => {
     });
 
   it('a discarded run offers nothing', () => {
-    panel(run('x1', 'discarded'));
+    panel(run('x1', 'closed', { why: 'discarded' }));
     expect(screen.queryAllByTestId(/^swarm-out-cmd-/)).toHaveLength(0);
   });
 
@@ -282,7 +282,7 @@ describe('the command panel', () => {
   });
 
   it('discard asks first, says what it removes, takes an optional note', async () => {
-    const done = panel(run('x1', 'stopped', { settle: { verdict: null, code: 'unsealed', why_not: ['code'], settled: null } }));
+    const done = panel(run('x1', 'stopped', { settle: { code: 'unsealed', why_not: ['code'], settled: null } }));
     fireEvent.click(screen.getByTestId('swarm-out-cmd-discard'));
     expect(svc.discard).not.toHaveBeenCalled();
     expect(screen.getByTestId('swarm-out-review-discard').textContent).toContain('never sealed');
@@ -474,7 +474,7 @@ describe('the run list', () => {
   });
 
   it('a section header counts its rows; recently done is open, the latest to end first, and folds', () => {
-    const settled = (at: string) => ({ settle: { verdict: 'pass' as const, code: 'none' as const, why_not: [], settled: { at, outcome: 'passed' as const, released: true } } });
+    const settled = (at: string) => ({ settle: { code: 'none' as const, why_not: [], settled: { at, outcome: 'passed' as const, released: true } } });
     const endedAt = (r: SwarmOutRun, at: string): SwarmOutRun => ({ ...r, result: { ...r.result!, ended_at: at } });
     // p1 ended first but was accepted last: the order follows the end, not the acceptance
     list([run('a1', 'awaiting'),
@@ -503,7 +503,7 @@ describe('opening a run\'s session', () => {
 
   it('a discarded run cannot open; an accepted one opens read-only; an awaiting one opens', () => {
     const open = vi.fn();
-    expect(renderHook(() => useOpenRun(run('d1', 'discarded')), { wrapper: wrap(open) }).result.current).toBeNull();
+    expect(renderHook(() => useOpenRun(run('d1', 'closed', { why: 'discarded' })), { wrapper: wrap(open) }).result.current).toBeNull();
     const accepted = renderHook(() => useOpenRun(run('p1', 'accepted')), { wrapper: wrap(open) }).result.current;
     act(() => accepted!());
     expect(open).toHaveBeenLastCalledWith(sid(1), 'task p1 · explorer', true);

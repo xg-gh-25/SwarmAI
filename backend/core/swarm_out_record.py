@@ -287,7 +287,7 @@ def funnel(row: dict, rec: dict, d: dict) -> dict[str, Any]:
             gates.append(_gate("judge", "done", j.get("by"), j.get("at")))
         elif d.get("verdict") == "pass":
             gates.append(_gate("judge", "done", None, None))
-        elif d.get("stage") in ("discarded", "expired"):
+        elif d.get("stage") == "closed":
             # decided: discarded (by whoever did it) or gone; never "judging" any more
             j = last("discard")
             gates.append(_gate("judge", "done", (j or {}).get("by"), (j or {}).get("at")))

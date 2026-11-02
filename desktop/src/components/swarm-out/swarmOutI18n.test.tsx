@@ -20,6 +20,7 @@ import { HiveGuide } from './HiveGuide';
 import { judgeSummary } from './judge';
 import { ENDINGS, endedLabel, gateLine, HIVE_STATUSES, hiveStatusLabel, lessonsLine, resultErrorLabel, runStats, stateLabel, workLines } from './live';
 import { hiveTone, runTone } from './tone';
+import { CLOSED_WHYS, stageLabel } from './runReview';
 import i18n from '../../i18n';
 
 vi.mock('../../services/swarmOut', () => ({
@@ -73,7 +74,7 @@ const RICH = result({
 
 const run = (id: string, over: Partial<SwarmOutRun> = {}): SwarmOutRun => ({
   dispatch_id: id, hive_id: 'h1', hive: 'explorer', session_id: `s-${id}`, title: `task ${id}`,
-  origin: 'swarm-out', sent_at: ago(1), waiting: false, running: false, state: 'stopped', state_reason: 'idle',
+  origin: 'swarm-out', sent_at: ago(1), state: 'stopped', state_reason: 'idle',
   result: null, result_status: 'fetched', ...over,
 });
 
@@ -93,11 +94,11 @@ const RUNS: SwarmOutRuns = {
     run('failedfetch', { result_status: 'failed', result_error: 'http_502' }),
     run('gone', { state_reason: 'hive_gone', result_status: 'failed', result_error: 'session_gone' }),
     run('off', { state_reason: 'hive_stopped' }),
-    run('running', { state: 'running', running: true, state_reason: 'preparing' }),
-    run('running2', { state: 'running', running: true, state_reason: 'streaming' }),
-    run('unknown', { state: 'unknown', running: null }),
-    run('nosession', { state: 'unknown', running: null, session_unknown: true, session_id: null, sent_at: ago(40) }),
-    run('waits', { state: 'waiting', waiting: true }),
+    run('running', { state: 'running', state_reason: 'preparing' }),
+    run('running2', { state: 'running', state_reason: 'streaming' }),
+    run('unknown', { state: 'unknown' }),
+    run('nosession', { state: 'unknown', session_unknown: true, session_id: null, sent_at: ago(40) }),
+    run('waits', { state: 'waiting' }),
     run('old', { sent_at: ago(24 * 5), result: result({ ended: 'crashed', error: { code: 'crashed' } }) }),
   ],
   asks: [
@@ -185,7 +186,9 @@ describe('in English, nothing on the panel is Chinese', () => {
       ...ENDINGS.map((e) => endedLabel(result({ ended: e, provisional: true })).text),
       ...HIVE_STATUSES.map(hiveStatusLabel),
       ...['session_gone', 'hive_silent', 'hive_not_running', 'hive_unusable', 'unexpected_body', 'no session', 'http_404'].map(resultErrorLabel),
-      ...RUNS.runs.map(stateLabel),
+      ...RUNS.runs.map(stateLabel), stateLabel(run('updating', { state: 'unknown', state_reason: 'hive_updating' })),
+      ...(['running', 'needs_answer', 'awaiting', 'stopped', 'accepted', 'closed'] as const).map((st) => stageLabel(st)),
+      ...CLOSED_WHYS.map((w) => stageLabel('closed', w)),
       ...workLines(RICH), ...workLines(result()), ...runStats(RICH).flatMap((x) => [x.label, x.value, x.sub ?? '', x.title ?? '']),
       lessonsLine(RICH) ?? '', lessonsLine(result({ lessons: { ...LESSONS, sent: 0, returned: 0, error: 'x' } })) ?? '',
       gateLine(RICH) ?? '', gateLine(result({ project_agent: { brain: 'b', mode: null, profile: null, delivery: null }, gate_refusals: null })) ?? '',

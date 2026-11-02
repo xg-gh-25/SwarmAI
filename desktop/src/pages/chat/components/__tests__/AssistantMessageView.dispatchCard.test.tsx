@@ -65,7 +65,7 @@ beforeEach(() => {
   _resetDispatchPoll();
   runs = vi.spyOn(swarmOutService, 'runs').mockResolvedValue({
     runs: [{ dispatch_id: 'so_b150abc3fd86', hive_id: 'h1', hive: 'explorer', session_id: SID, title: 't', origin: 'swarm-out',
-      sent_at: '2026-10-30T05:25:50Z', waiting: false, running: true, state: 'running', state_reason: 'streaming' }],
+      sent_at: '2026-10-30T05:25:50Z', state: 'running', state_reason: 'streaming' }],
     asks: [], errors: [],
   });
   setOverlayCtxBridge({ openHiveSession, showSwarmOut });
@@ -76,7 +76,7 @@ describe('a dispatch that ran differently', () => {
   it('says so on the card, from the run result', async () => {
     runs.mockResolvedValue({
       runs: [{ dispatch_id: 'so_b150abc3fd86', hive_id: 'h1', hive: 'explorer', session_id: SID, title: 't', origin: 'swarm-out',
-        sent_at: '2026-10-30T05:25:50Z', waiting: false, running: false, state: 'stopped',
+        sent_at: '2026-10-30T05:25:50Z', state: 'stopped',
         result: { execution_check: { state: 'differs', why: 'other_profile' } } }],
       asks: [], errors: [],
     } as never);

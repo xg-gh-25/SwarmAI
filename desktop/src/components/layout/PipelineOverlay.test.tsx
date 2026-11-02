@@ -75,7 +75,7 @@ const ANALYTICS = {
 };
 const hiveRun = (id: string, pipeline: boolean) => ({
   dispatch_id: id, hive_id: 'h1', hive: 'demo', session_id: null, title: `Hive ${id}`, origin: 'swarm-out',
-  sent_at: '2026-10-31T09:00:00Z', waiting: false, running: false, state: 'stopped', stage: 'accepted',
+  sent_at: '2026-10-31T09:00:00Z', state: 'stopped', stage: 'accepted',
   project_agent: { brain: 'SwarmAI', mode: 'change', profile: 'bugfix', revision: 'r', delivery: 'bundle', acceptance: null },
   settle: { settled: { at: '2026-10-31T10:00:00Z', outcome: 'passed', released: true } },
   result: { ended: 'completed', ended_at: '2026-10-31T09:30:00Z', tokens: null, cost_usd: null,

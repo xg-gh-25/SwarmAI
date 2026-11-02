@@ -23,7 +23,7 @@ export const OpenSessionContext = createContext<OpenSession | null>(null);
 export const PanelHiddenContext = createContext(false);
 
 /** Opens a run's Hive session in the Hive tab, or null when there is none this Host
- *  knows, or the run's commands do not include opening it (a discarded or expired run:
+ *  knows, or the run's commands do not include opening it (a closed run:
  *  backend core/swarm_out_settle; design 2026-10-31-swarm-out-run-review §3.4). The tab
  *  is titled run first, then its Hive: a narrow tab still shows which run it is, and
  *  the whole title is on its hover. */

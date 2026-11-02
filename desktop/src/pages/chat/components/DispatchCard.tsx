@@ -100,12 +100,13 @@ export function syncLabel(t: TFunction, s: string | null): string | null {
  *  short: the card links to Swarm Out for the rest. Not live.ts's stateLabel: that module
  *  binds the app's i18n instance at import, and a chat message must not. */
 export function liveWord(t: TFunction, r: SwarmOutRun): string {
-  const state = r.state ?? (r.waiting ? 'waiting' : r.running === true ? 'running' : r.running === false ? 'stopped' : 'unknown');
+  const { state } = r;
   if (state === 'stopped' && r.result?.ended) {
     return tf(t, `swarmOut.ended.${r.result.ended}`, r.result.ended)
       + (r.result.provisional && r.result.ended !== 'no_record' ? tf(t, 'swarmOut.ended.provisional', '') : '');
   }
   if (state === 'unknown' && r.session_unknown) return tf(t, 'swarmOut.state.sessionUnknown', 'session not named');
+  if (state === 'unknown' && r.state_reason === 'hive_updating') return tf(t, 'swarmOut.state.unknownUpdating', 'the Hive is updating');
   return tf(t, `swarmOut.state.${state}`, state);
 }
 

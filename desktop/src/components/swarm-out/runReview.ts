@@ -21,9 +21,10 @@
  * and offers only "open session".
  */
 import i18n from '../../i18n';
-import type { SwarmOutAction, SwarmOutAsk, SwarmOutCommand, SwarmOutResult, SwarmOutRun, SwarmOutStage } from '../../services/swarmOut';
+import type { SwarmOutAction, SwarmOutAsk, SwarmOutClosedWhy, SwarmOutCommand, SwarmOutResult, SwarmOutRun, SwarmOutStage } from '../../services/swarmOut';
 import { judgeState, type JudgeState } from './judge';
 import { brainLabel, checkStatus, interventionsOf, runJudge } from './live';
+import { TONE_VAR } from './tone';
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -35,10 +36,28 @@ const ms = (iso: string | null | undefined): number => {
 /** The run's stage: the backend's, else (an older dispatch) from its Hive state. */
 export function stageOf(r: SwarmOutRun): SwarmOutStage {
   if (r.stage) return r.stage;
-  const waiting = r.state ? r.state === 'waiting' : r.waiting;
-  if (waiting) return 'needs_answer';
-  if (r.state === 'running' || (r.state === undefined && r.running === true)) return 'running';
+  if (r.state === 'waiting') return 'needs_answer';
+  if (r.state === 'running') return 'running';
   return 'stopped';
+}
+
+/** Each stage's colour in the big card's header; a closed run (whatever closed it) is muted. */
+export const STAGE_TONE: Record<SwarmOutStage, string> = {
+  running: TONE_VAR.busy, needs_answer: TONE_VAR.attention, awaiting: TONE_VAR.attention, stopped: TONE_VAR.error,
+  accepted: TONE_VAR.ok, closed: 'var(--color-text-muted)',
+};
+
+/** Why a closed run is closed, each with its own name (its ``why``). */
+export const CLOSED_WHYS: readonly SwarmOutClosedWhy[] = ['discarded', 'reverted', 'expired', 'hive_gone'];
+
+/** A stage in the person's words. A closed run is named by its reason (Discarded,
+ *  Reverted, Expired, Hive gone); a reason this build does not know reads "Closed". */
+export function stageLabel(stage: SwarmOutStage, why?: string | null): string {
+  if (stage === 'closed') {
+    return why && (CLOSED_WHYS as readonly string[]).includes(why)
+      ? i18n.t(`swarmOut.review.closed.${why}`) : i18n.t('swarmOut.review.stage.closed');
+  }
+  return i18n.t(`swarmOut.review.stage.${stage}`);
 }
 
 /** The run's commands in their order: the backend's; an older dispatch only opens. */
@@ -51,7 +70,7 @@ export const actionOf = (r: SwarmOutRun, key: SwarmOutCommand): SwarmOutAction |
   actionsOf(r).find((a) => a.key === key);
 
 /** The settled stages: nothing is asked of anyone any more. */
-export const DONE_STAGES: readonly SwarmOutStage[] = ['accepted', 'discarded', 'expired'];
+export const DONE_STAGES: readonly SwarmOutStage[] = ['accepted', 'closed'];
 const YOU_ORDER: readonly SwarmOutStage[] = ['needs_answer', 'awaiting', 'stopped'];
 
 /** The open questions of the run's session (the Hive wrote them; the card answers them). */
@@ -205,7 +224,7 @@ export function taskTag(r: SwarmOutRun): { key: 'answer' | 'awaiting' | 'stopped
   if (r.funnel?.ask?.state === 'open') return { key: 'ask', text: i18n.t('swarmOut.review.tag.ask') };
   if (r.needs_person === false) return null;          // the agent's: the row says where it is
   if (stage === 'needs_answer') return { key: 'answer', text: i18n.t('swarmOut.review.tag.answer') };
-  if (stage === 'stopped') return { key: 'stopped', text: i18n.t('swarmOut.review.stage.stopped') };
+  if (stage === 'stopped') return { key: 'stopped', text: stageLabel('stopped') };
   if (stage !== 'awaiting') return null;
   return { key: 'awaiting', text: i18n.t('swarmOut.review.tag.awaiting', { what: deliveredWhat(r) }) };
 }

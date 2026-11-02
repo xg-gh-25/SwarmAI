@@ -377,7 +377,7 @@ def test_f5_unreachable_hive_keeps_unknown(tmp_path, monkeypatch):
     monkeypatch.setattr(swarm_out, "_order_state", no_answer)
     asyncio.run(swarm_out._find_sessions([row], {"h1": "running"}))
     assert swarm_out.run_state(row, "running", None, False) == ("unknown", "no_session_id")
-    assert act.discard_blocker({**row, "state": "unknown", "running": None}) is not None
+    assert act.discard_blocker({**row, "state": "unknown"}) is not None
 
 
 def test_a_lost_session_is_found_or_the_run_reads_not_started(tmp_path, monkeypatch):
@@ -396,8 +396,7 @@ def test_a_lost_session_is_found_or_the_run_reads_not_started(tmp_path, monkeypa
             assert swarm_out_settle.load(r["dispatch_id"])["session_found"] == "s-found"   # kept for the next refresh
         else:
             assert swarm_out.run_state(r, "running", None, False) == ("stopped", "not_started")
-            assert act.discard_blocker({**r, "state": "stopped", "state_reason": "not_started",
-                                        "running": False}) is None
+            assert act.discard_blocker({**r, "state": "stopped", "state_reason": "not_started"}) is None
 
 
 # ── F6: a pin refused for its revision is not sent again ────────────────────
@@ -572,7 +571,7 @@ def test_a_lost_session_is_asked_again_until_claimed_and_a_gone_order_stays_unkn
     r = dict(row)
     asyncio.run(swarm_out._find_sessions([r], {"h1": "running"}))
     assert not r.get("not_started")                          # an old answer does not let a discard through
-    assert act.discard_blocker({**r, "state": "unknown", "running": None}) is not None
+    assert act.discard_blocker({**r, "state": "unknown"}) is not None
     state["st"] = {"exists": True, "claimed": True, "session_id": "sess-late-0001"}
     r = dict(row)
     asyncio.run(swarm_out._find_sessions([r], {"h1": "running"}))

@@ -33,14 +33,14 @@ export interface SwarmOutActivity {
 /** Runs the Hive says wait on the person whose question has not reached this Host. */
 export function waitingUnasked(d: SwarmOutRuns) {
   const asked = new Set(d.asks.map((a) => `${a.hive_id}/${a.session_id}`));
-  return d.runs.filter((r) => (r.state ? r.state === 'waiting' : r.waiting) && !asked.has(`${r.hive_id}/${r.session_id}`));
+  return d.runs.filter((r) => r.state === 'waiting' && !asked.has(`${r.hive_id}/${r.session_id}`));
 }
 
 /** A run that waits on the person to decide it (backend core/swarm_out_settle: stage
  *  awaiting, or stopped with a command to give), or whose records go within 3 days
  *  unsettled; never a run waiting on a question (that one is counted by its ask). */
 export function toSettle(r: SwarmOutRun): boolean {
-  if (r.settle?.settled || (r.state ? r.state === 'waiting' : r.waiting)) return false;
+  if (r.settle?.settled || r.state === 'waiting') return false;
   const decides = (r.actions ?? []).some((a) => a.key !== 'open_session');
   return ((r.stage === 'awaiting' || r.stage === 'stopped') && decides) || !!r.cleanup_soon;
 }
@@ -48,7 +48,7 @@ export function toSettle(r: SwarmOutRun): boolean {
 export function activityOf(d: SwarmOutRuns): SwarmOutActivity {
   return {
     waiting: d.asks.filter((a) => !a.refused).length + waitingUnasked(d).length + d.runs.filter(toSettle).length,
-    running: d.runs.filter((r) => r.running === true && !r.waiting).length,
+    running: d.runs.filter((r) => r.state === 'running').length,
   };
 }
 

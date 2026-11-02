@@ -41,7 +41,7 @@ import { JudgeTag } from './JudgeTag';
 import { agentFacts, autonomyLine, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
 import { RunList } from './RunList';
 import { RunOverlay } from './RunOverlay';
-import { actionsOf, stageOf } from './runReview';
+import { actionsOf, stageLabel, stageOf } from './runReview';
 import { waitingUnasked } from './useSwarmOutActivity';
 import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
 
@@ -271,7 +271,7 @@ function ReviewLine({ r }: { r: SwarmOutRun }) {
   if (!asks || !['needs_answer', 'awaiting', 'stopped', 'running'].includes(stage)) return null;
   return (
     <div className="mt-2 pt-2 border-t border-[var(--color-border)] flex items-center gap-2 text-[12.5px]" data-testid="swarm-out-review-line" data-stage={stage}>
-      <span className="font-medium" style={{ color: stage === 'stopped' ? TONE_VAR.error : stage === 'running' ? TONE_VAR.busy : TONE_VAR.attention }}>{t(`swarmOut.review.stage.${stage}`)}</span>
+      <span className="font-medium" style={{ color: stage === 'stopped' ? TONE_VAR.error : stage === 'running' ? TONE_VAR.busy : TONE_VAR.attention }}>{stageLabel(stage, r.why)}</span>
       {r.cleanup_soon && <span className="text-[12px]" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-cleanup-soon">{t('swarmOut.review.cleanupSoon')}</span>}
     </div>
   );

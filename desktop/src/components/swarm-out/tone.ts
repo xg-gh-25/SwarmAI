@@ -47,9 +47,8 @@ export function endedTone(res: SwarmOutResult): Tone {
 /** A run's tone: waiting on the person, running, else how it ended (unknown when its
  *  Hive has not said). */
 export function runTone(r: SwarmOutRun): Tone {
-  const state = r.state ?? (r.waiting ? 'waiting' : r.running === true ? 'running' : r.running === false ? 'stopped' : 'unknown');
-  if (state === 'waiting') return 'attention';
-  if (state === 'running') return 'busy';
+  if (r.state === 'waiting') return 'attention';
+  if (r.state === 'running') return 'busy';
   if (r.result) return endedTone(r.result);
   return 'unknown';
 }
