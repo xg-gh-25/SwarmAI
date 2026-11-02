@@ -3,7 +3,7 @@ title: Hive run 的决定 — 一个漏斗：agent 先判，落到 host 上的�
 created: 2026-11-02
 updated: 2026-11-02
 project: SwarmAI
-status: r3 design only（无代码）。r2 的路径分类、重写、逐路径标注全部撤掉，按 XG 的漏斗重写；未送审
+status: r3.1 design only（无代码）。r2 的路径分类、重写、逐路径标注全部撤掉，按 XG 的漏斗重写；未送审
 tags: [swarm-out, hive, accountability, traceability, autonomy, zero-touch]
 related:
   - docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md（agent 对自己派的单下命令，命令带理由）
@@ -79,7 +79,21 @@ flowchart TD
 
 - 每条由执行这个决定的命令在同一个锁里写，不靠 agent 记得去写。人的命令（面板上的通过、撤回、留着）也写一条。
 - 去掉 50 条上限（AGENT R23）。
-- 大卡片的"自主"页改成"决定"页：一条时间线，一关一行。`ask_person` 那条用琥珀色，写全 `for_person`。列表行照旧只显示"人介入 N 次"。
+### 3.1 卡上怎么看（mock：`Knowledge/Mockups/2026-11-02-hive-run-decision-funnel.html`，四个场景）
+
+卡回答一个问题："这一单走到漏斗哪一关了，有没有要我做的？"不新做卡片，复用 RunList 和 RunOverlay，只加三样：
+
+- **标题下一行就是漏斗：** 例如 `✓ 审 agent 09:52 → ✓ 落到 main e9c1b37 · 09:55 → ✓ 判 agent 通过 09:58 · 之前打回过 1 次`。只写已经过的关和当前这一关，
+  每关写谁、什么时候；落地那关给出 commit 或 Brain 里的文件，点了看内容。不列还没到的关。只有"判不了，等你定"这一关用琥珀色。
+- **"自主"页改名"决定"页：** 按关分组（派发和执行 / 审 / 落到 host / 判），一行一个决定："时间 · 谁（agent / 人 / 产品）· 定了什么 · 理由"；点一行展开
+  `observed`。代答的等待是"派发和执行"组里的一行，不再单独列。pipeline 单的 Autonomy Judge 照旧放在这一页最上面。
+- **给人的那张卡：** 放在今天"等待"卡的位置（标签页上方），琥珀色，内容就是 `for_person`：一个问题、已经落在哪、agent 的判断、为什么定不了、撤回会怎样。
+  右侧命令面板只有"留着""撤回"两个动作，加一个可选的多行输入框给 agent 补一句。
+- **列表行：** 字段不变，状态词说漏斗位置（Hive 在做 / agent 在审 / 在落地 / 已落到 main · agent 在判 / agent 已通过 / agent 已丢弃）。"等你"分区只剩一种：
+  已落地、agent 判不了的，标签"定：留着还是撤回"。自主度标签照旧只数人的决定。
+- 验收条去掉琥珀色底：琥珀色只留给要人做的事（`tone.ts` 的规矩）。
+
+非代码 run 的文件在交回时由产品自动放进 Brain（`hive_files.place`），所以它的漏斗是 `✓ 落到 Brain（自动）→ ✓ 审 → ✓ 判`，"落到 host"在审之前就过了。
 - Swarm Run 的 lead run 对子单的处理就是子单记录里的 `by: agent` 条目，不另记 `child_action`。
 
 ## 4. 不做
@@ -120,3 +134,4 @@ flowchart TD
 - r3（2026-11-02）：XG："别搞复杂了，我要的是个漏斗决策。"改成三关：agent 审 → 落到 host（落不到就重跑、接手或丢弃，绝不给人）→ agent 判（判不了才给人，
   带上 agent 的判断和原因）。代码和非代码一个道理。撤掉 r2 的路径分类、重写、逐路径标注和结单核对；agent 能直接落受保护路径，只保留 `GIT_PROTECTED` 一条底线；
   Needs You 不再收没落到 host 的单子；新增 `ask-person`，只对已落地的结果可用。
+- r3.1（2026-11-02）：XG："run card 上要有这个决策漏斗信息。"加 §3.1 卡上怎么看和 mock：标题下一行漏斗、"决定"页按关分组、给人的卡、列表行的状态词。
