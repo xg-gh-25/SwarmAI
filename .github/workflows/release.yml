@@ -72,15 +72,15 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -154,7 +154,7 @@ jobs:
             "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" out
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: installer-${{ matrix.name }}
           path: out/*
@@ -168,16 +168,16 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
       # A Hive installs with python3.12 (backend/hive/user_data.py); the smoke test does too.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -220,7 +220,7 @@ jobs:
         run: mv dist/checksums.txt "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz.sha256"
 
       - name: Upload the Hive package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hive-package
           path: |
@@ -260,12 +260,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           sparse-checkout: scripts/verify_installer.sh
           sparse-checkout-cone-mode: false
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: installer-${{ matrix.name }}
           path: installer
@@ -282,17 +282,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for the latest.json generator script)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download all installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: installer-*
           path: artifacts
 
       # Kept out of artifacts/: the updater manifest is generated from that directory only.
       - name: Download the Hive package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: hive-package
           path: hive-package
@@ -316,7 +316,7 @@ jobs:
           cat release/latest.json
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: "v${{ needs.prepare.outputs.version }}"
           name: "SwarmAI v${{ needs.prepare.outputs.version }}"

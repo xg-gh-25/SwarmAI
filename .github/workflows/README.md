@@ -158,7 +158,7 @@ npm run build:all
 Edit the workflow file:
 ```yaml
 - name: Setup Python
-  uses: actions/setup-python@v5
+  uses: actions/setup-python@v6
   with:
     python-version: '3.12'  # Change version here
 ```

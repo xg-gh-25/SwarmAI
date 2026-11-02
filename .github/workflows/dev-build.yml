@@ -23,17 +23,17 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -102,7 +102,7 @@ jobs:
           ls -lh desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ || true
 
       - name: Upload DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-aarch64-dmg
           path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
@@ -110,7 +110,7 @@ jobs:
           retention-days: 7
 
       - name: Upload tar.gz (updater)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-aarch64-updater
           path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.tar.gz
@@ -122,15 +122,15 @@ jobs:
     if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -192,7 +192,7 @@ jobs:
           ls -lh desktop/src-tauri/target/release/bundle/msi/ || true
 
       - name: Upload NSIS installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-x64-nsis
           path: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
@@ -200,7 +200,7 @@ jobs:
           retention-days: 7
 
       - name: Upload MSI installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-x64-msi
           path: desktop/src-tauri/target/release/bundle/msi/*.msi

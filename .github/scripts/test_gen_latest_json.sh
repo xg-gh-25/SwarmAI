@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test for gen-latest-json.sh — drives the REAL script against fixture artifact trees laid
-# out like actions/download-artifact@v4 (installer-<target>/ per release target, as written by
+# out like actions/download-artifact@v7 (installer-<target>/ per release target, as written by
 # collect-installer.sh). Asserts the emitted latest.json's contents; every target is required.
 #
 # Run: bash .github/scripts/test_gen_latest_json.sh
