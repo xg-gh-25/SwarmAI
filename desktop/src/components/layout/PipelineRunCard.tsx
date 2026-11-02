@@ -144,11 +144,14 @@ export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onRe
   const meta = [d?.project, d?.profile, id, d?.createdAt ? t('ui.PipelineOverlay.started', { when: when(d.createdAt) }) : null]
     .filter(Boolean).join(' · ');
 
+  // pt-11: the macOS title bar overlays the top 28px of the window (TitleBarStyle::Overlay,
+  // src-tauri/src/lib.rs); the card starts 16px below it, and its height is a share of the
+  // scrim's own box (100%), not of the viewport height, so the whole card stays in view.
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'color-mix(in srgb, black 55%, transparent)' }}
+    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4 pb-4 pt-11" style={{ background: 'color-mix(in srgb, black 55%, transparent)' }}
       onMouseDown={(e) => { if (e.target === e.currentTarget && mode === 'list') onClose(); }} data-testid="pipeline-card-overlay">
       <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} onClickCapture={markClick}
-        className="flex flex-col w-[1240px] max-w-full h-[min(880px,calc(100vh-32px))] rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl overflow-hidden text-body outline-none"
+        className="flex flex-col w-[1240px] max-w-full h-[min(880px,100%)] rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl overflow-hidden text-body outline-none"
         data-testid="pipeline-card">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-[var(--color-border)] min-w-0">
           <div className="min-w-0 flex-1 basis-[280px]">

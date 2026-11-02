@@ -91,6 +91,16 @@ describe('Layout viewport lock — ERROR behavior (must NOT happen)', () => {
     expect(layoutFile).toMatch(/className="[^"]*h-full[^"]*"/);
   });
 
+  it.each(['src/components/swarm-out/RunOverlay.tsx', 'src/components/layout/PipelineRunCard.tsx'])(
+    'the big run card in %s must NOT sit under the macOS title bar (was: p-4 + 100vh height, title hidden)', (file) => {
+      const src = readFileSync(resolve(PROJECT_ROOT, file), 'utf-8');
+      // the window's title bar overlays its top 28px (TitleBarStyle::Overlay): the scrim
+      // keeps the card 44px down, and the card's height is a share of the scrim, not of 100vh
+      expect(src).toMatch(/className="fixed inset-0 z-\[60\][^"]*\bpt-11\b[^"]*"/);
+      expect(src).toMatch(/h-\[min\(880px,100%\)\]/);
+      expect(src).not.toMatch(/100vh/);
+    });
+
   it('ChatInput must NOT lack flex-shrink-0 (was: input area compressed by flex)', () => {
     const chatInputFile = readFileSync(
       resolve(PROJECT_ROOT, 'src/pages/chat/components/ChatInput.tsx'), 'utf-8'
