@@ -58,7 +58,7 @@ status: r2（一次零上下文审查后修订），待 XG 确认后实施
    - 写完后走现有后半段：`bind_project` → 文档索引和 survey → Project Agent 重新起草。
 3. **提示词和文档。** `newBrainDispatch.ts:222-223`、`:260` 和 SKILL.md P3 一行，URL 都改成 `bind --url`。
 
-**测试（先红后绿；拒绝类用例断言具体错误文字，不能只看退出码，否则今天 argparse 不认 `--url` 也会"通过"）。** `tests/test_local_binding.py`（扩展）与 `tests/test_artifact_cli_bind_url.py`：
+**测试（先红后绿；拒绝类用例断言具体错误文字，不能只看退出码，否则今天 argparse 不认 `--url` 也会"通过"）。** 新增 `tests/test_local_binding.py`（今天没有任何测试覆盖 `record()`）与 `tests/test_artifact_cli_bind_url.py`：
 - `file://` 指向临时 bare repo：新建 `bindings.yaml`，`load_bindings` 读得回，一条 binding，`remote_kind: self-hosted-main`，分支等于 bare repo 的默认分支。
 - `https://github.com/…`（用 `--branch` 跳过网络）：`remote_kind: github-pr`、`auto_send: manual-push`。
 - 已有 `bindings.yaml`（带 `jobs:`、没有 `bindings:` 键，CMHK 的形状）：追加后能读回，`jobs` 不变，`.bak` 存在。
