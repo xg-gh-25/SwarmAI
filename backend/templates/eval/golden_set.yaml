@@ -1090,7 +1090,7 @@ cases:
       \nThese are the instructions the brain-building skill gives for writing those entries. The entry contract\
       \ they mention is already written at the path above, and here you cannot run commands or write files: your\
       \ reply is the entries file.\n\n#### Writing a new brain's first entries (P2b)\n\nFirst get the format: `\"\
-      $SWARM_BACKEND_BIN\" py scripts/artifact_cli.py entry-contract\n--project <P>` prints it and writes `Projects/<P>/.artifacts/bootstrap/entry-contract.json`.\n\
+      $SWARM_BACKEND_BIN\" py -m scripts.artifact_cli entry-contract\n--project <P>` prints it and writes `Projects/<P>/.artifacts/bootstrap/entry-contract.json`.\n\
       It is generated from the rules `bootstrap-apply` enforces: the file's shape, the fields of\neach kind, the\
       \ fields each type requires and what they mean, the types each section takes,\nthe source forms, the limits,\
       \ and `repos.owned` — the repos this brain can cite (none, for\na pure-knowledge brain: cite only `file:`,\
@@ -1187,7 +1187,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 861e88bbfb4cb58f
+  validated_by_4gate: 12bb9be9f8b0f728
 - id: OFF_BRAIN_FIRST_ENTRIES_ADR
   category: ddd
   dimension: cognition
@@ -1213,7 +1213,7 @@ cases:
       \nThese are the instructions the brain-building skill gives for writing those entries. The entry contract\
       \ they mention is already written at the path above, and here you cannot run commands or write files: your\
       \ reply is the entries file.\n\n#### Writing a new brain's first entries (P2b)\n\nFirst get the format: `\"\
-      $SWARM_BACKEND_BIN\" py scripts/artifact_cli.py entry-contract\n--project <P>` prints it and writes `Projects/<P>/.artifacts/bootstrap/entry-contract.json`.\n\
+      $SWARM_BACKEND_BIN\" py -m scripts.artifact_cli entry-contract\n--project <P>` prints it and writes `Projects/<P>/.artifacts/bootstrap/entry-contract.json`.\n\
       It is generated from the rules `bootstrap-apply` enforces: the file's shape, the fields of\neach kind, the\
       \ fields each type requires and what they mean, the types each section takes,\nthe source forms, the limits,\
       \ and `repos.owned` — the repos this brain can cite (none, for\na pure-knowledge brain: cite only `file:`,\
@@ -1316,7 +1316,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 487d6a9c65f288af
+  validated_by_4gate: 17d395d142d0815e
 - id: OFF_BRAIN_FIRST_ENTRIES_KNOWLEDGE
   category: ddd
   dimension: cognition
@@ -1338,7 +1338,7 @@ cases:
       \ to you. Reply with only a ```json block holding the content of the entries file.\n\nThese are the instructions\
       \ the brain-building skill gives for writing those entries. The entry contract they mention is already written\
       \ at the path above, and here you cannot run commands or write files: your reply is the entries file.\n\n\
-      #### Writing a new brain's first entries (P2b)\n\nFirst get the format: `\"$SWARM_BACKEND_BIN\" py scripts/artifact_cli.py\
+      #### Writing a new brain's first entries (P2b)\n\nFirst get the format: `\"$SWARM_BACKEND_BIN\" py -m scripts.artifact_cli\
       \ entry-contract\n--project <P>` prints it and writes `Projects/<P>/.artifacts/bootstrap/entry-contract.json`.\n\
       It is generated from the rules `bootstrap-apply` enforces: the file's shape, the fields of\neach kind, the\
       \ fields each type requires and what they mean, the types each section takes,\nthe source forms, the limits,\
@@ -1437,4 +1437,4 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 2e277e2463f0a480
+  validated_by_4gate: c5dec5d8b768749d
