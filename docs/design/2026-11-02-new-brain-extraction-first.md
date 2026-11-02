@@ -2,7 +2,7 @@
 title: New Brain setup — extraction first: the knowledge standard reaches whoever writes
 created: 2026-11-02
 updated: 2026-11-02
-status: r1 — design, for XG to read
+status: implemented (r1.1; XG 2026-11-02 "按这份设计开始实现")
 principle: SWARMAI.md "What a DDD is for, and how it stays true" — quality is made at extraction; checks stay light
 related:
   - docs/design/2026-10-27-new-brain-initial-ddd.md      # bootstrap-apply, survey, the offline eval
@@ -77,6 +77,13 @@ gbrain 建 Brain（2026-11-02）时，三类错误写进了首批知识，P6 全
 | E4 | `eval_fixture_brains --check` 无漂移；新 trap 出现在生成的用例里 |
 
 收尾：上述测试 + 被改函数的直接调用方（`test_brain_bootstrap*`、`test_project_agent_draft*`、`test_cdf_s7_*`、`test_eval_bootstrap_entries`），各跑一次。每条修复做 mutation check。不跑全量。
+
+## 4.1 实施时与 r1 的不同（一轮零上下文前提审查之后）
+
+- **E1：** S7 原文是手工换行的，第 3、6 点用代码换行无法逐字节还原；现在保证用词逐字相同，换行可能不同（`prompt_hash` 变一次）。共享句子保留 S7 的原措辞（"unit""who was not here"），contract 里照原文读。
+- **E2：** `read_whole` 列的是 tier-2/3 文档和没内嵌的 tier-1 文档：漏读的是 tier-2/3（`SKILL.md` Step 4 原话），tier-1 本来就整篇内嵌。eval fixture 生成 contract 时传入 survey，和真实 Brain 一致。`SKILL.md` P2b 保留"A PRODUCT section holds only what…"一段（eval 用例逐字嵌入 P2b，有测试钉着）。
+- **E3：** 去重同时放在默认挑选（`_default_commands`，让 `dropped` 不出现噪音）、提案（`command_rows`）和重新起草的合并（`_merge` → `_one_per_check`，旧草稿里已有的重复也会去掉）。子目录形式 `(cd sub && npm run test)` 与 `cwd=sub` 的 `npm test` 不在本次范围内。
+- **E4：** 在 tokensign 的 README 加安装自检和当前版本两句，并在答案键 `facts` 里记下它们，版本与 `pyproject.toml` 一致（2.1.0）。
 
 ## 5. 顺序与大小
 
