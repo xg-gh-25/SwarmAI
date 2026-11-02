@@ -219,7 +219,10 @@ def _ensure_link_file(content: str, target: Path) -> str:
 
 def _timeline_section(group: Mapping[str, Any]) -> str:
     """The TIMELINE section an event goes under: its month, or "Not injected" when it
-    cites external content (the plan's anchor names the same section)."""
+    cites external content (the plan's anchor names the same section). No event is
+    injected; the month summaries are, and the summary lane reads only the month
+    sections, so an event citing external content stays out of the injected summary by
+    being placed here."""
     if group.get("cited_external"):
         return "Not injected"
     return str(group.get("when") or _now().date().isoformat())[:7]
@@ -420,7 +423,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
         event_key = str(group.get("event_key") or
                         _decision_value(decision, "version_vector", {}).get("event_key", ""))
         # each field on its own line: a line break inside one would start a heading,
-        # i.e. a forged event, in a file read every turn
+        # i.e. a forged event (or month summary, which the prompt carries)
         lines = [f"### {_one_line(group.get('when', today))} {_one_line(title)}",
                  f"- what: {_one_line(group.get('what', fallback_body))}"]
         for name in ("impact", "outcome"):

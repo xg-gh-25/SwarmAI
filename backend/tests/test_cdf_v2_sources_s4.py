@@ -38,7 +38,8 @@ def test_s4_excludes_run_landed_commit_before_extraction(monkeypatch):
     out = s4_code.extract_commits(
         commits, run_landed_commits={"run-owned"}, project_hint="P",
         root_ids=("root:manual",), llm=FakeLLM())
-    assert len(out) == 2 and len(calls) == 2 and len(attempts) == 1
+    # the event in the reply is not enqueued: S4 writes cognition only
+    assert len(out) == 1 and len(calls) == 1 and len(attempts) == 1
     assert all(call[0][0] == "S4" for call in calls)
     assert roots == [("commit", "repo:demo:manual", "manual architecture patch", "external")]
     assert all(call[1]["read_root_ids"] == ("root:registered", "root:manual") for call in calls)

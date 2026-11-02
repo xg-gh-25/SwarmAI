@@ -162,6 +162,21 @@ def timeline_entries(workspace: Path) -> list[Entry]:
     return _entries_of(path, Path(workspace)) if path.is_file() else []
 
 
+def closest_events(query: str, workspace: Path | None = None, *, top: int = TOP) -> list[str]:
+    """The TIMELINE events closest to *query* (BM25), as the ``<id> | <first line>`` refs
+    an event declares ``same`` with: shown to a writer of events that has no other view of
+    the timeline (a run's report, ``pipeline-v1 events``), so work already recorded by a
+    session review is declared the same instead of written again. No query, no events."""
+    if workspace is None:
+        from config import get_swarmws
+        workspace = Path(get_swarmws())
+    if not (query or "").strip():
+        return []
+    events = [e for e in timeline_entries(workspace)
+              if "month_summary" not in e.text and "month_supplement" not in e.text]
+    return [e.shown() for e in candidates(query, events, top=top)]
+
+
 def withdrawn_entries(records) -> list[Entry]:
     """The completed withdrawals (``withdrawn.records``) as entries a unit may be declared
     against: one the user withdrew is refused when declared the same, one closed or done

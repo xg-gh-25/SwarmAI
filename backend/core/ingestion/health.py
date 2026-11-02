@@ -94,9 +94,14 @@ DESTINATIONS: dict[str, tuple[str, float, str]] = {
             "an open gap of a project: a problem still to solve. Useful when it names a concrete "
             "problem and what would close it; describing how things stand now is what a gap is, "
             "not a status note."),
-    "TIMELINE": ("every_turn", 0.95,
-                 "the timeline of events, read in every session and for later retrospectives. Useful "
-                 "when it says what happened and its outcome; an event needs no cause or lesson."),
+    "TIMELINE": ("on_demand", 0.9,
+                 "the timeline of events, read when the work looks back (retrospectives, when and "
+                 "why something changed); only its month summaries reach every session. Useful "
+                 "when it records a decision (and why), a milestone, an incident (and how it was "
+                 "resolved) or real rework that no other event of the timeline already records; "
+                 "a copy of a commit line, one step of a larger deliverable, or a status (where "
+                 "the work sits: pushed, on local main, under review, in progress) is not useful. "
+                 "An event needs no cause or lesson."),
     "REFERENCE": ("other", 0.9,
                   "a reference: a source the next session cannot otherwise find (an external link, a "
                   "measurement or result that only appeared in a conversation); never a copy or "

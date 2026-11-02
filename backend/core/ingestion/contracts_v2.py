@@ -306,16 +306,38 @@ SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 # ── card 1 v2 answers (re-check) ──────────────────────────────────────────────
-# TIMELINE is injected every turn, so an event must change how the work stands. Stated
-# by both extraction prompts (extract_llm, s7_review) and the card 1 event check.
+# TIMELINE is read when the work looks back (retros, "when and why did this change"); only
+# its month summaries reach the prompt (memory_injection.select_timeline), and they are
+# drawn from the events. So an event must change how the work stands, one per piece of
+# work. Stated by both extraction prompts (extract_llm, s7_review) and the run report card.
 EVENT_RULE = ("An event is recorded only when it changes how the work stands: a deliverable "
               "the user asked for landed, a decision or change of direction (and why), a "
               "milestone, an incident (and how it was resolved), real loss or rework, "
               "worded as it stands at the end. Routine operations are not events whether "
               "they succeed or fail: a build, a restart, a deploy, an install, a test run, "
-              "checking a result, dispatching the next step of a plan. An event is never a "
-              "status (not pushed, not built) and never work still to do: open work is a "
-              "ToDo, written by the session's own activity summary.\n")
+              "checking a result, dispatching the next step of a plan. The steps of one "
+              "deliverable are one event, not one each: its notes, docs, copies, CI fixes, "
+              "review rounds and design revisions belong to the event of what it delivered. "
+              "An event is never a status and never work still to do: an outcome that only "
+              "says where the work sits (on local main, pushed, under review, in progress, "
+              "waiting for a build) is a status, so state what changed instead, or record "
+              "no event. A title states what changed, never a commit subject (fix(x): ...). "
+              "Open work is a ToDo, written by the session's own activity summary.\n")
+# A conventional-commit subject: a commit type (``fix: …``, ``test(conftest): …``,
+# ``release: …``) or any lowercase word with a scope (``brain(x): …``), then ``:``. The
+# shape of a commit line, which git already records; an event titled so is a commit
+# copied into the timeline. Reads the shape only, so it holds whatever language the rest
+# of the title is in; a plain lead word (``v2: …``, ``e2e: …``) is not a commit subject.
+COMMIT_SUBJECT = re.compile(
+    r"^\s*(?:(?:feat|fix|docs|style|refactor|perf|test|tests|build|ci|chore|revert|release)"
+    r"(?:\([^)\n]*\))?|[a-z][a-z0-9-]*\([^)\n]*\))!?:\s")
+
+
+def commit_shaped(title: str | None) -> bool:
+    """Whether an event *title* has the shape of a conventional-commit subject."""
+    return bool(COMMIT_SUBJECT.match(title or ""))
+
+
 def event_date_rule() -> str:
     """The date an event falls back to: with none in the source the model invented one
     (2025-01-01T00:00:00), which filed the event under a month of its own."""
@@ -454,9 +476,12 @@ EvidenceRootKind = Literal[
 ]
 
 # ── sources (§5.2) ────────────────────────────────────────────────────────────
-SourceId = Literal["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]  # S0 = system summaries (summary lane)
+SourceId = Literal["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]  # S0 = system summaries (scheduled lane)
 SOURCES_V2: dict[str, dict] = {
-    "S0": {"name": "system_summary", "lane": "summary"},  # TIMELINE month summaries only
+    # S0 writes TIMELINE month summaries only. Its candidates use the scheduled lane: the
+    # inbox admits only immediate/session/run/scheduled/maintenance, and a lane of its own
+    # was refused there, so no summary was ever stored.
+    "S0": {"name": "system_summary", "lane": "scheduled"},
     "S1": {"name": "user_directive", "lane": "immediate"},
     "S2": {"name": "session", "lane": "session"},
     "S3": {"name": "run", "lane": "run"},

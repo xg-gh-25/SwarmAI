@@ -29,13 +29,11 @@ from .store import connect_rw
 logger = logging.getLogger(__name__)
 
 LANE_WEIGHTS: dict[Lane, int] = {
-    "immediate": 8, "session": 4, "run": 4, "scheduled": 2,
-    "summary": 2, "maintenance": 1,
+    "immediate": 8, "session": 4, "run": 4, "scheduled": 2, "maintenance": 1,
 }
 MAX_WAIT = {
     "session": timedelta(minutes=30), "run": timedelta(minutes=30),
-    "scheduled": timedelta(hours=12), "summary": timedelta(hours=36),
-    "maintenance": timedelta(hours=36),
+    "scheduled": timedelta(hours=12), "maintenance": timedelta(hours=36),
 }
 TERMINAL_STATES = frozenset({
     "merged", "written", "reinforced", "rejected", "failed_poison", "expired_unprocessed",
@@ -698,15 +696,20 @@ class IngestionWorker:
     def run_once(self, conn: sqlite3.Connection) -> bool:
         """Process one eligible candidate selected by lane policy."""
         now = _utcnow()
-        # The summary lane never starves the other lanes: refused, failed or idle, the
-        # rest of this pass still runs.
-        summary_lane = "summary"  # frozen v1 Lane typing does not include v2 yet
-        if now >= self._summary_due and ingestion_admission(summary_lane).run:  # type: ignore[arg-type]
+        # The month-summary pass never starves the other lanes: refused, failed or idle,
+        # the rest of this pass still runs. It is admitted like the scheduled lane its
+        # candidates are stored in (contracts_v2.SOURCES_V2["S0"]).
+        if now >= self._summary_due and ingestion_admission("scheduled").run:
             try:
                 worked = self._summary_lane.run_due(conn, now=now)
             except Exception as exc:
-                logger.warning("CDF summary lane failed; retrying: %s", exc)
-                self._summary_due = now + timedelta(minutes=5)
+                # a passing failure (the model or the store busy) is retried soon; once it
+                # has failed three times in a row (summary_failed is raised) it is the same
+                # failure each time, and each retry is a model call: try again next day
+                again = (timedelta(minutes=5) if self._summary_lane.consecutive_failures < 3
+                         else timedelta(days=1))
+                logger.warning("CDF summary lane failed; retrying in %s: %s", again, exc)
+                self._summary_due = now + again
                 worked = False
             else:
                 self._summary_due = now + timedelta(days=1)

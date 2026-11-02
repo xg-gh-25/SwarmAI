@@ -1,7 +1,9 @@
 """S4 code-change source for commits not landed by a pipeline run.
 
 The adapter accepts complete commit records, excludes run-owned SHAs before the LLM
-call, and emits taint-preserving Cognition or Event units through api_v2 only.
+call, and emits taint-preserving Cognition units through api_v2 only. It writes no
+events: the commit history already records what landed, and the events of that work come
+from the session review (S7) and the run report (S3) that hold its context.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from core.ingestion import api_v2
 from . import common
 from .extract_llm import EXTRACTOR_VERSION
 
-_ALLOWED = ("cognition", "event")
+_ALLOWED = ("cognition",)
 # characters of commit records per extractor call (s2_session.WINDOW_CHARS, the window
 # every extraction call reads)
 BATCH_CHARS = 150_000

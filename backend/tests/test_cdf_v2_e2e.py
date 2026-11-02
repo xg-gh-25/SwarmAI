@@ -592,7 +592,8 @@ def test_s3_real_pipeline_lands_reflects_and_writes_five_parts(
     assert "Observe report quality" in improvement
     assert "## What to Watch For" in improvement
     timeline = (rig.ws / ".context/TIMELINE.md").read_text(encoding="utf-8")
-    # the run's own event cites no external content: it is read every turn (cited_external)
+    # the run's own event cites no external content: it goes under its month, where the
+    # injected month summary reads it (cited_external)
     assert "Pipeline v1 landed CDF report" in timeline and "## Not injected" not in timeline
     _flow_is_read_only(rig.data)
 

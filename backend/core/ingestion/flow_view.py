@@ -30,14 +30,16 @@ from core.memory_guard import MemoryGuard
 from .contracts_v2 import PARKED_DEFER_REASONS
 from .queries import _MAX_FIELD_BYTES, _WINDOWS, _clip_utf8, _iso, _json, _table_exists, _utc_now
 
-# the files read in every turn; a project's DDD and the General Brain / Library are recalled
+# the .context files the prompt carries every turn (of TIMELINE, only its month summaries);
+# a project's DDD and the General Brain / Library are recalled
 EVERY_TURN_STORES = ("MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS", "TIMELINE")
 PROJECT_STORES = ("DDD",)
 GENERAL_STORES = ("COMMON_DDD", "KNOWLEDGE")
 PLACES = {"every_turn": EVERY_TURN_STORES, "project": PROJECT_STORES, "general": GENERAL_STORES}
 
 # which decision step produced an outcome (pipeline_v2.run_unit_v2, worker, store migrations)
-_BASIC = frozenset({"noisy", "credentialed_url", "malformed_payload"})
+# an event titled as a commit subject (contracts_v2.commit_shaped) is a shape check too
+_BASIC = frozenset({"noisy", "credentialed_url", "malformed_payload", "commit_title"})
 # a Hive lesson about a project other than its run's Brain (pipeline_v2: project_outside_brain)
 _PLACE = frozenset({"project_outside_brain"})
 # a project that did not exist was dropped before the General Brain took these (D7)

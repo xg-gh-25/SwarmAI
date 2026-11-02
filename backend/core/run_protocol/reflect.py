@@ -47,6 +47,11 @@ def _unit(section: str, raw: Any, *, allowed_anchors: set[str],
         raise ReflectError(f"not a contracts_v2 unit: {exc}") from exc
     if not _section_accepts(section, unit):
         raise ReflectError("wrong unit kind or cognition type for this section")
+    if getattr(unit, "kind", "") == "event" and contracts_v2.commit_shaped(unit.title):
+        # refused here, where the run's author sees it and can retitle it, rather than
+        # by CDF later, where the event (and the gaps it closes) would be lost silently
+        raise ReflectError("an event title states what changed, not a commit subject "
+                           "(fix(x): ...): retitle it")
     unknown = set(unit.evidence) - allowed_anchors
     if unknown:
         raise ReflectError(f"cites evidence outside this run: {sorted(unknown)}")

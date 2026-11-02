@@ -766,12 +766,15 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         destination = _home(unit, destination, corpus_project, subject,
                             cited_external=facts.cited_external)
     if destination.store == "TIMELINE":
-        # an event citing external content is not read every turn (writer: "Not injected")
+        # an event citing external content is kept out of the injected month summary
+        # (writer: "Not injected")
         destination = destination.model_copy(update={"injectable": not facts.cited_external})
     done = dict(vectors=vectors, card0=card0, destination=destination)
 
     event_key = None
     if isinstance(unit, EventUnit):
+        if unit.event_kind == "event" and contracts_v2.commit_shaped(unit.title):
+            return _decision(unit_id, "reject", "reject", "commit_title", **done)
         event_key = _event_key(unit, resolved.root_ids)
         if _event_known(root, event_key):
             return _decision(unit_id, "reject", "reject", "already_exists", **done)

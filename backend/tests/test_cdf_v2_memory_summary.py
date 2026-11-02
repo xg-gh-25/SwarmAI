@@ -40,12 +40,14 @@ def _conn():
 def test_monthly_summary_enqueued_through_v2_api(tmp_path, monkeypatch):
     conn = _conn()
     captured = []
-    monkeypatch.setattr(summary_lane, "_month_anchors", lambda *_: [".context/TIMELINE.md#2026-09#cand:e1"])
+    monkeypatch.setattr(summary_lane, "_month_units", lambda *_: [
+        (".context/TIMELINE.md#2026-09#cand:e1", "### 2026-09-03 Decided one writer")])
     monkeypatch.setattr(
         "core.ingestion.api_v2.enqueue_unit",
         lambda *args, **kwargs: captured.append((args, kwargs)) or _queued(),
     )
-    assert enqueue_month_summary(conn, tmp_path, "2026-09") == "month_summary"
+    writer = lambda month, kind, events: "- Decided one writer."  # noqa: E731
+    assert enqueue_month_summary(conn, tmp_path, "2026-09", writer=writer) == "month_summary"
     source, source_ref, unit = captured[0][0]
     assert source == "S0" and source_ref == "summary:2026-09"
     assert unit.event_kind == "month_summary"
@@ -53,8 +55,11 @@ def test_monthly_summary_enqueued_through_v2_api(tmp_path, monkeypatch):
 
 
 def test_summary_lane_scheduler_policy():
-    assert LANE_WEIGHTS["summary"] == 2
-    assert MAX_WAIT["summary"].total_seconds() == 36 * 60 * 60
+    # month summaries are stored in the scheduled lane: the inbox admits no lane of its own
+    from core.ingestion.contracts_v2 import SOURCES_V2
+    assert SOURCES_V2["S0"]["lane"] == "scheduled"
+    assert "summary" not in LANE_WEIGHTS and "summary" not in MAX_WAIT
+    assert MAX_WAIT["scheduled"].total_seconds() == 12 * 60 * 60
 
 
 def test_three_failures_raise_need_you_event(tmp_path, monkeypatch):
@@ -81,16 +86,19 @@ def test_late_month_event_enqueues_supplement(tmp_path, monkeypatch):
             "evidence": ["unit:.context/TIMELINE.md#2026-09#cand:e1"]
         }), "2026-10-01T00:00:00+00:00"),
     )
-    monkeypatch.setattr(summary_lane, "_month_anchors", lambda *_: [
-        ".context/TIMELINE.md#2026-09#cand:e1",
-        ".context/TIMELINE.md#2026-09#cand:e2",
+    monkeypatch.setattr(summary_lane, "_month_units", lambda *_: [
+        (".context/TIMELINE.md#2026-09#cand:e1", "### 2026-09-03 first"),
+        (".context/TIMELINE.md#2026-09#cand:e2", "### 2026-09-28 later"),
     ])
     captured = []
     monkeypatch.setattr(
         "core.ingestion.api_v2.enqueue_unit",
         lambda *args, **kwargs: captured.append((args, kwargs)) or _queued(),
     )
-    assert enqueue_month_summary(conn, tmp_path, "2026-09") == "month_supplement"
+    seen = []
+    writer = lambda month, kind, events: seen.append(events) or "- A later decision."  # noqa: E731
+    assert enqueue_month_summary(conn, tmp_path, "2026-09", writer=writer) == "month_supplement"
+    assert seen == [["### 2026-09-28 later"]]   # only what arrived after the summary
     _, source_ref, unit = captured[0][0]
     assert source_ref.startswith("summary:2026-09:supplement:")
     assert unit.event_kind == "month_supplement"
