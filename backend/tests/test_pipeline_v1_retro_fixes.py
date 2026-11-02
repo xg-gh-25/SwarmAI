@@ -32,8 +32,8 @@ def rig(tmp_path, monkeypatch):
     r.close()
 
 
-def _row(kind: str, file: str, claim: str = "stale note") -> str:
-    return "New finding: " + json.dumps({"severity": "LOW", "kind": kind, "file": file,
+def _row(kind: str, file: str, claim: str = "stale note", severity: str = "LOW") -> str:
+    return "New finding: " + json.dumps({"severity": severity, "kind": kind, "file": file,
                                          "line": 1, "claim": claim, "fix": "rewrite it"})
 
 
@@ -113,8 +113,10 @@ def _r2(r: Rig, handout: dict, finding_id: str, status: str) -> None:
 
 def test_a_re_address_without_fix_files_shows_r2_the_findings_own_file(rig):
     """Review fix: R2 and the proof judge the same files. Pass 1 named the guide; pass 2
-    names nothing, so R2 sees the finding's own file, as the proof will judge it."""
-    (row,) = _r1(rig, _row("design", "backend/core/mod.py"))
+    names nothing, so R2 sees the finding's own file, as the proof will judge it. The
+    finding is a HIGH: after R2 only an open HIGH gets the visit's one more pass (design
+    2026-10-31-pipeline-review-close-and-landing-route §3 change 1)."""
+    (row,) = _r1(rig, _row("design", "backend/core/mod.py", severity="HIGH"))
     fid = row["canonical_id"]
     rig.edit({"docs/guide.md": DOC + "\nThe boundary is intended.\n"})
     out = _addressed(rig, fid, {"fix_files": ["docs/guide.md"]})
