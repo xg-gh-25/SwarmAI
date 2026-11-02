@@ -25,6 +25,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import asyncio
 import json
 import logging
@@ -471,9 +473,33 @@ def _record(window: list[dict[str, Any]], own: list[tuple[str, ...]],
     return text, anchors, aliases
 
 
+_ANCHOR_PREFIX = re.compile(r"^event:[a-z_]+:")
+_MIN_ID_PREFIX = 8
+
+
+def _shown(value: str, aliases: dict[str, list[str]]) -> list[str] | None:
+    """The anchors of the item *value* names among the ids this window showed: the id as
+    written; else without an ``event:<kind>:`` prefix the review put before a shown id;
+    else the one shown id it is the first characters of (at least ``_MIN_ID_PREFIX``),
+    when exactly one is. None when it names no shown item (left as written, so the unit
+    citing it is refused): nothing outside this window can be reached this way."""
+    if value in aliases:
+        return aliases[value]
+    bare = _ANCHOR_PREFIX.sub("", value)
+    if bare in aliases:
+        return aliases[bare]
+    if len(bare) >= _MIN_ID_PREFIX:
+        hits = [k for k in aliases if k.startswith(bare)]
+        if len(hits) == 1:
+            return aliases[hits[0]]
+    return None
+
+
 def _cited(answer: Any, aliases: dict[str, list[str]]) -> Any:
     """*answer* with each evidence id the record showed for an item (``_record``) replaced
-    by that item's anchors; any other value is left as written."""
+    by that item's anchors (``_shown``: also a shown id written with an anchor's prefix or
+    cut to its first characters, measured 2026-11-01 as 12 of 13 refused review units);
+    any other value is left as written."""
     if not isinstance(answer, dict):
         return answer
     out = {}
@@ -484,7 +510,7 @@ def _cited(answer: Any, aliases: dict[str, list[str]]) -> Any:
         fixed = []
         for unit in units:
             if isinstance(unit, dict) and isinstance(unit.get("evidence"), list):
-                evidence = [a for e in unit["evidence"] for a in aliases.get(str(e), [e])]
+                evidence = [a for e in unit["evidence"] for a in (_shown(str(e), aliases) or [e])]
                 unit = {**unit, "evidence": list(dict.fromkeys(evidence))}
             fixed.append(unit)
         out[key] = fixed

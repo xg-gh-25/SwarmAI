@@ -145,6 +145,9 @@ _STRUCTURAL = {
     r"[^0-9a-z\u4e00-\u9fff]+", r"-{2,}",   # slugify a name into a file name
     r"[\s_\-]+",                            # a project name's spelling, compared without separators
     r"https?://[^\s<>()\"']+",              # a URL, checked for a credential parameter (security)
+    # the system appendix heading of a user file (new or legacy), located to reuse it
+    "'^(?:' + '|'.join((re.escape(h) for h in SYSTEM_APPENDIX_HEADINGS)) + ')\\\\s*$'",
+    r"^event:[a-z_]+:",                     # an anchor prefix a review put before a shown id
 }
 
 
