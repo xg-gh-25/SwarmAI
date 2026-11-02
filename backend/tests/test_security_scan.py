@@ -147,6 +147,21 @@ def test_inv3_new_secret_blocks(scan_tree: Path):
     assert r.returncode == 1, f"a new hardcoded secret must block. stdout={r.stdout}"
 
 
+# ── a golden-set case's validation fingerprint is not a secret; the same hex elsewhere is
+def test_case_validation_fingerprint_is_not_a_secret(scan_tree: Path):
+    (scan_tree / "backend" / "mod.py").write_text("SAFE = 'nothing here'\n")   # bandit needs code
+    f = scan_tree / "backend" / "golden_set.yaml"
+    f.write_text("- id: A\n  tier: gate\n")
+    _make_baseline(scan_tree)
+    f.write_text("- id: A\n  tier: gate\n  validated_by_4gate: 52cfcd83f260dfba\n")
+    r = _run_scan(scan_tree)
+    assert r.returncode == 0, f"a re-validated case must not block. stdout={r.stdout}"
+    f.write_text("- id: A\n  tier: gate\n  validated_by_4gate: 52cfcd83f260dfba\n"
+                 "  api_token: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n")
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, f"a hex value under any other key is still a secret. stdout={r.stdout}"
+
+
 # ── INV4: baselined finding whose line MOVED → exit 0 (move-robust) ─────────────
 def test_inv4_moved_baselined_finding_still_passes(scan_tree: Path):
     f = scan_tree / "backend" / "mod.py"
