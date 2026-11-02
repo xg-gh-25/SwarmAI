@@ -92,7 +92,7 @@ const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 50
 async function openSwarmOut() {
   await waitFor(() => expect(screen.getByTestId('swarm-out-icon')).toBeTruthy(), { timeout: 5000 });
   fireEvent.click(screen.getByTestId('swarm-out-icon'));
-  if (secondAccepted) fireEvent.click(await screen.findByTestId('swarm-out-section-done', {}, { timeout: 5000 }));
+  // "Recently done" is open by default: an accepted run's row shows without a click
   await waitFor(() => expect(screen.getAllByTestId('swarm-out-row-open').length).toBe(2), { timeout: 5000 });
 }
 /** a run row's "Open session" button */
