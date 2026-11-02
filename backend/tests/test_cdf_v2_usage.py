@@ -215,65 +215,81 @@ def test_bootstrap_progress_counts_candidates_by_project(conn) -> None:
 def test_missing_section_parks_without_retry_then_requeues_and_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A project DDD's structure is the person's: a unit whose section is missing there
+    waits, unretried, with an event saying which heading to add, and is written once the
+    heading is there. (A product section of MEMORY / EVOLUTION is added by the writer
+    itself, design e8658b4ea: see the second half.)"""
     from core.ingestion.owner import acquire
     from core.ingestion.pipeline_v2 import requeue_missing_sections
     from core.ingestion.store import connect_rw
     from core.ingestion.worker import process_candidate
 
     workspace = tmp_path / "workspace"
-    context = workspace / ".context"
-    context.mkdir(parents=True)
-    memory = context / "MEMORY.md"
+    (workspace / ".context").mkdir(parents=True)
+    memory = workspace / ".context" / "MEMORY.md"
     memory.write_text("# Memory\n", encoding="utf-8")
+    tech = workspace / "Projects" / "Widget" / "2-understanding" / "TECH.md"
+    tech.parent.mkdir(parents=True)
+    tech.write_text("# TECH\n", encoding="utf-8")
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("SWARM_WORKSPACE", str(workspace))
     monkeypatch.setattr("core.ingestion.pipeline_v2._user_texts",
                         lambda unit, row: ["verify current state before editing, please"])
     from core.ingestion import user_check
     monkeypatch.setattr(user_check, "grounds", lambda claim, texts: user_check.Verdict(True, "said"))
-    payload = {
-        "kind": "cognition", "type": "guideline", "scope": "world",
-        "title": "Verify current state", "what": "Verify current state before editing.",
-        "applicability": "When editing.", "evidence": ["event:one"],
-        "user_quote": "verify current state before editing",
-    }
+    envelope = __import__("json").dumps({
+        "root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
+        "strength": "user_explicit", "read_external": False, "cited_external": False})
+
+    def enqueue(conn, cid, payload):
+        conn.execute(
+            """INSERT INTO ingestion_inbox(
+                 id,idem_key,source,source_ref,lane,payload,payload_schema,content_hash,
+                 envelope,project_snapshot,project_candidates,state,created_at,unit_kind,
+                 source_v2,evidence_root_ids
+               ) VALUES(?,?,'S2','session','session',?,'cognition:v2','h',
+                        ?,'{}','[]','queued',?,'cognition','S2','["root-1"]')""",
+            (cid, cid, __import__("json").dumps(payload), envelope, _at(-1)))
+        return conn.execute("SELECT * FROM ingestion_inbox WHERE id=?", (cid,)).fetchone()
+
     owner = acquire()
     assert owner is not None
     conn = connect_rw()
-    now = _at(-1)
-    conn.execute(
-        """INSERT INTO ingestion_inbox(
-             id,idem_key,source,source_ref,lane,payload,payload_schema,content_hash,
-             envelope,project_snapshot,project_candidates,state,created_at,unit_kind,
-             source_v2,evidence_root_ids
-           ) VALUES('missing','missing','S2','session','session',?,'cognition:v2','h',
-                    ?,'{}','[]','queued',?,'cognition','S2','["root-1"]')""",
-        (__import__("json").dumps(payload), __import__("json").dumps({
-            "root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
-            "strength": "user_explicit", "read_external": False, "cited_external": False,
-        }), now),
-    )
-    row = conn.execute("SELECT * FROM ingestion_inbox WHERE id='missing'").fetchone()
+    row = enqueue(conn, "missing", {
+        "kind": "cognition", "type": "pitfall", "scope": "project:Widget", "topic": "architecture",
+        "title": "Verify current state", "what": "Verify current state before editing.",
+        "applicability": "When editing.", "evidence": ["event:one"],
+        "user_quote": "verify current state before editing"})
     process_candidate(conn, owner, row, workspace)
     parked = conn.execute(
-        "SELECT state,attempts,next_attempt_at,defer_reason,destination FROM ingestion_units"
+        "SELECT state,attempts,next_attempt_at,defer_reason FROM ingestion_units WHERE candidate_id='missing'"
     ).fetchone()
-    assert tuple(parked[:4]) == ("deferred", 0, None, "missing_section")
+    assert tuple(parked) == ("deferred", 0, None, "missing_section")
     event = conn.execute(
         "SELECT detail FROM ingestion_events WHERE kind='missing_section' AND resolved=0"
     ).fetchone()
-    assert "在 .context/MEMORY.md 加 `## Guidelines`" in event[0]
+    assert "Add `## Runtime Traps` to Projects/Widget/2-understanding/TECH.md" in event[0]
 
-    memory.write_text("# Memory\n\n## Guidelines\n", encoding="utf-8")
-    assert requeue_missing_sections(workspace, memory) == 1
-    assert conn.execute("SELECT state FROM ingestion_units").fetchone()[0] == "queued"
+    tech.write_text("# TECH\n\n## Runtime Traps\n", encoding="utf-8")
+    assert requeue_missing_sections(workspace, tech) == 1
+    assert conn.execute("SELECT state FROM ingestion_units WHERE candidate_id='missing'").fetchone()[0] == "queued"
     assert conn.execute(
         "SELECT resolved FROM ingestion_events WHERE kind='missing_section'"
     ).fetchone()[0] == 1
-    row = conn.execute("SELECT * FROM ingestion_inbox WHERE id='missing'").fetchone()
+    process_candidate(conn, owner, conn.execute("SELECT * FROM ingestion_inbox WHERE id='missing'").fetchone(),
+                      workspace)
+    assert conn.execute("SELECT state FROM ingestion_units WHERE candidate_id='missing'").fetchone()[0] == "written"
+    assert "Verify current state" in tech.read_text(encoding="utf-8")
+
+    # a product section of MEMORY is added by the writer itself, nothing waits
+    row = enqueue(conn, "memory", {
+        "kind": "cognition", "type": "guideline", "scope": "world",
+        "title": "Verify the state first", "what": "Verify the current state before any edit.",
+        "applicability": "When editing.", "evidence": ["event:one"],
+        "user_quote": "verify current state before editing"})
     process_candidate(conn, owner, row, workspace)
-    assert conn.execute("SELECT state FROM ingestion_units").fetchone()[0] == "written"
-    assert "Verify current state" in memory.read_text(encoding="utf-8")
+    assert conn.execute("SELECT state FROM ingestion_units WHERE candidate_id='memory'").fetchone()[0] == "written"
+    assert "## Guidelines" in memory.read_text(encoding="utf-8")
     conn.close()
     owner.release()
 

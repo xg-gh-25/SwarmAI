@@ -114,13 +114,17 @@ def test_every_option_in_the_cards_exists_and_no_card_names_the_runner():
     so no card or skill doc names the old runner or its modes."""
     import sys
     from core.run_protocol import cli_main as pipeline_v1
+    from core import knowledge_cli
     known = _options(pipeline_v1.parser())
+    # a span that runs the cognition command names that command's options
+    cognition = _options(knowledge_cli.parser("cognition"))
     for doc in DOCS:
         text = doc.read_text(encoding="utf-8")
         assert "pipeline_test" not in text and "--mode" not in text, doc.name
         for span in _code_spans(text):
+            options = cognition if re.search(r"\b(cognition|knowledge) (find|get|map)\b", span) else known
             for flag in re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", span):
-                assert flag in known, (doc.name, span, flag)
+                assert flag in options, (doc.name, span, flag)
             if "pipeline-v1 create" in span and "--profile direct" in span:
                 assert "--requirement" in span, (doc.name, span)
 
