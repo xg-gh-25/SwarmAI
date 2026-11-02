@@ -198,8 +198,8 @@ numbered text options ("reply with a number"). Only this question.
      machine only: pushing stays the person's, and is not part of the run. When prepare
      lists protected paths (they guard the agent or run code here), read those files'
      diff with extra care and say in `--why` what they change and why it is right: they
-     land with the rest. Git hooks, filters, submodules and a coding tool's hook settings
-     (`.claude/settings*.json`) never land from a Hive (they would run its code here on their own): `rerun` asking the Hive to leave them out, or make that
+     land with the rest. Git hooks, filters and submodules never land from a Hive (git would run its code here on
+     its own): `rerun` asking the Hive to leave them out, or make that
      change yourself in this session, with its own tests and review.
      When `return-land` is refused (a conflict, rewritten commits): take the change over
      yourself in this session, then `discard` the run saying so (its commits stay in

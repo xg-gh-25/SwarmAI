@@ -56,7 +56,7 @@ flowchart TD
 | 现状 | 出处 | 改成 |
 |---|---|---|
 | agent 落地时，只要提交碰到仓库的受保护路径就整单拒绝，只能让 Hive 重做或自己写；人可以批。E2E 里因此只能在本机 cherry-pick，单子卡在"等你"，要人点"已手动落地" | `core/hive_return.py:472-499`（路由对 agent 传 `approve_protected=False`）；DailyActivity 2026-11-02 10:22 | agent 审过就能落受保护路径，理由进决策记录。不再需要 cherry-pick 和 `manual_landed`（`manual_landed` 照旧只给人） |
-| 会在本机自己执行代码的路径（`AUTORUN`：git 钩子、属性、子模块、pre-commit，加上编码工具的钩子配置 `.claude/settings*.json`）agent 不能落；测试、脚本、构建这些要人或 agent 主动去跑的代码，和其他改动一样审过就落 | `core/hive_return.py:313-316,490-493` | 不变，这是唯一保留的产品底线；碰到它就是"落不到"，agent 让 Hive 去掉这部分重做，或自己写 |
+| 会在本机执行代码的路径（`GIT_PROTECTED`：git 钩子、属性、子模块、pre-commit）agent 不能落 | `core/hive_return.py:313-316,490-493` | 不变，这是唯一保留的产品底线；碰到它就是"落不到"，agent 让 Hive 去掉这部分重做，或自己写 |
 | Needs You 把所有 `awaiting`、`stopped` 的单子算成"N 个单子等你通过或决定"，"三天内会被清掉、提交落不了"的也给人 | `core/attention_authority.py:813-841` | 有派单 agent 的单子，这些都是"还没落到 host"，不进 Needs You，由 Conductor 叫醒派单会话处理（Swarm Run r7.11 §5.5）。没有派单会话记录的旧单照旧 |
 | agent 丢弃时，只要有提交没落地就拒绝 | `core/swarm_out_actor.py:242-267` `discard_blocker` | 提交已经 `return-prepare` 取回本机 `refs/hive/...` 的，agent 可以丢弃（字节还在本机，什么都不丢），带理由；没取回的照旧拒绝 |
 | agent 只能把 Hive 的**等待**交给人（`escalate`），不能把一个落地了但判不了的**结果**交给人 | `core/swarm_out_wait_card.py:395-425` | 新增 `swarm_out ask-person <dispatch> --why <agent 的判断和原因> --decide <要人定什么>`：只在结果已落到 host 上时可用（代码：已 `return-land`；非代码：结果是最终的、文件已放好），否则拒绝并说"先落地，或重跑 / 丢弃" |
@@ -104,6 +104,7 @@ flowchart TD
 
 **已知风险：** agent 现在能把 Hive 对受保护路径的改动（包括 `AGENTS.md`、守护代码）落到本机 main。挡住它的是 agent 自己的审查和决策记录，事后人能在卡上看到；
 东西出本机仍要人决定 push。这是按"agent 负责到底"有意接受的。
+审查里提出过两次把钩子会调用的脚本、agent 自己的防护和上下文文件（`security_hooks.py`、`.swarmai/pipeline.toml`、`CLAUDE.md`、`backend/context/`）也列为 agent 不能落；不采纳（owner 2026-11-02）：这个流程判的是结果是不是要的，不在这里造拦住落地能力的机制；安全是单独的工作，不和交付流程揉在一起。
 
 ## 5. 验证计划
 

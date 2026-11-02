@@ -33,7 +33,7 @@ The agent lands commits that change the repository's own protected paths once it
 reviewed them (design 2026-11-02-hive-run-decision-record §2: the funnel lands on this
 host or re-runs, never hands unlanded work to the person); the land entry keeps the
 paths and its reason. Paths that make this machine run code on their own (git hooks,
-filters, submodules, a coding tool's hooks: core/hive_return ``AUTORUN``) an agent never lands: it re-runs the task
+filters, submodules: core/hive_return ``GIT_PROTECTED``) an agent never lands: it re-runs the task
 asking the Hive to leave them out, or makes the change itself in its own session.
 
 Every command, the agent's and the person's, is one entry of the run's decision record

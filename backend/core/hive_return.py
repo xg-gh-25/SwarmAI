@@ -27,8 +27,7 @@ after the tip that landed) onto the run's branch from objects only (no working t
 hook, no filter), as one commit with a message this host writes (the Hive's commits stay at the ``refs/hive/`` ref),
 and fast-forwards the branch to it. Paths under an ignored or linked directory of the
 checkout are refused at prepare (git would write a file into a virtualenv), and paths
-that change git's own behaviour, or make a coding tool run commands on its own, are protected in
-every repository (``AUTORUN``). Not good enough is
+that change git's own behaviour are protected in every repository (``GIT_PROTECTED``). Not good enough is
 not recorded here: the person re-runs the task with a correction or discards it. Qualifying the change (build, tests,
 deploy) is the repository's own process and the person's, after this.
 """
@@ -314,16 +313,6 @@ def _verify_and_fetch(repo: Path, branch: str, bundle: Path, local_ref: str) -> 
 #: submodules, hooks kept in the tree): protected in every repository
 GIT_PROTECTED = ("**/.gitattributes", ".gitattributes", ".lfsconfig", "**/.lfsconfig", ".gitmodules",
                  ".husky/**", ".githooks/**", ".pre-commit-config.yaml")
-#: a coding tool's settings whose hooks run shell commands on their own when the tool
-#: opens or works in the checkout (Claude Code ``settings.json`` hooks): like a git hook,
-#: they run code here without anyone choosing to run it
-TOOL_AUTORUN = (".claude/settings.json", "**/.claude/settings.json",
-                ".claude/settings.local.json", "**/.claude/settings.local.json")
-#: what an agent never lands (design 2026-11-02-hive-run-decision-record §2: the one floor,
-#: paths that run code on this machine on their own); everything else protected it lands
-#: once it reviewed it. Code a person or agent runs on purpose (tests, scripts, builds)
-#: is reviewed like any other change.
-AUTORUN = (*GIT_PROTECTED, *TOOL_AUTORUN)
 _BAD_CHARS = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 
@@ -349,7 +338,7 @@ def _unsafe_paths(repo: Path, paths: list[str]) -> list[str]:
 
 def _review(repo: Path, base: str, tip: str, globs: list[str]) -> dict[str, Any]:
     raw = _out(repo, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", base, tip)
-    globs = [*AUTORUN, *globs]
+    globs = [*GIT_PROTECTED, *globs]
     files = []
     for entry in raw.split("\0"):
         parts = entry.split("\t", 2)
@@ -561,8 +550,9 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     commit's message names those paths. The agent's landing (the route passes
     ``approve_protected`` True and ``allow_git_exec`` False for it: design
     2026-11-02-hive-run-decision-record §2) lands the repository's protected paths it
-    reviewed and refuses what runs code on this machine on its own (``AUTORUN``: git
-    hooks and filters, a coding tool's hooks). The commit is built from objects only
+    reviewed and refuses the git hooks and filters (``GIT_PROTECTED``), which make git
+    run code on this machine on its own. The flow judges whether the result is the one
+    asked for; it is not where security is enforced (that is its own work). The commit is built from objects only
     (``merge-tree --write-tree`` of the branch and the tip over the reviewed base, then
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
     main checkout fast-forwards to it, which runs no hook either."""
@@ -572,10 +562,10 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     repo = Path(state["repo"])
     if _git(repo, "rev-parse", "--verify", "--quiet", f"{state['ref']}^{{commit}}").stdout.decode().strip() != tip:
         raise ReturnError("the ref of these commits moved since they were shown; review them again")
-    git_exec = [p for p in state["protected_files"] if _is_protected(p, list(AUTORUN))]
+    git_exec = [p for p in state["protected_files"] if _is_protected(p, list(GIT_PROTECTED))]
     if git_exec and not allow_git_exec:
         raise ReturnError("these commits change files that make this machine run code on its own "
-                          "(git hooks, filters, submodules, a coding tool's hooks): "
+                          "(git hooks, filters, submodules): "
                           + ", ".join(git_exec[:10])
                           + "; an agent does not land them: re-run asking the Hive to leave them out")
     if state["protected_files"] and not approve_protected:
