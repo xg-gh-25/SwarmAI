@@ -442,15 +442,14 @@ See `Projects/SwarmAI/2-understanding/TECH.md` → "Output Format Protocol" for 
 <!-- CAPABILITIES_START -->
 | Engine | Path | What It Does |
 |--------|------|-------------|
-| DDD Cultivation Engine (event-driven v2) | `backend/core/cultivation_dispatcher.py` | Event-driven domain knowledge growth — 6 event sources, gate-based promotion, maturity tracking |
-| Autonomous Pipeline (9-stage) | `backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` | EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate |
+| DDD Cultivation Engine (event-driven v2) | `backend/core/cultivation_dispatcher.py` | Event-driven DDD maintenance — queued events (git commit, 30-minute timer) run the orchestrator's DDD staleness channel; DDD knowledge itself is written by CDF (core/ingestion/) |
+| Autonomous Pipeline (staged runs) | `backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` | Profile-driven runs (full: EVALUATE→THINK→PLAN→BUILD→REVIEW→TEST→DELIVER→REFLECT) with expert review gates |
 | Pollinate Content Engine | `backend/skills/s_pollinate/INSTRUCTIONS.md` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
-| Evolution Pipeline (MINE→ASSESS→ACT→AUDIT) | `backend/core/evolution_optimizer.py` | Confidence-gated self-evolution from session mining and skill fitness scoring |
 | Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | Deterministic graph traversal for code context retrieval |
-| Session Resume Enrichment | `backend/core/context_injector.py` | Cold resume from ~3K to ~50-100K tokens of structured context |
-| Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |
-| Background Job System | `backend/jobs/scheduler.py` | Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports |
-| AI Docs Auto-Refresh | `backend/scripts/refresh_ai_docs.py` | Self-maintaining documentation — scans codebase metrics and capabilities daily, updates AI_CONTEXT.md + AGENTS.md |
+| Session Resume Enrichment | `backend/core/context_injector.py` | Five-layer resume context (checkpoint, git state, conclusions, key tool results, recent conversation) within a model-aware token budget |
+| Slack Channel Adapter | `backend/channels/adapters/slack.py` | Socket Mode bot with HTTP polling fallback — responds on the owner's behalf to allowlisted users |
+| Background Job System | `backend/jobs/scheduler.py` | Cron + event-triggered jobs — headless Claude CLI agent tasks, deterministic scripts, signal fetch and digest |
+| AI Docs Auto-Refresh | `backend/scripts/refresh_ai_docs.py` | Regenerates the METRICS block (docs/CODEBASE_METRICS.md) and CAPABILITIES block (AGENTS.md + AI_CONTEXT.md) — run by hand, by prod.sh preflight, and by the post-session context health check at most once a day |
 <!-- CAPABILITIES_END -->
 
 ## Codebase Metrics
