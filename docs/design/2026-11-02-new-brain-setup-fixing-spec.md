@@ -4,12 +4,14 @@ date: 2026-11-02
 created: 2026-11-02
 updated: 2026-11-02
 project: SwarmAI
-status: r2（一次零上下文审查后修订），待 XG 确认后实施
+status: r3（G1 按 XG 要求重写：仓库落位进 Project Agent），待 XG 确认后实施
 ---
 
 # New Brain 建立流程 fixing-spec
 
 一句话：2026-11-02 用 New Brain 从一个 GitHub 链接（`garrytan/gbrain`）建了一个 Brain，P0–P6 全部跑完、P6 通过，但过程中暴露出一批问题。产品侧的按原因分成 7 组（G1–G5、G7、G8；原 G6 经审查删除），每组一个方案、一组先红后绿的测试，一次修完；我自己在这个 Brain 里写错的几处放在 Part B，用 `s_ddd-persist` 修。
+
+**r3 改了什么。** G1 按 XG 的要求重写：仓库放在哪、怎么放、在哪写代码，现在由一个仓库工作区设置加上 Project Agent 里每个仓库的落位一起决定，本机会话和 Hive 派单读的是同一份；URL 资产先克隆到工作区，再按本地仓库绑定；已有的镜像 checkout 用 `--relocate` 迁移。
 
 **r2 改了什么。** r1 经一次零上下文审查，报了 9 HIGH / 11 MEDIUM / 5 LOW，关键几条已在源码上逐条核实。改动：G1 改为复用现有写入函数（r1 说"没有写函数"是错的），默认值改成能通过校验的；G2 补上 monorepo 子包和"重新起草不会替换旧行"；G6 删除（没有观测到的缺陷，P9）；G7a 不回改其他 Brain（只有 gbrain 有那一行）；G7b 不加 P6 行；新增 G8（`py -m` 会从当前目录加载代码）；每个改到 P2b 一节的提交都重新生成 golden set。
 
@@ -29,7 +31,7 @@ status: r2（一次零上下文审查后修订），待 XG 确认后实施
 
 | 组 | 原因（一句话） | 现象 | 严重度 |
 |---|---|---|---|
-| G1 | 远程 URL 没有写入 `bindings.yaml` 的入口 | 创建时给了 GitHub 链接，`bind` 没有 `--url`，只能手写 YAML、自己查分支 | 高 |
+| G1 | 仓库落位没有被定义：没有仓库工作区，Project Agent 里也没有"仓库在哪、在哪写代码" | URL 资产只能进隐藏镜像，Hive 交回的代码落在那；本机写代码时 agent 不知道去哪改；`bind` 没有 `--url`，只能手写 YAML | 高 |
 | G2 | 命令解析不认包管理器，安装步骤识别错 | Bun 仓库的检查命令写成 `npm run …`；默认 setup 选中的是全局装 CLI 的 CI 步骤 | 高 |
 | G3 | 文档排序按信号个数，README 只有一个信号 | README、AGENTS.md、CLAUDE.md 都排到预算外，没内嵌 | 中 |
 | G4 | 修复热点只排除了文档 | 180 个热点里有 33 个是 fixture、生成文件和簿记文件 | 中 |
@@ -37,36 +39,73 @@ status: r2（一次零上下文审查后修订），待 XG 确认后实施
 | G7 | 模板和文档本身有错 | 新 Brain 带一个死路径 PENDING；人格文件是空模板也能打包；skill 里 6 处命令跑不通 | 中 |
 | G8 | `py -m` 把当前目录放在导入路径最前面 | 在一个带 `scripts/` 包的仓库里运行，命令会报错，或者执行那个仓库里的代码 | 高（安全） |
 
-## 2. G1 远程 URL 不能一步绑定
+## 2. G1 仓库落位：放在哪、怎么放、在哪写代码（r3 重写）
+
+**XG 的要求（r3）：** 仓库放在哪、怎么放，要写进 Project Agent。否则 agent 不知道去哪写代码。关心的是 Brain 这个产品功能，不是 gbrain 这一个 case。
 
 **现在的代码。**
 
-- `core/swarm_workspace_manager.py:2644`：`create_project` 只把 `assets` 写进 `.artifacts/setup.json`；docstring（2578-2579）明说 ⑤ 等 BIND。
-- `scripts/artifact_cli.py:341-357`：`cmd_bind` 只有 `--local <path>` 或读已有 `bindings.yaml` 两条路；解析器（692-699）没有 URL 参数。
-- **写入函数已经有了：** `core/local_binding.py:48-78` `record()` 追加一条 binding，写临时文件、用 `load_bindings` 校验、原子替换，替换前留 `.bak`；`bind --local` 用的就是它（`artifact_cli.py:431-434`）。它只会生成本地 checkout 的条目（`binding_for`，37-45）。
-- 交付契约的必填字段：`remote_kind`（只能是 `github-pr` / `code-amazon-cr` / `self-hosted-main`）、`branch`、`review_path`、`auto_send`（`core/ddd_bindings.py:85-93`）。
-- P6 查 code repo 和资产是否绑定，看的是 `bindings[].repo` 和 `bindings[].clone`（`verify_ddd_complete.py:161-169`、`:427-437`），不需要另写 `governed_assets`。
-- 新 Brain 提示词让模型对 URL 直接 `bind`，没提先写 `bindings.yaml`：`desktop/src/utils/newBrainDispatch.ts:222-223`、`:260`（SKILL.md 第 134 行的 P3 说了要先声明）。
+- **本机 checkout 只有两个来源**（`core/project_agent.py:128-143` `repo_roots`）：binding 声明的 `worktree`，或 bind 管理的镜像 `~/.swarm-ai/bindings/<repo>`。URL 资产只能走后者。
+- **镜像不是工作区。** 重新 bind 时，干净的镜像直接删掉重克隆，有改动的整个改名挪开（`core/ddd_bindings.py:391-403`）。用户也看不到它。
+- **Hive 交回的 commits 落在同一个 checkout 上**（`core/hive_return.py:115-131` `_checkout` → `repo_roots`）。URL 绑定的 Brain，代码落进了镜像。派单也从这个 checkout 取分支和 HEAD 提交（`core/task_spec.py:259-283` `_brain_repos`）。
+- **Project Agent 定义里没有落位。** `intake.repos` 只是名字列表（`templates/project-agents/STANDARD.md` 字段表）。
+  - Hive 上，agent 靠 Hive 准备工作区时生成的说明知道去哪写（`core/task_repos.py:171-190` `task_text`）。
+  - 本机原生写代码时，`[DDD:<project>]` 提示（`core/session_router.py:1979`）只给 Brain 的路径，不说仓库在哪、在哪改。
+- **产品没有"仓库工作区"设置**（`core/app_config_manager.py` 的 `DEFAULT_CONFIG` 里没有）。
+- **URL 没有一步绑定的入口**（r2 的发现，仍成立）。
+  - `create_project` 只把 assets 记进 `setup.json`（`core/swarm_workspace_manager.py:2644`）。
+  - `artifact_cli bind` 只有 `--local` 和"读已有 `bindings.yaml`"两条路（`scripts/artifact_cli.py:341-357`、`692-699`）。
+  - 新 Brain 提示词让模型对 URL 直接 `bind`（`desktop/src/utils/newBrainDispatch.ts:222-223`、`:260`）。
+  - 写 binding 的函数已经有了：`core/local_binding.py:48-78` `record()`，`--local` 在用。
 
 **方案。**
 
-1. **一个写入函数。** 把 `local_binding.record()` 泛化：除了本地 checkout，也能接收一条远程 binding（`worktree: null`）。新增 `remote_binding_for(url, branch)`，照 `binding_for` 的形状给默认值：host 是 github.com → `github-pr`，否则 `self-hosted-main`；分支取不到时用 `main`；`review_path: s_expert-review`；`auto_send: manual-push`（发出 PR 是离开本机的动作，默认不自动）。只写一条 `bindings` 条目，不写 `governed_assets`。写法沿用 `record()`：`safe_dump` 重写、留 `.bak`、校验后原子替换（`--local` 现在就是这样；手写的注释会丢在 `.bak` 之外，这是已有行为，不在本 spec 里改）。
-2. **CLI。** `artifact_cli bind --project <P> --url <URL> [--branch <name>]`：
-   - URL 先规范化：没写协议的 `github.com/owner/repo` 补成 `https://`（桌面端和 P6 `_norm_ref` 都接受这种写法）；带账号密码的 `https://user:token@…` 直接拒绝（否则令牌会写进 `bindings.yaml`，而 `brain_sync.py:134-144` 会把它同步到 Hive）。然后用 `_validate_clone_source`（`ddd_bindings.py:424-450`）的规则校验。全部校验通过前不写任何东西。
-   - 分支：`--branch` 优先；否则 `git ls-remote --symref -- <url> HEAD`，加上和 `git_clone` 一样的保护（`GIT_ALLOW_PROTOCOL`，`git_sync_engine.py:326-328`），再加 `GIT_TERMINAL_PROMPT=0` 和 SSH `BatchMode=yes`，限时；取不到就用 `main`，并在输出里说明。
-   - 仓库名取 URL 最后一段去掉 `.git`。克隆目录 `~/.swarm-ai/bindings/<repo>` 是**所有 Brain 共用的**，所以重名检查要看所有 `Projects/*/bindings.yaml`：别的 Brain 已用这个名字、URL 不同 → 改用 `<owner>-<repo>`，仍冲突就拒绝；同一 Brain 已有同一 URL → 不写、也不重新克隆（`bind_project` 每次都会清空重克隆整个项目，`_bind_locked:554`），回报"已绑定"。
-   - 写完后走现有后半段：`bind_project` → 文档索引和 survey → Project Agent 重新起草。
-3. **提示词和文档。** `newBrainDispatch.ts:222-223`、`:260` 和 SKILL.md P3 一行，URL 都改成 `bind --url`。
+1. **一个设置：仓库工作区 `repos_dir`。**
+   - `DEFAULT_CONFIG` 新键，默认 `~/SwarmAI-Repos`，在 Settings 里改。
+   - 每个用户都有、都用得上（strip test 通过）。XG 自己设为 `~/Desktop/SwarmAI-Workspace`。
+2. **URL 资产先拉到工作区，再按本地仓库绑定。** `artifact_cli bind --project <P> --url <URL> [--branch <name>]`：
+   - **校验（沿用 r2 的规则）。** 没写协议的 `github.com/owner/repo` 补成 `https://`；带账号或令牌的 URL 拒绝；然后用 `_validate_clone_source`（`ddd_bindings.py:424-450`）校验。全部通过前，不克隆、不写任何东西。
+   - **决定目标目录 `<repos_dir>/<repo>`。**
+     - 目录不存在 → 用 `git_clone` 那套保护克隆（`git_sync_engine.py:326-328`），`--branch` 指定就检出那个分支。
+     - 已存在，且 origin 是同一个仓库（`task_repos._same_repo`）→ 原地复用，不重新克隆。
+     - 已存在但是别的仓库 → 改用 `<owner>-<repo>`；仍冲突就拒绝。
+   - **然后和 `--local` 走同一条路。** `local_binding.record()` 写 binding（`worktree` = 这个目录，分支从 checkout 读，`binding_for` 已经这样做），注册为本 Brain 的本地仓库，代码图在子进程里建。
+   - 这样 URL 和本地路径最后是同一种绑定：一个用户看得见的 checkout，Brain 原地读、拥有它。
+   - 镜像只留给 Hive 用：Hive 上的 Brain 从本机同步过去，`worktree` 会被剥掉（`core/brain_sync.py:133-144`）。
+   - 不再需要 `ls-remote`，r2 那套分支探测和保护随之删除。
+3. **Project Agent 写明每个仓库的落位。**
+   - `intake.repos` 从名字列表改成每仓库一行：`{name, remote, branch, checkout}`。
+     - `remote`、`branch` 来自 binding。
+     - `checkout`：在工作区里的写成 `repos_dir:<name>`（每台机器各自解析）；用户用 `--local` 绑的写它的绝对路径。
+   - 这几项由 `project-agent-draft` 从 binding 确定性地填写，不由模型判断。
+   - 同步到 Hive 时，和 `bindings.yaml` 的 `worktree` 一样剥掉 `checkout`。
+   - **"在哪写代码"是产品固定的规则，不写进文件**（和保留动作一样，STANDARD.md）。由项目段落按运行位置打印：
+     - **本机：** 在 checkout 上开 session worktree（`session_worktree create <checkout>`），提交后 `land` 回 checkout 的分支。
+     - **Hive：** 在 Hive 准备好的任务克隆里提交（`task_text` 不变）。commits 交回后，落到本机 checkout 的分支（`hive_return`）。
+   - **校验器新增一条：** `code-change` 模式的仓库在本机没有 checkout 时，报 "no local checkout"，在派单前就拦下（今天要等交回时 `hive_return` 才报错）。
+4. **本机原生写代码也读这份定义。** `session_router.py:1979` 的 `[DDD:<project>]` 提示，从 Project Agent 加一行：每个仓库的 checkout 路径，加上"在这里开 session worktree 写代码"。
+5. **已有 Brain 的迁移。**
+   - binding 没有 `worktree`（checkout 在镜像里）时，P6 新增一行 PENDING："checkout is in SwarmAI's managed mirror; code returned from a Hive lands there"，并给出命令 `artifact_cli bind --project <P> --relocate <repo>`。
+   - 镜像干净 → 移到 `<repos_dir>/<repo>`（同盘 rename），写入 `worktree`，注册为本地仓库。
+   - 有未提交改动或未推送的提交 → 拒绝，并说明（不搬、不删）。
+   - 目前受影响的是 AIDLC 的 `adlc-workflows` 和 gbrain（`~/.swarm-ai/bindings/` 下只有这两个仓库目录）。
+6. **提示词和文档（G7d）。** `newBrainDispatch.ts:222-223`、`:260` 和 SKILL.md 的 P3 一行，都改成 `bind --url`，并说明它会克隆到工作区。
 
-**测试（先红后绿；拒绝类用例断言具体错误文字，不能只看退出码，否则今天 argparse 不认 `--url` 也会"通过"）。** 新增 `tests/test_local_binding.py`（今天没有任何测试覆盖 `record()`）与 `tests/test_artifact_cli_bind_url.py`：
-- `file://` 指向临时 bare repo：新建 `bindings.yaml`，`load_bindings` 读得回，一条 binding，`remote_kind: self-hosted-main`，分支等于 bare repo 的默认分支。
-- `https://github.com/…`（用 `--branch` 跳过网络）：`remote_kind: github-pr`、`auto_send: manual-push`。
-- 已有 `bindings.yaml`（带 `jobs:`、没有 `bindings:` 键，CMHK 的形状）：追加后能读回，`jobs` 不变，`.bak` 存在。
-- `git://`、`ext::`、带令牌的 URL：报对应错误，文件不变。
-- `github.com/a/x`（无协议）：规范化为 `https://github.com/a/x.git`。
-- 另一个 Brain 已有 `utils`、URL 不同：新条目名为 `<owner>-utils`。
-- 同一 URL 跑两次：条目数不变，不触发克隆（打桩 `bind_project` 断言没被调用）。
-- 桌面：`desktop/src/utils/__tests__/newBrainDispatch.test.ts` 断言 URL 资产的提示包含 `bind --project <name> --url`。
+**测试（先红后绿；拒绝类用例断言具体错误文字）。** 新增 `tests/test_local_binding.py`（今天没有测试覆盖 `record()`）、`tests/test_artifact_cli_bind_url.py`，扩展 `tests/test_project_agent_draft.py`、`tests/test_task_spec.py`、`tests/test_brain_sync.py`：
+- `--url` 指向临时 bare repo（`file://`），`repos_dir` 指向临时目录：
+  - 克隆到 `<repos_dir>/<name>`，binding 的 `worktree` 是这个路径；
+  - `repo_roots` 返回它；
+  - 分支等于 bare repo 的默认分支。
+- 目标目录已存在且 origin 相同 → 不调用克隆（打桩断言）；origin 不同 → 落到 `<owner>-<name>`。
+- `git://`、`ext::`、带令牌的 URL：报对应错误，什么都没克隆，文件不变。
+- `github.com/a/x`（无协议）规范化为 `https://github.com/a/x.git`。
+- `project-agent-draft`：`intake.repos` 每行有 `remote`、`branch`、`checkout`；工作区里的仓库写成 `repos_dir:<name>`。
+- `brain_sync` 打包后没有 `checkout`。
+- `task_spec.segment`：本机运行打印 checkout 和 session worktree 规则；Hive 运行的 `task_text` 不变。
+- `code-change` 模式的仓库没有本机 checkout → 校验报 "no local checkout"。
+- `[DDD:<project>]` 提示里有 checkout 那一行。
+- `--relocate`：干净镜像被移走，`worktree` 已写入，`hive_return._checkout` 返回新路径；有未提交改动 → 拒绝，镜像原样不动。
+- 桌面：`newBrainDispatch.test.ts` 断言 URL 资产的提示包含 `bind --project <name> --url`。
 
 ## 3. G2 命令解析不认包管理器
 
@@ -141,7 +180,7 @@ status: r2（一次零上下文审查后修订），待 XG 确认后实施
 1. **删掉快照条目。** TECH › Runtime Traps "Persistence and quote-fencing files are the most frequently re-fixed code"：来自当下的 git 历史，会过期（R30#4）。改成方法（"改持久化、刷新、引用防护这几块前，先看 survey 的非测试热点"），或整条删掉；`project-agent.yaml` 的 watches 里 "Persistence and quoting hot spots" 一并改掉。
 2. **推断降为 gap。** PRODUCT › Success Criteria "An install is done only when a remember/recall round trip works…" 是安装验收步骤，不是项目说的成功标准，改成 IMPROVEMENT › What to Watch For 的一条 gap。
 3. **补记没读全的文档。** What to Watch For 加一条 gap：`docs/TESTING.md`、`docs/RELEASING.md`、`docs/ENGINES.md`、`docs/architecture/topologies.md`、`docs/guides/bootstrap.md`、`docs/guides/troubleshooting.md` 只读了标题或片段。
-4. **G2 落地后**重新提交一份写明 `code-change` 的提案（命令 id 按位置编号，要重新读 facts），检查命令改成 `bun run …`；**G7a 落地后**替换 AGENTS.md 第 54 行，P6 的 PENDING 消失。
+4. **G1 落地后**对 gbrain 跑 `bind --relocate gbrain`，checkout 移到工作区；**G2 落地后**重新提交一份写明 `code-change` 的提案（命令 id 按位置编号，要重新读 facts），检查命令改成 `bun run …`；**G7a 落地后**替换 AGENTS.md 第 54 行，P6 的 PENDING 消失。
 
 ## 10. 实施顺序和提交
 
@@ -151,7 +190,7 @@ status: r2（一次零上下文审查后修订），待 XG 确认后实施
 2. G7c（skill 命令写法）
 3. G2（命令解析）
 4. G3、G4（survey，彼此独立）
-5. G1 + G7d（远程绑定 + 提示词 + P3 文档）
+5. G1 + G7d（仓库工作区设置、`bind --url` / `--relocate`、Project Agent 的仓库落位、`[DDD]` 提示、P6 行、提示词和 P3 文档）
 6. G7a、G7b（模板、打包）
 7. G5（指引）
 8. Part B（Brain 实例，在 SwarmWS，不进 git）
@@ -162,14 +201,16 @@ status: r2（一次零上下文审查后修订），待 XG 确认后实施
 - **golden set：** `scripts/eval_fixture_brains.py:95-106` 把 SKILL.md 的 P2b 一节（第 328-387 行，含 330、373、375 行）逐字嵌进 `templates/eval/golden_set.yaml`，`tests/test_eval_bootstrap_entries.py:88` 在两边不一致时变红。所以 **G7c、G4、G5 每个提交都要重新生成 golden set**，与 SKILL.md 改动放在同一个提交里。
 - **提交前：** 改动函数及其直接调用方的现有测试：`tests/test_brain_bootstrap.py`、`test_brain_bootstrap_apply.py`、`test_project_agent_draft.py`、`test_ddd_bindings.py`、`test_local_binding.py`、`test_ddd_packager.py`、`test_swarm_workspace_manager.py`（只跑 create_project 相关用例）、`test_eval_bootstrap_entries.py`，以及 `backend/skills/s_project-manager/scripts/test_verify_ddd_complete.py`。
 - **收尾一次（不变量）：**
-  1. 从一个小的公开 GitHub 仓库走完 New Brain：`create` → `bind --url` → survey → P6，全程不手写 YAML。
+  1. 从一个小的公开 GitHub 仓库走完 New Brain：`create` → `bind --url` → survey → P6，全程不手写 YAML；仓库出现在 `<repos_dir>/<repo>`，Project Agent 的 `intake.repos` 写着它，本机 `[DDD]` 提示和派单的项目段落都打印同一个 checkout。
+  6. 对 gbrain 跑 `--relocate`，然后派一个 Hive 的 `code-change`，交回的 commits 落进工作区里的 checkout，不进镜像。
   2. 新 Brain 的 P6 没有 `assets/data-source/` 的 PENDING。
   3. Bun 仓库的检查命令是 `bun run …`，默认 setup 里没有全局安装。
   4. 根目录 README 被内嵌。
   5. 在带 `scripts/` 包的目录里运行 `py -m scripts.artifact_cli --help`，跑的是打包里的那个。
-- **审查：** G1（新的写入路径和对外 CLI 接口）与 G8（安全）请 correctness 和 security 专家审；其余是小改动，不另请专家。
+- **审查：** G1（新设置、新 CLI 接口、Project Agent 定义的形状变化、跨 bind / 派单 / 交回 / 会话提示四条路径）请 correctness、security、integration 专家审；G8（安全）请 security 专家审；其余是小改动，不另请专家。
 
 ## 12. 待 XG 确认
 
-1. G5 选 B（只改指引），A 暂缓。可以吗？
-2. G1 和 G8 跨模块，G1 还新增一个 CLI 接口：直接改，还是走 pipeline？
+1. G1 的仓库工作区默认 `~/SwarmAI-Repos`，你的设为 `~/Desktop/SwarmAI-Workspace`。可以吗？
+2. G5 选 B（只改指引），A 暂缓。可以吗？
+3. G1 现在是跨四条路径的改动（bind、派单、交回、会话提示），还改了 Project Agent 定义的形状：我建议 G1 走 pipeline（full），其余各组直接改。可以吗？
