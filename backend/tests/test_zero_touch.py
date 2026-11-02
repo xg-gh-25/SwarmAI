@@ -670,3 +670,12 @@ def test_update_hive_refuses_when_it_cannot_see_the_open_runs(monkeypatch, capsy
                             {"hives": [{"id": "i1", "name": "h1", "status": "running"}]})
         assert cli.main(["update-hive", "--hive", "h1"]) == 1, fleet
     assert calls == []
+
+
+def test_a_new_brain_has_no_dangling_reference(tmp_path):
+    # fixing-spec 2026-11-02-new-brain-setup G7a: the AGENTS.md the product writes named
+    # assets/data-source/, so every new Brain carried a P6 references PENDING
+    from core.ddd_format import dangling_references
+    from core.swarm_workspace_manager import SwarmWorkspaceManager
+    _loop_run(SwarmWorkspaceManager().create_project("Fresh", str(tmp_path), assets=[]))
+    assert dangling_references(tmp_path / "Projects" / "Fresh") == []

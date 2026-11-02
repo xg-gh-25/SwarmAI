@@ -2296,3 +2296,17 @@ class TestScanContext:
             assert any(f.kind == "host-path" for f in findings), (
                 f"unknown scan_context {bad_ctx!r} must fail-CLOSED (strict scan), "
                 f"not silently skip the dev-command pattern: {findings}")
+
+
+# fixing-spec 2026-11-02-new-brain-setup G7b: the persona stub the product writes at
+# create is a placeholder, not a persona; packaging it ships "Rewrite this file" as the
+# installed agent's system prompt
+def test_the_untouched_persona_stub_refuses_to_package(tmp_path):
+    from core.swarm_workspace_manager import SECTION_SCAFFOLD
+    stub = SECTION_SCAFFOLD["SYSTEM_PROMPT.md"].format(project_name="Acme")
+    (tmp_path / "SYSTEM_PROMPT.md").write_text(stub, encoding="utf-8")
+    with pytest.raises(pk.PackagingError, match="persona"):
+        pk._read_system_prompt(tmp_path)
+    written = "# Acme — Agent\n\nYou review Acme's invoices against its contracts.\n"
+    (tmp_path / "SYSTEM_PROMPT.md").write_text(written, encoding="utf-8")
+    assert pk._read_system_prompt(tmp_path) == written

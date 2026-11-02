@@ -504,7 +504,7 @@ are generated at export — they are NOT part of the SwarmWS-native skeleton.
 `assets/<kind>/` — the DDD's **governed assets**, each keyed by an open `kind`
 (`data-source/`, `code-repo/`, `document-corpus/`, …). A data-agent brain's moat
 (the unified SDK: client + catalog + validate_sql + data-contract) is the
-`data-source` asset and lives at `assets/data-source/` — a first-class citizen,
+`data-source` asset and lives under `assets/<kind>/` (kind `data-source`) — a first-class citizen,
 NOT masquerading as a skill under ④. `assets/` is un-numbered (it sorts after ⑥
 like `.artifacts/`; numbering is read by path, not by sort). Loose misc files
 (diagrams/decks/generators) may also live under `assets/` but governed assets are
@@ -542,9 +542,9 @@ the projection LOCALLY (never PR-flowed-back — the derived-projection rule, sp
     # config.systemPrompt (AIM standard §4: systemPrompt points at a dedicated prompt
     # file, NOT AGENTS.md — AGENTS.md is the consumer entry doc, §7). Authored here at
     # provision so it exists in the DDD source and is maintained IN the brain, never
-    # conjured at export. The packager fail-loud requires it; this stub makes a fresh
-    # DDD package-ready. REWRITE this for your domain — it is what the installed agent
-    # becomes. NOT a directory map (that is AGENTS.md); it is identity + when-to-use-
+    # conjured at export. The packager fail-loud requires it, and refuses this stub
+    # while it is untouched (core/ddd_packager._read_system_prompt): REWRITE it for your
+    # domain before distributing — it is what the installed agent becomes. NOT a directory map (that is AGENTS.md); it is identity + when-to-use-
     # which-capability + how-you-ground-judgment, in package-relative terms.
     "SYSTEM_PROMPT.md": """# {project_name} — Agent
 

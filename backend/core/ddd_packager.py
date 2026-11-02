@@ -1038,6 +1038,8 @@ def _skill_description(ddd_dir: Path, raw_skill: str) -> str:
 
 
 _SYSTEM_PROMPT_FILE = "SYSTEM_PROMPT.md"
+#: a sentence only the untouched persona stub (core/swarm_workspace_manager) carries
+_PERSONA_STUB_MARK = "Rewrite this file to define who this installed agent is"
 
 
 def _read_system_prompt(ddd_dir: Path) -> str:
@@ -1063,7 +1065,17 @@ def _read_system_prompt(ddd_dir: Path) -> str:
             f"author it like README.md. The packager never falls back to AGENTS.md "
             f"(that is the consumer entry doc, not a persona) nor generates one."
         )
-    return src.read_text(encoding="utf-8")
+    text = src.read_text(encoding="utf-8")
+    # The stub every new Brain gets is a placeholder, not a persona: shipping it would
+    # make "Rewrite this file" the installed agent's system prompt. Whitespace is folded
+    # because the stub's sentence wraps across lines.
+    if _PERSONA_STUB_MARK in " ".join(text.split()):
+        raise PackagingError(
+            f"{_SYSTEM_PROMPT_FILE} at {ddd_dir} is still the stub a new Brain gets: write "
+            f"the agent's persona (what it does, when to use which skill, how it grounds "
+            f"its judgment) before packaging."
+        )
+    return text
 
 
 def _render_readme(ddd_dir: Path, skills_included: list[str]) -> str:
