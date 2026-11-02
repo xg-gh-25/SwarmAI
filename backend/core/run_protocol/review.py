@@ -821,9 +821,13 @@ class ReviewOrchestrator:
             if row is not None and row.get("expert") == fd.GATE0_EXPERT:
                 raise ReviewError(f"handoff item {index} ({finding_id}) is a Gate-0 finding: "
                                   + GATE0_CLOSES)
-            if row is None or occurrence is None or occurrence.get("round") != 1 \
+            # which findings a pass may address is ``fixable``'s answer, which the engine
+            # asks first (``address_refusal``): every finding of the visit's first pass,
+            # then its open HIGH / CRITICAL ones whichever round raised them (an R2 can),
+            # each with its cluster. Here only that the finding exists and is not closed.
+            if row is None or occurrence is None \
                     or row.get("status") not in {"open", "invalid_test", "closed_proven"}:
-                raise ReviewError(f"handoff item {index} is not an addressable R1 finding")
+                raise ReviewError(f"handoff item {index} is not an addressable finding of this review")
             if finding_id in addressed or not isinstance(hunk, str) or not hunk.strip():
                 raise ReviewError(f"handoff item {index} needs a unique finding and non-empty hunk")
             proposal = item.get("reclassify")

@@ -197,3 +197,52 @@ def test_an_answer_unreadable_twice_is_not_asked_a_third_time(rig):
     assert "stage-complete" in step["command"], step
     third = r.v1("review-start")
     assert not third.get("handouts"), third
+
+
+def _address(r: Rig, ids: list[str], marker: str, pass_number: int) -> dict:
+    r.edit({"backend/core/mod.py": BIG.replace("b + a", f"a + b  # {marker}")})
+    r.v1("report-tests", "--artifact", r.artifact(f"rep-{marker}", r.report()))
+    return r.v1("review-address", "--artifact", r.artifact(f"addr-{marker}", {
+        "pass": pass_number, "items": [{"finding_id": cid, "hunk": "@@ -2 +2 @@ return a + b",
+                                        "proof": {"evidence_type": "reported_test",
+                                                  "command": TEST_CMD}} for cid in ids]}))
+
+
+def test_a_high_new_in_r2_gets_the_one_more_pass(rig):
+    """A HIGH the R2 itself raised is a HIGH this visit raised: the card offers it one
+    more pass, and that pass is accepted (it used to be refused as not a round-1
+    finding, while next still asked for it)."""
+    r = rig()
+    (medium,) = _r1(r, _finding("MEDIUM", 30, "a wrong default"))
+    out = _address(r, [medium], "one", 1)
+    assert out.get("ok") is True, out
+    _r2(r, out, {medium: "ADEQUATE"}, _finding("HIGH", 2, "the fix kills the caller"))
+    lines = _findings(r)
+    (high,) = [cid for cid in lines if cid != medium]
+    assert lines[high].startswith("fix it"), lines
+    again = _address(r, [high], "two", 2)
+    assert again.get("ok") is True, again
+    assert again["handouts"], "the second pass's R2 must be handed out"
+    _r2(r, again, {high: "ADEQUATE"}, tag="r2b")
+    assert _findings(r)[high] == "", _findings(r)          # closed by its proven test
+    assert r.v1("stage-complete").get("ok") is True
+
+
+def test_a_high_new_in_r2_is_fixed_with_its_cluster(rig):
+    """The run that found this: R2 judged an R1 finding TEST_INADEQUATE and raised a HIGH
+    and a MEDIUM at the same place; the second pass names all three (one cluster) and is
+    accepted."""
+    r = rig()
+    (low,) = _r1(r, _finding("LOW", 4, "the child is not stopped on SIGKILL"))
+    out = _address(r, [low], "one", 1)
+    assert out.get("ok") is True, out
+    _r2(r, out, {low: "TEST_INADEQUATE"},
+        _finding("HIGH", 6, "the handler kills the caller's group") + "\n"
+        + json.dumps({"severity": "MEDIUM", "kind": "behavior", "file": "backend/core/mod.py",
+                      "line": 6, "claim": "it can kill the daemon too", "fix": "own group"}))
+    lines = _findings(r)
+    new = [cid for cid in lines if cid != low]
+    assert len(new) == 2 and all(lines[cid].startswith("fix it") for cid in new), lines
+    again = _address(r, [low, *new], "two", 2)
+    assert again.get("ok") is True, again
+    assert again["handouts"], "the second pass's R2 must be handed out"
