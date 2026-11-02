@@ -85,8 +85,11 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   a bucket count carries no text a human can act on. Upgrades JUDGMENT in layers (L0 skill
   / L1 AGENT / L2 SOUL / L3 self-model); **governance (SOUL/AGENT) is never auto-written — the
   human gate is the only promotion path.**
-- **DDD cultivation** (CDF, `core/ingestion/`) — a session's candidate knowledge goes
-  S2 extraction → judge → writer; DDD units are written only by the writer
+- **DDD cultivation** (CDF, `core/ingestion/`) — a session's knowledge is extracted by
+  the agent that holds its context (it declares each unit's type, scope and place), CDF
+  checks facts only (an empty unit, a credentialed URL, the evidence, declared relations
+  and overrides; its one model call, `user_check`, asks only whether the user's own words
+  carry a unit bound for a file read every turn), then the writer; DDD units are written only by the writer
   (`writer._render_ddd`), so no source writes a project doc directly. Nothing decays: an
   entry leaves a main file only by an override the deciding context declares (S7/S3,
   `ingestion/overrides`) or a withdrawal (`governed_edit.withdraw`), recorded outside the

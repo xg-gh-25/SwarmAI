@@ -587,9 +587,9 @@ def requeue_missing_sections(workspace_root: Path | str, target_path: Path | str
 
 # ── refactor 2026-10-29: whoever holds the context decides ────────────────────
 # Design 2026-10-29-cdf-refactor. The destination is the extractor's declaration
-# (contracts_v2.route_unit); trust is the unit's own cited evidence; one verification
-# call (judge.verify) answers what a context-free checker can; a hit in another file is
-# linked, never rewritten or hidden.
+# (contracts_v2.route_unit); trust is the unit's own cited evidence; facts are checked,
+# never what a unit says (the one model call is user_check, for the user's own words); a
+# hit in another file is linked, never rewritten or hidden.
 
 def _project_key(name: str) -> str:
     return re.sub(r"[\s_\-]+", "", name).casefold()
