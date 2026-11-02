@@ -546,3 +546,52 @@ def test_the_definition_records_where_each_repository_is_checked_out(brain, tmp_
     pad.apply(brain, {})
     doc = yaml.safe_load((brain / "project-agent.yaml").read_text())
     assert doc["intake"]["placement"]["lib"]["checkout"].startswith("repos_dir:")
+
+
+def _pkg_repo(tmp: Path, ci_test: str, lock: str | None = None) -> Path:
+    r = tmp / "repo"
+    (r / ".github" / "workflows").mkdir(parents=True)
+    (r / ".github" / "workflows" / "ci.yml").write_text(
+        f"jobs:\n  t:\n    steps:\n      - run: npm install\n      - run: {ci_test}\n")
+    (r / "package.json").write_text(json.dumps({"name": "lib", "scripts": {"test": "node t.js"}}))
+    if lock:
+        (r / lock).write_text("")
+    (r / "README.md").write_text("lib\n")
+    _git(r, "init", "-q")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-qm", "init")
+    return r
+
+
+def test_one_check_declared_twice_in_two_spellings_is_one_validation(tmp_path):
+    # `npm test` (the CI step) and `npm run test` (package.json) run the same script:
+    # the default keeps one, so a Hive does not run the tests twice per check
+    b = _brain(tmp_path, _pkg_repo(tmp_path, "npm test"))
+    doc, dropped = pad.build(b, {})
+    assert [r["command"] for r in doc["modes"][0]["validations"]] == ["npm test"]
+    # the defaults are picked without the twin, so nothing about it lands in `dropped`
+    # (which the agent reads to fix its proposal)
+    assert not any("same command" in d for d in dropped), dropped
+
+
+def test_bun_test_and_bun_run_test_are_different_commands(tmp_path):
+    # `bun test` is bun's own test runner; `bun run test` runs package.json's script
+    b = _brain(tmp_path, _pkg_repo(tmp_path, "bun test", lock="bun.lock"))
+    doc, _ = pad.build(b, {})
+    assert sorted(r["command"] for r in doc["modes"][0]["validations"]) == ["bun run test", "bun test"]
+
+
+def test_a_proposal_naming_one_check_twice_keeps_the_first_and_says_so(tmp_path):
+    b = _brain(tmp_path, _pkg_repo(tmp_path, "npm test"))
+    ids = {c["command"]: c["id"] for c in pad.survey(b)["commands"]}
+    proposal = {"modes": [{"id": "code-change", "source": "TECH.md",
+                           "validations": [ids["npm test"], ids["npm run test"]]}]}
+    doc, dropped = pad.build(b, proposal)
+    code = next(m for m in doc["modes"] if m["id"] == "code-change")
+    assert [r["command"] for r in code["validations"]] == ["npm test"]
+    assert any("the same command as" in d and "npm run test" in d for d in dropped), dropped
+
+
+def test_the_contract_says_what_a_validation_is():
+    text = json.dumps(pad.PROPOSAL_CONTRACT)
+    assert "every change" in text and "release" in text

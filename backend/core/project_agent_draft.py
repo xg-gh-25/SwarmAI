@@ -71,6 +71,10 @@ PROPOSAL_CONTRACT: dict[str, Any] = {
             **std.MODE_PROPOSAL_KEYS,
         }],
     },
+    "validations": ("a validation is a check the repo asks for before every change (its "
+                    "contributing or agent guide, else the CI step that tests each push); a CI "
+                    "step run only for a release, nightly or across a matrix (end-to-end suites, "
+                    "packaging) is not one. One check declared in two spellings is one row"),
     "defaults": ("the standard modes (templates/project-agents/STANDARD.md): research always; "
                  "code-change when the Brain has a bound repo, its setup / validations default "
                  "to the install steps / the validations.json entries (else the check commands) "
@@ -99,6 +103,16 @@ def _validations_json(repo: str, root: Path) -> list[dict[str, Any]]:
                 item["cwd"] = _cwd(e.get("cwd"))
             out.append(item)
     return out
+
+
+#: npm, pnpm and yarn run a package.json lifecycle script both ways: ``npm test`` is
+#: ``npm run test``. ``bun test`` is not: it is bun's own test runner.
+_LIFECYCLE_RE = re.compile(r"^(npm|pnpm|yarn) (test|start|stop|restart)(?=\s|$)")
+
+
+def _same_command(command: str) -> str:
+    """One spelling of a command, so two declarations of one check are one row."""
+    return _LIFECYCLE_RE.sub(r"\1 run \2", command.strip())
 
 
 def _cwd(v: Any) -> Optional[str]:
@@ -336,10 +350,17 @@ class _Builder:
             self.drop(where, "not a list")
             return []
         rows: list[dict[str, str]] = []
+        first: dict[tuple, str] = {}
         for i, item in enumerate(items):
             row = self.command_row(f"{where}[{i}]", item, with_id, repos)
-            if row and row not in rows:
-                rows.append(row)
+            if not row or row in rows:
+                continue
+            key = (row["repo"], row.get("cwd"), _same_command(row["command"]))
+            if key in first:
+                self.drop(f"{where}[{i}]", f"{row['command']!r} is the same command as {first[key]!r}")
+                continue
+            first[key] = row["command"]
+            rows.append(row)
         if with_id:
             seen: dict[str, int] = {}
             for row in rows:
@@ -368,7 +389,7 @@ def _default_commands(commands: list[dict[str, Any]], role: str) -> list[str]:
             picked = [c for c in picked if c["kind"] != "ci_run" or Path(c["source"]).stem.lower() == "ci"]
         seen: set[tuple] = set()
         for c in picked:
-            key = (c["command"], c.get("cwd"))
+            key = (_same_command(c["command"]), _cwd(c.get("cwd")))
             if key not in seen:
                 seen.add(key)
                 out.append(c["id"])
