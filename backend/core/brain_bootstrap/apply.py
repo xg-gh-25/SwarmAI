@@ -278,12 +278,15 @@ def check_entry(entry, evidence: Evidence, stamp: str) -> dict:
 
 def entry_contract(project_dir: str | Path | None = None, *,
                    repo_names: list[str] | None = None) -> dict:
-    """The entry format, for the agent that writes the entries file: generated from the
-    constants ``validate`` and the renderer enforce (tests hold each rule to its
-    enforcement), so it says nothing they do not. With *project_dir* it also names the
+    """The entry format, for the agent that writes the entries file, and the standard it
+    extracts to. The format is generated from the constants ``validate`` and the renderer
+    enforce (tests hold each rule to its enforcement), so it says nothing they do not;
+    ``knowledge_standard`` (core/knowledge_standard, CDF's own) is what is worth writing,
+    read while writing and never checked against an entry. With *project_dir* it also names the
     repos that brain owns — none means only ``file:``, ``url:`` and ``user`` can be
     cited; *repo_names* gives those names directly (the eval fixtures, whose brains are
     not bound). Written to ``CONTRACT_FILE`` by ``write_entry_contract``."""
+    from core import knowledge_standard as ks
     from core.ddd_entry_lifecycle import COMMENT_MARKERS, TITLE_FORBIDDEN
     from core.ddd_skeleton import GAP_SECTION, SECTION_TYPES, skeleton_sections, DOCS
     typed = {place: sorted(types) for place, types in SECTION_TYPES.items()}
@@ -342,6 +345,9 @@ def entry_contract(project_dir: str | Path | None = None, *,
             "url:<http(s) URL>": "a web page",
             "user": "the person's own answer (the only source that is not outside content)",
         },
+        # what is worth writing, the same standard CDF's session review extracts to
+        # (core/knowledge_standard): read while writing, never checked against an entry
+        "knowledge_standard": ks.sentences(),
         "sections": sections,
         "refusals": dict(REFUSALS),
         **({} if repos is None else {"repos": repos}),

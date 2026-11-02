@@ -38,6 +38,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from core import knowledge_standard as ks
 from core.ingestion import api_v2, contracts_v2
 from core.ingestion.llm_usage import attribute
 
@@ -360,6 +361,17 @@ def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, reco
                       for kind in allowed if contracts_v2.UNIT_RULES.get(kind))
     window = (f" This is part {part[0]} of {part[1]} of the record since your last review."
               if part[1] > 1 else "")
+    # the knowledge standard every door extracts to (core/knowledge_standard); item 7 sets
+    # this record's own rules between its sentences
+    keep, stands = ks.item(2, ks.KEEP_ONLY_IF), ks.item(3, ks.STANDS_ALONE)
+    stays = ks.item(7, " ".join([
+        "Record what stays true, as it stands at the end of this record.", ks.NOT_KNOWLEDGE[0],
+        "A problem the record leaves open at its end is a gap; one opened and solved within it "
+        "is not. Something that changed how the work stands is an event, worded as it stands now "
+        '("X fixed", not "root cause of X found" when the fix followed). A bug found and fixed '
+        "within this record is not a pitfall: the fix is an event, and a lesson is only the "
+        "general rule that would have caught it, when that rule holds beyond this one piece of "
+        "code.", *ks.NOT_KNOWLEDGE[1:]]))
     return f"""A conversation you had with the person has been quiet for an hour; it may go on
 later, and an earlier review of it may already have recorded part of it. Review the work
 since your last review and record what is worth keeping, by calling {extract_llm.TOOL_NAME}.
@@ -375,12 +387,8 @@ concluded is in what you said; that is what to record from.
    (debt, a risk, a deferred finding, a process issue) as gaps, and what happened that
    matters later as events. The next steps of the work are not recorded here: the
    session's own activity summary makes them ToDos.
-2. Keep a unit only if all three hold: it is useful in another task; a capable person who
-   was not here would go wrong or waste time without it; you can point to its evidence.
-3. Write each unit as situation (applicability: a recognisable trigger, not "when
-   developing"), judgment (what; how for a process), reason (why; for a decision also
-   rejected_alternatives) and evidence. It must stand on its own for a reader who was
-   not here: no "above", "this" or "plan A".
+{keep}
+{stands}
 4. The seven types, each recognised by one question:
 {types}
 5. Ask about yourself as well (scope "agent"): where was your judgment wrong this time, why
@@ -404,18 +412,7 @@ concluded is in what you said; that is what to record from.
    - a project's knowledge: only what changes how a later judgment in that project is
      made (a decision, a model, a pitfall with the sign that it is coming). What this
      session did is in git and the daily activity, not in the project's knowledge.
-7. Record what stays true, as it stands at the end of this record. The state of the
-   moment (not pushed, needs a build, not verified yet, a count that will change) is not
-   knowledge and is not written into any unit. A problem the record leaves open at its
-   end is a gap; one opened and solved within it is not. Something that changed how the
-   work stands is an event, worded as it stands now ("X fixed", not "root cause of X
-   found" when the fix followed). A bug found and fixed within this record is not a
-   pitfall: the fix is an event, and a lesson is only the general rule that would have
-   caught it, when that rule holds beyond this one piece of code. What one look at the code
-   or the data answers (a signature, a schema, a constant's value, a file's layout) is no
-   lesson. A problem still open is a gap, never a lesson. Commit hashes, run ids, version
-   numbers of a document and approval dates are evidence, not knowledge: they stay out of
-   a unit's text.
+{stays}
 8. Per kind of work:
 {_EXAMPLES}
 

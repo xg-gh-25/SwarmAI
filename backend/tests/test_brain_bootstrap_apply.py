@@ -502,3 +502,10 @@ def test_a_refusal_must_name_its_kind() -> None:
         ap.Rejected("no kind")  # type: ignore[call-arg]
     with pytest.raises(ValueError):
         ap.Rejected("bad kind", "doc")
+
+
+def test_the_contract_carries_the_knowledge_standard_every_door_extracts_to() -> None:
+    # the agent writing a new Brain's first entries reads the same standard CDF's
+    # session review extracts to (core/knowledge_standard): one copy, two doors
+    from core import knowledge_standard as ks
+    assert ap.entry_contract()["knowledge_standard"] == ks.sentences()

@@ -83,6 +83,14 @@
   "url:<http(s) URL>": "a web page",
   "user": "the person's own answer (the only source that is not outside content)"
  },
+ "knowledge_standard": [
+  "Keep a unit only if all three hold: it is useful in another task; a capable person who was not here would go wrong or waste time without it; you can point to its evidence.",
+  "Write each unit as situation (applicability: a recognisable trigger, not \"when developing\"), judgment (what; how for a process), reason (why; for a decision also rejected_alternatives) and evidence. It must stand on its own for a reader who was not here: no \"above\", \"this\" or \"plan A\".",
+  "The state of the moment (not pushed, needs a build, not verified yet, a count that will change) is not knowledge and is not written into any unit.",
+  "What one look at the code or the data answers (a signature, a schema, a constant's value, a file's layout) is no lesson.",
+  "A problem still open is a gap, never a lesson.",
+  "Commit hashes, run ids, version numbers of a document and approval dates are evidence, not knowledge: they stay out of a unit's text."
+ ],
  "sections": [
   {
    "doc": "PRODUCT.md",

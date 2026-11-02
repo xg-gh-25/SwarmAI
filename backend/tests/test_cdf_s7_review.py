@@ -550,3 +550,12 @@ def test_the_prompt_states_when_each_destination_is_written():
                    "changes how a later judgment"):
         assert needle in prompt, needle
     assert "your own context" not in prompt                      # no fork: the record is all it reads
+
+
+def test_the_review_prompt_carries_the_shared_knowledge_standard():
+    from core import knowledge_standard as ks
+    from core.ingestion import contracts_v2
+    from core.ingestion.sources import s7_review
+    prompt = " ".join(s7_review.build_prompt(tuple(contracts_v2.UNIT_RULES), {}, "I", "R").split())
+    for sentence in ks.sentences():
+        assert " ".join(sentence.split()) in prompt, sentence
