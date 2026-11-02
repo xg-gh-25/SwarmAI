@@ -626,6 +626,14 @@ def test_the_source_check_of_one_package_json_sees_the_lockfile_beside_it(tmp_pa
 
 # ── tier-1 reading order (fixing-spec 2026-11-02 G3) ───────────────────────────
 
+def test_a_root_readme_without_an_extension_is_a_document():
+    from core.brain_bootstrap.docs import _root_readme, is_doc
+    assert is_doc("README") and is_doc("readme")
+    assert not is_doc("pkg/README") and not is_doc("LICENSE")
+    assert _root_readme(["README", "docs/guide.md"]) == "README"
+    assert _root_readme(["README", "README.md"]) == "README.md"
+
+
 def test_the_root_readme_and_agent_guide_are_read_before_better_linked_docs(tmp_path):
     from core.brain_bootstrap import docs as _docs
     body = "This document explains one part of the project in plain words.\n" * 14

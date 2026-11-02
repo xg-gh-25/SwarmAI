@@ -78,12 +78,13 @@ def _hidden_ok(rel: str) -> bool:
 
 def is_doc(rel: str) -> bool:
     """A document this survey ranks (by extension; ``.txt`` only in a docs directory or
-    under a well-known name, so ``requirements.txt`` is not a document)."""
+    under a well-known name, so ``requirements.txt`` is not a document; and a root
+    ``README`` with no extension, as older repositories name it)."""
     if not _hidden_ok(rel) or any(d in _NOT_DOC_DIRS for d in _dirs(rel)):
         return False
     ext = posixpath.splitext(rel)[1].lower()
     if ext not in DOC_EXTS:
-        return rel in _CODEOWNERS
+        return rel in _CODEOWNERS or rel.lower() == "readme"
     if ext == ".txt":
         return bool(_DOC_DIRS & set(_dirs(rel))) or _stem(rel) in _TXT_DOC_STEMS
     return True
