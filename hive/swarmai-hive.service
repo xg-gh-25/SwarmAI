@@ -34,9 +34,15 @@ Environment=CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 # denying all non-public requests — never fails open).
 EnvironmentFile=-/etc/swarmai/hive-auth.env
 
-# Resource limits — m7g.xlarge has 16GB, budget 6GB for backend
+# Resource limits. The service runs the daemon AND every task's builds and tests, so its
+# memory is a share of the machine (the rest is for the system, Caddy and the SSM agent),
+# never a fixed size picked for the daemon alone.
+# OOMPolicy=continue: when one process goes over (a large repository's type check), the
+# kernel kills that process and the Hive keeps running; the task sees its command fail.
+# The default (stop) stopped the whole service and ended every run on the Hive.
 LimitNOFILE=65535
-MemoryMax=6G
+MemoryMax=85%
+OOMPolicy=continue
 
 # Logging to journald
 StandardOutput=journal
