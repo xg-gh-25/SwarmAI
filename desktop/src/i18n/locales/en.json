@@ -1248,6 +1248,13 @@
       "awsLocalLead": "No Swarm AWS account is connected yet; Hives, cloud storage and voice need one.",
       "connect": "Connect an account"
     },
+    "reposDir": {
+      "title": "Repository workspace",
+      "description": "Where a Brain's code repositories are cloned when you give a URL. Each one is a normal checkout you can open and work in; code a Hive sends back lands there.",
+      "save": "Save",
+      "saved": "Saved",
+      "error": "Could not save the folder"
+    },
     "accent": {
       "title": "Accent Color",
       "description": "Personalize the primary color used across buttons, links, and highlights."

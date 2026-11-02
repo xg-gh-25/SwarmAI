@@ -467,6 +467,29 @@ def _check_delivery(d: Path, assets: list[dict[str, Any]]) -> tuple[str, str, st
             f"{len(assets)} governed asset(s): {', '.join(_label(a) for a in assets)}")
 
 
+def _check_repo_placement(d: Path) -> tuple[str, str, str]:
+    """⑤ Repository placement: each bound code repository has a checkout the person works
+    in (core.repo_placement). One that lives in SwarmAI's bind-managed mirror is
+    PENDING: a Hive's returned commits would land there, and a re-bind moves it aside;
+    ``bind --relocate`` moves it into the repository workspace. No repository: N/A."""
+    name = "⑤ Repository placement"
+    try:
+        from core.repo_placement import placement
+        from core.project_agent import repo_roots
+        where = placement(d)
+        roots = repo_roots(d)
+    except Exception as exc:  # noqa: BLE001 — a foreign host without the backend
+        return (name, STATUS_NA, f"not checked here ({type(exc).__name__})")
+    if not where:
+        return (name, STATUS_NA, "no code repository bound")
+    mirrored = [r for r, p in where.items() if p["checkout"] == "mirror" and r in roots]
+    if mirrored:
+        return (name, STATUS_PENDING,
+                "checkout in SwarmAI's managed mirror, where a Hive's commits would land: "
+                + "; ".join(f"artifact_cli bind --project {d.name} --relocate {r}" for r in mirrored))
+    return (name, STATUS_PASS, ", ".join(f"{r}: {p['checkout']}" for r, p in where.items()))
+
+
 def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[str, str, str]:
     """⑥ REFRESHER / code-intel — THE asset-aware check.
 
@@ -599,6 +622,7 @@ def verify_project(project_dir: str | Path) -> dict[str, Any]:
         _check_capabilities(d, aim),
         _check_delivery(d, assets),
         _check_project_agent(d),
+        _check_repo_placement(d),
         _check_refresher_code_intel(d, _code_repo_assets(raw)),
     ]
     check_dicts = [{"name": n, "status": s, "detail": t} for (n, s, t) in checks]

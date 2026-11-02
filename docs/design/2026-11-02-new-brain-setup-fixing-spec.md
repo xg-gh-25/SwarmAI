@@ -4,7 +4,7 @@ date: 2026-11-02
 created: 2026-11-02
 updated: 2026-11-02
 project: SwarmAI
-status: r3（G1 按 XG 要求重写：仓库落位进 Project Agent），待 XG 确认后实施
+status: r3，实施中（XG 2026-11-02：全部直接改）
 ---
 
 # New Brain 建立流程 fixing-spec
@@ -90,6 +90,12 @@ status: r3（G1 按 XG 要求重写：仓库落位进 Project Agent），待 XG 
    - 有未提交改动或未推送的提交 → 拒绝，并说明（不搬、不删）。
    - 目前受影响的是 AIDLC 的 `adlc-workflows` 和 gbrain（`~/.swarm-ai/bindings/` 下只有这两个仓库目录）。
 6. **提示词和文档（G7d）。** `newBrainDispatch.ts:222-223`、`:260` 和 SKILL.md 的 P3 一行，都改成 `bind --url`，并说明它会克隆到工作区。
+
+**实施时的三处调整（2026-11-02，直接改时按源码定）。**
+
+- **落位写在新键 `intake.placement`，不改 `intake.repos` 的形状。** 所有读者（`project_agent.validate`、`load_project_agent`、`project_agent_draft`）都把 `intake.repos` 当名字列表读；Hive 可能跑旧版本，旧版会把对象过滤掉，再报 "not in intake.repos"。validator 本来就忽略未知键，所以新键不影响旧读者。
+- **只拒绝"commits 落进镜像"，不拒绝"本机没有 checkout"。** 没有 checkout 时，`hive_return` 交回会等到仓库绑定后再落地，不是已观测到的缺陷（P9）；落进镜像才是。拒绝放在 `task_spec.admit`（只对 `returns == commits`），没放进 P6 与准入共用的 `dispatch_problems`。
+- **派单的项目段落不变。** 目前只有 Hive 一种派单位置，Hive 端的工作区说明（`task_text`）已经写明在哪写代码；本机这一侧由 `[DDD:<project>]` 提示给出 checkout 和规则。
 
 **测试（先红后绿；拒绝类用例断言具体错误文字）。** 新增 `tests/test_local_binding.py`（今天没有测试覆盖 `record()`）、`tests/test_artifact_cli_bind_url.py`，扩展 `tests/test_project_agent_draft.py`、`tests/test_task_spec.py`、`tests/test_brain_sync.py`：
 - `--url` 指向临时 bare repo（`file://`），`repos_dir` 指向临时目录：

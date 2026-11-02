@@ -118,3 +118,61 @@ def test_the_entry_is_taken_from_the_hit_section_only(tmp_path):
     hit = _best_entry_of_section({"doc": "TECH.md", "section": "Architecture"}, base,
                                  {"TECH.md": text}, "quokkas midnight")
     assert "Quokka rule" in hit["content"]
+
+
+def test_the_ddd_pointer_says_where_the_code_is_and_where_to_write_it(tmp_path, monkeypatch):
+    # fixing-spec 2026-11-02-new-brain-setup G1: an agent coding natively learns the
+    # repository's checkout and the rule (a session worktree of it), not only the Brain
+    import subprocess
+    from types import SimpleNamespace
+    from core import session_router as sr
+    repo = tmp_path / "Repos" / "app"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    base = tmp_path / "Projects" / "P"
+    base.mkdir(parents=True)
+    (base / "bindings.yaml").write_text(
+        "bindings:\n  - repo: app\n    kind: external\n    clone: https://github.com/acme/app.git\n"
+        f"    worktree: {repo}\n    delivery_contract: {{remote_kind: github-pr, branch: main, "
+        "review_path: local, auto_send: manual-push}\n")
+    monkeypatch.setattr("core.repo_placement.repos_dir", lambda: tmp_path / "Repos")
+    monkeypatch.setattr("core.addressing.project_root", lambda project: base)
+    monkeypatch.setattr(sr, "_record_ddd_inject", lambda *a: None)
+    got: list[str] = []
+    sr._inject_ddd_for_active_project(SimpleNamespace(system_prompt=""), "继续",
+                                      ("P", "signal1_project_path"), deliver=got.append)
+    assert len(got) == 1 and "[DDD:P]" in got[0]
+    assert f"checkout {repo.resolve()}" in got[0] and "session_worktree create" in got[0]
+
+
+def test_a_brain_without_a_repository_gets_no_repository_lines(tmp_path):
+    from core.session_router import _ddd_repo_lines
+    (tmp_path / "P").mkdir()
+    assert _ddd_repo_lines(tmp_path / "P") == ""
+    assert _ddd_repo_lines(None) == ""
+
+
+def test_the_ddd_block_with_hits_also_says_where_the_code_is(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+    from core import session_router as sr
+    repo = tmp_path / "Repos" / "app"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    base = tmp_path / "Projects" / "P"
+    (base / "2-understanding").mkdir(parents=True)
+    (base / "2-understanding" / "TECH.md").write_text(TECH, encoding="utf-8")
+    (base / "bindings.yaml").write_text(
+        "bindings:\n  - repo: app\n    kind: external\n    clone: https://github.com/acme/app.git\n"
+        f"    worktree: {repo}\n    delivery_contract: {{remote_kind: github-pr, branch: main, "
+        "review_path: local, auto_send: manual-push}\n")
+    monkeypatch.setattr("core.repo_placement.repos_dir", lambda: tmp_path / "Repos")
+    monkeypatch.setattr(sr, "_record_ddd_inject", lambda *a: None)
+    hit = {"doc": "TECH.md", "section": "Architecture",
+           "content": "- [pitfall] **Quokka rule** — never feed quokkas after midnight."}
+    monkeypatch.setattr("core.recall_multi.recall_all",
+                        lambda *a, **k: SimpleNamespace(buckets={"ddd": [hit]}))
+    monkeypatch.setattr("core.recall_multi._load_ddd_docs_text", lambda project: (base, {"TECH.md": TECH}))
+    got: list[str] = []
+    sr._inject_ddd_for_active_project(SimpleNamespace(system_prompt=""), "quokka rule after midnight",
+                                      ("P", "signal1_project_path"), deliver=got.append)
+    assert len(got) == 1 and "Quokka rule" in got[0]
+    assert f"checkout {repo.resolve()}" in got[0]

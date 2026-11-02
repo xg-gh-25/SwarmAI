@@ -642,3 +642,35 @@ def test_bindings_repo_does_not_change_the_delivery_detail(tmp_path):
                 "      review_path: pr\n      auto_send: manual\n")
     d = _make_ddd(tmp_path, "Deliv", bindings_yaml=bindings)
     assert "governed asset(s)" not in _detail_of(gate.verify_project(d), "delivery")
+
+
+# ── ⑤ Repository placement (fixing-spec 2026-11-02-new-brain-setup G1) ───────
+
+def _placed_brain(tmp_path, monkeypatch, *, worktree: str | None):
+    import subprocess
+    bindings = tmp_path / "bindings"
+    monkeypatch.setattr("core.ddd_bindings._default_bindings_root", lambda: bindings)
+    monkeypatch.setattr("core.repo_placement.repos_dir", lambda: tmp_path / "Repos")
+    checkout = Path(worktree) if worktree else bindings / "app"
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    d = tmp_path / "Projects" / "B"
+    d.mkdir(parents=True)
+    (d / "bindings.yaml").write_text(
+        "bindings:\n  - repo: app\n    kind: external\n    clone: https://github.com/acme/app.git\n"
+        f"    worktree: {worktree or 'null'}\n    delivery_contract: {{remote_kind: github-pr, "
+        "branch: main, review_path: local, auto_send: manual-push}\n")
+    return d
+
+
+def test_a_checkout_in_the_managed_mirror_is_pending_with_the_relocate_command(tmp_path, monkeypatch):
+    name, status, detail = gate._check_repo_placement(_placed_brain(tmp_path, monkeypatch, worktree=None))
+    assert status == gate.STATUS_PENDING and "--relocate app" in detail
+
+
+def test_a_checkout_in_the_workspace_passes(tmp_path, monkeypatch):
+    d = _placed_brain(tmp_path, monkeypatch, worktree=str(tmp_path / "Repos" / "app"))
+    assert gate._check_repo_placement(d)[1:] == (gate.STATUS_PASS, "app: repos_dir:app")
+
+
+def test_no_repository_is_not_applicable(tmp_path):
+    assert gate._check_repo_placement(tmp_path)[1] == gate.STATUS_NA

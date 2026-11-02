@@ -350,8 +350,14 @@ def cmd_bind(args, reg) -> None:
     """
     from core.ddd_bindings import bind_project
 
+    if sum(bool(getattr(args, k, None)) for k in ("local", "url", "relocate")) > 1:
+        print(json.dumps({"error": "give one of --local, --url, --relocate"}), file=sys.stderr)
+        sys.exit(2)
     if getattr(args, "local", None):
         _bind_local(args.project, args.local, source=getattr(args, "source", "agent"))
+        return
+    if getattr(args, "url", None) or getattr(args, "relocate", None):
+        _bind_into_workspace(args)
         return
     try:
         outcomes = bind_project(args.project)
@@ -392,6 +398,28 @@ def cmd_bind(args, reg) -> None:
     # Run-level failure ONLY when there were bindings and every one failed.
     if outcomes and all(o.status == "failed" for o in outcomes):
         sys.exit(1)
+
+
+def _bind_into_workspace(args) -> None:
+    """``bind --url``: clone the repository into the repository workspace
+    (``core.repo_placement``), then read it in place like ``--local``. ``bind
+    --relocate <repo>``: move a binding's bind-managed mirror into the workspace, then
+    the same. Either way the Brain ends with one checkout the person can see and work in,
+    where a Hive's returned commits land (fixing-spec 2026-11-02 G1)."""
+    from core import repo_placement as rp
+    projects = _get_workspace() / "Projects"
+    try:
+        if args.url:
+            url = rp.normalize_url(args.url)
+            root, cloned = rp.clone_into_workspace(url, getattr(args, "branch", None))
+        else:
+            root, cloned = rp.relocate(projects / args.project, args.relocate), False
+    except rp.PlacementError as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"checkout": str(root), "cloned": cloned,
+                      "relocated": bool(getattr(args, "relocate", None))}), file=sys.stderr)
+    _bind_local(args.project, str(root), source=getattr(args, "source", "agent"))
 
 
 def _bind_local(project: str, path: str, *, source: str = "agent") -> None:
@@ -695,8 +723,17 @@ def main() -> None:
                         help="read the user's own checkout PATH in place: it becomes a local root "
                              "of the project now and its graph is built by a child process "
                              "(instead of PULLing bindings.yaml)")
+    p_bind.add_argument("--url", default=None, metavar="URL",
+                        help="clone the repository at URL into the repository workspace "
+                             "(repos_dir, default ~/SwarmAI-Repos) and read it in place like "
+                             "--local; the same repository already there is reused")
+    p_bind.add_argument("--branch", default=None, help="with --url: the branch to check out")
+    p_bind.add_argument("--relocate", default=None, metavar="REPO",
+                        help="move REPO's bind-managed mirror (~/.swarm-ai/bindings/REPO) into "
+                             "the repository workspace and read it there; refused when it holds "
+                             "unpushed work")
     p_bind.add_argument("--source", default="agent", choices=("agent", "new-brain"),
-                        help="with --local: who declared it, shown on the Brain Hub card")
+                        help="with --local / --url: who declared it, shown on the Brain Hub card")
 
     # survey (design 2026-10-27 §5.2-§5.3: inventory the owned repos, index their docs in place)
     p_survey = sub.add_parser("survey", help="Survey a project's repos into survey.json and index their docs for recall")

@@ -527,3 +527,22 @@ def test_bun_install_is_setup_and_a_global_install_is_not():
     assert _role({**ci, "command": 'npm install -g "@openai/codex@1"'}) != "setup"
     assert _role({**ci, "command": "pnpm add --global turbo"}) != "setup"
     assert _role({**ci, "command": "npm ci"}) == "setup"
+
+
+def test_the_definition_records_where_each_repository_is_checked_out(brain, tmp_path, monkeypatch):
+    # fixing-spec 2026-11-02-new-brain-setup G1: the placement is derived (never judged)
+    # and a kind, never a path; a reader that predates the key ignores it
+    import yaml
+    from core.project_agent import validate
+    monkeypatch.setattr("core.repo_placement.repos_dir", lambda: tmp_path / "Repos")
+    pad.apply(brain, {})
+    doc = yaml.safe_load((brain / "project-agent.yaml").read_text())
+    p = doc["intake"]["placement"]["lib"]
+    assert p["checkout"] == "local" and p["branch"] and str(tmp_path) not in yaml.safe_dump(p)
+    assert doc["intake"]["repos"] == ["lib"]               # the list older readers use, unchanged
+    assert validate(doc, brain) == []
+    # a checkout in the repository workspace is named by its place there
+    monkeypatch.setattr("core.repo_placement.repos_dir", lambda: tmp_path)
+    pad.apply(brain, {})
+    doc = yaml.safe_load((brain / "project-agent.yaml").read_text())
+    assert doc["intake"]["placement"]["lib"]["checkout"].startswith("repos_dir:")

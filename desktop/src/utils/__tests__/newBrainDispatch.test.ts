@@ -149,6 +149,15 @@ describe('buildAddKnowledgePrompt / buildResumeSetupPrompt', () => {
     expect(p).toContain('- ~/docs/runbook.md');
     for (const s of ['s_ddd-persist', 's_learn-content', 's_library', 'proposal for me to review', '--record']) expect(p).toContain(s);
   });
+  it('a URL is bound with bind --url, which clones it into the repository workspace', () => {
+    // fixing-spec 2026-11-02-new-brain-setup G1: a bare `bind` on a Brain with no
+    // bindings.yaml binds nothing, and the old path cloned into a hidden mirror
+    const add = buildAddKnowledgePrompt('Acme', [{ value: 'github.com/acme/billing', role: 'GOVERN' }]);
+    expect(add).toContain('artifact_cli bind --url');
+    const create = buildBrainManifest('Acme', [{ value: 'https://github.com/acme/billing', role: 'GOVERN' }]);
+    expect(create).toContain('artifact_cli bind --project <name> --url <url>');
+    expect(create).toContain('repository workspace');
+  });
   it('a resume verifies first, binds before knowledge, and redoes nothing', () => {
     const p = buildResumeSetupPrompt('Acme');
     expect(p).toContain('P6 check first');

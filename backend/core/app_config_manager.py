@@ -105,6 +105,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # detected/toggled deployment context so Settings shows the same card set.
     "deployment_context": None,
     "sandbox_additional_write_paths": "~/.swarm-ai/",
+    # The repository workspace: where `artifact_cli bind --url` clones a Brain's code
+    # repository, so it has one checkout the person can see and work in (core/repo_placement).
+    "repos_dir": "~/SwarmAI-Repos",
     "sandbox_enabled_default": False,
     "sandbox_auto_allow_bash": True,
     "sandbox_excluded_commands": "docker,ps,pgrep,pkill,top,open,screencapture,osascript,launchctl",

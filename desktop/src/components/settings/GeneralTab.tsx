@@ -1,9 +1,13 @@
 /**
- * General settings tab: Language + Theme.
+ * General settings tab: Language + Theme + Accent + the repository workspace.
  *
- * Extracted from SettingsPage.tsx — same UI, scoped to its own tab.
+ * Extracted from SettingsPage.tsx — same UI, scoped to its own tab. The repository
+ * workspace (`repos_dir`) is where `artifact_cli bind --url` clones a Brain's code
+ * repository (backend core/repo_placement.py).
  */
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { settingsService } from '../../services/settings';
 import { useTheme, ACCENT_PRESETS } from '../../contexts/ThemeContext';
 import { LANGUAGE_STORAGE_KEY } from '../../i18n';
 
@@ -15,6 +19,23 @@ export default function GeneralTab() {
   const handleLanguageChange = (lang: 'zh' | 'en') => {
     i18n.changeLanguage(lang);
     localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  };
+
+  const [reposDir, setReposDir] = useState('');
+  const [reposStatus, setReposStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+  useEffect(() => {
+    settingsService.getAPIConfiguration()
+      .then((cfg) => setReposDir(typeof cfg.reposDir === 'string' ? cfg.reposDir : ''))
+      .catch(() => setReposStatus('error'));
+  }, []);
+  const saveReposDir = async () => {
+    try {
+      const cfg = await settingsService.updateAPIConfiguration({ reposDir: reposDir.trim() });
+      setReposDir(typeof cfg.reposDir === 'string' ? cfg.reposDir : reposDir);
+      setReposStatus('saved');
+    } catch {
+      setReposStatus('error');
+    }
   };
 
   return (
@@ -66,6 +87,33 @@ export default function GeneralTab() {
             </button>
           ))}
         </div>
+      </section>
+
+      {/* Repository workspace */}
+      <section className="bg-[var(--color-card)] rounded-lg p-6 border border-[var(--color-border)]">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">{t('settings.reposDir.title')}</h2>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">{t('settings.reposDir.description')}</p>
+        <div className="flex gap-3 items-center">
+          <input
+            aria-label={t('settings.reposDir.title')}
+            value={reposDir}
+            onChange={(e) => { setReposDir(e.target.value); setReposStatus('idle'); }}
+            placeholder="~/SwarmAI-Repos"
+            className="flex-1 px-3 py-2 rounded-lg text-sm font-mono bg-[var(--color-bg)] text-[var(--color-text)] border border-[var(--color-border)]"
+          />
+          <button
+            onClick={saveReposDir}
+            disabled={!reposDir.trim()}
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-[var(--color-primary)] text-white disabled:opacity-50"
+          >
+            {t('settings.reposDir.save')}
+          </button>
+        </div>
+        {reposStatus !== 'idle' && (
+          <p className={`text-xs mt-2 ${reposStatus === 'error' ? 'text-[var(--color-error)]' : 'text-[var(--color-text-muted)]'}`}>
+            {t(`settings.reposDir.${reposStatus}`)}
+          </p>
+        )}
       </section>
 
       {/* Accent Color */}

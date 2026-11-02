@@ -220,7 +220,8 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
       'artifact_cli classify-starter for a folder whose role is unclear → P3 bind each repo ' +
       'first, which also surveys it: a local path with `artifact_cli bind --project <name> --local <path> ' +
       '--source new-brain` (read in place, owned at once, its graph built in the background), a URL with ' +
-      '`artifact_cli bind` → P2 read the survey and the material whole, write the first typed ' +
+      '`artifact_cli bind --project <name> --url <url> --source new-brain` (cloned into the repository ' +
+      'workspace, then read in place the same way) → P2 read the survey and the material whole, write the first typed ' +
       'entries section by section into bootstrap-entries.json, write them with artifact_cli ' +
       'bootstrap-apply (fix what it rejects), and give every PRODUCT or TECH section it reports without ' +
       'evidence its gap → P3b draft the Project Agent (artifact_cli project-agent-draft) from this ' +
@@ -257,7 +258,7 @@ function materialLines(items: StarterItem[], notes: Record<StarterRole, string>)
 export function buildAddKnowledgePrompt(name: string, items: StarterItem[]): string {
   const lines = [`Add knowledge to the "${name.trim()}" Brain (s_project-manager: Add knowledge to an existing Brain).`, '', 'Material:'];
   lines.push(...materialLines(items, {
-    GOVERN: 'GOVERN (a new asset: a local path with `artifact_cli bind --local`, read in place; a URL in bindings.yaml and `artifact_cli bind`)',
+    GOVERN: 'GOVERN (a new asset: a local path with `artifact_cli bind --local`, read in place; a URL with `artifact_cli bind --url`, cloned into the repository workspace and read in place)',
     DISTILL: 'DISTILL (read it, then sediment what is worth keeping into PRODUCT/TECH/IMPROVEMENT/PROJECT)',
     SHELF: 'SHELF (mount for reference in the Library; do not copy it into the docs)',
   }));

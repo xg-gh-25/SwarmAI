@@ -261,7 +261,8 @@ def _brain_repos(d: Path, mid: str, mode_repos: list[str]) -> list[dict[str, Any
     where its setup and checks run). With a checkout on this machine: its branch and HEAD
     commit (``sha``, what the Hive works on, core/repo_ship) and how many paths have
     uncommitted changes (not sent); without one: the remote at the delivery branch.
-    (design 2026-10-30-hive-task-repos-from-host §2)"""
+    ``placement``: the kind of checkout (core.repo_placement), which admission reads for a
+    task that returns commits. (design 2026-10-30-hive-task-repos-from-host §2)"""
     from core import repo_ship
     from core.project_agent import repo_roots
     bindings = _bindings(d)
@@ -269,10 +270,13 @@ def _brain_repos(d: Path, mid: str, mode_repos: list[str]) -> list[dict[str, Any
         if name not in bindings:
             raise SpecError(f"mode {mid} works on {name}, which bindings.yaml does not bind")
     roots = repo_roots(d)
+    from core.repo_placement import placement
+    kinds = {n: p["checkout"] for n, p in placement(d).items()}
     out = []
     for name, b in bindings.items():
         row: dict[str, Any] = {"name": name, "url": b.clone, "ref": b.delivery_contract.branch or None,
-                               "sha": None, "dirty": None, "checkout": None, "error": None}
+                               "sha": None, "dirty": None, "checkout": None, "error": None,
+                               "placement": kinds.get(name)}
         if name in roots:
             try:
                 st = repo_ship.state(roots[name])
@@ -308,6 +312,15 @@ def admit(spec: dict[str, Any]) -> list[str]:
                 out.append(f"{r['name']} has no remote a Hive can clone ({r['url']!r})")
             if r.get("error"):
                 out.append(f"{r['name']}: {r['error']}")
+            if (spec["returns"] == "commits" and r.get("access") == "write"
+                    and r.get("checkout") and r.get("placement") == "mirror"):
+                # the returned commits land on this machine's checkout (core/hive_return);
+                # in the bind-managed mirror that is where nobody works, and a re-bind
+                # moves it aside (fixing-spec 2026-11-02 G1). With no checkout at all the
+                # return itself waits until one is bound, so that is not refused here.
+                out.append(f"{r['name']}'s checkout is SwarmAI's managed mirror, not one you "
+                           f"work in, and the commits would land there: artifact_cli bind "
+                           f"--project {spec['brain']} --relocate {r['name']}")
     prof = spec["execution"]["profile"]
     if prof is not None:
         from core.run_protocol.lifecycle import caps

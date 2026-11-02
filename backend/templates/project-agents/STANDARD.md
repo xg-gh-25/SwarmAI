@@ -33,6 +33,7 @@ Only what a Hive run reads.
 | `identity.summary` | One sentence: what the work in this Brain usually is. The first line of the run's project section, and what routing shows. |
 | `intake.handles` | 3-8 typical requests, one sentence each. Routing compares a new task with them. |
 | `intake.repos` | The repos the Brain binds (`bindings.yaml`). |
+| `intake.placement` | Per repo: `remote`, `branch` and where its checkout is on the person's machine (`repos_dir:<name>`, `local` or `mirror`; a kind, never a path). Derived from the binding, never judged. Code is written in a session worktree of that checkout, and a Hive's commits land on its branch. |
 | `modes[].id` / `when` | One kind of work and the kind of request it handles. The agent picks the mode whose `when` matches the task. |
 | `modes[].repos` | The repos this mode works in; the Hive clones them. |
 | `modes[].setup` | Install steps run first, copied verbatim from the file the repo declares them in (`source`). |

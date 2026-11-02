@@ -406,6 +406,12 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
         intake["handles"] = handles
     if repo_names:
         intake["repos"] = repo_names
+        # where each repository is checked out and how (core.repo_placement): derived,
+        # never judged, and a kind (repos_dir:<name> / local / mirror), never a path, so
+        # the definition holds on every machine. A key of its own: a reader that predates
+        # it (an older Hive) ignores it, where reshaping intake.repos would break it.
+        from core.repo_placement import placement
+        intake["placement"] = placement(project_dir)
     if intake:
         doc["intake"] = intake
 

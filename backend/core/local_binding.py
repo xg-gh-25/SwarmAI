@@ -9,7 +9,7 @@ is its ``origin`` (the path itself when it has none: a Hive cannot clone it then
 admission says so). ``core.ddd_bindings.bind_project`` treats such a binding as bound in
 place and never clones over it.
 
-Public: ``record(project_dir, root) -> repo name``.
+Public: ``record(project_dir, root) -> repo name``, ``set_worktree(project_dir, repo, root)``.
 """
 from __future__ import annotations
 
@@ -76,3 +76,23 @@ def record(project_dir: Path, root: Path) -> str:
     load_bindings(tmp)                       # what is written must load (raises ValueError)
     tmp.replace(p)
     return name
+
+
+def set_worktree(project_dir: Path, repo: str, root: Path) -> None:
+    """Point the existing binding *repo* at the checkout *root* (``bind --relocate``):
+    the rest of the binding is kept. Same write as ``record``: backed up, checked by
+    ``load_bindings`` before it replaces the file."""
+    project_dir, root = Path(project_dir), Path(root).resolve()
+    p = project_dir / BINDINGS
+    doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    rows = doc.get("bindings") if isinstance(doc, dict) else None
+    hit = [b for b in rows or [] if isinstance(b, dict) and b.get("repo") == repo]
+    if len(hit) != 1:
+        raise ValueError(f"{BINDINGS} has no single binding named {repo!r}")
+    hit[0]["worktree"] = str(root)
+    shutil.copy2(p, p.with_name(BINDINGS + ".bak"))
+    from core.ddd_bindings import load_bindings
+    tmp = p.with_name(BINDINGS + ".tmp")
+    tmp.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    load_bindings(tmp)
+    tmp.replace(p)

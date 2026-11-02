@@ -129,7 +129,8 @@ def test_the_spec_comes_from_the_definition(ws):
     assert (s["mode"], s["mode_chosen"], s["execution"], s["profile"]) == (
         "code-change", "the default mode", {"how": "native", "profile": None}, None)
     assert s["repos"] == [{"name": "lib", "url": "https://github.com/acme/lib.git", "ref": "main",
-                           "sha": None, "dirty": None, "checkout": None, "error": None, "access": "write"}]
+                           "sha": None, "dirty": None, "checkout": None, "error": None, "placement": "mirror",
+                           "access": "write"}]
     # every repository of the Brain goes, whatever the mode (research declares none)
     assert [r["name"] for r in _build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research")["repos"]] == ["lib"]
     assert "delivery" not in s and s["revision"] and not s["problems"]       # a bundle is the one delivery
@@ -576,3 +577,21 @@ def test_nothing_waits_for_a_confirmation(ws):
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\n---\nchanged\n")
     after = ts.build(ws, "Lib", "x", "y", None, "native", "", "hive", returns="answer")
     assert after["revision"] != before and not ts.admit(after)       # a new version, used as it is
+
+
+def test_commits_are_not_sent_back_into_the_bind_managed_mirror(ws, tmp_path, monkeypatch):
+    # fixing-spec 2026-11-02-new-brain-setup G1: a Hive's commits land on this machine's
+    # checkout; when that is the mirror under ~/.swarm-ai/bindings they land where nobody
+    # works, and a re-bind moves them aside
+    import subprocess
+    bindings_root = tmp_path / "bindings"
+    mirror = bindings_root / "lib"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(mirror)], check=True)
+    subprocess.run(["git", "-C", str(mirror), "-c", "user.email=t@e", "-c", "user.name=t",
+                    "commit", "-q", "--allow-empty", "-m", "i"], check=True)
+    monkeypatch.setattr("core.ddd_bindings._default_bindings_root", lambda: bindings_root)
+    _brain(ws)
+    refusals = ts.admit(_build(ws, "Lib", "x", "y"))
+    assert any("managed mirror" in r and "--relocate lib" in r for r in refusals), refusals
+    # a task that only reads is not refused for it
+    assert not any("managed mirror" in r for r in ts.admit(_build(ws, "Lib", "x", "y", returns="answer")))

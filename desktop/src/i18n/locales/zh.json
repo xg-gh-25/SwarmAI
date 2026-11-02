@@ -1248,6 +1248,13 @@
       "awsLocalLead": "还没连接 Swarm AWS 账号；Hive、云存储、语音要先连接。",
       "connect": "连接账号"
     },
+    "reposDir": {
+      "title": "仓库工作区",
+      "description": "给 Brain 一个仓库链接时，代码克隆到这个目录。每个都是普通的 checkout，你可以直接打开、在里面工作；Hive 交回的代码也落在这里。",
+      "save": "保存",
+      "saved": "已保存",
+      "error": "目录没能保存"
+    },
     "accent": {
       "title": "强调色",
       "description": "设置按钮、链接和高亮使用的主色调。"

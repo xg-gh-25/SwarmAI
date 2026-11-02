@@ -1890,6 +1890,22 @@ def _ddd_hit_line(project: str, base, docs_text: dict, hit: dict) -> str:
     return f"- § {sec} — {where}"
 
 
+def _ddd_repo_lines(project_dir: Any) -> str:
+    """Where the active project's code repositories are checked out on this machine and
+    where to write code (core.repo_placement; its Project Agent records the placement):
+    an agent coding natively otherwise has no way to know. Empty for a Brain with no
+    repository, and on any error (the DDD block never fails on it)."""
+    if project_dir is None:
+        return ""
+    try:
+        from core.repo_placement import describe
+        lines = describe(Path(project_dir))
+    except Exception:  # noqa: BLE001 — a hint, never a reason to drop the DDD block
+        logger.debug("_ddd_repo_lines: placement unreadable", exc_info=True)
+        return ""
+    return ("\n> Code repositories:\n" + "\n".join(f">  {ln}" for ln in lines) + "\n") if lines else ""
+
+
 def _inject_ddd_for_active_project(
     options: Any,
     user_message: str,
@@ -1980,7 +1996,8 @@ def _inject_ddd_for_active_project(
             f"> **[DDD:{project}]** You are working in project {project} "
             f"(detected via {signal}). Its DDD is at `{root}` (layout: SWARMAI.md, My "
             f"Workspace); before a project-specific decision, look it up: "
-            f"`\"$SWARM_BACKEND_BIN\" cognition find --project {project} --query \"<words>\"`.\n"))
+            f"`\"$SWARM_BACKEND_BIN\" cognition find --project {project} --query \"<words>\"`.\n")
+            + _ddd_repo_lines(base))
         _record_ddd_inject("injected_pointer_only")
         logger.info("DDD detected project=%s (%s): no section matched the message "
                     "-- injected the project pointer only", project, signal)
@@ -1998,6 +2015,7 @@ def _inject_ddd_for_active_project(
         f"(detected via {signal}). Read the ones that bear on this before acting "
         f"(at that line, or `\"$SWARM_BACKEND_BIN\" cognition get --project {project} <path:line>`).\n\n"
         + "\n".join(lines)
+        + _ddd_repo_lines(base)
     )
     deliver(block)
     _record_ddd_inject("injected")

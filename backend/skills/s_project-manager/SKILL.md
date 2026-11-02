@@ -131,7 +131,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P0 — DEFINE (资产定形)** ⭐ | Before touching content, write the **governed-asset inventory**: `0..N` assets, each with a `kind` (`code-repo` / `data-source` / `skill-set` / `document-corpus` / `external-service` / `process` / …). From New Brain it is the form's GOVERN items: take them as they are, nobody is asked. This one decision determines the shape of ⑤ and whether ⑥ does anything. | An explicit asset list exists (a 0-asset pure-knowledge brain is a valid, complete answer — write "0 assets"). |
 | **P1 — CREATE** | `create_project` (with the P0 list as `assets`, kept in the setup record so P6 checks each is bound) scaffolds the six-section skeleton (the four docs come from the one skeleton, `backend/templates/ddd-skeleton/`) + copies the native skills. Then replace the placeholder `description` in `aim.json` with one sentence on what this Brain is and for whom: its Brain Hub card and its package show it. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
 | **P2 — KNOWLEDGE (the moat)** | **A repo is bound (P3) before P2:** the survey and `bootstrap-apply` only see repos the brain owns, so entries citing an unbound repo are all rejected and the person gets asked what the README already says. Learn the material, then write typed entries — the model judges, a deterministic tool writes. **P2a** survey the repos (`artifact_cli bind` does it; else `artifact_cli survey`) and read the DISTILL material whole. **P2b** get the format (`artifact_cli entry-contract`), then write `.artifacts/bootstrap/bootstrap-entries.json` section by section (§ "Writing a new brain's first entries" below). **P2c** `artifact_cli bootstrap-apply` checks and writes them; fix what it rejects and re-run. **P2d** every PRODUCT or TECH section it reports in `need_gap` gets its gap ("<Section>: no evidence yet"): nobody is asked, and the person fills a gap whenever they like. Never invent content to fill a section. | P6 ②: every skeleton section present (structure); every PRODUCT and TECH section holds an entry or a gap, and IMPROVEMENT holds a typed entry (content). |
-| **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets. Run it right after P1, before P2** (the bind surveys the repo P2 reads). Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ checks the assets create recorded). 0-asset → ⑤ is N/A, which passes. |
+| **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets. Run it right after P1, before P2** (the bind surveys the repo P2 reads). A `code-repo` URL → `artifact_cli bind --project <P> --url <url>` (clones it into the repository workspace and reads it in place: one checkout the person sees, where code is written and a Hive's commits land); a local checkout → `bind --local <path>`. A `data-source` / `skill-set` → a `governed_assets:` entry in `bindings.yaml`. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ checks the assets create recorded). 0-asset → ⑤ is N/A, which passes. |
 | **P3b — PROJECT AGENT** ⭐ | **Every brain.** Draft `project-agent.yaml` (next to `bindings.yaml`, section ⑤) with `artifact_cli project-agent-draft` from what this brain now knows — see "Generating the Project Agent" below. Creating the Brain already wrote a skeleton (the standard modes and the repos' checks; the reserved actions are fixed by the product and are not in the file); drafting fills in the judged fields. Nothing is confirmed: the agent keeps it current and a dispatch uses the latest. | P6 ⑤ Project Agent check (the same validator the tool uses): valid → PASS; missing, invalid or still a skeleton (no summary, no typical requests) → FAIL. |
 | **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph, or `bind --local` reads a local checkout in place and builds its graph in a child; the reindex job keeps both current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + a code graph that opens, holds indexed files and was built from the brain's own repo → PASS; not bound yet / empty / foreign → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
@@ -476,7 +476,39 @@ The discriminator is the delivery contract's `remote_kind` (`code-amazon-cr` vs
 A no-repo project simply has no `bindings.yaml`; BIND/PULL/DEVELOP/SYNC-BACK don't
 apply and the CREATE flow (4 DDD docs) is the whole story.
 
+#### Where a repository lives, and where code is written
+
+A Brain's code repository has **one checkout on this machine**, and everything that
+touches code uses it: a native session writes code in a session worktree of it
+(`"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create <checkout>`), a Hive task
+starts from its commit, and a Hive's commits land on its branch. The Project Agent
+records where it is (`intake.placement`, one of `repos_dir:<name>`, `local`, `mirror`),
+and each session's `[DDD:<project>]` note names the checkout.
+
+- **A URL:** `bind --url` (Step 0 below) clones it into the **repository workspace**
+  (Settings → General; `repos_dir`, default `~/SwarmAI-Repos`).
+- **A checkout the person already has:** `bind --local` (Step 2b).
+- **`mirror`:** an older Brain whose repository was cloned into SwarmAI's managed
+  `~/.swarm-ai/bindings/<repo>`. It is not a place to work (a re-bind replaces it), so a
+  task that returns commits is refused there; move it with
+  `bind --project <P> --relocate <repo>` (refused, nothing moved, if it holds unpushed work).
+
+#### Step 0: A repository URL: clone it into the workspace
+
+```bash
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli bind --project <P> --url <url> [--branch <name>] [--source new-brain]
+```
+
+`github.com/owner/name` without a scheme is read as https. Refused before anything is
+cloned: a URL with a user name or token in it (git uses the person's own credentials),
+and a scheme git would run code for. The same repository already in the workspace is
+used as it is; a different one with the same name goes to `<owner>-<name>`. The rest is
+Step 2b: read in place, recorded in `bindings.yaml`, surveyed, Project Agent redrafted.
+
 #### Step 1: Declare the binding in `Projects/<name>/bindings.yaml`
+
+For an internal repository, a data source or a skill set, which `--url` / `--local` do
+not cover.
 
 The schema is section ⑤ DELIVERY CONTRACT (spec §3.6, `DDD_SPEC_VERSION: 1.0`).
 `bindings` is an ARRAY; each entry:
