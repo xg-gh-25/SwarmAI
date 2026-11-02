@@ -287,3 +287,60 @@ def test_cli_calls_only_owner_agent_ops(monkeypatch):
         op = swarm_out_ops.match(method, path)
         assert op is not None, (name, method, path)
         assert OWNER in op.callers, (name, op.name)
+
+
+
+# ── a plain file write is the one heredoc whose body is never run ─────────────
+_URL = "http://127.0.0.1:18321/api/hive/" + "work"
+_CODE = "import httpx\nhttpx.post('" + _URL + "')\n"
+
+
+@pytest.mark.parametrize("cmd", [
+    # the command this check refused while code naming the route was appended to a test
+    "cat >> tests/t.py <<'EOF'\nasync with httpx.AsyncClient() as c:\n    await c.post('/api/hive/work')\nEOF",
+    "cat > /tmp/x.py <<'EOF'\n" + _CODE + "EOF",
+    "cat <<'EOF' > /tmp/x.py\n" + _CODE + "EOF",
+    "cat > /tmp/x.py <<\"EOF\"\n" + _CODE + "EOF",
+    "tee -a /tmp/x.py <<'EOF' > /dev/null\n" + _CODE + "EOF",
+])
+def test_a_plain_file_write_of_code_naming_a_route_is_not_a_call(cmd):
+    assert _user_only_deny(cmd) is None, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "cat > /tmp/x.py <<'EOF'\n" + _CODE + "EOF\npython3 /tmp/x.py",                 # written, then run
+    "cat > /tmp/x.py <<'EOF' && python3 /tmp/x.py\n" + _CODE + "EOF",
+    "tee /tmp/x.py <<'EOF' >/dev/null && python3 /tmp/x.py\n" + _CODE + "EOF",
+    "cat > /tmp/x <<EOF\n$(python3 -c \"import httpx; httpx.post('" + _URL + "')\")\nEOF",   # unquoted: expanded
+    "cat <<'EOF' | python3 -\n" + _CODE + "EOF",                                     # piped into code
+    "cat <<'EOF' > >(python3 -)\n" + _CODE + "EOF",
+    "tee >(python3 -) <<'EOF'\n" + _CODE + "EOF",
+    "cat <<'EOF' \\\n| python3 -\n" + _CODE + "EOF",                                # a continuation
+    "cat > /tmp/x <<'EOF'\nx\nEOF\npython3 -c \"import httpx; httpx.post('" + _URL + "')\"\nEOF",
+    "cat > $(python3 -c \"import httpx; httpx.post('" + _URL + "')\") <<'EOF'\nx\nEOF",
+    "python3 - <<'EOF'\nold = \"httpx.post('/api/hive/work')\"\nEOF",               # an edit script: use Write
+    "bash -c \"$(cat <<'EOF'\n" + _CODE + "EOF\n)\"",
+    "true; cat > /tmp/x.py <<'EOF'\n" + _CODE + "EOF",
+])
+def test_anything_but_the_plain_file_write_still_reads_its_heredoc(cmd):
+    assert _user_only_deny(cmd) is not None, cmd
+
+
+def test_a_refusal_says_how_to_write_text_that_names_a_route():
+    d = _user_only_deny("curl -X POST " + _URL)
+    assert "Write or Edit tool" in d["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("cmd", [
+    # each of these makes bash or zsh end the heredoc early, or read it otherwise, and run
+    # the next line; checked against both shells with a harmless command in its place
+    "cat > /tmp/x <<'EOF'\r\nx\r\nEOF\r\ncurl -X POST " + _URL + "\r\nEOF\n",
+    "cat > /tmp/x <<'EOF'\nx\nEOF\r\ncurl -X POST " + _URL + "\nEOF\n",
+    "cat > /tmp/x <<-'EOF'\nx\n\tEOF\ncurl -X POST " + _URL + "\nEOF\n",
+    "cat > /tmp/x <<'EOF'\nx\\\nEOF\ncurl -X POST " + _URL + "\nEOF\n",
+    "cat > /tmp/x <<'EOF' <<'E2'\nx\nEOF\ncurl -X POST " + _URL + "\nE2\n",
+    "cat > /tmp/x <<'EOF\"\nx\nEOF\n",
+])
+def test_a_heredoc_the_shell_may_end_elsewhere_is_not_a_plain_write(cmd):
+    from core.run_owner_gate import _only_writes_a_file
+    assert not _only_writes_a_file(cmd), cmd

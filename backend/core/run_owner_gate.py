@@ -401,11 +401,44 @@ _HTTP_LIB_RE = re.compile(
     r"|\bhttp\.client\b|\bfetch\s*\(|\baxios\b|\bXMLHttpRequest\b")
 
 
+# The whole command is one file write of a heredoc whose delimiter is quoted (so the
+# shell expands nothing in it) to a plain path, and nothing else: ``cat > p <<'EOF'``,
+# ``cat >> p``, ``cat <<'EOF' > p``, ``tee [-a] p <<'EOF'`` (stdout optionally to
+# /dev/null). Such a command runs nothing it writes.
+_PLAIN_PATH = r"[A-Za-z0-9_./~+-]+"
+_QUOTED_HEREDOC = r"<<[ \t]*(?P<q>['\"])(?P<d>[A-Za-z_][A-Za-z0-9_]*)(?P=q)"
+_HEREDOC_REST = r"[ \t]*\n(?P<body>(?:.*\n)*?)(?P=d)\n?\Z"
+_FILE_WRITES_RE = tuple(re.compile(r"\A[ \t]*" + head + _HEREDOC_REST) for head in (
+    rf"cat[ \t]+>>?[ \t]*{_PLAIN_PATH}[ \t]+{_QUOTED_HEREDOC}",
+    rf"cat[ \t]+{_QUOTED_HEREDOC}[ \t]+>>?[ \t]*{_PLAIN_PATH}",
+    rf"tee[ \t]+(?:-a[ \t]+)?{_PLAIN_PATH}[ \t]+{_QUOTED_HEREDOC}(?:[ \t]+>[ \t]*/dev/null)?",
+))
+
+
+def _only_writes_a_file(command: str) -> bool:
+    """Whether *command* is exactly one of the ``_FILE_WRITES_RE`` file writes: one
+    heredoc with a quoted delimiter (the shell expands nothing in it) written by ``cat``
+    / ``tee`` to a plain path, its body holding no line that would end it early (the
+    shell ends a heredoc at the first such line and runs what follows), nothing before
+    or after it. Its body is the file's text, never run, so a client library named
+    there is not a call."""
+    for rx in _FILE_WRITES_RE:
+        m = rx.match(command)
+        if m is not None:
+            delim = m.group("d")
+            return all(line.strip() != delim for line in m.group("body").split("\n"))
+    return False
+
+
 def _makes_http_call(command: str) -> bool:
     """Whether *command* sends an HTTP request (see the patterns above). A command that
     only names a route (a search, a file being written, a test or doc being edited) does
     not: the person-only checks are for calls, and every one of their past denials in
-    the owner's sessions was a command that only named the path."""
+    the owner's sessions was a command that only named the path. A client library named
+    in a heredoc counts as a call (the heredoc may be code a program runs), except in
+    the one write that provably runs nothing (``_only_writes_a_file``)."""
+    if _only_writes_a_file(command):
+        return False
     outside = _HEREDOC_BODY_RE.sub("<<heredoc", command)
     bare = re.sub(r"[\"'\\]", "", outside)
     return bool(_HTTP_CLI_RE.search(outside) or _HTTP_CLI_RE.search(bare) or _HTTP_LIB_RE.search(command))
@@ -424,6 +457,24 @@ def _user_only_deny(command: str) -> "dict | None":
     script file) is not seen; the agent and the daemon share an OS user (boundary A)."""
     if not _makes_http_call(command):
         return None
+    deny = _user_only_deny_of(command)
+    if deny is None:
+        return None
+    out = deny["hookSpecificOutput"]
+    out["permissionDecisionReason"] = out["permissionDecisionReason"] + _NAMING_HINT
+    return deny
+
+
+#: added to every refusal of a person-only route: a command that only writes text naming
+#: the route is read as a call when it is not one of the plain file writes this check
+#: knows run nothing (``_only_writes_a_file``)
+_NAMING_HINT = (" If this command only writes or edits text that names the route (code, a "
+                "test, a doc, an edit script), write that text with the Write or Edit tool "
+                "instead: this check reads commands, not the files they write.")
+
+
+def _user_only_deny_of(command: str) -> "dict | None":
+    """``_user_only_deny`` for a command that sends an HTTP request."""
     if _HUMAN_ONLY_API_RE.search(command):
         if re.search(r"/confirm-landed\b", command):
             return _deny("the dashboard's confirm-landed is the person's button. Record it "
