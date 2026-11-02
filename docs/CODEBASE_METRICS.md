@@ -16,7 +16,7 @@ updated: 2026-11-02
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 5962+ | `git log --oneline | wc -l` |
+| Total commits | 5964+ | `git log --oneline | wc -l` |
 | Duration | ~253 days | First commit to latest (1 human contributor) |
 | Backend core modules | 377 Python files, 172641 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
 | Total backend LOC | 291126 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
@@ -29,5 +29,5 @@ updated: 2026-11-02
 | Context system | 1515 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
 | Background jobs | 18 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
-| Code graph | not measured (no code graph built where this ran) | `code_intel.db` (code_nodes / code_edges tables) |
+| Code graph | 41,561 symbols, 106,746 edges | `code_intel.db` (code_nodes / code_edges tables) |
 <!-- METRICS_END -->
