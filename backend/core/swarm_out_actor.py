@@ -22,22 +22,25 @@ agent the routes refuse what is the person's to decide:
 - re-sending with a correction more than ``MAX_AGENT_RERUNS`` times (``reserve_rerun``
   counts it under the run's lock before it is sent): after that the agent takes the
   task over or discards it;
-- discarding while something would be lost: code not landed, a file not placed in the
-  Brain, lessons not in, the run running, waiting or its Hive not answering, or its
-  result not final (``discard_blocker``). A run whose Hive never started its session
-  (``not_started``) has nothing to lose.
+- discarding while something would be lost: commits not landed that are not on this
+  host either (``return-prepare`` takes them into ``refs/hive/...``: once every returned
+  tip is there, discarding loses nothing), a file not placed in the Brain, lessons not
+  in, the run running, waiting or its Hive not answering, or its result not final
+  (``discard_blocker``). A run whose Hive never started its session (``not_started``)
+  has nothing to lose.
 
-Landing commits that change the repository's protected paths is never an agent's,
-whatever its request says (the land route ignores ``approve_protected`` from an agent):
-those paths guard the agent itself or run code on this machine, so a Hive's change to
-them stays the person's. The agent re-runs the task asking the Hive to leave them out,
-or makes the change itself in its own session.
+The agent lands commits that change the repository's own protected paths once it has
+reviewed them (design 2026-11-02-hive-run-decision-record §2: the funnel lands on this
+host or re-runs, never hands unlanded work to the person); the land entry keeps the
+paths and its reason. Paths that make this machine run code on their own (git hooks,
+filters, submodules, a coding tool's hooks: core/hive_return ``AUTORUN``) an agent never lands: it re-runs the task
+asking the Hive to leave them out, or makes the change itself in its own session.
 
-Every agent command is recorded in the run's settle record (``commands``: by, session,
-time, command, reason), which the panel shows as "accepted by the agent: <reason>".
-Like every "person only" in Swarm Out this is a speed bump against the agent's own
-mistakes, not a boundary (ops-registry design §2.4): the agent and the daemon share an
-OS user.
+Every command, the agent's and the person's, is one entry of the run's decision record
+(core/swarm_out_record: by, session, time, decision, reason, and the facts this host saw),
+which the run card's Decisions tab shows. Like every "person only" in Swarm Out this is a
+speed bump against the agent's own mistakes, not a boundary (ops-registry design §2.4):
+the agent and the daemon share an OS user.
 
 Public: ``Actor``, ``actor``, ``MAX_AGENT_RERUNS``, ``check``, ``row_blocker``,
 ``record``, ``record_wait_answer``, ``reserve_rerun``, ``release_rerun``, ``agent_reruns``,
@@ -53,8 +56,6 @@ from typing import Any, Optional
 
 MAX_AGENT_RERUNS = 2
 MAX_WHY_CHARS = 400
-#: commands kept per run (oldest dropped)
-MAX_COMMANDS = 50
 COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "rerun", "stop", "discard")
 
 
@@ -134,18 +135,11 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
 
 
 def record(dispatch_id: str, a: Actor, command: str) -> None:
-    """Keep one line for an agent's command in the run's settle record. A person's
-    commands are already what the settle record holds (verdict, discard, landing)."""
-    if not a.agent:
-        return
-    from core import swarm_out_settle
-
-    def change(rec: dict[str, Any]):
-        cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
-        cmds.append({"by": "agent", "session": a.session, "command": command, "why": a.why,
-                     "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        rec["commands"] = cmds[-MAX_COMMANDS:]
-    swarm_out_settle._update(dispatch_id, change)
+    """Keep one entry for a command, the agent's or the person's, in the run's decision
+    record (core/swarm_out_record), with the facts this host sees now."""
+    from core import swarm_out_record
+    swarm_out_record.append(dispatch_id, a.by, swarm_out_record.decision_of({"command": command}) or command,
+                            a.why, a.session if a.agent else None, command)
 
 
 #: how much of what was asked a kept answer line holds (the card's text, Hive-written)
@@ -159,18 +153,12 @@ def record_wait_answer(dispatch_id: str, session: Optional[str], request_id: str
     picked and why. ``host_answers`` reads them back for the run's autonomy tab, so the
     person can see afterwards what the agent decided for them; the run's summary counts
     them as handled by the host, never as the person stepping in."""
-    from core import swarm_out_settle
+    from core import swarm_out_record, swarm_out_settle
     shown = pick if isinstance(pick, str) else json.dumps(pick, ensure_ascii=False)[:400]
-
-    def change(rec: dict[str, Any]):
-        cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
-        cmds.append({"by": "agent", "session": session, "command": "answer_wait",
-                     "request_id": request_id, "class": cls, "pick": shown, "why": why,
-                     "asked": str(asked or "")[:MAX_ASKED_CHARS],
-                     "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        rec["commands"] = cmds[-MAX_COMMANDS:]
     try:
-        swarm_out_settle._update(dispatch_id, change)
+        swarm_out_record.append(dispatch_id, "agent", "answer_wait", why, session, "answer_wait",
+                                {"request_id": request_id, "class": cls, "pick": shown,
+                                 "asked": str(asked or "")[:MAX_ASKED_CHARS]})
     except swarm_out_settle.SettleError:
         logging.getLogger(__name__).warning("swarm_out_actor: the answer on %s was not kept", dispatch_id)
 
@@ -185,7 +173,8 @@ def host_answers(dispatch_id: str) -> list[dict[str, Any]]:
         return []
     cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
     return [{k: c.get(k) for k in ("at", "request_id", "class", "asked", "pick", "why")}
-            for c in cmds if isinstance(c, dict) and c.get("command") == "answer_wait"]
+            for c in cmds if isinstance(c, dict) and c.get("command") == "answer_wait"
+            and c.get("by", "agent") == "agent"]
 
 
 def _counted(cmds: list) -> int:
@@ -199,7 +188,8 @@ def agent_reruns(dispatch_id: str) -> int:
         rec = swarm_out_settle.load(dispatch_id)
     except swarm_out_settle.SettleError:
         return 0
-    return _counted(rec.get("commands") if isinstance(rec.get("commands"), list) else [])
+    cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
+    return _counted([c for c in cmds if isinstance(c, dict) and c.get("by", "agent") == "agent"])
 
 
 def reserve_rerun(dispatch_id: str, a: Actor) -> Optional[str]:
@@ -208,16 +198,20 @@ def reserve_rerun(dispatch_id: str, a: Actor) -> Optional[str]:
     failed when the send fails), None for a person. Raises ActorError at the limit."""
     if not a.agent:
         return None
-    from core import swarm_out_settle
+    from core import swarm_out_record, swarm_out_settle
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + f"#{time.monotonic_ns()}"
+    e = swarm_out_record.entry("agent", "rerun", a.why, a.session, "rerun",
+                               facts=swarm_out_record.observed(dispatch_id))
+    e["at"] = at
 
     def change(rec: dict[str, Any]):
         cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
-        if _counted(cmds) >= MAX_AGENT_RERUNS:
+        if _counted([c for c in cmds if isinstance(c, dict) and c.get("by", "agent") == "agent"]) \
+                >= MAX_AGENT_RERUNS:
             raise ActorError(f"an agent has re-sent this run {MAX_AGENT_RERUNS} times already: take "
                              "the task over yourself, or discard the run saying why")
-        cmds.append({"by": "agent", "session": a.session, "command": "rerun", "why": a.why, "at": at})
-        rec["commands"] = cmds[-MAX_COMMANDS:]
+        cmds.append(e)
+        rec["commands"] = cmds
     try:
         swarm_out_settle._update(dispatch_id, change)
     except swarm_out_settle.SettleError as e:
@@ -239,7 +233,7 @@ def release_rerun(dispatch_id: str, at: Optional[str]) -> None:
 
 
 #: what each ``settle.why_not`` item means for a discard
-_LOST = {"code": "commits that came back are not landed (land them first)",
+_LOST = {"code": "commits that came back are not landed or taken back here (return-prepare them first)",
          "files": "files that came back are not placed in the Brain yet",
          "lessons": "the run's lessons are not in yet"}
 
@@ -260,8 +254,49 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
     res = row.get("result")
     if not _final(res if isinstance(res, dict) else None):
         return "its final result is not here yet"
+    funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
+    if isinstance(funnel.get("ask"), dict) and funnel["ask"].get("state") == "revert":
+        return ("the person asked for a revert: undo what landed and report it with "
+                "`swarm_out reverted`; when it cannot match exactly, say so in the session "
+                "(the run stays open until its records expire)")
     settle = row.get("settle") if isinstance(row.get("settle"), dict) else {}
-    lost = [_LOST[w] for w in (settle.get("why_not") or []) if w in _LOST]
+    why_not = list(settle.get("why_not") or [])
+    if "code" in why_not and commits_here(str(row.get("dispatch_id") or ""), res):
+        why_not.remove("code")       # every returned tip is in refs/hive here: nothing is lost
+    lost = [_LOST[w] for w in why_not if w in _LOST]
     if lost:
         return "; ".join(lost) + ": take them first"
     return None
+
+
+def commits_here(dispatch_id: str, res: Any) -> bool:
+    """Every repository that brought commits back has them on this host: its bundle was
+    taken back (core/hive_return.prepare) and its ``refs/hive/<dispatch>/<key>`` ref
+    still names the tip. A repository whose commits were never sealed into a bundle
+    has them only on the Hive."""
+    from core import hive_bundle, hive_return
+    import subprocess
+    repos = [r for r in (((res or {}).get("work") or {}).get("repos") or []) if isinstance(r, dict)]
+    checked = 0
+    for r in repos:
+        b = r.get("bundle")
+        has_bundle = isinstance(b, dict) and (b.get("available") or b.get("sha256")) and isinstance(r.get("dir"), str)
+        if not has_bundle:
+            if (r.get("commits_total") or 0) > 0:
+                return False
+            continue
+        try:
+            st = hive_return.load(dispatch_id, hive_bundle.key(r["dir"])) or {}
+        except hive_return.ReturnError:
+            return False
+        if st.get("status") not in ("prepared", "landed") or not st.get("repo") or not st.get("ref"):
+            return False
+        try:
+            out = subprocess.run(["git", "-C", str(st["repo"]), "rev-parse", "--verify", "--quiet",
+                                  f"{st['ref']}^{{commit}}"], capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if out.returncode != 0 or out.stdout.strip() != st.get("tip"):
+            return False
+        checked += 1
+    return checked > 0          # nothing to check is not proof the commits are here

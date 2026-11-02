@@ -154,6 +154,20 @@ async def proxy(sid: str, path: str, request: Request):
         await r.aclose()
         await client.aclose()
         return _status_error(r.status_code)
+    # what the person does in the run's Hive tab is the person's decision on the run,
+    # one entry of its record (design 2026-11-02-hive-run-decision-record §3)
+    _PERSON_STEP = {"chat/stream": ("said", "message"), "chat/answer-question": ("answer_wait", "answer"),
+                    "chat/cmd-permission-continue": ("answer_wait", "approval")}
+    step = _PERSON_STEP.get(route.template) if request.method == "POST" else None
+    if step:
+        import asyncio
+        from core import swarm_out_record
+        did = await asyncio.to_thread(swarm_out.dispatch_of_session, sid)
+        if did:
+            # one small entry per message: no facts (a chatty session must not grow the
+            # record by a snapshot per message)
+            await asyncio.to_thread(swarm_out_record.append_quietly, did, "person", step[0], "", None,
+                                    step[0], {"kind": step[1]}, {})
 
     async def events() -> AsyncIterator[str]:
         try:

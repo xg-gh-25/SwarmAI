@@ -255,6 +255,8 @@ _CLI_ARGS = {
     "return-land": ["so_0123456789ab", "--why", "w", "--key", "k", "--tip", "t", "--summary-file", __file__],
     "rerun": ["so_0123456789ab", "--why", "w", "--text-file", __file__],
     "discard": ["so_0123456789ab", "--why", "w"],
+    "ask-person": ["so_0123456789ab", "--decide", "keep it?", "--judgment", "fine", "--why", "a preference"],
+    "reverted": ["so_0123456789ab", "--commit", "abc123", "--why", "reverted it"],
 }
 
 

@@ -18,7 +18,7 @@ import { Dot } from './LiveDispatches';
 import { agentFacts, brainLabel, stateLabel } from './live';
 import { useOpenRun } from './openSession';
 import { RunOverlay } from './RunOverlay';
-import { actionOf, ago, autonomyWord, brainChips, clock, endedAt, sections, stageOf, taskTag, waitingSince } from './runReview';
+import { actionOf, ago, autonomyWord, brainChips, clock, DONE_STAGES, endedAt, funnelWord, sections, stageOf, taskTag, waitingSince } from './runReview';
 import { runTone, TONE_VAR, type Tone } from './tone';
 
 const muted = 'text-[var(--color-text-muted)]';
@@ -53,8 +53,9 @@ function OpenButton({ r, compact }: { r: SwarmOutRun; compact: boolean }) {
   );
 }
 
-const TAG_STYLE: Record<'answer' | 'awaiting' | 'stopped', React.CSSProperties> = {
+const TAG_STYLE: Record<'answer' | 'awaiting' | 'stopped' | 'ask', React.CSSProperties> = {
   answer: { background: TONE_VAR.attention, color: '#0b0d11' },
+  ask: { background: TONE_VAR.attention, color: '#0b0d11' },
   awaiting: { color: TONE_VAR.attention, background: `color-mix(in srgb, ${TONE_VAR.attention} 13%, transparent)` },
   stopped: { color: TONE_VAR.error, background: `color-mix(in srgb, ${TONE_VAR.error} 13%, transparent)` },
 };
@@ -62,10 +63,15 @@ const TAG_STYLE: Record<'answer' | 'awaiting' | 'stopped', React.CSSProperties> 
 function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks: SwarmOutAsk[]; now: number; onOpen: () => void; onReload: () => void; compact: boolean }) {
   const { t } = useTranslation();
   const stage = stageOf(r);
-  const tone: Tone = stage === 'needs_answer' || stage === 'awaiting' ? 'attention' : stage === 'running' ? 'busy'
-    : stage === 'accepted' ? 'ok' : stage === 'stopped' ? 'error' : runTone(r);
-  const word = autonomyWord(r.result);
+  // amber only when the person has something to do (a run its agent is taking through
+  // the funnel is busy, not waiting on anyone here)
+  const agents = r.needs_person === false && !DONE_STAGES.includes(stage);
+  const tone: Tone = agents ? 'busy'
+    : stage === 'needs_answer' || stage === 'awaiting' ? 'attention' : stage === 'running' ? 'busy'
+      : stage === 'accepted' ? 'ok' : stage === 'stopped' ? 'error' : runTone(r);
+  const word = autonomyWord(r.result, r.person_decisions);
   const tag = taskTag(r);
+  const funnel = funnelWord(r);
   const ended = endedAt(r);
   const facts = agentFacts(r);
   const meta = [facts.brain, facts.none ? null : facts.agent, r.hive, r.why ? t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why }) : null]
@@ -91,6 +97,7 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
       </div>
       {word && !compact ? <span className="text-[11px] px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" style={wordStyle} data-testid="swarm-out-row-autonomy">{word.text}</span> : <span />}
       {tag ? <span className="text-[12px] px-[9px] py-[2px] rounded-md whitespace-nowrap font-semibold" style={TAG_STYLE[tag.key]} data-testid="swarm-out-row-tag">{tag.text}</span>
+        : funnel ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.busy }} data-testid="swarm-out-row-funnel">{funnel}</span>
         : r.cleanup_soon ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-row-cleanup">{t('swarmOut.review.cleanupSoon')}</span>
         : stage === 'running' ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.busy }}>{stateLabel(r)}</span>
           : <span className={`text-[12px] ${muted}`}>{t(`swarmOut.review.stage.${stage}`)}</span>}

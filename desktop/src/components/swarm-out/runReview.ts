@@ -7,7 +7,11 @@
  * only arranges what came back:
  *  - ``sections``: Waiting for you (needs your answer > awaiting acceptance > stopped,
  *    the longest waiting first), Running, Recently done (settled in the last 24 h, the
- *    latest to end first);
+ *    latest to end first). A run its dispatching session answers for (the backend's
+ *    ``needs_person`` is a boolean) waits for you only when that is true (design
+ *    docs/design/2026-11-02-hive-run-decision-record.md: only a landed result the agent
+ *    handed over, or a wait that is yours); while the agent works it through the funnel
+ *    it is under Running;
  *  - ``brainChips``: the Brains the rows went under, with counts, never a fixed list;
  *  - ``autonomyWord``: the one word a row and the card's header carry (Judge verdict for
  *    a pipeline run, else how often a person stepped in);
@@ -133,6 +137,11 @@ export function sections(runs: SwarmOutRun[], asks: SwarmOutAsk[], now: number):
   for (const r of runs) {
     const stage = stageOf(r);
     const asksSomething = actionsOf(r).some((a) => a.key !== 'open_session');
+    if (typeof r.needs_person === 'boolean' && !DONE_STAGES.includes(stage)) {
+      // the dispatching session answers for it: yours only when the backend says so
+      (r.needs_person ? you : running).push(r);
+      continue;
+    }
     if (stage === 'running') running.push(r);
     // a run whose records go within days waits for you too, whatever its stage
     else if ((YOU_ORDER.includes(stage) && (asksSomething || stage === 'needs_answer'))
@@ -173,14 +182,17 @@ export interface AutonomyWord {
 /** The one word on a row and in the card's header: a pipeline run's Autonomy Judge
  *  state, else "Fully autonomous" (nobody stepped in) or "Stepped in N×". None
  *  before a result is read. */
-export function autonomyWord(res: SwarmOutResult | null | undefined): AutonomyWord | null {
+export function autonomyWord(res: SwarmOutResult | null | undefined,
+  personDecisions?: number | null): AutonomyWord | null {
   if (!res) return null;
   const judge = runJudge(res);
   if (judge) {
     const { state } = judgeState(judge.verdicts);
     return { kind: 'judge', state, text: i18n.t('swarmOut.review.autonomy.judge', { state }) };
   }
-  const n = interventions(res);
+  // the run's decision record counts the person's own decisions (an agent's
+  // corrections and answers are not the person stepping in); an older record cannot
+  const n = typeof personDecisions === 'number' ? personDecisions : interventions(res);
   if (n == null) return null;          // an older record cannot tell
   return n === 0 ? { kind: 'full', text: i18n.t('swarmOut.review.autonomy.full') }
     : { kind: 'interventions', text: i18n.t('swarmOut.review.autonomy.steppedIn', { count: n }) };
@@ -188,8 +200,10 @@ export function autonomyWord(res: SwarmOutResult | null | undefined): AutonomyWo
 
 /** What the run asks of the person, as the row's one tag: answer the question, accept
  *  (what came back), or that it stopped. Null while running or done. */
-export function taskTag(r: SwarmOutRun): { key: 'answer' | 'awaiting' | 'stopped'; text: string } | null {
+export function taskTag(r: SwarmOutRun): { key: 'answer' | 'awaiting' | 'stopped' | 'ask'; text: string } | null {
   const stage = stageOf(r);
+  if (r.funnel?.ask?.state === 'open') return { key: 'ask', text: i18n.t('swarmOut.review.tag.ask') };
+  if (r.needs_person === false) return null;          // the agent's: the row says where it is
   if (stage === 'needs_answer') return { key: 'answer', text: i18n.t('swarmOut.review.tag.answer') };
   if (stage === 'stopped') return { key: 'stopped', text: i18n.t('swarmOut.review.stage.stopped') };
   if (stage !== 'awaiting') return null;
@@ -235,6 +249,9 @@ export function commandMeta(a: SwarmOutAction): CommandMeta {
     // answer). Not A: accept's key, a stage away (pressing it as the run moves on must
     // never accept)
     case 'answer': return { name: `${base}.answer.name`, does: `${base}.answer.does`, key: 'w', hint: 'W' };
+    // keep / revert what landed: no single key (a deliberate answer, given in its box)
+    case 'keep': return { name: `${base}.keep.name`, does: `${base}.keep.does`, key: null, hint: null };
+    case 'revert': return { name: `${base}.revert.name`, does: `${base}.revert.does`, key: null, hint: null };
     default: return { name: `${base}.open.name`, does: `${base}.open.does`, key: null, hint: null };
   }
 }
@@ -291,4 +308,19 @@ export function machineChecks(r: SwarmOutRun, full?: SwarmOutResult | null): { k
   if (res.execution_check) out.push({ key: 'execution', ok: res.execution_check.state === 'matches', text: res.execution_check.state === 'matches' ? t('executionMatches') : t('executionDiffers') });
   out.push({ key: 'unanswered', ok: res.work.human.unanswered === 0, text: res.work.human.unanswered === 0 ? t('noneUnanswered') : t('unanswered', { count: res.work.human.unanswered }) });
   return out;
+}
+
+
+/** Where a run its dispatching agent is taking through the funnel stands, in a word
+ *  (the row's state word; design 2026-11-02-hive-run-decision-record §3.1). Null when
+ *  the row says something else (running on the Hive, waiting on the person, done). */
+export function funnelWord(r: SwarmOutRun): string | null {
+  if (r.needs_person !== false) return null;
+  const stage = stageOf(r);
+  if (stage === 'running' || DONE_STAGES.includes(stage)) return null;
+  if (r.why === 'revert') return i18n.t('swarmOut.review.funnel.reverting');
+  if (r.why === 'judge') return i18n.t('swarmOut.review.funnel.judging');
+  if (stage === 'needs_answer') return i18n.t('swarmOut.review.funnel.answering');
+  if (r.funnel?.current === 'land') return i18n.t('swarmOut.review.funnel.landing');
+  return i18n.t('swarmOut.review.funnel.reviewing');
 }

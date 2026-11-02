@@ -98,6 +98,12 @@ _STATIC: "tuple[Op, ...]" = (
     _op("run.rerun", "POST", f"{_SO}/runs/{{dispatch_id}}/rerun", _PO, "change"),
     _op("run.stop", "POST", f"{_SO}/runs/{{dispatch_id}}/stop", _PO, "change"),
     _op("run.discard", "POST", f"{_SO}/runs/{{dispatch_id}}/discard", _PO, "irreversible"),
+    # the funnel's last gate (design 2026-11-02-hive-run-decision-record §1): the
+    # dispatching agent hands a landed result it cannot judge to the person, and reports
+    # the revert the person asked for; keeping or reverting is the person's
+    _op("run.ask_person", "POST", f"{_SO}/runs/{{dispatch_id}}/ask-person", (OWNER,), "change"),
+    _op("run.ask_answer", "POST", f"{_SO}/runs/{{dispatch_id}}/ask-person/answer", _P, "change"),
+    _op("run.reverted", "POST", f"{_SO}/runs/{{dispatch_id}}/reverted", (OWNER,), "change"),
     # approvals and question answers share one route; the gate cannot read the body,
     # so the whole route is the person's (the dispatching agent answers through
     # ask.answer_host below, never this route)
@@ -252,7 +258,7 @@ def person_only_match(text: str) -> "Op | None":
 #: to any of them from a command
 AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
                            "run.rerun", "run.stop", "run.discard",
-                           "ask.answer_host", "ask.escalate",
+                           "ask.answer_host", "ask.escalate", "run.ask_person", "run.reverted",
                            # only when no Hive takes this Host's runs: the CLI checks it
                            "hive.start"})
 

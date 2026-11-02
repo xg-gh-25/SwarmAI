@@ -828,6 +828,14 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                                 "dispatched_from": _session_or_none(dispatched_from),
                                 "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0}
                                                for r in spec["repos"]]})
+    # the first line of the run's decision record (design 2026-11-02-hive-run-decision-record §3)
+    from core import swarm_out_record
+    await asyncio.to_thread(
+        swarm_out_record.append_quietly, row["dispatch_id"],
+        "agent" if _session_or_none(dispatched_from) else "person", "dispatch", spec["execution_why"],
+        _session_or_none(dispatched_from), "dispatch", None,
+        {"hive": inst.get("name"), "brain": brain, "execution": spec["execution"]["how"],
+         "returns": spec["returns"], "revision": agent.get("revision")})
     return {**row, "brain_sync": synced}
 
 
@@ -1498,9 +1506,6 @@ def _release_done(task: "asyncio.Task") -> None:
 #: passes for one made after it. ``task`` is the computation running, ``task_gen`` the
 #: generation it started at.
 _SNAPSHOT: dict[str, Any] = {"at": None, "data": None, "task": None, "task_gen": 0, "gen": 0}
-#: (hive, session, request id) -> when this Host first saw the wait open (its own clock,
-#: never the Hive's asked_at): how long a wait has gone unhandled (attention_authority)
-_FIRST_SEEN: dict[tuple, float] = {}
 SNAPSHOT_FRESH_S = 20
 REFRESH_EVERY_S = 60
 
@@ -1558,6 +1563,10 @@ def cancel_refresh() -> None:
         task.cancel()
 
 
+#: the wake pass started after the last refresh (core/swarm_out_wake), while it runs
+_WAKE: Optional[asyncio.Task] = None
+
+
 async def run_refresh_loop() -> None:
     """Refresh the runs every REFRESH_EVERY_S while this Host has dispatched anything.
     Never raises."""
@@ -1569,6 +1578,13 @@ async def run_refresh_loop() -> None:
             raise
         except Exception as e:  # noqa: BLE001 — tried again next round
             logger.warning("swarm_out: refreshing the runs failed (%s)", type(e).__name__)
+        # the sessions that dispatched a run it needs now are woken (design
+        # 2026-11-02-hive-run-decision-record §2; core/swarm_out_wake): in a task of its
+        # own, one pass at a time, so a slow send never holds the refresh
+        global _WAKE
+        if _WAKE is None or _WAKE.done():
+            from core import swarm_out_wake
+            _WAKE = asyncio.create_task(swarm_out_wake.wake_sessions(), name="swarm-out-wake")
         await asyncio.sleep(REFRESH_EVERY_S)
 
 
@@ -1722,15 +1738,6 @@ async def _compute_runs() -> dict[str, Any]:
             (answered if a.get("phase") in ("sent", "taken", "gone") else asks).append(a)
         sessions_of[hive_id] = sessions
         errors.extend(errs)
-    now, seen = time.time(), set()
-    for a in asks:
-        key = (a.get("hive_id"), a.get("session_id"), a.get("request_id"))
-        seen.add(key)
-        a["seen_at"] = _FIRST_SEEN.setdefault(key, now)
-    read_ok = {h for h, (_a, _s, errs) in zip(targets, results) if not errs}
-    for key in [k for k in _FIRST_SEEN if k not in seen and (
-            k[0] in read_ok or status_of.get(k[0], "gone") not in ("running", None))]:
-        del _FIRST_SEEN[key]                       # gone from a Hive that was read
     await _find_sessions(rows, status_of)
     open_asks = {(a["hive_id"], a.get("session_id")) for a in asks if not a.get("refused")}
     open_decisions = {(a["hive_id"], a.get("session_id")) for a in asks
@@ -1777,6 +1784,18 @@ async def _compute_runs() -> dict[str, Any]:
     except Exception as e:                          # never breaks the list
         logger.warning("swarm_out: settling failed (%s)", type(e).__name__)
         errors.append("could not read the runs' acceptance")
+    # whether the person has anything to do on each run (design
+    # 2026-11-02-hive-run-decision-record §1): one rule for the panel's "waiting for you"
+    from core import swarm_out_record
+
+    def _needs_person() -> None:
+        for r in rows:
+            if isinstance(r, dict) and isinstance(r.get("project_agent"), dict):
+                r["needs_person"] = swarm_out_record.needs_person(r, asks)
+    try:
+        await asyncio.to_thread(_needs_person)
+    except Exception as e:                          # never breaks the list
+        logger.warning("swarm_out: who acts next failed (%s)", type(e).__name__)
     # intake refusals, for the history's line (dispatch-center §2.3)
     try:
         refusals = await asyncio.to_thread(refusal_counts)
@@ -1935,12 +1954,15 @@ def _log_row_of(dispatch_id: str) -> dict[str, Any]:
 
 async def run_result(dispatch_id: str) -> dict[str, Any]:
     """The whole kept record of one run (with the reply), for the panel only."""
-    from core import swarm_out_actor, swarm_out_results
+    from core import swarm_out_actor, swarm_out_record, swarm_out_results, swarm_out_settle
     await asyncio.to_thread(_log_row_of, dispatch_id)
     rec = await asyncio.to_thread(swarm_out_results.load, dispatch_id)
     # the waits the dispatching agent answered itself (design 2026-10-31-hive-approvals H8)
     answers = await asyncio.to_thread(swarm_out_actor.host_answers, dispatch_id)
-    return {"dispatch_id": dispatch_id, "record": _shown_checks(rec), "host_answers": answers}
+    # every decision on the run, oldest first (design 2026-11-02-hive-run-decision-record §3)
+    settle_rec = await asyncio.to_thread(swarm_out_settle.load, dispatch_id)
+    return {"dispatch_id": dispatch_id, "record": _shown_checks(rec), "host_answers": answers,
+            "decisions": swarm_out_record.entries(settle_rec), "ask_person": swarm_out_record.ask(settle_rec)}
 
 
 def _shown_checks(rec: Any) -> Any:
@@ -2123,6 +2145,9 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
         if via == "chat":
             body["via"] = "chat"
         await asyncio.to_thread(_put_once, s3, inst, base + "answer/" + rel, body)
+        if answered_by == "person":
+            await asyncio.to_thread(_record_person_answer, session_id, request_id, "decision",
+                                    body["shown_label"])
         return {"ok": True, "request_id": request_id}
     raw = await asyncio.to_thread(_load, "ask/")
     if raw is None:
@@ -2155,7 +2180,33 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
         body["via"] = "chat"
 
     await asyncio.to_thread(_put_once, s3, inst, base + "answer/" + rel, body)
+    if answered_by == "person":
+        await asyncio.to_thread(_record_person_answer, session_id, request_id, rec["kind"],
+                                decision if rec["kind"] == "approval" else json.dumps(body.get("answers"), ensure_ascii=False))
     return {"ok": True, "request_id": request_id}
+
+
+def dispatch_of_session(session_id: str) -> Optional[str]:
+    """The dispatch whose Hive session is *session_id* (the runs as last listed, then the
+    log), else None."""
+    snap = snapshot() or {}
+    for r in snap.get("runs") or []:
+        if isinstance(r, dict) and r.get("session_id") == session_id and r.get("dispatch_id"):
+            return r["dispatch_id"]
+    for r in _read_log():
+        if r.get("session_id") == session_id and r.get("dispatch_id"):
+            return r["dispatch_id"]
+    return None
+
+
+def _record_person_answer(session_id: str, request_id: str, kind: str, picked: Any) -> None:
+    """The person's answer to one of a run's waits, one entry of its decision record."""
+    from core import swarm_out_record
+    did = dispatch_of_session(session_id)
+    if did:
+        swarm_out_record.append_quietly(did, "person", "answer_wait", "", None, "answer_wait",
+                                        {"request_id": request_id, "kind": kind,
+                                         "pick": str(picked or "")[:400]})
 
 
 def _put_once(s3, inst: dict[str, Any], key: str, body: dict[str, Any]) -> None:

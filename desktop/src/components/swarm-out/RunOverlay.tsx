@@ -41,8 +41,9 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'r
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { swarmOutService, type SwarmOutAction, type SwarmOutAsk, type SwarmOutFileVersions, type SwarmOutHostAnswer, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAction, type SwarmOutAsk, type SwarmOutDecision, type SwarmOutFileVersions, type SwarmOutHostAnswer, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { OPEN_FILE_VERSIONS_EVENT, openFileVersions } from '../file-viewer/utils/fileVersions';
+import { AskPersonCard, DecisionsList, FunnelLine } from './funnel';
 import { Stats } from './LiveDispatches';
 import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { SectionLabel, Tabs } from '../overlay';
@@ -64,7 +65,7 @@ const btn = 'btn-md btn-secondary disabled:opacity-50';
 
 type Tab = 'deliverable' | 'autonomy' | 'process' | 'cost' | 'lessons';
 /** what the command panel shows: the commands, or one of them taking words or a confirmation */
-export type PanelMode = 'list' | 'rerun' | 'discard' | 'land' | 'manual';
+export type PanelMode = 'list' | 'rerun' | 'discard' | 'land' | 'manual' | 'keep' | 'revert';
 
 /** HTTP status of a failed api call (the api interceptor's ApiError, or axios's shape). */
 function statusOf(e: unknown): number | undefined {
@@ -105,22 +106,29 @@ function HostAnswers({ answers, now }: { answers: SwarmOutHostAnswer[]; now: num
   );
 }
 
-/** The autonomy tab: a pipeline run's five Judge rows, else who stepped in and how; then
- *  what the dispatching agent answered for the person. */
-function AutonomyTab({ res, answers, now }: { res: SwarmOutResult | null; answers: SwarmOutHostAnswer[]; now: number }) {
+/** The decisions tab (design 2026-11-02-hive-run-decision-record §3.1): a pipeline run's
+ *  five Judge rows, else who stepped in and how; then every decision on the run, grouped
+ *  by gate (an older backend: what the dispatching agent answered for the person). */
+function DecisionsTab({ res, answers, decisions, personDecisions, now }: {
+  res: SwarmOutResult | null; answers: SwarmOutHostAnswer[]; decisions: SwarmOutDecision[] | null;
+  personDecisions: number | null | undefined; now: number;
+}) {
   return (
     <>
-      <AutonomyBody res={res} hostListed={answers.length > 0} />
-      <HostAnswers answers={answers} now={now} />
+      <AutonomyBody res={res} hostListed={answers.length > 0 || !!decisions} personDecisions={personDecisions} />
+      <div className="mt-6">
+        {decisions ? <DecisionsList decisions={decisions} /> : <HostAnswers answers={answers} now={now} />}
+      </div>
     </>
   );
 }
 
-function AutonomyBody({ res, hostListed }: { res: SwarmOutResult | null; hostListed: boolean }) {
+function AutonomyBody({ res, hostListed, personDecisions }: { res: SwarmOutResult | null; hostListed: boolean;
+  personDecisions?: number | null }) {
   const { t } = useTranslation();
   if (!res) return <div className={muted}>{t('swarmOut.review.noResult')}</div>;
   const judge = runJudge(res);
-  const word = autonomyWord(res);
+  const word = autonomyWord(res, personDecisions);
   if (judge) {
     return (
       <div data-testid="swarm-out-review-autonomy" data-kind="judge">
@@ -363,7 +371,7 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
   const id = r.dispatch_id;
   const stage = stageOf(r);
   useEffect(() => { setText(''); setError(null); setLanded([]); }, [id]);
-  useEffect(() => { if (mode === 'rerun' || mode === 'discard') boxRef.current?.focus(); }, [mode]);
+  useEffect(() => { if (mode === 'rerun' || mode === 'discard' || mode === 'keep' || mode === 'revert') boxRef.current?.focus(); }, [mode]);
   // landing ends when the backend says the run is no longer waiting for acceptance
   useEffect(() => {
     if (mode === 'land' && stage !== 'awaiting') { setMode('list'); onDone(true); }
@@ -398,6 +406,8 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
       case 'stop': void run(() => swarmOutService.stop(id), false); return;
       case 'open_session': openSession(); return;
       case 'answer': onShowDeliverable(); return;
+      case 'keep': setMode('keep'); return;
+      case 'revert': setMode('revert'); return;
       default:
     }
   }, [busy, id, openSession, onShowDeliverable, r.result, run, setMode]);
@@ -455,6 +465,26 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
             placeholder={t(rerun ? 'swarmOut.review.rerunBox.placeholder' : 'swarmOut.review.discardBox.placeholder')}
             data-testid="swarm-out-review-box" />
           {rerun && <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.review.rerunBox.note')}</div>}
+        </>
+      ),
+    });
+  }
+
+  if (mode === 'keep' || mode === 'revert') {
+    const keep = mode === 'keep';
+    return sheet({
+      testId: `swarm-out-review-${mode}`, danger: !keep, confirmTone: keep ? 'ok' : undefined,
+      title: t(`swarmOut.review.cmd.${mode}.name`),
+      consequence: t(`swarmOut.review.cmd.${mode}.does`),
+      confirmLabel: t(`swarmOut.review.askBox.${mode}`),
+      onConfirm: () => { if (!busy) void run(() => swarmOutService.answerAsk(id, keep ? 'keep' : 'revert', text), keep); },
+      children: (
+        <>
+          <label className={`text-[12px] ${muted}`} htmlFor={`swarm-out-box-${id}`}>{t('swarmOut.review.askBox.label')}</label>
+          <textarea id={`swarm-out-box-${id}`} ref={boxRef} rows={4} maxLength={4000}
+            className="w-full min-h-[96px] rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2 text-[13px] leading-[1.5] resize-y"
+            value={text} onChange={(e) => setText(e.target.value)}
+            placeholder={t('swarmOut.review.askBox.placeholder')} data-testid="swarm-out-review-box" />
         </>
       ),
     });
@@ -633,6 +663,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   const [fullRead, setFullRead] = useState(false);
   const [fullFailed, setFullFailed] = useState(false);
   const [hostAnswers, setHostAnswers] = useState<SwarmOutHostAnswer[]>([]);
+  const [decisions, setDecisions] = useState<SwarmOutDecision[] | null>(null);
   const [fetchKey, setFetchKey] = useState(0);
   // an answer half given in a wait card: kept like a half-written correction
   const [askDirty, setAskDirty] = useState(false);
@@ -667,9 +698,12 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   askDirtyRef.current = askDirty;
   useEffect(() => {
     let alive = true;
-    setFull(null); setFullRead(false); setFullFailed(false); setHostAnswers([]);
+    setFull(null); setFullRead(false); setFullFailed(false); setHostAnswers([]); setDecisions(null);
     swarmOutService.result(id).then((rec) => {
-      if (alive) { setFull(rec.record?.result ?? null); setHostAnswers(rec.host_answers ?? []); setFullRead(true); }
+      if (alive) {
+        setFull(rec.record?.result ?? null); setHostAnswers(rec.host_answers ?? []);
+        setDecisions(Array.isArray(rec.decisions) ? rec.decisions : null); setFullRead(true);
+      }
     })
       .catch(() => { if (alive) setFullFailed(true); });
     return () => { alive = false; };
@@ -747,7 +781,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   }, [keeps, step]);
 
   const res = full ?? r?.result ?? null;
-  const word = useMemo(() => autonomyWord(res), [res]);
+  const word = useMemo(() => autonomyWord(res, r?.person_decisions), [res, r?.person_decisions]);
   if (!r) return null;
   const waits = waitsOf(r, asks, answered);
   const leaveTo = () => { onClose(); };
@@ -763,7 +797,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   const running = stageOf(r) === 'running';
   const tabs: { key: Tab; label: string; count?: number; testid: string }[] = [
     { key: 'deliverable', label: running ? t('swarmOut.review.tab.now') : t('swarmOut.review.tab.deliverable'), count: running ? undefined : delivered },
-    { key: 'autonomy', label: t('swarmOut.review.tab.autonomy') },
+    { key: 'autonomy', label: t('swarmOut.review.tab.decisions'), count: decisions ? decisions.length : undefined },
     { key: 'process', label: t('swarmOut.review.tab.process'), count: res?.work.steps.total ?? 0 },
     { key: 'cost', label: t('swarmOut.review.tab.cost') },
     { key: 'lessons', label: t('swarmOut.review.tab.lessons'), count: lessons },
@@ -785,6 +819,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
               {word && <> · <button type="button" className="underline-offset-2 hover:underline" style={{ color: word.kind === 'full' || word.state === 'PASS' ? TONE_VAR.ok : TONE_VAR.attention }}
                 onClick={() => setTab('autonomy')} data-testid="swarm-out-review-autonomy-word">{word.text}</button></>}
             </div>
+            <FunnelLine r={r} />
           </div>
           <div className={`ml-auto flex flex-wrap items-center gap-1.5 text-[12px] ${muted}`}>
             {pos >= 0 && <>
@@ -805,10 +840,9 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
         <div className="flex-1 grid min-h-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_290px] overflow-auto md:overflow-hidden">
           <div className="flex flex-col min-h-0 md:border-r border-[var(--color-border)]">
             {(acceptance || checks.length > 0) && (
-              <div className="px-4 py-3 border-b" style={{ background: `color-mix(in srgb, ${TONE_VAR.attention} 7%, transparent)`, borderColor: `color-mix(in srgb, ${TONE_VAR.attention} 30%, var(--color-border))` }}
-                data-testid="swarm-out-review-acceptance">
+              <div className="px-4 py-3 border-b border-[var(--color-border)]" data-testid="swarm-out-review-acceptance">
                 {acceptance && <>
-                  <div className="text-[11.5px] font-semibold" style={{ color: TONE_VAR.attention }}>{t('swarmOut.review.acceptance')}</div>
+                  <div className={`text-[11.5px] font-semibold ${muted}`}>{t('swarmOut.review.acceptance')}</div>
                   <div className="text-[14px] mt-0.5 break-words">{acceptance}</div>
                 </>}
                 {checks.length > 0 && (
@@ -821,6 +855,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
                 )}
               </div>
             )}
+            {r.funnel?.ask?.state === 'open' && <AskPersonCard ask={r.funnel.ask} />}
             {waits.length > 0 && (
               // what waits on you is the decision of this moment: above the tabs (design
               // 2026-10-31-swarm-out-single-loop-fixes §2.2), the chat's own card
@@ -836,7 +871,8 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
             <div className="flex-1 md:overflow-auto px-5 py-5" role="tabpanel">
               {tab === 'deliverable' && <DeliverableTab r={r} full={full} fullRead={fullRead} fullFailed={fullFailed} onRetry={() => setFetchKey((k) => k + 1)}
                 waits={waits.length} />}
-              {tab === 'autonomy' && <AutonomyTab res={res} answers={hostAnswers} now={now} />}
+              {tab === 'autonomy' && <DecisionsTab res={res} answers={hostAnswers} decisions={decisions}
+                personDecisions={r.person_decisions} now={now} />}
               {tab === 'process' && (
                 <div className="flex flex-col gap-1 text-[12.5px]" data-testid="swarm-out-review-process">
                   {res ? [...workLines(res), executionLine(res), checksLine(res), gateLine(res)].filter(Boolean).map((l) => <div key={l!}>{l}</div>)

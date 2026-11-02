@@ -422,6 +422,9 @@ async def escalate(session: Optional[str], dispatch_id: str, request_id: str, wh
     out = {"dispatch_id": dispatch_id, "request_id": request_id, "session": session,
            "why": why, "at": _now()}
     await asyncio.to_thread(_write_escalation, p, out)
+    from core import swarm_out_record
+    await asyncio.to_thread(swarm_out_record.append_quietly, dispatch_id, "agent", "escalate", why,
+                            session, "escalate", {"request_id": request_id})
     logger.info("swarm_out_wait_card: %s %s escalated to the person", dispatch_id, request_id)
     return out
 

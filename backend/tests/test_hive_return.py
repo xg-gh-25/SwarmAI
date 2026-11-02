@@ -599,20 +599,21 @@ def test_a_session_id_the_hive_named_oddly_is_not_put_into_a_url(world):
         asyncio.run(hive_return.prepare(DID, URL))
 
 
-def test_an_agent_never_lands_protected_paths(world, monkeypatch):
-    """security review: protected paths guard the agent or run code here; the agent's
-    landing (approve_protected False, as the route passes it) refuses them and says what
-    to do; the person may approve them, and the commit names them."""
+def test_protected_paths_land_only_once_approved(world, monkeypatch):
+    """Protected paths guard the agent or run code here: without approval they are
+    refused and the refusal says how they land; approved (the person's button, or the
+    agent's landing after its review: the route passes approve_protected True for it,
+    design 2026-11-02-hive-run-decision-record §2) they land, and the commit names them."""
     from core import hive_return
     _no_network(monkeypatch, world)
     _commit(world["hive"], "scripts/build.sh", "echo hi\n", "add a build step")
     _hive_bundle(world)
     st = asyncio.run(hive_return.prepare(DID, URL))
     before = git(world["host"], "rev-parse", "main")
-    with pytest.raises(hive_return.ReturnError, match="an agent does not land them"):
+    with pytest.raises(hive_return.ReturnError, match="approve them to land"):
         hive_return.land(DID, st["key"], st["tip"], approve_protected=False, allow_git_exec=False)
     assert git(world["host"], "rev-parse", "main") == before
-    out = hive_return.land(DID, st["key"], st["tip"], approve_protected=True)        # the person
+    out = hive_return.land(DID, st["key"], st["tip"], approve_protected=True, allow_git_exec=False)   # approved
     assert out["landed"] and out["protected_files"] == ["scripts/build.sh"]
     assert "Changes protected paths: scripts/build.sh" in git(world["host"], "log", "--format=%b", f"{before}..main")
 

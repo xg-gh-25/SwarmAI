@@ -1840,7 +1840,8 @@
       },
       "tag": {
         "answer": "回答问题",
-        "awaiting": "验收 · {{what}}"
+        "awaiting": "验收 · {{what}}",
+        "ask": "定：留着还是撤回"
       },
       "what": {
         "commits_one": "{{count}} 提交",
@@ -1870,7 +1871,11 @@
         "no_terminal": "没记下怎么结束",
         "restarted": "重启过",
         "superseded": "被替换",
-        "no_record": "中途停了，没留下结束记录"
+        "no_record": "中途停了，没留下结束记录",
+        "judge": "已落地：agent 在判",
+        "revert": "你要求撤回：agent 正在撤回",
+        "ask_person": "agent 交给你定",
+        "reverted": "已撤回"
       },
       "cmd": {
         "accept": {
@@ -1910,6 +1915,14 @@
         "answer": {
           "name": "回答",
           "does": "问题在左边交付物里"
+        },
+        "keep": {
+          "name": "留着",
+          "does": "已经落地的保留，结单"
+        },
+        "revert": {
+          "name": "撤回",
+          "does": "agent 撤回已经落地的，然后结单"
         }
       },
       "check": {
@@ -1954,7 +1967,8 @@
         "autonomy": "自主度",
         "process": "过程",
         "cost": "花费",
-        "lessons": "教训"
+        "lessons": "教训",
+        "decisions": "决定"
       },
       "section": {
         "you": "等你",
@@ -2020,6 +2034,19 @@
         "answer_sent": "已回答，等 Hive 接收",
         "answer_refused": "回答没用上",
         "background": "本轮已结束，后台任务还在跑"
+      },
+      "funnel": {
+        "reviewing": "agent 在审",
+        "landing": "在落地",
+        "judging": "agent 在判",
+        "reverting": "agent 在撤回",
+        "answering": "agent 在答"
+      },
+      "askBox": {
+        "label": "想补一句给 agent（可选）",
+        "placeholder": "比如：留着，但把语言包改成空闲时预加载",
+        "keep": "留着",
+        "revert": "撤回"
       }
     },
     "wait": {
@@ -2049,6 +2076,57 @@
       },
       "doneByAgent": "派单的 agent 已答",
       "agentAnswers": "这一项由派单的 agent 自己回答；你也可以先答。"
+    },
+    "funnel": {
+      "by": {
+        "agent": "agent",
+        "person": "你",
+        "product": "产品"
+      },
+      "gate": {
+        "review": "审",
+        "land": "落地",
+        "judge": "判"
+      },
+      "yours": "agent 判不了，等你定",
+      "reruns_one": "之前打回过 1 次",
+      "reruns_other": "之前打回过 {{count}} 次",
+      "ask": {
+        "title": "要你定",
+        "where": "已经落在",
+        "judgment": "agent 的判断",
+        "why": "为什么定不了",
+        "revert": "撤回会怎样",
+        "onHost": "本机",
+        "revertCommits": "agent 在本机 revert 这个 commit，然后结单",
+        "revertFiles": "agent 把这些文件移出 Brain，然后结单"
+      },
+      "decision": {
+        "dispatch": "派发",
+        "answer_wait": "回答等待",
+        "said": "在会话里说",
+        "review": "取回审查",
+        "rerun": "修正重跑",
+        "stop": "停止",
+        "land": "落地",
+        "accept": "通过",
+        "take_over": "接手自己做",
+        "discard": "丢弃",
+        "escalate": "把等待交给人",
+        "ask_person": "交给你",
+        "keep": "留着",
+        "revert": "要求撤回",
+        "reverted": "已撤回",
+        "place_files": "放进 Brain",
+        "settle": "结单"
+      },
+      "group": {
+        "run": "派发和执行",
+        "review": "审",
+        "land": "落到本机",
+        "judge": "判"
+      },
+      "none": "这一单还没有记录到决定。"
     }
   },
   "usage": {

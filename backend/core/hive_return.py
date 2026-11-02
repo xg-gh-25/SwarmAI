@@ -27,7 +27,8 @@ after the tip that landed) onto the run's branch from objects only (no working t
 hook, no filter), as one commit with a message this host writes (the Hive's commits stay at the ``refs/hive/`` ref),
 and fast-forwards the branch to it. Paths under an ignored or linked directory of the
 checkout are refused at prepare (git would write a file into a virtualenv), and paths
-that change git's own behaviour are protected in every repository (``GIT_PROTECTED``). Not good enough is
+that change git's own behaviour, or make a coding tool run commands on its own, are protected in
+every repository (``AUTORUN``). Not good enough is
 not recorded here: the person re-runs the task with a correction or discards it. Qualifying the change (build, tests,
 deploy) is the repository's own process and the person's, after this.
 """
@@ -313,6 +314,16 @@ def _verify_and_fetch(repo: Path, branch: str, bundle: Path, local_ref: str) -> 
 #: submodules, hooks kept in the tree): protected in every repository
 GIT_PROTECTED = ("**/.gitattributes", ".gitattributes", ".lfsconfig", "**/.lfsconfig", ".gitmodules",
                  ".husky/**", ".githooks/**", ".pre-commit-config.yaml")
+#: a coding tool's settings whose hooks run shell commands on their own when the tool
+#: opens or works in the checkout (Claude Code ``settings.json`` hooks): like a git hook,
+#: they run code here without anyone choosing to run it
+TOOL_AUTORUN = (".claude/settings.json", "**/.claude/settings.json",
+                ".claude/settings.local.json", "**/.claude/settings.local.json")
+#: what an agent never lands (design 2026-11-02-hive-run-decision-record §2: the one floor,
+#: paths that run code on this machine on their own); everything else protected it lands
+#: once it reviewed it. Code a person or agent runs on purpose (tests, scripts, builds)
+#: is reviewed like any other change.
+AUTORUN = (*GIT_PROTECTED, *TOOL_AUTORUN)
 _BAD_CHARS = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 
@@ -338,7 +349,7 @@ def _unsafe_paths(repo: Path, paths: list[str]) -> list[str]:
 
 def _review(repo: Path, base: str, tip: str, globs: list[str]) -> dict[str, Any]:
     raw = _out(repo, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", base, tip)
-    globs = [*GIT_PROTECTED, *globs]
+    globs = [*AUTORUN, *globs]
     files = []
     for entry in raw.split("\0"):
         parts = entry.split("\t", 2)
@@ -548,9 +559,10 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     """Land the prepared tip the person or the dispatching agent approved; commits that
     change the repository's protected paths need ``approve_protected``, and the landed
     commit's message names those paths. The agent's landing (the route passes
-    ``approve_protected`` False and ``allow_git_exec`` False for it) refuses every
-    protected path; ``allow_git_exec`` names the git hooks and filters in the refusal,
-    which run code on this machine. The commit is built from objects only
+    ``approve_protected`` True and ``allow_git_exec`` False for it: design
+    2026-11-02-hive-run-decision-record §2) lands the repository's protected paths it
+    reviewed and refuses what runs code on this machine on its own (``AUTORUN``: git
+    hooks and filters, a coding tool's hooks). The commit is built from objects only
     (``merge-tree --write-tree`` of the branch and the tip over the reviewed base, then
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
     main checkout fast-forwards to it, which runs no hook either."""
@@ -560,16 +572,16 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     repo = Path(state["repo"])
     if _git(repo, "rev-parse", "--verify", "--quiet", f"{state['ref']}^{{commit}}").stdout.decode().strip() != tip:
         raise ReturnError("the ref of these commits moved since they were shown; review them again")
-    git_exec = [p for p in state["protected_files"] if _is_protected(p, list(GIT_PROTECTED))]
+    git_exec = [p for p in state["protected_files"] if _is_protected(p, list(AUTORUN))]
     if git_exec and not allow_git_exec:
-        raise ReturnError("these commits change files that make this machine run code (git hooks, "
-                          "filters, submodules): " + ", ".join(git_exec[:10])
+        raise ReturnError("these commits change files that make this machine run code on its own "
+                          "(git hooks, filters, submodules, a coding tool's hooks): "
+                          + ", ".join(git_exec[:10])
                           + "; an agent does not land them: re-run asking the Hive to leave them out")
     if state["protected_files"] and not approve_protected:
         raise ReturnError("the commits change protected paths (they guard the agent or run code "
                           "here): " + ", ".join(state["protected_files"][:10])
-                          + "; an agent does not land them: re-run asking the Hive to leave them "
-                          "out, or make the change yourself; the person may approve them")
+                          + "; review their diff and approve them to land")
     if state["files_total"] > len(state["files"]):
         raise ReturnError(f"the commits change {state['files_total']} files, more than the review shows; "
                           f"land them by hand from {state['ref']}")
@@ -621,3 +633,62 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     return {"landed": True, "head": new[:12], "into": branch.replace("refs/heads/", ""),
             "protected_files": state["protected_files"][:20]}
 
+
+
+def _patch_id(repo: Path, a: str, b: str) -> Optional[str]:
+    """The stable patch id of the change from ``a`` to ``b`` (None: no change)."""
+    diff = _git(repo, *_SAFE, "diff", "--no-ext-diff", "--no-textconv", "--binary", a, b, check=True).stdout
+    if not diff.strip():
+        return None
+    try:
+        p = subprocess.run(["git", "patch-id", "--stable"], cwd=str(repo), input=diff,
+                           capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReturnError(f"git could not run ({type(exc).__name__})") from None
+    out = p.stdout.decode("utf-8", "replace").split()
+    return out[0] if out else None
+
+
+def verify_revert(dispatch_id: str, commits: list[str]) -> list[dict[str, str]]:
+    """The commits the dispatching agent says undo this run's landing (design
+    2026-11-02-hive-run-decision-record §1): every landed repository has exactly one of
+    them, it is on the branch the landing went to, and its change is the exact reverse
+    of the landed commit's (the same stable patch id as landed→landed^). Raises
+    ReturnError naming what does not hold; returns the pairs it matched."""
+    d = _state_dir(dispatch_id)
+    landed = []
+    for f in sorted(d.glob("*.json")):
+        st = load(dispatch_id, f.stem) or {}
+        if st.get("status") == "landed" and st.get("landed"):
+            landed.append(st)
+    if not landed:
+        raise ReturnError("nothing of this run is landed here")
+    wanted = [c.strip() for c in commits or [] if isinstance(c, str) and c.strip()]
+    if not wanted:
+        raise ReturnError("name the commit that undoes the landing (--commit)")
+    matched, used = [], set()
+    for st in landed:
+        repo, branch, commit = Path(st["repo"]), st.get("branch") or "HEAD", st["landed"]
+        target = _patch_id(repo, commit, f"{commit}^")
+        hit = None
+        for c in wanted:
+            if c in used:
+                continue
+            p = _git(repo, "rev-parse", "--verify", "--quiet", f"{c}^{{commit}}")
+            full = p.stdout.decode().strip() if p.returncode == 0 else ""
+            if not full:
+                continue
+            if _git(repo, "merge-base", "--is-ancestor", full, branch).returncode != 0:
+                continue
+            if _patch_id(repo, f"{full}^", full) == target:
+                hit = (c, full)
+                break
+        if hit is None:
+            raise ReturnError(f"no commit you named undoes the landing {commit[:12]} on "
+                              f"{branch.rsplit('/', 1)[-1]} (it must be on that branch and reverse it exactly)")
+        used.add(hit[0])
+        matched.append({"landed": commit, "revert": hit[1]})
+    extra = [c for c in wanted if c not in used]
+    if extra:
+        raise ReturnError("these commits undo nothing this run landed: " + ", ".join(x[:12] for x in extra))
+    return matched

@@ -154,19 +154,21 @@ async def _allowed(actor, command: str, dispatch_id: str,
     row = await _call(swarm_out.run_row(dispatch_id))
     why = swarm_out_actor.row_blocker(actor, command, row, ended_at)
     if why is None and command == "discard":
-        why = swarm_out_actor.discard_blocker(row)
+        import asyncio
+        why = await asyncio.to_thread(swarm_out_actor.discard_blocker, row)
     if why:
         raise HTTPException(status_code=403, detail=f"an agent may not {command.replace('_', ' ')} this run now: {why}")
 
 
 def _recorded(actor, command: str, dispatch_id: str) -> None:
-    """Keep the agent's command in the run's settle record (after it succeeded); a
-    failure to keep it does not undo the command."""
+    """Keep the command, the agent's or the person's, as one entry of the run's decision
+    record (core/swarm_out_record, after it succeeded); a failure to keep it does not
+    undo the command."""
     from core import swarm_out_actor
     try:
         swarm_out_actor.record(dispatch_id, actor, command)
     except Exception:  # noqa: BLE001 — the command happened; only its record is missing
-        logger.warning("swarm_out: agent command not recorded for %s", dispatch_id, exc_info=True)
+        logger.warning("swarm_out: command not recorded for %s", dispatch_id, exc_info=True)
 
 
 async def _return(fn, *args) -> dict[str, Any]:
@@ -227,16 +229,18 @@ async def return_file(dispatch_id: str, url: str = "", path: str = "") -> dict[s
 @router.post("/runs/{dispatch_id}/return/land")
 async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     """Land the prepared commits: the panel's button, or the dispatching agent's command.
-    An agent never lands protected paths, whatever its request says: they guard the
-    agent itself or run code on this machine, so a Hive's change to them is the
-    person's (the agent re-runs without them, or makes the change itself)."""
+    The agent lands the repository's protected paths it reviewed (design
+    2026-11-02-hive-run-decision-record §2: the funnel lands or re-runs, it never hands
+    unlanded work to the person; the land entry keeps the paths and the reason), but
+    never the git hooks and filters that run code on this machine (``allow_git_exec``
+    False: it re-runs without them, or makes the change itself)."""
     _require_desktop()
     import asyncio
     from core import hive_return
     actor = _actor(body)
     await _allowed(actor, "return_land", dispatch_id)
     out = await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
-                        body.approve_protected and not actor.agent, not actor.agent, body.summary)
+                        True if actor.agent else body.approve_protected, not actor.agent, body.summary)
     _recorded(actor, "return_land", dispatch_id)
     return out
 
@@ -306,13 +310,23 @@ async def _settle(fn, *args) -> dict[str, Any]:
 @router.post("/runs/{dispatch_id}/verdict")
 async def run_verdict(dispatch_id: str, body: VerdictBody) -> dict[str, Any]:
     """The pass on an answer or a document (run-review §1.1), the person's or the
-    dispatching agent's (core/swarm_out_actor)."""
+    dispatching agent's (core/swarm_out_actor); on commits the dispatching agent landed,
+    its judgment of them (design 2026-11-02-hive-run-decision-record §1, gate 3): that
+    entry is what closes the funnel, so a failure to keep it is the command's failure."""
     _require_desktop()
-    from core import swarm_out_settle
+    import asyncio
+    from core import swarm_out_actor, swarm_out_settle
     actor = _actor(body)
     await _allowed(actor, "accept", dispatch_id, ended_at=body.ended_at)
     out = await _settle(swarm_out_settle.set_verdict, dispatch_id, body.value, body.note or actor.why,
                         body.ended_at)
+    if isinstance(out, dict) and out.get("judged") is True:
+        try:                                   # the judgment of a landing: the entry is the decision
+            await asyncio.to_thread(swarm_out_actor.record, dispatch_id, actor, "accept")
+        except swarm_out_settle.SettleError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        swarm_out._refresh_soon()
+        return {"judged": True}
     _recorded(actor, "accept", dispatch_id)
     return out
 
@@ -350,7 +364,10 @@ async def run_rerun(dispatch_id: str, body: RerunBody) -> dict[str, Any]:
     except swarm_out_actor.ActorError as e:
         raise HTTPException(status_code=403, detail=str(e))
     try:
-        return await _call(swarm_out.rerun(dispatch_id, body.text))
+        out = await _call(swarm_out.rerun(dispatch_id, body.text))
+        if not actor.agent:
+            _recorded(actor, "rerun", dispatch_id)   # an agent's re-send is its reservation
+        return out
     except HTTPException as e:
         # refused before anything was sent: it does not count. A 504 (it may have
         # reached the Hive) and a cancelled request keep counting.
@@ -426,6 +443,68 @@ async def watch(body: WatchBody) -> dict[str, Any]:
 async def runs() -> dict[str, Any]:
     _require_desktop()
     return await _call(swarm_out.list_runs(swarm_out.SNAPSHOT_FRESH_S))
+
+
+class AskPersonBody(BaseModel):
+    """The dispatching agent hands its landed result to the person (the CLI's
+    ``ask-person``): what they decide, its own judgment, why it cannot decide."""
+    session: Optional[str] = Field(default=None, max_length=80)
+    decide: str = Field(min_length=1, max_length=2000)
+    judgment: str = Field(min_length=1, max_length=2000)
+    why: str = Field(min_length=1, max_length=2000)
+
+
+class AskAnswerBody(BaseModel):
+    pick: str = Field(max_length=10)
+    note: str = Field(default="", max_length=4000)
+
+
+class RevertedBody(BaseModel):
+    session: Optional[str] = Field(default=None, max_length=80)
+    commits: list[str] = Field(default_factory=list, max_length=20)
+    why: str = Field(min_length=1, max_length=2000)
+
+
+async def _record_step(fn, *args) -> dict[str, Any]:
+    import asyncio
+    from core import swarm_out_record
+    try:
+        out = await asyncio.to_thread(fn, *args)
+    except swarm_out_record.RecordError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    swarm_out._refresh_soon()
+    return out
+
+
+@router.post("/runs/{dispatch_id}/ask-person")
+async def run_ask_person(dispatch_id: str, body: AskPersonBody) -> dict[str, Any]:
+    """Hand a landed result the dispatching agent cannot judge to the person (design
+    2026-11-02-hive-run-decision-record §1): only a result on this host; refused with
+    nothing written otherwise."""
+    _require_desktop()
+    from core import swarm_out_record
+    row = await _call(swarm_out.run_row(dispatch_id))
+    return await _record_step(swarm_out_record.ask_person, dispatch_id, row, body.session,
+                              body.decide, body.judgment, body.why)
+
+
+@router.post("/runs/{dispatch_id}/ask-person/answer")
+async def run_ask_answer(dispatch_id: str, body: AskAnswerBody) -> dict[str, Any]:
+    """The person keeps what landed, or has it reverted (the person's only: ops registry)."""
+    _require_desktop()
+    from core import swarm_out_record
+    return await _record_step(swarm_out_record.answer_ask, dispatch_id, body.pick, body.note)
+
+
+@router.post("/runs/{dispatch_id}/reverted")
+async def run_reverted(dispatch_id: str, body: RevertedBody) -> dict[str, Any]:
+    """The dispatching agent carried out the person's revert: checked here before the
+    run settles."""
+    _require_desktop()
+    from core import swarm_out_record
+    row = await _call(swarm_out.run_row(dispatch_id))
+    return await _record_step(swarm_out_record.reverted, dispatch_id, row, body.session,
+                              body.commits, body.why)
 
 
 @router.get("/runs/{dispatch_id}/result")

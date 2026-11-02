@@ -23,6 +23,8 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-prepare <dispatch_id> --url <repository url> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <k> --tip <sha> --summary-file <f> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out rerun <dispatch_id> --text-file <correction> --why <w>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out ask-person <dispatch_id> --decide <what the person decides> --judgment <yours> --why <why you cannot decide>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out reverted <dispatch_id> [--commit <sha> ...] --why <what you did>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out update-hive --hive <name> [--version <v>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out start-hive --hive <name>
 
@@ -226,6 +228,17 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--hive", required=True, help="the Hive's name")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id", type=_dispatch_id)
+    # the funnel's last gate (design 2026-11-02-hive-run-decision-record §1): only a result
+    # already on this host goes to the person, with your judgment and why you cannot decide
+    ap = sub.add_parser("ask-person", help="hand a landed result you cannot judge to the person")
+    ap.add_argument("dispatch_id", type=_dispatch_id)
+    ap.add_argument("--decide", required=True, help="what the person decides (keep or revert, and the question)")
+    ap.add_argument("--judgment", required=True, help="your own judgment of what landed")
+    ap.add_argument("--why", required=True, help="why you cannot decide it yourself")
+    rv = sub.add_parser("reverted", help="report the revert the person asked for, once done")
+    rv.add_argument("dispatch_id", type=_dispatch_id)
+    rv.add_argument("--commit", action="append", default=[], help="a commit that undoes a landing (repeat per repository)")
+    rv.add_argument("--why", required=True, help="what you did")
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
     for name, extra in (("accept", ("--ended-at",)), ("stop", ()),
                         ("return-prepare", ("--url",)), ("return-land", ("--key", "--tip", "--summary-file")),
@@ -248,8 +261,9 @@ def _run_command(args) -> int:
     if args.cmd == "return-prepare":
         return _call("POST", path + "/return/prepare", {**actor, "url": args.url}, timeout=300)
     if args.cmd == "return-land":
-        # never protected paths: the daemon refuses them to an agent (hive_return.land)
-        # the landed commit's message carries this summary (yours, from the review), never
+        # the repository's protected paths you reviewed land too (their paths are kept in
+        # the run's decision record); git hooks and filters never do (hive_return.land).
+        # The landed commit's message carries this summary (yours, from the review), never
         # the Hive's own commit messages
         try:
             summary = open(args.summary_file, encoding="utf-8").read()
@@ -440,6 +454,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "escalate":
         return _call("POST", f"/runs/{args.dispatch_id}/waits/{args.request_id}/escalate",
                      {"session": _session(), "why": args.why})
+    if args.cmd == "ask-person":
+        return _call("POST", f"/runs/{args.dispatch_id}/ask-person",
+                     {"session": _session(), "decide": args.decide, "judgment": args.judgment, "why": args.why})
+    if args.cmd == "reverted":
+        return _call("POST", f"/runs/{args.dispatch_id}/reverted",
+                     {"session": _session(), "commits": args.commit, "why": args.why})
     if args.cmd in ("spec", "dispatch"):
         body = {"brain": args.brain, "task": _task(args), "acceptance": args.acceptance,
                 "mode": args.mode, "execution": args.execution, "why": args.why,

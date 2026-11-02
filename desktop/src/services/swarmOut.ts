@@ -51,11 +51,72 @@ export interface SwarmOutRun {
   /** not settled, and this Host removes its records within 3 days (bundles can no
    *  longer land after that) */
   cleanup_soon?: boolean;
+  /** The run's decision funnel (backend core/swarm_out_record.funnel; design
+   *  docs/design/2026-11-02-hive-run-decision-record.md): the gates passed and the one
+   *  it is at. Absent from an older backend. */
+  funnel?: SwarmOutFunnel;
+  /** How many decisions the person made on the run (their commands, answers, what they
+   *  said in its Hive tab); null for a record kept before the funnel. */
+  person_decisions?: number | null;
+  /** The person has something to do on it now (an open ask, a wait that is theirs);
+   *  null: no live session answers for the run, the older rules apply. */
+  needs_person?: boolean | null;
+}
+
+export type SwarmOutGateKey = 'review' | 'land' | 'judge';
+
+/** One gate of the funnel: done, the one it is at (now), or waiting on the person. */
+export interface SwarmOutGate {
+  key: SwarmOutGateKey;
+  state: 'done' | 'now' | 'person';
+  by: 'agent' | 'person' | 'product' | null;
+  at: string | null;
+  /** land: the commit or the first file placed */
+  ref: string | null;
+}
+
+/** A landed result the dispatching agent handed to the person (backend
+ *  swarm_out_record.ask_person). The text is the agent's own, never the Hive's. */
+export interface SwarmOutAskPerson {
+  state: 'open' | 'keep' | 'revert' | 'reverted';
+  decide: string;
+  judgment: string;
+  why: string;
+  landed: { commits: string[]; files: string[] };
+  at?: string;
+  answered_at?: string;
+  note?: string;
+}
+
+export interface SwarmOutFunnel {
+  gates: SwarmOutGate[];
+  current: SwarmOutGateKey | null;
+  ask: SwarmOutAskPerson | null;
+  reruns: number;
+}
+
+/** One decision on a run (backend core/swarm_out_record): who, when, which decision,
+ *  their reason, and the facts this host saw then. */
+export interface SwarmOutDecision {
+  at: string;
+  by: 'agent' | 'person' | 'product';
+  session?: string | null;
+  decision: string;
+  why?: string;
+  observed?: Record<string, unknown>;
+  command?: string;
+  request_id?: string;
+  class?: string | null;
+  pick?: string;
+  asked?: string;
+  commits?: string[];
+  failed?: boolean;
 }
 
 export type SwarmOutStage = 'running' | 'needs_answer' | 'awaiting' | 'stopped' | 'accepted' | 'discarded' | 'expired';
 
-export type SwarmOutCommand = 'accept' | 'rerun' | 'discard' | 'stop' | 'open_session' | 'answer';
+export type SwarmOutCommand = 'accept' | 'rerun' | 'discard' | 'stop' | 'open_session' | 'answer'
+  | 'keep' | 'revert';
 
 /** One command on a run. ``variant``: accept ``land`` (land the commits that came
  *  back), ``manual`` (they cannot be taken as they are: "I landed it by hand"),
@@ -70,7 +131,7 @@ export interface SwarmOutAction {
 export interface SwarmOutSettle {
   /** pass: the person's on an answer or document, or the landing for commits;
    *  abandoned: discarded; gone: the Hive is gone and left no result; null: not yet */
-  verdict: 'pass' | 'abandoned' | 'gone' | 'expired' | null;
+  verdict: 'pass' | 'abandoned' | 'gone' | 'expired' | 'reverted' | null;
   /** unsealed: commits the Hive could not seal into a bundle (they exist only in its
    *  workspace: land them by hand, or discarding removes them); rejected: an older
    *  Host's record */
@@ -79,7 +140,7 @@ export interface SwarmOutSettle {
   why_not: ('verdict' | 'code' | 'files' | 'lessons')[];
   /** settled: the Hive was told to remove its workspace (released false: not yet, told
    *  again after a backoff; null: no Hive to tell) */
-  settled: { at: string; outcome: 'passed' | 'abandoned' | 'gone' | 'expired'; released: boolean | null } | null;
+  settled: { at: string; outcome: 'passed' | 'abandoned' | 'gone' | 'expired' | 'reverted'; released: boolean | null } | null;
 }
 
 export type SwarmOutEnded = 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'no_terminal'
@@ -231,6 +292,9 @@ export interface SwarmOutResultRecord {
     fetched_at: string | null } | null;
   /** an older backend sends none */
   host_answers?: SwarmOutHostAnswer[];
+  /** every decision on the run, oldest first (an older backend sends none) */
+  decisions?: SwarmOutDecision[];
+  ask_person?: SwarmOutAskPerson | null;
 }
 
 export interface SwarmOutQuestion {
@@ -410,6 +474,11 @@ export const swarmOutService = {
   /** Re-run with a correction: the text goes into the run's own Hive session. */
   async rerun(dispatchId: string, text: string): Promise<void> {
     await api.post(runPath(dispatchId, 'rerun'), { text, by: PERSON });
+  },
+  /** The person's answer to a landed result the agent handed over: keep it, or have
+   *  the agent revert it. */
+  async answerAsk(dispatchId: string, pick: 'keep' | 'revert', note: string): Promise<void> {
+    await api.post(runPath(dispatchId, 'ask-person/answer'), { pick, note });
   },
   /** Stop the run's current turn; its session and workspace stay. */
   async stop(dispatchId: string): Promise<void> {

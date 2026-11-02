@@ -53,15 +53,16 @@ def test_an_agent_may_give_return_land(state):
     act.check(_agent(), "return_land", dispatch_id=DID)
 
 
-def test_an_agents_command_is_kept_with_its_session_and_reason(state):
+def test_every_command_is_kept_with_who_gave_it_and_why(state):
     act.record(DID, _agent("tests pass and the report matches"), "accept")
-    act.record(DID, act.actor("person", None, ""), "accept")      # not an agent's: not kept here
+    act.record(DID, act.actor("person", None, "looks right"), "accept")   # the person's too
     cmds = swarm_out_settle.load(DID)["commands"]
     assert [(c["by"], c["session"], c["command"], c["why"]) for c in cmds] == [
-        ("agent", "s-abc123", "accept", "tests pass and the report matches")]
-    for _ in range(act.MAX_COMMANDS + 5):
+        ("agent", "s-abc123", "accept", "tests pass and the report matches"),
+        ("person", None, "accept", "looks right")]
+    for _ in range(55):
         act.record(DID, _agent(), "stop")
-    assert len(swarm_out_settle.load(DID)["commands"]) == act.MAX_COMMANDS
+    assert len(swarm_out_settle.load(DID)["commands"]) == 57          # kept whole (no cap)
 
 
 # ── discarding: only when nothing would be lost ─────────────────────────────
@@ -237,7 +238,7 @@ def test_the_verdict_route_takes_an_agents_accept_only_on_the_final_result(clien
     assert len(seen) == 1
 
 
-def test_the_land_route_never_lets_an_agent_land_protected_paths(client, monkeypatch):
+def test_the_land_route_lets_an_agent_land_reviewed_protected_paths_but_never_git_hooks(client, monkeypatch):
     c, _ = client
     from core import hive_return
     landed: list = []
@@ -246,9 +247,10 @@ def test_the_land_route_never_lets_an_agent_land_protected_paths(client, monkeyp
     body = {**AGENT, "key": "k", "tip": "t", "summary": "s"}
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json={**body, "approve_protected": True}).status_code == 200
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
-    # whatever an agent's request says, its landing takes no protected path; its
-    # summary becomes the landed commit's message body
-    assert landed == [(DID, "k", "t", False, False, "s"), (DID, "k", "t", False, False, "s")]
+    # an agent lands the repository's protected paths it reviewed, never the git hooks
+    # and filters that run code here (design 2026-11-02-hive-run-decision-record §2);
+    # its summary becomes the landed commit's message body
+    assert landed == [(DID, "k", "t", True, False, "s"), (DID, "k", "t", True, False, "s")]
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land",
                   json={"by": "person", "key": "k", "tip": "t"}).status_code == 200
     assert landed[-1] == (DID, "k", "t", False, True, None)

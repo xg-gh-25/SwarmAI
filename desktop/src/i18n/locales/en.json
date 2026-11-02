@@ -1840,7 +1840,8 @@
       },
       "tag": {
         "answer": "Answer the question",
-        "awaiting": "Accept · {{what}}"
+        "awaiting": "Accept · {{what}}",
+        "ask": "Keep or revert"
       },
       "what": {
         "commits_one": "{{count}} commit",
@@ -1870,7 +1871,11 @@
         "no_terminal": "no ending recorded",
         "restarted": "restarted",
         "superseded": "superseded",
-        "no_record": "it stopped mid-turn, no ending recorded"
+        "no_record": "it stopped mid-turn, no ending recorded",
+        "judge": "landed: the agent judges it",
+        "revert": "you asked to revert: the agent is undoing it",
+        "ask_person": "the agent handed it to you",
+        "reverted": "reverted"
       },
       "cmd": {
         "accept": {
@@ -1910,6 +1915,14 @@
         "answer": {
           "name": "Answer",
           "does": "The question is on the left, under what came back"
+        },
+        "keep": {
+          "name": "Keep it",
+          "does": "What landed stays; the run settles"
+        },
+        "revert": {
+          "name": "Revert it",
+          "does": "The agent undoes what landed, then the run settles"
         }
       },
       "check": {
@@ -1954,7 +1967,8 @@
         "autonomy": "Autonomy",
         "process": "Process",
         "cost": "Cost",
-        "lessons": "Lessons"
+        "lessons": "Lessons",
+        "decisions": "Decisions"
       },
       "section": {
         "you": "Waiting for you",
@@ -2020,6 +2034,19 @@
         "answer_sent": "Answered, waiting for the Hive",
         "answer_refused": "Answer not used",
         "background": "Turn ended, background work still running"
+      },
+      "funnel": {
+        "reviewing": "Agent reviewing",
+        "landing": "Landing",
+        "judging": "Agent judging",
+        "reverting": "Agent reverting",
+        "answering": "Agent answering"
+      },
+      "askBox": {
+        "label": "A note for the agent (optional)",
+        "placeholder": "e.g. keep it, but preload the language pack when idle",
+        "keep": "Keep",
+        "revert": "Revert"
       }
     },
     "wait": {
@@ -2049,6 +2076,57 @@
       },
       "doneByAgent": "Answered by the agent that dispatched it",
       "agentAnswers": "The agent that dispatched this run answers this itself; you can answer first."
+    },
+    "funnel": {
+      "by": {
+        "agent": "agent",
+        "person": "you",
+        "product": "product"
+      },
+      "gate": {
+        "review": "Reviewed",
+        "land": "Landed",
+        "judge": "Judged"
+      },
+      "yours": "the agent could not judge it: your call",
+      "reruns_one": "re-ran once before",
+      "reruns_other": "re-ran {{count}} times before",
+      "ask": {
+        "title": "Yours to decide",
+        "where": "Landed in",
+        "judgment": "Agent's judgment",
+        "why": "Why it could not decide",
+        "revert": "Revert does",
+        "onHost": "this machine",
+        "revertCommits": "the agent reverts the commit on this machine's branch, then the run settles",
+        "revertFiles": "the agent moves the files out of the Brain, then the run settles"
+      },
+      "decision": {
+        "dispatch": "Dispatched",
+        "answer_wait": "Answered a wait",
+        "said": "Wrote in the session",
+        "review": "Took back to review",
+        "rerun": "Re-ran with a correction",
+        "stop": "Stopped",
+        "land": "Landed",
+        "accept": "Passed it",
+        "take_over": "Took it over",
+        "discard": "Discarded",
+        "escalate": "Handed a wait over",
+        "ask_person": "Handed to you",
+        "keep": "Kept it",
+        "revert": "Asked to revert",
+        "reverted": "Reverted it",
+        "place_files": "Placed files in the Brain",
+        "settle": "Settled"
+      },
+      "group": {
+        "run": "Dispatched and running",
+        "review": "Review",
+        "land": "Landing on this machine",
+        "judge": "Judgment"
+      },
+      "none": "No decisions recorded for this run."
     }
   },
   "usage": {

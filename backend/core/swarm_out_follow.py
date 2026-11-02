@@ -262,6 +262,13 @@ def listed_ids() -> set:
     return {r.get("dispatch_id") for r in (data or {}).get("runs") or [] if isinstance(r, dict)}
 
 
+#: what the funnel asks of the dispatching agent next (core/swarm_out_settle ``why``;
+#: design 2026-11-02-hive-run-decision-record §1)
+_NEXT = {"judge": "landed: judge it (`swarm_out accept`, or `swarm_out ask-person` when you cannot)",
+         "revert": "the person asked to revert what landed: undo it, then `swarm_out reverted`",
+         "ask_person": "with the person (keep or revert)"}
+
+
 def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
     """(block, fingerprints shown) for the next message of *session*: the runs it
     dispatched whose fingerprint changed since it last saw them, from the background
@@ -293,6 +300,8 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
             bits.append(f"stage {s['stage']}")
         if s.get("result_status") == "fetched":
             bits.append(f"result {s.get('ended') or 'in'}")
+        if _NEXT.get(str(r.get("why") or "")):
+            bits.append(_NEXT[str(r.get("why"))])
         waits = [f"{w['kind']} {w['phase']}"
                  + (f" ({w['approval_class'] or 'unknown'}, answered by {w['who']})" if w.get("phase") == "waiting" else "")
                  for w in s["waits"] if w.get("kind")]

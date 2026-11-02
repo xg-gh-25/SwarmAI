@@ -225,6 +225,7 @@ def place_pending(row: dict, record_dir: Path) -> dict[str, dict]:
             done = _load(d)
             ws = Path(get_swarmws())
             changed = False
+            fresh: list[str] = []
             for e in hive_records._read_manifest(d):
                 if e.get("kind") != "file" or (done.get(str(e["seq"])) or {}).get("local"):
                     continue
@@ -235,6 +236,7 @@ def place_pending(row: dict, record_dir: Path) -> dict[str, dict]:
                 try:
                     info["local"] = _place_one(ws, row, src, e.get("path"))
                     src.unlink()                 # the copy in the Brain is the one kept
+                    fresh.append(info["local"])
                 except Exception as exc:  # noqa: BLE001 — one file never stops the pull
                     info["error"] = type(exc).__name__
                     logger.warning("hive_files: %s of %s not placed (%s: %s)", e["seq"],
@@ -245,6 +247,12 @@ def place_pending(row: dict, record_dir: Path) -> dict[str, dict]:
                 tmp = d / f".{PLACED}.{secrets.token_hex(6)}.tmp"
                 tmp.write_text(json.dumps(done, ensure_ascii=False, sort_keys=True), encoding="utf-8")
                 os.replace(tmp, d / PLACED)
+                if fresh and row.get("dispatch_id"):
+                    # landing a run's files on this host is the product's own decision
+                    # (design 2026-11-02-hive-run-decision-record §3)
+                    from core import swarm_out_record
+                    swarm_out_record.append_quietly(row["dispatch_id"], "product", "place_files",
+                                                    f"{len(fresh)} file(s) placed in the Brain")
             return done
     except Exception as exc:  # noqa: BLE001 — the record's state never breaks the pull
         logger.warning("hive_files: placing for %s failed (%s)", row.get("dispatch_id"), type(exc).__name__)
