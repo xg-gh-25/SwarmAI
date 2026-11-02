@@ -20,6 +20,16 @@ later line and check, a ``NAME=value`` (or ``NAME<<DELIM`` ... ``DELIM``) line a
 the second sets that variable. So setup copied from a CI workflow runs unchanged, on
 every repository that uses that workflow format; any other line is plain bash.
 
+The ``uses:`` steps of a workflow are not copied, and the one a setup most depends on is
+``actions/setup-python``: it gives the job a ``python`` and a writable ``pip`` on PATH, which
+a line like ``pip install uv`` then expects. A Hive has its system ``python3.N`` only (no
+``python``, no ``pip``), so ``setup`` first does what setup-python does: it makes a venv
+for the task (``checks/python``, removed with the task) from the ``python3.N`` the repos'
+workflows ask for (``python-version`` of a setup-python step), else from the newest
+``python3.N`` on PATH, and puts its ``bin`` first on PATH for every line and check. When
+the machine has no ``python3.N`` or the venv cannot be made, it says so and the lines run
+as they are.
+
 ``run`` runs the named checks (all of them without an id), one after the other, each
 in its own directory with what setup collected. An id the order does not have is
 refused and nothing runs. Each check writes two lines to the record: one when it starts
@@ -48,6 +58,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -170,6 +182,74 @@ def _read_github_env(f: Path) -> dict[str, str]:
     return out
 
 
+#: a workflow step that runs GitHub's setup-python, and the version it asks for
+_SETUP_PYTHON_RE = re.compile(r"uses:\s*actions/setup-python@")
+_PY_VERSION_RE = re.compile(r"python-version:\s*['\"]?(3\.\d+)")
+_PYTHON3_RE = re.compile(r"python3\.(\d+)")
+#: venv creation is local and quick; bounded only so a hung interpreter cannot hold setup
+VENV_TIMEOUT_S = 300
+
+
+def _wanted_pythons(dirs: list[Path]) -> list[str]:
+    """The ``3.N`` versions the setup-python steps of the repos' workflows ask for, in
+    the order the files list them."""
+    out: list[str] = []
+    for d in dirs:
+        for f in sorted((d / ".github" / "workflows").glob("*.y*ml")):
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _SETUP_PYTHON_RE.search(text):
+                out += [v for v in _PY_VERSION_RE.findall(text) if v not in out]
+    return out
+
+
+def _python_on_path(wanted: list[str], path: str) -> Optional[str]:
+    """The first ``python<version>`` of *wanted* on *path*, else the newest ``python3.N``
+    on it (the first of that version in PATH order), else None."""
+    for v in wanted:
+        found = shutil.which(f"python{v}", path=path)
+        if found:
+            return found
+    best: dict[int, str] = {}
+    for d in path.split(os.pathsep):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            m = _PYTHON3_RE.fullmatch(name)
+            full = os.path.join(d, name)
+            if m and int(m.group(1)) not in best and os.access(full, os.X_OK) and os.path.isfile(full):
+                best[int(m.group(1))] = full
+    return best[max(best)] if best else None
+
+
+def _task_python(ws: Path, order: dict[str, Any], cdir: Path) -> Optional[str]:
+    """setup-python for the task: the ``bin`` of a venv made for it, or None (said why)."""
+    venv = cdir / "python"
+    if (venv / "bin" / "python").exists():
+        return str(venv / "bin")
+    dirs = [ws / r["dir"] for r in order.get("repos") or []
+            if isinstance(r, dict) and isinstance(r.get("dir"), str)]
+    exe = _python_on_path(_wanted_pythons(dirs), os.environ.get("PATH", ""))
+    if exe is None:
+        print("no python3.N on this machine: setup runs without a python of its own")
+        return None
+    try:
+        made = subprocess.run([exe, "-m", "venv", str(venv)], capture_output=True, text=True,
+                              timeout=VENV_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"could not make a python for the task from {exe}: {type(e).__name__}")
+        return None
+    if made.returncode != 0:
+        print(f"could not make a python for the task from {exe}:\n{made.stderr[-800:]}")
+        return None
+    print(f"python for the task: {venv / 'bin' / 'python'} (from {exe})")
+    return str(venv / "bin")
+
+
 def _append(f: Path, row: dict[str, Any]) -> None:
     with open(f, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -225,7 +305,8 @@ def setup(work_id: str) -> int:
     ws = _workspace()
     order = _order(ws, work_id)
     cdir = _checks_dir(ws, work_id)
-    state = {"path": [], "env": {}}
+    tools = _task_python(ws, order, cdir)
+    state: dict[str, Any] = {"path": [tools] if tools else [], "env": {}}
     lines = order["checks"].get("setup") or []
     for n, item in enumerate(lines, 1):
         cwd = _dir(ws, order, item["repo"], item.get("cwd") or "")
