@@ -20,7 +20,7 @@ Agents read the knowledge before each task and write back what they learned. We 
 
 - **We reject**: a knowledge base written once and left to rot; patching missing domain understanding with more prompt.
 
-### T2 · Human-in-the-loop — humans review and judge, the system remembers.
+### T2 · Human-on-the-loop — humans review and judge, the system remembers.
 
 Autonomy removes human execution and babysitting, not human review and judgment. Execution can't depend on anyone staying online, so remote cloud run is a hard requirement (H2). People step in only at review and decision points set in advance by task type, risk, and maturity, and only when the trigger fires: requirement clarification when real ambiguity remains; design review for new, immature, or high-risk task types, moving to sampling once a task type proves reliable. Every judgment and correction goes into the knowledge or the eval, so no one answers the same question twice.
 
