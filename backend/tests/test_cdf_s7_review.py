@@ -7,7 +7,7 @@ What is tested:
   reviewed against that message; the session type is a fact.
 - turn one runs the session's own model on the evidence index (user
   messages in full, labelled by kind) and the record since the last review, every item
-  with its anchors; units citing what they were shown are enqueued as S7, others recorded
+  citable by its id; units citing what they were shown are enqueued as S7, others recorded
   invalid; no unit cap; nothing new, no call.
 - turn two, in the review's own conversation: each unit with the entries it may relate
   to; the declarations it returns are set on the units (a malformed one stands for nothing).
@@ -124,11 +124,11 @@ def test_review_session_two_turns(cdf_env, tmp_path, monkeypatch, model) -> None
     for needle in ("After-action review", "brainstorming", "user_quote",
                    f'event:{users[1]} (user message): "不对，以后都要先出 mockup 再写代码"'):
         assert needle in index, needle               # the index quotes each message in full
-    assert "好的。" in record and f"event:{users[1]}" in record      # the record, with its anchors
-    # every item carries its anchors, the agent's own words too: what the agent learned
+    assert "好的。" in record and '"r1"' in record                    # the record, each item by its id
+    # every item is citable by its id, the agent's own words too: what the agent learned
     # from its own work rests on them
     shown = [json.loads(line) for line in record.split("</session-record>")[0].strip().splitlines()]
-    assert all(item["anchors"] for item in shown), shown
+    assert all(item["id"] and "anchors" not in item for item in shown), shown
     assert (second["resume"], second["fork"], second["schema"]) == ("fork-1", False, first["schema"])  # one schema
     assert entry.shown() in second["prompt"] and "Unit 1:" in second["prompt"]
     assert dropped == [("fork-1", sdk)]
@@ -392,7 +392,7 @@ def test_work_after_the_persons_last_message_is_reviewed_against_it(cdf_env, tmp
     unit = {"kind": "cognition", "type": "pitfall", "scope": "project:SwarmAI",
             "title": "A missing access field makes every repo writable",
             "what": "The repo spec parser treats a missing access field as writable.",
-            "applicability": "When parsing a repo spec.", "evidence": work[0]["anchors"]}
+            "applicability": "When parsing a repo spec.", "evidence": [work[0]["id"]]}
     run = Runner([unit], {"relations": [{"unit": 1, "relation": "new"}]})
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=first["reviewed_to"], runner=run)
     assert out["units"] == 1 and out["invalid"] == 0
@@ -426,7 +426,7 @@ def test_a_lesson_from_the_agents_own_work_is_kept_out_of_every_turn_files(cdf_e
     unit = {"kind": "cognition", "type": "pitfall", "scope": "agent",
             "title": "A missing access field must not mean writable",
             "what": "Treat a repo spec without an access field as read-only, never as writable.",
-            "applicability": "When parsing any permission spec.", "evidence": agent_item["anchors"]}
+            "applicability": "When parsing any permission spec.", "evidence": [agent_item["id"]]}
     run = Runner([unit], {"relations": [{"unit": 1, "relation": "new"}]})
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=run)
     assert out["units"] == 1 and out["invalid"] == 0
@@ -449,7 +449,7 @@ def test_a_unit_citing_the_person_and_a_tool_result_is_external(cdf_env, tmp_pat
     (tool,) = [json.loads(l) for l in record.strip().splitlines() if json.loads(l).get("id") == "t1"]
     unit = {"kind": "cognition", "type": "guideline", "scope": "agent", "title": "Smoke test before deploy",
             "what": "Run the smoke test before every deploy.", "applicability": "Before a deploy.",
-            "evidence": [f"event:{asked}", *tool["anchors"]], "user_quote": "以后 deploy 前都先跑 smoke test"}
+            "evidence": [f"event:{asked}", tool["id"]], "user_quote": "以后 deploy 前都先跑 smoke test"}
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
                                    runner=Runner([unit], {"relations": [{"unit": 1, "relation": "new"}]}))
     assert out["units"] == 1

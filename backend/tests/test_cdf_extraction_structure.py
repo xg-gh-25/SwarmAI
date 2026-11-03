@@ -131,3 +131,47 @@ def test_the_relations_prompt_lists_each_entry_once_and_whole():
     assert f"abcd1234 | {head}" in prompt                            # what a declaration copies
     assert prompt.count("abcd1234 | ") == 1 and prompt.count("abcd1234") >= 3   # listed once, named per unit
     assert "Log the request id" in prompt
+
+
+# ── the record carries the conversation, not the store's bookkeeping (§10) ───────────
+
+def _rows():
+    meta = {"session_id": "s" * 36, "created_at": "2026-11-03T01:00:00", "updated_at": "x",
+            "model": "m", "metadata": {"client_id": "c-1"}, "expires_at": None, "sent": 1,
+            "pending_seq": None, "claimed_at": None}
+    tool = lambda i, ok=True: [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "summary": "Running: x"},
+                               {"type": "tool_result", "tool_use_id": f"t{i}", "is_error": not ok, "outcome": "1"}]
+    return [
+        {"id": "u1", "role": "user", "content": "check it", **meta},
+        {"id": "a1", "role": "assistant", "content": tool(1), **meta},
+        {"id": "a2", "role": "assistant", "content": tool(2, ok=False), **meta},
+        {"id": "a3", "role": "assistant", "content": [{"type": "pipeline_stage", "stage": "review", "detail": "x" * 500},
+                                                      {"type": "turn_deliverables", "items": ["y" * 300]},
+                                                      {"type": "text", "text": "It is done."},
+                                                      {"type": "turn_outcome", "ended": "completed", "usage": {}}], **meta},
+        {"id": "a4", "role": "assistant", "content": [{"type": "turn_outcome", "ended": "stopped", "subtype": "user"}], **meta},
+    ]
+
+
+def test_a_row_carries_only_its_id_role_and_what_it_shows():
+    from core.ingestion.sources import s7_review
+    view = s7_review.knowledge_view(_rows())
+    assert all(set(r) == {"id", "role", "content"} for r in view), view
+    shown = json.dumps(view)
+    assert "pipeline_stage" not in shown and "turn_deliverables" not in shown       # display cards are not read
+    assert '"completed"' not in shown and '"stopped"' in shown                    # an outcome only when it is news
+
+
+def test_consecutive_tool_only_messages_are_one_line():
+    from core.ingestion.sources import s7_review
+    view = s7_review.knowledge_view(_rows())
+    assert [r["id"] for r in view] == ["u1", "a1", "a3", "a4"]
+    assert view[1]["content"] == [{"type": "tools_used", "tools": "Bash x2", "failed": 1}]
+
+
+def test_the_record_cites_an_item_by_its_id_not_a_list_of_anchors():
+    from core.ingestion.sources import s7_review
+    window = [{"id": "a1", "role": "assistant", "content": [{"type": "text", "text": "done"}]}]
+    text, anchors, aliases = s7_review._record(window, [("e1", "e2")], {})
+    assert "anchors" not in text and '"a1"' in text
+    assert aliases["a1"] == ["event:e1", "event:e2"] and set(anchors) == {"event:e1", "event:e2"}

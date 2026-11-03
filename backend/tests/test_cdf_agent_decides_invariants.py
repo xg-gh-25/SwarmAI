@@ -145,6 +145,10 @@ _STRUCTURAL = {
     r"[^0-9a-z\u4e00-\u9fff]+", r"-{2,}",   # slugify a name into a file name
     r"[\s_\-]+",                            # a project name's spelling, compared without separators
     r"https?://[^\s<>()\"']+",              # a URL, checked for a credential parameter (security)
+    # a conventional-commit subject's shape (contracts_v2.COMMIT_SUBJECT): the format of an
+    # event title, never its meaning; an event titled so is a commit copied into TIMELINE
+    r"^\s*(?:(?:feat|fix|docs|style|refactor|perf|test|tests|build|ci|chore|revert|release)"
+    r"(?:\([^)\n]*\))?|[a-z][a-z0-9-]*\([^)\n]*\))!?:\s",
     # the system appendix heading of a user file (new or legacy), located to reuse it
     "'^(?:' + '|'.join((re.escape(h) for h in SYSTEM_APPENDIX_HEADINGS)) + ')\\\\s*$'",
     r"^event:[a-z_]+:",                     # an anchor prefix a review put before a shown id

@@ -24,6 +24,7 @@ _ENTRY = "jobs/bedrock.py"
 # A file that calls Bedrock runtime for something other than an answer, and why.
 _ALLOWED = {
     "routers/system.py": "the onboarding connectivity check: one token, the reply is discarded",
+    "core/aws_account.py": "the account check's Bedrock probe: one token, the reply is discarded",
 }
 _SKIP_DIRS = {".venv", "tests", "apps", "node_modules", "__pycache__", "build", "dist", "templates"}
 
