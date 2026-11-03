@@ -75,6 +75,10 @@ _STATIC: "tuple[Op, ...]" = (
     _op("run.diagnostics", "GET", f"{_SO}/runs/{{dispatch_id}}/diagnostics", _PO, "read"),
     # waits until a followed run changes (core/swarm_out_follow; agent-owns-its-runs §2.3)
     _op("run.watch", "POST", f"{_SO}/watch", _PO, "read"),
+    # a Swarm Run's card (core/swarm_run.view), and the person's stop of the whole run:
+    # every child still running and the lead run's turn (design 2026-10-31-swarm-run §5.9)
+    _op("swarm_run.view", "GET", f"{_SO}/swarm-runs/{{run_id}}", _PO, "read"),
+    _op("swarm_run.stop", "POST", f"{_SO}/swarm-runs/{{run_id}}/stop", _P, "change"),
     # the chat card for one of a run's waits (core/swarm_out_wait_card): it writes only
     # this machine's record of the card; the person's pick is forwarded by the daemon
     _op("ask.card", "POST", f"{_SO}/runs/{{dispatch_id}}/card", _PO, "change"),

@@ -449,6 +449,51 @@ async def watch(body: WatchBody) -> dict[str, Any]:
     return await _call(swarm_out_follow.watch(body.ids, body.since, body.session, wait))
 
 
+@router.get("/swarm-runs/{run_id}")
+async def swarm_run_view(run_id: str) -> dict[str, Any]:
+    """A Swarm Run's card above its children (core/swarm_run.view)."""
+    _require_desktop()
+    import asyncio
+    from core import swarm_run
+    out = await asyncio.to_thread(swarm_run.view, run_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail="no such pipeline run")
+    return out
+
+
+@router.post("/swarm-runs/{run_id}/stop")
+async def swarm_run_stop(run_id: str, body: ActorBody) -> dict[str, Any]:
+    """The person stops a whole Swarm Run: each child still running or waiting, and the
+    lead run's current turn (design 2026-10-31-swarm-run §5.9). The person's only."""
+    _require_desktop()
+    import asyncio
+    from core import swarm_run
+    if _actor(body).agent:
+        raise HTTPException(status_code=403, detail="stopping a whole Swarm Run is the person's")
+    found = await asyncio.to_thread(swarm_run.lead, run_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="no such pipeline run")
+    data = await swarm_out.list_runs(swarm_out.SNAPSHOT_FRESH_S)
+    stopped, failed = [], []
+    for r in swarm_run.children(data.get("runs") or [], run_id):
+        if r.get("state") not in ("running", "waiting"):
+            continue
+        try:
+            await swarm_out.stop_run(str(r["dispatch_id"]))
+            stopped.append(r["dispatch_id"])
+        except swarm_out.SwarmOutError:
+            failed.append(r["dispatch_id"])
+    lead_stopped = False
+    try:
+        from core import session_registry
+        router_ = session_registry.session_router
+        if router_ is not None and found.owner:
+            lead_stopped = bool((await router_.interrupt_session(found.owner) or {}).get("success"))
+    except Exception:  # noqa: BLE001 — the children were stopped; the turn may have ended already
+        logger.warning("swarm_out: the lead run's turn was not interrupted", exc_info=True)
+    return {"stopped": stopped, "not_stopped": failed, "lead_turn_stopped": lead_stopped}
+
+
 @router.get("/runs")
 async def runs() -> dict[str, Any]:
     _require_desktop()

@@ -282,6 +282,39 @@ def open_children(run_id: str) -> list[dict]:
     return out
 
 
+def view(run_id: str) -> Optional[dict]:
+    """What the Swarm Run card shows above its children (design §5.9): the lead run's
+    title, project, profile and status, its plan's packages not dispatched yet, and the
+    children's spend (each child's own, by dispatch id: never added twice, I10). The
+    children's rows themselves are Swarm Out's ``/runs`` (filtered by ``parent_run``).
+    None when *run_id* is not a readable v1 run."""
+    import json
+    found = lead(run_id)
+    if found is None:
+        return None
+    from core import swarm_out, swarm_out_results
+    from core.pipeline_human import load_engine
+    engine = load_engine(run_id)
+    try:
+        title = engine._run_title()
+    except Exception:  # noqa: BLE001 — the card names the run by its id then
+        title = None
+    try:
+        plan = json.loads((engine.run_dir / "children.json").read_text(encoding="utf-8")).get("children") or []
+    except (OSError, ValueError, AttributeError):
+        plan = []
+    kids = children(swarm_out._read_log(), run_id)
+    sent = {r.get("wp") for r in kids}
+    spend = swarm_out_results.spend_of([str(r.get("dispatch_id")) for r in kids])
+    cost = sum(float(v.get("cost_usd") or 0) for v in spend.values())
+    return {"run_id": run_id, "project": found.project, "title": title or run_id,
+            "profile": engine.contract.get("profile"), "status": found.status, "stage": found.stage,
+            "children": len(kids), "planned": len(plan),
+            "not_dispatched": [{"wp": c.get("wp"), "title": c.get("title"), "after": c.get("after") or []}
+                               for c in plan if isinstance(c, dict) and c.get("wp") not in sent],
+            "children_cost_usd": round(cost, 4) if spend else None}
+
+
 def children(rows: Iterable[dict], run_id: str) -> list[dict]:
     """The dispatched children of *run_id*, oldest first."""
     return [r for r in rows if isinstance(r, dict) and r.get("parent_run") == run_id]

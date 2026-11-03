@@ -257,3 +257,75 @@ def test_next_names_the_open_children_and_report_lists_what_the_lead_run_did(run
     text = audit.render(value, fmt="report")
     assert "## Hive children (Swarm Run)" in text and "W1 meets its acceptance" in text
     assert did.replace("_", "\\_") in text                                  # markdown-escaped
+
+
+# ── the Swarm Run card (§5.9, I10, I12) ─────────────────────────────────────
+
+def test_the_run_card_comes_once_from_the_call_that_sent_the_first_children(run):
+    import time as _time
+    from core import swarm_out, swarm_out_card, swarm_run_card
+    rig, _ = run
+    cmd = f'"$SWARM_BACKEND_BIN" pipeline-v1 child --project {PROJECT} --run-id {rig.run_id} dispatch W1'
+    since = _time.time()
+    assert swarm_out_card.cards(cmd, "{}", since) == []                       # nothing went out
+    now = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(since + 1))
+    swarm_out._append(json.dumps({"dispatch_id": "so_000000000001", "parent_run": rig.run_id, "wp": "W1",
+                                  "project": PROJECT, "sent_at": now}) + "\n")
+    blocks = swarm_out_card.cards(cmd, "{}", since)
+    assert blocks == [{"type": "swarm_run", "runId": rig.run_id, "project": PROJECT}]
+    # a later dispatch shows in the same card: no second one
+    assert swarm_run_card.cards(cmd.replace("W1", "W2"), "{}", since + 3600) == []
+    from core.context_injector import _TOOL_ONLY_TYPES
+    assert "swarm_run" in _TOOL_ONLY_TYPES                                    # never in the model's context
+
+
+def test_the_run_card_head_is_the_lead_run_and_its_packages_not_sent(run):
+    from core import swarm_out, swarm_run
+    rig, _ = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    swarm_out._append(json.dumps({"dispatch_id": "so_000000000001", "parent_run": rig.run_id, "wp": "W1",
+                                  "project": PROJECT}) + "\n")
+    v = swarm_run.view(rig.run_id)
+    assert (v["project"], v["profile"], v["status"], v["children"], v["planned"]) == (PROJECT, "direct", "active", 1, 2)
+    assert v["not_dispatched"] == [{"wp": "W2", "title": "docs", "after": ["W1"]}]
+    assert v["children_cost_usd"] is None                                     # no ledger rows: unknown, not 0
+    assert swarm_run.view("run_ffffffffffff") is None
+
+
+def test_only_the_person_stops_a_whole_swarm_run(monkeypatch):
+    import asyncio
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from core import swarm_out, swarm_run, session_registry
+    from routers import swarm_out as route
+    run_id = "run_0123456789ab"
+    monkeypatch.setattr(swarm_run, "lead", lambda r: swarm_run.Lead(run_id, PROJECT, SESSION, "active", "build")
+                        if r == run_id else None)
+    rows = [{"dispatch_id": "so_000000000001", "parent_run": run_id, "state": "running"},
+            {"dispatch_id": "so_000000000002", "parent_run": run_id, "state": "stopped"},
+            {"dispatch_id": "so_000000000003", "parent_run": "run_other", "state": "running"}]
+
+    async def runs(_age):
+        return {"runs": rows}
+    stopped = []
+
+    async def stop(did):
+        stopped.append(did)
+        return {"stopped": True}
+
+    class _Router:
+        async def interrupt_session(self, sid):
+            stopped.append(sid)
+            return {"success": True}
+    monkeypatch.setattr(swarm_out, "list_runs", runs)
+    monkeypatch.setattr(swarm_out, "stop_run", stop)
+    monkeypatch.setattr(session_registry, "session_router", _Router())
+    monkeypatch.setattr(route, "_require_desktop", lambda: None)
+    app = FastAPI()
+    app.include_router(route.router, prefix="/api/swarm-out")
+    c = TestClient(app)
+    assert c.post(f"/api/swarm-out/swarm-runs/{run_id}/stop", json={"by": "agent", "session": SESSION, "why": "w"}).status_code == 403
+    r = c.post(f"/api/swarm-out/swarm-runs/{run_id}/stop", json={"by": "person"})
+    assert r.status_code == 200 and r.json()["stopped"] == ["so_000000000001"] and r.json()["lead_turn_stopped"]
+    assert stopped == ["so_000000000001", SESSION]
+    assert c.post("/api/swarm-out/swarm-runs/run_ffffffffffff/stop", json={"by": "person"}).status_code == 404

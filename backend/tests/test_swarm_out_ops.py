@@ -92,7 +92,7 @@ def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
     assert got == _AGENT_IRREVERSIBLE
 
 
-_SAMPLE = {"dispatch_id": "so_0123456789ab", "sid": "s-abc123", "hive_id": "hv1",
+_SAMPLE = {"dispatch_id": "so_0123456789ab", "run_id": "run_0123456789ab", "sid": "s-abc123", "hive_id": "hv1",
            "session_id": "s-abc123", "request_id": "req1", "account_id": "acc1",
            "instance_id": "inst1", "brain": "SwarmAI", "work_id": "w1", "key": "k1",
            "seq": "3", "client_id": "c1", "task_id": "t1"}

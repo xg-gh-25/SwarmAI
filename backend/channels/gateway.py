@@ -1985,6 +1985,10 @@ class ChannelGateway:
         card_texts: list[str] = []
 
         def take_card(blk: Any) -> bool:
+            if isinstance(blk, dict) and blk.get("type") == "swarm_run":
+                from core import swarm_run_card
+                card_texts.append(swarm_run_card.channel_text(blk))
+                return True
             if not (isinstance(blk, dict) and blk.get("type") == _swarm_out_card.BLOCK_TYPE):
                 return False
             text = _swarm_out_card.channel_text(blk, direct=chat_type == "im")

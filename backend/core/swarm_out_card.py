@@ -60,7 +60,14 @@ def _without_heredoc_bodies(command: str) -> str:
 
 
 def watched(command: Any) -> bool:
-    return isinstance(command, str) and bool(_DISPATCH_RE.search(_without_heredoc_bodies(command)))
+    """A dispatch call: Swarm Out's, or a Swarm Run's child dispatch (its card is
+    core/swarm_run_card's, made through ``cards``)."""
+    if not isinstance(command, str):
+        return False
+    if bool(_DISPATCH_RE.search(_without_heredoc_bodies(command))):
+        return True
+    from core import swarm_run_card
+    return swarm_run_card.watched(command)
 
 
 def _args(command: str) -> dict[str, str]:
@@ -181,7 +188,11 @@ def cards(command: str, output: str, since: Optional[float] = None, cwd: Optiona
     """Every card of a dispatch call's result. One, as ``card`` gives, except for a call
     that printed no JSON and whose ``--title`` the shell expanded: such a call (a loop)
     may have sent several tasks, so each row this session dispatched after it started is
-    a card. None of them fits: the "not sure" card, as ``card``."""
+    a card. None of them fits: the "not sure" card, as ``card``. A Swarm Run's child
+    dispatch gets its run's card instead (core/swarm_run_card)."""
+    from core import swarm_run_card
+    if not _DISPATCH_RE.search(_without_heredoc_bodies(command)) and swarm_run_card.watched(command):
+        return swarm_run_card.cards(command, output, since)
     if (_json_head(output) is None and not _USAGE_RE.search(output or "")
             and _expanded(_args(command).get("title"))):
         rows = _rows_of_session(command, since, session_id)
