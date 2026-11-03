@@ -140,13 +140,16 @@ def _package(workspace: Path, brain: str, default: bool) -> tuple[bytes, str, in
     return data, brain_sync.content_digest(files), len(files)
 
 
-async def sync(inst: dict[str, Any], brain: str, workspace: Optional[Path] = None) -> dict[str, Any]:
-    """Push *brain* to the Hive; returns ``{brain, digest, files, installed_at}``."""
+async def sync(inst: dict[str, Any], brain: str, workspace: Optional[Path] = None,
+               package: Optional[tuple[bytes, str, int]] = None) -> dict[str, Any]:
+    """Push *brain* to the Hive; returns ``{brain, digest, files, installed_at}``.
+    *package*: these bytes instead of packaging the Brain now (a Swarm Run's frozen
+    Brain, core/swarm_run.freeze)."""
     from core.project_registry import get_swarmws
     from core.swarm_out import _client
     ws = workspace or get_swarmws()
     try:
-        data, digest, n = await asyncio.to_thread(_package, ws, brain, brain in DEFAULT_BRAINS)
+        data, digest, n = package or await asyncio.to_thread(_package, ws, brain, brain in DEFAULT_BRAINS)
     except brain_sync.SyncError as exc:
         raise SyncRefused(str(exc)) from None
     async with _client(inst, SYNC_TIMEOUT_S) as client:

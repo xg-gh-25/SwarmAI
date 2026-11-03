@@ -223,7 +223,8 @@ def _send_one(engine: RunEngine, item: dict, session: Optional[str], note: str =
         return {"wp": item["wp"], "ok": False, "detail": row.get("detail"),
                 **({"maybe_sent": True} if row.get("maybe_sent") else {})}
     return {"wp": item["wp"], "ok": True, "dispatch_id": row.get("dispatch_id"), "hive": row.get("hive"),
-            **({"again_of": again_of} if again_of else {})}
+            **({"again_of": again_of} if again_of else {}),
+            **({"frozen": row["frozen"]} if isinstance(row.get("frozen"), dict) else {})}
 
 
 def dispatch(engine: RunEngine, wps: list[str], *, again: str = "", note: str = "") -> dict[str, Any]:
@@ -253,6 +254,15 @@ def dispatch(engine: RunEngine, wps: list[str], *, again: str = "", note: str = 
     session = _session()            # read here: the request context does not reach the threads
     with ThreadPoolExecutor(max_workers=min(4, len(wps))) as pool:
         results = list(pool.map(lambda w: _send_one(engine, plan[w], session, note, previous), wps))
+    frozen = next((r.pop("frozen") for r in results if isinstance(r.get("frozen"), dict)), None)
+    for r in results:
+        r.pop("frozen", None)
+    if frozen and engine.frozen() is None:
+        try:                       # what the children share, for REPORT (the daemon keeps the bytes)
+            engine.record_frozen(str(frozen.get("brain") or ""), str(frozen.get("digest") or ""),
+                                 str(frozen.get("revision") or ""), str(frozen.get("model") or ""))
+        except Exception:  # noqa: BLE001 — a duplicate or a later record is not the dispatch's failure
+            pass
     for r in results:
         if r.get("ok") and r.get("dispatch_id"):
             try:

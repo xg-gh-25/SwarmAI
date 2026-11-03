@@ -48,6 +48,9 @@ async def end_children(data: Any) -> list[str]:
     except Exception as exc:  # noqa: BLE001 — the next refresh looks again
         logger.warning("swarm_run_conductor: reading the children failed (%s)", type(exc).__name__)
         return done
+    from core import swarm_run
+    ended = {str(r.get("parent_run")) for r in (data or {}).get("runs") or []
+             if swarm_run.is_child(r) and (swarm_run.lead(r.get("parent_run")) or swarm_run.Lead("", "", "", "", "")).ended}
     for r in rows:
         did = r["dispatch_id"]
         try:
@@ -59,4 +62,6 @@ async def end_children(data: Any) -> list[str]:
             done.append(did)
         except Exception as exc:  # noqa: BLE001 — the next refresh tries again
             logger.warning("swarm_run_conductor: closing %s failed (%s)", did, type(exc).__name__)
+    for run_id in ended:           # an ended run's children no longer need its frozen Brain
+        await asyncio.to_thread(swarm_run.drop_freeze, run_id)
     return done

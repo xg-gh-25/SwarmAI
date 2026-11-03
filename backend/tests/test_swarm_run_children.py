@@ -234,3 +234,76 @@ def test_the_children_of_an_ended_lead_run_are_stopped_and_handled(leads, env, m
     assert stopped == [SDID]                                                    # only the running one
     assert st.load(SDID)["handled"]["by"] == "run_end"
     assert asyncio.run(swarm_run_conductor.end_children(data)) == []          # once
+
+
+# ── the freeze: one Brain, one definition, one model per Swarm Run (§5.1, I7, I15) ──
+
+def _child_dispatch(rev, **kw):
+    return asyncio.run(swarm_out.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native",
+                                               returns="commits", seen_revision=rev, dispatched_from=LEAD,
+                                               parent_run=RUN, **kw))
+
+
+def test_every_child_gets_the_brain_and_model_frozen_at_the_first(leads, ws, monkeypatch):
+    from core import swarm_out_model
+    from core.project_agent import revision
+    from tests.test_task_spec import _brain, _fake_hive
+    b = _brain(ws)
+    rev = revision(b)
+    calls = _fake_hive(monkeypatch, "0" * 64)
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [])
+    monkeypatch.setattr(swarm_out_model, "host_model", lambda: "model-a")
+    first = _child_dispatch(rev, wp="W1")
+    assert first["frozen"]["revision"] == rev and first["frozen"]["model"] == "model-a"
+    pkg = calls["packages"][-1]
+    assert pkg is not None and pkg[1] == first["frozen"]["digest"]
+    # the host learns more and changes its model: the next child still gets the frozen ones
+    (b / "2-understanding" / "PRODUCT.md").write_text("# PRODUCT\nlearned since\n")
+    monkeypatch.setattr(swarm_out_model, "host_model", lambda: "model-b")
+    second = _child_dispatch(rev, wp="W2")
+    assert calls["packages"][-1] == pkg and second["frozen"]["digest"] == first["frozen"]["digest"]
+    assert calls["dispatch"][-1]["model"] == "model-a"
+    # the Project Agent changed during the run: a child is refused, not sent on another one
+    (b / "project-agent.yaml").write_text((b / "project-agent.yaml").read_text() + "\n# changed\n")
+    with pytest.raises(swarm_out.SwarmOutError, match="changed during Swarm Run"):
+        _child_dispatch(revision(b), wp="W3")
+
+
+def test_another_version_of_a_frozen_brain_is_not_put_where_the_run_uses_it(leads, ws, monkeypatch):
+    from core.project_agent import revision
+    from tests.test_task_spec import _brain, _fake_hive
+    b = _brain(ws)
+    rev = revision(b)
+    _fake_hive(monkeypatch, "0" * 64)
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [])
+    _child_dispatch(rev, wp="W1")
+    log = [{"dispatch_id": DID, "parent_run": RUN, "wp": "W1", "project": "Lib", "hive_id": "i1"}]
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: log)
+    (b / "2-understanding" / "PRODUCT.md").write_text("# PRODUCT\nanother version\n")
+    plain = dict(execution="native", returns="commits", seen_revision=rev, dispatched_from="s-abc123")
+    with pytest.raises(swarm_out.SwarmOutError, match="holds Lib for a running Swarm Run"):
+        asyncio.run(swarm_out.dispatch_spec("hive3", "t", "Lib", "x", "y", **plain))
+    # the run's own children may go there, and once it has ended anyone may
+    _child_dispatch(rev, wp="W2")
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
+    asyncio.run(swarm_out.dispatch_spec("hive3", "t", "Lib", "x", "y", **plain))
+    # pick_hive leaves the held Hives out, and says so when nothing else is left
+    hives = [{"id": "i1", "name": "a", "status": "running", "reachable": True, "saturated": False,
+              "streaming": 0, "capable": True},
+             {"id": "i2", "name": "b", "status": "running", "reachable": True, "saturated": False,
+              "streaming": 3, "capable": True}]
+    assert swarm_out.pick_hive(hives, exclude=frozenset({"i1"}))[0] == "b"
+    with pytest.raises(swarm_out.SwarmOutError, match="holds this Brain"):
+        swarm_out.pick_hive(hives, exclude=frozenset({"i1", "i2"}))
+
+
+def test_an_ended_runs_freeze_is_dropped(leads, env, monkeypatch, tmp_path):
+    from core import swarm_run_conductor
+    d = swarm_run._freeze_dir(RUN)
+    d.mkdir(parents=True)
+    (d / "freeze.json").write_text('{"brain": "Lib", "digest": "x", "revision": "r"}')
+    rows, _ = env
+    rows[SDID] = _schild(state="stopped")
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "abandoned", "build")
+    asyncio.run(swarm_run_conductor.end_children({"runs": list(rows.values())}))
+    assert swarm_run.frozen(RUN) is None and not d.exists()

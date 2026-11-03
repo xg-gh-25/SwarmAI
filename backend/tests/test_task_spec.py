@@ -292,16 +292,17 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
                                                            "current_digest": current or remote_digest,
                                                            "changed_files": 2}}}
 
-    async def sync(inst, brain, ws=None):
+    async def sync(inst, brain, ws=None, package=None):
         calls["sync"].append(brain)
+        calls.setdefault("packages", []).append(package)
         if sync_error:
             raise sync_error
 
     async def dispatch(hive, title, task, origin, repos, *, segment, agent, extra=None, dispatch_id=None,
-                       deadline=None, checks=None):
+                       deadline=None, checks=None, model=None):
         calls["dispatch"].append({"hive": hive, "task": task, "repos": repos, "segment": segment,
                                   "agent": agent, "extra": extra, "dispatch_id": dispatch_id,
-                                  "checks": checks})
+                                  "checks": checks, "model": model})
         return {"dispatch_id": "so_1"}
     monkeypatch.setattr(so, "_instance", instance)
     monkeypatch.setattr(host, "hive_brains", hive_brains)

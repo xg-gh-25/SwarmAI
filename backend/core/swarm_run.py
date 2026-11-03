@@ -21,6 +21,12 @@ child may be dispatched:
   written only when the dispatch ends (minutes later), so two at once cannot both count
   the same free place.
 - ``is_child(row)``: whether a dispatched run belongs to a Swarm Run.
+- ``freeze(workspace, run_id, brain)``: what every child of one Swarm Run shares (design
+  §5.1): the Brain package of the first child's dispatch (its bytes and digest), the
+  Project Agent revision and the host's model, kept under ``state/swarm-run/<run>/``.
+  Later children push those bytes and run on that model, whatever the host has learned
+  since. ``held_hives(rows, brain, digest, run_id)``: the Hives where another running
+  Swarm Run holds *brain* at a different digest (a dispatch does not replace it there).
 
 Read-only and deterministic; nothing here asks a model.
 """
@@ -153,6 +159,89 @@ def release(parent_run: str, wp: str) -> None:
             _INFLIGHT[(parent_run, wp)] = n
         else:
             _INFLIGHT.pop((parent_run, wp), None)
+
+
+def _freeze_dir(run_id: str):
+    from pathlib import Path
+    from core import swarm_out
+    if not RUN_ID_RE.fullmatch(run_id or ""):
+        raise ChildRefused("not a run id")
+    return Path(swarm_out._state_dir()).parent / "swarm-run" / run_id
+
+
+def frozen(run_id: str) -> Optional[dict]:
+    """The freeze of *run_id* (``{brain, digest, files, revision, model, at}``), or None."""
+    import json
+    try:
+        data = json.loads((_freeze_dir(run_id) / "freeze.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, ChildRefused):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def frozen_package(run_id: str) -> Optional[tuple[bytes, str, int]]:
+    f = frozen(run_id)
+    if not f:
+        return None
+    try:
+        data = (_freeze_dir(run_id) / "brain.pkg").read_bytes()
+    except OSError:
+        return None
+    return data, f["digest"], int(f.get("files") or 0)
+
+
+def freeze(workspace, run_id: str, brain: str, revision: str) -> dict:
+    """The run's freeze, made now if it has none (see the module doc). Raises
+    ChildRefused when the Brain cannot be packaged or is not the run's."""
+    import json
+    import os
+    import time
+    with _LOCK:
+        have = frozen(run_id)
+        if have:
+            if have.get("brain") != brain:
+                raise ChildRefused(f"{run_id}'s children go under {have.get('brain')}")
+            return have
+        from core import brain_sync_host, swarm_out_model
+        try:
+            data, digest, n = brain_sync_host._package(workspace, brain, brain in brain_sync_host.DEFAULT_BRAINS)
+        except Exception as exc:  # noqa: BLE001 — named to the lead run
+            raise ChildRefused(f"{brain} cannot be packaged for the Swarm Run: {exc}") from None
+        rec = {"brain": brain, "digest": digest, "files": n, "revision": revision,
+               "model": swarm_out_model.host_model() or "", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        d = _freeze_dir(run_id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "brain.pkg.tmp").write_bytes(data)
+        os.replace(d / "brain.pkg.tmp", d / "brain.pkg")
+        (d / "freeze.json.tmp").write_text(json.dumps(rec), encoding="utf-8")
+        os.replace(d / "freeze.json.tmp", d / "freeze.json")
+        return rec
+
+
+def drop_freeze(run_id: str) -> None:
+    """Remove an ended run's freeze (its children no longer need the package)."""
+    import shutil
+    try:
+        shutil.rmtree(_freeze_dir(run_id), ignore_errors=True)
+    except ChildRefused:
+        pass
+
+
+def held_hives(rows: Iterable[dict], brain: str, digest: Optional[str], run_id: Optional[str]) -> set[str]:
+    """Hive ids where another Swarm Run that has not ended holds *brain* frozen at a digest
+    other than *digest* (design §5.1, I15): a dispatch does not put another version of
+    the Brain there while that run's children use it."""
+    out: set[str] = set()
+    for r in rows:
+        if not is_child(r) or r.get("project") != brain or r.get("parent_run") == run_id:
+            continue
+        f = frozen(str(r.get("parent_run")))
+        found = lead(r.get("parent_run"))
+        if not f or found is None or found.ended or f.get("digest") == digest:
+            continue
+        if r.get("hive_id"):
+            out.add(str(r["hive_id"]))
+    return out
 
 
 def children(rows: Iterable[dict], run_id: str) -> list[dict]:

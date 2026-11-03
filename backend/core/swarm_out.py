@@ -368,7 +368,8 @@ async def _prepare_work(client: httpx.AsyncClient, inst: dict[str, Any], work_id
     """The Hive's ``POST /api/hive/work``: the prepared order. Raises SwarmOutError with
     the Hive's reason (one of core/hive_workspace's fixed texts) when it is not.
     ``checks``: the task's setup and checks by id (``work_checks``), sent only to a Hive
-    that runs them (admission ``task_checks``)."""
+    that runs them (admission ``task_checks``). ``model``: the model the Hive runs the
+    session on instead of this host's current one (a Swarm Run's frozen model)."""
     from core import hive_workspace
     body_out: dict[str, Any] = {"work_id": work_id, "repos": repos}
     if checks:
@@ -456,7 +457,8 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
                    agent: Optional[dict] = None, extra: Optional[dict] = None,
                    dispatch_id: Optional[str] = None,
                    deadline: Optional[_Deadline] = None,
-                   checks: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                   checks: Optional[dict[str, Any]] = None,
+                   model: Optional[str] = None) -> dict[str, Any]:
     """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
     repos}. ``repos``: ``[{url, ref[, sha]}]`` the task works on (core/task_repos; ``sha``:
     this machine's commit, its bundle kept on the Hive first by ``_ship_repos``).
@@ -501,7 +503,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
         try:
             # at most three requests (read the settings, check the model, set it)
             await _within(deadline, f"setting Hive {name}'s model", 3 * HTTP_TIMEOUT_S,
-                          lambda: swarm_out_model.align(client, inst["name"]))
+                          lambda: swarm_out_model.align(client, inst["name"], model))
         except swarm_out_model.ModelAlignError as e:
             raise SwarmOutError(f"{e}; the task was not sent") from None
         # the Hive's backend makes the work order real before the session starts
@@ -662,7 +664,8 @@ def _pin_request(agent: Optional[dict], task: str = "") -> Optional[dict]:
 MAX_BRIEF_CHARS = 400
 
 
-def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] = None) -> tuple[str, str]:
+def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] = None,
+              exclude: frozenset = frozenset()) -> tuple[str, str]:
     """(name, reason) of the Hive a task goes to when none is named: running and
     reachable, not saturated; the fewest of this Host's runs still open there
     (``open_runs`` by Hive name: a run waiting on the person is not streaming but still
@@ -671,11 +674,16 @@ def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] =
     Raises SwarmOutError when none can take a task. ``reason`` is a
     code the card words (core/swarm_out_card, the desktop card): ``only_free``, ``idle``
     (nothing open, nothing streaming) or ``least_busy:<n>`` (n: the larger of the two);
-    a named Hive's is ``named``."""
+    a named Hive's is ``named``. ``exclude``: Hive ids not to choose (another Swarm Run
+    holds the task's Brain there at another version, core/swarm_run.held_hives)."""
     held = open_runs or {}
     up = [h for h in hives if h.get("status") == "running" and h.get("reachable") is True
           and h.get("saturated") is False and isinstance(h.get("streaming"), int)]
     ok = [h for h in up if h.get("capable") is True]
+    if exclude and ok and all(str(h.get("id")) in exclude for h in ok):
+        raise SwarmOutError("every Hive that could take it holds this Brain for a running Swarm Run "
+                            "at another version; send it when that run ends")
+    ok = [h for h in ok if str(h.get("id")) not in exclude]
     if not ok and up:
         raise SwarmOutError("no running Hive has this version yet: update one with no open runs "
                             "(update-hive), then send the task")
@@ -776,6 +784,18 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
         raise SwarmOutError(str(e)) from None
     if not seen_revision or spec["revision"] != seen_revision:
         raise SwarmOutError(f"{brain}'s Project Agent changed since spec returned it; run spec again")
+    from core import swarm_run
+    frozen = None
+    if lead is not None:
+        # every child of one Swarm Run gets the same Brain, Project Agent and model (§5.1)
+        try:
+            frozen = await asyncio.to_thread(swarm_run.freeze, ws, lead.run_id, brain, spec["revision"])
+        except swarm_run.ChildRefused as e:
+            raise SwarmOutError(str(e)) from None
+        if frozen.get("revision") != spec["revision"]:
+            raise SwarmOutError(f"{brain}'s Project Agent changed during Swarm Run {lead.run_id}; its "
+                                "children share the definition it started with: finish the run without "
+                                "this child, or start a new run")
     reasons = task_spec.admit(spec)
     if reasons:
         # refused at intake: before a Hive is chosen or the Brain synced (dispatch-center §2)
@@ -785,14 +805,22 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
         except OSError as exc:                     # the record is not the refusal
             logger.warning("swarm_out: refusal not recorded (%s)", type(exc).__name__)
         raise SwarmOutRefused(f"{brain} cannot be sent to a Hive: " + "; ".join(reasons), private)
+    # a Hive where another running Swarm Run holds this Brain at another version is not
+    # given this one (I15): its children would read a Brain they were not given
+    digest = frozen["digest"] if frozen else (await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)).get("digest")
+    held = frozenset(await asyncio.to_thread(swarm_run.held_hives, _read_log(), brain, digest,
+                                             lead.run_id if lead else None))
     if hive_ref:
         hive_reason = "named"
     else:
         # the Hives are probed at once, each within PROBE_TIMEOUT_S
         hive_ref, hive_reason = pick_hive((await _within(deadline, "choosing a Hive", 4 * PROBE_TIMEOUT_S,
                                                          fleet))["hives"],
-                                          await asyncio.to_thread(open_runs_by_hive))
+                                          await asyncio.to_thread(open_runs_by_hive), exclude=held)
     inst = await _instance(hive_ref)
+    if str(inst.get("id")) in held:
+        raise SwarmOutError(f"Hive {inst['name']} holds {brain} for a running Swarm Run at another "
+                            "version; send it to another Hive, or when that run ends")
     # a Hive that cannot prepare the workspace would run the task the old way: it is
     # refused before anything (the Brain included) is sent to it (run-spec §4.4)
     await _within(deadline, f"checking Hive {inst['name']}", 2 * PROBE_TIMEOUT_S,
@@ -808,20 +836,24 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
                                lambda: brain_sync_host.hive_brains(inst))
         if not remote["supported"]:
             raise SwarmOutError(f"Hive {inst['name']}'s version cannot receive Brains; update it once")
-        local = await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)
+        local = {"digest": frozen["digest"]} if frozen else \
+            await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)
         if local["digest"] is None:
             raise SwarmOutError(f"{brain} cannot be packaged: {local['error']}")
+        package = await asyncio.to_thread(swarm_run.frozen_package, lead.run_id) if frozen else None
+        if frozen and package is None:
+            raise SwarmOutError(f"Swarm Run {lead.run_id}'s frozen Brain is gone; nothing was sent")
         have = remote["brains"].get(brain) or {}
         synced = "up to date"
         sync_step = f"syncing {brain} to Hive {inst['name']}"
         if have.get("digest") != local["digest"]:
             await _within(deadline, sync_step, brain_sync_host.SYNC_TIMEOUT_S,
-                          lambda: brain_sync_host.sync(inst, brain, ws))
+                          lambda: brain_sync_host.sync(inst, brain, ws, **({"package": package} if package else {})))
             synced = "synced"
         elif have.get("current_digest") != local["digest"]:
             # the Hive's copy was changed there: the host is the only writer, so it is restored
             await _within(deadline, sync_step, brain_sync_host.SYNC_TIMEOUT_S,
-                          lambda: brain_sync_host.sync(inst, brain, ws))
+                          lambda: brain_sync_host.sync(inst, brain, ws, **({"package": package} if package else {})))
             n = have.get("changed_files")
             synced = f"restored {n} file(s) the Hive had changed" if isinstance(n, int) else "restored"
     except brain_sync_host.SyncRefused as e:
@@ -855,6 +887,7 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
                          segment=task_spec.segment(spec, run_id, work_id=dispatch_id if checks_by_id else None),
                          agent=agent, dispatch_id=dispatch_id, deadline=deadline,
                          checks=work_checks(spec) if checks_by_id else None,
+                         **({"model": frozen["model"]} if frozen and frozen.get("model") else {}),
                          extra={"brief": " ".join((brief or "").split())[:MAX_BRIEF_CHARS],
                                 "hive_reason": hive_reason, "brain_sync": synced,
                                 # the agent session that follows the run (agent-owns-its-runs §2.1)
@@ -873,7 +906,10 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
         _session_or_none(dispatched_from), "dispatch", None,
         {"hive": inst.get("name"), "brain": brain, "execution": spec["execution"]["how"],
          "returns": spec["returns"], "revision": agent.get("revision")})
-    return {**row, "brain_sync": synced}
+    out = {**row, "brain_sync": synced}
+    if frozen:
+        out["frozen"] = {k: frozen.get(k) for k in ("brain", "digest", "revision", "model")}
+    return out
 
 
 def work_checks(spec: dict[str, Any]) -> dict[str, Any]:
