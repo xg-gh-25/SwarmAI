@@ -41,12 +41,29 @@ command from anything else. The record and the logs live in
 ``Hive/work/<work_id>/checks/``, which the release removes with the task. There is no
 time limit here: the agent caps each call. The check runs in a process group of its
 own (never this process's: that group is the caller's, which on a Hive can hold the agent
-and the daemon). Its group is ended whenever this process stops it or stops itself: on
-SIGTERM, SIGALRM, SIGHUP or SIGQUIT (to this process, or to the caller's group it
-belongs to), on any exception while it waits (SIGINT raises one), and when the check ends (so a process the
-check left in the background does not outlive it). SIGKILL cannot be handled: a SIGKILL
-of this process, or of the caller's group, leaves the check's group running unrecorded
-until it ends.
+and the daemon). The check is ended, with every process it started, whenever this
+process stops it or stops itself: on SIGTERM, SIGALRM, SIGHUP or SIGQUIT (to this
+process, or to the caller's group it belongs to), on any exception while it waits
+(SIGINT raises one), and when the check ends (so a process the check left in the
+background does not outlive it).
+
+"Every process it started" is found by parent, not by group: a check's command may move
+a process into a group of its own (GNU ``timeout`` does, to signal what it runs), and
+ending only the check's group leaves that one running. So the end kills the check's
+group and every descendant of this process, parents before their children, round after
+round until none is left (a child forked before its parent was killed is found in the
+next round). The signals this process handles are held while it does (they act once it
+is done), so a second stop does not interrupt the first halfway; the hold is per thread,
+so this holds when task_checks runs alone in its process (as a command), and a caller
+running ``main`` with other threads may still see a nested end (which still kills all). Run as a command on Linux,
+this process is a child subreaper (``PR_SET_CHILD_SUBREAPER``): a descendant whose parent
+ends is adopted here instead of by init, so it is still found, including what a finished
+check left in the background. Elsewhere (macOS, a developer machine, not a Hive) an
+orphan in another group escapes once its parent has ended. A pid read from the process
+table can in principle be reused by an unrelated process before it is signalled (a
+grandchild reaped by its own parent); with Linux's pid space this is not guarded
+against. SIGKILL cannot be handled: a SIGKILL of this process, or of the caller's group,
+leaves the check running unrecorded until it ends.
 """
 from __future__ import annotations
 
@@ -56,6 +73,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -184,21 +202,166 @@ def _append(f: Path, row: dict[str, Any]) -> None:
         os.fsync(fh.fileno())
 
 
-def _end_group(child: Optional[subprocess.Popen]) -> None:
-    """End the check's own process group (its pgid is its pid: a session of its own),
-    with whatever it left running; never this process's group, which is the caller's.
-    A group already gone is fine."""
-    if child is None:
+#: the signals this process handles (``main``), held while a check is ended
+HANDLED = (signal.SIGTERM, signal.SIGALRM, signal.SIGHUP, signal.SIGQUIT, signal.SIGINT)
+#: rounds of killing before the end gives up on a process that will not die (one in
+#: uninterruptible sleep): a hang guard, each round is a few milliseconds
+END_ROUNDS = 50
+PR_SET_CHILD_SUBREAPER = 36
+#: a hang guard on the process listing where it needs ps (it answers in milliseconds)
+PS_WAIT_S = 2
+
+
+def _adopt_orphans() -> None:
+    """On Linux, make this process a child subreaper, so a check's process whose parent
+    ends is reparented here and still found by ``_descendants``. Elsewhere a no-op."""
+    if not sys.platform.startswith("linux"):
         return
+    import ctypes
     try:
-        os.killpg(child.pid, signal.SIGKILL)
-    except OSError:
-        pass
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER)")
+    except (OSError, AttributeError) as exc:
+        print(f"task_checks: cannot adopt a check's orphans ({exc}); a process a check "
+              "leaves in another group may outlive it", file=sys.stderr)
+
+
+def _table() -> list[tuple[int, int, str]]:
+    """(pid, parent pid, state) of every process: from /proc where there is one, else ps."""
+    rows = []
+    proc = Path("/proc")
+    if (proc / "self" / "stat").exists():
+        for d in proc.iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                stat = (d / "stat").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue                              # it ended while being read
+            # "pid (comm) state ppid ...": comm may hold spaces and parentheses
+            rest = stat[stat.rfind(")") + 2:].split()
+            if len(rest) >= 2 and rest[1].isdigit():
+                rows.append((int(d.name), int(rest[1]), rest[0]))
+        return rows
+    # ps is a child of this process too: its own row is left out, or every walk finds it
+    ps = subprocess.Popen(["ps", "-A", "-o", "pid=,ppid=,stat="], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, text=True)
+    try:
+        out, _ = ps.communicate(timeout=PS_WAIT_S)
+    except subprocess.TimeoutExpired:
+        ps.kill()
+        ps.wait()
+        raise OSError("ps did not answer")
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit() and int(parts[0]) != ps.pid:
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+    return rows
+
+
+#: this process's descendants from before its first check (``main``): never a check's,
+#: so the end leaves them (and what they start) alone, as when a caller runs ``main``
+#: in-process
+_spare: set[int] = set()
+
+
+class _held:
+    """Hold the signals this process handles until the block ends; one that came
+    meanwhile acts then. Off the main thread (no handlers there) a no-op."""
+
+    def __enter__(self):
+        self.mask = None
+        if threading.current_thread() is threading.main_thread():
+            old = signal.pthread_sigmask(signal.SIG_BLOCK, ())
+            try:
+                signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED)
+            except BaseException:
+                # a handler that ran inside the call (CPython runs pending ones there,
+                # after the new mask is set) raised: put the old mask back, or the
+                # signals stay held for good
+                signal.pthread_sigmask(signal.SIG_SETMASK, old)
+                raise
+            self.mask = old
+
+    def __exit__(self, *_exc):
+        if self.mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, self.mask)
+
+
+def _tree() -> list[tuple[int, str]]:
+    """(pid, state) of every descendant of this process that the check started:
+    ``_spare`` and what is below them are left out (not the check's)."""
+    me = os.getpid()
+    children: dict[int, list[int]] = {}
+    state: dict[int, str] = {}
+    for pid, ppid, st in _table():
+        children.setdefault(ppid, []).append(pid)
+        state[pid] = st
+    found: list[int] = []
+    todo = list(children.get(me, []))
+    while todo:
+        pid = todo.pop()
+        if pid == me or pid in found or pid in _spare:
+            continue
+        found.append(pid)
+        todo.extend(children.get(pid, []))
+    return [(p, state.get(p, "")) for p in found]
+
+
+def _descendants() -> list[int]:
+    """The live processes of ``_tree`` (a zombie holds nothing)."""
+    return [p for p, st in _tree() if not st.startswith("Z")]
+
+
+def _reap(pids) -> None:
+    """Collect the ended ones of *pids* that are this process's children (killed ones,
+    and orphans adopted here). Only those: a caller running ``main`` in-process keeps
+    the exit status of its own children."""
+    for pid in pids:
+        try:
+            os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            pass                                          # not a child here, or reaped
+
+
+def _end_group(child: Optional[subprocess.Popen]) -> None:
+    """End the check with everything it started: its own process group, and every
+    descendant of this process, whatever group it moved to (module doc). Never this
+    process or its group, which is the caller's. A process already gone is fine."""
+    with _held():
+        group = child.pid if child is not None else None
+        for _ in range(END_ROUNDS):
+            try:
+                tree = _tree()
+            except OSError as exc:                     # no process table (no ps)
+                print(f"task_checks: cannot list processes ({exc}); ending only the "
+                      "check's group", file=sys.stderr)
+                tree = []
+            if group is not None:
+                # in the round the tree was read in, while the group surely has members
+                # (its pgid cannot have been handed out again yet)
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except OSError:
+                    pass
+                group = None
+            live = [p for p, st in tree if not st.startswith("Z")]
+            for pid in live:                           # parents first: none forks after
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            _reap([p for p, _ in tree])
+            if not live:
+                break
+            time.sleep(0.01)
 
 
 def _stop_child(signum, _frame) -> None:
     """A cap that ends this process (SIGALRM from ``perl -e 'alarm N'``, SIGTERM, an
-    interrupt) ends the check's process group too, so nothing keeps running unrecorded."""
+    interrupt) ends the check with everything it started, so nothing keeps running
+    unrecorded."""
     _end_group(_child)
     raise SystemExit(128 + signum)
 
@@ -308,6 +471,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     li = sub.add_parser("list", help="list the order's checks")
     li.add_argument("work_id")
     args = p.parse_args(argv)
+    with _held():
+        try:
+            spare = {pid for pid, _ in _tree()}
+        except OSError:
+            spare = set()
+        _spare.clear()
+        _spare.update(spare)
     # SIGINT needs no handler: it raises KeyboardInterrupt in the wait, which ends the group
     for sig in (signal.SIGTERM, signal.SIGALRM, signal.SIGHUP, signal.SIGQUIT):
         signal.signal(sig, _stop_child)
@@ -319,4 +489,5 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    _adopt_orphans()          # the command only: a caller running main() keeps its own role
     sys.exit(main())

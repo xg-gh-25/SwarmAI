@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 
 import pytest
 
@@ -357,3 +358,175 @@ def test_a_finished_check_leaves_nothing_in_the_background(world, order, tmp_pat
             os.kill(sentinel, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+# A process that moves itself into a group of its own, as GNU `timeout` (without
+# --foreground) does: it writes its pid, leaves the check's group, then sleeps.
+_OWN_GROUP = ("perl -e 'open(F, \">\", shift) or die; print F $$; close F; setpgrp(0, 0); "
+              "exec \"sleep\", \"300\"' {pidfile}")
+
+
+def test_a_signal_ends_a_process_that_left_the_checks_group(world, order, tmp_path):  # noqa: F811
+    """A check whose command runs a process in a group of its own (`timeout` does this):
+    stopping task_checks ends that process too, and the caller's group lives on."""
+    import os
+    import signal
+    # "; echo": bash forks it as a child (a lone command would be exec'd and stay the
+    # session's leader, which cannot change group), as a script runs `timeout`
+    p, sentinel, pidfile = _caller_with_check(world, order, tmp_path, _OWN_GROUP + "; echo ended")
+    try:
+        moved = int(pidfile.read_text().strip())
+        for _ in range(50):                       # wait until it has left the check's group
+            if os.getpgid(moved) == moved:
+                break
+            __import__("time").sleep(0.1)
+        assert os.getpgid(moved) == moved
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=20)
+        assert _gone(moved), "a process in its own group outlived the stopped check"
+        os.kill(sentinel, 0)                      # the caller's group is untouched
+    finally:
+        for pid in (sentinel, p.pid, int(pidfile.read_text().strip() or 0)):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="only Linux lets task_checks adopt a check's orphans (a child subreaper)")
+def test_a_finished_check_ends_what_it_left_in_another_group(world, order, tmp_path):  # noqa: F811
+    """A check that ends while a process it started in a group of its own still runs:
+    that process ends with the check."""
+    import os
+    import signal
+    p, sentinel, pidfile = _caller_with_check(world, order, tmp_path, _OWN_GROUP + " & sleep 1")
+    try:
+        p.wait(timeout=30)
+        assert p.returncode == 0
+        leftover = int(pidfile.read_text().strip())
+        assert _gone(leftover), "a process the check left in another group outlived it"
+    finally:
+        for pid in (sentinel, int(pidfile.read_text().strip() or 0)):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_a_process_without_children_has_no_descendants():
+    """The walk does not count its own process listing (ps is a child too): with no
+    check running, nothing is found, so the end stops at once instead of looping."""
+    import subprocess
+    from pathlib import Path
+    backend = Path(task_checks.__file__).resolve().parents[1]
+    out = subprocess.run([sys.executable, "-c", "from scripts import task_checks; print(task_checks._descendants())"],
+                         cwd=str(backend), capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "[]"
+
+
+def test_a_check_run_in_process_leaves_the_callers_children_alone(world, order):  # noqa: F811
+    """A caller that runs task_checks in its own process keeps the children it had
+    before the check: the end takes only what the check started."""
+    import signal
+    import subprocess
+    order({"setup": [], "validations": [{"id": "ok", "command": "true", "repo": "lib", "cwd": ""}]})
+    mine = subprocess.Popen(["sleep", "60"])
+    try:
+        assert task_checks.main(["run", W1, "ok"]) == 0
+        assert mine.poll() is None, "a child the caller had before the check was ended"
+    finally:
+        mine.kill()
+        mine.wait()
+        for sig in (signal.SIGTERM, signal.SIGALRM, signal.SIGHUP, signal.SIGQUIT):
+            signal.signal(sig, signal.SIG_DFL)      # main() set them for its own process
+
+
+def test_a_check_run_in_process_keeps_the_callers_exit_statuses(world, order):  # noqa: F811
+    """The end collects only the check's ended processes: a child the caller had, which
+    ended before the check, still reports its own exit code to the caller."""
+    import signal
+    import subprocess
+    import time
+    order({"setup": [], "validations": [{"id": "ok", "command": "true", "repo": "lib", "cwd": ""}]})
+    mine = subprocess.Popen(["sh", "-c", "exit 3"])
+    time.sleep(0.5)                                  # ended, not yet collected
+    try:
+        assert task_checks.main(["run", W1, "ok"]) == 0
+        assert mine.wait(timeout=10) == 3
+    finally:
+        for sig in (signal.SIGTERM, signal.SIGALRM, signal.SIGHUP, signal.SIGQUIT):
+            signal.signal(sig, signal.SIG_DFL)
+
+
+def test_a_signal_during_the_end_acts_only_after_it(monkeypatch):
+    """A second stop that arrives while a check is being ended waits until the end is
+    done: it cannot leave the check half-killed."""
+    import signal
+    fired = []
+    seen_inside = []
+
+    def tree():
+        signal.raise_signal(signal.SIGTERM)      # to this thread, which holds it
+        seen_inside.append(bool(fired))          # a held signal has not acted yet
+        return []
+
+    old = signal.signal(signal.SIGTERM, lambda *_: fired.append(True))
+    try:
+        monkeypatch.setattr(task_checks, "_tree", tree)
+        task_checks._end_group(None)
+        assert seen_inside == [False]
+        assert fired == [True]                   # and it acted once the end was done
+    finally:
+        signal.signal(signal.SIGTERM, old)
+
+
+def test_without_a_process_table_the_checks_group_is_still_ended(monkeypatch):
+    """When the processes cannot be listed (no ps), the check's own group is still
+    killed, as before the walk existed."""
+    import os
+    import signal
+    killed = []
+
+    def no_table():
+        raise FileNotFoundError("ps")
+
+    monkeypatch.setattr(task_checks, "_tree", no_table)
+    monkeypatch.setattr(os, "killpg", lambda pg, sig: killed.append((pg, sig)))
+    task_checks._end_group(type("C", (), {"pid": 4242})())
+    assert killed == [(4242, signal.SIGKILL)]
+
+
+def test_main_in_process_does_not_adopt_the_callers_orphans(world, order, monkeypatch):  # noqa: F811
+    """Only the command makes itself a child subreaper: a caller that runs main() in
+    its own process keeps its role."""
+    import signal
+    order({"setup": [], "validations": [{"id": "ok", "command": "true", "repo": "lib", "cwd": ""}]})
+    monkeypatch.setattr(task_checks, "_adopt_orphans", lambda: (_ for _ in ()).throw(AssertionError("adopted")))
+    try:
+        assert task_checks.main(["run", W1, "ok"]) == 0
+    finally:
+        for sig in (signal.SIGTERM, signal.SIGALRM, signal.SIGHUP, signal.SIGQUIT):
+            signal.signal(sig, signal.SIG_DFL)
+
+
+def test_a_handler_raising_while_signals_are_held_releases_them(monkeypatch):
+    """A pending handler that raises inside the hold (CPython runs pending ones as the
+    mask is set) leaves the signals as they were, not held for good."""
+    import signal
+    real = signal.pthread_sigmask
+
+    def raising(how, sigs):
+        got = real(how, sigs)
+        if how == signal.SIG_BLOCK and signal.SIGTERM in set(sigs):
+            raise KeyboardInterrupt
+        return got
+
+    before = real(signal.SIG_BLOCK, ())
+    monkeypatch.setattr(signal, "pthread_sigmask", raising)
+    with pytest.raises(KeyboardInterrupt):
+        with task_checks._held():
+            pass
+    monkeypatch.setattr(signal, "pthread_sigmask", real)
+    assert real(signal.SIG_BLOCK, ()) == before
