@@ -36,7 +36,7 @@ function errText(e: unknown, fallback: string): string {
   return m && m.length < 300 ? m : fallback;
 }
 
-/** the classes the agent that dispatched the run answers itself (backend core/approval_class) */
+/** the classes the agent that answers for the run answers itself (backend core/approval_class) */
 const HOST_CLASSES = new Set(['question', 'decision', 'hive_local', 'run_authorization']);
 
 export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, source }: {
@@ -124,7 +124,7 @@ export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, sou
   }
 
   // ── waiting ─────────────────────────────────────────────────────────────────────
-  // a wait the dispatching agent answers for: it is handling it; the person may answer first
+  // a wait the agent that answers for the run answers: it is handling it; the person may answer first
   const agentNote = HOST_CLASSES.has(wait.approval_class ?? '') && (
     <div className="mb-1 text-[12px] text-[var(--color-text-muted)]" data-testid="swarm-out-wait-agent">{t('swarmOut.wait.agentAnswers')}</div>
   );

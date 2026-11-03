@@ -1834,7 +1834,7 @@
         "host": "answered by the agent"
       },
       "hostAnswers": {
-        "title": "Answered for you by the agent that dispatched it ({{count}})",
+        "title": "Answered for you by the agent that answers for this run ({{count}})",
         "noText": "(the card's text was not kept)",
         "why": "why: {{why}}",
         "class": {
@@ -2108,7 +2108,7 @@
         "other": "the Hive did not say why",
         "not_host_class": "only a person can answer this (it reaches beyond the Hive)"
       },
-      "doneByAgent": "Answered by the agent that dispatched it",
+      "doneByAgent": "Answered by the agent that answers for this run",
       "agentAnswers": "The agent that answers for this run answers this itself; you can answer first."
     },
     "funnel": {

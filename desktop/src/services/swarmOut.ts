@@ -299,7 +299,7 @@ export interface SwarmOutLessons {
   digests?: string[];
 }
 
-/** A wait the agent that dispatched the run answered itself (backend
+/** A wait the agent that answers for the run answered itself (backend
  *  swarm_out_actor.host_answers): what was asked (the Hive's words, plain text), the
  *  option it picked and why. */
 export interface SwarmOutHostAnswer {
@@ -366,10 +366,10 @@ export interface SwarmOutAsk {
   /** the Hive refused the answer given (it did not match what was waiting): not delivered */
   refused?: boolean;
   /** what the wait is about, as the Hive's gate said (design 2026-10-31-hive-approvals):
-   *  the agent that dispatched the run answers question / decision / hive_local /
+   *  the agent that answers for the run answers question / decision / hive_local /
    *  run_authorization itself; null from a Hive too old to say (the person's) */
   approval_class?: string | null;
-  /** answered: by the person, or by the agent that dispatched the run (its own decision) */
+  /** answered: by the person, or by the agent that answers for the run (its own decision) */
   answered_by?: 'person' | 'host';
   /** where the wait is (design 2026-10-31-swarm-out-single-loop-fixes §2.1): ``asks``
    *  holds waiting and refused, ``answered`` holds sent, taken and gone */

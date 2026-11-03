@@ -594,8 +594,15 @@ def hardlinked(wt: "str | Path", paths: Iterable[str]) -> "list[str]":
     return bad
 
 
+#: the identity of a run's own snapshot commits (review snapshots, a Swarm Run's chain and
+#: child bases): never landed, never pushed, so they need no git identity on the machine
+#: (a fresh Hive or a CI runner has none). Dates stay real, unlike _FIXED_ID's
+RUN_SNAPSHOT_ID = {"GIT_AUTHOR_NAME": "swarm-run", "GIT_AUTHOR_EMAIL": "run@swarm.local",
+                   "GIT_COMMITTER_NAME": "swarm-run", "GIT_COMMITTER_EMAIL": "run@swarm.local"}
+
+
 def _snapshot(wt, parent: str, tree: str, msg: str) -> str:
-    return _out(wt, "commit-tree", tree, "-p", parent, "-m", msg).strip()
+    return _out(wt, "commit-tree", tree, "-p", parent, "-m", msg, env=RUN_SNAPSHOT_ID).strip()
 
 
 # ── review snapshots and test overlays (deterministic convergence §4) ────────
@@ -626,7 +633,7 @@ def snapshot_commit(wt: "str | Path", run_id: str, label: str) -> dict:
     head = _rev(wt, "HEAD")
     tree = change_tree(wt, run_id)
     sha = _out(wt, "commit-tree", tree, "-p", head, "-m",
-               f"swarm snapshot {run_id} {label}").strip()
+               f"swarm snapshot {run_id} {label}", env=RUN_SNAPSHOT_ID).strip()
     _out(wt, "update-ref", ref, sha)
     return {"sha": sha, "tree": tree, "base": head, "ref": ref}
 

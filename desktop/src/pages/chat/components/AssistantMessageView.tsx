@@ -449,7 +449,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     renderProducts: (z) => <ProductList blocks={z.blocks} />,
     renderDispatch: (z) => (z.block.type === 'swarm_run'
       // its own boundary: a card that fails to load leaves the rest of the turn standing
-      ? <ErrorBoundary variant="panel" fallback={null}><Suspense fallback={null}><SwarmRunCard block={z.block} /></Suspense></ErrorBoundary>
+      ? <ErrorBoundary fallback={null}><Suspense fallback={null}><SwarmRunCard block={z.block} /></Suspense></ErrorBoundary>
       : <DispatchCard block={z.block} />),
   };
   // The ending (spec §8): one output card. Code changes come only from turn_changes;

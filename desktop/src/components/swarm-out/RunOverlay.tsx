@@ -80,7 +80,7 @@ function detailOf(e: unknown, fallback: string): string {
   return m && m.length < 300 ? m : fallback;
 }
 
-/** What the agent that dispatched the run answered for the person, oldest first: what
+/** What the agent that answers for the run answered for the person, oldest first: what
  *  was asked, what it picked and why (design 2026-10-31-hive-approvals H8). Everything
  *  but the reason was written by the Hive, and is shown as plain text. */
 function HostAnswers({ answers, now }: { answers: SwarmOutHostAnswer[]; now: number }) {

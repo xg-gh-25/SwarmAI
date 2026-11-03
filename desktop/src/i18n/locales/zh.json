@@ -1834,7 +1834,7 @@
         "host": "agent 代答"
       },
       "hostAnswers": {
-        "title": "派单的 agent 替你答的（{{count}}）",
+        "title": "负责这一单的 agent 替你答的（{{count}}）",
         "noText": "（没有留下卡片原文）",
         "why": "理由：{{why}}",
         "class": {
@@ -2108,7 +2108,7 @@
         "other": "Hive 没说原因",
         "not_host_class": "这一项只能由人回答（影响到 Hive 之外）"
       },
-      "doneByAgent": "派单的 agent 已答",
+      "doneByAgent": "负责这一单的 agent 已答",
       "agentAnswers": "这一项由负责这一单的 agent 自己回答；你也可以先答。"
     },
     "funnel": {

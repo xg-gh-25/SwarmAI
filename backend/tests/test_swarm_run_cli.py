@@ -572,3 +572,19 @@ def test_the_runs_snapshot_commits_need_no_git_identity(tmp_path):
     tree = _g(repo, "rev-parse", "HEAD^{tree}")
     sha = child_merge._commit(repo, tree, head, "snapshot")
     assert _g(repo, "log", "-1", "--format=%an <%ae>", sha) == "swarm-run <run@swarm.local>"
+
+
+def test_a_runs_review_snapshot_needs_no_git_identity_either(tmp_path):
+    """The run's review snapshot (run_worktree.snapshot_commit) is one of its own commits
+    too: on a Hive without a git identity a child pipeline run reaches REVIEW."""
+    from core import run_worktree as rw
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    (repo / "a.txt").write_text("a\n")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-qm", "init")
+    _g(repo, "config", "user.useConfigOnly", "true")
+    (repo / "a.txt").write_text("b\n")
+    snap = rw.snapshot_commit(repo, "run_0123456789ab", "r1")
+    assert _g(repo, "log", "-1", "--format=%an <%ae>", snap["sha"]) == "swarm-run <run@swarm.local>"
