@@ -317,6 +317,8 @@ def execute(args) -> dict[str, Any]:
         # the run owner's, but never under the operation lock while a Hive is waited on
         # (a dispatch takes minutes): child_cli takes it only for its own short writes
         from core.run_protocol import child_cli
+        if not args.project or not args.run_id:
+            raise ValueError("child needs --project and --run-id")
         engine = _load(args, note=False)
         refused = _not_owner(engine, args.run_id)
         if refused:

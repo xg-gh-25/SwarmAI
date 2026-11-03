@@ -3489,6 +3489,20 @@ class RunEngine:
                            "status": str(r.get("status") or "none"),
                            "entries": len(r.get("items") or ())} for r in records]}
 
+    def _children_summary(self, rows) -> list[dict[str, Any]]:
+        """This run's Swarm Run children for REPORT (core/swarm_run.child_report); [] when
+        it dispatched none or their records cannot be read."""
+        recorded = [dict(e.get("payload") or {}) for e in rows if e.get("kind") == "child_dispatched"]
+        if not recorded:
+            return []
+        try:
+            from core import swarm_run
+            return swarm_run.child_report(self.run_id, recorded)
+        except Exception:  # noqa: BLE001 — the REPORT says the children, never fails on them
+            logger.warning("run %s: children not read for REPORT", self.run_id, exc_info=True)
+            return [{"dispatch_id": c.get("dispatch_id"), "wp": c.get("wp"), "outcome": "unread",
+                     "lead_run": []} for c in recorded]
+
     def build_audit(self, *, through: str, commits: Mapping[str, str] | None = None,
                     persist: bool = True,
                     event_rows: Sequence[Mapping[str, Any]] | None = None,
@@ -3503,6 +3517,7 @@ class RunEngine:
             events=rows, findings=projected_findings,
             test_reports=self._test_reports(rows), lessons=self._reflected_lessons(),
             knowledge=self._knowledge_summary(rows),
+            children=self._children_summary(rows),
             contract={**self.contract, "requirement": self._delivered_summary()},
             open_checks=dict(open_checks if open_checks is not None
                              else self.open_checks()["open"]), audit_through=through,

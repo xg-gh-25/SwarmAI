@@ -199,6 +199,33 @@ def status(engine: RunEngine) -> dict[str, Any]:
 
 # ── dispatch ────────────────────────────────────────────────────────────────
 
+WORKTREE_BASE = "@worktree"
+
+
+def worktree_base(engine: RunEngine) -> list[str]:
+    """``base`` for a child that starts from this run's worktree as it is now (a contract
+    the lead run wrote first: design §7 point 1): one commit per repository of the
+    change, untracked new files included, parent the run's base, at
+    ``refs/swarm/snapshots/<run>/base-<repo>`` (moved to the newest each time)."""
+    from core import run_worktree as rw
+    from core.run_protocol import child_merge
+    from core.run_protocol.oplock import operation
+    from config import get_app_data_dir
+    repos = engine.effective_repos()
+    if not repos:
+        raise ChildError("this run has no worktree yet: a child can start from it in a code stage")
+    out = []
+    with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", engine.run_id):
+        for name, path in repos.items():
+            wt = Path(path)
+            commit = child_merge._commit(wt, child_merge._worktree_tree(wt, engine.run_id),
+                                         rw._rev(wt, "HEAD"), f"swarm run {engine.run_id}: a child's base")
+            ref = rw.snapshot_ref(engine.run_id, child_merge._label("base", name))
+            rw._out(wt, "update-ref", ref, commit)
+            out.append(ref if len(repos) == 1 else f"{name}={ref}")
+    return out
+
+
 def _send_one(engine: RunEngine, item: dict, session: Optional[str], note: str = "",
               again_of: str = "") -> dict[str, Any]:
     task = item["task"]
@@ -252,6 +279,9 @@ def dispatch(engine: RunEngine, wps: list[str], *, again: str = "", note: str = 
         raise ChildError(f"{again} still has an open child: discard or take it first")
     previous = next((r.get("dispatch_id") for r in reversed(rows) if r.get("wp") == again), "") if again else ""
     session = _session()            # read here: the request context does not reach the threads
+    if any(plan[w].get("base") == [WORKTREE_BASE] for w in wps):
+        base = worktree_base(engine)    # once, for every child of this call that asks for it
+        plan = {w: ({**c, "base": base} if c.get("base") == [WORKTREE_BASE] else c) for w, c in plan.items()}
     with ThreadPoolExecutor(max_workers=min(4, len(wps))) as pool:
         results = list(pool.map(lambda w: _send_one(engine, plan[w], session, note, previous), wps))
     frozen = next((r.pop("frozen") for r in results if isinstance(r.get("frozen"), dict)), None)
@@ -334,10 +364,18 @@ def wait(engine: RunEngine, since: str = "") -> dict[str, Any]:
 # ── argparse and the dispatch from cli_commands ─────────────────────────────
 
 def add_parser(sub) -> None:
+    import argparse
     c = sub.add_parser("child", help="a Swarm Run's children: work packages dispatched to Hives")
-    c.add_argument("--project", required=True)
-    c.add_argument("--run-id", required=True)
+    # --project / --run-id before or after the child command (``next`` writes them after:
+    # next_step._cmd); a later one wins, a missing one is refused (cli_commands)
+    c.add_argument("--project", default=None)
+    c.add_argument("--run-id", default=None)
+    run_args = argparse.ArgumentParser(add_help=False)
+    run_args.add_argument("--project", default=argparse.SUPPRESS)
+    run_args.add_argument("--run-id", default=argparse.SUPPRESS)
     cs = c.add_subparsers(dest="child_command", required=True)
+    _add = cs.add_parser
+    cs.add_parser = lambda name, **kw: _add(name, parents=[run_args], **kw)   # type: ignore[method-assign]
     p = cs.add_parser("plan")
     p.add_argument("--file", required=True, help="the plan as JSON, - for stdin")
     d = cs.add_parser("dispatch")

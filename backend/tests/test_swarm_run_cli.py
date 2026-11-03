@@ -215,3 +215,45 @@ def test_merge_refuses_git_hooks_and_reports_a_conflict_without_changing_the_cha
     out = _exec(rig, "merge", "so_eeeeeeeeeeee")
     assert not out["ok"] and out["merged"][0]["conflicts"] == ["x.txt"]
     assert _g(rig.repo, "rev-parse", chain) == tip                             # left as it was
+
+
+def test_a_child_can_start_from_the_runs_worktree_as_it_is_now(run):
+    """§7 point 1: the lead run writes a contract first and its children start from it."""
+    rig, fake = run
+    plan = {"children": [{**PLAN["children"][0], "base": ["@worktree"]}]}
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(plan))
+    wt = Path(next(iter(rig.engine().effective_repos().values())))
+    (wt / "contract.py").write_text("def parse(text): ...\n")                   # untracked, the contract
+    head = _g(wt, "rev-parse", "HEAD")
+    out = _exec(rig, "dispatch", "W1")
+    assert out["ok"], out
+    sent = [b for m, p, b in fake.calls if p == "/dispatch"][-1]
+    ref = sent["base"][0]
+    assert ref.startswith(f"refs/swarm/snapshots/{rig.run_id}/base-")
+    assert "contract.py" in _g(rig.repo, "ls-tree", "-r", "--name-only", ref).split()
+    assert _g(rig.repo, "rev-parse", f"{ref}^") == head                        # on the run's base
+    assert _g(wt, "rev-parse", "HEAD") == head and _g(wt, "status", "--porcelain") == "?? contract.py"
+
+
+def test_next_names_the_open_children_and_report_lists_what_the_lead_run_did(run):
+    """§5.2 / §5.8: BUILD's next step says which children are still open; REPORT lists
+    each child, how it ended and the lead run's decisions on it (its decision record)."""
+    from core import swarm_out, swarm_out_record
+    from core.run_protocol import audit
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    _exec(rig, "dispatch", "W1")
+    did = fake.rows[0]["dispatch_id"]
+    swarm_out._append(json.dumps({"dispatch_id": did, "parent_run": rig.run_id, "wp": "W1"}) + "\n")
+    out = _exec(rig, "status")
+    assert out["next"]["children"] == {"open": 1, "work_packages": ["W1"]}
+    assert "child status" in out["next"]["why"]
+    swarm_out_record.append_quietly(did, "agent", "accept", "W1 meets its acceptance", SESSION, "accept", None, {})
+    from core import swarm_out_settle
+    swarm_out_settle._update(did, lambda rec: rec.update(handled_at="2026-11-03T00:00:00Z"))
+    assert "children" not in _exec(rig, "status")["next"]                    # nothing open now
+    value = rig.engine().build_audit(through="DELIVER", persist=False)
+    assert value["details"]["children"][0]["outcome"] == "handled"
+    text = audit.render(value, fmt="report")
+    assert "## Hive children (Swarm Run)" in text and "W1 meets its acceptance" in text
+    assert did.replace("_", "\\_") in text                                  # markdown-escaped

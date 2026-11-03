@@ -382,7 +382,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
           test_reports: Mapping[str, Mapping[str, Any]] | None = None,
           lessons: Sequence[Mapping[str, Any]] = (),
           knowledge: Mapping[str, Any] | None = None,
-          untracked: Mapping[str, Any] | None = None) -> dict[str, Any]:
+          untracked: Mapping[str, Any] | None = None,
+          children: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """*test_reports*: repo -> the latest TEST validation report (its commands are
     listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
     the run because their project has no DDD are listed in the REPORT); *open_checks*:
@@ -391,7 +392,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     cited}`` of the run's knowledge.md (run-knowledge §3.5), None for a run created
     before it -- REPORT gets one line, never the recalled text; *untracked*: the
     landing's untracked files from ``select_untracked`` (REPORT lists them; no verdict
-    reads them)."""
+    reads them); *children*: a Swarm Run's children and what the lead run did with each
+    (core/swarm_run.child_report; listed, never judged)."""
     if audit_through not in {"DELIVER", "COMPLETED"}:
         raise AuditError("audit_through must be DELIVER or COMPLETED")
     if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
@@ -607,6 +609,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                               "searches": (int(knowledge["searches"])
                                            if isinstance(knowledge.get("searches"), int) else None)}
                              if isinstance(knowledge, Mapping) else None)}
+    details["children"] = [dict(c) for c in children if isinstance(c, Mapping)]
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
              "summary": {"isolation": isolation, "speed": speed, "quality": quality,
@@ -864,6 +867,19 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                   for repo, cmd in skipped[:50]]
         if len(skipped) > 50:
             lines.append(f"- {len(skipped) - 50} more in run_audit.json")
+    kids = details.get("children") or []
+    if kids:
+        # a Swarm Run: each child and what the lead run did with it (swarm-run §5.8)
+        lines += ["", "## Hive children (Swarm Run)", ""]
+        for c in kids[:50]:
+            did = "; ".join(f"{_text(x.get('decision'), 20)}: {_text(x.get('why'), 200)}"
+                            for x in c.get("lead_run") or [] if isinstance(x, Mapping))
+            lines.append(f"- {_text(c.get('wp'), 32)} · {_text(c.get('dispatch_id'), 20)}"
+                         + (f" · {_text(c.get('hive'), 60)}" if c.get("hive") else "")
+                         + (f" · again of {_text(c.get('again_of'), 20)}" if c.get("again_of") else "")
+                         + f" · {_text(c.get('outcome'), 20)}" + (f" · {did}" if did else ""))
+        if len(kids) > 50:
+            lines.append(f"- {len(kids) - 50} more in run_audit.json")
     doc_only = details.get("doc_paths_not_reviewed") or {}
     if doc_only:
         lines += ["", "## Doc-class files changed after REVIEW, not sent to a review", ""]

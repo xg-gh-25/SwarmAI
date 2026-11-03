@@ -318,6 +318,8 @@ def next_step(engine, *, previous_stage: str | None = None,
         _note_main_overlap(engine, out)
         if stage == "build" and previous_stage == "plan":
             _note_split(engine, out)
+        if stage == "build":
+            _note_children(engine, out)
         return out
     if not blocking:
         out.update(action="run", command=_cmd(engine, "stage-complete"),
@@ -378,6 +380,24 @@ def _note_split(engine, out: dict[str, Any]) -> None:
         f"its tasks fall into {len(groups)} groups that share no file ({', '.join('+'.join(g[:4]) + ('…' if len(g) > 4 else '') for g in groups[:6])}). "
         "A group that is useful and revertible on its own reviews and lands faster as its "
         "own run: abandon this one and create one run per group, or go on as planned.")
+
+
+def _note_children(engine, out: dict[str, Any]) -> None:
+    """This run's Swarm Run children still open on Hives (design 2026-10-31-swarm-run §5.2,
+    §5.5): say how many and how to follow them. Information; it blocks nothing."""
+    try:
+        from core import swarm_run
+        open_ = swarm_run.open_children(engine.run_id)
+    except Exception:  # noqa: BLE001 — a note, never the step's failure
+        return
+    if not open_:
+        return
+    wps = [str(r.get("wp")) for r in open_]
+    out["children"] = {"open": len(open_), "work_packages": wps}
+    out["why"] = (out.get("why") or "") + (
+        f" {len(open_)} of this run's children are still open on Hives ({', '.join(wps[:10])}): "
+        f"`{_cmd(engine, 'child status')}`. End your turn to wait for them; the run is woken "
+        "when one changes.")
 
 
 def _note_main_overlap(engine, out: dict[str, Any]) -> None:

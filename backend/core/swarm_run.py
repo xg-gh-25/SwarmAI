@@ -244,6 +244,44 @@ def held_hives(rows: Iterable[dict], brain: str, digest: Optional[str], run_id: 
     return out
 
 
+def child_report(run_id: str, recorded: Iterable[dict]) -> list[dict]:
+    """For a lead run's REPORT and REFLECT (design §5.8, §7 point 9, §16): each child its
+    log names (``child_dispatched`` payloads), how it ended in Swarm Out and what the lead
+    run did with it (its decision record's ``by: agent`` entries, design
+    2026-11-02-hive-run-decision-record §3). Read from files; never asks a Hive."""
+    from core import swarm_out_settle
+    out = []
+    for c in recorded:
+        did = str(c.get("dispatch_id") or "")
+        if not did:
+            continue
+        try:
+            rec = swarm_out_settle.load(did)
+        except Exception:  # noqa: BLE001 — a child whose record is gone is listed as such
+            rec = {}
+        settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else {}
+        outcome = settled.get("outcome") or ("handled" if rec.get("handled_at") else
+                                             "discarded" if rec.get("abandoned_at") else "open")
+        lead_did = [{"decision": e.get("decision"), "why": e.get("why")}
+                    for e in rec.get("commands") or []
+                    if isinstance(e, dict) and e.get("by") == "agent" and e.get("decision") != "dispatch"]
+        out.append({"dispatch_id": did, "wp": c.get("wp"), "hive": c.get("hive"),
+                    "again_of": c.get("again_of"), "outcome": outcome, "lead_run": lead_did})
+    return out
+
+
+def open_children(run_id: str) -> list[dict]:
+    """The children of *run_id* nothing has closed yet (read from the dispatch log and the
+    settle records; for ``next``)."""
+    from core import swarm_out, swarm_out_settle
+    out = []
+    for r in children(swarm_out._read_log(), run_id):
+        rec = swarm_out_settle.load(str(r.get("dispatch_id")))
+        if not (rec.get("handled_at") or rec.get("abandoned_at") or rec.get("settled")):
+            out.append(r)
+    return out
+
+
 def children(rows: Iterable[dict], run_id: str) -> list[dict]:
     """The dispatched children of *run_id*, oldest first."""
     return [r for r in rows if isinstance(r, dict) and r.get("parent_run") == run_id]

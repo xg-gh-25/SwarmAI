@@ -9,3 +9,15 @@ End BUILD with your validation report on stdin: `"$SWARM_BACKEND_BIN" pipeline-v
 Required check: BX-3 (a change exists, and every repo has a BUILD report on its current code tree).
 
 A valid example of this stage's document, with placeholders for your own values: `"$SWARM_BACKEND_BIN" pipeline-v1 template validation_report`.
+
+## Using the person's Hives (a Swarm Run, optional)
+
+When parts of the change stand on their own and are large, you may hand them to the person's Hives as children of this run and keep what you judge good. Everything about them is yours to decide: whether to split, how, which execution each gets, whether to trust a result, whether to correct it, take it over or drop it. What lands is still only this run's own change, through its own REVIEW and TEST.
+
+1. Split into work packages that stand alone (each task text complete: nothing from this conversation, no path on this machine), each with its acceptance, what comes back and the packages it waits for (`after`). Packages that would change the same files: make them one, or first write the contract yourself (interfaces, stubs, a failing test) and give the children `"base": ["@worktree"]` so they start from it. Cannot be split: do not fan out.
+2. Write the plan and dispatch what is ready: `"$SWARM_BACKEND_BIN" pipeline-v1 child plan --project <P> --run-id <R> --file -` with `{"children": [{"wp", "title", "task", "acceptance", "execution", "returns", "why", "after", "base"}]}`, then `"$SWARM_BACKEND_BIN" pipeline-v1 child dispatch --project <P> --run-id <R> W1 W2`.
+3. Wait: end your turn; the run is woken when a child changes. `"$SWARM_BACKEND_BIN" pipeline-v1 child status --project <P> --run-id <R>` shows them; a child's wait you answer with `child card` then `child answer`, or `child escalate` when only the person can.
+4. Review each result as its risk needs (read the commits in `refs/hive/...`, or send the review experts as for your own change).
+5. For each: take it (`"$SWARM_BACKEND_BIN" pipeline-v1 child merge --project <P> --run-id <R> <dispatch>`, then `child accept <dispatch> --ended-at <its result's ended_at> --why ...`), correct it (`child rerun` for a native child, `child dispatch --again <wp> --note-file -` for a pipeline one), take it over, or `child discard`. Correct it when the fix is small and the child still has its context; take it over when it conflicts with another child, the correction is hard to say, or the budget is nearly used (one package goes out at most three times).
+6. `"$SWARM_BACKEND_BIN" pipeline-v1 child apply --project <P> --run-id <R>` lays the merged children into the worktree, keeping your own edits; then finish BUILD as above.
+7. In the delivery summary say what each child was used for, what you corrected or took over, and anything left undone.
