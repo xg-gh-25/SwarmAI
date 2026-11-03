@@ -220,9 +220,14 @@ def _hive_setup(view: dict[str, Any], repos: list[dict[str, Any]]) -> list[dict[
 
 def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optional[str] = None,
           execution: Optional[str] = None, why: str = "", placement: str = "hive", *,
-          returns: Optional[str] = None, needs_private: str = "") -> dict[str, Any]:
+          returns: Optional[str] = None, needs_private: str = "",
+          base: Optional[list[str]] = None, parent_run: Optional[str] = None) -> dict[str, Any]:
     """The Task Spec; raises SpecError when a choice does not fit (the mode against the
-    definition, the execution against the product's profiles)."""
+    definition, the execution against the product's profiles). ``base``: where the task
+    starts instead of each checkout's HEAD, ``["<ref>"]`` for a Brain with one repository
+    or ``["<repo>=<ref>", ...]`` (design 2026-10-31-swarm-run §5.1); ``parent_run``: the
+    Swarm Run this task is a child of (its commits are material for that run, never
+    landed here, so a base off this machine's branch is fine for it)."""
     try:
         d = brain_dir(workspace, brain)
     except PinError as e:
@@ -243,7 +248,7 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
     ex = parse_execution(execution)
     if returns not in RETURNS:
         raise SpecError(f"say what comes back: one of {', '.join(RETURNS)} (got {str(returns)[:20]!r})")
-    repos = _brain_repos(d, mid, view["repos"])
+    repos = _brain_repos(d, mid, view["repos"], _bases(base))
     for r in repos:
         # only a task that delivers commits writes in a repository (§4.3)
         r["access"] = "write" if returns == "commits" else "read"
@@ -257,7 +262,7 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         "mode_chosen": "named" if mode else "the default mode",
         # how the task runs, chosen for this request (``profile`` is the pipeline's, None
         # when native), and the one sentence the dispatch card shows for why
-        "execution": ex, "profile": ex["profile"], "returns": returns,
+        "execution": ex, "profile": ex["profile"], "returns": returns, "parent_run": parent_run or None,
         # what makes this task need a private network (refused on a Hive, §2.2 of the
         # dispatch-center design); [] when nothing does
         "private": private_needs(d, mid, view, task or "", acceptance or "", needs_private),
@@ -282,13 +287,31 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
     }
 
 
-def _brain_repos(d: Path, mid: str, mode_repos: list[str]) -> list[dict[str, Any]]:
+def _bases(base: Optional[list[str]]) -> dict[str, str]:
+    """``{repo name or "": ref}`` from ``["<ref>"]`` / ``["<repo>=<ref>", ...]``."""
+    out: dict[str, str] = {}
+    for item in base or []:
+        name, sep, ref = str(item).strip().partition("=")
+        if not sep:
+            name, ref = "", name
+        if not ref.strip() or name in out:
+            raise SpecError(f"base {str(item)[:80]!r}: say <ref>, or <repository>=<ref> once per repository")
+        out[name.strip()] = ref.strip()
+    if "" in out and len(out) > 1:
+        raise SpecError("base: name the repository of each ref when there are several")
+    return out
+
+
+def _brain_repos(d: Path, mid: str, mode_repos: list[str],
+                 bases: Optional[dict[str, str]] = None) -> list[dict[str, Any]]:
     """Every repository the Brain binds, whatever the mode (a mode's ``repos`` only says
     where its setup and checks run). With a checkout on this machine: its branch and HEAD
     commit (``sha``, what the Hive works on, core/repo_ship) and how many paths have
     uncommitted changes (not sent); without one: the remote at the delivery branch.
     ``checkout_kind``: the kind of checkout (core.repo_placement), which admission reads for a
-    task that returns commits. (design 2026-10-30-hive-task-repos-from-host §2)"""
+    task that returns commits. (design 2026-10-30-hive-task-repos-from-host §2)
+    *bases*: a repository given a base starts at that commit (``sha``; ``base`` keeps the
+    ref as given) and its uncommitted changes do not concern the task (``dirty`` 0)."""
     from core import repo_ship
     from core.project_agent import repo_roots
     bindings = _bindings(d)
@@ -298,6 +321,14 @@ def _brain_repos(d: Path, mid: str, mode_repos: list[str]) -> list[dict[str, Any
     roots = repo_roots(d)
     from core.repo_placement import placement
     kinds = {n: p["checkout"] for n, p in placement(d).items()}
+    bases = dict(bases or {})
+    if "" in bases:
+        if len(bindings) != 1:
+            raise SpecError("base: this Brain binds several repositories; say <repository>=<ref>")
+        bases = {next(iter(bindings)): bases[""]}
+    for name in bases:
+        if name not in bindings:
+            raise SpecError(f"base: {name!r} is not a repository this Brain binds")
     out = []
     for name, b in bindings.items():
         row: dict[str, Any] = {"name": name, "url": b.clone, "ref": b.delivery_contract.branch or None,
@@ -307,8 +338,13 @@ def _brain_repos(d: Path, mid: str, mode_repos: list[str]) -> list[dict[str, Any
             try:
                 st = repo_ship.state(roots[name])
                 row.update(ref=st["branch"], sha=st["sha"], dirty=st["dirty"], checkout=str(roots[name]))
+                if name in bases:
+                    row.update(base=bases[name], sha=repo_ship.resolve(roots[name], bases[name]), dirty=0)
+                    row["base_on_branch"] = repo_ship.contains(roots[name], row["sha"], st["branch"])
             except repo_ship.ShipError as e:
                 row["error"] = str(e)
+        elif name in bases:
+            row["error"] = f"a base needs this machine's checkout of {name}, and there is none"
         out.append(row)
     return out
 
@@ -338,6 +374,13 @@ def admit(spec: dict[str, Any]) -> list[str]:
                 out.append(f"{r['name']} has no remote a Hive can clone ({r['url']!r})")
             if r.get("error"):
                 out.append(f"{r['name']}: {r['error']}")
+            if (spec["returns"] == "commits" and r.get("base") and r.get("base_on_branch") is False
+                    and not spec.get("parent_run")):
+                # the returned commits build on the base, and they land only on top of this
+                # machine's branch (core/hive_return.prepare): refused now, not after the work
+                out.append(f"{r['name']}: base {r['base']!r} is not on this machine's {r['ref']}, so "
+                           "the commits that come back could not land here; start from a commit "
+                           "on it, or return a document")
             if (spec["returns"] == "commits" and r.get("access") == "write"
                     and r.get("checkout") and r.get("checkout_kind") == "mirror"):
                 # the returned commits land on this machine's checkout (core/hive_return);

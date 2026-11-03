@@ -121,6 +121,39 @@ def test_a_checkout_that_moved_while_packing_is_refused(world):
         repo_ship.pack(world["host"], URL, "main", world["b"])
 
 
+def test_a_pinned_commit_off_head_reaches_the_hive_and_the_checkout_is_untouched(world):
+    """Swarm Run's ``base`` (design 2026-10-31-swarm-run §5.1): a commit only a snapshot
+    ref points at goes out as a bundle whose HEAD is that commit, and the checkout keeps
+    its HEAD, its refs and its files."""
+    host = world["host"]
+    tree = _g(host, "write-tree")
+    snap = _g(host, "commit-tree", tree, "-p", world["c"], "-m", "snapshot")
+    _g(host, "update-ref", "refs/swarm/snapshots/run_1/l1", snap)
+    refs_before = _g(host, "for-each-ref")
+    sha = repo_ship.resolve(host, "refs/swarm/snapshots/run_1/l1")
+    assert sha == snap
+    path, base, size = repo_ship.pack(host, URL, "main", sha, pinned=True)
+    try:
+        assert base == world["a"] and size > 0
+        assert snap in _g(host, "bundle", "list-heads", str(path))
+        _keep(world["ws"], snap, path.read_bytes())
+    finally:
+        path.unlink(missing_ok=True)
+    assert _g(_prepare(world, snap), "rev-parse", "HEAD") == snap
+    assert _g(host, "rev-parse", "HEAD") == world["c"]
+    assert _g(host, "for-each-ref") == refs_before
+    assert _g(host, "status", "--porcelain") == ""
+
+
+def test_resolve_takes_a_branch_or_a_commit_and_refuses_options_and_unknown_refs(world):
+    host = world["host"]
+    assert repo_ship.resolve(host, "main") == world["c"]
+    assert repo_ship.resolve(host, world["b"]) == world["b"]
+    for bad in ("--output=x", "-x", "main..HEAD", "", "nope/branch", "a b"):
+        with pytest.raises(repo_ship.ShipError):
+            repo_ship.resolve(host, bad)
+
+
 def test_nothing_is_sent_when_the_remote_has_the_commit_and_the_hive_still_gets_there(world):
     _g(world["host"], "push", "-q", "origin", "main")
     st = repo_ship.state(world["host"])
@@ -237,6 +270,22 @@ def test_the_dispatch_sends_each_bundle_once(world, monkeypatch):
     monkeypatch.setattr(so, "_put_repo", lambda *a: asyncio.sleep(0, (404, "")))
     with pytest.raises(so.SwarmOutError, match="update it once"):
         asyncio.run(so._ship_repos({"name": "h"}, repos))
+
+
+def test_the_dispatch_ships_a_base_commit_off_head(world, monkeypatch):
+    """A repository row with a base (core/task_spec) is shipped at that commit even though
+    HEAD is elsewhere: the unpinned pack would refuse it as moved."""
+    import core.swarm_out as so
+    sent = []
+
+    async def put(inst, r, path, size):
+        sent.append(_g(world["host"], "bundle", "list-heads", str(path)).split()[0])
+        return 200, ""
+    monkeypatch.setattr(so, "_put_repo", put)
+    repos = [{"name": "lib", "url": URL, "ref": "main", "sha": world["b"], "base": world["b"],
+              "checkout": str(world["host"])}]
+    asyncio.run(so._ship_repos({"name": "h"}, repos))
+    assert sent == [world["b"]]
 
 
 def test_a_hive_answer_that_does_not_name_the_kept_bundle_is_not_taken(world, tmp_path, monkeypatch):

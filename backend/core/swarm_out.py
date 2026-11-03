@@ -723,7 +723,8 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                         mode: Optional[str] = None, execution: Optional[str] = None,
                         origin: str = "swarm-out", *, seen_revision: str, brief: str = "",
                         why: str = "", returns: Optional[str] = None,
-                        needs_private: str = "", dispatched_from: Optional[str] = None) -> dict[str, Any]:
+                        needs_private: str = "", dispatched_from: Optional[str] = None,
+                        base: Optional[list[str]] = None) -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision ``/spec`` returned (``seen_revision``) or admission fails (naming the rule), syncs the Brain when the
@@ -731,14 +732,15 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     records the spec; the result says what the sync did (``brain_sync``). No
     ``hive_ref``: ``pick_hive`` chooses (the person named none). ``brief``: one or two
     sentences of what the task is, for the dispatch card. The whole of it runs within one
-    DISPATCH_DEADLINE_S, started here and passed to every step (``_Deadline``)."""
+    DISPATCH_DEADLINE_S, started here and passed to every step (``_Deadline``). ``base``:
+    where the task starts instead of each checkout's HEAD (core/task_spec.build)."""
     from core import brain_sync_host, task_spec
     from core.project_registry import get_swarmws
     deadline = _Deadline(DISPATCH_DEADLINE_S)
     ws = get_swarmws()
     try:
         spec = await asyncio.to_thread(task_spec.build, ws, brain, task, acceptance, mode, execution, why,
-                                       "hive", returns=returns, needs_private=needs_private)
+                                       "hive", returns=returns, needs_private=needs_private, base=base)
     except task_spec.SpecError as e:
         raise SwarmOutError(str(e)) from None
     if not seen_revision or spec["revision"] != seen_revision:
@@ -826,7 +828,8 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                                 "hive_reason": hive_reason, "brain_sync": synced,
                                 # the agent session that follows the run (agent-owns-its-runs §2.1)
                                 "dispatched_from": _session_or_none(dispatched_from),
-                                "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0}
+                                "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0,
+                                                **({"base": r["base"]} if r.get("base") else {})}
                                                for r in spec["repos"]]})
     # the first line of the run's decision record (design 2026-11-02-hive-run-decision-record §3)
     from core import swarm_out_record
@@ -905,8 +908,10 @@ async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]],
             continue
         git_s = deadline.budget(f"packing {r['name']}", repo_ship.GIT_TIMEOUT_S, SESSION_ID_WAIT_S)
         try:
+            # a task given a base starts at that commit, whatever HEAD is (core/repo_ship)
             path, _base, size = await asyncio.to_thread(
-                repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"], timeout=git_s)
+                repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"], timeout=git_s,
+                **({"pinned": True} if r.get("base") else {}))
         except repo_ship.ShipError as e:
             raise SwarmOutError(f"{r['name']} could not be packed: {e}; nothing was sent") from None
         if path is None:

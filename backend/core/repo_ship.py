@@ -14,13 +14,25 @@ Only read-only git commands run in the checkout (``rev-parse``, ``status``, ``re
 ``merge-base``; ``bundle create`` writes only the output file), with fixed arguments, no
 shell and hooks off. A bundle over ``MAX_BUNDLE_BYTES`` is refused, never cut.
 
+A task may also start from a commit other than HEAD (Swarm Run's ``base``: a contract
+the lead run wrote, a snapshot ref of its run; design 2026-10-31-swarm-run §5.1).
+``resolve`` turns that ref into a commit of the checkout, and ``pack(..., pinned=True)``
+bundles exactly that commit: in a temporary bare repository that borrows the checkout's
+objects (``objects/info/alternates``) with its ``HEAD`` set to the commit, so the bundle's
+one ref is still ``HEAD`` (the Hive fetches ``+HEAD:``, unchanged) and the checkout gets
+no ref and no write.
+
 - ``state(checkout)`` — {branch, sha, dirty} of a checkout; raises ShipError
-- ``pack(checkout, url, branch, sha, full=False)`` — (bundle path or None, base or None, bytes)
+- ``resolve(checkout, ref)`` — the commit a ref or sha names in the checkout; raises ShipError
+- ``contains(checkout, sha, branch)`` — whether the commit is in the branch's history
+- ``pack(checkout, url, branch, sha, full=False, pinned=False)`` — (bundle path or None,
+  base or None, bytes)
 """
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -65,6 +77,56 @@ def state(checkout: Path) -> dict:
     return {"branch": ref[len("refs/heads/"):], "sha": sha, "dirty": sum(1 for e in dirty.split("\0") if e)}
 
 
+
+def resolve(checkout: Path, ref: str) -> str:
+    """The commit *ref* names in *checkout* (a sha, a branch, a tag, a snapshot ref such
+    as ``refs/swarm/snapshots/<run>/<label>``). Raises ShipError when it names none."""
+    checkout = Path(checkout)
+    ref = (ref or "").strip()
+    # ``--verify`` takes exactly one revision (a range or a pathspec fails) and
+    # ``--end-of-options`` keeps a value starting with "-" from being read as an option
+    if not ref or len(ref) > 200:
+        raise ShipError(f"{ref[:60]!r} is not a commit or a ref name")
+    try:
+        sha = _git(checkout, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}").strip()
+    except ShipError:
+        raise ShipError(f"{checkout.name} has no commit {ref[:60]!r}") from None
+    if not _SHA_RE.fullmatch(sha):
+        raise ShipError(f"{checkout.name} has no commit {ref[:60]!r}")
+    return sha
+
+
+def contains(checkout: Path, sha: str, branch: str) -> bool:
+    """Whether *sha* is in the history of *checkout*'s *branch*."""
+    try:
+        p = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "merge-base", "--is-ancestor", sha,
+                            f"refs/heads/{branch}"], cwd=str(checkout), env={**os.environ, **_GIT_ENV},
+                           capture_output=True, timeout=60, check=False)
+    except (subprocess.TimeoutExpired, OSError):
+        raise ShipError(f"git merge-base could not run in {Path(checkout).name}") from None
+    if p.returncode not in (0, 1):
+        raise ShipError(f"git merge-base failed in {Path(checkout).name}")
+    return p.returncode == 0
+
+
+def _pinned_repo(checkout: Path, sha: str, left) -> Path:
+    """A temporary bare repository whose HEAD is *sha*, borrowing *checkout*'s objects.
+    The caller removes it."""
+    fmt = _git(checkout, "rev-parse", "--show-object-format", timeout=left()).strip() or "sha1"
+    common = Path(_git(checkout, "rev-parse", "--path-format=absolute", "--git-common-dir",
+                       timeout=left()).strip())
+    tmp = Path(tempfile.mkdtemp(prefix="swarm-pin-"))
+    try:
+        _git(tmp, "init", "-q", "--bare", f"--object-format={fmt}", str(tmp / "r.git"), timeout=left())
+        repo = tmp / "r.git"
+        (repo / "objects" / "info" / "alternates").write_text(str(common / "objects") + "\n")
+        (repo / "HEAD").write_text(sha + "\n")
+        return repo
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
 def _tracking_base(checkout: Path, url: str, branch: str, sha: str,
                    left=lambda: 60.0) -> Optional[str]:
     """The merge-base of ``sha`` with the tracking branch of a remote of the checkout
@@ -96,10 +158,12 @@ def _tracking_base(checkout: Path, url: str, branch: str, sha: str,
 
 
 def pack(checkout: Path, url: str, branch: str, sha: str,
-         full: bool = False, timeout: float = GIT_TIMEOUT_S) -> tuple[Optional[Path], Optional[str], int]:
+         full: bool = False, timeout: float = GIT_TIMEOUT_S,
+         pinned: bool = False) -> tuple[Optional[Path], Optional[str], int]:
     """A bundle whose ``HEAD`` is ``sha``: thin (``base..sha``) unless ``full`` or there is
     no base. ``(None, sha, 0)`` when the remote has ``sha`` already (nothing to send). The
-    caller removes the file. Raises ShipError, also when HEAD moved off ``sha``.
+    caller removes the file. Raises ShipError, also when HEAD moved off ``sha`` (unless
+    ``pinned``: then ``sha`` is the commit asked for, whatever HEAD is; see the module doc).
     ``timeout``: how long its git calls may run in all (a dispatch passes what is left
     of its deadline, core/swarm_out); each also keeps its own cap."""
     checkout = Path(checkout)
@@ -113,12 +177,16 @@ def pack(checkout: Path, url: str, branch: str, sha: str,
     fd, name = tempfile.mkstemp(prefix="swarm-repo-", suffix=".bundle")
     os.close(fd)
     path = Path(name)
+    pin = None
     try:
         # HEAD, not a ref written for the purpose: the checkout is never changed. The
         # bundle is checked to hold exactly ``sha`` (HEAD may have moved since ``state``).
-        _git(checkout, "bundle", "create", str(path), "HEAD", *([f"^{base}"] if base else []),
+        if pinned:
+            pin = _pinned_repo(checkout, sha, left)
+        src = pin or checkout
+        _git(src, "bundle", "create", str(path), "HEAD", *([f"^{base}"] if base else []),
              timeout=left(GIT_TIMEOUT_S))
-        heads = _git(checkout, "bundle", "list-heads", str(path), timeout=left()).split()
+        heads = _git(src, "bundle", "list-heads", str(path), timeout=left()).split()
         if sha not in heads:
             raise ShipError(f"{checkout.name} moved while it was being packed; send the task again")
         size = path.stat().st_size
@@ -129,3 +197,6 @@ def pack(checkout: Path, url: str, branch: str, sha: str,
     except BaseException:
         path.unlink(missing_ok=True)
         raise
+    finally:
+        if pin is not None:
+            shutil.rmtree(pin.parent, ignore_errors=True)

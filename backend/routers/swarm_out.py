@@ -51,6 +51,9 @@ class DispatchBody(BaseModel):
     # the agent session that dispatched it (the CLI's SWARM_APP_SESSION_ID): it follows
     # the run (design 2026-10-31-swarm-out-agent-owns-its-runs §2.1)
     session: Optional[str] = Field(default=None, max_length=80)
+    # where the task starts instead of each checkout's HEAD: ["<ref>"] or
+    # ["<repo>=<ref>", ...] (core/task_spec.build; design 2026-10-31-swarm-run §5.1)
+    base: Optional[list[str]] = Field(default=None, max_length=8)
 
 
 class ActorBody(BaseModel):
@@ -79,6 +82,7 @@ class SpecBody(BaseModel):
     why: Optional[str] = Field(default=None, max_length=600)
     returns: Optional[str] = Field(default=None, max_length=20)
     needs_private: Optional[str] = Field(default=None, max_length=600)
+    base: Optional[list[str]] = Field(default=None, max_length=8)
 
 
 class AnswerBody(BaseModel):
@@ -122,7 +126,7 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
                                                body.origin, seen_revision=body.revision,
                                                brief=body.brief or "", why=body.why or "",
                                                returns=body.returns, needs_private=body.needs_private or "",
-                                               dispatched_from=body.session))
+                                               dispatched_from=body.session, base=body.base))
 
 
 class ReturnBody(ActorBody):
@@ -269,7 +273,8 @@ async def spec(body: SpecBody) -> dict[str, Any]:
     try:
         s = await asyncio.to_thread(task_spec.build, get_swarmws(), body.brain, body.task,
                                     body.acceptance, body.mode, body.execution, body.why or "", "hive",
-                                    returns=body.returns, needs_private=body.needs_private or "")
+                                    returns=body.returns, needs_private=body.needs_private or "",
+                                    base=body.base)
     except task_spec.SpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"spec": {k: v for k, v in s.items() if k != "task"},

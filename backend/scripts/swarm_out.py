@@ -199,6 +199,8 @@ def _parser() -> argparse.ArgumentParser:
                        help="what comes back; only commits makes the repositories writable")
         d.add_argument("--needs-private", default="",
                        help="why the task needs a private network the checks cannot see (refuses it)")
+        d.add_argument("--base", action="append", default=None,
+                       help="start from this commit instead of HEAD: <ref>, or <repo>=<ref> (repeat per repository)")
         if name == "dispatch":
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
     sub.add_parser("runs")
@@ -469,7 +471,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd in ("spec", "dispatch"):
         body = {"brain": args.brain, "task": _task(args), "acceptance": args.acceptance,
                 "mode": args.mode, "execution": args.execution, "why": args.why,
-                "returns": args.returns, "needs_private": args.needs_private}
+                "returns": args.returns, "needs_private": args.needs_private,
+                **({"base": args.base} if args.base else {})}
         if args.cmd == "spec":
             return _call("POST", "/spec", body)
         # a dispatch may sync the Brain, send this machine's commits, wait for the Hive

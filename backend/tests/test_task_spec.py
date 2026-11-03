@@ -157,6 +157,48 @@ def test_a_checkout_on_this_machine_gives_its_branch_and_commit(ws, tmp_path):
     assert (r["ref"], r["sha"], r["dirty"], r["checkout"]) == ("work", sha, 1, str(repo.resolve()))
 
 
+def test_a_base_starts_the_task_at_that_commit_and_admission_guards_its_return(ws, tmp_path):
+    """Swarm Run's ``base`` (design 2026-10-31-swarm-run §5.1): the repository row carries
+    the commit the ref names (not HEAD) and no dirty count; commits that would build on a
+    base off this machine's branch are refused at admission, except for a Swarm Run's
+    child, whose commits never land here."""
+    import subprocess
+
+    def g(*a):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    repo = tmp_path / "lib"
+    subprocess.run(["git", "init", "-q", "-b", "work", str(repo)], check=True)
+    (repo / "a.txt").write_text("a")
+    g("add", ".")
+    g("commit", "-qm", "a")
+    first = g("rev-parse", "HEAD")
+    (repo / "a.txt").write_text("b")
+    g("commit", "-qam", "b")
+    snap = g("commit-tree", g("write-tree"), "-p", "HEAD", "-m", "snapshot")
+    g("update-ref", "refs/swarm/snapshots/run_x/l1", snap)
+    (repo / "a.txt").write_text("dirty")
+    b = _brain(ws)
+    (b / "bindings.yaml").write_text(BINDINGS.replace("    kind: external\n", f"    kind: external\n    worktree: {repo}\n"))
+    on = _build(ws, "Lib", "x", "done", base=[first])
+    r = on["repos"][0]
+    assert (r["sha"], r["base"], r["dirty"], r["base_on_branch"]) == (first, first, 0, True)
+    assert ts.admit(on) == []
+    assert _build(ws, "Lib", "x", "done", base=["lib=" + first])["repos"][0]["sha"] == first
+    off = _build(ws, "Lib", "x", "done", base=["refs/swarm/snapshots/run_x/l1"])
+    assert off["repos"][0]["sha"] == snap and off["repos"][0]["base_on_branch"] is False
+    assert any("could not land here" in x for x in ts.admit(off))
+    assert ts.admit(_build(ws, "Lib", "x", "done", base=["refs/swarm/snapshots/run_x/l1"],
+                           parent_run="run_x")) == []
+    assert ts.admit(_build(ws, "Lib", "x", "done", base=["refs/swarm/snapshots/run_x/l1"],
+                           returns="document")) == []
+    assert "no commit" in _build(ws, "Lib", "x", "done", base=["nope"])["repos"][0]["error"]
+    for bad, match in ((["other=main"], "not a repository this Brain binds"),
+                       (["main", "lib=main"], "name the repository"), (["lib="], "say <ref>")):
+        with pytest.raises(ts.SpecError, match=match):
+            _build(ws, "Lib", "x", "done", base=bad)
+
+
 @pytest.mark.parametrize("kw,match", [
     ({"mode": "nope"}, "no mode 'nope'"),
     ({"execution": None}, "say how the task runs"),
