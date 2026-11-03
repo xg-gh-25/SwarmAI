@@ -351,6 +351,13 @@ def test_a_research_run_fans_out_from_think_without_a_worktree(tmp_path, monkeyp
     assert out["ok"], out
     assert rig.engine().projection()["stage"] in ("evaluate", "think")
     assert [b["returns"] for m, p, b in fake.calls if p == "/dispatch"] == ["document"]
+    # its next step says a child is still out, not only "every check passes" (E2E finding)
+    from core import swarm_out
+    rig.drive(until="think")
+    swarm_out._append(json.dumps({"dispatch_id": fake.rows[0]["dispatch_id"], "parent_run": rig.run_id,
+                                  "wp": "Q1"}) + "\n")
+    nxt = _exec(rig, "status")["next"]
+    assert nxt["children"] == {"open": 1, "work_packages": ["Q1"]} and "child status" in nxt["why"]
 
 
 # ── the first review's fixes (impl §4: F, G, H, I, J, M) ────────────────────

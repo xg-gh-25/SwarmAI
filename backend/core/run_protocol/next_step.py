@@ -326,9 +326,11 @@ def next_step(engine, *, previous_stage: str | None = None,
     if not blocking:
         out.update(action="run", command=_cmd(engine, "stage-complete"),
                    why=f"every {stage} check passes")
+        _note_children(engine, out)        # a research run's THINK fans out too
         return out
     out.update(action="fix", command=_cmd(engine, "stage-complete"),
                why=f"{len(blocking)} {stage} check(s) do not pass yet")
+    _note_children(engine, out)
     return out
 
 
