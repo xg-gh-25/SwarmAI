@@ -26,6 +26,8 @@ def leads(monkeypatch):
     table = {RUN: swarm_run.Lead(RUN, "Lib", LEAD, "active", "build")}
     monkeypatch.setattr(swarm_run, "lead", lambda run_id: table.get(run_id))
     monkeypatch.setattr(swarm_run, "_INFLIGHT", {})
+    from core import swarm_run_conductor
+    monkeypatch.setattr(swarm_run_conductor, "_UNREADABLE_SINCE", {})
     return table
 
 
@@ -286,7 +288,7 @@ def test_the_children_of_an_ended_lead_run_are_stopped_and_handled(leads, env, m
     async def stop(did):
         stopped.append(did)
         return {"stopped": True}
-    monkeypatch.setattr(swarm_out, "stop_run", stop)
+    monkeypatch.setattr(swarm_out, "stop_turn", stop)
     data = {"runs": list(rows.values())}
     assert asyncio.run(swarm_run_conductor.end_children(data)) == []          # the run is still going
     leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
@@ -542,7 +544,7 @@ def test_the_conductor_does_not_close_a_child_whose_hive_does_not_answer(leads, 
     async def stop(did):
         stopped.append(did)
         return {"stopped": True}
-    monkeypatch.setattr(swarm_out, "stop_run", stop)
+    monkeypatch.setattr(swarm_out, "stop_turn", stop)
     leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
     assert asyncio.run(swarm_run_conductor.end_children({"runs": list(rows.values())})) == ["so_bbbbbbbbbbbb"]
     assert stopped == ["so_bbbbbbbbbbbb"] and not st.load(SDID).get("handled_at")
@@ -614,18 +616,64 @@ def test_a_child_whose_hive_named_no_session_is_handled_with_nothing_to_stop(lea
 
     async def stop(did):
         stopped.append(did)
-    monkeypatch.setattr(swarm_out, "stop_run", stop)
+    monkeypatch.setattr(swarm_out, "stop_turn", stop)
     leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
     assert asyncio.run(swarm_run_conductor.end_children({"runs": list(rows.values())})) == [SDID]
     assert stopped == [] and st.load(SDID)["handled"]["by"] == "run_end"
 
 
-def test_a_child_whose_lead_run_cannot_be_read_falls_back_to_the_older_rules(leads, monkeypatch):
-    """S: nobody can command it: not hidden as "nobody's", the person sees it."""
+def test_a_child_whose_lead_run_cannot_be_read_is_never_handed_to_the_person(leads, monkeypatch):
+    """Execution is the agents': a child nobody can command is the Conductor's to close,
+    not the person's to clean up (XG 2026-11-03)."""
     from core import swarm_out_record
     monkeypatch.setattr(swarm_out_record, "owner_alive", lambda r: False)
     leads.clear()
-    assert swarm_out_record.needs_person(_child(), []) is None
+    assert swarm_out_record.needs_person(_child(), []) is False
+
+
+def test_the_children_of_a_lead_run_that_stays_unreadable_are_closed(leads, env, monkeypatch):
+    """A lead run whose log is gone or damaged for ORPHAN_AFTER_S: its children are
+    stopped and handled; a read that fails once does not close them."""
+    from core import swarm_run_conductor as cond
+    rows, _ = env
+    rows[SDID] = _schild(state="running")
+    data = {"runs": list(rows.values())}
+    leads.clear()
+    assert cond._children_to_close(data, now=1000.0)[0] == []                 # first seen unreadable
+    assert cond._children_to_close(data, now=1000.0 + cond.ORPHAN_AFTER_S - 1)[0] == []
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "active", "build")
+    assert cond._children_to_close(data, now=1000.0 + cond.ORPHAN_AFTER_S + 1)[0] == []  # read again: forgotten
+    leads.clear()
+    assert cond._children_to_close(data, now=2000.0)[0] == []                 # counted from now, not 1000
+    rows_, _, closed = cond._children_to_close(data, now=2000.0 + cond.ORPHAN_AFTER_S)
+    assert [r["dispatch_id"] for r in rows_] == [SDID] and closed == {RUN: "orphaned"}
+    stopped = []
+
+    async def stop(did):
+        stopped.append(did)
+    monkeypatch.setattr(swarm_out, "stop_turn", stop)
+    monkeypatch.setattr(cond, "ORPHAN_AFTER_S", 0.0)
+    assert asyncio.run(cond.end_children(data)) == [SDID] and stopped == [SDID]
+    assert "can no longer be read" in st.load(SDID)["handled"]["note"]
+
+
+def test_a_child_its_run_closed_is_stopped_again_when_it_runs_again(leads, env, monkeypatch):
+    """An answer sent before the run ended and taken afterwards resumes a turn: the
+    Conductor stops it again, so it settles; nobody is asked to discard it."""
+    from core import swarm_run_conductor as cond
+    rows, _ = env
+    rows[SDID] = _schild(state="stopped")
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
+    stopped = []
+
+    async def stop(did):
+        stopped.append(did)
+    monkeypatch.setattr(swarm_out, "stop_turn", stop)
+    assert asyncio.run(cond.end_children({"runs": [rows[SDID]]})) == [SDID] and stopped == []
+    resumed = _schild(state="running", state_reason="answer_sent")
+    assert asyncio.run(cond.end_children({"runs": [resumed]})) == [] and stopped == [SDID]
+    asyncio.run(cond.end_children({"runs": [_schild(state="stopped")]}))
+    assert stopped == [SDID]                                                  # stopped: left alone
 
 
 def test_the_freeze_lock_of_an_ended_run_stays(leads, ws, monkeypatch):

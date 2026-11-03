@@ -128,7 +128,8 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         return "the run is not in the list of runs now; try again in a moment"
     owner = swarm_run.owner_of(row)
     if not owner and swarm_run.is_child(row):
-        return "the Swarm Run this run belongs to cannot be read: nobody gives commands on it now"
+        return ("the Swarm Run this run belongs to cannot be read: nobody gives commands on it now "
+                "(the Conductor closes it if the run stays unreadable)")
     if not owner:
         # a run from before the dispatching session was recorded: no agent owns it
         return "no agent session is recorded as having dispatched this run: the person gives commands on it"

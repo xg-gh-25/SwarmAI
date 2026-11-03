@@ -1932,8 +1932,15 @@ async def _not_closed(dispatch_id: str) -> None:
 
 async def stop_run(dispatch_id: str) -> dict[str, Any]:
     """Stop the run's current turn on its Hive (the session and the workspace stay)."""
-    row = await _session_row(dispatch_id)
     await _not_closed(dispatch_id)
+    return await stop_turn(dispatch_id)
+
+
+async def stop_turn(dispatch_id: str) -> dict[str, Any]:
+    """``stop_run`` without its refusal of an accepted run: for the Conductor only, which
+    keeps a Swarm Run's child stopped once its run has closed it
+    (core/swarm_run_conductor). No route calls it."""
+    row = await _session_row(dispatch_id)
     inst = await _instance(row["hive_id"])
     async with _client(inst) as client:
         r = await client.post(f"/api/chat/stop/{row['session_id']}")
