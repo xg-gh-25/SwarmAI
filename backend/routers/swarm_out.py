@@ -373,7 +373,8 @@ async def run_rerun(dispatch_id: str, body: RerunBody) -> dict[str, Any]:
     except swarm_out_actor.ActorError as e:
         raise HTTPException(status_code=403, detail=str(e))
     try:
-        out = await _call(swarm_out.rerun(dispatch_id, body.text))
+        # an agent's correction is the host's, never the person's words (swarm-run §5.10)
+        out = await _call(swarm_out.rerun(dispatch_id, body.text, origin="host" if actor.agent else None))
         if not actor.agent:
             _recorded(actor, "rerun", dispatch_id)   # an agent's re-send is its reservation
         return out

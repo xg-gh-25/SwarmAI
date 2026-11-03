@@ -49,6 +49,12 @@ WAKE_TEXT = (MARKER + " Runs you dispatched need you (listed above). Take each t
              "funnel yourself: review the result, land it on this host or re-run / take it over / "
              "discard it, then judge it (`swarm_out accept`) or, only when you cannot, hand the "
              "landed result to the person (`swarm_out ask-person`). Say in a line or two what you did.")
+#: the wake of a lead run whose Swarm Run children changed (design 2026-10-31-swarm-run §5.5)
+RUN_MARKER = "[Swarm Run 自动继续]"
+RUN_WAKE_TEXT = (RUN_MARKER + " Children of your Swarm Run changed (listed above). Read them with "
+                 "`pipeline-v1 child status`: take what meets its acceptance (`child merge`, `child apply`, "
+                 "`child accept`), correct or re-dispatch what does not, answer their waits (`child card`, "
+                 "`child answer`), then carry the run on. Say in a line or two what you did.")
 #: sessions woken in one pass at most (each starts a turn); the rest wait for the next
 MAX_WAKES_PER_PASS = 5
 #: how long a pass waits for a send's ``accepted`` receipt (the turn goes on either way;
@@ -93,14 +99,14 @@ async def _idle(router: Any, session: str) -> bool:
         return False
 
 
-async def _send(router: Any, session: str, client_id: str) -> bool:
+async def _send(router: Any, session: str, client_id: str, text: str = WAKE_TEXT) -> bool:
     """Send the wake; True once the router owns it (``accepted``) within ACCEPT_WAIT_S.
     The turn is read to its end in a task of its own whatever this returns."""
     accepted = asyncio.Event()
 
     async def drain() -> None:
         try:
-            gen = router.run_conversation(agent_id="default", user_message=WAKE_TEXT,
+            gen = router.run_conversation(agent_id="default", user_message=text,
                                           session_id=session, client_id=client_id,
                                           input_origin="system")
             async with contextlib.aclosing(gen) as events:
@@ -128,7 +134,7 @@ async def _send(router: Any, session: str, client_id: str) -> bool:
 
 async def wake_sessions(router: Any = None) -> list[str]:
     """One pass over the runs the last refresh listed; the sessions woken. Never raises."""
-    from core import swarm_out, swarm_out_follow
+    from core import swarm_out, swarm_out_follow, swarm_run
     try:
         if router is None:
             from core import session_registry
@@ -136,6 +142,7 @@ async def wake_sessions(router: Any = None) -> list[str]:
         if router is None:
             return []
         data = swarm_out.snapshot()
+        children = {str(r.get("dispatch_id")) for r in (data or {}).get("runs") or [] if swarm_run.is_child(r)}
         woken: list[str] = []
         # session lookups and file reads: off the event loop
         for session, ids in (await asyncio.to_thread(candidates, data)).items():
@@ -149,7 +156,8 @@ async def wake_sessions(router: Any = None) -> list[str]:
                 continue                  # it saw these already: nothing new to wake it for
             if not await _idle(router, session):
                 continue
-            if await _send(router, session, _client_id(session, unseen)):
+            text = RUN_WAKE_TEXT if children & set(unseen) else WAKE_TEXT
+            if await _send(router, session, _client_id(session, unseen), text):
                 woken.append(session)
         if woken:
             logger.info("swarm_out_wake: woke %d dispatching session(s)", len(woken))

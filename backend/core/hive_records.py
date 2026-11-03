@@ -395,9 +395,11 @@ def turn_projection(rows: list[dict], *, first_turn: bool = False,
                 blocks.append(_cap(b, FIELD_MAX))
         if isinstance(r.get("content"), str) and r.get("role") == "user":
             blocks.append({"type": "text", "text": _cap(r["content"], FIELD_MAX)})
+        kept = {k: True for k in ("steer", "steered") if k in meta}
+        if meta.get("origin") == "host":
+            kept["origin"] = "host"          # sent by the Host's agent, not the person (swarm-run §5.10)
         out.append({"id": r.get("id"), "role": r.get("role"), "created_at": r.get("created_at"),
-                    **({"metadata": {k: True for k in ("steer", "steered") if k in meta}}
-                       if any(k in meta for k in ("steer", "steered")) else {}),
+                    **({"metadata": kept} if kept else {}),
                     "content": blocks})
     head: dict[str, Any] = {"first_turn": first_turn}
     if answers:

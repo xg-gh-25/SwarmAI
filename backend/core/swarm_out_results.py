@@ -56,7 +56,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 13
+SUMMARY_VERSION = 14
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -319,7 +319,11 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
     # message, a new turn or a steer read mid-turn (a re-run with a correction is one;
     # so is anything typed in the Hive tab). With older turns not read, the first row
     # read is not the task, so every one counts.
-    said = sum(1 for r in rows if r.get("role") == "user") - (0 if has_more else 1)
+    users = [r for r in rows if r.get("role") == "user"]
+    # a message the Host's agent sent (a lead run's correction, swarm-run §5.10) is not
+    # the person's: counted on its own, never as what the person said
+    host_said = sum(1 for r in users if (r.get("metadata") or {}).get("origin") == "host")
+    said = len(users) - host_said - (0 if has_more else 1)
     said = max(0, said)
     all_blocks = [b for r in rows if r.get("role") == "assistant" for b in _blocks(r)]
     after_rows = [r for r in rows[last_user + 1:] if r.get("role") == "assistant"]
@@ -552,6 +556,8 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
             "human": {"approved": approved, "denied": denied, "unanswered": unanswered_perm + unanswered_q,
                       "answered_questions": answered_q, "said": said},
             "host_handled": host_handled,
+            # corrections the Host's agent sent (not the person's, swarm-run §5.10)
+            "host_said": host_said,
         },
         "pipeline": pipeline,
         "pipeline_runs": runs_seen[:10],
@@ -1285,6 +1291,7 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None,
                       "agents": _int(steps.get("agents")), "by_tool": {}},
             "human": {k: _int(human.get(k)) for k in ("approved", "denied", "unanswered", "answered_questions", "said")},
             "host_handled": _int(work.get("host_handled")),
+            "host_said": _int(work.get("host_said")),
         },
         "pipeline": pipeline,
         "dropped": _int(res.get("dropped")),

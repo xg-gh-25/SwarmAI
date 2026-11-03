@@ -191,6 +191,26 @@ class TestChatStreamAsync:
         assert [e.get("type") for e in events][:2] == ["session_start", "result"]
 
 
+class TestChatOrigin:
+    async def test_a_hosts_message_is_recorded_as_the_hosts(self, async_client: AsyncClient, monkeypatch):
+        """A message the Host's agent sends into a Hive session (``origin: host``, a
+        Swarm Run lead run's correction, design 2026-10-31-swarm-run §5.10) reaches the
+        router as the host's; any other message stays the person's."""
+        from routers import chat as chat_router
+        seen = []
+
+        class _Router:
+            async def run_conversation(self, **kw):
+                seen.append(kw["input_origin"])
+                yield {"type": "result", "sessionId": "s-stub"}
+
+        monkeypatch.setattr(chat_router, "_get_router", lambda: _Router())
+        for body in ({"origin": "host"}, {}):
+            r = await async_client.post("/api/chat/stream", json={"agent_id": "default", "message": "x", **body})
+            assert r.status_code == 200
+        assert seen == ["host", "person"]
+
+
 class TestChatErrorHandling:
     """Tests for chat error handling."""
 

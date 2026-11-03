@@ -528,7 +528,8 @@ async def chat_stream(request: Request):
                 terminal_context=chat_request.terminal_context.model_dump() if chat_request.terminal_context else None,
                 client_id=chat_request.client_id,
                 project_agent=project_agent_pin,
-                input_origin="person",
+                # a Host agent's correction is not the person's words (swarm-run §5.10)
+                input_origin="host" if chat_request.origin == "host" else "person",
             )
             async for msg in _turn_stream:
                 if captured_session_id is None:

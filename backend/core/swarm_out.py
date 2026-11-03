@@ -1029,7 +1029,8 @@ async def _start_session(client: httpx.AsyncClient, message: str,
                          work_id: Optional[str] = None,
                          project_agent: Optional[dict] = None,
                          session_id: Optional[str] = None,
-                         on_accepted: Optional[Callable[[], None]] = None) -> Optional[str]:
+                         on_accepted: Optional[Callable[[], None]] = None,
+                         origin: Optional[str] = None) -> Optional[str]:
     """POST the message and read SSE only until the Hive names the session, then drop
     the connection: the Hive keeps running the turn (it detaches a gone client). The
     session works on the work order ``work_id`` the Hive prepared (its repositories are
@@ -1044,6 +1045,8 @@ async def _start_session(client: httpx.AsyncClient, message: str,
         body["work_id"] = work_id
     if project_agent:
         body["project_agent"] = project_agent
+    if origin:
+        body["origin"] = origin           # an older Hive ignores it (the field is not required)
     async with client.stream("POST", "/api/chat/stream", json=body,
                              timeout=httpx.Timeout(HTTP_TIMEOUT_S, read=SESSION_ID_WAIT_S)) as r:
         if r.status_code != 200:
@@ -1939,10 +1942,11 @@ async def stop_run(dispatch_id: str) -> dict[str, Any]:
     return {"stopped": True}
 
 
-async def rerun(dispatch_id: str, text: str) -> dict[str, Any]:
+async def rerun(dispatch_id: str, text: str, origin: Optional[str] = None) -> dict[str, Any]:
     """Send the person's correction into the run's own session as a new message: the
     Hive runs a new turn in the same workspace, and the verdict on the last result is
-    void once that turn ends (it is bound to its ``ended_at``)."""
+    void once that turn ends (it is bound to its ``ended_at``). ``origin="host"``: the
+    correction is the dispatching agent's, and the Hive records it so (swarm-run §5.10)."""
     text = (text or "").strip()
     if not text:
         raise SwarmOutError("say what to change")
@@ -1966,7 +1970,8 @@ async def rerun(dispatch_id: str, text: str) -> dict[str, Any]:
             pin = _rerun_pin({**row, "dispatch_id": dispatch_id}, k, text)
     message = text if pin is None else _rerun_how(pin, str(pin.get("brain") or "")) + "\n\n" + text
     async with _client(inst) as client:
-        sid = await _start_session(client, message, project_agent=pin, session_id=row["session_id"])
+        sid = await _start_session(client, message, project_agent=pin, session_id=row["session_id"],
+                                   **({"origin": origin} if origin else {}))
     if sid != row["session_id"]:
         raise SwarmOutError("the Hive did not take the correction into the run's session")
     await asyncio.to_thread(swarm_out_results.turn_started, dispatch_id)

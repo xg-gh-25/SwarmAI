@@ -2283,6 +2283,16 @@ _SEAL_TASKS: set = set()
 _SEAL_LOCKS: dict = {}
 
 
+
+def user_row_metadata(client_id: Optional[str], input_origin: str) -> Optional[dict]:
+    """The metadata of a persisted user row: its ``client_id`` (optimistic dedup), and
+    ``origin: host`` for a message the Host's agent sent into a Hive session (design
+    2026-10-31-swarm-run §5.10), so no reader counts it as the person's."""
+    meta = {"client_id": client_id} if client_id else {}
+    if input_origin == "host":
+        meta["origin"] = "host"
+    return meta or None
+
 class SessionRouter:
     """Routes chat requests to SessionUnits with RAM-based spawn admission.
 
@@ -4442,7 +4452,10 @@ class SessionRouter:
 
         ``input_origin`` (CDF §9 provenance): ``"person"`` only for a message the
         authenticated app user typed (``routers/chat.py``); channel turns derive it
-        from ``channel_context["is_owner"]``; everything else is ``"system"``.
+        from ``channel_context["is_owner"]``; everything else is ``"system"``. On a
+        Hive, ``"host"``: a correction the Host's agent sent (design 2026-10-31-swarm-run
+        §5.10): recorded like ``"system"`` and marked on the message (``metadata.origin``)
+        so it is never counted as the person's.
 
         A turn without a client_id of its own (drain, channel, task, skill
         creator) gets a server one, so its persisted assistant rows and a
@@ -4888,7 +4901,7 @@ class SessionRouter:
                         # pipeline session whose run exists (a resume would be stuck)
                         await record_pin(session_id, {"broken": "its pipeline run could not be created"})
                         raise
-                _msg_metadata = {"client_id": client_id} if client_id else None
+                _msg_metadata = user_row_metadata(client_id, input_origin)
                 persisted_msg_id = str(uuid4())
                 # Strip raw tool-call leaks before persisting — symmetric with the
                 # assistant path (_clean_blocks_for_persist at the assistant put).
@@ -4916,7 +4929,7 @@ class SessionRouter:
                     if channel_context is not None:
                         _origin = "person" if channel_context.get("is_owner") else "channel_peer"
                     else:
-                        _origin = input_origin
+                        _origin = "system" if input_origin == "host" else input_origin
                     await _executors.run_in(
                         "io", functools.partial(
                             record_user_input_parts, session_id, user_message,

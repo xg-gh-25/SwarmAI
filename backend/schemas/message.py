@@ -171,6 +171,9 @@ class ChatRequest(BaseModel):
     # Swarm Out: the work order the Hive prepared for this task (POST /api/hive/work,
     # core/hive_workspace); its repositories replace ``task_repos``. NEW session only.
     work_id: str | None = Field(default=None, max_length=40)
+    # who sent a message into a Hive session: "host" when it is the Host's agent (a
+    # Swarm Run lead run's correction), never the person (design 2026-10-31-swarm-run §5.10)
+    origin: Literal["host"] | None = None
     # Project Agent: {brain, mode?, revision?} — a NEW session works under that Brain's
     # Project Agent (core/project_agent_session); ignored for an existing session.
     project_agent: dict[str, Any] | None = None

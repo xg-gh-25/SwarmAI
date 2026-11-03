@@ -8,6 +8,7 @@ would say); the children are dispatch-log rows with ``parent_run``.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -307,3 +308,79 @@ def test_an_ended_runs_freeze_is_dropped(leads, env, monkeypatch, tmp_path):
     leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "abandoned", "build")
     asyncio.run(swarm_run_conductor.end_children({"runs": list(rows.values())}))
     assert swarm_run.frozen(RUN) is None and not d.exists()
+
+
+# ── the lead run's wake and the host's own messages (§5.5, §5.10, I9, I13) ──
+
+def test_a_lead_run_is_woken_with_the_swarm_run_marker(leads, monkeypatch, tmp_path):
+    from core import session_pending, swarm_out_record, swarm_out_wake as wake
+    from tests.test_hive_run_funnel import _Router
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(swarm_out_record, "owner_alive", lambda r: True)
+    child = {"dispatch_id": DID, "parent_run": RUN, "wp": "W1", "dispatched_from": LEAD, "stage": "awaiting",
+             "state": "idle", "session_id": "hs1", "title": "W1 · parser", "settle": {"why_not": ["verdict"]}}
+    data = {"runs": [child], "asks": [], "answered": []}
+    monkeypatch.setattr(swarm_out, "snapshot", lambda: data)
+
+    async def none(sid):
+        return 0
+    monkeypatch.setattr(session_pending, "count_pending", none)
+    router = _Router()
+    assert asyncio.run(wake.wake_sessions(router)) == [LEAD]
+    assert router.sent[-1]["user_message"].startswith(wake.RUN_MARKER)
+    assert router.sent[-1]["input_origin"] == "system"
+    # an ordinary run's session gets the Swarm Out wake
+    data["runs"] = [{**child, "dispatch_id": "so_dddddddddddd", "parent_run": None, "dispatched_from": "s-abc123"}]
+    asyncio.run(wake.wake_sessions(router))
+    assert router.sent[-1]["user_message"].startswith(wake.MARKER)
+
+
+def test_a_message_the_host_sent_is_never_counted_as_the_persons():
+    from core import hive_records, swarm_out_results
+    rows = [{"id": "u1", "role": "user", "content": "the task"},
+            {"id": "u2", "role": "user", "content": "fix the edge case", "metadata": {"origin": "host"}},
+            {"id": "u3", "role": "user", "content": "a word from the person"}]
+    projected = json.loads(hive_records.turn_projection(rows).decode())
+    kept = {r["id"]: r.get("metadata") for r in projected["rows"]}
+    assert kept["u2"] == {"origin": "host"} and kept["u1"] is None
+    s = swarm_out_results.summarize(rows)
+    assert s["work"]["human"]["said"] == 1 and s["work"]["host_said"] == 1
+
+
+def test_an_agents_correction_goes_to_the_hive_as_the_hosts(monkeypatch):
+    sent = {}
+
+    class _Stream:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def aiter_lines(self):
+            yield 'data: {"type": "session_start", "sessionId": "hs1"}'
+
+    class _Client:
+        def stream(self, method, url, json=None, timeout=None):
+            sent.update(json)
+            return _Stream()
+    asyncio.run(swarm_out._start_session(_Client(), "fix it", session_id="hs1", origin="host"))
+    assert sent["origin"] == "host"
+    sent.clear()
+    asyncio.run(swarm_out._start_session(_Client(), "fix it", session_id="hs1"))
+    assert "origin" not in sent
+    from schemas.message import ChatRequest
+    assert ChatRequest(agent_id="default", message="x", origin="host").origin == "host"
+    assert ChatRequest(agent_id="default", message="x").origin is None
+    with pytest.raises(Exception):
+        ChatRequest(agent_id="default", message="x", origin="person")   # the person is never claimed
+
+
+def test_a_hosts_user_row_is_marked_and_a_persons_is_not():
+    from core.session_router import user_row_metadata
+    assert user_row_metadata("c1", "host") == {"client_id": "c1", "origin": "host"}
+    assert user_row_metadata(None, "host") == {"origin": "host"}
+    assert user_row_metadata("c1", "person") == {"client_id": "c1"}
+    assert user_row_metadata(None, "system") is None

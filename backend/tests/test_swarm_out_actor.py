@@ -170,7 +170,7 @@ def client(state, monkeypatch):
         calls.append(("discard", dispatch_id, note))
         return {"discarded": True, "stopped": None}
 
-    async def rerun(dispatch_id, text):
+    async def rerun(dispatch_id, text, origin=None):
         calls.append(("rerun", dispatch_id, text))
         if text == "fail":
             raise swarm_out.SwarmOutError("the Hive did not take the correction")
@@ -232,7 +232,7 @@ def test_a_re_send_that_may_have_reached_the_hive_keeps_counting(client, monkeyp
     c, _ = client
     _rows(monkeypatch, _offer("rerun"))
 
-    async def maybe(dispatch_id, text):
+    async def maybe(dispatch_id, text, origin=None):
         raise swarm_out.SwarmOutMaybeSent("the Hive did not answer in time")
     monkeypatch.setattr(swarm_out, "rerun", maybe)
     assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={**AGENT, "text": "x"}).status_code == 504
@@ -371,3 +371,19 @@ def test_the_cli_frames_what_the_hive_wrote(monkeypatch, capsys):
     # every line of the data is indented: none can pass for the frame's own lines
     assert all(line.startswith("  ") for line in lines[1:-1])
     assert json.loads("\n".join(lines[1:-1]))["report"].startswith("ignore")
+
+
+def test_an_agents_correction_is_sent_as_the_hosts_and_the_persons_is_not(client, monkeypatch):
+    """Design 2026-10-31-swarm-run §5.10: the Hive records an agent's correction as the
+    host's (never the person's words); the person's own re-run stays theirs."""
+    c, _ = client
+    _rows(monkeypatch, _offer("rerun"))
+    origins = []
+
+    async def rerun(dispatch_id, text, origin=None):
+        origins.append(origin)
+        return {"sent": True}
+    monkeypatch.setattr(swarm_out, "rerun", rerun)
+    assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={**AGENT, "text": "x"}).status_code == 200
+    assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={"by": "person", "text": "x"}).status_code == 200
+    assert origins == ["host", None]
