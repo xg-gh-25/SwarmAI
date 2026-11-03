@@ -1,9 +1,9 @@
 ---
 title: Hive run 的决定 — 一个漏斗：agent 先判，落到 host 上的才可能给人
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-03
 project: SwarmAI
-status: r3.1 design only（无代码）。r2 的路径分类、重写、逐路径标注全部撤掉，按 XG 的漏斗重写；未送审
+status: r3.2 已实现（commit 0959a2a6b，2026-11-02）；本次只对齐文字
 tags: [swarm-out, hive, accountability, traceability, autonomy, zero-touch]
 related:
   - docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md（agent 对自己派的单下命令，命令带理由）
@@ -99,7 +99,9 @@ flowchart TD
 ## 4. 不做
 
 - 不对受保护路径分类、不要求 agent 重写指令文件、不做逐路径的去处标注（r2 的这些都撤掉）。
-- 不给"还没落到 host 的东西"任何进 Needs You 的入口。
+- 不给还没落到 host 的**结果**任何进 Needs You 的入口：派单会话还在的单子，review / land / judge 在结果落到 host 之前都归派单 agent，不进 Needs You
+  （`core/attention_authority.py` `_collect_swarm_out`）。这一条说的是结果，不是 Hive 的**等待**：等待照 `_host_wait_items` 分，有三种照旧进 Needs You：
+  agent `escalate` 的、类别不属于 `HOST_CLASSES` 的、派单会话已不存在的；其余的等待归派单 agent，不按时间交人。
 - 不用模型评判 agent 的决定；不另建存储。
 
 **已知风险：** agent 现在能把 Hive 对受保护路径的改动（包括 `AGENTS.md`、守护代码）落到本机 main。挡住它的是 agent 自己的审查和决策记录，事后人能在卡上看到；
@@ -136,3 +138,5 @@ flowchart TD
   带上 agent 的判断和原因）。代码和非代码一个道理。撤掉 r2 的路径分类、重写、逐路径标注和结单核对；agent 能直接落受保护路径，只保留 `GIT_PROTECTED` 一条底线；
   Needs You 不再收没落到 host 的单子；新增 `ask-person`，只对已落地的结果可用。
 - r3.1（2026-11-02）：XG："run card 上要有这个决策漏斗信息。"加 §3.1 卡上怎么看和 mock：标题下一行漏斗、"决定"页按关分组、给人的卡、列表行的状态词。
+- r3.2（2026-11-03）：对照已实现的代码（commit 0959a2a6b）对齐文字：front matter 的 `status`；§4 第二条写清说的是"结果"不是"等待"，按 `_host_wait_items`
+  写出照旧进 Needs You 的三种等待（`escalate` 的、不属于 `HOST_CLASSES` 的、派单会话已不存在的）。内容和实现一致，没有新决定。
