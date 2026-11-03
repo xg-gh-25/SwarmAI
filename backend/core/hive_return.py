@@ -8,9 +8,9 @@ here, trusting nothing the Hive reported beyond "there is a bundle with this sha
   is the Brain's binding for that URL, and the bundle's key is recomputed from the
   directory this host sent (core/hive_bundle.key);
 - the bundle's bytes have the sha256 the run's outcome named, within the size limit;
-- ``git bundle verify`` passes, it has exactly one ref, and every prerequisite is in
-  this repository's history (an ancestor of its main branch or that branch's
-  upstream);
+- ``git bundle verify`` passes, it has exactly one ref, and every prerequisite is an
+  ancestor of this repository's main branch (the branch itself, not its upstream: a
+  prerequisite only the upstream has is refused until main is brought up to date);
 - it is fetched with fsck, without tags or submodules, into
   ``refs/hive/<dispatch>/<key>`` only: no branch or tag here can move;
 - the base is this machine's own ``merge-base`` of that tip and the main branch.
