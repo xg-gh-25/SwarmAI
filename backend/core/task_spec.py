@@ -14,7 +14,8 @@ docs/design/2026-10-28-project-agent-flow.md §7 ①–④, ⑥).
   §3, the s_swarm-out skill), with ``why`` recorded. The Project Agent does not set it.
   ``returns`` (answer / document / commits) is chosen the same way; only ``commits``
   makes the repositories writable on the Hive (each repo's ``access``, §4.3).
-  Everything else (revision, setup, checks, gates) comes from the definition; nothing in
+  Everything else (revision, setup, checks, gates) comes from the definition (checks only
+  for ``commits``: they verify a change, and the others make none); nothing in
   it is confirmed (design 2026-11-01-project-agent-simple): admission refuses what is
   wrong and the agent fixes it. The repositories
   are every one the Brain binds, at this machine's commit when it has a checkout.
@@ -268,7 +269,10 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         "reserved": sorted(RESERVED_ACTIONS), "gates": view["gates"],
         "skills": usable, "skills_not_here": [s for s in view["skills"] if s not in usable],
         "setup": _hive_setup(view, repos) if placement == "hive" else view["setup"],
-        "validations": view["validations"],
+        # the checks verify the task's change: a task that cannot change a repository
+        # (returns answer / document, read-only worktrees) would only re-check the
+        # unchanged base, already green here, at most of the run's time
+        "validations": view["validations"] if returns == "commits" else [],
         "watches": [{"area": _line(w.get("area")), "why": _line(w.get("why"))}
                     for w in _list_of_dicts(n.get("watches"))],
         "summary": _line(identity.get("summary")),

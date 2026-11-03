@@ -131,6 +131,22 @@ def test_task_text_names_task_checks(ws):  # noqa: F811 — test_task_spec's wor
     assert "task_checks" not in plain and "Before you finish, run:" in plain
 
 
+def test_a_task_that_changes_no_repository_gets_no_checks(ws):  # noqa: F811
+    """Checks verify the task's change: a task returning an answer or a document works on
+    read-only worktrees, so its checks would only re-run the unchanged base. Setup stays
+    (the task may run the repository's tests itself)."""
+    from core import task_spec
+    from tests.test_task_spec import _brain, _build
+    _brain(ws)
+    for returns in ("answer", "document"):
+        spec = _build(ws, "Lib", "x", "y", returns=returns)
+        assert spec["validations"] == [] and spec["setup"], returns
+        text = task_spec.segment(spec, None, work_id=W1)
+        assert "task_checks run" not in text and "Before you finish, run" not in text
+        assert f"scripts.task_checks setup {W1}" in text
+    assert _build(ws, "Lib", "x", "y", returns="commits")["validations"]
+
+
 def test_dispatch_sends_checks_by_id_only_to_a_capable_hive(ws, monkeypatch):  # noqa: F811
     """The Host sends the checks as data (and tells the agent to run them through
     task_checks) only to a Hive whose admission state says task_checks."""
