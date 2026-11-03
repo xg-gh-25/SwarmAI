@@ -58,6 +58,8 @@ class DispatchBody(BaseModel):
     # session that drives the run may send them)
     parent_run: Optional[str] = Field(default=None, max_length=40)
     wp: Optional[str] = Field(default=None, max_length=32)
+    # a new attempt at a work package that went out (core/swarm_run.check_child_dispatch)
+    again: Optional[bool] = None
 
 
 class ActorBody(BaseModel):
@@ -87,6 +89,10 @@ class SpecBody(BaseModel):
     returns: Optional[str] = Field(default=None, max_length=20)
     needs_private: Optional[str] = Field(default=None, max_length=600)
     base: Optional[list[str]] = Field(default=None, max_length=8)
+    # a Swarm Run child's spec: its base may be off this machine's branch (its commits
+    # are its lead run's material, never landed here: core/task_spec.build). Only
+    # admission reads it; /dispatch checks the run and the session
+    parent_run: Optional[str] = Field(default=None, max_length=40)
 
 
 class AnswerBody(BaseModel):
@@ -131,7 +137,8 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
                                                brief=body.brief or "", why=body.why or "",
                                                returns=body.returns, needs_private=body.needs_private or "",
                                                dispatched_from=body.session, base=body.base,
-                                               parent_run=body.parent_run, wp=body.wp))
+                                               parent_run=body.parent_run, wp=body.wp,
+                                               again=bool(body.again)))
 
 
 class ReturnBody(ActorBody):
@@ -150,22 +157,26 @@ def _actor(body: "Optional[ActorBody]"):
 async def _allowed(actor, command: str, dispatch_id: str,
                    ended_at: Optional[str] = None) -> None:
     """Refuse (403) what an agent may not do on this run now (core/swarm_out_actor): the
-    request's own limits, then the run's row as /runs has it (which session dispatched
-    it, what the panel offers on it, for a discard what would be lost)."""
+    request's own limits, then the run's row as /runs has it (which session answers for
+    it, what the panel offers on it, for a discard what would be lost). For the person
+    only what nobody does on a Swarm Run's child (land it here, take or correct it in
+    its lead run's place) is refused. ``row_blocker`` reads the lead run's audit log, so
+    it runs off the event loop."""
+    import asyncio
     from core import swarm_out_actor
     try:
         swarm_out_actor.check(actor, command, dispatch_id=dispatch_id)
     except swarm_out_actor.ActorError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    if not actor.agent:
+    if not actor.agent and command not in swarm_out_actor.CHILD_REFUSED | swarm_out_actor.CHILD_LEAD_ONLY:
         return
     row = await _call(swarm_out.run_row(dispatch_id))
-    why = swarm_out_actor.row_blocker(actor, command, row, ended_at)
-    if why is None and command == "discard":
-        import asyncio
+    why = await asyncio.to_thread(swarm_out_actor.row_blocker, actor, command, row, ended_at)
+    if why is None and actor.agent and command == "discard":
         why = await asyncio.to_thread(swarm_out_actor.discard_blocker, row)
     if why:
-        raise HTTPException(status_code=403, detail=f"an agent may not {command.replace('_', ' ')} this run now: {why}")
+        who = "an agent" if actor.agent else "you"
+        raise HTTPException(status_code=403, detail=f"{who} may not {command.replace('_', ' ')} this run now: {why}")
 
 
 def _recorded(actor, command: str, dispatch_id: str) -> None:
@@ -279,7 +290,7 @@ async def spec(body: SpecBody) -> dict[str, Any]:
         s = await asyncio.to_thread(task_spec.build, get_swarmws(), body.brain, body.task,
                                     body.acceptance, body.mode, body.execution, body.why or "", "hive",
                                     returns=body.returns, needs_private=body.needs_private or "",
-                                    base=body.base)
+                                    base=body.base, parent_run=body.parent_run)
     except task_spec.SpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"spec": {k: v for k, v in s.items() if k != "task"},

@@ -38,6 +38,7 @@ vi.mock('../../services/swarmOut', () => ({
     rerun: vi.fn(async () => undefined), stop: vi.fn(async () => undefined),
     discard: vi.fn(async () => ({ discarded: true, stopped: true })),
     result: vi.fn(() => new Promise(() => {})), answer: vi.fn(),
+    swarmRun: vi.fn(async () => { throw new Error('not read'); }),
     returnPrepare: vi.fn(), returnLand: vi.fn(), refresh: vi.fn(),
   },
 }));
@@ -161,7 +162,7 @@ describe('the command panel', () => {
   it('a Swarm Run child says whose it is, and offers the person no take or correction (I12)', () => {
     panel(run('x1', 'awaiting', { parent_run: 'run_0123456789ab', wp: 'W1',
       actions: [A('open_session'), A('discard')] }));
-    expect(screen.getByTestId('swarm-out-child-of').textContent).toContain('part of Swarm Run run_0123456789ab');
+    expect(screen.getByTestId('swarm-out-child-of').textContent).toContain('part of Swarm Run “run_0123456789ab”');   // its id until its title is read
     expect(shown()).toEqual(['open_session', 'discard']);
     expect(stageLabel('accepted', 'swarm_run')).toBe('Handled by the Swarm Run');
   });

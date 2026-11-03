@@ -25,19 +25,23 @@ import { DISPATCH_POLL_MS, reloadRunsPoll, useRunsPoll } from './DispatchCard';
 const muted = 'text-[var(--color-text-muted)]';
 const LIVE = new Set(['active', 'paused']);
 
+/** The card's head, polled while the lead run is going; once it has ended (delivered,
+ *  abandoned, failed) it no longer changes, so polling stops. */
 function useView(runId: string): { view: SwarmRunView | null; failed: boolean; reload: () => void } {
   const [view, setView] = useState<SwarmRunView | null>(null);
   const [failed, setFailed] = useState(false);
   const [tick, setTick] = useState(0);
+  const ended = view != null && !LIVE.has(view.status);
   useEffect(() => {
     let gone = false;
     const load = () => swarmOutService.swarmRun(runId)
       .then((v) => { if (!gone) { setView(v); setFailed(false); } })
       .catch(() => { if (!gone) setFailed(true); });
     load();
+    if (ended) return () => { gone = true; };
     const timer = window.setInterval(load, DISPATCH_POLL_MS);
     return () => { gone = true; window.clearInterval(timer); };
-  }, [runId, tick]);
+  }, [runId, tick, ended]);
   return { view, failed, reload: () => setTick((n) => n + 1) };
 }
 
@@ -57,7 +61,8 @@ export function SwarmRunCard({ block }: { block: SwarmRunContent }) {
   const asks = (all?.asks ?? []).filter((a) => sessions.has(a.session_id));
   const answered = (all?.answered ?? []).filter((a) => sessions.has(a.session_id));
   const onReload = () => { reloadRunsPoll(); reload(); };
-  const live = view ? LIVE.has(view.status) : true;
+  // the person's stop needs the run: none shown while it cannot be read or has ended
+  const live = view != null && LIVE.has(view.status);
   const project = view?.project ?? block.project ?? '';
   const count = view?.children ?? runs.length;
   return (
@@ -73,12 +78,17 @@ export function SwarmRunCard({ block }: { block: SwarmRunContent }) {
             {view && <> · {t(`swarmOut.review.swarmRun.status.${view.status}`, { defaultValue: view.status })}</>}
           </div>
           {failed && !view && <div className={`text-[12px] ${muted}`}>{t('swarmOut.review.swarmRun.unreadable')}</div>}
+          {stopFailed && (
+            <div className="text-[12px]" style={{ color: TONE_VAR.error }} data-testid="swarm-run-stop-failed">
+              {t('swarmOut.review.swarmRun.stopAllFailed')}
+            </div>
+          )}
         </div>
         {live && runs.some((r) => r.state === 'running' || r.state === 'waiting') && (
           <button type="button" disabled={stopping} data-testid="swarm-run-stop-all"
             className="btn-sm border disabled:opacity-50 shrink-0"
             style={{ color: TONE_VAR.error, borderColor: `color-mix(in srgb, ${TONE_VAR.error} 45%, var(--color-border))` }}
-            title={stopFailed ? t('swarmOut.review.swarmRun.stopAllFailed') : t('swarmOut.review.swarmRun.stopAllDoes')}
+            title={t('swarmOut.review.swarmRun.stopAllDoes')}
             onClick={() => {
               setStopping(true); setStopFailed(false);
               swarmOutService.stopSwarmRun(block.runId)

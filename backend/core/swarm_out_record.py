@@ -466,8 +466,11 @@ def owner_alive(row: dict) -> bool:
 def needs_person(row: dict, asks: list[dict]) -> Optional[bool]:
     """Whether the person has something to do on the run: None for a run no live session
     answers for (the older rules apply); else only an open ask, or a wait on its Hive
-    that is the person's (not the agent's class, or escalated)."""
-    if not owner_alive(row):
+    that is the person's (not the agent's class, or escalated). A Swarm Run's child never
+    falls back to the older rules: its lead run takes it or the Conductor closes it, so
+    only a wait that is the person's is the person's, whether its lead session lives or not."""
+    from core import swarm_run
+    if not swarm_run.is_child(row) and not owner_alive(row):
         return None
     a = (row.get("funnel") or {}).get("ask")
     if isinstance(a, dict) and a.get("state") == "open":

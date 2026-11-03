@@ -229,10 +229,16 @@ def test_a_child_can_start_from_the_runs_worktree_as_it_is_now(run):
     assert out["ok"], out
     sent = [b for m, p, b in fake.calls if p == "/dispatch"][-1]
     ref = sent["base"][0]
-    assert ref.startswith(f"refs/swarm/snapshots/{rig.run_id}/base-")
+    assert ref == f"refs/swarm/snapshots/{rig.run_id}/b1-repo"
     assert "contract.py" in _g(rig.repo, "ls-tree", "-r", "--name-only", ref).split()
     assert _g(rig.repo, "rev-parse", f"{ref}^") == head                        # on the run's base
     assert _g(wt, "rev-parse", "HEAD") == head and _g(wt, "status", "--porcelain") == "?? contract.py"
+    # C: a later batch starts from a new ref; the first child's start keeps its own
+    first = _g(rig.repo, "rev-parse", ref)
+    (wt / "contract.py").write_text("def parse(text): return []\n")
+    later = child_cli.worktree_base(rig.engine())[0]
+    assert later == f"refs/swarm/snapshots/{rig.run_id}/b2-repo"
+    assert _g(rig.repo, "rev-parse", ref) == first and _g(rig.repo, "rev-parse", later) != first
 
 
 def test_next_names_the_open_children_and_report_lists_what_the_lead_run_did(run):
@@ -345,3 +351,135 @@ def test_a_research_run_fans_out_from_think_without_a_worktree(tmp_path, monkeyp
     assert out["ok"], out
     assert rig.engine().projection()["stage"] in ("evaluate", "think")
     assert [b["returns"] for m, p, b in fake.calls if p == "/dispatch"] == ["document"]
+
+
+# ── the first review's fixes (impl §4: F, G, H, I, J, M) ────────────────────
+
+def test_a_package_named_twice_goes_out_once_and_a_sent_one_stays_in_the_plan_as_sent(run):
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    out = _exec(rig, "dispatch", "W1", "W1")
+    assert out["ok"] and len([1 for m, p, b in fake.calls if p == "/dispatch"]) == 1
+    # W1 went out: it may be retitled, not removed or given other work
+    w1, w2 = PLAN["children"]
+    assert "stays in the plan" in _exec(rig, "plan", "--file", "-", stdin=json.dumps({"children": [
+        {**w2, "after": []}]}))["error"]
+    assert "its task stay as sent" in _exec(rig, "plan", "--file", "-", stdin=json.dumps({"children": [
+        {**w1, "task": "something else"}, w2]}))["error"]
+    assert _exec(rig, "plan", "--file", "-", stdin=json.dumps({"children": [{**w1, "title": "the parser"}]}))["ok"]
+    # a correction tells the daemon it is one (core/swarm_run.check_child_dispatch)
+    fake.rows[0]["stage"] = "closed"
+    _exec(rig, "dispatch", "--again", "W1", "--note-file", "-", stdin="fix it")
+    assert [b.get("again") for m, p, b in fake.calls if p == "/dispatch"] == [None, True]
+    assert all(b.get("parent_run") == rig.run_id for m, p, b in fake.calls if p == "/spec")
+
+
+def test_every_child_command_fails_with_an_error(run, monkeypatch):
+    """M: a daemon refusal (``detail``) and a CLI refusal (``error``) read the same."""
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    _exec(rig, "dispatch", "W1")
+    did = fake.rows[0]["dispatch_id"]
+    real = fake.__call__
+
+    def refuse(method, path, body=None, timeout=120):
+        if path.endswith("/stop"):
+            return {"ok": False, "status": 403, "detail": "an agent may not stop this run now: x"}
+        return real(method, path, body, timeout)
+    monkeypatch.setattr(child_cli, "_http", refuse)
+    out = _exec(rig, "stop", did, "--why", "w")
+    assert out["ok"] is False and out["error"] == "an agent may not stop this run now: x"
+
+
+def _deliverable_rig(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, monkeypatch, profile="direct",
+              extra={".aidlc/deliverables/run_old/REPORT.md": "the old report\n",
+                     ".aidlc/deliverables/run_old/NOTES.md": "notes\n"})
+    rig.create()
+    fake = FakeDaemon()
+    monkeypatch.setattr(child_cli, "_http", fake)
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    _exec(rig, "dispatch", "W1", "W2")
+    return rig, fake
+
+
+def test_merge_keeps_the_deliverables_as_the_chain_has_them(tmp_path, monkeypatch):
+    """G: a child that changes or deletes a deliverable the run's base has brings neither in."""
+    rig, fake = _deliverable_rig(tmp_path, monkeypatch)
+    d1 = fake.rows[0]["dispatch_id"]
+    base = _g(rig.repo, "rev-parse", "main")
+    wt = rig.repo.parent / "child-x"
+    _g(rig.repo, "worktree", "add", "-q", "--detach", str(wt), base)
+    (wt / ".aidlc/deliverables/run_old/REPORT.md").write_text("rewritten by the child\n")
+    (wt / ".aidlc/deliverables/run_old/NOTES.md").unlink()
+    (wt / "a.py").write_text("x = 1\n")
+    _g(wt, "add", "-A")
+    _g(wt, "commit", "-qm", "child")
+    tip = _g(wt, "rev-parse", "HEAD")
+    _g(rig.repo, "update-ref", f"refs/hive/{d1}/k1", tip)
+    fake.prepared[d1] = {"base": base, "tip": tip, "repo": str(rig.repo), "key": "k1",
+                         "files": [{"path": "a.py"}], "protected_files": []}
+    out = _exec(rig, "merge", d1)
+    assert out["ok"], out
+    chain = out["merged"][0]["chain"]
+    assert _g(rig.repo, "show", f"{chain}:.aidlc/deliverables/run_old/REPORT.md") == "the old report"
+    assert _g(rig.repo, "show", f"{chain}:.aidlc/deliverables/run_old/NOTES.md") == "notes"
+    assert _g(rig.repo, "show", f"{chain}:a.py") == "x = 1"
+
+
+def test_one_childs_git_failure_is_its_own_and_the_rest_merge(run, monkeypatch):
+    """H: a git error on one child is reported for it; the next is still put on the chain."""
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    _exec(rig, "dispatch", "W1", "W2")
+    d1, d2 = fake.rows[0]["dispatch_id"], fake.rows[1]["dispatch_id"]
+    _prepared(rig, fake, d1, {"a.py": "a\n"})
+    _prepared(rig, fake, d2, {"b.py": "b\n"})
+    real = child_merge._merge_tree
+    calls = []
+
+    def flaky(wt, base, ours, theirs):
+        calls.append(theirs)
+        if len(calls) == 1:
+            raise child_merge.MergeError("git merge-tree failed: disk")
+        return real(wt, base, ours, theirs)
+    monkeypatch.setattr(child_merge, "_merge_tree", flaky)
+    out = _exec(rig, "merge", d1, d2)
+    assert [m["ok"] for m in out["merged"]] == [False, True] and "disk" in out["merged"][0]["detail"]
+    assert "b.py" in _g(rig.repo, "ls-tree", "-r", "--name-only", out["merged"][1]["chain"]).split()
+
+
+def test_apply_refuses_when_the_worktree_changes_while_the_chain_is_merged(run, monkeypatch):
+    """I: an edit made while the chain was being merged is never overwritten."""
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    _exec(rig, "dispatch", "W1")
+    d1 = fake.rows[0]["dispatch_id"]
+    _prepared(rig, fake, d1, {"a.py": "a\n"})
+    assert _exec(rig, "merge", d1)["ok"]
+    wt = Path(next(iter(rig.engine().effective_repos().values())))
+    real = child_merge._worktree_tree
+    n = []
+
+    def editing(w, run_id):
+        n.append(1)
+        if len(n) == 2:
+            (wt / "late.txt").write_text("written while merging\n")
+        return real(w, run_id)
+    monkeypatch.setattr(child_merge, "_worktree_tree", editing)
+    out = _exec(rig, "apply")
+    assert not out["ok"] and "changed while" in out["applied"][0]["detail"]
+    assert not (wt / "a.py").exists() and (wt / "late.txt").read_text() == "written while merging\n"
+
+
+def test_report_lists_a_child_whose_event_was_never_written(run):
+    """J: REPORT reads Swarm Out's dispatch log; the run's log only adds again_of."""
+    from core import swarm_out
+    rig, _ = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    swarm_out._append(json.dumps({"dispatch_id": "so_000000000077", "parent_run": rig.run_id, "wp": "W2",
+                                  "hive": "h2"}) + "\n")
+    value = rig.engine().build_audit(through="DELIVER", persist=False)
+    kids = value["details"]["children"]
+    assert [(c["dispatch_id"], c["wp"], c["hive"], c["outcome"]) for c in kids] == \
+        [("so_000000000077", "W2", "h2", "open")]

@@ -97,15 +97,73 @@ def test_only_the_lead_runs_owner_dispatches_its_children_and_at_most_three_time
         swarm_run.check_child_dispatch("run_ffffffffffff", "W1", LEAD, rows)
     # two logged dispatches of W1 and one in flight: a fourth is refused until one ends
     rows = [{"parent_run": RUN, "wp": "W1"}, {"parent_run": RUN, "wp": "W1"}, {"parent_run": RUN, "wp": "W2"}]
-    swarm_run.check_child_dispatch(RUN, "W1", LEAD, rows)
-    with pytest.raises(swarm_run.ChildRefused, match="dispatched 3 times"):
-        swarm_run.check_child_dispatch(RUN, "W1", LEAD, rows)
+    swarm_run.check_child_dispatch(RUN, "W1", LEAD, rows, again=True)
+    with pytest.raises(swarm_run.ChildRefused, match="being dispatched now"):
+        swarm_run.check_child_dispatch(RUN, "W1", LEAD, rows, again=True)
     swarm_run.release(RUN, "W1")
-    swarm_run.check_child_dispatch(RUN, "W1", LEAD, rows)          # the in-flight one ended unsent
-    swarm_run.check_child_dispatch(RUN, "W2", LEAD, rows)          # another package counts alone
+    rows.append({"parent_run": RUN, "wp": "W1"})                    # it went out
+    with pytest.raises(swarm_run.ChildRefused, match="dispatched 3 times"):
+        swarm_run.check_child_dispatch(RUN, "W1", LEAD, rows, again=True)
+    swarm_run.check_child_dispatch(RUN, "W3", LEAD, rows)          # another package counts alone
     leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
     with pytest.raises(swarm_run.ChildRefused, match="has ended"):
-        swarm_run.check_child_dispatch(RUN, "W3", LEAD, rows)
+        swarm_run.check_child_dispatch(RUN, "W4", LEAD, rows)
+
+
+def test_a_package_goes_out_once_unless_dispatched_again_and_the_run_has_a_total(leads, monkeypatch):
+    """F: a first dispatch of a package that went out, or is going out, is refused (two
+    concurrent calls, or one call naming it twice, send it once); --again needs one that
+    went out; the run's dispatches in all are capped, renamed packages included."""
+    with pytest.raises(swarm_run.ChildRefused, match="went out already"):
+        swarm_run.check_child_dispatch(RUN, "W1", LEAD, [{"parent_run": RUN, "wp": "W1"}])
+    swarm_run.check_child_dispatch(RUN, "W1", LEAD, [])
+    with pytest.raises(swarm_run.ChildRefused, match="went out already"):
+        swarm_run.check_child_dispatch(RUN, "W1", LEAD, [])          # the first is still in flight
+    with pytest.raises(swarm_run.ChildRefused, match="never went out"):
+        swarm_run.check_child_dispatch(RUN, "W2", LEAD, [], again=True)
+    monkeypatch.setattr(swarm_run, "MAX_RUN_DISPATCHES", 3)
+    log = [{"parent_run": RUN, "wp": f"X{i}"} for i in range(2)] + [{"parent_run": "run_other", "wp": "Y"}]
+    with pytest.raises(swarm_run.ChildRefused, match="has dispatched 3 children"):
+        swarm_run.check_child_dispatch(RUN, "X9", LEAD, log)        # 2 logged + W1 in flight
+
+
+def test_the_dispatch_log_is_counted_under_the_dispatch_lock(leads):
+    """D: the log is read while the count's lock is held, so two dispatches of a package
+    cannot both count it before either row is written."""
+    held = []
+
+    def rows():
+        held.append(swarm_run._DISPATCH_LOCK.locked())
+        return []
+    swarm_run.check_child_dispatch(RUN, "W1", LEAD, rows)
+    assert held == [True]
+
+
+def test_packaging_the_freeze_does_not_hold_the_lead_runs_lock(leads, ws, monkeypatch):
+    """D: lead() (every permission check, the wake) does not wait while a Brain is packaged."""
+    import threading
+    from core import brain_sync_host
+    started, go = threading.Event(), threading.Event()
+
+    def slow(*a):
+        started.set()
+        go.wait(5)
+        return b"pkg", "d" * 64, 1
+    from core import swarm_out_model
+    monkeypatch.setattr(brain_sync_host, "_package", slow)
+    monkeypatch.setattr(swarm_out_model, "host_model", lambda: "m")
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: ws / "state" / "swarm-out")
+    t = threading.Thread(target=swarm_run.freeze, args=(ws, RUN, "Lib", "rev"))
+    t.start()
+    try:
+        assert started.wait(5)
+        got = swarm_run._LOCK.acquire(timeout=1)
+        assert got
+        swarm_run._LOCK.release()
+    finally:
+        go.set()
+        t.join(5)
+    assert swarm_run.frozen(RUN)["digest"] == "d" * 64
 
 
 def test_a_child_dispatch_is_recorded_with_its_lead_run_and_package(leads, ws, monkeypatch):  # noqa: F811
@@ -333,6 +391,12 @@ def test_a_lead_run_is_woken_with_the_swarm_run_marker(leads, monkeypatch, tmp_p
     data["runs"] = [{**child, "dispatch_id": "so_dddddddddddd", "parent_run": None, "dispatched_from": "s-abc123"}]
     asyncio.run(wake.wake_sessions(router))
     assert router.sent[-1]["user_message"].startswith(wake.MARKER)
+    # M: both at once, a child and a run of its own: one wake that says both
+    data["runs"] = [{**child, "dispatch_id": "so_eeeeeeeeeeee"},
+                    {**child, "dispatch_id": "so_ffffffffffff", "parent_run": None}]
+    asyncio.run(wake.wake_sessions(router))
+    text = router.sent[-1]["user_message"]
+    assert text.startswith(wake.RUN_MARKER) and "Runs you dispatched yourself" in text
 
 
 def test_a_message_the_host_sent_is_never_counted_as_the_persons():
@@ -384,3 +448,112 @@ def test_a_hosts_user_row_is_marked_and_a_persons_is_not():
     assert user_row_metadata(None, "host") == {"origin": "host"}
     assert user_row_metadata("c1", "person") == {"client_id": "c1"}
     assert user_row_metadata(None, "system") is None
+
+
+# ── the first review's fixes: the person's path, the spec, a lead run that ended ──
+
+def _client(monkeypatch, row):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import swarm_out as route
+
+    async def run_row(did):
+        return row if did == row["dispatch_id"] else None
+    monkeypatch.setattr(swarm_out, "run_row", run_row)
+    monkeypatch.setattr(route, "_require_desktop", lambda: None)
+    app = FastAPI()
+    app.include_router(route.router, prefix="/api/swarm-out")
+    return TestClient(app)
+
+
+def test_the_person_cannot_land_take_or_correct_a_child_through_the_routes(leads, monkeypatch):
+    """A: the routes apply the child refusals to the person too (not only to agents)."""
+    c = _client(monkeypatch, _child())
+    for path, body in (("return/land", {"url": "https://github.com/acme/r.git", "key": "k1", "tip": "a" * 40}),
+                       ("manual-landed", {}), ("verdict", {"value": "pass", "ended_at": "2026-11-03T00:00:00Z"}),
+                       ("rerun", {"text": "again"})):
+        r = c.post(f"/api/swarm-out/runs/{DID}/{path}", json={"by": "person", **body})
+        assert r.status_code == 403 and "child of Swarm Run" in r.json()["detail"], (path, r.text)
+
+
+def test_spec_hands_a_childs_run_to_admission(monkeypatch):
+    """B: /spec takes parent_run and gives it to task_spec.build (a child's base may be off
+    this machine's branch); /dispatch then checks the run and the session."""
+    from core import task_spec
+    seen = {}
+
+    def build(*a, **kw):
+        seen.update(kw)
+        raise task_spec.SpecError("stop here")
+    monkeypatch.setattr(task_spec, "build", build)
+    c = _client(monkeypatch, _child())
+    r = c.post("/api/swarm-out/spec", json={"brain": "Lib", "task": "t", "parent_run": RUN, "base": ["main"]})
+    assert r.status_code == 400 and seen["parent_run"] == RUN and seen["base"] == ["main"]
+    with pytest.raises(task_spec.SpecError, match="at most 300"):
+        task_spec._bases(["repo=" + "x" * 400])
+
+
+def test_after_its_run_ended_the_lead_session_no_longer_takes_corrects_or_takes_back_a_child(leads):
+    """E: an ended run's children are closed by the Conductor, not taken into a run that
+    has its delivery; stopping or discarding one stays possible."""
+    lead = act.actor("agent", LEAD, "w")
+    row = _child(lead_actions=[{"key": "accept", "variant": "child"}, {"key": "rerun"},
+                               {"key": "stop"}, {"key": "discard"}])
+    assert act.row_blocker(lead, "rerun", row) is None
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "abandoned", "build")
+    for cmd in ("accept", "rerun", "return_prepare"):
+        assert "has ended" in act.row_blocker(lead, cmd, row, "2026-11-03T00:00:00Z"), cmd
+    assert act.row_blocker(lead, "stop", row) is None
+
+
+def test_the_wake_leaves_out_an_ended_runs_children_and_says_both_when_both_changed(leads, monkeypatch):
+    from core import swarm_out_record, swarm_out_wake as wake
+    monkeypatch.setattr(swarm_out_record, "owner_alive", lambda r: True)
+    monkeypatch.setattr(swarm_out_record, "actionable", lambda r, asks: True)
+    kid, mine = _child(), {"dispatch_id": "so_dddddddddddd", "dispatched_from": LEAD, "stage": "awaiting"}
+    assert wake.candidates({"runs": [kid, mine]}) == {LEAD: [DID, "so_dddddddddddd"]}
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
+    assert wake.candidates({"runs": [kid, mine]}) == {LEAD: ["so_dddddddddddd"]}
+    assert wake.MIXED_WAKE_TEXT.startswith(wake.RUN_MARKER) and "swarm_out accept" in wake.MIXED_WAKE_TEXT
+
+
+def test_a_child_closed_by_its_runs_end_settles_though_a_wait_stays_open(leads, env):
+    """E: like a discard, a wait left open on its Hive does not keep it from settling;
+    one its lead run took still settles only once stopped."""
+    rows, _ = env
+    rows[SDID] = _schild(state="waiting")
+    st.set_handled(SDID, "its run ended", None, by="run_end")
+    d = st.derive(_schild(state="waiting"), K(True))
+    assert d["why_not"] == [] and d["settles"] is True
+    st._update(SDID, lambda rec: rec["handled"].update(by="lead"))
+    assert st.derive(_schild(state="waiting"), K(True))["settles"] is False
+
+
+def test_the_conductor_does_not_close_a_child_whose_hive_does_not_answer(leads, env, monkeypatch):
+    """E: state unknown (a turn may still be going) waits for a refresh that knows it;
+    a waiting child is stopped, then handled."""
+    from core import swarm_run_conductor
+    rows, _ = env
+    rows[SDID] = _schild(state="unknown")
+    rows["so_bbbbbbbbbbbb"] = _schild(dispatch_id="so_bbbbbbbbbbbb", state="waiting")
+    stopped = []
+
+    async def stop(did):
+        stopped.append(did)
+        return {"stopped": True}
+    monkeypatch.setattr(swarm_out, "stop_run", stop)
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
+    assert asyncio.run(swarm_run_conductor.end_children({"runs": list(rows.values())})) == ["so_bbbbbbbbbbbb"]
+    assert stopped == ["so_bbbbbbbbbbbb"] and not st.load(SDID).get("handled_at")
+
+
+def test_a_child_is_the_persons_only_for_a_wait_of_theirs_whether_its_lead_lives_or_not(leads, monkeypatch):
+    """K: a child never falls back to the older rules (None: "the person's") when its
+    lead session is gone."""
+    from core import approval_class, swarm_out_record
+    monkeypatch.setattr(swarm_out_record, "owner_alive", lambda r: False)
+    row = _child(session_id="hs1")
+    assert swarm_out_record.needs_person(row, []) is False
+    assert swarm_out_record.needs_person({"dispatch_id": "so_dddddddddddd", "dispatched_from": "s-x"}, []) is None
+    person_class = next(c for c in ("person", "human", "secret") if c not in approval_class.HOST_CLASSES)
+    assert swarm_out_record.needs_person(row, [{"session_id": "hs1", "approval_class": person_class}]) is True

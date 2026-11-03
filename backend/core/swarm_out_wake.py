@@ -55,6 +55,9 @@ RUN_WAKE_TEXT = (RUN_MARKER + " Children of your Swarm Run changed (listed above
                  "`pipeline-v1 child status`: take what meets its acceptance (`child merge`, `child apply`, "
                  "`child accept`), correct or re-dispatch what does not, answer their waits (`child card`, "
                  "`child answer`), then carry the run on. Say in a line or two what you did.")
+#: both at once: the run's children and runs the session dispatched itself
+MIXED_WAKE_TEXT = (RUN_WAKE_TEXT + " Runs you dispatched yourself need you too: "
+                   + WAKE_TEXT[len(MARKER):].strip())
 #: sessions woken in one pass at most (each starts a turn); the rest wait for the next
 MAX_WAKES_PER_PASS = 5
 #: how long a pass waits for a send's ``accepted`` receipt (the turn goes on either way;
@@ -82,6 +85,10 @@ def candidates(data: Optional[dict[str, Any]]) -> dict[str, list[str]]:
         owner = swarm_run.owner_of(r)
         if not owner:
             continue
+        if swarm_run.is_child(r):
+            found = swarm_run.lead(r.get("parent_run"))
+            if found is None or found.ended:
+                continue           # an ended run's children are closed by the Conductor
         if swarm_out_record.actionable(r, asks) and swarm_out_record.owner_alive(r):
             out.setdefault(owner, []).append(str(r.get("dispatch_id")))
     return out
@@ -156,7 +163,8 @@ async def wake_sessions(router: Any = None) -> list[str]:
                 continue                  # it saw these already: nothing new to wake it for
             if not await _idle(router, session):
                 continue
-            text = RUN_WAKE_TEXT if children & set(unseen) else WAKE_TEXT
+            kids = children & set(unseen)
+            text = (WAKE_TEXT if not kids else RUN_WAKE_TEXT if kids == set(unseen) else MIXED_WAKE_TEXT)
             if await _send(router, session, _client_id(session, unseen), text):
                 woken.append(session)
         if woken:

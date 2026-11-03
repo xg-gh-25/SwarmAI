@@ -2061,8 +2061,8 @@
       },
       "swarmRun": {
         "title": "Swarm Run · {{title}}",
-        "meta_one": "{{project}} · lead run {{profile}} · {{count}} 个子任务",
-        "meta_other": "{{project}} · lead run {{profile}} · {{count}} 个子任务",
+        "meta_one": "{{project}} · lead run {{profile}} · {{count}} 个子单",
+        "meta_other": "{{project}} · lead run {{profile}} · {{count}} 个子单",
         "cost": "Hive 上花费 ${{cost}}",
         "status": {
           "active": "进行中",
@@ -2078,7 +2078,7 @@
         "waitsFor": "等 {{wps}}",
         "toDispatch": "待派",
         "unreadable": "现在读不到 lead run。",
-        "childOf": "属于 Swarm Run {{run}}",
+        "childOf": "属于 Swarm Run「{{run}}」",
         "takenByLead": "由 lead run 验收或修正；你停止或丢弃它，lead run 会被叫醒处理。"
       },
       "handled": "由 Swarm Run 处理"

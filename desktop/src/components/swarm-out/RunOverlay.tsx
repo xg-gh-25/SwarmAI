@@ -563,7 +563,7 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
       {r.parent_run && (
         // a Swarm Run's child: its lead run takes or corrects it (design 2026-10-31-swarm-run §5.9)
         <div className={`text-[12px] ${muted}`} data-testid="swarm-out-child-of">
-          <div className="font-medium text-[var(--color-text)]">{t('swarmOut.review.swarmRun.childOf', { run: r.parent_run })}</div>
+          <div className="font-medium text-[var(--color-text)]"><ParentRun runId={r.parent_run} /></div>
           <div>{t('swarmOut.review.swarmRun.takenByLead')}</div>
         </div>
       )}
@@ -635,6 +635,19 @@ export function ConfirmSheet({ title, consequence, children, confirmLabel, onCon
       </div>
     </div>
   );
+}
+
+/** "part of Swarm Run “<its title>”": the lead run's title once read, its id until then
+ *  (or when it cannot be read). */
+function ParentRun({ runId }: { runId: string }) {
+  const { t } = useTranslation();
+  const [title, setTitle] = useState<string | null>(null);
+  useEffect(() => {
+    let gone = false;
+    swarmOutService.swarmRun(runId).then((v) => { if (!gone && v?.title) setTitle(v.title); }).catch(() => {});
+    return () => { gone = true; };
+  }, [runId]);
+  return <span data-testid="swarm-out-child-of-run">{t('swarmOut.review.swarmRun.childOf', { run: title ?? runId })}</span>;
 }
 
 export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting', id, onSelect, onSettled, onClose, onFileOpened, onReload, now }: {

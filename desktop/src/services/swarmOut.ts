@@ -65,6 +65,9 @@ export interface SwarmOutRun {
    *  person's ``actions`` never hold accept or rerun. */
   parent_run?: string | null;
   wp?: string | null;
+  /** a child: its lead run's commands on it (accept is variant ``child``); the backend
+   *  checks a lead run's command against these */
+  lead_actions?: SwarmOutAction[];
 }
 
 /** The head of a Swarm Run's card (backend core/swarm_run.view). */
@@ -256,6 +259,8 @@ export interface SwarmOutResult {
     human: { approved: number; denied: number; unanswered: number; answered_questions: number; said?: number };
     /** waits the dispatching agent answered itself: its own decisions, not the person stepping in */
     host_handled?: number;
+    /** messages the Host's agent sent the session (a lead run's corrections): never the person's */
+    host_said?: number;
   };
   pipeline: { run_id: string | null; profile: string | null; status: string | null; landing: string | null;
     landed_sha: string | null; audit: SwarmOutAuditRow[] } | null;

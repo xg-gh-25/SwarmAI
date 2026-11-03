@@ -86,6 +86,47 @@ describe('SwarmRunCard', () => {
     await waitFor(() => expect(svc.stopSwarmRun).toHaveBeenCalledWith(RUN));
   });
 
+  it('says in a line when Stop all left a child running, and lists the pending after the done', async () => {
+    svc.stopSwarmRun.mockResolvedValueOnce({ stopped: [], not_stopped: ['so_000000000001'], lead_turn_stopped: true } as never);
+    render(<SwarmRunCard block={{ type: 'swarm_run', runId: RUN, project: 'SwarmAI' }} />);
+    fireEvent.click(await screen.findByTestId('swarm-run-stop-all'));
+    expect((await screen.findByTestId('swarm-run-stop-failed')).textContent).toContain('Not everything stopped');
+    const done = screen.getByTestId('swarm-out-section-done');
+    const pending = screen.getByTestId('swarm-out-section-pending');
+    expect(done.compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('offers no Stop all while the lead run cannot be read', async () => {
+    svc.swarmRun.mockRejectedValue(new Error('down'));
+    render(<SwarmRunCard block={{ type: 'swarm_run', runId: RUN, project: 'SwarmAI' }} />);
+    await screen.findByText('The lead run cannot be read now.');
+    await waitFor(() => expect(screen.getByText('W1 · part 1')).toBeTruthy());
+    expect(screen.queryByTestId('swarm-run-stop-all')).toBeNull();
+  });
+
+  it('stops reading the head once the lead run has ended', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      svc.swarmRun.mockResolvedValue({ ...VIEW, status: 'completed' });
+      render(<SwarmRunCard block={{ type: 'swarm_run', runId: RUN, project: 'SwarmAI' }} />);
+      await screen.findByText('Swarm Run · Add the export command');
+      await waitFor(() => expect(svc.swarmRun).toHaveBeenCalled());
+      const n = svc.swarmRun.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(svc.swarmRun.mock.calls.length).toBe(n);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('names the lead run by its title in a child’s big card', async () => {
+    render(<SwarmRunCard block={{ type: 'swarm_run', runId: RUN, project: 'SwarmAI' }} />);
+    const row = (await screen.findAllByTestId('swarm-out-row')).find((r) => r.getAttribute('data-id') === 'so_000000000002');
+    fireEvent.click(row!);
+    await waitFor(() => expect(screen.getByTestId('swarm-out-child-of-run').textContent)
+      .toBe('part of Swarm Run “Add the export command”'));
+  });
+
   it('shows no Stop all once nothing runs', async () => {
     svc.runs.mockResolvedValue({ runs: [child('so_000000000002', { state: 'stopped', stage: 'accepted', why: 'swarm_run' })], asks: [], answered: [] } as never);
     render(<SwarmRunCard block={{ type: 'swarm_run', runId: RUN, project: 'SwarmAI' }} />);

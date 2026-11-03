@@ -11,7 +11,9 @@ worktree's HEAD (the run's base). Each child is a three-way ``merge-tree`` of th
 chain's tip and the child's tip over the child's own base; a conflict is reported and
 leaves the chain as it was. A child whose commits change a path that makes git run code
 here on its own (``hive_return.GIT_PROTECTED``) is refused, the rule an agent's landing
-follows; the paths a child pipeline run writes under ``.aidlc/deliverables/`` are left out.
+follows; ``.aidlc/deliverables/`` stays as the chain has it (a child pipeline run's own
+records, added, changed or deleted there, are never the lead run's). One child's or
+repository's failure is reported as that item's; the others go on.
 
 ``apply(engine)``: the chain's tip is laid into the run worktree (``read-tree --reset
 -u``, then the index back to HEAD: HEAD stays the run's base and the change stays
@@ -80,19 +82,29 @@ def _merge_tree(wt: Path, base: str, ours: str, theirs: str) -> "tuple[str | Non
     raise MergeError(f"git merge-tree failed: {p.stderr.strip()[:200]}")
 
 
+def _subtree(wt: Path, commit_or_tree: str, path: str) -> "str | None":
+    p = rw.git(wt, "rev-parse", "--verify", "--quiet", f"{commit_or_tree}:{path}")
+    out = (p.stdout or "").strip() if isinstance(p.stdout, str) else (p.stdout or b"").decode().strip()
+    return out if p.returncode == 0 and out else None
+
+
 def _without_deliverables(wt: Path, tree: str, keep_from: str) -> str:
-    """*tree* with every path under ``.aidlc/deliverables/`` as it is in *keep_from*."""
-    paths = [p for p in rw._out(wt, "ls-tree", "-r", "--name-only", "-z", tree).split("\0")
-             if p.startswith(_DELIVERABLES)]
-    kept = {p for p in rw._out(wt, "ls-tree", "-r", "--name-only", "-z", keep_from).split("\0")
-            if p.startswith(_DELIVERABLES)}
-    drop = [p for p in paths if p not in kept]
-    if not drop:
+    """*tree* with ``.aidlc/deliverables/`` exactly as it is in *keep_from*: what a child
+    added there is left out, and what it changed or deleted there is put back (a child
+    pipeline run's own records are never the lead run's)."""
+    where = _DELIVERABLES.rstrip("/")
+    if _subtree(wt, tree, where) == _subtree(wt, keep_from, where):
         return tree
     tmp, env = rw._temp_index(wt)
     try:
         rw._out(wt, "read-tree", tree, env=env)
-        rw._out(wt, "rm", "-q", "--cached", "--", *drop, env={**env, "GIT_LITERAL_PATHSPECS": "1"})
+        # --force: only the private index is changed (its entries differ from HEAD and
+        # the worktree by construction), never a file
+        rw._out(wt, "rm", "-r", "-q", "--force", "--cached", "--ignore-unmatch", "--", where,
+                env={**env, "GIT_LITERAL_PATHSPECS": "1"})
+        kept = rw._out(wt, "ls-tree", "-r", "-z", "--full-tree", keep_from, "--", where)
+        if kept:
+            rw._out(wt, "update-index", "-z", "--index-info", env=env, input_text=kept)
         return rw._out(wt, "write-tree", env=env).strip()
     finally:
         if os.path.exists(tmp):
@@ -129,53 +141,64 @@ def _chain_start(wt: Path, run_id: str, repo: str) -> "tuple[str, str]":
 
 
 def merge(engine, dispatch_ids: list[str]) -> dict[str, Any]:
-    from core import hive_return
     from core.run_protocol import child_cli
-    from core.run_protocol.oplock import operation
-    from config import get_app_data_dir
     out: list[dict[str, Any]] = []
     for did in dispatch_ids:
-        row = child_cli._own(engine.run_id, did)
+        try:
+            row = child_cli._own(engine.run_id, did)
+        except child_cli.ChildError as exc:
+            out.append({"dispatch_id": did, "ok": False, "detail": str(exc)})
+            continue
         repos = [r for r in row.get("repos") or [] if isinstance(r, dict) and r.get("access") == "write"]
         if not repos:
             out.append({"dispatch_id": did, "ok": False, "detail": "this child brings no commits back"})
             continue
         for r in repos:
-            got = child_cli._http("POST", f"/runs/{did}/return/prepare",
-                                  {"by": "agent", "session": child_cli._session(), "url": r.get("url"),
-                                   "why": f"take {row.get('wp')}'s commits into Swarm Run {engine.run_id}"})
-            if got.get("ok") is False:
-                out.append({"dispatch_id": did, "repo": r.get("name"), "ok": False, "detail": got.get("detail")})
-                continue
-            git_exec = [p for p in got.get("protected_files") or []
-                        if hive_return._is_protected(p, list(hive_return.GIT_PROTECTED))]
-            if git_exec:
-                out.append({"dispatch_id": did, "repo": r.get("name"), "ok": False, "refused": True,
-                            "detail": "these commits change files that make this machine run code on its "
-                                      "own (git hooks, filters, submodules): " + ", ".join(git_exec[:10])
-                                      + "; re-run the child asking it to leave them out"})
-                continue
-            name, wt = _repo_of(engine, got)
-            if wt is None:
+            try:
+                out.append(_merge_one(engine, did, row, r))
+            except Exception as exc:  # noqa: BLE001 — this child's, named; the chain keeps what it took
                 out.append({"dispatch_id": did, "repo": r.get("name"), "ok": False,
-                            "detail": "this run has no worktree of that repository"})
-                continue
-            with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", engine.run_id):
-                chain, tip = _chain_start(wt, engine.run_id, name)
-                # over the commit the child started from (its declared sha), else prepare's base
-                tree, conflicts = _merge_tree(wt, r.get("sha") or got["base"], tip, got["tip"])
-                if tree is None:
-                    out.append({"dispatch_id": did, "repo": name, "ok": False, "conflicts": conflicts,
-                                "detail": "these paths conflict with what the chain has; nothing was "
-                                          "changed (write the change yourself, or re-run the child on it)"})
-                    continue
-                tree = _without_deliverables(wt, tree, tip)
-                new = _commit(wt, tree, tip, f"swarm run {engine.run_id}: {row.get('wp')} ({did})")
-                rw._out(wt, "update-ref", chain, new, tip)
-            out.append({"dispatch_id": did, "repo": name, "ok": True, "chain": chain, "tip": new,
-                        "files": [f.get("path") for f in got.get("files") or [] if isinstance(f, dict)][:50]})
+                            "detail": f"git failed on this child ({type(exc).__name__}: {str(exc)[:200]}); "
+                                      "the chain keeps what was merged before it"})
     return {"ok": bool(out) and all(x.get("ok") for x in out), "merged": out,
             "next": "`pipeline-v1 child apply` lays the chain into the worktree"}
+
+
+def _merge_one(engine, did: str, row: dict, r: dict) -> dict[str, Any]:
+    """One child's commits in one repository onto the run's chain (see the module doc)."""
+    from core import hive_return
+    from core.run_protocol import child_cli
+    from core.run_protocol.oplock import operation
+    from config import get_app_data_dir
+    got = child_cli._http("POST", f"/runs/{did}/return/prepare",
+                          {"by": "agent", "session": child_cli._session(), "url": r.get("url"),
+                           "why": f"take {row.get('wp')}'s commits into Swarm Run {engine.run_id}"})
+    if got.get("ok") is False:
+        return {"dispatch_id": did, "repo": r.get("name"), "ok": False, "detail": got.get("detail")}
+    git_exec = [p for p in got.get("protected_files") or []
+                if hive_return._is_protected(p, list(hive_return.GIT_PROTECTED))]
+    if git_exec:
+        return {"dispatch_id": did, "repo": r.get("name"), "ok": False, "refused": True,
+                "detail": "these commits change files that make this machine run code on its "
+                          "own (git hooks, filters, submodules): " + ", ".join(git_exec[:10])
+                          + "; re-run the child asking it to leave them out"}
+    name, wt = _repo_of(engine, got)
+    if wt is None:
+        return {"dispatch_id": did, "repo": r.get("name"), "ok": False,
+                "detail": "this run has no worktree of that repository"}
+    with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", engine.run_id):
+        chain, tip = _chain_start(wt, engine.run_id, name)
+        # over the commit the child started from (its declared sha), else prepare's base
+        tree, conflicts = _merge_tree(wt, r.get("sha") or got["base"], tip, got["tip"])
+        if tree is None:
+            return {"dispatch_id": did, "repo": name, "ok": False, "conflicts": conflicts,
+                    "detail": "these paths conflict with what the chain has; nothing was "
+                              "changed (write the change yourself, or re-run the child on it)"}
+        tree = _without_deliverables(wt, tree, tip)
+        new = _commit(wt, tree, tip, f"swarm run {engine.run_id}: {row.get('wp')} ({did})")
+        rw._out(wt, "update-ref", chain, new, tip)
+    return {"dispatch_id": did, "repo": name, "ok": True, "chain": chain, "tip": new,
+            "files": [f.get("path") for f in got.get("files") or [] if isinstance(f, dict)][:50]}
 
 
 def apply(engine) -> dict[str, Any]:
@@ -184,32 +207,48 @@ def apply(engine) -> dict[str, Any]:
     out: list[dict[str, Any]] = []
     with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", engine.run_id):
         for name, path in engine.effective_repos().items():
-            wt = Path(path)
-            chain = rw.snapshot_ref(engine.run_id, _label("chain", name))
-            took = rw.snapshot_ref(engine.run_id, _label("took", name))
-            tip, last = _rev_or_none(wt, chain), _rev_or_none(wt, took)
-            if tip is None or last is None:
-                continue
-            now = _worktree_tree(wt, engine.run_id)
-            if now != _tree_of(wt, last):
-                # edited since the chain last took the worktree: those edits go on the chain
-                mine = _commit(wt, now, last, f"swarm run {engine.run_id}: the worktree's edits")
-                tree, conflicts = _merge_tree(wt, last, tip, mine)
-                if tree is None:
-                    out.append({"repo": name, "ok": False, "conflicts": conflicts,
-                                "detail": "the worktree's edits conflict with the merged children; "
-                                          "nothing was changed"})
-                    continue
-                new = _commit(wt, tree, tip, f"swarm run {engine.run_id}: the worktree's edits")
-                rw._out(wt, "update-ref", chain, new, tip)
-                tip = new
-            # the index holds the worktree's files, so no untracked file is "in the way";
-            # the tip is laid in, then the index goes back to HEAD (the change unstaged)
-            rw._out(wt, "read-tree", now)
-            rw._out(wt, "read-tree", "--reset", "-u", tip)
-            rw._out(wt, "read-tree", "HEAD")
-            rw._out(wt, "update-ref", took, tip)
-            out.append({"repo": name, "ok": True, "tip": tip})
+            try:
+                done = _apply_one(engine.run_id, name, Path(path))
+            except Exception as exc:  # noqa: BLE001 — this repository's, named; the others go on
+                done = {"repo": name, "ok": False,
+                        "detail": f"git failed ({type(exc).__name__}: {str(exc)[:200]}); the worktree "
+                                  "of this repository may be as it was or have the chain laid in: "
+                                  "check `git status` there"}
+            if done is not None:
+                out.append(done)
     if not out:
         return {"ok": False, "error": "nothing merged yet: `pipeline-v1 child merge <dispatch>…` first"}
     return {"ok": all(x.get("ok") for x in out), "applied": out}
+
+
+def _apply_one(run_id: str, name: str, wt: Path) -> "dict[str, Any] | None":
+    """The chain's tip laid into one repository's worktree, or None when it has no chain."""
+    chain = rw.snapshot_ref(run_id, _label("chain", name))
+    took = rw.snapshot_ref(run_id, _label("took", name))
+    tip, last = _rev_or_none(wt, chain), _rev_or_none(wt, took)
+    if tip is None or last is None:
+        return None
+    now = _worktree_tree(wt, run_id)
+    if now != _tree_of(wt, last):
+        # edited since the chain last took the worktree: those edits go on the chain
+        mine = _commit(wt, now, last, f"swarm run {run_id}: the worktree's edits")
+        tree, conflicts = _merge_tree(wt, last, tip, mine)
+        if tree is None:
+            return {"repo": name, "ok": False, "conflicts": conflicts,
+                    "detail": "the worktree's edits conflict with the merged children; nothing was changed"}
+        new = _commit(wt, tree, tip, f"swarm run {run_id}: the worktree's edits")
+        rw._out(wt, "update-ref", chain, new, tip)
+        tip = new
+    # the agent writes the worktree without the run's lock: an edit made while the
+    # chain was being merged would be overwritten by the lay-in, so it is refused
+    if _worktree_tree(wt, run_id) != now:
+        return {"repo": name, "ok": False,
+                "detail": "the worktree changed while the chain was being merged; nothing was laid in "
+                          "(the chain has the earlier edits): run `child apply` again"}
+    # the index holds the worktree's files, so no untracked file is "in the way";
+    # the tip is laid in, then the index goes back to HEAD (the change unstaged)
+    rw._out(wt, "read-tree", now)
+    rw._out(wt, "read-tree", "--reset", "-u", tip)
+    rw._out(wt, "read-tree", "HEAD")
+    rw._out(wt, "update-ref", took, tip)
+    return {"repo": name, "ok": True, "tip": tip}

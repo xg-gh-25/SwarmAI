@@ -287,10 +287,16 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
     }
 
 
+#: one ``base`` item, ``<repository>=<ref>`` (a ref of the run's snapshots is about 80)
+MAX_BASE_CHARS = 300
+
+
 def _bases(base: Optional[list[str]]) -> dict[str, str]:
     """``{repo name or "": ref}`` from ``["<ref>"]`` / ``["<repo>=<ref>", ...]``."""
     out: dict[str, str] = {}
     for item in base or []:
+        if len(str(item)) > MAX_BASE_CHARS:
+            raise SpecError(f"base {str(item)[:80]!r}…: at most {MAX_BASE_CHARS} characters")
         name, sep, ref = str(item).strip().partition("=")
         if not sep:
             name, ref = "", name

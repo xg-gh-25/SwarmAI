@@ -473,6 +473,9 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     rec = load(row["dispatch_id"])
     child = swarm_run.is_child(row)
     handled = child and bool(rec.get("handled_at"))
+    # closed because its lead run ended: like a discard, a wait left open on its Hive
+    # does not keep it from settling (nothing will answer it; core/swarm_run_conductor)
+    run_end = handled and (rec.get("handled") or {}).get("by") == "run_end"
     kept = kept if isinstance(kept, dict) else {}
     recs = kept.get("records") if isinstance(kept.get("records"), dict) else None
     kept_res = kept.get("result") if isinstance(kept.get("result"), dict) else {}
@@ -583,12 +586,14 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
                        ask or ("judge" if why == "judge" else None))
     out = {"stage": stage, "actions": _person_actions(actions) if child else actions,
            "why": why, "verdict": verdict, "code": code,
-           # a discarded run settles though a wait stays open on its Hive (a pipeline
-           # decision outlives the stopped chat): nothing will answer it. Never while it
+           # a discarded run (or a child closed by its run's end) settles though a wait
+           # stays open on its Hive (a pipeline decision outlives the stopped chat):
+           # nothing will answer it. Never while it
            # runs, and never while its Hive does not answer unless a person discarded it:
            # settling tells the Hive to release the workspace, which ends the session's
            # pipeline runs and removes what background work may still be writing
-           "settles": not why_not and (state == "stopped" or (abandoned and state != "running")),
+           "settles": not why_not and (state == "stopped" or (abandoned and state != "running")
+                                       or (run_end and state == "waiting")),
            "why_not": why_not, "settled": settled}
     if child:
         # the lead run's commands on its child (core/swarm_out_actor reads these for it):

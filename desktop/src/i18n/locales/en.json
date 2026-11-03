@@ -2078,7 +2078,7 @@
         "waitsFor": "waits for {{wps}}",
         "toDispatch": "to dispatch",
         "unreadable": "The lead run cannot be read now.",
-        "childOf": "part of Swarm Run {{run}}",
+        "childOf": "part of Swarm Run “{{run}}”",
         "takenByLead": "Taken or corrected by the lead run; it is woken when you stop or discard this one."
       },
       "handled": "Handled by the Swarm Run"

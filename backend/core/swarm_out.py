@@ -733,7 +733,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                         why: str = "", returns: Optional[str] = None,
                         needs_private: str = "", dispatched_from: Optional[str] = None,
                         base: Optional[list[str]] = None, parent_run: Optional[str] = None,
-                        wp: Optional[str] = None) -> dict[str, Any]:
+                        wp: Optional[str] = None, again: bool = False) -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision ``/spec`` returned (``seen_revision``) or admission fails (naming the rule), syncs the Brain when the
@@ -744,7 +744,8 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     DISPATCH_DEADLINE_S, started here and passed to every step (``_Deadline``). ``base``:
     where the task starts instead of each checkout's HEAD (core/task_spec.build).
     ``parent_run`` and ``wp``: the task is work package *wp* of that Swarm Run's lead run
-    (core/swarm_run), refused unless *dispatched_from* drives the run now."""
+    (core/swarm_run), refused unless *dispatched_from* drives the run now; ``again``: a
+    new attempt at a package that went out (core/swarm_run.check_child_dispatch)."""
     from core import brain_sync_host, swarm_run, task_spec
     from core.project_registry import get_swarmws
     deadline = _Deadline(DISPATCH_DEADLINE_S)
@@ -753,7 +754,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     if parent_run or wp:
         try:
             lead = await asyncio.to_thread(swarm_run.check_child_dispatch, parent_run or "", wp or "",
-                                           _session_or_none(dispatched_from), _read_log())
+                                           _session_or_none(dispatched_from), _read_log, again=again)
         except swarm_run.ChildRefused as e:
             raise SwarmOutError(str(e)) from None
         if lead.project != brain:

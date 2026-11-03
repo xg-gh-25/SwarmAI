@@ -9,7 +9,10 @@ lessons are in, and its Hive is told to release the workspace, by the rules ever
 follows (core/swarm_out_settle.annotate).
 
 Run after each refresh of the runs (core/swarm_out.run_refresh_loop), on the snapshot it
-just made; it does not poll a Hive itself. Deterministic, idempotent (a child already
+just made; it does not poll a Hive itself. A child whose Hive did not answer (state
+unknown) waits for a refresh that knows its state. One closed by its run's end settles
+once it is not running, a wait left open on its Hive included (nothing will answer it),
+as a discarded run does. Deterministic, idempotent (a child already
 handled, discarded or settled is skipped) and it never raises.
 
 - ``end_children(data)`` — one pass; returns the dispatch ids it handled.
@@ -23,38 +26,43 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _open_children_of_ended_runs(data: Any) -> list[dict]:
+def _open_children_of_ended_runs(data: Any) -> tuple[list[dict], set[str]]:
+    """The children nothing has closed yet whose lead run has ended, and the ended lead
+    runs. Reads the lead runs' audit logs: called off the event loop."""
     from core import swarm_out_settle, swarm_run
-    out = []
+    out, ended = [], set()
     for r in (data or {}).get("runs") or []:
         if not swarm_run.is_child(r) or not r.get("dispatch_id"):
             continue
         lead = swarm_run.lead(r.get("parent_run"))
         if lead is None or not lead.ended:
             continue
+        ended.add(lead.run_id)
         rec = swarm_out_settle.load(r["dispatch_id"])
         if rec.get("handled_at") or rec.get("abandoned_at") or rec.get("settled"):
             continue
         out.append(r)
-    return out
+    return out, ended
 
 
 async def end_children(data: Any) -> list[str]:
     """Close the children of every lead run that has ended (see the module doc)."""
-    from core import swarm_out, swarm_out_settle
+    from core import swarm_out, swarm_out_settle, swarm_run
     done: list[str] = []
     try:
-        rows = await asyncio.to_thread(_open_children_of_ended_runs, data)
+        rows, ended = await asyncio.to_thread(_open_children_of_ended_runs, data)
     except Exception as exc:  # noqa: BLE001 — the next refresh looks again
         logger.warning("swarm_run_conductor: reading the children failed (%s)", type(exc).__name__)
         return done
-    from core import swarm_run
-    ended = {str(r.get("parent_run")) for r in (data or {}).get("runs") or []
-             if swarm_run.is_child(r) and (swarm_run.lead(r.get("parent_run")) or swarm_run.Lead("", "", "", "", "")).ended}
     for r in rows:
         did = r["dispatch_id"]
+        state = r.get("state")
+        if state not in ("running", "waiting", "stopped"):
+            # its Hive did not answer: a turn may still be going there. Closed once its
+            # state is known (a later refresh), never recorded as handled while it may run
+            continue
         try:
-            if r.get("state") in ("running", "waiting"):
+            if state != "stopped":
                 # stopped first: once handled, the run counts as accepted and takes no stop
                 await swarm_out.stop_run(did)
             await asyncio.to_thread(swarm_out_settle.set_handled, did,

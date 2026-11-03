@@ -59,6 +59,8 @@ MAX_AGENT_RERUNS = 2
 CHILD_REFUSED = frozenset({"return_land", "manual_landed"})
 #: commands on a child that are its lead run's only (§5.9: the person stops or discards)
 CHILD_LEAD_ONLY = frozenset({"accept", "rerun"})
+#: what the lead run no longer does on a child once it has ended
+CHILD_AFTER_END = frozenset({"accept", "rerun", "return_prepare"})
 MAX_WHY_CHARS = 400
 COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "rerun", "stop", "discard")
 
@@ -132,6 +134,13 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         return "no agent session is recorded as having dispatched this run: the person gives commands on it"
     if a.session != owner:
         return "another session dispatched this run: only that session (or the person) gives commands on it"
+    if command in CHILD_AFTER_END and swarm_run.is_child(row):
+        found = swarm_run.lead(row.get("parent_run"))
+        if found is not None and found.ended:
+            # the run has its delivery: what its children did no longer goes into it, and
+            # the Conductor closes them (core/swarm_run_conductor)
+            return (f"its Swarm Run {found.run_id} has ended ({found.status}): its children are "
+                    "closed with it; stop or discard this one")
     if command == "manual_landed":
         # "landed by hand" settles the run and releases its workspace with whatever
         # commits are not landed yet: an agent lands commits with return_land instead

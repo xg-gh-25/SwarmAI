@@ -166,6 +166,13 @@ export function RunList({ runs, asks, answered = [], now, onReload, compact = fa
         <button type="button" className="px-2.5 py-1.5 text-[12px] text-[var(--color-primary)]" onClick={() => setAllRunning(true)}
           data-testid="swarm-out-running-more">{t('swarmOut.review.moreRunning', { count: s.running.length - running.length })} ›</button>
       )}
+      <button type="button" className="flex items-baseline gap-2 mt-4 mb-1.5" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}
+        data-testid="swarm-out-section-done">
+        <span className="text-[13px] font-semibold">{t('swarmOut.review.section.done')}</span>
+        <span className={`text-[12px] tabular-nums ${muted}`}>{s.done.length}</span>
+        <span className={`text-[12px] ${muted}`}>{showDone ? t('swarmOut.review.fold') : t('swarmOut.review.unfold')}</span>
+      </button>
+      {showDone && <div className="flex flex-col">{s.done.map(row)}</div>}
       {pending && pending.length > 0 && (
         <>
           {section('pending', t('swarmOut.review.swarmRun.notDispatched'), pending.length)}
@@ -181,13 +188,6 @@ export function RunList({ runs, asks, answered = [], now, onReload, compact = fa
           </div>
         </>
       )}
-      <button type="button" className="flex items-baseline gap-2 mt-4 mb-1.5" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}
-        data-testid="swarm-out-section-done">
-        <span className="text-[13px] font-semibold">{t('swarmOut.review.section.done')}</span>
-        <span className={`text-[12px] tabular-nums ${muted}`}>{s.done.length}</span>
-        <span className={`text-[12px] ${muted}`}>{showDone ? t('swarmOut.review.fold') : t('swarmOut.review.unfold')}</span>
-      </button>
-      {showDone && <div className="flex flex-col">{s.done.map(row)}</div>}
       {open && (
         <RunOverlay runs={runs} asks={asks} answered={answered} order={open.order} id={open.id} now={now}
           onSelect={(id) => setOpen((o) => (o ? { ...o, id } : o))}

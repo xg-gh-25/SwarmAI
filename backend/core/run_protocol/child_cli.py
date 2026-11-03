@@ -140,8 +140,35 @@ def _clean_plan(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+#: what a work package that went out keeps when the plan is written again: the work it
+#: was given (a renamed or rewritten package would be a new one under an old count)
+_SENT_KEYS = ("task", "acceptance", "execution", "returns", "mode", "base")
+
+
+def _sent_wps(engine: RunEngine) -> set[str]:
+    """Work packages that went out: the run's log, and Swarm Out's rows when the daemon
+    answers (a dispatch whose event was not written is still in its log)."""
+    sent = {str(c.get("wp")) for c in engine.children_recorded() if c.get("wp")}
+    rows, err = _rows(engine.run_id)
+    if err is None:
+        sent |= {str(r.get("wp")) for r in rows if r.get("wp")}
+    return sent
+
+
 def write_plan(engine: RunEngine, raw: Any) -> list[dict[str, Any]]:
+    """Check *raw* whole and keep it as the run's plan. A package that went out stays in
+    it as it was sent (see _SENT_KEYS); titles, briefs, ``why`` and ``after`` may change,
+    and packages not sent may be added, changed or removed."""
     plan = _clean_plan(raw)
+    old = {c["wp"]: c for c in read_plan(engine)}
+    new = {c["wp"]: c for c in plan}
+    for wp in sorted(_sent_wps(engine) & set(old)):
+        if wp not in new:
+            raise ChildError(f"{wp} went out already: it stays in the plan")
+        changed = [k for k in _SENT_KEYS if old[wp].get(k) != new[wp].get(k)]
+        if changed:
+            raise ChildError(f"{wp} went out already: its {', '.join(changed)} stay as sent "
+                             "(a correction goes with `child dispatch --again <wp> --note-file F`)")
     path = _plan_path(engine)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"children": plan}, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -200,13 +227,23 @@ def status(engine: RunEngine) -> dict[str, Any]:
 # ── dispatch ────────────────────────────────────────────────────────────────
 
 WORKTREE_BASE = "@worktree"
+_BASE_REF_RE = re.compile(r"/b(\d+)-[^/]*$")
+
+
+def _next_base(wt: Path, run_id: str) -> int:
+    """One more than the highest ``b<n>-`` base ref of this run in *wt*'s repository."""
+    from core import run_worktree as rw
+    refs = rw._out(wt, "for-each-ref", "--format=%(refname)", f"{rw.SNAPSHOT_REF_PREFIX}{run_id}/")
+    return 1 + max((int(m.group(1)) for m in map(_BASE_REF_RE.search, refs.split()) if m), default=0)
 
 
 def worktree_base(engine: RunEngine) -> list[str]:
     """``base`` for a child that starts from this run's worktree as it is now (a contract
     the lead run wrote first: design §7 point 1): one commit per repository of the
-    change, untracked new files included, parent the run's base, at
-    ``refs/swarm/snapshots/<run>/base-<repo>`` (moved to the newest each time)."""
+    change, untracked new files included, parent the run's base, at a new ref
+    ``refs/swarm/snapshots/<run>/b<n>-<repo>`` each time: a child dispatched from an
+    earlier one keeps its start (its commits are taken back over it, core/hive_return),
+    and the run's snapshot refs stay until the run's worktree goes."""
     from core import run_worktree as rw
     from core.run_protocol import child_merge
     from core.run_protocol.oplock import operation
@@ -220,7 +257,8 @@ def worktree_base(engine: RunEngine) -> list[str]:
             wt = Path(path)
             commit = child_merge._commit(wt, child_merge._worktree_tree(wt, engine.run_id),
                                          rw._rev(wt, "HEAD"), f"swarm run {engine.run_id}: a child's base")
-            ref = rw.snapshot_ref(engine.run_id, child_merge._label("base", name))
+            ref = rw.snapshot_ref(engine.run_id, child_merge._label(f"b{_next_base(wt, engine.run_id)}", name))
+            # a new name each time (under the run's lock, so two calls never pick one)
             rw._out(wt, "update-ref", ref, commit)
             out.append(ref if len(repos) == 1 else f"{name}={ref}")
     return out
@@ -236,7 +274,7 @@ def _send_one(engine: RunEngine, item: dict, session: Optional[str], note: str =
     body = {"brain": engine.project, "task": task, "acceptance": item["acceptance"],
             "mode": item.get("mode"), "execution": item["execution"], "why": item.get("why") or "",
             "returns": item["returns"], **({"base": item["base"]} if item.get("base") else {})}
-    spec = _http("POST", "/spec", body)
+    spec = _http("POST", "/spec", {**body, "parent_run": engine.run_id})
     if spec.get("ok") is False:
         return {"wp": item["wp"], "ok": False, "detail": spec.get("detail")}
     if spec.get("refusals"):
@@ -244,7 +282,8 @@ def _send_one(engine: RunEngine, item: dict, session: Optional[str], note: str =
     revision = (spec.get("spec") or {}).get("revision")
     row = _http("POST", "/dispatch", {**body, "title": f"{item['wp']} · {item['title']}"[:120],
                                        "brief": item.get("brief") or "", "revision": revision,
-                                       "session": session, "parent_run": engine.run_id, "wp": item["wp"]},
+                                       "session": session, "parent_run": engine.run_id, "wp": item["wp"],
+                                       **({"again": True} if again_of else {})},
                 timeout=DISPATCH_TIMEOUT_S)
     if row.get("ok") is False:
         return {"wp": item["wp"], "ok": False, "detail": row.get("detail"),
@@ -258,6 +297,7 @@ def dispatch(engine: RunEngine, wps: list[str], *, again: str = "", note: str = 
     plan = {c["wp"]: c for c in read_plan(engine)}
     if not plan:
         raise ChildError("write the plan first: `pipeline-v1 child plan --file -`")
+    wps = list(dict.fromkeys(wps))          # a package named twice goes out once
     if again:
         wps = [again]
         if not note.strip():
@@ -417,7 +457,12 @@ def _text(value: str) -> str:
 
 
 def run(args, engine: RunEngine) -> dict[str, Any]:
-    """The child command *args* on the loaded, owner-checked *engine*."""
+    """The child command *args* on the loaded, owner-checked *engine*; a failure is
+    ``{"ok": false, "error": …}`` whichever side refused (``result``)."""
+    return result(_run(args, engine))
+
+
+def _run(args, engine: RunEngine) -> dict[str, Any]:
     verb = args.child_command
     try:
         if verb == "plan":
@@ -452,3 +497,15 @@ def run(args, engine: RunEngine) -> dict[str, Any]:
     except (ChildError, EngineError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": False, "error": f"unknown child command {verb}"}
+
+
+def result(out: dict[str, Any]) -> dict[str, Any]:
+    """One failure shape for every child command: ``ok`` false carries ``error`` (a
+    daemon refusal's ``detail`` becomes it)."""
+    if isinstance(out, dict) and out.get("ok") is False and not out.get("error"):
+        items = [x for k in ("merged", "applied", "dispatched") for x in out.get(k) or []
+                 if isinstance(x, dict) and x.get("ok") is False]
+        first = next((x.get("detail") for x in items if x.get("detail")), None)
+        out = {**out, "error": str(out.get("detail") or (f"{len(items)} failed; the first: {first}" if first
+                                                         else "the command failed"))}
+    return out

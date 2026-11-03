@@ -3490,10 +3490,12 @@ class RunEngine:
                            "entries": len(r.get("items") or ())} for r in records]}
 
     def _children_summary(self, rows) -> list[dict[str, Any]]:
-        """This run's Swarm Run children for REPORT (core/swarm_run.child_report); [] when
-        it dispatched none or their records cannot be read."""
+        """This run's Swarm Run children for REPORT (core/swarm_run.child_report: Swarm
+        Out's dispatch log, with what this run's log adds); [] when it dispatched none.
+        A run sends children only after writing its plan (child_cli), so a run with neither
+        a plan nor a recorded child does not read the dispatch log."""
         recorded = [dict(e.get("payload") or {}) for e in rows if e.get("kind") == "child_dispatched"]
-        if not recorded:
+        if not recorded and not (self.run_dir / "children.json").exists():
             return []
         try:
             from core import swarm_run

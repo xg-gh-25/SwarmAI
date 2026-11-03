@@ -36,12 +36,15 @@ import logging
 import re
 import threading
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
 #: dispatches of one work package, corrections and replacements included (design §6.4)
 MAX_WP_DISPATCHES = 3
+#: dispatches of one Swarm Run in all: its plan's packages (child_cli.MAX_CHILDREN) and
+#: their corrections; a work package renamed in the plan does not reset its count here
+MAX_RUN_DISPATCHES = 40
 RUN_ID_RE = re.compile(r"run_[0-9a-f]{8,32}")
 WP_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
 TERMINAL = frozenset({"completed", "abandoned", "failed"})
@@ -65,9 +68,16 @@ class Lead:
 
 
 _CACHE: dict[str, tuple[tuple, Lead]] = {}
+#: guards _CACHE and _FREEZE_LOCKS only: held for dictionary reads and writes, never
+#: while a file is read or a Brain packaged
 _LOCK = threading.Lock()
+#: guards _INFLIGHT, held while the dispatch log is read for a count (so two dispatches
+#: of one package cannot both count the log before either row is written)
+_DISPATCH_LOCK = threading.Lock()
 #: (parent_run, wp) -> dispatches of it in flight (counted with the log's rows)
 _INFLIGHT: dict[tuple[str, str], int] = {}
+#: run_id -> the lock its freeze is made under (one Brain package per run)
+_FREEZE_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _stamp(run_id: str) -> Optional[tuple]:
@@ -127,9 +137,15 @@ def owner_of(row: Any) -> Optional[str]:
 
 
 def check_child_dispatch(parent_run: str, wp: str, session: Optional[str],
-                         rows: Iterable[dict]) -> Lead:
+                         rows: "Iterable[dict] | Callable[[], Iterable[dict]]", *,
+                         again: bool = False) -> Lead:
     """The lead run, when *session* may dispatch work package *wp* for it now; else
-    ChildRefused naming the rule. *rows*: the dispatch log (every row so far)."""
+    ChildRefused naming the rule. *rows*: the dispatch log (every row so far), or the
+    function that reads it (then read under the count's lock). *again*: a new attempt at
+    a package that went out; without it a package that went out, or is going out now,
+    is refused (a correction is said to be one). Counted: *wp*'s dispatches (at most
+    MAX_WP_DISPATCHES) and the run's (at most MAX_RUN_DISPATCHES), in flight included;
+    each one let through is ``release``d when it ends."""
     if not isinstance(wp, str) or not WP_RE.fullmatch(wp):
         raise ChildRefused("a child needs a work package id: letters, digits, - or _, at most 32")
     found = lead(parent_run)
@@ -139,21 +155,34 @@ def check_child_dispatch(parent_run: str, wp: str, session: Optional[str],
         raise ChildRefused(f"only the session that drives {found.run_id} dispatches its children")
     if found.ended:
         raise ChildRefused(f"{found.run_id} has ended ({found.status}); it dispatches nothing more")
-    logged = sum(1 for r in rows if isinstance(r, dict) and r.get("parent_run") == parent_run
-                 and r.get("wp") == wp)
-    with _LOCK:
-        sent = logged + _INFLIGHT.get((parent_run, wp), 0)
+    with _DISPATCH_LOCK:
+        log = [r for r in (rows() if callable(rows) else rows)
+               if isinstance(r, dict) and r.get("parent_run") == parent_run]
+        logged = sum(1 for r in log if r.get("wp") == wp)
+        flying = _INFLIGHT.get((parent_run, wp), 0)
+        sent = logged + flying
+        if not again and sent:
+            raise ChildRefused(f"{wp} went out already: a new attempt at it is a correction "
+                               "(`child rerun`, or `child dispatch --again`)")
+        if again and flying:
+            raise ChildRefused(f"{wp} is being dispatched now: wait for that dispatch to end")
+        if again and not logged:
+            raise ChildRefused(f"{wp} never went out: dispatch it, not again")
         if sent >= MAX_WP_DISPATCHES:
             raise ChildRefused(f"{wp} was dispatched {sent} times already (at most {MAX_WP_DISPATCHES}): "
                                "do it in the run yourself, or leave it out and say so in the delivery")
-        _INFLIGHT[(parent_run, wp)] = _INFLIGHT.get((parent_run, wp), 0) + 1
+        total = len(log) + sum(n for (run, _), n in _INFLIGHT.items() if run == parent_run)
+        if total >= MAX_RUN_DISPATCHES:
+            raise ChildRefused(f"{parent_run} has dispatched {total} children (at most {MAX_RUN_DISPATCHES}): "
+                               "do the rest in the run yourself, or leave it out and say so in the delivery")
+        _INFLIGHT[(parent_run, wp)] = flying + 1
     return found
 
 
 def release(parent_run: str, wp: str) -> None:
     """The dispatch that ``check_child_dispatch`` let through has ended (its row, if one
     was written, is in the log now)."""
-    with _LOCK:
+    with _DISPATCH_LOCK:
         n = _INFLIGHT.get((parent_run, wp), 0) - 1
         if n > 0:
             _INFLIGHT[(parent_run, wp)] = n
@@ -196,7 +225,12 @@ def freeze(workspace, run_id: str, brain: str, revision: str) -> dict:
     import json
     import os
     import time
+    _freeze_dir(run_id)                       # a bad run id is refused before a lock is made
     with _LOCK:
+        run_lock = _FREEZE_LOCKS.setdefault(run_id, threading.Lock())
+    # the run's own lock: two first children of one run make one package; lead() and
+    # other runs' freezes do not wait for the packaging
+    with run_lock:
         have = frozen(run_id)
         if have:
             if have.get("brain") != brain:
@@ -225,6 +259,8 @@ def drop_freeze(run_id: str) -> None:
         shutil.rmtree(_freeze_dir(run_id), ignore_errors=True)
     except ChildRefused:
         pass
+    with _LOCK:
+        _FREEZE_LOCKS.pop(run_id, None)
 
 
 def held_hives(rows: Iterable[dict], brain: str, digest: Optional[str], run_id: Optional[str]) -> set[str]:
@@ -245,13 +281,30 @@ def held_hives(rows: Iterable[dict], brain: str, digest: Optional[str], run_id: 
 
 
 def child_report(run_id: str, recorded: Iterable[dict]) -> list[dict]:
-    """For a lead run's REPORT and REFLECT (design §5.8, §7 point 9, §16): each child its
-    log names (``child_dispatched`` payloads), how it ended in Swarm Out and what the lead
-    run did with it (its decision record's ``by: agent`` entries, design
-    2026-11-02-hive-run-decision-record §3). Read from files; never asks a Hive."""
-    from core import swarm_out_settle
+    """For a lead run's REPORT and REFLECT (design §5.8, §7 point 9, §16): each child of
+    the run in Swarm Out's dispatch log (the truth of what went out: a dispatch whose
+    ``child_dispatched`` event was never written is listed too), with what the run's log
+    adds (``again_of``), how it ended in Swarm Out and what the lead run did with it (its
+    decision record's ``by: agent`` entries, design 2026-11-02-hive-run-decision-record
+    §3). *recorded*: the ``child_dispatched`` payloads. Read from files; never asks a Hive."""
+    from core import swarm_out, swarm_out_settle
+    events = {str(c.get("dispatch_id")): c for c in recorded if isinstance(c, dict) and c.get("dispatch_id")}
+    try:
+        logged = children(swarm_out._read_log(), run_id)
+    except (OSError, ValueError):
+        logged = []                    # the run's own log is all there is to say then
+    items, seen = [], set()
+    for r in logged:
+        did = str(r.get("dispatch_id") or "")
+        if not did or did in seen:
+            continue
+        seen.add(did)
+        e = events.get(did) or {}
+        items.append({"dispatch_id": did, "wp": r.get("wp") or e.get("wp"),
+                      "hive": r.get("hive") or e.get("hive"), "again_of": e.get("again_of")})
+    items += [e for did, e in events.items() if did not in seen]
     out = []
-    for c in recorded:
+    for c in items:
         did = str(c.get("dispatch_id") or "")
         if not did:
             continue
@@ -295,6 +348,8 @@ def view(run_id: str) -> Optional[dict]:
     from core import swarm_out, swarm_out_results
     from core.pipeline_human import load_engine
     engine = load_engine(run_id)
+    if engine is None:
+        return None                   # gone since its log was read
     try:
         title = engine._run_title()
     except Exception:  # noqa: BLE001 — the card names the run by its id then

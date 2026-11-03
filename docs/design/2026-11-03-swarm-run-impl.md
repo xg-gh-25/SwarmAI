@@ -56,3 +56,29 @@ related:
 | I16 | 子单状态只从快照读：`child status` 不读事件；引擎里没有 `child_returned` |
 
 审查：`child` 命令和底线检查 → security；合并工具、Conductor 了结、`owner_of` → concurrency + state-machine；派发参数和新路由 → api-contract；卡片 → ux。每位最多两轮。最后用两台 Hive 跑一次真的 Swarm Run（一个能拆成两单的小改动）。
+
+## 4. 第一轮审查的修复说明（security、correctness、concurrency + state-machine、api-contract + ux）
+
+每条发现都对照代码核实过。按原因分组，一组一个修法：
+
+| 组 | 原因 | 修法 | 证明它的测试 |
+|---|---|---|---|
+| A（HIGH） | 路由 `_allowed` 对人的命令在调 `row_blocker` 之前就返回，子单的拒绝对人从来不生效（人可以把子单落到 main） | `_allowed` 对人也取 row、调 `row_blocker`（它对人只做子单的拒绝） | 路由测试：人对子单 `return/land`、`manual-landed`、`verdict`、`rerun` 得 403 |
+| B（HIGH） | `/spec` 收不到 `parent_run`，起点不在本机分支的子单在 spec 就被拒 | `SpecBody.parent_run` 传给 `task_spec.build`，`child_cli` 发给 `/spec` | 路由测试：`/spec` 带 `parent_run` 把它交给 build |
+| C（HIGH） | `@worktree` 每次都挪同一个 base ref，前一批子单的起点失去 ref（取回被拒、可能被 gc） | 每次一个新的 ref（`b<n>-<repo>`），run 期间不删 | 两次 `@worktree`，第一次的 ref 还在、指向原 commit |
+| D | 权限检查和 Conductor 在事件循环上读审计日志；`freeze` 打包时占着 `lead()` 也用的锁；`check_child_dispatch` 在锁外读派发记录 | 路由在线程里调 `row_blocker`；Conductor 的 `ended` 在线程里算；`freeze` 用每个 run 自己的锁、在共享锁外打包；派发记录在锁里读 | 并发测试：`freeze` 打包时 `lead()` 不等；锁内读日志 |
+| E | lead run 结束后：等着决定的子单永远不了结、`unknown` 的子单不停就记成已处理、lead 的命令和叫醒还在 | run_end 处理过的子单像丢弃一样只要不在跑就了结；Conductor 停掉所有不是 stopped 的子单，`unknown` 的等状态清楚再处理；lead 结束后拒绝它的 accept / rerun / return-prepare，叫醒跳过这些子单 | 各一条测试 |
+| F | 同一个 wp 的预算能被绕过：一次调用里重复同一个 wp、两条并发调用、改计划换 wp 名 | CLI 去重；daemon 对没带 `again` 的首次派发拒绝已派过或在途的 wp；计划改写不能删改已派的 wp；每个 run 派发总数上限（`MAX_RUN_DISPATCHES`） | 各一条测试 |
+| G | `.aidlc/deliverables/` 只去掉了新增的，子单改、删已有的照样带进来 | 合并后这个目录整体恢复成链上原样 | 子单改一个、删一个已有的 deliverable，合并后都是原样 |
+| H | merge / apply 中途 git 出错，前面已上链的结果丢失 | 每个子单 / 仓库各自 try，失败记一条，列表照常返回 | 注入一次 git 失败 |
+| I | apply 合并期间 agent 改了 worktree，`read-tree -u` 会冲掉 | 铺之前再算一次 worktree 的树，变了就拒绝 | 注入一次中途修改 |
+| J | CLI 在派发后、记事件前死掉，REPORT 漏掉这个子单 | REPORT 以 Swarm Out 的派发记录为准，事件只补 `again_of` | 只有记录没有事件，REPORT 也列出 |
+| K | 子单的 lead 会话不在时，`needs_person` 为 null，子单因为有"丢弃"被放进"等你"、标成琥珀色 | 子单不退回旧规则：只有人的等待才算等人 | `needs_person` 对子单只看人的等待 |
+| L | "停止全部"失败只在 tooltip；读不到 lead run 时还显示按钮 | 失败写一行；读不到就不显示；run 结束后不再轮询卡头 | 前端测试 |
+| M | 杂项：`child` 的 JSON 两种失败写法、`view` 在 engine 为空时 500、`base` 单项没长度上限、TS 类型缺 `host_said` / `lead_actions` / `parent_title`、大卡片只写 run id、中文"子任务 / 子单"混用、"还没派"排在"最近完成"前、混合叫醒只给 Swarm Run 的说明 | 逐条照改 | 已有测试补断言 |
+| N | 旧 Hive 不认 `origin`，lead 的修正在它那里算成人说的话 | 不改：列表和大卡片的自主度读 Host 的决策记录（`person_decisions`），只有旧记录的"说的话"格会多算；Hive 升级后消失。记为剩下的风险 | — |
+
+不改：apply 会在 lead run 审之前把子单的文件放进它的 worktree（security INFO）。这是设计的意图（结果是材料，落地前过 lead run 自己的 REVIEW 和 TEST），和 agent 审过才落地是同一类风险，在这里写明。
+
+落地情况：A–M 都已改完，每条修法都写了先红后绿的测试，并做了变异检查（`scripts.mutation_check`：后端 27 处、前端 4 处，全部被抓到）。有一处没留：C 里"ref 只建不挪"的旧值检查。`@worktree` 本来就在 run 的操作锁里取新编号，两次调用不会撞名，所以这个检查从来抓不到问题，已删掉。REPORT 只在 run 写过计划（`children.json`）或记过子单时才读派发记录，普通 run 的审计不读。
+
