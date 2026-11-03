@@ -23,8 +23,8 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 ```bash
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <file> [--brain <B>] [--file <path>] [--bound-project <P>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits [--mode <m>] [--needs-private <why>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits --revision <revision from spec> [--needs-private <why>] [--hive <name>] [--mode <m>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits [--mode <m>] [--needs-private <why>] [--base <ref>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits --revision <revision from spec> [--needs-private <why>] [--hive <name>] [--mode <m>] [--base <ref>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [<dispatch_id> ...] [--since <token>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
@@ -93,6 +93,11 @@ numbered text options ("reply with a number"). Only this question.
    commit: the Hive prepares a worktree of each before the task starts and tells the
    task where it is. Do not add them, and do not write clone, pull or checkout
    instructions.
+   The task starts at this machine's HEAD of each repository; `--base <ref>` (or
+   `<repo>=<ref>` per repository) starts it at another commit of the checkout instead.
+   Commits that come back must build on this machine's branch, so a base off the branch
+   is refused for `--returns commits`. A pipeline run's own children go out with
+   `pipeline-v1 child` (its BUILD card), not with this command.
    **Acceptance** is required: one checkable sentence of what done looks like.
    **Brief**: one or two sentences of what the task is, for the card.
 3. **Choose the mode and how it runs.** Read the `modes` of the Brain's

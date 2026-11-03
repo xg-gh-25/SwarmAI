@@ -329,3 +329,19 @@ def test_only_the_person_stops_a_whole_swarm_run(monkeypatch):
     assert r.status_code == 200 and r.json()["stopped"] == ["so_000000000001"] and r.json()["lead_turn_stopped"]
     assert stopped == ["so_000000000001", SESSION]
     assert c.post("/api/swarm-out/swarm-runs/run_ffffffffffff/stop", json={"by": "person"}).status_code == 404
+
+
+def test_a_research_run_fans_out_from_think_without_a_worktree(tmp_path, monkeypatch):
+    """D7's aim, a research run's questions sent to Hives: child dispatch is not tied to a
+    code stage; a research run (no worktree) sends children that return documents."""
+    rig = Rig(tmp_path, monkeypatch, profile="research", with_repo=False)
+    rig.create()
+    fake = FakeDaemon()
+    monkeypatch.setattr(child_cli, "_http", fake)
+    plan = {"children": [{"wp": "Q1", "title": "prior art", "task": "survey the prior art", "acceptance": "a sourced report",
+                          "execution": "native", "returns": "document"}]}
+    assert _exec(rig, "plan", "--file", "-", stdin=json.dumps(plan))["ok"]
+    out = _exec(rig, "dispatch", "Q1")
+    assert out["ok"], out
+    assert rig.engine().projection()["stage"] in ("evaluate", "think")
+    assert [b["returns"] for m, p, b in fake.calls if p == "/dispatch"] == ["document"]
