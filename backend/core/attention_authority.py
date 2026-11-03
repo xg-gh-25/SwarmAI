@@ -728,7 +728,7 @@ def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list
     §2.3): one item each for those the person must answer, naming the session that
     answers for the run (a class the agent may not answer, one it escalated, one whose
     session is gone); the agent's own are left to it however long they wait: the session
-    that dispatched the run is woken to answer them (core/swarm_out_wake; design
+    that answers for the run is woken to answer them (core/swarm_out_wake; design
     2026-11-02-hive-run-decision-record: nothing is handed to the person by a timer).
     Returns (items, the waits of runs no agent dispatched)."""
     from core import approval_class, swarm_out_wait_card, swarm_run
@@ -758,9 +758,9 @@ def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list
             why = (f"It is about {cls}." if cls and cls != "unknown"
                    else "Its Hive does not say what it is about.")
         elif not alive:
-            title, why = f"A Hive {kind} whose session is gone", "The session that dispatched the run no longer exists."
+            title, why = f"A Hive {kind} whose session is gone", "The session that answers for the run no longer exists."
         else:
-            continue                       # the dispatching agent's to answer
+            continue                       # the agent that answers for the run answers it
         run_title = " ".join(str(row.get("title") or "").split())[:80]
         session_name = owner_title or owner[:8]
         items.append(AttentionItem(
@@ -786,8 +786,8 @@ def _collect_swarm_out() -> list[AttentionItem]:
     the dispatching agent handed to the person (``ask-person``, one BLOCKING item with the
     agent's question, judgment and reason), and, for runs no live session answers for,
     the runs to accept or decide (REVIEW) and the runs whose records go within days
-    (REVIEW). A run whose dispatching session is alive is never here before it landed:
-    reviewing, landing, re-running, discarding it is that session's (design
+    (REVIEW). While the session that answers for a run is alive, the run is never here
+    before it landed: reviewing, landing, re-running, discarding it is that session's (design
     2026-11-02-hive-run-decision-record §1), and it is woken for it. Read from the runs
     snapshot the refresh loop keeps (core/swarm_out.snapshot); never refreshes it: this
     authority holds no state. A click opens the Swarm Out tab (``context.kind``
@@ -805,7 +805,7 @@ def _collect_swarm_out() -> list[AttentionItem]:
                   if r.get("stage") == "closed" and r.get("session_id")}
         asks = [a for a in snap.get("asks") or [] if isinstance(a, dict) and not a.get("refused")
                 and a.get("session_id") not in closed]
-        # a run a live session dispatched is that session's until it lands and the
+        # a run a live session answers for is that session's until it lands and the
         # session hands it over (design 2026-11-02-hive-run-decision-record §1)
         alive: dict[str, bool] = {}
 

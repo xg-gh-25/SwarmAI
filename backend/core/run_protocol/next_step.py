@@ -15,10 +15,13 @@ only when the stage changed in this call (the card replaces ``stage-start``).
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Mapping
 
 from core.run_protocol import checks, lifecycle
+
+logger = logging.getLogger(__name__)
 
 _CARDS = Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline" / "stages"
 _ARTIFACT_STAGES = {"evaluate", "plan"}
@@ -392,7 +395,8 @@ def _note_children(engine, out: dict[str, Any]) -> None:
     try:
         from core import swarm_run
         open_ = swarm_run.open_children(engine.run_id)
-    except Exception:  # noqa: BLE001 — a note, never the step's failure
+    except Exception as exc:  # noqa: BLE001 — a note, never the step's failure
+        logger.warning("next_step: %s's open children not read (%s)", engine.run_id, type(exc).__name__)
         return
     if not open_:
         return

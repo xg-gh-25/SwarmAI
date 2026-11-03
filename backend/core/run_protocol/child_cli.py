@@ -2,7 +2,8 @@
 docs/design/2026-10-31-swarm-run.md §5; impl docs/design/2026-11-03-swarm-run-impl.md
 step 4).
 
-Every command is the run owner's (``cli_commands._not_owner``, checked first). The
+Every command is the run owner's (``cli_commands._not_owner``, checked first), and none
+is a non-owner channel session's (``run``, as ``scripts.swarm_out``). The
 children are ordinary Swarm Out dispatches: this module only adds what is the run's
 (its plan, which dispatch carries which work package) and calls the daemon's same routes
 with ``by: agent`` and this session, so every rule there holds unchanged (the actor
@@ -22,6 +23,8 @@ Text a Hive wrote reaches the agent only framed as data (``card``), never in ``s
 """
 from __future__ import annotations
 
+import logging
+
 import json
 import os
 import re
@@ -32,6 +35,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.run_protocol.engine import EngineError, RunEngine
+
+logger = logging.getLogger(__name__)
 
 PLAN_FILE = "children.json"
 #: the work packages this run's CLI set out to send (written before the HTTP call, under
@@ -73,7 +78,9 @@ def _http(method: str, path: str, body: Optional[dict] = None, timeout: float = 
     except urllib.error.HTTPError as e:
         try:
             detail = json.load(e).get("detail")
-        except Exception:  # noqa: BLE001 — the status is enough
+        except Exception as exc:  # noqa: BLE001 — the status is enough
+            logger.debug("child_cli: %s %s refused without a readable detail (%s)", method, path,
+                         type(exc).__name__)
             detail = None
         if isinstance(detail, dict):
             detail = detail.get("message") or str(detail)
@@ -370,14 +377,16 @@ def dispatch(engine: RunEngine, wps: list[str], *, again: str = "", note: str = 
         try:                       # what the children share, for REPORT (the daemon keeps the bytes)
             engine.record_frozen(str(frozen.get("brain") or ""), str(frozen.get("digest") or ""),
                                  str(frozen.get("revision") or ""), str(frozen.get("model") or ""))
-        except Exception:  # noqa: BLE001 — a duplicate or a later record is not the dispatch's failure
-            pass
+        except Exception as exc:  # noqa: BLE001 — a duplicate or a later record is not the dispatch's failure
+            logger.warning("child_cli: %s's frozen spec not recorded (%s)", engine.run_id, type(exc).__name__)
     for r in results:
         if r.get("ok") and r.get("dispatch_id"):
             try:
                 engine.record_child(r["dispatch_id"], r["wp"], hive=str(r.get("hive") or ""),
                                     again_of=str(r.get("again_of") or ""))
             except Exception as exc:  # noqa: BLE001 — Swarm Out has the row; the log is the run's note
+                logger.warning("child_cli: %s not recorded in %s's log (%s)", r["dispatch_id"], engine.run_id,
+                               type(exc).__name__)
                 r["record_error"] = type(exc).__name__
     return {"ok": all(r.get("ok") for r in results), "dispatched": results}
 
@@ -497,7 +506,17 @@ def _text(value: str) -> str:
 
 def run(args, engine: RunEngine) -> dict[str, Any]:
     """The child command *args* on the loaded, owner-checked *engine*; a failure is
-    ``{"ok": false, "error": …}`` whichever side refused (``result``)."""
+    ``{"ok": false, "error": …}`` whichever side refused (``result``).
+
+    A non-owner channel session is refused every child command here, before any daemon
+    call or file write, as ``scripts.swarm_out`` refuses it: the children go to the
+    owner's Hives, even when that session owns the lead run."""
+    from core.knowledge_cli import RESTRICTED_ENV
+    # present at all, not only truthy: an emptied variable is still a restricted session
+    # (the session's command hook refuses these commands too, core/security_hooks)
+    if RESTRICTED_ENV in os.environ:
+        return {"ok": False, "error": "Swarm Out is only available to the owner: a Swarm Run's "
+                                      "children are dispatched to the owner's Hives"}
     return result(_run(args, engine))
 
 

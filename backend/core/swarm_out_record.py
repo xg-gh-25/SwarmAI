@@ -332,7 +332,7 @@ def ask_person(dispatch_id: str, row: Optional[dict], session: Optional[str], de
     """The dispatching agent hands its landed result to the person: what they decide
     (``decide``), the agent's own judgment, and why the agent cannot decide. Refused,
     with nothing written, when the result is not on this host, the session is not the
-    one that dispatched the run, an ask is already open, or a field is missing."""
+    one that answers for the run, an ask is already open, or a field is missing."""
     from core import swarm_out_settle
     if not isinstance(row, dict):
         raise RecordError("the run is not in the list of runs now; try again in a moment")
@@ -343,7 +343,7 @@ def ask_person(dispatch_id: str, row: Optional[dict], session: Optional[str], de
         raise RecordError("this run is a child of a Swarm Run: its lead run judges it, and hands "
                           "the person only its own landed result")
     if not session or swarm_run.owner_of(row) != session:
-        raise RecordError("only the session that dispatched this run hands it to the person")
+        raise RecordError("only the session that answers for this run hands it to the person")
     decide, judgment, why = _clean(decide), _clean(judgment), _clean(why)
     if not decide or not judgment or not why:
         raise RecordError("say what the person decides (--decide), your judgment (--judgment) "
@@ -399,7 +399,7 @@ def answer_ask(dispatch_id: str, pick: str, note: str = "") -> dict[str, Any]:
 
 def reverted(dispatch_id: str, row: Optional[dict], session: Optional[str], commits: list[str],
              why: str) -> dict[str, Any]:
-    """The dispatching agent carried out the person's revert: for commits, each named
+    """The agent that answers for the run carried out the person's revert: for commits, each named
     commit is on the landed branch and undoes exactly one landed commit, and every landed
     commit is undone (core/hive_return.verify_revert); for files, none placed is left at
     its place. Refused, with nothing written, otherwise."""
@@ -410,7 +410,7 @@ def reverted(dispatch_id: str, row: Optional[dict], session: Optional[str], comm
         raise RecordError("the run is not in the list of runs now; try again in a moment")
     from core import swarm_run
     if not session or swarm_run.owner_of(row) != session:
-        raise RecordError("only the session that dispatched this run reports its revert")
+        raise RecordError("only the session that answers for this run reports its revert")
     why = _clean(why)
     if not why:
         raise RecordError("say what you did (--why)")

@@ -21,7 +21,7 @@ pipeline decision card is recorded (core/security_hooks ask_question_gate):
 3. The person answers in the App (``answered_by`` person; the chat answer route is
    refused from a command, core/run_owner_gate).
 4. ``forward(session, questions, answers)`` (called by ask_question_gate) forwards when
-   the card is one this module built for a run that *session* dispatched, its shape is
+   the card is one this module built for a run that *session* answers for, its shape is
    unchanged, and every answer maps (a decision or an approval takes one of its options,
    never free text). It answers through ``swarm_out.answer`` as the panel does, and keeps
    the outcome on the card (``forward``), which the run's follow fingerprint carries: a
@@ -293,7 +293,7 @@ async def _forward(session, questions, answers):
     if (rec.get("forward") or {}).get("status") == "forwarded":
         return _not(None, "this wait was already forwarded")
     if not session or _owner(rec) != session:
-        return _not(rec, "the card was answered in a session that did not dispatch this run")
+        return _not(rec, "the card was answered in a session that does not answer for this run")
     if _shape(questions) != rec.get("shape"):
         return _not(rec, "the card asked is not the one built for this wait")
     if not isinstance(answers, dict):
@@ -345,7 +345,7 @@ def _mapped(rec: dict[str, Any], answers: Any, *, options_only: bool) -> "dict[s
 
 async def answer_as_host(session: Optional[str], dispatch_id: str, request_id: str,
                          answers: Any, why: str, pick: Optional[str] = None) -> dict[str, Any]:
-    """The dispatching agent answers one of its run's waits itself (module docstring):
+    """The agent that answers for the run answers one of its waits itself (module docstring):
     from the card this session built for it (what it saw: the Hive's ``shown_sha256`` and
     the option maps), only for a class it answers for, with one of the card's options and
     a reason. Written as the host's answer; kept on the card and in the run's commands,
@@ -360,7 +360,7 @@ async def answer_as_host(session: Optional[str], dispatch_id: str, request_id: s
     if (rec.get("forward") or {}).get("status") == "forwarded":
         raise CardError("this wait was already answered", 409)
     if not session or _owner(rec) != session:
-        raise CardError("only the session that dispatched this run answers its waits", 403)
+        raise CardError("only the session that answers for this run may answer its waits", 403)
     cls = rec.get("approval_class")
     if cls not in approval_class.HOST_CLASSES:
         raise CardError(f"this wait is the person's to answer ({cls or 'its Hive does not say what it is about'}): "
@@ -402,7 +402,7 @@ def _esc_path(dispatch_id: str, request_id: str) -> Optional[Path]:
 
 
 async def escalate(session: Optional[str], dispatch_id: str, request_id: str, why: str) -> dict[str, Any]:
-    """The dispatching agent hands one of its run's waits to the person: it shows in
+    """The agent that answers for the run hands one of its waits to the person: it shows in
     Needs You as that session's, with the reason. Only that session may; once escalated,
     the agent no longer answers it (the person does)."""
     from core import swarm_out, swarm_out_actor
@@ -420,7 +420,7 @@ async def escalate(session: Optional[str], dispatch_id: str, request_id: str, wh
         raise CardError("no such run")
     from core import swarm_run
     if not session or swarm_run.owner_of(row) != session:
-        raise CardError("only the session that dispatched this run escalates its waits", 403)
+        raise CardError("only the session that answers for this run escalates its waits", 403)
     try:
         data = await swarm_out.list_runs(swarm_out.SNAPSHOT_FRESH_S)
     except swarm_out.SwarmOutError as e:

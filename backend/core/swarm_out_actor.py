@@ -11,7 +11,7 @@ command says who gave it (``by``: ``agent`` from the CLI, ``person`` from the Ap
 request that says nothing is an agent's, so a bare call gets the agent's limits). For an
 agent the routes refuse what is the person's to decide:
 
-- any command from a session other than the one that dispatched the run, or without a
+- any command from a session other than the one that answers for the run, or without a
   reason (``why``);
 - any command on a run no agent session is recorded as having dispatched (an older run);
 - a command the panel does not offer the person on the run now (its ``/runs`` row's
@@ -111,7 +111,7 @@ _NEEDS = {"accept": ("accept", "verdict"), "return_prepare": ("accept", "land"),
 def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
                 ended_at: Optional[str] = None) -> Optional[str]:
     """Why an agent may not give *command* on the run whose ``/runs`` row is *row*, else
-    None: another session dispatched it, or the panel does not offer the person that
+    None: another session answers for it, or the panel does not offer the person that
     command on it now (module docstring)."""
     from core import swarm_run
     if command in CHILD_REFUSED and swarm_run.is_child(row):
@@ -134,7 +134,7 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         # a run from before the dispatching session was recorded: no agent owns it
         return "no agent session is recorded as having dispatched this run: the person gives commands on it"
     if a.session != owner:
-        return "another session dispatched this run: only that session (or the person) gives commands on it"
+        return "another session answers for this run: only that session (or the person) gives commands on it"
     if command in CHILD_AFTER_END and swarm_run.is_child(row):
         found = swarm_run.lead(row.get("parent_run"))
         if found is not None and found.ended:

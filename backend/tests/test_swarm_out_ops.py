@@ -8,8 +8,10 @@ Questions answered (design §8 invariants 1-4):
    ``..``, quote-split and trailing-slash spellings, called by curl, a variable, Python or
    Node, while the owner agent's ops are not, and a command that only names a route (a
    search, a file being written) is not judged?
-3. is any command naming Swarm Out or the Hive routes denied in a non-owner channel?
-4. does the ``scripts.swarm_out`` CLI call only ops the owner agent may call?
+3. is any command naming Swarm Out or the Hive routes denied in a non-owner channel, and
+   is every ``pipeline-v1 child`` subcommand refused there without a daemon call?
+4. do the ``scripts.swarm_out`` CLI and the ``pipeline-v1 child`` commands call only ops
+   the owner agent may call, every subcommand of each covered?
 """
 from __future__ import annotations
 
@@ -289,6 +291,121 @@ def test_cli_calls_only_owner_agent_ops(monkeypatch):
         assert op is not None, (name, method, path)
         assert OWNER in op.callers, (name, op.name)
 
+
+# ── invariant 4 for the second caller: a Swarm Run's ``pipeline-v1 child`` commands ──
+
+_DID = "{did}"          # the child the run dispatched (filled in when it is known)
+#: every child subcommand, in the order they are driven (plan and dispatch first: the
+#: others act on the child dispatch sent)
+_CHILD_ARGS = {
+    "plan": ["--file", "-"],
+    "dispatch": ["W1"],
+    "status": [],
+    "wait": [],
+    "card": [_DID, "req1"],
+    "answer": [_DID, "req1", "--pick", "A", "--why", "w"],
+    "escalate": [_DID, "req1", "--why", "w"],
+    "accept": [_DID, "--why", "w", "--ended-at", "t1"],
+    "rerun": [_DID, "--why", "w", "--text-file", __file__],
+    "stop": [_DID, "--why", "w"],
+    "discard": [_DID, "--why", "w"],
+    "merge": [_DID],
+    "apply": [],
+}
+#: the child subcommands that call no daemon route (apply lays the merged chain in, locally)
+_CHILD_NO_DAEMON = {"apply"}
+#: those that end in a refusal here: merge's prepare is refused by the fake, so nothing
+#: is merged and apply has nothing to lay in (each route was still called and checked)
+_CHILD_REFUSED = {"merge", "apply"}
+
+
+def _child_subcommands() -> "set[str]":
+    from core.run_protocol import cli_commands
+    top = next(a for a in cli_commands.parser()._actions if getattr(a, "choices", None)
+               and "child" in a.choices)
+    child = top.choices["child"]
+    sub = next(a for a in child._actions if a.dest == "child_command")
+    return set(sub.choices)
+
+
+@pytest.fixture
+def child_run(tmp_path, monkeypatch):
+    from core.run_protocol import child_cli
+    from core.knowledge_cli import RESTRICTED_ENV
+    from tests.pipeline_v1_rig import Rig
+    from tests.test_swarm_run_cli import FakeDaemon
+    monkeypatch.delenv(RESTRICTED_ENV, raising=False)
+    rig = Rig(tmp_path, monkeypatch, profile="direct")
+    rig.create()
+    fake = FakeDaemon()
+    monkeypatch.setattr(child_cli, "_http", fake)
+    return rig, fake
+
+
+def _child_argv(name: str, did: str) -> "list[str]":
+    return [name, *(did if a == _DID else a for a in _CHILD_ARGS[name])]
+
+
+def test_child_commands_call_only_owner_agent_ops(child_run):
+    """Every route a ``pipeline-v1 child`` subcommand sends through ``child_cli._http`` is
+    a registry row the owner agent may call; a new subcommand must be added here."""
+    import json
+    from tests.test_swarm_run_cli import PLAN, _exec
+    assert _child_subcommands() == set(_CHILD_ARGS), "a new child subcommand: add it here"
+    rig, fake = child_run
+    did = "so_0123456789ab"
+    for name in _CHILD_ARGS:
+        if name == "merge":
+            fake.prepared[did] = {"ok": False, "detail": "not prepared in this test"}
+        before = len(fake.calls)
+        out = _exec(rig, *_child_argv(name, did), stdin=json.dumps(PLAN) if name == "plan" else None)
+        assert (out.get("ok") is False) == (name in _CHILD_REFUSED), (name, out)
+        if name == "dispatch":
+            did = out["dispatched"][0]["dispatch_id"]
+        sent = fake.calls[before:]
+        assert bool(sent) == (name not in _CHILD_NO_DAEMON), (name, sent)
+        for method, path, _body in sent:
+            op = swarm_out_ops.match(method, f"/api/swarm-out{path}")
+            assert op is not None, (name, method, path)
+            assert OWNER in op.callers, (name, op.name)
+
+
+def test_child_commands_refuse_a_non_owner_channel_session(child_run, monkeypatch):
+    """Like ``scripts.swarm_out``: a channel session that owns the lead run still never
+    reaches the owner's Hives, and nothing is written (the plan included)."""
+    import json
+    from core.knowledge_cli import RESTRICTED_ENV
+    from tests.test_swarm_run_cli import PLAN, _exec
+    rig, fake = child_run
+    monkeypatch.setenv(RESTRICTED_ENV, "1")
+    for name in sorted(_child_subcommands()):
+        out = _exec(rig, *_child_argv(name, "so_0123456789ab"),
+                    stdin=json.dumps(PLAN) if name == "plan" else None)
+        assert out["ok"] is False and "only available to the owner" in out["error"], (name, out)
+    assert fake.calls == []
+    assert not (rig.engine().run_dir / "children.json").exists()
+    assert not (rig.engine().run_dir / "children.sent.json").exists()
+    # an emptied variable is still a restricted session (`VAR= pipeline-v1 child ...`)
+    monkeypatch.setenv(RESTRICTED_ENV, "")
+    assert _exec(rig, "status")["ok"] is False and fake.calls == []
+
+
+@pytest.mark.parametrize("cmd", [
+    '"$SWARM_BACKEND_BIN" pipeline-v1 child --project P --run-id run_0123456789ab dispatch W1',
+    'SWARM_KNOWLEDGE_RESTRICTED= "$SWARM_BACKEND_BIN" pipeline-v1 child dispatch W1 --project P',
+    'env -u SWARM_KNOWLEDGE_RESTRICTED python -m scripts.pipeline_v1 child status --project P',
+    "\"$SWARM_BACKEND_BIN\" 'pipeline-v1' 'child' plan --file -",
+])
+def test_the_session_hook_refuses_child_commands_in_a_restricted_session(cmd):
+    """The command hook refuses a Swarm Run's child commands too, so an agent that empties
+    or drops RESTRICTED_ENV in its own command still does not reach the owner's Hives."""
+    from core.security_hooks import owner_command_denial
+    assert owner_command_denial(cmd) and "only available to the owner" in owner_command_denial(cmd)
+
+
+def test_the_session_hook_leaves_other_pipeline_commands_alone():
+    from core.security_hooks import owner_command_denial
+    assert owner_command_denial('"$SWARM_BACKEND_BIN" pipeline-v1 status --project P --run-id run_0123456789ab') is None
 
 
 # ── a plain file write is the one heredoc whose body is never run ─────────────

@@ -246,7 +246,7 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
             # back by one unknown read (it keeps what was seen before)
             token_fps = {i: (seen[i] if i in unknown_once else now[i]) for i in ids}
             # what the caller is told now it has seen: every run it asked about that this
-            # session dispatched (another session's runs are not its to mark)
+            # session answers for (another session's runs are not its to mark)
             own = {i: token_fps[i] for i in ids if swarm_run.owner_of(rows.get(i)) == session}
             await asyncio.to_thread(mark_seen, session, own, set(rows))
             return {"changed": bool(changed), "changed_ids": changed, "token": _token(token_fps),
@@ -273,7 +273,7 @@ _NEXT = {"judge": "landed: judge it (`swarm_out accept`, or `swarm_out ask-perso
 
 def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
     """(block, fingerprints shown) for the next message of *session*: the runs it
-    dispatched whose fingerprint changed since it last saw them, from the background
+    answers for whose fingerprint changed since it last saw them, from the background
     snapshot. (None, {}) when there is nothing to say. The caller marks the
     fingerprints seen once the block is delivered (``mark_seen``)."""
     from core import swarm_out
@@ -314,7 +314,7 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
     if not lines:
         return None, {}
     body = "\n".join(lines) + (f"\n- and {more} more that changed: `swarm_out runs`" if more else "")
-    block = (f"{DIGEST_HEADER}\nRuns this session dispatched changed since your last turn. Tell the "
+    block = (f"{DIGEST_HEADER}\nRuns this session answers for changed since your last turn. Tell the "
              "person where they are in a sentence or two first, handle what you can (the Swarm Out "
              f"skill), then answer the message.\n{body}")
     return block, shown

@@ -481,11 +481,14 @@ async def swarm_run_view(run_id: str) -> dict[str, Any]:
 @router.post("/swarm-runs/{run_id}/stop")
 async def swarm_run_stop(run_id: str, body: ActorBody) -> dict[str, Any]:
     """The person stops a whole Swarm Run: each child still running or waiting, and the
-    lead run's current turn (design 2026-10-31-swarm-run §5.9). The person's only."""
+    lead run's current turn (design 2026-10-31-swarm-run §5.9). The person's only. Each
+    child stopped gets the person's stop in its decision record, as ``run_stop`` keeps it;
+    a child that did not stop gets none."""
     _require_desktop()
     import asyncio
     from core import swarm_run
-    if _actor(body).agent:
+    actor = _actor(body)
+    if actor.agent:
         raise HTTPException(status_code=403, detail="stopping a whole Swarm Run is the person's")
     found = await asyncio.to_thread(swarm_run.lead, run_id)
     if found is None:
@@ -497,9 +500,11 @@ async def swarm_run_stop(run_id: str, body: ActorBody) -> dict[str, Any]:
             continue
         try:
             await swarm_out.stop_run(str(r["dispatch_id"]))
-            stopped.append(r["dispatch_id"])
         except swarm_out.SwarmOutError:
             failed.append(r["dispatch_id"])
+            continue
+        stopped.append(r["dispatch_id"])
+        _recorded(actor, "stop", str(r["dispatch_id"]))
     lead_stopped = False
     try:
         from core import session_registry

@@ -210,3 +210,16 @@ describe('a Swarm Run card in the turn', () => {
     expect(screen.queryByTestId('dispatch-card')).toBeNull();
   });
 });
+
+describe('a Swarm Run in the turn', () => {
+  it('renders the Swarm Run card where its block is (loaded when the turn has one)', async () => {
+    vi.spyOn(swarmOutService, 'swarmRun').mockResolvedValue({
+      run_id: 'run_0123456789ab', project: 'SwarmAI', title: 'Fix the audit findings', profile: 'direct', status: 'active',
+      stage: 'build', children: 1, planned: 1, not_dispatched: [], children_cost_usd: null,
+    });
+    const block = { type: 'swarm_run', runId: 'run_0123456789ab', project: 'SwarmAI' } as unknown as ContentBlock;
+    const { container } = render(view([bash('b1'), tr('b1'), block, tx('Split into one package.')]));
+    expect(await screen.findByTestId('swarm-run-card')).toBeTruthy();
+    expect(zones(container)).toContain('dispatch');
+  });
+});

@@ -6563,6 +6563,9 @@ def knowledge_command_denial(command: str) -> "str | None":
 # Swarm Out by name, and the Hive-management routes (core/swarm_out_ops: a non-owner
 # channel agent is never a caller of either)
 _SWARM_OUT_WORD_RE = re.compile(r"swarm[_-]?out|/api/+hive\b", re.IGNORECASE)
+# a Swarm Run's child commands dispatch to the owner's Hives through the pipeline CLI
+# (core/run_protocol/child_cli), whose command line names neither of the words above
+_SWARM_RUN_CHILD_RE = re.compile(r"\bpipeline[-_]v1\b[^\n;&|]*\bchild\b", re.IGNORECASE)
 # the owner's AWS account: who it is, and (with a token) its credentials
 _AWS_ACCOUNT_WORD_RE = re.compile(
     r"/api/+aws-account\b|/api/+system/+auth-method\b|(?<![\w-])aws-credentials\b"
@@ -6573,8 +6576,8 @@ _AWS_ACCOUNT_WORD_RE = re.compile(
 def owner_command_denial(command: str) -> "str | None":
     """Why a Bash *command* in a restricted (non-owner channel) session is denied, or
     None: the knowledge command (``knowledge_command_denial``), and anything that names
-    Swarm Out (the CLI ``scripts.swarm_out`` or the daemon's ``/api/swarm-out`` routes)
-    or the Hive-management routes (``/api/hive``), or the owner's AWS account
+    Swarm Out (the CLI ``scripts.swarm_out``, the daemon's ``/api/swarm-out`` routes, or a
+    Swarm Run's ``pipeline-v1 child`` commands) or the Hive-management routes (``/api/hive``), or the owner's AWS account
     (``/api/aws-account``, the ``aws-credentials`` subcommand, ``<data dir>/aws/``):
     dispatching to the owner's Hives sends their code out and spends their money, and
     ``runs`` shows their dispatches (design 2026-10-30-swarm-out-dispatch-card §4).
@@ -6588,6 +6591,8 @@ def owner_command_denial(command: str) -> "str | None":
     bare = re.sub(r"[\"'\\]", "", command or "")
     if _SWARM_OUT_WORD_RE.search(bare) or _SWARM_OUT_WORD_RE.search(_as_routed(bare)):
         return "Swarm Out is only available to the owner"
+    if _SWARM_RUN_CHILD_RE.search(bare):
+        return "Swarm Out is only available to the owner: a Swarm Run's children go to the owner's Hives"
     if _AWS_ACCOUNT_WORD_RE.search(bare) or _AWS_ACCOUNT_WORD_RE.search(_as_routed(bare)):
         return "the SwarmAI AWS account is only available to the owner"
     return None

@@ -195,7 +195,9 @@ def _open(row: dict) -> bool:
     from core import swarm_out_settle
     try:
         rec = swarm_out_settle.load(str(row.get("dispatch_id") or ""))
-    except Exception:  # noqa: BLE001 — a record that cannot be read is not known closed
+    except Exception as exc:  # noqa: BLE001 — a record that cannot be read is not known closed
+        logger.warning("swarm_run: settle record of %s unreadable (%s)", row.get("dispatch_id"),
+                       type(exc).__name__)
         return True
     return not (rec.get("settled") or rec.get("handled_at") or rec.get("abandoned_at"))
 
@@ -331,7 +333,8 @@ def child_report(run_id: str, recorded: Iterable[dict]) -> list[dict]:
             continue
         try:
             rec = swarm_out_settle.load(did)
-        except Exception:  # noqa: BLE001 — a child whose record is gone is listed as such
+        except Exception as exc:  # noqa: BLE001 — a child whose record is gone is listed as such
+            logger.warning("swarm_run: settle record of %s unreadable for REPORT (%s)", did, type(exc).__name__)
             rec = {}
         settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else {}
         outcome = settled.get("outcome") or ("handled" if rec.get("handled_at") else
@@ -373,7 +376,8 @@ def view(run_id: str) -> Optional[dict]:
         return None                   # gone since its log was read
     try:
         title = engine._run_title()
-    except Exception:  # noqa: BLE001 — the card names the run by its id then
+    except Exception as exc:  # noqa: BLE001 — the card names the run by its id then
+        logger.debug("swarm_run: %s has no readable title (%s)", run_id, type(exc).__name__)
         title = None
     try:
         plan = json.loads((engine.run_dir / "children.json").read_text(encoding="utf-8")).get("children") or []

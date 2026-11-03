@@ -1,4 +1,4 @@
-"""Wake the session that dispatched a run when the run needs it (design
+"""Wake the session that answers for a run when the run needs it (design
 docs/design/2026-11-02-hive-run-decision-record.md §1-§2; Swarm Run r7.11 §5.5).
 
 Whoever dispatched a run answers for it, so nothing a run needs before it has landed on
@@ -6,7 +6,7 @@ this host goes to the person: not by a timer, not by a Needs You item. The dispa
 agent sees its runs while it follows them (``swarm_out watch``) and in the digest
 before its next message (core/session_router ``_dispatch_digest``); this module covers
 the rest: a session that ended its turn. After each refresh of the runs
-(core/swarm_out.run_refresh_loop) every live dispatching session with a run that needs
+(core/swarm_out.run_refresh_loop) every live session that answers for a run that needs
 it and that it has not seen gets one system message:
 
 - **needs it** (core/swarm_out_record.actionable): a result to review, land or judge, a
@@ -75,7 +75,7 @@ def _client_id(session: str, shown: dict[str, str]) -> str:
 
 
 def candidates(data: Optional[dict[str, Any]]) -> dict[str, list[str]]:
-    """Each live dispatching session -> the dispatch ids of its runs that need it now."""
+    """Each live session that answers for runs -> the dispatch ids of its runs that need it now."""
     from core import swarm_out_record, swarm_run
     if not isinstance(data, dict):
         return {}

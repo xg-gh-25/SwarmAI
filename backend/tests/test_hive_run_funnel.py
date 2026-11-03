@@ -323,7 +323,7 @@ def test_ask_person_only_on_landed_results_and_holds_settlement(env):
     assert "ask_person" not in st.load(DID)
     _commits_row(rows, returns, "landed")
     r = _annotated(rows[DID])
-    with pytest.raises(rc.RecordError, match="only the session"):
+    with pytest.raises(rc.RecordError, match="only the session that answers for this run hands it"):
         rc.ask_person(DID, r, "s-other", "Keep it?", "keep", "a preference")
     with pytest.raises(rc.RecordError, match="say what"):
         rc.ask_person(DID, r, SID, "Keep it?", "", "a preference")
@@ -389,7 +389,7 @@ def test_keep_and_revert(env, tmp_path):
     assert rc.ask(st.load(DID))["state"] == "revert"
     _git(repo, "revert", "--no-edit", landed)
     rev = _git(repo, "rev-parse", "HEAD")
-    with pytest.raises(rc.RecordError, match="only the session"):
+    with pytest.raises(rc.RecordError, match="only the session that answers for this run reports its revert"):
         rc.reverted(DID, _annotated(rows[DID]), "s-other", [rev], "done")
     rc.reverted(DID, _annotated(rows[DID]), SID, [rev], "reverted it")
     d = st.derive(rows[DID], K())

@@ -61,10 +61,10 @@ def test_a_child_is_its_lead_runs_current_owners(leads):
 def test_commands_on_a_child_follow_the_lead_runs_owner(leads):
     lead, old = act.actor("agent", LEAD, "w"), act.actor("agent", "s-new002", "w")
     assert act.row_blocker(lead, "stop", _child()) is None
-    assert "another session" in act.row_blocker(old, "stop", _child())
+    assert "another session answers for this run" in act.row_blocker(old, "stop", _child())
     leads[RUN] = swarm_run.Lead(RUN, "Lib", "s-new002", "active", "build")
     assert act.row_blocker(old, "stop", _child()) is None
-    assert "another session" in act.row_blocker(lead, "stop", _child())
+    assert "another session answers for this run" in act.row_blocker(lead, "stop", _child())
     leads.clear()
     assert "cannot be read" in act.row_blocker(lead, "stop", _child())
 

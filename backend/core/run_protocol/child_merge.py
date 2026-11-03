@@ -60,8 +60,15 @@ def _worktree_tree(wt: Path, run_id: str) -> str:
     return rw.change_tree(wt, run_id, add=rw.untracked_new_files(wt, run_id))
 
 
+#: the chain's and a child base's commits are the run's own snapshots (never landed, never
+#: pushed): a fixed identity, so they need no git identity on the machine (a fresh Hive or
+#: a CI runner has none)
+_RUN_ID = {"GIT_AUTHOR_NAME": "swarm-run", "GIT_AUTHOR_EMAIL": "run@swarm.local",
+           "GIT_COMMITTER_NAME": "swarm-run", "GIT_COMMITTER_EMAIL": "run@swarm.local"}
+
+
 def _commit(wt: Path, tree: str, parent: str, msg: str) -> str:
-    return rw._out(wt, "commit-tree", tree, "-p", parent, "-m", msg).strip()
+    return rw._out(wt, "commit-tree", tree, "-p", parent, "-m", msg, env=_RUN_ID).strip()
 
 
 def _merge_tree(wt: Path, base: str, ours: str, theirs: str) -> "tuple[str | None, list[str]]":

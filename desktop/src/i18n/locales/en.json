@@ -2109,7 +2109,7 @@
         "not_host_class": "only a person can answer this (it reaches beyond the Hive)"
       },
       "doneByAgent": "Answered by the agent that dispatched it",
-      "agentAnswers": "The agent that dispatched this run answers this itself; you can answer first."
+      "agentAnswers": "The agent that answers for this run answers this itself; you can answer first."
     },
     "funnel": {
       "by": {

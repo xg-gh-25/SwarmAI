@@ -12,7 +12,9 @@ Readers:
 - ``tests/test_swarm_out_ops.py``: every route the app serves under those prefixes is
   in this table (a new route without a row turns it red), every person-only path is
   denied in its encoded / ``..`` / quote-split spellings, the owner agent's reads are
-  not, and the ``scripts.swarm_out`` CLI calls only operations the owner agent may call.
+  not, and the two CLIs an agent calls these routes through, ``scripts.swarm_out`` and
+  the ``pipeline-v1 child`` commands (``core.run_protocol.child_cli``), call only
+  operations the owner agent may call and refuse a non-owner channel session.
 
 What this is NOT: a boundary. The gate reads command text, and the agent and the
 daemon share an OS user (design §2.4: the Hive's password and the account's AWS keys
@@ -260,8 +262,10 @@ def person_only_match(text: str) -> "Op | None":
 
 #: the commands on a run an agent may give with its limits (core/swarm_out_actor): a
 #: request says who gives it (``by``), which the routes cannot verify, so an agent gives
-#: them only through the Swarm Out CLI and core/run_owner_gate refuses a direct HTTP call
-#: to any of them from a command
+#: them only through the Swarm Out CLI (``scripts.swarm_out``) or a Swarm Run lead's
+#: ``pipeline-v1 child`` commands (``core.run_protocol.child_cli``, on the run's own
+#: children), and core/run_owner_gate refuses a direct HTTP call to any of them from a
+#: command
 AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
                            "run.rerun", "run.stop", "run.discard",
                            "ask.answer_host", "ask.escalate", "run.ask_person", "run.reverted",

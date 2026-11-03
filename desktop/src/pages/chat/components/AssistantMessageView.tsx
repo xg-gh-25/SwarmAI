@@ -34,7 +34,7 @@
  *            3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
  */
 
-import React, { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import clsx from 'clsx';
 import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
@@ -42,8 +42,11 @@ import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ChatErrorMessage } from '../../../components/chat';
 import { AssumptionsDisclosure, isVerificationAttentionItem, OutputCard, ProductList, remoteProducts, RunLine } from './TurnCards';
 import { DispatchCard } from './DispatchCard';
-import { SwarmRunCard } from './SwarmRunCard';
 import { NextSteps } from './NextSteps';
+import { ErrorBoundary } from '../../../components/common/ErrorBoundary';
+// loaded only when a turn has a Swarm Run: it brings the Swarm Out panel (RunList, its
+// live module and the locale setup that module runs), which the chat view does not need
+const SwarmRunCard = lazy(() => import('./SwarmRunCard').then((m) => ({ default: m.SwarmRunCard })));
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
 import { deriveTurnView, extractNextSteps, hasTurnChanges } from '../turnView';
@@ -444,7 +447,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     renderText: (text, key) => <div className="text-[14px]">{renderBlock({ type: 'text', text }, key)}</div>,
     renderNeeds,
     renderProducts: (z) => <ProductList blocks={z.blocks} />,
-    renderDispatch: (z) => (z.block.type === 'swarm_run' ? <SwarmRunCard block={z.block} /> : <DispatchCard block={z.block} />),
+    renderDispatch: (z) => (z.block.type === 'swarm_run'
+      // its own boundary: a card that fails to load leaves the rest of the turn standing
+      ? <ErrorBoundary variant="panel" fallback={null}><Suspense fallback={null}><SwarmRunCard block={z.block} /></Suspense></ErrorBoundary>
+      : <DispatchCard block={z.block} />),
   };
   // The ending (spec §8): one output card. Code changes come only from turn_changes;
   // a deliverable is not listed again as a changed file; a pipeline run's documents are

@@ -141,6 +141,8 @@ def test_what_is_not_the_persons_pick_on_the_built_card_is_not_forwarded(hive, h
         answers = {qs[0]["question"]: "a — the fixture", "x": "b — conftest"}
     out = _forward(qs, answers, session)
     assert out["status"] == "not_forwarded" and hive == []
+    if how == "other session":
+        assert out["reason"] == "the card was answered in a session that does not answer for this run"
     assert wc.status(DID, "dc-1")["status"] == "not_forwarded"
 
 

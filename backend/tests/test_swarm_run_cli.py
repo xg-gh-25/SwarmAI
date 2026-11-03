@@ -298,24 +298,29 @@ def test_the_run_card_head_is_the_lead_run_and_its_packages_not_sent(run):
     assert swarm_run.view("run_ffffffffffff") is None
 
 
-def test_only_the_person_stops_a_whole_swarm_run(monkeypatch):
-    import asyncio
+def test_only_the_person_stops_a_whole_swarm_run(monkeypatch, tmp_path):
+    """§5.9: the person stops the whole run; each child it stopped keeps the person's stop
+    in its decision record (as the single-run stop does), a child it did not stop none."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from core import swarm_out, swarm_run, session_registry
+    from core import swarm_out, swarm_out_record, swarm_out_settle, swarm_run, session_registry
     from routers import swarm_out as route
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)       # the real record, kept here
     run_id = "run_0123456789ab"
     monkeypatch.setattr(swarm_run, "lead", lambda r: swarm_run.Lead(run_id, PROJECT, SESSION, "active", "build")
                         if r == run_id else None)
     rows = [{"dispatch_id": "so_000000000001", "parent_run": run_id, "state": "running"},
             {"dispatch_id": "so_000000000002", "parent_run": run_id, "state": "stopped"},
-            {"dispatch_id": "so_000000000003", "parent_run": "run_other", "state": "running"}]
+            {"dispatch_id": "so_000000000003", "parent_run": "run_other", "state": "running"},
+            {"dispatch_id": "so_000000000004", "parent_run": run_id, "state": "waiting"}]
 
     async def runs(_age):
         return {"runs": rows}
     stopped = []
 
     async def stop(did):
+        if did == "so_000000000004":
+            raise swarm_out.SwarmOutError("the Hive did not answer")
         stopped.append(did)
         return {"stopped": True}
 
@@ -331,9 +336,16 @@ def test_only_the_person_stops_a_whole_swarm_run(monkeypatch):
     app.include_router(route.router, prefix="/api/swarm-out")
     c = TestClient(app)
     assert c.post(f"/api/swarm-out/swarm-runs/{run_id}/stop", json={"by": "agent", "session": SESSION, "why": "w"}).status_code == 403
+    assert all(swarm_out_settle.load(f"so_00000000000{i}") == {} for i in range(1, 5))  # the agent's 403: nothing kept
     r = c.post(f"/api/swarm-out/swarm-runs/{run_id}/stop", json={"by": "person"})
-    assert r.status_code == 200 and r.json()["stopped"] == ["so_000000000001"] and r.json()["lead_turn_stopped"]
+    assert r.status_code == 200
+    assert r.json() == {"stopped": ["so_000000000001"], "not_stopped": ["so_000000000004"], "lead_turn_stopped": True}
     assert stopped == ["so_000000000001", SESSION]
+    kept = swarm_out_record.entries(swarm_out_settle.load("so_000000000001"))
+    assert [(e["by"], e["decision"]) for e in kept] == [("person", "stop")]
+    assert swarm_out_record.person_decisions(swarm_out_settle.load("so_000000000001"), by_agent=True) == 1
+    for other in ("so_000000000002", "so_000000000003", "so_000000000004"):   # not running / not this run / not stopped
+        assert swarm_out_record.entries(swarm_out_settle.load(other)) == []
     assert c.post("/api/swarm-out/swarm-runs/run_ffffffffffff/stop", json={"by": "person"}).status_code == 404
 
 
@@ -544,3 +556,19 @@ def test_apply_names_the_paths_that_changed_during_the_lay_in(run, monkeypatch):
     monkeypatch.setattr(child_merge.rw, "_out", out)
     got = _exec(rig, "apply")
     assert not got["ok"] and got["applied"][0]["differs"] == ["a.py"]
+
+
+def test_the_runs_snapshot_commits_need_no_git_identity(tmp_path):
+    """A fresh Hive or a CI runner has no git identity: the chain's and a child base's
+    commits are the run's own snapshots and carry a fixed one (E2E finding)."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    (repo / "a.txt").write_text("a\n")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-qm", "init")
+    _g(repo, "config", "user.useConfigOnly", "true")     # no identity may be guessed here
+    head = _g(repo, "rev-parse", "HEAD")
+    tree = _g(repo, "rev-parse", "HEAD^{tree}")
+    sha = child_merge._commit(repo, tree, head, "snapshot")
+    assert _g(repo, "log", "-1", "--format=%an <%ae>", sha) == "swarm-run <run@swarm.local>"

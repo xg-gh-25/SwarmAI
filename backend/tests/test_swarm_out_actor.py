@@ -135,7 +135,7 @@ def test_an_agent_gives_only_what_the_panel_offers_now():
 
 def test_an_agent_gives_commands_only_on_runs_its_session_dispatched():
     other = act.actor("agent", "s-other", "w")
-    assert "another session" in act.row_blocker(other, "rerun", _offer("rerun"))
+    assert "another session answers for this run" in act.row_blocker(other, "rerun", _offer("rerun"))
     assert act.row_blocker(_agent(), "rerun", _offer("rerun")) is None
     # a run no agent session is recorded as having dispatched is the person's
     assert "no agent session" in act.row_blocker(_agent(), "rerun", {**_offer("rerun"), "dispatched_from": None})

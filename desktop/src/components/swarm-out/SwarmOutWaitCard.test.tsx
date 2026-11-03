@@ -107,9 +107,9 @@ describe('SwarmOutWaitCard', () => {
 });
 
 describe('SwarmOutWaitCard — who answers (design 2026-10-31-hive-approvals)', () => {
-  it('a wait the dispatching agent answers says so, and the person can still answer it', () => {
+  it('a wait the agent that answers for the run answers says so, and the person can still answer it', () => {
     render(<SwarmOutWaitCard wait={{ ...decision, approval_class: 'decision' }} onAnswered={vi.fn()} />);
-    expect(screen.getByTestId('swarm-out-wait-agent').textContent).toContain('agent that dispatched');
+    expect(screen.getByTestId('swarm-out-wait-agent').textContent).toContain('agent that answers for this run');
     expect(screen.getByTestId('swarm-out-wait-submit')).toBeTruthy();
   });
 

@@ -433,7 +433,7 @@ def test_the_dispatching_agent_answers_its_own_classes(host):
 @pytest.mark.parametrize("rid,pick,session,word", [
     ("ap-2", "Approve", SESSION, "person's to answer"),         # off machine
     ("q-old", "A", SESSION, "person's to answer"),               # an older Hive (H9)
-    ("q-1", "A", "sess-other", "only the session that dispatched"),
+    ("q-1", "A", "sess-other", "only the session that answers for this run"),
     ("q-1", "C, whatever the Hive says", SESSION, "one of its options"),
 ])
 def test_what_the_host_may_not_answer(host, rid, pick, session, word):
@@ -456,7 +456,7 @@ def test_no_card_no_answer_and_a_reason_is_required(host):
 def test_an_escalated_wait_is_the_persons(host):
     from core import swarm_out_wait_card as wc
     asyncio.run(wc.card(DID, "q-1"))
-    with pytest.raises(wc.CardError, match="only the session"):
+    with pytest.raises(wc.CardError, match="only the session that answers for this run escalates"):
         asyncio.run(wc.escalate("sess-other", DID, "q-1", "not mine"))
     asyncio.run(wc.escalate(SESSION, DID, "q-1", "it asks what the person wants"))
     assert wc.escalation(DID, "q-1")["why"] == "it asks what the person wants"
@@ -542,7 +542,8 @@ def test_needs_you_shows_only_the_persons_waits_with_their_session(tmp_path, mon
     # the session is gone: the agent's own wait goes to the person too
     monkeypatch.setattr(aa, "_session_title", lambda sid: (False, ""))
     monkeypatch.setattr(aa, "session_confirmed", lambda sid: False)
-    assert f"swarm_out:wait:{DID}:q-1" in {i.id for i in aa._collect_swarm_out()}
+    gone = {i.id: i for i in aa._collect_swarm_out()}
+    assert gone[f"swarm_out:wait:{DID}:q-1"].detail == "The session that answers for the run no longer exists."
 
 
 def test_what_the_agent_is_told_says_who_answers():
