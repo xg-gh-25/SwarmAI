@@ -203,6 +203,20 @@ def _baseline_anchors(path: Path) -> list[str]:
             for unit in entry.get("units", [])]
 
 
+def _related_anchors(conn: sqlite3.Connection, path: Path) -> list[str]:
+    """Anchors in *path* that an active relation names. The baseline can be older than an
+    entry written since; the writer ends the relations of whichever of these the edit removes."""
+    if not _table_exists_for_redaction(conn, "ingestion_relations"):
+        return []
+    prefix = _relative(path) + "#"
+    like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    rows = conn.execute(
+        "SELECT subject_anchor FROM ingestion_relations WHERE inactive=0 AND subject_anchor LIKE ? ESCAPE '\\' "
+        "UNION SELECT object_anchor FROM ingestion_relations WHERE inactive=0 AND object_anchor LIKE ? ESCAPE '\\'",
+        (like, like)).fetchall()
+    return sorted(str(r[0]) for r in rows)
+
+
 def _insert_user_plan(conn: sqlite3.Connection, *, op_id: str, path: Path,
                       before_hash: str, new_bytes: bytes | None, archive: Path | None,
                       baseline_patch: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -249,7 +263,7 @@ def apply_user_edit(path: Path, new_bytes: bytes | None, *, expected_revision: s
             patch = {
                 "target_path": _relative(target),
                 "delete": new_bytes is None,
-                "invalidate_anchors": _baseline_anchors(target),
+                "invalidate_anchors": _baseline_anchors(target) + _related_anchors(conn, target),
                 "actor": actor,
             }
             plan = _insert_user_plan(

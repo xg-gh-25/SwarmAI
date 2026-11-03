@@ -786,3 +786,35 @@ def test_a_refusal_never_echoes_a_secret(corpus: dict[str, Path]) -> None:
         apply_user_edit(target, slash.encode(), expected_revision=revision_of(target))
     message = str(refused.value).casefold()
     assert "curl_secrets" in message and token.casefold() not in message
+
+
+def test_user_edit_inactivates_relations_of_removed_entries_the_baseline_never_saw(
+        corpus: dict[str, Path]) -> None:
+    """A governed edit that removes an entry ends that entry's relations, even when the
+    entry was written after the baseline was last refreshed: the relation table, not the
+    baseline snapshot, says which anchors have relations."""
+    from core.ingestion.api_v2 import SCHEMA_V2_DDL
+    from core.ingestion.governed_edit import apply_user_edit
+
+    target = corpus["workspace"] / "Projects/P/2-understanding/TECH.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# T\n\n## Conventions\n", encoding="utf-8")
+    ensure_baseline()
+    keep = "- [guideline] **Keep** Stays. <!-- cand:k1.unit -->\n"
+    gone = "- [guideline] **Gone** Removed. <!-- cand:g1.unit -->\n"
+    target.write_text("# T\n\n## Conventions\n\n" + keep + gone, encoding="utf-8")
+    base = "Projects/P/2-understanding/TECH.md#Conventions#cand:"
+    conn = _connect(corpus["db"])
+    conn.executescript(SCHEMA_V2_DDL)
+    for subject, obj in ((base + "k1.unit", "other#s#i"), ("other#s#j", base + "g1.unit")):
+        conn.execute("INSERT INTO ingestion_relations(subject_anchor,predicate,object_anchor,created) "
+                     "VALUES(?, 'supersedes', ?, 't')", (subject, obj))
+    conn.commit(); conn.close()
+
+    apply_user_edit(target, ("# T\n\n## Conventions\n\n" + keep).encode("utf-8"),
+                    expected_revision=revision_of(target), actor="agent:test")
+
+    conn = _connect(corpus["db"])
+    rows = dict(conn.execute("SELECT subject_anchor, inactive FROM ingestion_relations").fetchall())
+    conn.close()
+    assert rows == {base + "k1.unit": 0, "other#s#j": 1}
