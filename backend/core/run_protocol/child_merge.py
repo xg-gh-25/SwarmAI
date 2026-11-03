@@ -251,4 +251,13 @@ def _apply_one(run_id: str, name: str, wt: Path) -> "dict[str, Any] | None":
     rw._out(wt, "read-tree", "--reset", "-u", tip)
     rw._out(wt, "read-tree", "HEAD")
     rw._out(wt, "update-ref", took, tip)
+    # an edit that landed in the last moment before the lay-in is not silently lost:
+    # the worktree is compared with what was laid in, and any path that differs is named
+    after = _worktree_tree(wt, run_id)
+    if after != _tree_of(wt, tip):
+        paths = [x for x in rw._out(wt, "diff-tree", "-r", "--name-only", "-z", _tree_of(wt, tip), after)
+                 .split("\0") if x]
+        return {"repo": name, "ok": False, "tip": tip, "differs": paths[:50],
+                "detail": "the chain was laid in, but the worktree changed meanwhile: these paths are "
+                          "not what the chain has; check them (`git diff` there)"}
     return {"repo": name, "ok": True, "tip": tip}

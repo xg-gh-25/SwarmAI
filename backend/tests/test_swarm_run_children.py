@@ -87,7 +87,8 @@ def test_a_child_is_never_handed_to_the_person(leads, monkeypatch):
 
 # ── dispatching a child ─────────────────────────────────────────────────────
 
-def test_only_the_lead_runs_owner_dispatches_its_children_and_at_most_three_times(leads):
+def test_only_the_lead_runs_owner_dispatches_its_children_and_at_most_three_times(leads, monkeypatch):
+    monkeypatch.setattr(swarm_run, "_open", lambda r: False)       # the earlier ones are closed
     rows = []
     with pytest.raises(swarm_run.ChildRefused, match="only the session that drives"):
         swarm_run.check_child_dispatch(RUN, "W1", "s-other", rows)
@@ -557,3 +558,105 @@ def test_a_child_is_the_persons_only_for_a_wait_of_theirs_whether_its_lead_lives
     assert swarm_out_record.needs_person({"dispatch_id": "so_dddddddddddd", "dispatched_from": "s-x"}, []) is None
     person_class = next(c for c in ("person", "human", "secret") if c not in approval_class.HOST_CLASSES)
     assert swarm_out_record.needs_person(row, [{"session_id": "hs1", "approval_class": person_class}]) is True
+
+
+# ── the second review's fixes (impl §5: P, R, S, T, V, W) ───────────────────
+
+def test_release_never_waits_for_a_count_reading_the_log(leads):
+    """P: release (on the event loop) does not take the lock held while the log is read."""
+    import threading
+    swarm_run.check_child_dispatch(RUN, "W1", LEAD, [])
+    reading, go, done = threading.Event(), threading.Event(), threading.Event()
+
+    def slow_log():
+        reading.set()
+        go.wait(5)
+        return []
+    t = threading.Thread(target=lambda: (swarm_run.check_child_dispatch(RUN, "W2", LEAD, slow_log), done.set()))
+    t.start()
+    try:
+        assert reading.wait(5)
+        r = threading.Thread(target=swarm_run.release, args=(RUN, "W1"))
+        r.start()
+        r.join(1)
+        assert not r.is_alive()                       # it did not wait for the log read
+    finally:
+        go.set()
+        t.join(5)
+    assert done.is_set() and swarm_run._INFLIGHT == {(RUN, "W2"): 1}
+
+
+def test_again_is_refused_while_the_package_has_an_open_child(leads, env):
+    """T: the daemon agrees with the CLI: no second open child of one package."""
+    rows, _ = env
+    rows[SDID] = _schild()
+    log = [{"dispatch_id": SDID, "parent_run": RUN, "wp": "W1"}]
+    with pytest.raises(swarm_run.ChildRefused, match="still has an open child"):
+        swarm_run.check_child_dispatch(RUN, "W1", LEAD, log, again=True)
+    st.set_handled(SDID, "taken", None, by="run_end")
+    swarm_run.check_child_dispatch(RUN, "W1", LEAD, log, again=True)
+
+
+def test_the_persons_refusal_reads_the_log_when_the_snapshot_lacks_the_row(leads, monkeypatch):
+    """R: a child missing from the runs snapshot is still a child for the person."""
+    c = _client(monkeypatch, {"dispatch_id": "so_000000000000"})
+    monkeypatch.setattr(swarm_out, "_log_row_of", lambda did: _child() if did == DID else {})
+    r = c.post(f"/api/swarm-out/runs/{DID}/manual-landed", json={"by": "person"})
+    assert r.status_code == 403 and "child of Swarm Run" in r.json()["detail"]
+
+
+def test_a_child_whose_hive_named_no_session_is_handled_with_nothing_to_stop(leads, env, monkeypatch):
+    """S: unknown because its Hive named no session for it: closed by the run's end."""
+    from core import swarm_run_conductor
+    rows, _ = env
+    rows[SDID] = _schild(state="unknown", state_reason="no_session_id")
+    stopped = []
+
+    async def stop(did):
+        stopped.append(did)
+    monkeypatch.setattr(swarm_out, "stop_run", stop)
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
+    assert asyncio.run(swarm_run_conductor.end_children({"runs": list(rows.values())})) == [SDID]
+    assert stopped == [] and st.load(SDID)["handled"]["by"] == "run_end"
+
+
+def test_a_child_whose_lead_run_cannot_be_read_falls_back_to_the_older_rules(leads, monkeypatch):
+    """S: nobody can command it: not hidden as "nobody's", the person sees it."""
+    from core import swarm_out_record
+    monkeypatch.setattr(swarm_out_record, "owner_alive", lambda r: False)
+    leads.clear()
+    assert swarm_out_record.needs_person(_child(), []) is None
+
+
+def test_the_freeze_lock_of_an_ended_run_stays(leads, ws, monkeypatch):
+    """V: dropping a freeze keeps the run's lock: a freeze still being made holds it."""
+    from core import brain_sync_host, swarm_out_model
+    monkeypatch.setattr(brain_sync_host, "_package", lambda *a: (b"p", "e" * 64, 1))
+    monkeypatch.setattr(swarm_out_model, "host_model", lambda: "m")
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: ws / "state" / "swarm-out")
+    swarm_run.freeze(ws, RUN, "Lib", "rev")
+    lock = swarm_run._FREEZE_LOCKS[RUN]
+    swarm_run.drop_freeze(RUN)
+    assert swarm_run._FREEZE_LOCKS.get(RUN) is lock and swarm_run.frozen(RUN) is None
+
+
+def test_a_spec_for_a_child_does_not_let_another_session_or_a_fake_run_dispatch(leads, ws, monkeypatch):
+    """W: /spec takes parent_run for admission only; /dispatch rechecks run and session."""
+    from core.project_agent import revision
+    from tests.test_task_spec import _brain, _fake_hive
+    b = _brain(ws)
+    _fake_hive(monkeypatch, "0" * 64)
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [])
+    c = _client(monkeypatch, _child())
+    spec = c.post("/api/swarm-out/spec", json={"brain": "Lib", "task": "fix it", "acceptance": "tests pass",
+                                                "execution": "native", "returns": "commits", "parent_run": RUN})
+    assert spec.status_code == 200, spec.text
+    body = {"brain": "Lib", "title": "W1 · x", "task": "fix it", "acceptance": "tests pass", "execution": "native",
+            "returns": "commits", "revision": revision(b), "hive": "hive3", "wp": "W1"}
+    for over, word in (({"session": "s-other", "parent_run": RUN}, "only the session that drives"),
+                       ({"session": LEAD, "parent_run": "run_ffffffffffff"}, "not a pipeline run")):
+        r = c.post("/api/swarm-out/dispatch", json={**body, **over})
+        assert r.status_code == 400 and word in r.json()["detail"], r.text
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "abandoned", "build")
+    r = c.post("/api/swarm-out/dispatch", json={**body, "session": LEAD, "parent_run": RUN})
+    assert r.status_code == 400 and "has ended" in r.json()["detail"]

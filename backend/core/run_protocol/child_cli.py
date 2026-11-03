@@ -34,6 +34,9 @@ from typing import Any, Optional
 from core.run_protocol.engine import EngineError, RunEngine
 
 PLAN_FILE = "children.json"
+#: the work packages this run's CLI set out to send (written before the HTTP call, under
+#: the run's lock): "went out" is known before the dispatch log says so
+SENT_FILE = "children.sent.json"
 MAX_CHILDREN = 20
 MAX_TASK_CHARS = 20000
 DISPATCH_TIMEOUT_S = 540
@@ -145,10 +148,32 @@ def _clean_plan(raw: Any) -> list[dict[str, Any]]:
 _SENT_KEYS = ("task", "acceptance", "execution", "returns", "mode", "base")
 
 
+def _read_sent(engine: RunEngine) -> set[str]:
+    try:
+        data = json.loads((engine.run_dir / SENT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(w) for w in data if isinstance(w, str)} if isinstance(data, list) else set()
+
+
+def _write_sent(engine: RunEngine, wps: set[str]) -> None:
+    path = engine.run_dir / SENT_FILE
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(wps)), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _run_lock(engine: RunEngine):
+    from config import get_app_data_dir
+    from core.run_protocol.oplock import operation
+    return operation(get_app_data_dir() / "state" / "pipeline_agent_audit", engine.run_id)
+
+
 def _sent_wps(engine: RunEngine) -> set[str]:
-    """Work packages that went out: the run's log, and Swarm Out's rows when the daemon
-    answers (a dispatch whose event was not written is still in its log)."""
-    sent = {str(c.get("wp")) for c in engine.children_recorded() if c.get("wp")}
+    """Work packages that went out or are going out: what this run's CLI set out to send
+    (SENT_FILE, kept until a plain refusal), the run's log, and Swarm Out's rows when the
+    daemon answers. Read under the run's lock."""
+    sent = _read_sent(engine) | {str(c.get("wp")) for c in engine.children_recorded() if c.get("wp")}
     rows, err = _rows(engine.run_id)
     if err is None:
         sent |= {str(r.get("wp")) for r in rows if r.get("wp")}
@@ -160,19 +185,20 @@ def write_plan(engine: RunEngine, raw: Any) -> list[dict[str, Any]]:
     it as it was sent (see _SENT_KEYS); titles, briefs, ``why`` and ``after`` may change,
     and packages not sent may be added, changed or removed."""
     plan = _clean_plan(raw)
-    old = {c["wp"]: c for c in read_plan(engine)}
-    new = {c["wp"]: c for c in plan}
-    for wp in sorted(_sent_wps(engine) & set(old)):
-        if wp not in new:
-            raise ChildError(f"{wp} went out already: it stays in the plan")
-        changed = [k for k in _SENT_KEYS if old[wp].get(k) != new[wp].get(k)]
-        if changed:
-            raise ChildError(f"{wp} went out already: its {', '.join(changed)} stay as sent "
-                             "(a correction goes with `child dispatch --again <wp> --note-file F`)")
-    path = _plan_path(engine)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"children": plan}, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    with _run_lock(engine):        # a dispatch marks what it sends under the same lock
+        old = {c["wp"]: c for c in read_plan(engine)}
+        new = {c["wp"]: c for c in plan}
+        for wp in sorted(_sent_wps(engine) & set(old)):
+            if wp not in new:
+                raise ChildError(f"{wp} went out already: it stays in the plan")
+            changed = [k for k in _SENT_KEYS if old[wp].get(k) != new[wp].get(k)]
+            if changed:
+                raise ChildError(f"{wp} went out already: its {', '.join(changed)} stay as sent "
+                                 "(a correction goes with `child dispatch --again <wp> --note-file F`)")
+        path = _plan_path(engine)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"children": plan}, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
     return plan
 
 
@@ -319,11 +345,24 @@ def dispatch(engine: RunEngine, wps: list[str], *, again: str = "", note: str = 
         raise ChildError(f"{again} still has an open child: discard or take it first")
     previous = next((r.get("dispatch_id") for r in reversed(rows) if r.get("wp") == again), "") if again else ""
     session = _session()            # read here: the request context does not reach the threads
-    if any(plan[w].get("base") == [WORKTREE_BASE] for w in wps):
-        base = worktree_base(engine)    # once, for every child of this call that asks for it
+    base = worktree_base(engine) if any(plan[w].get("base") == [WORKTREE_BASE] for w in wps) else None
+    with _run_lock(engine):
+        # what goes out is the plan as it is now, marked sent before it goes: a plan
+        # written meanwhile (write_plan, same lock) is either read here or refused there
+        fresh = {c["wp"]: c for c in read_plan(engine)}
+        if any(fresh.get(w) != plan.get(w) for w in wps):
+            raise ChildError("the plan changed since this dispatch read it: run it again")
+        _write_sent(engine, _read_sent(engine) | set(wps))
+    if base is not None:           # once, for every child of this call that asks for it
         plan = {w: ({**c, "base": base} if c.get("base") == [WORKTREE_BASE] else c) for w, c in plan.items()}
     with ThreadPoolExecutor(max_workers=min(4, len(wps))) as pool:
         results = list(pool.map(lambda w: _send_one(engine, plan[w], session, note, previous), wps))
+    # a plain refusal sent nothing: that package may still change in the plan
+    refused = {r["wp"] for r in results if not r.get("ok") and not r.get("maybe_sent")}
+    if refused and not again:
+        with _run_lock(engine):
+            sent_any = {str(c.get("wp")) for c in engine.children_recorded()}
+            _write_sent(engine, _read_sent(engine) - (refused - sent_any))
     frozen = next((r.pop("frozen") for r in results if isinstance(r.get("frozen"), dict)), None)
     for r in results:
         r.pop("frozen", None)

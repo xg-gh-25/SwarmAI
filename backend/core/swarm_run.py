@@ -71,9 +71,12 @@ _CACHE: dict[str, tuple[tuple, Lead]] = {}
 #: guards _CACHE and _FREEZE_LOCKS only: held for dictionary reads and writes, never
 #: while a file is read or a Brain packaged
 _LOCK = threading.Lock()
-#: guards _INFLIGHT, held while the dispatch log is read for a count (so two dispatches
-#: of one package cannot both count the log before either row is written)
+#: held for a whole count, the dispatch log's read included (so two dispatches of one
+#: package cannot both count the log before either row is written)
 _DISPATCH_LOCK = threading.Lock()
+#: guards _INFLIGHT only, never held over a read: ``release`` (called on the event loop)
+#: takes nothing else
+_FLIGHT_LOCK = threading.Lock()
 #: (parent_run, wp) -> dispatches of it in flight (counted with the log's rows)
 _INFLIGHT: dict[tuple[str, str], int] = {}
 #: run_id -> the lock its freeze is made under (one Brain package per run)
@@ -156,10 +159,15 @@ def check_child_dispatch(parent_run: str, wp: str, session: Optional[str],
     if found.ended:
         raise ChildRefused(f"{found.run_id} has ended ({found.status}); it dispatches nothing more")
     with _DISPATCH_LOCK:
+        # in flight first, then the log: a dispatch that ends between the two reads is
+        # counted twice (refused at worst), never not at all
+        with _FLIGHT_LOCK:
+            inflight = dict(_INFLIGHT)
         log = [r for r in (rows() if callable(rows) else rows)
                if isinstance(r, dict) and r.get("parent_run") == parent_run]
-        logged = sum(1 for r in log if r.get("wp") == wp)
-        flying = _INFLIGHT.get((parent_run, wp), 0)
+        mine = [r for r in log if r.get("wp") == wp]
+        logged = len(mine)
+        flying = inflight.get((parent_run, wp), 0)
         sent = logged + flying
         if not again and sent:
             raise ChildRefused(f"{wp} went out already: a new attempt at it is a correction "
@@ -168,21 +176,34 @@ def check_child_dispatch(parent_run: str, wp: str, session: Optional[str],
             raise ChildRefused(f"{wp} is being dispatched now: wait for that dispatch to end")
         if again and not logged:
             raise ChildRefused(f"{wp} never went out: dispatch it, not again")
+        if again and any(_open(r) for r in mine):
+            raise ChildRefused(f"{wp} still has an open child: discard or take it first")
         if sent >= MAX_WP_DISPATCHES:
             raise ChildRefused(f"{wp} was dispatched {sent} times already (at most {MAX_WP_DISPATCHES}): "
                                "do it in the run yourself, or leave it out and say so in the delivery")
-        total = len(log) + sum(n for (run, _), n in _INFLIGHT.items() if run == parent_run)
+        total = len(log) + sum(n for (run, _), n in inflight.items() if run == parent_run)
         if total >= MAX_RUN_DISPATCHES:
             raise ChildRefused(f"{parent_run} has dispatched {total} children (at most {MAX_RUN_DISPATCHES}): "
                                "do the rest in the run yourself, or leave it out and say so in the delivery")
-        _INFLIGHT[(parent_run, wp)] = flying + 1
+        with _FLIGHT_LOCK:
+            _INFLIGHT[(parent_run, wp)] = _INFLIGHT.get((parent_run, wp), 0) + 1
     return found
+
+
+def _open(row: dict) -> bool:
+    """Nothing has closed this dispatch yet (settled, handled by its run, discarded)."""
+    from core import swarm_out_settle
+    try:
+        rec = swarm_out_settle.load(str(row.get("dispatch_id") or ""))
+    except Exception:  # noqa: BLE001 — a record that cannot be read is not known closed
+        return True
+    return not (rec.get("settled") or rec.get("handled_at") or rec.get("abandoned_at"))
 
 
 def release(parent_run: str, wp: str) -> None:
     """The dispatch that ``check_child_dispatch`` let through has ended (its row, if one
     was written, is in the log now)."""
-    with _DISPATCH_LOCK:
+    with _FLIGHT_LOCK:
         n = _INFLIGHT.get((parent_run, wp), 0) - 1
         if n > 0:
             _INFLIGHT[(parent_run, wp)] = n
@@ -259,8 +280,8 @@ def drop_freeze(run_id: str) -> None:
         shutil.rmtree(_freeze_dir(run_id), ignore_errors=True)
     except ChildRefused:
         pass
-    with _LOCK:
-        _FREEZE_LOCKS.pop(run_id, None)
+    # the run's freeze lock stays: a freeze still being made holds it, and a new one
+    # would let a second packaging run beside it (one lock per run costs nothing)
 
 
 def held_hives(rows: Iterable[dict], brain: str, digest: Optional[str], run_id: Optional[str]) -> set[str]:

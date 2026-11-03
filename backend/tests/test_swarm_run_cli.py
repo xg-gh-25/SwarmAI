@@ -483,3 +483,57 @@ def test_report_lists_a_child_whose_event_was_never_written(run):
     kids = value["details"]["children"]
     assert [(c["dispatch_id"], c["wp"], c["hive"], c["outcome"]) for c in kids] == \
         [("so_000000000077", "W2", "h2", "open")]
+
+
+
+# ── the second review's fixes (impl §5: Q, U) ───────────────────────────────
+
+def test_a_package_is_marked_sent_before_it_goes_and_the_plan_keeps_it(run, monkeypatch):
+    """Q: while a dispatch is on its way (no row, no event yet), and when the daemon does
+    not answer, the plan cannot change what was sent; a plain refusal frees it again."""
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    w1, w2 = PLAN["children"]
+    seen = {}
+    real = fake.__call__
+
+    def mid_dispatch(method, path, body=None, timeout=120):
+        if path == "/dispatch" and "plan" not in seen:
+            # the dispatch is on its way: a plan written now must keep W1 as sent
+            seen["plan"] = _exec(rig, "plan", "--file", "-", stdin=json.dumps({"children": [
+                {**w1, "task": "something else"}, w2]}))
+        return real(method, path, body, timeout)
+    monkeypatch.setattr(child_cli, "_http", mid_dispatch)
+    assert _exec(rig, "dispatch", "W1")["ok"]
+    assert "stay as sent" in seen["plan"]["error"]
+    # the daemon is down: what went out is still known
+    monkeypatch.setattr(child_cli, "_http", lambda *a, **k: {"ok": False, "status": None, "detail": "down"})
+    assert "stays in the plan" in _exec(rig, "plan", "--file", "-", stdin=json.dumps({"children": [
+        {**w2, "after": []}]}))["error"]
+    # a plain refusal sent nothing: W2 may change again
+    monkeypatch.setattr(child_cli, "_http", lambda m, p, b=None, timeout=120: (
+        {"ok": False, "status": 400, "detail": "refused"} if p == "/dispatch" else real(m, p, b, timeout)))
+    assert not _exec(rig, "dispatch", "W2")["ok"]
+    monkeypatch.setattr(child_cli, "_http", fake)
+    assert _exec(rig, "plan", "--file", "-", stdin=json.dumps({"children": [w1, {**w2, "task": "a new task"}]}))["ok"]
+
+
+def test_apply_names_the_paths_that_changed_during_the_lay_in(run, monkeypatch):
+    """U: an edit in the last moment before the lay-in is reported, not silently lost."""
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    _exec(rig, "dispatch", "W1")
+    d1 = fake.rows[0]["dispatch_id"]
+    _prepared(rig, fake, d1, {"a.py": "a\n"})
+    assert _exec(rig, "merge", d1)["ok"]
+    wt = Path(next(iter(rig.engine().effective_repos().values())))
+    real = child_merge.rw._out
+
+    def out(cwd, *args, **kw):
+        res = real(cwd, *args, **kw)
+        if args[:2] == ("read-tree", "--reset"):
+            (wt / "a.py").write_text("an edit in the last moment\n")
+        return res
+    monkeypatch.setattr(child_merge.rw, "_out", out)
+    got = _exec(rig, "apply")
+    assert not got["ok"] and got["applied"][0]["differs"] == ["a.py"]

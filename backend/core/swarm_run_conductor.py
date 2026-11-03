@@ -10,7 +10,9 @@ follows (core/swarm_out_settle.annotate).
 
 Run after each refresh of the runs (core/swarm_out.run_refresh_loop), on the snapshot it
 just made; it does not poll a Hive itself. A child whose Hive did not answer (state
-unknown) waits for a refresh that knows its state. One closed by its run's end settles
+unknown) waits for a refresh that knows its state, except one its Hive named no session
+for (``no_session_id``): there is nothing to stop, so it is handled; a session that turns
+up later ends its turn and then settles by the same rules. One closed by its run's end settles
 once it is not running, a wait left open on its Hive included (nothing will answer it),
 as a discarded run does. Deterministic, idempotent (a child already
 handled, discarded or settled is skipped) and it never raises.
@@ -57,12 +59,13 @@ async def end_children(data: Any) -> list[str]:
     for r in rows:
         did = r["dispatch_id"]
         state = r.get("state")
-        if state not in ("running", "waiting", "stopped"):
+        no_session = state == "unknown" and r.get("state_reason") == "no_session_id"
+        if state not in ("running", "waiting", "stopped") and not no_session:
             # its Hive did not answer: a turn may still be going there. Closed once its
             # state is known (a later refresh), never recorded as handled while it may run
             continue
         try:
-            if state != "stopped":
+            if state in ("running", "waiting"):
                 # stopped first: once handled, the run counts as accepted and takes no stop
                 await swarm_out.stop_run(did)
             await asyncio.to_thread(swarm_out_settle.set_handled, did,

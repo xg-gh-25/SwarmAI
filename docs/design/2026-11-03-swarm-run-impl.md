@@ -82,3 +82,23 @@ related:
 
 落地情况：A–M 都已改完，每条修法都写了先红后绿的测试，并做了变异检查（`scripts.mutation_check`：后端 27 处、前端 4 处，全部被抓到）。有一处没留：C 里"ref 只建不挪"的旧值检查。`@worktree` 本来就在 run 的操作锁里取新编号，两次调用不会撞名，所以这个检查从来抓不到问题，已删掉。REPORT 只在 run 写过计划（`children.json`）或记过子单时才读派发记录，普通 run 的审计不读。
 
+
+## 5. 第二轮审查的修复说明（security、concurrency、state-machine，对 `f98400b28` 的修复 diff）
+
+三位都没有 HIGH。按原因合并成下面几组，一次改完。这是最后一轮：之后再发现的问题，记为剩下的风险。
+
+| 组 | 原因 | 修法 | 证明它的测试 |
+|---|---|---|---|
+| P | `release` 在事件循环上取 `_DISPATCH_LOCK`，而计数时这把锁在读整份派发记录（concurrency MED） | `_INFLIGHT` 改用一把只管字典的小锁；计数时先在小锁里复制在途数，再读派发记录（release 夹在两次读之间时多算一次，偏安全）；`release` 只取小锁 | 计数读派发记录的同时，`release` 不必等 |
+| Q | "哪些 wp 已经派出"要等派发记录写下来才知道：派发途中改计划、daemon 不应答时改计划，都能改动一个已经派出的 wp（concurrency MED、security LOW、state-machine LOW） | CLI 在发出 HTTP 之前，在 run 的锁里把 wp 记进 `children.sent.json`；只有明确的拒绝（不是 `maybe_sent`）才删掉这条记录。`write_plan` 在同一把锁里读这个文件，和事件、Swarm Out 的 row 一起算"已派" | 派发途中改计划被拒；daemon 不应答时改计划也被拒 |
+| R | 人的子单拒绝只看快照里的 row，没有这一行就放行（security LOW） | row 为空、命令又是子单相关的时，退回读派发记录里的 row（`_log_row_of`） | `run_row` 返回 None 时，人对子单 `return/land` 仍得 403 |
+| S | 没人能了结的子单不告诉任何人：Hive 没给出会话（`unknown/no_session_id`）的子单 Conductor 永远在等；lead run 读不到的子单，`needs_person` 不再落回旧规则（state-machine 两条 MED） | Conductor 把 `unknown/no_session_id` 当成没有可停的会话，直接记为已处理。之后如果真出现会话，它跑完自然停下，再按规则了结。`needs_person` 只在 lead run 读得到时才对子单用新规则，读不到就照旧规则走 | 两条测试各一 |
+| T | daemon 的 `again` 不看前一单是否还开着，CLI 看（state-machine LOW） | `check_child_dispatch` 对 `again` 拒绝：这个 wp 还有一单没了结（没 settled、没 handled、没 abandoned） | 直接调用时被拒 |
+| U | apply 的二次检查之后、铺入之前仍有一个窗口（concurrency LOW） | 铺完再算一次 worktree 的树，和 tip 不一样就报出差异路径，不报 `ok` | 铺入时注入一次修改 |
+| V | `drop_freeze` 不拿锁就把 run 的锁从字典里弹掉（concurrency LOW） | 不再弹出（每个 run 一把锁，开销可以忽略） | 变异检查：恢复弹出后测试变红 |
+| W | 缺一条端到端测试：`/spec` 带了 `parent_run`，`/dispatch` 换了会话或用假的 run 要被拒（security） | 补测试 | — |
+
+剩下的风险（不改）：一个因 run 结束而被停掉的子单，如果停在 `running/answer_sent`（答案已发出、Hive 还没取），可能一直不了结（state-machine LOW，信心 4，运行时没有确认过）。了结它会让 Hive 释放 workspace，而 Hive 一旦取走这个答案，那一轮就会接着跑。所以宁可让它挂着，由人丢弃，也不冒这个险。
+
+落地情况：P–W 都已改完，每条修法都写了测试，并做了变异检查（9 处，全部被抓到）。两轮审查到此结束。
+

@@ -470,8 +470,9 @@ def needs_person(row: dict, asks: list[dict]) -> Optional[bool]:
     falls back to the older rules: its lead run takes it or the Conductor closes it, so
     only a wait that is the person's is the person's, whether its lead session lives or not."""
     from core import swarm_run
-    if not swarm_run.is_child(row) and not owner_alive(row):
-        return None
+    lead_known = swarm_run.is_child(row) and swarm_run.lead(row.get("parent_run")) is not None
+    if not lead_known and not owner_alive(row):
+        return None               # a child whose lead run cannot be read: the older rules
     a = (row.get("funnel") or {}).get("ask")
     if isinstance(a, dict) and a.get("state") == "open":
         return True

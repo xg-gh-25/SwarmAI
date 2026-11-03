@@ -171,6 +171,12 @@ async def _allowed(actor, command: str, dispatch_id: str,
     if not actor.agent and command not in swarm_out_actor.CHILD_REFUSED | swarm_out_actor.CHILD_LEAD_ONLY:
         return
     row = await _call(swarm_out.run_row(dispatch_id))
+    if row is None and not actor.agent:
+        # not in the runs snapshot now: whether it is a child is in the dispatch log
+        try:
+            row = await asyncio.to_thread(swarm_out._log_row_of, dispatch_id)
+        except swarm_out.SwarmOutError:
+            row = None
     why = await asyncio.to_thread(swarm_out_actor.row_blocker, actor, command, row, ended_at)
     if why is None and actor.agent and command == "discard":
         why = await asyncio.to_thread(swarm_out_actor.discard_blocker, row)
