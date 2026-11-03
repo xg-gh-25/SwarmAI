@@ -54,6 +54,10 @@ class DispatchBody(BaseModel):
     # where the task starts instead of each checkout's HEAD: ["<ref>"] or
     # ["<repo>=<ref>", ...] (core/task_spec.build; design 2026-10-31-swarm-run §5.1)
     base: Optional[list[str]] = Field(default=None, max_length=8)
+    # a Swarm Run's child: the lead run and the work package (core/swarm_run; only the
+    # session that drives the run may send them)
+    parent_run: Optional[str] = Field(default=None, max_length=40)
+    wp: Optional[str] = Field(default=None, max_length=32)
 
 
 class ActorBody(BaseModel):
@@ -126,7 +130,8 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
                                                body.origin, seen_revision=body.revision,
                                                brief=body.brief or "", why=body.why or "",
                                                returns=body.returns, needs_private=body.needs_private or "",
-                                               dispatched_from=body.session, base=body.base))
+                                               dispatched_from=body.session, base=body.base,
+                                               parent_run=body.parent_run, wp=body.wp))
 
 
 class ReturnBody(ActorBody):

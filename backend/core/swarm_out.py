@@ -724,7 +724,8 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                         origin: str = "swarm-out", *, seen_revision: str, brief: str = "",
                         why: str = "", returns: Optional[str] = None,
                         needs_private: str = "", dispatched_from: Optional[str] = None,
-                        base: Optional[list[str]] = None) -> dict[str, Any]:
+                        base: Optional[list[str]] = None, parent_run: Optional[str] = None,
+                        wp: Optional[str] = None) -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision ``/spec`` returned (``seen_revision``) or admission fails (naming the rule), syncs the Brain when the
@@ -733,14 +734,44 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     ``hive_ref``: ``pick_hive`` chooses (the person named none). ``brief``: one or two
     sentences of what the task is, for the dispatch card. The whole of it runs within one
     DISPATCH_DEADLINE_S, started here and passed to every step (``_Deadline``). ``base``:
-    where the task starts instead of each checkout's HEAD (core/task_spec.build)."""
-    from core import brain_sync_host, task_spec
+    where the task starts instead of each checkout's HEAD (core/task_spec.build).
+    ``parent_run`` and ``wp``: the task is work package *wp* of that Swarm Run's lead run
+    (core/swarm_run), refused unless *dispatched_from* drives the run now."""
+    from core import brain_sync_host, swarm_run, task_spec
     from core.project_registry import get_swarmws
     deadline = _Deadline(DISPATCH_DEADLINE_S)
     ws = get_swarmws()
+    lead = None
+    if parent_run or wp:
+        try:
+            lead = await asyncio.to_thread(swarm_run.check_child_dispatch, parent_run or "", wp or "",
+                                           _session_or_none(dispatched_from), _read_log())
+        except swarm_run.ChildRefused as e:
+            raise SwarmOutError(str(e)) from None
+        if lead.project != brain:
+            swarm_run.release(lead.run_id, wp or "")
+            raise SwarmOutError(f"{lead.run_id} is a run of {lead.project}; its children go under that Brain")
+    try:
+        return await _dispatch_spec(deadline, ws, lead, hive_ref, title, brain, task, acceptance, mode,
+                                    execution, origin, seen_revision=seen_revision, brief=brief, why=why,
+                                    returns=returns, needs_private=needs_private,
+                                    dispatched_from=dispatched_from, base=base, wp=wp)
+    finally:
+        if lead is not None:
+            swarm_run.release(lead.run_id, wp or "")
+
+
+async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: Optional[str], title: str,
+                         brain: str, task: str, acceptance: str, mode: Optional[str],
+                         execution: Optional[str], origin: str, *, seen_revision: str, brief: str,
+                         why: str, returns: Optional[str], needs_private: str,
+                         dispatched_from: Optional[str], base: Optional[list[str]],
+                         wp: Optional[str]) -> dict[str, Any]:
+    from core import brain_sync_host, task_spec
     try:
         spec = await asyncio.to_thread(task_spec.build, ws, brain, task, acceptance, mode, execution, why,
-                                       "hive", returns=returns, needs_private=needs_private, base=base)
+                                       "hive", returns=returns, needs_private=needs_private, base=base,
+                                       parent_run=lead.run_id if lead else None)
     except task_spec.SpecError as e:
         raise SwarmOutError(str(e)) from None
     if not seen_revision or spec["revision"] != seen_revision:
@@ -828,6 +859,9 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                                 "hive_reason": hive_reason, "brain_sync": synced,
                                 # the agent session that follows the run (agent-owns-its-runs §2.1)
                                 "dispatched_from": _session_or_none(dispatched_from),
+                                # a Swarm Run's child: its lead run and work package (core/swarm_run)
+                                **({"parent_run": lead.run_id, "wp": wp, "project": lead.project}
+                                   if lead else {}),
                                 "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0,
                                                 **({"base": r["base"]} if r.get("base") else {})}
                                                for r in spec["repos"]]})

@@ -55,6 +55,8 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 MAX_AGENT_RERUNS = 2
+#: commands no one gives on a Swarm Run's child (design 2026-10-31-swarm-run §5.3)
+CHILD_REFUSED = frozenset({"return_land", "manual_landed"})
 MAX_WHY_CHARS = 400
 COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "rerun", "stop", "discard")
 
@@ -107,11 +109,19 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
     """Why an agent may not give *command* on the run whose ``/runs`` row is *row*, else
     None: another session dispatched it, or the panel does not offer the person that
     command on it now (module docstring)."""
+    from core import swarm_run
+    if command in CHILD_REFUSED and swarm_run.is_child(row):
+        # a Swarm Run's child is material for its lead run, never landed here on its own
+        # (design 2026-10-31-swarm-run §6 point 2): the lead run lands its own change
+        return ("this run is a child of Swarm Run " + str(row.get("parent_run"))
+                + ": its commits are material for that run, not landed on their own")
     if not a.agent:
         return None
     if not isinstance(row, dict):
         return "the run is not in the list of runs now; try again in a moment"
-    owner = row.get("dispatched_from")
+    owner = swarm_run.owner_of(row)
+    if not owner and swarm_run.is_child(row):
+        return "the Swarm Run this run belongs to cannot be read: nobody gives commands on it now"
     if not owner:
         # a run from before the dispatching session was recorded: no agent owns it
         return "no agent session is recorded as having dispatched this run: the person gives commands on it"

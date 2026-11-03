@@ -162,7 +162,7 @@ def _rows_of_session(command: str, since: Optional[float], session_id: Optional[
     if _expanded(title):
         title = None
     rows = [r for r in swarm_out._read_log()
-            if r.get("dispatched_from") == session_id
+            if r.get("dispatched_from") == session_id and not r.get("parent_run")
             and (at := _sent_at(r)) is not None and at >= since - _SKEW_S
             and (title is None or r.get("title") == title)]
     return sorted(rows, key=lambda r: _sent_at(r) or 0.0)

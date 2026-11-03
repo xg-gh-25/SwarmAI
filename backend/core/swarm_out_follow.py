@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from core import swarm_run
 from core.injected_blocks import DISPATCH_DIGEST_HEADER as DIGEST_HEADER
 
 logger = logging.getLogger(__name__)
@@ -246,7 +247,7 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
             token_fps = {i: (seen[i] if i in unknown_once else now[i]) for i in ids}
             # what the caller is told now it has seen: every run it asked about that this
             # session dispatched (another session's runs are not its to mark)
-            own = {i: token_fps[i] for i in ids if (rows.get(i) or {}).get("dispatched_from") == session}
+            own = {i: token_fps[i] for i in ids if swarm_run.owner_of(rows.get(i)) == session}
             await asyncio.to_thread(mark_seen, session, own, set(rows))
             return {"changed": bool(changed), "changed_ids": changed, "token": _token(token_fps),
                     "runs": [summary(rows[i], data) if i in rows else {"dispatch_id": i, "state": "missing"}
@@ -284,7 +285,7 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
     seen = _load_seen(session)
     lines, shown, more = [], {}, 0
     for r in data.get("runs") or []:                 # newest dispatch first
-        if not isinstance(r, dict) or r.get("dispatched_from") != session:
+        if not isinstance(r, dict) or swarm_run.owner_of(r) != session:
             continue
         if r.get("state") == "unknown" and r.get("state_reason") != "no_session_id":
             continue          # one slow probe is not news; told once the Hive answers (not marked)

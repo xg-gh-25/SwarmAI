@@ -87,6 +87,14 @@ def _path(dispatch_id: str, request_id: str) -> Optional[Path]:
     return swarm_out._state_dir() / "cards" / dispatch_id / f"{request_id}.json"
 
 
+
+def _owner(rec: dict) -> Optional[str]:
+    """Who answers this card's waits now: the dispatching session, or for a Swarm Run's
+    child its lead run's current owner (core/swarm_run.owner_of)."""
+    from core import swarm_run
+    return swarm_run.owner_of({"parent_run": rec.get("parent_run"),
+                               "dispatched_from": rec.get("dispatched_from")})
+
 def _load(dispatch_id: str, request_id: str) -> Optional[dict[str, Any]]:
     p = _path(dispatch_id, request_id)
     if p is None:
@@ -201,7 +209,8 @@ async def card(dispatch_id: str, request_id: str) -> dict[str, Any]:
     cls = wait.get("approval_class")
     rec = {"dispatch_id": dispatch_id, "request_id": request_id, "kind": kind,
            "hive_id": row.get("hive_id"), "session_id": row["session_id"],
-           "dispatched_from": row.get("dispatched_from"), "shape": _shape(questions),
+           "dispatched_from": row.get("dispatched_from"), "parent_run": row.get("parent_run"),
+           "shape": _shape(questions),
            "questions": qmap, "options": omap, "hive_shown_sha256": wait.get("shown_sha256"),
            "approval_class": cls, "created_at": _now(), "forward": None,
            "labels": labels}
@@ -283,7 +292,7 @@ async def _forward(session, questions, answers):
         return _not(None, "no card was built for this wait (`swarm_out card`)")
     if (rec.get("forward") or {}).get("status") == "forwarded":
         return _not(None, "this wait was already forwarded")
-    if not session or rec.get("dispatched_from") != session:
+    if not session or _owner(rec) != session:
         return _not(rec, "the card was answered in a session that did not dispatch this run")
     if _shape(questions) != rec.get("shape"):
         return _not(rec, "the card asked is not the one built for this wait")
@@ -350,7 +359,7 @@ async def answer_as_host(session: Optional[str], dispatch_id: str, request_id: s
         raise CardError("build the card first (`swarm_out card`): you answer what it shows")
     if (rec.get("forward") or {}).get("status") == "forwarded":
         raise CardError("this wait was already answered", 409)
-    if not session or rec.get("dispatched_from") != session:
+    if not session or _owner(rec) != session:
         raise CardError("only the session that dispatched this run answers its waits", 403)
     cls = rec.get("approval_class")
     if cls not in approval_class.HOST_CLASSES:
@@ -409,7 +418,8 @@ async def escalate(session: Optional[str], dispatch_id: str, request_id: str, wh
         raise CardError(str(e)) from None
     if not isinstance(row, dict):
         raise CardError("no such run")
-    if not session or row.get("dispatched_from") != session:
+    from core import swarm_run
+    if not session or swarm_run.owner_of(row) != session:
         raise CardError("only the session that dispatched this run escalates its waits", 403)
     try:
         data = await swarm_out.list_runs(swarm_out.SNAPSHOT_FRESH_S)

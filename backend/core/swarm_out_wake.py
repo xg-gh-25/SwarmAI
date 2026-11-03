@@ -67,16 +67,17 @@ def _client_id(session: str, shown: dict[str, str]) -> str:
 
 def candidates(data: Optional[dict[str, Any]]) -> dict[str, list[str]]:
     """Each live dispatching session -> the dispatch ids of its runs that need it now."""
-    from core import swarm_out_record
+    from core import swarm_out_record, swarm_run
     if not isinstance(data, dict):
         return {}
     asks = [a for a in data.get("asks") or [] if isinstance(a, dict)]
     out: dict[str, list[str]] = {}
     for r in data.get("runs") or []:
-        if not isinstance(r, dict) or not r.get("dispatched_from"):
+        owner = swarm_run.owner_of(r)
+        if not owner:
             continue
         if swarm_out_record.actionable(r, asks) and swarm_out_record.owner_alive(r):
-            out.setdefault(r["dispatched_from"], []).append(str(r.get("dispatch_id")))
+            out.setdefault(owner, []).append(str(r.get("dispatch_id")))
     return out
 
 

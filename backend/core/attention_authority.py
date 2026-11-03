@@ -731,14 +731,14 @@ def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list
     that dispatched the run is woken to answer them (core/swarm_out_wake; design
     2026-11-02-hive-run-decision-record: nothing is handed to the person by a timer).
     Returns (items, the waits of runs no agent dispatched)."""
-    from core import approval_class, swarm_out_wait_card
+    from core import approval_class, swarm_out_wait_card, swarm_run
     # a run's Hive session id names its waits (as core/swarm_out_wait_card.card joins them)
     by_session = {r.get("session_id"): r for r in runs if r.get("session_id")}
     items, plain = [], []
     titles: dict[str, tuple[bool, str]] = {}
     for a in asks:
         row = by_session.get(a.get("session_id"))
-        owner = (row or {}).get("dispatched_from")
+        owner = swarm_run.owner_of(row)
         if not row or not owner:
             plain.append(a)
             continue
@@ -810,7 +810,8 @@ def _collect_swarm_out() -> list[AttentionItem]:
         alive: dict[str, bool] = {}
 
         def owned(r: dict) -> bool:
-            owner = r.get("dispatched_from")
+            from core import swarm_run
+            owner = swarm_run.owner_of(r)
             if not owner:
                 return False
             if owner not in alive:

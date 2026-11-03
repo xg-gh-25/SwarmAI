@@ -336,7 +336,13 @@ def ask_person(dispatch_id: str, row: Optional[dict], session: Optional[str], de
     from core import swarm_out_settle
     if not isinstance(row, dict):
         raise RecordError("the run is not in the list of runs now; try again in a moment")
-    if not session or row.get("dispatched_from") != session:
+    from core import swarm_run
+    if swarm_run.is_child(row):
+        # a child's result is material for its lead run: the person sees the lead run's
+        # own landed result, never a child's (design 2026-10-31-swarm-run §5.3)
+        raise RecordError("this run is a child of a Swarm Run: its lead run judges it, and hands "
+                          "the person only its own landed result")
+    if not session or swarm_run.owner_of(row) != session:
         raise RecordError("only the session that dispatched this run hands it to the person")
     decide, judgment, why = _clean(decide), _clean(judgment), _clean(why)
     if not decide or not judgment or not why:
@@ -402,7 +408,8 @@ def reverted(dispatch_id: str, row: Optional[dict], session: Optional[str], comm
     from pathlib import Path
     if not isinstance(row, dict):
         raise RecordError("the run is not in the list of runs now; try again in a moment")
-    if not session or row.get("dispatched_from") != session:
+    from core import swarm_run
+    if not session or swarm_run.owner_of(row) != session:
         raise RecordError("only the session that dispatched this run reports its revert")
     why = _clean(why)
     if not why:
@@ -446,8 +453,10 @@ def reverted(dispatch_id: str, row: Optional[dict], session: Optional[str], comm
 # ── who needs to act ─────────────────────────────────────────────────────────
 
 def owner_alive(row: dict) -> bool:
-    """The run has a dispatching session that still exists (it answers for the run)."""
-    owner = row.get("dispatched_from")
+    """The run has a session that answers for it and still exists: the one that
+    dispatched it, or for a Swarm Run's child its lead run's owner (core/swarm_run)."""
+    from core import swarm_run
+    owner = swarm_run.owner_of(row)
     if not owner:
         return False
     from core import attention_authority
