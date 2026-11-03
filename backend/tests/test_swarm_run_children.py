@@ -33,8 +33,9 @@ def _child(**kw):
          "project": "Lib", "dispatched_from": LEAD,
          "result": {"ended": "completed", "provisional": False, "ended_at": "2026-11-03T00:00:00Z"},
          "settle": {"why_not": ["verdict"]},
-         "actions": [{"key": "accept", "variant": "land"}, {"key": "rerun"}, {"key": "discard"},
-                     {"key": "stop"}]}
+         "actions": [{"key": "discard"}, {"key": "stop"}],
+         "lead_actions": [{"key": "accept", "variant": "child"}, {"key": "rerun"}, {"key": "discard"},
+                          {"key": "stop"}]}
     r.update(kw)
     return r
 
@@ -157,3 +158,79 @@ def test_the_lead_run_is_read_from_its_audit_log_and_follows_a_takeover(tmp_path
     assert rig.engine().transfer_owner("bbbbbbbb-1111-2222-3333-444444444444", reason="takeover") is True
     assert swarm_run.lead(rig.run_id).owner == "bbbbbbbb-1111-2222-3333-444444444444"
     assert swarm_run.lead("run_ffffffffffff") is None and swarm_run.lead("../x") is None
+
+
+# ── a child's outcome: handled by its Swarm Run (§5.7, I10, I12) ────────────
+
+from tests.test_swarm_out_settle import A, K, env, _row as _srow, _with_bundle, _code_state  # noqa: E402,F401
+from core import swarm_out_settle as st  # noqa: E402
+
+SDID = "so_aaaaaaaaaaaa"
+ENDED = "2026-10-30T10:00:00Z"
+
+
+def _schild(returns="commits", **kw):
+    return _srow(returns, parent_run=RUN, wp="W1", dispatched_from=LEAD, **kw)
+
+
+def test_the_person_is_not_offered_taking_or_correcting_a_child_and_the_lead_run_is(leads, env):
+    rows, _ = env
+    rows[SDID] = _schild()
+    d = st.derive(_schild(), K(True))
+    assert d["stage"] == "awaiting" and A(d) == ["open_session", "discard"]
+    assert [a["key"] + (":" + a["variant"] if a.get("variant") else "") for a in d["lead_actions"]] == \
+        ["accept:child", "rerun", "open_session", "discard"]
+    row = {**_schild(), **d}
+    person, lead = act.actor("person", None, ""), act.actor("agent", LEAD, "w")
+    assert "lead run takes or corrects it" in act.row_blocker(person, "accept", row, ENDED)
+    assert "lead run takes or corrects it" in act.row_blocker(person, "rerun", row)
+    assert act.row_blocker(person, "discard", row) is None
+    assert act.row_blocker(lead, "accept", row, ENDED) is None
+    assert act.row_blocker(lead, "rerun", row) is None
+    # an ordinary commits run is unchanged: the person is offered no accept until it lands
+    plain = st.derive(_srow("commits"), K(True))
+    assert "lead_actions" not in plain
+
+
+def test_taking_a_child_needs_its_commits_here_and_then_settles_it_as_handled(leads, env, monkeypatch):
+    rows, returns = env
+    rows[SDID] = _with_bundle(_schild())
+    monkeypatch.setattr(act, "commits_here", lambda d, res: False)
+    monkeypatch.setattr(st, "_brought_commits", lambda d: True)
+    with pytest.raises(st.SettleError, match="take them back first"):
+        st.set_verdict(SDID, "pass", "W1 is what the run needs", ENDED)
+    monkeypatch.setattr(act, "commits_here", lambda d, res: True)
+    with pytest.raises(st.SettleError, match="result changed"):
+        st.set_verdict(SDID, "pass", "W1", "2026-10-29T00:00:00Z")
+    assert st.set_verdict(SDID, "pass", "W1 is what the run needs", ENDED) == {"handled": True}
+    rec = st.load(SDID)
+    assert rec["handled"]["by"] == "lead" and st.closed_state(rec) == "accepted"
+    d = st.derive(_with_bundle(_schild()), K(True))          # its commits never land here
+    assert (d["stage"], d["why"], d["verdict"], d["why_not"]) == ("accepted", "swarm_run", "handled", [])
+    assert d["settles"]
+    tell = st.annotate([_with_bundle(_schild())])
+    assert st.load(SDID)["settled"]["outcome"] == "handled" and len(tell) == 1
+    # an ordinary run cannot be handled
+    rows[SDID] = _srow("answer")
+    with pytest.raises(st.SettleError, match="only a Swarm Run's child"):
+        st.set_handled(SDID, "x", ENDED)
+
+
+def test_the_children_of_an_ended_lead_run_are_stopped_and_handled(leads, env, monkeypatch):
+    from core import swarm_run_conductor
+    rows, _ = env
+    rows[SDID] = _schild(state="running")
+    rows["so_bbbbbbbbbbbb"] = _schild(dispatch_id="so_bbbbbbbbbbbb")
+    stopped = []
+
+    async def stop(did):
+        stopped.append(did)
+        return {"stopped": True}
+    monkeypatch.setattr(swarm_out, "stop_run", stop)
+    data = {"runs": list(rows.values())}
+    assert asyncio.run(swarm_run_conductor.end_children(data)) == []          # the run is still going
+    leads[RUN] = swarm_run.Lead(RUN, "Lib", LEAD, "completed", "reflect")
+    assert sorted(asyncio.run(swarm_run_conductor.end_children(data))) == ["so_aaaaaaaaaaaa", "so_bbbbbbbbbbbb"]
+    assert stopped == [SDID]                                                    # only the running one
+    assert st.load(SDID)["handled"]["by"] == "run_end"
+    assert asyncio.run(swarm_run_conductor.end_children(data)) == []          # once

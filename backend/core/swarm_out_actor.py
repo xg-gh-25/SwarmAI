@@ -57,6 +57,8 @@ from typing import Any, Optional
 MAX_AGENT_RERUNS = 2
 #: commands no one gives on a Swarm Run's child (design 2026-10-31-swarm-run §5.3)
 CHILD_REFUSED = frozenset({"return_land", "manual_landed"})
+#: commands on a child that are its lead run's only (§5.9: the person stops or discards)
+CHILD_LEAD_ONLY = frozenset({"accept", "rerun"})
 MAX_WHY_CHARS = 400
 COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "rerun", "stop", "discard")
 
@@ -115,6 +117,9 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         # (design 2026-10-31-swarm-run §6 point 2): the lead run lands its own change
         return ("this run is a child of Swarm Run " + str(row.get("parent_run"))
                 + ": its commits are material for that run, not landed on their own")
+    if command in CHILD_LEAD_ONLY and swarm_run.is_child(row) and not a.agent:
+        return ("this run is a child of Swarm Run " + str(row.get("parent_run"))
+                + ": its lead run takes or corrects it; stop or discard it here, and the lead run is woken")
     if not a.agent:
         return None
     if not isinstance(row, dict):
@@ -132,7 +137,15 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         # commits are not landed yet: an agent lands commits with return_land instead
         return "an agent lands commits with return-land; saying they were landed by hand is the person's"
     key, variant = _NEEDS[command]
-    offered = {x.get("key"): x.get("variant") for x in row.get("actions") or [] if isinstance(x, dict)}
+    listed = row.get("actions")
+    if swarm_run.is_child(row):
+        # the lead run's commands on its child: taking it is ``accept`` variant ``child``
+        # (core/swarm_out_settle.set_handled)
+        if command == "return_prepare":
+            return None                  # only into refs/hive here: the take needs them first
+        listed = row.get("lead_actions")
+        variant = "child" if command == "accept" else variant
+    offered = {x.get("key"): x.get("variant") for x in listed or [] if isinstance(x, dict)}
     if key not in offered or (variant is not None and offered[key] != variant):
         stage = row.get("stage") or "?"
         return f"the run does not offer `{command}` now (stage {stage}); see its actions in `runs`"

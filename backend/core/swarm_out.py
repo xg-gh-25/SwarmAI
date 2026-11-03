@@ -1624,6 +1624,15 @@ async def run_refresh_loop() -> None:
         if _WAKE is None or _WAKE.done():
             from core import swarm_out_wake
             _WAKE = asyncio.create_task(swarm_out_wake.wake_sessions(), name="swarm-out-wake")
+        # the children of a Swarm Run that has ended go with it (core/swarm_run_conductor)
+        try:
+            from core import swarm_run_conductor
+            if await swarm_run_conductor.end_children(snapshot()):
+                _refresh_soon()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — tried again next round
+            logger.warning("swarm_out: closing ended Swarm Runs' children failed (%s)", type(e).__name__)
         await asyncio.sleep(REFRESH_EVERY_S)
 
 

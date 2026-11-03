@@ -152,6 +152,11 @@ def set_verdict(dispatch_id: str, value: str, note: str, ended_at: Optional[str]
     row = _row(dispatch_id)
     if value not in VERDICTS:
         raise SettleError("the verdict is pass (not good enough: re-run with a correction, or discard)")
+    from core import swarm_run
+    if swarm_run.is_child(row):
+        # a Swarm Run's child: accepting it is its lead run taking the result
+        set_handled(dispatch_id, note, ended_at)
+        return {"handled": True}
     if (row.get("project_agent") or {}).get("returns") == "commits":
         # landing them is the pass; after the dispatching agent landed them, its own
         # judgment (this accept, kept as the run's decision by the route) closes the
@@ -246,6 +251,36 @@ def discard(dispatch_id: str, note: str = "") -> dict[str, Any]:
     return _update(dispatch_id, change)
 
 
+def set_handled(dispatch_id: str, note: str, ended_at: Optional[str], *, by: str = "lead") -> dict[str, Any]:
+    """A Swarm Run's child is handled by its lead run (design 2026-10-31-swarm-run §5.7):
+    ``by="lead"``, the lead run took the result that ended at ``ended_at`` (its commits
+    must be on this host first, in ``refs/hive``: nothing is lost when the workspace
+    goes); ``by="run_end"``, the lead run ended and the child goes with it (the Conductor,
+    core/swarm_run_conductor). Either way the child is accepted from now on: no re-run,
+    no session write, and it settles once it has stopped and its lessons are in."""
+    from core import swarm_out_actor, swarm_run
+    row = _row(dispatch_id)
+    if not swarm_run.is_child(row):
+        raise SettleError("only a Swarm Run's child is handled by its lead run")
+    if by == "lead":
+        current = _current_result(dispatch_id)
+        if not isinstance(ended_at, str) or not ended_at or not _final(current) \
+                or current.get("ended_at") != ended_at:
+            raise SettleError("the run's result changed since it was shown: reload it and take the "
+                              "result there is now")
+        if _brought_commits(dispatch_id) and not swarm_out_actor.commits_here(dispatch_id, current):
+            raise SettleError("its commits are only on the Hive: take them back first "
+                              "(`pipeline-v1 child merge`, or `swarm_out return-prepare`)")
+
+    def change(rec):
+        if rec.get("handled_at") or rec.get("abandoned_at") or rec.get("settled"):
+            return False
+        rec["handled_at"] = _now()
+        rec["handled"] = {"by": by, "ended_at": ended_at,
+                          "note": " ".join((note or "").split())[:MAX_NOTE_CHARS]}
+    return _update(dispatch_id, change)
+
+
 # ── what follows from the records ────────────────────────────────────────────
 
 def _code(row: dict, res: dict, rec: dict) -> str:
@@ -322,7 +357,7 @@ def closed_state(rec: dict, dispatch_id: Optional[str] = None) -> Optional[str]:
     if rec.get("abandoned_at") or (settled and settled.get("outcome") in ("abandoned", "gone", "expired",
                                                                            "reverted")):
         return "closed"
-    if settled or rec.get("manual_landed_at") or rec.get("code_landed_at"):
+    if settled or rec.get("manual_landed_at") or rec.get("code_landed_at") or rec.get("handled_at"):
         return "accepted"
     verdict = rec.get("verdict") if isinstance(rec.get("verdict"), dict) else None
     if verdict and verdict.get("value") == "pass" and (
@@ -338,9 +373,11 @@ def closed_state(rec: dict, dispatch_id: Optional[str] = None) -> Optional[str]:
 STAGES = ("running", "needs_answer", "awaiting", "stopped", "accepted", "closed")
 #: a settle outcome -> its stage (``reverted``: the person had what landed undone)
 _OUTCOME_STAGE = {"passed": "accepted", "abandoned": "closed", "gone": "closed", "expired": "closed",
-                  "reverted": "closed"}
-#: a settle outcome -> the ``why`` of its closed stage (stored outcomes keep their names)
-_OUTCOME_WHY = {"abandoned": "discarded", "gone": "hive_gone", "expired": "expired", "reverted": "reverted"}
+                  "reverted": "closed", "handled": "accepted"}
+#: a settle outcome -> the ``why`` of its stage (stored outcomes keep their names);
+#: ``swarm_run``: a child its lead run handled (design 2026-10-31-swarm-run §5.7)
+_OUTCOME_WHY = {"abandoned": "discarded", "gone": "hive_gone", "expired": "expired", "reverted": "reverted",
+                "handled": "swarm_run"}
 #: a result that ended this way delivered what it set out to (anything else, the turn
 #: limit included, stopped: design §3.2)
 _DELIVERED = ("completed",)
@@ -432,8 +469,10 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     discarded it: settling tells the Hive to release the workspace, and a turn or
     background work may still be going there (design
     2026-11-02-swarm-out-hive-deaths-diagnostics-states §3 S3)."""
-    from core import hive_records, swarm_out_record
+    from core import hive_records, swarm_out_record, swarm_run
     rec = load(row["dispatch_id"])
+    child = swarm_run.is_child(row)
+    handled = child and bool(rec.get("handled_at"))
     kept = kept if isinstance(kept, dict) else {}
     recs = kept.get("records") if isinstance(kept.get("records"), dict) else None
     kept_res = kept.get("result") if isinstance(kept.get("result"), dict) else {}
@@ -453,6 +492,8 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     verdict: Optional[str] = None
     if abandoned:
         verdict = "abandoned"
+    elif handled:
+        verdict = "handled"
     elif ask == "reverted":
         verdict = "reverted"
     elif gone and not _final(res):
@@ -473,9 +514,11 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         and hive_records.backstop_passed(recs.get("last_at") or row.get("sent_at")))
     closed = recs.get("closed") if recs else None           # None: this run keeps no record
     lessons_done = abandoned or pulled_out or (closed is not False and not unqueued)
-    code_done = abandoned or gone or code in ("none", "landed", "rejected")
+    # a handled child's commits are its lead run's material (in refs/hive, or no longer
+    # wanted once the run ended): nothing here waits on landing them
+    code_done = abandoned or gone or handled or code in ("none", "landed", "rejected")
     files_done = abandoned or gone or _files_here(row["dispatch_id"], kept_res)
-    decided = verdict in ("pass", "abandoned", "gone", "reverted")
+    decided = verdict in ("pass", "abandoned", "gone", "reverted", "handled")
     # no result will come: none can be fetched for good (a passing fetch error, the Hive
     # silent or unusable, may still bring it)
     stopped_without_result = res is None and row.get("state") == "stopped" and (
@@ -494,6 +537,8 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         why = _OUTCOME_WHY.get(settled.get("outcome"))
     elif abandoned:
         stage, why = "closed", "discarded"                 # settles at the next look
+    elif handled:
+        stage, why = "accepted", "swarm_run"               # settles once stopped, lessons in
     elif gone and not _final(res):
         stage, why = "closed", "hive_gone"
     elif state == "waiting":
@@ -520,8 +565,10 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     # taken as they are), else the person's verdict on what came back; a task that
     # delivers commits and has none to land (none came, or an older record rejected
     # them all) cannot be accepted: re-run or discard
-    if judging:
-        accept: Optional[str] = "verdict"                  # the agent's judgment of its landing
+    if child:
+        accept: Optional[str] = "child"                    # the lead run takes it (set_handled)
+    elif judging:
+        accept = "verdict"                                 # the agent's judgment of its landing
     elif code == "waiting":
         accept = "land"
     elif code == "unsealed":
@@ -532,8 +579,9 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         accept = "verdict"
     why_not = [w for w, ok in (("verdict", decided), ("code", code_done), ("files", files_done),
                                ("lessons", lessons_done)) if not ok]
-    out = {"stage": stage, "actions": _actions(stage, alive, accept, row.get("state_reason"),
-                                               ask or ("judge" if why == "judge" else None)),
+    actions = _actions(stage, alive, accept, row.get("state_reason"),
+                       ask or ("judge" if why == "judge" else None))
+    out = {"stage": stage, "actions": _person_actions(actions) if child else actions,
            "why": why, "verdict": verdict, "code": code,
            # a discarded run settles though a wait stays open on its Hive (a pipeline
            # decision outlives the stopped chat): nothing will answer it. Never while it
@@ -542,6 +590,10 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
            # pipeline runs and removes what background work may still be writing
            "settles": not why_not and (state == "stopped" or (abandoned and state != "running")),
            "why_not": why_not, "settled": settled}
+    if child:
+        # the lead run's commands on its child (core/swarm_out_actor reads these for it):
+        # take it (accept, variant child), correct it (rerun), stop, discard
+        out["lead_actions"] = actions
     out["funnel"] = swarm_out_record.funnel(row, rec, {**out, "files_done": files_done,
                                                        "result_final": _final(res)})
     out["person_decisions"] = swarm_out_record.person_decisions(rec, bool(row.get("dispatched_from")))
@@ -569,12 +621,19 @@ def _idle_days(row: dict, kept: dict) -> Optional[float]:
     return (datetime.now(timezone.utc) - max(times)).total_seconds() / 86400
 
 
+def _person_actions(actions: list[dict]) -> list[dict]:
+    """What the person is offered on a Swarm Run's child: taking it and correcting it are
+    the lead run's (design 2026-10-31-swarm-run §5.9, I12); stop, discard and opening the
+    session stay theirs."""
+    return [a for a in actions if a.get("key") not in ("accept", "rerun")]
+
+
 def _settle_now(r: dict, d: dict) -> Optional[dict]:
     """Write ``settled`` if no one did meanwhile; the record's ``settled``, or None when it
     was already settled."""
     from core import swarm_out_record
     outcome = {"pass": "passed", "abandoned": "abandoned", "gone": "gone",
-               "expired": "expired", "reverted": "reverted"}.get(d["verdict"], "passed")
+               "expired": "expired", "reverted": "reverted", "handled": "handled"}.get(d["verdict"], "passed")
     gone = r.get("state_reason") == "hive_gone"
     out: dict = {}
 
@@ -633,6 +692,8 @@ def annotate(rows: list[dict], can_tell: bool = True) -> list[dict]:
             expire = idle is not None and idle >= hive_records.RETENTION_DAYS and r.get("state") != "running"
             if not d["settles"] and not expire:
                 r["stage"], r["actions"], r["why"] = d["stage"], d["actions"], d["why"]
+                if "lead_actions" in d:
+                    r["lead_actions"] = d["lead_actions"]
                 r["settle"] = {"code": d["code"], "why_not": d["why_not"], "settled": None}
                 r["funnel"], r["person_decisions"] = d["funnel"], d["person_decisions"]
                 r["cleanup_soon"] = idle is not None and idle >= hive_records.RETENTION_DAYS - REMIND_DAYS
