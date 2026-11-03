@@ -1,8 +1,8 @@
 ---
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-03
 title: "Hive 审批按责任链：实现方案（对照 2026-11-01 的代码）"
-status: implemented — 已实现并经两轮专家审查（见 §4）；设计见 2026-10-31-hive-approvals-person-and-host.md。2026-11-02：§1.2 的 10 分钟兜底和 H12 将由 Swarm Run r7.11 的 Conductor 叫醒取代（XG 改为要叫醒、不按时间交人），实现前这里的描述仍是现状
+status: implemented — 已实现并经两轮专家审查（见 §4）；设计见 2026-10-31-hive-approvals-person-and-host.md。2026-11-02：§1.2 的 10 分钟兜底已删掉，由 Conductor 叫醒派单会话取代（commit 0959a2a6b，`core/swarm_out_wake.py`；XG 改为要叫醒、不按时间交人），H12 已改成"host 类的等待只有 escalate 或 owner 会话不在时才进 Needs You"（`tests/test_hive_approvals_host.py`）；§1.2、§2 里写 10 分钟的地方是当时的方案
 related: docs/design/2026-10-31-hive-approvals-person-and-host.md · docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md
 ---
 
