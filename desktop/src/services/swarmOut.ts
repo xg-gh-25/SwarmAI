@@ -60,6 +60,26 @@ export interface SwarmOutRun {
   /** The person has something to do on it now (an open ask, a wait that is theirs);
    *  null: no live session answers for the run, the older rules apply. */
   needs_person?: boolean | null;
+  /** A Swarm Run's child (design docs/design/2026-10-31-swarm-run.md): the lead run it
+   *  belongs to and the work package it carries. Its lead run takes or corrects it: the
+   *  person's ``actions`` never hold accept or rerun. */
+  parent_run?: string | null;
+  wp?: string | null;
+}
+
+/** The head of a Swarm Run's card (backend core/swarm_run.view). */
+export interface SwarmRunView {
+  run_id: string;
+  project: string;
+  title: string;
+  profile: string | null;
+  status: 'active' | 'paused' | 'completed' | 'abandoned' | 'failed' | string;
+  stage: string;
+  children: number;
+  planned: number;
+  not_dispatched: { wp: string; title: string; after: string[] }[];
+  /** the children's spend on Hives; null when the ledger has none (unknown, not 0) */
+  children_cost_usd: number | null;
 }
 
 export type SwarmOutGateKey = 'review' | 'land' | 'judge';
@@ -505,6 +525,16 @@ export const swarmOutService = {
   async runs(): Promise<SwarmOutRuns> {
     const { data } = await api.get('/swarm-out/runs');
     return data as SwarmOutRuns;
+  },
+  /** A Swarm Run's head: its lead run and the packages not dispatched yet. */
+  async swarmRun(runId: string): Promise<SwarmRunView> {
+    const { data } = await api.get(`/swarm-out/swarm-runs/${encodeURIComponent(runId)}`);
+    return data as SwarmRunView;
+  },
+  /** Stop a whole Swarm Run: every child still running and the lead run's turn. */
+  async stopSwarmRun(runId: string): Promise<{ stopped: string[]; not_stopped: string[]; lead_turn_stopped: boolean }> {
+    const { data } = await api.post(`/swarm-out/swarm-runs/${encodeURIComponent(runId)}/stop`, { by: PERSON });
+    return data as { stopped: string[]; not_stopped: string[]; lead_turn_stopped: boolean };
   },
 
   /** One run's whole kept result, with the Hive's reply: the panel's card only. */

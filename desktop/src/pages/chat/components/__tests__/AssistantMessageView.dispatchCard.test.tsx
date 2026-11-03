@@ -190,3 +190,23 @@ describe('a dispatch that did not go out', () => {
     await waitFor(() => expect(showSwarmOut).toHaveBeenCalled());
   });
 });
+
+describe('a Swarm Run card in the turn', () => {
+  beforeEach(() => {
+    _resetDispatchPoll();
+    vi.spyOn(swarmOutService, 'runs').mockResolvedValue({ runs: [], asks: [], answered: [] } as never);
+    vi.spyOn(swarmOutService, 'swarmRun').mockResolvedValue({
+      run_id: 'run_0123456789ab', project: 'SwarmAI', title: 'Add the export command', profile: 'full',
+      status: 'active', stage: 'build', children: 0, planned: 1, not_dispatched: [], children_cost_usd: null,
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('renders a swarm_run block as the run card, in the same zone a dispatch card takes', async () => {
+    const { container } = render(view([bash('t1'), tr('t1'),
+      { type: 'swarm_run', runId: 'run_0123456789ab', project: 'SwarmAI' } as ContentBlock, tx('Dispatched W1.')]));
+    expect(await screen.findByTestId('swarm-run-card')).toBeTruthy();
+    expect(container.querySelector('[data-testid="zone-dispatch"]')).not.toBeNull();
+    expect(screen.queryByTestId('dispatch-card')).toBeNull();
+  });
+});

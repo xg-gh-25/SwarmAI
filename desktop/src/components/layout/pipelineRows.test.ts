@@ -67,6 +67,8 @@ describe('pipelineRows', () => {
     const asks = fromHive(hive({ stage: 'stopped', settle: null, actions: [{ key: 'rerun', primary: true }] }))!;
     expect(asks.task).toBe('stopped');
     expect(fromHive(hive({}, { work: { human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 1 } } }))!.interventions?.total).toBeNull();
+    // the person's decisions on the run's record, as every "stepped in" reader counts them (swarm-run I13)
+    expect(fromHive(hive({ person_decisions: 0 }))!.interventions?.total).toBe(0);
     expect(fromHive(hive({}, { pipeline: null }))).toBeNull();                                  // a native Hive run
     expect(fromHive(hive({}, null))).toBeNull();
   });

@@ -47,7 +47,7 @@
  */
 import type { InterruptBlock, ProcessUnit, ThoughtUnit, ToolStep, TurnUnit, TurnView } from './turnView';
 import { displayCommand, isGateStage, isUnanswered, toolCall } from './turnView';
-import type { PipelineDocRef, PipelineStageContent, SwarmOutDispatchContent, ToolUseContent, TurnProductContent, TurnStopContent } from '../../types';
+import type { PipelineDocRef, PipelineStageContent, SwarmOutDispatchContent, SwarmRunContent, ToolUseContent, TurnProductContent, TurnStopContent } from '../../types';
 
 /** What the agent wrote between calls, in the phase, where it was written. */
 export interface PhaseText { kind: 'text'; text: string; textOrdinal: number }
@@ -86,7 +86,7 @@ export type Zone =
   /** Files written and remote actions done by the calls just before it (§3.1). */
   | { kind: 'products'; id: string; blocks: TurnProductContent[] }
   /** A Swarm Out dispatch card (core/swarm_out_card): first level, ends the open work. */
-  | { kind: 'dispatch'; id: string; block: SwarmOutDispatchContent }
+  | { kind: 'dispatch'; id: string; block: SwarmOutDispatchContent | SwarmRunContent }
   | { kind: 'failure'; id: string; step: ToolStep }
   | { kind: 'pipelineStart'; id: string; profile: string | null }
   | { kind: 'stageResult'; id: string; block: PipelineStageContent }
@@ -172,7 +172,8 @@ function layOut(units: TurnUnit[], hasCalls: boolean, resultOrdinal: number | nu
     }
     if (u.kind === 'dispatch') {
       close();
-      out.push({ kind: 'dispatch', id: `so-${u.block.dispatchId ?? u.index}`, block: u.block });
+      out.push({ kind: 'dispatch', block: u.block,
+        id: u.block.type === 'swarm_run' ? `sr-${u.block.runId}` : `so-${u.block.dispatchId ?? u.index}` });
       continue;
     }
     if (u.kind === 'stage') continue; // the caller splits on stage rows

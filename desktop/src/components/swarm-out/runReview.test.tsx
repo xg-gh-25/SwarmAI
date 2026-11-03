@@ -25,7 +25,7 @@ import { swarmOutService, type SwarmOutAction, type SwarmOutRun } from '../../se
 import { CommandPanel, RunOverlay, type PanelMode } from './RunOverlay';
 import { RunList } from './RunList';
 import { OpenSessionContext, PanelHiddenContext, useOpenRun } from './openSession';
-import { brainChips, clock, sections } from './runReview';
+import { brainChips, clock, sections, stageLabel } from './runReview';
 import { activityOf } from './useSwarmOutActivity';
 import i18n from '../../i18n';
 
@@ -156,6 +156,14 @@ describe('the command panel', () => {
     render(<CommandPanel r={run('x1', 'needs_answer')} full={null} mode="list" setMode={vi.fn()} onDone={vi.fn()}
       onShowDeliverable={vi.fn()} hasWaits={false} />);
     expect(screen.getByTestId('swarm-out-command-hint').textContent).not.toContain('card on the left');
+  });
+
+  it('a Swarm Run child says whose it is, and offers the person no take or correction (I12)', () => {
+    panel(run('x1', 'awaiting', { parent_run: 'run_0123456789ab', wp: 'W1',
+      actions: [A('open_session'), A('discard')] }));
+    expect(screen.getByTestId('swarm-out-child-of').textContent).toContain('part of Swarm Run run_0123456789ab');
+    expect(shown()).toEqual(['open_session', 'discard']);
+    expect(stageLabel('accepted', 'swarm_run')).toBe('Handled by the Swarm Run');
   });
 
   it('a button holds only its name and key; what it does is a line apart', () => {

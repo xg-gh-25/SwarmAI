@@ -15,7 +15,7 @@
  * Text a Hive or the backend wrote (title, brief, error, acceptance) is data and is
  * never translated; the labels come from chat.swarmOut.dispatch.* in the locales.
  *
- * @exports DispatchCard, useDispatchedRun, hiveReasonLabel, syncLabel, liveWord
+ * @exports DispatchCard, useDispatchedRun, useRunsPoll, reloadRunsPoll, hiveReasonLabel, syncLabel, liveWord
  */
 import { useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -67,6 +67,17 @@ export function useDispatchedRun(dispatchId: string | null): SwarmOutRun | null 
   const runs = useSyncExternalStore(dispatchId ? subscribe : noop, dispatchId ? () => latest : none);
   if (!dispatchId || !runs) return null;
   return runs.runs.find((r) => r.dispatch_id === dispatchId) ?? null;
+}
+
+/** Every run, from the same shared poll (the Swarm Run card reads its children from it);
+ *  null until the first answer. */
+export function useRunsPoll(): SwarmOutRuns | null {
+  return useSyncExternalStore(subscribe, () => latest);
+}
+
+/** Ask the shared poll again now (after a command). */
+export function reloadRunsPoll(): void {
+  load();
 }
 
 /** Test hook: forget the shared poll's answer. */

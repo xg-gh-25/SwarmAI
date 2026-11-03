@@ -672,10 +672,19 @@ export interface BackgroundFinishedContent {
   }>;
 }
 
+/** A Swarm Run's card in its lead run's chat (backend core/swarm_run_card, design
+ *  docs/design/2026-10-31-swarm-run.md §5.9): written once, by the call that sent the
+ *  run's first children; the card reads the live runs. */
+export interface SwarmRunContent {
+  type: 'swarm_run';
+  runId: string;
+  project: string | null;
+}
+
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
   | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent
   | TurnNoticeContent | BackgroundFinishedContent | TurnStopContent | TurnProductContent
-  | TurnOutcomeContent | SwarmOutDispatchContent;
+  | TurnOutcomeContent | SwarmOutDispatchContent | SwarmRunContent;
 
 export interface Message {
   id: string;

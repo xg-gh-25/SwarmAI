@@ -53,6 +53,8 @@ export const CLOSED_WHYS: readonly SwarmOutClosedWhy[] = ['discarded', 'reverted
 /** A stage in the person's words. A closed run is named by its reason (Discarded,
  *  Reverted, Expired, Hive gone); a reason this build does not know reads "Closed". */
 export function stageLabel(stage: SwarmOutStage, why?: string | null): string {
+  // a Swarm Run's child its lead run took, or that went with the run's end
+  if (stage === 'accepted' && why === 'swarm_run') return i18n.t('swarmOut.review.handled');
   if (stage === 'closed') {
     return why && (CLOSED_WHYS as readonly string[]).includes(why)
       ? i18n.t(`swarmOut.review.closed.${why}`) : i18n.t('swarmOut.review.stage.closed');

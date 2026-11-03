@@ -81,6 +81,7 @@ import type {
   TurnDeliverable,
   TurnChangesContent,
   SwarmOutDispatchContent,
+  SwarmRunContent,
   TurnStopContent,
   TurnProductContent,
   SubAgentProgress,
@@ -163,7 +164,7 @@ export type TurnUnit =
   | { kind: 'products'; blocks: TurnProductContent[]; index: number }
   /** A Swarm Out dispatch card (`swarm_out_dispatch`, backend core/swarm_out_card): what
    *  the dispatch call just before it sent, or why nothing went. First level, like products. */
-  | { kind: 'dispatch'; block: SwarmOutDispatchContent; index: number };
+  | { kind: 'dispatch'; block: SwarmOutDispatchContent | SwarmRunContent; index: number };
 
 export interface ThoughtUnit {
   kind: 'thought';
@@ -569,7 +570,7 @@ export function deriveTurnView(
       else units.push({ kind: 'products', blocks: [block], index });
       return;
     }
-    if (block.type === 'swarm_out_dispatch') {
+    if (block.type === 'swarm_out_dispatch' || block.type === 'swarm_run') {
       seg = null;
       units.push({ kind: 'dispatch', block, index });
       return;

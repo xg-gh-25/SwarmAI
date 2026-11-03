@@ -2058,7 +2058,30 @@
         "placeholder": "比如：留着，但把语言包改成空闲时预加载",
         "keep": "留着",
         "revert": "撤回"
-      }
+      },
+      "swarmRun": {
+        "title": "Swarm Run · {{title}}",
+        "meta_one": "{{project}} · lead run {{profile}} · {{count}} 个子任务",
+        "meta_other": "{{project}} · lead run {{profile}} · {{count}} 个子任务",
+        "cost": "Hive 上花费 ${{cost}}",
+        "status": {
+          "active": "进行中",
+          "paused": "已暂停",
+          "completed": "已交付",
+          "abandoned": "已放弃",
+          "failed": "失败"
+        },
+        "stopAll": "停止全部",
+        "stopAllDoes": "停掉所有还在跑的子单和 lead run 当前这一轮",
+        "stopAllFailed": "有的没停下，再试一次",
+        "notDispatched": "还没派",
+        "waitsFor": "等 {{wps}}",
+        "toDispatch": "待派",
+        "unreadable": "现在读不到 lead run。",
+        "childOf": "属于 Swarm Run {{run}}",
+        "takenByLead": "由 lead run 验收或修正；你停止或丢弃它，lead run 会被叫醒处理。"
+      },
+      "handled": "由 Swarm Run 处理"
     },
     "wait": {
       "done": "已回答",

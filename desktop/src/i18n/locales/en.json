@@ -2058,7 +2058,30 @@
         "placeholder": "e.g. keep it, but preload the language pack when idle",
         "keep": "Keep",
         "revert": "Revert"
-      }
+      },
+      "swarmRun": {
+        "title": "Swarm Run · {{title}}",
+        "meta_one": "{{project}} · lead run {{profile}} · {{count}} child",
+        "meta_other": "{{project}} · lead run {{profile}} · {{count}} children",
+        "cost": "${{cost}} on Hives",
+        "status": {
+          "active": "running",
+          "paused": "paused",
+          "completed": "delivered",
+          "abandoned": "abandoned",
+          "failed": "failed"
+        },
+        "stopAll": "Stop all",
+        "stopAllDoes": "Stop every child still running and the lead run's turn",
+        "stopAllFailed": "Not everything stopped; try again",
+        "notDispatched": "Not dispatched yet",
+        "waitsFor": "waits for {{wps}}",
+        "toDispatch": "to dispatch",
+        "unreadable": "The lead run cannot be read now.",
+        "childOf": "part of Swarm Run {{run}}",
+        "takenByLead": "Taken or corrected by the lead run; it is woken when you stop or discard this one."
+      },
+      "handled": "Handled by the Swarm Run"
     },
     "wait": {
       "done": "Answered",

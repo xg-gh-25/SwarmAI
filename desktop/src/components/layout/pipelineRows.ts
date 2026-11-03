@@ -119,7 +119,9 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
     tokens: res ? tokenTotal(res) : null, costUsd: res?.cost_usd ?? null,
     interventions: res && human ? {
       answers: human.answered_questions, corrections: human.said ?? null, rescues: 0,
-      total: interventionsOf(res),
+      // the person's decisions on the run's record, the rule every reader of "stepped in"
+      // uses (runReview.autonomyWord); the counts from the session only for older records
+      total: r.person_decisions ?? interventionsOf(res),
     } : null,
     audit: (res?.pipeline?.audit ?? []).map((a) => ({ dim: a.dim, verdict: a.verdict ?? '' })),
     ownerSessionId: r.session_id, hive_run: r,

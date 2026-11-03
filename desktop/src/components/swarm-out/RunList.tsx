@@ -112,13 +112,18 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
   );
 }
 
-export function RunList({ runs, asks, answered = [], now, onReload, compact = false }: {
+/** A Swarm Run's work package not dispatched yet (backend core/swarm_run.view). */
+export interface PendingChild { wp: string; title: string; after: string[] }
+
+export function RunList({ runs, asks, answered = [], now, onReload, compact = false, pending }: {
   runs: SwarmOutRun[]; asks: SwarmOutAsk[];
   /** the waits answered from here (the big card shows each as one line) */
   answered?: SwarmOutAsk[];
   now: number; onReload: () => void;
   /** the dashboard is narrow: rows drop the autonomy word and shorten Open session */
   compact?: boolean;
+  /** a Swarm Run's card: its packages not dispatched yet, a section of their own */
+  pending?: PendingChild[];
 }) {
   const { t } = useTranslation();
   const [brain, setBrain] = useState<string | null>(null);
@@ -160,6 +165,21 @@ export function RunList({ runs, asks, answered = [], now, onReload, compact = fa
       {s.running.length > running.length && (
         <button type="button" className="px-2.5 py-1.5 text-[12px] text-[var(--color-primary)]" onClick={() => setAllRunning(true)}
           data-testid="swarm-out-running-more">{t('swarmOut.review.moreRunning', { count: s.running.length - running.length })} ›</button>
+      )}
+      {pending && pending.length > 0 && (
+        <>
+          {section('pending', t('swarmOut.review.swarmRun.notDispatched'), pending.length)}
+          <div className="flex flex-col" data-testid="swarm-run-pending">
+            {pending.map((p) => (
+              <div key={p.wp} className="flex items-center gap-2.5 px-2.5 py-1.5 text-[12.5px]" data-testid="swarm-run-pending-row">
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: 'var(--color-text-dim)' }} />
+                <span className={`flex-1 min-w-0 truncate ${muted}`}>{p.wp} · {p.title}</span>
+                {p.after.length > 0 && <span className={`text-[11.5px] ${muted}`}>{t('swarmOut.review.swarmRun.waitsFor', { wps: p.after.join(', ') })}</span>}
+                <span className={`text-[11.5px] ${muted}`}>{t('swarmOut.review.swarmRun.toDispatch')}</span>
+              </div>
+            ))}
+          </div>
+        </>
       )}
       <button type="button" className="flex items-baseline gap-2 mt-4 mb-1.5" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}
         data-testid="swarm-out-section-done">

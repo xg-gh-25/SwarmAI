@@ -560,6 +560,13 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
   return (
     <div className="flex flex-col gap-5 h-full" data-testid="swarm-out-command-panel">
       {header}
+      {r.parent_run && (
+        // a Swarm Run's child: its lead run takes or corrects it (design 2026-10-31-swarm-run §5.9)
+        <div className={`text-[12px] ${muted}`} data-testid="swarm-out-child-of">
+          <div className="font-medium text-[var(--color-text)]">{t('swarmOut.review.swarmRun.childOf', { run: r.parent_run })}</div>
+          <div>{t('swarmOut.review.swarmRun.takenByLead')}</div>
+        </div>
+      )}
       {hint && (
         <div className="rounded-lg px-3 py-2.5 text-[12.5px]" data-testid="swarm-out-command-hint"
           style={{ background: `color-mix(in srgb, ${TONE_VAR.attention} 9%, transparent)` }}>
