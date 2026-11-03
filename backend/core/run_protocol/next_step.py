@@ -184,7 +184,9 @@ def next_step(engine, *, previous_stage: str | None = None,
     status, stage = state["status"], state["stage"]
     out: dict[str, Any] = {"stage": stage, "status": status, "action": "none",
                            "command": "", "why": "", "blocking": []}
-    card = _CARDS / f"{stage}.md"
+    # a profile's own card for a stage (``think.research.md``) when it has one
+    own = _CARDS / f"{stage}.{engine.contract.get('profile')}.md"
+    card = own if own.is_file() else _CARDS / f"{stage}.md"
     if card.is_file():
         out["card"] = str(card)
         if previous_stage is not None and previous_stage != stage and status == "active":

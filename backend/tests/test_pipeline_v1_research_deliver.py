@@ -59,3 +59,23 @@ def test_land_on_a_research_run_is_refused_and_writes_nothing(research):
 
 
 
+
+
+def test_a_research_run_gets_its_own_think_card_and_a_full_run_the_code_one(tmp_path, monkeypatch):
+    """Swarm Run P3 (impl §7): research THINK has its own card (splitting the question to
+    Hives, the sourced report); every other profile keeps stages/think.md."""
+    r = Rig(tmp_path / "research", monkeypatch, profile="research", with_repo=False)
+    r.create()
+    try:
+        r.drive(until="think")
+        nxt = r.v1("status")["next"]
+        assert nxt["card"].endswith("stages/think.research.md"), nxt
+    finally:
+        r.close()
+    f = Rig(tmp_path / "full", monkeypatch, profile="full")
+    f.create()
+    try:
+        f.drive(until="think")
+        assert f.v1("status")["next"]["card"].endswith("stages/think.md")
+    finally:
+        f.close()

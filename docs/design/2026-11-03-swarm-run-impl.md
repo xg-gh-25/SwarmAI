@@ -35,7 +35,7 @@ related:
 7. **叫醒和来源**：wake 按 `owner_of` 分组，lead run 的会话用 `[Swarm Run 自动继续]` 开头。Host 发给子单的修正带 `origin: "host"`，Hive 记进消息的 metadata，`summarize` 只数 person 的 `said`，host 的另计。
 8. **Swarm Run 卡**：`pipeline-v1 child dispatch` 之后，后端按记录生成 `swarm_run` 块（和派发卡同一套持久化）；前端 `SwarmRunCard` 复用 `RunList` / `RunOverlay`，按 `parent_run` 过滤，加"还没派"分区和卡头；`GET /api/swarm-out/swarm-runs/{run_id}` 给卡头和计划（进操作登记表）。大卡片里子单的命令面板显示"由 lead run 验收"和子单的决策记录。
 9. **引擎侧**：BUILD 的 `next` 在有开着的子单时写"在等 N 个子单"；BUILD 卡片加 §7 的默认做法；REPORT 加"Hive 子单"一节（每单的 wp、Hive、结局、lead run 的处理），REFLECT 从这里取数。
-10. **P3**：research profile 加 PLAN 和 REVIEW（D7）。最后做，先看前面九步的代价。
+10. **P3**：research run 的 THINK 用它自己的卡（`stages/think.research.md`，`next` 按 profile 选卡）：拆子问题、派给 Hive、判、综合成带来源的报告（§7，设计 r7.13）。
 
 ## 3. 验证
 
@@ -112,4 +112,8 @@ XG："执行过程中的各种决策——丢弃、重跑、lead run 接手—�
 | 已了结的子单又跑了起来（run 结束前发出的答案，之后被 Hive 取走，那一轮接着跑） | Conductor 每一轮都会看到它在跑，再停一次（`swarm_out.stop_turn`：不受"已验收的单不再接受停止"的限制，只有 Conductor 调用，没有路由能调到）；停下以后按规则了结。答案一直没被取走的，等它过期，变成 gone，再了结 |
 
 人仍然可以停止、丢弃、打开会话（设计 §5.9），但这些只是可选的控制，不是要人去收尾。还交给人的只有本来就该人决定的：碰人的数据或外部世界的等待（approval class），以及 lead run 自己判断解决不了而 escalate 的事。
+
+## 7. P3：research 的 THINK 卡（XG 2026-11-03 选 B）
+
+不加阶段。`next_step` 先找 `stages/<stage>.<profile>.md`，没有才用 `stages/<stage>.md`；research 的 THINK 卡写：先读 Brain 已知的；能独立的子问题可以派给 Hive（`returns: document`），由 lead run 判、修正、自己做或丢弃；报告里每个事实注明来源，没核实的标出来，没回答的部分说明原因；要不要请专家查报告由 lead run 定。测试：research run 在 THINK 拿到 `think.research.md`，full run 仍是 `think.md`（变异检查：去掉按 profile 选卡，测试变红）。真机 E2E（一个 research run 拆两单到两台 Hive，再综合交付）和 Swarm Run 的 E2E 一起，等 Host daemon 重建后跑。
 
