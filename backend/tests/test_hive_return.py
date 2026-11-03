@@ -623,3 +623,29 @@ def test_a_git_hook_from_a_hive_is_refused_to_the_agent(world, monkeypatch):
         hive_return.land(DID, st["key"], st["tip"], allow_git_exec=False)
     assert git(world["host"], "rev-parse", "main") == before
     assert hive_return.land(DID, st["key"], st["tip"])["landed"]   # the person may
+
+
+def test_a_swarm_run_childs_commits_may_build_on_its_lead_runs_snapshot(world, monkeypatch, tmp_path):
+    """Design 2026-10-31-swarm-run §5.4 (P2): a child dispatched from a snapshot of its
+    lead run (``base``) brings commits whose prerequisite is that snapshot, not main.
+    They are taken back for the lead run; any other run's are refused as before."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    snap = git(host, "commit-tree", git(host, "write-tree"), "-p", "HEAD", "-m", "the lead run's contract")
+    run = "run_0123456789ab"
+    git(host, "update-ref", f"refs/swarm/snapshots/{run}/l1", snap)
+    child = git(host, "commit-tree", git(host, "write-tree"), "-p", snap, "-m", "the child's work")
+    git(host, "update-ref", "refs/tmp/child", child)
+    f = tmp_path / "child.bundle"
+    git(host, "bundle", "create", "-q", str(f), "refs/tmp/child", f"^{snap}")
+    git(host, "update-ref", "-d", "refs/tmp/child")
+    _hive_bundle(world, file=f)
+    with pytest.raises(hive_return.ReturnError, match="not in this machine.s main"):
+        asyncio.run(hive_return.prepare(DID, URL))
+    world["row"]["parent_run"] = run
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["tip"] == child and git(host, "rev-parse", st["ref"]) == child
+    world["row"]["parent_run"] = "run_ffffffffffff"                 # another run's snapshot does not count
+    with pytest.raises(hive_return.ReturnError, match="not in this machine.s main"):
+        asyncio.run(hive_return.prepare(DID, URL))

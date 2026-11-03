@@ -34,6 +34,9 @@ def _localize(argv: "list[str]") -> "tuple[list[str], str | None]":
     - anything else → sent as is (the daemon reports it is not JSON).
     Each ``--repo name=<path>`` gets ``~`` expanded and is made absolute here."""
     args = parser().parse_args(argv)
+    if getattr(args, "command", None) == "child" and "-" in (
+            getattr(args, "file", None), getattr(args, "note_file", None), getattr(args, "text_file", None)):
+        return argv, sys.stdin.read()            # a child plan / correction on stdin (child_cli)
     artifact = getattr(args, "artifact", None)
     stdin: "str | None" = None
     # review-answer's text (standalone T6): stdin, or a file in the agent's cwd

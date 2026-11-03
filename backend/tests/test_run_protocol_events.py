@@ -109,6 +109,10 @@ CASES = {
                                 "trigger_event_id": "t1"}}, "payload.to", "failed"),
 }
 CASES.update({
+    "child_dispatched": ({"payload": {"dispatch_id": "so_aaaaaaaaaaaa", "wp": "W1"}},
+                         "payload.dispatch_id", "so_bbbbbbbbbbbb"),
+    "frozen_spec": ({"payload": {"brain": "Lib", "brain_digest": "a" * 64, "revision": "r"}},
+                    "payload.brain_digest", "b" * 64),
     "render": ({"stage": "deliver", "attempt": 1, "payload": {"document": "REPORT"}},
                "payload.document", "REVIEW"),
     "render_failed": ({"payload": {"document": "REVIEW", "source_tail_event_id": "e1"}},

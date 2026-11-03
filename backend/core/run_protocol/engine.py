@@ -662,6 +662,41 @@ class RunEngine:
         self._settle(); self.write_projection()
         return True
 
+    @_one_operation
+    def record_child(self, dispatch_id: str, wp: str, *, hive: str = "", again_of: str = "") -> None:
+        """A Swarm Run child this run dispatched to a Hive (design 2026-10-31-swarm-run §9):
+        which dispatch carries which work package. Its state is never recorded here: it is
+        Swarm Out's (core/swarm_run). A second record of one dispatch is a duplicate."""
+        payload = {"dispatch_id": dispatch_id, "wp": wp}
+        if hive:
+            payload["hive"] = hive
+        if again_of:
+            payload["again_of"] = again_of
+        self.store.append_new(writer=self.authority.writer("cli"), kind="child_dispatched",
+                              at=_now(), payload=payload)
+        self._settle(); self.write_projection()
+
+    @_one_operation
+    def record_frozen(self, brain: str, brain_digest: str, revision: str, model: str = "") -> None:
+        """What every child of this Swarm Run shares (design 2026-10-31-swarm-run §5.1): the
+        Brain package it is given (its digest), the Project Agent revision and the model."""
+        payload = {"brain": brain, "brain_digest": brain_digest, "revision": revision}
+        if model:
+            payload["model"] = model
+        self.store.append_new(writer=self.authority.writer("cli"), kind="frozen_spec",
+                              at=_now(), payload=payload)
+        self._settle(); self.write_projection()
+
+    def children_recorded(self) -> list[dict[str, Any]]:
+        """``child_dispatched`` payloads, oldest first."""
+        return [dict(e.get("payload") or {}) for e in self.store.read_events()
+                if e.get("kind") == "child_dispatched"]
+
+    def frozen(self) -> dict[str, Any] | None:
+        """The first ``frozen_spec`` payload, or None."""
+        return next((dict(e.get("payload") or {}) for e in self.store.read_events()
+                     if e.get("kind") == "frozen_spec"), None)
+
     def decision_value(self, request_id: str) -> dict[str, Any] | None:
         """The decision exactly as its validated event recorded it (conformance K1)."""
         from core.run_protocol import facts

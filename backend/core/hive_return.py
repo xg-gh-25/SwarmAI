@@ -281,10 +281,13 @@ def _bundle_header(path: Path) -> tuple[list[str], list[tuple[str, str]]]:
     return prereq, refs
 
 
-def _verify_and_fetch(repo: Path, branch: str, bundle: Path, local_ref: str) -> tuple[str, str]:
+def _verify_and_fetch(repo: Path, branch: str, bundle: Path, local_ref: str,
+                      also: tuple[str, ...] = ()) -> tuple[str, str]:
     """(tip, base) after every check; the tip is at *local_ref* only. Every
     prerequisite must be in *branch* itself (not only in its upstream): the commits
-    are reviewed and landed against that branch."""
+    are reviewed and landed against that branch. *also*: a Swarm Run child's commits
+    may build on its lead run's snapshot refs instead (they are material for that run,
+    never landed: design 2026-10-31-swarm-run §5.4)."""
     prereq, refs = _bundle_header(bundle)
     if len(refs) != 1:
         raise ReturnError(f"the bundle has {len(refs)} refs; one is expected")
@@ -292,7 +295,8 @@ def _verify_and_fetch(repo: Path, branch: str, bundle: Path, local_ref: str) -> 
         raise ReturnError("the bundle carries a whole history, not commits on top of this repository")
     short = branch.replace("refs/heads/", "")
     for sha in prereq:
-        if _git(repo, "merge-base", "--is-ancestor", sha, branch).returncode != 0:
+        if _git(repo, "merge-base", "--is-ancestor", sha, branch).returncode != 0 and not any(
+                _git(repo, "merge-base", "--is-ancestor", sha, ref).returncode == 0 for ref in also):
             raise ReturnError(f"the bundle builds on {sha[:12]}, which is not in this machine's {short} "
                               f"(bring {short} up to date with its upstream, then take the commits back again)")
     if _git(repo, "bundle", "verify", "-q", str(bundle)).returncode != 0:
@@ -391,7 +395,7 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
 
     def _work() -> dict[str, Any]:
         branch = _target_branch(repo, declared.get("ref"))
-        tip, base = _verify_and_fetch(repo, branch, bundle, local_ref)
+        tip, base = _verify_and_fetch(repo, branch, bundle, local_ref, _lead_refs(repo, row))
         landed = before.get("landed_tip")
         if landed == tip:
             raise ReturnError("these commits already landed")
@@ -412,6 +416,16 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
         _save(dispatch_id, b["key"], state)
         return state
     return await asyncio.to_thread(_work)
+
+
+def _lead_refs(repo: Path, row: dict) -> tuple[str, ...]:
+    """A Swarm Run child's lead run's snapshot refs in *repo* (core/run_worktree), else ()."""
+    run = row.get("parent_run")
+    if not isinstance(run, str) or not re.fullmatch(r"run_[0-9a-f]{8,32}", run):
+        return ()
+    p = _git(repo, "for-each-ref", "--format=%(refname)", f"refs/swarm/snapshots/{run}/")
+    out = p.stdout.decode("utf-8", "replace") if isinstance(p.stdout, bytes) else (p.stdout or "")
+    return tuple(r for r in out.split("\n") if r)
 
 
 # ── land ────────────────────────────────────────────────────────────

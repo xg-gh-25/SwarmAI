@@ -241,6 +241,9 @@ def parser() -> argparse.ArgumentParser:
     reflect_prepare.add_argument("--project", required=True)
     reflect_prepare.add_argument("--run-id", required=True)
     reflect_prepare.add_argument("--artifact", required=True)
+    # a Swarm Run's children (core/run_protocol/child_cli; design 2026-10-31-swarm-run §5)
+    from core.run_protocol import child_cli
+    child_cli.add_parser(sub)
     return root
 
 
@@ -310,6 +313,16 @@ def execute(args) -> dict[str, Any]:
         if notes:
             result["notes"] = notes
         return _with_next(engine, result, previous_stage="", mutating=True)
+    if args.command == "child":
+        # the run owner's, but never under the operation lock while a Hive is waited on
+        # (a dispatch takes minutes): child_cli takes it only for its own short writes
+        from core.run_protocol import child_cli
+        engine = _load(args, note=False)
+        refused = _not_owner(engine, args.run_id)
+        if refused:
+            return refused
+        result = child_cli.run(args, engine)
+        return _with_next(_load(args, note=False), result, previous_stage=None, mutating=False)
     if args.command not in _READ_ONLY:
         # one read-decide-write operation at a time on this run (r6 §2.2): a parallel
         # call waits, then is judged on the state the first one left

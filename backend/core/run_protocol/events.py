@@ -289,6 +289,14 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # every human authorization binds to the CURRENT owner, not the creator.
     "owner_transfer": _spec("hook", ("ordinal",), None,
                             {"from_session": str, "to_session": str, "reason": str}),
+    # Swarm Run (design 2026-10-31-swarm-run §9, §10): a child this run dispatched to a
+    # Hive (its state lives in Swarm Out, never here), and what its children share
+    "child_dispatched": _spec("cli", ("payload.dispatch_id",), None,
+                              {"dispatch_id": str, "wp": str},
+                              {"hive": str, "again_of": str}),
+    "frozen_spec": _spec("cli", ("payload.brain_digest",), None,
+                         {"brain": str, "brain_digest": str, "revision": str},
+                         {"model": str}),
     # REVIEW's completion records the code it signed off on (S6-2): LG-1 lands only a
     # change whose patch one of these recorded
     "stage_complete": _spec("cli", ("stage", "attempt"), "stage",
