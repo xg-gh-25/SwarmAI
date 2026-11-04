@@ -10,7 +10,8 @@ One copy, read by every extractor:
 
 Nothing checks an entry against it: it is what the extractor reads, not a gate.
 
-- ``KEEP_ONLY_IF``, ``STANDS_ALONE``, ``NOT_KNOWLEDGE`` — the sentences, plain text
+- ``KEEP_ONLY_IF``, ``STANDS_ALONE``, ``ABSOLUTES``, ``NOT_KNOWLEDGE`` — the sentences,
+  plain text (``ABSOLUTES``: what a claim without exceptions must rest on)
 - ``WRITE_WHEN`` — when each destination is written; when its condition does not hold,
   nothing is written there (the fields it needs are required by the unit contract,
   ``contracts_v2``: applicability, a gap's proposed_next)
@@ -29,6 +30,15 @@ STANDS_ALONE = ('Write each unit as situation (applicability: a recognisable tri
                 'developing"), judgment (what; how for a process), reason (why; for a decision '
                 "also rejected_alternatives) and evidence. It must stand on its own for a reader "
                 'who was not here: no "above", "this" or "plan A".')
+
+# A claim that holds without exception is the one a stale description breaks most often: a
+# sample of a new Brain's entries checked against its repo found most errors in "only",
+# "never" and "exactly one" taken from a design note or comment the code had moved past.
+ABSOLUTES = ('A claim that something always, never or only happens, or that there is exactly '
+             "one of something, rests on the thing that does it (the code, the configuration, "
+             "a measured result) when there is one: a document, design note or comment that "
+             "describes it can be out of date. When only a description says it, write it as "
+             "what that description says.")
 
 NOT_KNOWLEDGE = (
     "The state of the moment (not pushed, needs a build, not verified yet, a count that will "
@@ -57,7 +67,7 @@ WIDTH = 89
 
 def sentences() -> list[str]:
     """Every sentence of the standard, in order."""
-    return [KEEP_ONLY_IF, STANDS_ALONE, *NOT_KNOWLEDGE, *WRITE_WHEN]
+    return [KEEP_ONLY_IF, STANDS_ALONE, ABSOLUTES, *NOT_KNOWLEDGE, *WRITE_WHEN]
 
 
 def item(n: int, text: str) -> str:

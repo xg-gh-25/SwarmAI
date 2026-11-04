@@ -390,7 +390,8 @@ def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, reco
               if part[1] > 1 else "")
     # the knowledge standard every door extracts to (core/knowledge_standard); item 7 sets
     # this record's own rules between its sentences
-    keep, stands = ks.item(2, ks.KEEP_ONLY_IF), ks.item(3, ks.STANDS_ALONE)
+    keep = ks.item(2, ks.KEEP_ONLY_IF)
+    stands = ks.item(3, " ".join([ks.STANDS_ALONE, ks.ABSOLUTES]))
     write_when = ks.item(6, " ".join(["Each destination is written only when its condition "
                                       "holds; when it does not, write nothing there.", *ks.WRITE_WHEN]))
     stays = ks.item(7, " ".join([

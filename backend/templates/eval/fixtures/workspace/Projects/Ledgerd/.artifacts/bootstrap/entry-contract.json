@@ -86,6 +86,7 @@
  "knowledge_standard": [
   "Keep a unit only if all three hold: it is useful in another task; a capable person who was not here would go wrong or waste time without it; you can point to its evidence.",
   "Write each unit as situation (applicability: a recognisable trigger, not \"when developing\"), judgment (what; how for a process), reason (why; for a decision also rejected_alternatives) and evidence. It must stand on its own for a reader who was not here: no \"above\", \"this\" or \"plan A\".",
+  "A claim that something always, never or only happens, or that there is exactly one of something, rests on the thing that does it (the code, the configuration, a measured result) when there is one: a document, design note or comment that describes it can be out of date. When only a description says it, write it as what that description says.",
   "The state of the moment (not pushed, needs a build, not verified yet, a count that will change) is not knowledge and is not written into any unit.",
   "What one look at the code or the data answers (a signature, a schema, a constant's value, a file's layout) is no lesson.",
   "A problem still open is a gap, never a lesson.",
