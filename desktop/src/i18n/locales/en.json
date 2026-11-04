@@ -2306,6 +2306,7 @@
       "baseline": "baseline of {{label}} · {{n}} mistakes",
       "count": "mistakes · {{pct}}",
       "prev": "{{n}} the month before",
+      "prevBaseline": "{{n}} in the baseline",
       "none": "No monthly mistake audit yet: the first one runs on the 1st of next month."
     },
     "stage": {

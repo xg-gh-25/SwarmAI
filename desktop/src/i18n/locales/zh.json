@@ -2306,6 +2306,7 @@
       "baseline": "{{label}} 基线 · {{n}} 个错",
       "count": "个错 · {{pct}}",
       "prev": "上月 {{n}}",
+      "prevBaseline": "基线 {{n}}",
       "none": "还没有月度错误倒查：下个月 1 号跑第一次。"
     },
     "stage": {

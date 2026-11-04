@@ -77,7 +77,8 @@ def _ask(prompt: str, schema: dict) -> dict:
     head, stale = MATCH[cid]
     entries = [line for line in prompt.splitlines() if line.startswith("[")]
     idx = next((i for i, e in enumerate(entries) if head and head in e), -1)
-    return {"reasoning": "stub", "match": idx, "stale": stale}
+    return {"reasoning": "stub", "matches": [idx] if idx >= 0 else [],
+            "stale": [idx] if stale and idx >= 0 else []}
 
 
 def _ids(ws: Path) -> dict[str, str]:
@@ -121,7 +122,7 @@ def test_the_report_compares_with_the_baseline_and_counts_the_month(cdf_env):
         {"baseline": "2026-10-30 基线", "table": base}, ensure_ascii=False), encoding="utf-8")
     res = run_brain_mistake_audit({"workspace": str(ws)}, ask=_ask, now=NOW)
     md = Path(res["output_path"]).read_text(encoding="utf-8")
-    assert " (last month 10)" in md and "Compared with: 2026-10-30 基线" in md
+    assert " (baseline 10)" in md and "Compared with: 2026-10-30 基线" in md
     assert "## 2. Changes to the brain this month" in md and "## 3. Open conflicts" in md
 
 
@@ -275,3 +276,157 @@ def test_open_conflicts_are_only_those_whose_two_entries_are_both_in_force(cdf_e
     md = Path(res["output_path"]).read_text(encoding="utf-8")
     section = md.split("## 3. Open conflicts", 1)[1]
     assert "Open pair new side" in section and "Settled pair new side" not in section
+
+
+# ── what the brain held: the routed project, the General Brain, repeats, archives ──
+
+def _correction(conn, cid, title, *, session, at, project=None, repeats=None):
+    """A written chat correction as CDF stores it: the session's detected project
+    (``project_snapshot``) empty, the project CDF routed the unit to on the unit."""
+    conn.execute("INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,"
+                 "content_hash,envelope,project_snapshot,created_at) VALUES (?,?,'S7',?,'session',?,'v','h',"
+                 "'{}','{}',?)", (cid, cid, session, json.dumps({"type": "correction", "title": title,
+                                                                "what": title}), at))
+    decision = {"version_vector": {"repeats": repeats}} if repeats else {}
+    conn.execute("INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,action,reason,decision,"
+                 "project,updated_at) VALUES (?,?,'{}','written','add','r',?,?,?)",
+                 (cid + ".unit", cid, json.dumps(decision), project, at))
+    conn.execute("INSERT INTO ingestion_writes(op_id,op_kind,unit_id,target_path,step,created_at,updated_at) "
+                 "VALUES (?,'ingestion_unit',?,'x','done',?,?)", ("w-" + cid, cid + ".unit", at, at))
+
+
+def _usage(conn, anchor, at):
+    conn.execute("INSERT INTO unit_usage(anchor,kind,session_id,at) VALUES (?,'recall_injected','s',?)",
+                 (anchor, at))
+
+
+def _anchor(ws, path, word):
+    from core.ingestion.units import parse_units
+    return next(u.anchor for u in parse_units(path, root=ws) if word in u.text)
+
+
+def _chat_ask(heads: dict, knowable: dict | None = None):
+    """The model stub for chat corrections: the knowledge is the correction's title; the
+    entries stating it are those containing any of ``heads[title]``."""
+    def ask(prompt, schema):
+        if "items" in schema["properties"]:
+            items = []
+            for line in prompt.splitlines():
+                if line.startswith("- id="):
+                    cid = line.split("id=", 1)[1].split(" ", 1)[0]
+                    title = line.split("): ", 1)[1].split(" ", 1)[0]
+                    items.append({"id": cid, "real": True, "class": "C", "knowledge": title,
+                                  "query": " ".join(heads.get(title, [title])),
+                                  "knowable": (knowable or {}).get(cid, True)})
+            return {"items": items}
+        need = prompt.split("Needed knowledge: ", 1)[1].split("\n", 1)[0]
+        entries = [line for line in prompt.splitlines() if line.startswith("[")]
+        hits = [i for i, e in enumerate(entries) if any(h in e for h in heads.get(need, []))]
+        return {"reasoning": "stub", "matches": hits, "stale": []}
+    return ask
+
+
+def _run(ws, ask):
+    from jobs.handlers.brain_mistake_audit import run_brain_mistake_audit
+    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=ask, now=NOW)
+    assert res["status"] == "success", res
+    return json.loads(Path(res["output_path"]).with_suffix(".json").read_text(encoding="utf-8"))
+
+
+def test_a_correction_is_judged_against_the_brains_cdf_routed_it_to(cdf_env):
+    """Chat corrections carry no detected project (``project_snapshot`` is empty for most
+    sessions) but CDF routes each unit to a project or the General Brain. Reading the
+    snapshot sent every one past its DDD, and the General Brain was never searched: 106
+    of 111 October mistakes read as "not in the brain"."""
+    from core.ingestion.api import connect_rw
+    ws = cdf_env["workspace"]
+    _a_record_before_the_month()
+    (cdf_env["ddd"] / "TECH.md").write_text(TECH, encoding="utf-8")
+    lib = ws / "Knowledge/Library/lessons.md"
+    lib.write_text("# Lessons\n\n## Pitfalls\n\n- [pitfall] **Price catalog first** Look up the exact "
+                   "model price before comparing costs. (2026-11-05)\n", encoding="utf-8")
+    conn = connect_rw()
+    _correction(conn, "cand-p1", "relayfilter", session="s1", at="2026-11-20T08:00:00+00:00", project="P")
+    _correction(conn, "cand-g1", "pricecatalog", session="s2", at="2026-11-21T08:00:00+00:00")
+    _usage(conn, _anchor(ws, lib, "Price catalog"), "2026-11-10T00:00:00+00:00")
+    conn.commit()
+    conn.close()
+    data = _run(ws, _chat_ask({"relayfilter": ["Relay filter"], "pricecatalog": ["Price catalog"]}))
+    got = {r["id"]: r["outcome"] for r in data["rows"]}
+    assert got == {"cand-p1.unit": "有但没送到",     # in P's DDD since 11-02, never recalled
+                   "cand-g1.unit": "送到仍犯"}       # in the General Brain, recalled 11-10
+
+
+def test_a_correction_cdf_recorded_as_a_repeat_had_its_knowledge_beforehand(cdf_env):
+    """The agent that held the conversation declared the correction repeats an earlier one
+    and CDF resolved it to that entry: the knowledge was in EVOLUTION, in the prompt every
+    turn. A repeat of the same conversation's own entry is no second occurrence."""
+    from core.ingestion.api import connect_rw
+    ws = cdf_env["workspace"]
+    _a_record_before_the_month()
+    evo = ws / ".context/EVOLUTION.md"
+    evo.write_text("# Evolution\n\n## Corrections Captured\n\n- [correction] **Reply in Chinese** Answer "
+                   "a Chinese message in Chinese. <!-- cand:cand-e1.unit -->\n\n## Competence Learned\n",
+                   encoding="utf-8")
+    anchor = ".context/EVOLUTION.md#Corrections Captured#cand:cand-e1.unit"
+    conn = connect_rw()
+    _correction(conn, "cand-e1", "chinese", session="s-old", at="2026-11-05T08:00:00+00:00")
+    _correction(conn, "cand-r1", "chinese2", session="s-new", at="2026-11-20T08:00:00+00:00", repeats=anchor)
+    _correction(conn, "cand-r2", "chinese3", session="s-old", at="2026-11-21T08:00:00+00:00", repeats=anchor)
+    conn.commit()
+    conn.close()
+    data = _run(ws, _chat_ask({}))                  # the model finds no entry for any of them
+    got = {r["id"]: r["outcome"] for r in data["rows"]}
+    assert got["cand-r1.unit"] == "送到仍犯"
+    assert got["cand-r2.unit"] == "事先没有"
+
+
+def test_an_entry_a_consolidation_replaced_still_counts_as_there_beforehand(cdf_env):
+    """A consolidation writes one new entry (dated the day it ran) and moves the ones it
+    replaced to an archive shard. Judged by the new entry alone, every earlier mistake of
+    that kind read as "not in the brain"; any entry stating it that was there decides."""
+    from core.ingestion.api import connect_rw
+    from jobs.handlers import brain_mistake_audit as audit
+    ws = cdf_env["workspace"]
+    _a_record_before_the_month()
+    (ws / ".context/EVOLUTION.md").write_text(
+        "# Evolution\n\n## Corrections Captured\n\n### C200 | 2026-11-25 · Reply in the user's language\n"
+        "- **Correction**: answer in the language of the last message.\n", encoding="utf-8")
+    shard = ws / ".context/EVOLUTION-archive-2026-11.md"
+    shard.write_text("# Evolution archive\n\n## Corrections Captured\n\n### C150 | 2026-11-03\n"
+                     "- **Correction**: **Reply in Chinese** when the user writes Chinese.\n"
+                     "<!-- cand:cand-0bd1.unit -->\n", encoding="utf-8")
+    conn = connect_rw()
+    _correction(conn, "cand-0bd1", "earlier", session="s0", at="2026-11-03T08:00:00+00:00")
+    _correction(conn, "cand-l1", "language", session="s1", at="2026-11-20T08:00:00+00:00")
+    _usage(conn, _anchor(ws, shard, "Reply in Chinese"), "2026-11-10T00:00:00+00:00")
+    conn.commit()
+    conn.close()
+    data = _run(ws, _chat_ask({"language": ["user's language", "Reply in Chinese"]}))
+    assert {r["id"]: r["outcome"] for r in data["rows"]}["cand-l1.unit"] == "送到仍犯"
+    # archived and never recalled: it may still have been in the main file that day
+    item = {"mode": "chat", "date": "2026-11-20"}
+    assert audit._delivered(None, ws, item, {"store": "context_archive", "anchor": None}) is None
+
+
+def test_a_defect_only_in_the_new_code_is_not_counted_as_missing_knowledge(cdf_env):
+    """A review finding like "the new function reads one key, not both" names a defect no
+    earlier entry could have stated; counted as missing it made "improve what is written"
+    look like the leak."""
+    from core.ingestion.api import connect_rw
+    from jobs.handlers.brain_mistake_audit import run_brain_mistake_audit
+    connect_rw().close()
+    ws = _setup(cdf_env)
+
+    def ask(prompt, schema):
+        out = _ask(prompt, schema)
+        for row in out.get("items") or []:
+            row["knowable"] = row["id"] != "CF-6"
+        return out
+    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=ask, now=NOW)
+    data = json.loads(Path(res["output_path"]).with_suffix(".json").read_text(encoding="utf-8"))
+    assert "CF-6" not in {r["id"] for r in data["rows"]}
+    assert [r["id"] for r in data["new_code"]] == ["CF-6"]
+    assert data["table"]["A"]["事先没有"] == 1       # CF-3 only
+    assert "## 5. Defects only in the code written for that change" in Path(res["output_path"]).read_text(
+        encoding="utf-8")

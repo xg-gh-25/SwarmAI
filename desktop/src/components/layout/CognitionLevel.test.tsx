@@ -85,6 +85,16 @@ describe('cognition level', () => {
     expect(missing).toHaveTextContent('60%');
   });
 
+  it('labels a comparison with the baseline as the baseline, not the month before', async () => {
+    const audit = DATA.audit!;
+    cognitionLevel.mockResolvedValue({ ...DATA, audit: { ...audit, previous: { month: '2026-10-30',
+      outcomes: { 事先没有: 22 }, total: 38, baseline: true } } });
+    render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap });
+    const missing = within(await screen.findByTestId('level-chain')).getByTestId('level-stage-missing');
+    expect(missing).toHaveTextContent('22 in the baseline');
+    expect(missing).not.toHaveTextContent('the month before');
+  });
+
   it('says when the first audit runs when there is none', async () => {
     cognitionLevel.mockResolvedValue({ ...DATA, audit: null });
     render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap });

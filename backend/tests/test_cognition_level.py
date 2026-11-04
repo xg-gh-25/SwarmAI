@@ -170,6 +170,13 @@ def test_audit_newest_month_and_baseline(env):
         {"baseline": "2026-10-30 基线（38 条）", "table": table(5)}), encoding="utf-8")
     first = cl.audit(env["ws"])
     assert first["baseline"] is True and first["month"] == "2026-10-30" and first["outcomes"]["事先没有"] == 6
+    (out / "2026-09-brain-mistake-audit.json").write_text(json.dumps({"month": "2026-09", "table": table(4)}),
+                                                         encoding="utf-8")
+    # one month and the baseline: the month is compared with the baseline, labelled as one
+    # (the panel showed it as "the month before" though it was measured another way)
+    only = cl.audit(env["ws"])
+    assert only["month"] == "2026-09" and only["previous"]["baseline"] is True
+    (out / "2026-09-brain-mistake-audit.json").unlink()
     (out / "2026-11-brain-mistake-audit.json").write_text(json.dumps({"month": "2026-11", "table": table(2)}),
                                                          encoding="utf-8")
     (out / "2026-10-brain-mistake-audit.json").write_text(json.dumps({"month": "2026-10", "table": table(9)}),
@@ -177,6 +184,7 @@ def test_audit_newest_month_and_baseline(env):
     got = cl.audit(env["ws"])
     assert got["month"] == "2026-11" and got["outcomes"]["事先没有"] == 3 and got["total"] == 4
     assert got["previous"]["month"] == "2026-10" and got["previous"]["outcomes"]["事先没有"] == 10
+    assert got["previous"]["baseline"] is False
 
 
 # ── §6.5 the route validates against its model ─────────────────────────────────────
@@ -193,3 +201,12 @@ def test_route(env, monkeypatch):
     app.include_router(cognition_health.level_router)
     body = TestClient(app).get("/api/ingestion/cognition-level").json()
     assert len(body["weeks"]) == cl.WEEKS_SHOWN and body["audit"] is None
+    out = env["ws"] / "Knowledge" / "JobResults"
+    out.mkdir(parents=True)
+    (out / "baseline-x-brain-mistake-audit.json").write_text(json.dumps(
+        {"baseline": "2026-10-30", "table": {"A": {"事先没有": 1}}}), encoding="utf-8")
+    (out / "2026-10-brain-mistake-audit.json").write_text(json.dumps(
+        {"month": "2026-10", "table": {"A": {"事先没有": 2}}}), encoding="utf-8")
+    body = TestClient(app).get("/api/ingestion/cognition-level").json()
+    assert body["audit"]["previous"] == {"month": "2026-10-30", "outcomes": body["audit"]["previous"]["outcomes"],
+                                         "total": 1, "baseline": True}

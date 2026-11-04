@@ -320,8 +320,10 @@ def audit(workspace: Path) -> dict | None:
         is_baseline = False
     else:
         (label, totals), prev, is_baseline = baseline, None, True
+    # the panel says "the month before" only for a month: a baseline was measured another way
     return {"month": label, "baseline": is_baseline, "outcomes": totals, "total": sum(totals.values()),
-            "previous": {"month": prev[0], "outcomes": prev[1], "total": sum(prev[1].values())} if prev else None}
+            "previous": {"month": prev[0], "outcomes": prev[1], "total": sum(prev[1].values()),
+                         "baseline": prev is baseline} if prev else None}
 
 
 # ── what the tab reads ──────────────────────────────────────────────────────────

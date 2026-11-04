@@ -120,7 +120,8 @@ function Chain({ audit, t }: { audit: NonNullable<CognitionLevelData['audit']>; 
                 style={{ color: tone === 'var(--color-text-muted)' ? 'var(--color-text)' : tone }}>
                 {n}<span className="ml-1 text-meta font-normal text-[var(--color-text-muted)]">
                   {t('cogLevel.chain.count', { pct: pct(share) })}
-                  {prev != null && ` · ${t('cogLevel.chain.prev', { n: prev })}`}
+                  {prev != null && ` · ${t(audit.previous?.baseline ? 'cogLevel.chain.prevBaseline'
+                    : 'cogLevel.chain.prev', { n: prev })}`}
                 </span>
               </div>
               <div className="text-meta text-[var(--color-text-muted)]">{t(`cogLevel.stageFix.${STAGE_KEY[o]}`)}</div>

@@ -190,9 +190,13 @@ class AuditTotals(Strict):
     total: int
 
 
+class PreviousAudit(AuditTotals):
+    baseline: bool              # a baseline measured another way, not the month before
+
+
 class Audit(AuditTotals):
     baseline: bool
-    previous: AuditTotals | None
+    previous: PreviousAudit | None
 
 
 class CognitionLevel(Strict):

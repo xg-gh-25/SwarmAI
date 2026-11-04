@@ -239,7 +239,7 @@ export interface CognitionLevelData {
   latest: LevelWeek | null;
   earliest: LevelWeek | null;
   audit: { month: string; baseline: boolean; outcomes: Record<string, number>; total: number;
-    previous: { month: string; outcomes: Record<string, number>; total: number } | null } | null;
+    previous: { month: string; outcomes: Record<string, number>; total: number; baseline?: boolean } | null } | null;
   used: { usedRate: number | null; matureWritten: number; matureUsed: number; windowDays: number };
   agreement: { correctedTotal: number; correctedAgreed: number; cleanTotal: number; cleanAgreed: number };
 }
