@@ -63,6 +63,24 @@ def _unit(section: str, raw: Any, *, allowed_anchors: set[str],
     return unit.model_dump(mode="json", exclude_none=True)
 
 
+#: put in front of a dropped entry's reason when its evidence was refused
+_EVIDENCE_HINT = ("evidence must be anchors of this run, listed by `pipeline-v1 events` "
+                  "under `anchors`:")
+
+
+def nothing_kept_warning(document: Mapping[str, Any], dropped: list[Any]) -> str | None:
+    """A warning when entries were sent but none was kept (nothing of the report reaches
+    CDF), else None. Only a warning: REFLECT never fails the step (design
+    2026-11-01-pipeline-delivery-friction E1)."""
+    kept = sum(len(rows) for rows in (document.get("sections") or {}).values())
+    sent = sum(1 for d in dropped if isinstance(d, Mapping) and d.get("index") is not None)
+    if kept or not sent:
+        return None
+    return (f"nothing of this report was kept: all {sent} entr{'y' if sent == 1 else 'ies'} "
+            "were dropped (see dropped), so no lesson, decision, gap or gap closing reaches "
+            "CDF. Fix them and run reflect-prepare again with the whole report.")
+
+
 def prepare_lenient(report: Mapping[str, Any], *, allowed_anchors: set[str],
                     open_gap_ids: set[str] | None = None) -> dict[str, Any]:
     """``{"schema", "sections", "dropped"}``: every valid unit kept, each invalid one in
@@ -90,7 +108,12 @@ def prepare_lenient(report: Mapping[str, Any], *, allowed_anchors: set[str],
                 rows.append(_unit(section, raw, allowed_anchors=allowed_anchors,
                                   open_gap_ids=open_gap_ids))
             except ReflectError as exc:
-                dropped.append({"section": section, "index": index, "reason": str(exc)[:500]})
+                reason = str(exc)
+                if "evidence" in reason:
+                    # say where the citable anchors are: the reason alone names only the
+                    # pattern or the ids it refused
+                    reason = f"{_EVIDENCE_HINT} {reason}"
+                dropped.append({"section": section, "index": index, "reason": reason[:500]})
         sections[section] = rows
     return {"schema": SCHEMA, "sections": sections, "dropped": dropped}
 

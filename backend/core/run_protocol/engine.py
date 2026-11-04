@@ -3596,6 +3596,10 @@ class RunEngine:
             DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False,
                                                    sort_keys=True, indent=2))
         out = {**document, "checks": result["checks"], "passed": result["passed"]}
+        warning = reflect.nothing_kept_warning(document, dropped)
+        if warning:
+            logger.warning("reflect-prepare %s: %s", self.run_id, warning)
+            out["warning"] = warning
         if dropped:
             out["dropped"] = dropped
             out["note"] = (f"{len(dropped)} entr{'y' if len(dropped) == 1 else 'ies'} not "

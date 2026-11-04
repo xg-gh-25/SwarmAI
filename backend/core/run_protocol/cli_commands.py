@@ -499,12 +499,19 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         events = engine.store.read_events()
         rows = review_protocol.ReviewOrchestrator(engine.store, engine.run_dir).findings(events)
         return {"ok": True, "findings": review_protocol.closure_view(rows, events)}
-    if args.command == "events":      # read-only: the ids a lesson may cite (RF-2, D1),
-        from core.ingestion import contracts_v2, gaps, relations_v2  # the open gaps an event
-        query = gaps.run_query(engine.run_dir)   # may close, the event standard, and the
-        return {"ok": True, "events": [          # recorded events it may be the same as
-            {"event_id": e["event_id"], "kind": e["kind"], "stage": e.get("stage"),
-             "at": e.get("at")} for e in engine.store.read_events()],
+    if args.command == "events":
+        # what a REFLECT report may cite and close (RF-2, D1): the run's evidence anchors,
+        # registered and read exactly as reflect-prepare does (one list, so every anchor
+        # shown is accepted and nothing else is), the open gaps an event may close, the
+        # event standard, and the recorded events it may be the same as. Registering the
+        # run's evidence is idempotent; it changes nothing the run itself records.
+        from core.ingestion import contracts_v2, gaps, relations_v2
+        from core.ingestion.sources.s3_run import _roots
+        from core.run_protocol.provenance import sync_run_evidence
+        sync_run_evidence(engine.store, engine.run_dir)
+        anchors, _root_ids = _roots(engine)
+        query = gaps.run_query(engine.run_dir)
+        return {"ok": True, "anchors": sorted(anchors),
             "open_gaps": gaps.open_gaps(engine.project, query),
             "event_rule": contracts_v2.EVENT_RULE.strip(),
             "timeline_events": relations_v2.closest_events(

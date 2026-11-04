@@ -24,7 +24,7 @@ PLACEHOLDERS = {
     "<TEST_REF>": "a test the plan relies on: <test file>::<test name>",
     "<REPO>": "the repo name the run was created with (--repo <name>=<path>)",
     "<COMMAND>": "the exact command you ran, as you would type it again",
-    "<ANCHOR>": "an evidence anchor of this run: `pipeline-v1 events` lists them",
+    "<ANCHOR>": "an evidence anchor of this run, copied from `anchors` in `pipeline-v1 events`",
     "<FINDING_ID>": "a finding id (CF-xxxxxxxx): `pipeline-v1 findings` lists them",
     "<PROJECT>": "the run's project name (--project)",
 }
