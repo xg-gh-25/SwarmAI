@@ -2114,7 +2114,7 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 16 — session_inputs: append-only provenance ledger for CDF (2026-10-27)
 # 17 — session_inputs.root_id + measured trust for CDF v2 (2026-10-27)
 # 18 — usage_ledger: the platform's one record of model usage and spend (2026-10-29)
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 19
 
 #: usage_ledger (v18). ``kind``: spend rows are what was spent and the only rows any
 #: total adds; attribution rows split spend rows (a pipeline run inside a chat turn).
@@ -3584,6 +3584,26 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.rollback()
                 raise
             logger.info("Migration v18: usage ledger")
+
+        if current_version < 19 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 18:
+            # Version 19: hive_instances.origin_secret, the per-Hive value CloudFront sends
+            # as X-Swarm-Origin and the Hive's Caddy requires (design
+            # 2026-11-04-kirocrew-borrow §3.C1). Additive only: one nullable column, no
+            # row touched. It sits next to auth_password; the API response models list
+            # their fields, so no endpoint returns it.
+            await conn.execute("BEGIN")
+            try:
+                cols = {r[1] for r in await (await conn.execute(
+                    "PRAGMA table_info(hive_instances)")).fetchall()}
+                if cols and "origin_secret" not in cols:   # no table: nothing to add to
+                    await conn.execute("ALTER TABLE hive_instances ADD COLUMN origin_secret TEXT")
+                await conn.execute("PRAGMA user_version = 19")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v19: hive_instances.origin_secret")
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 

@@ -5,6 +5,7 @@ Downloads the hive package from S3, installs dependencies, configures
 Caddy with basic auth, starts services, and tags the instance ready.
 """
 
+import re
 import secrets
 
 _USER_DATA_TEMPLATE = r"""#!/bin/bash
@@ -67,12 +68,38 @@ mkdir -p /etc/caddy /var/log/caddy
 # ── 6. Configure Caddy (HTTP, CloudFront terminates TLS) ──
 echo "[6/9] Configuring Caddy with basic auth..."
 cat > /etc/caddy/Caddyfile << 'CADDY'
+# ORIGIN-GUARD-GLOBAL-BEGIN
+# Only this Hive's CloudFront distribution sends X-Swarm-Origin with this Hive's secret.
+# Caddy runs basic_auth before respond by default; this order makes the 403 below come first.
+# The default logger (Caddy's error log, in the journal) writes request headers too.
+{
+    order respond before basic_auth
+    log default {
+        format filter {
+            wrap json
+            fields {
+                request>headers>X-Swarm-Origin delete
+            }
+        }
+    }
+}
+# ORIGIN-GUARD-GLOBAL-END
 :80 {
     # Health check BEFORE auth — enables external monitors (G11)
     handle /health {
         reverse_proxy 127.0.0.1:18321
     }
 
+    # ORIGIN-GUARD-RULE-BEGIN
+    # /health is exempt only as the literal request path: the path matcher cleans dot
+    # segments, but the backend gets the raw path, so /x/../health must not pass.
+    @foreign_origin {
+        not expression `{http.request.uri.path} == "/health"`
+        not header X-Swarm-Origin ${origin_secret}
+    }
+    respond @foreign_origin 403
+    request_header -X-Swarm-Origin
+    # ORIGIN-GUARD-RULE-END
     @protected not path /health
     basic_auth @protected {
         ${auth_user} ${auth_hash}
@@ -119,6 +146,14 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
         -Server
     }
     log {
+        # ORIGIN-GUARD-LOG-BEGIN
+        format filter {
+            wrap json
+            fields {
+                request>headers>X-Swarm-Origin delete
+            }
+        }
+        # ORIGIN-GUARD-LOG-END
         output file /var/log/caddy/hive-access.log {
             roll_size 100mb
             roll_keep 5
@@ -283,6 +318,96 @@ def caddy_hash_password(password: str) -> str:
     return hashed.decode()
 
 
+# ── Origin guard: only this Hive's CloudFront distribution reaches the origin ──
+# Every CloudFront distribution is in the global prefix list the security group allows,
+# so a distribution someone else creates could reach the origin. Each Hive has a random
+# secret (secrets.token_urlsafe(32)) that only its own distribution sends as
+# X-Swarm-Origin (OriginCustomHeaders); the Caddyfile answers 403 to every other request
+# except /health, before basic auth, strips the header before the backend, and no log
+# (the access log and the default/error log) keeps it. The guard is
+# the three marked blocks of the heredoc above; the SSM editor below inserts exactly
+# those blocks into an existing Hive's Caddyfile, so a migrated Hive and a new one run
+# the same file, and removing them restores the file the Hive had before.
+ORIGIN_HEADER = "X-Swarm-Origin"
+ORIGIN_SECRET_PATTERN = r"[A-Za-z0-9_-]{32,128}"
+_ORIGIN_SECRET_RE = re.compile(ORIGIN_SECRET_PATTERN)
+_GUARD_MARK_PATTERN = (r"^[ \t]*# ORIGIN-GUARD-(GLOBAL|RULE|LOG)-BEGIN\n.*?"
+                       r"^[ \t]*# ORIGIN-GUARD-\1-END\n")
+_GUARD_MARK_RE = re.compile(_GUARD_MARK_PATTERN, re.S | re.M)
+_CADDY_HEREDOC_OPEN = "cat > /etc/caddy/Caddyfile << 'CADDY'\n"
+# (block name, the line it sits next to in the Caddyfile, before/after that line)
+_GUARD_ANCHORS = (
+    ("GLOBAL", ":80 {\n", "before"),
+    ("RULE", "    @protected not path /health\n", "before"),
+    ("LOG", "    log {\n", "after"),
+)
+
+
+def _guard_blocks() -> list:
+    """[(block text with ${origin_secret}, anchor, where)], read from the template so the
+    editor can never insert anything but what a new Hive gets. Fails loud on drift."""
+    caddy = _USER_DATA_TEMPLATE.split(_CADDY_HEREDOC_OPEN, 1)[1].split("\nCADDY\n", 1)[0]
+    found = {m.group(1): m.group(0) for m in _GUARD_MARK_RE.finditer(caddy + "\n")}
+    out = []
+    for name, anchor, where in _GUARD_ANCHORS:
+        block = found.get(name)
+        if block is None or (block + anchor if where == "before" else anchor + block) not in caddy:
+            raise RuntimeError(f"origin guard block {name} drifted from its anchor")
+        out.append((block, anchor, where))
+    return out
+
+
+# Runs on the instance (python3 of Amazon Linux 2023: keep it 3.9-compatible and stdlib
+# only). argv: apply|remove <Caddyfile>; apply reads the secret from stdin. It writes the
+# file only when every anchor was found once (atomic replace, mode kept) and never prints
+# the secret.
+_GUARD_EDITOR_TEMPLATE = r'''
+import os, re, shutil, sys
+BLOCKS = __BLOCKS__
+MARK = re.compile(__MARK__, re.S | re.M)
+mode, path = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    text = f.read()
+out = MARK.sub("", text)
+if mode == "apply":
+    secret = sys.stdin.read().strip()
+    if not re.fullmatch(__SECRET_RE__, secret):
+        sys.exit("ERROR: the origin secret has an unexpected shape; Caddyfile not changed")
+    for block, anchor, where in BLOCKS:
+        if out.count(anchor) != 1:
+            sys.exit("ERROR: this Caddyfile is not in the layout the origin guard needs "
+                     "(a line it goes next to is missing or repeated); Caddyfile not changed. "
+                     "Redeploy the Hive, or add the guard by hand")
+        block = block.replace("${origin_secret}", secret)
+        out = out.replace(anchor, block + anchor if where == "before" else anchor + block, 1)
+elif mode != "remove":
+    sys.exit("ERROR: unknown mode")
+if out != text:
+    tmp = path + ".origin-new"
+    with open(tmp, "w") as f:
+        f.write(out)
+    shutil.copymode(path, tmp)
+    os.replace(tmp, path)
+print("Caddyfile origin guard: " + mode)
+'''
+
+
+def origin_guard_editor_source() -> str:
+    """The Python the SSM command runs on an existing Hive to add (``apply``) or remove
+    (``remove``) the origin guard in /etc/caddy/Caddyfile."""
+    return (_GUARD_EDITOR_TEMPLATE
+            .replace("__BLOCKS__", repr(_guard_blocks()))
+            .replace("__MARK__", repr(_GUARD_MARK_PATTERN))
+            .replace("__SECRET_RE__", repr(ORIGIN_SECRET_PATTERN)))
+
+
+_guard_blocks()  # a template edit that moves a guard block fails at import, not on a Hive
+
+
+def valid_origin_secret(value) -> bool:
+    return isinstance(value, str) and bool(_ORIGIN_SECRET_RE.fullmatch(value))
+
+
 # ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
 # When a pre-baked custom AMI is used, the heavy on-machine install steps are
 # already固化 in the image, so render_user_data(prebaked=True) strips these two
@@ -321,6 +446,7 @@ def render_user_data(
     auth_hash: str,
     region: str,
     prebaked: bool = False,
+    origin_secret: str | None = None,
 ) -> str:
     """Render the EC2 user-data bash script with parameters.
 
@@ -336,8 +462,13 @@ def render_user_data(
     instance only pulls the package (step 3) + starts services (steps 5-9),
     cutting build time from minutes to ~10s. prebaked=False (default) renders
     byte-for-byte the original full-install script — zero regression.
+
+    origin_secret: this Hive's secret, which its CloudFront distribution sends as
+    X-Swarm-Origin (provisioner.deploy generates it before the launch). The Caddyfile
+    then answers 403 to every request but /health whose header does not equal it, before
+    basic auth, and its access log drops the header. None renders the Caddyfile without
+    the guard (the shape Hives had before it), never a guard nobody can pass.
     """
-    import re
     from string import Template
 
     # Validate inputs structurally to prevent shell/config injection.
@@ -360,6 +491,9 @@ def render_user_data(
             raise ValueError(
                 f"Invalid {name}: contains unsafe characters"
             )
+    if origin_secret is not None and not valid_origin_secret(origin_secret):
+        # The value is never echoed: it is a credential.
+        raise ValueError(f"Invalid origin_secret: must match {ORIGIN_SECRET_PATTERN}")
 
     # base64-encode the bcrypt hash for the backend env-file write (avoids shell/systemd
     # `$` expansion of $2b$.. — same footgun the Caddyfile heredoc dodges via single-quotes).
@@ -367,7 +501,7 @@ def render_user_data(
     auth_hash_b64 = base64.b64encode(auth_hash.encode()).decode()
 
     tmpl = Template(_USER_DATA_TEMPLATE)
-    result = tmpl.safe_substitute(
+    values = dict(
         s3_bucket=s3_bucket,
         version=version,
         auth_user=auth_user,
@@ -375,6 +509,11 @@ def render_user_data(
         auth_hash_b64=auth_hash_b64,
         region=region,
     )
+    if origin_secret is not None:
+        values["origin_secret"] = origin_secret
+    result = tmpl.safe_substitute(**values)
+    if origin_secret is None:
+        result = _GUARD_MARK_RE.sub("", result)
 
     # Prebaked AMI: strip the heavy on-machine install segments. Fail LOUD if a
     # segment isn't found verbatim (template drifted) — never silently render a
@@ -391,8 +530,9 @@ def render_user_data(
             result = result.replace(old, new)
 
     # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
-    # Only check for our 5 known template vars (shell vars like ${i}, ${HASH} are expected).
-    _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region"}
+    # Only check for our known template vars (shell vars like ${i}, ${HASH} are expected).
+    _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region",
+                      "origin_secret"}
     for var in _TEMPLATE_VARS:
         if f"${{{var}}}" in result:
             raise ValueError(f"Unresolved template variable: ${{{var}}}")

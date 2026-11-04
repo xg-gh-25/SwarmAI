@@ -97,7 +97,7 @@ class _PM:
         self.cached = cached
         self.approved = []
 
-    def is_command_approved(self, session_key, command):
+    def is_command_approved(self, session_key, command, *, cwd):
         return self.cached
 
     def is_resolved(self, session_id, tool_call_id):
@@ -116,7 +116,7 @@ class _PM:
     def pop_decided_by(self, request_id):
         return "host"
 
-    def approve_command(self, session_key, command):
+    def approve_command(self, session_key, command, *, cwd):
         self.approved.append(command)
 
 

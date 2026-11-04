@@ -498,7 +498,9 @@ def segment(spec: dict[str, Any], run_id: Optional[str] = None,
     else:
         lines.append("Delivery: your answer, in your final reply. The repositories are there to read.")
     if spec["reserved"]:
-        lines.append(f"Asked of the person every time: {', '.join(spec['reserved'])}.")
+        # what the gates do on a dispatched task (core/security_hooks): refused, nobody asked
+        lines.append(f"Refused on this task without asking anyone: {', '.join(spec['reserved'])}. "
+                     "Do them another way, or say in your result why they could not be done.")
     if spec["gates"]:
         lines.append(f"Brain gates run before each command and file write: {', '.join(spec['gates'])}.")
     lines.append(f"Done when: {spec['acceptance']}")

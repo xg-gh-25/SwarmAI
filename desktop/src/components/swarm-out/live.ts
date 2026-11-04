@@ -142,13 +142,16 @@ const gateName = (k: string): string =>
   k === 'integrity' ? i18n.t('swarmOut.gate.integrity') : k.startsWith('error:') ? i18n.t('swarmOut.gate.errored', { name: k.slice(6) }) : k;
 
 /** "Brain gate 拦下 3 次（no_git_push 2、完整性 1）"; for a Project Agent run on a Hive
- *  that does not count them, says so; null otherwise. */
+ *  that does not count them, says so; a count a turn lost when its Hive stopped mid-turn
+ *  (gate_refusals_partial) says so too; null otherwise. */
 export function gateLine(res: SwarmOutResult): string | null {
   if (res.project_agent && res.gate_refusals === null) return i18n.t('swarmOut.gate.notCounted');
   const g = Object.entries(res.gate_refusals ?? {}).filter(([, n]) => n > 0);
-  if (g.length === 0) return null;
+  const lost = res.project_agent && res.gate_refusals_partial === true;
+  if (g.length === 0) return lost ? i18n.t('swarmOut.gate.lost') : null;
   const total = g.reduce((a, [, n]) => a + n, 0);
-  return i18n.t('swarmOut.gate.refused', { count: total, list: g.map(([k, n]) => `${gateName(k)} ${n}`).join(i18n.t('swarmOut.sep.list')) });
+  return i18n.t('swarmOut.gate.refused', { count: total, list: g.map(([k, n]) => `${gateName(k)} ${n}`).join(i18n.t('swarmOut.sep.list')) })
+    + (lost ? i18n.t('swarmOut.gate.partial') : '');
 }
 
 /** "教训：交回 3 条，本机判官写进 Brain 1 条、没通过 1 条、待判 1 条" for a Project Agent
@@ -213,7 +216,7 @@ export function errorLabel(e: string): string {
 
 /** Every ending the Hive records (SwarmOutEnded), each with its locale label. */
 export const ENDINGS: readonly SwarmOutEnded[] = ['completed', 'turn_limit', 'error', 'crashed', 'paused', 'no_terminal',
-  'stopped', 'restarted', 'superseded', 'gave_up', 'no_record'];
+  'stopped', 'restarted', 'superseded', 'gave_up', 'no_record', 'daemon_stopped'];
 
 /** How a run ended, in the card's words, and its tone (./tone). Facts only: a
  *  provisional ending says so, an unrecorded one says why. */
@@ -480,7 +483,8 @@ export function outcomeBucket(r: SwarmOutRun): OutcomeBucket {
   if (!res) return 'other';   // paused / no_record (the provisional endings) fall to 'other' below
   if (res.ended === 'completed' || res.ended === 'turn_limit') return 'completed';
   if (res.ended === 'error' || res.ended === 'crashed' || res.ended === 'gave_up') return 'error';
-  if (res.ended === 'stopped' || res.ended === 'superseded' || res.ended === 'restarted') return 'stopped';
+  if (res.ended === 'stopped' || res.ended === 'superseded' || res.ended === 'restarted'
+    || res.ended === 'daemon_stopped') return 'stopped';
   return 'other';
 }
 

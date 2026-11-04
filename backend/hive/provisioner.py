@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -48,7 +49,7 @@ _VALID_INSTANCE_COLUMNS = frozenset({
     "ec2_instance_id", "ec2_public_ip", "elastic_ip_alloc_id",
     "security_group_id", "iam_role_name", "iam_instance_profile_arn",
     "cloudfront_dist_id", "cloudfront_domain", "s3_bucket",
-    "auth_user", "auth_password", "custom_ami_id",
+    "auth_user", "auth_password", "custom_ami_id", "origin_secret",
 })
 
 # Hive name regex — single source of truth, imported by routers/hive.py
@@ -189,6 +190,130 @@ def _put_hive_role_policy(iam, role_name: str) -> None:
         PolicyName="SwarmAI-Hive-Policy",
         PolicyDocument=json.dumps(HIVE_IAM_POLICY),
     )
+
+
+# ── Origin secret (design 2026-11-04-kirocrew-borrow §3.C1) ─────────────────
+# The distribution's origin is "hive-origin" (_create_cloudfront); its OriginCustomHeaders
+# carry X-Swarm-Origin, which the Caddyfile requires (hive/user_data.py, origin guard).
+_HIVE_ORIGIN_ID = "hive-origin"
+
+
+class OriginLockError(RuntimeError):
+    """A step of adding or removing the origin secret failed. Its message is written by
+    this module and never holds the secret, so it may be logged and shown."""
+
+
+def _hive_origin(config: dict) -> dict:
+    for origin in (config.get("Origins") or {}).get("Items") or []:
+        if origin.get("Id") == _HIVE_ORIGIN_ID:
+            return origin
+    raise OriginLockError(f"the distribution has no origin {_HIVE_ORIGIN_ID!r}")
+
+
+def _origin_header_value(config: dict) -> Optional[str]:
+    """The X-Swarm-Origin value the distribution sends to the Hive, or None."""
+    from hive.user_data import ORIGIN_HEADER
+    items = (_hive_origin(config).get("OriginCustomHeaders") or {}).get("Items") or []
+    for item in items:
+        if item.get("HeaderName", "").lower() == ORIGIN_HEADER.lower():
+            return item.get("HeaderValue")
+    return None
+
+
+def _set_origin_header(config: dict, secret: Optional[str]) -> None:
+    """Set (or, with None, remove) X-Swarm-Origin on the Hive origin of a distribution
+    config, in place; any other custom header is kept."""
+    from hive.user_data import ORIGIN_HEADER
+    origin = _hive_origin(config)
+    items = [i for i in (origin.get("OriginCustomHeaders") or {}).get("Items") or []
+             if i.get("HeaderName", "").lower() != ORIGIN_HEADER.lower()]
+    if secret is not None:
+        items.append({"HeaderName": ORIGIN_HEADER, "HeaderValue": secret})
+    origin["OriginCustomHeaders"] = {"Quantity": len(items), "Items": items}
+
+
+def _origin_guard_script(mode: str, secret: Optional[str]) -> str:
+    """The SSM script that adds (``apply``) or removes (``remove``) the origin guard in an
+    existing Hive's Caddyfile, the way update_caddyfile edits it: back up, edit, ``caddy
+    validate``, restart, and put the previous file back when validate fails. After the
+    restart it checks that a request without the header gets 403 (apply) or 401 (remove,
+    basic auth), and restores the previous file and restarts again when it does not.
+    In apply mode it also sends the secret and expects 401 (past the guard, at basic auth),
+    so a Caddyfile whose value is not the one the distribution sends is never left in
+    place. The secret reaches the editor on stdin and curl from a 0600 temp file (never an
+    argument), base64-encoded in the script; nothing the script prints holds it."""
+    import base64
+    from hive.user_data import origin_guard_editor_source, valid_origin_secret
+    if mode == "apply":
+        if not valid_origin_secret(secret):
+            raise OriginLockError("refusing to apply an origin secret of unexpected shape")
+        feed = f"echo '{base64.b64encode(secret.encode()).decode()}' | base64 -d"
+        expect = "403"
+        with_header = "401"
+    elif mode == "remove":
+        feed, expect, with_header = "true", "401", ""
+    else:
+        raise ValueError(f"unknown origin guard mode {mode!r}")
+    editor_b64 = base64.b64encode(origin_guard_editor_source().encode()).decode()
+    return f"""#!/bin/bash
+set -euo pipefail
+CADDYFILE="/etc/caddy/Caddyfile"
+BACKUP="$CADDYFILE.origin-bak"
+if [ ! -f "$CADDYFILE" ]; then
+  echo "ERROR: Caddyfile not found" >&2
+  exit 1
+fi
+cp -p "$CADDYFILE" "$BACKUP"
+put_back() {{
+  cp -p "$BACKUP" "$CADDYFILE"
+  rm -f "$BACKUP"
+}}
+EDITOR_PY=$(echo '{editor_b64}' | base64 -d)
+if ! {feed} | python3 -c "$EDITOR_PY" {mode} "$CADDYFILE"; then
+  put_back
+  echo "ERROR: the origin guard edit failed; previous Caddyfile kept" >&2
+  exit 1
+fi
+if ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+  put_back
+  echo "ERROR: caddy validate failed; previous Caddyfile restored" >&2
+  exit 1
+fi
+if ! systemctl restart caddy; then
+  put_back
+  systemctl restart caddy || true
+  echo "ERROR: caddy did not restart; previous Caddyfile restored" >&2
+  exit 1
+fi
+CODE=""
+for i in $(seq 1 15); do
+  CODE=$(curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1/ || true)
+  if [ "$CODE" = "{expect}" ]; then
+    break
+  fi
+  sleep 1
+done
+if [ "$CODE" != "{expect}" ]; then
+  put_back
+  systemctl restart caddy || true
+  echo "ERROR: a request without the header got $CODE, not {expect}; previous Caddyfile restored" >&2
+  exit 1
+fi
+if [ -n "{with_header}" ]; then
+  HDR=$(mktemp)
+  {{ printf 'X-Swarm-Origin: '; {feed}; }} > "$HDR"
+  CODE=$(curl -s -o /dev/null -w '%{{http_code}}' -H "@$HDR" http://127.0.0.1/ || true)
+  rm -f "$HDR"
+  if [ "$CODE" != "{with_header}" ]; then
+    put_back
+    systemctl restart caddy || true
+    echo "ERROR: a request with the secret got $CODE, not {with_header}; previous Caddyfile restored" >&2
+    exit 1
+  fi
+fi
+rm -f "$BACKUP"
+echo "Origin guard {mode}: done"
+"""
 
 
 # A release version as it appears in a tag, an S3 key and the update script: digits and
@@ -837,12 +962,14 @@ class HiveProvisioner:
         return dns
 
     async def _create_cloudfront(
-        self, session, origin_domain: str, name: str
+        self, session, origin_domain: str, name: str, origin_secret: str
     ) -> tuple[str, str]:
         """Create CloudFront distribution. Returns (dist_id, domain_name).
 
         origin_domain must be a DNS name (not an IP) — CloudFront rejects IPs.
         Use _get_ec2_public_dns() to resolve the EC2 public DNS name.
+        origin_secret is sent to the origin as X-Swarm-Origin (OriginCustomHeaders): the
+        Hive's Caddyfile answers 403 without it.
         """
         import uuid as _uuid
 
@@ -861,7 +988,7 @@ class HiveProvisioner:
                     "Quantity": 1,
                     "Items": [
                         {
-                            "Id": "hive-origin",
+                            "Id": _HIVE_ORIGIN_ID,
                             "DomainName": origin_domain,
                             "CustomOriginConfig": {
                                 "HTTPPort": 80,
@@ -893,6 +1020,7 @@ class HiveProvisioner:
                 # Browser-side caching via hashed filenames is sufficient.
                 "CacheBehaviors": {"Quantity": 0, "Items": []},
             }
+            _set_origin_header(dist_config, origin_secret)
 
             resp = cf.create_distribution(DistributionConfig=dist_config)
             dist_id = resp["Distribution"]["Id"]
@@ -903,9 +1031,10 @@ class HiveProvisioner:
         return await asyncio.to_thread(_create)
 
     async def _wait_cloudfront_deployed(
-        self, session, dist_id: str, timeout: int = 1200
+        self, session, dist_id: str, timeout: int = 1200, on_poll=None
     ) -> bool:
-        """Wait for CloudFront distribution to reach Deployed status."""
+        """Wait for CloudFront distribution to reach Deployed status. *on_poll*, when
+        given, is awaited after every status read that is not Deployed."""
         # M1: Create client once — reused across all poll iterations
         cf_client = session.client("cloudfront")
 
@@ -920,6 +1049,8 @@ class HiveProvisioner:
                 logger.info("CloudFront %s deployed", dist_id)
                 return True
             logger.info("CloudFront %s status: %s (waiting...)", dist_id, status)
+            if on_poll is not None:
+                await on_poll()
             await asyncio.sleep(30)
 
         logger.warning("CloudFront %s not deployed within %ds", dist_id, timeout)
@@ -992,11 +1123,14 @@ class HiveProvisioner:
             created_resources["security_group"] = sg_id
             await self._update_instance(instance_id, security_group_id=sg_id)
 
-            # Step 6: Generate user-data
+            # Step 6: Generate user-data. The origin secret is made here, before the
+            # launch: the Caddyfile is written from user data on first boot, and the
+            # distribution that sends the secret is only created at step 10.
             from hive.user_data import generate_password, caddy_hash_password, render_user_data
 
             password = generate_password()
             auth_hash = caddy_hash_password(password)
+            origin_secret = secrets.token_urlsafe(32)
             user_data = render_user_data(
                 s3_bucket=bucket,
                 version=version,
@@ -1004,9 +1138,11 @@ class HiveProvisioner:
                 auth_hash=auth_hash,
                 region=region,
                 prebaked=bool(custom_ami_id),
+                origin_secret=origin_secret,
             )
             await self._update_instance(
-                instance_id, auth_user="admin", auth_password=password
+                instance_id, auth_user="admin", auth_password=password,
+                origin_secret=origin_secret,
             )
 
             # Step 7: Launch EC2
@@ -1052,7 +1188,8 @@ class HiveProvisioner:
 
             # Step 10: CloudFront (needs DNS name, not IP — CF rejects IPs)
             origin_dns = await self._get_ec2_public_dns(session, ec2_id, region)
-            dist_id, cf_domain = await self._create_cloudfront(session, origin_dns, name)
+            dist_id, cf_domain = await self._create_cloudfront(
+                session, origin_dns, name, origin_secret)
             created_resources["cloudfront"] = dist_id
             await self._update_instance(
                 instance_id,
@@ -1241,7 +1378,9 @@ class HiveProvisioner:
         middle), so the card offers its actions again. Returns how many rows changed.
 
         - 'updating' older than *max_age_s* → 'running' (an update takes at most about 12
-          minutes: S3 sync, the SSM command's 300 s, our 300 s poll, the 60 s health check);
+          minutes: S3 sync, the SSM command's 300 s, our 300 s poll, the 60 s health check;
+          the origin-secret step that may follow waits up to 20 more minutes for
+          CloudFront, and refreshes updated_at at every poll of that wait);
         - 'deleting' older than *deleting_max_age_s* → 'error', keeping the last step the
           retry recorded (snapshots up to 40 minutes, then the cleanup), so the person
           knows how far it got; the next Retry checks the instance again."""
@@ -1478,10 +1617,26 @@ echo "=== Update to v{version} verified ==="
                     session, ec2_id, region, timeout=60
                 )
                 if healthy:
+                    # A Hive made before the origin secret gets it now (§3.C1). Its failure
+                    # leaves the Hive on the new version and is retried by the next update.
+                    origin_note = None
+                    if instance.get("cloudfront_dist_id") and not instance.get("origin_secret"):
+                        # The Hive is on the new version now, whatever the next step does.
+                        await self._update_instance(instance_id, version=version)
+                        try:
+                            await self._lock_origin(instance_id, instance, session)
+                        except Exception as e:  # noqa: BLE001 — recorded on the card below
+                            reason = str(e) if isinstance(e, OriginLockError) else type(e).__name__
+                            origin_note = (f"Updated to v{version}, but limiting the origin to "
+                                           f"its CloudFront distribution failed ({reason}); "
+                                           f"the next update tries it again.")
                     await self._update_instance(instance_id, version=version, status="running",
-                                                error_message=None)
+                                                error_message=origin_note)
                     _update_succeeded = True
                     logger.info("Hive %s updated to v%s (health verified)", instance["name"], version)
+                    if origin_note:
+                        logger.warning("Hive %s: %s", instance["name"], origin_note)
+                        raise RuntimeError(origin_note)
                 else:
                     await self._update_instance(
                         instance_id, status="running",
@@ -1773,6 +1928,141 @@ fi
         if status != "Success":
             raise RuntimeError(f"Caddyfile update failed: {status}. {output[:200]}")
         logger.info("Hive %s Caddyfile updated", instance["name"])
+
+    # ── Origin secret on an existing Hive (§3.C1) ───────────────────
+
+    @staticmethod
+    def _run_ssm_script(session, region: str, ec2_id: str, script: str,
+                        comment: str) -> tuple[str, str]:
+        """Send one shell script over SSM and wait for its end (sync: run it in a thread).
+        Returns (status, stdout + stderr)."""
+        ssm = session.client("ssm", region_name=region)
+        resp = ssm.send_command(
+            InstanceIds=[ec2_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={"commands": [script]},
+            TimeoutSeconds=120,
+            Comment=comment,
+        )
+        command_id = resp["Command"]["CommandId"]
+        for _ in range(30):  # 30 x 5 s: the script's own checks take at most ~20 s
+            result = ssm.get_command_invocation(CommandId=command_id, InstanceId=ec2_id)
+            if result["Status"] in ("Success", "Failed", "Cancelled", "TimedOut"):
+                out = (result.get("StandardOutputContent", "") + "\n"
+                       + result.get("StandardErrorContent", "")).strip()
+                return result["Status"], out
+            time.sleep(5)
+        return "TimedOut", ""
+
+    async def _lock_origin(self, instance_id: str, instance: dict, session) -> None:
+        """Give an existing Hive its origin secret without ever locking it out:
+
+        1. the distribution gets the X-Swarm-Origin header (get_distribution, then
+           update_distribution with IfMatch). Caddy does not look at it yet, so this
+           changes nothing for the Hive;
+        2. wait until the distribution is Deployed, so every edge sends the header;
+        3. only then the SSM edit adds the 403 rule to the Caddyfile (validate, restart,
+           previous file back on any failure);
+        4. the secret is stored with the instance record.
+
+        When a step fails the header stays on the distribution (harmless) and no secret is
+        stored, so the next update runs this again and reuses the value the distribution
+        already sends. Raises OriginLockError (or a boto/SSM error) on failure."""
+        from hive.user_data import valid_origin_secret
+        dist_id = instance["cloudfront_dist_id"]
+        ec2_id = instance.get("ec2_instance_id")
+        if not ec2_id:
+            raise OriginLockError("the Hive has no EC2 instance")
+        cf = session.client("cloudfront")
+
+        def _put_header() -> str:
+            dist = cf.get_distribution(Id=dist_id)
+            config = dist["Distribution"]["DistributionConfig"]
+            current = _origin_header_value(config)
+            secret = current if valid_origin_secret(current) else secrets.token_urlsafe(32)
+            if current != secret:
+                _set_origin_header(config, secret)
+                cf.update_distribution(Id=dist_id, DistributionConfig=config,
+                                       IfMatch=dist["ETag"])
+            return secret
+
+        secret = await asyncio.to_thread(_put_header)
+
+        # The wait can pass UPDATE_STALE_S: refresh updated_at at every poll so that
+        # release_stale_updates never takes this running update for an interrupted one.
+        async def _heartbeat() -> None:
+            await self._update_instance(instance_id, status="updating")
+
+        await _heartbeat()
+        if not await self._wait_cloudfront_deployed(session, dist_id, timeout=1200,
+                                                    on_poll=_heartbeat):
+            raise OriginLockError("the distribution was not Deployed within 20 minutes; "
+                                  "the Caddyfile was not changed")
+        await _heartbeat()
+        status, output = await asyncio.to_thread(
+            self._run_ssm_script, session, instance["region"], ec2_id,
+            _origin_guard_script("apply", secret), "SwarmAI Hive origin guard: apply")
+        if status != "Success":
+            raise OriginLockError(f"the Caddyfile edit ended {status}: {output[-200:]}")
+        await self._update_instance(instance_id, origin_secret=secret)
+        logger.info("Hive %s: origin limited to its CloudFront distribution", instance["name"])
+
+    async def remove_origin_secret(self, instance_id: str, claimed: bool = False) -> None:
+        """Roll the origin secret back, in the order that never locks the Hive out: first
+        the Caddyfile loses its 403 rule and Caddy restarts (previous file back on any
+        failure, and then the distribution is not touched); then the header leaves the
+        distribution. The stored secret is cleared between the two, so a Hive whose
+        distribution step failed is still offered the lock again. The next update adds
+        the secret back (a fresh one or the one the distribution still sends): roll back
+        to stop a broken release, not to turn the lock off for good.
+
+        It holds the same running → updating gate as update (claim_update), so it never
+        interleaves with an update's own origin step, and ends 'running' in every case,
+        with the reason when it failed. An operator path: no route calls it."""
+        if not claimed:
+            await self.claim_update(instance_id)
+        try:
+            await self._remove_origin_secret(instance_id)
+        except BaseException as e:
+            reason = str(e) if isinstance(e, OriginLockError) else type(e).__name__
+            try:
+                await self._update_instance(
+                    instance_id, status="running",
+                    error_message=f"Removing the origin secret failed ({reason}).")
+            except Exception:  # noqa: BLE001
+                logger.error("Failed to reset status after origin rollback error for %s",
+                             instance_id)
+            raise
+        await self._update_instance(instance_id, status="running", error_message=None)
+
+    async def _remove_origin_secret(self, instance_id: str) -> None:
+        instance = await self._get_instance(instance_id)
+        account = await self._get_account(instance["account_ref"])
+        session = await self._session(account, instance["region"], "manage")
+        ec2_id = instance.get("ec2_instance_id")
+        if not ec2_id:
+            raise ValueError("No EC2 instance ID")
+
+        status, output = await asyncio.to_thread(
+            self._run_ssm_script, session, instance["region"], ec2_id,
+            _origin_guard_script("remove", None), "SwarmAI Hive origin guard: remove")
+        if status != "Success":
+            raise OriginLockError(f"removing the Caddy rule ended {status}: {output[-200:]}; "
+                                  f"the distribution was not changed")
+        await self._update_instance(instance_id, origin_secret=None)
+
+        dist_id = instance.get("cloudfront_dist_id")
+        if dist_id:
+            def _drop_header() -> None:
+                cf = session.client("cloudfront")
+                dist = cf.get_distribution(Id=dist_id)
+                config = dist["Distribution"]["DistributionConfig"]
+                if _origin_header_value(config) is not None:
+                    _set_origin_header(config, None)
+                    cf.update_distribution(Id=dist_id, DistributionConfig=config,
+                                           IfMatch=dist["ETag"])
+            await asyncio.to_thread(_drop_header)
+        logger.info("Hive %s: origin secret removed", instance["name"])
 
     # ── Cleanup ────────────────────────────────────────────────────
 

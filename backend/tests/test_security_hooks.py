@@ -619,7 +619,7 @@ class TestDangerousCommandGateIntegration:
         )
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         # THE invariant: denied command is not in the session's approved set.
-        assert pm.is_command_approved("sess-smoke", cmd) is False
+        assert pm.is_command_approved("sess-smoke", cmd, cwd="") is False
 
     @pytest.mark.asyncio
     async def test_timeout_emits_visible_distinct_reason(self):

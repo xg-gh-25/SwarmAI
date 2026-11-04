@@ -4,7 +4,7 @@ Encapsulates all mutable permission state. Uses a singleton pattern to ensure ex
 preserving the current single-process concurrency model.
 
 State managed:
-    - _approved_commands: session ID → set of approved command hashes
+    - _approved_commands: session ID → set of approved (command, cwd) hashes
     - _permission_events: request ID → asyncio.Event for signaling decisions
     - _permission_results: request ID → decision string ("approve" or "deny")
     - _prompts: session ID → the open prompts a hook is blocked on (the board)
@@ -100,23 +100,26 @@ class PermissionManager:
         self._lock = threading.Lock()
         self._pending_requests: dict[str, dict[str, Any]] = self._load_pending()
 
-    def hash_command(self, command: str) -> str:
-        """Create a hash of the command for approval tracking."""
-        return hashlib.sha256(command.encode()).hexdigest()[:16]
+    def hash_command(self, command: str, cwd: str) -> str:
+        """The approval key of *command* run in *cwd*: the danger rules read both (a
+        relative ``rm -rf build`` is another target in another directory), so an
+        approval covers the command in the directory it was approved in."""
+        # the whole digest: a cut-down one lets two prepared commands share one approval
+        return hashlib.sha256(json.dumps([command, cwd]).encode()).hexdigest()
 
-    def approve_command(self, session_id: str, command: str) -> None:
-        """Mark a command as approved for a session."""
+    def approve_command(self, session_id: str, command: str, *, cwd: str) -> None:
+        """Mark *command*, run in *cwd*, as approved for a session."""
         if session_id not in self._approved_commands:
             self._approved_commands[session_id] = set()
-        command_hash = self.hash_command(command)
+        command_hash = self.hash_command(command, cwd)
         self._approved_commands[session_id].add(command_hash)
         logger.info(f"Command approved for session {session_id} (hash: {command_hash})")
 
-    def is_command_approved(self, session_id: str, command: str) -> bool:
-        """Check if a command was previously approved for a session."""
+    def is_command_approved(self, session_id: str, command: str, *, cwd: str) -> bool:
+        """Whether *command*, run in *cwd*, was approved before in this session."""
         if session_id not in self._approved_commands:
             return False
-        command_hash = self.hash_command(command)
+        command_hash = self.hash_command(command, cwd)
         return command_hash in self._approved_commands[session_id]
 
     def clear_session_approvals(self, session_id: str) -> None:

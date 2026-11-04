@@ -33,29 +33,31 @@ class TestPermissionApproveCheckRoundTrip:
     @given(
         session_id=st.text(min_size=1),
         command=st.text(min_size=1),
+        cwd=st.text(),
     )
     @PROPERTY_SETTINGS
-    def test_approved_command_is_recognized(self, session_id: str, command: str):
+    def test_approved_command_is_recognized(self, session_id: str, command: str, cwd: str):
         """approve_command then is_command_approved returns True.
 
         **Validates: Requirements 2.4**
         """
         pm = PermissionManager()
-        pm.approve_command(session_id, command)
-        assert pm.is_command_approved(session_id, command) is True
+        pm.approve_command(session_id, command, cwd=cwd)
+        assert pm.is_command_approved(session_id, command, cwd=cwd) is True
 
     @given(
         session_id=st.text(min_size=1),
         command=st.text(min_size=1),
+        cwd=st.text(),
     )
     @PROPERTY_SETTINGS
-    def test_unapproved_command_is_not_recognized(self, session_id: str, command: str):
+    def test_unapproved_command_is_not_recognized(self, session_id: str, command: str, cwd: str):
         """is_command_approved returns False for unapproved commands.
 
         **Validates: Requirements 2.4**
         """
         pm = PermissionManager()
-        assert pm.is_command_approved(session_id, command) is False
+        assert pm.is_command_approved(session_id, command, cwd=cwd) is False
 
 
 class TestPermissionDecisionSetWaitRoundTrip:

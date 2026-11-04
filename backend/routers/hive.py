@@ -859,7 +859,7 @@ async def _retry_steps(provisioner: HiveProvisioner, instance_id: str, version: 
                 ec2_instance_id=NULL, ec2_public_ip=NULL, elastic_ip_alloc_id=NULL,
                 security_group_id=NULL, iam_role_name=NULL, iam_instance_profile_arn=NULL,
                 cloudfront_dist_id=NULL, cloudfront_domain=NULL, s3_bucket=NULL,
-                auth_user=NULL, auth_password=NULL, updated_at=?
+                auth_user=NULL, auth_password=NULL, origin_secret=NULL, updated_at=?
                 WHERE id=?""",
             (_now(), instance_id),
         )

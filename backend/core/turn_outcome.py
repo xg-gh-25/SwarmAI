@@ -15,8 +15,9 @@ terminal event is an ``error``, or an erroring ``result`` other than the turn li
 ``turn_limit_reached``), ``completed`` (any other ``result``), ``paused`` (no terminal
 event; the turn stopped on a question or a permission prompt, whose continuation
 writes its own outcome), ``none`` (no terminal event: a Stop — its ``turn_stop`` block
-says so — an interrupt, a shutdown). Facts only: the reader combines it with
-``turn_stop`` / ``turn_notice``.
+says so — an interrupt, a shutdown), ``daemon_stopped`` (never from a recorder: written
+when a Hive's daemon starts again for a turn its death left open, core/hive_boot). Facts
+only: the reader combines it with ``turn_stop`` / ``turn_notice``.
 
 ``cli_cost_total`` is the CLI process's running total (``result.total_cost_usd``), not
 this turn's cost; ``cli_pid`` tells whether two outcomes come from one process.
@@ -27,6 +28,7 @@ A display block: ``context_injector`` keeps it out of resume history and the cha
 
 - ``BLOCK_TYPE``, ``ENDED``
 - ``OutcomeRecorder`` — ``note(event, pid)``, ``crashed(exc)``, ``block(repos)``
+- ``daemon_stopped_block(repos)`` — the outcome of a turn the daemon's death cut off
 - ``cost_increase(prev, value)`` / ``turn_costs(outcomes)``
 """
 from __future__ import annotations
@@ -37,7 +39,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 BLOCK_TYPE = "turn_outcome"
-ENDED = ("completed", "turn_limit", "error", "crashed", "paused", "none")
+ENDED = ("completed", "turn_limit", "error", "crashed", "paused", "none", "daemon_stopped")
 
 _PAUSE_EVENTS = ("ask_user_question", "cmd_permission_request")
 _USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens",
@@ -121,6 +123,25 @@ class OutcomeRecorder:
         if repos is not None:
             block["repos"] = repos
         return block
+
+
+def daemon_stopped_block(repos: Optional[list] = None, at: Optional[str] = None,
+                         partial: bool = True) -> dict:
+    """The outcome of a turn the daemon's death left open (core/hive_boot): the shape
+    ``OutcomeRecorder.block`` writes, with nothing the dead process knew. Its gate
+    refusals are lost with it: ``{}`` marked ``gate_refusals_partial`` (``partial``
+    False: a turn that only sat on its question, whose paused outcome counted them).
+    ``at``: when the turn last wrote (now when not known)."""
+    block: dict[str, Any] = {
+        "type": BLOCK_TYPE, "ended": "daemon_stopped", "subtype": None, "code": None,
+        "message": None, "exception": None, "duration_ms": None, "num_turns": None,
+        "cli_cost_total": None, "cli_pid": None, "usage": None,
+        "at": at or datetime.now(timezone.utc).isoformat(),
+        "gate_refusals": {}, "gate_refusals_partial": partial,
+    }
+    if repos is not None:
+        block["repos"] = repos
+    return block
 
 
 def cost_increase(prev: Optional[tuple[Any, float]], pid: Any, value: float) -> float:

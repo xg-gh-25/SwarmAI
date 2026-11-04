@@ -34,6 +34,7 @@ const ENDED_TONE: Record<SwarmOutEnded, Tone> = {
   stopped: 'attention',
   superseded: 'attention',
   restarted: 'attention',
+  daemon_stopped: 'attention',
   no_terminal: 'unknown',
   no_record: 'unknown',
 };

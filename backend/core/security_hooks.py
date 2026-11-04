@@ -8,7 +8,7 @@ Public symbols
 --------------
 - ``create_pre_tool_logger``                 — factory: logs every tool invocation + durable SEL audit
 - ``DEFAULT_DANGEROUS_PATTERNS``             — default glob patterns for dangerous commands
-- ``load_dangerous_patterns``                — load patterns from ~/.swarm-ai/dangerous_commands.json
+- ``load_dangerous_patterns``                — the defaults plus the user's own patterns from ~/.swarm-ai/dangerous_commands.json
 - ``create_dangerous_command_gate``          — single PreToolUse gate for Bash commands
 - ``create_file_access_permission_handler``  — workspace file-path sandbox
 - ``create_skill_access_checker``            — skill allow-list enforcement
@@ -31,9 +31,10 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 from uuid import uuid4
@@ -1686,52 +1687,100 @@ def _foreign_uncommitted(dirs: "list[str] | None", mine: "dict | None",
     return ("Discards uncommitted changes another session made — " + "; ".join(parts))
 
 
-def load_dangerous_patterns() -> list[str]:
-    """Load glob patterns from ``~/.swarm-ai/dangerous_commands.json``.
+#: patterns earlier releases seeded into the file and the code no longer ships (the
+#: blanket rm globs; recursive rm is judged by ``_is_dangerous_rm``, which allows /tmp)
+_OBSOLETE_DANGEROUS_PATTERNS: frozenset[str] = frozenset({"rm -rf *", "rm -rf /*", "rm -rf ~*"})
 
-    Creates the file with ``DEFAULT_DANGEROUS_PATTERNS`` if missing.
-    Falls back to defaults on invalid JSON or missing ``"patterns"`` key.
+
+def _write_patterns_file(path: Path, patterns: list[str]) -> None:
+    """Write ``{"patterns": [...]}`` atomically (a temp file in the same directory, then
+    ``os.replace``): a crash mid-write never leaves a half-written file. A symlinked
+    file (a dotfiles setup) is written at its target; the link stays."""
+    path = path.resolve()
+    tmp = path.with_name(f".{path.name}.{uuid4().hex[:8]}.tmp")
+    try:
+        tmp.write_text(json.dumps({"patterns": patterns}, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _migrate_patterns_file(path: Path, listed: list[str]) -> None:
+    """Rewrite a file that still holds built-in (or obsolete) patterns so it holds only
+    the user's own. Earlier releases seeded the file with every default, and a seeded
+    copy would keep a pattern the code later removes loading for ever. The original is
+    first copied byte for byte (``shutil.copy2``) to ``<name>.bak-<UTC timestamp>``;
+    when that copy cannot be written the file is left as it is."""
+    defaults = set(DEFAULT_DANGEROUS_PATTERNS)
+    if not any(p in defaults or p in _OBSOLETE_DANGEROUS_PATTERNS for p in listed):
+        return
+    own = list(dict.fromkeys(p for p in listed
+                             if p not in defaults and p not in _OBSOLETE_DANGEROUS_PATTERNS))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = path.with_name(f"{path.name}.bak-{stamp}")
+    try:
+        shutil.copy2(path, backup)
+    except OSError as exc:
+        logger.warning("dangerous_commands.json not migrated: backup %s failed (%s)", backup, exc)
+        return
+    try:
+        _write_patterns_file(path, own)
+    except OSError as exc:
+        # the file is unchanged, so its copy is not needed; kept, every later load
+        # would add one more
+        backup.unlink(missing_ok=True)
+        logger.warning("dangerous_commands.json not migrated: rewrite failed (%s)", exc)
+        return
+    logger.info("Migrated dangerous_commands.json to the user's own %d pattern(s); "
+                "the original is %s", len(own), backup)
+
+
+def load_dangerous_patterns() -> list[str]:
+    """The dangerous command patterns: ``DEFAULT_DANGEROUS_PATTERNS`` followed by the
+    user's own patterns from ``~/.swarm-ai/dangerous_commands.json``, once each.
+
+    The built-in patterns always apply: the file only adds patterns, it cannot remove
+    one (a false positive in a built-in pattern is fixed in the product's default). The
+    file is ``{"patterns": [str, ...]}``; anything else (bad JSON, no ``patterns`` key,
+    ``patterns`` not a list of strings) logs a warning and loads the built-in patterns
+    alone, never raising. A missing file is written as ``{"patterns": []}``. A file that
+    still lists built-in or obsolete patterns is migrated once
+    (``_migrate_patterns_file``: backed up byte for byte, then rewritten with only the
+    user's own patterns).
     Public API — also called by ``main.py`` for ``permissions.json`` generation.
     """
+    defaults = list(DEFAULT_DANGEROUS_PATTERNS)
     patterns_path = get_app_data_dir() / "dangerous_commands.json"
     try:
         raw = patterns_path.read_text(encoding="utf-8").strip()
-        if not raw:
-            raise ValueError("empty file")
-        data = json.loads(raw)
-        if not isinstance(data, dict) or "patterns" not in data:
-            raise ValueError("missing 'patterns' key")
-        patterns = list(data["patterns"])
-        # Migration (fix #3): existing installs persisted the obsolete blanket
-        # rm globs. They are now handled by _is_dangerous_rm (which allows /tmp).
-        # Strip them on load so the fix reaches users who already have the file —
-        # otherwise the on-disk file silently overrides the code change
-        # (default-propagation trap, PIT38).
-        _obsolete = {"rm -rf *", "rm -rf /*", "rm -rf ~*"}
-        if any(p in _obsolete for p in patterns):
-            patterns = [p for p in patterns if p not in _obsolete]
-            try:
-                patterns_path.write_text(
-                    json.dumps({"patterns": patterns}, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                logger.info("Migrated dangerous_commands.json — removed obsolete rm globs")
-            except OSError:
-                pass  # in-memory strip still takes effect this run
-        logger.info("Loaded %d dangerous patterns from %s", len(patterns), patterns_path)
-        return patterns
     except FileNotFoundError:
-        logger.info("dangerous_commands.json not found — seeding defaults")
-        patterns_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"patterns": list(DEFAULT_DANGEROUS_PATTERNS)}
-        patterns_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        return list(DEFAULT_DANGEROUS_PATTERNS)
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Invalid dangerous_commands.json (%s) — using defaults", exc)
-        return list(DEFAULT_DANGEROUS_PATTERNS)
-    except OSError as exc:
-        logger.warning("Cannot read dangerous_commands.json (%s) — using defaults", exc)
-        return list(DEFAULT_DANGEROUS_PATTERNS)
+        logger.info("dangerous_commands.json not found — writing an empty one")
+        try:
+            patterns_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_patterns_file(patterns_path, [])
+        except OSError as exc:
+            logger.warning("Cannot write dangerous_commands.json (%s)", exc)
+        return defaults
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("Cannot read dangerous_commands.json (%s) — using the built-in patterns", exc)
+        return defaults
+    try:
+        data = json.loads(raw) if raw else None
+    except (ValueError, RecursionError) as exc:  # bad JSON, or nested too deep to parse
+        data, why = None, f"invalid JSON: {type(exc).__name__}: {str(exc)[:200]}"
+    else:
+        why = "empty file" if not raw else "not {\"patterns\": [str, ...]}"
+    listed = data.get("patterns") if isinstance(data, dict) else None
+    if not isinstance(listed, list) or not all(isinstance(p, str) for p in listed):
+        logger.warning("Invalid dangerous_commands.json (%s) — using the built-in patterns", why)
+        return defaults
+    _migrate_patterns_file(patterns_path, listed)
+    seen = set(defaults)
+    own = [p for p in dict.fromkeys(listed)
+           if p not in seen and p not in _OBSOLETE_DANGEROUS_PATTERNS]
+    logger.info("Loaded %d dangerous patterns (%d of the user's own from %s)",
+                len(defaults) + len(own), len(own), patterns_path)
+    return defaults + own
 
 
 def create_ask_question_gate(
@@ -2208,7 +2257,7 @@ def create_dangerous_command_gate(
         # a person's decision about one logged request; so is a discard, which is a
         # decision about the files its card listed, not about the command text.
         if not _is_v1_land_request(command) and not discard_reason and not reserved_action \
-                and permission_mgr.is_command_approved(session_key, command):
+                and permission_mgr.is_command_approved(session_key, command, cwd=cwd):
             logger.info("[APPROVED] Session-approved command: %s", command[:50])
             return {"decision": "approve"}
 
@@ -2234,7 +2283,7 @@ def create_dangerous_command_gate(
             # Carry tool_call_id so a Bash approval is also PERSISTED durably (the
             # request survives a daemon restart in the on-disk store) and is
             # diagnosable by tool-call. NOTE: the Bash gate's re-prompt idempotency
-            # is provided by is_command_approved() (command-hash, session-scoped), NOT
+            # is provided by is_command_approved() ((command, cwd)-hash, session-scoped), NOT
             # by is_resolved((session,tool_call_id)) — that key guards the external
             # gate. This field is for durability + audit, not a second idempotency path.
             "tool_call_id": tool_use_id,
@@ -2268,7 +2317,7 @@ def create_dangerous_command_gate(
 
         if decision == "approve":
             if not discard_reason and not reserved_action:
-                permission_mgr.approve_command(session_key, command)
+                permission_mgr.approve_command(session_key, command, cwd=cwd)
             if _is_v1_land_request(command):
                 record_land_approval(tool_use_id, command, by=decided_by)
             elif decided_by == "person":

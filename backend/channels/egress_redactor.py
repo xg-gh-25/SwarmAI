@@ -63,10 +63,12 @@ from core.credential_patterns import (  # noqa: F401  (re-exported: tscc + tests
 
 
 def redact_exfiltration_urls(text: str) -> str:
-    """Redact URLs that carry embedded credentials (user:pass@ or ?token=…).
+    """Redact the credentials URLs carry (a ``user:pass@`` password, any scheme, and the
+    value of a credential parameter such as ``?token=…`` or ``X-Amz-Signature=…``).
 
-    A plain URL (docs link, repo link) is left intact — only URLs that *carry a
-    secret* are redacted, matching the C041 concern (exfiltration of a secret
+    Only the credential values are replaced; the rest of the URL stays, so a reader
+    sees which link it was while the link no longer works. A plain URL (docs link,
+    repo link) is left intact, matching the C041 concern (exfiltration of a secret
     via a link), not link-stripping in general.
     """
     if not text:

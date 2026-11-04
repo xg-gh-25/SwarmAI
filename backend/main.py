@@ -18,6 +18,7 @@ from pathlib import Path
 
 from config import settings, get_app_data_dir, get_log_file_path, get_swarmws
 from core import session_registry
+from core import hive_boot  # imported first: its STARTED_AT is this process's start
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router, apps_router
 from routers.ingestion import router as ingestion_router
@@ -54,7 +55,8 @@ def _generate_permissions_json(workspace_path: Path, dangerous_patterns: list[st
         "description": (
             "Commands matching these glob patterns require user approval "
             "per session. All other commands are auto-approved. "
-            "Edit ~/.swarm-ai/dangerous_commands.json to customize."
+            "Add your own patterns in ~/.swarm-ai/dangerous_commands.json; "
+            "the built-in patterns always apply."
         ),
         "dangerous_commands": dangerous_patterns,
     }
@@ -1346,6 +1348,19 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.debug("desktop pool pre-warm failed (non-critical)", exc_info=True)
     asyncio.create_task(_prewarm_desktop_pool())
+
+    # A Hive closes the turns its daemon's death left open (core/hive_boot), awaited
+    # here: before the claimed messages are reopened and before the Swarm Out bridge
+    # starts, which keeps the turns of this boot from starting first (a turn that starts
+    # anyway is never touched). Non-fatal; startup waits for it, about one read of the
+    # repositories per turn it closes (SessionRouter._task_repo_facts, bounded there).
+    if _detect_run_mode() == "hive":
+        try:
+            closed = await hive_boot.close_open_turns(session_registry.session_router)
+            if closed:
+                logger.info("Closed %d turn(s) the daemon's stop left open", closed)
+        except Exception as exc:  # pragma: no cover - non-fatal startup guard
+            logger.warning("hive_boot.close_open_turns failed (non-fatal): %s", exc)
 
     # Root-1 SSOT: reopen any pending messages left in the 'claimed' phase by a
     # crash (claimed_at set, sent=0) so they re-drain on the next IDLE instead of

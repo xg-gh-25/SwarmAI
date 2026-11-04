@@ -179,6 +179,7 @@ numbered text options ("reply with a number"). Only this question.
    | `running` · `background` | The turn ended but its sub-agents or background commands still run; their end starts the turn that writes the real result. Not finished: `watch` again, and judge nothing yet |
    | `running` · any | Nothing to say: `watch` again |
    | `stopped` · `idle` or `not_held`, result fetched | Check it, below |
+   | `stopped` · result `ended` `daemon_stopped` | The Hive's daemon stopped (killed, restarted) while the turn ran; its commits up to then came back. Run `diagnose`, then decide whether to `rerun` |
    | `stopped` · `not_started` | The Hive never started the task: `discard` it saying so, and dispatch it again |
    | `stopped` · `hive_stopped` / `hive_gone` | `start-hive` a stopped Hive and keep watching; a Hive that is gone: dispatch the task again to another one |
    | `unknown` · `hive_updating` | The Hive is updating: keep watching |

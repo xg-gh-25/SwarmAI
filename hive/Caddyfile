@@ -9,6 +9,27 @@
 # execute and streaming silently buffers until response completes.
 #
 # Usage: caddy run --config /etc/caddy/Caddyfile
+#
+# REFERENCE COPY — not deployed. The Caddyfile a Hive runs is the heredoc written by
+# backend/hive/user_data.py (render_user_data); keep the two in step.
+
+# --- Origin guard: only this Hive's CloudFront distribution reaches the origin ---
+# The security group admits every CloudFront distribution (global prefix list), so
+# each Hive has a secret that only its own distribution sends as X-Swarm-Origin
+# (OriginCustomHeaders). Caddy runs basic_auth before respond by default; this order
+# makes the 403 below come first.
+{
+    order respond before basic_auth
+    # The default logger (Caddy's error log) writes request headers too.
+    log default {
+        format filter {
+            wrap json
+            fields {
+                request>headers>X-Swarm-Origin delete
+            }
+        }
+    }
+}
 
 :80 {
 
@@ -18,6 +39,17 @@
     handle /health {
         reverse_proxy 127.0.0.1:18321
     }
+
+    # --- Origin guard: 403 for anything but /health without this Hive's secret ---
+    # Unset HIVE_ORIGIN_SECRET falls back to a value no distribution sends (fail closed).
+    # /health is exempt only as the literal request path: the path matcher cleans dot
+    # segments, but the backend gets the raw path, so /x/../health must not pass.
+    @foreign_origin {
+        not expression `{http.request.uri.path} == "/health"`
+        not header X-Swarm-Origin {$HIVE_ORIGIN_SECRET:INVALID_NOT_A_REAL_SECRET}
+    }
+    respond @foreign_origin 403
+    request_header -X-Swarm-Origin
 
     # --- Authentication (MVP: basic auth) ---
     # @protected excludes /health so external monitors can reach it (G11)
@@ -80,8 +112,14 @@
         -Server
     }
 
-    # --- Logging ---
+    # --- Logging --- (the origin secret header is never written to the log)
     log {
+        format filter {
+            wrap json
+            fields {
+                request>headers>X-Swarm-Origin delete
+            }
+        }
         output file /var/log/caddy/hive-access.log {
             roll_size 100mb
             roll_keep 5

@@ -56,7 +56,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 14
+SUMMARY_VERSION = 15
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -65,8 +65,10 @@ _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
 _RUN_ID_RE = re.compile(r"run_[0-9a-f]{8}")
 _NAME_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 
+#: ``daemon_stopped``: the Hive's daemon died while the turn ran and recorded so when it
+#: started again (core/hive_boot): final, unlike ``no_record``, which an older Hive leaves
 ENDED = ("completed", "turn_limit", "error", "crashed", "paused", "no_terminal", "stopped",
-         "restarted", "superseded", "gave_up", "no_record")
+         "restarted", "superseded", "gave_up", "no_record", "daemon_stopped")
 _NOTICE_REASONS = ("restarted", "superseded", "gave_up")
 _VERDICTS = ("PASS", "WARN", "BLOCK", "NA", "N/A", "PENDING")
 
@@ -339,7 +341,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
     ended_raw = last_outcome.get("ended") if last_outcome else None
     if stopped:
         ended = "stopped"
-    elif ended_raw in ("completed", "turn_limit", "error", "crashed", "paused"):
+    elif ended_raw in ("completed", "turn_limit", "error", "crashed", "paused", "daemon_stopped"):
         ended = ended_raw
     elif notices:
         ended = notices[-1]
@@ -535,6 +537,8 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
         # since the Hive's agent could have written that record too (``_checks``)
         "checks_from_record": check_records is not None and bool((agent or {}).get("validations")),
         "gate_refusals": refusals,
+        # an outcome's count was lost (its daemon died mid-turn: core/hive_boot)
+        "gate_refusals_partial": any(o.get("gate_refusals_partial") is True for o in outcomes),
         # older turns were not read: a check or refusal there is not seen
         "checks_partial": bool(has_more),
         # any turn of the session has an outcome: the Hive records them, so a missing one
@@ -1091,8 +1095,8 @@ def _public_agent(res: dict, agent: Any, dispatch_id: Optional[str] = None) -> d
     the host's own row; check statuses only for the row's check ids; gate refusals only
     under the row's gate names (or ``integrity``)."""
     if not isinstance(agent, dict) or not isinstance(agent.get("brain"), str):
-        return {"project_agent": None, "checks": None, "gate_refusals": None, "checks_partial": False,
-                "checks_inferred": False, "checks_from_record": False, "execution_check": None}
+        return {"project_agent": None, "checks": None, "gate_refusals": None, "gate_refusals_partial": False,
+                "checks_partial": False, "checks_inferred": False, "checks_from_record": False, "execution_check": None}
     ids = [v.get("id") for v in agent.get("validations") or [] if isinstance(v, dict)]
     got = {c.get("id"): c.get("status") for c in res.get("checks") or [] if isinstance(c, dict)}
     names = {g for g in agent.get("gates") or [] if isinstance(g, str)}
@@ -1108,6 +1112,7 @@ def _public_agent(res: dict, agent: Any, dispatch_id: Optional[str] = None) -> d
         "checks": [{"id": i, "status": check_status(got.get(i))}
                    for i in ids if isinstance(i, str)] if ids else None,
         "gate_refusals": None if ref is None else {g: _int(ref.get(g)) for g in sorted(gates) if _int(ref.get(g))},
+        "gate_refusals_partial": res.get("gate_refusals_partial") is True,
         "checks_partial": res.get("checks_partial") is True,
         "checks_inferred": res.get("checks_inferred") is True,
         "checks_from_record": res.get("checks_from_record") is True,
@@ -1121,7 +1126,7 @@ _COST_EPS = 0.005
 #: written when the CLI result arrives, the outcome a moment later, both on the Hive)
 _END_SLACK_S = 120
 #: how a run ended when nothing more will be added to it
-_FINAL = frozenset({"completed", "turn_limit", "error", "crashed", "stopped"})
+_FINAL = frozenset({"completed", "turn_limit", "error", "crashed", "stopped", "daemon_stopped"})
 _KINDS = ("input", "output", "cache_read", "cache_write")
 
 

@@ -168,7 +168,9 @@ export interface SwarmOutSettle {
 }
 
 export type SwarmOutEnded = 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'no_terminal'
-  | 'stopped' | 'restarted' | 'superseded' | 'gave_up' | 'no_record';
+  | 'stopped' | 'restarted' | 'superseded' | 'gave_up' | 'no_record'
+  /** the Hive's daemon stopped while the turn ran (recorded when it started again) */
+  | 'daemon_stopped';
 
 /** One declared repository: what the task changed against the version it pulled.
  *  In /runs the file and commit lists are empty (counts only) and url/ref/dir are
@@ -271,6 +273,8 @@ export interface SwarmOutResult {
   /** Brain gate refusals by gate ("error:<gate>": the gate could not run; "integrity":
    *  the gates were changed or unreadable); null: the Hive does not count them */
   gate_refusals?: Record<string, number> | null;
+  /** a turn's refusal count was lost with its daemon (the Hive stopped mid-turn) */
+  gate_refusals_partial?: boolean;
   /** older turns were not read: a check or refusal there is not seen */
   checks_partial?: boolean;
   /** the check statuses were inferred from the commands' text (the Hive keeps no

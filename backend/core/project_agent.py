@@ -48,9 +48,11 @@ import yaml
 logger = logging.getLogger(__name__)
 
 PROJECT_AGENT_FILE = "project-agent.yaml"
-#: the actions a Project Agent session asks the person for every time, the same for
-#: every Brain and mode; each maps to a product gate predicate
-#: (core/security_hooks._is_reserved_action)
+#: the actions reserved for the person, the same for every Brain and mode: a dispatched
+#: session refuses them without asking anyone — send_external_message by the external-tool
+#: gate (core/security_hooks.create_external_approval_gate), the others by the
+#: dangerous-command gate's dispatched-task branch, which reads the predicate
+#: core/security_hooks._is_reserved_action
 RESERVED_ACTIONS: frozenset[str] = frozenset(
     {"push", "open_pr", "publish_release", "send_external_message"})
 #: the Brain of tasks that belong to no project: its knowledge is Knowledge/Library and

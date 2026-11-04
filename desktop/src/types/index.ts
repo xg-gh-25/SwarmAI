@@ -609,7 +609,7 @@ export interface TurnChangesContent {
  *  from a Hive to tell a finished run from a failed one. */
 export interface TurnOutcomeContent {
   type: 'turn_outcome';
-  ended: 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'none' | string;
+  ended: 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'none' | 'daemon_stopped' | string;
   subtype?: string | null;
   code?: string | null;
   message?: string | null;
@@ -620,6 +620,8 @@ export interface TurnOutcomeContent {
   cli_pid?: number | null;
   at?: string;
   repos?: unknown[];
+  /** daemon_stopped: the refusals counted before the daemon died are not known */
+  gate_refusals_partial?: boolean;
 }
 
 /** Why a turn's last call did not finish — written by the BACKEND when it restarts

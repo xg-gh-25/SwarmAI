@@ -381,6 +381,17 @@ _OUTCOME_WHY = {"abandoned": "discarded", "gone": "hive_gone", "expired": "expir
 #: a result that ended this way delivered what it set out to (anything else, the turn
 #: limit included, stopped: design §3.2)
 _DELIVERED = ("completed",)
+#: a turn its Hive recorded as cut off by its daemon's death (core/hive_boot): stopped at
+#: once, as an interrupted ``no_record`` turn is after INTERRUPTED_AFTER_S (an older Hive
+#: records nothing). It is final, so it reaches ``stopped`` through ``_DELIVERED`` (its
+#: ``why`` the Hive's word) and its returned commits go through the funnel like any
+#: final result's; a Hive that is gone closes it the ``no_record`` way unless commits
+#: of it can still land here or an ask holds it (``derive``).
+_CUT_OFF = ("daemon_stopped",)
+
+
+def _cut_off(res: Optional[dict]) -> bool:
+    return isinstance(res, dict) and res.get("ended") in _CUT_OFF
 
 
 def _act(key: str, primary: bool = False, variant: Optional[str] = None) -> dict[str, Any]:
@@ -443,7 +454,8 @@ INTERRUPTED_AFTER_S = 300
 def interrupted(row: dict, res: Optional[dict], kept: Optional[dict]) -> bool:
     """The run stopped mid-turn: its session is not running, and its result has said
     ``no_record`` (no end record for the last turn) for INTERRUPTED_AFTER_S
-    (core/swarm_out_results records since when)."""
+    (core/swarm_out_results records since when). A Hive that records the cut-off says
+    ``daemon_stopped`` instead (``_CUT_OFF``)."""
     if row.get("state") != "stopped":
         return False
     if not isinstance(res, dict) or res.get("ended") != "no_record":
@@ -491,6 +503,11 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     ask_rec = swarm_out_record.ask(rec)
     ask = ask_rec.get("state") if ask_rec else None
     judging = kind == "commits" and code == "landed" and swarm_out_record.judgment_pending(rec)
+    # a Hive that is gone closes a result that may still change, and a cut-off turn
+    # (``_CUT_OFF``) the same way when nothing it returned can still land here (commits
+    # kept here, ``waiting``, or landed go through the funnel) and no ask holds it
+    closes_gone = gone and (not _final(res) or (_cut_off(res) and code in ("none", "rejected", "unsealed")
+                                                and ask is None))
     # the verdict: the person's on this result, the landing for commits, or discarded
     verdict: Optional[str] = None
     if abandoned:
@@ -499,7 +516,7 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         verdict = "handled"
     elif ask == "reverted":
         verdict = "reverted"
-    elif gone and not _final(res):
+    elif closes_gone:
         verdict = "gone"
     elif ask in ("open", "revert"):
         verdict = None
@@ -542,7 +559,7 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         stage, why = "closed", "discarded"                 # settles at the next look
     elif handled:
         stage, why = "accepted", "swarm_run"               # settles once stopped, lessons in
-    elif gone and not _final(res):
+    elif closes_gone:
         stage, why = "closed", "hive_gone"
     elif state == "waiting":
         stage = "needs_answer"

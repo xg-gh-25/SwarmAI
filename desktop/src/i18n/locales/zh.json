@@ -1585,7 +1585,9 @@
       "errored": "{{name}} 出错",
       "notCounted": "Brain gate：这台 Hive 不记录拦截次数",
       "refused_one": "Brain gate 拦下 {{count}} 次（{{list}}）",
-      "refused_other": "Brain gate 拦下 {{count}} 次（{{list}}）"
+      "refused_other": "Brain gate 拦下 {{count}} 次（{{list}}）",
+      "lost": "Brain gate：Hive 停掉时那个 turn 的拦截次数没留下",
+      "partial": "（Hive 停掉时那个 turn 的没计入）"
     },
     "lessons": {
       "notSupported": "教训：这台 Hive 还不能交回教训（需要更新 Hive）",
@@ -1642,6 +1644,7 @@
       "superseded": "被新消息接替",
       "gave_up": "重试用尽",
       "no_record": "没有结束记录",
+      "daemon_stopped": "这个 turn 运行时 Hive 停了",
       "noRecordExited": "没有结束记录：这个 turn 没走到结束（进程中途退出）",
       "noRecordUnknown": "结束方式不知道：这台 Hive 的版本不记录，或 turn 没走到结束",
       "provisional": " · 暂定"
@@ -1883,6 +1886,7 @@
         "restarted": "重启过",
         "superseded": "被替换",
         "no_record": "中途停了，没留下结束记录",
+        "daemon_stopped": "这个 turn 运行时 Hive 停了",
         "judge": "已落地：agent 在判",
         "revert": "你要求撤回：agent 正在撤回",
         "ask_person": "agent 交给你定",

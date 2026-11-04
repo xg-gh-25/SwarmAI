@@ -60,7 +60,7 @@ def env(monkeypatch, tmp_path):
                             "version TEXT, ec2_instance_id TEXT, ec2_public_ip TEXT, elastic_ip_alloc_id TEXT, "
                             "security_group_id TEXT, iam_role_name TEXT, iam_instance_profile_arn TEXT, "
                             "cloudfront_dist_id TEXT, cloudfront_domain TEXT, s3_bucket TEXT, auth_user TEXT, "
-                            "auth_password TEXT, updated_at TEXT)")
+                            "auth_password TEXT, origin_secret TEXT, updated_at TEXT)")
             await c.execute("INSERT INTO hive_instances (id, status, error_message, ec2_instance_id) "
                             "VALUES ('h1', 'error', 'Start failed', 'i-1')")
             await c.commit()

@@ -31,6 +31,8 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from core.credential_patterns import PRESIGN_PARAMS, URL_CREDENTIAL_PARAMS  # noqa: F401 (re-exported)
+
 
 CONTRACT_V2_VERSION = "cdf-contract-r16.5-v1"
 # The heading of the CDF-managed appendix of STEERING / USER / TOOLS (writer.py). Files
@@ -418,10 +420,8 @@ def project_candidates(unit: object, snapshot: object) -> list[str]:
 
 
 # ── URL credentials (§5.12) ───────────────────────────────────────────────────
-PRESIGN_PARAMS: frozenset[str] = frozenset({"x-amz-signature", "x-amz-credential", "x-amz-security-token"})
-URL_CREDENTIAL_PARAMS: frozenset[str] = frozenset({
-    "token", "access_token", "sig", "signature", "key", "api_key", "apikey", "auth", "password", "secret",
-}) | PRESIGN_PARAMS
+# PRESIGN_PARAMS / URL_CREDENTIAL_PARAMS: defined once in core.credential_patterns,
+# with the redactors that read them (imported above)
 _TRACKING_PREFIXES = ("utm_",)
 
 

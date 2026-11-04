@@ -32,7 +32,7 @@ class _FakePM:
         self._decision = decision
         self.removed = []
 
-    def is_command_approved(self, session_key, command):
+    def is_command_approved(self, session_key, command, *, cwd):
         return False
 
     def pop_decided_by(self, request_id):
@@ -54,7 +54,7 @@ class _FakePM:
     def remove_pending_request(self, request_id):
         self.removed.append(request_id)
 
-    def approve_command(self, session_key, command):
+    def approve_command(self, session_key, command, *, cwd):
         pass
 
 

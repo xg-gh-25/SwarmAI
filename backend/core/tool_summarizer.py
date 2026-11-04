@@ -80,10 +80,6 @@ _KEY_NAME = re.compile(r"([\w-]+)['\"]?\s*[=:]")
 # it, so prose like "Basic configuration" is untouched; the value is masked.
 _BASIC_AUTH = re.compile(r"(?i)(\bauthorization\s*:\s*basic\s+)[A-Za-z0-9+/=]{8,}")
 
-# ``scheme://user:pass@host`` for ANY scheme (postgres://, redis://, mongodb+srv://, …):
-# the password between ``user:`` and ``@`` is masked, the rest stays readable.
-_ANY_URL_CREDENTIAL = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://[^/\s:@'\"]+:)[^@\s/'\"]+(?=@)")
-
 # A secret passed as the NEXT argument of a flag (``--password hunter2``,
 # ``--token abc``); ``--flag=value`` is already covered by ``_NAMED_SECRET``.
 _SECRET_FLAG_ARG = re.compile(
@@ -116,9 +112,10 @@ def _mask_named(m: re.Match) -> str:
 
 
 def _redact_named(text: str) -> str:
-    """Name-anchored secrets (display only — too broad for channel prose)."""
+    """Name-anchored secrets (display only — too broad for channel prose). A URL's
+    ``user:password@`` for any scheme is masked by ``redact_credentials``, which runs
+    first."""
     text = _NAMED_SECRET.sub(_mask_named, text)
-    text = _ANY_URL_CREDENTIAL.sub(lambda m: m.group(1) + "[REDACTED]", text)
     text = _SECRET_FLAG_ARG.sub(lambda m: m.group(1) + "[REDACTED]", text)
     return _BASIC_AUTH.sub(lambda m: m.group(1) + "[REDACTED]", text)
 

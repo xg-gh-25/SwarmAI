@@ -1585,7 +1585,9 @@
       "errored": "{{name}} errored",
       "notCounted": "Brain gate: this Hive doesn't count refusals",
       "refused_one": "Brain gate refused {{count}} time ({{list}})",
-      "refused_other": "Brain gate refused {{count}} times ({{list}})"
+      "refused_other": "Brain gate refused {{count}} times ({{list}})",
+      "lost": "Brain gate: the refusals of a turn cut off by the Hive's stop are not known",
+      "partial": " · a turn cut off by the Hive's stop is not counted"
     },
     "lessons": {
       "notSupported": "Lessons: this Hive can't return lessons yet (update the Hive)",
@@ -1642,6 +1644,7 @@
       "superseded": "Taken over by a new message",
       "gave_up": "Retries used up",
       "no_record": "No end record",
+      "daemon_stopped": "The Hive stopped while this turn ran",
       "noRecordExited": "No end record: this turn never reached its end (the process exited midway)",
       "noRecordUnknown": "How it ended is not known: this Hive's version does not record it, or the turn never reached its end",
       "provisional": " · provisional"
@@ -1883,6 +1886,7 @@
         "restarted": "restarted",
         "superseded": "superseded",
         "no_record": "it stopped mid-turn, no ending recorded",
+        "daemon_stopped": "the Hive stopped while this turn ran",
         "judge": "landed: the agent judges it",
         "revert": "you asked to revert: the agent is undoing it",
         "ask_person": "the agent handed it to you",
