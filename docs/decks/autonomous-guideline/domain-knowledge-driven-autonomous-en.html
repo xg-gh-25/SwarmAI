@@ -21,14 +21,15 @@ iframe.on{display:block}
 <body>
 <nav>
   <button data-k="home"><i>0</i>Home</button>
-  <button data-k="overall"><i>1</i>Two Loops, One Brain</button>
-  <button data-k="builder"><i>2</i>Inside the Builder Loop</button>
-  <button data-k="pipeline"><i>3</i>Pipeline Run</button>
-  <button data-k="distill"><i>4</i>Cognition Distill Flow</button>
-  <button data-k="onemove"><i>5</i>One Move, Three Outcomes</button>
-  <button data-k="tenets"><i>6</i>Tenets</button>
-  <button data-k="appendix"><i>7</i>Appendix · Checkpoints</button>
-  <span>Press 0–7</span>
+  <button data-k="core"><i>1</i>Core Logic</button>
+  <button data-k="overall"><i>2</i>Two Loops, One Brain</button>
+  <button data-k="builder"><i>3</i>Inside the Builder Loop</button>
+  <button data-k="pipeline"><i>4</i>Pipeline Run</button>
+  <button data-k="distill"><i>5</i>Cognition Distill Flow</button>
+  <button data-k="onemove"><i>6</i>One Move, Three Outcomes</button>
+  <button data-k="tenets"><i>7</i>Tenets</button>
+  <button data-k="appendix"><i>8</i>Appendix · Checkpoints</button>
+  <span>Press 0–8</span>
 </nav>
 <iframe data-k="home" title="Home" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
@@ -93,6 +94,95 @@ body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Micr
 &lt;/div&gt;
 &lt;script&gt;
 function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1040);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1040*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="core" title="Core Logic" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Core Logic&lt;/title&gt;
+&lt;!-- The deck&#x27;s spine, right after the cover: expertise becomes a Domain Brain, the Brain drives
+     autonomous execution, execution compounds, and the compounding flows back into the Brain and
+     into the people. Drawn as a loop on purpose: a straight line would read as a one-off pipeline.
+     Each block names the pages that expand it. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
+.brand b{font-size:26px;font-weight:800;white-space:nowrap}
+
+.blk{position:absolute;top:140px;width:340px;height:500px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden}
+.bh{height:150px;padding:22px 26px;color:#fff}
+.bh .n{font:800 22px Menlo,monospace;opacity:.75}
+.bh b{display:block;margin-top:12px;font-size:33px;font-weight:800;line-height:1.15}
+.bb{position:absolute;left:26px;right:26px;top:180px;font-size:29px;font-weight:700;line-height:1.5;color:#1f2937}
+.bb p{margin:0 0 10px}
+.bb p.nw{white-space:nowrap;font-size:29px;line-height:48px}
+.pg{position:absolute;left:26px;bottom:24px;font-size:19px;font-weight:700;color:#6b7280}
+.pg span{display:inline-block;margin-left:6px;padding:3px 11px;border-radius:9px;background:#f1f5f9;border:1px solid #e2e8f0;color:#111827;font-family:Menlo,monospace}
+.x .bh{background:#c2410c}
+.k .bh{background:#0b3b37}.k .bh .n{color:#7ee0cf;opacity:1}
+.e .bh{background:#2563eb}
+.c .bh{background:#111827}.c .bh b{color:#fb923c}
+.c .curve{position:absolute;right:22px;bottom:62px}
+
+.loopl{position:absolute;top:918px;font-size:26px;font-weight:800;color:#c2410c;white-space:nowrap;transform:translateX(-50%)}
+.loopc{position:absolute;left:1004px;top:836px;font-size:40px;font-weight:800;color:#c2410c;white-space:nowrap;transform:translateX(-50%)}
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;app&quot;&gt;
+&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Core &lt;span style=&quot;color:#c2410c&quot;&gt;Logic&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;&lt;/header&gt;
+
+&lt;div class=&quot;blk x&quot; style=&quot;left:18px&quot;&gt;
+  &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;01&lt;/div&gt;&lt;b&gt;Domain&lt;br&gt;Expertise&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;Human judgment&lt;/p&gt;&lt;p&gt;Domain knowledge&lt;/p&gt;&lt;/div&gt;
+  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;7&lt;/span&gt;&lt;span&gt;8&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;blk k&quot; style=&quot;left:426px&quot;&gt;
+  &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;02&lt;/div&gt;&lt;b&gt;Domain&lt;br&gt;Brain&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;Reusable&lt;/p&gt;&lt;p&gt;Governed&lt;/p&gt;&lt;p&gt;Executable knowledge&lt;/p&gt;&lt;/div&gt;
+  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;2&lt;/span&gt;&lt;span&gt;3&lt;/span&gt;&lt;span&gt;4&lt;/span&gt;&lt;span&gt;5&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;blk e&quot; style=&quot;left:834px&quot;&gt;
+  &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;03&lt;/div&gt;&lt;b&gt;Autonomous&lt;br&gt;Execution&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;Two Loops&lt;/p&gt;&lt;p class=&quot;nw&quot;&gt;Human-on-the-loop&lt;/p&gt;&lt;p&gt;Eval&lt;/p&gt;&lt;/div&gt;
+  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;2&lt;/span&gt;&lt;span&gt;3&lt;/span&gt;&lt;span&gt;4&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;blk c&quot; style=&quot;left:1242px&quot;&gt;
+  &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;04&lt;/div&gt;&lt;b&gt;Compounding&lt;br&gt;Intelligence&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;Better judgment&lt;/p&gt;&lt;p&gt;Less repeated correction&lt;/p&gt;&lt;p&gt;Higher autonomy&lt;/p&gt;&lt;/div&gt;
+  &lt;svg class=&quot;curve&quot; width=&quot;190&quot; height=&quot;54&quot; viewBox=&quot;0 0 190 54&quot;&gt;&lt;path d=&quot;M6,48 C80,46 130,38 182,8&quot; fill=&quot;none&quot; stroke=&quot;#7ee0cf&quot; stroke-width=&quot;4&quot; stroke-linecap=&quot;round&quot;/&gt;&lt;circle cx=&quot;182&quot; cy=&quot;8&quot; r=&quot;6&quot; fill=&quot;#f97316&quot;/&gt;&lt;/svg&gt;
+  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;5&lt;/span&gt;&lt;span&gt;6&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;div class=&quot;loopc&quot;&gt;Compound ↺&lt;/div&gt;
+&lt;div class=&quot;loopl&quot; style=&quot;left:596px&quot;&gt;Written back to the Brain&lt;/div&gt;
+&lt;div class=&quot;loopl&quot; style=&quot;left:188px&quot;&gt;People grow with it&lt;/div&gt;
+
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
+  &lt;defs&gt;
+    &lt;marker id=&quot;mG&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;5&quot; markerHeight=&quot;5&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#6b7280&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mO&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;4.5&quot; markerHeight=&quot;4.5&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#c2410c&quot;/&gt;&lt;/marker&gt;
+  &lt;/defs&gt;
+  &lt;path d=&quot;M366,390 L418,390&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
+  &lt;path d=&quot;M774,390 L826,390&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
+  &lt;path d=&quot;M1182,390 L1234,390&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
+  &lt;!-- the loop: compounding flows back into the Brain and into the people --&gt;
+  &lt;path d=&quot;M1412,642 L1412,880 Q1412,900 1392,900 L616,900 Q596,900 596,880 L596,652&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;6&quot; fill=&quot;none&quot; marker-end=&quot;url(#mO)&quot;/&gt;
+  &lt;path d=&quot;M616,900 L208,900 Q188,900 188,880 L188,652&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;6&quot; fill=&quot;none&quot; marker-end=&quot;url(#mO)&quot;/&gt;
+&lt;/svg&gt;
+
+&lt;/div&gt;
+&lt;script&gt;
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
 addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/script&gt;
 &lt;/body&gt;
@@ -1673,7 +1763,7 @@ addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/html&gt;
 "></iframe>
 <script>
-const KEYS={'0':'home','1':'overall','2':'builder','3':'pipeline','4':'distill','5':'onemove','6':'tenets','7':'appendix'}, VALID=Object.values(KEYS);
+const KEYS={'0':'home','1':'core','2':'overall','3':'builder','4':'pipeline','5':'distill','6':'onemove','7':'tenets','8':'appendix'}, VALID=Object.values(KEYS);
 function show(k){ if(!VALID.includes(k)) k='home';
   document.querySelectorAll('[data-k]').forEach(e=>e.classList.toggle('on',e.dataset.k===k));
   history.replaceState(null,'','#'+k); }

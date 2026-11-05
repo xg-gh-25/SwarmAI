@@ -103,21 +103,23 @@ SwarmAI 只有**一个大脑**。这是有意为之，拒绝的是"多脑"：团
 
 ## 自主交付指南
 
-领域知识驱动的自主交付是怎么运作的，一页一页看。完整 deck（含 Checkpoints 附录）是一个 HTML 文件：[中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) · [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html)（下载后用浏览器打开，按 0–7 切换页面）。
+领域知识驱动的自主交付是怎么运作的，一页一页看。完整 deck（含 Checkpoints 附录）是一个 HTML 文件：[中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) · [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html)（下载后用浏览器打开，按 0–8 切换页面）。
 
 ![Domain Knowledge Driven Autonomous](./assets/readme/autonomous/zh/00-cover.png)
 
-![Two Loops, One Brain](./assets/readme/autonomous/zh/01-two-loops-one-brain.png)
+![Core Logic](./assets/readme/autonomous/zh/01-core-logic.png)
 
-![Inside the Builder Loop](./assets/readme/autonomous/zh/02-inside-the-builder-loop.png)
+![Two Loops, One Brain](./assets/readme/autonomous/zh/02-two-loops-one-brain.png)
 
-![Pipeline Run](./assets/readme/autonomous/zh/03-pipeline-run.png)
+![Inside the Builder Loop](./assets/readme/autonomous/zh/03-inside-the-builder-loop.png)
 
-![Cognition Distill Flow](./assets/readme/autonomous/zh/04-cognition-distill-flow.png)
+![Pipeline Run](./assets/readme/autonomous/zh/04-pipeline-run.png)
 
-![One Move, Three Outcomes](./assets/readme/autonomous/zh/05-one-move-three-outcomes.png)
+![Cognition Distill Flow](./assets/readme/autonomous/zh/05-cognition-distill-flow.png)
 
-![Autonomous Agent Tenets](./assets/readme/autonomous/zh/06-tenets.png)
+![One Move, Three Outcomes](./assets/readme/autonomous/zh/06-one-move-three-outcomes.png)
+
+![Autonomous Agent Tenets](./assets/readme/autonomous/zh/07-tenets.png)
 
 ---
 

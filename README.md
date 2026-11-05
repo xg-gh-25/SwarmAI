@@ -103,21 +103,23 @@ Every unit arrives whole: recall decides which entries to show, never how much o
 
 ## Autonomous Guideline
 
-How domain-knowledge-driven autonomous delivery works, page by page. The full deck, with a checkpoints appendix, is a single HTML file: [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html) · [中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) (download it and open it in a browser; keys 0–7 switch pages).
+How domain-knowledge-driven autonomous delivery works, page by page. The full deck, with a checkpoints appendix, is a single HTML file: [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html) · [中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) (download it and open it in a browser; keys 0–8 switch pages).
 
 ![Domain Knowledge Driven Autonomous](./assets/readme/autonomous/en/00-cover.png)
 
-![Two Loops, One Brain](./assets/readme/autonomous/en/01-two-loops-one-brain.png)
+![Core Logic](./assets/readme/autonomous/en/01-core-logic.png)
 
-![Inside the Builder Loop](./assets/readme/autonomous/en/02-inside-the-builder-loop.png)
+![Two Loops, One Brain](./assets/readme/autonomous/en/02-two-loops-one-brain.png)
 
-![Pipeline Run](./assets/readme/autonomous/en/03-pipeline-run.png)
+![Inside the Builder Loop](./assets/readme/autonomous/en/03-inside-the-builder-loop.png)
 
-![Cognition Distill Flow](./assets/readme/autonomous/en/04-cognition-distill-flow.png)
+![Pipeline Run](./assets/readme/autonomous/en/04-pipeline-run.png)
 
-![One Move, Three Outcomes](./assets/readme/autonomous/en/05-one-move-three-outcomes.png)
+![Cognition Distill Flow](./assets/readme/autonomous/en/05-cognition-distill-flow.png)
 
-![Autonomous Agent Tenets](./assets/readme/autonomous/en/06-tenets.png)
+![One Move, Three Outcomes](./assets/readme/autonomous/en/06-one-move-three-outcomes.png)
+
+![Autonomous Agent Tenets](./assets/readme/autonomous/en/07-tenets.png)
 
 ---
 
