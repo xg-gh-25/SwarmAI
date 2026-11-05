@@ -793,3 +793,87 @@ def test_an_install_removes_the_retired_check_file(tmp_path):
     (target / ".project-agent-check.json").write_text('{"ok": true}')
     bs.install(hive, "Lib", files, bs.content_digest(files))
     assert not (target / ".project-agent-check.json").exists()
+
+
+# ── .hive-ignore: files the person keeps on this machine ──────────────────────
+# Questions: does a listed file (exact name, glob, in a sub-directory) stay home while
+# the rest still travels; are blank lines and comment lines harmless; does the list itself
+# never travel; does a list that cannot be read stop the package instead of sending
+# everything; does a project Brain honour it too; is a Hive's copy of a newly ignored
+# file deleted by the next install.
+
+def _library(tmp_path: Path) -> Path:
+    lib = tmp_path / "Knowledge" / "Library"
+    (lib / "sub").mkdir(parents=True)
+    for name in ("a.md", "promo-evidence-x.md", "promo-feedback-y.md", "org-chart.md"):
+        (lib / name).write_text(f"{name}\n")
+    (lib / "sub" / "org-chart.md").write_text("nested\n")
+    (lib / "project-agent.yaml").write_text("x: 1\n")
+    return lib
+
+
+def test_a_hive_ignore_keeps_its_files_home(tmp_path):
+    lib = _library(tmp_path)
+    (lib / bs.HIVE_IGNORE_FILE).write_text(
+        "# personal\n\npromo-*.md\n  org-chart.md  \n")
+    assert sorted(bs.collect(lib, general=True)) == ["a.md", "project-agent.yaml", "sub/org-chart.md"]
+
+
+def test_a_glob_can_reach_into_sub_directories(tmp_path):
+    lib = _library(tmp_path)
+    (lib / bs.HIVE_IGNORE_FILE).write_text("*org-chart.md\n")
+    assert "org-chart.md" not in bs.collect(lib, general=True)
+    assert "sub/org-chart.md" not in bs.collect(lib, general=True)
+
+
+def test_without_a_hive_ignore_everything_allowlisted_travels(tmp_path):
+    lib = _library(tmp_path)
+    assert len(bs.collect(lib, general=True)) == 6
+    assert bs.hive_ignore_patterns(lib) == []
+
+
+@pytest.mark.parametrize("make", [
+    lambda p: p.write_bytes(b"\xff\xfe not utf-8"),
+    lambda p: p.mkdir(),
+    lambda p: p.symlink_to(p.parent / "a.md"),
+])
+def test_a_hive_ignore_that_cannot_be_read_stops_the_package(tmp_path, make):
+    lib = _library(tmp_path)
+    make(lib / bs.HIVE_IGNORE_FILE)
+    with pytest.raises(bs.SyncError) as e:
+        bs.collect(lib, general=True)
+    assert e.value.status == 409 and bs.HIVE_IGNORE_FILE in str(e.value)
+
+
+def test_a_project_brain_honours_its_hive_ignore(tmp_path):
+    b = _brain(tmp_path)
+    (b / bs.HIVE_IGNORE_FILE).write_text("2-understanding/knowledge/*\n")
+    files = bs.collect(b, False)
+    assert "2-understanding/knowledge/note.md" not in files
+    assert "2-understanding/PRODUCT.md" in files and bs.HIVE_IGNORE_FILE not in files
+
+
+def test_the_next_install_deletes_a_hive_copy_of_a_newly_ignored_file(tmp_path):
+    host, hive = tmp_path / "host", tmp_path / "hive"
+    lib = _library(host)
+    first = bs.collect(lib, general=True)
+    bs.install(hive, "General", first, bs.content_digest(first))
+    on_hive = hive / "Knowledge" / "Library"
+    assert (on_hive / "promo-evidence-x.md").exists()
+    (lib / bs.HIVE_IGNORE_FILE).write_text("promo-*.md\n")
+    second = bs.collect(lib, general=True)
+    rec = bs.install(hive, "General", second, bs.content_digest(second))
+    assert not (on_hive / "promo-evidence-x.md").exists()
+    assert not (on_hive / "promo-feedback-y.md").exists()
+    assert (on_hive / "a.md").exists() and not (on_hive / bs.HIVE_IGNORE_FILE).exists()
+    assert bs.installed_state(hive, "General")["current_digest"] == rec["digest"]
+
+
+def test_case_and_a_leading_slash_do_not_let_a_file_out(tmp_path):
+    lib = _library(tmp_path)
+    (lib / "Work-Summary-L7.md").write_text("mine\n")
+    (lib / bs.HIVE_IGNORE_FILE).write_text("./PROMO-Evidence-*.md\n/Org-Chart.md\nwork-summary-l7.md\n")
+    files = bs.collect(lib, general=True)
+    assert "Work-Summary-L7.md" not in files
+    assert "promo-evidence-x.md" not in files and "org-chart.md" not in files
+    assert "promo-feedback-y.md" in files and "sub/org-chart.md" in files

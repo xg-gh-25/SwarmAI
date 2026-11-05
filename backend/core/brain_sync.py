@@ -13,6 +13,16 @@ module holds both sides so they share one allowlist and one digest:
   and archives excluded). The General Brain is ``Knowledge/Library``: its ``**/*.md``
   plus its definition. Private context, ``.artifacts/``, code graphs,
   binary assets and anything a secret-name rule matches never travel.
+- **What the person keeps home** (``HIVE_IGNORE_FILE``): a ``.hive-ignore`` at the
+  Brain's root lists files that stay on this machine although the allowlist would send
+  them (personal or internal documents). One glob per line, matched with ``fnmatch``
+  against the path relative to the Brain (``*`` also crosses ``/``), ignoring case (a
+  name typed in the wrong case on a case-insensitive disk still stays home; matching
+  more only keeps more home) and a leading ``./`` or ``/``; blank lines are skipped, and
+  a line starting with ``#`` matches no file name, so it serves as a comment. The file
+  never travels itself (a dot file). One that cannot be read stops the package (a list
+  that cannot be read could leak what it names). A Hive's copy of an ignored file is deleted by the next install, like any
+  allowlisted file the package no longer has.
 - **The digest** (``content_digest``): sha256 over the sorted (path, sha256(bytes))
   pairs, so the same content always has the same digest, however it is packed, and a
   Hive can recompute it from the files on its disk.
@@ -63,6 +73,8 @@ GENERAL_FILES = frozenset({"project-agent.yaml"})
 #: files an older host shipped that a Brain install removes (the retired confirmation's
 #: source check)
 RETIRED_FILES = (".project-agent-check.json",)
+HIVE_IGNORE_FILE = ".hive-ignore"
+_HIVE_IGNORE_MAX_BYTES = 64 * 1024
 _SKIP_PARTS = frozenset({"__pycache__", ".git", "node_modules", ".DS_Store"})
 _SKIP_SUFFIXES = (".pyc", ".pyo", ".lock", ".tmp")
 
@@ -181,15 +193,45 @@ def old_layout(root: Path) -> bool:
                for d in DDD_CANONICAL_DOCS)
 
 
+def hive_ignore_patterns(root: Path) -> list[str]:
+    """The globs of the Brain's ``.hive-ignore``, lower-cased (``[]`` when it has none).
+    A file that is there but cannot be read as UTF-8 text raises ``SyncError``: the
+    package stops."""
+    p = Path(root) / HIVE_IGNORE_FILE
+    if not os.path.lexists(p):
+        return []
+    try:
+        raw = _read_plain(p, _HIVE_IGNORE_MAX_BYTES)
+    except SyncError:
+        raise SyncError(f"{HIVE_IGNORE_FILE} cannot be read; fix it, then sync again", 409) from None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SyncError(f"{HIVE_IGNORE_FILE} is not UTF-8 text; fix it, then sync again", 409) from None
+    out = []
+    for line in text.splitlines():
+        pat = line.strip()
+        while pat.startswith(("./", "/")):
+            pat = pat[2:] if pat.startswith("./") else pat[1:]
+        if pat:
+            out.append(pat.lower())
+    return out
+
+
 def collect(root: Path, general: bool) -> dict[str, bytes]:
-    """The files of the Brain at *root* that travel, as they travel (host side)."""
+    """The files of the Brain at *root* that travel, as they travel (host side): the
+    allowlisted ones, less those its ``.hive-ignore`` keeps home."""
+    from fnmatch import fnmatchcase
     from utils.file_lock import md_lock
     if not general and old_layout(root):
         raise SyncError("this Brain is in the old layout (docs at its root); migrate it to "
                         "2-understanding/ first", 409)
+    ignored = hive_ignore_patterns(Path(root))
     files: dict[str, bytes] = {}
     total = 0
     for rel in _walk(Path(root), general):
+        if any(fnmatchcase(rel.lower(), pat) for pat in ignored):
+            continue
         p = Path(root) / rel
         if rel.endswith(".md"):
             with md_lock(p, blocking=False) as got:
