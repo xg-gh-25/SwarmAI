@@ -305,7 +305,7 @@ def _anchor(ws, path, word):
     return next(u.anchor for u in parse_units(path, root=ws) if word in u.text)
 
 
-def _chat_ask(heads: dict, knowable: dict | None = None):
+def _chat_ask(heads: dict, knowable: dict | None = None, first: dict | None = None):
     """The model stub for chat corrections: the knowledge is the correction's title; the
     entries stating it are those containing any of ``heads[title]``."""
     def ask(prompt, schema):
@@ -317,7 +317,8 @@ def _chat_ask(heads: dict, knowable: dict | None = None):
                     title = line.split("): ", 1)[1].split(" ", 1)[0]
                     items.append({"id": cid, "real": True, "class": "C", "knowledge": title,
                                   "query": " ".join(heads.get(title, [title])),
-                                  "knowable": (knowable or {}).get(cid, True)})
+                                  "knowable": (knowable or {}).get(cid, True),
+                                  "first_stated": (first or {}).get(cid, False)})
             return {"items": items}
         need = prompt.split("Needed knowledge: ", 1)[1].split("\n", 1)[0]
         entries = [line for line in prompt.splitlines() if line.startswith("[")]
@@ -406,7 +407,7 @@ def test_an_entry_a_consolidation_replaced_still_counts_as_there_beforehand(cdf_
     assert {r["id"]: r["outcome"] for r in data["rows"]}["cand-l1.unit"] == "送到仍犯"
     # archived and never recalled: it may still have been in the main file that day
     item = {"mode": "chat", "date": "2026-11-20"}
-    assert audit._delivered(None, ws, item, {"store": "context_archive", "anchor": None}) is None
+    assert audit._delivered(None, ws, item, {"store": "context_maybe", "anchor": None}) is None
 
 
 def test_a_defect_only_in_the_new_code_is_not_counted_as_missing_knowledge(cdf_env):
@@ -430,3 +431,82 @@ def test_a_defect_only_in_the_new_code_is_not_counted_as_missing_knowledge(cdf_e
     assert data["table"]["A"]["事先没有"] == 1       # CF-3 only
     assert "## 5. Defects only in the code written for that change" in Path(res["output_path"]).read_text(
         encoding="utf-8")
+
+
+def _git(repo, *args, date="2026-11-01T12:00:00"):
+    import os
+    import subprocess
+    env = {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "-c", "commit.gpgsign=false", *args], check=True, capture_output=True, env=env)
+
+
+def test_the_files_searched_are_the_prompt_builders_own_list():
+    from jobs.handlers.brain_mistake_audit import _context_files
+    whole, part = _context_files()
+    assert {"SOUL.md", "AGENT.md", "STEERING.md", "MEMORY.md", "EVOLUTION.md"} <= set(whole)
+    assert part == ["TIMELINE.md"]          # whole events chosen to fit a budget
+
+
+def test_a_rule_in_a_governed_file_was_there_and_delivered(cdf_env):
+    """SOUL / AGENT / STEERING are injected every turn, but the audit never searched them:
+    a mistake against a rule in them read as "not in the brain" instead of "delivered and
+    still made", the judgment problem. A file in git is dated by the version committed
+    before the mistake; a decision the person stated first is counted apart, unless the
+    records show an entry held it before."""
+    from core.ingestion.api import connect_rw
+    from jobs.handlers import brain_mistake_audit as audit
+    audit._committed_text.cache_clear()
+    ws = cdf_env["workspace"]
+    _a_record_before_the_month()
+    agent = ws / ".context/AGENT.md"
+    agent.write_text("# Agent\n\n## Rules\n\n- **R1. Old rule** Reuse an existing mechanism before "
+                     "adding one.\n", encoding="utf-8")
+    _git(ws, "init", "-q")
+    _git(ws, "add", ".context/AGENT.md")
+    _git(ws, "commit", "-q", "-m", "rule", date="2026-11-10T12:00:00")
+    agent.write_text(agent.read_text(encoding="utf-8") + "- **R9. Late rule** Look up the price "
+                     "catalog first.\n", encoding="utf-8")
+    _git(ws, "commit", "-q", "-am", "late", date="2026-11-25T12:00:00")
+    conn = connect_rw()
+    _correction(conn, "cand-a1", "reuse", session="s1", at="2026-11-20T08:00:00+00:00")
+    _correction(conn, "cand-a2", "late", session="s2", at="2026-11-20T09:00:00+00:00")
+    _correction(conn, "cand-a3", "reuse", session="s3", at="2026-11-21T08:00:00+00:00")
+    _correction(conn, "cand-f1", "brainterm", session="s4", at="2026-11-21T09:00:00+00:00")
+    conn.commit()
+    conn.close()
+    data = _run(ws, _chat_ask({"reuse": ["Old rule"], "late": ["Late rule"], "brainterm": ["nothing"]},
+                              first={"cand-a3.unit": True, "cand-f1.unit": True}))
+    got = {r["id"]: r["outcome"] for r in data["rows"]}
+    assert got["cand-a1.unit"] == "送到仍犯"         # committed 11-10, injected every turn
+    assert got["cand-a2.unit"] == "事先没有"         # committed 11-25, after the mistake
+    assert got["cand-a3.unit"] == "送到仍犯"         # the records win over "first stated"
+    assert [r["id"] for r in data["first_stated"]] == ["cand-f1.unit"]
+    assert "cand-f1.unit" not in got
+
+
+def test_a_repos_own_guidance_is_searched(cdf_env, tmp_path):
+    """A pitfall in the governed repo's ``.swarmai/review.md`` was there; whether it reached
+    the session or the experts no record says, so it is "cannot tell", not "missing"."""
+    from core.ingestion.api import connect_rw
+    from jobs.handlers import brain_mistake_audit as audit
+    audit._committed_text.cache_clear()
+    ws = cdf_env["workspace"]
+    _a_record_before_the_month()
+    repo = tmp_path / "repo"
+    (repo / ".swarmai").mkdir(parents=True)
+    (repo / ".swarmai/review.md").write_text(
+        "# Review\n\n## Patterns\n\n- **Decompressed size cap** A body cap must count the bytes "
+        "after decompression.\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "guide", date="2026-11-05T12:00:00")
+    (ws / "Projects/P/bindings.yaml").write_text(
+        f"governed_assets:\n  - kind: code-repo\n    name: repo\n    source_workspace: {repo}\n",
+        encoding="utf-8")
+    conn = connect_rw()
+    _correction(conn, "cand-z1", "zipcap", session="s1", at="2026-11-20T08:00:00+00:00", project="P")
+    conn.commit()
+    conn.close()
+    data = _run(ws, _chat_ask({"zipcap": ["Decompressed size cap"]}))
+    assert {r["id"]: r["outcome"] for r in data["rows"]} == {"cand-z1.unit": "无法判断"}
