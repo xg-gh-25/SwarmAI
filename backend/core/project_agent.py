@@ -218,11 +218,24 @@ def _is_general_dir(project_dir: Path) -> bool:
     return p.name == "Library" and p.parent.name == "Knowledge"
 
 
-def _tree_files(root: Path, prefix: str, general: bool = False) -> list[Path]:
+def _hive_ignore(project_dir: Path) -> Optional[list[str]]:
+    """The Brain's ``.hive-ignore`` globs ([] without one), or None when the list
+    cannot be read (the package would stop too)."""
+    from core.brain_sync import SyncError, hive_ignore_patterns
+    try:
+        return hive_ignore_patterns(Path(project_dir))
+    except SyncError:
+        return None
+
+
+def _tree_files(root: Path, prefix: str, general: bool = False,
+                ignored: Iterable[str] = ()) -> list[Path]:
     """The files under *root* that travel to a Hive (``core.brain_sync.allowlisted`` of
-    ``<prefix>/<rel>``): the revision and the gates digest cover exactly what a Hive
-    receives, so a Hive recomputes the same values from its copy."""
-    from core.brain_sync import allowlisted
+    ``<prefix>/<rel>``, less those the Brain's ``.hive-ignore`` keeps home): the revision
+    and the gates digest cover exactly what a Hive receives, so a Hive recomputes the
+    same values from its copy."""
+    from core.brain_sync import allowlisted, is_ignored
+    ignored = list(ignored)
     if not root.is_dir():
         return []
     files = []
@@ -230,7 +243,9 @@ def _tree_files(root: Path, prefix: str, general: bool = False) -> list[Path]:
         rel = p.relative_to(root)
         if any(part in _GATE_SKIP_PARTS for part in rel.parts) or p.suffix == ".pyc":
             continue
-        if p.is_file() and not p.is_symlink() and allowlisted(f"{prefix}/{rel.as_posix()}", general):
+        travel = f"{prefix}/{rel.as_posix()}"
+        if (p.is_file() and not p.is_symlink() and allowlisted(travel, general)
+                and not is_ignored(travel, ignored)):
             files.append(p)
     return files
 
@@ -253,7 +268,7 @@ def gates_snapshot(project_dir: Path) -> tuple[str, dict[str, bytes]]:
     root = _gates_dir(project_dir)
     h = hashlib.sha256()
     files: dict[str, bytes] = {}
-    for f in _tree_files(root, "3-gates", _is_general_dir(project_dir)):
+    for f in _tree_files(root, "3-gates", _is_general_dir(project_dir), _hive_ignore(project_dir) or []):
         rel = str(f.relative_to(root))
         data = f.read_bytes()
         _hash_one(h, rel, data)
@@ -393,7 +408,8 @@ def _reference_problems(d: dict[str, Any], project_dir: Path) -> list[str]:
 
 def revision(project_dir: Path) -> Optional[str]:
     """sha256 of the definition file, every skill directory its modes use and the
-    3-gates/ tree (the files of each that travel to a Hive); None when the Brain has no definition. Any change to one of them
+    3-gates/ tree (the files of each that travel to a Hive); None when the Brain has no
+    definition or its ``.hive-ignore`` cannot be read. Any change to one of them
     gives a new revision, so a run pins exactly what it was dispatched with."""
     project_dir = Path(project_dir)
     p = project_dir / PROJECT_AGENT_FILE
@@ -403,6 +419,9 @@ def revision(project_dir: Path) -> Optional[str]:
         raw = p.read_bytes()
         doc = yaml.safe_load(raw.decode("utf-8")) or {}
     except (OSError, UnicodeError, yaml.YAMLError):
+        return None
+    ignored = _hive_ignore(project_dir)
+    if ignored is None:      # an unreadable .hive-ignore: no revision, so no dispatch
         return None
     h = hashlib.sha256()
     h.update(raw)
@@ -414,7 +433,8 @@ def revision(project_dir: Path) -> Optional[str]:
             d = caps / s
             if d.is_dir() and not d.is_symlink():
                 h.update(b"skill:" + s.encode("utf-8") + b"\0")
-                _hash_files(h, caps, _tree_files(d, f"4-capabilities/{s}", _is_general_dir(project_dir)))
+                _hash_files(h, caps, _tree_files(d, f"4-capabilities/{s}", _is_general_dir(project_dir),
+                                                 ignored))
     h.update(b"gates:" + gates_digest(project_dir).encode("ascii"))
     return h.hexdigest()
 

@@ -21,8 +21,11 @@ module holds both sides so they share one allowlist and one digest:
   more only keeps more home) and a leading ``./`` or ``/``; blank lines are skipped, and
   a line starting with ``#`` matches no file name, so it serves as a comment. The file
   never travels itself (a dot file). One that cannot be read stops the package (a list
-  that cannot be read could leak what it names). A Hive's copy of an ignored file is deleted by the next install, like any
-  allowlisted file the package no longer has.
+  that cannot be read could leak what it names). A Hive's copy of an ignored file is
+  deleted by the next install, like any allowlisted file the package no longer has.
+  The Project Agent's revision and gates digest leave ignored files out too
+  (``project_agent._tree_files``), so the host and the Hive, which has neither the list
+  nor the files, compute the same values.
 - **The digest** (``content_digest``): sha256 over the sorted (path, sha256(bytes))
   pairs, so the same content always has the same digest, however it is packed, and a
   Hive can recompute it from the files on its disk.
@@ -218,10 +221,17 @@ def hive_ignore_patterns(root: Path) -> list[str]:
     return out
 
 
+def is_ignored(rel: str, patterns: list[str]) -> bool:
+    """True when *rel* (relative to the Brain) matches one of the ``.hive-ignore``
+    globs from ``hive_ignore_patterns`` (already lower-cased)."""
+    from fnmatch import fnmatchcase
+    low = rel.lower()
+    return any(fnmatchcase(low, pat) for pat in patterns)
+
+
 def collect(root: Path, general: bool) -> dict[str, bytes]:
     """The files of the Brain at *root* that travel, as they travel (host side): the
     allowlisted ones, less those its ``.hive-ignore`` keeps home."""
-    from fnmatch import fnmatchcase
     from utils.file_lock import md_lock
     if not general and old_layout(root):
         raise SyncError("this Brain is in the old layout (docs at its root); migrate it to "
@@ -230,7 +240,7 @@ def collect(root: Path, general: bool) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     total = 0
     for rel in _walk(Path(root), general):
-        if any(fnmatchcase(rel.lower(), pat) for pat in ignored):
+        if is_ignored(rel, ignored):
             continue
         p = Path(root) / rel
         if rel.endswith(".md"):

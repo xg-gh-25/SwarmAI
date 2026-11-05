@@ -877,3 +877,30 @@ def test_case_and_a_leading_slash_do_not_let_a_file_out(tmp_path):
     assert "Work-Summary-L7.md" not in files
     assert "promo-evidence-x.md" not in files and "org-chart.md" not in files
     assert "promo-feedback-y.md" in files and "sub/org-chart.md" in files
+
+
+def test_ignored_skill_and_gate_files_are_outside_the_revision_on_both_sides(tmp_path):
+    """A .hive-ignore that keeps a file of a used skill or of 3-gates/ home must not make
+    the Hive compute another revision or gates digest (the dispatch would be refused)."""
+    from core import project_agent as pa
+    doc = {**DEF, "modes": [{"id": "research", "when": "a question", "profile": "research",
+                              "skills": ["s_lib-release"]}]}
+    b = _brain(tmp_path, doc=doc)
+    (b / "4-capabilities" / "s_lib-release" / "recipients.md").write_text("names\n")
+    (b / "3-gates" / "notes.md").write_text("internal\n")
+    (b / bs.HIVE_IGNORE_FILE).write_text("4-capabilities/*/recipients.md\n3-gates/notes.md\n")
+    files = bs.collect(b, general=False)
+    assert "4-capabilities/s_lib-release/recipients.md" not in files and "3-gates/notes.md" not in files
+    hive = tmp_path / "hive"
+    bs.install(hive, "Lib", files, bs.content_digest(files))
+    on_hive = hive / "Projects" / "Lib"
+    assert pa.revision(b) and pa.revision(on_hive) == pa.revision(b)
+    assert pa.gates_digest(on_hive) == pa.gates_digest(b)
+
+
+def test_an_unreadable_hive_ignore_gives_no_revision(tmp_path):
+    from core import project_agent as pa
+    b = _brain(tmp_path)
+    assert pa.revision(b)
+    (b / bs.HIVE_IGNORE_FILE).write_bytes(b"\xff\xfe")
+    assert pa.revision(b) is None
