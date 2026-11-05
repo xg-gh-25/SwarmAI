@@ -184,7 +184,7 @@ numbered text options ("reply with a number"). Only this question.
    | `stopped` · `hive_stopped` / `hive_gone` | `start-hive` a stopped Hive and keep watching; a Hive that is gone: dispatch the task again to another one |
    | `unknown` · `hive_updating` | The Hive is updating: keep watching |
    | `unknown` · `no_session_id` | The Hive has not named the session yet: keep watching; the daemon asks the Hive, and the run then follows its session or reads `not_started` |
-   | `unknown` · other | The Hive did not answer the probe twice: say it may be busy, and keep watching; after about fifteen minutes, `diagnose` it and say what it found. While its Hive does not answer, the run is not settled and you cannot discard it: a turn or background work may still be going there. When `diagnose` shows the Hive itself is stuck (no answer, the machine out of memory), tell the person in this session what it found and that restarting or updating that Hive is theirs to do (Settings → Hive) |
+   | `unknown` · other | The Hive did not answer the probe twice: say it may be busy, and keep watching; after about fifteen minutes, `diagnose` it and say what it found. While its Hive does not answer, the run is not settled and you cannot discard it: a turn or background work may still be going there. When `diagnose` shows the Hive itself is stuck (no answer, the machine out of memory), tell the person in this session what it found and that restarting or updating that Hive is theirs to do (the Hive page in the left navigation) |
 
    **Before you re-run, take over or discard a run that ended in an error or was cut
    off** (`result.ended` not `completed`, or stage `stopped` · `no_record`), run

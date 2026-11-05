@@ -504,8 +504,8 @@ def _user_only_deny_of(command: str) -> "dict | None":
     op = swarm_out_ops.person_only_match(command)
     if op is not None:
         return _deny(f"`{op.name}` ({op.method} {op.path}) is the person's to do in the App "
-                     "(Swarm Out, or Settings → Hive), never a command. Tell the user what you "
-                     "think should be done and why; they decide.")
+                     "(Swarm Out, or the Hive page in the left navigation), never a command. "
+                     "Tell the user what you think should be done and why; they decide.")
     return None
 
 

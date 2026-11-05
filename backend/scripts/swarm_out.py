@@ -387,7 +387,7 @@ def _update_hive(args) -> int:
             print(json.dumps({"ok": False, "hive": args.hive, "status": "running",
                               "version": (now or {}).get("version"),
                               "detail": ("the update ended with the Hive running but without what this "
-                                         f"Host needs to dispatch to it (asked for {version}); Settings → Hive "
+                                         f"Host needs to dispatch to it (asked for {version}); the Hive page in the left navigation "
                                          "shows why. When no package of that version is published, a source "
                                          f"checkout uploads one with `./hive/release.sh {version}`; then update again")}))
             return 1
