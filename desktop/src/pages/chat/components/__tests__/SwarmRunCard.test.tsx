@@ -31,7 +31,7 @@ const RUN = 'run_0123456789ab';
 function child(id: string, over: Partial<SwarmOutRun> = {}): SwarmOutRun {
   return {
     dispatch_id: id, hive_id: 'h1', hive: 'explorer', session_id: `9db44de7-b39e-4a35-b739-85b656a0426${id.slice(-1)}`,
-    title: `W${id.slice(-1)} · part ${id.slice(-1)}`, origin: 'swarm-out', sent_at: '2026-11-03T08:00:00Z',
+    title: `W${id.slice(-1)} · part ${id.slice(-1)}`, origin: 'swarm-out', sent_at: new Date(Date.now() - 3_600_000).toISOString(),   // an hour ago: a fixed date made the stopped child disappear from the card days later
     state: 'running', state_reason: 'streaming', stage: 'running',
     actions: [{ key: 'stop', primary: true }, { key: 'open_session', primary: false }, { key: 'discard', primary: false }],
     project_agent: { brain: 'SwarmAI', mode: 'code-change', revision: 'r', profile: '', delivery: 'bundle', acceptance: 'a', returns: 'commits' },
