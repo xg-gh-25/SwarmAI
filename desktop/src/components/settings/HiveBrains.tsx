@@ -7,6 +7,11 @@
  * many are out of date, one "Sync" action for those); the per-Brain rows (why one
  * cannot be sent, files the Hive changed, runs using it) are behind "Details".
  *
+ * "Sync" only updates Brains the Hive already holds, plus the SwarmAI and General
+ * Brains. A project Brain that was never sent stays on this machine until a task that
+ * uses it is dispatched (the dispatch syncs it, core/swarm_out.py): a Brain leaves the
+ * machine because a task needs it, never because a button counted it as stale.
+ *
  * Data: GET /hive/instances/{id}/brains (hiveService.brainStatus). The host computes
  * every verdict and reason; from the Hive it only gets digests, times and counts.
  * The first time this session shows a Hive whose SwarmAI or General Brain is missing
@@ -29,10 +34,15 @@ export function resetHiveBrainsAutoSync(): void {
   autoSynced.clear();
 }
 
-const needsSync = (b: HiveBrainRow) => b.syncable && !b.synced && !b.localError;
+/** On the Hive already (out of date or current), or one of the two default Brains. */
+const kept = (b: HiveBrainRow) => b.isDefault || b.hiveDigest !== null;
+const needsSync = (b: HiveBrainRow) => b.syncable && !b.synced && !b.localError && kept(b);
+/** A valid project Brain not on this Hive: the first task that uses it brings it. */
+const sentWithTask = (b: HiveBrainRow) => b.syncable && !b.synced && !b.localError && !kept(b);
 
 function verdict(b: HiveBrainRow, t: TFunction): { text: string; tone: 'ok' | 'warn' | 'muted' } {
   if (b.dispatchable) return { text: t('ui.HiveBrains.canBeSent'), tone: 'ok' };
+  if (sentWithTask(b)) return { text: t('ui.HiveBrains.sentWithTask'), tone: 'ok' };
   if (needsSync(b) && b.reasons.every((r) => r === 'not synced' || r === 'out of date')) {
     return { text: b.hiveDigest ? t('ui.HiveBrains.outOfDate') : t('ui.HiveBrains.notOnHiveYet'), tone: 'warn' };
   }
@@ -99,7 +109,7 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
       </span>
     );
   } else {
-    const ready = data.brains.filter((b) => b.dispatchable).length;
+    const ready = data.brains.filter((b) => b.dispatchable || sentWithTask(b)).length;
     stale = data.brains.filter(needsSync);
     summary = (
       <span data-testid="hive-brains-summary">

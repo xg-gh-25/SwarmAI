@@ -3950,6 +3950,7 @@
       "canBeSent": "可以发到这里",
       "outOfDate": "已过期",
       "notOnHiveYet": "还没在这个 Hive 上",
+      "sentWithTask": "用到它的任务派出时才发过去",
       "checking": "检查中…",
       "couldNotRead": "读取失败（{{error}}）",
       "unsupported": "这个 Hive 的版本收不了 Brain；请先更新一次",

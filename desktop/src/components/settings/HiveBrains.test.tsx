@@ -68,7 +68,7 @@ describe('HiveBrains', () => {
 
   it('syncs the out-of-date Brains and reloads', async () => {
     brainStatus.mockResolvedValueOnce(status([
-      row({ brain: 'Lib', synced: false, hiveDigest: null, dispatchable: false, reasons: ['not synced'] }),
+      row({ brain: 'Lib', synced: false, hiveDigest: 'b'.repeat(64), dispatchable: false, reasons: ['out of date'] }),
     ])).mockResolvedValue(status([row({ brain: 'Lib' })]));
     renderQ();
     fireEvent.click(await screen.findByTestId('hive-brains-sync-all'));
@@ -79,13 +79,32 @@ describe('HiveBrains', () => {
 
   it('shows why a sync failed', async () => {
     brainStatus.mockResolvedValue(status([
-      row({ brain: 'Lib', synced: false, hiveDigest: null, dispatchable: false, reasons: ['not synced'] }),
+      row({ brain: 'Lib', synced: false, hiveDigest: 'b'.repeat(64), dispatchable: false, reasons: ['out of date'] }),
     ]));
     syncBrain.mockRejectedValue(new Error('the Hive is busy with Lib'));
     renderQ();
     fireEvent.click(await screen.findByTestId('hive-brains-toggle'));
     fireEvent.click(screen.getByTestId('hive-brain-sync-Lib'));
     expect((await screen.findByTestId('hive-brains-sync-error')).textContent).toContain('busy');
+  });
+
+  it('a project Brain never sent to this Hive stays home: no sync button, not counted as stale', async () => {
+    brainStatus.mockResolvedValue(status([
+      row({ brain: 'SwarmAI', isDefault: true }),
+      row({ brain: 'Old', synced: false, hiveDigest: 'b'.repeat(64), dispatchable: false, reasons: ['out of date'] }),
+      row({ brain: 'Sales', synced: false, hiveDigest: null, installedAt: null, dispatchable: false,
+            reasons: ['not synced'] }),
+    ]));
+    renderQ();
+    const summary = await screen.findByTestId('hive-brains-summary');
+    expect(summary.textContent).toContain('2 of 3 can be sent here');   // Sales goes with its first task
+    expect(summary.textContent).toContain('1 need a sync');
+    fireEvent.click(screen.getByTestId('hive-brains-sync-all'));
+    await waitFor(() => expect(syncBrain).toHaveBeenCalledWith('i1', 'Old'));
+    expect(syncBrain).not.toHaveBeenCalledWith('i1', 'Sales');
+    fireEvent.click(screen.getByTestId('hive-brains-toggle'));
+    expect(screen.getByTestId('hive-brain-Sales').textContent).toContain('Sent with the first task that uses it');
+    expect(screen.queryByTestId('hive-brain-sync-Sales')).toBeNull();
   });
 
   it('syncs SwarmAI and General once per Hive when they are missing there', async () => {

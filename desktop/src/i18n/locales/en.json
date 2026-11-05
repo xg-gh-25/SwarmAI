@@ -3950,6 +3950,7 @@
       "canBeSent": "Can be sent here",
       "outOfDate": "Out of date",
       "notOnHiveYet": "Not on this Hive yet",
+      "sentWithTask": "Sent with the first task that uses it",
       "checking": "checking…",
       "couldNotRead": "could not be read ({{error}})",
       "unsupported": "this Hive's version cannot receive Brains; update it once",
