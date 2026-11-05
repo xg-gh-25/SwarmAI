@@ -1,0 +1,1688 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Domain Knowledge Driven Autonomous</title>
+<!-- Cover + two diagrams in one file. Each page runs in its own iframe so their styles and scripts stay separate. -->
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#e9ecf3;font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+nav{position:fixed;left:0;top:0;right:0;height:44px;background:#111827;display:flex;align-items:center;gap:6px;padding:0 14px;z-index:2}
+nav button{height:30px;padding:0 14px;border-radius:8px;border:1px solid #374151;background:#1f2937;color:#d1d5db;font:600 13.5px "PingFang SC",sans-serif;cursor:pointer;white-space:nowrap}
+nav button i{font-style:normal;display:inline-block;width:19px;height:19px;border-radius:50%;background:#374151;color:#fff;font:700 11px/19px Menlo,monospace;text-align:center;margin-right:7px}
+nav button.on{background:#fff;color:#111827;border-color:#fff}
+nav button.on i{background:#c2410c}
+nav span{margin-left:auto;font-size:12px;color:#9ca3af}
+iframe{position:fixed;left:0;top:44px;width:100%;height:calc(100% - 44px);border:0;display:none;background:#e9ecf3}
+iframe.on{display:block}
+</style>
+</head>
+<body>
+<nav>
+  <button data-k="home"><i>0</i>首页</button>
+  <button data-k="overall"><i>1</i>Two Loops, One Brain</button>
+  <button data-k="builder"><i>2</i>Inside the Builder Loop</button>
+  <button data-k="pipeline"><i>3</i>Pipeline Run</button>
+  <button data-k="distill"><i>4</i>Cognition Distill Flow</button>
+  <button data-k="onemove"><i>5</i>One Move, Three Outcomes</button>
+  <button data-k="tenets"><i>6</i>Tenets</button>
+  <button data-k="appendix"><i>7</i>Appendix · Checkpoints</button>
+  <span>按 0 – 7 切换</span>
+</nav>
+<iframe data-k="home" title="首页" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Domain Knowledge Driven Autonomous&lt;/title&gt;
+&lt;!-- Cover page for the two autonomous-flow diagrams. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#072c29}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;-webkit-font-smoothing:antialiased}
+#app{position:absolute;left:0;top:0;width:1600px;height:1040px;transform-origin:0 0;overflow:hidden;color:#e6f4f1;
+  background:radial-gradient(1200px 700px at 85% 10%,#13544d 0%,rgba(19,84,77,0) 60%),#0b3b37}
+.title{position:absolute;left:120px;top:120px}
+.curve{position:absolute;left:0;top:0;pointer-events:none}
+.title b{display:block;font-size:104px;line-height:1.08;font-weight:800;color:#fff;letter-spacing:-1px}
+.title .q{margin-top:34px;padding-left:22px;border-left:8px solid #f97316;font-size:38px;line-height:1.2;font-weight:700;color:#fff;white-space:nowrap}
+.title .q .m{color:#7fa9a2}
+.title .q .o{color:#fb923c}
+
+.tenets{position:absolute;left:120px;right:120px;top:470px;display:grid;grid-template-columns:1fr 1fr;gap:48px 80px}
+.t{border-top:2px solid #2f7f75;padding-top:26px}
+.t .n{font:700 20px Menlo,monospace;color:#7ee0cf;letter-spacing:2px}
+.t h2{margin:16px 0 0;font-size:44px;line-height:1.25;font-weight:800;color:#fff}
+.t h2 .o{color:#fb923c}
+.t h2 s{color:#6b9a92;text-decoration-thickness:3px}
+.chips{display:flex;align-items:center;gap:6px;margin-top:22px;white-space:nowrap}
+.chips span{font-size:21px;font-weight:700;color:#0b3b37;background:#7ee0cf;border-radius:24px;padding:5px 12px}
+.chips i{font-style:normal;font-size:24px;font-weight:800;color:#fb923c}
+
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;app&quot;&gt;
+  &lt;svg class=&quot;curve&quot; width=&quot;1600&quot; height=&quot;1040&quot; viewBox=&quot;0 0 1600 1040&quot;&gt;
+    &lt;path d=&quot;M1150.0,430.0 L1158.0,428.9 L1166.0,427.8 L1174.0,426.6 L1182.0,425.2 L1190.0,423.8 L1198.0,422.3 L1206.0,420.6 L1214.0,418.8 L1222.0,416.9 L1230.0,414.8 L1238.0,412.5 L1246.0,410.1 L1254.0,407.5 L1262.0,404.7 L1270.0,401.7 L1278.0,398.4 L1286.0,394.9 L1294.0,391.1 L1302.0,387.0 L1310.0,382.6 L1318.0,377.8 L1326.0,372.7 L1334.0,367.2 L1342.0,361.2 L1350.0,354.8 L1358.0,347.9 L1366.0,340.4 L1374.0,332.4 L1382.0,323.7 L1390.0,314.4 L1398.0,304.3 L1406.0,293.5 L1414.0,281.8 L1422.0,269.2 L1430.0,255.6 L1438.0,240.9 L1446.0,225.1 L1454.0,208.1 L1462.0,189.8 L1470.0,170.0&quot; fill=&quot;none&quot; stroke=&quot;#7ee0cf&quot; stroke-width=&quot;4&quot; stroke-linecap=&quot;round&quot;/&gt;
+    &lt;circle cx=&quot;1150.0&quot; cy=&quot;430.0&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1190.0&quot; cy=&quot;423.8&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1230.0&quot; cy=&quot;414.8&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1270.0&quot; cy=&quot;401.7&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1310.0&quot; cy=&quot;382.6&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1350.0&quot; cy=&quot;354.8&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1390.0&quot; cy=&quot;314.4&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1430.0&quot; cy=&quot;255.6&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1470.0&quot; cy=&quot;170.0&quot; r=&quot;10&quot; fill=&quot;#f97316&quot;/&gt;
+    &lt;text x=&quot;1464&quot; y=&quot;142&quot; text-anchor=&quot;end&quot; font-size=&quot;34&quot; font-weight=&quot;800&quot; fill=&quot;#fb923c&quot;&gt;Compound&lt;/text&gt;
+  &lt;/svg&gt;
+  &lt;div class=&quot;title&quot;&gt;&lt;b&gt;Domain Knowledge&lt;br&gt;Driven Autonomous&lt;/b&gt;&lt;div class=&quot;q&quot;&gt;Are you &lt;span class=&quot;m&quot;&gt;consuming&lt;/span&gt; intelligence, or &lt;span class=&quot;o&quot;&gt;compounding&lt;/span&gt; it?&lt;/div&gt;&lt;/div&gt;
+
+  &lt;div class=&quot;tenets&quot;&gt;
+    &lt;div class=&quot;t&quot;&gt;
+      &lt;div class=&quot;n&quot;&gt;01&lt;/div&gt;
+      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;Less&lt;/span&gt; Attention&lt;br&gt;Is All You Need&lt;/h2&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;t&quot;&gt;
+      &lt;div class=&quot;n&quot;&gt;02&lt;/div&gt;
+      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;Human-on-the-loop&lt;/span&gt;,&lt;br&gt;not &lt;s&gt;in-the-loop&lt;/s&gt;&lt;/h2&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;t&quot;&gt;
+      &lt;div class=&quot;n&quot;&gt;03&lt;/div&gt;
+      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;Autonomous Rate&lt;/span&gt; Is the Goal,&lt;br&gt;Speed Is the Output&lt;/h2&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;t&quot;&gt;
+      &lt;div class=&quot;n&quot;&gt;04&lt;/div&gt;
+      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;One Move&lt;/span&gt;, Three Outcomes&lt;/h2&gt;
+      &lt;div class=&quot;chips&quot;&gt;&lt;span&gt;Autonomous Pipeline&lt;/span&gt;&lt;i&gt;=&lt;/i&gt;&lt;span&gt;AI Native Talent&lt;/span&gt;&lt;i&gt;=&lt;/i&gt;&lt;span&gt;AI Native Org&lt;/span&gt;&lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+&lt;script&gt;
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1040);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1040*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="overall" title="Two Loops, One Brain" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Two Loops, One Brain&lt;/title&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#stage{position:fixed;inset:0}
+#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px;gap:18px}
+.brand{display:flex;flex-direction:column;line-height:1.3;white-space:nowrap}
+.brand b{font-size:26px;font-weight:800}
+.brand span{font-size:14px;color:#4b5563}
+.legend{margin-left:auto;display:flex;gap:16px;font-size:14px;color:#4b5563;white-space:nowrap;align-items:center}
+.legend i{display:inline-block;vertical-align:middle;margin-right:7px}
+.lg-p{width:24px;border-top:2.5px solid #7c3aed}
+.lg-b{width:24px;border-top:2.5px solid #2563eb}
+.lg-j{width:24px;border-top:2.5px solid #334155}
+.lg-k{width:24px;border-top:2.5px solid #0f766e}
+.lg-d{width:10px;height:10px;background:#c2410c;transform:rotate(45deg)}
+
+.pane{position:absolute;background:#fff;border:1px solid #e5e7eb;border-radius:14px}
+
+/* ---- entry column: intent sources + Jira / Taskei ---- */
+#src{left:16px;top:72px;width:258px;height:196px;padding:12px 14px}
+#src h4,#jira h4{margin:0 0 8px;font-size:15px;font-weight:800}
+#src h4 small{font-size:14px;color:#6b7280;font-weight:400;margin-left:6px}
+.srcs{display:flex;flex-wrap:wrap;gap:6px}
+.srcs span{font-size:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:3px 10px;white-space:nowrap}
+#jira{left:16px;top:282px;width:258px;height:330px;border:1.5px solid #334155;overflow:hidden}
+#jira .jh{height:52px;background:#1f2937;color:#fff;padding:0 14px;display:flex;align-items:center}
+#jira .jh b{display:block;font-size:16px}
+#jira .jh span{font-size:14px;color:#cbd5e1}
+.tri{margin:14px 12px 0;border:1.5px dashed #64748b;border-radius:10px;padding:8px 10px;font-size:14px;line-height:1.4;color:#374151}
+.tri b{display:block;font-size:14px;color:#111827;margin-bottom:2px}
+.tri .r{display:flex;flex-direction:column;white-space:nowrap}
+.tri .r em{font-style:normal;font-weight:700;align-self:flex-end}
+.jl{margin:12px 14px 0;font-size:14px;letter-spacing:1px;font-weight:700;color:#6b7280}
+.pills{margin:6px 12px 0;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.pill{height:28px;justify-content:center;font-size:14px !important;padding:0 6px !important;border-radius:7px;background:#f1f5f9;border:1px solid #cbd5e1;font-size:14px;font-weight:600;display:flex;align-items:center;padding:0 10px;white-space:nowrap}
+.pill small{margin-left:auto;font-size:14px;font-weight:400;color:#6b7280}
+.pill.pm{background:#f5f3ff;border-color:#c4b5fd;color:#5b21b6}
+.pill.bd{background:#eff6ff;border-color:#93c5fd;color:#1d4ed8}
+.pill.ac{background:#fffaf5;border-color:#fdba74;color:#9a3412}
+.jnote{margin:14px 14px 0;font-size:14px;color:#4b5563;line-height:1.6}
+
+/* ---- decision funnel ---- */
+#funnel{left:16px;top:628px;width:258px;height:230px;padding:12px 14px}
+#funnel h4{margin:0 0 10px;font-size:15px;font-weight:800}
+.fr{position:relative;height:30px;margin:0 auto 5px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;white-space:nowrap}
+
+/* ---- Human-on-the-loop band across both sides ---- */
+#hum{left:352px;top:72px;width:1232px;height:96px;border:2px solid #f59e0b;background:#fffaf5}
+.hwho{position:absolute;left:10px;top:9px;width:112px;height:74px;border-radius:10px;background:#c2410c;color:#fff;text-align:center;padding-top:16px;line-height:1.25}
+.hwho svg{display:block;margin:0 auto 2px}
+.hwho b{display:block;font-size:14px}
+.hwho span{display:block;font-size:14px;opacity:.92;white-space:nowrap}
+.hzone{position:absolute;top:6px;font-size:14px;font-weight:700;letter-spacing:.5px;white-space:nowrap}
+.hq{position:absolute;top:28px;height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.3;padding:0 6px}
+.hq b{display:block;font-size:14px;color:#9a3412;white-space:nowrap}
+.hq b:before{content:&quot;&quot;;display:inline-block;width:8px;height:8px;background:#c2410c;transform:rotate(45deg);margin-right:6px;vertical-align:1px}
+.hq.c b:before{background:#fff;border:1.5px solid #c2410c}
+.hq span{display:block;font-size:14px;color:#4b5563;margin-top:2px;white-space:nowrap}
+.hq .rt{display:inline-block;font-style:normal;font-size:14px;font-weight:700;color:#fff;border-radius:7px;padding:0 6px;line-height:15px;margin:0 2px}
+.hq.box{border:1.5px solid #c2410c;border-radius:9px;background:#fff}
+.hq.dbox{border:1.5px dashed #f59e0b;border-radius:9px;background:#fff}
+.hzone{top:8px !important}
+.hdiv{position:absolute;left:566px;top:12px;bottom:12px;border-left:1.5px dashed #fdba74}
+
+/* ---- cycle nodes ---- */
+.nd{position:absolute;transform:translate(-50%,-50%);padding:6px 8px;border-radius:10px;background:#fff;border:1.5px solid #c4b5fd;text-align:center;line-height:1.3;z-index:3}
+.nd b{display:block;font-size:14px;white-space:nowrap;color:#5b21b6}
+.nd span{display:block;font-size:14px;color:#4b5563;margin-top:2px}
+.nd.bb{border-color:#93c5fd}.nd.bb b{color:#1d4ed8}
+.nd.h{border:2px solid #c2410c;background:#fffaf5}
+.nd.h b{color:#9a3412}
+.nd.h b:before{content:&quot;&quot;;display:inline-block;width:8px;height:8px;background:#c2410c;transform:rotate(45deg);margin-right:6px;vertical-align:1px}
+.nd.h b:has(.sno):before{display:none}
+.nd.c{border:2px dashed #c2410c}
+.nd.free{background:repeating-linear-gradient(135deg,#f8fafc 0 6px,#eef2f7 6px 12px);border:1.5px dashed #94a3b8}
+.nd.free b{color:#334155}
+.nd.refl{border-color:#5eead4;background:#f0fdfa}.nd.refl b{color:#0f766e}
+.sno{font-style:normal;display:inline-block;width:21px;height:21px;border-radius:50%;background:#e2e8f0;color:#334155;font:700 14px/21px Menlo,monospace;margin-right:5px;vertical-align:1px}
+.sno.hum{background:#c2410c;color:#fff}
+.role{position:absolute;right:-8px;top:-12px;font-size:14px;font-weight:700;line-height:19px;padding:0 7px;border-radius:8px;background:#c2410c;color:#fff;font-style:normal;white-space:nowrap}
+.role.b2{background:#9a3412}
+.rc{position:absolute;z-index:2;transform:translate(-50%,-50%);text-align:center;line-height:1.45;white-space:nowrap}
+.rc b{display:block;font-weight:800;letter-spacing:1px}
+.rc em{display:block;font-style:normal;font-size:14px;font-weight:700}
+.rc span{display:block;font-size:14px;color:#4b5563}
+.rc span.k{color:#111827;font-weight:600}
+.tok{position:absolute;transform:translate(-50%,-50%);z-index:4;width:12px;height:12px;border-radius:50%;background:#334155;box-shadow:0 0 0 3px #fff}
+.tok.w{background:#c2410c;box-shadow:0 0 0 3px #fde4d0}
+.tok.s{width:9px;height:9px;background:#64748b}
+.tl{position:absolute;z-index:4;font-size:14px;font-weight:700;white-space:nowrap;color:#334155;transform:translate(-50%,-50%)}
+.tl.w{color:#c2410c}
+
+/* ---- traces + eval ---- */
+.trace{position:absolute;top:746px;height:112px;border:1.5px solid #334155;border-radius:12px;background:#fff;padding:10px 16px;display:flex;flex-direction:column;gap:8px}
+#tpm{left:292px;width:448px;border-left:6px solid #7c3aed}
+#tbd{left:1084px;width:500px;border-left:6px solid #2563eb}
+.trace h4{margin:0;font-size:15px;font-weight:800}
+.trace h4 small{font-size:14px;color:#6b7280;font-weight:400;margin-left:6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips span{font-size:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:2px 8px;white-space:nowrap}
+.chips span.h{color:#9a3412;border-color:#fed7aa;background:#fffaf5}
+.tuse{font-size:14px;color:#374151}
+.tuse b{color:#0f766e;margin-right:6px}
+#eval{left:764px;top:746px;width:296px;height:112px;padding:10px 16px;border:1.5px solid #334155;border-left:6px solid #334155;background:#eef2f6;display:flex;flex-direction:column;gap:8px}
+#eval h4{margin:0;font-size:15px;font-weight:800}
+#eval .chips span{background:#fff;border-color:#cbd5e1}
+#eval h4 small{font-size:14px;color:#6b7280;font-weight:400;margin-left:6px}
+#eval .q{font-size:14px;font-weight:700;color:#111827}
+#eval .eg{display:grid;grid-template-columns:1fr 1fr;gap:3px 14px}
+#eval .eg div{font-size:14px;color:#4b5563;line-height:1.35;white-space:nowrap}
+#eval .eg b{display:block;font-size:14px;color:#111827}
+#eval .o{font-size:14px;white-space:nowrap}
+#eval .o .h{color:#c2410c}#eval .o .k{color:#0f766e}
+
+/* ---- shared Brain ---- */
+#brain{position:absolute;left:16px;top:870px;width:1568px;height:182px;background:#0b3b37;border-radius:16px;color:#d5ece7}
+.bt{position:absolute;left:28px;top:0;bottom:0;width:240px;display:flex;flex-direction:column;justify-content:center}
+.bt b{font-size:28px;font-weight:800;color:#fff}
+.bt em{font-style:normal;font-size:14px;color:#7ee0cf;margin-top:4px}
+.bh{font-size:14px;letter-spacing:1px;font-weight:700;color:#7ee0cf;margin-bottom:12px;white-space:nowrap}
+.bagent{position:absolute;left:286px;top:28px;width:272px;height:126px;border:1.5px solid #3aa596;border-radius:12px;background:#124a45;padding:18px 18px}
+.bagent .bh{font-size:17px;letter-spacing:0;color:#fff;margin-bottom:16px}
+.btags{display:flex;gap:8px}
+.btags span{font-size:14px;color:#0b3b37;background:#7ee0cf;border-radius:14px;padding:3px 11px;font-weight:600;white-space:nowrap}
+.bdocs{position:absolute;left:580px;top:30px;width:456px}
+.bgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.bdirs{position:absolute;left:1056px;top:30px;width:196px}
+.dgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.dgrid span{position:relative;font:700 14px Menlo,monospace;color:#a7f3e4;border:1.5px dashed #3aa596;border-radius:3px 9px 9px 9px;padding:8px 10px;white-space:nowrap}
+.dgrid span:before{content:&quot;&quot;;position:absolute;left:-1.5px;top:-7px;width:26px;height:6px;border:1.5px dashed #3aa596;border-bottom:none;border-radius:4px 4px 0 0}
+.bgrid span{font:700 14px Menlo,monospace;color:#fff;background:#124a45;border-radius:7px 11px 7px 7px;padding:9px 10px;white-space:nowrap}
+.bonto{position:absolute;left:1270px;top:30px;right:24px;padding-left:22px;border-left:1px solid #1f5b55}
+.otags{display:flex;flex-wrap:wrap;gap:6px}
+.otags code{font:600 14px Menlo,monospace;color:#0b3b37;background:#7ee0cf;border-radius:4px;padding:2px 6px}
+.olife{margin-top:12px;font-size:14px;color:#fff;font-weight:600}
+
+#fills{position:absolute;left:0;top:0;z-index:0}
+.region{position:absolute;z-index:0;border:1.5px solid;border-radius:18px}
+.region span{position:absolute;left:14px;top:12px;font-size:14px;font-weight:700;letter-spacing:.5px;color:#fff;border-radius:10px;padding:1px 10px}
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none;z-index:2}
+.wl{font-size:14px;font-weight:600}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;stage&quot;&gt;&lt;div id=&quot;app&quot;&gt;
+
+&lt;header&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Two Loops, &lt;span style=&quot;color:#c2410c;font-size:inherit&quot;&gt;One Brain&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;legend&quot;&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-j&quot;&gt;&lt;/i&gt;入口与交接&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-p&quot;&gt;&lt;/i&gt;PM 环&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-b&quot;&gt;&lt;/i&gt;Builder 环&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-k&quot;&gt;&lt;/i&gt;知识读写&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-d&quot;&gt;&lt;/i&gt;人的判断点&lt;/span&gt;
+  &lt;/div&gt;
+&lt;/header&gt;
+
+&lt;!-- entry --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;src&quot;&gt;
+  &lt;h4&gt;Intent 来源&lt;/h4&gt;
+  &lt;div class=&quot;srcs&quot;&gt;&lt;span&gt;客户与业务方&lt;/span&gt;&lt;span&gt;用户反馈&lt;/span&gt;&lt;span&gt;商机&lt;/span&gt;&lt;span&gt;告警&lt;/span&gt;&lt;span&gt;Bugs&lt;/span&gt;&lt;span&gt;Security findings&lt;/span&gt;&lt;span&gt;技术债&lt;/span&gt;&lt;span&gt;Eval 缺口&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;pane&quot; id=&quot;jira&quot;&gt;
+  &lt;div class=&quot;jh&quot;&gt;&lt;b&gt;Jira / Taskei&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;tri&quot;&gt;&lt;b&gt;◇ 自动 Triage&lt;/b&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;span&gt;Bug · 安全 · 确定性需求&lt;/span&gt;&lt;em style=&quot;color:#2563eb&quot;&gt;→ Builder&lt;/em&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;span&gt;新功能 · 体验 · 方向&lt;/span&gt;&lt;em style=&quot;color:#7c3aed&quot;&gt;→ PM&lt;/em&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;jl&quot;&gt;交接状态&lt;/div&gt;
+  &lt;div class=&quot;pills&quot;&gt;&lt;div class=&quot;pill pm&quot;&gt;待 PM 澄清&lt;/div&gt;&lt;div class=&quot;pill pm&quot;&gt;PM Clarified&lt;/div&gt;&lt;div class=&quot;pill bd&quot;&gt;无需 PM&lt;/div&gt;&lt;div class=&quot;pill&quot;&gt;进行中&lt;/div&gt;&lt;div class=&quot;pill ac&quot;&gt;待验收&lt;/div&gt;&lt;div class=&quot;pill&quot;&gt;完成&lt;/div&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- decision funnel --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;funnel&quot;&gt;
+  &lt;h4&gt;决策漏斗 - &lt;span style=&quot;color:#c2410c&quot;&gt;Less Attention&lt;/span&gt;&lt;/h4&gt;
+  &lt;div id=&quot;frows&quot;&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- Human-on-the-loop --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;hum&quot;&gt;
+  &lt;div class=&quot;hwho&quot;&gt;&lt;svg width=&quot;16&quot; height=&quot;16&quot; viewBox=&quot;0 0 26 26&quot;&gt;&lt;circle cx=&quot;13&quot; cy=&quot;8&quot; r=&quot;5&quot; fill=&quot;#fff&quot;/&gt;&lt;path d=&quot;M3,25 C3,17 8,14 13,14 C18,14 23,17 23,25 Z&quot; fill=&quot;#fff&quot;/&gt;&lt;/svg&gt;&lt;b&gt;人只在这里&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;hzone&quot; style=&quot;left:140px;color:#7c3aed&quot;&gt;PM 环&lt;/div&gt;
+  &lt;div class=&quot;hzone&quot; style=&quot;left:582px;color:#2563eb&quot;&gt;BUILDER 环&lt;/div&gt;
+  &lt;div id=&quot;hq&quot;&gt;&lt;/div&gt;
+  &lt;div class=&quot;hdiv&quot;&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;div id=&quot;nodes&quot;&gt;&lt;/div&gt;
+
+&lt;!-- traces + eval --&gt;
+&lt;div class=&quot;trace&quot; id=&quot;tpm&quot;&gt;
+  &lt;h4&gt;PM Agent · Run Trace&lt;/h4&gt;
+  &lt;div class=&quot;chips&quot;&gt;&lt;span&gt;Triage 理由&lt;/span&gt;&lt;span&gt;澄清问答&lt;/span&gt;&lt;span&gt;PRD / 原型&lt;/span&gt;&lt;span&gt;Agent 评审&lt;/span&gt;&lt;span class=&quot;h&quot;&gt;Stakeholder 取舍&lt;/span&gt;&lt;span class=&quot;h&quot;&gt;批准与验收&lt;/span&gt;&lt;span&gt;全口径 token&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;pane&quot; id=&quot;eval&quot;&gt;
+  &lt;h4&gt;Eval&lt;/h4&gt;
+  &lt;div class=&quot;chips&quot;&gt;&lt;span&gt;Autonomous&lt;/span&gt;&lt;span&gt;Human Attention&lt;/span&gt;&lt;span&gt;Knowledge Health&lt;/span&gt;&lt;span&gt;Token Cost&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;trace&quot; id=&quot;tbd&quot;&gt;
+  &lt;h4&gt;Builder Agent · Run Trace&lt;/h4&gt;
+  &lt;div class=&quot;chips&quot;&gt;&lt;span&gt;计划&lt;/span&gt;&lt;span&gt;关键动作&lt;/span&gt;&lt;span&gt;决策与理由&lt;/span&gt;&lt;span&gt;检查结果&lt;/span&gt;&lt;span class=&quot;h&quot;&gt;人的回答与纠正&lt;/span&gt;&lt;span&gt;全口径 token&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- shared Brain --&gt;
+&lt;div id=&quot;brain&quot;&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 两边共用的领域知识&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bagent&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;Project / Domain Agent&lt;/div&gt;
+    &lt;div class=&quot;btags&quot;&gt;&lt;span&gt;范围&lt;/span&gt;&lt;span&gt;模式&lt;/span&gt;&lt;span&gt;并发&lt;/span&gt;&lt;span&gt;授权&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bdocs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;Markdown&lt;/div&gt;
+    &lt;div class=&quot;bgrid&quot;&gt;&lt;span&gt;AGENTS.md&lt;/span&gt;&lt;span&gt;BUSINESS.md&lt;/span&gt;&lt;span&gt;PRODUCT.md&lt;/span&gt;&lt;span&gt;TECH.md&lt;/span&gt;&lt;span&gt;IMPROVEMENT.md&lt;/span&gt;&lt;span&gt;PROJECT.md&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bdirs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;目录&lt;/div&gt;
+    &lt;div class=&quot;dgrid&quot;&gt;&lt;span&gt;specs/&lt;/span&gt;&lt;span&gt;skills/&lt;/span&gt;&lt;span&gt;gates/&lt;/span&gt;&lt;span&gt;assets/&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bonto&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;轻量 Ontology&lt;/div&gt;
+    &lt;div class=&quot;otags&quot;&gt;&lt;code&gt;principle&lt;/code&gt;&lt;code&gt;correction&lt;/code&gt;&lt;code&gt;decision&lt;/code&gt;&lt;code&gt;model&lt;/code&gt;&lt;code&gt;guideline&lt;/code&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;code&gt;process&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;olife&quot;&gt;新增 · 覆盖 · 撤回&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;div class=&quot;region&quot; style=&quot;left:286px;top:210px;width:560px;height:518px;background:#faf8ff;border-color:#ddd6fe&quot;&gt;&lt;span style=&quot;background:#7c3aed&quot;&gt;PM 侧&lt;/span&gt;&lt;/div&gt;
+&lt;div class=&quot;region&quot; style=&quot;left:872px;top:210px;width:712px;height:518px;background:#f5f9ff;border-color:#bfdbfe&quot;&gt;&lt;span style=&quot;background:#2563eb&quot;&gt;BUILDER 侧&lt;/span&gt;&lt;/div&gt;
+&lt;svg id=&quot;fills&quot; width=&quot;1600&quot; height=&quot;1080&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
+  &lt;circle cx=&quot;566&quot; cy=&quot;470&quot; r=&quot;205&quot; fill=&quot;#ede9fe&quot; opacity=&quot;.55&quot;/&gt;
+  &lt;ellipse cx=&quot;1266&quot; cy=&quot;490&quot; rx=&quot;250&quot; ry=&quot;222&quot; fill=&quot;none&quot; stroke=&quot;#c7d7f5&quot; stroke-width=&quot;2&quot; stroke-dasharray=&quot;6 5&quot;/&gt;
+  &lt;ellipse cx=&quot;1256&quot; cy=&quot;483&quot; rx=&quot;250&quot; ry=&quot;222&quot; fill=&quot;none&quot; stroke=&quot;#b6cdf3&quot; stroke-width=&quot;2&quot;/&gt;
+  &lt;ellipse cx=&quot;1246&quot; cy=&quot;476&quot; rx=&quot;250&quot; ry=&quot;222&quot; fill=&quot;#dbeafe&quot; opacity=&quot;.6&quot;/&gt;
+&lt;/svg&gt;
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
+  &lt;defs&gt;
+    &lt;marker id=&quot;mP&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#7c3aed&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mB&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#2563eb&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mJ&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#334155&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mH&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#c2410c&quot;/&gt;&lt;/marker&gt;
+  &lt;/defs&gt;
+  &lt;g id=&quot;g&quot;&gt;&lt;/g&gt;
+&lt;/svg&gt;
+
+&lt;/div&gt;&lt;/div&gt;
+&lt;script&gt;
+const $=s=&gt;document.querySelector(s);
+const el=(tag,cls,html,style)=&gt;{const e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;if(style)Object.assign(e.style,style);return e;};
+const NS=&#x27;http://www.w3.org/2000/svg&#x27;, G=$(&#x27;#g&#x27;);
+function path(d,stroke,marker,dash,w){const p=document.createElementNS(NS,&#x27;path&#x27;);p.setAttribute(&#x27;d&#x27;,d);p.setAttribute(&#x27;fill&#x27;,&#x27;none&#x27;);p.setAttribute(&#x27;stroke&#x27;,stroke);p.setAttribute(&#x27;stroke-width&#x27;,w||2);if(dash)p.setAttribute(&#x27;stroke-dasharray&#x27;,dash);if(marker)p.setAttribute(&#x27;marker-end&#x27;,`url(#${marker})`);G.appendChild(p);}
+function text(x,y,t,fill,anchor){const e=document.createElementNS(NS,&#x27;text&#x27;);e.setAttribute(&#x27;x&#x27;,x);e.setAttribute(&#x27;y&#x27;,y);e.setAttribute(&#x27;class&#x27;,&#x27;wl&#x27;);e.setAttribute(&#x27;fill&#x27;,fill);if(anchor)e.setAttribute(&#x27;text-anchor&#x27;,anchor);e.textContent=t;G.appendChild(e);}
+
+// ---------- decision funnel: each layer absorbs decisions, only judgment reaches a person ----------
+const FW=[228,204,180,156,132,108];
+[[&#x27;所有决策&#x27;,&#x27;#e5e7eb&#x27;,&#x27;#111827&#x27;],[&#x27;Brain 已有答案&#x27;,&#x27;#d5efe9&#x27;,&#x27;#0f766e&#x27;],[&#x27;确定性检查&#x27;,&#x27;#e2e8f0&#x27;,&#x27;#334155&#x27;],[&#x27;Agent 自决&#x27;,&#x27;#dbeafe&#x27;,&#x27;#1d4ed8&#x27;],[&#x27;人&#x27;,&#x27;#fde0cc&#x27;,&#x27;#c2410c&#x27;]].forEach(([t,bg,c],k)=&gt;{
+  const ins=(FW[k]-FW[k+1])/2;
+  $(&#x27;#frows&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;fr&#x27;,t,{width:FW[k]+&#x27;px&#x27;,background:bg,color:c,clipPath:`polygon(0 0,100% 0,calc(100% - ${ins}px) 100%,${ins}px 100%)`}));
+});
+
+// ---------- cycle geometry ----------
+const PMC={cx:566,cy:470,r:205,hw:62,hh:27,w:124};
+const BDC={cx:1246,cy:476,r:222,rx:250,hw:82,hh:28,w:164};   // rx: the Builder ring is a little wider than tall
+const at=(c,a,r)=&gt;({x:c.cx+(r||c.rx||c.r)*Math.cos(a*Math.PI/180), y:c.cy-(r||c.r)*Math.sin(a*Math.PI/180)});
+const pad=(c,a)=&gt;{const t=a*Math.PI/180, rx=c.rx||c.r;const ext=Math.abs(c.hw*Math.sin(t))+Math.abs(c.hh*Math.cos(t));const ds=Math.hypot(rx*Math.sin(t),c.r*Math.cos(t));return ext/ds*180/Math.PI+2;};
+// clockwise arc on screen from the node at angle a1 to the node at angle a2
+function arc(c,a1,a2,stroke,marker,dash){
+  if(a2&gt;=a1) a2-=360;
+  const s=a1-pad(c,a1), e=a2+pad(c,a2);
+  const p1=at(c,s), p2=at(c,e), large=(s-e)&gt;180?1:0;
+  path(`M${p1.x.toFixed(1)},${p1.y.toFixed(1)} A${c.rx||c.r},${c.r} 0 ${large} 1 ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`,stroke,marker,dash,2.5);
+}
+const N={};
+function node(id,c,a,k,t,s,extra){
+  const p=at(c,a); const n={x:p.x,y:p.y,a}; N[id]=n;
+  const hum=extra&amp;&amp;extra.hum!==undefined?extra.hum:extra&amp;&amp;[1,2,6].includes(extra.no);
+  const no=extra&amp;&amp;extra.no?`&lt;i class=&quot;sno${hum?&#x27; hum&#x27;:&#x27;&#x27;}&quot;&gt;${extra.no}&lt;/i&gt;`:&#x27;&#x27;;
+  const d=el(&#x27;div&#x27;,&#x27;nd &#x27;+k,`&lt;b&gt;${no}${t}&lt;/b&gt;&lt;span&gt;${s}&lt;/span&gt;`,{left:p.x+&#x27;px&#x27;,top:p.y+&#x27;px&#x27;,width:c.w+&#x27;px&#x27;});
+  if(extra&amp;&amp;extra.role) d.appendChild(el(&#x27;i&#x27;,&#x27;role&#x27;+(extra.b2?&#x27; b2&#x27;:&#x27;&#x27;),extra.role,extra.left?{left:&#x27;-8px&#x27;,right:&#x27;auto&#x27;}:null));
+  $(&#x27;#nodes&#x27;).appendChild(d);
+}
+
+// ---------- PM cycle: PM + PM Agent, own runs ----------
+// 7 stages, like the Builder cycle; orange = a person takes part
+const PA=[180,135,90,45,0,-45,-110];
+node(&#x27;p1&#x27;,PMC,PA[0],&#x27;&#x27;,&#x27;接 Intent&#x27;,&#x27;自动 Triage&#x27;,{no:1,hum:0});
+node(&#x27;p2&#x27;,PMC,PA[1],&#x27;h&#x27;,&#x27;澄清需求&#x27;,&#x27;基于 DDD&#x27;,{no:2,hum:1,role:&#x27;PM + Agent&#x27;});
+node(&#x27;p3&#x27;,PMC,PA[2],&#x27;&#x27;,&#x27;生成 PRD&#x27;,&#x27;PRD · Mockup&lt;br&gt;Prototype&#x27;,{no:3,hum:0});
+node(&#x27;p4&#x27;,PMC,PA[3],&#x27;&#x27;,&#x27;Agent 评审&#x27;,&#x27;对抗评审 PRD&#x27;,{no:4,hum:0});
+node(&#x27;p5&#x27;,PMC,PA[4],&#x27;h&#x27;,&#x27;对齐与评审&#x27;,&#x27;协调对齐&#x27;,{no:5,hum:1,role:&#x27;All stakeholders&#x27;});
+node(&#x27;p6&#x27;,PMC,PA[5],&#x27;h&#x27;,&#x27;定稿与批准&#x27;,&#x27;Finalize PRD&lt;br&gt;批准 → Jira&#x27;,{no:6,hum:1,role:&#x27;PM + Agent&#x27;});
+node(&#x27;p7&#x27;,PMC,PA[6],&#x27;h&#x27;,&#x27;结果验收&#x27;,&#x27;对照 ACs&#x27;,{no:7,hum:1,role:&#x27;PM + Agent&#x27;});
+for(let i=0;i&lt;5;i++) arc(PMC,PA[i],PA[i+1],&#x27;#7c3aed&#x27;,&#x27;mP&#x27;);
+arc(PMC,PA[5],PA[6],&#x27;#a78bfa&#x27;,null,&#x27;5 6&#x27;);
+arc(PMC,PA[6],PA[0],&#x27;#7c3aed&#x27;,&#x27;mP&#x27;);
+text(352,716,&#x27;上线与反馈：新的 Intent 回到 Jira&#x27;,&#x27;#7c3aed&#x27;,&#x27;start&#x27;);
+$(&#x27;#nodes&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;rc&#x27;,`&lt;b style=&quot;font-size:24px;color:#6d28d9&quot;&gt;PM 环&lt;/b&gt;&lt;em style=&quot;color:#6d28d9&quot;&gt;PM + PM Agent&lt;/em&gt;`,{left:&#x27;566px&#x27;,top:&#x27;470px&#x27;}));
+
+// ---------- Builder cycle: the unchanged pipeline, many runs at once ----------
+// the same eight stages as the Inside the Builder Loop and Pipeline Run pages
+const BA=[180,130,85,40,-5,-50,-95,-140];
+node(&#x27;b1&#x27;,BDC,BA[0],&#x27;bb h c&#x27;,&#x27;评估&#x27;,&#x27;Intent Evaluation&#x27;,{no:1,role:&#x27;按需问人&#x27;,b2:1});
+node(&#x27;b2&#x27;,BDC,BA[1],&#x27;bb h c&#x27;,&#x27;方案&#x27;,&#x27;Design-Spec&lt;br&gt;PM + Builder 评审&#x27;,{no:2,role:&#x27;按需问人&#x27;,b2:1});
+node(&#x27;b3&#x27;,BDC,BA[2],&#x27;bb&#x27;,&#x27;计划&#x27;,&#x27;任务 · 完成标准&#x27;,{no:3});
+node(&#x27;b4&#x27;,BDC,BA[3],&#x27;bb free&#x27;,&#x27;构建（并发 Runs）&#x27;,&#x27;Native Coding&#x27;,{no:4});
+node(&#x27;b5&#x27;,BDC,BA[4],&#x27;bb&#x27;,&#x27;评审&#x27;,&#x27;对抗评审 · 门禁&#x27;,{no:5});
+node(&#x27;b6&#x27;,BDC,BA[5],&#x27;bb&#x27;,&#x27;测试&#x27;,&#x27;在审过的树上&#x27;,{no:6,hum:0});
+node(&#x27;b7&#x27;,BDC,BA[6],&#x27;bb h c&#x27;,&#x27;交付&#x27;,&#x27;PR · 证据报告&#x27;,{no:7,hum:1,role:&#x27;Builder 按需审 PR&#x27;,b2:1,left:1});
+node(&#x27;b8&#x27;,BDC,BA[7],&#x27;bb refl&#x27;,&#x27;回写&#x27;,&#x27;Reflect&#x27;,{no:8,hum:0});
+for(let i=0;i&lt;8;i++) arc(BDC,BA[i],BA[(i+1)%8],i===7?&#x27;#93c5fd&#x27;:&#x27;#2563eb&#x27;,i===7?null:&#x27;mB&#x27;,i===7?&#x27;5 6&#x27;:null);
+// runs travelling round the cycle at the same time, in the gaps between stages; orange = about to wait at 2 方案 and 7 交付
+[[168],[156,1],[62],[20],[-25],[-73,1],[-118]].forEach(([a,w])=&gt;{
+  const p=at(BDC,a);
+  $(&#x27;#nodes&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;tok&#x27;+(w?&#x27; w&#x27;:&#x27;&#x27;),null,{left:p.x+&#x27;px&#x27;,top:p.y+&#x27;px&#x27;}));
+});
+$(&#x27;#nodes&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;rc&#x27;,`&lt;b style=&quot;font-size:28px;color:#1d4ed8&quot;&gt;Builder 环&lt;/b&gt;&lt;em style=&quot;color:#1d4ed8&quot;&gt;Builder Agent 自主 run&lt;/em&gt;&lt;span class=&quot;k&quot;&gt;并发：本机 ×N · 云端 ×N&lt;/span&gt;`,{left:&#x27;1246px&#x27;,top:&#x27;483px&#x27;}));
+
+// ---------- Human-on-the-loop points ----------
+const HQ=[
+  // PM ring: always (solid)
+  {x:492,w:132,cls:&#x27;box&#x27;,t:&#x27;2 澄清需求&#x27;,s:&#x27;PM 基于 DDD&#x27;},
+  {x:632,w:132,cls:&#x27;box&#x27;,t:&#x27;5 对齐与评审&#x27;,s:&#x27;All stakeholders&#x27;},
+  {x:772,w:140,cls:&#x27;box&#x27;,t:&#x27;6·7 批准 · 验收&#x27;,s:&#x27;PRD · 对照 ACs&#x27;},
+  // Builder ring: only when needed (dashed)
+  {x:926,w:172,cls:&#x27;dbox&#x27;,c:1,t:&#x27;1 评估&#x27;,s:&#x27;仍有歧义才问&#x27;},
+  {x:1106,w:168,cls:&#x27;dbox&#x27;,c:1,t:&#x27;2 Design-Spec 评审&#x27;,s:&#x27;&#x27;},
+  {x:1282,w:156,cls:&#x27;dbox&#x27;,c:1,t:&#x27;危险动作审批&#x27;,s:&#x27;对外 · 不可逆&#x27;},
+  {x:1446,w:130,cls:&#x27;dbox&#x27;,c:1,t:&#x27;7 交付&#x27;,s:&#x27;按需审 PR&#x27;},
+];
+HQ.forEach(q=&gt;$(&#x27;#hq&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;hq&#x27;+(q.c?&#x27; c&#x27;:&#x27;&#x27;)+(q.cls?&#x27; &#x27;+q.cls:&#x27;&#x27;),`&lt;b&gt;${q.t}&lt;/b&gt;${q.s?`&lt;span&gt;${q.s}&lt;/span&gt;`:&#x27;&#x27;}`,{left:(q.x-352)+&#x27;px&#x27;,width:q.w+&#x27;px&#x27;})));
+
+// ---------- entry: triage into the two cycles ----------
+path(&#x27;M145,268 L145,280&#x27;,&#x27;#334155&#x27;,&#x27;mJ&#x27;,null,2.2);
+// needs PM -&gt; PM cycle
+path(`M274,437 C292,437 272,${N.p1.y} ${N.p1.x-PMC.w/2-3},${N.p1.y}`,&#x27;#7c3aed&#x27;,&#x27;mP&#x27;,null,2.4);
+// no PM -&gt; straight into the Builder cycle, over the PM cycle
+path(`M274,397 C330,397 330,196 390,196 L880,196 C${N.b1.x-30},196 ${N.b1.x-30},230 ${N.b1.x-30},${N.b1.y-30}`,&#x27;#334155&#x27;,&#x27;mJ&#x27;,null,2.4);
+text(600,190,&#x27;无需 PM：Tickets · Bugs · Security findings · 确定性需求 → 直接进 Builder 环&#x27;,&#x27;#334155&#x27;,&#x27;middle&#x27;);
+// PM -&gt; Builder, through Jira
+path(`M${N.p6.x+PMC.w/2+2},${N.p6.y} C860,${N.p6.y} 880,${N.b1.y+12} ${N.b1.x-BDC.w/2-2},${N.b1.y+12}`,&#x27;#334155&#x27;,&#x27;mJ&#x27;,null,2.4);
+text(880,560,&#x27;PM Clarified Intent&#x27;,&#x27;#334155&#x27;,&#x27;start&#x27;);
+text(880,578,&#x27;PRD &amp; Mockup&#x27;,&#x27;#334155&#x27;,&#x27;start&#x27;);
+text(880,596,&#x27;经 Jira 交接&#x27;,&#x27;#6b7280&#x27;,&#x27;start&#x27;);
+// Builder results -&gt; PM acceptance, through Jira
+path(`M${N.b7.x-BDC.w/2-2},${N.b7.y+8} C1010,712 780,708 ${N.p7.x+PMC.w/2+2},${N.p7.y+8}`,&#x27;#2563eb&#x27;,&#x27;mB&#x27;,null,2.4);
+text(1000,723,&#x27;结果 + 证据报告 · 经 Jira 待验收&#x27;,&#x27;#2563eb&#x27;,&#x27;middle&#x27;);
+
+// ---------- each side keeps its own trace ----------
+path(&#x27;M334,729 L334,745&#x27;,&#x27;#7c3aed&#x27;,&#x27;mP&#x27;,null,2);
+path(&#x27;M1450,729 L1450,745&#x27;,&#x27;#2563eb&#x27;,&#x27;mB&#x27;,null,2);
+text(1458,741,&#x27;每个 run 都留 trace&#x27;,&#x27;#2563eb&#x27;,&#x27;start&#x27;);
+text(342,741,&#x27;每个 run 都留 trace&#x27;,&#x27;#7c3aed&#x27;,&#x27;start&#x27;);
+path(&#x27;M741,802 L762,802&#x27;,&#x27;#334155&#x27;,&#x27;mJ&#x27;,null,2);
+path(&#x27;M1084,802 L1063,802&#x27;,&#x27;#334155&#x27;,&#x27;mJ&#x27;,null,2);
+// ---------- knowledge with the shared Brain ----------
+path(&#x27;M752,868 L752,731&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;,null,2.2); text(758,742,&#x27;装载&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
+path(&#x27;M1072,868 L1072,731&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;,null,2.2); text(1078,742,&#x27;装载&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
+path(&#x27;M516,859 L516,868&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;,&#x27;4 3&#x27;,2.2);
+path(&#x27;M912,859 L912,868&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;,&#x27;4 3&#x27;,2.2);
+path(&#x27;M1334,859 L1334,868&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;,&#x27;4 3&#x27;,2.2);
+
+function fit(){const a=$(&#x27;#app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="builder" title="Inside the Builder Loop" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Inside the Builder Loop&lt;/title&gt;
+&lt;!-- Zoom-in on the Builder loop of 2026-11-05-dual-loop-autonomous-flow.html (the overall view).
+     Stages, human points, trace, Eval, funnel and Brain use the same words as that diagram. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#stage{position:fixed;inset:0}
+#app{position:absolute;left:0;top:0;width:1600px;height:1088px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px;gap:18px}
+.brand b{font-size:26px;font-weight:800;white-space:nowrap}
+.legend{margin-left:auto;display:flex;gap:20px;font-size:14px;color:#4b5563;white-space:nowrap;align-items:center}
+.legend i{display:inline-block;vertical-align:middle;margin-right:7px}
+.lg-exec{width:26px;height:0;border-top:2px solid #334155}
+.lg-know{width:26px;height:0;border-top:2.5px solid #0f766e}
+.lg-cond{width:26px;height:0;border-top:2px dashed #c2410c}
+.lg-dia{width:10px;height:10px;background:#c2410c;transform:rotate(45deg)}
+
+.pane{position:absolute;background:#fff;border:1px solid #e5e7eb;border-radius:14px}
+.pt{position:absolute;left:14px;top:11px;right:14px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.pt b{font-size:16px;font-weight:800}
+.pt .r{margin-left:auto}
+.no{display:inline-block;width:20px;height:20px;border-radius:50%;background:#111827;color:#fff;font:700 14px/20px Menlo,monospace;text-align:center}
+
+/* Intent entry: two kinds */
+#int{left:284px;top:72px;width:172px;height:134px;border:1.5px solid #111827}
+.ik{position:absolute;left:10px;right:10px;height:42px;border-radius:8px;padding:3px 9px;line-height:1.3;white-space:nowrap}
+.ik b{display:block;font-size:14px}
+.ik span{display:block;font-size:14px;color:#4b5563}
+.ik.pm{top:38px;background:#f5f3ff;border:1px solid #c4b5fd}.ik.pm b{color:#5b21b6}
+.ik.np{top:84px;background:#f1f5f9;border:1px solid #cbd5e1}
+
+/* ① Project Agent */
+#pa{left:284px;top:334px;width:172px;height:248px}
+.pa-list{position:absolute;left:14px;right:12px;top:50px}
+.pa-con{position:absolute;left:12px;right:12px;top:200px;display:flex;gap:6px}
+.pa-con span{flex:1;height:34px;border-radius:9px;background:#eff6ff;border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#1d4ed8;white-space:nowrap}
+.pa-row{padding:8px 0;border-top:1px solid #f0f1f4;font-size:14.5px;font-weight:700}
+
+/* ② funnel */
+#fun{left:16px;top:72px;width:256px;height:746px}
+.frow{position:absolute;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;white-space:nowrap}
+
+/* ② human band */
+#hum{left:480px;top:72px;width:1104px;height:124px;border:2px solid #f59e0b;background:#fffaf5}
+.who{position:absolute;left:10px;top:44px;width:92px;height:56px;border-radius:9px;background:#9a3412;color:#fff;display:flex;align-items:center;justify-content:center;gap:6px}
+.who b{font-size:14px}
+.solo{display:inline-flex;align-items:center;gap:5px;background:#c2410c;color:#fff;border-radius:11px;padding:1px 9px 1px 6px;font-size:14px;font-weight:700}
+.hbox{position:absolute;top:44px;height:56px;border:1.5px dashed #f59e0b;border-radius:9px;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.3;font-size:14px;font-weight:700;color:#9a3412}
+.hbox i{position:absolute;left:calc(50% - 5px);top:-6px;width:9px;height:9px;border:1.5px solid #c2410c;background:#fffaf5;transform:rotate(45deg)}
+.hbox.agent{border:1.5px solid #bfdbfe;background:#eff6ff;color:#1d4ed8}
+.hbox.agent small{font-size:14px;font-weight:600;color:#9a3412}
+.hbox span{white-space:nowrap;letter-spacing:-.2px}
+
+/* ④ execution */
+#exe{left:480px;top:208px;width:1104px;height:446px}
+.mchip{font-size:14px;font-weight:600;color:#334155;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:11px;padding:1px 9px}
+.sh em.hand{color:#7c3aed;font-weight:600;margin-top:3px}
+.colbg{position:absolute;top:40px;height:356px;border-left:1px dashed #e5e7eb}
+.colbg.free{background:repeating-linear-gradient(135deg,#f8fafc 0 6px,#f1f5f9 6px 12px);border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0}
+.colbg.refl{background:#effaf7;border-left:1px solid #ccebe4}
+.colbg.hum{background:#fff4e8;border-left:1.5px dashed #fdba74;border-right:1.5px dashed #fdba74}
+.sh{position:absolute;top:46px;padding:0 4px;text-align:center;line-height:1.3}
+.sh b{display:block;font-size:14px;white-space:nowrap}
+.sh b i{font-style:normal;display:inline-block;width:17px;height:17px;border-radius:50%;background:#f3f4f6;color:#374151;font:700 14px/17px Menlo,monospace;margin-right:4px;vertical-align:1px}
+.sh em{display:block;font-style:normal;font-size:14px;color:#9ca3af;margin-top:1px;white-space:nowrap}
+.sh.refl b{color:#0f766e}.sh.refl b i{background:#0f766e;color:#fff}
+.sh.hum b{color:#9a3412}.sh.hum b i{background:#c2410c;color:#fff}
+.sh.agent b{font-size:14px;letter-spacing:-.2px}
+.sh.two b{font-size:14px}
+.lbl{position:absolute;left:12px;top:48px;font-size:14px;font-weight:700;color:#111827}
+.grp{position:absolute;left:12px;font-size:14px;font-weight:700;white-space:nowrap;color:#111827}
+.lane{position:absolute;left:0;width:1104px;height:34px}
+.ll{position:absolute;left:12px;top:1px;width:88px;line-height:1.25;white-space:nowrap}
+.ll b{display:block;font-size:14px}
+.ll span{display:block;font-size:14px;color:#6b7280}
+.track{position:absolute;top:16px;height:0;border-top:2px solid #e5e7eb}
+.track.done{border-top:2.5px solid #334155}
+.track.skip{border-top:2px dashed #d1d5db}
+.dot{position:absolute;top:11px;width:12px;height:12px;border-radius:50%;margin-left:-6px}
+.dot.d{background:#334155}
+.dot.t{background:#fff;border:1.5px solid #cbd5e1;width:10px;height:10px;top:12px;margin-left:-5px}
+.dot.c{background:#fff;border:3.5px solid #334155;width:16px;height:16px;top:9px;margin-left:-8px}
+.dot.p{background:#c2410c;width:16px;height:16px;top:9px;margin-left:-8px;box-shadow:0 0 0 4px #fde7d6}
+.cap{position:absolute;top:8px;font-size:14px;white-space:nowrap;color:#4b5563;background:#fff;padding:0 4px}
+.cap.p{color:#c2410c;font-weight:600}
+.mini{position:absolute;height:6px}
+.mini .mt{position:absolute;top:2px;height:2px;background:#eef0f3}
+.mini .mf{position:absolute;top:1.5px;height:3px;background:#94a3b8;border-radius:2px}
+.mini .md{position:absolute;top:0;width:6px;height:6px;border-radius:50%;background:#334155;margin-left:-3px}
+.mini .md.p{background:#c2410c}
+.more{position:absolute;left:12px;font-size:14px;font-weight:700;color:#334155}
+.ends{position:absolute;top:404px;height:30px}
+.ends:before{content:&quot;&quot;;position:absolute;left:0;right:0;top:0;height:7px;border:2px solid #334155;border-bottom:none;border-radius:4px 4px 0 0}
+.ends.free:before{border:1.5px dashed #94a3b8;border-bottom:none}
+.ends span{position:absolute;left:0;right:0;top:10px;text-align:center;font-size:14px;font-weight:700;color:#111827;white-space:nowrap}
+.ends.free span{color:#64748b}
+.ends-l{position:absolute;left:12px;top:414px;width:88px;font-size:14px;font-weight:700;color:#111827}
+
+/* Run Trace */
+#trace{left:480px;top:670px;width:1104px;height:48px;border:1.5px solid #334155;border-left:6px solid #2563eb;background:#f8fafc;display:flex;align-items:center;gap:16px;padding:0 14px}
+.tr-t b{font-size:15px;font-weight:800;white-space:nowrap}
+.tr-items{display:flex;gap:6px;flex-wrap:nowrap}
+.tr-items span{font-size:14px;color:#1f2937;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:3px 7px;white-space:nowrap}
+.tr-items span.h{color:#9a3412;border-color:#fed7aa;background:#fffaf5}
+
+/* ② reflect */
+#ref{left:480px;top:734px;width:600px;height:84px;border-color:#99d8cb;background:#f4fbf9}
+#ref .pt b{color:#0f766e}
+.ritems{position:absolute;left:14px;right:14px;top:48px;display:flex;gap:14px}
+.ri{flex:1;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.ri b{font-size:14px;color:#0f3d3a}
+.ri code{font:600 14px Menlo,monospace;color:#0f766e;background:#dbf1ec;border-radius:3px;padding:1px 5px}
+
+/* ③ eval */
+#eva{left:1096px;top:734px;width:488px;height:84px;border:1.5px solid #334155;border-left:6px solid #334155;background:#eef2f6}
+#eva .pt{top:28px}
+.echips{position:absolute;left:96px;right:12px;top:8px;bottom:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px;align-content:center}
+.echips span{font-size:14px;font-weight:600;background:#fff;border:1px solid #cbd5e1;border-radius:7px;padding:3px 8px;white-space:nowrap}
+
+/* ---- shared Brain (same as the overall diagram) ---- */
+#brain{position:absolute;left:16px;top:842px;width:1568px;height:182px;background:#0b3b37;border-radius:16px;color:#d5ece7}
+.bt{position:absolute;left:28px;top:0;bottom:0;width:240px;display:flex;flex-direction:column;justify-content:center}
+.bt b{font-size:28px;font-weight:800;color:#fff}
+.bt em{font-style:normal;font-size:14px;color:#7ee0cf;margin-top:4px}
+.bh{font-size:14px;letter-spacing:1px;font-weight:700;color:#7ee0cf;margin-bottom:12px;white-space:nowrap}
+.bagent{position:absolute;left:286px;top:28px;width:272px;height:126px;border:1.5px solid #3aa596;border-radius:12px;background:#124a45;padding:18px 18px}
+.bagent .bh{font-size:17px;letter-spacing:0;color:#fff;margin-bottom:16px}
+.btags{display:flex;gap:8px}
+.btags span{font-size:14px;color:#0b3b37;background:#7ee0cf;border-radius:14px;padding:3px 11px;font-weight:600;white-space:nowrap}
+.bdocs{position:absolute;left:580px;top:30px;width:456px}
+.bgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.bgrid span{font:700 14px Menlo,monospace;color:#fff;background:#124a45;border-radius:7px 11px 7px 7px;padding:9px 10px;white-space:nowrap}
+.bdirs{position:absolute;left:1056px;top:30px;width:196px}
+.dgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.dgrid span{position:relative;font:700 14px Menlo,monospace;color:#a7f3e4;border:1.5px dashed #3aa596;border-radius:3px 9px 9px 9px;padding:8px 10px;white-space:nowrap}
+.dgrid span:before{content:&quot;&quot;;position:absolute;left:-1.5px;top:-7px;width:26px;height:6px;border:1.5px dashed #3aa596;border-bottom:none;border-radius:4px 4px 0 0}
+.bonto{position:absolute;left:1270px;top:30px;right:24px;padding-left:22px;border-left:1px solid #1f5b55}
+.otags{display:flex;flex-wrap:wrap;gap:6px}
+.otags code{font:600 14px Menlo,monospace;color:#0b3b37;background:#7ee0cf;border-radius:4px;padding:2px 6px}
+.olife{margin-top:12px;font-size:14px;color:#fff;font-weight:600}
+
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:1040px;pointer-events:none}
+.wl{font-size:14px;fill:#0f766e;font-weight:600}
+
+/* ---------- demo ---------- */
+#content{position:absolute;left:0;top:48px;width:1600px;height:1040px}
+#ctrl{position:absolute;left:0;top:60px;width:1600px;height:48px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;padding:0 16px;z-index:5}
+#chips{display:flex;gap:4px}
+.chip{height:30px;padding:0 10px 0 4px;border-radius:15px;border:1px solid #e5e7eb;background:#fff;font-size:14px;color:#4b5563;display:flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap}
+.chip i{font-style:normal;width:21px;height:21px;border-radius:50%;background:#f3f4f6;color:#4b5563;font:700 14px/21px Menlo,monospace;text-align:center}
+.chip:hover{border-color:#0f766e}
+.chip.done i{background:#334155;color:#fff}
+.chip.cur{border-color:#0f766e;color:#0f3d3a;background:#effaf7;box-shadow:0 0 0 3px rgba(15,118,110,.15)}
+.chip.cur i{background:#0f766e;color:#fff}
+#cap{flex:1;min-width:0;font-size:14px;color:#111827;line-height:1.4;padding:0 10px;font-weight:500}
+#cap b{color:#0f766e;margin-right:6px}
+.cbtns{display:flex;gap:6px}
+.cb{height:32px;padding:0 12px;border-radius:9px;border:1px solid #d1d5db;background:#fff;font:600 14px &quot;PingFang SC&quot;,sans-serif;color:#374151;cursor:pointer;white-space:nowrap}
+.cb:hover{border-color:#0f766e;color:#0f766e}
+.cb.pri{background:#0f766e;border-color:#0f766e;color:#fff}
+.cb.on{background:#effaf7;border-color:#0f766e;color:#0f766e}
+#prog{position:absolute;left:0;bottom:-1px;height:2px;background:#0f766e;width:0}
+
+.blk{transition:opacity .45s,filter .45s,box-shadow .45s}
+#app.demo .blk:not(.on){opacity:.14;filter:saturate(.2)}
+#app.demo .blk.on{box-shadow:0 0 0 3px rgba(15,118,110,.28),0 10px 28px rgba(15,23,42,.10)}
+#app.demo #hum.on{box-shadow:0 0 0 4px rgba(194,65,12,.25),0 10px 28px rgba(15,23,42,.10)}
+#wires .w{transition:opacity .45s}
+#app.demo #wires .w:not(.on){opacity:.06}
+#app.demo #wires .w.on path.solid{stroke-dasharray:8 5;animation:march .7s linear infinite}
+#app.demo #wires .w.on path.dash{animation:march .7s linear infinite}
+@keyframes march{to{stroke-dashoffset:-13}}
+.dot,.track{transition:all .5s}
+.mini .mf{transition:width .7s ease}
+.mini .md{transition:left .7s ease,background .3s}
+.dot.p{animation:wait 1.2s ease-in-out infinite}
+@keyframes wait{50%{box-shadow:0 0 0 8px rgba(194,65,12,.18)}}
+#app.play-fun .frow{animation:frIn .55s both}
+#app.play-fun .frow:nth-child(1){animation-delay:.1s}
+#app.play-fun .frow:nth-child(2){animation-delay:.7s}
+#app.play-fun .frow:nth-child(3){animation-delay:1.3s}
+#app.play-fun .frow:nth-child(4){animation-delay:1.9s}
+#app.play-fun .frow:nth-child(5){animation-delay:2.5s}
+@keyframes frIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+#app.pulse-hum .hbox i{animation:dia 1s ease-in-out infinite}
+#app.pulse-hum .who{animation:whoP 1.2s ease-in-out infinite}
+@keyframes dia{50%{transform:rotate(45deg) scale(1.7)}}
+@keyframes whoP{50%{box-shadow:0 0 0 6px rgba(194,65,12,.22)}}
+#app.pulse-files .bgrid span{animation:docG 1.3s ease-in-out infinite}
+#app.pulse-onto .otags code,#app.pulse-onto .ri code{animation:codeG 1.3s ease-in-out infinite}
+@keyframes docG{50%{background:#1f6f66}}
+@keyframes codeG{50%{filter:brightness(1.35)}}
+#app.pulse-trace .tr-items span{animation:trP 1.2s ease-in-out infinite}
+@keyframes trP{50%{transform:translateY(-3px);box-shadow:0 3px 8px rgba(15,23,42,.12)}}
+#app.pulse-eval .echips span{animation:eqG 1.4s ease-in-out infinite}
+@keyframes eqG{50%{color:#0f766e}}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;stage&quot;&gt;&lt;div id=&quot;app&quot;&gt;
+
+&lt;header&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Inside the &lt;span style=&quot;color:#c2410c&quot;&gt;Builder Loop&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;legend&quot;&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-exec&quot;&gt;&lt;/i&gt;执行流&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-know&quot;&gt;&lt;/i&gt;知识读写&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-dia&quot;&gt;&lt;/i&gt;人的判断点&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-cond&quot;&gt;&lt;/i&gt;按需触发&lt;/span&gt;
+  &lt;/div&gt;
+&lt;/header&gt;
+
+&lt;div id=&quot;ctrl&quot;&gt;
+  &lt;button class=&quot;cb&quot; id=&quot;bOver&quot;&gt;全景&lt;/button&gt;
+  &lt;div id=&quot;chips&quot;&gt;&lt;/div&gt;
+  &lt;div id=&quot;cap&quot;&gt;&lt;/div&gt;
+  &lt;div class=&quot;cbtns&quot;&gt;&lt;button class=&quot;cb&quot; id=&quot;bPrev&quot; title=&quot;上一步 ←&quot;&gt;◀&lt;/button&gt;&lt;button class=&quot;cb&quot; id=&quot;bNext&quot; title=&quot;下一步 →&quot;&gt;▶&lt;/button&gt;&lt;button class=&quot;cb pri&quot; id=&quot;bPlay&quot;&gt;▶ 自动演示&lt;/button&gt;&lt;/div&gt;
+  &lt;div id=&quot;prog&quot;&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;div id=&quot;content&quot;&gt;
+
+&lt;!-- ② Decision funnel --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;fun&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;2&lt;/span&gt;&lt;b&gt;决策漏斗 - &lt;span style=&quot;color:#c2410c&quot;&gt;Less Attention&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div id=&quot;frows&quot;&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- Intent entry: two kinds, both through Jira / Taskei --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;int&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;b&gt;Intent 入口&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;ik pm&quot;&gt;&lt;b&gt;PM Clarified Intent&lt;/b&gt;&lt;span&gt;PRD &amp;amp; Mockup&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;ik np&quot;&gt;&lt;b&gt;无需 PM · 确定性需求&lt;/b&gt;&lt;span&gt;Bug · 安全 · Ticket&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ① Project Agent --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;pa&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;1&lt;/span&gt;&lt;b&gt;Project Agent&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;pa-list&quot;&gt;&lt;div class=&quot;pa-row&quot;&gt;范围&lt;/div&gt;&lt;div class=&quot;pa-row&quot;&gt;模式&lt;/div&gt;&lt;div class=&quot;pa-row&quot;&gt;授权&lt;/div&gt;&lt;div class=&quot;pa-row&quot;&gt;并发&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;pa-con&quot;&gt;&lt;span&gt;本机 ×N&lt;/span&gt;&lt;span&gt;云端 ×N&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ② Human-on-the-loop --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;hum&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;2&lt;/span&gt;&lt;b style=&quot;color:#9a3412&quot;&gt;Human-on-the-loop&lt;/b&gt;&lt;span class=&quot;solo&quot;&gt;&lt;svg width=&quot;14&quot; height=&quot;14&quot; viewBox=&quot;0 0 26 26&quot;&gt;&lt;circle cx=&quot;13&quot; cy=&quot;8&quot; r=&quot;5&quot; fill=&quot;#fff&quot;/&gt;&lt;path d=&quot;M3,25 C3,17 8,14 13,14 C18,14 23,17 23,25 Z&quot; fill=&quot;#fff&quot;/&gt;&lt;/svg&gt;人只在这里 · 全部按需&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;who&quot;&gt;&lt;svg width=&quot;18&quot; height=&quot;18&quot; viewBox=&quot;0 0 26 26&quot;&gt;&lt;circle cx=&quot;13&quot; cy=&quot;8&quot; r=&quot;5&quot; fill=&quot;#fff&quot;/&gt;&lt;path d=&quot;M3,25 C3,17 8,14 13,14 C18,14 23,17 23,25 Z&quot; fill=&quot;#fff&quot;/&gt;&lt;/svg&gt;&lt;b&gt;Builder&lt;/b&gt;&lt;/div&gt;
+  &lt;div id=&quot;hpoints&quot;&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ④ Execution --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;exe&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;4&lt;/span&gt;&lt;b&gt;执行编排&lt;/b&gt;&lt;span class=&quot;mchip&quot; style=&quot;position:absolute;left:430px&quot;&gt;Pipeline Run&lt;/span&gt;&lt;span class=&quot;mchip&quot; style=&quot;position:absolute;left:576px&quot;&gt;Native Run&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;lbl&quot;&gt;阶段&lt;/div&gt;
+  &lt;div id=&quot;cols&quot;&gt;&lt;/div&gt;
+  &lt;div id=&quot;lanes&quot;&gt;&lt;/div&gt;
+  &lt;div class=&quot;ends-l&quot;&gt;只管两头&lt;/div&gt;
+  &lt;div id=&quot;ends&quot;&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- Run Trace --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;trace&quot;&gt;
+  &lt;div class=&quot;tr-t&quot;&gt;&lt;b&gt;Builder Agent · Run Trace&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;tr-items&quot;&gt;&lt;span&gt;计划&lt;/span&gt;&lt;span&gt;关键动作&lt;/span&gt;&lt;span&gt;决策与理由&lt;/span&gt;&lt;span&gt;检查结果&lt;/span&gt;&lt;span class=&quot;h&quot;&gt;人的回答与纠正&lt;/span&gt;&lt;span&gt;全口径 token&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ② Reflect --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;ref&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;2&lt;/span&gt;&lt;b&gt;Reflect 闭环&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;ritems&quot;&gt;
+    &lt;div class=&quot;ri&quot;&gt;&lt;b&gt;关键决策&lt;/b&gt;&lt;code&gt;decision&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;ri&quot;&gt;&lt;b&gt;经验教训&lt;/b&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;ri&quot;&gt;&lt;b&gt;纠正&lt;/b&gt;&lt;code&gt;correction&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;ri&quot;&gt;&lt;b&gt;缺口&lt;/b&gt;&lt;code&gt;→ 下一个 run&lt;/code&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ③ Eval --&gt;
+&lt;div class=&quot;pane blk&quot; id=&quot;eva&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;3&lt;/span&gt;&lt;b&gt;Eval&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;echips&quot;&gt;&lt;span&gt;Autonomous&lt;/span&gt;&lt;span&gt;Human Attention&lt;/span&gt;&lt;span&gt;Knowledge Health&lt;/span&gt;&lt;span&gt;Token Cost&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- shared Brain (same as the overall diagram) --&gt;
+&lt;div id=&quot;brain&quot; class=&quot;blk&quot;&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 两边共用的领域知识&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bagent&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;Project / Domain Agent&lt;/div&gt;
+    &lt;div class=&quot;btags&quot;&gt;&lt;span&gt;范围&lt;/span&gt;&lt;span&gt;模式&lt;/span&gt;&lt;span&gt;并发&lt;/span&gt;&lt;span&gt;授权&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bdocs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;Markdown&lt;/div&gt;
+    &lt;div class=&quot;bgrid&quot;&gt;&lt;span&gt;AGENTS.md&lt;/span&gt;&lt;span&gt;BUSINESS.md&lt;/span&gt;&lt;span&gt;PRODUCT.md&lt;/span&gt;&lt;span&gt;TECH.md&lt;/span&gt;&lt;span&gt;IMPROVEMENT.md&lt;/span&gt;&lt;span&gt;PROJECT.md&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bdirs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;目录&lt;/div&gt;
+    &lt;div class=&quot;dgrid&quot;&gt;&lt;span&gt;specs/&lt;/span&gt;&lt;span&gt;skills/&lt;/span&gt;&lt;span&gt;gates/&lt;/span&gt;&lt;span&gt;assets/&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bonto&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;轻量 Ontology&lt;/div&gt;
+    &lt;div class=&quot;otags&quot;&gt;&lt;code&gt;principle&lt;/code&gt;&lt;code&gt;correction&lt;/code&gt;&lt;code&gt;decision&lt;/code&gt;&lt;code&gt;model&lt;/code&gt;&lt;code&gt;guideline&lt;/code&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;code&gt;process&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;olife&quot;&gt;新增 · 覆盖 · 撤回&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1040&quot;&gt;
+  &lt;defs&gt;
+    &lt;marker id=&quot;aK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;aE&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#334155&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;aH&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#c2410c&quot;/&gt;&lt;/marker&gt;
+  &lt;/defs&gt;
+  &lt;g id=&quot;wireg&quot;&gt;&lt;/g&gt;
+&lt;/svg&gt;
+
+&lt;/div&gt;
+&lt;/div&gt;&lt;/div&gt;
+&lt;script&gt;
+// ---------- geometry (stage px) ----------
+const EX=480, EY=208;              // execution pane origin
+const C0=120, CW=121;               // first stage column x (pane-relative), column width
+const cx=i=&gt;EX+C0+CW*i+CW/2;        // stage column centre, absolute
+const rcx=i=&gt;C0+CW*i+CW/2;          // stage column centre, pane-relative
+const $=s=&gt;document.querySelector(s);
+const el=(tag,cls,html,style)=&gt;{const e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;if(style)Object.assign(e.style,style);return e;};
+
+// ---------- ② funnel: same layers as the overall diagram ----------
+const W=[240,216,192,168,144,120], RH=120, RG=14, RT=56, PANE=256;
+[[&#x27;所有决策&#x27;,&#x27;#f3f4f6&#x27;,&#x27;#111827&#x27;],[&#x27;Brain 已有答案&#x27;,&#x27;#dbf1ec&#x27;,&#x27;#0f766e&#x27;],[&#x27;确定性检查&#x27;,&#x27;#e8ecf2&#x27;,&#x27;#334155&#x27;],[&#x27;Agent 自决&#x27;,&#x27;#dbeafe&#x27;,&#x27;#1d4ed8&#x27;],[&#x27;人&#x27;,&#x27;#fde4d0&#x27;,&#x27;#c2410c&#x27;]].forEach(([t,bg,c],k)=&gt;{
+  const wt=W[k], wb=W[k+1], ins=(wt-wb)/2;
+  $(&#x27;#frows&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;frow&#x27;,t,{left:((PANE-wt)/2)+&#x27;px&#x27;,top:(RT+k*(RH+RG))+&#x27;px&#x27;,width:wt+&#x27;px&#x27;,height:RH+&#x27;px&#x27;,background:bg,color:c,
+    clipPath:`polygon(0 0,100% 0,calc(100% - ${ins}px) 100%,${ins}px 100%)`}));
+});
+
+// ---------- ④ stage columns: the same eight stages as the Pipeline Run page ----------
+// 1, 2, 7 = a person may take part (only when needed)
+const stages=[
+  [&#x27;评估&#x27;,&#x27;EVALUATE&#x27;],
+  [&#x27;方案&#x27;,&#x27;THINK&#x27;],
+  [&#x27;计划&#x27;,&#x27;PLAN&#x27;],
+  [&#x27;构建&#x27;,&#x27;Native Coding&#x27;],
+  [&#x27;评审&#x27;,&#x27;REVIEW&#x27;],
+  [&#x27;测试&#x27;,&#x27;TEST&#x27;],
+  [&#x27;交付&#x27;,&#x27;结果 → Jira&lt;br&gt;待 PM 验收&#x27;,&#x27;hand&#x27;],
+  [&#x27;回写&#x27;,&#x27;REFLECT&#x27;],
+];
+stages.forEach((s,i)=&gt;{
+  const x=C0+CW*i, refl=i===7, hum=[0,1,6].includes(i);
+  $(&#x27;#cols&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;colbg&#x27;+(refl?&#x27; refl&#x27;:&#x27;&#x27;)+(i===3?&#x27; free&#x27;:&#x27;&#x27;)+(hum?&#x27; hum&#x27;:&#x27;&#x27;),null,{left:x+&#x27;px&#x27;,width:CW+&#x27;px&#x27;}));
+  $(&#x27;#cols&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;sh&#x27;+(refl?&#x27; refl&#x27;:&#x27;&#x27;)+(hum?&#x27; hum&#x27;:&#x27;&#x27;),`&lt;b&gt;&lt;i&gt;${i+1}&lt;/i&gt;${s[0]}&lt;/b&gt;${s[1]?`&lt;em${s[2]?` class=&quot;${s[2]}&quot;`:&#x27;&#x27;}&gt;${s[1]}&lt;/em&gt;`:&#x27;&#x27;}`,{left:x+&#x27;px&#x27;,width:CW+&#x27;px&#x27;}));
+});
+
+// ---------- ④ the pipeline owns only the two ends ----------
+[[0,3,&#x27;&#x27;,&#x27;流程管&#x27;],[3,4,&#x27; free&#x27;,&#x27;不管&#x27;],[4,8,&#x27;&#x27;,&#x27;流程管&#x27;]].forEach(([a,b,f,t])=&gt;{
+  $(&#x27;#ends&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;ends&#x27;+f,`&lt;span&gt;${t}&lt;/span&gt;`,{left:(C0+CW*a+4)+&#x27;px&#x27;,width:(CW*(b-a)-8)+&#x27;px&#x27;}));
+});
+
+// ---------- ① ④ concurrent runs ----------
+// per stage: d=done, c=current, p=waiting on a person, t=to do, s=skipped by profile, n=not in this mode
+const LANES=[
+  {top:130,name:&#x27;run A&#x27;,tag:&#x27;Pipeline · full&#x27;},
+  {top:166,name:&#x27;run B&#x27;,tag:&#x27;Native Run&#x27;},
+  {top:270,name:&#x27;run C&#x27;,tag:&#x27;Pipeline · full&#x27;},
+  {top:306,name:&#x27;run D&#x27;,tag:&#x27;Pipeline · trivial&#x27;},
+];
+// lane state for each demo step (0 = overview)
+const LS=[
+  [&#x27;ddddcttt&#x27;,&#x27;nnndddct&#x27;,&#x27;dptttttt&#x27;,&#x27;dsdctttt&#x27;],
+  [&#x27;tttttttt&#x27;,&#x27;nnnttttt&#x27;,&#x27;tttttttt&#x27;,&#x27;tstttttt&#x27;],
+  [&#x27;tttttttt&#x27;,&#x27;nnnttttt&#x27;,&#x27;tttttttt&#x27;,&#x27;tstttttt&#x27;],
+  [&#x27;dctttttt&#x27;,&#x27;nnnctttt&#x27;,&#x27;cttttttt&#x27;,&#x27;cstttttt&#x27;],
+  [&#x27;dddctttt&#x27;,&#x27;nnndcttt&#x27;,&#x27;dctttttt&#x27;,&#x27;dscttttt&#x27;],
+  [&#x27;ddddcttt&#x27;,&#x27;nnndddct&#x27;,&#x27;dptttttt&#x27;,&#x27;dsdctttt&#x27;],
+  [&#x27;ddddddct&#x27;,&#x27;nnnddddc&#x27;,&#x27;ddcttttt&#x27;,&#x27;dsddcttt&#x27;],
+  [&#x27;dddddddc&#x27;,&#x27;nnnddddd&#x27;,&#x27;dddctttt&#x27;,&#x27;dsddddct&#x27;],
+  [&#x27;dddddddc&#x27;,&#x27;nnnddddd&#x27;,&#x27;dddctttt&#x27;,&#x27;dsddddct&#x27;],
+  [&#x27;dddddddd&#x27;,&#x27;nnnddddd&#x27;,&#x27;ddddcttt&#x27;,&#x27;dsdddddd&#x27;],
+];
+const LC={
+  0:{2:[1,&#x27;⏸ 等人&#x27;,&#x27;p&#x27;],3:[3,&#x27;无人值守&#x27;,&#x27;&#x27;]},
+  1:{0:[0,&#x27;排队中&#x27;,&#x27;&#x27;]},
+  2:{0:[0,&#x27;装载中&#x27;,&#x27;&#x27;]},
+  3:{3:[0,&#x27;无人值守&#x27;,&#x27;&#x27;]},
+  4:{3:[2,&#x27;无人值守&#x27;,&#x27;&#x27;]},
+  5:{2:[1,&#x27;⏸ 等人看 spec&#x27;,&#x27;p&#x27;],3:[3,&#x27;无人值守&#x27;,&#x27;&#x27;]},
+  6:{2:[2,&#x27;↻ 已恢复&#x27;,&#x27;&#x27;],0:[6,&#x27;待 PM 验收&#x27;,&#x27;p&#x27;]},
+  7:{3:[6,&#x27;无人值守&#x27;,&#x27;&#x27;]},
+  8:{3:[6,&#x27;无人值守&#x27;,&#x27;&#x27;]},
+  9:{},
+};
+[{top:112,t:&#x27;本机 Local&#x27;},{top:252,t:&#x27;云端 Cloud&#x27;}].forEach(g=&gt;$(&#x27;#lanes&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;grp&#x27;,g.t,{top:g.top+&#x27;px&#x27;})));
+const laneBox=el(&#x27;div&#x27;,null,null,{position:&#x27;absolute&#x27;,left:&#x27;0&#x27;,top:&#x27;0&#x27;});
+$(&#x27;#lanes&#x27;).appendChild(laneBox);
+function renderLanes(step){
+  laneBox.innerHTML=&#x27;&#x27;;
+  LANES.forEach((L,n)=&gt;{
+    const lane=el(&#x27;div&#x27;,&#x27;lane&#x27;,null,{top:L.top+&#x27;px&#x27;});
+    lane.appendChild(el(&#x27;div&#x27;,&#x27;ll&#x27;,`&lt;b&gt;${L.name}&lt;/b&gt;&lt;span&gt;${L.tag}&lt;/span&gt;`));
+    const st=LS[step][n].split(&#x27;&#x27;);
+    for(let i=0;i&lt;7;i++){
+      const a=st[i], b=st[i+1];
+      if(a===&#x27;n&#x27;) continue;
+      let cls=&#x27;track&#x27;;
+      if(a===&#x27;d&#x27;&amp;&amp;&#x27;dcp&#x27;.includes(b)) cls+=&#x27; done&#x27;;
+      if(a===&#x27;s&#x27;||b===&#x27;s&#x27;) cls=&#x27;track skip&#x27;;
+      lane.appendChild(el(&#x27;div&#x27;,cls,null,{left:rcx(i)+&#x27;px&#x27;,width:CW+&#x27;px&#x27;}));
+    }
+    st.forEach((v,i)=&gt;{ if(v!==&#x27;n&#x27;&amp;&amp;v!==&#x27;s&#x27;) lane.appendChild(el(&#x27;div&#x27;,&#x27;dot &#x27;+v,null,{left:rcx(i)+&#x27;px&#x27;})); });
+    const c=(LC[step]||{})[n];
+    if(c&amp;&amp;c[1]) lane.appendChild(el(&#x27;div&#x27;,&#x27;cap &#x27;+c[2],c[1],{left:(rcx(c[0])+14)+&#x27;px&#x27;}));
+    laneBox.appendChild(lane);
+  });
+}
+// many more runs, drawn compact: [start stage, current stage at overview, waiting-on-person?]
+const MINI_OFF=[0,-9,-9,-3,-2,0,1,2,2,3];
+const miniRows=[];
+function minis(top,list,label){
+  $(&#x27;#lanes&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;more&#x27;,label,{top:(top-2)+&#x27;px&#x27;}));
+  list.forEach((m,k)=&gt;{
+    const [s0,c,p]=m, y=top+k*6;
+    const row=el(&#x27;div&#x27;,&#x27;mini&#x27;,null,{left:&#x27;0px&#x27;,top:y+&#x27;px&#x27;,width:&#x27;1104px&#x27;});
+    row.appendChild(el(&#x27;div&#x27;,&#x27;mt&#x27;,null,{left:rcx(s0)+&#x27;px&#x27;,width:(rcx(7)-rcx(s0))+&#x27;px&#x27;}));
+    const mf=el(&#x27;div&#x27;,&#x27;mf&#x27;,null,{left:rcx(s0)+&#x27;px&#x27;,width:&#x27;0px&#x27;}), md=el(&#x27;div&#x27;,&#x27;md&#x27;,null,{left:rcx(s0)+&#x27;px&#x27;});
+    row.appendChild(mf); row.appendChild(md);
+    miniRows.push({s0,c,p,mf,md});
+    $(&#x27;#lanes&#x27;).appendChild(row);
+  });
+}
+minis(206,[[0,2],[0,6],[3,4],[0,1],[0,7]],&#x27;+5 个 run&#x27;);
+minis(350,[[0,3],[0,0,1],[0,4],[3,6],[0,2],[0,5],[0,7],[0,1]],&#x27;+8 个 run&#x27;);
+function updateMinis(step){
+  miniRows.forEach(m=&gt;{
+    const c=Math.max(m.s0,Math.min(7,m.c+MINI_OFF[step]));
+    m.mf.style.width=(rcx(c)-rcx(m.s0))+&#x27;px&#x27;;
+    m.md.style.left=rcx(c)+&#x27;px&#x27;;
+    m.md.className=&#x27;md&#x27;+(m.p&amp;&amp;(step===0||step===5)?&#x27; p&#x27;:&#x27;&#x27;);
+  });
+}
+
+// ---------- ② human points: the Builder ring&#x27;s, all only when needed ----------
+[
+  {a:0,b:1,t:&#x27;需求歧义&#x27;},
+  {a:1,b:2,t:&#x27;不可逆 /&lt;br&gt;高风险设计&#x27;},
+  {a:2,b:6,t:&#x27;全部交给 Agent&lt;br&gt;&lt;small&gt;◇ 危险动作才审批&lt;/small&gt;&#x27;,agent:1},
+  {a:6,b:7,t:&#x27;交付&lt;br&gt;按需审 PR&#x27;},
+].forEach(p=&gt;$(&#x27;#hpoints&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;hbox&#x27;+(p.agent?&#x27; agent&#x27;:&#x27;&#x27;),`${p.agent?&#x27;&#x27;:&#x27;&lt;i&gt;&lt;/i&gt;&#x27;}&lt;span&gt;${p.t}&lt;/span&gt;`,{left:(C0+CW*p.a+4)+&#x27;px&#x27;,width:(CW*(p.b-p.a)-8)+&#x27;px&#x27;})));
+
+// ---------- wires (each tagged with a key the demo can light up) ----------
+const NS=&#x27;http://www.w3.org/2000/svg&#x27;, G=$(&#x27;#wireg&#x27;), WG={};
+function grp(k){if(!WG[k]){const g=document.createElementNS(NS,&#x27;g&#x27;);g.setAttribute(&#x27;class&#x27;,&#x27;w&#x27;);g.dataset.k=k;G.appendChild(g);WG[k]=g;}return WG[k];}
+function path(k,d,stroke,marker,dash,w){const p=document.createElementNS(NS,&#x27;path&#x27;);p.setAttribute(&#x27;d&#x27;,d);p.setAttribute(&#x27;fill&#x27;,&#x27;none&#x27;);p.setAttribute(&#x27;stroke&#x27;,stroke);p.setAttribute(&#x27;stroke-width&#x27;,w||2);p.setAttribute(&#x27;class&#x27;,dash?&#x27;dash&#x27;:&#x27;solid&#x27;);if(dash)p.setAttribute(&#x27;stroke-dasharray&#x27;,dash);if(marker)p.setAttribute(&#x27;marker-end&#x27;,`url(#${marker})`);grp(k).appendChild(p);}
+function text(k,x,y,t,cls){const e=document.createElementNS(NS,&#x27;text&#x27;);e.setAttribute(&#x27;x&#x27;,x);e.setAttribute(&#x27;y&#x27;,y);e.setAttribute(&#x27;class&#x27;,cls);e.textContent=t;grp(k).appendChild(e);}
+// human points drop into their stage
+[0,1,6].forEach(i=&gt;path(&#x27;h&#x27;+i,`M${cx(i)},196 L${cx(i)},246`,&#x27;#c2410c&#x27;,&#x27;aH&#x27;,&#x27;4 3&#x27;,1.6));
+// Intent -&gt; Project Agent
+path(&#x27;int&#x27;,`M370,206 L370,332`,&#x27;#334155&#x27;,&#x27;aE&#x27;,null,2);
+// Project Agent dispatches to local + cloud groups
+const ly=EY+180, cy2=EY+320;
+path(&#x27;disp&#x27;,`M457,${(ly+cy2)/2} L467,${(ly+cy2)/2}`,&#x27;#334155&#x27;,null,null,2);
+path(&#x27;disp&#x27;,`M467,${ly} L467,${cy2}`,&#x27;#334155&#x27;,null,null,2);
+path(&#x27;disp&#x27;,`M467,${ly} L478,${ly}`,&#x27;#334155&#x27;,&#x27;aE&#x27;,null,2);
+path(&#x27;disp&#x27;,`M467,${cy2} L478,${cy2}`,&#x27;#334155&#x27;,&#x27;aE&#x27;,null,2);
+// every run writes its trace; trace -&gt; Reflect (per run) and -&gt; Eval (across runs)
+path(&#x27;run2trace&#x27;,`M1032,654 L1032,668`,&#x27;#334155&#x27;,&#x27;aE&#x27;,null,2);
+path(&#x27;trace2ref&#x27;,`M780,718 L780,732`,&#x27;#334155&#x27;,&#x27;aE&#x27;,null,2);
+path(&#x27;trace2eval&#x27;,`M1340,718 L1340,732`,&#x27;#334155&#x27;,&#x27;aE&#x27;,null,2);
+// Reflect -&gt; Brain, Eval -&gt; Brain
+path(&#x27;write&#x27;,`M780,818 L780,840`,&#x27;#0f766e&#x27;,&#x27;aK&#x27;,null,2.5);
+text(&#x27;write&#x27;,792,834,&#x27;写回&#x27;,&#x27;wl&#x27;);
+path(&#x27;gold&#x27;,`M1340,818 L1340,840`,&#x27;#0f766e&#x27;,&#x27;aK&#x27;,null,2.5);
+text(&#x27;gold&#x27;,1352,834,&#x27;缺口 · golden case&#x27;,&#x27;wl&#x27;);
+// Brain -&gt; Project Agent
+path(&#x27;read&#x27;,`M300,840 L300,584`,&#x27;#0f766e&#x27;,&#x27;aK&#x27;,null,2.5);
+text(&#x27;read&#x27;,312,716,&#x27;装载&#x27;,&#x27;wl&#x27;);
+
+// ---------- step-by-step demo ----------
+const STEPS=[
+  {chip:&#x27;全景&#x27;,cap:&#x27;&lt;b&gt;全景&lt;/b&gt;Builder 环的自主交付。点「自动演示」，或用 ← → 逐步看。&#x27;},
+  {chip:&#x27;Intent&#x27;,focus:[&#x27;int&#x27;],wires:[&#x27;int&#x27;],cap:&#x27;&lt;b&gt;Intent 进来&lt;/b&gt;两种 Intent 经 Jira 进来：PM Clarified（PRD &amp;amp; Mockup），和无需 PM 的 Bug · 安全 · 确定性需求。&#x27;},
+  {chip:&#x27;装载&#x27;,focus:[&#x27;int&#x27;,&#x27;pa&#x27;,&#x27;brain&#x27;],wires:[&#x27;int&#x27;,&#x27;read&#x27;],extra:&#x27;pulse-files&#x27;,cap:&#x27;&lt;b&gt;Brain 装载&lt;/b&gt;每个 run 启动时，从 Domain Brain 装载相关知识。&#x27;},
+  {chip:&#x27;并发&#x27;,focus:[&#x27;pa&#x27;,&#x27;exe&#x27;],wires:[&#x27;disp&#x27;],cap:&#x27;&lt;b&gt;并发 Runs&lt;/b&gt;Project Agent 派发到本机和云端，多个 run 同时跑；流程只管两头，中间 Native Coding 由 agent 自己定。&#x27;},
+  {chip:&#x27;漏斗&#x27;,focus:[&#x27;fun&#x27;,&#x27;exe&#x27;],extra:&#x27;play-fun&#x27;,cap:&#x27;&lt;b&gt;决策漏斗&lt;/b&gt;run 里的决策先被 Brain、确定性检查、Agent 自决逐层吸收，只剩判断到人。&#x27;},
+  {chip:&#x27;人&#x27;,focus:[&#x27;hum&#x27;,&#x27;exe&#x27;],wires:[&#x27;h0&#x27;,&#x27;h1&#x27;],extra:&#x27;pulse-hum&#x27;,cap:&#x27;&lt;b&gt;Human-on-the-loop&lt;/b&gt;Builder 的判断点全部按需。run C 在方案处等人，其他 run 照跑。&#x27;},
+  {chip:&#x27;交付&#x27;,focus:[&#x27;hum&#x27;,&#x27;exe&#x27;],wires:[&#x27;h6&#x27;],cap:&#x27;&lt;b&gt;交付&lt;/b&gt;结果 + 证据报告经 Jira 交给 PM 验收；Builder 按需审 PR。&#x27;},
+  {chip:&#x27;Trace&#x27;,focus:[&#x27;exe&#x27;,&#x27;trace&#x27;],wires:[&#x27;run2trace&#x27;],extra:&#x27;pulse-trace&#x27;,cap:&#x27;&lt;b&gt;Run Trace&lt;/b&gt;每个 run 都留 trace：计划、关键动作、决策与理由、检查结果、人的回答与纠正、token。&#x27;},
+  {chip:&#x27;Reflect&#x27;,focus:[&#x27;trace&#x27;,&#x27;ref&#x27;,&#x27;brain&#x27;],wires:[&#x27;trace2ref&#x27;,&#x27;write&#x27;],extra:&#x27;pulse-onto&#x27;,cap:&#x27;&lt;b&gt;Reflect&lt;/b&gt;读这个 run 的 trace，把决策、教训、纠正按类型写回 Brain。&#x27;},
+  {chip:&#x27;Eval&#x27;,focus:[&#x27;trace&#x27;,&#x27;eva&#x27;,&#x27;brain&#x27;],wires:[&#x27;trace2eval&#x27;,&#x27;gold&#x27;],extra:&#x27;pulse-eval&#x27;,cap:&#x27;&lt;b&gt;Eval&lt;/b&gt;跨 run 汇总 trace：自主度、人的注意力、知识健康、成本。&#x27;},
+];
+const APP=$(&#x27;#app&#x27;), BLOCKS=[...document.querySelectorAll(&#x27;.blk&#x27;)], EXTRAS=[&#x27;play-fun&#x27;,&#x27;pulse-hum&#x27;,&#x27;pulse-files&#x27;,&#x27;pulse-onto&#x27;,&#x27;pulse-eval&#x27;,&#x27;pulse-trace&#x27;];
+const DUR=5600; let cur=0, timer=null, playing=false;
+STEPS.forEach((S,i)=&gt;{ if(i===0) return; const c=el(&#x27;div&#x27;,&#x27;chip&#x27;,`&lt;i&gt;${i}&lt;/i&gt;${S.chip}`); c.onclick=()=&gt;{stop();go(i);}; $(&#x27;#chips&#x27;).appendChild(c); });
+function go(n){
+  cur=n; const S=STEPS[n];
+  APP.classList.toggle(&#x27;demo&#x27;,n&gt;0);
+  BLOCKS.forEach(b=&gt;b.classList.toggle(&#x27;on&#x27;,n&gt;0&amp;&amp;S.focus.includes(b.id)));
+  Object.entries(WG).forEach(([k,g])=&gt;g.classList.toggle(&#x27;on&#x27;,n&gt;0&amp;&amp;(S.wires||[]).includes(k)));
+  EXTRAS.forEach(x=&gt;APP.classList.remove(x));
+  if(S.extra){ void APP.offsetWidth; APP.classList.add(S.extra); }
+  renderLanes(n); updateMinis(n);
+  $(&#x27;#cap&#x27;).innerHTML=S.cap;
+  [...$(&#x27;#chips&#x27;).children].forEach((c,i)=&gt;{c.classList.toggle(&#x27;cur&#x27;,i+1===n);c.classList.toggle(&#x27;done&#x27;,i+1&lt;n);});
+  $(&#x27;#bOver&#x27;).classList.toggle(&#x27;on&#x27;,n===0);
+}
+function bar(){const p=$(&#x27;#prog&#x27;);p.style.transition=&#x27;none&#x27;;p.style.width=&#x27;0&#x27;;void p.offsetWidth;p.style.transition=`width ${DUR}ms linear`;p.style.width=&#x27;100%&#x27;;}
+function tick(){ timer=setTimeout(()=&gt;{ if(cur&lt;STEPS.length-1){go(cur+1);bar();tick();} else {stop();go(0);} },DUR); }
+function play(){ playing=true; $(&#x27;#bPlay&#x27;).textContent=&#x27;❚❚ 暂停&#x27;; if(cur===0||cur===STEPS.length-1) go(1); bar(); tick(); }
+function stop(){ playing=false; clearTimeout(timer); $(&#x27;#bPlay&#x27;).textContent=&#x27;▶ 自动演示&#x27;; const p=$(&#x27;#prog&#x27;);p.style.transition=&#x27;none&#x27;;p.style.width=&#x27;0&#x27;; }
+$(&#x27;#bPlay&#x27;).onclick=()=&gt;playing?stop():play();
+$(&#x27;#bNext&#x27;).onclick=()=&gt;{stop();go(Math.min(STEPS.length-1,cur+1));};
+$(&#x27;#bPrev&#x27;).onclick=()=&gt;{stop();go(Math.max(0,cur-1));};
+$(&#x27;#bOver&#x27;).onclick=()=&gt;{stop();go(0);};
+addEventListener(&#x27;keydown&#x27;,e=&gt;{
+  if(e.key===&#x27;ArrowRight&#x27;){stop();go(Math.min(STEPS.length-1,cur+1));}
+  else if(e.key===&#x27;ArrowLeft&#x27;){stop();go(Math.max(0,cur-1));}
+  else if(e.key===&#x27; &#x27;){e.preventDefault();playing?stop():play();}
+  else if(e.key===&#x27;Escape&#x27;){stop();go(0);}
+});
+window.__go=go;
+go(0);
+if(location.hash===&#x27;#play&#x27;) play();
+// #static: plain diagram for export (no demo bar)
+if(location.hash===&#x27;#static&#x27;){ $(&#x27;#ctrl&#x27;).style.display=&#x27;none&#x27;; $(&#x27;#content&#x27;).style.top=&#x27;0&#x27;; APP.style.height=&#x27;1040px&#x27;; }
+
+// ---------- fit to window ----------
+function fit(){const a=$(&#x27;#app&#x27;),H=a.offsetHeight,s=Math.min(innerWidth/1600,innerHeight/H);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-H*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="pipeline" title="Pipeline Run" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Pipeline Run - Model Proposes, Checks Dispose&lt;/title&gt;
+&lt;!-- Fourth view of the autonomous-flow set: the Builder loop&#x27;s Pipeline Run mode (beside Native Run), stage by stage.
+     Each stage card splits what the agent writes from what the deterministic checks decide;
+     stages 1, 2, 7 ask a person only when needed, the rest are the agent&#x27;s alone.
+     Stage order per profile follows the pipeline&#x27;s own profile table. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
+.brand b{font-size:26px;font-weight:800;white-space:nowrap}
+.legend{margin-left:auto;display:flex;gap:20px;font-size:13px;color:#4b5563;white-space:nowrap;align-items:center}
+.legend i{display:inline-block;vertical-align:middle;margin-right:7px}
+.lg-a{width:14px;height:14px;border-radius:4px;background:#dbeafe;border:1.5px solid #2563eb}
+.lg-c{width:14px;height:14px;border-radius:50%;background:#334155}
+.lg-k{width:26px;border-top:2.5px solid #0f766e}
+.lg-d{width:10px;height:10px;background:#c2410c;transform:rotate(45deg)}
+
+.pane{position:absolute;background:#fff;border:1px solid #e5e7eb;border-radius:14px}
+
+/* human band */
+#hum{left:16px;top:72px;width:1568px;height:96px;border:2px solid #f59e0b;background:#fffaf5}
+.who{position:absolute;left:10px;top:10px;width:96px;height:72px;border-radius:10px;background:#c2410c;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+.who b{font-size:14px;white-space:nowrap}
+.hb{position:absolute;top:14px;height:64px;border:1.5px dashed #f59e0b;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.3;font-size:15px;font-weight:700;color:#9a3412;white-space:nowrap}
+.hb.solid{border:2px solid #c2410c}
+.hb i{position:absolute;left:calc(50% - 5px);top:-6px;width:9px;height:9px;border:1.5px solid #c2410c;background:#fffaf5;transform:rotate(45deg)}
+.hb.solid i{background:#c2410c}
+
+/* profile matrix */
+#mx{left:16px;top:180px;width:1568px;height:196px}
+.mh{position:absolute;top:14px;width:170px;text-align:center;font:700 13px Menlo,monospace;letter-spacing:1px;color:#334155}
+.mh i{font-style:normal;display:inline-block;width:20px;height:20px;border-radius:50%;background:#111827;color:#fff;line-height:20px;margin-right:6px;font-size:11.5px;letter-spacing:0}
+.ml{position:absolute;left:16px;width:110px;height:30px;display:flex;align-items:center;font:700 14px Menlo,monospace;color:#111827;white-space:nowrap}
+.mt{position:absolute;height:0;border-top:3px solid #2563eb}
+.md{position:absolute;width:16px;height:16px;border-radius:50%;margin:-8px 0 0 -8px;background:#2563eb;box-shadow:0 0 0 3px #fff}
+.mo{position:absolute;width:8px;height:8px;border-radius:50%;margin:-4px 0 0 -4px;background:#d1d5db}
+
+/* stage cards */
+.st{position:absolute;top:392px;width:170px;height:344px;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px 14px;display:flex;flex-direction:column}
+.st h3{margin:0 0 14px;font-size:21px;font-weight:800;white-space:nowrap}
+.st h3 small{display:block;font:600 11.5px Menlo,monospace;letter-spacing:1px;color:#9ca3af;margin-top:3px}
+.za{border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe;padding:10px 11px;font-size:14px;font-weight:700;color:#1d4ed8;line-height:1.5;flex:0 0 auto;min-height:92px}
+.za .doc{display:inline-block;font:700 13px Menlo,monospace;color:#1e3a8a;background:#fff;border:1.5px solid #93c5fd;border-radius:4px 9px 4px 4px;padding:2px 8px;margin:1px 0 3px}
+.za b,.zc b{display:block;font:700 11px Menlo,monospace;letter-spacing:1px;margin-bottom:4px}
+.za b{color:#2563eb}
+.zc{margin-top:10px;flex:1;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;padding:10px 10px;font-size:13.5px;font-weight:600;color:#1f2937;line-height:1.5}
+.zc b{color:#334155}
+.zc div{display:flex;gap:6px;margin-top:4px;white-space:nowrap}
+.zc div:before{content:&quot;✓&quot;;flex:0 0 17px;height:17px;border-radius:50%;background:#334155;color:#fff;font-size:10.5px;line-height:17px;text-align:center;margin-top:3px}
+.st.free .za{background:repeating-linear-gradient(135deg,#eff6ff 0 6px,#e0ecff 6px 12px)}
+#fan{position:absolute;top:772px;height:84px;border:1.5px dashed #60a5fa;border-radius:12px;background:#f5f9ff;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 16px;white-space:nowrap}
+#fan b{font-size:16px;font-weight:800;color:#1d4ed8}
+#fan .kids{display:flex;gap:6px}
+#fan .kids span{font-size:13px;font-weight:700;color:#1d4ed8;background:#fff;border:1.5px solid #93c5fd;border-radius:8px;padding:4px 10px}
+#fan .acc{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;color:#334155}
+#fan .acc span{font-size:12.5px;font-weight:600;color:#4b5563}
+.st.refl{background:#f4fbf9;border-color:#99d8cb}.st.refl h3{color:#0f766e}
+.st.hum{background:#fffaf5;border:2px dashed #f59e0b}.st.hum h3{color:#9a3412}
+.st .tg{font-style:normal;position:absolute;right:12px;top:14px;font-size:12px;font-weight:700;border-radius:10px;padding:2px 9px;white-space:nowrap}
+.tg.a{background:#dbeafe;color:#1d4ed8}.tg.h{background:#c2410c;color:#fff}
+.hb.agent{border:1.5px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;flex-direction:column;gap:2px}
+.hb.agent small{font-size:12.5px;font-weight:600;color:#9a3412}
+
+/* ---- shared Brain (same as the other diagrams) ---- */
+#brain{position:absolute;left:16px;top:870px;width:1568px;height:182px;background:#0b3b37;border-radius:16px;color:#d5ece7}
+.bt{position:absolute;left:28px;top:0;bottom:0;width:240px;display:flex;flex-direction:column;justify-content:center}
+.bt b{font-size:28px;font-weight:800;color:#fff}
+.bt em{font-style:normal;font-size:14px;color:#7ee0cf;margin-top:4px}
+.bh{font-size:14px;letter-spacing:1px;font-weight:700;color:#7ee0cf;margin-bottom:12px;white-space:nowrap}
+.bagent{position:absolute;left:286px;top:28px;width:272px;height:126px;border:1.5px solid #3aa596;border-radius:12px;background:#124a45;padding:18px 18px}
+.bagent .bh{font-size:17px;letter-spacing:0;color:#fff;margin-bottom:16px}
+.btags{display:flex;gap:8px}
+.btags span{font-size:14px;color:#0b3b37;background:#7ee0cf;border-radius:14px;padding:3px 11px;font-weight:600;white-space:nowrap}
+.bdocs{position:absolute;left:580px;top:30px;width:456px}
+.bgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.bgrid span{font:700 14px Menlo,monospace;color:#fff;background:#124a45;border-radius:7px 11px 7px 7px;padding:9px 10px;white-space:nowrap}
+.bdirs{position:absolute;left:1056px;top:30px;width:196px}
+.dgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.dgrid span{position:relative;font:700 14px Menlo,monospace;color:#a7f3e4;border:1.5px dashed #3aa596;border-radius:3px 9px 9px 9px;padding:8px 10px;white-space:nowrap}
+.dgrid span:before{content:&quot;&quot;;position:absolute;left:-1.5px;top:-7px;width:26px;height:6px;border:1.5px dashed #3aa596;border-bottom:none;border-radius:4px 4px 0 0}
+.bonto{position:absolute;left:1270px;top:30px;right:24px;padding-left:22px;border-left:1px solid #1f5b55}
+.otags{display:flex;flex-wrap:wrap;gap:6px}
+.otags code{font:600 14px Menlo,monospace;color:#0b3b37;background:#7ee0cf;border-radius:4px;padding:2px 6px}
+.olife{margin-top:12px;font-size:14px;color:#fff;font-weight:600}
+
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none;z-index:2}
+.wl{font-size:14px;font-weight:700}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;app&quot;&gt;
+
+&lt;header&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Pipeline Run - &lt;span style=&quot;color:#c2410c&quot;&gt;Model Proposes, Checks Dispose&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;legend&quot;&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-a&quot;&gt;&lt;/i&gt;Agent 写&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-c&quot;&gt;&lt;/i&gt;确定性检查&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-k&quot;&gt;&lt;/i&gt;知识读写&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-d&quot;&gt;&lt;/i&gt;人&lt;/span&gt;
+  &lt;/div&gt;
+&lt;/header&gt;
+
+&lt;div class=&quot;pane&quot; id=&quot;hum&quot;&gt;
+  &lt;div class=&quot;who&quot;&gt;&lt;svg width=&quot;18&quot; height=&quot;18&quot; viewBox=&quot;0 0 26 26&quot;&gt;&lt;circle cx=&quot;13&quot; cy=&quot;8&quot; r=&quot;5&quot; fill=&quot;#fff&quot;/&gt;&lt;path d=&quot;M3,25 C3,17 8,14 13,14 C18,14 23,17 23,25 Z&quot; fill=&quot;#fff&quot;/&gt;&lt;/svg&gt;&lt;b&gt;人只在这里&lt;/b&gt;&lt;/div&gt;
+  &lt;div id=&quot;hq&quot;&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;div class=&quot;pane&quot; id=&quot;mx&quot;&gt;&lt;div id=&quot;mxi&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div id=&quot;cards&quot;&gt;&lt;/div&gt;
+&lt;!-- BUILD may split into child runs that run at once; the parent judges each result --&gt;
+&lt;div id=&quot;fan&quot;&gt;&lt;b&gt;Fan-out Runs&lt;/b&gt;&lt;div class=&quot;kids&quot;&gt;&lt;span&gt;子 run&lt;/span&gt;&lt;span&gt;子 run&lt;/span&gt;&lt;span&gt;子 run&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;acc&quot;&gt;父 run 验收&lt;span&gt;采用 · 修正 · 接手 · 丢弃&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;!-- shared Brain --&gt;
+&lt;div id=&quot;brain&quot;&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 两边共用的领域知识&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bagent&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;Project / Domain Agent&lt;/div&gt;
+    &lt;div class=&quot;btags&quot;&gt;&lt;span&gt;范围&lt;/span&gt;&lt;span&gt;模式&lt;/span&gt;&lt;span&gt;并发&lt;/span&gt;&lt;span&gt;授权&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bdocs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;Markdown&lt;/div&gt;
+    &lt;div class=&quot;bgrid&quot;&gt;&lt;span&gt;AGENTS.md&lt;/span&gt;&lt;span&gt;BUSINESS.md&lt;/span&gt;&lt;span&gt;PRODUCT.md&lt;/span&gt;&lt;span&gt;TECH.md&lt;/span&gt;&lt;span&gt;IMPROVEMENT.md&lt;/span&gt;&lt;span&gt;PROJECT.md&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bdirs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;目录&lt;/div&gt;
+    &lt;div class=&quot;dgrid&quot;&gt;&lt;span&gt;specs/&lt;/span&gt;&lt;span&gt;skills/&lt;/span&gt;&lt;span&gt;gates/&lt;/span&gt;&lt;span&gt;assets/&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bonto&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;轻量 Ontology&lt;/div&gt;
+    &lt;div class=&quot;otags&quot;&gt;&lt;code&gt;principle&lt;/code&gt;&lt;code&gt;correction&lt;/code&gt;&lt;code&gt;decision&lt;/code&gt;&lt;code&gt;model&lt;/code&gt;&lt;code&gt;guideline&lt;/code&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;code&gt;process&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;olife&quot;&gt;新增 · 覆盖 · 撤回&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
+  &lt;defs&gt;
+    &lt;marker id=&quot;mW&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;6&quot; markerHeight=&quot;6&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#334155&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mB&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#2563eb&quot;/&gt;&lt;/marker&gt;
+  &lt;/defs&gt;
+  &lt;g id=&quot;g&quot;&gt;&lt;/g&gt;
+&lt;/svg&gt;
+
+&lt;/div&gt;
+&lt;script&gt;
+const $=s=&gt;document.querySelector(s);
+const el=(tag,cls,html,style)=&gt;{const e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;if(style)Object.assign(e.style,style);return e;};
+const NS=&#x27;http://www.w3.org/2000/svg&#x27;, G=$(&#x27;#g&#x27;);
+function path(d,stroke,marker,w,dash){const p=document.createElementNS(NS,&#x27;path&#x27;);p.setAttribute(&#x27;d&#x27;,d);p.setAttribute(&#x27;fill&#x27;,&#x27;none&#x27;);p.setAttribute(&#x27;stroke&#x27;,stroke);p.setAttribute(&#x27;stroke-width&#x27;,w||2.5);if(dash)p.setAttribute(&#x27;stroke-dasharray&#x27;,dash);if(marker)p.setAttribute(&#x27;marker-end&#x27;,`url(#${marker})`);G.appendChild(p);}
+function text(x,y,t,fill,anchor){const e=document.createElementNS(NS,&#x27;text&#x27;);e.setAttribute(&#x27;x&#x27;,x);e.setAttribute(&#x27;y&#x27;,y);e.setAttribute(&#x27;class&#x27;,&#x27;wl&#x27;);e.setAttribute(&#x27;fill&#x27;,fill);if(anchor)e.setAttribute(&#x27;text-anchor&#x27;,anchor);e.textContent=t;G.appendChild(e);}
+
+// ---------- geometry: a label column, then eight stage columns ----------
+const C0=136, CW=170, GAP=12;
+const X=i=&gt;C0+i*(CW+GAP), CX=i=&gt;X(i)+CW/2;
+
+// ---------- eight stages: what the agent writes, what the checks decide ----------
+const ST=[
+  [&#x27;EVALUATE&#x27;,&#x27;评估&#x27;,[&#x27;doc:Requirements&#x27;,&#x27;EARS 结构&#x27;],[&#x27;需求可验证&#x27;,&#x27;Gate-0 按需&#x27;]],
+  [&#x27;THINK&#x27;,&#x27;方案&#x27;,[&#x27;方案对比&#x27;,&#x27;用方案词查 Brain&#x27;],[&#x27;代码证据定案&#x27;]],
+  [&#x27;PLAN&#x27;,&#x27;计划&#x27;,[&#x27;doc:Design-Spec&#x27;,&#x27;任务 · 完成标准&#x27;],[&#x27;任务 ↔ 需求&#x27;,&#x27;验收有测试&#x27;]],
+  [&#x27;BUILD&#x27;,&#x27;构建&#x27;,[&#x27;Native Coding&#x27;,&#x27;Fan-out Runs&#x27;],[&#x27;独立 worktree&#x27;,&#x27;报告在当前树&#x27;]],
+  [&#x27;REVIEW&#x27;,&#x27;评审&#x27;,[&#x27;doc:Fixing-Spec&#x27;,&#x27;按原因归并&#x27;,&#x27;一次修完&#x27;],[&#x27;按改动派专家&#x27;,&#x27;R1 → R2&#x27;,&#x27;修复有测试证明&#x27;,&#x27;最多两轮&#x27;]],
+  [&#x27;TEST&#x27;,&#x27;测试&#x27;,[&#x27;跑最终验证&#x27;],[&#x27;在审过的树上&#x27;,&#x27;无失败命令&#x27;]],
+  [&#x27;DELIVER&#x27;,&#x27;交付&#x27;,[&#x27;doc:Reflect&#x27;],[&#x27;落地 = 审过的&#x27;,&#x27;出 REPORT&#x27;,&#x27;不 push&#x27;]],
+  [&#x27;REFLECT&#x27;,&#x27;回写&#x27;,[&#x27;决策 · 纠正&#x27;,&#x27;实践 · 缺口&#x27;],[&#x27;进 CDF&#x27;,&#x27;不挡落地&#x27;]],
+];
+ST.forEach(([en,zh,a,c],i)=&gt;{
+  const hum=[0,1,6].includes(i);
+  const cls=&#x27;st&#x27;+(i===3?&#x27; free&#x27;:&#x27;&#x27;)+(i===7?&#x27; refl&#x27;:&#x27;&#x27;)+(hum?&#x27; hum&#x27;:&#x27;&#x27;);
+  $(&#x27;#cards&#x27;).appendChild(el(&#x27;div&#x27;,cls,
+    `${hum?&#x27;&lt;i class=&quot;tg h&quot;&gt;按需问人&lt;/i&gt;&#x27;:&#x27;&lt;i class=&quot;tg a&quot;&gt;Agent 全权&lt;/i&gt;&#x27;}&lt;h3&gt;${zh}&lt;small&gt;${i+1} ${en}&lt;/small&gt;&lt;/h3&gt;&lt;div class=&quot;za&quot;&gt;&lt;b&gt;AGENT&lt;/b&gt;${a.map(t=&gt;t.startsWith(&#x27;doc:&#x27;)?`&lt;span class=&quot;doc&quot;&gt;${t.slice(4)}&lt;/span&gt;`:t).join(&#x27;&lt;br&gt;&#x27;)}&lt;/div&gt;&lt;div class=&quot;zc&quot;&gt;&lt;b&gt;CHECK&lt;/b&gt;${c.map(t=&gt;`&lt;div&gt;${t}&lt;/div&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;`,
+    {left:X(i)+&#x27;px&#x27;}));
+});
+
+// ---------- profiles: which stages each one runs ----------
+ST.forEach(([en],i)=&gt;$(&#x27;#mxi&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;mh&#x27;,`&lt;i&gt;${i+1}&lt;/i&gt;${en}`,{left:(X(i)-16)+&#x27;px&#x27;})));
+const PROF=[[&#x27;full · bugfix&#x27;,&#x27;11111111&#x27;],[&#x27;trivial&#x27;,&#x27;10111111&#x27;],[&#x27;direct&#x27;,&#x27;00011111&#x27;],[&#x27;research&#x27;,&#x27;11000011&#x27;]];
+PROF.forEach(([name,on],k)=&gt;{
+  const y=66+k*34;
+  $(&#x27;#mxi&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;ml&#x27;,name,{top:(y-15)+&#x27;px&#x27;}));
+  const idx=[...on].map((v,i)=&gt;v===&#x27;1&#x27;?i:-1).filter(i=&gt;i&gt;=0);
+  for(let j=0;j&lt;idx.length-1;j++) $(&#x27;#mxi&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;mt&#x27;,null,{left:(CX(idx[j])-16)+&#x27;px&#x27;,width:(CX(idx[j+1])-CX(idx[j]))+&#x27;px&#x27;,top:(y-1.5)+&#x27;px&#x27;}));
+  [...on].forEach((v,i)=&gt;$(&#x27;#mxi&#x27;).appendChild(el(&#x27;div&#x27;,v===&#x27;1&#x27;?&#x27;md&#x27;:&#x27;mo&#x27;,null,{left:(CX(i)-16)+&#x27;px&#x27;,top:y+&#x27;px&#x27;})));
+});
+
+// ---------- where a person may come in ----------
+[
+  {a:0,b:1,t:&#x27;需求歧义&#x27;},
+  {a:1,b:2,t:&#x27;不可逆 /&lt;br&gt;高风险设计&#x27;},
+  {a:2,b:6,t:&#x27;全部交给 Agent&lt;small&gt;◇ 危险动作才审批&lt;/small&gt;&#x27;,agent:1},
+  {a:6,b:7,t:&#x27;Push&lt;br&gt;按需审 PR&#x27;,solid:1},
+].forEach(p=&gt;$(&#x27;#hq&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;hb&#x27;+(p.solid?&#x27; solid&#x27;:&#x27;&#x27;)+(p.agent?&#x27; agent&#x27;:&#x27;&#x27;),`${p.agent?&#x27;&#x27;:&#x27;&lt;i&gt;&lt;/i&gt;&#x27;}&lt;span style=&quot;display:flex;flex-direction:column;align-items:center;gap:3px&quot;&gt;${p.t}&lt;/span&gt;`,{left:(X(p.a)-16)+&#x27;px&#x27;,width:(X(p.b)-X(p.a)-GAP)+&#x27;px&#x27;})));
+
+// ---------- wires ----------
+// stage to stage
+for(let i=0;i&lt;7;i++) path(`M${X(i)+CW+1},564 L${X(i+1)-1},564`,&#x27;#334155&#x27;,&#x27;mW&#x27;,2);
+// BUILD fans out to child runs
+const FAN_L=X(1), FAN_R=X(3)+CW+48;
+Object.assign($(&#x27;#fan&#x27;).style,{left:FAN_L+&#x27;px&#x27;,width:(FAN_R-FAN_L)+&#x27;px&#x27;});
+path(`M${CX(3)},738 L${CX(3)},770`,&#x27;#2563eb&#x27;,&#x27;mB&#x27;,2.2,&#x27;6 4&#x27;);
+// a code change in TEST goes back to REVIEW
+path(`M${CX(5)},738 C${CX(5)},782 ${CX(4)},782 ${CX(4)},740`,&#x27;#2563eb&#x27;,&#x27;mB&#x27;,2.2,&#x27;6 4&#x27;);
+text((CX(4)+CX(5))/2,812,&#x27;改代码 → 回审 · ≤ 2&#x27;,&#x27;#2563eb&#x27;,&#x27;middle&#x27;);
+// Brain -&gt; the run&#x27;s knowledge; REFLECT -&gt; CDF -&gt; Brain
+path(`M${CX(0)},868 L${CX(0)},740`,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
+text(CX(0)+10,812,&#x27;装载&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
+path(`M${CX(7)},738 L${CX(7)},866`,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
+text(CX(7)+10,812,&#x27;写回&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
+
+function fit(){const a=$(&#x27;#app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="distill" title="Cognition Distill Flow" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Cognition Distill Flow - How Work Becomes Judgment&lt;/title&gt;
+&lt;!-- Third view of the autonomous-flow set: how a run&#x27;s work is distilled into the shared Brain
+     and comes back as better judgment. Brain block is the same as in the other two diagrams. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
+.brand b{font-size:26px;font-weight:800;white-space:nowrap}
+.legend{margin-left:auto;display:flex;gap:20px;font-size:13px;color:#4b5563;white-space:nowrap;align-items:center}
+.legend i{display:inline-block;vertical-align:middle;margin-right:7px}
+.lg-w{width:26px;border-top:2px solid #334155}
+.lg-k{width:26px;border-top:2.5px solid #0f766e}
+.lg-d{width:10px;height:10px;background:#c2410c;transform:rotate(45deg)}
+
+.pane{position:absolute;top:92px;height:640px;background:#fff;border:1px solid #e5e7eb;border-radius:14px}
+.pt{position:absolute;left:18px;right:18px;top:18px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.pt b{font-size:23px;font-weight:800}
+.pt .tag{margin-left:auto;font-size:14px;font-weight:700;border-radius:12px;padding:3px 12px}
+.no{display:inline-block;width:27px;height:27px;border-radius:50%;background:#111827;color:#fff;font:700 15px/27px Menlo,monospace;text-align:center}
+.body{position:absolute;left:18px;right:18px;top:78px;bottom:18px;display:flex;flex-direction:column;gap:16px}
+
+/* ① Work */
+#work{left:16px;width:190px}
+.src{flex:1;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;border-left:6px solid #334155;display:flex;align-items:center;padding:0 14px;font-size:18.5px;font-weight:700;line-height:1.3}
+.src.pm{border-left-color:#7c3aed}.src.bd{border-left-color:#2563eb}
+.src.hu{background:#fffaf5;border:2px solid #c2410c;border-left-width:6px;color:#9a3412}
+.src.hu:before{content:&quot;&quot;;display:inline-block;width:9px;height:9px;background:#c2410c;transform:rotate(45deg);margin-right:9px}
+
+/* ② Extract */
+#ext{left:236px;width:360px}
+#ext .body{justify-content:space-evenly;gap:0}
+#ext .tag{background:#dbeafe;color:#1d4ed8}
+.blk{border-top:1px solid #f0f1f4;padding-top:22px}
+.blk:first-child{border-top:none;padding-top:0}
+.bl{font-size:17px;font-weight:800;color:#111827;margin-bottom:12px}
+.lay{display:flex;align-items:center;gap:6px;margin-top:10px}
+.lay em{font-style:normal;width:60px;font-size:15px;color:#6b7280}
+code{font:600 14px Menlo,monospace;color:#0b3b37;background:#d5efe9;border-radius:5px;padding:4px 8px;white-space:nowrap}
+code.r{background:#e2e8f0;color:#334155}
+.row{display:flex;flex-wrap:wrap;gap:8px}
+.sc{font-size:16px;font-weight:700;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:16px;padding:4px 15px}
+
+/* ③ Check: facts only */
+#chk{left:626px;width:330px}
+#chk .tag{background:#e2e8f0;color:#334155}
+#chk .body{gap:12px}
+.ck{flex:1;display:flex;align-items:center;gap:12px;font-size:17px;font-weight:700;color:#1f2937;border-radius:9px;background:#f8fafc;border:1px solid #e2e8f0;padding:0 12px;white-space:nowrap}
+.ck i{font-style:normal;flex:0 0 26px;height:26px;border-radius:50%;background:#334155;color:#fff;font-size:14.5px;line-height:26px;text-align:center}
+.ck code{font-size:13.5px;padding:3px 7px}
+.ck.llm{background:#fff;border:1.5px dashed #64748b}
+.ck.llm i{background:#fff;color:#334155;border:1.5px solid #334155;line-height:23px}
+
+/* ④ Route */
+#rte{left:986px;width:330px}
+#rte .tag{background:#dbeafe;color:#1d4ed8}
+#rte .body{gap:0;justify-content:center}
+.dest{border-radius:12px;padding:20px 18px}
+.dest .dh{display:flex;align-items:center;justify-content:space-between;font-size:19px;font-weight:800;margin-bottom:16px;white-space:nowrap}
+.dest .dh small{font-size:13.5px;font-weight:700;border-radius:11px;padding:2px 10px}
+.dest.hot{background:#27235e;color:#fff}
+.dest.hot .dh small{background:#fb923c;color:#fff}
+.dest.hot .row span{background:#3b3680;color:#fff;border:1px solid #8b84e6}
+.dest.cold{background:#f0fdfa;border:1.5px solid #99d8cb;color:#0f3d3a}
+.dest .row span{font-size:15.5px;font-weight:700;border-radius:15px;padding:5px 13px;white-space:nowrap}
+.dest.cold .row span{background:#fff;border:1px solid #99d8cb;color:#0f766e}
+.down{height:76px;display:flex;align-items:center;gap:10px;padding-left:32px;font-size:15px;font-weight:700;color:#0f766e}
+.down:before{content:&quot;&quot;;width:0;height:56px;border-left:2px dashed #0f766e}
+
+/* ⑤ Judgment */
+#jdg{left:1346px;width:238px;border:2px solid #f59e0b;background:#fffaf5}
+#jdg .pt b{color:#9a3412}
+#jdg .body{gap:16px}
+.m{flex:1;border-radius:10px;background:#fff;border:1px solid #fed7aa;display:flex;align-items:center;justify-content:space-between;padding:0 16px}
+.m b{font-size:16px;font-weight:800;color:#111827;white-space:nowrap}
+.m span{font-size:40px;font-weight:800;color:#c2410c;white-space:nowrap}
+.m span.up{color:#0f766e}
+
+/* ---- shared Brain (same as the other diagrams) ---- */
+#brain{position:absolute;left:16px;top:864px;width:1192px;height:182px;background:#0b3b37;border-radius:16px;color:#d5ece7}
+.bt{position:absolute;left:28px;top:0;bottom:0;width:200px;display:flex;flex-direction:column;justify-content:center}
+.bt b{font-size:28px;font-weight:800;color:#fff}
+.bt em{font-style:normal;font-size:14px;color:#7ee0cf;margin-top:4px}
+.bh{font-size:12px;letter-spacing:1px;font-weight:700;color:#7ee0cf;margin-bottom:12px;white-space:nowrap}
+.bagent{position:absolute;left:286px;top:28px;width:272px;height:126px;border:1.5px solid #3aa596;border-radius:12px;background:#124a45;padding:18px 18px}
+.bagent .bh{font-size:17px;letter-spacing:0;color:#fff;margin-bottom:16px}
+.btags{display:flex;gap:8px}
+.btags span{font-size:13px;color:#0b3b37;background:#7ee0cf;border-radius:14px;padding:3px 11px;font-weight:600;white-space:nowrap}
+.bdocs{position:absolute;left:240px;top:30px;width:420px}
+.bgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.bgrid span{font:700 12.5px Menlo,monospace;color:#fff;background:#124a45;border-radius:7px 11px 7px 7px;padding:9px 12px;white-space:nowrap}
+.bdirs{position:absolute;left:690px;top:30px;width:220px}
+.dgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.dgrid span{position:relative;font:700 13px Menlo,monospace;color:#a7f3e4;border:1.5px dashed #3aa596;border-radius:3px 9px 9px 9px;padding:8px 12px;white-space:nowrap}
+.dgrid span:before{content:&quot;&quot;;position:absolute;left:-1.5px;top:-7px;width:26px;height:6px;border:1.5px dashed #3aa596;border-bottom:none;border-radius:4px 4px 0 0}
+.bonto{position:absolute;left:936px;top:30px;right:24px;padding-left:22px;border-left:1px solid #1f5b55}
+.otags{display:flex;flex-wrap:wrap;gap:6px}
+.otags code{font:600 11.5px Menlo,monospace;color:#0b3b37;background:#7ee0cf;border-radius:4px;padding:2px 6px}
+.olife{margin-top:12px;font-size:13px;color:#fff;font-weight:600}
+
+#mem{position:absolute;left:1224px;top:864px;width:360px;height:182px;background:#27235e;border-radius:16px;color:#e0e7ff;padding:24px 26px}
+#mem b{display:block;font-size:28px;font-weight:800;color:#fff}
+#mem em{display:block;font-style:normal;font-size:14px;color:#a5b4fc;margin:4px 0 16px}
+#mem .row span{font-size:14px;font-weight:700;color:#fff;background:#3b3680;border:1px solid #8b84e6;border-radius:14px;padding:4px 12px;white-space:nowrap}
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none;z-index:2}
+.wl{font-size:15px;font-weight:700}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;app&quot;&gt;
+
+&lt;header&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Cognition Distill Flow - &lt;span style=&quot;color:#c2410c&quot;&gt;How Work Becomes Judgment&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;legend&quot;&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-w&quot;&gt;&lt;/i&gt;工作流&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-k&quot;&gt;&lt;/i&gt;Brain 读写&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-k&quot; style=&quot;border-color:#4338ca&quot;&gt;&lt;/i&gt;Memory 读写&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-d&quot;&gt;&lt;/i&gt;人&lt;/span&gt;
+  &lt;/div&gt;
+&lt;/header&gt;
+
+&lt;!-- ① where knowledge comes from --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;work&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;1&lt;/span&gt;&lt;b&gt;Work&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;body&quot;&gt;
+    &lt;div class=&quot;src pm&quot;&gt;PM&lt;br&gt;Run Trace&lt;/div&gt;
+    &lt;div class=&quot;src bd&quot;&gt;Builder&lt;br&gt;Run Trace&lt;/div&gt;
+    &lt;div class=&quot;src hu&quot;&gt;人的纠正&lt;/div&gt;
+    &lt;div class=&quot;src&quot;&gt;Eval 缺口&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ② the agent that did the work extracts and declares --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;ext&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;2&lt;/span&gt;&lt;b&gt;Extract&lt;/b&gt;&lt;span class=&quot;tag&quot;&gt;做事的 Agent&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;body&quot;&gt;
+    &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;类型&lt;/div&gt;
+      &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;元认知&lt;/em&gt;&lt;code&gt;principle&lt;/code&gt;&lt;code&gt;correction&lt;/code&gt;&lt;/div&gt;
+      &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;认知&lt;/em&gt;&lt;code&gt;decision&lt;/code&gt;&lt;code&gt;model&lt;/code&gt;&lt;/div&gt;
+      &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;操作&lt;/em&gt;&lt;code&gt;guideline&lt;/code&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;code&gt;process&lt;/code&gt;&lt;/div&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;范围&lt;/div&gt;&lt;div class=&quot;row&quot;&gt;&lt;span class=&quot;sc&quot;&gt;用户&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;Agent&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;通用&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;项目&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;关系&lt;/div&gt;&lt;div class=&quot;row&quot;&gt;&lt;code class=&quot;r&quot;&gt;new&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;same&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;adds to&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;replaces&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;repeats&lt;/code&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ③ facts only: deterministic, plus one isolated model check --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;chk&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;3&lt;/span&gt;&lt;b&gt;Check&lt;/b&gt;&lt;span class=&quot;tag&quot;&gt;只查事实&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;body&quot;&gt;
+    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;非空 · 无凭据链接&lt;/div&gt;
+    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;证据&lt;code&gt;原话&lt;/code&gt;&lt;code&gt;测量&lt;/code&gt;&lt;code&gt;外部&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;关系 · 覆盖指向唯一条目&lt;/div&gt;
+    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;只覆盖更旧的 · 不碰人写的&lt;/div&gt;
+    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;已撤回的不再进入&lt;/div&gt;
+    &lt;div class=&quot;ck llm&quot;&gt;&lt;i&gt;◇&lt;/i&gt;原话是否说了这件事&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ④ where it goes: the agent&#x27;s declaration, held to its evidence --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;rte&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;4&lt;/span&gt;&lt;b&gt;Route&lt;/b&gt;&lt;span class=&quot;tag&quot;&gt;按 Agent 声明&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;body&quot;&gt;
+    &lt;div class=&quot;dest hot&quot;&gt;&lt;div class=&quot;dh&quot;&gt;Memory&lt;small&gt;原话 / 测量&lt;/small&gt;&lt;/div&gt;
+      &lt;div class=&quot;row&quot;&gt;&lt;span&gt;用户偏好&lt;/span&gt;&lt;span&gt;Agent 纠正&lt;/span&gt;&lt;span&gt;通用原则&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div class=&quot;down&quot;&gt;否则&lt;/div&gt;
+    &lt;div class=&quot;dest cold&quot;&gt;&lt;div class=&quot;dh&quot;&gt;Brain&lt;/div&gt;
+      &lt;div class=&quot;row&quot;&gt;&lt;span&gt;项目 Brain&lt;/span&gt;&lt;span&gt;General Brain&lt;/span&gt;&lt;span&gt;Timeline&lt;/span&gt;&lt;span&gt;Reference&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- ⑤ what it changes --&gt;
+&lt;div class=&quot;pane&quot; id=&quot;jdg&quot;&gt;
+  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot; style=&quot;background:#c2410c&quot;&gt;5&lt;/span&gt;&lt;b&gt;Judgment&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;body&quot;&gt;
+    &lt;div class=&quot;m&quot;&gt;&lt;b&gt;纠正&lt;/b&gt;&lt;span&gt;↓&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;m&quot;&gt;&lt;b&gt;重复纠正&lt;/b&gt;&lt;span&gt;→ 0&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;m&quot;&gt;&lt;b&gt;Autonomous Rate&lt;/b&gt;&lt;span class=&quot;up&quot;&gt;↑&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- shared Brain --&gt;
+&lt;div id=&quot;brain&quot;&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 按需召回&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bdocs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;Markdown&lt;/div&gt;
+    &lt;div class=&quot;bgrid&quot;&gt;&lt;span&gt;AGENTS.md&lt;/span&gt;&lt;span&gt;BUSINESS.md&lt;/span&gt;&lt;span&gt;PRODUCT.md&lt;/span&gt;&lt;span&gt;TECH.md&lt;/span&gt;&lt;span&gt;IMPROVEMENT.md&lt;/span&gt;&lt;span&gt;PROJECT.md&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bdirs&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;目录&lt;/div&gt;
+    &lt;div class=&quot;dgrid&quot;&gt;&lt;span&gt;specs/&lt;/span&gt;&lt;span&gt;skills/&lt;/span&gt;&lt;span&gt;gates/&lt;/span&gt;&lt;span&gt;assets/&lt;/span&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;bonto&quot;&gt;
+    &lt;div class=&quot;bh&quot;&gt;轻量 Ontology&lt;/div&gt;
+    &lt;div class=&quot;otags&quot;&gt;&lt;code&gt;principle&lt;/code&gt;&lt;code&gt;correction&lt;/code&gt;&lt;code&gt;decision&lt;/code&gt;&lt;code&gt;model&lt;/code&gt;&lt;code&gt;guideline&lt;/code&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;code&gt;process&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;olife&quot;&gt;新增 · 覆盖 · 撤回&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;!-- Memory: what every turn reads --&gt;
+&lt;div id=&quot;mem&quot;&gt;&lt;b&gt;Memory&lt;/b&gt;&lt;em&gt;每轮都读&lt;/em&gt;&lt;div class=&quot;row&quot;&gt;&lt;span&gt;用户偏好&lt;/span&gt;&lt;span&gt;Agent 纠正&lt;/span&gt;&lt;span&gt;通用原则&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
+  &lt;defs&gt;
+    &lt;marker id=&quot;mW&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#334155&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mI&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#4338ca&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;
+  &lt;/defs&gt;
+  &lt;g id=&quot;g&quot;&gt;&lt;/g&gt;
+&lt;/svg&gt;
+
+&lt;/div&gt;
+&lt;script&gt;
+const NS=&#x27;http://www.w3.org/2000/svg&#x27;, G=document.getElementById(&#x27;g&#x27;);
+function path(d,stroke,marker,w){const p=document.createElementNS(NS,&#x27;path&#x27;);p.setAttribute(&#x27;d&#x27;,d);p.setAttribute(&#x27;fill&#x27;,&#x27;none&#x27;);p.setAttribute(&#x27;stroke&#x27;,stroke);p.setAttribute(&#x27;stroke-width&#x27;,w||2.5);if(marker)p.setAttribute(&#x27;marker-end&#x27;,`url(#${marker})`);G.appendChild(p);}
+function text(x,y,t,fill,anchor){const e=document.createElementNS(NS,&#x27;text&#x27;);e.setAttribute(&#x27;x&#x27;,x);e.setAttribute(&#x27;y&#x27;,y);e.setAttribute(&#x27;class&#x27;,&#x27;wl&#x27;);e.setAttribute(&#x27;fill&#x27;,fill);if(anchor)e.setAttribute(&#x27;text-anchor&#x27;,anchor);e.textContent=t;G.appendChild(e);}
+// Work -&gt; Extract -&gt; Check -&gt; Route (judgment is fed by the Brain, not by Route)
+[[206,236],[596,626],[956,986]].forEach(([a,b])=&gt;path(`M${a+1},412 L${b-2},412`,&#x27;#334155&#x27;,&#x27;mW&#x27;));
+// Write -&gt; Brain
+path(&#x27;M1040,733 L1040,862&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
+text(1050,804,&#x27;写入&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
+path(&#x27;M1270,733 L1270,862&#x27;,&#x27;#4338ca&#x27;,&#x27;mI&#x27;);
+text(1280,804,&#x27;写入&#x27;,&#x27;#4338ca&#x27;,&#x27;start&#x27;);
+// Brain -&gt; the next run&#x27;s work
+path(&#x27;M111,862 L111,734&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
+text(123,804,&#x27;装载 · 下一个 run&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
+// Brain -&gt; judgment
+path(&#x27;M1465,862 L1465,734&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
+text(1477,804,&#x27;Compound&#x27;,&#x27;#c2410c&#x27;,&#x27;start&#x27;);
+
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="onemove" title="One Move, Three Outcomes" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;One Move, Three Outcomes&lt;/title&gt;
+&lt;!-- Closing view of the autonomous-flow set: building the autonomous pipeline on one Domain Brain
+     is the same move that changes the people (talent) and the organisation. Each column is a set
+     of from → to shifts; the Brain underneath is why the three are one move. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
+.brand b{font-size:26px;font-weight:800;white-space:nowrap}
+
+.col{position:absolute;top:96px;width:482px;height:720px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden}
+.ch{height:86px;display:flex;align-items:center;padding:0 26px;color:#fff;font-size:28px;font-weight:800;white-space:nowrap}
+.col.p .ch{background:#2563eb}.col.t .ch{background:#c2410c}.col.o .ch{background:#7c3aed}
+.rows{position:absolute;left:22px;right:22px;top:108px;bottom:22px;display:flex;flex-direction:column;gap:14px}
+.r{flex:1;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;display:flex;flex-direction:column;justify-content:center;padding:0 22px}
+.r s{font-size:21px;font-weight:600;color:#4b5563;text-decoration:none;white-space:nowrap}
+.r b{font-size:25px;font-weight:800;color:#111827;margin-top:6px;white-space:nowrap}
+.r b:before{content:&quot;→&quot;;margin-right:10px;font-weight:800}
+.r em{font-style:normal;font-size:25px;font-weight:800;color:#c2410c;margin:4px 0 0 36px;white-space:nowrap}
+.col.p .r b:before{color:#2563eb}.col.t .r b:before{color:#c2410c}.col.o .r b:before{color:#7c3aed}
+.eq{position:absolute;top:400px;width:60px;text-align:center;font-size:56px;font-weight:800;color:#c2410c}
+
+#brain{position:absolute;left:16px;top:868px;width:1568px;height:160px;background:#0b3b37;border-radius:16px;color:#d5ece7}
+#brain .bt{position:absolute;left:28px;top:22px;font-size:30px;font-weight:800;color:#fff}
+.bl{position:absolute;top:92px;width:482px;text-align:center;font-size:22px;font-weight:800;color:#7ee0cf;white-space:nowrap}
+
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none;z-index:2}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;app&quot;&gt;
+
+&lt;header&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;&lt;span style=&quot;color:#c2410c&quot;&gt;One Move&lt;/span&gt;, Three Outcomes&lt;/b&gt;&lt;/div&gt;
+&lt;/header&gt;
+
+&lt;div class=&quot;col p&quot; style=&quot;left:16px&quot;&gt;
+  &lt;div class=&quot;ch&quot;&gt;Autonomous Pipeline&lt;/div&gt;
+  &lt;div class=&quot;rows&quot;&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;人指挥 AI 写代码&lt;/s&gt;&lt;b&gt;Agent 自主 run&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;In-the-loop 每一步都审&lt;/s&gt;&lt;b&gt;只管两头&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;交付即结束&lt;/s&gt;&lt;b&gt;每个 run 写回 Brain&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;看速度&lt;/s&gt;&lt;b&gt;看 Autonomous Rate&lt;/b&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;eq&quot; style=&quot;left:498px&quot;&gt;=&lt;/div&gt;
+&lt;div class=&quot;col t&quot; style=&quot;left:559px&quot;&gt;
+  &lt;div class=&quot;ch&quot;&gt;AI Native Talent&lt;/div&gt;
+  &lt;div class=&quot;rows&quot;&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;执行者&lt;/s&gt;&lt;b&gt;判断者 - On-the-loop&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;PM：写文档&lt;/s&gt;&lt;b&gt;PM：定意图 · 验收&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;Builder：写代码&lt;/s&gt;&lt;b&gt;Builder：设计 · 守质量&lt;/b&gt;&lt;em&gt;+ Build Autonomy&lt;/em&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;专家：答问题&lt;/s&gt;&lt;b&gt;专家：拥有 Domain Brain&lt;/b&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+&lt;div class=&quot;eq&quot; style=&quot;left:1041px&quot;&gt;=&lt;/div&gt;
+&lt;div class=&quot;col o&quot; style=&quot;left:1102px&quot;&gt;
+  &lt;div class=&quot;ch&quot;&gt;AI Native Org&lt;/div&gt;
+  &lt;div class=&quot;rows&quot;&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;按流程分工&lt;/s&gt;&lt;b&gt;按责任 &amp;amp; 结果分工&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;开会交接&lt;/s&gt;&lt;b&gt;经 Brain + Jira 交接&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;加人扩产&lt;/s&gt;&lt;b&gt;加 auto run 扩产&lt;/b&gt;&lt;/div&gt;
+    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;经验在人&lt;/s&gt;&lt;b&gt;知识在 Brain&lt;/b&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;div id=&quot;brain&quot;&gt;
+  &lt;div class=&quot;bt&quot;&gt;Domain Brain&lt;/div&gt;
+  &lt;div class=&quot;bl&quot; style=&quot;left:0&quot;&gt;auto run 读写&lt;/div&gt;
+  &lt;div class=&quot;bl&quot; style=&quot;left:543px&quot;&gt;人在其中成长&lt;/div&gt;
+  &lt;div class=&quot;bl&quot; style=&quot;left:1086px&quot;&gt;组织沉淀 · 复利&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
+  &lt;defs&gt;&lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;&lt;/defs&gt;
+  &lt;path d=&quot;M257,866 L257,820&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;2.5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;
+  &lt;path d=&quot;M800,866 L800,820&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;2.5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;
+  &lt;path d=&quot;M1343,866 L1343,820&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;2.5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;
+&lt;/svg&gt;
+
+&lt;/div&gt;
+&lt;script&gt;
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="tenets" title="Tenets" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Autonomous Agent Tenets&lt;/title&gt;
+&lt;!-- The four Autonomous Agent Tenets, English as published, one Chinese line each. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
+.brand b{font-size:26px;font-weight:800;white-space:nowrap}
+
+#grid{position:absolute;left:16px;right:16px;top:84px;bottom:24px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:20px}
+.t{position:relative;border-radius:18px;background:#fff;border:1px solid #e5e7eb;padding:40px 44px 40px 140px;display:flex;flex-direction:column;justify-content:center}
+.t .id{position:absolute;left:36px;top:50%;transform:translateY(-50%);width:76px;height:76px;border-radius:18px;background:#0b3b37;color:#fff;font:800 30px/76px Menlo,monospace;text-align:center}
+.t b{font-size:31px;font-weight:800;line-height:1.3;color:#111827;text-wrap:balance}
+.t span{font-size:21px;color:#374151;line-height:1.55;margin-top:18px}
+.t .tag{font-style:normal;position:absolute;right:22px;top:20px;font-size:16px;font-weight:700;border-radius:12px;padding:3px 12px}
+.t .tag.p0{background:#0b3b37;color:#7ee0cf}.t .tag.fl{background:#c2410c;color:#fff}
+.t.hot{background:#fffaf5;border:2px solid #f59e0b}.t.hot .id{background:#c2410c}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;app&quot;&gt;
+&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Autonomous Agent &lt;span style=&quot;color:#c2410c&quot;&gt;Tenets&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;&lt;/header&gt;
+
+&lt;div id=&quot;grid&quot;&gt;
+    &lt;div class=&quot;t&quot;&gt;&lt;i class=&quot;tag p0&quot;&gt;Priority 0&lt;/i&gt;&lt;div class=&quot;id&quot;&gt;T1&lt;/div&gt;
+      &lt;b&gt;Domain knowledge is the foundation — cultivate it, don&#x27;t just document it.&lt;/b&gt;
+      &lt;span&gt;Agent 能多自主，取决于专家的判断力。&lt;br&gt;知识要持续养，不是写完就放着。&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;t&quot;&gt;&lt;div class=&quot;id&quot;&gt;T2&lt;/div&gt;
+      &lt;b&gt;Human-on-the-loop — humans review and judge, the system remembers.&lt;/b&gt;
+      &lt;span&gt;人不再盯着干活，只在关键处做判断；&lt;br&gt;每次纠正都被记住，同一个问题不问第二次。&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;t&quot;&gt;&lt;div class=&quot;id&quot;&gt;T3&lt;/div&gt;
+      &lt;b&gt;Eval the whole autonomous loop, not just the deliverable — and let the eval steer.&lt;/b&gt;
+      &lt;span&gt;结果对了不等于自主，中间可能有人改了十遍。&lt;br&gt;要评整个过程，让评估决定下一步投在哪。&lt;/span&gt;&lt;/div&gt;
+    &lt;div class=&quot;t hot&quot;&gt;&lt;i class=&quot;tag fl&quot;&gt;Floor&lt;/i&gt;&lt;div class=&quot;id&quot;&gt;T4&lt;/div&gt;
+      &lt;b&gt;Quality and security are the floor — autonomy is built on top of them, never traded for them.&lt;/b&gt;
+      &lt;span&gt;质量和安全是底线；&lt;br&gt;对外、不可逆、客户数据动作必须人批。&lt;/span&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;/div&gt;
+&lt;script&gt;
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<iframe data-k="appendix" title="Appendix · Checkpoints" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;zh-CN&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
+&lt;title&gt;Appendix - Checkpoints&lt;/title&gt;
+&lt;!-- Appendix to the autonomous-flow set: the six checkpoints from the published Autonomous Agent
+     Tenets and Checkpoints, each with the evidence to ask for. Red dot = must-have. --&gt;
+&lt;style&gt;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
+body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
+#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
+.brand b{font-size:26px;font-weight:800;white-space:nowrap}
+.legend{margin-left:auto;font-size:16px;color:#4b5563;display:flex;align-items:center;gap:8px}
+.must{display:inline-block;width:13px;height:13px;border-radius:50%;background:#dc2626}
+
+.head{position:absolute;left:16px;right:16px;top:80px;height:36px;display:grid;grid-template-columns:96px 250px 1fr 470px;gap:20px;padding:0 24px;align-items:center;font-size:15px;font-weight:800;letter-spacing:1px;color:#6b7280}
+.rows{position:absolute;left:16px;right:16px;top:120px;bottom:24px;display:flex;flex-direction:column;gap:12px}
+.c{flex:1;display:grid;grid-template-columns:96px 250px 1fr 470px;gap:20px;align-items:center;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:0 24px}
+.cid{position:relative;width:64px;height:48px;border-radius:11px;background:#e2e8f0;color:#111827;font:800 20px/48px Menlo,monospace;text-align:center}
+.c.m .cid{background:#111827;color:#fff}
+.c.m .cid:after{content:&quot;&quot;;position:absolute;right:-6px;top:-6px;width:15px;height:15px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px #fff}
+.area{font-size:17px;font-weight:800;color:#0f3d3a}
+.what{font-size:19px;font-weight:600;line-height:1.5;color:#111827}
+.show{font-size:17px;line-height:1.5;color:#0f3d3a;background:#effaf7;border:1px solid #bfe6dd;border-radius:10px;padding:10px 14px}
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;app&quot;&gt;
+&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Appendix - &lt;span style=&quot;color:#c2410c&quot;&gt;Checkpoints&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;legend&quot;&gt;&lt;i class=&quot;must&quot;&gt;&lt;/i&gt;必须有&lt;/div&gt;&lt;/header&gt;
+
+&lt;div class=&quot;head&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;领域&lt;/span&gt;&lt;span&gt;检查点&lt;/span&gt;&lt;span&gt;要看&lt;/span&gt;&lt;/div&gt;
+&lt;div class=&quot;rows&quot;&gt;
+  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;K1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Domain Knowledge&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;领域知识就位：专家、相关方和 Agent 都在用，有领域专家对质量负责&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;正在被人和 Agent 使用的知识&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;c&quot;&gt;&lt;div class=&quot;cid&quot;&gt;K2&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Domain Knowledge&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;知识被用、并且在长：真实 run 里改变了 Agent 的决策，学到的写回&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;几个 run 和它们的写回&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;c&quot;&gt;&lt;div class=&quot;cid&quot;&gt;H1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Human-on-the-loop&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;按任务类型预设判断点，每个都有触发条件&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;判断点清单，和触发过的 run&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;H2&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Human-on-the-loop&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;云端远程 run：状态持久、可异步提问、答完续跑，trace 进 Eval&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;一个云端无人值守做完的真实任务&lt;br&gt;一次暂停 → 回答 → 续跑&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;E1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Eval&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;每个 run 留 trace、记全口径 token；独立的 Eval 和看板跟踪自主度、人的注意力、知识健康&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;trace、成本记录、看板&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;Q1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Quality &amp;amp; Security&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;质量和安全底线守住：Ticket Score 和安全逃逸都没有变差&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;Ticket Score、安全逃逸的趋势，对比自主之前的基线&lt;/div&gt;&lt;/div&gt;
+&lt;/div&gt;
+
+&lt;/div&gt;
+&lt;script&gt;
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+addEventListener(&#x27;resize&#x27;,fit);fit();
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+<script>
+const KEYS={'0':'home','1':'overall','2':'builder','3':'pipeline','4':'distill','5':'onemove','6':'tenets','7':'appendix'}, VALID=Object.values(KEYS);
+function show(k){ if(!VALID.includes(k)) k='home';
+  document.querySelectorAll('[data-k]').forEach(e=>e.classList.toggle('on',e.dataset.k===k));
+  history.replaceState(null,'','#'+k); }
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>show(b.dataset.k));
+// the number keys also work while a page has focus
+const key=e=>{ if(KEYS[e.key]) show(KEYS[e.key]); };
+addEventListener('keydown',key);
+document.querySelectorAll('iframe').forEach(f=>f.addEventListener('load',()=>f.contentWindow.addEventListener('keydown',key)));
+show(location.hash.slice(1));
+</script>
+</body>
+</html>
