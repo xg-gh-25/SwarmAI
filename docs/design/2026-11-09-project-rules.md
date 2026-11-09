@@ -3,7 +3,7 @@ title: 项目规则表：你对一个项目的长期要求送到这个项目的�
 created: 2026-11-09
 updated: 2026-11-09
 project: SwarmAI
-status: 草案 r2，待 XG 确认
+status: 已被 docs/design/2026-11-09-project-agent-contract.md 取代（2026-11-09）
 ---
 
 # 项目规则表（Project Rules）
