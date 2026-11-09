@@ -46,8 +46,10 @@ def lite_requirements():
 
 def full_design():
     return {
-        "alternatives": [{"what": "patch"}, {"what": "replace"}],
-        "chosen": "replace",
+        "alternatives": [{"id": "A1", "what": "patch",
+                          "why_not": "the bug comes back with the next caller"},
+                         {"id": "A2", "what": "replace"}],
+        "chosen": "A2",
         "design": {"user_workflow": "send request", "architecture": "router to service",
                    "flow": "request -> validate; invalid -> error; valid -> response",
                    "states": [{"name": "open", "created_by": "request",

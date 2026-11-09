@@ -77,11 +77,38 @@ def render_requirements(document: Mapping[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def one_line(value: Any) -> str:
+    """Model-written text on one line, whitespace collapsed and never cut: it cannot open a
+    heading or a list item of its own in a rendered document (its size is bounded by the
+    schema when it is submitted)."""
+    return " ".join(str(value or "").split())
+
+
 def render_design(document: Mapping[str, Any]) -> str:
     lines = ["# Design Spec", ""]
     chosen = document.get("chosen")
     if chosen:
-        lines += ["## Chosen approach", "", str(chosen), ""]
+        picked = schemas.chosen_alternative(document)
+        named = next((row for row in document.get("alternatives") or []
+                      if isinstance(row, Mapping) and picked and row.get("id") == picked
+                      and row.get("what")), None)
+        text = f"**{picked}** — {one_line(named['what'])}" if named else str(chosen)
+        lines += ["## Chosen approach", "", text, ""]
+    rejected = schemas.not_taken(document)
+    if rejected:
+        lines += ["## Considered and not taken", ""]
+        for row in rejected:
+            head = f"**{row['id']}** — " if row["id"] else ""
+            why = one_line(row["why_not"]) if row["why_not"] else "no reason recorded"
+            lines.append(f"- {head}{one_line(row['what'])}. Not taken: {why}")
+        lines.append("")
+    decided = [row for row in document.get("decisions") or [] if isinstance(row, Mapping)]
+    if decided:
+        lines += ["## Decisions", ""]
+        lines += [f"- **{one_line(row.get('id'))}** {one_line(row.get('question'))} → "
+                  f"{one_line(row.get('choice'))}. Why: {one_line(row.get('reason'))}"
+                  for row in decided]
+        lines.append("")
     design = document.get("design")
     if isinstance(design, Mapping):
         lines += ["## Design", "", f"**Workflow:** {design.get('user_workflow', '')}", "",

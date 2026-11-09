@@ -187,8 +187,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
                                {"stage": str, "repo": str, "code_tree": str,
                                 "n_pass": int, "n_fail": int, "n_not_run": int,
                                 "report_json": (str, dict)},
-                               # red at the run's base too (D6); absent when none
-                               {"n_pre_existing": int}),
+                               # red at the run's base too (D6); the agent's judgment
+                               # calls in the report (REPORT Decisions); absent when none
+                               {"n_pre_existing": int, "decisions": list}),
     "stage_attempt": _spec("cli", ("stage", "attempt"), "stage",
                            {"check_ids": list}),
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),
@@ -427,6 +428,10 @@ def _event_contract(event: Mapping[str, Any], *, allow_missing_ckey: bool) -> st
             raise EventError("validation_report code_tree must be a git tree id")
         if min(payload["n_pass"], payload["n_fail"], payload["n_not_run"]) < 0:
             raise EventError("validation_report counts must not be negative")
+        if "decisions" in payload:
+            from core.run_protocol.schemas import decision_issues
+            if decision_issues(payload["decisions"]):
+                raise EventError("validation_report decisions are malformed")
     if spec.ckey_path == "event_id:canonical":
         expected_ckey = ("CF-" + event["event_id"][:8]) if event.get("event_id") else None
     else:

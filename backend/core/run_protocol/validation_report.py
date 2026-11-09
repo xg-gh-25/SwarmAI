@@ -10,7 +10,13 @@ The pipeline does not run or observe tests. BUILD and TEST end with
                    "reason": "..."}],          # reason required unless pass
      "tests_changed": ["path", ...],            # tests added or changed
      "rationale": "why these tests show the change is right",
-     "risk": ["security"]}                      # optional (§3.5.2): dispatches security
+     "risk": ["security"],                      # optional (§3.5.2): dispatches security
+     "decisions": [{"id": "D1", "question": "...", "choice": "...",
+                    "reason": "..."}]}           # optional: judgment calls made here
+
+``decisions`` (optional, an empty list is fine) are the agent's judgment calls made while
+building or testing, in the shape DESIGN_SPEC uses (``schemas.decision_issues`` checks
+both). The event payload carries them inline, so the REPORT reads them from the log.
 
 The engine writes one ``validation_report`` event per repo; the event's ``code_tree``
 is the tree the engine computes for that repo's worktree at that moment, never a value
@@ -36,7 +42,7 @@ MAX_TESTS = 200
 MAX_COMMAND_CHARS = 2_000
 MAX_REASON_CHARS = 1_000
 MAX_RATIONALE_CHARS = 6_000
-_KEYS = {"repo", "commands", "tests_changed", "rationale", "risk"}
+_KEYS = {"repo", "commands", "tests_changed", "rationale", "risk", "decisions"}
 # what a report may declare about its change (§3.5.2); each name dispatches a reviewer
 RISKS = ("security",)
 _COMMAND_KEYS = {"command", "cwd", "result", "reason"}
@@ -99,6 +105,15 @@ def _one(row: Any, i: int, expected: Sequence[str]) -> dict[str, Any]:
             raise ReportError(f"{where}.risk must be a list of {list(RISKS)}")
         if risk:
             out["risk"] = sorted(set(risk))
+    if "decisions" in row:
+        from core.run_protocol.schemas import decision_issues
+        problems = decision_issues(row["decisions"], f"{where}.decisions")
+        if problems:
+            raise ReportError("; ".join(f"{path}: {message}" for path, message in problems))
+        if row["decisions"]:
+            out["decisions"] = [{key: entry[key].strip()
+                                 for key in ("id", "question", "choice", "reason")}
+                                for entry in row["decisions"]]
     return out
 
 
@@ -125,6 +140,9 @@ def event_payload(stage: str, report: Mapping[str, Any], code_tree: str) -> dict
             "n_pass": counts["pass"], "n_fail": counts["fail"],
             "n_not_run": counts["not_run"],
             **({"n_pre_existing": counts["pre_existing"]} if counts["pre_existing"] else {}),
+            # inline, so the REPORT's Decisions section is a function of the log alone
+            **({"decisions": [dict(d) for d in report["decisions"]]}
+               if report.get("decisions") else {}),
             "report_json": json.dumps(
                 report, ensure_ascii=False, sort_keys=True)}
 

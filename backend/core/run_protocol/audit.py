@@ -288,6 +288,66 @@ def _validation_lines(event_rows) -> list[str]:
     return report_lines(event_rows)
 
 
+def _decisions(design: Mapping[str, Any] | None, requirements: Mapping[str, Any] | None,
+               event_rows, answered: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Every judgment the run recorded, one entry each, in the order a reader meets them:
+    ``{id, question, choice, reason, source, by}``.
+
+    ``by`` is never taken from a field the agent writes. A REQUIREMENTS clarification or a
+    DESIGN_SPEC ``chosen.decisions`` row is credited to ``user`` / ``host`` only when the
+    log holds that answer (*answered*, by document and request id); the agent's own choice after the
+    decision cap is ``agent_after_cap``; a clarification with no recorded answer is the
+    agent's own account (``agent``). The agent's other decisions come from DESIGN_SPEC
+    ``decisions`` and the latest validation report per stage and repo (a resubmitted
+    report replaces its earlier one). What each says is the author's account: listed,
+    not judged."""
+    out: list[dict[str, Any]] = []
+    recorded = {(row.get("document"), row.get("request_id")): row for row in answered or ()
+                if isinstance(row, Mapping) and row.get("request_id")}
+
+    def text(value: Any) -> str | None:
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    def who(document: str, request_id: Any) -> str:
+        row = recorded.get((document, request_id))
+        if row is None:
+            return "agent"
+        if row.get("decided_by") == "agent_after_cap":
+            return "agent_after_cap"
+        return text(row.get("answered_by")) or "agent"
+
+    def agent(rows: Any, source: str) -> None:
+        for row in rows or []:
+            if isinstance(row, Mapping):
+                out.append({"id": text(row.get("id")), "question": text(row.get("question")),
+                            "choice": text(row.get("choice")), "reason": text(row.get("reason")),
+                            "source": source, "by": "agent"})
+    if isinstance(requirements, Mapping):
+        for row in requirements.get("clarifications") or []:
+            if isinstance(row, Mapping):
+                out.append({"id": text(row.get("qid")), "question": text(row.get("question")),
+                            "choice": text(row.get("answer")), "reason": None,
+                            "source": "REQUIREMENTS", "by": who("REQUIREMENTS", row.get("qid"))})
+    if isinstance(design, Mapping):
+        chosen = design.get("chosen")
+        for row in (chosen.get("decisions") or []) if isinstance(chosen, Mapping) else []:
+            if isinstance(row, Mapping):
+                asked = recorded.get(("DESIGN_SPEC", row.get("request_id"))) or {}
+                out.append({"id": text(row.get("request_id")),
+                            "question": text(asked.get("question")),
+                            "choice": text(row.get("choice")), "reason": None,
+                            "source": "DESIGN_SPEC", "by": who("DESIGN_SPEC", row.get("request_id"))})
+        agent(design.get("decisions"), "DESIGN_SPEC")
+    latest: dict[tuple[str, str], Any] = {}
+    for event in event_rows:
+        if event.get("kind") == "validation_report":
+            payload = event.get("payload") or {}
+            latest[(str(payload.get("stage")), str(payload.get("repo")))] = payload.get("decisions")
+    for (stage, repo), rows in latest.items():
+        agent(rows, f"{stage.upper()} report · {repo}")
+    return out
+
+
 def select_untracked(event_rows, read_blob) -> dict[str, Any] | None:
     """``{files: repo -> paths, reason}`` of the landing's metric(delivery_untracked),
     or None when no landing recorded one. Only the landing's own (cli) records count,
@@ -383,7 +443,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
           lessons: Sequence[Mapping[str, Any]] = (),
           knowledge: Mapping[str, Any] | None = None,
           untracked: Mapping[str, Any] | None = None,
-          children: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+          children: Sequence[Mapping[str, Any]] = (),
+          requirements: Mapping[str, Any] | None = None,
+          answered: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """*test_reports*: repo -> the latest TEST validation report (its commands are
     listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
     the run because their project has no DDD are listed in the REPORT); *open_checks*:
@@ -393,7 +455,13 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     before it -- REPORT gets one line, never the recalled text; *untracked*: the
     landing's untracked files from ``select_untracked`` (REPORT lists them; no verdict
     reads them); *children*: a Swarm Run's children and what the lead run did with each
-    (core/swarm_run.child_report; listed, never judged)."""
+    (core/swarm_run.child_report; listed, never judged); *requirements*: the REQUIREMENTS
+    document (its analysis and answered clarifications), None for a run without one;
+    *answered*: the run's recorded answers to its decision requests (the engine's
+    ``_answered_decisions``, each with the ``document`` it was asked for), the only
+    source that credits a decision to a person.
+    ``details.decisions`` / ``considered`` / ``analysis`` are the run's evidence for its
+    reviewer (``_decisions``): listed in the REPORT, never judged."""
     if audit_through not in {"DELIVER", "COMPLETED"}:
         raise AuditError("audit_through must be DELIVER or COMPLETED")
     if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
@@ -610,6 +678,13 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                                            if isinstance(knowledge.get("searches"), int) else None)}
                              if isinstance(knowledge, Mapping) else None)}
     details["children"] = [dict(c) for c in children if isinstance(c, Mapping)]
+    details["decisions"] = _decisions(design, requirements, event_rows, answered)
+    from core.run_protocol.schemas import not_taken
+    details["considered"] = not_taken(design) if isinstance(design, Mapping) else []
+    details["analysis"] = [
+        {key: row.get(key) for key in ("kind", "refs", "note", "resolution")}
+        for row in ((requirements or {}).get("analysis") or [])
+        if isinstance(row, Mapping)] if isinstance(requirements, Mapping) else []
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
              "summary": {"isolation": isolation, "speed": speed, "quality": quality,
@@ -730,12 +805,15 @@ def _isolation_text(row: Mapping[str, Any]) -> str:
 _MD_SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_[]!|~"})
 
 
-def _text(value: Any, limit: int = 300) -> str:
+def _text(value: Any, limit: int | None = 300) -> str:
     """Untrusted words (the user's requirement, a person's note, a check's detail) as
     plain Markdown text (K4 r1): one line, HTML-escaped, Markdown syntax escaped, so a
     REPORT committed into a repo carries no link, image, HTML or heading it did not
-    write itself."""
-    flat = " ".join(str(value).split())[:limit]
+    write itself. ``limit=None`` keeps all of it: a unit the reader acts on (a decision,
+    an alternative not taken) is shown whole, its size bounded when it was submitted."""
+    flat = " ".join(str(value).split())
+    if limit is not None:
+        flat = flat[:limit]
     flat = flat.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return flat.translate(_MD_SPECIAL)
 
@@ -778,6 +856,43 @@ def card_rows(audit: Mapping[str, Any]) -> list[dict[str, str]]:
             for name, row, detail in rows]
 
 
+def _evidence_lines(details: Mapping[str, Any]) -> list[str]:
+    """REPORT's Decisions and Findings sections (the reviewer's evidence): every entry
+    whole, on one line; a section with nothing in it is left out."""
+    lines: list[str] = []
+    decided = [row for row in details.get("decisions") or () if isinstance(row, Mapping)]
+    if decided:
+        lines += ["", "## Decisions", ""]
+        for row in decided:
+            entry = f"- {_text(row.get('id') or '-', None)} · "
+            if row.get("question"):
+                entry += f"{_text(row['question'], None)} → "
+            entry += _text(row.get("choice") or "no choice recorded", None)
+            if row.get("reason"):
+                entry += f". Why: {_text(row['reason'], None)}"
+            entry += f" ({_text(row.get('source') or '?', 80)}, {_text(row.get('by') or '?', 40)})"
+            lines.append(entry)
+    considered = [row for row in details.get("considered") or () if isinstance(row, Mapping)]
+    analysis = [row for row in details.get("analysis") or () if isinstance(row, Mapping)]
+    if considered or analysis:
+        lines += ["", "## Findings", ""]
+    if considered:
+        lines += ["Considered and not taken:", ""]
+        lines += [f"- {_text(row.get('id') or '-', 20)} · {_text(row.get('what') or '', None)}. "
+                  f"Not taken: {_text(row.get('why_not') or 'no reason recorded', None)}"
+                  for row in considered]
+        lines.append("")
+    if analysis:
+        lines += ["Requirements analysis:", ""]
+        lines += [f"- {_text(row.get('kind') or '?', 40)} ("
+                  f"{_text(', '.join(str(r) for r in row.get('refs') or ()), 200)}): "
+                  f"{_text(row.get('note') or '', None)} → {_text(row.get('resolution') or '?', 40)}"
+                  for row in analysis]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     """One renderer for REPORT and the chat card (§B8, §E9.5): the same five numbers."""
     if fmt not in {"report", "card"}:
@@ -810,6 +925,7 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
             + (f" (+{len(known['cited_on_demand'])} found on demand)" if known.get("cited_on_demand") else "")
             + (f" · searched the DDD {known['searches']}×" if isinstance(known.get("searches"), int)
                else "")]
+    lines += _evidence_lines(details)
     sources = details.get("answer_sources") or {}
     relayed = int(sources.get("relayed") or 0) if isinstance(sources, Mapping) else 0
     if relayed:

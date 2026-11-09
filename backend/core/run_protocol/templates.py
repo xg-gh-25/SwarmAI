@@ -54,8 +54,15 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     },
     # PLAN (full / bugfix): stage-complete --artifact -
     "design_spec": {
-        "alternatives": [{"what": "the approach chosen"}, {"what": "an approach not taken"}],
-        "chosen": "the approach chosen",
+        # more than one alternative: each has an id, chosen names one, every other one
+        # says why_not (the reviewer sees whether their objection was already weighed)
+        "alternatives": [{"id": "A1", "what": "the approach chosen"},
+                         {"id": "A2", "what": "an approach not taken",
+                          "why_not": "why it was not taken"}],
+        "chosen": "A1",
+        # optional: each judgment call the plan makes, one entry each ([] when none)
+        "decisions": [{"id": "D1", "question": "a choice the plan had to make",
+                       "choice": "what was chosen", "reason": "why"}],
         "design": {"user_workflow": "how a user meets the change",
                    "architecture": "where it lives and what it calls",
                    "flow": "call -> validate; invalid -> error; valid -> result",
@@ -84,7 +91,10 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
             {"command": "<COMMAND>", "cwd": ".", "result": "pre_existing",
              "reason": "fails the same way on the run's base (pipeline-v1 base-tree)"}],
         "tests_changed": ["<TEST_FILE>"],
-        "rationale": "why these commands show the change is right"}]},
+        "rationale": "why these commands show the change is right",
+        # optional: judgment calls made while building or testing ([] when none)
+        "decisions": [{"id": "D1", "question": "a choice the work had to make",
+                       "choice": "what was chosen", "reason": "why"}]}]},
     # DELIVER: reflect-prepare --artifact -
     "reflect": {
         "delivered": [{"kind": "event", "when": "2026-01-01", "scope": "project:<PROJECT>",

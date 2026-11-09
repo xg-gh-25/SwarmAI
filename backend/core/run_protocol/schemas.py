@@ -6,6 +6,10 @@ Public symbols:
 - ``SchemaIssue`` — one check-id/path/message result.
 - ``resolve_test_ref`` / ``test_refs`` — which repo path a DESIGN_SPEC test reference
   names, and every reference of a design (DS-2a at PLAN, TS-4 at TEST).
+- ``decision_issues`` — the problems of a ``decisions`` list (the agent's judgment calls,
+  each ``{id: D<n>, question, choice, reason}``): DESIGN_SPEC and validation reports.
+- ``chosen_alternative`` / ``not_taken`` — which alternative a DESIGN_SPEC chose, and the
+  ones it considered and did not take, with their ``why_not`` (renderers read these).
 
 Validation is pure and language-independent. Unknown fields are errors: obsolete model
 self-claims cannot silently survive the v1 cutover.
@@ -30,6 +34,13 @@ PROP_ID = re.compile(r"^P[1-9][0-9]*$")
 FAIL_ID = re.compile(r"^F[1-9][0-9]*$")
 TASK_ID = re.compile(r"^T[1-9][0-9]*$")
 EXIT_ID = re.compile(r"^X[1-9][0-9]*$")
+ALT_ID = re.compile(r"^A[1-9][0-9]*$")
+DECISION_ID = re.compile(r"^D[1-9][0-9]*$")
+# a decision is a unit a reviewer acts on: shown whole wherever it is shown, so its size
+# is bounded here, when it is submitted (never cut when it is rendered)
+MAX_DECISIONS = 50
+DECISION_LIMITS = {"question": 1_000, "choice": 2_000, "reason": 4_000}
+MAX_WHY_NOT_CHARS = 4_000
 EARS_PATTERNS = frozenset({"ubiquitous", "event", "state", "unwanted", "optional"})
 ANALYSIS_KINDS = frozenset({"conflict", "vague", "undefined_term", "missing_edge"})
 ANALYSIS_RESOLUTIONS = frozenset({"rewritten", "confirmed", "asked"})
@@ -395,6 +406,113 @@ def _refs(value: Any, out: list[SchemaIssue], path: str, known: set[str],
     return refs
 
 
+def decision_issues(value: Any, path: str = "decisions") -> list[tuple[str, str]]:
+    """``(path, message)`` for every problem of a ``decisions`` list: the agent's judgment
+    calls, one entry each, ``{id: D<n>, question, choice, reason}`` with every field
+    non-empty text, ids unique in the list. An empty list is a valid answer. Shared by
+    DESIGN_SPEC (DS-5) and the BUILD / TEST validation report, so the two cannot drift."""
+    if not isinstance(value, list):
+        return [(path, "must be a list")]
+    if len(value) > MAX_DECISIONS:
+        return [(path, f"at most {MAX_DECISIONS} decisions")]
+    problems: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for i, row in enumerate(value):
+        where = f"{path}[{i}]"
+        if not isinstance(row, Mapping):
+            problems.append((where, "must be an object"))
+            continue
+        for key in sorted(set(row) - {"id", *DECISION_LIMITS}):
+            problems.append((f"{where}.{key}", "unknown field"))
+        ident = row.get("id")
+        if not isinstance(ident, str) or not DECISION_ID.fullmatch(ident):
+            problems.append((f"{where}.id", "must be a decision id D1, D2, ..."))
+        elif ident in seen:
+            problems.append((f"{where}.id", f"duplicate decision id {ident}"))
+        else:
+            seen.add(ident)
+        for key, limit in DECISION_LIMITS.items():
+            text = row.get(key)
+            if not isinstance(text, str) or not text.strip():
+                problems.append((f"{where}.{key}", "must be non-empty text"))
+            elif len(text) > limit:
+                problems.append((f"{where}.{key}", f"at most {limit} characters"))
+    return problems
+
+
+def chosen_alternative(design: Mapping[str, Any]) -> str | None:
+    """The reference ``chosen`` names (``chosen.alternative`` once a person's answer was
+    written back into it), or None."""
+    chosen = design.get("chosen") if isinstance(design, Mapping) else None
+    if isinstance(chosen, Mapping):
+        chosen = chosen.get("alternative")
+    return chosen.strip() if isinstance(chosen, str) and chosen.strip() else None
+
+
+def not_taken(design: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The alternatives a DESIGN_SPEC considered and did not take: ``{id, what, why_not}``
+    (``id`` / ``why_not`` None when the document has none). The chosen one is the
+    alternative whose ``id`` ``chosen`` names; a document written before alternatives had
+    ids (``chosen`` holding the approach's own text) is matched on ``what``. When
+    ``chosen`` names none of them, which ones were not taken is unknown: nothing is
+    returned rather than a guess."""
+    rows = design.get("alternatives") if isinstance(design, Mapping) else None
+    rows = [row for row in rows or [] if isinstance(row, Mapping)]
+    chosen = chosen_alternative(design or {})
+    if not rows or chosen is None:
+        return []
+
+    def key(row: Mapping[str, Any]) -> Any:
+        ident = row.get("id")
+        return ident.strip() if isinstance(ident, str) and ident.strip() else row.get("what")
+    if not any(key(row) == chosen for row in rows):
+        return []
+
+    def text(value: Any) -> str | None:
+        return value.strip() if isinstance(value, str) and value.strip() else None
+    return [{"id": text(row.get("id")), "what": text(row.get("what")),
+             "why_not": text(row.get("why_not"))}
+            for row in rows if key(row) != chosen]
+
+
+def _alternatives(alternatives: list[Any], chosen: Any, out: list[SchemaIssue]) -> None:
+    """DS-6 for a full DESIGN_SPEC's alternatives: with more than one, each has an id
+    (A1, A2, ...) and its ``what``, ``chosen`` names one of the ids, and every other one
+    says ``why_not`` — the reviewer sees whether their objection was already weighed. A
+    single alternative needs neither. A given ``why_not`` is non-empty text."""
+    rows = [row for row in alternatives if isinstance(row, Mapping)]
+    for i, row in enumerate(alternatives):
+        if isinstance(row, Mapping) and "why_not" in row:
+            why = row.get("why_not")
+            if not isinstance(why, str) or not why.strip():
+                _issue(out, "DS-6", f"alternatives[{i}].why_not", "must be non-empty text")
+            elif len(why) > MAX_WHY_NOT_CHARS:
+                _issue(out, "DS-6", f"alternatives[{i}].why_not",
+                       f"at most {MAX_WHY_NOT_CHARS} characters")
+    if len(rows) < 2:
+        return
+    ids: list[str] = []
+    for i, row in enumerate(alternatives):
+        if not isinstance(row, Mapping):
+            continue
+        ident = row.get("id")
+        if not isinstance(ident, str) or not ALT_ID.fullmatch(ident):
+            _issue(out, "DS-6", f"alternatives[{i}].id",
+                   "must be an alternative id A1, A2, ... when there is more than one")
+        else:
+            ids.append(ident)
+        _text(row, "what", out, "DS-6", f"alternatives[{i}]")
+    _unique(ids, out, "DS-6", "alternatives")
+    picked = chosen_alternative({"chosen": chosen})
+    if picked not in ids:
+        _issue(out, "DS-6", "chosen", "must name one alternative by its id (A1, A2, ...)")
+        return
+    for i, row in enumerate(alternatives):
+        if isinstance(row, Mapping) and row.get("id") != picked and "why_not" not in row:
+            _issue(out, "DS-6", f"alternatives[{i}].why_not",
+                   "say why this alternative was not taken")
+
+
 def _consumers(document: Mapping[str, Any], out: list[SchemaIssue]) -> None:
     consumers, reason = document.get("consumers"), document.get("no_contract_change_reason")
     if consumers is not None and reason is not None:
@@ -514,11 +632,14 @@ def validate_design_spec(document: Any, *, variant: str,
         return [SchemaIssue("DS-5", "$", f"unknown design variant {variant!r}")]
     common = {"properties", "failure_modes", "tasks", "exit_criteria", "consumers",
               "no_contract_change_reason", "security_boundaries", "knowledge_refs",
-              "knowledge_checked"}
+              "knowledge_checked", "decisions"}
     allowed = common | ({"alternatives", "chosen", "design"} if variant == "full" else set())
     _strict(obj, allowed, out, "DS-5", "$")
     _knowledge_refs(obj, out, "DS-5")
     _knowledge_checked(obj, out, "DS-5")
+    if "decisions" in obj:              # optional: the agent's judgment calls, one each
+        for where, message in decision_issues(obj["decisions"]):
+            _issue(out, "DS-5", where, message)
     if not isinstance(requirement_ids, set) or any(not isinstance(x, str) for x in requirement_ids):
         _issue(out, "DS-5", "requirement_ids", "must be a set of requirement IDs")
         requirement_ids = set()
@@ -537,6 +658,8 @@ def validate_design_spec(document: Any, *, variant: str,
         chosen = obj.get("chosen")
         if not isinstance(chosen, (str, Mapping)) or not chosen:
             _issue(out, "DS-6", "chosen", "must identify the selected alternative")
+        else:
+            _alternatives(alternatives, chosen, out)
         design = _object(obj.get("design"), out, "DS-6", "design")
         if design is not None:
             _strict(design, {"user_workflow", "architecture", "flow", "states"},

@@ -1809,7 +1809,9 @@ class RunEngine:
     def _answered_decisions(self, document: str) -> list[dict[str, Any]]:
         """Every decided decision of *document*, from the logged log alone: a person's
         answer (``human_answer``) or the agent's after-cap choice (a ``decision`` with
-        ``decided_by``). The documents carry them as a projection (conformance F13)."""
+        ``decided_by``). The documents carry them as a projection (conformance F13). Each
+        row names its ``document``: the audit credits a decision to a person only for the
+        document that asked it."""
         events = self.store.read_events()
         asked = {e["payload"]["request_id"]: e for e in events if e.get("kind") == "decision"}
         picks: list[tuple[str, str, Mapping[str, Any]]] = []
@@ -1832,7 +1834,8 @@ class RunEngine:
             option = next((o for o in value.get("options") or []
                            if isinstance(o, Mapping) and o.get("id") == option_id), {})
             out.append({"request_id": request_id, "question": value.get("question"),
-                        "option_id": option_id, "choice": option.get("choice"), **how})
+                        "option_id": option_id, "choice": option.get("choice"),
+                        "document": document, **how})
         return out
 
     def _with_decisions(self, document: str, value: Mapping[str, Any]) -> dict[str, Any]:
@@ -3382,8 +3385,9 @@ class RunEngine:
     def _audit_facts(self) -> dict[str, Any]:
         """Measured inputs the audit cannot read from events (§E9.3, D5): how many repos
         really got a run worktree (recorded at creation, in the audit area), the
-        retained, unintegrated work, and the landing's untracked files (their list is in
-        a blob the events name)."""
+        retained, unintegrated work, the landing's untracked files (their list is in
+        a blob the events name), and the run's DESIGN_SPEC and REQUIREMENTS with their
+        recorded answers (the REPORT's Decisions and Findings)."""
         made = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
         isolated = (len([n for n in self.contract["expected_repos"] if n in made])
                     if self.contract["mode"] == "isolated" else 0)
@@ -3400,11 +3404,24 @@ class RunEngine:
         design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
         if isinstance(design, Mapping):     # the decisions are part of the design (K3)
             design = self._with_decisions("DESIGN_SPEC", design)
+        # its analysis and answered clarifications are REPORT evidence (Findings, Decisions)
+        try:       # evidence only: an unreadable file leaves those sections out here
+            requirements = self._read_json(
+                self.run_dir / "artifacts" / "requirements.json", None)
+        except (EngineError, OSError, ValueError):
+            logger.warning("run %s: requirements.json unreadable for the REPORT", self.run_id)
+            requirements = None
+        if isinstance(requirements, Mapping):
+            requirements = self._with_decisions("REQUIREMENTS", requirements)
         from core.run_protocol import audit as audit_protocol
         untracked = audit_protocol.select_untracked(rows, self.store.read_blob)
         return {"repos_isolated": isolated, "manual": manual, "title": self._run_title(),
                 "untracked": untracked,
                 "design": design if isinstance(design, Mapping) else None,
+                "requirements": requirements if isinstance(requirements, Mapping) else None,
+                # who answered each decision request, from the log (never the documents)
+                "answered": [*self._answered_decisions("REQUIREMENTS"),
+                             *self._answered_decisions("DESIGN_SPEC")],
                 "retained": [{"repo_name": row.get("repo_name"), "ledger": row.get("ledger")}
                              for row in self._retention_entries()
                              if isinstance(row, Mapping) and row.get("ledger")]}

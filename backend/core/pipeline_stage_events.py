@@ -16,7 +16,8 @@ The module is fail-safe (it never raises):
   stage that closed (completed / degraded) and per stage that opened between the two
   states, completions first, in the profile's order.
 - ``run_block`` / ``checklist`` — the run's alignment (requirement, planned stages).
-- ``attention_due`` / ``attention_block`` — the needs-you card with the DELIVER row.
+- ``attention_due`` / ``attention_block`` — the needs-you card with the DELIVER row
+  (a change that did not land, then the agent's own decisions).
 - ``attach_stage_docs`` / ``summary_block`` — each closed stage's documents, and the
   run's execution summary once it ends.
 
@@ -67,6 +68,8 @@ SUMMARY_MAX = 160
 REQUIREMENT_MAX = 400
 ITEM_TEXT_MAX = 200
 MAX_ATTENTION_ITEMS = 8
+#: ``details.decisions`` ``by`` values that mean the agent decided (run_protocol.audit._decisions)
+AGENT_DECIDED = frozenset({"agent", "agent_after_cap"})
 
 def _valid_run_id(value: object) -> bool:
     """The protocol's one run-id rule (``identifiers.validate_run_id``)."""
@@ -312,10 +315,33 @@ def attention_due(before: Optional[dict], after: Optional[dict], deliver_row_end
     return deliver_row_ended
 
 
+def _agent_decisions(run_dir: Optional[str]) -> list[dict[str, Any]]:
+    """The agent's own judgment calls as the run's audit keeps them (``run_audit.json``
+    ``details.decisions`` with ``by`` in ``AGENT_DECIDED``: its decisions, a clarification
+    no person's answer backs, its choice after the decision cap), the record the REPORT's Decisions section is
+    rendered from), as ``self_answered`` items: each whole (its size is bounded when it is
+    submitted). Empty when the file is missing, unreadable or too large."""
+    if not run_dir:
+        return []
+    try:
+        path = Path(run_dir) / "run_audit.json"
+        if path.stat().st_size > 4 * 1024 * 1024:
+            return []
+        rows = (json.loads(path.read_text(encoding="utf-8")).get("details") or {}).get("decisions")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [{"kind": "self_answered", "id": row.get("id"), "question": row.get("question"),
+             "answer": row.get("choice"), "reason": row.get("reason")}
+            for row in rows if isinstance(row, dict) and row.get("by") in AGENT_DECIDED] \
+        if isinstance(rows, list) else []
+
+
 def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
-    """What in this run needs a person: a change that did not land (it is not on main).
-    None when nothing does; open audit checks are not shown here (XG 2026-10-26: no
-    push verdict, they are one line in the REPORT's Quality cell)."""
+    """What in this run a person may want to look at: a change that did not land (it is
+    not on main) first, then the agent's own judgment calls (``self_answered``, folded in
+    the chat under "Assumptions to verify"; each can be overturned on its own). None when
+    there is neither; open audit checks are not shown here (XG 2026-10-26: no push
+    verdict, they are one line in the REPORT's Quality cell)."""
     if not state:
         return None
     items: list[dict] = []
@@ -323,6 +349,7 @@ def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dic
         reason = _clip(state.get("reason"), 120) or "not landed"
         items.append({"kind": "not_landed", "reasons": [reason],
                       "reasonCodes": [None], "detail": "Details: REPORT.md"})
+    items += _agent_decisions(state.get("run_dir"))
     if not items:
         return None
     return {"type": ATTENTION_BLOCK_TYPE, "runId": run_id,
