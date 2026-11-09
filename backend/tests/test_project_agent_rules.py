@@ -261,10 +261,17 @@ def test_a_rule_is_whole_sentences_and_the_session_is_the_gates(ws):
                        (base, {"agent_id": "sub-1"})):
         out = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": cmd}, **extra}, "t1", None))
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
-    # its tests are not the rule command: a sub-agent may run them
-    out = asyncio.run(gate({"tool_name": "Bash", "agent_id": "sub-1", "tool_input": {
-        "command": "python -m pytest -q tests/test_project_agent_rules.py"}}, "t1", None))
-    assert (out.get("hookSpecificOutput") or {}).get("permissionDecision") != "deny"
+    for cmd in ('python -c "import scripts.project_agent_rule as r; r.main()"',
+                "python3.12 scripts/project_agent_rule.py add --brain Demo --said x"):
+        out = asyncio.run(gate({"tool_name": "Bash", "agent_id": "sub-1", "tool_input": {"command": cmd}}, "t1", None))
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
+    # running its tests, or reading the script, is not the rule command: a sub-agent may
+    for cmd, extra in (("python -m pytest -q tests/test_project_agent_rules.py", {"agent_id": "sub-1"}),
+                       ("cat scripts/project_agent_rule.py", {"agent_id": "sub-1"}),
+                       ("git diff -- backend/scripts/project_agent_rule.py", {"agent_id": "sub-1"}),
+                       ("grep -n SWARM_APP_SESSION_ID scripts/project_agent_rule.py", {})):
+        out = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": cmd}, **extra}, "t1", None))
+        assert (out.get("hookSpecificOutput") or {}).get("permissionDecision") != "deny", cmd
 
 
 def test_writing_a_rule_keeps_the_files_mode(ws):

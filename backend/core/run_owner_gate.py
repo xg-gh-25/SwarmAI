@@ -616,7 +616,13 @@ _SO_MODULE = "scripts.swarm_out"
 #: a Brain rule is verified against this session's own user message (design
 #: 2026-11-09-project-agent-contract §4.3): the command needs the session id too
 _RULE_MODULE = "scripts.project_agent_rule"
-_RULE_CLI_RE = re.compile(r"project_agent_rule(?!s)")
+# the rule command when the command RUNS it: as a module (-m), as a path an interpreter is
+# given (.py or .pyc), or imported (python -c); a cat, grep or git diff of the script is no
+# run of it, and its tests (project_agent_rules) are not it
+_RULE_CLI_RE = re.compile(
+    r"-m\s+(?:scripts\.)?project_agent_rule(?!s)"
+    r"|\b(?:python[\d.]*|py|python-backend)\s+(?:-\S+\s+)*\S*project_agent_rule(?!s)"
+    r"|\b(?:import|from)\s+\S*project_agent_rule(?!s)")
 
 
 def _session_worktree_export(command: str, sid: str, turn_id: "str | None",
