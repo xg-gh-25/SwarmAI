@@ -119,11 +119,16 @@ Findings from any review (a gate, an expert, a reviewer sub-agent, a red test ru
 patched one by one as they arrive. Collect the whole round, evaluate them together, group by
 cause, write ONE fixing spec (cause, every site with the same cause, one solution per group,
 the test that proves it), fix it in one pass, then re-verify once.
-**The change's scope bounds the fix.** A finding about behaviour this change did not introduce
-(the reviewer says pre-existing, residual, "not caused by this diff") is out of scope: record it
-as a known issue (commit message / ToDo) for the user to schedule, never fold it into this run —
-unless it makes this change's own tests red. Widening the fix to it grows the diff, reopens
-review and the full test run, and is itself where new regressions come from.
+**The change's scope bounds the diff, not what gets fixed.** Where the defect sits decides:
+- **In or next to this change** (the function, read/write path or contract the change touched,
+  behaviour a comment it wrote describes) **or broken in front of me** (a red test, a crash, a
+  clear defect I ran into): fix it now, in this change or as its own commit right after
+  (SOUL P4: there is no "later").
+- **Elsewhere, pointed out in passing** (the reviewer says pre-existing, "not caused by this
+  diff"): do not widen this diff (it grows the change, reopens review and the full test run, and
+  is where new regressions come from); fix it as its own small change once this one lands.
+A defect I can fix is never left as "residual risk": a known issue (commit message / ToDo) is
+only for one that cannot be fixed now, with the reason.
 **Signal lands in the user's CURRENT channel** — a decision they need NOW goes in-band in this
 tab, never a passive dashboard/briefing/log. When I CAN decide → decide + disclose in one line
 ("chose X because Y, say so to override"). (SOUL P3+P4)
