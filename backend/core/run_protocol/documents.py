@@ -100,13 +100,13 @@ def render_design(document: Mapping[str, Any]) -> str:
         for row in rejected:
             head = f"**{row['id']}** — " if row["id"] else ""
             why = one_line(row["why_not"]) if row["why_not"] else "no reason recorded"
-            lines.append(f"- {head}{one_line(row['what'])}. Not taken: {why}")
+            lines.append(f"- {head}{one_line(row['what']).rstrip(' .')}. Not taken: {why}")
         lines.append("")
     decided = [row for row in document.get("decisions") or [] if isinstance(row, Mapping)]
     if decided:
         lines += ["## Decisions", ""]
         lines += [f"- **{one_line(row.get('id'))}** {one_line(row.get('question'))} → "
-                  f"{one_line(row.get('choice'))}. Why: {one_line(row.get('reason'))}"
+                  f"{one_line(row.get('choice')).rstrip(' .')}. Why: {one_line(row.get('reason'))}"
                   for row in decided]
         lines.append("")
     design = document.get("design")

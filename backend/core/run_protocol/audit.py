@@ -860,6 +860,10 @@ def _evidence_lines(details: Mapping[str, Any]) -> list[str]:
     """REPORT's Decisions and Findings sections (the reviewer's evidence): every entry
     whole, on one line; a section with nothing in it is left out."""
     lines: list[str] = []
+    def clause(value: Any) -> str:
+        """A field that a fixed '. Why:' / '. Not taken:' follows: its own closing full
+        stop is dropped, so the line never reads '..'."""
+        return _text(str(value).rstrip(" ."), None)
     decided = [row for row in details.get("decisions") or () if isinstance(row, Mapping)]
     if decided:
         lines += ["", "## Decisions", ""]
@@ -867,9 +871,9 @@ def _evidence_lines(details: Mapping[str, Any]) -> list[str]:
             entry = f"- {_text(row.get('id') or '-', None)} · "
             if row.get("question"):
                 entry += f"{_text(row['question'], None)} → "
-            entry += _text(row.get("choice") or "no choice recorded", None)
+            entry += clause(row.get("choice") or "no choice recorded")
             if row.get("reason"):
-                entry += f". Why: {_text(row['reason'], None)}"
+                entry += f". Why: {clause(row['reason'])}"
             entry += f" ({_text(row.get('source') or '?', 80)}, {_text(row.get('by') or '?', 40)})"
             lines.append(entry)
     considered = [row for row in details.get("considered") or () if isinstance(row, Mapping)]
@@ -878,7 +882,7 @@ def _evidence_lines(details: Mapping[str, Any]) -> list[str]:
         lines += ["", "## Findings", ""]
     if considered:
         lines += ["Considered and not taken:", ""]
-        lines += [f"- {_text(row.get('id') or '-', 20)} · {_text(row.get('what') or '', None)}. "
+        lines += [f"- {_text(row.get('id') or '-', 20)} · {clause(row.get('what') or '')}. "
                   f"Not taken: {_text(row.get('why_not') or 'no reason recorded', None)}"
                   for row in considered]
         lines.append("")

@@ -305,3 +305,12 @@ def test_engine_credits_a_recorded_answer_to_the_person(rig):
     # q1: the request the person answered on the card; Q1: a clarification the document
     # itself carries, with no recorded answer behind it: the agent's own account
     assert by == {"q1": "user", "Q1": "agent"}, value["details"]["decisions"]
+
+
+def test_a_field_ending_in_a_full_stop_reads_once():
+    design = _design(decisions=[_decision(choice="the existing documents.")])
+    design["alternatives"][1]["what"] = "a new evidence artifact."
+    for text in (documents.render_design(design), audit.render(_audit(design=design), fmt="report")):
+        assert ".." not in text
+        assert "a new evidence artifact. Not taken:" in text
+        assert "the existing documents. Why:" in text
