@@ -773,12 +773,18 @@ class RunEngine:
         return self.effective_repos()
 
     def _read_json(self, path: Path, default: Any) -> Any:
+        """*path* as JSON; *default* when it does not exist. Any other way the file cannot
+        be read (malformed JSON, not UTF-8, a directory, no permission) is one
+        ``EngineError`` naming the file, so every caller handles "this document is bad"
+        the same way instead of a raw OSError escaping from some of them."""
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return default
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise EngineError(f"malformed {path.name}: {exc}") from exc
+        except OSError as exc:
+            raise EngineError(f"unreadable {path.name}: {exc}") from exc
 
     def _record_integration_branch(self, name: str, branch: Any) -> None:
         """The branch the worktree forked from, kept in the audit area (B6 review): the
@@ -3405,12 +3411,7 @@ class RunEngine:
         if isinstance(design, Mapping):     # the decisions are part of the design (K3)
             design = self._with_decisions("DESIGN_SPEC", design)
         # its analysis and answered clarifications are REPORT evidence (Findings, Decisions)
-        try:       # evidence only: an unreadable file leaves those sections out here
-            requirements = self._read_json(
-                self.run_dir / "artifacts" / "requirements.json", None)
-        except (EngineError, OSError, ValueError):
-            logger.warning("run %s: requirements.json unreadable for the REPORT", self.run_id)
-            requirements = None
+        requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", None)
         if isinstance(requirements, Mapping):
             requirements = self._with_decisions("REQUIREMENTS", requirements)
         from core.run_protocol import audit as audit_protocol

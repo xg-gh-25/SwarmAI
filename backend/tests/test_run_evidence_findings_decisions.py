@@ -314,3 +314,29 @@ def test_a_field_ending_in_a_full_stop_reads_once():
         assert ".." not in text
         assert "a new evidence artifact. Not taken:" in text
         assert "the existing documents. Why:" in text
+
+
+@pytest.mark.timeout(300)
+def test_an_unreadable_run_document_is_one_engine_error(rig):
+    """A run document that cannot be read (not UTF-8, a directory) stops the audit with
+    one EngineError naming the file, like a malformed one: not a raw UnicodeDecodeError
+    or IsADirectoryError escaping from whichever reader got there first."""
+    from core.run_protocol.engine import EngineError
+    r = rig("bugfix")
+    r.create()
+    artifacts = r.engine().run_dir / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    try:
+        (artifacts / "requirements.json").write_bytes(b"\xff\xfe not utf-8")
+        with pytest.raises(EngineError, match="malformed requirements.json"):
+            r.engine().build_audit(through="DELIVER", persist=False)
+        (artifacts / "requirements.json").unlink()
+        (artifacts / "requirements.json").mkdir()
+        with pytest.raises(EngineError, match="unreadable requirements.json"):
+            r.engine().build_audit(through="DELIVER", persist=False)
+    finally:      # the rig's teardown reads the run's state
+        target = artifacts / "requirements.json"
+        if target.is_dir():
+            target.rmdir()
+        elif target.exists():
+            target.unlink()

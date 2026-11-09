@@ -325,9 +325,15 @@ async def test_products_before_a_pause_reach_the_turns_result(path):
         cont = (router.continue_with_answer("sid", "a", tool_use_id="q") if path == "answer"
                 else router.continue_with_cmd_permission("sid", "r", True))
         out = [ev async for ev in cont]
-    (deliv,) = [e for e in out if e.get("type") == "assistant"]
+    # the turn's own assistant blocks: ONE turn_deliverables block with both segments'
+    # files; after `result` only the turn's turn_outcome block (session_router: written
+    # and published once the turn ran to its end)
+    (deliv,) = [e for e in out if e.get("type") == "assistant"
+                and e["content"][0].get("type") == "turn_deliverables"]
     assert [f["absolutePath"] for f in deliv["content"][0]["files"]] == ["/ws/out/before.pptx", "/ws/out/after.md"]
-    assert out[-1]["type"] == "result" and unit._turn_files == {}
+    end = [e["type"] for e in out].index("result")
+    assert [e["content"][0]["type"] for e in out[end + 1:]] == ["turn_outcome"]
+    assert unit._turn_files == {}
 
 
 def test_turn_files_of_tolerates_units_without_the_dict():
