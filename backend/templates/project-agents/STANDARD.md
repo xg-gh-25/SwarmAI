@@ -41,7 +41,7 @@ Only what a Hive run reads.
 | `modes[].validations` | Checks the run must pass before it finishes, copied verbatim from `validations.json` or CI (`source`). |
 | `modes[].skills` | The Brain's skills the mode uses. A desktop-only skill is not listed on a Hive. |
 | `gates.enforce` (and a mode's own `gates`) | The Brain's gates (`3-gates/`) run before each command and file write. A mode only adds gates. |
-| `watches` | What every review of work here checks, each with the document it comes from. |
+| `watches` | What every review of work here checks, each with the document it comes from: a lasting property of this brain's work. Not a status, an open question, a to-do, a market view, or a rule the product already gives every session. |
 | `default_mode` | The mode used when a task names none. |
 
 Before a dispatch the host checks that every `tools` / `setup` / `validations` row's `source` is in

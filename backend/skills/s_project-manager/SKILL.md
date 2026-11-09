@@ -161,7 +161,7 @@ You judge; a tool writes:
    documents, and the proposal format (`contract`).
 2. Read PRODUCT / TECH / IMPROVEMENT / PROJECT.md, then write a proposal JSON in that
    format: `identity` (a one-sentence summary), 3-8 `handles` (typical intents),
-   `watches` (what a reviewer must look at, and why) and the `modes`. Every row names its `source`; a row with no source that exists is
+   `watches` (what a reviewer of a change here must look at, and why: a lasting property of this brain's work, never a status, an open question, a to-do, a market or competitor view, or a rule every brain has, since the product's own rules already reach every session) and the `modes`. Every row names its `source`; a row with no source that exists is
    not written, so leave out what no document supports. A brain with a bound repo
    gets a `code-change` mode: pick its `setup` and `validations` by command id from the
    facts (they are copied verbatim; never write a command yourself). Every brain gets
