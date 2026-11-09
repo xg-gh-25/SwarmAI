@@ -730,6 +730,20 @@ def apply(project_dir: Path, proposal: Any, *, dry_run: bool = False,
     report["problems"] = validate(doc, project_dir)
     if report["problems"] or dry_run:
         return report
+    from core.project_agent_rules import current_rules
+    from utils.file_lock import md_lock
+    with md_lock(target):
+        # the person's rules are never drafted: only scripts.project_agent_rule writes them
+        # (design 2026-11-09-project-agent-contract §4.3), so the draft takes them as the
+        # file holds them now, under the lock the rule command takes (a rule added while
+        # this draft was built is kept)
+        rules = current_rules(target)
+        if rules:
+            doc["rules"] = rules
+        return _write_draft(target, project_dir, doc, report)
+
+
+def _write_draft(target: Path, project_dir: Path, doc: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
     text = (std.HEADER + "# Written by `artifact_cli project-agent-draft` from this Brain's knowledge.\n"
             + yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
     if target.is_file():

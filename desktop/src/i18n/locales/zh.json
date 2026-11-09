@@ -4802,6 +4802,8 @@
       "typicalRequests": "常见请求：",
       "neverOnHive": "Hive 运行永远不做（只归你）：{{actions}}。",
       "gates": "每条命令都要过的 Brain 关卡：{{gates}}。",
+      "rules": "你对这个 Brain 的规则（{{count}}）",
+      "ruleUnverified": "未核实（手动写进文件的）",
       "reviewChecks": "每次 review 都检查的内容（{{count}}）",
       "notePlaceholder": "想改？告诉 agent 要改什么；它会修改定义，并告诉你改了什么。",
       "askInChat": "在聊天中提出"

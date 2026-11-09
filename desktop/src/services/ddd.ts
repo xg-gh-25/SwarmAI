@@ -190,6 +190,10 @@ export interface ProjectAgent {
   schema?: number;
   summary?: string;
   reviewFocus?: { area: string; why: string; source: string }[];
+  /** the person's standing requirements for this Brain, in their words; only a verified
+   *  one (checked against their own message when added) reaches any task
+   *  (core/project_agent_rules) */
+  rules?: { said: string; added: string; verified: boolean }[];
   /** the product's, the same for every Brain: what a Hive run never does (the person's) */
   reservedForHuman?: string[];
   /** typical requests: routing compares a task with them */

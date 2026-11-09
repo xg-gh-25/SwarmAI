@@ -3,7 +3,7 @@ title: Project Agent 是替一个 Brain 干活的角色，定义是 Brain 给这
 created: 2026-11-09
 updated: 2026-11-09
 project: SwarmAI
-status: 草案 r3，待 XG 确认
+status: r3 已确认（2026-11-09）；规则写入部分已实现
 supersedes: docs/design/2026-11-09-project-rules.md（规则表 r2，方案 D：规则放进 STEERING）
 ---
 
@@ -92,9 +92,9 @@ rules:
 送出去的就是原话 `said`，不另写改述。规则永远不会成为定义的"问题"，不进 `validate` / `dispatch_problems`，也就不会挡住派单。
 
 ### 4.3 写入：核实一次，记在 agent 写不到的地方
-- **只通过一个命令写**：`project-agent rule add --brain <B> --said "<原话>"`。命令做这几件事：
+- **只通过一个命令写**：`"$SWARM_BACKEND_BIN" py -m scripts.project_agent_rule add --brain <B> --said "<原话>"`（实现时定的名字）。命令做这几件事：
   1. 取这一轮人的消息：和 `ingest submit --evidence last-user` 一样，用 `session_inputs.latest_user_event_id`（`desktop_main.py:342-344`）。
-  2. 核实原话逐字在这条消息里：用 CDF 的 `_quote_found`，归一化后至少 6 个字。
+  2. 核实原话是这条消息里完整的一句或连续几句（只在句号、问号、叹号、换行处断句；用 CDF 的归一化），归一化后至少 6 个字。截一句里的一部分会丢掉"不要""never"，意思反过来，所以不接受。
   3. 写进 YAML。
   4. 往核实记录里追加一行：Brain、原话的哈希、event id、时间。
   
@@ -102,10 +102,11 @@ rules:
 - **核实记录**放在 `state/project_agent_rules/`。像 `state/pipeline_agent_audit` 一样，由 audit 写入 gate 拒绝 agent 写入、移动、删除（`hook_builder.py:392-402`，把这个目录加进它保护的路径）。这和 pipeline 审计日志是同一个防护等级：防的是 agent 出错或被诱导，不是防同一用户的其他进程。
 - **只核实一次，读的时候不再核实**。读的地方只送"YAML 里有、核实记录里也有"的规则。用户消息 90 天后被清掉不影响，换机器也不影响，Hive 用的是主机发过去的那份。
 - **核实不了就不写，并说明原因**：这一轮没有人的消息（频道消息让 `latest_user_event_id` 返回 None，`session_inputs.py:234-250`）；原话在消息里找不到；不到 6 个字。预热后被领用的会话没有 `SWARM_APP_SESSION_ID`：这个命令和 pipeline 命令一样，由 `run_owner_gate` 在调用前补上会话 id（`run_owner_gate.py:15-20`，加进它的命令名单）。
-- **拿掉**：`project-agent rule remove --brain <B> --said "<原话>"`，人说"去掉这条"时由 agent 执行。拿掉不需要核实，方向是安全的。
+- **拿掉**：`… scripts.project_agent_rule remove --brain <B> --said "<原话>"`，也要在人自己开启的这一轮里，而且这一轮的消息里要有整条规则：这一轮读到的网页拿不掉人的规则。
+- **防的是什么**：防 agent 出错（记了人没说的话，或者只截了一部分）。和 agent 执行的其他命令（pipeline、`ingest submit`）一样，这些检查在 agent 自己的进程里做，不防一个专门想绕过的 agent：用变量拼出会话 id 的名字、按路径跑脚本、`py -c` 直接调用，都看不见。这是全产品的已知限制（S6-3），在 REPORT 里列为剩余风险。XG 2026-11-09 选定这个方向（方案 A），不做人工确认。
 - **手改 YAML 加的规则**不会送出去，Brain Hub 上显示成"未核实"的警告，不算问题。
 - **重新起草时保留规则**：`project_agent_draft._merge` 只额外保留 `rules` 这一个键（`project_agent_draft.py:582-650`；每次绑定仓库都会重新起草，`artifact_cli.py:388`），不保留其他不认识的键，以免 11-01 退役的 `status`、`placements` 这类字段又回来。配一个测试。
-- **和 CDF 的边界**：
+- **和 CDF 的边界**（送达那次 run 一起做：规则送达之前，STEERING 是唯一能送到每个会话的路，提前去重会让规则两头落空）：
   - 抽取提示（`s7_review.py:355-365` 的 `_WHERE`）加一句："人只对一个 Brain 提的长期要求，在会话里用 `project-agent rule add` 记；记过的不再作为 user 范围提交。"
   - 再加一道确定性的去重：CDF 写 STEERING 之前，如果这个单元的 `user_quote` 和某条核实过的 Brain 规则原话相同，就不写，原因记为"已经是 Brain 规则"。
   - 会话里漏记的，CDF 照旧写进 STEERING，不会丢。
@@ -132,7 +133,7 @@ Brain Hub 的 Project Agent 页最上面列出规则：原话、日期、是否�
 
 | # | 风险 | 对策 | 落在哪 |
 |---|---|---|---|
-| 1 | **规则成了长期注入口**：agent 读到外部内容，被诱导写下"用户说以后都要 X"，假规则就会进入每个会话、每个专家、每一单 | 写入时核实一次：原话必须逐字出现在这一轮人的消息里；核实记录放在 agent 写不到的地方；只送核实过的规则；送出去的只有原话 | §4.3 |
+| 1 | **规则成了长期注入口**：agent 读到外部内容，被诱导写下"用户说以后都要 X"，假规则就会进入每个会话、每个专家、每一单 | 写入时核实一次：原话必须是这一轮人的消息里完整的一句或几句；核实记录放在 agent 写不到的地方；只送核实过的规则；送出去的只有原话 | §4.3 |
 | 2 | **定义里的错被放大到每个本机会话**：今天只有 Hive 读定义，起草出来的错一直没人发现 | 第 0 步已完成：12 份定义盘点清理，watches 从 58 条减到 41 条，起草说明和标准模板写明 watches 不是什么。第 1 步上线前再盘点一次 | §8 第 0 步 |
 | 3 | **本机被诱导跑大量检查**：SwarmAI code-change 有 11 条检查，KiroCrew 有 10 条 | 本机写成"按改动挑相关的跑"，不列 setup；pipeline 的 TEST 和 Hive 才是"结束前要跑" | §3.1 |
 | 4 | **token 和首 token 时间增加** | 不截断、不设上限（R23）。第 1 步前后各测一次：每个 Brain 的约定字数，SwarmAI 会话的提示长度和首 token 时间；明显变大时精简定义本身 | §9 验收 7 |

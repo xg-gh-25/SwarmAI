@@ -513,6 +513,7 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "schema": doc.get("schema", 1),
         "summary": str(identity.get("summary") or ""),
         "reviewFocus": _rows(d.get("watches"), ("area", "why", "source")),
+        "rules": _rule_view(project_dir),
         "reservedForHuman": sorted(RESERVED_ACTIONS),
         "gates": _str_list((d.get("gates") or {}).get("enforce")),
         "repos": _str_list(intake.get("repos")),
@@ -524,6 +525,13 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         # the typical requests routing compares a task with (core/task_spec.route)
         "handles": [h for h in _str_list(intake.get("handles"))][:8],
     }
+
+
+def _rule_view(project_dir: Path) -> list[dict[str, Any]]:
+    """The Brain's rules as the Hub lists them: the person's words, the day, and whether
+    the words were verified when added (core.project_agent_rules); file order."""
+    from core.project_agent_rules import rule_rows
+    return rule_rows(project_dir)
 
 
 #: the standard mode that changes a bound repo's code: it needs a check to run

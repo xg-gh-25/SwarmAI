@@ -3,7 +3,9 @@
  * docs/design/2026-11-01-project-agent-simple.md).
  *
  * The decision the page answers: "can a Hive run do this Brain's work, and what will it
- * do?". It shows only what a Hive run reads: the summary, each mode (when it is used,
+ * do?". It shows the person's rules for this Brain first (their words, each marked when it
+ * was not verified when added; design 2026-11-09-project-agent-contract §4.4), then only
+ * what a Hive run reads: the summary, each mode (when it is used,
  * its repos, setup, checks and skills), the Brain gates, what every review watches, and
  * the actions a run always asks you for (the product's, the same for every Brain).
  * Nothing here is confirmed or edited: the agent keeps the definition current, and a
@@ -63,6 +65,17 @@ export function ProjectAgentView({ brain, agent, onRevise }: {
         <button className="btn-sm btn-ghost" data-testid="pa-open-file" onClick={() => openPath(file)}>{t('ui.ProjectAgentView.openYaml')}</button>
       </div>
       {problems.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-error)]" data-testid="bm-agent-problems">{problems.join(' · ')}</div>}
+      {(agent.rules ?? []).length > 0 && (
+        <section className="mt-3" data-testid="pa-rules">
+          <div className="text-small font-medium">{t('ui.ProjectAgentView.rules', { count: (agent.rules ?? []).length })}</div>
+          <ul className="mt-1 space-y-0.5 text-small">
+            {(agent.rules ?? []).map((r, i) => (
+              <li key={i} data-testid={`pa-rule-${i}`}>
+                「{r.said}」<span className="text-meta text-[var(--color-text-muted)]"> · {r.added}</span>
+                {!r.verified && <span className="text-meta text-[var(--color-status-error)]"> · {t('ui.ProjectAgentView.ruleUnverified')}</span>}
+              </li>))}
+          </ul>
+        </section>)}
       {agent.summary && <p className="mt-3 text-small" data-testid="pa-summary">{agent.summary}</p>}
       {(agent.handles ?? []).length > 0 && (
         <div className="mt-2 text-meta" data-testid="pa-handles">

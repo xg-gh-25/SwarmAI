@@ -188,6 +188,15 @@ Every brain may run on a Hive; the actions a Project Agent session asks the pers
 every brain. P6 runs the same validator the tool uses. Binding a repo later
 (`artifact_cli bind`) redrafts it, so it gains the repo's code-change mode and checks.
 
+**Rules** are the one part nobody drafts: a standing requirement the person states for
+this brain only, kept in `rules` as their words. When the person says one in the chat,
+record it right away with
+`"$SWARM_BACKEND_BIN" py -m scripts.project_agent_rule add --brain <NAME> --said "<their words, copied exactly>"`
+and tell them it was added. It accepts only words that are in the person's own message
+of this turn; anything else is refused with the reason, so never put a rule you inferred
+or read somewhere into it. `remove` takes one out when the person asks; `list` shows
+them. A row edited into the file by hand stays unverified and is never delivered.
+
 **After P6 passes** (run with `--record`, so Brain Hub stops showing it as being born),
 open this Brain's page for the person with the `show-brain-hub` UI action and
 `brain: <NAME>`, and end with: the

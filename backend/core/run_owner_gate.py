@@ -613,6 +613,10 @@ _SW_MODULE = "scripts.session_worktree"
 #: agent gives on a run (design 2026-10-31-swarm-out-agent-owns-its-runs §2.1); it gets
 #: the same export, and is no landing (no turn changes are read for it)
 _SO_MODULE = "scripts.swarm_out"
+#: a Brain rule is verified against this session's own user message (design
+#: 2026-11-09-project-agent-contract §4.3): the command needs the session id too
+_RULE_MODULE = "scripts.project_agent_rule"
+_RULE_CLI_RE = re.compile(r"project_agent_rule(?!s)")
 
 
 def _session_worktree_export(command: str, sid: str, turn_id: "str | None",
@@ -686,7 +690,19 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
             (phase == "check" and (_SW_MODULE in command or pipeline_command.is_land(command)))
             or (phase == "approved" and pipeline_command.is_land(command)
                 and any(c in command for c in AFTER_APPROVAL)))
-        swarm_out_cli = phase == "check" and isinstance(command, str) and _SO_MODULE in command
+        bare = re.sub(r"[\"'\\]", "", command) if isinstance(command, str) else ""
+        # the rule command by module or by path (its tests, project_agent_rules, are not it)
+        rule_cli = phase == "check" and bool(_RULE_CLI_RE.search(bare))
+        if rule_cli and (input_data.get("agent_id") or _SESSION_ENV in bare or _TURN_ENV in bare):
+            # a rule is checked against this session's own user message: the session is
+            # the gate's, a sub-agent never adds or removes one (design
+            # 2026-11-09-project-agent-contract §4.3). Read from the command text, this
+            # catches a mistake; a command built to hide its session is not seen (S6-3)
+            return _deny("a Brain rule is added or removed only by the main agent of this "
+                         "session, with the session the gate gives it: do not set "
+                         f"{_SESSION_ENV} or {_TURN_ENV}, and do not run it from a sub-agent.")
+        swarm_out_cli = phase == "check" and isinstance(command, str) and (
+            _SO_MODULE in command or rule_cli)
         if lands or swarm_out_cli:
             # pure string work, no IO
             sub_agent = bool(input_data.get("agent_id"))

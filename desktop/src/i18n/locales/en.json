@@ -4802,6 +4802,8 @@
       "typicalRequests": "Typical requests:",
       "neverOnHive": "Never done by a Hive run (yours alone): {{actions}}.",
       "gates": "Brain gates on every command: {{gates}}.",
+      "rules": "Your rules for this Brain ({{count}})",
+      "ruleUnverified": "not verified (written into the file by hand)",
       "reviewChecks": "What every review checks ({{count}})",
       "notePlaceholder": "Want it changed? Tell the agent what to change; it edits the definition and tells you what it did.",
       "askInChat": "Ask in chat"
