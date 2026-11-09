@@ -3,7 +3,7 @@ title: Project Agent 是替一个 Brain 干活的角色，定义是 Brain 给这
 created: 2026-11-09
 updated: 2026-11-09
 project: SwarmAI
-status: r3 已确认（2026-11-09）；规则写入部分已实现
+status: r3 已确认（2026-11-09）；规则写入、三个入口的送达和 STEERING 去重已实现；pipeline 的 --agent-mode、knowledge.md 约定段、TEST 列检查未做
 supersedes: docs/design/2026-11-09-project-rules.md（规则表 r2，方案 D：规则放进 STEERING）
 ---
 

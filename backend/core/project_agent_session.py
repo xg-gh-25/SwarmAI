@@ -42,6 +42,7 @@ import yaml
 
 from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, RESERVED_ACTIONS, _list_of_dicts, _mode_view,
                                 gates_snapshot, general_brain_dir, normalize, revision, validate)
+from core.project_agent_rules import MAX_RULE_CHARS, MAX_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +98,28 @@ def pin_execution(value: Any, repos: Optional[dict[str, str]] = None) -> Optiona
             "repos": dict(repos or {})}
 
 
+#: the person's rules a dispatch may carry (design 2026-11-09-project-agent-contract §3.3):
+#: the limits a rule is added under (core.project_agent_rules), so a host never sends more
+MAX_PIN_RULES = MAX_RULES
+MAX_PIN_RULE_CHARS = MAX_RULE_CHARS
+
+
+def pin_rules(value: Any) -> list[str]:
+    """The rules a host's pin request carries: each non-empty string of at most
+    ``MAX_PIN_RULE_CHARS``, the first ``MAX_PIN_RULES`` of them (the limits a rule is added
+    under, so a host never sends more). A dropped item is logged; not a list gives []
+    (never an error: the task runs without them)."""
+    if not isinstance(value, list):
+        return []
+    kept = [r.strip() for r in value if isinstance(r, str) and r.strip() and len(r) <= MAX_PIN_RULE_CHARS]
+    if len(kept) != len(value) or len(kept) > MAX_PIN_RULES:
+        logger.warning("pin request rules: kept %d of %d", min(len(kept), MAX_PIN_RULES), len(value))
+    return kept[:MAX_PIN_RULES]
+
+
 def make_pin(workspace: Path, brain: str, mode: Optional[str] = None,
              seen_revision: Optional[str] = None, execution: Any = None,
-             repos: Optional[dict[str, str]] = None) -> dict[str, Any]:
+             repos: Optional[dict[str, str]] = None, rules: Any = None) -> dict[str, Any]:
     """The values a session under *brain*'s Project Agent enforces. Raises PinError
     when there is no valid definition, the mode does not exist, or the definition
     changed since *seen_revision*. ``execution``: how the task runs, decided by the
@@ -134,6 +154,16 @@ def make_pin(workspace: Path, brain: str, mode: Optional[str] = None,
            "reserved": sorted(RESERVED_ACTIONS), "gates": view["gates"], "gates_digest": digest}
     if ex is not None:
         pin["execution"] = ex
+    from core.app_role import is_worker
+    if is_worker():
+        # verified on the host, which holds the records; this Hive has none
+        kept = pin_rules(rules)
+    else:
+        # the host holds the records: a request's rules are never taken for the person's
+        from core.project_agent_rules import verified_rules
+        kept = [r["said"] for r in verified_rules(d)[0]]
+    if kept:
+        pin["rules"] = kept
     return pin
 
 
@@ -149,7 +179,7 @@ def create_pinned_run(session_id: str, pin: dict[str, Any]) -> Optional[str]:
     engine, _binding, _knowledge, _file = create_run(
         project=pin["brain"], profile=ex["profile"], session_id=session_id, repos=ex.get("repos") or {},
         run_id=ex["run_id"], transcript_ids=[], requirement=ex.get("requirement"),
-        owner_source="host", review_answers="host")
+        owner_source="host", review_answers="host", brain_rules=list(pin.get("rules") or []))
     return engine.run_id
 
 

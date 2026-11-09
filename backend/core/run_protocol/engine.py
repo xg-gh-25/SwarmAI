@@ -470,7 +470,8 @@ class RunEngine:
                requirement: str | None = None, has_ddd: bool = False,
                bound_repos: Sequence[str] = (),
                knowledge: Mapping[str, Any] | None = None,
-               owner_source: str = "host", review_answers: str = "host") -> "RunEngine":
+               owner_source: str = "host", review_answers: str = "host",
+               project_agent: Mapping[str, Any] | None = None) -> "RunEngine":
         """Create a run. Every run's code is in its own git worktree per repo (S6-5: the
         shared mode, where a run edited the main checkout, is gone). *has_ddd* and
         *bound_repos* come from the repos' bindings (project_binding.resolve,
@@ -555,6 +556,11 @@ class RunEngine:
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
                         **({"ddd_stale_since": ddd_stale_since} if ddd_stale_since else {}),
+                        # the Brain's rules and watches every reviewer checks against
+                        **({"project_agent": {"rules": [str(r) for r in project_agent.get("rules") or []],
+                                              "watches": [dict(w) for w in project_agent.get("watches") or []
+                                                          if isinstance(w, Mapping)]}}
+                           if isinstance(project_agent, Mapping) else {}),
                         # reference lines, never limits: the p95 of this install's own
                         # landed runs of the profile (review-closure §6.2); null = none yet
                         **_budgets(audit_root / "runs", profile)}
@@ -2989,6 +2995,9 @@ class RunEngine:
             ddd_map = self._expert_map(item["id"])
             if ddd_map:
                 review_input = ddd_map + "\n\n" + review_input
+            contract_block = self._brain_contract_block()
+            if contract_block:
+                review_input = contract_block + "\n\n" + review_input
             if item.get("high_risk"):
                 review_input = review.high_risk_notice(item["reason"]) + review_input
             # this visit's review of the same code by this expert (a re-ask, never a
@@ -3019,6 +3028,28 @@ class RunEngine:
         if not handouts:
             self._write_review_documents()
         return {"reviewers": roster, "handouts": handouts}
+
+    def _brain_contract_block(self) -> str:
+        """The section every expert's review input starts with: the person's rules for this
+        Brain and its watches, as recorded at create (design
+        2026-11-09-project-agent-contract §3.2), each on one line. "" for a run without them."""
+        from core.project_agent import one_line
+        agent = self.contract.get("project_agent")
+        if not isinstance(agent, Mapping):
+            return ""
+        rules = [r for r in agent.get("rules") or [] if isinstance(r, str) and r.strip()]
+        watches = [w for w in agent.get("watches") or [] if isinstance(w, Mapping)]
+        if not rules and not watches:
+            return ""
+        lines = [f"THE BRAIN'S CONTRACT ({self.project}): what this change must not break. "
+                 "Report a change that goes against one of these as a finding."]
+        if rules:
+            lines.append("The person's rules for this Brain, in their words:")
+            lines += [f"- 「{one_line(r)}」" for r in rules]
+        if watches:
+            lines.append("What every review of work here looks at:")
+            lines += [f"- {one_line(w.get('area'))}: {one_line(w.get('why'))}" for w in watches]
+        return "\n".join(lines)
 
     def _expert_knowledge(self, changed: Sequence[Mapping[str, Any]]) -> tuple[str, list[str], str]:
         """The correctness expert's PROJECT KNOWLEDGE section for *changed* (run-knowledge
@@ -3284,6 +3315,9 @@ class RunEngine:
             ddd_map = self._expert_map(expert)
             if ddd_map:
                 block = (block + "\n\n" + ddd_map) if block else ddd_map
+            contract_block = self._brain_contract_block()
+            if contract_block:
+                block = (contract_block + "\n\n" + block) if block else contract_block
             handouts.append(orchestrator.handout(
                 expert_id=expert, stage="review", round=1, attempt=attempt, at=_now(),
                 expert_instructions=review.expert_prompt(expert),

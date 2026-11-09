@@ -770,6 +770,12 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         # (writer: "Not injected")
         destination = destination.model_copy(update={"injectable": not facts.cited_external})
     done = dict(vectors=vectors, card0=card0, destination=destination)
+    if destination.store == "STEERING" and facts.user_words:
+        # a rule the person gave for one Brain has one home, that Brain's rules
+        # (design 2026-11-09-project-agent-contract §4.3)
+        from core.project_agent_rules import is_brain_rule_quote
+        if is_brain_rule_quote(getattr(unit, "user_quote", None), root):
+            return _decision(unit_id, "reject", "reject", "brain_rule", **done)
 
     event_key = None
     if isinstance(unit, EventUnit):

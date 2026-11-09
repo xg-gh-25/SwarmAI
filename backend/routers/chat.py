@@ -460,7 +460,7 @@ async def chat_stream(request: Request):
                 make_pin, get_swarmws(), str(pa.get("brain") or ""),
                 pa.get("mode") if isinstance(pa.get("mode"), str) else None,
                 pa.get("revision") if isinstance(pa.get("revision"), str) else None,
-                pa.get("execution"), run_repos)
+                pa.get("execution"), run_repos, pa.get("rules"))
         except PinError as e:
             raise ValidationException(message="Invalid Project Agent", detail=str(e))
     elif chat_request.project_agent and chat_request.session_id:

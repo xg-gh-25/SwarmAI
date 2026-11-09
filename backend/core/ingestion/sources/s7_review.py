@@ -360,7 +360,10 @@ _EXAMPLES = """- research: which sources were reliable and which not, and why; t
 _WHERE = """Where a unit goes follows from what you declare and what it rests on:
 - scope "user" (the user's own rule, profile or environment) is read in every future
   session: it is kept there only with user_quote, the user's own words copied verbatim
-  (same language, same characters) from one of the user messages it cites.
+  (same language, same characters) from one of the user messages it cites. A standing
+  requirement the user gave for one project only is that project's rule: it is recorded
+  during the session with `scripts.project_agent_rule add`; one recorded so is not
+  submitted again as scope "user".
 - scope "agent" or "world" is read in every future session too, whatever the project:
   declare it only for what changes how you judge in most tasks (a principle, a decision,
   a model, a correction, a broad lesson). A fact about one tool, library, API or subject

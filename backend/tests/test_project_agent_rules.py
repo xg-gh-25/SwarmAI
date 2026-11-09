@@ -20,6 +20,7 @@ What is tested, one question per test:
   (quoted, or the script by path) or comes from a sub-agent? These guard against mistakes;
   a command built to hide its session is the product-wide limit (S6-3).
 - does writing a rule keep the definition's file mode?
+- does add refuse a rule longer than a dispatch carries, and one more than a Brain holds?
 - does a package leave the rules out?
 Methodology: a temp workspace and app data dir; the person's message is the session
 input the command reads (session_inputs is replaced by its two lookups); the real gates,
@@ -295,3 +296,20 @@ def test_a_package_leaves_the_rules_out(tmp_path):
     for f in Path(res.out_dir).rglob("*"):
         if f.is_file():
             assert b"only-my-own-words-xyz" not in f.read_bytes(), f
+
+
+def test_add_refuses_what_a_dispatch_could_not_carry(ws):
+    workspace, state = ws
+    long_said = "这条规则很长。" * 300
+    state["text"] = long_said
+    with pytest.raises(rules.RuleError, match="at most"):
+        rules.add_rule(workspace, "Demo", long_said, "sess-1")
+    p = workspace / "Projects/Demo/project-agent.yaml"
+    doc = _doc(workspace)
+    doc["rules"] = [{"said": f"rule number {i} here"} for i in range(rules.MAX_RULES)]
+    p.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    state["text"] = MESSAGE
+    with pytest.raises(rules.RuleError, match="remove one"):
+        rules.add_rule(workspace, "Demo", SAID, "sess-1")
+    assert len(_doc(workspace)["rules"]) == rules.MAX_RULES
+    assert _records() == []                      # refused: no record either

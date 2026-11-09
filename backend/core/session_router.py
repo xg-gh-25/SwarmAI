@@ -1204,6 +1204,49 @@ async def _maybe_inject_ddd(
                        type(exc).__name__, exc)
     finally:
         unit._ddd_injected = True
+    await _maybe_inject_contract(project[0], options, unit, should_mutate_system_prompt)
+
+
+def _contract_block(project: str) -> str:
+    """The Project Agent block of *project* (core.project_agent.render_contract), or ""."""
+    from config import get_swarmws
+    from core.project_agent import render_contract
+    from core.project_agent_session import PinError, brain_dir
+    try:
+        d = brain_dir(Path(get_swarmws()), project)
+    except PinError:
+        return ""
+    return render_contract(d, project)
+
+
+async def _maybe_inject_contract(project: str, options: Any, unit: Any,
+                                 should_mutate_system_prompt: bool) -> None:
+    """Deliver the session's Brain's Project Agent contract once, with the DDD block, and
+    keep it for the first prompt after a compaction (design
+    2026-11-09-project-agent-contract §3.1). Not on a worker Hive or in a session pinned
+    to a Project Agent: there the task text is the contract. Never raises. The kept copy
+    is cleared first, so a respawn that delivers nothing re-sends no earlier Brain's block."""
+    ctx = getattr(unit, "_hook_session_context", None)
+    if isinstance(ctx, dict):
+        ctx.pop("_project_agent_block", None)
+    try:
+        from core.app_role import is_worker
+        if is_worker():
+            return
+        if ctx:
+            from core.project_agent_session import current_pin
+            if await current_pin(ctx):
+                return
+        from core import executors
+        block = await asyncio.wait_for(executors.run_in("io", _contract_block, project),
+                                       timeout=_RECALL_DISASTER_TIMEOUT_S)
+        if not block:
+            return
+        _deliver_block(options, unit, "\n\n" + block + "\n", should_mutate_system_prompt)
+        if isinstance(ctx, dict):
+            ctx["_project_agent_block"] = block
+    except Exception:  # noqa: BLE001 — an additive block never breaks the turn
+        logger.warning("Project Agent block for %s not delivered", project, exc_info=True)
 
 
 # Follow-up recall on a topic change. Recall used to run once per session (the

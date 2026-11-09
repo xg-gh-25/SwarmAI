@@ -1270,10 +1270,16 @@ def create_post_compact_injection(
         # Reset flag — fire once
         ctx["_compacted"] = False
 
+        text = " ".join(parts)
+        # the Brain's Project Agent contract the session got with its DDD block: the
+        # compaction folded it into the summary (design 2026-11-09-project-agent-contract §3.1)
+        block = ctx.get("_project_agent_block")
+        if isinstance(block, str) and block:
+            text += "\n\n" + block
         return {
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": " ".join(parts),
+                "additionalContext": text,
             }
         }
 

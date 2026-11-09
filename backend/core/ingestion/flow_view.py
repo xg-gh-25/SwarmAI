@@ -44,7 +44,7 @@ _BASIC = frozenset({"noisy", "credentialed_url", "malformed_payload", "commit_ti
 _PLACE = frozenset({"project_outside_brain"})
 # a project that did not exist was dropped before the General Brain took these (D7)
 _NO_PROJECT = frozenset({"unknown_project", "gap_without_project"})
-_KNOWN = frozenset({"already_exists"})
+_KNOWN = frozenset({"already_exists", "brain_rule"})
 _WITHDRAWN = frozenset({"withdrawn"})          # the same as what the user withdrew
 _OLDER = frozenset({"older_than_existing"})    # an existing entry is newer
 _BACKLOG = frozenset({"discarded_backlog"})

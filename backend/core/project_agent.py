@@ -534,6 +534,74 @@ def _rule_view(project_dir: Path) -> list[dict[str, Any]]:
     return rule_rows(project_dir)
 
 
+def one_line(value: Any) -> str:
+    """Definition or rule text as one line, whole: a newline in it cannot start a section
+    of the prompt it is put into."""
+    return " ".join(str(value or "").split())
+
+
+def render_contract(project_dir: Path, brain: str) -> str:
+    """The Project Agent block a session working for *brain* reads (design
+    docs/design/2026-11-09-project-agent-contract.md §3.1): the summary, each mode's
+    when, checks (to pick by what the change touches) and skills, the watches, the
+    person's verified rules word for word, the gate names and how to add a rule. No
+    setup: those commands build a fresh machine. Empty when the Brain has no readable
+    definition. Every item whole and on one line (one_line)."""
+    view = load_project_agent(Path(project_dir))
+    if not view or "modes" not in view:
+        return ""
+    from core.project_agent_rules import verified_rules
+    rules, _unverified = verified_rules(Path(project_dir))
+    lines = [f"## Project Agent — {brain}",
+             f"You are working for the {brain} Brain. Below is its Project Agent contract: "
+             "the Brain's definition and the person's rules for it; the product's rules (SOUL, "
+             "AGENT, the gates) rank above it."]
+    if view.get("summary"):
+        lines.append(one_line(view["summary"]))
+    modes = view.get("modes") or []
+    if modes:
+        lines.append("Kinds of work (pick the one whose 'when' fits and say which):")
+        for m in modes:
+            line = f"- {one_line(m['id'])}: {one_line(m['when'])}"
+            if m.get("validations"):
+                line += (". The Brain's checks; run the ones this change touches: "
+                         + "; ".join(f"{one_line(v['id'])}: `{one_line(v['command'])}`"
+                                     for v in m["validations"]))
+            if m.get("skills"):
+                line += f". Skills: {', '.join(one_line(s) for s in m['skills'])}"
+            lines.append(line)
+    if view.get("reviewFocus"):
+        lines.append("What every review of work here looks at:")
+        lines += [f"- {one_line(w['area'])}: {one_line(w['why'])}" for w in view["reviewFocus"]]
+    if rules:
+        lines.append("The person's rules for this Brain, in their words:")
+        lines += [f"- 「{one_line(r['said'])}」" for r in rules]
+    if view.get("gates"):
+        lines.append(f"Brain gates (run in dispatched sessions): {', '.join(one_line(g) for g in view['gates'])}.")
+    lines.append("When the person states a standing requirement for this Brain, record it with "
+                 f"`\"$SWARM_BACKEND_BIN\" py -m scripts.project_agent_rule add --brain {brain} --said "
+                 "\"<their whole sentences, copied exactly>\"` and tell them.")
+    return "\n".join(lines)
+
+
+def contract_for_run(project_dir: Path, rules: Optional[list[str]] = None) -> Optional[dict[str, Any]]:
+    """What a pipeline run records for its reviewers: ``{"rules": [...], "watches": [{area,
+    why}]}``, or None when there is neither. *rules* None = the Brain's verified rules on
+    this machine (a Hive passes the ones its dispatch carried). Never raises."""
+    try:
+        if rules is None:
+            from core.project_agent_rules import verified_rules
+            rules = [r["said"] for r in verified_rules(Path(project_dir))[0]]
+        view = load_project_agent(Path(project_dir)) or {}
+        watches = [{"area": w["area"], "why": w["why"]} for w in view.get("reviewFocus") or []
+                   if w.get("area") and w.get("why")]
+    except Exception:  # noqa: BLE001 — a run is created without it rather than not at all
+        logger.debug("contract_for_run failed for %s", project_dir, exc_info=True)
+        return None
+    rules = [r for r in rules or [] if isinstance(r, str) and r.strip()]
+    return {"rules": rules, "watches": watches} if rules or watches else None
+
+
 #: the standard mode that changes a bound repo's code: it needs a check to run
 CODE_CHANGE_MODE = "code-change"
 

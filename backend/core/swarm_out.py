@@ -651,6 +651,10 @@ def _pin_request(agent: Optional[dict], task: str = "") -> Optional[dict]:
     if not agent:
         return None
     req = {"brain": agent["brain"], "mode": agent["mode"], "revision": agent["revision"]}
+    if agent.get("rules"):
+        # verified on this host; the Hive keeps them in its pin (design
+        # 2026-11-09-project-agent-contract §3.3)
+        req["rules"] = list(agent["rules"])
     if agent.get("execution") == "native":
         req["execution"] = {"how": "native"}
     elif agent.get("execution") == "pipeline":
@@ -863,6 +867,7 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
         raise SwarmOutError(f"{brain} could not be synced to {inst['name']}: the Hive did not answer "
                             f"({type(e).__name__}); nothing was sent") from None
     agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "acceptance", "gates")}
+    agent["rules"] = list(spec.get("rules") or [])
     # the dispatch's id first: a pipeline task's run is named after it, so the project
     # section can name the run the Hive creates with the session (run-spec §4.2)
     dispatch_id = new_dispatch_id()

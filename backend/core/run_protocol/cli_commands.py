@@ -249,7 +249,7 @@ def parser() -> argparse.ArgumentParser:
 
 def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, str],
                run_id: str | None, transcript_ids: list[str], requirement: str | None,
-               owner_source: str, review_answers: str):
+               owner_source: str, review_answers: str, brain_rules: list[str] | None = None):
     """Create a run as ``pipeline-v1 create`` does once its owner is known: resolve the
     project's binding (run-knowledge §3.2), build the run's knowledge (§3.3), create it
     and write the knowledge file. ``(engine, binding, knowledge, knowledge_file)``."""
@@ -262,6 +262,15 @@ def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, 
     knowledge = run_knowledge.build(
         requirement, project=binding.project, has_ddd=binding.has_ddd,
         workspace=_workspace(), repo_roots=repos, purpose=purpose)
+    # the Brain's rules and watches its reviewers check against, fixed at create (design
+    # 2026-11-09-project-agent-contract §3.2): verified here, or the ones a Hive's
+    # dispatch carried (*brain_rules*)
+    from core.project_agent import contract_for_run
+    from core.project_agent_session import PinError, brain_dir
+    try:
+        agent = contract_for_run(brain_dir(_workspace(), binding.project), brain_rules)
+    except PinError:
+        agent = None
     engine = RunEngine.create(
         data_dir=get_app_data_dir(), workspace=_workspace(), project=binding.project,
         profile=profile, session_id=session_id, repos=repos,
@@ -269,7 +278,7 @@ def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, 
         requirement=requirement, has_ddd=binding.has_ddd,
         bound_repos=binding.bound_repos,
         knowledge=run_knowledge.contract_record(knowledge),
-        owner_source=owner_source, review_answers=review_answers)
+        owner_source=owner_source, review_answers=review_answers, project_agent=agent)
     knowledge_file = engine.write_knowledge(knowledge.markdown, purpose)
     return engine, binding, knowledge, knowledge_file
 

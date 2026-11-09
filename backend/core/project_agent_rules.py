@@ -39,9 +39,11 @@ Key public symbols:
 - ``current_rules(path)``  the ``rules`` value of a definition file as it is now (the draft
   writer carries it, so a redraft never drops a rule added meanwhile)
 
-Not here yet: delivering the verified rules to chat, review experts and Hive tasks, and
-CDF keeping such a rule out of STEERING. Both land together in the delivery run (design
-§3, §4.3): until rules are delivered, STEERING stays the path that reaches every session.
+- ``is_brain_rule_quote(quote, workspace)`` whether a Brain of *workspace* has a verified
+  rule in force with these words: CDF then keeps the unit out of STEERING (one home)
+
+Delivered to the desktop chat, review experts and Hive tasks through
+``project_agent.render_contract`` / ``contract_for_run`` and the task spec (design §3).
 """
 from __future__ import annotations
 
@@ -60,6 +62,9 @@ import yaml
 logger = logging.getLogger(__name__)
 
 MIN_CHARS = 6
+#: the most rules a Brain holds and the longest rule: a dispatch carries them all to a Hive
+MAX_RULES = 50
+MAX_RULE_CHARS = 2000
 RULES_KEY = "rules"
 _SUFFIX = ".jsonl"
 # what ends a sentence of the person's message: a rule is one sentence or several in a row,
@@ -197,6 +202,8 @@ def add_rule(workspace: Path, brain: str, said: str, session_id: str,
     said = (said or "").strip()
     if len(_norm(said)) < MIN_CHARS:
         raise RuleError(f"a rule needs at least {MIN_CHARS} characters of your words")
+    if len(said) > MAX_RULE_CHARS:
+        raise RuleError(f"a rule is at most {MAX_RULE_CHARS} characters; record its sentences as separate rules")
     try:
         project_dir = brain_dir(Path(workspace), brain)
     except PinError as exc:
@@ -213,6 +220,8 @@ def add_rule(workspace: Path, brain: str, said: str, session_id: str,
         rows = doc.get(RULES_KEY) if isinstance(doc.get(RULES_KEY), list) else []
         exists = any(isinstance(r, dict) and isinstance(r.get("said"), str) and quote_key(r["said"]) == key
                      for r in rows)
+        if not exists and len(rows) >= MAX_RULES:
+            raise RuleError(f"{brain} already has {MAX_RULES} rules; remove one before adding another")
         record = _record_file(brain)
         if key not in _record_keys(record):
             record.parent.mkdir(parents=True, exist_ok=True)
@@ -297,3 +306,29 @@ def current_rules(path: Path) -> Any:
     except Exception:  # noqa: BLE001
         return None
     return doc.get(RULES_KEY) if isinstance(doc, dict) and doc.get(RULES_KEY) else None
+
+
+def is_brain_rule_quote(quote: Optional[str], workspace: Path) -> bool:
+    """Whether a Brain of *workspace* has a verified rule with exactly these words
+    (normalized) still in its definition: its record exists and the rule was not removed.
+    Never raises (a failed check writes the unit as before)."""
+    if not quote or len(_norm(quote)) < MIN_CHARS:
+        return False
+    try:
+        key = quote_key(quote)
+        root = rules_dir()
+        if not root.is_dir():
+            return False
+        from core.project_agent_session import brain_dir
+        for record in sorted(root.glob(f"*{_SUFFIX}")):
+            if key not in _record_keys(record):
+                continue
+            try:
+                d = brain_dir(Path(workspace), record.name[:-len(_SUFFIX)])
+            except Exception:  # noqa: BLE001 — a record of a Brain that is not here
+                continue
+            if any(quote_key(r["said"]) == key for r in verified_rules(d)[0]):
+                return True
+    except Exception:  # noqa: BLE001
+        logger.debug("is_brain_rule_quote failed", exc_info=True)
+    return False
