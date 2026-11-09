@@ -192,3 +192,31 @@ def test_canvas_artifacts_keep_only_products(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "in_head", lambda paths: {})
     got = cs._artifacts("s1", str(ws), None)
     assert [r["absolutePath"] for r in got] == [str(note)]
+
+
+def test_canvas_artifacts_keep_the_sessions_run_documents(tmp_path, monkeypatch):
+    """A session that ran the pipeline lists every document of its run in Canvas, not
+    only the REPORT the product rule keeps (Left Nav keeps its one REPORT per run). Other
+    files in a run directory, a document of a run-shaped path outside Projects/<P>, and a
+    symlink named like a run document stay out."""
+    from core import session_outputs
+    ws = tmp_path / "ws"
+    run = ws / "Projects" / "P" / ".artifacts" / "runs" / "run_ab12"
+    names = ("REQUIREMENTS.md", "DESIGN_SPEC.md", "REVIEW.md", "FIXING_SPEC.md", "REPORT.md")
+    docs = [run / n for n in names]
+    other = [run / "run.json", run / "artifacts" / "design_spec.json",
+             ws / ".artifacts" / "runs" / "run_ab12" / "REVIEW.md",
+             ws / "Projects" / "P" / ".artifacts" / "runs" / "not-a-run" / "REVIEW.md"]
+    for f in (*docs, *other):
+        f.parent.mkdir(parents=True, exist_ok=True); f.write_text("x")
+    link = ws / "Projects" / "P" / ".artifacts" / "runs" / "run_cd34" / "REVIEW.md"
+    link.parent.mkdir(parents=True); link.symlink_to(docs[0])
+    rows = [{"path": str(p.relative_to(ws)), "absolutePath": str(p), "kind": "knowledge",
+             "firstAt": "t", "lastAt": "t", "writes": 1, "deleted": False}
+            for p in (*docs, *other, link)]
+    monkeypatch.setattr(session_outputs, "read", lambda sid: {"rows": rows, "backfilled": True})
+    monkeypatch.setattr(cs, "in_head", lambda paths: {})
+    got = cs._artifacts("s1", str(ws), None)
+    assert [r["absolutePath"] for r in got] == [str(p) for p in docs]
+    assert {r["role"] for r in got} == {"Pipeline"}
+    assert cs.run_document(str(docs[0]), None) is False

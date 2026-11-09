@@ -2,7 +2,7 @@
 title: Artifacts, one rule (Canvas and Left Nav)
 date: 2026-10-26
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-11-09
 status: accepted (Gawan 2026-10-26 "三条都做"); implemented
 ---
 
@@ -13,7 +13,7 @@ status: accepted (Gawan 2026-10-26 "三条都做"); implemented
 | Surface | Question | Filter |
 |---|---|---|
 | Turn product rows, DELIVERABLES | What did this turn write? | none: the emit gate's kinds, as they happened |
-| Canvas Artifacts | Of what this session wrote, what should the user look at? | the product rule |
+| Canvas Artifacts | Of what this session wrote, what should the user look at? | the product rule, plus the session's pipeline run documents |
 | Left Nav Artifacts | Of everything in SwarmAI, what should the user look at? | the product rule |
 
 The product rule is `ProductRegistry._classify` (role not `Other`, no garbage or
@@ -47,6 +47,17 @@ surfaces.
    `streaming_orchestrator` ask it when `needs_human_review` declines a SwarmWS path; a
    yes emits `kind: content`, so the turn rows, DELIVERABLES and `session_outputs` see
    it, and a delete marks its row.
+
+## 2a. Addendum 2026-11-09: a run's documents in its session's Canvas
+
+The product rule keeps one REPORT per run (`derive_role`: the `.artifacts` dot folder
+excludes everything else under it), which suits Left Nav: one row per run, labelled with
+its task. In the Canvas of the session that ran the pipeline the other documents were
+missing too (REQUIREMENTS, DESIGN_SPEC, REVIEW, FIXING_SPEC), although the turn listed
+them. `canvas_session._artifacts` also keeps a row that `canvas_session.run_document`
+names: a file named in `pipeline_stage_events.STAGE_DOCS`, directly in
+`Projects/<P>/.artifacts/runs/<run id>/`, not a symlink, shown with role `Pipeline`.
+Left Nav is unchanged (decided by Gawan: "按 A 直接修，只改 Canvas").
 
 ## 3. Cost
 

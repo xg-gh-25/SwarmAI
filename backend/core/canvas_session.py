@@ -6,7 +6,8 @@ Never shows another session's work, and is the same live, after a reload or a re
   its turns run), each row joined with the workspace product catalog
   (ProductRegistry.lookup: role, label, favorite — the same answer the left-nav
   Artifacts overlay gives for that file) and with whether the file is in its repo's
-  HEAD (``inHead``: the rail's NEW / UPD badge; one ``git ls-tree`` per repo). A
+  HEAD (``inHead``: the rail's NEW / UPD badge; one ``git ls-tree`` per repo), kept when
+  the product rule keeps it or it is one of the session's pipeline run documents. A
   session recorded before that store existed is imported once from its
   ``turn_deliverables`` blocks.
 - **Changes** ← core/session_changes: each persisted ``turn_changes`` card of the
@@ -20,7 +21,8 @@ single-worker ``canvas_session`` pool (behind the session_outputs writes the rou
 submitted first); Changes run on the ``canvas_changes`` pool (their own read-only
 database connection and git), so an Artifacts refresh never waits for them.
 
-Public: ``build``, ``artifact_rows``, ``in_head``, ``deliverable_turns``, ``MAX_FILES``.
+Public: ``build``, ``artifact_rows``, ``run_document``, ``in_head``, ``deliverable_turns``,
+``MAX_FILES``.
 """
 from __future__ import annotations
 
@@ -144,15 +146,46 @@ def _landed(path: str, session_id: Optional[str]) -> str:
 
 # ── the request ─────────────────────────────────────────────────────────────
 
+def run_document(abs_path: str, workspace: Optional[str]) -> bool:
+    """Is *abs_path* one of a pipeline run's own documents: a file named in
+    ``pipeline_stage_events.STAGE_DOCS`` (REQUIREMENTS, DESIGN_SPEC, REVIEW, FIXING_SPEC,
+    REPORT) directly in ``<SwarmWS>/Projects/<project>/.artifacts/runs/<run id>/``, not a
+    symlink. The product rule keeps only the REPORT (the dot folder excludes the rest);
+    a session that ran the pipeline still needs every document of its run in its Canvas."""
+    if not workspace:
+        return False
+    from core.pipeline_stage_events import STAGE_DOCS
+    from core.run_protocol.identifiers import IdentifierError, validate_run_id
+    rel = os.path.relpath(abs_path, workspace)
+    parts = rel.split(os.sep)
+    if len(parts) != 6 or parts[0] != "Projects" or parts[2:4] != [".artifacts", "runs"]:
+        return False
+    if parts[5] not in {name for names in STAGE_DOCS.values() for name in names}:
+        return False
+    try:
+        validate_run_id(parts[4])
+    except IdentifierError:
+        return False
+    return not os.path.islink(abs_path)
+
+
 def _artifacts(session_id: str, workspace: Optional[str], backfill_turns: Optional[list]) -> list[dict]:
-    """Blocking, on the canvas_session pool (after the router's queued writes). Only
-    the rows the product rule keeps: the same rule as Left Nav's Artifacts (design
-    2026-10-26-artifacts-one-rule.md); the turn's own rows list every write."""
+    """Blocking, on the canvas_session pool (after the router's queued writes). The rows
+    the product rule keeps (the same rule as Left Nav's Artifacts, design
+    2026-10-26-artifacts-one-rule.md), plus the session's pipeline run documents
+    (``run_document``: Left Nav keeps one REPORT per run, the Canvas of the session that
+    ran it lists them all); the turn's own rows list every write."""
     from core import session_outputs
     if backfill_turns is not None:
         session_outputs.backfill(session_id, backfill_turns)
     rows = artifact_rows(session_outputs.read(session_id)["rows"], workspace, session_id)
-    return [r for r in rows if r["product"]]
+    out = []
+    for r in rows:
+        if r["product"]:
+            out.append(r)
+        elif run_document(r["absolutePath"], workspace):
+            out.append({**r, "role": "Pipeline"})
+    return out
 
 
 async def build(session_id: str, parts: str = "all") -> dict[str, Any]:

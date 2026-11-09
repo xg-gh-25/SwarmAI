@@ -1,11 +1,12 @@
 /**
  * CanvasOutputRail — the session's OUTPUT list inside the Canvas surface.
  *
- * Shows ONLY the real deliverables the agent produced this session — the
- * `written` group from useReferencedFiles, MINUS bookkeeping noise
- * (.artifacts/ pipeline records, dotfiles, temp/scratch). This is STRICTER
- * than Radar's ChangesSection (which shows all written files): Canvas is
- * "outputs shown to the user", not "every file the agent touched".
+ * Shows ONLY the real deliverables the agent produced this session: the rows the
+ * backend keeps (core/canvas_session: the product rule, plus the documents of a
+ * pipeline run this session ran; dotfiles, temp/scratch and other .artifacts/ records
+ * are dropped there). This is STRICTER than Radar's ChangesSection (which shows all
+ * written files): Canvas is "outputs shown to the user", not "every file the agent
+ * touched".
  *
  * Reuse, not duplication of logic: the EXTRACTION (useReferencedFiles written
  * filter; each row's NEW/UPD badge is the backend's inHead) lives in hooks/ and is shared
