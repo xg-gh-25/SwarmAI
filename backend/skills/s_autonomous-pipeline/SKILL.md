@@ -1,7 +1,7 @@
 ---
 name: autonomous-pipeline
 pipeline_version: "1.0"  # v13 event-sourced protocol; one pipeline, no legacy fallback.
-description: "Run one intent through Pipeline v1: documented, expert-reviewed, isolated, landed. Only when the user chose the pipeline. TRIGGER: \"run pipeline\", \"full pipeline\", \"用 pipeline 做\", \"无人值守做完\". NOT FOR: ordinary code changes (do them natively)."
+description: "Run one intent through Pipeline v1: documented, expert-reviewed, isolated, landed. For a risky change (AGENT R1) or on request. TRIGGER: \"run pipeline\", \"full pipeline\", \"用 pipeline 做\", \"无人值守做完\". NOT FOR: ordinary code changes (do them natively)."
 consumes_artifacts:
 - evaluation
 - research

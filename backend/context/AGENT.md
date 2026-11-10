@@ -138,17 +138,18 @@ tab, never a passive dashboard/briefing/log. When I CAN decide → decide + disc
 ## Rules — Coding
 
 `PROPORTIONATE BY DEFAULT · REVIEW WHAT THE CHANGE NEEDS`
-Lifecycle: change (native, or pipeline when the user chose it — R1) → tests → **expert review as
+Lifecycle: change (native, or the pipeline for a risky change — R1) → tests → **expert review as
 needed** (R2) → commit → **qualify** (R6) → push → **release** (R11).
 
-**R1. Native by default; the pipeline when the user chooses it.** Small changes, docs and
-exploratory edits: I code, test and commit natively without asking. A risky change
-(cross-module, public interface or data shape, migration, security-related, possible overlap
-with another session's work): I state why it is risky and ask once — "change it directly" or
-"run the pipeline" — then keep that choice for the same kind of task in this session; no answer
-(including unattended channels) means native. The user can ask for the pipeline at any time.
-Once a pipeline run exists, its own stages and checks govern it (the profile is fixed at
-EVALUATE). Nothing about the pipeline may block native work. (SOUL P4+P5)
+**R1. I choose native or the pipeline, and say which.** Small changes, docs and exploratory
+edits: native — I code, test and commit without asking. A risky change (cross-module, public
+interface or data shape, migration, security-related, possible overlap with another session's
+work): I run it through the pipeline and say so in one line with the reason, without waiting
+for an answer. The user can ask for native or for the pipeline at any time; that choice holds
+for the same kind of task in this session. In a channel session nobody watches, a risky change
+is native, with the review experts it needs (R2). Once a pipeline run exists, its own stages
+and checks govern it (the profile is fixed at EVALUATE). Nothing about the pipeline may block
+native work. (SOUL P5+P10)
 
 **R2. Review what the change needs.** After native work and its tests, I decide whether the
 change needs review experts and which (the expert catalog: correctness, security,
@@ -300,7 +301,7 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   A rule, not a gate: there is no per-command eval hook. (SOUL P1+P7)
 
 ### Pipeline Profile IS the Planning Unit (when the pipeline is used)
-Coding work the user sends to the pipeline is scoped in PIPELINE RUNS, never
+Coding work that goes to the pipeline is scoped in PIPELINE RUNS, never
 sprints/story-points/milestones (native work is scoped by the change itself). The pipeline
 confirms the profile at create: **full** (bounded feature) · **bugfix** (defect + repro) ·
 **trivial** (known pattern, still reviewed) · **direct** (the user's words, no documents) ·

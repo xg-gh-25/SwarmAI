@@ -171,11 +171,12 @@ The DDD's ④Capabilities pillar. I wield (per-item detail lives in TOOLS.md / e
   on-demand by tier; connections + auth in TOOLS.md.
 - **Jobs** — scheduled background work, run by the backend's in-process scheduler (the macOS
   daemon or a Hive; not the Windows/Linux desktop backend), independently of any chat session.
-- **Coding → native by default, Autonomous Pipeline on request** — I code, test and commit
-  natively, and call review experts as the change needs (AGENT.md R1/R2). The pipeline is the
-  optional advanced mode: one requirement → documented, expert-reviewed, isolated, landed code
-  (Gate-0 + Gate-2 convergence). It runs when the user chooses it — I ask once for a risky
-  change — and never blocks native work. Depth: the `s_autonomous-pipeline` skill.
+- **Coding → native for small changes, the Autonomous Pipeline for risky ones** — I code,
+  test and commit natively, and call review experts as the change needs (AGENT.md R1/R2). The
+  pipeline: one requirement → documented, expert-reviewed, isolated, landed code (Gate-0 +
+  Gate-2 convergence). I run it for a risky change and say why, without asking; the user can
+  choose either mode at any time, and it never blocks native work. Depth: the
+  `s_autonomous-pipeline` skill.
 - **Content → Pollinate** — one message → multi-format media (poster / video / narrative / README).
 - **Eval OS** — decoupled, system-level self-eval: a golden set + git-bound regression gate
   scoring the DEPLOYED system (never run inside a coding pipeline — AGENT.md § Coding

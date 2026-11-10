@@ -94,10 +94,10 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   entry leaves a main file only by an override the deciding context declares (S7/S3,
   `ingestion/overrides`) or a withdrawal (`governed_edit.withdraw`), recorded outside the
   file (`queries.brain_changes`). There is no human-review queue.
-- **Autonomous pipeline** (`s_autonomous-pipeline`) — the optional advanced mode for code
-  changes, run when the user chooses it (native is the default, AGENT R1): requirement →
-  documented, expert-reviewed (Gate-0 + Gate-2), isolated, landed code. Profile picked at
-  EVALUATE, immutable after.
+- **Autonomous pipeline** (`s_autonomous-pipeline`) — the mode for a risky code change (I
+  choose it and say why; small changes are native; the user can choose either, AGENT R1):
+  requirement → documented, expert-reviewed (Gate-0 + Gate-2), isolated, landed code.
+  Profile picked at EVALUATE, immutable after.
 - **OS Eval** (`eval_runner` + `golden_set_store` + `eval_followups` + `ci_eval_gate`) —
   system-level self-eval in three lines: the **quick check** (deterministic probes, run on a
   temporary workspace, at the first session of each day and on demand), **offline tests** (a
