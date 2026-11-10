@@ -283,9 +283,16 @@ def _doc_paths_not_reviewed(event_rows) -> dict[str, list[str]]:
     return {repo: sorted(paths) for repo, paths in sorted(out.items())}
 
 
-def _validation_lines(event_rows) -> list[str]:
+def _validation_lines(event_rows, contract: Mapping[str, Any] | None = None) -> list[str]:
+    """The REPORT's Tests lines; with the Brain's checks the run recorded, for a profile
+    that has TEST (design 2026-11-09-project-agent-contract §3.2)."""
+    from core.run_protocol.lifecycle import PROFILE_STAGES
     from core.run_protocol.validation_report import report_lines
-    return report_lines(event_rows)
+    agent = (contract or {}).get("project_agent")
+    if not isinstance(agent, Mapping) or "test" not in PROFILE_STAGES.get((contract or {}).get("profile"), ()):
+        return report_lines(event_rows)
+    return report_lines(event_rows, mode=agent.get("mode"),
+                        checks=[c for c in agent.get("checks") or [] if isinstance(c, Mapping)])
 
 
 def _decisions(design: Mapping[str, Any] | None, requirements: Mapping[str, Any] | None,
@@ -646,7 +653,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "landed_unreviewed": _landed_unreviewed(event_rows),
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
-               "validation": _validation_lines(event_rows),
+               "validation": _validation_lines(event_rows, contract),
                # whether a review expert answered after reading the agent's reports
                "reports_reviewed": _reports_reviewed(event_rows),
                "trace_matrix": trace_protocol.matrix(design),

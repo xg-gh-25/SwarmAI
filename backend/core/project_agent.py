@@ -584,10 +584,41 @@ def render_contract(project_dir: Path, brain: str) -> str:
     return "\n".join(lines)
 
 
-def contract_for_run(project_dir: Path, rules: Optional[list[str]] = None) -> Optional[dict[str, Any]]:
-    """What a pipeline run records for its reviewers: ``{"rules": [...], "watches": [{area,
-    why}]}``, or None when there is neither. *rules* None = the Brain's verified rules on
-    this machine (a Hive passes the ones its dispatch carried). Never raises."""
+class ModeError(ValueError):
+    """A pipeline run names a kind of work the Brain's definition does not have."""
+
+
+def mode_checks(project_dir: Path, mode: Optional[str] = None) -> Optional[tuple[str, list[dict[str, str]]]]:
+    """The kind of work a pipeline run records (design 2026-11-09-project-agent-contract
+    §3.2) and its checks, ``(mode, [{"id", "command"}])``: *mode*, or the definition's
+    default mode when None. None when *mode* is None and the Brain has no readable
+    definition (or it names no mode). Raises ModeError when *mode* is given and the
+    definition is missing or has no such mode. Each check's id and command on one line."""
+    view = load_project_agent(Path(project_dir))
+    modes = {m["id"]: m for m in (view or {}).get("modes") or [] if m.get("id")}
+    if mode is None:
+        mode = (view or {}).get("defaultMode")
+        if not modes or mode not in modes:
+            return None
+    elif not modes:
+        raise ModeError(f"--agent-mode {mode}: this Brain has no readable Project Agent definition")
+    elif mode not in modes:
+        raise ModeError(f"--agent-mode {mode}: the Brain's modes are {', '.join(sorted(modes))}")
+    # one line each, like every definition text put into a prompt or the REPORT
+    checks = [{"id": one_line(v["id"]), "command": one_line(v["command"])}
+              for v in modes[mode]["validations"] if one_line(v.get("id")) and one_line(v.get("command"))]
+    return one_line(mode), checks
+
+
+def contract_for_run(project_dir: Path, rules: Optional[list[str]] = None,
+                     mode: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """What a pipeline run records at create: ``{"rules": [...], "watches": [{area, why}]}``
+    for its reviewers, and ``mode`` with its ``checks`` (``mode_checks``) when there is a
+    mode; None when there is none of these. *rules* None = the Brain's verified rules on
+    this machine (a Hive passes the ones its dispatch carried). Raises only ModeError for
+    a *mode* given and not in the definition; anything else gives what could be read."""
+    if mode is not None:
+        mode_checks(Path(project_dir), mode)          # a given mode is checked first
     try:
         if rules is None:
             from core.project_agent_rules import verified_rules
@@ -595,11 +626,15 @@ def contract_for_run(project_dir: Path, rules: Optional[list[str]] = None) -> Op
         view = load_project_agent(Path(project_dir)) or {}
         watches = [{"area": w["area"], "why": w["why"]} for w in view.get("reviewFocus") or []
                    if w.get("area") and w.get("why")]
+        work = mode_checks(Path(project_dir), mode)
     except Exception:  # noqa: BLE001 — a run is created without it rather than not at all
         logger.debug("contract_for_run failed for %s", project_dir, exc_info=True)
         return None
     rules = [r for r in rules or [] if isinstance(r, str) and r.strip()]
-    return {"rules": rules, "watches": watches} if rules or watches else None
+    out: dict[str, Any] = {"rules": rules, "watches": watches}
+    if work is not None:
+        out["mode"], out["checks"] = work
+    return out if rules or watches or work is not None else None
 
 
 #: the standard mode that changes a bound repo's code: it needs a check to run

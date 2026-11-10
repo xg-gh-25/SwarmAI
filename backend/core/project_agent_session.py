@@ -179,7 +179,8 @@ def create_pinned_run(session_id: str, pin: dict[str, Any]) -> Optional[str]:
     engine, _binding, _knowledge, _file = create_run(
         project=pin["brain"], profile=ex["profile"], session_id=session_id, repos=ex.get("repos") or {},
         run_id=ex["run_id"], transcript_ids=[], requirement=ex.get("requirement"),
-        owner_source="host", review_answers="host", brain_rules=list(pin.get("rules") or []))
+        owner_source="host", review_answers="host", brain_rules=list(pin.get("rules") or []),
+        agent_mode=pin.get("mode") if isinstance(pin.get("mode"), str) else None)
     return engine.run_id
 
 

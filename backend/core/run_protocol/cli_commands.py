@@ -147,6 +147,9 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--transcript-id", action="append", default=[])
     create.add_argument("--requirement",
                         help="the user's request, verbatim (required for --profile direct)")
+    create.add_argument("--agent-mode", default=None,
+                        help="the Brain's kind of work this run does (a mode of its Project "
+                             "Agent definition); default: the definition's default mode")
     for command in ("status", "review-start", "land",
                     "events", "findings", "resume", "restore"):
         item = sub.add_parser(command)
@@ -249,12 +252,30 @@ def parser() -> argparse.ArgumentParser:
 
 def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, str],
                run_id: str | None, transcript_ids: list[str], requirement: str | None,
-               owner_source: str, review_answers: str, brain_rules: list[str] | None = None):
+               owner_source: str, review_answers: str, brain_rules: list[str] | None = None,
+               agent_mode: str | None = None):
     """Create a run as ``pipeline-v1 create`` does once its owner is known: resolve the
     project's binding (run-knowledge §3.2), build the run's knowledge (§3.3), create it
-    and write the knowledge file. ``(engine, binding, knowledge, knowledge_file)``."""
+    and write the knowledge file. ``(engine, binding, knowledge, knowledge_file)``.
+    *agent_mode*: the Brain's kind of work (default: its definition's default mode); a
+    mode the definition does not have raises ValueError before anything is written."""
     from core.run_protocol import project_binding
     binding = project_binding.resolve(project, repos)          # run-knowledge §3.2
+    from core.project_agent import ModeError, contract_for_run
+    from core.project_agent_session import PinError, brain_dir
+    try:
+        brain = brain_dir(_workspace(), binding.project)
+    except PinError:
+        brain = None
+    if agent_mode is not None and brain is None:
+        raise ValueError(f"--agent-mode {agent_mode}: {binding.project} has no Project Agent definition")
+    try:
+        # the Brain's rules and watches its reviewers check against and the kind of
+        # work with its checks, fixed at create (design 2026-11-09-project-agent-contract
+        # §3.2): verified here, or the ones a Hive's dispatch carried (*brain_rules*)
+        agent = contract_for_run(brain, brain_rules, agent_mode) if brain is not None else None
+    except ModeError as exc:
+        raise ValueError(str(exc)) from None
     from core.run_protocol import run_knowledge                # run-knowledge §3.3
     from core.run_protocol.lifecycle import PROFILE_STAGES
     # a profile without EVALUATE goes straight to code: give it the design recall
@@ -262,15 +283,6 @@ def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, 
     knowledge = run_knowledge.build(
         requirement, project=binding.project, has_ddd=binding.has_ddd,
         workspace=_workspace(), repo_roots=repos, purpose=purpose)
-    # the Brain's rules and watches its reviewers check against, fixed at create (design
-    # 2026-11-09-project-agent-contract §3.2): verified here, or the ones a Hive's
-    # dispatch carried (*brain_rules*)
-    from core.project_agent import contract_for_run
-    from core.project_agent_session import PinError, brain_dir
-    try:
-        agent = contract_for_run(brain_dir(_workspace(), binding.project), brain_rules)
-    except PinError:
-        agent = None
     engine = RunEngine.create(
         data_dir=get_app_data_dir(), workspace=_workspace(), project=binding.project,
         profile=profile, session_id=session_id, repos=repos,
@@ -305,7 +317,8 @@ def execute(args) -> dict[str, Any]:
             project=args.project, profile=args.profile, session_id=args.session_id,
             repos=_repos(args.repo), run_id=args.run_id,
             transcript_ids=[*args.transcript_id, *_this_transcript()],
-            requirement=args.requirement, owner_source=owner_source, review_answers=review_answers)
+            requirement=args.requirement, owner_source=owner_source, review_answers=review_answers,
+            agent_mode=args.agent_mode)
         result = {"ok": True, "pipeline_id": engine.run_id, "project": binding.project,
                   "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json"),
                   "knowledge": {"file": str(knowledge_file), "status": knowledge.status,
@@ -404,6 +417,10 @@ def _with_next(engine: RunEngine, result: dict[str, Any], *, previous_stage: str
             result["worktree_error"] = str(exc)
     result["state"] = engine.projection()
     result["repos"] = engine.effective_repos()       # where the run's code is edited
+    if getattr(engine, "report_warnings", None):
+        # a report's row named something that is not a check of the run's mode: kept,
+        # not recorded as a check (design 2026-11-09-project-agent-contract §3.2)
+        result.setdefault("warnings", []).extend(engine.report_warnings)
     handouts = result.get("handouts")
     result["next"] = next_step(engine, previous_stage=previous_stage,
                                dispatched=len(handouts) if isinstance(handouts, list) else None)

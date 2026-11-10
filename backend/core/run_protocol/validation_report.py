@@ -7,7 +7,8 @@ The pipeline does not run or observe tests. BUILD and TEST end with
     {"repo": "<expected repo name>",
      "commands": [{"command": "...", "cwd": "...",
                    "result": "pass|fail|not_run|pre_existing",
-                   "reason": "..."}],          # reason required unless pass
+                   "reason": "...",            # reason required unless pass
+                   "validation": "<id>"}],     # optional: the Brain's check this command runs
      "tests_changed": ["path", ...],            # tests added or changed
      "rationale": "why these tests show the change is right",
      "risk": ["security"],                      # optional (§3.5.2): dispatches security
@@ -17,6 +18,13 @@ The pipeline does not run or observe tests. BUILD and TEST end with
 ``decisions`` (optional, an empty list is fine) are the agent's judgment calls made while
 building or testing, in the shape DESIGN_SPEC uses (``schemas.decision_issues`` checks
 both). The event payload carries them inline, so the REPORT reads them from the log.
+
+``validation`` names one of the checks of the Brain's kind of work recorded at create
+(design 2026-11-09-project-agent-contract §3.2): the event payload's ``checks`` keeps
+``{id: result}`` for those ids, an id that is not one of them is a warning
+(``unknown_checks``), never a refusal, and the REPORT lists each check as its result or
+"not run". Which command runs which check is said by the agent, not matched by text:
+commands are reported wrapped in a time cap and with an interpreter path.
 
 The engine writes one ``validation_report`` event per repo; the event's ``code_tree``
 is the tree the engine computes for that repo's worktree at that moment, never a value
@@ -45,7 +53,7 @@ MAX_RATIONALE_CHARS = 6_000
 _KEYS = {"repo", "commands", "tests_changed", "rationale", "risk", "decisions"}
 # what a report may declare about its change (§3.5.2); each name dispatches a reviewer
 RISKS = ("security",)
-_COMMAND_KEYS = {"command", "cwd", "result", "reason"}
+_COMMAND_KEYS = {"command", "cwd", "result", "reason", "validation"}
 
 
 class ReportError(ValueError):
@@ -90,6 +98,11 @@ def _one(row: Any, i: int, expected: Sequence[str]) -> dict[str, Any]:
                                    f"result is {result})", MAX_REASON_CHARS)
         elif cmd.get("reason"):
             item["reason"] = _text(cmd.get("reason"), f"{cw}.reason", MAX_REASON_CHARS)
+        # the check this command runs: kept as given (one line); an id that is not a
+        # check of the run's mode is a warning later (unknown_checks), never a refusal
+        check = " ".join(str(cmd.get("validation") or "").split())[:MAX_COMMAND_CHARS]
+        if check:
+            item["validation"] = check
         out_commands.append(item)
     tests = row.get("tests_changed")
     if not isinstance(tests, list) or len(tests) > MAX_TESTS:
@@ -133,9 +146,43 @@ def parse(artifact: Any, expected_repos: Sequence[str]) -> list[dict[str, Any]]:
     return rows
 
 
-def event_payload(stage: str, report: Mapping[str, Any], code_tree: str) -> dict[str, Any]:
-    """The ``validation_report`` event payload: summary inline, the report as a blob."""
+#: when one check is reported by several rows, the worst result is its result
+_WORST = ("fail", "pre_existing", "not_run", "pass")
+
+
+def _named_checks(report: Mapping[str, Any], check_ids: Sequence[str]) -> dict[str, str]:
+    """``{id: result}`` for the rows naming one of *check_ids* (worst result wins)."""
+    out: dict[str, str] = {}
+    for c in report["commands"]:
+        cid = c.get("validation")
+        if cid in check_ids:
+            prev = out.get(cid)
+            out[cid] = c["result"] if prev is None else min(prev, c["result"], key=_WORST.index)
+    return out
+
+
+def unknown_checks(reports: Sequence[Mapping[str, Any]], check_ids: Sequence[str],
+                   mode: str | None = None) -> list[str]:
+    """One warning per row whose ``validation`` is not a check of the run's *mode*."""
+    out = []
+    for report in reports:
+        for c in report["commands"]:
+            cid = c.get("validation")
+            if cid and cid not in check_ids:
+                where = (f"the checks are {', '.join(check_ids)}" if check_ids else
+                         f"mode {mode} has no checks" if mode else
+                         "this run records no kind of work")
+                out.append(f"{report['repo']}: validation {cid!r} is not a check of this run's "
+                           f"mode ({where}); the row is kept, not counted as a check")
+    return out
+
+
+def event_payload(stage: str, report: Mapping[str, Any], code_tree: str,
+                  check_ids: Sequence[str] = ()) -> dict[str, Any]:
+    """The ``validation_report`` event payload: summary inline, the report as a blob;
+    ``checks`` ({id: result}) when a row names one of *check_ids*."""
     counts = {r: sum(1 for c in report["commands"] if c["result"] == r) for r in RESULTS}
+    named = _named_checks(report, check_ids)
     return {"stage": stage, "repo": report["repo"], "code_tree": code_tree,
             "n_pass": counts["pass"], "n_fail": counts["fail"],
             "n_not_run": counts["not_run"],
@@ -143,6 +190,8 @@ def event_payload(stage: str, report: Mapping[str, Any], code_tree: str) -> dict
             # inline, so the REPORT's Decisions section is a function of the log alone
             **({"decisions": [dict(d) for d in report["decisions"]]}
                if report.get("decisions") else {}),
+            # inline too: the REPORT's Brain checks lines read the log alone
+            **({"checks": named} if named else {}),
             "report_json": json.dumps(
                 report, ensure_ascii=False, sort_keys=True)}
 
@@ -183,16 +232,27 @@ def find_command(store: Any, events: Sequence[Mapping[str, Any]], *, repo: str,
     return None
 
 
-def report_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
+def report_lines(events: Sequence[Mapping[str, Any]], *, mode: str | None = None,
+                 checks: Sequence[Mapping[str, Any]] = ()) -> list[str]:
     """REPORT lines from the events alone (the REPORT is a pure function of the log):
     per stage and repo, the latest report's tree and counts. The commands themselves
-    are in the report blob (``read``)."""
+    are in the report blob (``read``). With the run's *mode* and its *checks* (only for
+    a profile that has TEST): one line per check, the result the latest TEST reports
+    gave it, or "not run". Never a blocking fact."""
     lines: list[str] = []
     for stage in ("build", "test"):
         for repo, event in sorted(latest(events, stage).items()):
             p = event["payload"]
             lines.append(f"- {stage} · {repo} @ {str(p['code_tree'])[:12]}: "
                          f"{p['n_pass']} pass, {p['n_fail']} fail, {p['n_not_run']} not run")
+    if mode and checks:
+        results: dict[str, str] = {}
+        for event in latest(events, "test").values():
+            for cid, result in ((event.get("payload") or {}).get("checks") or {}).items():
+                prev = results.get(cid)
+                results[cid] = result if prev is None else min(prev, result, key=_WORST.index)
+        lines.append(f"- the Brain's checks ({mode}), as the TEST reports name them:")
+        lines += [f"  - {c['id']}: {results.get(c['id'], 'not run')}" for c in checks]
     if lines:
         head = ("## Tests (reported by the agent, not rerun by the pipeline; review experts read these reports)"
                 if reports_reviewed(events) else

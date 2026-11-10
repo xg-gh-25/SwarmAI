@@ -189,7 +189,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
                                 "report_json": (str, dict)},
                                # red at the run's base too (D6); the agent's judgment
                                # calls in the report (REPORT Decisions); absent when none
-                               {"n_pre_existing": int, "decisions": list}),
+                               {"n_pre_existing": int, "decisions": list,
+                                # the Brain's checks a row named: {id: result}
+                                "checks": dict}),
     "stage_attempt": _spec("cli", ("stage", "attempt"), "stage",
                            {"check_ids": list}),
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),

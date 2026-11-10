@@ -559,7 +559,12 @@ class RunEngine:
                         # the Brain's rules and watches every reviewer checks against
                         **({"project_agent": {"rules": [str(r) for r in project_agent.get("rules") or []],
                                               "watches": [dict(w) for w in project_agent.get("watches") or []
-                                                          if isinstance(w, Mapping)]}}
+                                                          if isinstance(w, Mapping)],
+                                              # the kind of work and its checks (TEST, REPORT)
+                                              **({"mode": str(project_agent["mode"]),
+                                                  "checks": [{"id": str(c["id"]), "command": str(c["command"])}
+                                                             for c in project_agent.get("checks") or []]}
+                                                 if project_agent.get("mode") else {})}}
                            if isinstance(project_agent, Mapping) else {}),
                         # reference lines, never limits: the p95 of this install's own
                         # landed runs of the profile (review-closure §6.2); null = none yet
@@ -2647,11 +2652,27 @@ class RunEngine:
         if unknown:
             raise EngineError(f"validation report: the code or base of {unknown} is unknown "
                               "(no worktree, or its base cannot be named); nothing recorded")
+        check_ids = [c["id"] for c in self.brain_checks()]
+        self.report_warnings = validation_report.unknown_checks(reports, check_ids, self.brain_mode())
         for report in reports:
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="validation_report", at=_now(),
                 ordinal=NEXT, payload=validation_report.event_payload(
-                    stage, report, code_trees[report["repo"]]))
+                    stage, report, code_trees[report["repo"]], check_ids))
+
+    def brain_checks(self) -> list[dict[str, str]]:
+        """The checks of the Brain's kind of work recorded at create (``[{"id",
+        "command"}]``); [] for a run without one (design 2026-11-09-project-agent-contract
+        §3.2)."""
+        agent = self.contract.get("project_agent")
+        if not isinstance(agent, Mapping):
+            return []
+        return [dict(c) for c in agent.get("checks") or [] if isinstance(c, Mapping) and c.get("id")]
+
+    def brain_mode(self) -> str | None:
+        """The Brain's kind of work recorded at create, or None."""
+        agent = self.contract.get("project_agent")
+        return str(agent["mode"]) if isinstance(agent, Mapping) and agent.get("mode") else None
 
     def write_knowledge(self, markdown: str, purpose: str = "requirement") -> Path:
         """``artifacts/knowledge.md`` (requirement, at create) or

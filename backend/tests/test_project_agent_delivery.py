@@ -150,7 +150,8 @@ def test_every_reviewer_gets_the_rules_recorded_at_create(tmp_path, monkeypatch)
     _verify(PROJECT, RULE)
     r.create()
     assert r.engine().contract["project_agent"] == {
-        "rules": [RULE], "watches": [{"area": "hot paths", "why": "measured timings"}]}
+        "rules": [RULE], "watches": [{"area": "hot paths", "why": "measured timings"}],
+        "mode": "code-change", "checks": [{"id": "unit", "command": "pytest -q"}]}
     r.drive(until="review")
     started = r.v1("review-start")
     assert started.get("ok") is True, started
@@ -172,6 +173,9 @@ def test_every_reviewer_gets_the_rules_recorded_at_create(tmp_path, monkeypatch)
     assert contract_for_run(d, ["from the dispatch"])["rules"] == ["from the dispatch"]
     (d / "project-agent.yaml").write_text(yaml.safe_dump({k: v for k, v in DEF.items()
                                                           if k not in ("rules", "watches")}), encoding="utf-8")
+    assert contract_for_run(d, []) == {"rules": [], "watches": [], "mode": "code-change",
+                                       "checks": [{"id": "unit", "command": "pytest -q"}]}
+    (d / "project-agent.yaml").unlink()
     assert contract_for_run(d, []) is None
 
 

@@ -3,7 +3,7 @@ title: Project Agent 是替一个 Brain 干活的角色，定义是 Brain 给这
 created: 2026-11-09
 updated: 2026-11-09
 project: SwarmAI
-status: r3 已确认（2026-11-09）；规则写入、三个入口的送达和 STEERING 去重已实现；pipeline 的 --agent-mode、knowledge.md 约定段、TEST 列检查未做
+status: r3 已确认（2026-11-09）；已全部实现：规则写入、三个入口的送达、STEERING 去重（第 1 步），pipeline 记 mode、TEST 列检查、REPORT 标出每条检查（第 2 步，2026-11-10 收窄）
 supersedes: docs/design/2026-11-09-project-rules.md（规则表 r2，方案 D：规则放进 STEERING）
 ---
 
@@ -61,10 +61,10 @@ AgentSpaces 的 Project Agent 是每个项目一个常驻的编排者。我们�
 - **gates 在本机不执行**，只列名字（§9 第 2 条）。保留动作照旧走产品的审批 gate，会问人，不会直接拒绝。
 
 ### 3.2 本地 pipeline
-- **create 时记下来**：`pipeline create` 新增 `--agent-mode`，默认取定义里的 `default_mode`。不能叫 `mode`，因为 run 的 contract 里已经有 `mode: "isolated"`（`engine.py:543`）。create 时把渲染好的约定写成这个 run 的一份受保护文件，跟 `knowledge.md` 同一类，同时记下 revision；之后各阶段只读这一份，和 `review.md` 按 run 的基线读是同一个道理（`engine.py:3175`）。旧 run 没有这份文件，所有读的地方都把"没有"当作"没有约定"处理，不报错（§7 第 8 条）。Hive 上，约定从 pin 里来（§3.3）。
-- **执行的 agent**：`knowledge.md` 在"数据，不是指令"那一行标题**之前**加一段约定，每条带 `item_id`，写进 contract 的 knowledge items，这样 REQUIREMENTS / DESIGN_SPEC 可以引用（RQ-5/DS-5，`engine.py:2726-2750`）。
-- **审查专家**：每个专家的派单都带上规则和 watches，不只 correctness。措辞是"这个 Brain 的人定的要求和审查重点，检查改动有没有违反"。
-- **TEST**：`next` 列出所选 mode 的 validations。REPORT 现有的"## Tests"里，凡是和某条 validation 命令相同的行，标上它的 id；没跑的 validation 列成"未跑"。不另开一节。
+- **create 时记下来**：`pipeline create` 新增 `--agent-mode`，默认取定义里的 `default_mode`。不能叫 `mode`，因为 run 的 contract 里已经有 `mode: "isolated"`（`engine.py:543`）。create 时把规则、watches、所选 mode 和这个 mode 的检查（id 和命令）记进 run 受保护的 contract（`project_agent` 这一项）；之后各阶段只读这一份，和 `review.md` 按 run 的基线读是同一个道理。定义里没有这个 mode，或者 Brain 没有定义却给了 `--agent-mode`，create 直接拒绝，不建 run。旧 run 没有这一项，所有读的地方都把"没有"当作"没有约定"处理，不报错（§7 第 8 条）。Hive 上，规则和 mode 从 pin 里来（§3.3）。
+- **执行的 agent**：不另写约定段。本地 pipeline 跑在聊天会话里，这个会话已经从聊天入口拿到了完整约定（§3.1）；`knowledge.md` 里再写一份是重复（2026-11-10 和 XG 一起收窄）。
+- **审查专家**：每个专家的派单开头都带上规则和 watches，首轮和增量审查都有，不只 correctness。措辞是"这个 Brain 的人定的要求和审查重点，检查改动有没有违反"。（第 1 步已做）
+- **TEST**：`next` 列出所选 mode 的检查，写成"按改动挑相关的跑"。报告里哪条命令跑的是哪条检查，由 agent 在这一行写 `"validation": "<id>"` 说明；不按命令文字比对，因为命令都包着时间上限、带着解释器路径，文字几乎不会相同。写的 id 不是这个 mode 的检查时，报告照收，stage-complete 的返回里给一条 warning。REPORT 现有的"## Tests"里，每条检查列一行：TEST 报告给它的结果，没写到的标"not run"。不另开一节；没有 TEST 阶段的 profile（research）不列。
 - **都不阻塞落地**（按你定的"pipeline 的 DELIVER/REFLECT 要顺滑"）。
 
 ### 3.3 Hive 派单
@@ -144,6 +144,7 @@ Brain Hub 的 Project Agent 页最上面列出规则：原话、日期、是否�
 | 9 | **同一条规则同时存在两个地方** | 抽取提示加一句，CDF 写 STEERING 前做确定性去重 | §4.3 |
 | 10 | **改规则会换 revision**，已派出、Hive 还没开始执行的那一单启动失败 | 接受。很少见，失败信息会说明，重派即可 | — |
 | 11 | **本机不执行 Brain gate**，写 gate 的人以为它到处生效 | 本机的约定块写明"gates 只在派出去的会话里执行"；目前唯一的例子 `no_git_push` 在本机已有产品的 push 审批 | §3.1 |
+| 12 | **agent 写的定义文字进入每个会话**（第 1 步安全审查 CF-2f35086b）：summary、mode 的 when、检查命令、watches 都是 agent 写的，被诱导写进去的一行指令或一条命令会被后来的会话当成 Brain 的约定 | 已接受。定义的标准部分由 host agent 根据 Brain 的知识生成和维护，和 DDD 文档一样不经人审（XG 2026-11-01 删掉确认步骤，2026-11-10 再次确认：只有自定义部分里的规则要人的原话，以后如果做自定义 gate，再给它加人审）。已做的：所有定义文字送进提示前压成一行，伪造不了提示里的段落 | §3.1、§4 |
 
 ## 8. 分步落地
 
@@ -151,7 +152,7 @@ Brain Hub 的 Project Agent 页最上面列出规则：原话、日期、是否�
 |---|---|---|
 | 0（已完成 11-09） | 盘点并清理 12 份定义，补强 watches 的起草说明 | 各 Brain 的 `project-agent.yaml`；`s_project-manager` SKILL.md；`STANDARD.md` |
 | 1 | `rules` 字段；`rule add/remove` 命令、核实记录和 gate 保护；`_merge` 保留；`render_contract`；本机聊天的约定（DDD 块、两种不送、压缩后重送）；Hive 的 `Rules:`、pin 带规则、结尾句；Brain Hub 规则列表；CDF 抽取提示和去重；打包不带规则 | `project_agent.py`、新命令、`run_owner_gate.py`、`hook_builder.py`（gate 路径）、`project_agent_draft.py`、`session_router.py`、压缩后注入、`task_spec.py`、`swarm_out.py`、`project_agent_session.py`、`s7_review.py`、`pipeline_v2.py`、`ddd_packager.py`、`ProjectAgentView.tsx` |
-| 2 | pipeline：`--agent-mode`、约定文件、`knowledge.md` 约定段及 ids、所有专家的约定段、TEST 的 validations 和 Tests 标注 | `cli_commands.py`、`engine.py`、`run_knowledge.py`、REPORT 渲染 |
+| 2（已完成 11-10） | pipeline：`--agent-mode` 记进 contract；TEST 列出这个 mode 的检查；报告行用 `validation` 写明跑的是哪条检查；REPORT 的 Tests 列出每条检查的结果或 not run。所有专家的约定段已在第 1 步做了；`knowledge.md` 约定段不做（§3.2） | `project_agent.py`、`cli_commands.py`、`engine.py`、`validation_report.py`、`events.py`、`next_step.py`、`audit.py`、`project_agent_session.py` |
 
 两步各走一次 pipeline。第 1 步改动面大：命令、gate、CDF、注入、派单、前端都在内。如果太大，可以再拆成"规则写入和核实"和"三个入口送达"两次 run。
 
@@ -161,7 +162,7 @@ Brain Hub 的 Project Agent 页最上面列出规则：原话、日期、是否�
 3. 新会话里第一条和 SwarmAI 相关的消息带着约定，里面有 X，没有 setup，检查清单写着"按改动挑"。只改 swarmai 仓库文件、没有召回到任何条目的会话，也带着约定。
 4. Hive worker 上，以及 pin 在 Project Agent 上的会话里，不出现本机的约定块；Hive 上的 pipeline run 里有 X（来自 pin）。
 5. 压缩后的那一轮，约定重新出现。重新起草后，`rules` 还在，退役字段没有回来。
-6. 一个 SwarmAI pipeline run：`knowledge.md` 开头有约定，REQUIREMENTS 能引用它的 id；每个专家的派单里都有 X；REPORT 的 Tests 标出 validation id 和未跑的项。旧 run 照常能走完。
+6. 一个 SwarmAI pipeline run：contract 里记着 mode 和它的检查；每个专家的派单里都有 X；TEST 的 `next` 列出检查；REPORT 的 Tests 列出每条检查的结果和 not run 的项，不挡落地。旧 run 照常能走完。
 7. 测量：每个 Brain 的约定字数，SwarmAI 会话的提示长度和首 token 时间，上线前后各一次，写进 REPORT。
 8. 只生成派单文本、不真派：有 `Rules:` 和 X；另一个 Brain 的派单里没有。打包 SwarmAI Brain，包里没有 `rules`。
 
@@ -175,7 +176,7 @@ Brain Hub 的 Project Agent 页最上面列出规则：原话、日期、是否�
   - `task_spec` 的 `Rules:`、pin 带规则、改写后的结尾句。
   - CDF 去重。
   - 打包不带 `rules`。
-  - 第 2 步：`--agent-mode` 默认值；ids 写进 contract；每个专家都有约定；Tests 的标注；旧 run 没有约定文件。
+  - 第 2 步：`--agent-mode` 默认值、拒绝不存在的 mode；mode 和检查写进 contract；Hive 的 pin 带 mode；TEST 列出检查；报告行的 `validation` 记进事件，不认识的 id 只是 warning；REPORT 的检查行和 not run；旧 run 和 research run 不列。
 - **审查**：两步都跑 correctness 和 security。约定会进每个会话、每个专家、每一单，是注入面；第 1 步还动了 gate 和 CDF 的准入。
 - **最终测试集**：上面新增的测试，加上这些现有测试：`test_project_agent*`、`test_task_spec*`、`test_run_owner_gate*`、audit 写入 gate、DDD 注入、压缩后注入、CDF `pipeline_v2`、`ddd_packager`，以及 run_protocol 的 create、派单、REPORT。
 

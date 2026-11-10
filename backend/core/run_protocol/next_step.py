@@ -320,6 +320,15 @@ def next_step(engine, *, previous_stage: str | None = None,
                         if stage in _CODE_STAGES else
                         "run the final verification on this tree yourself (do not change "
                         "code in TEST), then pass the report on stdin in the same shape"))
+        brain_checks = engine.brain_checks() if hasattr(engine, "brain_checks") else []
+        if stage == "test" and brain_checks:
+            # the Brain's checks for the run's kind of work (design
+            # 2026-11-09-project-agent-contract §3.2): listed, never required
+            out["brain_checks"] = brain_checks
+            out["why"] += (f". The Brain's checks for {engine.brain_mode()}, run the ones this "
+                           "change touches: " + "; ".join(f"{c['id']}: `{c['command']}`" for c in brain_checks)
+                           + '. Give a command that runs one "validation": "<its id>"; the REPORT '
+                           "lists each check as its result or not run")
         _note_main_overlap(engine, out)
         if stage == "build" and previous_stage == "plan":
             _note_split(engine, out)
