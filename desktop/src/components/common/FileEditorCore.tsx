@@ -852,7 +852,9 @@ export default function FileEditorCore({
   // FILE_CHANGE_COALESCE_MS later and the events after it join that read, at most one
   // read in flight (an event during a read schedules one more
   // after it), and a sequence number so only the newest read is ever applied.
-  useEffect(() => {
+  // A layout effect, so the subscription exists before the editor can be seen: as a
+  // passive effect it ran after the paint, and a change announced in that gap was lost.
+  useLayoutEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let inFlight = false;
     let again = false;
@@ -1206,7 +1208,16 @@ export default function FileEditorCore({
   }, []);
 
   // --- Reset state when content changes (e.g. file switch in panel mode) ---
+  // Only when the file the state was set up for changes. The state's initial values
+  // already equal what this resets, and React runs this effect after the editor is
+  // painted, so running it on mount overwrote an edit made in that gap (the tab then
+  // never turned dirty). Comparing values also keeps StrictMode's second run a no-op.
+  const resetForRef = useRef({ initialContent, filePath, fileName, initialShowDiff });
   useEffect(() => {
+    const last = resetForRef.current;
+    if (last.initialContent === initialContent && last.filePath === filePath
+      && last.fileName === fileName && last.initialShowDiff === initialShowDiff) return;
+    resetForRef.current = { initialContent, filePath, fileName, initialShowDiff };
     setContent(initialContent);
     setOriginalContent(committedContent ?? initialContent);
     setSavedContent(null);
