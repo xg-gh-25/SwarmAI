@@ -105,7 +105,7 @@ SwarmAI 只有**一个大脑**。这是有意为之，拒绝的是"多脑"：团
 
 领域知识驱动的自主交付是怎么运作的，一页一页看。完整 deck（含 Checkpoints 附录）是一个 HTML 文件：[中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) · [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html)（下载后用浏览器打开，按 0–8 切换页面）。
 
-![Domain Knowledge Driven Autonomous](./assets/readme/autonomous/zh/00-cover.png)
+![AI-Autonomous, Domain Knowledge Driven](./assets/readme/autonomous/zh/00-cover.png)
 
 ![Core Logic](./assets/readme/autonomous/zh/01-core-logic.png)
 
@@ -117,9 +117,9 @@ SwarmAI 只有**一个大脑**。这是有意为之，拒绝的是"多脑"：团
 
 ![Cognition Distill Flow](./assets/readme/autonomous/zh/05-cognition-distill-flow.png)
 
-![One Move, Three Outcomes](./assets/readme/autonomous/zh/06-one-move-three-outcomes.png)
+![Autonomous Agent Tenets](./assets/readme/autonomous/zh/06-tenets.png)
 
-![Autonomous Agent Tenets](./assets/readme/autonomous/zh/07-tenets.png)
+![One Move, Three Outcomes](./assets/readme/autonomous/zh/07-one-move-three-outcomes.png)
 
 ---
 
