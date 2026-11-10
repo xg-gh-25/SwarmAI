@@ -3652,46 +3652,46 @@ describe('TabStatusIndicator component', () => {
   }
 
   describe('renders correct indicator for each status', () => {
-    it('renders pulsing blue dot for streaming', () => {
+    it('renders pulsing primary dot for streaming', () => {
       const { container } = renderIndicator('streaming');
       const indicator = container.querySelector('span');
       expect(indicator).not.toBeNull();
-      expect(indicator!.className).toContain('bg-blue-500');
+      expect(indicator!.className).toContain('bg-[var(--color-primary)]');
       expect(indicator!.className).toContain('animate-pulse');
       expect(indicator!.className).toContain('rounded-full');
     });
 
-    it('renders orange "?" for waiting_input', () => {
+    it('renders warning-tone "?" for waiting_input', () => {
       const { container } = renderIndicator('waiting_input');
       const indicator = container.querySelector('span');
       expect(indicator).not.toBeNull();
       expect(indicator!.textContent).toBe('?');
-      expect(indicator!.className).toContain('text-orange-500');
-      expect(indicator!.className).toContain('font-bold');
+      expect(indicator!.className).toContain('var(--color-status-warning)');
+      expect(indicator!.className).toContain('font-semibold');
     });
 
-    it('renders yellow "⚠" for permission_needed', () => {
+    it('renders warning-tone "⚠" for permission_needed', () => {
       const { container } = renderIndicator('permission_needed');
       const indicator = container.querySelector('span');
       expect(indicator).not.toBeNull();
       expect(indicator!.textContent).toBe('⚠');
-      expect(indicator!.className).toContain('text-yellow-500');
+      expect(indicator!.className).toContain('var(--color-status-warning)');
     });
 
-    it('renders red "!" for error', () => {
+    it('renders error-tone "!" for error', () => {
       const { container } = renderIndicator('error');
       const indicator = container.querySelector('span');
       expect(indicator).not.toBeNull();
       expect(indicator!.textContent).toBe('!');
-      expect(indicator!.className).toContain('text-red-500');
-      expect(indicator!.className).toContain('font-bold');
+      expect(indicator!.className).toContain('var(--color-status-error)');
+      expect(indicator!.className).toContain('font-semibold');
     });
 
-    it('renders static green dot for complete_unread', () => {
+    it('renders static success dot for complete_unread', () => {
       const { container } = renderIndicator('complete_unread');
       const indicator = container.querySelector('span');
       expect(indicator).not.toBeNull();
-      expect(indicator!.className).toContain('bg-green-500');
+      expect(indicator!.className).toContain('bg-[var(--color-status-success)]');
       expect(indicator!.className).toContain('rounded-full');
       // Should NOT have animate-pulse (static dot)
       expect(indicator!.className).not.toContain('animate-pulse');

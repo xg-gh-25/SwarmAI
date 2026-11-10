@@ -79,6 +79,7 @@ export const FILES = [
   'pages/chat/components/WelcomeScreen.tsx',
   'pages/chat/components/ChatHeader.tsx',
   'pages/chat/components/SessionTabBar.tsx',
+  'pages/chat/components/TabStatusIndicator.tsx',
 ];
 
 const B = '(?<![\\w-])';

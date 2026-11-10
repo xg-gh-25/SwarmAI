@@ -20,6 +20,12 @@ interface TabStatusIndicatorProps {
   status: TabStatus;
 }
 
+/** Glyph colour: the status colour mixed 60/40 with --color-text, so the 12px glyph
+ *  is >= 4.5:1 on the tab in both themes (the plain warning colour is 2.8:1 on the
+ *  light chrome). Dots use the plain theme colour. Theme variables only (index.css). */
+const ERROR_TEXT = 'text-[color-mix(in_srgb,var(--color-status-error)_60%,var(--color-text))]';
+const WARNING_TEXT = 'text-[color-mix(in_srgb,var(--color-status-warning)_60%,var(--color-text))]';
+
 /**
  * Renders a small visual indicator based on the tab's lifecycle status.
  * Returns null for 'idle' tabs — no indicator shown.
@@ -30,7 +36,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
     case 'streaming':
       return (
         <span
-          className="w-2 h-2 rounded-full bg-blue-500 animate-pulse inline-block"
+          className="w-2 h-2 rounded-full bg-[var(--color-primary)] animate-pulse inline-block"
           role="img"
           aria-label={tf(t, 'chat.tabStatus.streaming', 'Streaming')}
         />
@@ -38,7 +44,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
     case 'waiting_input':
       return (
         <span
-          className="text-orange-500 text-xs font-bold leading-none"
+          className={`${WARNING_TEXT} text-small font-semibold leading-none`}
           role="img"
           aria-label={tf(t, 'chat.tabStatus.waitingInput', 'Waiting for input')}
         >
@@ -48,7 +54,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
     case 'permission_needed':
       return (
         <span
-          className="text-yellow-500 text-xs leading-none"
+          className={`${WARNING_TEXT} text-small leading-none`}
           role="img"
           aria-label={tf(t, 'chat.tabStatus.permissionNeeded', 'Permission needed')}
         >
@@ -58,7 +64,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
     case 'error':
       return (
         <span
-          className="text-red-500 text-xs font-bold leading-none"
+          className={`${ERROR_TEXT} text-small font-semibold leading-none`}
           role="img"
           aria-label={tf(t, 'chat.tabStatus.error', 'Error')}
         >
@@ -68,7 +74,7 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
     case 'complete_unread':
       return (
         <span
-          className="w-2 h-2 rounded-full bg-green-500 inline-block"
+          className="w-2 h-2 rounded-full bg-[var(--color-status-success)] inline-block"
           role="img"
           aria-label={tf(t, 'chat.tabStatus.newContent', 'New content')}
         />
