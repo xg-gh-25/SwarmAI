@@ -1992,6 +1992,7 @@ def _matched_part(command: str, *matches: Callable[[str], Any], limit: int = 160
             try:
                 return bool(match(s))
             except Exception:  # noqa: BLE001 — display only, never breaks the gate
+                logger.debug("matched-line predicate failed; falling back", exc_info=True)
                 return False
         line = next((ln for ln in lines if ln and _hit(ln)), None)
         if line is None:

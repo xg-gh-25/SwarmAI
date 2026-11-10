@@ -68,7 +68,7 @@ _MAX_PATCH_BYTES = 5_000_000
 # git's plain patch format, whatever the user's color / prefix / external-diff settings
 _DIFF_FLAGS = ("--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--no-relative",
                "--src-prefix=a/", "--dst-prefix=b/")
-_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # pragma: allowlist secret  (git's fixed empty-tree id, not a credential)
 _SNAPSHOT_ID = re.compile(r"[0-9a-f]{16}")
 # the expert prompts grade with MED; it is MEDIUM here
 _SEVERITY_ALIAS = {"MED": "MEDIUM"}

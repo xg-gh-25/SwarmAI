@@ -281,10 +281,12 @@ def rule_rows(project_dir: Path) -> list[dict[str, Any]]:
         doc = yaml.safe_load(_definition(project_dir).read_text(encoding="utf-8"))
         rows = _rows(doc)
     except Exception:  # noqa: BLE001 — a reader of the definition never fails on it
+        logger.debug("rule_rows: definition of %s unreadable", project_dir, exc_info=True)
         return []
     try:
         keys = _record_keys(_record_file(_brain_of(project_dir)))
     except Exception:  # noqa: BLE001
+        logger.debug("rule_rows: rule record of %s unreadable", project_dir, exc_info=True)
         keys = set()
     return [{"said": r["said"].strip(), "added": str(r.get("added") or ""),
              "verified": quote_key(r["said"]) in keys} for r in rows]
@@ -304,6 +306,7 @@ def current_rules(path: Path) -> Any:
     try:
         doc = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
+        logger.debug("current_rules: %s unreadable", path, exc_info=True)
         return None
     return doc.get(RULES_KEY) if isinstance(doc, dict) and doc.get(RULES_KEY) else None
 
@@ -326,6 +329,7 @@ def is_brain_rule_quote(quote: Optional[str], workspace: Path) -> bool:
             try:
                 d = brain_dir(Path(workspace), record.name[:-len(_SUFFIX)])
             except Exception:  # noqa: BLE001 — a record of a Brain that is not here
+                logger.debug("is_brain_rule_quote: no Brain for %s", record.name, exc_info=True)
                 continue
             if any(quote_key(r["said"]) == key for r in verified_rules(d)[0]):
                 return True
