@@ -46,16 +46,32 @@ def test_records_go_under_the_tests_data_dir_and_by_month(tmp_path):
     assert (get_app_data_dir() / "metrics" / f"prompt-metrics-{month}.jsonl").exists()
 
 
-def test_context_assembly_records_the_every_turn_sections(tmp_path):
+def test_context_assembly_records_the_every_turn_sections(tmp_path, monkeypatch):
     from core.context_directory_loader import ContextDirectoryLoader
-    ctx = tmp_path / "ctx"
-    ctx.mkdir()
+    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path / "ws"))
+    ctx = tmp_path / "ws" / ".context"
+    ctx.mkdir(parents=True)
     (ctx / "TOOLS.md").write_text("# Tools\n\nuse the knowledge cli for recall\n", encoding="utf-8")
     loader = ContextDirectoryLoader(context_dir=ctx, templates_dir=tmp_path / "none")
     assert "knowledge cli" in loader._assemble_from_sources(200_000)
     pm.flush()
     (day,) = pm.daily(1)
     assert day["files"]["Tools"]["last"] > 0
+
+
+def test_a_prompt_assembled_from_another_workspace_is_not_recorded(tmp_path, monkeypatch):
+    # the eval assembles the real prompt from its sample workspace inside the daemon:
+    # its tiny MEMORY must not read as the person's MEMORY shrinking
+    from core.context_directory_loader import ContextDirectoryLoader
+    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path / "live"))
+    (tmp_path / "live" / ".context").mkdir(parents=True)
+    sample = tmp_path / "sample" / ".context"
+    sample.mkdir(parents=True)
+    (sample / "TOOLS.md").write_text("# Tools\n\nsample\n", encoding="utf-8")
+    loader = ContextDirectoryLoader(context_dir=sample, templates_dir=tmp_path / "none")
+    assert "sample" in loader._assemble_from_sources(200_000)
+    pm.flush()
+    assert pm.daily(1) == [] or "Tools" not in (pm.daily(1)[0].get("files") or {})
 
 
 def test_a_record_goes_where_the_app_data_dir_was_when_it_was_made(tmp_path, monkeypatch):

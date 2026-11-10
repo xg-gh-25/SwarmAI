@@ -3,8 +3,12 @@
 Design docs/design/2026-10-30-cdf-agent-decides.md §4: the five files injected into
 every turn (MEMORY, EVOLUTION, STEERING, USER, TOOLS) are injected whole, with no
 budget; what keeps them lean is the agent's same / adds / overrides declarations.
-Whether that holds is measured, not capped: each assembled prompt records the
-tokens of those sections, and each turn its time to the first token. When either
+Whether that holds is measured, not capped: each time the live workspace's prompt is
+assembled from its source files, the tokens of those sections are recorded (a prompt
+served from the fresh shared cache is not reassembled, and a changed file invalidates
+that cache, so every size change is seen; a prompt assembled from any other workspace,
+such as the eval's sample one, is not recorded), and each turn its time to the first
+token. When either
 rises clearly against its baseline, the agent consolidates the file (declarations,
 never truncation).
 

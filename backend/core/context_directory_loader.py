@@ -1144,10 +1144,15 @@ class ContextDirectoryLoader:
         per_section = [(name, _section_tokens(name, content)) for _, name, content, _, _ in sections]
         total = sum(tok for _, tok in per_section)
         total += separator_tokens * max(0, len(sections) - 1)
-        # the every-turn files' size, measured on every assembly (core/prompt_metrics)
+        # the every-turn files' size, measured when the live workspace's prompt is
+        # assembled from its sources (core/prompt_metrics). Only the live workspace: the
+        # eval assembles the real prompt from a sample workspace inside the daemon, and
+        # its tiny files read as the person's MEMORY shrinking to almost nothing.
         try:
-            from . import prompt_metrics
-            prompt_metrics.record_sections(per_section)
+            from config import get_swarmws
+            if self.context_dir.resolve() == (get_swarmws() / ".context").resolve():
+                from . import prompt_metrics
+                prompt_metrics.record_sections(per_section)
         except Exception:  # noqa: BLE001 — a measurement never fails the assembly
             logger.debug("prompt metrics not recorded", exc_info=True)
 
