@@ -6,5 +6,6 @@ tier: lazy
 
 # Expert review (native mode)
 
-See INSTRUCTIONS.md (when to call which expert, how to run them, what to report) and
+See INSTRUCTIONS.md (when to call which expert, how to run them, how to record your
+verdict on each finding, what to report) and
 CATALOG.md (every expert, generated from its prompt file).

@@ -50,6 +50,10 @@ One sub-agent per expert, in parallel, with the Agent tool:
   change breaks, and the expert greps the files that name a symbol without a call. When
   the checkout has no code graph the output says so; paste that too, so the expert knows
   to grep the callers itself.
+- Just before you dispatch the experts, store the change they will read:
+  `"$SWARM_BACKEND_BIN" py -m scripts.expert_verdicts snapshot --repo <the checkout under review> [--base <ref>]`
+  (the same `--base` as above). It prints a snapshot id; keep it for step 4. Once you fix
+  a finding, the code the experts saw is gone, and the record must name that code.
 - When the repository is bound to a project with a DDD, paste the output of
   `"$SWARM_BACKEND_BIN" cognition map --project <P> --brief` into the prompt and say it may
   look things up there with `cognition find --project <P> --query "<words>"` when a finding
@@ -77,7 +81,34 @@ Report findings as: SEVERITY | file:line | what breaks | fix. Native review, no 
   should exist at all, rather than patching a third round.
 - Once one round ran and tests are green, the user saying "commit" ends the rounds.
 
-## 4. Report
+## 4. Record what you found out
+
+Before you commit, record the first round once, with the snapshot id from step 2, every
+expert you called (also one that found nothing) and your verdict on each finding:
+`real` (it breaks as claimed), `false_positive` (the code shows it does not) or
+`unverified` (you did not check it). Severity is the expert's own (CRITICAL, HIGH, MED
+or MEDIUM, LOW). A real or false-positive verdict carries its evidence: the test
+command, or the `path:line` that shows it. These verdicts are what a later check of the
+experts themselves is measured against, so give the verdict you reached, not the one
+that reads well.
+
+```
+"$SWARM_BACKEND_BIN" py -m scripts.expert_verdicts record --file - <<'EOF'
+{"snapshot": "<id from step 2>", "goal": "<one sentence>", "model": "<your model>",
+ "experts": [{"expert": "correctness", "prompt_file": "<absolute path of its prompt file>",
+              "findings": [{"severity": "HIGH", "file": "src/a.py", "line": 12,
+                            "claim": "<what breaks>", "verdict": "real",
+                            "evidence": "<test command or path:line>"}]}]}
+EOF
+```
+
+Without a snapshot, give `"repo"` (and `"base"`, default HEAD) instead: the record then
+holds the code as it is now, fixes included, and says so. The command refuses a
+document with a missing or wrong field and says which; fix it and run it again.
+`"$SWARM_BACKEND_BIN" py -m scripts.expert_verdicts stats` shows, per expert and prompt
+version, how many of its checked findings were real.
+
+## 5. Report
 
 In your reply (and, briefly, the commit message): who reviewed, what they found, what
 you fixed, and what risk remains open. If you decided no review was needed, say why in
