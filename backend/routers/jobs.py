@@ -124,8 +124,9 @@ async def run_job(req: RunJobRequest):
             return r
 
         # A job runs LLM calls / scripts for seconds to minutes: a worker thread,
-        # never the event loop (on the loop, Run now froze /health for the whole job).
-        result = await executors.run_nav(_run_and_save)
+        # never the event loop (on the loop, Run now froze /health for the whole job),
+        # and not a 'nav' thread every overlay read waits on.
+        result = await executors.run_nav_action(_run_and_save)
 
         return RunJobResponse(
             job_id=result.job_id,

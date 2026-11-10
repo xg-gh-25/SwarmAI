@@ -43,6 +43,8 @@ another, and MUST never touch the default pool the event loop schedules on):
                 or an unbounded git-clone never delays a cold-session TTFT
   gate        — per-tool-call hook judgments (fail-open timeouts count queueing)
   maintenance — context_health post-session work (slow, uncancellable)
+  nav         — Left Nav overlay reads (``run_nav``; a long queue wait is logged)
+  nav_action  — Left Nav actions that run for minutes (``run_nav_action``)
   turn_snapshot / turn_changes — core/turn_changes' per-send start snapshots and
                 its finish diffs / on-demand diffs; kept off 'subprocess' so they
                 never delay its fail-open safety gates, and apart from each other
@@ -54,11 +56,18 @@ from __future__ import annotations
 import asyncio
 import atexit
 import functools
+import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, TypeVar
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
+
+# A nav call that waits this long for a free 'nav' thread is logged (run_nav). Idle,
+# a Workspace read takes 0.02-0.3 s, so a second of queueing means the pool is full.
+NAV_QUEUE_WARN_S = 1.0
 
 # Per-class worker caps. Deliberately small: the goal is ISOLATION + BOUNDING,
 # not throughput. A class that needs more than its cap should queue within its
@@ -106,6 +115,12 @@ _POOL_SPECS: dict[str, int] = {
                       # Community, Jobs, ToDo, Pollinate, Hive, C&M, the Workspace tree):
                       # a slow overlay waits here, never ahead of chat or /health. Small
                       # on purpose: it also bounds how much nav Python competes for the GIL.
+                      # Reads only: an action that runs for minutes goes to 'nav_action'.
+    "nav_action": 2,  # Left Nav ACTIONS that run seconds to minutes: Jobs "Run now" (a
+                      # whole job: LLM calls / scripts, up to its timeout) and Hive account
+                      # verify (5 AWS API calls). On 'nav' two of them held both threads
+                      # and every overlay read (the Workspace tree, a location list)
+                      # queued behind them for minutes.
     "brain_gate": 2,  # core/project_agent_session: a Project Agent session's Brain gates
                       # (one short subprocess per gate per Bash / Write / Edit call). Only
                       # those sessions use it, so other sessions' gates never wait on it.
@@ -166,9 +181,27 @@ async def run_in(name: str, fn: Callable[..., T], *args: Any) -> T:
 
 async def run_nav(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """``asyncio.to_thread`` for Left Nav endpoints: same call shape (kwargs too), on
-    the ``nav`` pool. Design left-nav-backend-and-visual-system.md B4."""
-    call = functools.partial(fn, *args, **kwargs) if kwargs else fn
-    return await run_in("nav", call, *(() if kwargs else args))
+    the ``nav`` pool. Design left-nav-backend-and-visual-system.md B4.
+
+    A call that waited ``NAV_QUEUE_WARN_S`` or longer for a free thread is logged
+    (function name + wait), so a full nav pool shows in the daemon log."""
+    call = functools.partial(fn, *args, **kwargs)
+    queued = time.monotonic()
+
+    def _timed() -> T:
+        waited = time.monotonic() - queued
+        if waited >= NAV_QUEUE_WARN_S:
+            logger.warning("nav pool: %s waited %.2fs for a thread",
+                           getattr(fn, "__qualname__", repr(fn)), waited)
+        return call()
+
+    return await run_in("nav", _timed)
+
+
+async def run_nav_action(fn: Callable[..., T], *args: Any) -> T:
+    """A Left Nav ACTION that runs seconds to minutes (Jobs Run now, Hive verify), on
+    the ``nav_action`` pool so it never holds a thread an overlay read waits on."""
+    return await run_in("nav_action", fn, *args)
 
 
 def shutdown(wait: bool = False) -> None:

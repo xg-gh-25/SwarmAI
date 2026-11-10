@@ -28,6 +28,7 @@ import WorkspaceExplorer from './WorkspaceExplorer';
 import type { FileTreeItem } from './FileTreeNode';
 import { RepoPane } from './RepoPane';
 import { LocationHeader, PaneFooter, TreeSkeleton3 } from './workspaceParts';
+import { OverlayError } from '../layout/OverlayState';
 
 const SWARMWS: WorkspaceLocation = { key: 'swarmws', label: 'SwarmWS', kind: 'default', path: '' };
 export const SWARMWS_FOOT = 'Knowledge · Projects · Attachments';
@@ -97,8 +98,12 @@ export default function WorkspaceOverlay({ close }: { close: () => void }) {
   const [wanted, setWanted] = useState(() => getLastWorkspaceLocation());
   const current = list.find((l) => l.key === wanted) ?? list[0];
   // reopening on a remembered repo: wait for the list instead of mounting (and
-  // fetching) SwarmWS first; SwarmWS itself never waits
-  const waiting = wanted !== SWARMWS.key && !locs.data && !locs.isError;
+  // fetching) SwarmWS first; SwarmWS itself never waits. The list read is bounded
+  // (WORKSPACE_READ_TIMEOUT_MS): when it fails, that repo's place shows the error and
+  // Retry (the SwarmWS tab still works), never an endless skeleton.
+  const wantsRepo = wanted !== SWARMWS.key && !locs.data;
+  const listFailed = wantsRepo && locs.isError && !locs.isFetching;
+  const waiting = wantsRepo && !listFailed;
   const [visited, setVisited] = useState<Set<string>>(() => new Set());
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -109,9 +114,9 @@ export default function WorkspaceOverlay({ close }: { close: () => void }) {
   }, []);
 
   useEffect(() => {
-    if (waiting) return;
+    if (wantsRepo) return;   // not yet known which location is shown
     setVisited((v) => (v.has(current.key) ? v : new Set(v).add(current.key)));
-  }, [current.key, waiting]);
+  }, [current.key, wantsRepo]);
 
   // a remembered repo that left the list falls back to SwarmWS (and is forgotten)
   useEffect(() => {
@@ -155,7 +160,11 @@ export default function WorkspaceOverlay({ close }: { close: () => void }) {
         {/* the shown location is always mounted (also when the list arrives after
             the first render and moves `current` to a remembered repo) */}
         {waiting && <TreeSkeleton3 />}
-        {!waiting && list.filter((l) => visited.has(l.key) || l.key === current.key).map((l) => (
+        {listFailed && (
+          <OverlayError message={t('ui.WorkspaceOverlay.locationsError')} onRetry={() => void locs.refetch()}
+            testid="workspace-locations-error" retryTestid="workspace-locations-retry" />
+        )}
+        {!waiting && !listFailed && list.filter((l) => visited.has(l.key) || l.key === current.key).map((l) => (
           <div key={l.key} data-location-pane={l.key} hidden={l.key !== current.key} className="h-full">
             {l.kind === 'default'
               ? <ExplorerProvider><SwarmWsInner loc={l} close={close} /></ExplorerProvider>

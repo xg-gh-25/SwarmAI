@@ -10,6 +10,7 @@
  * - ``projectService``          — Project CRUD (GET/POST/PUT/DELETE /api/projects)
  * - ``folderService``           — Folder create, delete, rename (/api/workspace/folders, /api/workspace/rename)
  * - ``workspaceLocationsService`` — Workspace overlay locations: list, one location's summary / tree / expand
+ * - ``WORKSPACE_READ_TIMEOUT_MS`` — the bound on every Workspace overlay read (above)
  *
  * Conversion helpers:
  * - ``configToCamelCase``         — snake_case workspace config response → camelCase
@@ -32,6 +33,13 @@ import type {
   ProjectHistoryEntry,
   TreeNode,
 } from '../types';
+
+/** The most a Workspace overlay read (locations, summary, tree, expand) may take.
+ *  Idle they take 0.02-0.3 s; the slowest legitimate one is two capped git calls
+ *  (5 s status + 5 s log, core/workspace_locations GIT_TIMEOUT_S) plus queueing on
+ *  the backend's nav pool. Past this the read fails and the overlay shows Retry,
+ *  instead of a skeleton that never ends. */
+export const WORKSPACE_READ_TIMEOUT_MS = 15_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent workspace file operation converters (existing)
@@ -209,7 +217,7 @@ export const workspaceService = {
     try {
       const response = await api.get<Record<string, unknown>[]>(
         `/workspace/tree${params}`,
-        { headers }
+        { headers, timeout: WORKSPACE_READ_TIMEOUT_MS }
       );
 
       // Cache the ETag from the response
@@ -261,7 +269,7 @@ export const workspaceService = {
   async expandDirectory(path: string, depth: number = 2): Promise<TreeNode[]> {
     const response = await api.get<Record<string, unknown>[]>(
       `/workspace/tree/expand`,
-      { params: { path, depth } }
+      { params: { path, depth }, timeout: WORKSPACE_READ_TIMEOUT_MS }
     );
     return response.data.map(treeNodeToCamelCase);
   },
@@ -482,23 +490,25 @@ export interface WorkspaceSummary { changed: number; lastCommitAt?: number | nul
 
 export const workspaceLocationsService = {
   async list(): Promise<WorkspaceLocation[]> {
-    return (await api.get<WorkspaceLocation[]>('/workspace/locations')).data;
+    return (await api.get<WorkspaceLocation[]>('/workspace/locations', { timeout: WORKSPACE_READ_TIMEOUT_MS })).data;
   },
   async summary(key: string, fresh = false): Promise<WorkspaceSummary> {
     const { data } = await api.get<{ changed: number; last_commit_at?: number | null }>(
-      '/workspace/summary', { params: { location: key, ...(fresh ? { fresh: true } : {}) } });
+      '/workspace/summary', { params: { location: key, ...(fresh ? { fresh: true } : {}) }, timeout: WORKSPACE_READ_TIMEOUT_MS });
     return { changed: data.changed, lastCommitAt: data.last_commit_at ?? null };
   },
   /** A repo location's tree (first level by default). */
   async tree(key: string, depth = 1, fresh = false): Promise<TreeNode[]> {
     const { data } = await api.get<Record<string, unknown>[]>('/workspace/tree', {
       params: { location: key, depth, ...(fresh ? { fresh: true } : {}) },
+      timeout: WORKSPACE_READ_TIMEOUT_MS,
     });
     return data.map(treeNodeToCamelCase);
   },
   async expand(key: string, path: string): Promise<TreeNode[]> {
     const { data } = await api.get<Record<string, unknown>[]>('/workspace/tree/expand', {
       params: { location: key, path, depth: 1 },
+      timeout: WORKSPACE_READ_TIMEOUT_MS,
     });
     return data.map(treeNodeToCamelCase);
   },

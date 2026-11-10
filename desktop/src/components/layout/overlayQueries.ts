@@ -176,21 +176,26 @@ export const overlayQuery = {
   libraryMounts: <T,>() => ({ queryKey: ['library-mounts'] as const, queryFn: getJson<T>('/library/mounts'), staleTime: OVERLAY_STALE_MS }),
   /** Need You's queue (GET /attention). ONE cache for the overlay, the Welcome
    *  card and the AlertsPill (useAttentionQueue adds a 30s refetchInterval). */
-  // Workspace: each location has its own keys (design workspace-working-location.md §4)
+  // Workspace: each location has its own keys (design workspace-working-location.md §4).
+  // Each read is bounded by WORKSPACE_READ_TIMEOUT_MS and not retried by itself: a
+  // failure shows the overlay's Retry at once, so the wait is that bound, not twice it.
   workspaceLocations: () => ({
     queryKey: ['overlay', 'swarmws', 'locations'] as const,
     queryFn: () => workspaceLocationsService.list(),
     staleTime: OVERLAY_STALE_MS,
+    retry: false,
   }),
   workspaceSummary: (key: string) => ({
     queryKey: ['overlay', 'swarmws', key, 'summary'] as const,
     queryFn: () => workspaceLocationsService.summary(key),
     staleTime: OVERLAY_STALE_MS,
+    retry: false,
   }),
   workspaceRepoTree: (key: string) => ({
     queryKey: ['overlay', 'swarmws', key, 'tree'] as const,
     queryFn: () => workspaceLocationsService.tree(key, 1),
     staleTime: OVERLAY_STALE_MS,
+    retry: false,
   }),
   needsYou: () => ({
     queryKey: ['overlay', 'needs-you'] as const,

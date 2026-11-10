@@ -33,6 +33,7 @@ import { useTreeData } from '../../contexts/ExplorerContext';
 import ExplorerHeader from './ExplorerHeader';
 import SectionedExplorer from './SectionedExplorer';
 import type { FileTreeItem } from './FileTreeNode';
+import { OverlayError } from '../layout/OverlayState';
 
 /**
  * Skeleton placeholder for the file tree while loading.
@@ -64,21 +65,14 @@ function TreeSkeleton() {
 }
 
 /**
- * Inline error state with retry button, shown when the tree fetch fails.
- * ChatPage remains fully interactive regardless of this error.
+ * Error state with Retry, shown when the tree fetch fails (or times out:
+ * WORKSPACE_READ_TIMEOUT_MS). The shared overlay error box, as in the repo panes.
  */
 function TreeErrorState({ onRetry }: { onRetry: () => void }) {
   const { t } = useTranslation();
   return (
-    <div className="p-4 text-center" data-testid="tree-error-state">
-      <p className="text-body text-[var(--color-text-muted)] mb-2">{t('ui.WorkspaceExplorer.loadFailed')}</p>
-      <button
-        onClick={onRetry}
-        className="text-small text-primary hover:underline"
-      >
-        {t('common.button.retry')}
-      </button>
-    </div>
+    <OverlayError message={t('ui.WorkspaceExplorer.loadFailed')} onRetry={onRetry}
+      testid="tree-error-state" retryTestid="tree-error-retry" />
   );
 }
 

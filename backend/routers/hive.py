@@ -457,7 +457,9 @@ async def verify_account(account_id: str):
 
     try:
         import asyncio
-        aws_account_id, checks = await executors.run_nav(_run_checks)
+        # five AWS API calls (each up to boto3's own timeouts and retries): not on a
+        # 'nav' thread every overlay read waits on
+        aws_account_id, checks = await executors.run_nav_action(_run_checks)
 
         async with _conn() as c:
             await c.execute("UPDATE hive_accounts SET verified_at = ? WHERE id = ?", (_now(), account_id))

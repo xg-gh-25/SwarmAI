@@ -5032,7 +5032,8 @@
       "attachFiles": "Attach files (images, PDF, TXT, CSV)"
     },
     "WorkspaceOverlay": {
-      "locations": "Workspace locations"
+      "locations": "Workspace locations",
+      "locationsError": "Couldn't load the workspace locations."
     },
     "BackupTab": {
       "tokenPlaceholder": "ghp_..."

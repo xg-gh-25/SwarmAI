@@ -10,7 +10,9 @@ What is tested:
 - every git subprocess in ddd_brain.py and workspace_api.py passes an env with
   ``GIT_OPTIONAL_LOCKS=0`` (a read-only git status/diff must not refresh the
   index, which takes .git/index.lock and collides with chat's per-turn snapshot);
-- ``executors.run_nav`` runs a call with kwargs on a ``nav`` pool thread.
+- ``executors.run_nav`` runs a call with kwargs on a ``nav`` pool thread;
+- the minute-long nav actions (Jobs Run now, Hive verify) run on ``nav_action``, not
+  ``nav``, and a nav call that waited for a thread is logged (W1).
 """
 from __future__ import annotations
 
@@ -99,3 +101,63 @@ def test_run_nav_runs_on_the_nav_pool_with_kwargs():
 
     total, name = asyncio.run(executors.run_nav(f, 1, b=2))
     assert total == 3 and name.startswith("swarm-nav")
+
+
+def test_minute_long_nav_actions_are_off_the_nav_pool():
+    """Jobs Run now and Hive verify run for minutes: on 'nav' two of them held both
+    threads and every overlay read (the Workspace tree) queued behind them (W1)."""
+    jobs = (ROUTERS / "jobs.py").read_text()
+    hive = (ROUTERS / "hive.py").read_text()
+    assert "run_nav_action(_run_and_save)" in jobs and "run_nav(_run_and_save)" not in jobs
+    assert "run_nav_action(_run_checks)" in hive and "run_nav(_run_checks)" not in hive
+
+
+def test_run_nav_action_runs_on_its_own_pool():
+    import re
+    from core import executors
+
+    name = asyncio.run(executors.run_nav_action(lambda: threading.current_thread().name))
+    assert re.fullmatch(r"swarm-nav_action_\d+", name)
+    nav = asyncio.run(executors.run_nav(lambda: threading.current_thread().name))
+    assert re.fullmatch(r"swarm-nav_\d+", nav)
+
+
+def test_run_nav_logs_a_long_queue_wait(monkeypatch, caplog):
+    """With both nav threads busy, a third call waits; that wait is in the log."""
+    import logging
+    from core import executors
+
+    monkeypatch.setattr(executors, "NAV_QUEUE_WARN_S", 0.05)
+    release = threading.Event()
+    started = threading.Barrier(executors._POOL_SPECS["nav"] + 1)
+
+    def hold():
+        started.wait(timeout=5)
+        release.wait(timeout=5)
+
+    def queued_read():
+        return "ok"
+
+    async def scenario():
+        holders = [asyncio.ensure_future(executors.run_nav(hold))
+                   for _ in range(executors._POOL_SPECS["nav"])]
+        await asyncio.get_running_loop().run_in_executor(None, started.wait, 5)
+        waiting = asyncio.ensure_future(executors.run_nav(queued_read))
+        await asyncio.sleep(0.15)
+        release.set()
+        await asyncio.gather(*holders)
+        return await waiting
+
+    with caplog.at_level(logging.WARNING, logger="core.executors"):
+        assert asyncio.run(scenario()) == "ok"
+    hits = [r.getMessage() for r in caplog.records if "nav pool:" in r.getMessage()]
+    assert len(hits) == 1 and "queued_read waited" in hits[0]
+
+
+def test_run_nav_does_not_log_an_idle_call(caplog):
+    import logging
+    from core import executors
+
+    with caplog.at_level(logging.WARNING, logger="core.executors"):
+        assert asyncio.run(executors.run_nav(lambda: 1)) == 1
+    assert not [r for r in caplog.records if "nav pool:" in r.getMessage()]

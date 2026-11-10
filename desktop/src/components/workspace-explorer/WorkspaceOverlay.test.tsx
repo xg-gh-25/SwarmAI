@@ -17,13 +17,19 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const calls: { url: string; params: Record<string, unknown> }[] = [];
+const calls: { url: string; params: Record<string, unknown>; timeout?: number }[] = [];
 let failRepoTree = false;
+/** Reads that never answer (a backend stuck in its nav pool): they end only by the
+ *  request's own timeout, as axios ends them. Without a timeout they never end. */
+const hang = new Set<string>();
+const hung = (timeout?: number) => new Promise<never>((_, reject) => {
+  if (timeout) setTimeout(() => reject(new Error(`timeout of ${timeout}ms exceeded`)), timeout);
+});
 
 const REPO = { key: 'r_abc', label: 'swarmai', kind: 'repo', path: '/Users/me/swarmai' };
 const LOCS = [{ key: 'swarmws', label: 'SwarmWS', kind: 'default', path: '/Users/me/.swarm-ai/SwarmWS' }, REPO];
@@ -36,10 +42,11 @@ const BACKEND_KIDS = [{ name: 'main.py', path: 'backend/main.py', type: 'file', 
 
 vi.mock('../../services/api', () => ({
   default: {
-    get: vi.fn(async (url: string, cfg?: { params?: Record<string, unknown> }) => {
+    get: vi.fn(async (url: string, cfg?: { params?: Record<string, unknown>; timeout?: number }) => {
       const [path, qs] = url.split('?');
       const params = { ...Object.fromEntries(new URLSearchParams(qs ?? '')), ...(cfg?.params ?? {}) };
-      calls.push({ url: path, params });
+      calls.push({ url: path, params, timeout: cfg?.timeout });
+      if (hang.has(path)) return hung(cfg?.timeout);
       if (path === '/workspace/locations') return { data: LOCS, headers: {} };
       if (path === '/workspace/summary') {
         return { data: params.location === 'swarmws' ? { changed: 3 } : { changed: 2, last_commit_at: 1 }, headers: {} };
@@ -69,6 +76,7 @@ vi.mock('react-virtualized-auto-sizer', () => {
 import WorkspaceOverlay from './WorkspaceOverlay';
 import { flattenRows } from './RepoPane';
 import { setLastWorkspaceLocation } from '../layout/overlayQueries';
+import { WORKSPACE_READ_TIMEOUT_MS } from '../../services/workspace';
 
 const SRC = join(__dirname, '..', '..');
 const of = (url: string) => calls.filter((c) => c.url === url);
@@ -78,8 +86,8 @@ function mount() {
   return render(<QueryClientProvider client={qc}><WorkspaceOverlay close={() => {}} /></QueryClientProvider>);
 }
 
-beforeEach(() => { calls.length = 0; failRepoTree = false; setLastWorkspaceLocation('swarmws'); sessionStorage.clear(); });
-afterEach(() => cleanup());
+beforeEach(() => { calls.length = 0; failRepoTree = false; hang.clear(); setLastWorkspaceLocation('swarmws'); sessionStorage.clear(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe('T7 — fetch only what is shown, never poll', () => {
   it('the app shell mounts no ExplorerProvider and ExplorerContext has no timer', () => {
@@ -179,6 +187,63 @@ describe('T9 — a failing location does not take the others down', () => {
     fireEvent.click(screen.getByTestId('workspace-tab-swarmws'));
     expect(await screen.findByTestId('swarmws-pane')).toBeTruthy();
     await waitFor(() => expect(of('/workspace/tree').some((c) => c.params.location !== REPO.key)).toBe(true));
+  });
+});
+
+describe('W1 — a read that never answers ends in Retry, not an endless skeleton', () => {
+  it('every Workspace read carries the bound', async () => {
+    setLastWorkspaceLocation(REPO.key);
+    mount();
+    fireEvent.click((await screen.findAllByTestId('repo-row-backend'))[0]);   // + an expand
+    fireEvent.click(screen.getByTestId('workspace-tab-swarmws'));
+    await screen.findByTestId('virtualized-tree');
+    await waitFor(() => expect(of('/workspace/tree/expand').length).toBeGreaterThan(0));
+    const urls = new Set(calls.map((c) => c.url));
+    expect([...urls].sort()).toEqual(['/workspace/locations', '/workspace/summary', '/workspace/tree', '/workspace/tree/expand']);
+    expect(calls.filter((c) => c.timeout !== WORKSPACE_READ_TIMEOUT_MS)).toEqual([]);
+  });
+
+  it('reopening on a repo while the location list hangs: skeleton, then the error and Retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    hang.add('/workspace/locations');
+    setLastWorkspaceLocation(REPO.key);
+    mount();
+    await act(() => vi.advanceTimersByTimeAsync(WORKSPACE_READ_TIMEOUT_MS - 100));
+    expect(screen.getByTestId('workspace-skeleton')).toBeTruthy();
+    expect(screen.queryByTestId('workspace-locations-error')).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    expect(await screen.findByTestId('workspace-locations-error')).toBeTruthy();
+    expect(screen.queryByTestId('workspace-skeleton')).toBeNull();
+    expect(of('/workspace/locations')).toHaveLength(1);    // not retried by itself
+    expect(calls.some((c) => c.url !== '/workspace/locations')).toBe(false);   // SwarmWS not fetched
+
+    hang.clear();
+    fireEvent.click(screen.getByTestId('workspace-locations-retry'));
+    expect(await screen.findByTestId('repo-row-backend')).toBeTruthy();
+    expect(calls.some((c) => c.url === '/workspace/tree' && c.params.location !== REPO.key)).toBe(false);
+  });
+
+  it('a hanging repo tree ends in the repo error with Retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    hang.add('/workspace/tree');
+    setLastWorkspaceLocation(REPO.key);
+    mount();
+    await screen.findByTestId(`repo-pane-${REPO.key}`);
+    await act(() => vi.advanceTimersByTimeAsync(WORKSPACE_READ_TIMEOUT_MS + 100));
+    expect(await screen.findByTestId('repo-load-error')).toBeTruthy();
+    expect(screen.getByTestId('repo-retry')).toBeTruthy();
+  });
+
+  it('a hanging SwarmWS tree ends in the tree error with Retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    hang.add('/workspace/tree');
+    mount();
+    expect(await screen.findByTestId('tree-skeleton')).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(WORKSPACE_READ_TIMEOUT_MS + 100));
+    expect(await screen.findByTestId('tree-error-state')).toBeTruthy();
+    hang.clear();
+    fireEvent.click(screen.getByTestId('tree-error-retry'));
+    expect(await screen.findByTestId('virtualized-tree')).toBeTruthy();
   });
 });
 
