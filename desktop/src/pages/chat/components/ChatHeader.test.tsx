@@ -69,6 +69,19 @@ describe('ChatHeader — Alerts pill relocated to sidebar (run_2bdc68ad)', () =>
     renderHeader('disconnected');
     expect(screen.getByLabelText(/Backend Offline/i)).toBeInTheDocument();
   });
+
+  // L1: the pill is coloured by theme variables (readable in light and dark), offline
+  // in the error tone, starting / reconnecting in the warning tone.
+  it.each([
+    ['disconnected', /Backend Offline/i, '--color-status-error'],
+    ['initializing', /Starting up/i, '--color-status-warning'],
+    ['degraded', /Reconnecting/i, '--color-status-warning'],
+  ] as const)('the %s pill uses its theme tone', (status, label, tone) => {
+    renderHeader(status);
+    const pill = screen.getByLabelText(label);
+    expect(pill.className).toContain(`var(${tone})`);
+    expect(pill.querySelector('span')!.className).toContain(`bg-[var(${tone})]`);
+  });
 });
 
 describe('ChatHeader — Canvas outputs pill (run_9e42c066)', () => {

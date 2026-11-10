@@ -77,6 +77,8 @@ export const FILES = [
   'components/workspace-explorer/ExplorerToolbar.tsx',
   'components/workspace-explorer/OpenFileButton.tsx',
   'pages/chat/components/WelcomeScreen.tsx',
+  'pages/chat/components/ChatHeader.tsx',
+  'pages/chat/components/SessionTabBar.tsx',
 ];
 
 const B = '(?<![\\w-])';

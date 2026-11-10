@@ -37,6 +37,23 @@ interface ChatHeaderProps {
   onOpenCanvas?: () => void;
 }
 
+/** Health pill chrome. Tones use theme variables only (light and dark, index.css):
+ *  the tint is the status colour at 10% over the chrome; the text is the status colour
+ *  mixed 60/40 with --color-text, because the plain status colour on that tint is below
+ *  4.5:1 in the light theme (error 3.7, warning 2.6). Mixed: light 6.3 / 4.7, dark 6.4 / 8.6. */
+const PILL = 'flex items-center gap-1.5 px-2 py-1 rounded-md text-small font-semibold mr-2';
+const DOT = 'w-2 h-2 rounded-full animate-pulse';
+const TONE = {
+  error: {
+    pill: 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] text-[color-mix(in_srgb,var(--color-status-error)_60%,var(--color-text))]',
+    dot: 'bg-[var(--color-status-error)]',
+  },
+  warning: {
+    pill: 'bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] text-[color-mix(in_srgb,var(--color-status-warning)_60%,var(--color-text))]',
+    dot: 'bg-[var(--color-status-warning)]',
+  },
+} as const;
+
 /** The pinned Swarm Out tab with the Hives' activity (polled only while it exists). */
 function SwarmOutPinnedTab({ tab, isActive, onSelect, status }: {
   tab: OpenTab; isActive: boolean; onSelect: (id: string) => void; status?: TabStatus;
@@ -62,7 +79,7 @@ function SwarmOutPinnedTab({ tab, isActive, onSelect, status }: {
  * after a gap and a divider, outside the scrolling strip, which holds the user's
  * own chat tabs only. The right cluster holds the health warning (shown when not
  * connected) and the outputs pill.
- * The 🔔 Alerts "Needs You" pill was MOVED to the left-sidebar top slot
+ * The Alerts "Needs You" pill was MOVED to the left-sidebar top slot
  * (run_2bdc68ad) — a global attention signal belongs on the fixed-width left
  * chrome, not on the Canvas-shifting tab row; ChatPage portals it there.
  *
@@ -169,23 +186,23 @@ export function ChatHeader({
         {/* Health warning — only shown for non-connected states (BottomBar handles normal status) */}
         {health.status === 'disconnected' && (
           <div
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-500/10 text-red-400 text-xs font-medium mr-2"
+            className={`${PILL} ${TONE.error.pill}`}
             role="status"
             data-testid="health-pill"
             title={health.issue?.detail}
             aria-label={health.issue?.detail ?? t('health.disconnected', 'Backend Offline')}
           >
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+            <span className={`${DOT} ${TONE.error.dot}`} />
             {health.issue?.short ?? t('health.disconnected', 'Backend Offline')}
           </div>
         )}
         {health.status === 'initializing' && (
           <div
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-medium mr-2"
+            className={`${PILL} ${TONE.warning.pill}`}
             role="status"
             aria-label={t('health.initializing', 'Starting up...')}
           >
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span className={`${DOT} ${TONE.warning.dot}`} />
             {t('health.initializing', 'Starting up...')}
           </div>
         )}
@@ -193,13 +210,13 @@ export function ChatHeader({
             Amber "reconnecting" hint — inputs stay usable (NOT the red offline state). */}
         {health.status === 'degraded' && (
           <div
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-medium mr-2"
+            className={`${PILL} ${TONE.warning.pill}`}
             role="status"
             data-testid="health-pill"
             title={health.issue?.detail}
             aria-label={health.issue?.detail ?? t('health.degraded', 'Reconnecting…')}
           >
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span className={`${DOT} ${TONE.warning.dot}`} />
             {health.issue?.short ?? t('health.degraded', 'Reconnecting…')}
           </div>
         )}
