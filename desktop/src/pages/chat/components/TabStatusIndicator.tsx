@@ -54,11 +54,11 @@ export function TabStatusIndicator({ status }: TabStatusIndicatorProps) {
     case 'permission_needed':
       return (
         <span
-          className={`${WARNING_TEXT} text-small leading-none`}
+          className={`material-symbols-outlined icon-xs ${WARNING_TEXT} leading-none`}
           role="img"
           aria-label={tf(t, 'chat.tabStatus.permissionNeeded', 'Permission needed')}
         >
-          ⚠
+          warning
         </span>
       );
     case 'error':

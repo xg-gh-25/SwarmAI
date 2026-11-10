@@ -3670,11 +3670,13 @@ describe('TabStatusIndicator component', () => {
       expect(indicator!.className).toContain('font-semibold');
     });
 
-    it('renders warning-tone "⚠" for permission_needed', () => {
+    it('renders the warning-tone Material Symbols "warning" icon for permission_needed', () => {
       const { container } = renderIndicator('permission_needed');
       const indicator = container.querySelector('span');
       expect(indicator).not.toBeNull();
-      expect(indicator!.textContent).toBe('⚠');
+      expect(indicator!.textContent!.trim()).toBe('warning');
+      expect(indicator!.className).toContain('material-symbols-outlined');
+      expect(indicator!.className).toContain('icon-xs');
       expect(indicator!.className).toContain('var(--color-status-warning)');
     });
 
