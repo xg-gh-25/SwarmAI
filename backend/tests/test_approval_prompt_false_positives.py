@@ -11,6 +11,9 @@ What is tested:
 - C: the approval reason names the rule and the part of the command it matched, and
   every prompt (approve / deny / timeout) leaves exactly one row in
   gate_decisions.jsonl that gate_audit counts per rule.
+- C2: that part is the line (and ``&&`` / ``;`` part) that tripped the rule, not the
+  command's first line; with no such line it falls back to the first line. Display
+  only: an approved multi-line command stays approved.
 
 Each allow case is paired with true positives that must stay caught.
 """
@@ -212,3 +215,96 @@ async def test_gate_audit_counts_prompts_per_rule(gate_log, capsys):
     import re
     assert re.search(r"rule rm_unresolved_target\s+2\s+approve:2", out)
     assert re.search(r"rule pattern:sudo \*\s+1\s+approve:1", out)
+
+
+# ── C2: the card shows the line / part that tripped the rule, not line 1 ────
+# Display only: the same commands are asked as before, and an approval is still
+# remembered by the whole command (its hash), so it keeps applying.
+_LONG = "echo " + "x" * 200
+
+
+@pytest.mark.parametrize("cmd,rule,part", [
+    ("R=~/.swarm-ai/swarm-content-repo\ncd $R\ngit push --force origin main",
+     "irreversible_external", "git push --force origin main"),
+    # a line that fits is shown whole (its cd / other parts are context) ...
+    ("cd /tmp && git status && gh repo delete o/r --yes && echo done",
+     "irreversible_external", "cd /tmp && git status && gh repo delete o/r --yes && echo done"),
+    ("sudo ls; rm -rf ~/x", "pattern:sudo *", "sudo ls; rm -rf ~/x"),
+    # ... a longer one is narrowed to its matching part (quotes respected)
+    (f"cd /tmp && {_LONG} && git push -f origin x", "irreversible_external",
+     "git push -f origin x"),
+    (f"echo 'a && b' ; {_LONG} ; git push -f origin x", "irreversible_external",
+     "git push -f origin x"),
+    ("bash <<'EOF'\necho start\ngit push --force origin main\nEOF",
+     "irreversible_external", "git push --force origin main"),
+    ("R=~/.swarm-ai/x\nmv ~/.swarm-ai/SwarmWS/Projects/CMHK /tmp/old",
+     "irreplaceable_store", "mv ~/.swarm-ai/SwarmWS/Projects/CMHK /tmp/old"),
+    ("sudo ls /root", "pattern:sudo *", "sudo ls /root"),
+])
+def test_the_match_is_the_part_that_tripped_the_rule(cmd, rule, part):
+    from core import security_hooks as sh
+    hit = sh._danger_match(sh._command_as_run(cmd), list(sh.DEFAULT_DANGEROUS_PATTERNS), REPO)
+    assert hit is not None and hit["rule"] == rule
+    assert hit["match"] == part
+
+
+@pytest.mark.parametrize("cmd,part", [
+    ("R=~/.swarm-ai/swarm-content-repo\ngit -C $R reset --hard origin/main",
+     "git -C $R reset --hard origin/main"),
+    ("R=1\ncd /x && git status && git checkout -- a.py",
+     "cd /x && git status && git checkout -- a.py"),
+    ("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'reset', '--hard'])\nEOF",
+     "subprocess.run(['git', 'reset', '--hard'])"),
+    ("git reset --hard", "git reset --hard"),
+    # a precise discard line wins over a line that only has a discard's call shape
+    ("python3 - <<'EOF'\nsubprocess.run(['git', 'clean', '-fd'])\nEOF\ngit restore a.py",
+     "git restore a.py"),
+])
+def test_the_discard_part_is_the_discarding_line(cmd, part):
+    from core.security_hooks import _discard_part
+    assert _discard_part(cmd) == part
+
+
+def test_no_single_line_matching_falls_back_to_the_first_line():
+    from core.security_hooks import _matched_part
+
+    def boom(_s):
+        raise RuntimeError("predicate failed")
+    assert _matched_part("\n  first\nsecond", lambda s: False) == "first"
+    assert _matched_part("first\nsecond", boom) == "first"
+    # a \-continued line is one line; the first predicate that finds a line wins
+    assert _matched_part("R=1\ngit push \\\n  -f", lambda s: "-f" in s) == "git push    -f"
+    assert _matched_part("a b\nc d", lambda s: "z" in s, lambda s: "d" in s) == "c d"
+    assert _matched_part("x" * 300, lambda s: True).endswith("…")
+    # an oversized command is not judged line by line again
+    assert _matched_part("first\n" + "y" * 30_000, lambda s: s.startswith("y")) == "first"
+
+
+@pytest.mark.asyncio
+async def test_the_discard_card_and_log_show_the_discarding_line(gate_log, monkeypatch):
+    from core import security_hooks as sh
+
+    def _cannot_check(*_a, **_k):
+        raise RuntimeError("git timed out")   # the gate turns any failure into discard_unchecked
+    monkeypatch.setattr(sh, "_foreign_uncommitted", _cannot_check)
+    cmd = "R=~/.swarm-ai/swarm-content-repo\ngit -C $R reset --hard origin/main"
+    captured = []
+    await _gate("deny", captured)({"tool_name": "Bash", "tool_input": {"command": cmd},
+                                   "cwd": REPO}, "tu-1", None)
+    reason = captured[0]["reason"]
+    assert reason.startswith("`git -C $R reset --hard origin/main`")
+    assert "discard_unchecked" in reason and "R=~/" not in reason
+    rows = [r for r in _rows(gate_log) if r["gate"] == "dangerous_command_gate"]
+    assert rows[-1]["match"] == "git -C $R reset --hard origin/main"
+
+
+@pytest.mark.asyncio
+async def test_an_approved_multiline_command_stays_approved(gate_log):
+    cmd = "R=~/.swarm-ai/x\ngit push --force origin main"
+    captured = []
+    gate = _gate("approve", captured)
+    event = {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": REPO}
+    assert (await gate(event, "tu-1", None)) == {"decision": "approve"}
+    assert "`git push --force origin main`" in captured[0]["reason"]
+    assert (await gate(event, "tu-2", None)) == {"decision": "approve"}
+    assert len(captured) == 1          # the second run is not asked again

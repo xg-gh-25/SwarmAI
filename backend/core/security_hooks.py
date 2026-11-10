@@ -1944,6 +1944,70 @@ def _excerpt(command: str, limit: int = 160) -> str:
     return line if len(line) <= limit else line[:limit - 1] + "…"
 
 
+def _list_parts(line: str) -> list[str]:
+    """*line* split at ``&&`` / ``||`` / ``;`` outside quotes (a pipe is kept: a rule
+    such as ``curl *|bash*`` reads across it). For display only."""
+    parts: list[str] = []
+    cur: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and quote != "'" and i + 1 < len(line):
+            cur.append(line[i:i + 2])
+            i += 2
+            continue
+        if quote:
+            quote = "" if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif line.startswith(("&&", "||"), i) or c == ";":
+            parts.append("".join(cur))
+            cur = []
+            i += 1 if c == ";" else 2
+            continue
+        cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return [p.strip() for p in parts if p.strip()]
+
+
+#: shortcut: past this size the card keeps the first line (each line is judged again
+#: on the event loop); raise it if long multi-line scripts are asked often
+_MATCHED_PART_MAX = 20_000
+
+
+def _matched_part(command: str, *matches: Callable[[str], Any], limit: int = 160) -> str:
+    """The part of *command* a rule matched, shown on the approval card and logged as
+    ``match``: the first line (``\\``-continuations joined) that the first predicate of
+    *matches* finding one matches on its own; a line longer than *limit* is narrowed to
+    its first ``&&`` / ``||`` / ``;`` part that matches. Else the first non-empty line
+    (``_excerpt``). Display only: whether the command is asked was already decided on
+    the whole command, and a predicate error here only falls back."""
+    if len(command) > _MATCHED_PART_MAX:
+        return _excerpt(command, limit)
+    lines = [ln.strip() for ln in command.replace("\\\n", " ").split("\n")]
+    for match in matches:
+        def _hit(s: str) -> bool:
+            try:
+                return bool(match(s))
+            except Exception:  # noqa: BLE001 — display only, never breaks the gate
+                return False
+        line = next((ln for ln in lines if ln and _hit(ln)), None)
+        if line is None:
+            continue
+        if len(line) > limit:
+            line = next((p for p in _list_parts(line) if _hit(p)), line)
+        return line if len(line) <= limit else line[:limit - 1] + "…"
+    return _excerpt(command, limit)
+
+
+def _discard_part(command: str) -> str:
+    """The part of *command* that discards working-tree changes, for the card: a line
+    ``_discards_work`` flags, else one with a discard's call shape (a script body)."""
+    return _matched_part(command, _discards_work, _DISCARD_SIG_RE.search)
+
+
 _PATTERN_WHY = {
     "sudo *": "runs as administrator",
     "kill -9 *": "force-kills a process",
@@ -2025,7 +2089,8 @@ def _danger_match(command: str, patterns: "list[str]", cwd: str = "") -> "dict |
     readable sentence), or None. The discard rule is judged separately (it runs git)."""
     for p in patterns:
         if fnmatch.fnmatch(command, p):
-            return {"rule": f"pattern:{p}", "match": _excerpt(command),
+            return {"rule": f"pattern:{p}",
+                    "match": _matched_part(command, lambda s, p=p: fnmatch.fnmatch(s, p)),
                     "why": _PATTERN_WHY.get(p, f"matches the dangerous pattern {p!r}")}
     seg = _dangerous_rm_segment(command, cwd=cwd)
     if seg is not None:
@@ -2033,14 +2098,17 @@ def _danger_match(command: str, patterns: "list[str]", cwd: str = "") -> "dict |
                 "why": "recursive delete of a target the gate cannot resolve to a "
                        "temp directory"}
     if _is_irreversible_external_op(command):
-        return {"rule": "irreversible_external", "match": _excerpt(command),
+        return {"rule": "irreversible_external",
+                "match": _matched_part(command, _is_irreversible_external_op),
                 "why": "irreversible external operation (force push, delete, "
                        "visibility change)"}
     if _targets_irreplaceable_store(command):
-        return {"rule": "irreplaceable_store", "match": _excerpt(command),
+        return {"rule": "irreplaceable_store",
+                "match": _matched_part(command, _targets_irreplaceable_store),
                 "why": "deletes or moves an irreplaceable store (DDD, Library, .context)"}
     if _is_v1_land_request(command):
-        return {"rule": "v1_authorization", "match": _excerpt(command),
+        return {"rule": "v1_authorization",
+                "match": _matched_part(command, _is_v1_land_request),
                 "why": "consumes one Pipeline v1 human authorization"}
     return None
 
@@ -2169,9 +2237,11 @@ def create_dangerous_command_gate(
                 return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                                "permissionDecision": "deny",
                                                "permissionDecisionReason": reason}}
-            reserved_action = _is_reserved_action(text, pin.get("reserved") or [])
+            reserved = pin.get("reserved") or []
+            reserved_action = _is_reserved_action(text, reserved)
             if reserved_action and hit is None:
-                hit = {"rule": "reserved_action", "match": _excerpt(command),
+                hit = {"rule": "reserved_action",
+                       "match": _matched_part(text, lambda s: _is_reserved_action(s, reserved)),
                        "why": f"'{reserved_action}' is reserved for the person: a dispatched "
                               "task never does it"}
         is_dangerous = hit is not None
@@ -2202,7 +2272,7 @@ def create_dangerous_command_gate(
                                       "another session has uncommitted work there")
                 if discard_reason:
                     is_dangerous = True
-                    hit = {"rule": rule, "match": _excerpt(command), "why": discard_reason}
+                    hit = {"rule": rule, "match": _discard_part(text), "why": discard_reason}
                     logger.warning("[DISCARD] gated: %s", command[:80])
         if not is_dangerous or hit is None:
             return {"decision": "approve"}
