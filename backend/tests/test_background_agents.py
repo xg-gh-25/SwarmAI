@@ -46,6 +46,13 @@ def test_killed_is_stopped_and_non_terminal_is_ignored():
     assert normalize_status("killed") == "stopped"
     assert normalize_status("running") is None
     assert normalize_status("CANCELLED") == "stopped"
+    r, seen = _reg()
+    r.launch("ag1")
+    r.task_started("t1", "ag1")
+    r.task_finished("t1", "running")
+    assert [e["status"] for e in seen] == ["running"]
+    r.task_finished("t1", "killed")
+    assert seen[-1]["status"] == "stopped"
 
 
 def test_the_terminal_status_list_is_one_definition():
@@ -61,13 +68,6 @@ def test_the_terminal_status_list_is_one_definition():
     assert {normalize_status(s) for s in CLI_TERMINAL_STATUSES} <= TERMINAL
     assert not hasattr(csr, "_TERMINAL")
     assert "normalize_status" in inspect.getsource(csr)
-    r, seen = _reg()
-    r.launch("ag1")
-    r.task_started("t1", "ag1")
-    r.task_finished("t1", "running")
-    assert [e["status"] for e in seen] == ["running"]
-    r.task_finished("t1", "killed")
-    assert seen[-1]["status"] == "stopped"
 
 
 def test_a_finish_before_the_launch_is_applied_at_launch():
