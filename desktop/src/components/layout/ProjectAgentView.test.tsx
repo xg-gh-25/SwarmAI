@@ -5,7 +5,8 @@
  * Questions, one per test:
  * - are the rules listed first, as the person's words with their date, in file order,
  *   with an unverified one marked as reaching no task?
- * - is there no rules list when the Brain has none?
+ * - when the Brain has none, is there no list but a line saying how a rule is added?
+ * - does the gates line say the gates run only in sessions sent to a Hive?
  */
 import { render, screen, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -38,8 +39,19 @@ describe('ProjectAgentView rules', () => {
       .toBeTruthy();
   });
 
-  it('shows no rules list when the Brain has none', () => {
+  it('says how a rule is added when the Brain has none', () => {
     render(<ProjectAgentView brain="SwarmAI" onRevise={() => {}} agent={{ ...base, rules: [] }} />);
     expect(screen.queryByTestId('pa-rules')).toBeNull();
+    expect(screen.getByTestId('pa-rules-empty')).toHaveTextContent('from now on');
+  });
+
+  it('shows no hint once there is a rule, and says gates run only on a Hive', () => {
+    render(<ProjectAgentView brain="SwarmAI" onRevise={() => {}} agent={{
+      ...base, gates: ['no_git_push'],
+      rules: [{ said: 'x', added: '2026-11-10', verified: true }],
+    }} />);
+    expect(screen.queryByTestId('pa-rules-empty')).toBeNull();
+    expect(screen.getByTestId('pa-gates')).toHaveTextContent('sent to a Hive');
+    expect(screen.getByTestId('pa-gates')).toHaveTextContent('no_git_push');
   });
 });

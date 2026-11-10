@@ -65,6 +65,8 @@ export function ProjectAgentView({ brain, agent, onRevise }: {
         <button className="btn-sm btn-ghost" data-testid="pa-open-file" onClick={() => openPath(file)}>{t('ui.ProjectAgentView.openYaml')}</button>
       </div>
       {problems.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-error)]" data-testid="bm-agent-problems">{problems.join(' · ')}</div>}
+      {(agent.rules ?? []).length === 0 && (
+        <div className="mt-3 text-meta text-[var(--color-text-muted)]" data-testid="pa-rules-empty">{t('ui.ProjectAgentView.rulesEmpty')}</div>)}
       {(agent.rules ?? []).length > 0 && (
         <section className="mt-3" data-testid="pa-rules">
           <div className="text-small font-medium">{t('ui.ProjectAgentView.rules', { count: (agent.rules ?? []).length })}</div>
@@ -100,7 +102,7 @@ export function ProjectAgentView({ brain, agent, onRevise }: {
 
       <div className="mt-4 text-meta text-[var(--color-text-muted)] space-y-1" data-testid="pa-guards">
         <div>{t('ui.ProjectAgentView.neverOnHive', { actions: reserved.map((a) => (RESERVED_LABEL[a] ? t(RESERVED_LABEL[a]) : a)).join(', ') })}</div>
-        {(agent.gates ?? []).length > 0 && <div>{t('ui.ProjectAgentView.gates', { gates: (agent.gates ?? []).join(', ') })}</div>}
+        {(agent.gates ?? []).length > 0 && <div data-testid="pa-gates">{t('ui.ProjectAgentView.gates', { gates: (agent.gates ?? []).join(', ') })}</div>}
       </div>
       {(agent.reviewFocus ?? []).length > 0 && (
         <details className="mt-3 text-meta" data-testid="pa-watches">

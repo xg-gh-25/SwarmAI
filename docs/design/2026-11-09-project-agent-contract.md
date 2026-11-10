@@ -113,7 +113,7 @@ rules:
 - **已有的那条**："SwarmAI 的 pipeline DELIVER/REFLECT 要顺滑"留在 STEERING。它当初是你在会话里说的，那条消息已经找不回来，按 §4.3 核实不了。等你哪天再说一次，再用命令记进 SwarmAI 的规则；STEERING 里那条由你在界面上撤回。
 
 ### 4.4 展示
-Brain Hub 的 Project Agent 页最上面列出规则：原话、日期、是否已核实。只读；要拿掉，在对话里说。
+Brain Hub 的 Project Agent 页最上面列出规则：原话、日期、是否已核实。只读；要拿掉，在对话里说。还没有规则时，那里写一句怎么加（在聊天里对这个 Brain 说「以后都要…」）。gates 那一行写明只在派到 Hive 的会话里执行。
 
 ## 5. 谁在扮演 Project Agent
 
