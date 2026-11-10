@@ -14,7 +14,10 @@ Properties covered (design: Knowledge/Designs/2026-10-20-continuous-cli-stream-r
 - a turn nobody claimed goes to the injected callback;
 - a claim that a task notification raced is transferred at its echo;
 - quiescence follows the CLI's session state (I3); the reader's end or error
-  reaches the open turn and every later claim (I4).
+  reaches the open turn and every later claim (I4);
+- a background task with no end frame stops counting past its silence cap, while
+  one that keeps showing signs of life keeps counting (B1, settable awake clock);
+  the end-status list is the registry's (B2).
 """
 from __future__ import annotations
 
@@ -687,4 +690,148 @@ async def test_background_subagent_frames_do_not_become_a_waiting_claims_turn():
     assert isinstance(got[0], SystemMessage) and got[0].subtype == "init"
     assert not any(getattr(m, "parent_tool_use_id", None) == "toolu_bg_agent" for m in got)
     assert got[-1].result == "ONE"
+    r.close()
+
+
+# ── B1: a background task without an end frame is capped ─────────────────
+
+
+class _Clock:
+    """A settable awake_time() for the reader (the cap is measured in awake time)."""
+
+    def __init__(self) -> None:
+        self.t = 1_000_000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _agent_started(tool: str = "toolu_bg_agent", task: str = "agent-task-1") -> dict:
+    return {"type": "system", "subtype": "task_started", "task_id": task, "tool_use_id": tool,
+            "description": "bg agent", "task_type": "local_agent", "uuid": "ts-" + task,
+            "session_id": "S"}
+
+
+async def test_a_task_that_never_ends_stops_counting_past_its_cap(monkeypatch, caplog):
+    """A background Bash (no frames until it ends) whose end frame never comes holds
+    the session for BG_SILENT_TASK_CAP_S, then no longer counts: logged once, and a
+    late end frame is still handled."""
+    import core.cli_stream_reader as csr
+    clock = _Clock()
+    monkeypatch.setattr(csr, "awake_time", clock)
+    c = FakeClient()
+    r = _reader(c, [])
+    r.start()
+    started = next(f for f in _frames("idle_notification") if f.get("subtype") == "task_started")
+    assert started["task_type"] == "local_bash"
+    c.feed([started])
+    await _settle(c)
+    clock.t += csr.BG_SILENT_TASK_CAP_S - 60
+    assert r.background_tasks == {started["task_id"]}
+    clock.t += 120
+    with caplog.at_level("WARNING", logger="core.cli_stream_reader"):
+        assert r.background_tasks == frozenset()
+        assert r.background_tasks == frozenset()
+    assert sum("bg_task_stale" in rec.message for rec in caplog.records) == 1
+    assert started["task_id"] in caplog.text and "local_bash" in caplog.text
+    notified = r.notif_count
+    c.feed([next(f for f in _frames("idle_notification") if f.get("subtype") == "task_notification")])
+    await _settle(c)
+    assert r.notif_count == notified + 1 and r._bg == {}
+    r.close()
+
+
+async def test_a_working_background_agent_keeps_counting(monkeypatch, caplog):
+    """A background agent that keeps producing frames (its sub-agent's calls, a
+    task_progress, a non-terminal task_updated) keeps counting however long it runs;
+    only BG_AGENT_SILENCE_CAP_S of silence makes it stale, and a frame after that
+    makes it count again."""
+    import core.cli_stream_reader as csr
+    clock = _Clock()
+    monkeypatch.setattr(csr, "awake_time", clock)
+    c = FakeClient()
+    r = _reader(c, [])
+    r.start()
+    c.feed([_agent_started()])
+    await _settle(c)
+    step = csr.BG_AGENT_SILENCE_CAP_S - 60
+    signs = [
+        _subagent_frames(),
+        [{"type": "system", "subtype": "task_progress", "task_id": "agent-task-1",
+          "tool_use_id": "toolu_bg_agent", "description": "bg agent", "uuid": "tp-1",
+          "session_id": "S", "usage": {"total_tokens": 1, "tool_uses": 1, "duration_ms": 1}}],
+        [{"type": "system", "subtype": "task_updated", "task_id": "agent-task-1",
+          "uuid": "tu-1", "session_id": "S", "patch": {"status": "running"}}],
+    ]
+    for frames in signs:  # 3 near-cap silences: far past the cap since start
+        clock.t += step
+        assert r.background_tasks == {"agent-task-1"}
+        c.feed(frames)
+        await _settle(c)
+    clock.t += step
+    assert r.background_tasks == {"agent-task-1"}
+    clock.t += 120
+    with caplog.at_level("INFO", logger="core.cli_stream_reader"):
+        assert r.background_tasks == frozenset()
+        c.feed(_subagent_frames())
+        await _settle(c)
+        assert r.background_tasks == {"agent-task-1"}
+    assert "bg_task_stale" in caplog.text and "bg_task_alive_again" in caplog.text
+    # a foreign sub-agent's frames are no sign of life for this task
+    clock.t += csr.BG_AGENT_SILENCE_CAP_S + 1
+    c.feed(_subagent_frames("toolu_other"))
+    await _settle(c)
+    assert r.background_tasks == frozenset()
+    r.close()
+
+
+async def test_terminal_status_list_is_the_registrys(monkeypatch):
+    """B2: the reader ends a task on exactly the statuses the registry ends an agent
+    on (one list): a 'cancelled' task_updated ends it in both; an unknown
+    task_updated status ends it in neither; an unknown task_notification status
+    ends it (a notification is an end) and is logged."""
+    from core.background_agents import normalize_status
+    c = FakeClient()
+    r = _reader(c, [])
+    r.start()
+    for i, status in enumerate(("cancelled", "timed_out")):
+        tid = f"t{i}"
+        c.feed([_agent_started(f"toolu_{i}", tid),
+                {"type": "system", "subtype": "task_updated", "task_id": tid,
+                 "uuid": f"u{i}", "session_id": "S", "patch": {"status": status}}])
+        await _settle(c)
+        assert (tid in r.background_tasks) == (normalize_status(status) is None)
+    assert r.background_tasks == {"t1"}
+    c.feed([{"type": "system", "subtype": "task_notification", "task_id": "t1",
+             "tool_use_id": "toolu_1", "status": "timed_out", "summary": "", "uuid": "n1",
+             "session_id": "S", "output_file": "/tmp/x"}])
+    await _settle(c)
+    assert r.background_tasks == frozenset() and r._bg_tool == {}
+    r.close()
+
+
+async def test_an_ended_task_does_not_drop_another_tasks_sign_of_life(monkeypatch):
+    """Two tasks under one Agent call id: the first one's end keeps the second's
+    mapping, so its sub-agent frames still keep it counting; a repeated
+    task_started under a new id leaves no mapping behind."""
+    import core.cli_stream_reader as csr
+    clock = _Clock()
+    monkeypatch.setattr(csr, "awake_time", clock)
+    c = FakeClient()
+    r = _reader(c, [])
+    r.start()
+    c.feed([_agent_started("toolu_bg_agent", "a"), _agent_started("toolu_bg_agent", "b"),
+            {"type": "system", "subtype": "task_notification", "task_id": "a",
+             "tool_use_id": "toolu_bg_agent", "status": "completed", "summary": "",
+             "uuid": "na", "session_id": "S", "output_file": "/tmp/x"}])
+    await _settle(c)
+    assert r._bg_tool == {"toolu_bg_agent": "b"}
+    clock.t += csr.BG_AGENT_SILENCE_CAP_S - 60
+    c.feed(_subagent_frames())
+    await _settle(c)
+    clock.t += 120
+    assert r.background_tasks == {"b"}
+    c.feed([_agent_started("toolu_new", "b")])
+    await _settle(c)
+    assert r._bg_tool == {"toolu_new": "b"}
     r.close()

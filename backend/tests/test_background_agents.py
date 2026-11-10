@@ -45,6 +45,22 @@ def test_launch_then_finish_reports_running_then_completed():
 def test_killed_is_stopped_and_non_terminal_is_ignored():
     assert normalize_status("killed") == "stopped"
     assert normalize_status("running") is None
+    assert normalize_status("CANCELLED") == "stopped"
+
+
+def test_the_terminal_status_list_is_one_definition():
+    """B2: every CLI terminal status (the SDK's set included) maps to a registry
+    status, and the stream reader keeps no list of its own."""
+    import inspect
+
+    from claude_agent_sdk.types import TERMINAL_TASK_STATUSES
+
+    import core.cli_stream_reader as csr
+    from core.background_agents import CLI_TERMINAL_STATUSES, TERMINAL
+    assert TERMINAL_TASK_STATUSES <= CLI_TERMINAL_STATUSES
+    assert {normalize_status(s) for s in CLI_TERMINAL_STATUSES} <= TERMINAL
+    assert not hasattr(csr, "_TERMINAL")
+    assert "normalize_status" in inspect.getsource(csr)
     r, seen = _reg()
     r.launch("ag1")
     r.task_started("t1", "ag1")

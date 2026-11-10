@@ -1188,9 +1188,17 @@ class SessionUnit:
         someone can still see (the TTL, the RSS proactive restart, channel-pool
         eviction) skips such an IDLE unit: killing it loses the task and the turn it
         will start. An orphan (no window owns it) is not exempt, nor is
-        memory-pressure survival. A dead reader reports no background work."""
+        memory-pressure survival. A dead reader reports no background work, nor
+        does a task past its silence cap (``CliStreamReader.background_tasks``):
+        every reader of this flag (reclaim, the Swarm Out ``background_work``
+        snapshot, the Project Agent 409) then treats it as no longer running."""
+        return self._queued_injected() or bool(self.background_task_ids)
+
+    @property
+    def background_task_ids(self) -> frozenset:
+        """The CLI background tasks that still count as running (empty: no reader)."""
         r = getattr(self, "_stream_reader", None)
-        return self._queued_injected() or (r is not None and bool(r.background_tasks))
+        return r.background_tasks if r is not None else frozenset()
 
     def _queued_injected(self) -> bool:
         """True while a CLI-initiated turn waits for the sink. Drops streams the

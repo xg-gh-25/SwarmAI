@@ -490,6 +490,37 @@ async def test_background_task_protects_an_owned_unit_but_not_an_orphan():
     unit._stream_reader.close()
 
 
+async def test_a_task_past_its_cap_no_longer_holds_the_unit_from_reclaim(monkeypatch, caplog):
+    """B1: a background task whose end frame never came holds an IDLE unit from the
+    TTL and the RSS restart only until its cap; the TTL logs what holds it (once),
+    and past the cap the TTL kills it. A task still within its cap keeps it."""
+    import core.cli_stream_reader as csr
+    base = time.time()
+    clock = {"t": base}
+    monkeypatch.setattr(csr, "awake_time", lambda: clock["t"])
+    unit = _bg_unit("bg-capped")  # a local_bash task, idle 10 days
+    await _until(lambda: unit._stream_reader._bg)
+    task_id = _frame("task_started")["task_id"]
+    lm_router = MagicMock()
+    lm_router.list_units.return_value = [unit]
+    mgr = LifecycleManager(router=lm_router)
+    mgr._release_session_state = MagicMock()
+
+    clock["t"] = base + csr.BG_SILENT_TASK_CAP_S - 60  # still within its cap
+    with caplog.at_level("INFO", logger="core.lifecycle_manager"):
+        await mgr._check_ttl()
+        await mgr._check_ttl()
+    unit.kill.assert_not_awaited()
+    held = [r for r in caplog.records if "ttl_held_by_background" in r.message]
+    assert len(held) == 1 and task_id in held[0].message and unit.session_id in held[0].message
+
+    clock["t"] = base + csr.BG_SILENT_TASK_CAP_S + 60
+    assert not unit.has_background_work
+    await mgr._check_ttl()
+    unit.kill.assert_awaited()
+    unit._stream_reader.close()
+
+
 # ── the single writer and the no-second-reader rule ─────────────────────────
 
 

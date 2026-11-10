@@ -56,6 +56,11 @@ Quiescence (``quiescent``): the CLI may be written to only when its last
 counts as idle. ``on_idle`` fires whenever the CLI reports idle. ``on_task(subtype, msg)`` gets every
 ``task_started`` / ``task_notification`` / ``task_updated`` frame, turn open or not.
 
+Background tasks (``background_tasks``): a ``task_started`` task counts until its
+end frame, or until it has gone longer than its cap without a sign of life
+(``BG_AGENT_SILENCE_CAP_S`` / ``BG_SILENT_TASK_CAP_S``; logged once), so a lost end
+frame can no longer exempt its session from reclaim forever.
+
 Failure:
 
 - The stream ENDS (EOF): the open turn and every waiting claim end as an ended stream
@@ -82,18 +87,43 @@ from typing import Any, Callable, Optional
 
 from claude_agent_sdk import ResultMessage, SystemMessage, UserMessage
 
+from core.background_agents import normalize_status  # the one terminal-status list
+
 logger = logging.getLogger(__name__)
 
 _END = object()
 
-# Terminal task statuses (SDK types.TERMINAL_TASK_STATUSES plus the notification's
-# mapped "stopped"); kept local so an SDK without the constant still imports.
-_TERMINAL = frozenset({"completed", "failed", "killed", "stopped"})
+# How long a started, unended background task may go without a sign of life (its
+# task_started, a task_progress, a non-terminal task_updated, or a sub-agent frame
+# under its Agent call) and still hold its session from routine reclaim (TTL, RSS
+# restart, channel eviction). Past it the task is still tracked (a late end frame or
+# a new sign of life counts), it just no longer counts as background work. Awake
+# time: a sleeping machine does not age a task.
+# - An agent's own frames are its evidence of life. The longest silence of a live
+#   agent is one blocked call: a PreToolUse approval / AskUserQuestion wait is 4h
+#   (permission_manager / ask_question_manager), so 6h leaves margin.
+# - Any other task (a background Bash: no frames until it ends) has no evidence
+#   channel, so this is a lifetime bound: one TTL (24h) past its start.
+BG_AGENT_SILENCE_CAP_S = 6 * 3600.0
+BG_SILENT_TASK_CAP_S = 24 * 3600.0
 
 
 def _patch_status(data: dict) -> Optional[str]:
     patch = data.get("patch")
     return patch.get("status") if isinstance(patch, dict) else None
+
+
+@dataclass
+class _BgTask:
+    """One started, unended CLI background task."""
+    task_type: Optional[str]
+    tool_use_id: Optional[str]
+    last_at: float  # awake_time() of its last sign of life
+    stale: bool = False  # past its cap (logged once)
+
+    @property
+    def cap(self) -> float:
+        return BG_AGENT_SILENCE_CAP_S if self.task_type == "local_agent" else BG_SILENT_TASK_CAP_S
 
 
 _ABANDONED = "turn abandoned: "
@@ -233,7 +263,8 @@ class CliStreamReader:
         self._state: Optional[str] = None  # last session_state_changed value
         self._state_seen = False
         self._idle = True  # nothing has run yet
-        self._bg: set[str] = set()
+        self._bg: dict[str, _BgTask] = {}  # task_id -> started, not ended
+        self._bg_tool: dict[str, str] = {}  # its Agent call's tool_use_id -> task_id
         self._bg_frames = 0  # background sub-agent frames seen with no turn open
         self.error: Optional[BaseException] = None
 
@@ -279,7 +310,40 @@ class CliStreamReader:
 
     @property
     def background_tasks(self) -> frozenset:
-        return frozenset(self._bg)
+        """Task ids of the background tasks that still count as running: started,
+        not ended, and heard from within their cap (``BG_*_CAP_S``). The first read
+        that finds a task past its cap logs it once (WARNING)."""
+        now = awake_time()
+        live = set()
+        for tid, t in list(self._bg.items()):  # list(): one atomic copy
+            silent = now - t.last_at
+            if silent < t.cap:
+                live.add(tid)
+            elif not t.stale:
+                t.stale = True
+                logger.warning(
+                    "cli_stream_reader.bg_task_stale session_id=%s task_id=%s task_type=%s "
+                    "silent=%.0fs cap=%.0fs — no end frame and no sign of life; it no "
+                    "longer holds the session from TTL / RSS reclaim",
+                    self._session_id, tid, t.task_type, silent, t.cap)
+        return frozenset(live)
+
+    def _bg_untool(self, task_id: Optional[str]) -> None:
+        """Drop *task_id*'s tool_use_id mapping, only if it still points at it."""
+        t = self._bg.get(task_id) if task_id else None
+        if t is not None and t.tool_use_id and self._bg_tool.get(t.tool_use_id) == task_id:
+            del self._bg_tool[t.tool_use_id]
+
+    def _bg_touch(self, task_id: Optional[str]) -> None:
+        """A sign of life from a tracked background task."""
+        t = self._bg.get(task_id) if task_id else None
+        if t is None:
+            return
+        t.last_at = awake_time()
+        if t.stale:
+            t.stale = False
+            logger.info("cli_stream_reader.bg_task_alive_again session_id=%s task_id=%s",
+                        self._session_id, task_id)
 
     def claim(self, uuid: str, kind: str = "human",
               notif_mark: Optional[int] = None,
@@ -388,6 +452,7 @@ class CliStreamReader:
         self._merged = None
         self._claims.clear()
         self._bg.clear()
+        self._bg_tool.clear()
 
     def _deliver(self, msg: Any) -> None:
         if self._open is not None:
@@ -485,6 +550,12 @@ class CliStreamReader:
 
     def _route(self, msg: Any) -> None:
         parent = getattr(msg, "parent_tool_use_id", None)
+        if parent and self._bg_tool:
+            # its sub-agent is working. shortcut: a foreground Agent nested inside a
+            # background agent streams under the nested call's id, which is not
+            # mapped; only an outer agent silent past its cap inside one nested call
+            # is affected. Upgrade: map nested ids when such a case is seen.
+            self._bg_touch(self._bg_tool.get(parent))
         if parent and self._on_bg_frame is not None and not isinstance(msg, SystemMessage):
             # a sub-agent's own frame: the session learns a background agent is
             # working (its progress), with or without a turn open; routing below is
@@ -522,14 +593,27 @@ class CliStreamReader:
             if sub == "task_started":
                 tid = data.get("task_id")
                 if tid:
-                    self._bg.add(tid)
+                    tool = data.get("tool_use_id")
+                    self._bg_untool(tid)  # a repeated task_started replaces its record
+                    self._bg[tid] = _BgTask(data.get("task_type"), tool, awake_time())
+                    if tool:
+                        self._bg_tool[tool] = tid
             elif sub == "task_notification" or (
-                    sub == "task_updated" and _patch_status(data) in _TERMINAL):
+                    sub == "task_updated"
+                    and normalize_status(_patch_status(data)) is not None):
                 # A finished background task: the CLI is about to start a turn for it.
                 # The terminal task_updated is the earliest sign; a non-terminal one
                 # (running / paused progress) does not end quiescence.
+                if sub == "task_notification" and normalize_status(data.get("status")) is None:
+                    logger.warning(
+                        "cli_stream_reader.task_end_unknown_status session_id=%s task_id=%s "
+                        "status=%r — counted as ended", self._session_id,
+                        data.get("task_id"), data.get("status"))
                 self._notif_count += 1
-                self._bg.discard(data.get("task_id"))
+                self._bg_untool(data.get("task_id"))
+                self._bg.pop(data.get("task_id"), None)
+            elif sub in ("task_updated", "task_progress"):
+                self._bg_touch(data.get("task_id"))  # still running: a sign of life
             if sub == "init" and self._open is None:
                 self._open_turn(msg)
                 return

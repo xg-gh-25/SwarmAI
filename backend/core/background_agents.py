@@ -22,7 +22,10 @@ or ``lost`` (the CLI process went away first: its result will never come), or
 
 Pure bookkeeping, no I/O. Bounded: the newest ``MAX_AGENTS`` are kept.
 
-@exports BackgroundAgents, TERMINAL, normalize_status
+``CLI_TERMINAL_STATUSES`` / ``normalize_status`` are the ONE definition of "the CLI
+says this task ended": the stream reader (``core/cli_stream_reader.py``) reads them too.
+
+@exports BackgroundAgents, TERMINAL, CLI_TERMINAL_STATUSES, normalize_status
 """
 from __future__ import annotations
 
@@ -35,15 +38,17 @@ MAX_AGENTS = 50
 ANNOUNCE_WINDOW_S = 600.0
 TERMINAL = frozenset({"completed", "failed", "stopped", "lost"})
 
+#: The CLI's terminal task statuses, raw spelling -> this registry's status. Both
+#: CLI vocabularies (the SDK's TERMINAL_TASK_STATUSES: a task_notification says
+#: "stopped", a task_updated patch the raw "killed") plus the "cancelled" spellings.
+_CLI_TERMINAL = {"completed": "completed", "failed": "failed", "stopped": "stopped",
+                 "killed": "stopped", "cancelled": "stopped", "canceled": "stopped"}
+CLI_TERMINAL_STATUSES = frozenset(_CLI_TERMINAL)
+
 
 def normalize_status(status: Any) -> Optional[str]:
     """The CLI's terminal task status as one of ``TERMINAL`` (None if not terminal)."""
-    s = str(status or "").lower()
-    if s in ("completed", "failed", "stopped"):
-        return s
-    if s in ("killed", "cancelled", "canceled"):
-        return "stopped"
-    return None
+    return _CLI_TERMINAL.get(str(status or "").lower())
 
 
 def _now_ms() -> int:

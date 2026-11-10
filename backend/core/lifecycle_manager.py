@@ -998,15 +998,17 @@ class LifecycleManager:
                 # is maintained by the long-lived subprocess + --resume.
                 if unit.is_channel_session:
                     continue
+                idle_seconds = now - unit.last_used
                 # A live background task / queued CLI-initiated turn (I5).
                 if unit.has_background_work:
+                    if idle_seconds > self.TTL_SECONDS:
+                        self._log_ttl_held(unit, idle_seconds)
                     continue
                 # P-a AC1: an unadopted prewarm unit is a warm subprocess
                 # awaiting adoption, not a stale chat — exempt from TTL kill
                 # (same non-competitive-GC exemption as the orphan reaper).
                 if unit.session_id.startswith(PREWARM_SESSION_PREFIX):
                     continue
-                idle_seconds = now - unit.last_used
                 if idle_seconds > self.TTL_SECONDS:
                     logger.info(
                         "lifecycle_manager.ttl_kill session_id=%s idle=%.0fs "
@@ -1020,6 +1022,20 @@ class LifecycleManager:
                         await self.enqueue_hooks_for_unit(unit)
                     await unit.kill()
                     self._release_session_state(unit.session_id)
+
+    @staticmethod
+    def _log_ttl_held(unit, idle_seconds: float) -> None:
+        """The TTL would kill *unit* but its background work holds it: one INFO
+        line per unit each time the set of tasks holding it changes (the check
+        runs every cycle). The mark lives on the unit, so it ends with it.
+        ``tasks=[]``: what holds it is a CLI-started turn waiting for delivery."""
+        tasks = getattr(unit, "background_task_ids", frozenset())
+        if getattr(unit, "_ttl_held_logged", None) == tasks:
+            return
+        unit._ttl_held_logged = tasks
+        logger.info(
+            "lifecycle_manager.ttl_held_by_background session_id=%s idle=%.0fs tasks=%s",
+            unit.session_id, idle_seconds, sorted(tasks))
 
     @staticmethod
     def _owned_session_ids() -> set[str] | None:
