@@ -2083,12 +2083,23 @@ def _command_as_run(command: str) -> str:
     return command if _RUNS_A_SHELL_RE.search(shown) else shown
 
 
+def _matches_pattern(command: str, pattern: str) -> bool:
+    """*command* matches the glob *pattern* as written or with its backslash-newline
+    continuations joined (``kill \\`` + newline + ``-9 1`` is ``kill -9 1``)."""
+    if fnmatch.fnmatch(command, pattern):
+        return True
+    from core.shell_segments import join_continuations
+    joined = join_continuations(command)
+    return joined != command and fnmatch.fnmatch(joined, pattern)
+
+
 def _danger_match(command: str, patterns: "list[str]", cwd: str = "") -> "dict | None":
     """Which rule of dangerous_command_gate *command* trips (design 2026-10-26 §3.3 C1):
     ``{"rule", "match", "why"}`` (rule id, the part of the command it matched, one
     readable sentence), or None. The discard rule is judged separately (it runs git)."""
     for p in patterns:
-        if fnmatch.fnmatch(command, p):
+        if _matches_pattern(command, p):
+            # _matched_part already joins continuations, so a plain glob per line works
             return {"rule": f"pattern:{p}",
                     "match": _matched_part(command, lambda s, p=p: fnmatch.fnmatch(s, p)),
                     "why": _PATTERN_WHY.get(p, f"matches the dangerous pattern {p!r}")}
@@ -2145,7 +2156,7 @@ def _approval_class_of(command: str, patterns: "list[str]", cwd: str, hit: dict,
     is the person's), and a host class only for a shape the dispatching agent may
     answer (``_host_answerable_shape``); otherwise ``unknown``, the person's."""
     from core import approval_class as _ac
-    rules = [hit["rule"]] + [f"pattern:{p}" for p in patterns if fnmatch.fnmatch(command, p)]
+    rules = [hit["rule"]] + [f"pattern:{p}" for p in patterns if _matches_pattern(command, p)]
     if _dangerous_rm_segment(command, cwd=cwd) is not None:
         rules.append("rm_unresolved_target")
     if _is_irreversible_external_op(command):
@@ -2926,7 +2937,8 @@ def _normalize_newlines_quote_aware(command: str) -> str:
       • double-quote `"..."`: a backslash escapes the next char, so `\\"` stays INSIDE;
         `$(` re-enters unquoted rules until its `)`, so `"$(cat <<'EOF' … EOF)"` works;
       • unquoted: a backslash escapes the next char too, so `\\'`/`\\"` do NOT open a
-        span and a `\\<newline>` line-continuation is not treated as a separator.
+        span; a `\\<newline>` line-continuation is removed as bash removes it (after an
+        unquoted `#` on its line it is kept as before: it ends the shlex comment).
 
     Heredoc bodies (the false-DENY fix): a heredoc body is stdin DATA, but it used to be
     scanned as code — an apostrophe or odd `"` in a message (`git commit -F - <<'EOF'` …
@@ -2986,9 +2998,17 @@ def _normalize_newlines_quote_aware(command: str) -> str:
             i += 1
             continue
         # ctx is "top" or "cmd": unquoted shell rules.
-        # A backslash escapes the next char (a `\'`/`\"` does NOT open a span, a
-        # `\<newline>` continuation is not a separator).
+        # A backslash escapes the next char (a `\'`/`\"` does NOT open a span).
+        # A `\<newline>` continues the line: bash removes both, so `git -C x \`+newline
+        # +`reset --hard` is one command (kept, it left a "\n" token that hid the
+        # subcommand). After an unquoted `#` on the line it is kept as it was: the shlex
+        # split that follows reads `#` as a comment (even mid-word) up to a raw "\n",
+        # and this kept newline is what ends that comment; a separator here would let
+        # the comment run to the end of the command and hide the rest of it.
         if c == "\\" and i + 1 < n:
+            if command[i + 1] == "\n" and not hash_on_line:
+                i += 2
+                continue
             out.append(command[i:i + 2]); i += 2; continue
         if command.startswith("$'", i):
             # ANSI-C quoting `$'...'`: backslash escapes inside, so `$'\''` is ONE quote

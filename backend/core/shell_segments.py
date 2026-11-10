@@ -10,7 +10,8 @@ Pure, no I/O. Accepted limits are C041's (documented there): a wrapper that take
 own argument (``timeout 5 gh …``) and subshell grouping (``(git push)``,
 ``$(git push)``) are not recognised.
 
-Public: ``split_segments``, ``command_tokens``, ``git_subcommand_index``.
+Public: ``split_segments``, ``join_continuations``, ``command_tokens``,
+``git_subcommand_index``.
 """
 from __future__ import annotations
 
@@ -18,14 +19,75 @@ import shlex
 from typing import Optional
 
 _SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
+#: characters after which a ``#`` starts a word, and so a comment
+_WORD_BREAK = frozenset(" \t\n;&|()<>")
 _WRAPPERS = frozenset({"sudo", "env", "command", "nice", "nohup", "time"})
 
 
+def join_continuations(command: str) -> str:
+    """*command* with each unquoted backslash-newline removed, as bash joins a
+    continued line (``git push \\`` + newline + ``--force`` is ``git push --force``).
+
+    Kept as it is (so the newline still separates): a backslash-newline inside single
+    quotes or ``$'…'`` (literal there), inside double quotes (data either way), and
+    after an unquoted ``#`` that starts a word on its line: that is a comment, which
+    ends at the newline, and bash runs the next line as a new command. A ``#`` inside
+    a word (``a#b``, ``$#``, ``${#a}``) starts no comment, so the line is joined.
+    Quote state is tracked without heredocs: a quote char in a heredoc body can leave
+    a later continuation unjoined, as it was before (shortcut: the heredoc-aware
+    reader in security_hooks._normalize_newlines_quote_aware covers that case for the
+    rm / discard / store / commit rules; reuse it here if a ``split_segments`` rule
+    misses one)."""
+    if "\\\n" not in command:
+        return command
+    out: list[str] = []
+    quote = ""
+    hashed = False
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if quote:
+            if c == "\\" and quote != "'" and i + 1 < n:
+                out.append(command[i:i + 2])
+                i += 2
+                continue
+            if c == quote[-1]:
+                quote = ""
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if command[i + 1] == "\n":
+                if not hashed:
+                    i += 2
+                    continue
+                hashed = False      # the comment ends at this newline
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if command.startswith("$'", i):
+            quote = "$'"
+            out.append("$'")
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or command[i - 1] in _WORD_BREAK):
+            hashed = True
+        elif c == "\n":
+            hashed = False
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def split_segments(command: str) -> Optional[list[list[str]]]:
-    """The command's segments (token lists), split on ``; && || | &`` and newlines.
+    """The command's segments (token lists), split on ``; && || | &`` and newlines
+    (a backslash-newline continues the line, ``join_continuations``).
     None when shlex cannot tokenize it (the caller decides what unparseable means)."""
     # shlex treats a newline as plain whitespace, which would fuse a second line
     # into the first line's segment: normalize newlines to ';' first.
+    command = join_continuations(command)
     try:
         all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
     except ValueError:
