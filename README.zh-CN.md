@@ -103,7 +103,7 @@ SwarmAI 只有**一个大脑**。这是有意为之，拒绝的是"多脑"：团
 
 ## 自主交付指南
 
-领域知识驱动的自主交付是怎么运作的，一页一页看。完整 deck（含 Checkpoints 附录）是一个 HTML 文件：[中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) · [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html)（下载后用浏览器打开，按 0–8 切换页面）。
+领域知识驱动的自主交付是怎么运作的，一页一页看。完整 deck 是一个 HTML 文件：[中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) · [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html)（下载后用浏览器打开，点顶部的页码或按 ← → 切换页面；Builder Loop 那页可以逐步演示）。
 
 ![AI-Autonomous, Domain Knowledge Driven](./assets/readme/autonomous/zh/00-cover.png)
 

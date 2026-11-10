@@ -3,64 +3,60 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Domain Knowledge Driven Autonomous</title>
-<!-- Cover + two diagrams in one file. Each page runs in its own iframe so their styles and scripts stay separate. -->
+<title>AI-Autonomous · Domain Knowledge Driven</title>
+<!-- The story deck: each page runs in its own iframe so styles and scripts stay separate.
+     The bar groups pages by act; ← → step through them. -->
 <style>
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;overflow:hidden;background:#e9ecf3;font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
-nav{position:fixed;left:0;top:0;right:0;height:44px;background:#111827;display:flex;align-items:center;gap:6px;padding:0 14px;z-index:2}
-nav button{height:30px;padding:0 14px;border-radius:8px;border:1px solid #374151;background:#1f2937;color:#d1d5db;font:600 13.5px "PingFang SC",sans-serif;cursor:pointer;white-space:nowrap}
-nav button i{font-style:normal;display:inline-block;width:19px;height:19px;border-radius:50%;background:#374151;color:#fff;font:700 11px/19px Menlo,monospace;text-align:center;margin-right:7px}
-nav button.on{background:#fff;color:#111827;border-color:#fff}
-nav button.on i{background:#c2410c}
-nav span{margin-left:auto;font-size:12px;color:#9ca3af}
+nav{position:fixed;left:0;top:0;right:0;height:44px;background:#111827;display:flex;align-items:center;gap:14px;padding:0 14px;z-index:2}
+.act{display:flex;align-items:center;gap:4px}
+.act span{font-size:13px;font-weight:800;color:#9ca3af;margin-right:4px;white-space:nowrap}
+.act.on span{color:#fb923c}
+nav button{width:28px;height:28px;border-radius:7px;border:1px solid #374151;background:#1f2937;color:#d1d5db;font:700 12px Menlo,monospace;cursor:pointer;padding:0}
+nav button.on{background:#c2410c;border-color:#c2410c;color:#fff}
+#cur{margin-left:auto;font-size:13px;font-weight:700;color:#e5e7eb;white-space:nowrap}
+#cur i{font-style:normal;color:#6b7280;margin-left:10px}
 iframe{position:fixed;left:0;top:44px;width:100%;height:calc(100% - 44px);border:0;display:none;background:#e9ecf3}
 iframe.on{display:block}
 </style>
 </head>
 <body>
 <nav>
-  <button data-k="home"><i>0</i>首页</button>
-  <button data-k="core"><i>1</i>Core Logic</button>
-  <button data-k="overall"><i>2</i>Two Loops, One Brain</button>
-  <button data-k="builder"><i>3</i>Inside the Builder Loop</button>
-  <button data-k="pipeline"><i>4</i>Pipeline Run</button>
-  <button data-k="distill"><i>5</i>Cognition Distill Flow</button>
-  <button data-k="onemove"><i>6</i>One Move, Three Outcomes</button>
-  <button data-k="tenets"><i>7</i>Tenets</button>
-  <button data-k="appendix"><i>8</i>Appendix · Checkpoints</button>
-  <span>按 0 – 8 切换</span>
+<div class="act"><span>AI-Autonomous</span><button data-i="0" title="AI-Autonomous">0</button><button data-i="1" title="Core Logic">1</button><button data-i="2" title="Two Loops, One Brain">2</button><button data-i="3" title="Builder Loop">3</button><button data-i="4" title="Pipeline Run">4</button><button data-i="5" title="Distill">5</button><button data-i="6" title="Tenets">6</button><button data-i="7" title="One Move">7</button></div>
+  <div id="cur"></div>
 </nav>
-<iframe data-k="home" title="首页" srcdoc="&lt;!DOCTYPE html&gt;
+<iframe data-i="0" title="AI-Autonomous" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
 &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
-&lt;title&gt;Domain Knowledge Driven Autonomous&lt;/title&gt;
-&lt;!-- Cover page for the two autonomous-flow diagrams. --&gt;
+&lt;title&gt;AI-Autonomous: Domain Knowledge Driven&lt;/title&gt;
+&lt;!-- Story-deck chapter page for Phase 3, after the AIDLC chain page. Same dark stage as the
+     standalone deck&#x27;s cover (2026-11-05-autonomous-cover.html, left unchanged for that deck),
+     but it bridges: the Phase 2 bottleneck on the left, the Phase 3 answer on the right, and the
+     page-2 question (consuming or compounding intelligence) that this half of the deck answers. --&gt;
 &lt;style&gt;
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;overflow:hidden;background:#072c29}
 body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;-webkit-font-smoothing:antialiased}
-#app{position:absolute;left:0;top:0;width:1600px;height:1040px;transform-origin:0 0;overflow:hidden;color:#e6f4f1;
+#app{position:absolute;left:0;top:0;width:1600px;height:900px;transform-origin:0 0;overflow:hidden;color:#e6f4f1;
   background:radial-gradient(1200px 700px at 85% 10%,#13544d 0%,rgba(19,84,77,0) 60%),#0b3b37}
-.title{position:absolute;left:120px;top:120px}
-.curve{position:absolute;left:0;top:0;pointer-events:none}
-.title b{display:block;font-size:104px;line-height:1.08;font-weight:800;color:#fff;letter-spacing:-1px}
-.title .q{margin-top:34px;padding-left:22px;border-left:8px solid #f97316;font-size:38px;line-height:1.2;font-weight:700;color:#fff;white-space:nowrap}
-.title .q .m{color:#7fa9a2}
-.title .q .o{color:#fb923c}
-
-.tenets{position:absolute;left:120px;right:120px;top:470px;display:grid;grid-template-columns:1fr 1fr;gap:48px 80px}
-.t{border-top:2px solid #2f7f75;padding-top:26px}
-.t .n{font:700 20px Menlo,monospace;color:#7ee0cf;letter-spacing:2px}
-.t h2{margin:16px 0 0;font-size:44px;line-height:1.25;font-weight:800;color:#fff}
-.t h2 .o{color:#fb923c}
-.t h2 s{color:#6b9a92;text-decoration-thickness:3px}
-.chips{display:flex;align-items:center;gap:6px;margin-top:22px;white-space:nowrap}
-.chips span{font-size:21px;font-weight:700;color:#0b3b37;background:#7ee0cf;border-radius:24px;padding:5px 12px}
-.chips i{font-style:normal;font-size:24px;font-weight:800;color:#fb923c}
-
+.curve{position:absolute;left:0;top:-70px;pointer-events:none}
+.title{position:absolute;left:120px;top:104px;width:1000px}
+.title .ey{font:700 24px Menlo,monospace;color:#7ee0cf;letter-spacing:4px}
+.title b{display:block;margin-top:14px;font-size:112px;line-height:1.05;font-weight:800;color:#fff;letter-spacing:-1px;white-space:nowrap}
+.title b.k{margin-top:6px;font-size:76px;color:#fb923c;letter-spacing:0}
+.title .q{margin-top:40px;padding-left:22px;border-left:8px solid #f97316;font-size:40px;line-height:1.4;font-weight:700;color:#fff;white-space:nowrap}
+.title .q .m{color:#7fa9a2}.title .q .o{color:#fb923c}
+.br{position:absolute;left:120px;right:120px;top:540px;display:grid;grid-template-columns:1fr 120px 1fr;align-items:stretch}
+.c{border-top:2px solid #2f7f75;padding-top:28px}
+.c .n{font:700 22px Menlo,monospace;color:#7ee0cf;letter-spacing:2px}
+.c h2{margin:18px 0 0;font-size:48px;line-height:1.3;font-weight:800;color:#fff;white-space:nowrap}
+.c.p h2{color:#9cc3bc}
+.c h2 .o{color:#fb923c}
+.c .s{margin-top:14px;font-size:36px;font-weight:800;color:#fb923c}
+.ar{display:flex;align-items:center;justify-content:center;font-size:64px;font-weight:800;color:#fb923c;padding-top:30px}
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
@@ -70,36 +66,26 @@ body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Micr
     &lt;circle cx=&quot;1150.0&quot; cy=&quot;430.0&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1190.0&quot; cy=&quot;423.8&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1230.0&quot; cy=&quot;414.8&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1270.0&quot; cy=&quot;401.7&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1310.0&quot; cy=&quot;382.6&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1350.0&quot; cy=&quot;354.8&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1390.0&quot; cy=&quot;314.4&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1430.0&quot; cy=&quot;255.6&quot; r=&quot;6&quot; fill=&quot;#7ee0cf&quot;/&gt;&lt;circle cx=&quot;1470.0&quot; cy=&quot;170.0&quot; r=&quot;10&quot; fill=&quot;#f97316&quot;/&gt;
     &lt;text x=&quot;1464&quot; y=&quot;142&quot; text-anchor=&quot;end&quot; font-size=&quot;34&quot; font-weight=&quot;800&quot; fill=&quot;#fb923c&quot;&gt;Compound&lt;/text&gt;
   &lt;/svg&gt;
-  &lt;div class=&quot;title&quot;&gt;&lt;b&gt;Domain Knowledge&lt;br&gt;Driven Autonomous&lt;/b&gt;&lt;div class=&quot;q&quot;&gt;Are you &lt;span class=&quot;m&quot;&gt;consuming&lt;/span&gt; intelligence, or &lt;span class=&quot;o&quot;&gt;compounding&lt;/span&gt; it?&lt;/div&gt;&lt;/div&gt;
-
-  &lt;div class=&quot;tenets&quot;&gt;
-    &lt;div class=&quot;t&quot;&gt;
-      &lt;div class=&quot;n&quot;&gt;01&lt;/div&gt;
-      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;Less&lt;/span&gt; Attention&lt;br&gt;Is All You Need&lt;/h2&gt;
-    &lt;/div&gt;
-    &lt;div class=&quot;t&quot;&gt;
-      &lt;div class=&quot;n&quot;&gt;02&lt;/div&gt;
-      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;Human-on-the-loop&lt;/span&gt;,&lt;br&gt;not &lt;s&gt;in-the-loop&lt;/s&gt;&lt;/h2&gt;
-    &lt;/div&gt;
-    &lt;div class=&quot;t&quot;&gt;
-      &lt;div class=&quot;n&quot;&gt;03&lt;/div&gt;
-      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;Autonomous Rate&lt;/span&gt; Is the Goal,&lt;br&gt;Speed Is the Output&lt;/h2&gt;
-    &lt;/div&gt;
-    &lt;div class=&quot;t&quot;&gt;
-      &lt;div class=&quot;n&quot;&gt;04&lt;/div&gt;
-      &lt;h2&gt;&lt;span class=&quot;o&quot;&gt;One Move&lt;/span&gt;, Three Outcomes&lt;/h2&gt;
-      &lt;div class=&quot;chips&quot;&gt;&lt;span&gt;Autonomous Pipeline&lt;/span&gt;&lt;i&gt;=&lt;/i&gt;&lt;span&gt;AI Native Talent&lt;/span&gt;&lt;i&gt;=&lt;/i&gt;&lt;span&gt;AI Native Org&lt;/span&gt;&lt;/div&gt;
-    &lt;/div&gt;
+  &lt;div class=&quot;title&quot;&gt;
+    &lt;div class=&quot;ey&quot;&gt;PHASE 3&lt;/div&gt;
+    &lt;b&gt;AI-Autonomous&lt;/b&gt;
+    &lt;b class=&quot;k&quot;&gt;Domain Knowledge Driven&lt;/b&gt;
+    &lt;div class=&quot;q&quot;&gt;我们在&lt;span class=&quot;m&quot;&gt;消费&lt;/span&gt;智能，还是&lt;span class=&quot;o&quot;&gt;积累&lt;/span&gt;智能？&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;br&quot;&gt;
+    &lt;div class=&quot;c p&quot;&gt;&lt;div class=&quot;n&quot;&gt;PHASE 2 · 瓶颈&lt;/div&gt;&lt;h2&gt;关键决策卡在专家身上&lt;/h2&gt;&lt;/div&gt;
+    &lt;div class=&quot;ar&quot;&gt;→&lt;/div&gt;
+    &lt;div class=&quot;c&quot;&gt;&lt;div class=&quot;n&quot;&gt;PHASE 3 · 答案&lt;/div&gt;&lt;h2&gt;专家的&lt;span class=&quot;o&quot;&gt;判断力&lt;/span&gt;进系统&lt;/h2&gt;&lt;div class=&quot;s&quot;&gt;Human-on-the-loop&lt;/div&gt;&lt;/div&gt;
   &lt;/div&gt;
 &lt;/div&gt;
 &lt;script&gt;
-function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1040);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1040*s)/2)+&#x27;px&#x27;;}
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/900);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-900*s)/2)+&#x27;px&#x27;;}
 addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/script&gt;
 &lt;/body&gt;
 &lt;/html&gt;
 "></iframe>
-<iframe data-k="core" title="Core Logic" srcdoc="&lt;!DOCTYPE html&gt;
+<iframe data-i="1" title="Core Logic" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
@@ -107,88 +93,94 @@ addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;title&gt;Core Logic&lt;/title&gt;
 &lt;!-- The deck&#x27;s spine, right after the cover: expertise becomes a Domain Brain, the Brain drives
      autonomous execution, execution compounds, and the compounding flows back into the Brain and
-     into the people. Drawn as a loop on purpose: a straight line would read as a one-off pipeline.
-     Each block names the pages that expand it. --&gt;
+     into the people. Drawn as a loop on purpose: a straight line would read as a one-off pipeline. --&gt;
 &lt;style&gt;
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
 body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
-#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+#app{position:absolute;left:0;top:0;width:1600px;height:900px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
 header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
 .brand b{font-size:26px;font-weight:800;white-space:nowrap}
 
-.blk{position:absolute;top:140px;width:340px;height:500px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden}
+.blk{position:absolute;top:100px;width:340px;height:410px;background:#fff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden}
 .bh{height:150px;padding:22px 26px;color:#fff}
 .bh .n{font:800 22px Menlo,monospace;opacity:.75}
-.bh b{display:block;margin-top:12px;font-size:33px;font-weight:800;line-height:1.15}
+.bh b{display:block;margin-top:12px;font-size:31px;font-weight:800;line-height:1.15;white-space:nowrap}
 .bb{position:absolute;left:26px;right:26px;top:180px;font-size:32px;font-weight:700;line-height:1.5;color:#1f2937}
 .bb p{margin:0 0 10px}
 .bb p.nw{white-space:nowrap;font-size:29px;line-height:48px}
-.pg{position:absolute;left:26px;bottom:24px;font-size:19px;font-weight:700;color:#6b7280}
-.pg span{display:inline-block;margin-left:6px;padding:3px 11px;border-radius:9px;background:#f1f5f9;border:1px solid #e2e8f0;color:#111827;font-family:Menlo,monospace}
 .x .bh{background:#c2410c}
 .k .bh{background:#0b3b37}.k .bh .n{color:#7ee0cf;opacity:1}
+.blk.k{top:80px;height:450px;background:#0b3b37;border:3px solid #7ee0cf;box-shadow:0 0 0 8px rgba(126,224,207,.25),0 18px 40px rgba(11,59,55,.35)}
+.k .bh{height:170px;padding-top:36px}.k .bb{top:200px;color:#e6f4f1}
+.k .tag{position:absolute;right:20px;top:22px;font-size:20px;font-weight:800;color:#0b3b37;background:#7ee0cf;border-radius:20px;padding:4px 14px}
 .e .bh{background:#2563eb}
 .c .bh{background:#111827}.c .bh b{color:#fb923c}
-.c .curve{position:absolute;right:22px;bottom:62px}
+.c .curve{position:absolute;right:18px;bottom:14px}
 
-.loopl{position:absolute;top:918px;font-size:26px;font-weight:800;color:#c2410c;white-space:nowrap;transform:translateX(-50%)}
-.loopc{position:absolute;left:1004px;top:836px;font-size:40px;font-weight:800;color:#c2410c;white-space:nowrap;transform:translateX(-50%)}
-svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none}
+.loopl{position:absolute;top:676px;font-size:26px;font-weight:800;color:#c2410c;white-space:nowrap;transform:translateX(-50%)}
+.loopc{position:absolute;left:1208px;top:594px;font-size:40px;font-weight:800;color:#c2410c;white-space:nowrap;transform:translateX(-50%)}
+.om{position:absolute;left:18px;right:18px;top:736px;height:112px;background:#fff;border:2px solid #f59e0b;border-radius:18px;display:flex;align-items:center;justify-content:center;gap:22px;white-space:nowrap}
+.om .tg{font-size:40px;font-weight:800;color:#c2410c;margin-right:18px}
+.om span{font-size:30px;font-weight:800;color:#fff;border-radius:30px;padding:10px 26px}
+.om .p{background:#2563eb}.om .t{background:#c2410c}.om .g{background:#7c3aed}
+.om i{font-style:normal;font-size:40px;font-weight:800;color:#c2410c}
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:900px;pointer-events:none}
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
 &lt;div id=&quot;app&quot;&gt;
-&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Core &lt;span style=&quot;color:#c2410c&quot;&gt;Logic&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;&lt;/header&gt;
+&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Core &lt;span style=&quot;color:#c2410c&quot;&gt;Logic&lt;/span&gt; —— 判断力沉淀进系统，&lt;span style=&quot;color:#c2410c&quot;&gt;一个闭环&lt;/span&gt;带来三个结果&lt;/b&gt;&lt;/div&gt;&lt;/header&gt;
 
 &lt;div class=&quot;blk x&quot; style=&quot;left:18px&quot;&gt;
   &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;01&lt;/div&gt;&lt;b&gt;Domain&lt;br&gt;Expertise&lt;/b&gt;&lt;/div&gt;
   &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;人的判断&lt;/p&gt;&lt;p&gt;领域知识&lt;/p&gt;&lt;/div&gt;
-  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;7&lt;/span&gt;&lt;span&gt;8&lt;/span&gt;&lt;/div&gt;
 &lt;/div&gt;
 &lt;div class=&quot;blk k&quot; style=&quot;left:426px&quot;&gt;
+  &lt;div class=&quot;tag&quot;&gt;One Brain&lt;/div&gt;
   &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;02&lt;/div&gt;&lt;b&gt;Domain&lt;br&gt;Brain&lt;/b&gt;&lt;/div&gt;
   &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;可复用&lt;/p&gt;&lt;p&gt;受治理&lt;/p&gt;&lt;p&gt;可执行的知识&lt;/p&gt;&lt;/div&gt;
-  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;2&lt;/span&gt;&lt;span&gt;3&lt;/span&gt;&lt;span&gt;4&lt;/span&gt;&lt;span&gt;5&lt;/span&gt;&lt;/div&gt;
 &lt;/div&gt;
 &lt;div class=&quot;blk e&quot; style=&quot;left:834px&quot;&gt;
-  &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;03&lt;/div&gt;&lt;b&gt;Autonomous&lt;br&gt;Execution&lt;/b&gt;&lt;/div&gt;
-  &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;Two Loops&lt;/p&gt;&lt;p class=&quot;nw&quot;&gt;Human-on-the-loop&lt;/p&gt;&lt;p&gt;Eval&lt;/p&gt;&lt;/div&gt;
-  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;2&lt;/span&gt;&lt;span&gt;3&lt;/span&gt;&lt;span&gt;4&lt;/span&gt;&lt;/div&gt;
+  &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;03&lt;/div&gt;&lt;b&gt;Agent Autonomous&lt;br&gt;Execution&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;两个环，一个大脑&lt;/p&gt;&lt;p&gt;人只在关键处判断&lt;/p&gt;&lt;p&gt;Eval 整个闭环&lt;/p&gt;&lt;/div&gt;
 &lt;/div&gt;
 &lt;div class=&quot;blk c&quot; style=&quot;left:1242px&quot;&gt;
   &lt;div class=&quot;bh&quot;&gt;&lt;div class=&quot;n&quot;&gt;04&lt;/div&gt;&lt;b&gt;Compounding&lt;br&gt;Intelligence&lt;/b&gt;&lt;/div&gt;
   &lt;div class=&quot;bb&quot;&gt;&lt;p&gt;判断更好&lt;/p&gt;&lt;p&gt;重复纠正更少&lt;/p&gt;&lt;p&gt;自主度更高&lt;/p&gt;&lt;/div&gt;
-  &lt;svg class=&quot;curve&quot; width=&quot;190&quot; height=&quot;54&quot; viewBox=&quot;0 0 190 54&quot;&gt;&lt;path d=&quot;M6,48 C80,46 130,38 182,8&quot; fill=&quot;none&quot; stroke=&quot;#7ee0cf&quot; stroke-width=&quot;4&quot; stroke-linecap=&quot;round&quot;/&gt;&lt;circle cx=&quot;182&quot; cy=&quot;8&quot; r=&quot;6&quot; fill=&quot;#f97316&quot;/&gt;&lt;/svg&gt;
-  &lt;div class=&quot;pg&quot;&gt;→&lt;span&gt;5&lt;/span&gt;&lt;span&gt;6&lt;/span&gt;&lt;/div&gt;
+  &lt;svg class=&quot;curve&quot; width=&quot;150&quot; height=&quot;44&quot; viewBox=&quot;0 0 190 54&quot;&gt;&lt;path d=&quot;M6,48 C80,46 130,38 182,8&quot; fill=&quot;none&quot; stroke=&quot;#7ee0cf&quot; stroke-width=&quot;4&quot; stroke-linecap=&quot;round&quot;/&gt;&lt;circle cx=&quot;182&quot; cy=&quot;8&quot; r=&quot;6&quot; fill=&quot;#f97316&quot;/&gt;&lt;/svg&gt;
 &lt;/div&gt;
 
 &lt;div class=&quot;loopc&quot;&gt;Compound ↺&lt;/div&gt;
-&lt;div class=&quot;loopl&quot; style=&quot;left:596px&quot;&gt;写回 Brain&lt;/div&gt;
+&lt;div class=&quot;loopl&quot; style=&quot;left:1004px&quot;&gt;Agent 执行更自主&lt;/div&gt;
+&lt;div class=&quot;loopl&quot; style=&quot;left:596px&quot;&gt;更多判断力写回&lt;/div&gt;
 &lt;div class=&quot;loopl&quot; style=&quot;left:188px&quot;&gt;人在其中成长&lt;/div&gt;
 
-&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
+&lt;div class=&quot;om&quot;&gt;&lt;b class=&quot;tg&quot;&gt;One Move&lt;/b&gt;&lt;span class=&quot;p&quot;&gt;Agent Autonomy&lt;/span&gt;&lt;i&gt;=&lt;/i&gt;&lt;span class=&quot;t&quot;&gt;AI Native Talent&lt;/span&gt;&lt;i&gt;=&lt;/i&gt;&lt;span class=&quot;g&quot;&gt;AI Native Org&lt;/span&gt;&lt;/div&gt;
+
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 900&quot;&gt;
   &lt;defs&gt;
     &lt;marker id=&quot;mG&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;5&quot; markerHeight=&quot;5&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#6b7280&quot;/&gt;&lt;/marker&gt;
     &lt;marker id=&quot;mO&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;4.5&quot; markerHeight=&quot;4.5&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#c2410c&quot;/&gt;&lt;/marker&gt;
   &lt;/defs&gt;
-  &lt;path d=&quot;M366,390 L418,390&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
-  &lt;path d=&quot;M774,390 L826,390&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
-  &lt;path d=&quot;M1182,390 L1234,390&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
-  &lt;!-- the loop: compounding flows back into the Brain and into the people --&gt;
-  &lt;path d=&quot;M1412,642 L1412,880 Q1412,900 1392,900 L616,900 Q596,900 596,880 L596,652&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;6&quot; fill=&quot;none&quot; marker-end=&quot;url(#mO)&quot;/&gt;
-  &lt;path d=&quot;M616,900 L208,900 Q188,900 188,880 L188,652&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;6&quot; fill=&quot;none&quot; marker-end=&quot;url(#mO)&quot;/&gt;
+  &lt;path d=&quot;M366,305 L418,305&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
+  &lt;path d=&quot;M774,305 L826,305&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
+  &lt;path d=&quot;M1182,305 L1234,305&quot; stroke=&quot;#6b7280&quot; stroke-width=&quot;5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mG)&quot;/&gt;
+  &lt;!-- the loop: compounding flows back into execution, the Brain and the people --&gt;
+  &lt;path d=&quot;M1412,512 L1412,638 Q1412,658 1392,658 L616,658 Q596,658 596,638 L596,542&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;6&quot; fill=&quot;none&quot; marker-end=&quot;url(#mO)&quot;/&gt;
+  &lt;path d=&quot;M1024,658 Q1004,658 1004,638 L1004,522&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;6&quot; fill=&quot;none&quot; marker-end=&quot;url(#mO)&quot;/&gt;
+  &lt;path d=&quot;M616,658 L208,658 Q188,658 188,638 L188,522&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;6&quot; fill=&quot;none&quot; marker-end=&quot;url(#mO)&quot;/&gt;
 &lt;/svg&gt;
 
 &lt;/div&gt;
 &lt;script&gt;
-function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/900);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-900*s)/2)+&#x27;px&#x27;;}
 addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/script&gt;
 &lt;/body&gt;
 &lt;/html&gt;
 "></iframe>
-<iframe data-k="overall" title="Two Loops, One Brain" srcdoc="&lt;!DOCTYPE html&gt;
+<iframe data-i="2" title="Two Loops, One Brain" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
@@ -344,7 +336,7 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-even
 &lt;div id=&quot;stage&quot;&gt;&lt;div id=&quot;app&quot;&gt;
 
 &lt;header&gt;
-  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Two Loops, &lt;span style=&quot;color:#c2410c;font-size:inherit&quot;&gt;One Brain&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Two Loops, One Brain —— &lt;span style=&quot;color:#c2410c;font-size:inherit&quot;&gt;共用一个大脑，人只在关键处判断&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
   &lt;div class=&quot;legend&quot;&gt;
     &lt;span&gt;&lt;i class=&quot;lg-j&quot;&gt;&lt;/i&gt;入口与交接&lt;/span&gt;
     &lt;span&gt;&lt;i class=&quot;lg-p&quot;&gt;&lt;/i&gt;PM 环&lt;/span&gt;
@@ -402,7 +394,7 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-even
 
 &lt;!-- shared Brain --&gt;
 &lt;div id=&quot;brain&quot;&gt;
-  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 两边共用的领域知识&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;Domain Knowledge · 两边共用&lt;/em&gt;&lt;/div&gt;
   &lt;div class=&quot;bagent&quot;&gt;
     &lt;div class=&quot;bh&quot;&gt;Project / Domain Agent&lt;/div&gt;
     &lt;div class=&quot;btags&quot;&gt;&lt;span&gt;范围&lt;/span&gt;&lt;span&gt;模式&lt;/span&gt;&lt;span&gt;并发&lt;/span&gt;&lt;span&gt;授权&lt;/span&gt;&lt;/div&gt;
@@ -482,7 +474,7 @@ function node(id,c,a,k,t,s,extra){
 // 7 stages, like the Builder cycle; orange = a person takes part
 const PA=[180,135,90,45,0,-45,-110];
 node(&#x27;p1&#x27;,PMC,PA[0],&#x27;&#x27;,&#x27;接 Intent&#x27;,&#x27;自动 Triage&#x27;,{no:1,hum:0});
-node(&#x27;p2&#x27;,PMC,PA[1],&#x27;h&#x27;,&#x27;澄清需求&#x27;,&#x27;基于 DDD&#x27;,{no:2,hum:1,role:&#x27;PM + Agent&#x27;});
+node(&#x27;p2&#x27;,PMC,PA[1],&#x27;h&#x27;,&#x27;澄清需求&#x27;,&#x27;基于 Domain Knowledge&#x27;,{no:2,hum:1,role:&#x27;PM + Agent&#x27;});
 node(&#x27;p3&#x27;,PMC,PA[2],&#x27;&#x27;,&#x27;生成 PRD&#x27;,&#x27;PRD · Mockup&lt;br&gt;Prototype&#x27;,{no:3,hum:0});
 node(&#x27;p4&#x27;,PMC,PA[3],&#x27;&#x27;,&#x27;Agent 评审&#x27;,&#x27;对抗评审 PRD&#x27;,{no:4,hum:0});
 node(&#x27;p5&#x27;,PMC,PA[4],&#x27;h&#x27;,&#x27;对齐与评审&#x27;,&#x27;协调对齐&#x27;,{no:5,hum:1,role:&#x27;All stakeholders&#x27;});
@@ -516,9 +508,9 @@ $(&#x27;#nodes&#x27;).appendChild(el(&#x27;div&#x27;,&#x27;rc&#x27;,`&lt;b style
 // ---------- Human-on-the-loop points ----------
 const HQ=[
   // PM ring: always (solid)
-  {x:492,w:132,cls:&#x27;box&#x27;,t:&#x27;2 澄清需求&#x27;,s:&#x27;PM 基于 DDD&#x27;},
-  {x:632,w:132,cls:&#x27;box&#x27;,t:&#x27;5 对齐与评审&#x27;,s:&#x27;All stakeholders&#x27;},
-  {x:772,w:140,cls:&#x27;box&#x27;,t:&#x27;6·7 批准 · 验收&#x27;,s:&#x27;PRD · 对照 ACs&#x27;},
+  {x:492,w:162,cls:&#x27;box&#x27;,t:&#x27;2 澄清需求&#x27;,s:&#x27;基于 Domain Knowledge&#x27;},
+  {x:662,w:120,cls:&#x27;box&#x27;,t:&#x27;5 对齐与评审&#x27;,s:&#x27;All stakeholders&#x27;},
+  {x:788,w:130,cls:&#x27;box&#x27;,t:&#x27;6·7 批准 · 验收&#x27;,s:&#x27;PRD · 对照 ACs&#x27;},
   // Builder ring: only when needed (dashed)
   {x:926,w:172,cls:&#x27;dbox&#x27;,c:1,t:&#x27;1 评估&#x27;,s:&#x27;仍有歧义才问&#x27;},
   {x:1106,w:168,cls:&#x27;dbox&#x27;,c:1,t:&#x27;2 Design-Spec 评审&#x27;,s:&#x27;&#x27;},
@@ -563,7 +555,7 @@ addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/body&gt;
 &lt;/html&gt;
 "></iframe>
-<iframe data-k="builder" title="Inside the Builder Loop" srcdoc="&lt;!DOCTYPE html&gt;
+<iframe data-i="3" title="Builder Loop" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
@@ -772,7 +764,7 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1040px;pointer-even
 &lt;div id=&quot;stage&quot;&gt;&lt;div id=&quot;app&quot;&gt;
 
 &lt;header&gt;
-  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Inside the &lt;span style=&quot;color:#c2410c&quot;&gt;Builder Loop&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Builder Loop —— &lt;span style=&quot;color:#c2410c&quot;&gt;本机 + 云端并发 run，人只管两头&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
   &lt;div class=&quot;legend&quot;&gt;
     &lt;span&gt;&lt;i class=&quot;lg-exec&quot;&gt;&lt;/i&gt;执行流&lt;/span&gt;
     &lt;span&gt;&lt;i class=&quot;lg-know&quot;&gt;&lt;/i&gt;知识读写&lt;/span&gt;
@@ -853,7 +845,7 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1040px;pointer-even
 
 &lt;!-- shared Brain (same as the overall diagram) --&gt;
 &lt;div id=&quot;brain&quot; class=&quot;blk&quot;&gt;
-  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 两边共用的领域知识&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;Domain Knowledge · 两边共用&lt;/em&gt;&lt;/div&gt;
   &lt;div class=&quot;bagent&quot;&gt;
     &lt;div class=&quot;bh&quot;&gt;Project / Domain Agent&lt;/div&gt;
     &lt;div class=&quot;btags&quot;&gt;&lt;span&gt;范围&lt;/span&gt;&lt;span&gt;模式&lt;/span&gt;&lt;span&gt;并发&lt;/span&gt;&lt;span&gt;授权&lt;/span&gt;&lt;/div&gt;
@@ -1097,7 +1089,7 @@ addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/body&gt;
 &lt;/html&gt;
 "></iframe>
-<iframe data-k="pipeline" title="Pipeline Run" srcdoc="&lt;!DOCTYPE html&gt;
+<iframe data-i="4" title="Pipeline Run" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
@@ -1161,6 +1153,9 @@ header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;b
 #fan .kids span{font-size:13px;font-weight:700;color:#1d4ed8;background:#fff;border:1.5px solid #93c5fd;border-radius:8px;padding:4px 10px}
 #fan .acc{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;color:#334155}
 #fan .acc span{font-size:12.5px;font-weight:600;color:#4b5563}
+#out{position:absolute;top:772px;height:84px;border:2px solid #fdba74;border-radius:12px;background:#fffaf5;display:flex;flex-wrap:wrap;align-content:center;align-items:center;justify-content:center;gap:8px 10px;white-space:nowrap}
+#out b{flex-basis:100%;text-align:center;font:800 12px Menlo,monospace;color:#9a3412;letter-spacing:2px}
+#out span{font-size:16px;font-weight:800;color:#fff;background:#c2410c;border-radius:8px;padding:5px 12px}
 .st.refl{background:#f4fbf9;border-color:#99d8cb}.st.refl h3{color:#0f766e}
 .st.hum{background:#fffaf5;border:2px dashed #f59e0b}.st.hum h3{color:#9a3412}
 .st .tg{font-style:normal;position:absolute;right:12px;top:14px;font-size:12px;font-weight:700;border-radius:10px;padding:2px 9px;white-space:nowrap}
@@ -1198,7 +1193,7 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-even
 &lt;div id=&quot;app&quot;&gt;
 
 &lt;header&gt;
-  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Pipeline Run - &lt;span style=&quot;color:#c2410c&quot;&gt;Model Proposes, Checks Dispose&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Pipeline Run —— &lt;span style=&quot;color:#c2410c&quot;&gt;管住流程，放开 Coding&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
   &lt;div class=&quot;legend&quot;&gt;
     &lt;span&gt;&lt;i class=&quot;lg-a&quot;&gt;&lt;/i&gt;Agent 写&lt;/span&gt;
     &lt;span&gt;&lt;i class=&quot;lg-c&quot;&gt;&lt;/i&gt;确定性检查&lt;/span&gt;
@@ -1215,11 +1210,12 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-even
 &lt;div class=&quot;pane&quot; id=&quot;mx&quot;&gt;&lt;div id=&quot;mxi&quot;&gt;&lt;/div&gt;&lt;/div&gt;
 &lt;div id=&quot;cards&quot;&gt;&lt;/div&gt;
 &lt;!-- BUILD may split into child runs that run at once; the parent judges each result --&gt;
+&lt;div id=&quot;out&quot;&gt;&lt;b&gt;OUTPUT&lt;/b&gt;&lt;span&gt;PR&lt;/span&gt;&lt;span&gt;Report&lt;/span&gt;&lt;/div&gt;
 &lt;div id=&quot;fan&quot;&gt;&lt;b&gt;Fan-out Runs&lt;/b&gt;&lt;div class=&quot;kids&quot;&gt;&lt;span&gt;子 run&lt;/span&gt;&lt;span&gt;子 run&lt;/span&gt;&lt;span&gt;子 run&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;acc&quot;&gt;父 run 验收&lt;span&gt;采用 · 修正 · 接手 · 丢弃&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
 
 &lt;!-- shared Brain --&gt;
 &lt;div id=&quot;brain&quot;&gt;
-  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 两边共用的领域知识&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;Domain Knowledge · 两边共用&lt;/em&gt;&lt;/div&gt;
   &lt;div class=&quot;bagent&quot;&gt;
     &lt;div class=&quot;bh&quot;&gt;Project / Domain Agent&lt;/div&gt;
     &lt;div class=&quot;btags&quot;&gt;&lt;span&gt;范围&lt;/span&gt;&lt;span&gt;模式&lt;/span&gt;&lt;span&gt;并发&lt;/span&gt;&lt;span&gt;授权&lt;/span&gt;&lt;/div&gt;
@@ -1244,6 +1240,7 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-even
     &lt;marker id=&quot;mW&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;6&quot; markerHeight=&quot;6&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#334155&quot;/&gt;&lt;/marker&gt;
     &lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;
     &lt;marker id=&quot;mB&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#2563eb&quot;/&gt;&lt;/marker&gt;
+    &lt;marker id=&quot;mO&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#c2410c&quot;/&gt;&lt;/marker&gt;
   &lt;/defs&gt;
   &lt;g id=&quot;g&quot;&gt;&lt;/g&gt;
 &lt;/svg&gt;
@@ -1305,6 +1302,9 @@ for(let i=0;i&lt;7;i++) path(`M${X(i)+CW+1},564 L${X(i+1)-1},564`,&#x27;#334155&
 const FAN_L=X(1), FAN_R=X(3)+CW+48;
 Object.assign($(&#x27;#fan&#x27;).style,{left:FAN_L+&#x27;px&#x27;,width:(FAN_R-FAN_L)+&#x27;px&#x27;});
 path(`M${CX(3)},738 L${CX(3)},770`,&#x27;#2563eb&#x27;,&#x27;mB&#x27;,2.2,&#x27;6 4&#x27;);
+// DELIVER hands over its output: the PR and the report
+Object.assign($(&#x27;#out&#x27;).style,{left:X(6)+&#x27;px&#x27;,width:CW+&#x27;px&#x27;});
+path(`M${CX(6)},738 L${CX(6)},770`,&#x27;#c2410c&#x27;,&#x27;mO&#x27;,2.2,&#x27;6 4&#x27;);
 // a code change in TEST goes back to REVIEW
 path(`M${CX(5)},738 C${CX(5)},782 ${CX(4)},782 ${CX(4)},740`,&#x27;#2563eb&#x27;,&#x27;mB&#x27;,2.2,&#x27;6 4&#x27;);
 text((CX(4)+CX(5))/2,812,&#x27;改代码 → 回审 · ≤ 2&#x27;,&#x27;#2563eb&#x27;,&#x27;middle&#x27;);
@@ -1320,14 +1320,17 @@ addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/body&gt;
 &lt;/html&gt;
 "></iframe>
-<iframe data-k="distill" title="Cognition Distill Flow" srcdoc="&lt;!DOCTYPE html&gt;
+<iframe data-i="5" title="Distill" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
 &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
 &lt;title&gt;Cognition Distill Flow - How Work Becomes Judgment&lt;/title&gt;
-&lt;!-- Third view of the autonomous-flow set: how a run&#x27;s work is distilled into the shared Brain
-     and comes back as better judgment. Brain block is the same as in the other two diagrams. --&gt;
+&lt;!-- Third view of the autonomous-flow set, drawn as distillation: four kinds of work pour into a
+     funnel that narrows through Extract and Check, Route splits the result three ways and keeps them apart:
+     the team&#x27;s Domain Brain, and the person&#x27;s own Agent Context and Memory (never mixed into the
+     team Brain), and Judgment shows the trends it changes. The Brain
+     block is the same as in the other diagrams. --&gt;
 &lt;style&gt;
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
@@ -1342,27 +1345,28 @@ header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;b
 .lg-k{width:26px;border-top:2.5px solid #0f766e}
 .lg-d{width:10px;height:10px;background:#c2410c;transform:rotate(45deg)}
 
-.pane{position:absolute;top:92px;height:640px;background:#fff;border:1px solid #e5e7eb;border-radius:14px}
-.pt{position:absolute;left:18px;right:18px;top:18px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+
+/* distillation: many inputs -&gt; a narrowing funnel (extract, check) -&gt; a route -&gt; two stores */
+.card{position:absolute;background:#fff;border:1px solid #e5e7eb;border-radius:14px}
+.pt{display:flex;align-items:center;gap:8px;white-space:nowrap}
 .pt b{font-size:23px;font-weight:800}
 .pt .tag{margin-left:auto;font-size:14px;font-weight:700;border-radius:12px;padding:3px 12px}
 .no{display:inline-block;width:27px;height:27px;border-radius:50%;background:#111827;color:#fff;font:700 15px/27px Menlo,monospace;text-align:center}
-.body{position:absolute;left:18px;right:18px;top:78px;bottom:18px;display:flex;flex-direction:column;gap:16px}
+svg.fun{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none}
 
-/* ① Work */
-#work{left:16px;width:190px}
-.src{flex:1;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;border-left:6px solid #334155;display:flex;align-items:center;padding:0 14px;font-size:18.5px;font-weight:700;line-height:1.3}
+/* 1 Work: four sources pour in */
+#work{position:absolute;left:16px;top:150px;width:206px}
+#work .pt{margin-bottom:16px}
+.src{height:92px;margin-bottom:16px;border-radius:12px;background:#fff;border:1px solid #e2e8f0;border-left:6px solid #334155;display:flex;align-items:center;padding:0 16px;font-size:19px;font-weight:700;line-height:1.3}
 .src.pm{border-left-color:#7c3aed}.src.bd{border-left-color:#2563eb}
 .src.hu{background:#fffaf5;border:2px solid #c2410c;border-left-width:6px;color:#9a3412}
 .src.hu:before{content:&quot;&quot;;display:inline-block;width:9px;height:9px;background:#c2410c;transform:rotate(45deg);margin-right:9px}
 
-/* ② Extract */
-#ext{left:236px;width:360px}
-#ext .body{justify-content:space-evenly;gap:0}
+/* 2 Extract: the widest part of the funnel */
+#ext{left:296px;top:104px;width:360px;height:580px;padding:22px 22px;display:flex;flex-direction:column;justify-content:space-between}
 #ext .tag{background:#dbeafe;color:#1d4ed8}
-.blk{border-top:1px solid #f0f1f4;padding-top:22px}
-.blk:first-child{border-top:none;padding-top:0}
-.bl{font-size:17px;font-weight:800;color:#111827;margin-bottom:12px}
+.blk{border-top:1px solid #f0f1f4;padding-top:20px}
+.bl{font-size:17px;font-weight:800;color:#111827;margin-bottom:10px}
 .lay{display:flex;align-items:center;gap:6px;margin-top:10px}
 .lay em{font-style:normal;width:60px;font-size:15px;color:#6b7280}
 code{font:600 14px Menlo,monospace;color:#0b3b37;background:#d5efe9;border-radius:5px;padding:4px 8px;white-space:nowrap}
@@ -1370,43 +1374,33 @@ code.r{background:#e2e8f0;color:#334155}
 .row{display:flex;flex-wrap:wrap;gap:8px}
 .sc{font-size:16px;font-weight:700;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:16px;padding:4px 15px}
 
-/* ③ Check: facts only */
-#chk{left:626px;width:330px}
+/* 3 Check: narrower */
+#chk{left:700px;top:168px;width:340px;height:444px;padding:20px 18px;display:flex;flex-direction:column;gap:11px}
 #chk .tag{background:#e2e8f0;color:#334155}
-#chk .body{gap:12px}
+#chk .pt{margin-bottom:4px}
 .ck{flex:1;display:flex;align-items:center;gap:12px;font-size:17px;font-weight:700;color:#1f2937;border-radius:9px;background:#f8fafc;border:1px solid #e2e8f0;padding:0 12px;white-space:nowrap}
 .ck i{font-style:normal;flex:0 0 26px;height:26px;border-radius:50%;background:#334155;color:#fff;font-size:14.5px;line-height:26px;text-align:center}
 .ck code{font-size:13.5px;padding:3px 7px}
 .ck.llm{background:#fff;border:1.5px dashed #64748b}
 .ck.llm i{background:#fff;color:#334155;border:1.5px solid #334155;line-height:23px}
 
-/* ④ Route */
-#rte{left:986px;width:330px}
-#rte .tag{background:#dbeafe;color:#1d4ed8}
-#rte .body{gap:0;justify-content:center}
-.dest{border-radius:12px;padding:20px 18px}
-.dest .dh{display:flex;align-items:center;justify-content:space-between;font-size:19px;font-weight:800;margin-bottom:16px;white-space:nowrap}
-.dest .dh small{font-size:13.5px;font-weight:700;border-radius:11px;padding:2px 10px}
-.dest.hot{background:#27235e;color:#fff}
-.dest.hot .dh small{background:#fb923c;color:#fff}
-.dest.hot .row span{background:#3b3680;color:#fff;border:1px solid #8b84e6}
-.dest.cold{background:#f0fdfa;border:1.5px solid #99d8cb;color:#0f3d3a}
-.dest .row span{font-size:15.5px;font-weight:700;border-radius:15px;padding:5px 13px;white-space:nowrap}
-.dest.cold .row span{background:#fff;border:1px solid #99d8cb;color:#0f766e}
-.down{height:76px;display:flex;align-items:center;gap:10px;padding-left:32px;font-size:15px;font-weight:700;color:#0f766e}
-.down:before{content:&quot;&quot;;width:0;height:56px;border-left:2px dashed #0f766e}
+/* 4 Route: the throat of the funnel */
+#rt{position:absolute;left:1078px;top:332px;width:152px;height:116px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+#rt b{font-size:21px;font-weight:800;color:#111827}#rt span{font-size:13.5px;font-weight:700;color:#1d4ed8;margin-top:2px}
+#rt .no{position:absolute;top:-30px;color:#fff;margin:0}
+.lbl{position:absolute;font-size:15px;font-weight:700;white-space:nowrap}
+.pill{position:absolute;font-size:14px;font-weight:800;border-radius:12px;padding:3px 11px;white-space:nowrap}
 
-/* ⑤ Judgment */
-#jdg{left:1346px;width:238px;border:2px solid #f59e0b;background:#fffaf5}
+/* 5 Judgment: what it changes, as trends */
+#jdg{left:1360px;top:104px;width:224px;height:580px;border:2px solid #f59e0b;background:#fffaf5;padding:20px 18px;display:flex;flex-direction:column;gap:14px}
 #jdg .pt b{color:#9a3412}
-#jdg .body{gap:16px}
-.m{flex:1;border-radius:10px;background:#fff;border:1px solid #fed7aa;display:flex;align-items:center;justify-content:space-between;padding:0 16px}
-.m b{font-size:16px;font-weight:800;color:#111827;white-space:nowrap}
-.m span{font-size:40px;font-weight:800;color:#c2410c;white-space:nowrap}
+.m{flex:1;position:relative;border-radius:12px;background:#fff;border:1px solid #fed7aa;padding:14px 16px}
+.m b{font-size:19px;font-weight:800;color:#111827;white-space:nowrap}
+.m span{position:absolute;right:16px;top:42px;font-size:32px;font-weight:800;color:#c2410c;white-space:nowrap}
 .m span.up{color:#0f766e}
-
+.m svg{position:absolute;left:16px;right:16px;bottom:12px;width:calc(100% - 82px);height:50px}
 /* ---- shared Brain (same as the other diagrams) ---- */
-#brain{position:absolute;left:16px;top:864px;width:1192px;height:182px;background:#0b3b37;border-radius:16px;color:#d5ece7}
+#brain{position:absolute;left:16px;top:840px;width:964px;height:206px;background:#0b3b37;border-radius:16px;color:#d5ece7}
 .bt{position:absolute;left:28px;top:0;bottom:0;width:200px;display:flex;flex-direction:column;justify-content:center}
 .bt b{font-size:28px;font-weight:800;color:#fff}
 .bt em{font-style:normal;font-size:14px;color:#7ee0cf;margin-top:4px}
@@ -1415,102 +1409,94 @@ code.r{background:#e2e8f0;color:#334155}
 .bagent .bh{font-size:17px;letter-spacing:0;color:#fff;margin-bottom:16px}
 .btags{display:flex;gap:8px}
 .btags span{font-size:13px;color:#0b3b37;background:#7ee0cf;border-radius:14px;padding:3px 11px;font-weight:600;white-space:nowrap}
-.bdocs{position:absolute;left:240px;top:30px;width:420px}
+.bdocs{position:absolute;left:240px;top:16px;width:420px}
 .bgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .bgrid span{font:700 12.5px Menlo,monospace;color:#fff;background:#124a45;border-radius:7px 11px 7px 7px;padding:9px 12px;white-space:nowrap}
-.bdirs{position:absolute;left:690px;top:30px;width:220px}
-.dgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.bdirs{position:absolute;left:240px;top:132px;width:420px}
+.dgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .dgrid span{position:relative;font:700 13px Menlo,monospace;color:#a7f3e4;border:1.5px dashed #3aa596;border-radius:3px 9px 9px 9px;padding:8px 12px;white-space:nowrap}
 .dgrid span:before{content:&quot;&quot;;position:absolute;left:-1.5px;top:-7px;width:26px;height:6px;border:1.5px dashed #3aa596;border-bottom:none;border-radius:4px 4px 0 0}
-.bonto{position:absolute;left:936px;top:30px;right:24px;padding-left:22px;border-left:1px solid #1f5b55}
+.bonto{position:absolute;left:690px;top:22px;right:24px;padding-left:22px;border-left:1px solid #1f5b55}
 .otags{display:flex;flex-wrap:wrap;gap:6px}
 .otags code{font:600 11.5px Menlo,monospace;color:#0b3b37;background:#7ee0cf;border-radius:4px;padding:2px 6px}
 .olife{margin-top:12px;font-size:13px;color:#fff;font-weight:600}
 
-#mem{position:absolute;left:1224px;top:864px;width:360px;height:182px;background:#27235e;border-radius:16px;color:#e0e7ff;padding:24px 26px}
-#mem b{display:block;font-size:28px;font-weight:800;color:#fff}
-#mem em{display:block;font-style:normal;font-size:14px;color:#a5b4fc;margin:4px 0 16px}
-#mem .row span{font-size:14px;font-weight:700;color:#fff;background:#3b3680;border:1px solid #8b84e6;border-radius:14px;padding:4px 12px;white-space:nowrap}
-svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none;z-index:2}
+#pers{position:absolute;left:994px;top:812px;width:596px;height:244px;border:2px dashed #a5b4fc;border-radius:22px}
+#pers span{position:absolute;left:18px;bottom:-13px;background:#f6f7fb;padding:0 10px;font-size:15px;font-weight:800;color:#4338ca;white-space:nowrap}
+.ptank{position:absolute;top:840px;height:200px;border-radius:16px;color:#e0e7ff;padding:20px 22px}
+.ptank b{display:block;font-size:24px;line-height:1.15;font-weight:800;color:#fff}
+.ptank em{display:block;font-style:normal;font-size:14px;color:#c7d2fe;margin:6px 0 12px}
+.ptank .row span{font-size:13.5px;font-weight:700;color:#fff;border-radius:14px;padding:4px 11px;white-space:nowrap}
+#actx{left:1004px;width:276px;background:#3730a3}#actx .row span{background:#4f46e5;border:1px solid #a5b4fc}
+#mem{left:1294px;width:286px;background:#27235e}#mem .row span{background:#3b3680;border:1px solid #8b84e6}
 .wl{font-size:15px;font-weight:700}
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
 &lt;div id=&quot;app&quot;&gt;
-
 &lt;header&gt;
-  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Cognition Distill Flow - &lt;span style=&quot;color:#c2410c&quot;&gt;How Work Becomes Judgment&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Cognition Distill —— &lt;span style=&quot;color:#c2410c&quot;&gt;每一次工作，都沉淀成判断力&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
   &lt;div class=&quot;legend&quot;&gt;
     &lt;span&gt;&lt;i class=&quot;lg-w&quot;&gt;&lt;/i&gt;工作流&lt;/span&gt;
     &lt;span&gt;&lt;i class=&quot;lg-k&quot;&gt;&lt;/i&gt;Brain 读写&lt;/span&gt;
-    &lt;span&gt;&lt;i class=&quot;lg-k&quot; style=&quot;border-color:#4338ca&quot;&gt;&lt;/i&gt;Memory 读写&lt;/span&gt;
+    &lt;span&gt;&lt;i class=&quot;lg-k&quot; style=&quot;border-color:#4338ca&quot;&gt;&lt;/i&gt;个人 读写&lt;/span&gt;
     &lt;span&gt;&lt;i class=&quot;lg-d&quot;&gt;&lt;/i&gt;人&lt;/span&gt;
   &lt;/div&gt;
 &lt;/header&gt;
+&lt;svg class=&quot;fun&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;&lt;defs&gt;&lt;marker id=&quot;mW&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#334155&quot;/&gt;&lt;/marker&gt;&lt;marker id=&quot;mI&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#4338ca&quot;/&gt;&lt;/marker&gt;&lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;
+&lt;marker id=&quot;mP&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#6366f1&quot;/&gt;&lt;/marker&gt;&lt;linearGradient id=&quot;fg&quot; x1=&quot;0&quot; x2=&quot;1&quot;&gt;&lt;stop offset=&quot;0&quot; stop-color=&quot;#dbe7fb&quot;/&gt;&lt;stop offset=&quot;1&quot; stop-color=&quot;#eef2ff&quot;/&gt;&lt;/linearGradient&gt;&lt;/defs&gt;
+&lt;path d=&quot;M280,88 L668,88 C690,88 680,150 708,150 L1050,150 C1066,150 1070,170 1074,200 L1080,340 L1080,440 L1074,580 C1070,610 1066,630 1050,630 L708,630 C680,630 690,700 668,700 L280,700 Z&quot; fill=&quot;url(#fg)&quot;/&gt;
+&lt;polygon points=&quot;1078,390 1154,332 1230,390 1154,448&quot; fill=&quot;#fff&quot; stroke=&quot;#2563eb&quot; stroke-width=&quot;2.5&quot;/&gt;
+&lt;path d=&quot;M223,247 C258,247 262,394 292,394&quot; fill=&quot;none&quot; stroke=&quot;#334155&quot; stroke-width=&quot;2.5&quot; marker-end=&quot;url(#mW)&quot;/&gt;&lt;path d=&quot;M223,355 C258,355 262,394 292,394&quot; fill=&quot;none&quot; stroke=&quot;#334155&quot; stroke-width=&quot;2.5&quot; marker-end=&quot;url(#mW)&quot;/&gt;&lt;path d=&quot;M223,463 C258,463 262,394 292,394&quot; fill=&quot;none&quot; stroke=&quot;#334155&quot; stroke-width=&quot;2.5&quot; marker-end=&quot;url(#mW)&quot;/&gt;&lt;path d=&quot;M223,571 C258,571 262,394 292,394&quot; fill=&quot;none&quot; stroke=&quot;#334155&quot; stroke-width=&quot;2.5&quot; marker-end=&quot;url(#mW)&quot;/&gt;&lt;path d=&quot;M657,394 L696,394&quot; stroke=&quot;#334155&quot; stroke-width=&quot;2.5&quot; marker-end=&quot;url(#mW)&quot;/&gt;
+&lt;path d=&quot;M1041,390 L1074,390&quot; stroke=&quot;#334155&quot; stroke-width=&quot;2.5&quot; marker-end=&quot;url(#mW)&quot;/&gt;
+&lt;path d=&quot;M1230,390 L1330,390 L1330,836&quot; fill=&quot;none&quot; stroke=&quot;#4338ca&quot; stroke-width=&quot;3&quot; marker-end=&quot;url(#mI)&quot;/&gt;
+&lt;path d=&quot;M1154,448 L1154,836&quot; fill=&quot;none&quot; stroke=&quot;#6366f1&quot; stroke-width=&quot;3&quot; marker-end=&quot;url(#mP)&quot;/&gt;
+&lt;path d=&quot;M1116,419 L1116,736 Q1116,750 1102,750 L874,750 Q860,750 860,764 L860,836&quot; fill=&quot;none&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;3&quot; marker-end=&quot;url(#mK)&quot;/&gt;
+&lt;path d=&quot;M111,836 L111,694&quot; fill=&quot;none&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;3&quot; marker-end=&quot;url(#mK)&quot;/&gt;
+&lt;path d=&quot;M1480,836 L1480,690&quot; fill=&quot;none&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;3&quot; marker-end=&quot;url(#mK)&quot;/&gt;
+&lt;/svg&gt;
+&lt;div id=&quot;work&quot;&gt;&lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;1&lt;/span&gt;&lt;b&gt;Work&lt;/b&gt;&lt;/div&gt;
+  &lt;div class=&quot;src pm&quot;&gt;PM&lt;br&gt;Run Trace&lt;/div&gt;&lt;div class=&quot;src bd&quot;&gt;Builder&lt;br&gt;Run Trace&lt;/div&gt;&lt;div class=&quot;src hu&quot;&gt;人的纠正&lt;/div&gt;&lt;div class=&quot;src&quot;&gt;Eval 缺口&lt;/div&gt;&lt;/div&gt;
 
-&lt;!-- ① where knowledge comes from --&gt;
-&lt;div class=&quot;pane&quot; id=&quot;work&quot;&gt;
-  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;1&lt;/span&gt;&lt;b&gt;Work&lt;/b&gt;&lt;/div&gt;
-  &lt;div class=&quot;body&quot;&gt;
-    &lt;div class=&quot;src pm&quot;&gt;PM&lt;br&gt;Run Trace&lt;/div&gt;
-    &lt;div class=&quot;src bd&quot;&gt;Builder&lt;br&gt;Run Trace&lt;/div&gt;
-    &lt;div class=&quot;src hu&quot;&gt;人的纠正&lt;/div&gt;
-    &lt;div class=&quot;src&quot;&gt;Eval 缺口&lt;/div&gt;
-  &lt;/div&gt;
-&lt;/div&gt;
-
-&lt;!-- ② the agent that did the work extracts and declares --&gt;
-&lt;div class=&quot;pane&quot; id=&quot;ext&quot;&gt;
+&lt;div class=&quot;card&quot; id=&quot;ext&quot;&gt;
   &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;2&lt;/span&gt;&lt;b&gt;Extract&lt;/b&gt;&lt;span class=&quot;tag&quot;&gt;做事的 Agent&lt;/span&gt;&lt;/div&gt;
-  &lt;div class=&quot;body&quot;&gt;
-    &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;类型&lt;/div&gt;
-      &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;元认知&lt;/em&gt;&lt;code&gt;principle&lt;/code&gt;&lt;code&gt;correction&lt;/code&gt;&lt;/div&gt;
-      &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;认知&lt;/em&gt;&lt;code&gt;decision&lt;/code&gt;&lt;code&gt;model&lt;/code&gt;&lt;/div&gt;
-      &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;操作&lt;/em&gt;&lt;code&gt;guideline&lt;/code&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;code&gt;process&lt;/code&gt;&lt;/div&gt;
-    &lt;/div&gt;
-    &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;范围&lt;/div&gt;&lt;div class=&quot;row&quot;&gt;&lt;span class=&quot;sc&quot;&gt;用户&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;Agent&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;通用&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;项目&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
-    &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;关系&lt;/div&gt;&lt;div class=&quot;row&quot;&gt;&lt;code class=&quot;r&quot;&gt;new&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;same&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;adds to&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;replaces&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;repeats&lt;/code&gt;&lt;/div&gt;&lt;/div&gt;
-  &lt;/div&gt;
+  &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;类型&lt;/div&gt;
+    &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;元认知&lt;/em&gt;&lt;code&gt;principle&lt;/code&gt;&lt;code&gt;correction&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;认知&lt;/em&gt;&lt;code&gt;decision&lt;/code&gt;&lt;code&gt;model&lt;/code&gt;&lt;/div&gt;
+    &lt;div class=&quot;lay&quot;&gt;&lt;em&gt;操作&lt;/em&gt;&lt;code&gt;guideline&lt;/code&gt;&lt;code&gt;pitfall&lt;/code&gt;&lt;code&gt;process&lt;/code&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;范围&lt;/div&gt;&lt;div class=&quot;row&quot;&gt;&lt;span class=&quot;sc&quot;&gt;用户&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;Agent&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;通用&lt;/span&gt;&lt;span class=&quot;sc&quot;&gt;项目&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;blk&quot;&gt;&lt;div class=&quot;bl&quot;&gt;关系&lt;/div&gt;&lt;div class=&quot;row&quot;&gt;&lt;code class=&quot;r&quot;&gt;new&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;same&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;adds to&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;replaces&lt;/code&gt;&lt;code class=&quot;r&quot;&gt;repeats&lt;/code&gt;&lt;/div&gt;&lt;/div&gt;
 &lt;/div&gt;
 
-&lt;!-- ③ facts only: deterministic, plus one isolated model check --&gt;
-&lt;div class=&quot;pane&quot; id=&quot;chk&quot;&gt;
+&lt;div class=&quot;card&quot; id=&quot;chk&quot;&gt;
   &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;3&lt;/span&gt;&lt;b&gt;Check&lt;/b&gt;&lt;span class=&quot;tag&quot;&gt;只查事实&lt;/span&gt;&lt;/div&gt;
-  &lt;div class=&quot;body&quot;&gt;
-    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;非空 · 无凭据链接&lt;/div&gt;
-    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;证据&lt;code&gt;原话&lt;/code&gt;&lt;code&gt;测量&lt;/code&gt;&lt;code&gt;外部&lt;/code&gt;&lt;/div&gt;
-    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;关系 · 覆盖指向唯一条目&lt;/div&gt;
-    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;只覆盖更旧的 · 不碰人写的&lt;/div&gt;
-    &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;已撤回的不再进入&lt;/div&gt;
-    &lt;div class=&quot;ck llm&quot;&gt;&lt;i&gt;◇&lt;/i&gt;原话是否说了这件事&lt;/div&gt;
-  &lt;/div&gt;
+  &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;非空 · 无凭据链接&lt;/div&gt;
+  &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;证据&lt;code&gt;原话&lt;/code&gt;&lt;code&gt;测量&lt;/code&gt;&lt;code&gt;外部&lt;/code&gt;&lt;/div&gt;
+  &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;关系 · 覆盖指向唯一条目&lt;/div&gt;
+  &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;只覆盖更旧的 · 不碰人写的&lt;/div&gt;
+  &lt;div class=&quot;ck&quot;&gt;&lt;i&gt;✓&lt;/i&gt;已撤回的不再进入&lt;/div&gt;
+  &lt;div class=&quot;ck llm&quot;&gt;&lt;i&gt;◇&lt;/i&gt;原话是否说了这件事&lt;/div&gt;
 &lt;/div&gt;
 
-&lt;!-- ④ where it goes: the agent&#x27;s declaration, held to its evidence --&gt;
-&lt;div class=&quot;pane&quot; id=&quot;rte&quot;&gt;
-  &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot;&gt;4&lt;/span&gt;&lt;b&gt;Route&lt;/b&gt;&lt;span class=&quot;tag&quot;&gt;按 Agent 声明&lt;/span&gt;&lt;/div&gt;
-  &lt;div class=&quot;body&quot;&gt;
-    &lt;div class=&quot;dest hot&quot;&gt;&lt;div class=&quot;dh&quot;&gt;Memory&lt;small&gt;原话 / 测量&lt;/small&gt;&lt;/div&gt;
-      &lt;div class=&quot;row&quot;&gt;&lt;span&gt;用户偏好&lt;/span&gt;&lt;span&gt;Agent 纠正&lt;/span&gt;&lt;span&gt;通用原则&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
-    &lt;div class=&quot;down&quot;&gt;否则&lt;/div&gt;
-    &lt;div class=&quot;dest cold&quot;&gt;&lt;div class=&quot;dh&quot;&gt;Brain&lt;/div&gt;
-      &lt;div class=&quot;row&quot;&gt;&lt;span&gt;项目 Brain&lt;/span&gt;&lt;span&gt;General Brain&lt;/span&gt;&lt;span&gt;Timeline&lt;/span&gt;&lt;span&gt;Reference&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
-  &lt;/div&gt;
-&lt;/div&gt;
+&lt;div id=&quot;rt&quot;&gt;&lt;span class=&quot;no&quot;&gt;4&lt;/span&gt;&lt;b&gt;Route&lt;/b&gt;&lt;span&gt;按 Agent 声明&lt;/span&gt;&lt;/div&gt;
+&lt;div class=&quot;pill&quot; style=&quot;left:1340px;top:712px;background:#fb923c;color:#fff&quot;&gt;原话 / 测量&lt;/div&gt;
+&lt;div class=&quot;lbl&quot; style=&quot;left:1342px;top:746px;color:#4338ca&quot;&gt;→ Memory&lt;/div&gt;
+&lt;div class=&quot;lbl&quot; style=&quot;left:906px;top:724px;color:#0f766e&quot;&gt;项目知识 → Domain Brain&lt;/div&gt;
+&lt;div class=&quot;lbl&quot; style=&quot;left:1166px;top:640px;color:#4f46e5&quot;&gt;跨项目 · 个人&lt;/div&gt;
+&lt;div class=&quot;lbl&quot; style=&quot;left:1166px;top:664px;color:#4f46e5&quot;&gt;→ Agent Context&lt;/div&gt;
+&lt;div class=&quot;lbl&quot; style=&quot;left:123px;top:770px;color:#0f766e&quot;&gt;装载 · 下一个 run&lt;/div&gt;
+&lt;div class=&quot;lbl&quot; style=&quot;left:1490px;top:760px;color:#c2410c;font-size:17px&quot;&gt;Compound&lt;/div&gt;
 
-&lt;!-- ⑤ what it changes --&gt;
-&lt;div class=&quot;pane&quot; id=&quot;jdg&quot;&gt;
+&lt;div class=&quot;card&quot; id=&quot;jdg&quot;&gt;
   &lt;div class=&quot;pt&quot;&gt;&lt;span class=&quot;no&quot; style=&quot;background:#c2410c&quot;&gt;5&lt;/span&gt;&lt;b&gt;Judgment&lt;/b&gt;&lt;/div&gt;
-  &lt;div class=&quot;body&quot;&gt;
-    &lt;div class=&quot;m&quot;&gt;&lt;b&gt;纠正&lt;/b&gt;&lt;span&gt;↓&lt;/span&gt;&lt;/div&gt;
-    &lt;div class=&quot;m&quot;&gt;&lt;b&gt;重复纠正&lt;/b&gt;&lt;span&gt;→ 0&lt;/span&gt;&lt;/div&gt;
-    &lt;div class=&quot;m&quot;&gt;&lt;b&gt;Autonomous Rate&lt;/b&gt;&lt;span class=&quot;up&quot;&gt;↑&lt;/span&gt;&lt;/div&gt;
-  &lt;/div&gt;
+  &lt;div class=&quot;m&quot;&gt;&lt;b&gt;纠正&lt;/b&gt;&lt;span&gt;↓&lt;/span&gt;&lt;svg viewBox=&quot;0 0 240 62&quot; preserveAspectRatio=&quot;none&quot;&gt;&lt;polyline points=&quot;4,8 60,20 120,34 180,46 236,54&quot; fill=&quot;none&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; vector-effect=&quot;non-scaling-stroke&quot;/&gt;&lt;circle cx=&quot;236&quot; cy=&quot;54&quot; r=&quot;5&quot; fill=&quot;#c2410c&quot;/&gt;&lt;/svg&gt;&lt;/div&gt;
+  &lt;div class=&quot;m&quot;&gt;&lt;b&gt;重复纠正&lt;/b&gt;&lt;span&gt;→ 0&lt;/span&gt;&lt;svg viewBox=&quot;0 0 240 62&quot; preserveAspectRatio=&quot;none&quot;&gt;&lt;polyline points=&quot;4,10 70,34 130,54 236,56&quot; fill=&quot;none&quot; stroke=&quot;#c2410c&quot; stroke-width=&quot;4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; vector-effect=&quot;non-scaling-stroke&quot;/&gt;&lt;circle cx=&quot;236&quot; cy=&quot;56&quot; r=&quot;5&quot; fill=&quot;#c2410c&quot;/&gt;&lt;/svg&gt;&lt;/div&gt;
+  &lt;div class=&quot;m&quot;&gt;&lt;b&gt;Autonomous Rate&lt;/b&gt;&lt;span class=&quot;up&quot;&gt;↑&lt;/span&gt;&lt;svg viewBox=&quot;0 0 240 62&quot; preserveAspectRatio=&quot;none&quot;&gt;&lt;polyline points=&quot;4,56 60,50 120,40 180,26 236,8&quot; fill=&quot;none&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;4&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; vector-effect=&quot;non-scaling-stroke&quot;/&gt;&lt;circle cx=&quot;236&quot; cy=&quot;8&quot; r=&quot;5&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/svg&gt;&lt;/div&gt;
 &lt;/div&gt;
 
 &lt;!-- shared Brain --&gt;
 &lt;div id=&quot;brain&quot;&gt;
-  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;DDD · 按需召回&lt;/em&gt;&lt;/div&gt;
+  &lt;div class=&quot;bt&quot;&gt;&lt;b&gt;Domain Brain&lt;/b&gt;&lt;em&gt;Domain Knowledge&lt;br&gt;团队共享 · 按需召回&lt;/em&gt;&lt;/div&gt;
   &lt;div class=&quot;bdocs&quot;&gt;
     &lt;div class=&quot;bh&quot;&gt;Markdown&lt;/div&gt;
     &lt;div class=&quot;bgrid&quot;&gt;&lt;span&gt;AGENTS.md&lt;/span&gt;&lt;span&gt;BUSINESS.md&lt;/span&gt;&lt;span&gt;PRODUCT.md&lt;/span&gt;&lt;span&gt;TECH.md&lt;/span&gt;&lt;span&gt;IMPROVEMENT.md&lt;/span&gt;&lt;span&gt;PROJECT.md&lt;/span&gt;&lt;/div&gt;
@@ -1527,129 +1513,10 @@ svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-even
 &lt;/div&gt;
 
 &lt;!-- Memory: what every turn reads --&gt;
-&lt;div id=&quot;mem&quot;&gt;&lt;b&gt;Memory&lt;/b&gt;&lt;em&gt;每轮都读&lt;/em&gt;&lt;div class=&quot;row&quot;&gt;&lt;span&gt;用户偏好&lt;/span&gt;&lt;span&gt;Agent 纠正&lt;/span&gt;&lt;span&gt;通用原则&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div id=&quot;pers&quot;&gt;&lt;span&gt;Personal · 只属于你，不进团队 Brain&lt;/span&gt;&lt;/div&gt;
+&lt;div class=&quot;ptank&quot; id=&quot;actx&quot;&gt;&lt;b&gt;Personal&lt;br&gt;Agent Context&lt;/b&gt;&lt;em&gt;个人 · 按需召回&lt;/em&gt;&lt;div class=&quot;row&quot;&gt;&lt;span&gt;General Brain&lt;/span&gt;&lt;span&gt;Timeline&lt;/span&gt;&lt;span&gt;Reference&lt;/span&gt;&lt;span&gt;System Context&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div class=&quot;ptank&quot; id=&quot;mem&quot;&gt;&lt;b&gt;Personal&lt;br&gt;Memory&lt;/b&gt;&lt;em&gt;个人 · 每轮都读&lt;/em&gt;&lt;div class=&quot;row&quot;&gt;&lt;span&gt;用户偏好&lt;/span&gt;&lt;span&gt;Agent 纠正&lt;/span&gt;&lt;span&gt;通用原则&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
-  &lt;defs&gt;
-    &lt;marker id=&quot;mW&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#334155&quot;/&gt;&lt;/marker&gt;
-    &lt;marker id=&quot;mI&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#4338ca&quot;/&gt;&lt;/marker&gt;
-    &lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;
-  &lt;/defs&gt;
-  &lt;g id=&quot;g&quot;&gt;&lt;/g&gt;
-&lt;/svg&gt;
-
-&lt;/div&gt;
-&lt;script&gt;
-const NS=&#x27;http://www.w3.org/2000/svg&#x27;, G=document.getElementById(&#x27;g&#x27;);
-function path(d,stroke,marker,w){const p=document.createElementNS(NS,&#x27;path&#x27;);p.setAttribute(&#x27;d&#x27;,d);p.setAttribute(&#x27;fill&#x27;,&#x27;none&#x27;);p.setAttribute(&#x27;stroke&#x27;,stroke);p.setAttribute(&#x27;stroke-width&#x27;,w||2.5);if(marker)p.setAttribute(&#x27;marker-end&#x27;,`url(#${marker})`);G.appendChild(p);}
-function text(x,y,t,fill,anchor){const e=document.createElementNS(NS,&#x27;text&#x27;);e.setAttribute(&#x27;x&#x27;,x);e.setAttribute(&#x27;y&#x27;,y);e.setAttribute(&#x27;class&#x27;,&#x27;wl&#x27;);e.setAttribute(&#x27;fill&#x27;,fill);if(anchor)e.setAttribute(&#x27;text-anchor&#x27;,anchor);e.textContent=t;G.appendChild(e);}
-// Work -&gt; Extract -&gt; Check -&gt; Route (judgment is fed by the Brain, not by Route)
-[[206,236],[596,626],[956,986]].forEach(([a,b])=&gt;path(`M${a+1},412 L${b-2},412`,&#x27;#334155&#x27;,&#x27;mW&#x27;));
-// Write -&gt; Brain
-path(&#x27;M1040,733 L1040,862&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
-text(1050,804,&#x27;写入&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
-path(&#x27;M1270,733 L1270,862&#x27;,&#x27;#4338ca&#x27;,&#x27;mI&#x27;);
-text(1280,804,&#x27;写入&#x27;,&#x27;#4338ca&#x27;,&#x27;start&#x27;);
-// Brain -&gt; the next run&#x27;s work
-path(&#x27;M111,862 L111,734&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
-text(123,804,&#x27;装载 · 下一个 run&#x27;,&#x27;#0f766e&#x27;,&#x27;start&#x27;);
-// Brain -&gt; judgment
-path(&#x27;M1465,862 L1465,734&#x27;,&#x27;#0f766e&#x27;,&#x27;mK&#x27;);
-text(1477,804,&#x27;Compound&#x27;,&#x27;#c2410c&#x27;,&#x27;start&#x27;);
-
-function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
-addEventListener(&#x27;resize&#x27;,fit);fit();
-&lt;/script&gt;
-&lt;/body&gt;
-&lt;/html&gt;
-"></iframe>
-<iframe data-k="onemove" title="One Move, Three Outcomes" srcdoc="&lt;!DOCTYPE html&gt;
-&lt;html lang=&quot;zh-CN&quot;&gt;
-&lt;head&gt;
-&lt;meta charset=&quot;UTF-8&quot;&gt;
-&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
-&lt;title&gt;One Move, Three Outcomes&lt;/title&gt;
-&lt;!-- Closing view of the autonomous-flow set: building the autonomous pipeline on one Domain Brain
-     is the same move that changes the people (talent) and the organisation. Each column is a set
-     of from → to shifts; the Brain underneath is why the three are one move. --&gt;
-&lt;style&gt;
-*{box-sizing:border-box}
-html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
-body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
-#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
-
-header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
-.brand b{font-size:26px;font-weight:800;white-space:nowrap}
-
-.col{position:absolute;top:96px;width:482px;height:720px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden}
-.ch{height:86px;display:flex;align-items:center;padding:0 26px;color:#fff;font-size:28px;font-weight:800;white-space:nowrap}
-.col.p .ch{background:#2563eb}.col.t .ch{background:#c2410c}.col.o .ch{background:#7c3aed}
-.rows{position:absolute;left:22px;right:22px;top:108px;bottom:22px;display:flex;flex-direction:column;gap:14px}
-.r{flex:1;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;display:flex;flex-direction:column;justify-content:center;padding:0 22px}
-.r s{font-size:21px;font-weight:600;color:#4b5563;text-decoration:none;white-space:nowrap}
-.r b{font-size:25px;font-weight:800;color:#111827;margin-top:6px;white-space:nowrap}
-.r b:before{content:&quot;→&quot;;margin-right:10px;font-weight:800}
-.r em{font-style:normal;font-size:25px;font-weight:800;color:#c2410c;margin:4px 0 0 36px;white-space:nowrap}
-.col.p .r b:before{color:#2563eb}.col.t .r b:before{color:#c2410c}.col.o .r b:before{color:#7c3aed}
-.eq{position:absolute;top:400px;width:60px;text-align:center;font-size:56px;font-weight:800;color:#c2410c}
-
-#brain{position:absolute;left:16px;top:868px;width:1568px;height:160px;background:#0b3b37;border-radius:16px;color:#d5ece7}
-#brain .bt{position:absolute;left:28px;top:22px;font-size:30px;font-weight:800;color:#fff}
-.bl{position:absolute;top:92px;width:482px;text-align:center;font-size:22px;font-weight:800;color:#7ee0cf;white-space:nowrap}
-
-svg#wires{position:absolute;left:0;top:0;width:1600px;height:1080px;pointer-events:none;z-index:2}
-&lt;/style&gt;
-&lt;/head&gt;
-&lt;body&gt;
-&lt;div id=&quot;app&quot;&gt;
-
-&lt;header&gt;
-  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;&lt;span style=&quot;color:#c2410c&quot;&gt;One Move&lt;/span&gt;, Three Outcomes&lt;/b&gt;&lt;/div&gt;
-&lt;/header&gt;
-
-&lt;div class=&quot;col p&quot; style=&quot;left:16px&quot;&gt;
-  &lt;div class=&quot;ch&quot;&gt;Autonomous Pipeline&lt;/div&gt;
-  &lt;div class=&quot;rows&quot;&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;人指挥 AI 写代码&lt;/s&gt;&lt;b&gt;Agent 自主 run&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;In-the-loop 每一步都审&lt;/s&gt;&lt;b&gt;只管两头&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;交付即结束&lt;/s&gt;&lt;b&gt;每个 run 写回 Brain&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;看速度&lt;/s&gt;&lt;b&gt;看 Autonomous Rate&lt;/b&gt;&lt;/div&gt;
-  &lt;/div&gt;
-&lt;/div&gt;
-&lt;div class=&quot;eq&quot; style=&quot;left:498px&quot;&gt;=&lt;/div&gt;
-&lt;div class=&quot;col t&quot; style=&quot;left:559px&quot;&gt;
-  &lt;div class=&quot;ch&quot;&gt;AI Native Talent&lt;/div&gt;
-  &lt;div class=&quot;rows&quot;&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;执行者&lt;/s&gt;&lt;b&gt;判断者 - On-the-loop&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;PM：写文档&lt;/s&gt;&lt;b&gt;PM：定意图 · 验收&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;Builder：写代码&lt;/s&gt;&lt;b&gt;Builder：设计 · 守质量&lt;/b&gt;&lt;em&gt;+ Build Autonomy&lt;/em&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;专家：答问题&lt;/s&gt;&lt;b&gt;专家：拥有 Domain Brain&lt;/b&gt;&lt;/div&gt;
-  &lt;/div&gt;
-&lt;/div&gt;
-&lt;div class=&quot;eq&quot; style=&quot;left:1041px&quot;&gt;=&lt;/div&gt;
-&lt;div class=&quot;col o&quot; style=&quot;left:1102px&quot;&gt;
-  &lt;div class=&quot;ch&quot;&gt;AI Native Org&lt;/div&gt;
-  &lt;div class=&quot;rows&quot;&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;按流程分工&lt;/s&gt;&lt;b&gt;按责任 &amp;amp; 结果分工&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;开会交接&lt;/s&gt;&lt;b&gt;经 Brain + Jira 交接&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;加人扩产&lt;/s&gt;&lt;b&gt;加 auto run 扩产&lt;/b&gt;&lt;/div&gt;
-    &lt;div class=&quot;r&quot;&gt;&lt;s&gt;经验在人&lt;/s&gt;&lt;b&gt;知识在 Brain&lt;/b&gt;&lt;/div&gt;
-  &lt;/div&gt;
-&lt;/div&gt;
-
-&lt;div id=&quot;brain&quot;&gt;
-  &lt;div class=&quot;bt&quot;&gt;Domain Brain&lt;/div&gt;
-  &lt;div class=&quot;bl&quot; style=&quot;left:0&quot;&gt;auto run 读写&lt;/div&gt;
-  &lt;div class=&quot;bl&quot; style=&quot;left:543px&quot;&gt;人在其中成长&lt;/div&gt;
-  &lt;div class=&quot;bl&quot; style=&quot;left:1086px&quot;&gt;组织沉淀 · 复利&lt;/div&gt;
-&lt;/div&gt;
-
-&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 1080&quot;&gt;
-  &lt;defs&gt;&lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;7&quot; markerHeight=&quot;7&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;&lt;/defs&gt;
-  &lt;path d=&quot;M257,866 L257,820&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;2.5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;
-  &lt;path d=&quot;M800,866 L800,820&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;2.5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;
-  &lt;path d=&quot;M1343,866 L1343,820&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;2.5&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;
-&lt;/svg&gt;
 
 &lt;/div&gt;
 &lt;script&gt;
@@ -1657,9 +1524,8 @@ function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(inner
 addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/script&gt;
 &lt;/body&gt;
-&lt;/html&gt;
-"></iframe>
-<iframe data-k="tenets" title="Tenets" srcdoc="&lt;!DOCTYPE html&gt;
+&lt;/html&gt;"></iframe>
+<iframe data-i="6" title="Tenets" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
@@ -1670,11 +1536,11 @@ addEventListener(&#x27;resize&#x27;,fit);fit();
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
 body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
-#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+#app{position:absolute;left:0;top:0;width:1600px;height:900px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
 header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
 .brand b{font-size:26px;font-weight:800;white-space:nowrap}
 
-#grid{position:absolute;left:16px;right:16px;top:84px;bottom:24px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:20px}
+#grid{position:absolute;left:16px;right:16px;top:150px;height:660px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:20px}
 .t{position:relative;border-radius:18px;background:#fff;border:1px solid #e5e7eb;padding:40px 44px 40px 140px;display:flex;flex-direction:column;justify-content:center}
 .t .id{position:absolute;left:36px;top:50%;transform:translateY(-50%);width:76px;height:76px;border-radius:18px;background:#0b3b37;color:#fff;font:800 30px/76px Menlo,monospace;text-align:center}
 .t b{font-size:31px;font-weight:800;line-height:1.3;color:#111827;text-wrap:balance}
@@ -1686,7 +1552,7 @@ header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;b
 &lt;/head&gt;
 &lt;body&gt;
 &lt;div id=&quot;app&quot;&gt;
-&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Autonomous Agent &lt;span style=&quot;color:#c2410c&quot;&gt;Tenets&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;&lt;/header&gt;
+&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Autonomous Agent &lt;span style=&quot;color:#c2410c&quot;&gt;Tenets&lt;/span&gt; —— &lt;span style=&quot;color:#c2410c&quot;&gt;三条原则，一条底线&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;&lt;/header&gt;
 
 &lt;div id=&quot;grid&quot;&gt;
     &lt;div class=&quot;t&quot;&gt;&lt;i class=&quot;tag p0&quot;&gt;Priority 0&lt;/i&gt;&lt;div class=&quot;id&quot;&gt;T1&lt;/div&gt;
@@ -1705,74 +1571,82 @@ header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;b
 
 &lt;/div&gt;
 &lt;script&gt;
-function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/900);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-900*s)/2)+&#x27;px&#x27;;}
 addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/script&gt;
 &lt;/body&gt;
 &lt;/html&gt;
 "></iframe>
-<iframe data-k="appendix" title="Appendix · Checkpoints" srcdoc="&lt;!DOCTYPE html&gt;
+<iframe data-i="7" title="One Move" srcdoc="&lt;!DOCTYPE html&gt;
 &lt;html lang=&quot;zh-CN&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;UTF-8&quot;&gt;
 &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;&gt;
-&lt;title&gt;Appendix - Checkpoints&lt;/title&gt;
-&lt;!-- Appendix to the autonomous-flow set: the six checkpoints from the published Autonomous Agent
-     Tenets and Checkpoints, each with the evidence to ask for. Red dot = must-have. --&gt;
+&lt;title&gt;One Move, Three Outcomes&lt;/title&gt;
+&lt;!-- One Move drawn as before → after: the Domain Brain on the left feeds all three outcomes (that is
+     why they are one move); each outcome row reads left to right, what it was (grey) → what it
+     becomes (bold). Same shifts as the earlier three-column version, nothing added. --&gt;
 &lt;style&gt;
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e9ecf3}
 body{font-family:&quot;PingFang SC&quot;,&quot;Hiragino Sans GB&quot;,&quot;Microsoft YaHei&quot;,sans-serif;color:#111827;-webkit-font-smoothing:antialiased}
-#app{position:absolute;left:0;top:0;width:1600px;height:1080px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
+#app{position:absolute;left:0;top:0;width:1600px;height:900px;transform-origin:0 0;background:#f6f7fb;overflow:hidden}
 header{position:absolute;left:0;top:0;width:1600px;height:60px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;padding:0 18px}
 .brand b{font-size:26px;font-weight:800;white-space:nowrap}
-.legend{margin-left:auto;font-size:16px;color:#4b5563;display:flex;align-items:center;gap:8px}
-.must{display:inline-block;width:13px;height:13px;border-radius:50%;background:#dc2626}
-
-.head{position:absolute;left:16px;right:16px;top:80px;height:36px;display:grid;grid-template-columns:96px 250px 1fr 470px;gap:20px;padding:0 24px;align-items:center;font-size:15px;font-weight:800;letter-spacing:1px;color:#6b7280}
-.rows{position:absolute;left:16px;right:16px;top:120px;bottom:24px;display:flex;flex-direction:column;gap:12px}
-.c{flex:1;display:grid;grid-template-columns:96px 250px 1fr 470px;gap:20px;align-items:center;background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:0 24px}
-.cid{position:relative;width:64px;height:48px;border-radius:11px;background:#e2e8f0;color:#111827;font:800 20px/48px Menlo,monospace;text-align:center}
-.c.m .cid{background:#111827;color:#fff}
-.c.m .cid:after{content:&quot;&quot;;position:absolute;right:-6px;top:-6px;width:15px;height:15px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px #fff}
-.area{font-size:17px;font-weight:800;color:#0f3d3a}
-.what{font-size:19px;font-weight:600;line-height:1.5;color:#111827}
-.show{font-size:17px;line-height:1.5;color:#0f3d3a;background:#effaf7;border:1px solid #bfe6dd;border-radius:10px;padding:10px 14px}
+.colh{position:absolute;top:140px;font-size:22px;font-weight:800;white-space:nowrap}
+#brain{position:absolute;left:24px;top:180px;width:200px;height:640px;background:#0b3b37;border-radius:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+#brain .ey{font:800 18px Menlo,monospace;color:#fb923c;letter-spacing:2px}
+#brain b{display:block;margin-top:10px;font-size:34px;line-height:1.15;font-weight:800;color:#fff}
+.pl{position:absolute;left:228px;width:148px;text-align:center;font-size:18px;font-weight:800;color:#0f766e;white-space:nowrap}
+.row{position:absolute;left:380px;right:24px;height:200px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;display:flex}
+.tag{flex:none;width:236px;display:flex;align-items:center;padding:0 26px;font-size:27px;line-height:1.2;font-weight:800;color:#fff}
+.row.p .tag{background:#2563eb}.row.t .tag{background:#c2410c}.row.o .tag{background:#7c3aed}
+.sh{flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 28px}
+.ln{flex:1;display:flex;align-items:center;border-top:1px solid #f1f2f5;white-space:nowrap}
+.ln:first-child{border-top:none}
+.ln s{width:300px;font-size:20px;font-weight:600;color:#6b7280;text-decoration:none}
+.ln i{width:52px;font-style:normal;font-size:24px;font-weight:800}
+.row.p .ln i{color:#2563eb}.row.t .ln i{color:#c2410c}.row.o .ln i{color:#7c3aed}
+.ln b{font-size:23px;font-weight:800;color:#111827}
+.ln b em{font-style:normal;color:#c2410c}
+svg#wires{position:absolute;left:0;top:0;width:1600px;height:900px;pointer-events:none}
 &lt;/style&gt;
 &lt;/head&gt;
 &lt;body&gt;
 &lt;div id=&quot;app&quot;&gt;
-&lt;header&gt;&lt;div class=&quot;brand&quot;&gt;&lt;b&gt;Appendix - &lt;span style=&quot;color:#c2410c&quot;&gt;Checkpoints&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;legend&quot;&gt;&lt;i class=&quot;must&quot;&gt;&lt;/i&gt;必须有&lt;/div&gt;&lt;/header&gt;
+&lt;header&gt;
+  &lt;div class=&quot;brand&quot;&gt;&lt;b&gt;&lt;span style=&quot;color:#c2410c&quot;&gt;One Move&lt;/span&gt;, Three Outcomes —— &lt;span style=&quot;color:#c2410c&quot;&gt;Agent、人、组织，一起变&lt;/span&gt;&lt;/b&gt;&lt;/div&gt;
+&lt;/header&gt;
+&lt;div class=&quot;colh&quot; style=&quot;left:645px;color:#6b7280&quot;&gt;以前&lt;/div&gt;
+&lt;div class=&quot;colh&quot; style=&quot;left:997px;color:#c2410c&quot;&gt;AI-Autonomous&lt;/div&gt;
+&lt;div id=&quot;brain&quot;&gt;&lt;div class=&quot;ey&quot;&gt;ONE MOVE&lt;/div&gt;&lt;b&gt;Domain&lt;br&gt;Brain&lt;/b&gt;&lt;/div&gt;
+&lt;div class=&quot;pl&quot; style=&quot;top:246px&quot;&gt;Agent 更自主&lt;/div&gt;&lt;div class=&quot;pl&quot; style=&quot;top:466px&quot;&gt;人在其中成长&lt;/div&gt;&lt;div class=&quot;pl&quot; style=&quot;top:686px&quot;&gt;组织沉淀 · 复利&lt;/div&gt;
+&lt;div class=&quot;row p&quot; style=&quot;top:180px&quot;&gt;&lt;div class=&quot;tag&quot;&gt;Agent&lt;br&gt;Autonomy&lt;/div&gt;&lt;div class=&quot;sh&quot;&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;人指挥 AI 写代码&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;Agent 自主 run&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;In-the-loop 每一步都审&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;&lt;em&gt;人只管两头&lt;/em&gt;&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;交付即结束&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;每个 run 写回 Brain&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;看速度&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;看 Autonomous Rate，&lt;em&gt;速度自然有&lt;/em&gt;&lt;/b&gt;&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div class=&quot;row t&quot; style=&quot;top:400px&quot;&gt;&lt;div class=&quot;tag&quot;&gt;AI Native&lt;br&gt;Talent&lt;/div&gt;&lt;div class=&quot;sh&quot;&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;执行者&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;&lt;em&gt;掌舵 + 裁决者 - On-the-loop，T 型人才&lt;/em&gt;&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;PM：写文档&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;PM：定意图 · 验收&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;Builder：写代码&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;Builder：设计 · 守质量 &lt;em&gt;+ Build Autonomy&lt;/em&gt;&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;专家：答问题&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;专家：拥有 Domain Brain&lt;/b&gt;&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;
+&lt;div class=&quot;row o&quot; style=&quot;top:620px&quot;&gt;&lt;div class=&quot;tag&quot;&gt;AI Native&lt;br&gt;Org&lt;/div&gt;&lt;div class=&quot;sh&quot;&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;按流程分工&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;按责任 &amp;amp; 结果分工&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;开会交接&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;经 Brain + Jira 交接&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;加人扩产&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;&lt;em&gt;加并发 auto run 扩产&lt;/em&gt;&lt;/b&gt;&lt;/div&gt;&lt;div class=&quot;ln&quot;&gt;&lt;s&gt;经验在人&lt;/s&gt;&lt;i&gt;→&lt;/i&gt;&lt;b&gt;知识在 Domain Knowledge，&lt;em&gt;可 scale&lt;/em&gt;&lt;/b&gt;&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;
 
-&lt;div class=&quot;head&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;领域&lt;/span&gt;&lt;span&gt;检查点&lt;/span&gt;&lt;span&gt;要看&lt;/span&gt;&lt;/div&gt;
-&lt;div class=&quot;rows&quot;&gt;
-  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;K1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Domain Knowledge&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;领域知识就位：专家、相关方和 Agent 都在用，有领域专家对质量负责&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;正在被人和 Agent 使用的知识&lt;/div&gt;&lt;/div&gt;
-  &lt;div class=&quot;c&quot;&gt;&lt;div class=&quot;cid&quot;&gt;K2&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Domain Knowledge&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;知识被用、并且在长：真实 run 里改变了 Agent 的决策，学到的写回&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;几个 run 和它们的写回&lt;/div&gt;&lt;/div&gt;
-  &lt;div class=&quot;c&quot;&gt;&lt;div class=&quot;cid&quot;&gt;H1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Human-on-the-loop&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;按任务类型预设判断点，每个都有触发条件&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;判断点清单，和触发过的 run&lt;/div&gt;&lt;/div&gt;
-  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;H2&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Human-on-the-loop&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;云端远程 run：状态持久、可异步提问、答完续跑，trace 进 Eval&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;一个云端无人值守做完的真实任务&lt;br&gt;一次暂停 → 回答 → 续跑&lt;/div&gt;&lt;/div&gt;
-  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;E1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Eval&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;每个 run 留 trace、记全口径 token；独立的 Eval 和看板跟踪自主度、人的注意力、知识健康&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;trace、成本记录、看板&lt;/div&gt;&lt;/div&gt;
-  &lt;div class=&quot;c m&quot;&gt;&lt;div class=&quot;cid&quot;&gt;Q1&lt;/div&gt;&lt;div class=&quot;area&quot;&gt;Quality &amp;amp; Security&lt;/div&gt;&lt;div class=&quot;what&quot;&gt;质量和安全底线守住：Ticket Score 和安全逃逸都没有变差&lt;/div&gt;&lt;div class=&quot;show&quot;&gt;Ticket Score、安全逃逸的趋势，对比自主之前的基线&lt;/div&gt;&lt;/div&gt;
-&lt;/div&gt;
-
+&lt;svg id=&quot;wires&quot; viewBox=&quot;0 0 1600 900&quot;&gt;&lt;defs&gt;&lt;marker id=&quot;mK&quot; viewBox=&quot;0 0 10 10&quot; refX=&quot;8&quot; refY=&quot;5&quot; markerWidth=&quot;5&quot; markerHeight=&quot;5&quot; orient=&quot;auto&quot;&gt;&lt;path d=&quot;M0,0 L10,5 L0,10 z&quot; fill=&quot;#0f766e&quot;/&gt;&lt;/marker&gt;&lt;/defs&gt;&lt;path d=&quot;M228,280 L376,280&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;3&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;&lt;path d=&quot;M228,500 L376,500&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;3&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;&lt;path d=&quot;M228,720 L376,720&quot; stroke=&quot;#0f766e&quot; stroke-width=&quot;3&quot; fill=&quot;none&quot; marker-end=&quot;url(#mK)&quot;/&gt;&lt;/svg&gt;
 &lt;/div&gt;
 &lt;script&gt;
-function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/1080);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-1080*s)/2)+&#x27;px&#x27;;}
+function fit(){const a=document.getElementById(&#x27;app&#x27;),s=Math.min(innerWidth/1600,innerHeight/900);a.style.transform=`scale(${s})`;a.style.left=((innerWidth-1600*s)/2)+&#x27;px&#x27;;a.style.top=((innerHeight-900*s)/2)+&#x27;px&#x27;;}
 addEventListener(&#x27;resize&#x27;,fit);fit();
 &lt;/script&gt;
 &lt;/body&gt;
-&lt;/html&gt;
-"></iframe>
+&lt;/html&gt;"></iframe>
 <script>
-const KEYS={'0':'home','1':'core','2':'overall','3':'builder','4':'pipeline','5':'distill','6':'onemove','7':'tenets','8':'appendix'}, VALID=Object.values(KEYS);
-function show(k){ if(!VALID.includes(k)) k='home';
-  document.querySelectorAll('[data-k]').forEach(e=>e.classList.toggle('on',e.dataset.k===k));
-  history.replaceState(null,'','#'+k); }
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>show(b.dataset.k));
-// the number keys also work while a page has focus
-const key=e=>{ if(KEYS[e.key]) show(KEYS[e.key]); };
+const N=8, ACT=[0, 0, 0, 0, 0, 0, 0, 0];
+let cur=0;
+function show(i){ i=Math.max(0,Math.min(N-1,isNaN(i)?0:i)); cur=i;
+  document.querySelectorAll('[data-i]').forEach(e=>e.classList.toggle('on',+e.dataset.i===i));
+  document.querySelectorAll('.act').forEach((e,a)=>e.classList.toggle('on',a===ACT[i]));
+  const f=document.querySelector('iframe[data-i="'+i+'"]');
+  document.getElementById('cur').innerHTML=f.title+'<i>'+(i+1)+' / '+N+'  ← →</i>';
+  history.replaceState(null,'','#'+i); }
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>show(+b.dataset.i));
+const key=e=>{ if(['ArrowRight','PageDown',' '].includes(e.key)) show(cur+1); else if(['ArrowLeft','PageUp'].includes(e.key)) show(cur-1); };
 addEventListener('keydown',key);
 document.querySelectorAll('iframe').forEach(f=>f.addEventListener('load',()=>f.contentWindow.addEventListener('keydown',key)));
-show(location.hash.slice(1));
+show(parseInt(location.hash.slice(1)));
 </script>
 </body>
 </html>

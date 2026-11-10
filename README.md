@@ -103,7 +103,7 @@ Every unit arrives whole: recall decides which entries to show, never how much o
 
 ## Autonomous Guideline
 
-How domain-knowledge-driven autonomous delivery works, page by page. The full deck, with a checkpoints appendix, is a single HTML file: [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html) · [中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) (download it and open it in a browser; keys 0–8 switch pages).
+How domain-knowledge-driven autonomous delivery works, page by page. The full deck is a single HTML file: [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html) · [中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) (download it and open it in a browser; the numbered buttons or ← → switch pages, and Builder Loop has its own step-through demo).
 
 ![AI-Autonomous, Domain Knowledge Driven](./assets/readme/autonomous/en/00-cover.png)
 
