@@ -420,25 +420,34 @@ class HiveProvisioner:
     # ── Version resolution ────────────────────────────────────────
 
     async def _resolve_version(self, version: str | None) -> str:
-        """Resolve version string. If None or 'latest', fetch from GitHub.
+        """Resolve version string. If None or 'latest', read the latest release's version.
 
-        Raises RuntimeError if no release found — never silently falls back.
+        It is read from the release's own ``latest.json`` (the updater manifest the
+        release workflow publishes, only once every build including the Hive package
+        succeeded), downloaded like any release asset. Not from the REST API: without a
+        token that allows 60 calls an hour per public IP, which a shared office network
+        uses up for everyone behind it, and then answers 403.
+
+        Raises RuntimeError if no release is found — never silently falls back.
         """
         if version and version != "latest":
             return version
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-            )
-            if resp.status_code == 200:
-                tag = resp.json().get("tag_name", "")
-                if tag:
-                    return tag.lstrip("v")
+        url = f"https://github.com/{GITHUB_REPO}/releases/latest/download/latest.json"
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
             raise RuntimeError(
-                f"Cannot determine latest version from GitHub ({GITHUB_REPO}). "
-                f"HTTP {resp.status_code}. Ensure the repo has at least one release "
-                f"with a hive tar.gz asset."
-            )
+                f"Cannot determine the latest SwarmAI release ({GITHUB_REPO}): "
+                f"its latest.json answered HTTP {resp.status_code}.")
+        try:
+            found = str(resp.json().get("version") or "").lstrip("v")
+        except (ValueError, AttributeError):
+            found = ""
+        if len(found) > 32 or not VERSION_RE.fullmatch(found):
+            raise RuntimeError(
+                f"Cannot determine the latest SwarmAI release ({GITHUB_REPO}): "
+                f"its latest.json carries no valid version.")
+        return found
 
     # ── S3 ─────────────────────────────────────────────────────────
 
