@@ -159,7 +159,7 @@ interrupted，之后 dispatcher 还要自己 `diagnose` 才知道是怎么回事
   （`provisioner.py:1012`），而分发在之后才建（`:1055`）。
 - **新 Hive**：密钥写进 `hive/user_data.py:69` 的 Caddyfile heredoc（和 basic auth 的 hash 一样内联；
   `caddy.service` 没有 `EnvironmentFile`，`user_data.py:160-171`，所以不能走 env）。规则：除 `/health`
-  外，`X-Swarm-Origin` 不匹配就 403，匹配之后才进 basic auth。建分发时 `OriginCustomHeaders` 带上同一个值。
+  外，`X-Swarm-Origin` 不匹配就 403，匹配之后才进 basic auth。建分发时 origin 的 `CustomHeaders`（CloudFront API 字段名；`OriginCustomHeaders` 是 CloudFormation 的写法，API 不认）带上同一个值。
 - **access log 不能记下这个头**：Caddy 的 log 用 `format filter` 删掉 `request>headers>X-Swarm-Origin`。
   Caddy 默认会不会记，没有核实；不管默认如何都显式删掉。
 - **老 Hive**（`update-hive` 加一步）：先更新分发，加上这个头（Caddy 不认识这个头，加了也没影响），等分发

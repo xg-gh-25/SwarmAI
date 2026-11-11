@@ -322,7 +322,7 @@ def caddy_hash_password(password: str) -> str:
 # Every CloudFront distribution is in the global prefix list the security group allows,
 # so a distribution someone else creates could reach the origin. Each Hive has a random
 # secret (secrets.token_urlsafe(32)) that only its own distribution sends as
-# X-Swarm-Origin (OriginCustomHeaders); the Caddyfile answers 403 to every other request
+# X-Swarm-Origin (CustomHeaders); the Caddyfile answers 403 to every other request
 # except /health, before basic auth, strips the header before the backend, and no log
 # (the access log and the default/error log) keeps it. The guard is
 # the three marked blocks of the heredoc above; the SSM editor below inserts exactly

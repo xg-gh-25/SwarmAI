@@ -193,7 +193,7 @@ def _put_hive_role_policy(iam, role_name: str) -> None:
 
 
 # ── Origin secret (design 2026-11-04-kirocrew-borrow §3.C1) ─────────────────
-# The distribution's origin is "hive-origin" (_create_cloudfront); its OriginCustomHeaders
+# The distribution's origin is "hive-origin" (_create_cloudfront); its CustomHeaders
 # carry X-Swarm-Origin, which the Caddyfile requires (hive/user_data.py, origin guard).
 _HIVE_ORIGIN_ID = "hive-origin"
 
@@ -213,7 +213,7 @@ def _hive_origin(config: dict) -> dict:
 def _origin_header_value(config: dict) -> Optional[str]:
     """The X-Swarm-Origin value the distribution sends to the Hive, or None."""
     from hive.user_data import ORIGIN_HEADER
-    items = (_hive_origin(config).get("OriginCustomHeaders") or {}).get("Items") or []
+    items = (_hive_origin(config).get("CustomHeaders") or {}).get("Items") or []
     for item in items:
         if item.get("HeaderName", "").lower() == ORIGIN_HEADER.lower():
             return item.get("HeaderValue")
@@ -225,11 +225,11 @@ def _set_origin_header(config: dict, secret: Optional[str]) -> None:
     config, in place; any other custom header is kept."""
     from hive.user_data import ORIGIN_HEADER
     origin = _hive_origin(config)
-    items = [i for i in (origin.get("OriginCustomHeaders") or {}).get("Items") or []
+    items = [i for i in (origin.get("CustomHeaders") or {}).get("Items") or []
              if i.get("HeaderName", "").lower() != ORIGIN_HEADER.lower()]
     if secret is not None:
         items.append({"HeaderName": ORIGIN_HEADER, "HeaderValue": secret})
-    origin["OriginCustomHeaders"] = {"Quantity": len(items), "Items": items}
+    origin["CustomHeaders"] = {"Quantity": len(items), "Items": items}
 
 
 def _origin_guard_script(mode: str, secret: Optional[str]) -> str:
@@ -968,7 +968,7 @@ class HiveProvisioner:
 
         origin_domain must be a DNS name (not an IP) — CloudFront rejects IPs.
         Use _get_ec2_public_dns() to resolve the EC2 public DNS name.
-        origin_secret is sent to the origin as X-Swarm-Origin (OriginCustomHeaders): the
+        origin_secret is sent to the origin as X-Swarm-Origin (CustomHeaders): the
         Hive's Caddyfile answers 403 without it.
         """
         import uuid as _uuid

@@ -26,6 +26,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hive.provisioner import HiveProvisioner
+
+# The fake CloudFront checks every request against botocore's own CloudFront model (the
+# same check boto runs before sending), so a field name the real API does not accept
+# fails here, not on a live Hive.
+import botocore.session
+from botocore.validate import ParamValidator
+
+_CF_MODEL = botocore.session.get_session().get_service_model("cloudfront")
+
+
+def _validate_cf(operation: str, params: dict) -> None:
+    report = ParamValidator().validate(
+        params, _CF_MODEL.operation_model(operation).input_shape)
+    assert not report.has_errors(), report.generate_report()
 from hive.user_data import render_user_data
 
 FAKE_HASH = "$2a$14$" + "a" * 53
@@ -70,6 +84,7 @@ class FakeCloudFront:
         self.created: dict | None = None
 
     def create_distribution(self, DistributionConfig):
+        _validate_cf("CreateDistribution", {"DistributionConfig": DistributionConfig})
         self.events.append("cf.create_distribution")
         self.created = copy.deepcopy(DistributionConfig)
         self.config = copy.deepcopy(DistributionConfig)
@@ -89,6 +104,8 @@ class FakeCloudFront:
 
     def update_distribution(self, Id, DistributionConfig, IfMatch):
         assert IfMatch == self.etag, "update_distribution must pass the ETag it read"
+        _validate_cf("UpdateDistribution", {"Id": Id, "DistributionConfig": DistributionConfig,
+                                            "IfMatch": IfMatch})
         self.events.append("cf.update_distribution")
         self.config = copy.deepcopy(DistributionConfig)
         self.etag = f"E{int(self.etag[1:]) + 1}"
@@ -97,7 +114,7 @@ class FakeCloudFront:
 
     def header_value(self):
         origin = self.config["Origins"]["Items"][0]
-        items = (origin.get("OriginCustomHeaders") or {}).get("Items") or []
+        items = (origin.get("CustomHeaders") or {}).get("Items") or []
         values = [h["HeaderValue"] for h in items if h["HeaderName"] == "X-Swarm-Origin"]
         return values[0] if values else None
 
@@ -268,7 +285,7 @@ async def test_user_data_and_distribution_carry_secret(caplog):
 
     # The distribution built for this Hive sends the same value.
     origin = cf.created["Origins"]["Items"][0]
-    assert origin["OriginCustomHeaders"] == {
+    assert origin["CustomHeaders"] == {
         "Quantity": 1, "Items": [{"HeaderName": "X-Swarm-Origin", "HeaderValue": secret}]}
 
     assert _secret_in_logs(caplog, secret) == []
@@ -423,16 +440,24 @@ def _first(events, name):
     return next(i for i, e in enumerate(events) if e == name)
 
 
+async def _pre_secret_dist_config() -> dict:
+    """The config of a distribution made before the origin secret: the one
+    _create_cloudfront builds today, without its custom headers."""
+    cf = FakeCloudFront([])
+    await HiveProvisioner(Path("/tmp/unused.db"))._create_cloudfront(
+        FakeSession(cf), "ec2.example", "demo", "s" * 43)
+    config = copy.deepcopy(cf.created)
+    del config["Origins"]["Items"][0]["CustomHeaders"]
+    return config
+
+
 async def test_update_and_rollback_order(tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
     legacy = _caddyfile_of(_render())
     caddyfile = tmp_path / "Caddyfile"
     caddyfile.write_text(legacy)
     events: list = []
-    dist_config = {"Origins": {"Quantity": 1, "Items": [{
-        "Id": "hive-origin", "DomainName": "ec2.example",
-        "CustomOriginConfig": {"HTTPPort": 80, "OriginProtocolPolicy": "http-only"}}]},
-        "Enabled": True}
+    dist_config = await _pre_secret_dist_config()
     cf = FakeCloudFront(events, dist_config)
     ssm = ScriptRunningSSM(events, tmp_path, caddyfile)
     instance = {"id": "inst-1", "name": "demo", "account_ref": "acc-1", "region": "us-east-1",
