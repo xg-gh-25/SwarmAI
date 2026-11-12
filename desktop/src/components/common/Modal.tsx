@@ -123,10 +123,13 @@ export default function Modal({
   if (!isRendering) return null;
 
   return (
+    // pt-11: the macOS title bar overlays the top 28px of the window (TitleBarStyle::Overlay,
+    // src-tauri/src/lib.rs); the card starts 16px below it, and its height is capped at
+    // 100% of the scrim's own box, not at a share of 100vh, so the whole card stays in view.
     <div
       ref={overlayRef}
       className={clsx(
-        'z-50 fixed inset-0 flex justify-center items-center p-4 bg-black/50 backdrop-blur-sm',
+        'z-50 fixed inset-0 flex justify-center items-center px-4 pb-4 pt-11 bg-black/50 backdrop-blur-sm',
         'transition-opacity duration-[220ms] ease-out',
         entered ? 'opacity-100' : 'opacity-0',
       )}
@@ -147,7 +150,7 @@ export default function Modal({
         className={clsx(
           'flex flex-col bg-[var(--color-card)] border shadow-2xl outline-none',
           'transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(.16,1,.3,1)]',
-          'w-full rounded-xl border-[var(--color-border)] max-h-[90vh]',
+          'w-full rounded-xl border-[var(--color-border)] max-h-full',
           entered ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-[22px] scale-[0.96]',
           sizeClasses[size],
         )}

@@ -186,9 +186,11 @@ const MermaidModal = memo(function MermaidModal({
 
   if (!isOpen) return null;
 
+  // pt-11: the macOS title bar overlays the top 28px of the window (TitleBarStyle::Overlay,
+  // src-tauri/src/lib.rs); the toolbar (title + close) starts below it, same as Modal.
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/90 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex flex-col pt-11 bg-black/90 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       {/* Top toolbar */}

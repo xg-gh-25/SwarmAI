@@ -2229,14 +2229,15 @@ export default function FileEditorCore({
         )}
       </div>
 
-      {/* Unsaved Changes Warning */}
+      {/* Unsaved Changes Warning. pt-11 + max-h-full: kept below the macOS title bar
+          (top 28px, TitleBarStyle::Overlay), same as Modal. */}
       {showUnsavedWarning && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50"
+          className="fixed inset-0 z-[70] flex items-center justify-center px-4 pb-4 pt-11 bg-black/50"
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div ref={unsavedRef} role="alertdialog" aria-modal="true" aria-labelledby="unsaved-warning-title" tabIndex={-1}
-            className="w-full max-w-md bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl p-6 outline-none">
+            className="w-full max-w-md max-h-full overflow-y-auto bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl p-6 outline-none">
             <div className="flex items-center gap-3 mb-4">
               <span className="material-symbols-outlined icon-md text-[var(--color-warning)]" aria-hidden="true">
                 warning

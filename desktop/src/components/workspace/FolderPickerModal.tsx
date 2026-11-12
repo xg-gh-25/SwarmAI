@@ -125,8 +125,10 @@ export function FolderPickerModal({
 
   if (!isOpen) return null;
 
+  // pt-11 + max-h-full: kept below the macOS title bar (top 28px, TitleBarStyle::Overlay),
+  // its height capped at the wrapper's own box rather than a share of 100vh (same as Modal).
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4 pb-4 pt-11">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -135,7 +137,7 @@ export function FolderPickerModal({
 
       {/* Modal */}
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="folder-picker-title" tabIndex={-1}
-        className="relative bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[80vh] outline-none">
+        className="relative bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-full outline-none">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
           <div className="flex items-center gap-2">

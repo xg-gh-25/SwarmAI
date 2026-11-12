@@ -220,15 +220,18 @@ export default function FileEditorModal({
 
   if (!isOpen) return null;
 
+  // pt-11: the macOS title bar overlays the top 28px of the window (TitleBarStyle::Overlay,
+  // src-tauri/src/lib.rs); the editor starts 16px below it, and its size is the scrim's own
+  // box (100%), not a share of 100vh / 100vw, so its header and close button stay in view.
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center px-4 pb-4 pt-11 bg-black/50 backdrop-blur-sm"
       onMouseDown={handleOverlayClick}
       data-testid="file-editor-modal"
     >
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={fileName} tabIndex={-1}
-        className="w-[95vw] h-[90vh] max-w-[1600px] outline-none">
+        className="w-full h-full max-w-[1600px] outline-none">
         <FileEditorCore
           filePath={filePath}
           fileName={fileName}

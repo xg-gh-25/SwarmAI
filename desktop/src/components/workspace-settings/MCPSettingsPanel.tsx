@@ -351,11 +351,13 @@ function AddDevForm({
     });
   };
 
+  // pt-11 + max-h-full: kept below the macOS title bar (top 28px, TitleBarStyle::Overlay),
+  // same as Modal.
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4 pb-4 pt-11">
       <form
         onSubmit={handleSubmit}
-        className="bg-[var(--color-card)] rounded-xl p-6 w-full max-w-md space-y-4 border border-[var(--color-border)]"
+        className="bg-[var(--color-card)] rounded-xl p-6 w-full max-w-md max-h-full overflow-y-auto space-y-4 border border-[var(--color-border)]"
       >
         <h3 className="text-lg font-semibold text-[var(--color-text)]">{t('mcp.addMcp')}</h3>
         <div>

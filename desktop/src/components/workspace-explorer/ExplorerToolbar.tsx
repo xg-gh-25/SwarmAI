@@ -253,10 +253,10 @@ export default function ExplorerToolbar({
         />
       </div>
 
-      {/* Creation Dialog */}
+      {/* Creation Dialog. pt-11: kept below the macOS title bar (top 28px), same as Modal. */}
       {dialogState.isOpen && (
         <div 
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-scrim-strong)]"
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 pb-4 pt-11 bg-[var(--color-scrim-strong)]"
           onClick={handleCancel}
           data-testid="creation-dialog-overlay"
         >
@@ -266,7 +266,7 @@ export default function ExplorerToolbar({
             aria-modal="true"
             aria-labelledby="creation-dialog-title"
             tabIndex={-1}
-            className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg shadow-lg p-4 w-80 outline-none"
+            className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg shadow-lg p-4 w-80 max-w-full max-h-full overflow-y-auto outline-none"
             onClick={e => e.stopPropagation()}
             data-testid="creation-dialog"
           >

@@ -207,7 +207,10 @@ function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () 
       onMouseDown={(e) => e.stopPropagation()}
       // z above the popover (zIndex 9999): both are fixed siblings under <body>,
       // so paint order is guaranteed, not left to incidental non-overlap geometry.
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 outline-none"
+      // pt-11 + max-h-full: the macOS title bar overlays the window's top 28px
+      // (TitleBarStyle::Overlay); the card stays 16px below it, its height capped at the
+      // scrim's own box rather than a share of 100vh.
+      className="fixed inset-0 z-[10000] flex items-center justify-center px-4 pb-4 pt-11 bg-black/50 outline-none"
       onClick={onClose}
       ref={dialogRef}
       tabIndex={-1}
@@ -216,7 +219,7 @@ function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () 
       aria-label={t('ui.TSCCModules.fullPrompt')}
     >
       <div
-        className="w-[92vw] max-w-5xl max-h-[90vh] flex flex-col bg-[var(--color-card)] border-2 border-[var(--color-primary)]/70 rounded-lg shadow-2xl overflow-hidden"
+        className="w-full max-w-5xl max-h-full flex flex-col bg-[var(--color-card)] border-2 border-[var(--color-primary)]/70 rounded-lg shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
