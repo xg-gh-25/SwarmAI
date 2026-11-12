@@ -1475,6 +1475,7 @@ class HiveProvisioner:
                 _put_hive_role_policy, session.client("iam"), f"SwarmAI-Hive-{instance['name']}")
 
             # SSM Run Command
+            from hive.user_data import TMP_ON_DISK_SH
             update_script = f"""#!/bin/bash
 set -euo pipefail
 echo "=== Updating to v{version} ==="
@@ -1484,7 +1485,10 @@ echo "=== Updating to v{version} ==="
 echo "Backing up current installation..."
 rsync -a --exclude='backend/.venv' /opt/swarmai/ /opt/swarmai.bak/
 
-# Download and extract new version
+# Download and extract new version. A failed update leaves these behind, and /tmp is on
+# disk (user_data.py TMP_ON_DISK_SH), so a reboot no longer clears them: start empty, or
+# the files of the failed version would be deployed with this one.
+rm -rf /tmp/hive-new /tmp/hive-update.tar.gz
 aws s3 cp s3://{bucket}/v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz /tmp/hive-update.tar.gz --region {region}
 mkdir -p /tmp/hive-new
 tar xzf /tmp/hive-update.tar.gz --strip-components=1 -C /tmp/hive-new/
@@ -1558,6 +1562,9 @@ fi
 # The nightly workspace backup cron is gone: the Hive role never had write access to
 # backups/, so it never succeeded. A Hive provisioned before its removal still has it.
 rm -f /etc/cron.daily/swarmai-backup /tmp/swarm-backup-*.tar.gz
+
+# A Hive provisioned with /tmp on tmpfs gets it on disk from its next boot (user_data.py).
+{TMP_ON_DISK_SH}
 
 systemctl restart swarmai-hive --no-block
 echo "Waiting for swarmai-hive to start..."

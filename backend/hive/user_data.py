@@ -16,6 +16,14 @@ exec > /var/log/hive-setup.log 2>&1
 
 echo "=== SwarmAI Hive Setup — $(date) ==="
 
+${tmp_on_disk}
+# First boot: nothing of ours is in /tmp yet, so move it to disk now rather than at a
+# reboot a Hive may never have. A lazy unmount leaves any service already holding the
+# tmpfs (a PrivateTmp namespace) on it; everything opened from here on is on disk.
+if mountpoint -q /tmp && [ "$(systemctl is-enabled tmp.mount 2>/dev/null || true)" = masked ]; then
+    if umount -l /tmp; then echo "/tmp: now on disk"; else echo "WARN: /tmp stays on tmpfs until the next boot"; fi
+fi
+
 HIVE_S3_BUCKET="${s3_bucket}"
 HIVE_VERSION="${version}"
 HIVE_REGION="${region}"
@@ -408,6 +416,51 @@ def valid_origin_secret(value) -> bool:
     return isinstance(value, str) and bool(_ORIGIN_SECRET_RE.fullmatch(value))
 
 
+# ── /tmp on disk ──
+# Amazon Linux mounts /tmp as tmpfs (half the RAM, no swap on a Hive), so the scratch
+# agents leave there (clones, builds, test dirs) takes memory from the agent sessions.
+# Masking tmp.mount puts /tmp on the root disk from the next boot. The directory under the
+# mount is made world-writable first (through a bind view of /, which shows the root disk
+# without its mounts), and the mask is set only when that worked: a masked mount over a
+# directory nobody can write would break every program that needs /tmp.
+# On disk /tmp has no size cap and a reboot no longer empties it, so systemd-tmpfiles
+# removes what nobody touched for 3 days instead of 10: /etc/tmpfiles.d/tmp.conf is the
+# system's own tmp.conf with only that age changed (its other lines, such as the ones
+# that keep services' private tmp directories, stay). On a Hive still on tmpfs this also
+# frees the RAM sooner. Rendered into the first-boot script (render_user_data) and the
+# update script (provisioner.update); every failure only warns, the next update retries.
+TMP_ON_DISK_SH = r"""# ── /tmp on disk ──
+if root_view=$(mktemp -d /run/swarm-rootfs.XXXXXX); then
+    if mount --bind / "$root_view" && chmod 1777 "$root_view/tmp"; then
+        if systemctl mask tmp.mount >/dev/null; then
+            echo "/tmp: tmp.mount masked, /tmp is on disk from the next boot"
+        else
+            echo "WARN: could not mask tmp.mount; /tmp stays on tmpfs"
+        fi
+    else
+        echo "WARN: could not make the on-disk /tmp writable; /tmp stays on tmpfs"
+    fi
+    umount "$root_view" || umount -l "$root_view" || echo "WARN: $root_view is still mounted"
+    rmdir "$root_view" 2>/dev/null || true
+else
+    echo "WARN: no scratch directory under /run; /tmp stays on tmpfs"
+fi
+TMPFILES_SRC=/usr/lib/tmpfiles.d/tmp.conf
+TMPFILES_DST=/etc/tmpfiles.d/tmp.conf
+if [ -f "$TMPFILES_SRC" ] && grep -qE '^q /tmp .* 10d$' "$TMPFILES_SRC"; then
+    if mkdir -p /etc/tmpfiles.d \
+            && sed -E 's#^(q /tmp .*) 10d$#\1 3d#' "$TMPFILES_SRC" > "$TMPFILES_DST.new" \
+            && mv "$TMPFILES_DST.new" "$TMPFILES_DST"; then
+        echo "/tmp: files untouched for 3 days are removed"
+    else
+        rm -f "$TMPFILES_DST.new"
+        echo "WARN: could not shorten the /tmp cleanup; it stays at 10 days"
+    fi
+else
+    echo "WARN: $TMPFILES_SRC has no 10-day /tmp line; its /tmp cleanup is left as it is"
+fi"""
+
+
 # ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
 # When a pre-baked custom AMI is used, the heavy on-machine install steps are
 # already固化 in the image, so render_user_data(prebaked=True) strips these two
@@ -508,6 +561,7 @@ def render_user_data(
         auth_hash=auth_hash,
         auth_hash_b64=auth_hash_b64,
         region=region,
+        tmp_on_disk=TMP_ON_DISK_SH,
     )
     if origin_secret is not None:
         values["origin_secret"] = origin_secret
@@ -532,7 +586,7 @@ def render_user_data(
     # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
     # Only check for our known template vars (shell vars like ${i}, ${HASH} are expected).
     _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region",
-                      "origin_secret"}
+                      "origin_secret", "tmp_on_disk"}
     for var in _TEMPLATE_VARS:
         if f"${{{var}}}" in result:
             raise ValueError(f"Unresolved template variable: ${{{var}}}")
