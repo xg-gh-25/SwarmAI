@@ -605,7 +605,11 @@ async def refresh_workspace_skills(workspace: Path, *, why: str) -> None:
         try:
             skill_manager.workspace_root = workspace
             await asyncio.to_thread(ddd_skill_registry.build_manifest, workspace, skill_manager.builtin_path)
-            await skill_manager.scan_all()
+            # project_skills reads the cache; scan_all() alone returns a fresh dict and
+            # leaves the cache from boot, so a Brain installed or deleted since then
+            # would keep its old skill set
+            skill_manager.invalidate_cache()
+            await skill_manager.get_cache()
             await ProjectionLayer(skill_manager).project_skills(workspace, allow_all=True)
         except Exception as exc:  # noqa: BLE001 — see the docstring
             logger.error("skill refresh after %s failed: %s", why, exc)

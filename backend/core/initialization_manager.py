@@ -412,12 +412,14 @@ class InitializationManager:
         _sm = None
         try:
             from core.skill_manager import skill_manager as _sm
-            await _sm.scan_all()
+            # project_skills below reads the cache, which scan_all() alone leaves as it was
+            _sm.invalidate_cache()
+            await _sm.get_cache()
             logger.info("SkillManager scan completed during refresh")
         except Exception as e:
             logger.error("Skill scan failed during refresh (non-fatal): %s", e)
 
-        # Step 2: Re-project skill symlinks (uses cache from step 1)
+        # Step 2: Re-project skills (uses the cache rebuilt in step 1)
         try:
             if _sm is None:
                 from core.skill_manager import skill_manager as _sm

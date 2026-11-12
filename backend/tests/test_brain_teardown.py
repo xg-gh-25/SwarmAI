@@ -161,18 +161,18 @@ async def test_the_registry_refresh_drops_the_brains_projected_skill(env, monkey
     monkeypatch.setattr(skill_manager, "workspace_root", skill_manager.workspace_root)
     seen = []
 
-    async def _scan():
-        seen.append("scan")
-
     async def _cache():
+        seen.append("cache")
         return {}                      # no skill in any tier any more
-    monkeypatch.setattr(skill_manager, "scan_all", _scan)
+    monkeypatch.setattr(skill_manager, "invalidate_cache", lambda: seen.append("invalidate"))
     monkeypatch.setattr(skill_manager, "get_cache", _cache)
     _delete(env)
     await brain_teardown.refresh_registries(env["ws"])
     assert not any(r["skill"] == "s_gone" for r in ddd_skill_registry.read_manifest(env["ws"]))
     assert not (env["ws"] / ".claude" / "skills" / "s_gone").exists()
-    assert seen == ["scan"]
+    # the projection reads the cache, so it is invalidated first (a cache valid from
+    # boot would still hold the deleted Brain's skill; tests/test_refresh_workspace_skills.py)
+    assert seen[:2] == ["invalidate", "cache"]
 
 
 def test_a_brain_whose_ownership_cannot_be_read_keeps_everything_shared(env):
