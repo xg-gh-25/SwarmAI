@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import re
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -193,7 +194,10 @@ def clean_transcript_leaks(path: Path) -> int:
         if not total:
             return 0
         tmp = path.with_name(path.name + ".leakclean.tmp")
+        mode = stat.S_IMODE(os.stat(path).st_mode)
         with open(tmp, "w", encoding="utf-8") as fh:
+            # the transcript's own mode (the CLI writes it 0600), before any byte lands
+            os.chmod(tmp, mode)
             fh.writelines(out)
         os.replace(tmp, path)
         return total

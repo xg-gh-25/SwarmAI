@@ -345,11 +345,20 @@ class LifecycleManager:
                     # Workspace backup check every 60th cycle (~60 min)
                     if cycle % 60 == 0 and cycle > 0:
                         await self._run_daily_backup()
+                        await self._sweep_media_shed_backups()
                 except Exception as exc:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
             logger.info("Maintenance loop cancelled")
 
+
+    async def _sweep_media_shed_backups(self) -> None:
+        """Remove media-shed transcript backups whose transcript is gone (hourly)."""
+        try:
+            from core.transcript_media import sweep_orphan_backups
+            await asyncio.to_thread(sweep_orphan_backups)
+        except Exception as exc:  # noqa: BLE001 — a sweep must never stop the loop
+            logger.warning("media shed backup sweep failed: %s", exc)
 
     async def _health_check_all(self) -> None:
         """Health check all alive units. Detect dead subprocesses."""

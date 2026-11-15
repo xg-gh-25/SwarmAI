@@ -23,6 +23,9 @@ Public symbols:
   would send, or None when the file cannot be read.
 - ``shed_transcript_media(path, target_bytes)`` — back the file up byte for byte,
   then strip the oldest media in place (atomic replace); returns a ``ShedResult``.
+- ``sweep_orphan_backups()`` — delete the shed backups whose transcript is gone
+  (the CLI pruned it, or the session was deleted); a backup lives as long as the
+  transcript it was taken from.
 
 "Live history" is what ``--resume`` sends: the main-chain records after the last
 ``compact_boundary`` (records before it were compacted away, and sidechain records
@@ -62,6 +65,13 @@ MEDIA_SHED_TRIGGER_BYTES = 24 * MIB
 MEDIA_SHED_TARGET_BYTES = 12 * MIB
 
 BACKUP_INFIX = ".pre-media-shed-"
+#: A backup is removed only once the sweep has seen its transcript missing for at
+#: least this long, so a transcript that is briefly absent (being moved, a volume not
+#: mounted yet) never costs the backup.
+ORPHAN_BACKUP_MIN_AGE_S = 24 * 3600
+# backup path -> when a sweep first saw its transcript missing. In memory: a daemon
+# restart starts the wait again, which only keeps a backup longer.
+_ORPHAN_SINCE: dict[str, float] = {}
 
 _MEDIA_TYPES = ("image", "document")
 # Read and write with surrogateescape: a line torn mid-character by a killed writer
@@ -193,7 +203,8 @@ def shed_transcript_media(path: Path, target_bytes: int = MEDIA_SHED_TARGET_BYTE
 
     Before any rewrite the file is copied byte for byte (``shutil.copy2``) to
     ``<name>.pre-media-shed-<UTC time>.bak`` next to it; the name does not end in
-    ``.jsonl``, so the CLI never lists it as a session, and nothing here deletes it.
+    ``.jsonl``, so the CLI never lists it as a session; it lives as long as the
+    transcript does (``sweep_orphan_backups``).
     The rewrite goes to a temp file that replaces the original. Lines without a
     removed block keep their exact bytes. Never raises: a failure returns
     ``removed_blocks=0`` with ``error`` set and leaves the file as it was.
@@ -250,10 +261,12 @@ def _shed(path: Path, target_bytes: int) -> ShedResult:
     tmp = path.with_name(path.name + ".mediashed.tmp")
     try:
         shutil.copy2(path, backup)
+        os.utime(backup, None)  # its mtime says when the backup was made
+        mode = stat.S_IMODE(os.stat(path).st_mode)
         with open(tmp, "w", **_ENC) as fh:
+            # the transcript's own mode (the CLI writes it 0600), before any byte lands
+            os.chmod(tmp, mode)
             fh.writelines(out)
-        # keep the transcript's own mode (the CLI writes it 0600), not the umask's
-        os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
         os.replace(tmp, path)
     except (OSError, ValueError) as exc:
         try:
@@ -270,3 +283,51 @@ def _shed(path: Path, target_bytes: int) -> ShedResult:
     )
     return ShedResult(removed_blocks=removed, removed_bytes=removed_bytes,
                       remaining_bytes=total, backup_path=backup)
+
+
+def sweep_orphan_backups(projects_dir: Optional[Path] = None,
+                         now: Optional[float] = None) -> dict:
+    """Delete shed backups whose transcript no longer exists; return counts.
+
+    A backup holds the images a shed removed, so it is kept for as long as the
+    transcript it came from: once the CLI's own retention (or a session delete)
+    removed ``<sid>.jsonl``, its ``<sid>.jsonl.pre-media-shed-*.bak`` files go too,
+    once sweeps have seen the transcript missing for ``ORPHAN_BACKUP_MIN_AGE_S``
+    (a transcript that comes back resets the wait; any directory entry with its
+    name, a dangling symlink too, counts as present). Never raises; blocking I/O
+    (call through ``asyncio.to_thread``)."""
+    from .leak_transcript import _projects_dir
+
+    root = projects_dir or _projects_dir()
+    now = time.time() if now is None else now
+    out = {"removed": 0, "removed_bytes": 0, "kept": 0, "errors": 0}
+    try:
+        backups = list(root.glob(f"*/*.jsonl{BACKUP_INFIX}*.bak")) if root.is_dir() else []
+    except OSError as exc:
+        logger.warning("transcript_media.sweep_failed root=%s: %s", root, exc)
+        out["errors"] += 1
+        return out
+    for bak in backups:
+        try:
+            transcript = bak.with_name(bak.name.split(BACKUP_INFIX, 1)[0])
+            key = str(bak)
+            if os.path.lexists(transcript):
+                _ORPHAN_SINCE.pop(key, None)
+                out["kept"] += 1
+                continue
+            since = _ORPHAN_SINCE.setdefault(key, now)
+            if now - since < ORPHAN_BACKUP_MIN_AGE_S:
+                out["kept"] += 1
+                continue
+            st = bak.stat()
+            bak.unlink()
+            _ORPHAN_SINCE.pop(key, None)
+            out["removed"] += 1
+            out["removed_bytes"] += st.st_size
+        except OSError as exc:
+            logger.warning("transcript_media.sweep_failed backup=%s: %s", bak, exc)
+            out["errors"] += 1
+    if out["removed"] or out["errors"]:
+        logger.info("transcript_media.sweep removed=%d removed_bytes=%d kept=%d errors=%d",
+                    out["removed"], out["removed_bytes"], out["kept"], out["errors"])
+    return out

@@ -502,3 +502,104 @@ async def test_measure_baseline_resets_on_new_session(tmp_path, monkeypatch):
     await u._measure_transcript_media()
     assert u._media_shed_due is True and u._media_measured_sid == SID
     assert u._media_measured_size == p.stat().st_size
+
+
+# ── 7. backup lifetime and transcript mode in the leak cleaner ──────────────
+
+def test_sweep_removes_only_old_backups_of_gone_transcripts(tmp_path, monkeypatch):
+    import os
+    import time
+
+    monkeypatch.setattr(tm, "_ORPHAN_SINCE", {})
+    d = tmp_path / "projects" / "-Users-x-proj"
+    d.mkdir(parents=True)
+    live = d / f"{SID}.jsonl"
+    live.write_text("{}\n")
+    gone = "ffffffff-0000-0000-0000-000000000000"
+    dangling = "eeeeeeee-0000-0000-0000-000000000000"
+    (d / f"{dangling}.jsonl").symlink_to(tmp_path / "unmounted" / "x.jsonl")
+    keep_live = d / f"{SID}.jsonl{tm.BACKUP_INFIX}20261101T000000Z.bak"
+    orphan = d / f"{gone}.jsonl{tm.BACKUP_INFIX}20261101T000000Z.bak"
+    behind_link = d / f"{dangling}.jsonl{tm.BACKUP_INFIX}20261101T000000Z.bak"
+    other = d / "notes.bak"
+    ancient = time.time() - 30 * 86400  # copy2 keeps the transcript's old mtime
+    for f in (keep_live, orphan, behind_link, other):
+        f.write_text("x" * 10)
+        os.utime(f, (ancient, ancient))
+    t0 = time.time()
+
+    first = tm.sweep_orphan_backups(tmp_path / "projects", now=t0)
+    assert first["removed"] == 0 and orphan.exists(), \
+        "a transcript just seen missing keeps its backup, however old the backup's mtime"
+
+    later = t0 + tm.ORPHAN_BACKUP_MIN_AGE_S + 1
+    out = tm.sweep_orphan_backups(tmp_path / "projects", now=later)
+    assert out["removed"] == 1 and out["removed_bytes"] == 10 and out["errors"] == 0
+    assert not orphan.exists()
+    assert keep_live.exists(), "a backup lives as long as its transcript"
+    assert behind_link.exists(), "a dangling transcript symlink counts as present"
+    assert other.exists() and live.exists(), "nothing but shed backups is touched"
+
+
+def test_sweep_wait_resets_when_transcript_returns(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setattr(tm, "_ORPHAN_SINCE", {})
+    d = tmp_path / "projects" / "-p"
+    d.mkdir(parents=True)
+    t = d / f"{SID}.jsonl"
+    bak = d / f"{SID}.jsonl{tm.BACKUP_INFIX}x.bak"
+    bak.write_text("b")
+    t0 = time.time()
+    tm.sweep_orphan_backups(tmp_path / "projects", now=t0)          # missing: wait starts
+    t.write_text("{}\n")
+    tm.sweep_orphan_backups(tmp_path / "projects", now=t0 + 10)     # back: wait cleared
+    t.unlink()
+    out = tm.sweep_orphan_backups(tmp_path / "projects", now=t0 + tm.ORPHAN_BACKUP_MIN_AGE_S + 5)
+    assert out["removed"] == 0 and bak.exists(), "the wait starts again after a return"
+
+
+def test_shed_backup_mtime_is_creation_time(tmp_path, monkeypatch):
+    import os
+    import time
+
+    p = _session(tmp_path, monkeypatch, [100, 100])
+    old = time.time() - 10 * 86400
+    os.utime(p, (old, old))
+    r = tm.shed_transcript_media(p, target_bytes=50)
+    assert time.time() - r.backup_path.stat().st_mtime < 60
+
+
+def test_sweep_is_fail_soft(tmp_path):
+    assert tm.sweep_orphan_backups(tmp_path / "missing")["removed"] == 0
+
+
+async def test_lifecycle_sweep_runs_in_thread_and_never_raises(monkeypatch):
+    from core.lifecycle_manager import LifecycleManager
+
+    seen = []
+    monkeypatch.setattr(tm, "sweep_orphan_backups", lambda: seen.append(1) or {})
+    lm = LifecycleManager.__new__(LifecycleManager)
+    await lm._sweep_media_shed_backups()
+    assert seen == [1]
+
+    def _boom():
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(tm, "sweep_orphan_backups", _boom)
+    await lm._sweep_media_shed_backups()  # logged, not raised
+
+
+def test_leak_clean_keeps_transcript_mode(tmp_path, monkeypatch):
+    import os
+    import stat as _stat
+    from core.leak_transcript import clean_transcript_leaks
+    from tests.test_tool_call_leak_guard import _DEADEND_LEAK
+
+    rec = {"type": "assistant", "uuid": "m1",
+           "message": {"id": "m1", "role": "assistant",
+                       "content": [{"type": "text", "text": _DEADEND_LEAK}]}}
+    p = _write(tmp_path, monkeypatch, [rec])
+    os.chmod(p, 0o600)
+    assert clean_transcript_leaks(p) == 1
+    assert _stat.S_IMODE(p.stat().st_mode) == 0o600
