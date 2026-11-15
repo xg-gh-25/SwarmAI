@@ -10,7 +10,7 @@ visibility: public
 # Correctness Specialist Review
 <!-- version: 2026-10-18 -->
 
-Scope: Always dispatched when the source changeset is >= 50 lines.
+Scope: Dispatched for every pipeline change, whatever its size; a native review calls it as the change needs.
 
 **Also check, in your domain:** state machine, setTimeout, concurrent async,
 non-deterministic ordering, multi-shape returns, shell variable

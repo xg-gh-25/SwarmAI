@@ -70,7 +70,8 @@ def test_every_fixed_finding_audits_closed(rig):
                 "from core.mod import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\n"
                 "def test_order():\n    assert add('a', 'b') == 'ab'\n")})
     assert r.v1("report-tests", "--artifact", r.artifact("fix", r.report())).get("ok") is True
-    proof = {"evidence_type": "reported_test", "command": TEST_CMD}
+    proof = {"evidence_type": "reported_test", "command": TEST_CMD,
+             "no_mutation": "fixture: the fix is not mutation-checked here"}
     out = r.v1("review-address", "--artifact", r.artifact("pass1", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b", "proof": proof},
         {"finding_id": ids["absence"], "hunk": "@@ def test_order", "proof": proof},

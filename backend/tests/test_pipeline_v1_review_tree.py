@@ -151,7 +151,8 @@ def _finding_at_review(r: Rig) -> str:
 def _address(r: Rig, finding_id: str, command: str = TEST_CMD) -> dict:
     return r.v1("review-address", "--artifact", r.artifact("address", {"pass": 1, "items": [
         {"finding_id": finding_id, "hunk": "@@ -2 +2 @@ return a + b",
-         "proof": {"evidence_type": "reported_test", "command": command}}]}))
+         "proof": {"evidence_type": "reported_test", "command": command,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}}]}))
 
 
 def _status(r: Rig, finding_id: str) -> str:

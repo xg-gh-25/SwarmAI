@@ -6,8 +6,8 @@ What is tested (real CLI and hooks, ``tests/pipeline_v1_rig.py``):
   REPORT: with a transcript, Token Cost shows the measured total; without one it
   records ``metric(usage_not_available)`` at DELIVER and Token Cost is WARN with the
   reason, never BLOCK "not measured" (the old REPORT, rendered before REFLECT measured);
-- a run whose test reports no review expert saw (a small direct change dispatches
-  none) says so in the conclusion and the test section: "reported by the agent only";
+- a run whose test reports no review expert saw (its correctness handout never
+  answered) says so in the conclusion and the test section: "reported by the agent only";
 - a run whose review experts answered says the reports were reviewed instead.
 """
 from __future__ import annotations
@@ -24,8 +24,10 @@ pytestmark = pytest.mark.timeout(300)
 
 
 class NoGuideRig(Rig):
-    """No ``.swarmai/review.md``: a small direct change then dispatches no expert."""
+    """No ``.swarmai/review.md``. Every change gets correctness, whose usage the rig
+    meters here, so the main agent's transcript is the only unknown."""
     BASE_FILES = {k: v for k, v in BASE_FILES.items() if k != ".swarmai/review.md"}
+    METER_EXPERTS = True
 
 
 @pytest.fixture
@@ -58,8 +60,8 @@ def _row(report: str, name: str) -> str:
     return next(line for line in report.splitlines() if line.startswith(f"| {name} |"))
 
 
-# No expert in these two: an expert the rig spawns is not metered, which is BLOCK on its
-# own (§E5, test_pipeline_v1_handoff); here only the main transcript is in question.
+# The correctness expert is metered in these two (an unmetered one is BLOCK on its own,
+# §E5, test_pipeline_v1_handoff); here only the main transcript is in question.
 def test_without_a_transcript_token_cost_is_warn_with_the_reason(rig):
     r = rig("direct", NoGuideRig)
     r.create()
@@ -68,8 +70,10 @@ def test_without_a_transcript_token_cost_is_warn_with_the_reason(rig):
                and e["payload"]["name"] == "usage_not_available"]
     # before the DELIVER REPORT, and again as the landing's command ends REFLECT
     assert [e["stage"] for e in missing] == ["deliver", "reflect"], missing
+    assert all(e["payload"]["reason"] for e in missing)
     row = _row(report, "Token Cost")
-    assert row.startswith("| Token Cost | WARN | not measured ("), row
+    # the expert's tokens are observed; the main agent is the one call not accounted
+    assert row.startswith("| Token Cost | WARN | ") and "1/2 calls accounted" in row, row
 
 
 def test_with_a_transcript_the_report_shows_the_tokens_up_to_delivery(rig):
@@ -85,18 +89,26 @@ def test_with_a_transcript_the_report_shows_the_tokens_up_to_delivery(rig):
                     "usage": {"input_tokens": 1000, "output_tokens": 200}}}) + "\n",
         encoding="utf-8")
     report = _land(r)
+    # the run's transcript, measured at DELIVER and REFLECT (the review stage's metric
+    # is the correctness expert's own usage)
     measured = [e for e in r.events() if e["kind"] == "metric"
-                and e["payload"]["name"] == "input_tokens"]
+                and e["payload"]["name"] == "input_tokens" and e["stage"] != "review"]
     assert [e["stage"] for e in measured] == ["deliver", "reflect"], measured
     row = _row(report, "Token Cost")
     assert "not measured" not in row and " comparable · " in row and "1k billed" in row, row
 
 
 def test_reports_no_expert_saw_are_called_agent_only(rig):
-    r = rig("direct", NoGuideRig)      # a small change: no review expert is dispatched
+    r = rig("direct", NoGuideRig)
     r.create()
+    r.drive(until="review")
+    # correctness is handed out (every change gets it) but never answers: RV-1a is an
+    # audit line, REVIEW completes, and no expert has read the test reports
+    started = r.v1("review-start")
+    assert [row["id"] for row in started["reviewers"]] == ["correctness"], started
+    assert r.v1("stage-complete").get("ok") is True
     report = _land(r)
-    assert not [e for e in r.events() if e["kind"] in ("handout", "answer")]
+    assert not [e for e in r.events() if e["kind"] == "answer"]
     conclusion = report.splitlines()[2]
     assert "Test results are reported by the agent only; no review expert checked them" in conclusion, conclusion
     assert "## Tests (reported by the agent only: not rerun by the pipeline, not checked by a review expert)" in report, report

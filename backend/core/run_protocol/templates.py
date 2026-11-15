@@ -87,7 +87,9 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     "validation_report": {"reports": [{
         "repo": "<REPO>",
         "commands": [
-            {"command": "<COMMAND>", "cwd": ".", "result": "pass"},
+            # base_result (optional): the same command in the pipeline-v1 base-tree
+            # directory; fail there and pass here is a fail-to-pass test
+            {"command": "<COMMAND>", "cwd": ".", "result": "pass", "base_result": "fail"},
             {"command": "<COMMAND>", "cwd": ".", "result": "pre_existing",
              "reason": "fails the same way on the run's base (pipeline-v1 base-tree)"}],
         "tests_changed": ["<TEST_FILE>"],

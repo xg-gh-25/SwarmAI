@@ -130,11 +130,14 @@ class ProfileCaps:
     gate0: str              # "always" / "readings" (two or more readings) / "never"
     triad: bool             # REQUIREMENTS carries current / expected / unchanged (bugfix)
     decisions: bool         # may ask a person (DC-1); direct re-runs as trivial instead
+    # the audit says whether a reported test fails on the run's base and passes on the
+    # change (validation_report base_result); missing is one line, never a block (bugfix)
+    fail_to_pass: bool = False
 
 
 PROFILE_CAPS: dict[str, ProfileCaps] = {
     "full": ProfileCaps(True, "full", "full", "readings", False, True),
-    "bugfix": ProfileCaps(True, "full", "full", "always", True, True),
+    "bugfix": ProfileCaps(True, "full", "full", "always", True, True, fail_to_pass=True),
     "trivial": ProfileCaps(True, "full", "lite", "never", False, True),
     "direct": ProfileCaps(True, "words", None, "never", False, False),
     "research": ProfileCaps(False, "full", None, "never", False, True),

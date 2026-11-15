@@ -53,7 +53,8 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
 
     assert engine.stage_complete()["state"]["stage"] == "build"   # no report: BX-3
     assert engine.stage_complete(_report())["state"]["stage"] == "review"
-    assert engine.review_start()["reviewers"] == []
+    from tests.review_bridge_helper import answer_review
+    assert answer_review(engine, engine.review_start()) == ["correctness"]
     assert engine.stage_complete()["state"]["stage"] == "test"
 
     failed = engine.stage_complete(_report("fail"))       # a failed command blocks TEST

@@ -230,10 +230,13 @@ def _report():
 
 def test_review_completion_runs_the_join(run, monkeypatch):
     engine, wt, data = run
-    (wt / "notes.py").write_text("N = 1\n")                       # small: no expert
+    (wt / "notes.py").write_text("N = 1\n")
     assert engine.stage_complete(_report())["state"]["stage"] == "review"
     joined = []
     monkeypatch.setattr(type(engine), "_log_callers_join", lambda self: joined.append(1))
+    # about the join, not the roster: every change gets correctness, so no expert here
+    from core.run_protocol import review
+    monkeypatch.setattr(review, "reviewers", lambda **_kw: [])
     assert engine.review_start()["reviewers"] == []
     assert engine.stage_complete()["state"]["stage"] == "test"
     assert joined == [1]
@@ -300,7 +303,8 @@ def test_review_address_puts_the_block_first_in_every_r2(tmp_path, monkeypatch):
         out = r.engine().review_address({"pass": 1, "items": [
             {"finding_id": row["canonical_id"], "hunk": "@@ return a + b",
              "proof": {"evidence_type": "reported_test",
-                       "command": "python -m pytest backend/tests/test_x.py"}}]})
+                       "command": "python -m pytest backend/tests/test_x.py",
+                       "no_mutation": "fixture: the fix is not mutation-checked here"}}]})
         (handout,) = out["handouts"]
         assert "CALLERS-OF-THE-FIX" in Path(handout["path"]).read_text(encoding="utf-8")
     finally:

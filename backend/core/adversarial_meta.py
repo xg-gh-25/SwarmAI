@@ -4,9 +4,10 @@ Reads each completed Pipeline v1 run's ``run_audit.json`` (built by
 ``core.run_protocol.audit`` from the signed events): ``details.experts`` (one row per
 review-expert dispatch) and ``details.findings``. When the 3 latest completed runs that
 dispatched review experts all closed with 0 findings, it emits a degradation warning:
-the review may be rubber-stamping and its prompt may need rotation. A run v1 sent no
-expert (a small change) is not counted. A run with no audit (the retired pipeline) is
-skipped.
+the review may be rubber-stamping and its prompt may need rotation. A run with no expert,
+or whose only review was the correctness review every change gets (a small change: each
+dispatch's ``reason`` is ``review.ALWAYS_REASON``), is not counted: 0 findings is
+expected there. A run with no audit (the retired pipeline) is skipped.
 
 Public symbols:
     - check_adversarial_health  — main function
@@ -26,6 +27,15 @@ def _read(path: Path):
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, ValueError):
         return None
+
+
+def _small_change_only(experts: list) -> bool:
+    """Every review dispatch that says why was the size-free correctness review, and one
+    did (an audit from before dispatch reasons were kept says nothing: counted)."""
+    from core.run_protocol.review import ALWAYS_REASON
+    reasons = [row.get("reason") for row in experts
+               if isinstance(row, dict) and row.get("stage") == "review" and row.get("reason")]
+    return bool(reasons) and all(reason == ALWAYS_REASON for reason in reasons)
 
 
 def check_adversarial_health(artifacts_dir: Path) -> dict:
@@ -60,8 +70,8 @@ def check_adversarial_health(artifacts_dir: Path) -> dict:
         details = audit.get("details") if isinstance(audit.get("details"), dict) else {}
         experts = details.get("experts") if isinstance(details.get("experts"), list) else []
         findings = details.get("findings") if isinstance(details.get("findings"), list) else []
-        if not experts:
-            continue  # v1 reviewed nothing (a small change): 0 findings is expected
+        if not experts or _small_change_only(experts):
+            continue  # nothing, or only the size-free correctness review: 0 is expected
         rows.append((str(run_data.get("created_at") or ""), {
             "run_id": run_data.get("id", run_dir.name),
             "findings_total": len(findings),

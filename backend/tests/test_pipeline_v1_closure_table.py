@@ -109,15 +109,16 @@ def test_closed_and_push_effect(severity, status, r2, closed):
 
 
 def test_audit_counts_closed_with_the_same_function():
-    base = {"kind": "behavior", "file": "a.go", "line": 1, "claim": "c", "expert": "correctness"}
-    rows = [{**base, "canonical_id": "CF-1", "severity": "HIGH", "status": "closed_proven",
-             "r2_status": "ADEQUATE"},
-            {**base, "canonical_id": "CF-2", "severity": "LOW", "status": "closed_unproven",
-             "r2_status": "RESOLVED", "kind": "design"},
-            {**base, "canonical_id": "CF-3", "severity": "HIGH", "status": "closed_unproven",
-             "r2_status": "RESOLVED", "kind": "design"},
-            {**base, "canonical_id": "CF-4", "severity": "HIGH", "status": "closed_proven",
-             "r2_status": None}]
+    # each in its own cluster (findings are counted by ±10-line cluster)
+    base = {"kind": "behavior", "file": "a.go", "claim": "c", "expert": "correctness"}
+    rows = [{**base, "canonical_id": "CF-1", "line": 1, "severity": "HIGH",
+             "status": "closed_proven", "r2_status": "ADEQUATE"},
+            {**base, "canonical_id": "CF-2", "line": 20, "severity": "LOW",
+             "status": "closed_unproven", "r2_status": "RESOLVED", "kind": "design"},
+            {**base, "canonical_id": "CF-3", "line": 40, "severity": "HIGH",
+             "status": "closed_unproven", "r2_status": "RESOLVED", "kind": "design"},
+            {**base, "canonical_id": "CF-4", "line": 60, "severity": "HIGH",
+             "status": "closed_proven", "r2_status": None}]
     value = _audit(findings=rows)
     q = value["summary"]["quality"]
     assert (q["findings_closed"], q["findings_confirmed"], q["findings_total"]) == (2, 1, 4)

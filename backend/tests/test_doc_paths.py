@@ -50,5 +50,9 @@ def test_a_requirements_txt_change_is_reviewed_as_source():
     picked = review.reviewers(profile="full", changed=[
         {"path": "requirements.txt", "insertions": 60, "deletions": 0}])
     assert [row["id"] for row in picked] == ["correctness"]
-    assert review.reviewers(profile="full", changed=[
-        {"path": "docs/x.md", "insertions": 60, "deletions": 0}]) == []
+    # a docs-only change is not a 50-line source change; it still gets correctness,
+    # which every non-empty pipeline change gets
+    docs = review.reviewers(profile="full", changed=[
+        {"path": "docs/x.md", "insertions": 60, "deletions": 0}])
+    assert [row["id"] for row in docs] == ["correctness"]
+    assert docs[0]["reason"] != picked[0]["reason"]

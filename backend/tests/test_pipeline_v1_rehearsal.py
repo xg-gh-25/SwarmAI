@@ -94,7 +94,9 @@ def _run_code(case, profile, run_id, monkeypatch):
         wt=Path(engine.ensure_stage_worktrees()["repo"]); (wt/"a.py").write_text("value=2\n")
         assert engine.stage_complete(_design(profile))["ok"]
     assert engine.stage_complete(_report())["ok"]
-    assert engine.review_start()["reviewers"]==[]; assert engine.stage_complete()["ok"]
+    from tests.review_bridge_helper import answer_review
+    assert answer_review(engine, engine.review_start()) == ["correctness"]
+    assert engine.stage_complete()["ok"]
     assert engine.stage_complete(_report())["ok"]
     _land_through_the_hook(engine, monkeypatch, f"feat: {profile}\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"); _measured(engine); engine.reflect_complete()
     audit=json.loads((engine.run_dir/"run_audit.json").read_text())

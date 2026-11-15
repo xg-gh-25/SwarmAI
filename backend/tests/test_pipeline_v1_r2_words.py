@@ -67,7 +67,8 @@ def _proven_awaiting_r2(r: Rig) -> tuple[str, dict]:
     r.v1("report-tests", "--artifact", r.artifact("fix", r.report()))
     out = r.v1("review-address", "--artifact", r.artifact("address", {"pass": 1, "items": [
         {"finding_id": finding_id, "hunk": "@@ -2 +2 @@ return a + b",
-         "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]}))
+         "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}}]}))
     assert out.get("ok") is True, out
     (handout,) = out["handouts"]
     return finding_id, handout

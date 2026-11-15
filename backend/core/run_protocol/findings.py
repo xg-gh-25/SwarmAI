@@ -9,7 +9,11 @@ Public symbols:
 - ``GATE0_EXPERT`` / ``GATE0_PASS`` — a MEDIUM / LOW Gate-0 finding is closed
   (``closed_gate0``) by a later parsed Gate-0 answer with a passing verdict, never in
   REVIEW; a HIGH one waits for accept-finding.
-- ``cluster_findings`` / ``r2_experts`` — deterministic repair grouping/routing.
+- ``cluster_findings`` / ``r2_routes`` / ``r2_experts`` — deterministic repair grouping,
+  and R2 routing by cluster (one expert judges every finding of a ±10-line cluster).
+- ``cluster_counts`` — findings counted by cluster (the audit's Quality cell).
+- ``mutation_summary`` — the mutation_check result a behavior/contract fix's
+  ``reported_test`` proof carries, checked against the files the run changed.
 
 No public API accepts ``authorized=True``, old/new test strings or diff booleans as
 closure authority. Those facts enter only through the event kind's trusted producer.
@@ -46,7 +50,9 @@ _SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 # The closure table (design 2026-10-26-pipeline-review-closure-and-visibility §2.3): for
 # each finding kind, the evidence the agent submits to close it and the state it leaves.
 # ``reported_test``: a passing command of a validation report on the proof's tree (an
-# absence finding also needs that report to have changed tests); R2 then judges the test
+# absence finding also needs that report to have changed tests), and for a behavior /
+# contract finding the mutation_check result that reverting the fix turns the test red
+# (or why no mutation could be written: MUTATION_KINDS); R2 then judges the test
 # (ADEQUATE / TEST_INADEQUATE). ``diff_assertion``: after R2 judged the fix RESOLVED.
 # The ledger, the answer recorder, RV-2, the audit and ``findings`` all read this table.
 CLOSURE: dict[str, dict[str, str]] = {
@@ -58,6 +64,10 @@ CLOSURE: dict[str, dict[str, str]] = {
     "security_policy": {"evidence": "diff_assertion", "state": "closed_unproven"},
 }
 assert set(CLOSURE) == KINDS
+# a reported_test proof of these kinds carries a mutation_check result or the reason none
+# could be written (``mutation_summary``); an absence fix is often the added test itself
+MUTATION_KINDS = frozenset({"behavior", "contract"})
+MAX_MUTATION_REASON = 500
 
 
 def r2_allowed(finding_status: str) -> frozenset[str]:
@@ -165,6 +175,8 @@ def _occurrence(event: Mapping[str, Any]) -> dict[str, Any]:
         "line": payload["line"], "claim": payload["claim"], "fix": payload.get("fix"),
         "status": "open", "evidence_event_id": None, "r2_status": None,
         "reclassification": None,
+        # the reported_test proof's mutation_check summary, or why it has none
+        "mutation": None, "no_mutation": None,
     }
 
 
@@ -261,6 +273,9 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
             raise FindingError("reported_test proof needs a passing command of a "
                                "validation report on the proof's tree")
         row["status"] = rule["state"]
+        mutation, reason = payload.get("mutation"), payload.get("no_mutation")
+        row["mutation"] = copy.deepcopy(dict(mutation)) if isinstance(mutation, Mapping) else None
+        row["no_mutation"] = reason if isinstance(reason, str) and reason.strip() else None
     elif etype == "diff_assertion":
         if row["r2_status"] != "RESOLVED" or result != "asserted" \
                 or payload.get("touches_finding") is not True:
@@ -341,6 +356,7 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
     grants: dict[str, Mapping[str, Any]] = {}
     consumed_grants: set[str] = set()
     r2_targets: set[str] = set()
+    r2_handout_ids: dict[str, set[str]] = {}
     answered: set[str] = set()
     reports: dict[str, Mapping[str, Any]] = {}
     for event in events:
@@ -384,10 +400,17 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
             answer = answers.get(event["payload"]["answer_event_id"])
             if answer is not None and answer.get("producer") != event.get("producer"):
                 raise FindingError("finding_status producer differs from its answer's")
-            if answer is None or answer["payload"]["expert_id"] != row["expert"] \
+            # who may judge it: the expert whose R2 handout listed it (R2 is routed by
+            # cluster, so that can be another expert than the one that raised it), or,
+            # in a log from before cluster routing, the expert that raised it
+            listed = event["ckey"] in r2_handout_ids.get(
+                (answer or {}).get("payload", {}).get("handout_event_id"), set())
+            if answer is None \
+                    or not (listed or answer["payload"]["expert_id"] == row["expert"]) \
                     or answer["payload"]["state"] not in USABLE_STATES \
                     or answer["payload"]["round"] != 2 or event.get("round") != 2:
-                raise FindingError("finding_status does not match this expert's parsed R2 answer")
+                raise FindingError("finding_status does not match a parsed R2 answer to a "
+                                   "handout that listed the finding")
             _status(row, event)
             answered.add(event["ckey"])
         elif kind == "proof":
@@ -411,12 +434,13 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
             consumed_grants.add(payload["auth_event_id"])
             _accept(findings, event)
         elif kind == "handout" and event.get("round") == 2:
-            expert = event["payload"]["expert_id"]
+            # one expert judges a whole ±10-line cluster (r2_routes), so a handout may
+            # list another expert's findings; every id must be a finding of the run
             ids = set(event["payload"]["finding_ids"])
-            if any(canonical_id not in findings or findings[canonical_id]["expert"] != expert
-                   for canonical_id in ids):
-                raise FindingError("R2 handout roster does not match this expert's findings")
+            if any(canonical_id not in findings for canonical_id in ids):
+                raise FindingError("R2 handout roster names a finding this run does not have")
             r2_targets.update(ids)
+            r2_handout_ids[event["event_id"]] = ids
     # R2 silence never closes: only exact canonical IDs listed in the handout become OPEN.
     # A closed_proven finding keeps its state and waits for R2 (r2_status None): is_closed
     # / push_effect already hold it open until ADEQUATE, and its proof and R2 handout are
@@ -466,11 +490,146 @@ def cluster_findings(findings: list[Mapping[str, Any]], *, distance: int = 10) -
     return result
 
 
-def r2_experts(findings: list[Mapping[str, Any]], addressed_ids: set[str]) -> list[str]:
+# who leads the R2 of a cluster it raised a finding in (r2_routes): security first, so a
+# security finding is always judged with the security instructions; then any other
+# specialist; correctness, the generalist every pipeline change gets (review.reviewers),
+# last
+R2_LEAD_FIRST = "security"
+GENERALIST = "correctness"
+
+
+def _lead_rank(expert: str) -> int:
+    return 0 if expert == R2_LEAD_FIRST else 2 if expert == GENERALIST else 1
+
+
+def r2_routes(findings: list[Mapping[str, Any]], addressed_ids: set[str], *,
+              distance: int = 10) -> dict[str, list[str]]:
+    """{expert: finding ids} for the R2 of *addressed_ids*: the addressed findings are
+    clustered (``cluster_findings``: same file, within *distance* lines, across experts)
+    and each cluster goes whole to one expert, so two experts that reported the same
+    problem at the same place are rechecked once. Security leads every cluster it raised
+    a finding in, so a security finding is never judged without the security
+    instructions; otherwise another specialist leads before correctness (the generalist
+    that reviews every change, ``_lead_rank``); within a rank the expert of the
+    highest-severity finding, then the one with most findings in the cluster, then the
+    expert name. Every finding keeps its own row (expert, claim, fix): the R2 input
+    shows each one as its expert wrote it."""
     if not isinstance(addressed_ids, set):
         raise FindingError("addressed_ids must be a set")
     known = {str(row.get("canonical_id")) for row in findings}
     if addressed_ids - known:
         raise FindingError(f"addressed finding(s) are unknown: {sorted(addressed_ids - known)}")
-    return sorted({str(row["expert"]) for row in findings
-                   if row.get("canonical_id") in addressed_ids})
+    rows = {row["canonical_id"]: row for row in findings
+            if row.get("canonical_id") in addressed_ids}
+    routes: dict[str, set[str]] = {}
+    for cluster in cluster_findings(list(rows.values()), distance=distance):
+        members = [rows[cid] for cid in cluster["findings"]]
+        counts: dict[str, int] = {}
+        top: dict[str, int] = {}
+        for row in members:
+            expert = str(row["expert"])
+            counts[expert] = counts.get(expert, 0) + 1
+            rank = _SEVERITY_RANK[normalize_severity(row["severity"])]
+            top[expert] = max(top.get(expert, -1), rank)
+        lead = sorted(counts, key=lambda expert: (_lead_rank(expert), -top[expert],
+                                                  -counts[expert], expert))[0]
+        routes.setdefault(lead, set()).update(cluster["findings"])
+    return {expert: sorted(ids) for expert, ids in sorted(routes.items())}
+
+
+def r2_experts(findings: list[Mapping[str, Any]], addressed_ids: set[str]) -> list[str]:
+    """The experts the R2 of *addressed_ids* is sent to (``r2_routes``)."""
+    return sorted(r2_routes(findings, addressed_ids))
+
+
+def cluster_counts(findings: list[Mapping[str, Any]]) -> dict[str, int]:
+    """Findings counted by cluster (``cluster_findings``, across experts): ``total`` the
+    clusters, ``closed`` the clusters whose every finding is closed (``is_closed``),
+    ``confirmed`` the closed clusters with a test R2 judged ADEQUATE, ``reported`` the
+    findings themselves. Two experts reporting one problem at one place count once; a
+    cluster with one open finding is open."""
+    rows = list(findings)
+    by_id = {row["canonical_id"]: row for row in rows}
+    clusters = [[by_id[cid] for cid in cluster["findings"]]
+                for cluster in cluster_findings(rows)]
+    closed = [members for members in clusters if all(is_closed(row) for row in members)]
+    return {"total": len(clusters), "closed": len(closed),
+            "confirmed": sum(any(row.get("status") == "closed_proven"
+                                 and row.get("r2_status") == "ADEQUATE" for row in members)
+                             for members in closed),
+            "reported": len(rows)}
+
+
+def _mutated_path(row: Mapping[str, Any], root: "str | None") -> str | None:
+    """The repo-relative path one mutation_check row changed, or None when it names no
+    file inside the repo. ``path`` (the absolute file mutation_check wrote) is resolved
+    against *root*, the run's worktree; without it ``file`` must already be a path from
+    the repository root. A ``..`` or absolute path is never one of the run's files."""
+    import os
+    import posixpath
+    path = row.get("path")
+    if isinstance(path, str) and path and root:
+        rel = os.path.relpath(os.path.realpath(path), os.path.realpath(root))
+        rel = rel.replace(os.sep, "/")
+        return None if rel == ".." or rel.startswith("../") or os.path.isabs(rel) else rel
+    file = row.get("file")
+    if not isinstance(file, str) or not file.strip():
+        return None
+    norm = posixpath.normpath(file.strip().replace("\\", "/"))
+    if norm == ".." or norm.startswith("../") or norm.startswith("/"):
+        return None
+    return norm
+
+
+def mutation_summary(result: Any, changed: "set[str] | list[str]", *,
+                     tests: "set[str] | list[str]" = (), root: "str | None" = None
+                     ) -> tuple[dict[str, Any] | None, str | None]:
+    """(summary, None) when *result* -- the JSON ``scripts/mutation_check.py`` printed --
+    shows the fix's test going red with the fix taken out: a green baseline run, at
+    least one mutation, every one caught (none missed, none with a bad anchor, none whose
+    run hit the time cap) and every mutated file one the run changed that is not one of
+    its tests (*changed*: paths from the repository root; *tests*: the test files the
+    run changed, its report's ``tests_changed`` and the engine's test-path rule; *root*:
+    the run's worktree, where ``path`` must lie). Else (None,
+    what is wrong). The summary, recorded on the proof, is ``{"caught", "files"}``. The
+    pipeline does not run it (S6-1): this checks the agent's reported result."""
+    if not isinstance(result, Mapping):
+        return None, "mutation must be the JSON object scripts/mutation_check printed"
+    if result.get("error"):
+        return None, f"mutation_check reported an error: {str(result['error'])[:200]}"
+    baseline = result.get("baseline")
+    if not isinstance(baseline, Mapping) or baseline.get("rc") != 0 \
+            or baseline.get("timeout") is True:
+        return None, ("mutation_check's baseline run is missing or not green (run it "
+                      "without --no-baseline): without it a caught mutation proves nothing")
+    rows = result.get("mutations")
+    if not isinstance(rows, list) or not rows \
+            or not all(isinstance(row, Mapping) for row in rows):
+        return None, "mutation_check ran no mutation (mutations is empty)"
+    statuses = [row.get("status") for row in rows]
+    if "missed" in statuses:
+        names = [str(row.get("name") or row.get("file")) for row in rows
+                 if row.get("status") == "missed"]
+        return None, ("the test stays green with the fix taken out (missed: "
+                      + ", ".join(names[:5]) + "): it does not detect the fix")
+    if any(status != "caught" for status in statuses):
+        return None, ("a mutation's anchor was not found exactly once; fix the spec, or "
+                      "give no_mutation with the reason when no anchor can be written")
+    if any(row.get("timeout") is True for row in rows):
+        return None, ("a mutation's run hit mutation_check's time cap: a hang is not the "
+                      "test going red; fix the hang or raise --timeout")
+    changed_paths = {str(path) for path in changed}
+    test_paths = {str(path) for path in tests}
+    files: list[str] = []
+    for row in rows:
+        rel = _mutated_path(row, root)
+        if rel is None or rel not in changed_paths:
+            return None, (f"the mutation of {row.get('path') or row.get('file')} is not in a "
+                          "file this run changed (run mutation_check in the run's worktree "
+                          "and take the fix itself out)")
+        if rel in test_paths:
+            return None, (f"the mutation changes {rel}, a test file this run changed: take "
+                          "the fix out of the code, not the test")
+        files.append(rel)
+    files = sorted(set(files))
+    return {"caught": len(rows), "files": files[:10]}, None

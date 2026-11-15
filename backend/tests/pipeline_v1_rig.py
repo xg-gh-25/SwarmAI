@@ -151,6 +151,10 @@ def write(root: Path, files: dict[str, str]) -> None:
 class Rig:
     """One temporary data dir + workspace + git repo, and one run driven through it."""
 
+    #: True: an expert's transcript carries a timestamp and a message id, so its usage is
+    #: metered (SubagentStop records it); False keeps a spawned expert unmetered
+    METER_EXPERTS = False
+
     def __init__(self, tmp_path: Path, monkeypatch, profile: str = "direct",
                  extra: dict[str, str] | None = None, with_repo: bool = True):
         self.root, self.profile = tmp_path, profile
@@ -288,7 +292,9 @@ class Rig:
              "message": {"role": "user", "content": prompt}},
             *reads,
             {"type": "assistant", "isSidechain": True,
+             **({"timestamp": "2026-10-22T00:00:00+00:00"} if self.METER_EXPERTS else {}),
              "message": {"role": "assistant", "content": [{"type": "text", "text": answer}],
+                         **({"id": f"msg_{tool_use_id}"} if self.METER_EXPERTS else {}),
                          "usage": {"input_tokens": 10, "output_tokens": 5}}},
         )) + "\n", encoding="utf-8")
         stop = {"agent_type": "pipeline-expert", "agent_transcript_path": str(transcript),

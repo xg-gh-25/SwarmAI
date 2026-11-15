@@ -74,7 +74,8 @@ def _fix_and_address(r: Rig, ids: list[str], marker: str) -> dict:
     return r.v1("review-address", "--artifact", r.artifact(f"addr-{marker}", {
         "pass": 1, "items": [{"finding_id": cid, "hunk": "@@ -2 +2 @@ return a + b",
                               "proof": {"evidence_type": "reported_test",
-                                        "command": TEST_CMD}} for cid in ids]}))
+                                        "command": TEST_CMD,
+                                        "no_mutation": "fixture: the fix is not mutation-checked here"}} for cid in ids]}))
 
 
 def _r2(r: Rig, out: dict, statuses: dict[str, str], extra: str = "", tag: str = "r2") -> None:
@@ -247,7 +248,8 @@ def _address(r: Rig, ids: list[str], marker: str, pass_number: int) -> dict:
     return r.v1("review-address", "--artifact", r.artifact(f"addr-{marker}", {
         "pass": pass_number, "items": [{"finding_id": cid, "hunk": "@@ -2 +2 @@ return a + b",
                                         "proof": {"evidence_type": "reported_test",
-                                                  "command": TEST_CMD}} for cid in ids]}))
+                                                  "command": TEST_CMD,
+                                                  "no_mutation": "fixture: the fix is not mutation-checked here"}} for cid in ids]}))
 
 
 def test_a_high_new_in_r2_gets_the_one_more_pass(rig):

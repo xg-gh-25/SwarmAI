@@ -8,7 +8,8 @@ The pipeline does not run or observe tests. BUILD and TEST end with
      "commands": [{"command": "...", "cwd": "...",
                    "result": "pass|fail|not_run|pre_existing",
                    "reason": "...",            # reason required unless pass
-                   "validation": "<id>"}],     # optional: the Brain's check this command runs
+                   "validation": "<id>",       # optional: the Brain's check this command runs
+                   "base_result": "pass|fail"}],  # optional: the same command on the base
      "tests_changed": ["path", ...],            # tests added or changed
      "rationale": "why these tests show the change is right",
      "risk": ["security"],                      # optional (§3.5.2): dispatches security
@@ -18,6 +19,12 @@ The pipeline does not run or observe tests. BUILD and TEST end with
 ``decisions`` (optional, an empty list is fine) are the agent's judgment calls made while
 building or testing, in the shape DESIGN_SPEC uses (``schemas.decision_issues`` checks
 both). The event payload carries them inline, so the REPORT reads them from the log.
+
+``base_result`` (optional) is the result of the same command run in the directory
+``pipeline-v1 base-tree`` prints (the code the run started from). A row whose
+``base_result`` is ``fail`` and whose ``result`` is ``pass`` is a fail-to-pass test: it
+shows the change fixes what was broken. The event counts them (``n_fail_to_pass``); a
+bugfix run's audit says when there is none, never a refusal.
 
 ``validation`` names one of the checks of the Brain's kind of work recorded at create
 (design 2026-11-09-project-agent-contract §3.2): the event payload's ``checks`` keeps
@@ -32,7 +39,8 @@ the agent supplied. The log records only that this report was submitted on this 
 whether its content is true is for review to judge.
 
 Public: ``parse``, ``event_payload``, ``read``, ``latest``, ``report_lines``, ``reports_reviewed``,
-``STAGES``, ``RESULTS``, ``RISKS``, ``ReportError``.
+``fail_to_pass_rows``, ``fail_to_pass``, ``STAGES``, ``RESULTS``, ``BASE_RESULTS``, ``RISKS``,
+``ReportError``.
 """
 from __future__ import annotations
 
@@ -53,7 +61,9 @@ MAX_RATIONALE_CHARS = 6_000
 _KEYS = {"repo", "commands", "tests_changed", "rationale", "risk", "decisions"}
 # what a report may declare about its change (§3.5.2); each name dispatches a reviewer
 RISKS = ("security",)
-_COMMAND_KEYS = {"command", "cwd", "result", "reason", "validation"}
+_COMMAND_KEYS = {"command", "cwd", "result", "reason", "validation", "base_result"}
+#: what ``base_result`` may say: the command's result on the run's base (base-tree)
+BASE_RESULTS = ("pass", "fail")
 
 
 class ReportError(ValueError):
@@ -103,6 +113,12 @@ def _one(row: Any, i: int, expected: Sequence[str]) -> dict[str, Any]:
         check = " ".join(str(cmd.get("validation") or "").split())[:MAX_COMMAND_CHARS]
         if check:
             item["validation"] = check
+        if "base_result" in cmd:
+            if cmd["base_result"] not in BASE_RESULTS:
+                raise ReportError(f"{cw}.base_result must be one of {list(BASE_RESULTS)} "
+                                  "(the command's result in the pipeline-v1 base-tree "
+                                  "directory)")
+            item["base_result"] = cmd["base_result"]
         out_commands.append(item)
     tests = row.get("tests_changed")
     if not isinstance(tests, list) or len(tests) > MAX_TESTS:
@@ -177,16 +193,30 @@ def unknown_checks(reports: Sequence[Mapping[str, Any]], check_ids: Sequence[str
     return out
 
 
+def fail_to_pass_rows(report: Mapping[str, Any]) -> int:
+    """How many of *report*'s commands fail on the run's base and pass on the change."""
+    return sum(1 for c in report.get("commands") or ()
+               if c.get("base_result") == "fail" and c.get("result") == "pass")
+
+
+def fail_to_pass(events: Sequence[Mapping[str, Any]]) -> int:
+    """The most fail-to-pass rows any one ``validation_report`` of the run counted."""
+    return max((int((event.get("payload") or {}).get("n_fail_to_pass") or 0)
+                for event in events if event.get("kind") == "validation_report"), default=0)
+
+
 def event_payload(stage: str, report: Mapping[str, Any], code_tree: str,
                   check_ids: Sequence[str] = ()) -> dict[str, Any]:
     """The ``validation_report`` event payload: summary inline, the report as a blob;
     ``checks`` ({id: result}) when a row names one of *check_ids*."""
     counts = {r: sum(1 for c in report["commands"] if c["result"] == r) for r in RESULTS}
+    fail_to_pass = fail_to_pass_rows(report)
     named = _named_checks(report, check_ids)
     return {"stage": stage, "repo": report["repo"], "code_tree": code_tree,
             "n_pass": counts["pass"], "n_fail": counts["fail"],
             "n_not_run": counts["not_run"],
             **({"n_pre_existing": counts["pre_existing"]} if counts["pre_existing"] else {}),
+            **({"n_fail_to_pass": fail_to_pass} if fail_to_pass else {}),
             # inline, so the REPORT's Decisions section is a function of the log alone
             **({"decisions": [dict(d) for d in report["decisions"]]}
                if report.get("decisions") else {}),

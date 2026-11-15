@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from core.run_protocol import trace as trace_protocol
-from core.run_protocol.findings import is_closed, push_effect
+from core.run_protocol.findings import cluster_counts, push_effect
 
 
 class AuditError(ValueError):
@@ -183,8 +183,12 @@ def _experts(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         answer = answers.get(handout.get("event_id"))
         begin = _time(handout.get("at"))
         end = _time(answer.get("at")) if answer else None
+        reason = (handout.get("payload") or {}).get("reason")
         rows.append({"expert": (handout.get("payload") or {}).get("expert_id"),
                      "stage": handout.get("stage"), "round": handout.get("round"),
+                     # why the roster dispatched it: only when the handout says (an R2,
+                     # an incremental review and an older handout do not)
+                     **({"reason": reason} if reason else {}),
                      "handout_event_id": handout.get("event_id"),
                      "answer_event_id": answer.get("event_id") if answer else None,
                      "state": (answer.get("payload") or {}).get("state") if answer else None,
@@ -527,11 +531,29 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     # difference land (E2 / N1): said in the Quality cell, never a PASS
     carried, unreviewed = _tests_carried(event_rows), _landed_unreviewed(event_rows)
     shown = _merged_into_carry(open_checks, carried)
-    # "closed" is findings.is_closed (the closure table): a finding closed by a reported
-    # test counts only once R2 judged the test ADEQUATE, a reviewed-only HIGH never
-    confirmed = sum(row.get("status") == "closed_proven" and row.get("r2_status") == "ADEQUATE"
-                    for row in findings)
-    closed = sum(is_closed(row) for row in findings)
+    # findings are counted by cluster (findings.cluster_counts: one file, within 10 lines,
+    # across experts), so two experts reporting one problem count once; a cluster is
+    # closed when every finding in it is (findings.is_closed, the closure table: a finding
+    # closed by a reported test counts only once R2 judged the test ADEQUATE, a
+    # reviewed-only HIGH never); confirmed: the closed clusters a test R2 judged ADEQUATE
+    # closed, in the same unit
+    counted = cluster_counts(findings)
+    closed, total, confirmed = counted["closed"], counted["total"], counted["confirmed"]
+    # a behavior / contract fix proven without a mutation check: the agent's reason,
+    # one line each (the proof was recorded; nothing is refused for it)
+    no_mutation = [f"{row['canonical_id']}: no mutation check ({_text(row['no_mutation'], 160)})"
+                   for row in findings if row.get("no_mutation")]
+    # a bugfix run says whether a test fails on the base and passes on the change
+    # (validation_report base_result); missing is one line, never a block
+    from core.run_protocol.validation_report import fail_to_pass as _fail_to_pass
+    from core.run_protocol.lifecycle import LifecycleError, caps as _profile_caps
+    try:
+        bugfix = _profile_caps(str(projection.get("profile") or contract.get("profile")
+                                   or "")).fail_to_pass
+    except LifecycleError:
+        bugfix = False                  # an unknown or removed profile: nothing to say
+    fail_to_pass = _fail_to_pass(event_rows) if bugfix else None
+    no_fail_to_pass = bugfix and not fail_to_pass
     landing = projection.get("landing")
     reason = _reason(projection, event_rows)
     from core.run_protocol.lifecycle import QUALITY_BLOCK_REASONS   # one list
@@ -539,8 +561,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         quality_verdict = "BLOCK"
     elif landing in {"no_code", "not_landed"}:
         quality_verdict = "N/A"
-    elif landing == "human_override" or passed < required or closed < len(findings) \
-            or open_checks or not_run or red_at_base or carried or unreviewed:
+    elif landing == "human_override" or passed < required or closed < total \
+            or open_checks or not_run or red_at_base or carried or unreviewed \
+            or no_fail_to_pass:
         quality_verdict = "WARN"
     else:
         quality_verdict = "PASS"
@@ -548,11 +571,15 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "verification_required": required, "verification_not_run": not_run,
                "verification_red_at_base": red_at_base,
                "findings_closed": closed,
-               "findings_confirmed": confirmed, "findings_total": len(findings),
+               "findings_confirmed": confirmed, "findings_total": total,
+               "findings_reported": counted["reported"],
+               **({"fail_to_pass": fail_to_pass} if bugfix else {}),
                "open": _open_lines(shown, [row["canonical_id"] for row in findings
                                                  if push_effect(row)])
                + (["tests not run again after main moved"] if carried else [])
-               + (["landed a difference no review saw"] if unreviewed else [])}
+               + (["landed a difference no review saw"] if unreviewed else [])
+               + ([NO_FAIL_TO_PASS] if no_fail_to_pass else [])
+               + no_mutation}
 
     # Interventions (design 2026-11-01-brain-eval-and-runs §3; core.run_interventions):
     # the person's answers and rescues (a person's landing). Accepting a finding is review,
@@ -770,6 +797,7 @@ def _quality_text(quality: Mapping[str, Any], reason: Any) -> str:
     if quality.get("verdict") == "N/A":
         return str(reason or "no code")
     confirmed = quality.get("findings_confirmed")
+    reported, ftp = quality.get("findings_reported"), quality.get("fail_to_pass")
     opened = [str(line) for line in quality.get("open") or []]
     not_run = int(quality.get("verification_not_run") or 0)
     red_at_base = int(quality.get("verification_red_at_base") or 0)
@@ -777,10 +805,17 @@ def _quality_text(quality: Mapping[str, Any], reason: Any) -> str:
             + (f"{not_run} not run · " if not_run else "")
             + (f"{red_at_base} red at base · " if red_at_base else "")
             + f"{quality['findings_closed']}/{quality['findings_total']} findings closed"
+            + (f" ({reported} reported; within 10 lines of one file they count once)"
+               if isinstance(reported, int) and reported != quality["findings_total"] else "")
             + (f" ({confirmed} test-closed, confirmed by review)" if confirmed else "")
+            + (f" · {ftp} fail-to-pass" if isinstance(ftp, int) and ftp else "")
             + (f" · {opened[0]}" if opened else "")
             + (f" · +{len(opened) - 1} more" if len(opened) > 1 else ""))
 
+
+# a bugfix run with no reported command red on its base and green on the change
+NO_FAIL_TO_PASS = ("no fail-to-pass test: no reported command fails on the run's base "
+                   "(base_result fail, pipeline-v1 base-tree) and passes on the change")
 
 # one short sentence per open audit check, for the Quality cell (XG 2026-10-26)
 OPEN_TEXT = {"RV-1a": "correctness review not answered",

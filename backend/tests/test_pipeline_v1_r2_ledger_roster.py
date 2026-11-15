@@ -55,7 +55,8 @@ def test_the_next_pass_covers_an_earlier_uncovered_address(rig):
     assert not _r2_handouts(rig)
     out = rig.v1("review-address", "--artifact", rig.artifact("b", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
-         "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]}))
+         "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}}]}))
     assert out.get("ok") is True, out
     (handout,) = _r2_handouts(rig)
     assert sorted(handout["payload"]["finding_ids"]) == sorted(ids.values())
@@ -90,7 +91,8 @@ def test_a_second_pass_waits_for_the_first_pass_s_r2(rig):
     ids = _at_review(rig)
     first = rig.v1("review-address", "--artifact", rig.artifact("a", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
-         "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]}))
+         "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}}]}))
     assert first.get("ok") is True, first
     before = len(rig.events())
     second = rig.v1("review-address", "--artifact", rig.artifact("b", {"pass": 2, "items": [
@@ -107,7 +109,8 @@ def test_an_unanswered_line_stays_re_askable_while_a_second_pass_is_refused(rig)
     ids = _at_review(rig)
     out = rig.v1("review-address", "--artifact", rig.artifact("a", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
-         "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]}))
+         "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}}]}))
     _answer(rig, out["handouts"][0], ids["behavior"], "RESOLVED", "r2-0")   # not allowed
     refused = rig.v1("review-address", "--artifact", rig.artifact("b", {"pass": 2, "items": [
         {"finding_id": ids["docs"], "hunk": "@@ docstring"}]}))

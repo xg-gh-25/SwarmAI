@@ -30,7 +30,9 @@ Before any mutation the command runs once unchanged; if that run is not green, n
 mutated (every "caught" would be meaningless). ``--no-baseline`` skips it.
 
 Each run's output goes to its own log in a fresh temp directory (``log_dir`` in the
-result), never a shared path. Output is one JSON object on stdout; exit 0 when every
+result), never a shared path. Each mutation's entry names its ``file`` as given and its
+``path``, the absolute file written (a pipeline proof checks it is a file the run
+changed, in the run's worktree). Output is one JSON object on stdout; exit 0 when every
 mutation is caught, 1 when one is missed, has a bad anchor, the baseline is red or a
 backup is left over, 2 on bad use.
 """
@@ -144,7 +146,9 @@ def check(spec: list[dict], cmd: list[str], cwd: Path, timeout: float, baseline:
     for i, m in enumerate(spec):
         name = m.get("name") or f"mutation {i}"
         path = (cwd / m["file"]).resolve()
-        entry: dict = {"name": name, "file": m["file"]}
+        # path: the file as written (absolute), so a reader can tell which file of
+        # which checkout was mutated, whatever --cwd was
+        entry: dict = {"name": name, "file": m["file"], "path": str(path)}
         try:
             original = path.read_bytes()
         except OSError as exc:

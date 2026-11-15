@@ -109,6 +109,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
                       "bases": dict,
                       # reask_of: the handout whose unreadable answer this re-asks
                       "reask_of": str,
+                      # reason: why the roster dispatched this expert (review.reviewers)
+                      "reason": str,
                       "spawn_prompt": str, "spawn_sha": str, "knowledge_items": list, "knowledge_project": str}),
     # a host hook saw an expert spawned with exactly a handout's spawn prompt
     # (standalone §4.3, handout-by-file design §3.2)
@@ -174,6 +176,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                     # n_tests_changed: that report's tests_changed count (an absence
                     # finding needs it above zero; the fold does not read report blobs)
                     "report_event_id": str, "command": str, "n_tests_changed": int,
+                    # mutation: the mutation_check result's summary {caught, files}
+                    # (findings.mutation_summary); no_mutation: why none could be
+                    # written (the audit lists it). A behavior / contract proof has one
+                    "mutation": dict, "no_mutation": str,
                     # basis: "file" when a diff_assertion was judged on the file (the R1
                     # and R2 handout trees, design 2026-10-26-pipeline-review-closure §2.3
                     # point 4); absent: the reported line was touched (older runs)
@@ -190,6 +196,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
                                # red at the run's base too (D6); the agent's judgment
                                # calls in the report (REPORT Decisions); absent when none
                                {"n_pre_existing": int, "decisions": list,
+                                # rows red on the run's base (base_result fail) and
+                                # passing on the change: a fail-to-pass test
+                                "n_fail_to_pass": int,
                                 # the Brain's checks a row named: {id: result}
                                 "checks": dict}),
     "stage_attempt": _spec("cli", ("stage", "attempt"), "stage",

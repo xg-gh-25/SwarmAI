@@ -245,7 +245,8 @@ def test_run_land_reports_untracked_files(tmp_path, monkeypatch):
         {"command": "python3 -m pytest tests/test_x.py", "cwd": ".", "result": "pass"}],
         "tests_changed": ["tests/test_x.py"], "rationale": "test_value covers it"}]}
     assert engine.stage_complete(report)["state"]["stage"] == "review"
-    assert engine.review_start()["reviewers"] == []
+    from tests.review_bridge_helper import answer_review
+    assert answer_review(engine, engine.review_start()) == ["correctness"]
     assert engine.stage_complete()["state"]["stage"] == "test"
     assert engine.stage_complete(report)["state"]["stage"] == "deliver"
     prepared = engine.prepare_land_request(action="land", note="approved test")

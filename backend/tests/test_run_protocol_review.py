@@ -32,8 +32,9 @@ def test_roster_is_lightweight_and_security_is_risk_triggered():
     assert [row["id"] for row in reviewers(profile="full", changed=risky,
                                            security=["declared"])] == ["correctness", "security"]
     small_risk = [{"path": "backend/auth.py", "insertions": 15, "deletions": 0}]
+    # correctness reviews every change, whatever its size; security on declared risk
     assert [row["id"] for row in reviewers(profile="direct", changed=small_risk,
-                                           security=["declared"])] == ["security"]
+                                           security=["declared"])] == ["correctness", "security"]
     assert reviewers(profile="full", changed=[], security=[]) == []
 
 
@@ -107,7 +108,8 @@ def test_triggered_review_patterns_dispatch_correctness_even_for_a_small_change(
     small = [{"path": "backend/core/a.py", "insertions": 2, "deletions": 0}]
     got = reviewers(profile="direct", changed=small, patterns=["RP1", "RP13"])
     assert [r["id"] for r in got] == ["correctness"] and "RP1, RP13" in got[0]["reason"]
-    assert reviewers(profile="direct", changed=small, patterns=[]) == []
+    plain = reviewers(profile="direct", changed=small, patterns=[])
+    assert [r["id"] for r in plain] == ["correctness"] and "RP1" not in plain[0]["reason"]
 
 
 _TABLE = ("| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"

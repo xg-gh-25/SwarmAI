@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from core import run_worktree
-from core.doc_paths import is_doc_path
+from core.doc_paths import is_doc_path, is_test_path
 from core.run_protocol import checks, git_tree, lifecycle, review, validation_report
 from core.run_protocol import answers as answer_protocol
 from core.run_protocol import findings as finding_protocol
@@ -1654,7 +1654,11 @@ class RunEngine:
         """S6-2: a ``reported_test`` proof names a command of the agent's validation
         report; the engine finds that command passing in a report of the finding's
         repo on its CURRENT tree (``report-tests`` records one in REVIEW) and derives
-        the proof from the report. The agent supplies only the command text. Returns
+        the proof from the report. The agent supplies the command text and, for a
+        behavior / contract finding, the ``mutation`` result of scripts.mutation_check
+        (checked by ``findings.mutation_summary`` against the files the run changed
+        from its fork base to that tree) or ``no_mutation``, why none could be written
+        (the audit lists it). Returns
         (artifact with the derived proof for R2, {finding_id: proof payload}, the
         problems found: one line per item that cannot be resolved)."""
         items = artifact.get("items") if isinstance(artifact, Mapping) else None
@@ -1674,14 +1678,33 @@ class RunEngine:
             if row is None:
                 out_items.append(item)          # _handoff_problems names it
                 continue
-            if set(proof) != {"evidence_type", "command"} \
-                    or not isinstance(proof.get("command"), str) or not proof["command"]:
-                problems.append(f"{finding_id}: a reported_test proof is exactly "
+            extra = set(proof) - {"evidence_type", "command", "mutation", "no_mutation"}
+            if extra or not isinstance(proof.get("command"), str) or not proof["command"] \
+                    or ("mutation" in proof and "no_mutation" in proof):
+                problems.append(f"{finding_id}: a reported_test proof is "
                                 '{"evidence_type": "reported_test", "command": "<the '
-                                'command as written in your report>"}')
+                                'command as written in your report>", and either "mutation": '
+                                '<the JSON scripts.mutation_check printed> or "no_mutation": '
+                                '"<why no mutation of the fix could be written>"}')
+                continue
+            reason = proof.get("no_mutation")
+            if "no_mutation" in proof and (not isinstance(reason, str) or not reason.strip()
+                                           or len(reason) > finding_protocol.MAX_MUTATION_REASON):
+                problems.append(f"{finding_id}: no_mutation must be the reason, in at most "
+                                f"{finding_protocol.MAX_MUTATION_REASON} characters, why no "
+                                "mutation of the fix could be written")
+                continue
+            if row["kind"] in finding_protocol.MUTATION_KINDS \
+                    and "mutation" not in proof and "no_mutation" not in proof:
+                problems.append(
+                    f"{finding_id} ({row['kind']}): the proof needs the mutation_check result "
+                    "that reverting the fix turns this test red: run \"$SWARM_BACKEND_BIN\" "
+                    "py -m scripts.mutation_check <spec.json> -- <the test command> on the "
+                    "current code and give its JSON as \"mutation\", or \"no_mutation\": "
+                    "\"<why no anchor of the fix can be written>\"")
                 continue
             try:
-                name, _root = self._finding_repo(row["file"])
+                name, root = self._finding_repo(row["file"])
             except EngineError as exc:
                 problems.append(f"{finding_id}: {exc}")
                 continue
@@ -1700,10 +1723,31 @@ class RunEngine:
                                 "lists no tests_changed; an absence finding closes by a "
                                 "reported_test whose report changed tests")
                 continue
+            summary = None
+            if "mutation" in proof:
+                # the fix is code the run changed (fork base -> this tree), not a test
+                # the run changed, mutated in this worktree
+                run_changed = _git(root, "-c", "core.quotepath=off", "diff", "--name-only",
+                                   "--no-renames", self._fork_base(name, root),
+                                   trees.get(name) or "HEAD").splitlines()
+                # a test is never the fix: the report's tests_changed and every changed
+                # file the review roster counts as a test (doc_paths.is_test_path)
+                run_tests = set(changed if isinstance(changed, list) else ()) | {
+                    path for path in run_changed if is_test_path(path)}
+                summary, wrong = finding_protocol.mutation_summary(
+                    proof["mutation"], run_changed, root=root, tests=run_tests)
+                if wrong:
+                    problems.append(f"{finding_id}: its mutation result does not prove the "
+                                    f"fix: {wrong}")
+                    continue
             derived = {"evidence_type": "reported_test", "code_tree": trees[name],
                        "result": "proven", "repo": name,
                        "report_event_id": event["event_id"], "command": proof["command"],
                        "n_tests_changed": len(changed) if isinstance(changed, list) else 0}
+            if summary is not None:
+                derived["mutation"] = summary
+            elif isinstance(reason, str):
+                derived["no_mutation"] = " ".join(reason.split())
             tested[finding_id] = derived
             out_items.append({**item, "proof": {
                 **derived, "tests_changed": report.get("tests_changed", [])[:20],
@@ -2980,7 +3024,7 @@ class RunEngine:
                 ins, delete, path = line.split("\t", 2)
                 mine.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
                              "deletions": int(delete) if delete.isdigit() else 0,
-                             "is_test": "/tests/" in path or path.startswith("tests/")})
+                             "is_test": is_test_path(path)})
             changed += mine
             diff = _git(root, "diff", "--no-ext-diff", "--no-renames", base, tree_sha)
             diffs.append(f"## {name}\n" + diff)
@@ -3045,7 +3089,7 @@ class RunEngine:
                 at=_now(), expert_instructions=instructions,
                 review_input=review_input, code_trees=trees, knowledge_items=items,
                 bases={name: item["base"] for name, item in per_repo.items()},
-                knowledge_project=self._knowledge_project()))
+                knowledge_project=self._knowledge_project(), reason=item["reason"]))
         if not handouts:
             self._write_review_documents()
         return {"reviewers": roster, "handouts": handouts}
@@ -3284,7 +3328,7 @@ class RunEngine:
                 ins, delete, path = line.split("\t", 2)
                 mine.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
                              "deletions": int(delete) if delete.isdigit() else 0,
-                             "is_test": "/tests/" in path or path.startswith("tests/")})
+                             "is_test": is_test_path(path)})
             changed += mine
             diff = _git(root, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-renames",
                         *span)

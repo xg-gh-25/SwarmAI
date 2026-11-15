@@ -67,9 +67,11 @@ def test_invalid_items_are_all_named_and_nothing_is_written(rig):
     before = _snapshot(r)
     out = r.v1("review-address", "--artifact", r.artifact("bad", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
-         "proof": {"evidence_type": "reported_test", "command": TEST_CMD}},
+         "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}},
         {"finding_id": ids["docs"], "hunk": "@@ docstring",
-         "proof": {"evidence_type": "reported_test", "command": TEST_CMD}},
+         "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}},
         {"finding_id": "CF-deadbeef", "hunk": "@@ x"}]}))
     assert out.get("ok") is False, out
     error = out.get("error", "")
@@ -89,7 +91,8 @@ def test_a_failure_building_the_r2_handouts_writes_nothing(rig, monkeypatch):
     with pytest.raises(Exception, match="injected drift"):
         engine.review_address({"pass": 1, "items": [
             {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
-             "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]})
+             "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}}]})
     assert _snapshot(r) == before
 
 
@@ -99,7 +102,8 @@ def test_a_valid_pass_writes_address_proof_and_handout_together(rig):
     before = len(r.events())
     out = r.v1("review-address", "--artifact", r.artifact("ok", {"pass": 1, "items": [
         {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
-         "proof": {"evidence_type": "reported_test", "command": TEST_CMD}},
+         "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}},
         {"finding_id": ids["docs"], "hunk": "@@ docstring"}]}))
     assert out.get("ok") is True, out
     new = r.events()[before:]
@@ -129,6 +133,7 @@ def test_a_refusal_at_write_time_of_the_last_event_writes_nothing(rig):
     with pytest.raises(Exception, match="injected refusal"):
         engine.review_address({"pass": 1, "items": [
             {"finding_id": ids["behavior"], "hunk": "@@ return a + b",
-             "proof": {"evidence_type": "reported_test", "command": TEST_CMD}}]})
+             "proof": {"evidence_type": "reported_test", "command": TEST_CMD,
+                   "no_mutation": "fixture: the fix is not mutation-checked here"}}]})
     engine.store.validator = original
     assert _snapshot(r) == before

@@ -19,7 +19,7 @@ from typing import Any, Mapping, Sequence
 from core.doc_paths import is_doc_path
 from core.run_protocol import events as ev
 from core.run_protocol import findings as fd
-from core.run_protocol.findings import cluster_findings, fold as fold_findings, push_effect, r2_experts
+from core.run_protocol.findings import cluster_findings, fold as fold_findings, push_effect, r2_routes
 from core.run_protocol.store import AuditStore
 
 # How a Gate-0 finding closes: it is about the requirements, which no REVIEW expert reads,
@@ -363,8 +363,11 @@ def _close_step(row: Mapping[str, Any], ledger: Mapping[str, Any] | None, *,
         return "review-proof refuted, with path:line or event:<id> refs"
     if rule["evidence"] == "reported_test":
         return ("fix it, report-tests, then review-address with proof reported_test (a "
-                "command of that report)" + (" whose report lists tests_changed"
-                                             if row["kind"] == "absence" else ""))
+                "command of that report" + (", with its scripts.mutation_check result or "
+                                            "no_mutation and why" if row["kind"] in
+                                            fd.MUTATION_KINDS else "")
+                + ")" + (" whose report lists tests_changed"
+                         if row["kind"] == "absence" else ""))
     if r2 == "RESOLVED":
         return "review-proof diff_assertion"
     return ("fix it, then review-address without a proof; after R2 judges it RESOLVED, "
@@ -544,7 +547,7 @@ def review_patterns(repos: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     "paths": changed source paths, "diff": diff text}``. Returns ``{"blocks":
     {name: str}, "triggered": [ids], "security": [reasons], "error": str | None}``:
     blocks are the selected rows for the correctness handout; triggered are rows
-    matched on specific evidence (they make even a small change get correctness);
+    matched on specific evidence (correctness's dispatch reason names them);
     security are the repos whose ``security:`` line matched. A file that cannot be
     parsed sets error and is named in the block, never silently skipped.
     """
@@ -607,15 +610,22 @@ def expert_prompt(expert_id: str) -> str:
         encoding="utf-8")
 
 
+# correctness's dispatch reason when nothing but the change itself asks for it (a small
+# change): the audit keeps it per handout, so a reader can tell such a review apart
+ALWAYS_REASON = "every pipeline change gets a correctness review, whatever its size"
+
+
 def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
               patterns: Sequence[str] = (),
               security: Sequence[str] = ()) -> list[dict[str, str]]:
-    """P3a E1 roster: default correctness; security only on clear risk. A >=50-line
+    """P3a E1 roster: correctness for every change (a change in a pipeline run was
+    already judged risky, whatever its size); security only on clear risk. A >=50-line
     risky change gets security's "High-risk change" section (§3.5.1: red-team merged
-    into security), not a second reviewer.
+    into security), not a second reviewer. An empty change has no reviewer.
 
     *patterns*: rows of the repo's own review.md the change triggers by path or diff
-    (review_patterns). Any of them dispatches correctness, whatever the change's size.
+    (review_patterns). They are named in correctness's reason (``changed`` alone
+    dispatches it; a pattern dispatches it for a change whose numstat is empty too).
     *security*: why security review was declared for this change (review.md's
     ``security:`` line, the BUILD report's ``risk``, the design's security
     boundaries; §3.5.2). The product has no built-in path or API rule."""
@@ -636,6 +646,8 @@ def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
             high_risk = True
     elif risk:
         picked["security"] = risk
+    if changed and "correctness" not in picked:
+        picked = {"correctness": ALWAYS_REASON, **picked}
     return [{"id": expert, "reason": reason,
              **({"high_risk": True} if expert == "security" and high_risk else {})}
             for expert, reason in picked.items()]
@@ -679,13 +691,15 @@ class ReviewOrchestrator:
                 knowledge_items: Sequence[str] = (),
                 knowledge_project: str | None = None,
                 bases: Mapping[str, Any] | None = None,
-                reask_of: str | None = None) -> dict[str, Any]:
+                reask_of: str | None = None,
+                reason: str | None = None) -> dict[str, Any]:
         spec, prepared = self.handout_spec(
             expert_id=expert_id, stage=stage, round=round, attempt=attempt, at=at,
             expert_instructions=expert_instructions, review_input=review_input,
             finding_ids=finding_ids, code_trees=code_trees,
             incremental_from=incremental_from, knowledge_items=knowledge_items,
-            knowledge_project=knowledge_project, bases=bases, reask_of=reask_of)
+            knowledge_project=knowledge_project, bases=bases, reask_of=reask_of,
+            reason=reason)
         spec = dict(spec)
         event, _ = self.store.append_new(writer=self.store.authority.writer("cli"),
                                          kind=spec.pop("kind"), at=spec.pop("at"),
@@ -712,6 +726,7 @@ class ReviewOrchestrator:
                      redispatch_of: str | None = None,
                      bases: Mapping[str, Any] | None = None,
                      reask_of: str | None = None,
+                     reason: str | None = None,
                      ) -> tuple[dict[str, Any], dict[str, Any]]:
         """The handout event spec (for ``store.append_batch`` / ``append_new``) and what
         ``handout_written`` needs once it is on disk. Writes nothing: a prompt that fails
@@ -755,6 +770,8 @@ class ReviewOrchestrator:
             payload["incremental_from"] = dict(incremental_from)
         if reask_of:            # a first-round review asked again (its answer was unreadable)
             payload["reask_of"] = reask_of
+        if reason:              # why the roster picked this expert (reviewers())
+            payload["reason"] = str(reason)[:300]
         if knowledge_items:     # the PROJECT KNOWLEDGE entries this prompt carries (§3.4)
             payload["knowledge_items"] = list(knowledge_items)
         if knowledge_project:   # the DDD whose units a finding may also cite (addressing §2.5)
@@ -772,15 +789,15 @@ class ReviewOrchestrator:
         return cluster_findings(self.findings())
 
     def r2_roster(self, addressed_ids: set[str] | None = None) -> dict[str, list[str]]:
+        """{expert: finding ids} of the R2 for *addressed_ids*, routed by cluster
+        (``findings.r2_routes``): one expert rechecks every finding of a ±10-line
+        cluster, whichever expert raised it."""
         rows = self.findings()
         if addressed_ids is None:
             addressed_ids = {event["payload"]["canonical_id"]
                               for event in self.store.read_events()
                               if event.get("kind") == "address"}
-        experts = r2_experts(rows, addressed_ids)
-        return {expert: [row["canonical_id"] for row in rows
-                         if row["expert"] == expert and row["canonical_id"] in addressed_ids]
-                for expert in experts}
+        return r2_routes(rows, addressed_ids)
 
     def record_fix_handoff(self, value: Mapping[str, Any], *, at: str,
                            attempt: int) -> dict[str, Any]:
@@ -969,10 +986,14 @@ class ReviewOrchestrator:
         diff_assertion, its file's git diff from the tree R1 reviewed to now."""
         rows = {row["canonical_id"]: row for row in self.findings()}
         payload = []
+        others = False
         for finding_id in finding_ids:
             row = rows.get(finding_id)
-            if row is None or row["expert"] != expert:
-                raise ReviewError("R2 roster does not match expert findings")
+            if row is None:
+                raise ReviewError(f"R2 roster names an unknown finding {finding_id}")
+            # R2 is routed by cluster: a finding another expert raised at the same place
+            # comes to this expert as that expert wrote it (row: expert, claim, fix)
+            others = others or row["expert"] != expert
             if states and finding_id in states:
                 row = {**row, "status": states[finding_id]}
             entry = {"canonical_id": finding_id, "finding": row,
@@ -987,6 +1008,11 @@ class ReviewOrchestrator:
                 entry["previous_status_not_allowed"] = wrong[finding_id]
             payload.append(entry)
         head = "R2 ONLY — review these addressed findings, not the whole diff:\n"
+        if others:
+            head += ("Findings in one file within 10 lines of each other are one cluster and "
+                     "come to one expert: some below were raised by another expert (the "
+                     "finding's expert field names it). Judge each on its own claim and give "
+                     "each its own status line.\n")
         if allowed is not None:
             head += ("Each finding's R2 status line uses one word of its allowed_status "
                      "(ADEQUATE / TEST_INADEQUATE judge the test that closed a "
@@ -1020,16 +1046,21 @@ class ReviewOrchestrator:
                 f"{handout['event_id'][:12]} | {answer['event_id'][:12] if answer else '—'} | "
                 f"{answer['payload'].get('state') if answer else 'unanswered'} | "
                 f"{(answer['payload'].get('verdict') if answer else None) or '—'} |")
+        # each finding as its expert wrote it; Cluster: the ±10-line group it is counted
+        # and rechecked with (findings.cluster_counts / r2_routes)
+        cluster_of = {cid: cluster["cluster_id"] for cluster in cluster_findings(findings)
+                      for cid in cluster["findings"]}
         lines += ["", "## Findings", "",
-                  "| ID | Severity | Kind | Site | State | R2 | Reclassified | Evidence | Push | Claim |",
-                  "|---|---|---|---|---|---|---|---|---|---|"]
+                  "| ID | Cluster | Expert | Severity | Kind | Site | State | R2 | Reclassified | Evidence | Push | Claim |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for row in findings:
             change = row.get("reclassification")
             reclass = (f"{change['from']}→{change['to']} "
                        f"({'confirmed' if change.get('confirmed') else 'unconfirmed'})"
                        if isinstance(change, Mapping) else "—")
             evidence = str(row.get("evidence_event_id") or "—")[:12]
-            lines.append(f"| {row['canonical_id']} | {row['severity']} | {row['kind']} | "
+            lines.append(f"| {row['canonical_id']} | {cluster_of.get(row['canonical_id'], '—')} | "
+                         f"{row['expert']} | {row['severity']} | {row['kind']} | "
                          f"{row['file']}:{row['line']} | {row['status']} | "
                          f"{row.get('r2_status') or '—'} | {reclass} | {evidence} | "
                          f"{'yes' if push_effect(row) else 'no'} | {plain(row['claim'])} |")
