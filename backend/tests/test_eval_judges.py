@@ -109,6 +109,59 @@ def test_a_label_is_refused_outside_the_current_low_batch(ws, state, sid, human,
     assert not (ws / ".context" / ".judge-calibration.jsonl").exists()
 
 
+def test_a_random_normal_scored_session_takes_a_label(ws):
+    """The judge's misses can be measured: a session drawn at random that it scored
+    normal takes a label too, stored with the judge's outcome. A targeted session it
+    scored normal does not (its sample is biased), nor one not in the last run."""
+    _state(ws, normal_details=[{"session_id": "n1", "goal_score": 0.9, "tool_score": 1.0, "layer": "random"},
+                               {"session_id": "t1", "goal_score": 0.9, "tool_score": 1.0, "layer": "targeted"}])
+    svc = EvalService(workspace_root=ws)
+    out = svc.record_calibration("n1", "disagree")       # the judge said normal; there was a problem
+    assert out["normal"] == {"labels": 1, "problem": 1, "rate": 1.0} and out["low"]["labels"] == 0
+    line = json.loads((ws / ".context" / ".judge-calibration.jsonl").read_text().splitlines()[-1])
+    assert (line["session_id"], line["judge"], line["human"]) == ("n1", "normal", "disagree")
+    for sid in ("t1", "zz"):
+        with pytest.raises(ValueError, match="Not a low-scored or randomly drawn"):
+            svc.record_calibration(sid, "agree")
+    assert svc.record_calibration("s1", "agree")["low"] == {"labels": 1, "agree": 1, "rate": 1.0}
+    view = svc.get_session_quality()
+    assert [d["session_id"] for d in view["normal_details"]] == ["n1", "t1"]
+    assert view["normal_details"][0]["layer"] == "random" and view["calibration"]["labels"] == {"n1": "disagree", "s1": "agree"}
+
+
+def _labels(ws, sha, *pairs):
+    lines = [json.dumps({"session_id": f"{judge}{i}", "judge_prompt_sha": sha, "judge": judge, "human": human})
+             for i, (judge, human) in enumerate(pairs)]
+    (ws / ".context" / ".judge-calibration.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def test_both_rates_and_the_not_calibrated_mark(ws):
+    """Both rates: of the low scores labelled, the share the owner agreed with; of the
+    random normal-scored ones, the share the owner said had a problem. Calibrated only
+    with 20 labels and both outcomes among them; the Online view and its trend say so."""
+    sha = ss.JUDGE_PROMPT_SHA
+    _state(ws, trend=[{"week": "2026-W43", "judge_prompt_sha": sha, "rates": {}}, {"week": "2026-W42", "rates": {}}])
+    svc = EvalService(workspace_root=ws)
+    _labels(ws, sha, *([("low", "agree")] * 9 + [("low", "disagree")] * 3 + [("normal", "agree")] * 6
+                       + [("normal", "disagree")] * 1))
+    summary = svc._calibration_summary()
+    assert summary["low"] == {"labels": 12, "agree": 9, "rate": 0.75}
+    assert summary["normal"] == {"labels": 7, "problem": 1, "rate": 0.143}
+    assert summary["labels"] == 19 and summary["calibrated"] is False          # 19: not yet
+    view = svc.get_session_quality()
+    assert view["calibration"]["calibrated"] is False
+    assert [t["judge_calibrated"] for t in view["trend"]] == [False, None]
+    _labels(ws, sha, *([("low", "agree")] * 9 + [("low", "disagree")] * 3 + [("normal", "agree")] * 7
+                       + [("normal", "disagree")] * 1))
+    assert svc._calibration_summary()["calibrated"] is True                     # 20, both ways
+    assert [t["judge_calibrated"] for t in svc.get_session_quality()["trend"]] == [True, None]
+    _labels(ws, sha, *([("low", "agree")] * 25))
+    one_way = svc._calibration_summary()
+    assert one_way["calibrated"] is False and one_way["normal"]["rate"] is None   # never checked for misses
+    old = svc._calibration_summary("old000000000")
+    assert old["labels"] == 0 and old["calibrated"] is False
+
+
 def test_labels_for_an_older_prompt_do_not_count(ws):
     (ws / ".context" / ".judge-calibration.jsonl").write_text(json.dumps(
         {"session_id": "s1", "judge_prompt_sha": "old000000000", "human": "agree"}) + "\n")

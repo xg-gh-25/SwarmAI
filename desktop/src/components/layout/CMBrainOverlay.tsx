@@ -26,6 +26,7 @@ import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
 import { OverlayError } from './OverlayState';
 import { SectionLabel, StatusBadge, tableHeadClass, type Tone, Tabs } from '../overlay';
+import { trendVerdict } from './cognitionLevelText';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
 type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
@@ -68,12 +69,15 @@ interface TokenBlock {
 // heavy scans. The overlay's Context tab + rail (load, north star) + Governance count
 // consume this.
 interface CognitionMeasures {
-  week: string;
-  sessions: number;
-  corrected_rate: number;              // share of the week's sessions the person corrected
-  earlier_mean: number | null;
-  earlier_weeks: number;
-  direction: 'better' | 'worse' | 'same' | null;   // fewer corrected sessions is better
+  week: string;                        // the last week of the window
+  sessions: number;                    // sessions judged in the window
+  corrected_rate: number;              // share of the window's sessions the person corrected
+  window_weeks?: number;               // 4: the trend's window; 1: the latest week (no trend yet)
+  before_rate?: number | null;         // the 4 weeks before, pooled
+  margin?: number | null;              // half-width of the 95% interval, in points
+  // the backend's trend (cognition_level.trend): better / worse only outside the interval;
+  // a snapshot written before it has no before_rate and shows no direction
+  direction: 'better' | 'worse' | 'same' | null;
   repeat_rate: number | null;
   corrections: number | null;
 }
@@ -302,7 +306,8 @@ const DIRECTION_TINT = {
 
 // "Am I getting better?" — the north star readings (SWARMAI.md § My North Star), from
 // the same snapshot file the prompt reads. One verdict stands out (the share of
-// sessions the person corrected, against the weeks before); repeats and the knowledge
+// sessions the person corrected over four weeks, against the four before, called better or
+// worse only outside its 95% interval, in the prompt's words); repeats and the knowledge
 // flow are the supporting lines. Read-only; an absent snapshot says so, never "0".
 function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; failed: boolean }) {
   const cog = ns?.measures?.cognition;
@@ -325,10 +330,12 @@ function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; faile
                 <span className="text-small text-[var(--color-text-muted)]">{t('ui.CMBrainOverlay.nsCorrected')}</span>
               </div>
               <div className="text-meta text-[var(--color-text-muted)]">
-                {t('ui.CMBrainOverlay.nsWeekSessions', { week: cog.week, count: cog.sessions })}
-                {cog.direction && cog.earlier_mean != null && (
+                {(cog.window_weeks ?? 1) > 1
+                  ? t('ui.CMBrainOverlay.nsWindowSessions', { weeks: cog.window_weeks, week: cog.week, count: cog.sessions })
+                  : t('ui.CMBrainOverlay.nsWeekSessions', { week: cog.week, count: cog.sessions })}
+                {cog.direction && cog.before_rate != null && (
                   <span data-testid="cm-ns-direction" style={{ color: DIRECTION_TINT[cog.direction] }}>
-                    {' '}· {t(`ui.CMBrainOverlay.nsDirection_${cog.direction}`, { mean: pct(cog.earlier_mean) })}
+                    {' '}· {trendVerdict(t, cog)} · {t('ui.CMBrainOverlay.nsBefore', { before: pct(cog.before_rate) })}
                   </span>
                 )}
               </div>

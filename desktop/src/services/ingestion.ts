@@ -232,8 +232,19 @@ export interface LevelWeek {
   notCorrectedRate: number | null; corrections: number; repeats: number; repeatRate: number | null;
   recordCorrected: number; recordClean: number;
 }
+/** One window of the trend: pooled weeks, ``rate`` the corrected share. */
+export interface TrendWindow { from: string; to: string; judged: number; corrected: number; rate: number | null }
+/** The corrected share's trend, computed once by the backend (cognition_level.trend): the
+ *  last four weeks pooled against the four before, with a 95% interval of the difference.
+ *  `direction` is better / worse only when the interval excludes zero; null with too few. */
+export interface LevelTrend {
+  weeks: number; now: TrendWindow; before: TrendWindow; difference: number | null;
+  low: number | null; high: number | null; margin: number | null;
+  direction: 'better' | 'worse' | 'same' | null; minJudged: number;
+}
 export interface CognitionLevelData {
   weeks: LevelWeek[];
+  trend: LevelTrend | null;
   marks: Array<{ at: string; kind: string; label: string }>;
   coveredFrom: string | null;
   latest: LevelWeek | null;

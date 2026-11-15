@@ -166,7 +166,7 @@ async def get_judges():
 
 @router.post("/calibration", dependencies=[Depends(_json_body)])
 async def record_calibration(req: CalibrationRequest):
-    """The owner agrees or disagrees with a low online-judge score."""
+    """The owner labels an online-judge score: a low one, or a normal one drawn at random."""
     try:
         return await executors.run_nav(get_eval_service().record_calibration, req.session_id, req.human)
     except ValueError as e:
@@ -360,9 +360,11 @@ async def get_context_health_lite():
     except Exception as exc:
         logger.debug("context-health/lite: token block failed: %s", exc)
 
-    # 2. Governance-pending count (Approve) — same source as the overlay badge.
+    # 2. Governance-pending count (Approve) — same source as the overlay badge. Off the
+    #    event loop: an anchored GC row's count is read from the CDF store.
     try:
-        result["governance_pending_count"] = get_eval_service().get_pending_governance()["total"]
+        pending = await executors.run_nav(get_eval_service().get_pending_governance)
+        result["governance_pending_count"] = pending["total"]
     except Exception as exc:
         logger.debug("context-health/lite: governance count failed: %s", exc)
 
@@ -731,10 +733,11 @@ async def get_pending_governance():
     """List governance proposals (rule/gate) awaiting human decision.
 
     Derived from EVOLUTION.md's Governance Candidates table. Each item carries
-    `id` (= gc_id) for accept/reject.
+    `id` (= gc_id) for accept/reject; `accepted` lists each accepted rule with the
+    repeats of its mistake before and after acceptance.
     """
     svc = get_eval_service()
-    return svc.get_pending_governance()
+    return await executors.run_nav(svc.get_pending_governance, True)
 
 
 @router.post("/governance/decision")

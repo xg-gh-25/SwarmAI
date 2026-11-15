@@ -130,6 +130,20 @@ class TestContextHealthLiteFailSoft:
         assert r.status_code == 200
         assert r.json()["governance_pending_count"] == 0
 
+    def test_governance_count_is_read_off_the_event_loop(self, client, monkeypatch):
+        """An anchored GC row's count is read from the CDF store: the lite endpoint asks
+        for it on the nav pool, never on the event loop."""
+        import threading
+        from core.eval_service import get_eval_service
+        svc = get_eval_service()
+        seen = []
+        monkeypatch.setattr(svc, "get_pending_governance",
+                            lambda: seen.append(threading.current_thread().name) or {"total": 2})
+        r = client.get(LITE)
+        assert r.status_code == 200 and r.json()["governance_pending_count"] == 2
+        assert seen and seen[0].startswith("swarm-nav")
+
+
 class TestFullEndpointUnchanged:
     def test_full_endpoint_still_has_heavy_fields(self, client):
         """AC7 regression: /context-health still returns the full schema."""

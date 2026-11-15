@@ -2287,9 +2287,13 @@
     "empty": "还没有哪一周的对话够多，算不出来。",
     "line": {
       "tooFew": "还看不出趋势：要满 {{n}} 周的对话",
-      "better": "在变好：近 4 周 {{now}} 的对话不用你纠正，前 4 周是 {{before}}",
-      "worse": "在变差：近 4 周 {{now}} 的对话不用你纠正，前 4 周是 {{before}}",
-      "flat": "和之前差不多：近 4 周 {{now}}，前 4 周 {{before}}"
+      "trend": "近 4 周 {{now}} 的对话不用你纠正，前 4 周是 {{before}}：{{verdict}}"
+    },
+    "verdict": {
+      "better": "在变好",
+      "worse": "在变差",
+      "same": "看不出变化（±{{margin}} 个点）",
+      "tooFew": "会话太少，看不出趋势"
     },
     "repeats": "本周你纠正的错里，是以前纠正过的",
     "legend": {
@@ -3709,9 +3713,9 @@
       "nsNotMeasured": "尚未测量",
       "nsCorrected": "的会话被纠正",
       "nsWeekSessions_other": "{{week}} · {{count}} 个会话",
-      "nsDirection_better": "好于之前的 {{mean}}",
-      "nsDirection_worse": "差于之前的 {{mean}}",
-      "nsDirection_same": "与之前的 {{mean}} 持平",
+      "nsWindowSessions_one": "截至 {{week}} 的 {{weeks}} 周 · {{count}} 个会话",
+      "nsWindowSessions_other": "截至 {{week}} 的 {{weeks}} 周 · {{count}} 个会话",
+      "nsBefore": "前 4 周 {{before}}",
       "nsRepeats": "重复",
       "nsOfCorrections_other": "共 {{count}} 条纠正",
       "nsUseful": "知识有用率",

@@ -254,15 +254,24 @@ Sub-threshold proposals (1-2x evidence, not yet 3x) live in EVOLUTION.md "Candid
 
 | ID | Proposed Rule | Evidence | Count | Since | Checked |
 |----|---------------|----------|-------|-------|---------|
-| <GC-id> | "Read target API before coding against it" | <correction-ref> | 1/3 | 2026-05-19 | |
-| <GC-id> | "Never skip review for 'small' changes" | <correction-ref>, <ref> | 2/3 | 2026-05-19 | checked against: R2 — new because … |
+| <GC-id> | "Read target API before coding against it" | <correction-anchor> | 1/3 | 2026-05-19 | |
+| <GC-id> | "Never skip review for 'small' changes" | <correction-anchor>, <correction-anchor> | 2/3 | 2026-05-19 | checked against: R2 — new because … |
 ```
 
-The column order is what the governance miner parses. When you add evidence, bump Count and
-fill **Checked**: which existing rules you compared it with, and why it is a new axis. A row
-reaches the dashboard only with Count at 3/3 AND Checked filled; the user's accept / reject
-replaces Count with `✔ ACCEPTED <date>` / `✖ REJECTED <date>`, and the row is never proposed
-again. Accepting does not write the rule: run PROMOTE with the user.
+The column order is what the governance miner parses. **Evidence** lists the anchors of the
+correction entries the rule answers, each `<path>#<section>#<identity>` as the entry is
+addressed (for an entry CDF wrote, its marker gives the identity:
+`.context/EVOLUTION.md#Corrections Captured#cand:cand-<hex>.unit`). For a row with anchors the
+miner COMPUTES the count when it reads the table: the distinct conversations among those
+corrections and the corrections the after-session review recorded as repeating one of them.
+Do not bump Count by hand on such a row; it is shown as N/3 from the record. A row without
+anchors keeps the hand-written N/M. Fill **Checked**: which existing rules you compared it
+with, and why it is a new axis. A row reaches the dashboard only with its count at 3 AND
+Checked filled; the user's accept / reject replaces Count with `✔ ACCEPTED <date>` /
+`✖ REJECTED <date>`, and the row is never proposed again. Accepting does not write the rule:
+run PROMOTE with the user. For an accepted row with anchors, the north star detail
+(`python -m scripts.north_star`) shows the repeats of its mistake in the days since acceptance
+and in as many days before: whether the rule worked.
 
 ---
 

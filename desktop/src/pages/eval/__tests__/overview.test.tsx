@@ -141,4 +141,17 @@ describe('Overview', () => {
     await waitFor(() => expect(screen.getByTestId('dimension-responsibility-sub').textContent).toBe('No text before a tool call 59%'));
     expect(screen.getByTestId('dimension-cost-head').textContent).toBe('no data yet');
   });
+
+  it('marks the judge\'s signal not calibrated, and only the judge\'s', async () => {
+    routes['GET /eval/health'] = health({ verdict: 'release', reason: 'x', checks: checks() }, { dimension_summary: {} });
+    routes['GET /eval/session-quality'] = { trend: [], low_details: [], sessions_checked: 33,
+      calibration: { accepting: true, reason: null, labels: {}, calibrated: false },
+      checks: { O3_CORRECTIONS: { checked: 33, failed: 3, rate: 0.09, examples: [] },
+        O4_GOAL: { checked: 10, failed: 4, rate: 0.4, examples: [] },
+        O1_LANGUAGE: { checked: 512, failed: 43, rate: 0.084, examples: [] } } };
+    show(<OverviewTab />);
+    await waitFor(() => expect(screen.getByTestId('dimension-quality-head').textContent).toBe('60%'));
+    expect(screen.getByTestId('dimension-quality-head').getAttribute('title')).toBe('Judge sample: delivered (not calibrated)');
+    expect(screen.getByTestId('dimension-responsibility-head').getAttribute('title')).toBe('Answers in your language');
+  });
 });

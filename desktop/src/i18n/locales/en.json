@@ -2287,9 +2287,13 @@
     "empty": "No week has enough conversations yet.",
     "line": {
       "tooFew": "Too early for a trend: it needs {{n}} weeks of conversations",
-      "better": "Getting better: {{now}} of the last 4 weeks' conversations needed no correction, against {{before}} the 4 weeks before",
-      "worse": "Getting worse: {{now}} of the last 4 weeks' conversations needed no correction, against {{before}} the 4 weeks before",
-      "flat": "About the same: {{now}} over the last 4 weeks, {{before}} the 4 weeks before"
+      "trend": "{{now}} of the last 4 weeks' conversations needed no correction, {{before}} the 4 weeks before: {{verdict}}"
+    },
+    "verdict": {
+      "better": "better",
+      "worse": "worse",
+      "same": "no visible change (±{{margin}} points)",
+      "tooFew": "too few sessions for a trend"
     },
     "repeats": "of this week's corrections repeat one you made before",
     "legend": {
@@ -3710,9 +3714,9 @@
       "nsCorrected": "of sessions corrected",
       "nsWeekSessions_one": "{{week}} · {{count}} session",
       "nsWeekSessions_other": "{{week}} · {{count}} sessions",
-      "nsDirection_better": "better than {{mean}} before",
-      "nsDirection_worse": "worse than {{mean}} before",
-      "nsDirection_same": "about the same as {{mean}} before",
+      "nsWindowSessions_one": "{{weeks}} weeks to {{week}} · {{count}} session",
+      "nsWindowSessions_other": "{{weeks}} weeks to {{week}} · {{count}} sessions",
+      "nsBefore": "{{before}} the 4 weeks before",
       "nsRepeats": "Repeats",
       "nsOfCorrections_one": "of {{count}} correction",
       "nsOfCorrections_other": "of {{count}} corrections",

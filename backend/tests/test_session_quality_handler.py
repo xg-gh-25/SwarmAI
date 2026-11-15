@@ -121,13 +121,49 @@ def test_the_judge_sees_at_most_ten_sessions_corrected_first(tmp_path):
     corrections = [{"type": "user_correction", "session_id": "s24", "ts": NOW.timestamp()}]
     calls = []
     result, _, _ = _run(tmp_path, sessions, corrections=corrections, scorer=_scorer(goal=0.2, calls=calls))
-    assert result["checks"]["O4_GOAL"]["checked"] == 3           # only corrected / long sessions qualify
+    assert result["checks"]["O4_GOAL"]["checked"] == 3           # O4/O5: the targeted layer only
+    assert result["judge_layers"]["random"]["judged"] == 7       # the rest of the cap, at random
     assert result["checks"]["O1_LANGUAGE"]["checked"] > 25       # deterministic: every turn of every session
-    assert [d["session_id"] for d in result["low_details"]] == ["s24", "s20", "s21"]
+    low = result["low_details"]
+    assert [d["session_id"] for d in low[:3]] == ["s24", "s20", "s21"]
+    assert [d["layer"] for d in low] == ["targeted"] * 3 + ["random"] * 7
     many = {f"x{i:02d}": _good() for i in range(15)}
     corr = [{"type": "user_correction", "session_id": s, "ts": NOW.timestamp()} for s in many]
     capped, _, _ = _run(tmp_path, many, corrections=corr)
-    assert capped["checks"]["O4_GOAL"]["checked"] == 10
+    assert capped["checks"]["O4_GOAL"]["checked"] == 7
+    # corrected sessions fill at most 7: three slots stay random, from the other corrected ones
+    assert capped["judge_layers"]["targeted"]["sampled"] == 7 and capped["judge_layers"]["random"]["sampled"] == 3
+
+
+def test_the_sample_keeps_random_slots_reported_as_their_own_layer(tmp_path):
+    """Three of ten slots, drawn with a fixed seed from the sessions not targeted: the
+    judge reads ordinary sessions too, the same sessions give the same draw, and the
+    random layer is counted apart; its normal-scored sessions are kept for labels."""
+    picked = sq.select_sessions(session_turns={f"s{i:02d}": 1 for i in range(30)},
+                                correction_session_ids={f"s{i:02d}" for i in range(20)})
+    assert [layer for _sid, layer in picked] == ["targeted"] * 7 + ["random"] * 3
+    drawn = [sid for sid, layer in picked if layer == "random"]
+    targeted = {sid for sid, layer in picked if layer == "targeted"}
+    assert len(set(drawn)) == 3 and not set(drawn) & targeted
+    assert drawn != [f"s{i:02d}" for i in range(7, 10)]          # not just the next ones in order
+    again = sq.select_sessions(session_turns={f"s{i:02d}": 1 for i in range(30)},
+                               correction_session_ids={f"s{i:02d}" for i in range(20)})
+    assert again == picked                                        # a fixed seed
+    sessions = {f"n{i:02d}": _good() for i in range(12)}
+    corrections = [{"type": "user_correction", "session_id": "n00", "ts": NOW.timestamp()}]
+    result, spath, _ = _run(tmp_path, sessions, corrections=corrections, scorer=_scorer(goal=0.9))
+    layers = result["judge_layers"]
+    assert layers == {"targeted": {"sampled": 1, "judged": 1, "low": 0},
+                      "random": {"sampled": 9, "judged": 9, "low": 0}}
+    assert [d["layer"] for d in result["normal_details"]] == ["random"] * 9
+    assert "n00" not in {d["session_id"] for d in result["normal_details"]}   # targeted: no normal label
+    # O4/O5 are the targeted layer's: how many random sessions a week holds never moves them
+    assert result["checks"]["O4_GOAL"]["checked"] == 1 and result["checks"]["O5_TOOLS"]["checked"] == 1
+    saved = json.loads(spath.read_text())
+    assert saved["judge_layers"] == layers and saved["trend"][-1]["judge_prompt_sha"] == saved["judge_prompt_sha"]
+    only_random, _, _ = _run(tmp_path / "r", {f"m{i}": _good() for i in range(4)}, scorer=_scorer(goal=0.9))
+    assert only_random["checks"]["O4_GOAL"]["checked"] == 0 and only_random["judge_layers"]["random"]["judged"] == 4
+    assert only_random["trend"][-1]["judge_prompt_sha"] is None   # no O4 this week: no prompt to calibrate
 
 
 def test_the_state_file_is_written_and_the_dashboard_reads_the_same_numbers(tmp_path, monkeypatch):

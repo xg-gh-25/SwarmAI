@@ -345,6 +345,8 @@ class EvalService:
             "tool_score": d.get("tool_score"),
             "dimension": d.get("dimension"),
             "reason": reason,
+            # which part of the judge's sample it came from (session_quality.select_sessions)
+            "layer": d.get("layer") if d.get("layer") in ("targeted", "random") else None,
         }
 
     def get_lines(self, now: datetime | None = None) -> dict:
@@ -473,6 +475,13 @@ class EvalService:
                                      "rate": c.get("rate"),
                                      "examples": [_example(e) for e in (c.get("examples") or [])[:3]]}
         sampler_error = data.get("sampler_error")
+        summaries: dict[str, bool] = {}
+
+        def calibrated(sha: str) -> bool:
+            if sha not in summaries:
+                summaries[sha] = self._calibration_summary(sha)["calibrated"]
+            return summaries[sha]
+
         return {
             "last_run": data.get("last_run"),
             "window_days": data.get("window_days"),
@@ -481,6 +490,12 @@ class EvalService:
             "low_details": [{**self._project_low_detail(d),
                              "title": str((d or {}).get("title") or "")[:80] if isinstance(d, dict) else ""}
                             for d in (data.get("low_details") or [])],
+            # sessions drawn at random that the judge scored normal: a label on one says
+            # whether the judge missed a problem
+            "normal_details": [{**self._project_low_detail(d),
+                                "title": str((d or {}).get("title") or "")[:80] if isinstance(d, dict) else ""}
+                               for d in (data.get("normal_details") or [])],
+            "judge_layers": self._project_layers(data.get("judge_layers")),
             "sampler_error": str(sampler_error)[:300] if sampler_error else None,
             "judge_error": str(data["judge_error"])[:300] if data.get("judge_error") else None,
             # sampled sessions whose judge call failed (not in O4/O5); None in a state
@@ -497,10 +512,27 @@ class EvalService:
                                  if isinstance(v, (int, float))},
                        "metrics": self._project_metrics(t.get("metrics")),
                        "repeat_rate": t.get("repeat_rate") if isinstance(t.get("repeat_rate"), (int, float)) else None,
-                       "backfilled": bool(t.get("backfilled"))}
+                       "backfilled": bool(t.get("backfilled")),
+                       # whether the judge prompt that scored this week's O4/O5 is
+                       # calibrated (None: no judge on that week, or before it was recorded)
+                       "judge_calibrated": (calibrated(str(t["judge_prompt_sha"]))
+                                            if t.get("judge_prompt_sha") else None)}
                       for t in (data.get("trend") or []) if isinstance(t, dict)][-12:],
             "calibration": self._calibration_view(data),
         }
+
+    @staticmethod
+    def _project_layers(layers) -> dict | None:
+        """``{targeted|random: {sampled, judged, low}}`` of the judge's sample; None in a
+        state written before the sample had layers."""
+        if not isinstance(layers, dict):
+            return None
+        out = {}
+        for name in ("targeted", "random"):
+            v = layers.get(name) if isinstance(layers.get(name), dict) else {}
+            out[name] = {k: v.get(k) if isinstance(v.get(k), int) and not isinstance(v.get(k), bool) else 0
+                         for k in ("sampled", "judged", "low")}
+        return out
 
     @staticmethod
     def _project_repeats(r) -> dict | None:
@@ -521,22 +553,26 @@ class EvalService:
 
     _CALIBRATION_FILE = ".judge-calibration.jsonl"
     _CALIBRATION_LABELS = ("agree", "disagree")
+    #: a prompt version is calibrated with at least this many labels, both judge outcomes among them
+    CALIBRATION_MIN_LABELS = 20
 
     def _calibration_path(self) -> Path:
         if not self._workspace_root:
             raise RuntimeError("no workspace: calibration labels are not stored")
         return self._workspace_root / ".context" / self._CALIBRATION_FILE
 
-    def _calibration_labels(self, prompt_sha: str) -> dict:
-        """``{session_id: label}`` for the given judge prompt, the latest label per
-        session winning. A missing or garbled file reads as no labels."""
+    def _calibration_entries(self, prompt_sha: str) -> dict:
+        """``{session_id: {"judge": "low" | "normal", "human": "agree" | "disagree"}}`` for
+        the given judge prompt, the latest label per session winning. A line written before
+        normal-scored sessions took labels has no ``judge``: it was a low score. A missing
+        or garbled file reads as no labels."""
         import json as _json
 
-        labels: dict[str, str] = {}
+        entries: dict[str, dict] = {}
         try:
             lines = self._calibration_path().read_text(encoding="utf-8").splitlines()
         except (OSError, RuntimeError):
-            return labels
+            return entries
         for line in lines:
             try:
                 e = _json.loads(line)
@@ -544,29 +580,38 @@ class EvalService:
                 continue
             if (isinstance(e, dict) and e.get("judge_prompt_sha") == prompt_sha
                     and e.get("human") in self._CALIBRATION_LABELS and e.get("session_id")):
-                labels[str(e["session_id"])] = e["human"]
-        return labels
+                entries[str(e["session_id"])] = {"judge": "normal" if e.get("judge") == "normal" else "low",
+                                                 "human": e["human"]}
+        return entries
+
+    def _calibration_labels(self, prompt_sha: str) -> dict:
+        """``{session_id: label}`` for the given judge prompt (``_calibration_entries``)."""
+        return {sid: e["human"] for sid, e in self._calibration_entries(prompt_sha).items()}
 
     def _calibration_view(self, state: dict) -> dict:
-        """What the Online tab needs to show the agree / disagree buttons: whether
-        the last batch can take labels (it was scored by today's judge prompt) and
-        the labels already given to it."""
+        """What the Online tab needs to show the label buttons: whether the last batch can
+        take labels (it was scored by today's judge prompt), the labels already given to
+        it, and whether the judge is calibrated (``_calibration_summary``)."""
         from core.session_scorer import JUDGE_PROMPT_SHA
 
         sha = state.get("judge_prompt_sha")
         accepting = bool(sha) and sha == JUDGE_PROMPT_SHA
+        summary = self._calibration_summary()
         return {"accepting": accepting,
                 "reason": None if accepting else (
                     "scored by an older judge prompt" if sha else
                     "scored before calibration labels were recorded"),
-                "labels": self._calibration_labels(JUDGE_PROMPT_SHA) if accepting else {}}
+                "labels": self._calibration_labels(JUDGE_PROMPT_SHA) if accepting else {},
+                "calibrated": summary["calibrated"], "low": summary["low"], "normal": summary["normal"],
+                "min_labels": summary["min_labels"]}
 
     def record_calibration(self, session_id: str, human: str) -> dict:
-        """The owner agrees or disagrees with a low score the online judge gave.
-        Only a session in the last run's low-scored list, scored by the current
-        judge prompt, takes a label (an older batch would calibrate a prompt that no
-        longer runs). Appends one line to ``.context/.judge-calibration.jsonl``
-        (gitignored, the owner's); the latest label per session counts."""
+        """The owner labels a score the online judge gave, scored by the current judge
+        prompt (an older batch would calibrate a prompt that no longer runs): a session of
+        the last run it scored low ("agree": there was a problem), or one drawn at random
+        that it scored normal ("agree": there was none; "disagree": the judge missed a
+        problem). Appends one line to ``.context/.judge-calibration.jsonl`` (gitignored,
+        the owner's) with the judge's outcome; the latest label per session counts."""
         import json as _json
         from datetime import datetime as _dt, timezone as _tz
 
@@ -578,25 +623,49 @@ class EvalService:
         view = self._calibration_view(state)
         if not view["accepting"]:
             raise ValueError(f"This batch does not take labels: {view['reason']}")
-        low = {str((d or {}).get("session_id")) for d in (state.get("low_details") or [])
-               if isinstance(d, dict)}
-        if session_id not in low:
-            raise ValueError("Not a low-scored session of the last online run")
+
+        def _ids(key: str) -> set:
+            return {str((d or {}).get("session_id")) for d in (state.get(key) or []) if isinstance(d, dict)}
+        if session_id in _ids("low_details"):
+            judge = "low"
+        elif session_id in {str(d.get("session_id")) for d in (state.get("normal_details") or [])
+                            if isinstance(d, dict) and d.get("layer") == "random"}:
+            judge = "normal"
+        else:
+            raise ValueError("Not a low-scored or randomly drawn normal-scored session of the last online run")
         path = self._calibration_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         line = {"at": _dt.now(_tz.utc).isoformat(), "session_id": session_id,
-                "judge_prompt_sha": JUDGE_PROMPT_SHA, "judge": "low", "human": human}
+                "judge_prompt_sha": JUDGE_PROMPT_SHA, "judge": judge, "human": human}
         with self._data_lock, path.open("a", encoding="utf-8") as fh:
             fh.write(_json.dumps(line) + "\n")
         return self._calibration_summary()
 
-    def _calibration_summary(self) -> dict:
+    def _calibration_summary(self, prompt_sha: str | None = None) -> dict:
+        """How the judge prompt (the current one by default) agrees with the owner, both
+        ways: ``low`` — of its low scores labelled, how many the owner agreed had a problem
+        (``rate``); ``normal`` — of the randomly drawn sessions it scored normal and the
+        owner labelled, how many the owner said had a problem (``rate``, its miss rate).
+        ``calibrated`` once there are ``CALIBRATION_MIN_LABELS`` labels with both outcomes
+        among them; until then its trend is shown as not calibrated. ``agree`` /
+        ``agreement`` count every label where the owner agreed with the judge."""
         from core.session_scorer import JUDGE_PROMPT_SHA
 
-        labels = self._calibration_labels(JUDGE_PROMPT_SHA)
-        agree = sum(1 for v in labels.values() if v == "agree")
-        return {"prompt_sha": JUDGE_PROMPT_SHA, "labels": len(labels), "agree": agree,
-                "agreement": round(agree / len(labels), 3) if labels else None}
+        sha = prompt_sha or JUDGE_PROMPT_SHA
+        entries = list(self._calibration_entries(sha).values())
+        low = [e for e in entries if e["judge"] == "low"]
+        normal = [e for e in entries if e["judge"] == "normal"]
+        low_agree = sum(1 for e in low if e["human"] == "agree")
+        problems = sum(1 for e in normal if e["human"] == "disagree")
+        agree = sum(1 for e in entries if e["human"] == "agree")
+        return {"prompt_sha": sha, "labels": len(entries), "agree": agree,
+                "agreement": round(agree / len(entries), 3) if entries else None,
+                "low": {"labels": len(low), "agree": low_agree,
+                        "rate": round(low_agree / len(low), 3) if low else None},
+                "normal": {"labels": len(normal), "problem": problems,
+                           "rate": round(problems / len(normal), 3) if normal else None},
+                "calibrated": len(entries) >= self.CALIBRATION_MIN_LABELS and bool(low) and bool(normal),
+                "min_labels": self.CALIBRATION_MIN_LABELS}
 
     # ─── LLM judges (design §8 item 6) ─────────────────────────────────────
 
@@ -640,7 +709,8 @@ class EvalService:
                  "prompt": _shown(ss.JUDGE_PROMPT), "system": ss.JUDGE_SYSTEM,
                  "schema": ss.JUDGE_SCHEMA,
                  "temperature": ss.JUDGE_TEMPERATURE, "max_tokens": ss.JUDGE_MAX_TOKENS,
-                 "sample_cap": sq._SAMPLE_CAP, "low_threshold": sq._LOW_SCORE_THRESHOLD,
+                 "sample_cap": sq._SAMPLE_CAP, "random_slots": sq._RANDOM_SLOTS,
+                 "low_threshold": sq._LOW_SCORE_THRESHOLD,
                  "prompt_sha": ss.JUDGE_PROMPT_SHA,
                  "calibration": self._calibration_summary()},
             ],
@@ -1468,10 +1538,16 @@ class EvalService:
 
         return [p.to_proposal_dict() for p in generate_governance_proposals(self._evolution_md())]
 
-    def get_pending_governance(self) -> dict:
-        """List governance proposals awaiting human decision."""
+    def get_pending_governance(self, with_outcomes: bool = False) -> dict:
+        """List governance proposals awaiting human decision. ``with_outcomes`` adds
+        ``accepted``: for each accepted rule, the repeats of its corrections before and
+        after acceptance (``governance_miner.accepted_outcomes``)."""
         proposals = self._read_governance_proposals()
-        return {"proposals": proposals, "total": len(proposals)}
+        out = {"proposals": proposals, "total": len(proposals)}
+        if with_outcomes:
+            from core.evolution.governance_miner import accepted_outcomes
+            out["accepted"] = accepted_outcomes(self._evolution_md())
+        return out
 
     def decide_governance(self, proposal_id: str, decision: str) -> dict:
         """Accept / reject / defer a governance proposal.

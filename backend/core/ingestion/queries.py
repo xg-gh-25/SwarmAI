@@ -12,6 +12,8 @@
 - ``corrections`` / ``read_corrections``: every correction the after-session review
   recorded, with its session, the skill it names and whether it repeats an earlier one —
   the one source of "the user corrected the agent" (O3, skill health, the repeat rate).
+- ``repeats_of`` / ``candidate_sessions``: the corrections recorded as repeating given
+  anchors, and the sessions of given candidates — a GC row's computed count.
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ import json
 from pathlib import Path
 import sqlite3
 import threading
-from typing import Any
+from typing import Any, Iterable
 
 from config import get_swarmws
 from core.memory_guard import MemoryGuard
@@ -433,6 +435,46 @@ def corrections(conn: sqlite3.Connection, since: datetime | None = None) -> list
         out.append({"at": at, "session_id": str(session_id or ""),
                     "skill": str(skill) if skill else None, "repeats": bool(repeats)})
     return out
+
+
+def repeats_of(conn: sqlite3.Connection, anchors: Iterable[str]) -> list[dict[str, Any]]:
+    """The corrections the after-session review recorded as repeating one of *anchors*
+    (the anchor of the earlier correction its declaration named, ``version_vector.repeats``),
+    oldest first: ``{id, at: datetime, session_id, repeats_of}``. What a GC row's count and
+    an accepted rule's before/after repeats are computed from
+    (``core.evolution.governance_miner``; design 2026-10-26-evolution-loop-admission §9.1)."""
+    wanted = sorted({str(a) for a in anchors if a})
+    if not wanted or not _table_exists(conn, "ingestion_inbox"):
+        return []
+    marks = ",".join("?" * len(wanted))
+    rows = conn.execute(
+        f"""SELECT i.id, i.created_at, i.source_ref, json_extract(u.decision,'$.version_vector.repeats')
+              FROM ingestion_inbox i JOIN ingestion_units u ON u.candidate_id=i.id
+             WHERE i.source_v2='S7' AND i.unit_kind='cognition'
+               AND json_extract(i.payload,'$.type')='correction'
+               AND json_extract(u.decision,'$.version_vector.repeats') IN ({marks})
+             ORDER BY i.created_at""", wanted).fetchall()
+    out = []
+    for uid, created, session_id, anchor in rows:
+        try:
+            at = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        out.append({"id": str(uid), "at": at if at.tzinfo else at.replace(tzinfo=timezone.utc),
+                    "session_id": str(session_id or ""), "repeats_of": str(anchor)})
+    return out
+
+
+def candidate_sessions(conn: sqlite3.Connection, ids: Iterable[str]) -> dict[str, str]:
+    """``{candidate id: session}`` for the given CDF candidates (an entry's ``cand-…``
+    marker names the candidate it was written from); a candidate without a session is left
+    out."""
+    wanted = sorted({str(i) for i in ids if i})
+    if not wanted or not _table_exists(conn, "ingestion_inbox"):
+        return {}
+    marks = ",".join("?" * len(wanted))
+    return {str(uid): str(ref) for uid, ref in conn.execute(
+        f"SELECT id, source_ref FROM ingestion_inbox WHERE id IN ({marks})", wanted) if ref}
 
 
 def read_corrections(since: datetime | None = None) -> tuple[list[dict[str, Any]], datetime | None]:

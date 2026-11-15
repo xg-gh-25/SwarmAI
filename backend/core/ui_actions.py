@@ -424,7 +424,10 @@ def get_ui_mcp_server():
         # tool's RESULT IS the data — the agent reads it THIS turn and acts.
         brain = args.get("brain") or None
         try:
-            text = format_attention_for_agent(brain if isinstance(brain, str) else None)
+            # off the event loop: collect stat()s run files and reads the CDF store
+            from core import executors
+            text = await executors.run_nav(format_attention_for_agent,
+                                           brain if isinstance(brain, str) else None)
         except Exception as e:  # noqa: BLE001 — never break the turn on a read
             text = f"(Could not read the Need You queue: {e})"
         return {"content": [{"type": "text", "text": text}]}

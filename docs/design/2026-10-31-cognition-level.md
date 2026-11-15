@@ -31,9 +31,19 @@ logged, rises whatever happens and says nothing about judgment.
 1. One sentence and the share of this week's conversations the person did not have to
    correct; below it, how many of this week's corrections repeat one made before.
 2. A weekly curve of both. Back-filled weeks are dashed. Vertical marks show where the rules
-   the agent reads changed. A trend ("getting better / worse / about the same", ±5 points) is
-   claimed only between weeks measured the same way (recorded vs back-filled); otherwise the
-   sentence says it is too early.
+   the agent reads changed.
+   The trend is computed once, in the backend (`cognition_level.trend`, r3 2026-11-15): the
+   last four weeks pooled against the four before, with a 95% interval for the difference of
+   the two corrected shares (Agresti-Caffo: one corrected and one clean session added to each
+   window, so a window at 0% or 100% still has a width). It says "better" or "worse" only
+   when the interval excludes zero, otherwise "no visible change (±X points)" with X the
+   interval's half-width; a window with fewer than 10 judged sessions gives no direction
+   ("too few sessions for a trend"). The prompt headline (`core.north_star`), the C&M rail
+   and this tab all read that one result and word it the same way
+   (`backend/tests/fixtures/north_star_trend_wording.json` holds both sides to it). Before
+   r3 the headline compared one week with the mean of the earlier weeks within ±5 points and
+   the tab four weeks with four at ±5 points; at about 36 sessions a week the noise is about
+   ±16 points for one week and ±11 for four, so both called noise a trend.
 3. "Where its mistakes come from": the newest monthly brain mistake audit as one chain
    (learned and kept → put in front of it → used right → still true), each link with the
    mistakes it leaked and what to improve; the largest link is red.
@@ -79,5 +89,8 @@ about 8 minutes, a few dollars, once.
 Tests `backend/tests/test_cognition_level.py` and `desktop/.../CognitionLevel.test.tsx`:
 week composition (record, covered, back-fill, minimum), back-fill scope (only uncovered,
 once, failure left, only the person's messages, escaped), back-fill horizon, marks only for
-changes, audit selection (newest month, previous, baseline), route model, trend only between
-like-measured weeks, placement under the queue. Each guard mutation-checked.
+changes, audit selection (newest month, previous, baseline), route model, placement under the
+queue. Each guard mutation-checked. The trend
+(r3): `test_the_trend_is_called_only_outside_its_interval` (the interval, its width at 0%,
+the 10-judged minimum), and the shared wording in `test_north_star.py` and
+`CognitionLevel.test.tsx` over one case file.

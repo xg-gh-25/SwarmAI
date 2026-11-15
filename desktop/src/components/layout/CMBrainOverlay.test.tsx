@@ -800,8 +800,8 @@ describe('CMBrainOverlay — north star in the rail', () => {
   const NS = {
     at: '2026-11-01T06:05:34+00:00',
     measures: {
-      cognition: { week: '2026-W44', sessions: 34, corrected_rate: 0.69, earlier_mean: 0.52, earlier_weeks: 7,
-                   direction: 'worse', repeat_rate: 0.13, corrections: 139 },
+      cognition: { week: '2026-W44', sessions: 134, corrected_rate: 0.69, window_weeks: 4, before_rate: 0.52,
+                   margin: 11, low: 0.06, high: 0.28, direction: 'worse', repeat_rate: 0.13, corrections: 139 },
       cdf: { useful_rate: 0.83, target: 0.9, below_target: ['GENERAL'], checks_total: 10, checks_failing: ['C3'] },
     },
   };
@@ -811,9 +811,28 @@ describe('CMBrainOverlay — north star in the rail', () => {
     renderOverlay();
     const rail = await screen.findByTestId('cm-north-star');
     await waitFor(() => expect(within(rail).getByTestId('cm-ns-corrected').textContent).toContain('69%'));
-    expect(within(rail).getByTestId('cm-ns-direction').textContent).toMatch(/worse than 52% before/);
+    expect(within(rail).getByTestId('cm-ns-corrected').textContent).toContain('4 weeks to 2026-W44 · 134 sessions');
+    expect(within(rail).getByTestId('cm-ns-direction').textContent).toMatch(/worse · 52% the 4 weeks before/);
     expect(within(rail).getByTestId('cm-ns-repeats').textContent).toMatch(/13%.*139 corrections/);
     expect(within(rail).getByTestId('cm-ns-cdf').textContent).toMatch(/83%.*target 90%/);
+  });
+
+  it('words a move inside the interval as no visible change, in the prompt headline\'s words', async () => {
+    mockHealth({ north_star: { ...NS, measures: { ...NS.measures, cognition: {
+      ...NS.measures.cognition, direction: 'same', margin: 11, low: -0.05, high: 0.17 } } } });
+    renderOverlay();
+    const rail = await screen.findByTestId('cm-north-star');
+    await waitFor(() => expect(within(rail).getByTestId('cm-ns-direction').textContent)
+      .toMatch(/no visible change \(±11 points\) · 52% the 4 weeks before/));
+  });
+
+  it('a snapshot from before the shared trend shows no direction rather than a band of its own', async () => {
+    const { before_rate: _b, margin: _m, window_weeks: _w, ...old } = NS.measures.cognition;
+    mockHealth({ north_star: { ...NS, measures: { ...NS.measures, cognition: { ...old, earlier_mean: 0.52 } } } });
+    renderOverlay();
+    const rail = await screen.findByTestId('cm-north-star');
+    await waitFor(() => expect(within(rail).getByTestId('cm-ns-corrected').textContent).toContain('69%'));
+    expect(within(rail).queryByTestId('cm-ns-direction')).toBeNull();
   });
 
   it('says it is not measured yet instead of showing 0', async () => {

@@ -33,8 +33,20 @@ vi.mock('../../services/attention', async (orig) => ({
   attentionService: { fetchAttention: vi.fn(async () => ({ items: [], counts: { blocking: 0, review: 0 } })) },
 }));
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { NeedYouContent } from './NeedYouOverlay';
-import { levelLine, rolling } from './cognitionLevelText';
+import { levelLine, rolling, trendVerdict } from './cognitionLevelText';
+import { mapIngestionValue, type LevelTrend } from '../../services/ingestion';
+
+/** The cases the backend's headline test reads too (backend/tests/test_north_star.py). */
+const WORDING = JSON.parse(readFileSync(join(__dirname, '../../../../backend/tests/fixtures/north_star_trend_wording.json'),
+  'utf8')) as { cases: Array<{ name: string; trend: unknown; verdict: string }> };
+const trendOf = (now: number, before: number, direction: LevelTrend['direction'], margin: number | null = 11): LevelTrend => ({
+  weeks: 4, now: { from: 'W15', to: 'W18', judged: 40, corrected: Math.round(40 * now), rate: now },
+  before: { from: 'W11', to: 'W14', judged: 40, corrected: Math.round(40 * before), rate: before },
+  difference: now - before, low: null, high: null, margin, direction, minJudged: 10,
+});
 
 const W = (week: string, rate: number | null, judged = 10, extra: Partial<LevelWeek> = {}): LevelWeek => ({
   week, start: `2026-10-${week.slice(-2)}`, sessions: judged, judged,
@@ -47,6 +59,7 @@ const eight = (first: number, last: number) => [
 const DATA: CognitionLevelData = {
   weeks: [W('W40', null, 0), ...eight(0.4, 0.6).slice(0, 7),
     W('W18', 0.6, 10, { corrections: 12, repeats: 2, repeatRate: 0.17 })],
+  trend: trendOf(0.45, 0.6, 'better'),
   marks: [], coveredFrom: null, latest: null, earliest: null,
   audit: { month: '2026-10', baseline: false, total: 10,
     outcomes: { 事先没有: 6, 有但没送到: 3, 送到仍犯: 1, 'DDD 内容过时': 0 }, previous: null },
@@ -61,11 +74,23 @@ function wrap({ children }: { children: ReactNode }) {
 describe('cognition level', () => {
   beforeEach(() => cognitionLevel.mockReset().mockResolvedValue(DATA));
 
-  it('the trend pools four weeks against the four before', () => {
-    expect(levelLine(t, eight(0.4, 0.6).slice(0, 7))).toBe(t('cogLevel.line.tooFew', { n: 8 }));
-    expect(levelLine(t, eight(0.4, 0.6))).toBe(t('cogLevel.line.better', { now: '60%', before: '40%' }));
-    expect(levelLine(t, eight(0.6, 0.4))).toBe(t('cogLevel.line.worse', { now: '40%', before: '60%' }));
-    expect(levelLine(t, eight(0.5, 0.5))).toBe(t('cogLevel.line.flat', { now: '50%', before: '50%' }));
+  it.each(WORDING.cases.map((c) => [c.name, c] as const))('says the verdict the prompt headline says: %s', (_name, c) => {
+    expect(trendVerdict(t, mapIngestionValue<LevelTrend>(c.trend))).toBe(c.verdict);
+  });
+
+  it('words the backend trend and claims no direction of its own', () => {
+    expect(levelLine(t, null)).toBe(t('cogLevel.line.tooFew', { n: 8 }));
+    expect(levelLine(t, trendOf(0.4, 0.6, 'better'))).toBe(
+      "60% of the last 4 weeks' conversations needed no correction, 40% the 4 weeks before: better");
+    expect(levelLine(t, trendOf(0.6, 0.4, 'worse'))).toBe(
+      "40% of the last 4 weeks' conversations needed no correction, 60% the 4 weeks before: worse");
+    // a 20-point move the backend's interval holds is no visible change, not "better"
+    expect(levelLine(t, trendOf(0.4, 0.6, 'same', 21))).toBe(
+      "60% of the last 4 weeks' conversations needed no correction, 40% the 4 weeks before: no visible change (±21 points)");
+    expect(levelLine(t, trendOf(0.4, 0.6, null, null))).toContain(': too few sessions for a trend');
+  });
+
+  it('the curve pools four weeks, weighted by conversations', () => {
     // weighted by conversations: a 2-conversation week cannot swing the share
     const r = rolling([W('a', 0.5, 20), W('b', 0.5, 20), W('c', 0.5, 20), W('d', 0, 2)]);
     expect(r[3]).toBeCloseTo(1 - (30 + 2) / 62, 5);
@@ -78,6 +103,9 @@ describe('cognition level', () => {
     expect(screen.getByTestId('needs-you-attention').compareDocumentPosition(section)
       & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(section).toHaveTextContent('60%');
+    // the sentence and the big number are the backend trend's window, not the curve's own
+    expect(screen.getByTestId('level-line')).toHaveTextContent("55% of the last 4 weeks' conversations needed no correction, 40% the 4 weeks before: better");
+    expect(section).toHaveTextContent('55%');
     expect(section).toHaveTextContent('2 / 12');
     expect(screen.getByTestId('level-agreement')).toHaveTextContent('of 14 conversations it recorded a correction in, the judge found 13');
     const missing = within(screen.getByTestId('level-chain')).getByTestId('level-stage-missing');

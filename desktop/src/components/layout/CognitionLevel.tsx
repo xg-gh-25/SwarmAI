@@ -5,7 +5,8 @@
  *
  * - one sentence and the share of the last four weeks' conversations the person did not
  *   have to correct (this week's beside it), and how many of this week's corrections
- *   repeat an earlier one;
+ *   repeat an earlier one. The sentence words the backend's one trend (four weeks against
+ *   the four before, better / worse only outside its 95% interval), as the prompt does;
  * - a weekly curve: each week a point, the four-week rolling share as the line (one week
  *   is too few conversations to read a trend from), marks where the rules the agent reads
  *   changed. Every week is measured the same way (one judge over the person's own words),
@@ -140,8 +141,9 @@ export function CognitionLevel({ onOpenHealth }: { onOpenHealth?: () => void }) 
   const data = q.data;
   const first = data.weeks.findIndex((w) => w.notCorrectedRate != null);
   const weeks = first < 0 ? [] : data.weeks.slice(first);
-  const trend = rolling(weeks);
-  const recent = trend[trend.length - 1];
+  const curve = rolling(weeks);
+  // the big number is the trend's own window, so it matches the sentence beside it
+  const recent = data.trend?.now.rate != null ? 1 - data.trend.now.rate : curve[curve.length - 1];
   const thisWeek = data.weeks[data.weeks.length - 1];
   const ag = data.agreement;
   return (
@@ -153,7 +155,7 @@ export function CognitionLevel({ onOpenHealth }: { onOpenHealth?: () => void }) 
         <div className="mt-3 grid grid-cols-[300px_1fr] items-start gap-9">
           <div>
             <p className="mb-3.5 text-[20px] font-semibold leading-snug text-[var(--color-text)]" data-testid="level-line">
-              {levelLine(t, weeks)}
+              {levelLine(t, data.trend)}
             </p>
             {recent != null && (
               <>

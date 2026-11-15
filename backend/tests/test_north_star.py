@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -17,8 +18,16 @@ def _week(week, not_corrected, sessions=10):
     return {"week": week, "sessions": sessions, "not_corrected_rate": not_corrected}
 
 
+def _trend(now, before, direction, margin=11, low=0.18, high=0.40):
+    return {"weeks": 4, "now": {"from": "W41", "to": "W44", "judged": 140, "corrected": round(now * 140), "rate": now},
+            "before": {"from": "W37", "to": "W40", "judged": 150, "corrected": round(before * 150), "rate": before},
+            "difference": round(now - before, 4), "low": low, "high": high, "margin": margin,
+            "direction": direction, "min_judged": 10}
+
+
 LEVEL = {
     "weeks": [_week("W41", 0.6), _week("W42", 0.6), _week("W43", 0.6), _week("W44", 0.3, 29)],
+    "trend": _trend(0.7, 0.4, "worse"),
     "latest": {"repeat_rate": 0.08, "corrections": 122},
     "audit": {"month": "2026-10-30", "total": 10, "outcomes": {"missing": 6, "not delivered": 3, "stale": 1}},
     "used": {"used_rate": None, "mature_used": 0, "mature_written": 0, "window_days": 14},
@@ -46,14 +55,16 @@ def parts(monkeypatch, tmp_path):
     monkeypatch.setattr(cl, "level", lambda now=None, **k: LEVEL)
     monkeypatch.setattr(health, "overview", lambda window="7d", now=None: OVERVIEW)
     monkeypatch.setattr(N, "_attention", lambda: ATTENTION)
+    monkeypatch.setattr(N, "_accepted", lambda now: [])
     monkeypatch.setattr(N, "path", lambda: tmp_path / "north_star.json")
 
 
 def test_the_headline_says_the_state_and_its_direction(parts):
     snap = N.compute(NOW)
     cognition, cdf, needs = snap["headline"]
-    # 70% corrected now against 40% before: fewer corrected sessions is better, so worse
-    assert "you corrected me in 70%" in cognition and "worse than the 3 weeks before" in cognition
+    # the backend's trend: 70% corrected over 4 weeks against 40% before, interval above 0
+    assert cognition.startswith("Cognition (4 weeks to W44, 140 sessions judged): you corrected me in 70%")
+    assert "40% in the 4 weeks before: worse;" in cognition
     assert "repeats 8% of 122" in cognition and "missing 60%" in cognition
     assert "useful 83% vs target 90%" in cdf and "GENERAL 55%" in cdf and "DDD" not in cdf
     assert "failing: C3 review output valid" in cdf and "checks 1/3 pass" in cdf
@@ -65,12 +76,43 @@ def test_the_measures_carry_the_same_readings_as_numbers(parts):
     """The C&M rail reads numbers, not the headline's words (measures_for_ui)."""
     m = N.compute(NOW)["measures"]
     cog, cdf = m["cognition"], m["cdf"]
-    assert cog["week"] == "W44" and cog["sessions"] == 29 and cog["corrected_rate"] == 0.7
-    assert cog["earlier_mean"] == 0.4 and cog["earlier_weeks"] == 3 and cog["direction"] == "worse"
+    assert cog["week"] == "W44" and cog["sessions"] == 140 and cog["corrected_rate"] == 0.7
+    assert cog["window_weeks"] == 4 and cog["before_rate"] == 0.4 and cog["direction"] == "worse"
+    assert (cog["margin"], cog["low"], cog["high"]) == (11, 0.18, 0.40)
     assert cog["repeat_rate"] == 0.08 and cog["corrections"] == 122
     assert cdf["useful_rate"] == 0.83 and cdf["target"] == 0.9
     assert cdf["below_target"] == ["GENERAL"] and cdf["checks_failing"] == ["C3"]
     assert cdf["checks_total"] == 3 and "needs_you" not in m
+
+
+WORDING = json.loads((Path(__file__).parent / "fixtures" / "north_star_trend_wording.json").read_text())
+
+
+@pytest.mark.parametrize("case", WORDING["cases"], ids=[c["name"] for c in WORDING["cases"]])
+def test_the_headline_says_the_shared_verdict(parts, monkeypatch, case):
+    """The headline words the backend's one trend with the verdict the UI also shows
+    (CognitionLevel.test.tsx reads the same cases): better / worse only outside the 95%
+    interval, otherwise no visible change within ±the interval; no band of its own."""
+    from core.ingestion import cognition_level as cl
+    weeks = [{"week": f"2026-W{39 + i}", **w} for i, w in enumerate([case["before_week"]] * 4 + [case["now_week"]] * 4)]
+    trend = cl.trend(weeks)
+    assert trend == case["trend"]
+    assert N.trend_verdict(trend) == case["verdict"]
+    monkeypatch.setattr(cl, "level", lambda now=None, **k: {**LEVEL, "trend": trend})
+    cognition = N.compute(NOW)["headline"][0]
+    assert f": {case['verdict']};" in cognition
+    assert N.compute(NOW)["measures"]["cognition"]["direction"] == (
+        trend["direction"] if trend["now"]["rate"] is not None else None)
+
+
+def test_without_a_trend_the_headline_says_too_few(parts, monkeypatch):
+    """No trend yet (fewer than eight weeks): the latest week, and no direction claimed."""
+    import core.ingestion.cognition_level as cl
+    monkeypatch.setattr(cl, "level", lambda now=None, **k: {**LEVEL, "trend": None})
+    snap = N.compute(NOW)
+    assert snap["headline"][0].startswith("Cognition (W44, 29 sessions): you corrected me in 70% of them; "
+                                          "too few sessions for a trend;")
+    assert snap["measures"]["cognition"]["direction"] is None
 
 
 def test_the_overlay_reads_the_measures_from_the_file(parts):
@@ -151,3 +193,15 @@ def test_one_day_of_sizes_shows_no_earlier_value(parts, monkeypatch):
     monkeypatch.setattr(prompt_metrics, "daily", lambda days=8, today=None: list(rows))
     cdf = N.compute(NOW)["headline"][1]
     assert "every-turn files: EVOLUTION 24.3K tokens." in cdf and "days ago" not in cdf
+
+
+def test_the_detail_says_whether_an_accepted_rule_stopped_its_mistake(parts, monkeypatch):
+    monkeypatch.setattr(N, "_accepted", lambda now: [
+        {"gc_id": "GC9", "title": "Read the API first", "accepted_on": "2026-11-05", "measured": True,
+         "days": 10, "before": 2, "after": 0},
+        {"gc_id": "GC10", "title": "Old rule", "accepted_on": "2026-11-01", "measured": False,
+         "reason": "no correction anchors in Evidence"}])
+    detail = N.compute(NOW)["detail"]
+    assert "  GC9 accepted 2026-11-05 (10 days): 2 before, 0 after — Read the API first" in detail
+    assert any(line.startswith("  GC10 accepted 2026-11-01: not measured (no correction anchors") for line in detail)
+    assert len(N.compute(NOW)["headline"]) == 3                   # detail only

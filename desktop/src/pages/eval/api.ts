@@ -186,14 +186,29 @@ export interface AdmissionResult {
 export interface OnlineExample { session_id?: string; title?: string; snippet?: string; reason?: string }
 export interface OnlineCheck { checked: number | null; failed: number | null; rate: number | null; examples: OnlineExample[] }
 export interface OnlineMetrics { turns: number | null; turn_p50_s: number | null; cost_p50_usd: number | null }
-export interface OnlineLow { session_id?: string; title?: string; goal_score?: number; tool_score?: number; dimension?: string; reason?: string }
-export interface OnlineTrendWeek { week: string; at?: string | null; rates: Record<string, number>; metrics: OnlineMetrics; repeat_rate?: number | null; backfilled?: boolean }
+/** A judged session; `layer` is the part of the sample it came from (targeted: corrected
+ *  or long; random: drawn with a fixed seed from the others). */
+export interface OnlineLow { session_id?: string; title?: string; goal_score?: number; tool_score?: number; dimension?: string; reason?: string; layer?: 'targeted' | 'random' | null }
+export interface OnlineLayer { sampled: number; judged: number; low: number }
+/** How the judge agrees with the owner, both ways (eval_service._calibration_summary):
+ *  `low.rate` of its low scores labelled, the share the owner agreed had a problem;
+ *  `normal.rate` of the random normal-scored ones, the share the owner said had a problem. */
+export interface CalibrationRates {
+  low: { labels: number; agree: number; rate: number | null };
+  normal: { labels: number; problem: number; rate: number | null };
+  calibrated: boolean;
+  min_labels: number;
+}
+export interface OnlineTrendWeek { week: string; at?: string | null; rates: Record<string, number>; metrics: OnlineMetrics; repeat_rate?: number | null; backfilled?: boolean; judge_calibrated?: boolean | null }
 export interface OnlineScoring {
   last_run: string | null;
   window_days: number | null;
   sessions_checked: number;
   checks: Record<string, OnlineCheck>;
   low_details: OnlineLow[];
+  /** sessions drawn at random that the judge scored normal: a label says whether it missed a problem */
+  normal_details?: OnlineLow[];
+  judge_layers?: { targeted: OnlineLayer; random: OnlineLayer } | null;
   sampler_error: string | null;
   judge_error: string | null;
   /** sampled sessions, and how many of them the judge failed on (not in O4/O5) */
@@ -204,7 +219,7 @@ export interface OnlineScoring {
    *  review's declaration); null when the record does not cover the window */
   repeat_corrections?: { corrections: number | null; repeats: number | null; rate: number | null } | null;
   trend: OnlineTrendWeek[];
-  calibration?: { accepting: boolean; reason: string | null; labels: Record<string, 'agree' | 'disagree'> };
+  calibration?: { accepting: boolean; reason: string | null; labels: Record<string, 'agree' | 'disagree'> } & Partial<CalibrationRates>;
 }
 
 // ─── /judges ───────────────────────────────────────────────────────────────
@@ -222,7 +237,8 @@ export interface JudgeInfo {
   sample_cap?: number;
   low_threshold?: number;
   prompt_sha?: string;
-  calibration: { prompt_sha: string; labels: number; agree: number; agreement: number | null } | null;
+  random_slots?: number;
+  calibration: ({ prompt_sha: string; labels: number; agree: number; agreement: number | null } & Partial<CalibrationRates>) | null;
 }
 export interface JudgesPage {
   judge_model: string;

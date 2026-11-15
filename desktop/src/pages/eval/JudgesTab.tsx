@@ -19,6 +19,8 @@ export function JudgesTab() {
   const online = J.judges.find((j) => j.id === 'online_session');
   const models = Array.from(new Set([J.judge_model, ...(settings.data?.available_models ?? [])].filter(Boolean)));
   const agreement = online?.calibration?.agreement;
+  const cal = online?.calibration;
+  const calibrated = !!cal?.calibrated;
   const temps = Array.from(new Set(J.judges.map((j) => j.temperature))).join(' / ') || '—';
   const fixedTemp = J.judges.length > 0 && J.judges.every((j) => j.temperature === 0);
   const sameFamily = /claude/i.test(J.judge_model) && /claude/i.test(J.agent_model ?? '');
@@ -36,8 +38,9 @@ export function JudgesTab() {
     [t('Judge and agent from different model families', 'judge 和被测 agent 用不同的模型家族'),
       `judge ${J.judge_model}, agent ${J.agent_model ?? '—'}`, sameFamily ? 'gap' : 'ok', sameFamily ? t('same family', '同一家族') : t('done', '做到')],
     [t('Agree with human labels before trusting it', '先和人工判定对齐再信它'),
-      online?.calibration?.labels ? t(`${online.calibration.labels} labels, agreement ${pct(agreement)}`, `${online.calibration.labels} 条标注，一致率 ${pct(agreement)}`) : t('no human labels yet: the agree / disagree buttons in Live sessions collect them', '还没有人工判定；真实会话里低分会话的"同意 / 不同意"就是为这个准备的'),
-      online?.calibration?.labels ? 'gap' : 'no', online?.calibration?.labels ? t('collecting', '收集中') : t('no data', '没有数据')],
+      online?.calibration?.labels ? t(`${online.calibration.labels} labels, agreement ${pct(agreement)}`, `${online.calibration.labels} 条标注，一致率 ${pct(agreement)}`) : t('no human labels yet: the label buttons in Live sessions collect them, on low scores and on normal ones drawn at random', '还没有人工判定；真实会话里低分会话和随机抽的正常分会话上的标注按钮就是为这个准备的'),
+      calibrated ? 'ok' : online?.calibration?.labels ? 'gap' : 'no',
+      calibrated ? t('calibrated', '已校准') : online?.calibration?.labels ? t('not calibrated', '未校准') : t('no data', '没有数据')],
     [t('Reduce judge bias', '减少 judge 的偏差'), t('one judge, no swapped-order scoring, no panel of models; longer answers may score higher', '只有一个 judge，没有双向打分，也没有多模型评审团；偏长的回答可能被打高分'), 'no', t('not done', '没做')],
   ];
   const stateColor = { ok: 'var(--color-status-success)', gap: 'var(--color-status-warning)', no: 'var(--color-status-error)' };
@@ -97,15 +100,30 @@ export function JudgesTab() {
       </Zone>
 
       <Zone title={t('Calibration · how often the judge agrees with you', '校准 · judge 和你的一致率')}>
-        {online?.calibration?.labels ? (
-          <div className="text-body text-[var(--color-text)]" data-testid="judge-agreement">
-            <b className="text-display tabular-nums mr-2">{pct(agreement)}</b>
-            {t(`${online.calibration.agree} of ${online.calibration.labels} low scores you agreed with (this prompt version)`, `${online.calibration.labels} 个低分里你同意 ${online.calibration.agree} 个（当前 prompt 版本）`)}
+        {cal?.labels ? (
+          <div data-testid="judge-agreement">
+            <div className="grid grid-cols-2 gap-8">
+              <div className="text-body text-[var(--color-text)]" data-testid="judge-rate-low">
+                <b className="text-display tabular-nums mr-2">{cal.low?.rate != null ? pct(cal.low.rate) : '—'}</b>
+                {t(`of the ${cal.low?.labels ?? 0} low scores you labelled had a problem`, `你标过的 ${cal.low?.labels ?? 0} 个低分里确实有问题的比例`)}
+              </div>
+              <div className="text-body text-[var(--color-text)]" data-testid="judge-rate-normal">
+                <b className="text-display tabular-nums mr-2">{cal.normal?.rate != null ? pct(cal.normal.rate) : '—'}</b>
+                {t(`of the ${cal.normal?.labels ?? 0} random normal scores you labelled had a problem it missed`, `你标过的 ${cal.normal?.labels ?? 0} 个随机正常分里它漏掉问题的比例`)}
+              </div>
+            </div>
+            <p className="text-small mt-2" data-testid="judge-calibrated"
+               style={{ color: calibrated ? 'var(--color-text-muted)' : 'var(--color-status-warning)' }}>
+              {calibrated
+                ? t('Calibrated for this prompt version.', '当前 prompt 版本已校准。')
+                : t(`Not calibrated: it needs ${cal.min_labels ?? 20} labels for this prompt version, on low and on normal scores (${cal.labels} so far).`,
+                  `未校准：当前 prompt 版本要 ${cal.min_labels ?? 20} 条标注，低分和正常分都要有（现在 ${cal.labels} 条）。`)}
+            </p>
           </div>
         ) : (
           <div className="flex items-center gap-4 text-small text-[var(--color-text-muted)]">
-            <span className="flex-1">{t('No data yet. Mark the low-scored sessions in Live sessions with agree / disagree; the agreement appears here. A judge whose agreement holds up may move its items from watch to gate.',
-              '还没有数据。你在真实会话里对低分会话点"同意 / 不同意"，攒够后这里显示一致率。一致率达标的 judge，判的项目才能从观测升门禁。')}</span>
+            <span className="flex-1">{t('No data yet. Label the low-scored sessions and the normal ones drawn at random in Live sessions; both rates appear here. A judge whose rates hold up may move its items from watch to gate.',
+              '还没有数据。你在真实会话里给低分会话和随机抽的正常分会话打标注，这里显示两个比例。比例达标的 judge，判的项目才能从观测升门禁。')}</span>
             <Btn onClick={() => go('online', 'low')}>{t('Go label', '去标注')}</Btn>
           </div>
         )}

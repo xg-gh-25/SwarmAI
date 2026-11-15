@@ -1,0 +1,180 @@
+{
+ "_about": "Shared by backend/tests/test_north_star.py and desktop/src/components/layout/CognitionLevel.test.tsx: for each case, eight weeks (four of before_week, four of now_week) give this trend (core.ingestion.cognition_level.trend) and the prompt headline and the UI both say this verdict.",
+ "cases": [
+  {
+   "name": "a 5-point move at 36 sessions a week is noise",
+   "before_week": {
+    "judged": 36,
+    "corrected": 18
+   },
+   "now_week": {
+    "judged": 36,
+    "corrected": 16
+   },
+   "trend": {
+    "weeks": 4,
+    "now": {
+     "from": "2026-W43",
+     "to": "2026-W46",
+     "judged": 144,
+     "corrected": 64,
+     "rate": 0.4444
+    },
+    "before": {
+     "from": "2026-W39",
+     "to": "2026-W42",
+     "judged": 144,
+     "corrected": 72,
+     "rate": 0.5
+    },
+    "difference": -0.0556,
+    "low": -0.1691,
+    "high": 0.0596,
+    "margin": 11,
+    "direction": "same",
+    "min_judged": 10
+   },
+   "verdict": "no visible change (±11 points)"
+  },
+  {
+   "name": "a large fall in corrected sessions is better",
+   "before_week": {
+    "judged": 36,
+    "corrected": 18
+   },
+   "now_week": {
+    "judged": 36,
+    "corrected": 10
+   },
+   "trend": {
+    "weeks": 4,
+    "now": {
+     "from": "2026-W43",
+     "to": "2026-W46",
+     "judged": 144,
+     "corrected": 40,
+     "rate": 0.2778
+    },
+    "before": {
+     "from": "2026-W39",
+     "to": "2026-W42",
+     "judged": 144,
+     "corrected": 72,
+     "rate": 0.5
+    },
+    "difference": -0.2222,
+    "low": -0.3282,
+    "high": -0.1101,
+    "margin": 11,
+    "direction": "better",
+    "min_judged": 10
+   },
+   "verdict": "better"
+  },
+  {
+   "name": "a large rise in corrected sessions is worse",
+   "before_week": {
+    "judged": 36,
+    "corrected": 18
+   },
+   "now_week": {
+    "judged": 36,
+    "corrected": 25
+   },
+   "trend": {
+    "weeks": 4,
+    "now": {
+     "from": "2026-W43",
+     "to": "2026-W46",
+     "judged": 144,
+     "corrected": 100,
+     "rate": 0.6944
+    },
+    "before": {
+     "from": "2026-W39",
+     "to": "2026-W42",
+     "judged": 144,
+     "corrected": 72,
+     "rate": 0.5
+    },
+    "difference": 0.1944,
+    "low": 0.0814,
+    "high": 0.3022,
+    "margin": 11,
+    "direction": "worse",
+    "min_judged": 10
+   },
+   "verdict": "worse"
+  },
+  {
+   "name": "both windows at 0% still have a width",
+   "before_week": {
+    "judged": 10,
+    "corrected": 0
+   },
+   "now_week": {
+    "judged": 10,
+    "corrected": 0
+   },
+   "trend": {
+    "weeks": 4,
+    "now": {
+     "from": "2026-W43",
+     "to": "2026-W46",
+     "judged": 40,
+     "corrected": 0,
+     "rate": 0.0
+    },
+    "before": {
+     "from": "2026-W39",
+     "to": "2026-W42",
+     "judged": 40,
+     "corrected": 0,
+     "rate": 0.0
+    },
+    "difference": 0.0,
+    "low": -0.0652,
+    "high": 0.0652,
+    "margin": 7,
+    "direction": "same",
+    "min_judged": 10
+   },
+   "verdict": "no visible change (±7 points)"
+  },
+  {
+   "name": "a window with fewer than 10 judged gives no trend",
+   "before_week": {
+    "judged": 36,
+    "corrected": 18
+   },
+   "now_week": {
+    "judged": 2,
+    "corrected": 1
+   },
+   "trend": {
+    "weeks": 4,
+    "now": {
+     "from": "2026-W43",
+     "to": "2026-W46",
+     "judged": 8,
+     "corrected": 4,
+     "rate": 0.5
+    },
+    "before": {
+     "from": "2026-W39",
+     "to": "2026-W42",
+     "judged": 144,
+     "corrected": 72,
+     "rate": 0.5
+    },
+    "difference": null,
+    "low": null,
+    "high": null,
+    "margin": null,
+    "direction": null,
+    "min_judged": 10
+   },
+   "verdict": "too few sessions for a trend"
+  }
+ ]
+}

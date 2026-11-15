@@ -168,7 +168,7 @@ export function GuideTab() {
     </> },
     { id: 'g-gaps', title: t('Against the method, what SwarmAI still lacks', '对照方法论，SwarmAI 还差什么'), body: <>
       <ul className="list-disc pl-5 text-body text-[var(--color-text)] mt-2 space-y-1">
-        <li><b>{t('Judges not calibrated: ', 'judge 没校准：')}</b>{t('human labels are only starting to be collected, so judged items stay in the watch tier.', '人工判定刚开始收集，judge 判的项目只能在观测档。')}</li>
+        <li><b>{t('Judges not calibrated: ', 'judge 没校准：')}</b>{t('human labels are being collected both ways, on low scores and on normal ones drawn at random; until a prompt version has 20 with both, its scores are marked not calibrated and judged items stay in the watch tier.', '人工判定正在两头收集：低分会话，和随机抽的正常分会话；一个 prompt 版本攒够 20 条、两种都有之前，它的分标为未校准，judge 判的项目只能在观测档。')}</li>
         <li><b>{t('Judge and agent from one family: ', 'judge 和 agent 同一家族：')}</b>{t('both are Claude models and may favour each other.', '都是 Claude，可能互相偏袒。')}</li>
         <li><b>{t('No bias mitigation: ', '没有偏差缓解：')}</b>{t('a single judge, no swapped-order scoring, no panel of models.', '单个 judge，没有双向打分或多模型评审团。')}</li>
         <li><b>{t('Regression set only: ', '只有回归集：')}</b>{t('no capability set, and no consistency check such as pass^k over repeated runs.', '没有能力评测集，也没有 pass^k 这类多次运行的一致性检查。')}</li>

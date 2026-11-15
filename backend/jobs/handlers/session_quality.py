@@ -18,10 +18,16 @@ and tasks got done in real use.
     same mistake, of all corrections — rests only on the review's ``repeats``
     declaration. Weeks before the review's first record have no O3 (not zero); a
     session not reviewed yet when the job runs counts as not corrected.
-- Judge checks on a sample of at most ``_SAMPLE_CAP`` sessions (ones with a user
-  correction or an unusual number of turns first), via ``session_scorer``, each on
-  one exchange (the first answered question in the window, with its own answer and
-  tools):
+- Judge checks on a sample of at most ``_SAMPLE_CAP`` sessions, via
+  ``session_scorer``, each on one exchange (the first answered question in the window,
+  with its own answer and tools). The sample has two layers: ``targeted`` (sessions
+  with a user correction, then those with an unusual number of turns, at most
+  ``_SAMPLE_CAP - _RANDOM_SLOTS``) and ``random`` (the rest of the cap, at least
+  ``_RANDOM_SLOTS``, drawn from the other sessions with a fixed seed), reported apart in
+  ``judge_layers``. O4/O5 (their rates, the trend and the week-over-week follow-ups) are
+  the targeted layer's, so the share of random sessions in a week never moves them; the
+  random layer is its own count, and the random sessions the judge scored normal are
+  kept in ``normal_details`` so the owner can say whether it missed a problem:
   - O4_GOAL: was what the user asked for delivered;
   - O5_TOOLS: were the tools chosen sensibly.
 
@@ -29,14 +35,15 @@ The result is written to ``<workspace>/.context/.session-quality-state.json``
 (gitignored: it holds session titles, snippets and reasons for the owner):
 ``{version, last_run, window_days, sessions_checked, checks: {id: {checked, failed,
 rate, examples}}, metrics: {turns, turn_p50_s, cost_p50_usd}, repeat_corrections:
-{corrections, repeats, rate} | None, low_details, judge_prompt_sha, sampler_error,
-judge_error, judge_sampled, judge_failed, trend}``.
+{corrections, repeats, rate} | None, low_details, normal_details, judge_layers,
+judge_prompt_sha, sampler_error, judge_error, judge_sampled, judge_failed, trend}``
+(each judged session in ``low_details`` / ``normal_details`` names its ``layer``).
 ``judge_error`` is set when every judged session failed (O4/O5 then did not run);
 ``judge_failed`` of ``judge_sampled`` counts the sampled sessions whose judge call
 failed, which O4/O5 leave out; ``judge_prompt_sha`` names the
-judge prompt that scored ``low_details`` (a calibration label counts only for it).
-``trend`` is one entry per ISO week, sorted, last 12 kept: ``{week, at, rates,
-metrics, repeat_rate}``; this run replaces this week's entry, so ``trend[-2]`` is the week before
+judge prompt that scored ``low_details`` and ``normal_details`` (a calibration label
+counts only for it). ``trend`` is one entry per ISO week, sorted, last 12 kept: ``{week,
+at, rates, metrics, repeat_rate, judge_prompt_sha}`` (the sha only on a week whose O4 scored a session); this run replaces this week's entry, so ``trend[-2]`` is the week before
 (core.eval_followups reads it that way). Weeks before the first run are filled once
 from the session store (``backfilled: true``; O1–O3 and metrics only).
 Readers: EvalService.get_session_quality (the Online tab), eval_followups, and the
@@ -50,6 +57,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -60,6 +68,8 @@ logger = logging.getLogger(__name__)
 
 WINDOW_DAYS = 7
 _SAMPLE_CAP = 10          # sessions sent to the judge per run
+_RANDOM_SLOTS = 3         # of them, at least this many drawn at random from the others
+_RANDOM_SEED = "session-quality-random-v1"   # fixed: the same sessions give the same draw
 _TURN_ANOMALY_HIGH = 20   # more user turns than this is unusual
 _LOW_SCORE_THRESHOLD = 0.6
 _TREND_WEEKS = 12
@@ -70,14 +80,20 @@ CHECKS = ("O1_LANGUAGE", "O2_SILENT_TOOLS", "O3_CORRECTIONS", "O4_GOAL", "O5_TOO
 
 # ── sampling ──────────────────────────────────────────────────────────────────
 
-def select_sessions(*, session_turns: dict[str, int], correction_session_ids: set[str]) -> list[str]:
-    """The judge sample: sessions with a user correction, then those with more than
-    ``_TURN_ANOMALY_HIGH`` user turns, capped at ``_SAMPLE_CAP``. Deterministic order
-    so a run is reproducible."""
+def select_sessions(*, session_turns: dict[str, int], correction_session_ids: set[str]
+                    ) -> list[tuple[str, str]]:
+    """The judge sample as ``[(session_id, layer)]``: ``targeted`` — sessions with a user
+    correction, then those with more than ``_TURN_ANOMALY_HIGH`` user turns, at most
+    ``_SAMPLE_CAP - _RANDOM_SLOTS``; then ``random`` — the rest of the cap drawn from the
+    other sessions with a fixed seed, so the judge also reads ordinary sessions and its
+    misses can be measured. Deterministic: the same sessions give the same sample."""
     corrected = sorted(s for s in session_turns if s in correction_session_ids)
     long = sorted(s for s, n in session_turns.items()
                   if n > _TURN_ANOMALY_HIGH and s not in correction_session_ids)
-    return (corrected + long)[:_SAMPLE_CAP]
+    targeted = (corrected + long)[:_SAMPLE_CAP - _RANDOM_SLOTS]
+    others = sorted(set(session_turns) - set(targeted))
+    drawn = random.Random(_RANDOM_SEED).sample(others, min(len(others), _SAMPLE_CAP - len(targeted)))
+    return [(sid, "targeted") for sid in targeted] + [(sid, "random") for sid in drawn]
 
 
 def _read_corrections(reader: Callable[[], tuple]) -> tuple[list[tuple[float, str, bool]], float | None]:
@@ -273,17 +289,20 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
     """``sessions``: ``{sid: {title, messages}}`` for the window; ``costs`` the
     per-turn costs in it; ``correction_ids`` None when the corrections record does not
     cover the window (O3 is then not scored). Returns the ``sessions_checked``, ``checks``, ``metrics``,
-    ``low_details``, ``judge_error``, ``judge_sampled`` and ``judge_failed`` parts of the
-    state. A sampled session whose judge call failed is not in O4/O5: it is counted in
+    ``low_details``, ``normal_details``, ``judge_layers``, ``judge_error``, ``judge_sampled``
+    and ``judge_failed`` parts of the state. A sampled session whose judge call failed is not in O4/O5: it is counted in
     ``judge_failed`` so the judged share is never read off a silently smaller sample."""
     det = _Deterministic(since, None, correction_ids)
     for sid in sorted(sessions):
         det.add(sid, sessions[sid])
     tallies, turn_counts = det.tallies, det.turn_counts
     low: list[dict] = []
+    normal: list[dict] = []
     judge_errors: list[str] = []
     sample = select_sessions(session_turns=turn_counts, correction_session_ids=correction_ids or set())
-    for sid in sample:
+    layers = {name: {"sampled": 0, "judged": 0, "low": 0} for name in ("targeted", "random")}
+    for sid, layer in sample:
+        layers[layer]["sampled"] += 1
         session = sessions[sid]
         turns = split_turns(session.get("messages") or [], since)
         # The judge sees ONE exchange: a question with its own answer and tools. The
@@ -299,20 +318,26 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
             continue
         goal, tool = result.get("goal_score", 1.0), result.get("tool_score", 1.0)
         reason = str(result.get("reason") or "")
-        tallies["O4_GOAL"].add(goal < _LOW_SCORE_THRESHOLD, sid, session, turn["user"], reason)
-        tallies["O5_TOOLS"].add(tool < _LOW_SCORE_THRESHOLD, sid, session, turn["user"], reason)
+        if layer == "targeted":       # O4/O5 stay one sample drawn one way, week after week
+            tallies["O4_GOAL"].add(goal < _LOW_SCORE_THRESHOLD, sid, session, turn["user"], reason)
+            tallies["O5_TOOLS"].add(tool < _LOW_SCORE_THRESHOLD, sid, session, turn["user"], reason)
+        layers[layer]["judged"] += 1
+        detail = {"session_id": sid, "title": (session.get("title") or "")[:_TITLE_MAX],
+                  "goal_score": goal, "tool_score": tool, "dimension": result.get("dimension"),
+                  "reason": reason[:_REASON_MAX], "layer": layer}
         if min(goal, tool) < _LOW_SCORE_THRESHOLD:
-            low.append({"session_id": sid, "title": (session.get("title") or "")[:_TITLE_MAX],
-                        "goal_score": goal, "tool_score": tool, "dimension": result.get("dimension"),
-                        "reason": reason[:_REASON_MAX]})
+            layers[layer]["low"] += 1
+            low.append(detail)
+        elif layer == "random":
+            normal.append(detail)       # a label here measures what the judge misses
     # Every judged session failing is a fault, not "no data" (the judge is down).
     judge_error = (f"{len(judge_errors)}/{len(sample)} judged sessions failed: "
                    f"{judge_errors[0].split(':', 1)[0][:80]}"
                    if sample and len(judge_errors) == len(sample) else None)
     return {"sessions_checked": len(turn_counts),
             "checks": {cid: t.out() for cid, t in tallies.items()},
-            "metrics": det.metrics(costs or []), "low_details": low,
-            "judge_error": judge_error,
+            "metrics": det.metrics(costs or []), "low_details": low, "normal_details": normal,
+            "judge_layers": layers, "judge_error": judge_error,
             "judge_sampled": len(sample), "judge_failed": len(judge_errors)}
 
 
@@ -484,7 +509,10 @@ def run_session_quality(
                 logger.error("session_quality: weekly backfill failed (%s)", exc)
         trend = _with_trend(trend, _trend_entry(_week_label(now_local), now.isoformat(),
                                                 scored["checks"], scored["metrics"],
-                                                repeat_rate=(repeat_corrections or {}).get("rate")))
+                                                repeat_rate=(repeat_corrections or {}).get("rate"),
+                                                judge_prompt_sha=(JUDGE_PROMPT_SHA
+                                                                  if scored["checks"]["O4_GOAL"]["checked"]
+                                                                  else None)))
     state["trend"] = trend
     if not dry_run:
         try:

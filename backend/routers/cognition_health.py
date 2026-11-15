@@ -16,7 +16,7 @@ import ipaddress
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException, Path, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from core import executors
 from core.ingestion import health
@@ -178,6 +178,28 @@ class LevelAgreement(Strict):
     clean_agreed: int
 
 
+class TrendWindow(Strict):
+    from_: str = Field(alias="from")
+    to: str
+    judged: int
+    corrected: int
+    rate: float | None
+
+
+class LevelTrend(Strict):
+    """The corrected share's trend (cognition_level.trend): four weeks pooled against the
+    four before, a 95% interval of the difference; direction None with too few judged."""
+    weeks: int
+    now: TrendWindow
+    before: TrendWindow
+    difference: float | None
+    low: float | None
+    high: float | None
+    margin: int | None
+    direction: Literal["better", "worse", "same"] | None
+    min_judged: int
+
+
 class LevelMark(Strict):
     at: str
     kind: str
@@ -205,6 +227,7 @@ class CognitionLevel(Strict):
     covered_from: str | None
     latest: LevelWeek | None
     earliest: LevelWeek | None
+    trend: LevelTrend | None
     audit: Audit | None
     used: Used
     agreement: LevelAgreement

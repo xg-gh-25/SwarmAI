@@ -10,6 +10,10 @@ It measures outcomes, never how much is stored:
   week grows). One instrument for every week, so a trend means something. The
   after-session review's own record (``queries.corrections``, and the sessions it
   reviewed whole) checks the judge: ``agreement``.
+- **trend**: the last four weeks pooled against the four before, with a 95% interval for
+  the difference of the two corrected shares (``trend``); "better" or "worse" only when
+  the interval excludes zero, otherwise no visible change within ±the interval. The prompt
+  headline (``core.north_star``) and the tab both read this one result.
 - **repeats**: of the corrections the review recorded in a week, how many it declared a
   repeat of an earlier one (only the review knows the earlier corrections).
 - **where mistakes come from**: the newest monthly brain mistake audit
@@ -19,7 +23,8 @@ It measures outcomes, never how much is stored:
   the product version), recorded by each health pass, and when the review began
   recording corrections.
 
-Public: ``level(now=None)`` (what the first Needs You tab shows), ``judge_sessions(conn, ...)``
+Public: ``level(now=None)`` (what the first Needs You tab shows), ``trend(points)``,
+``judge_sessions(conn, ...)``
 and ``record_marks(conn, ...)`` (run by ``health.run``).
 
 Storage: the tables ``correction_backfill``, ``backfill_failures`` and ``rule_marks`` in
@@ -71,6 +76,9 @@ CREATE TABLE IF NOT EXISTS rule_marks (
 );
 """
 MAX_ATTEMPTS = 3              # a session-week whose judge call failed this often is given up
+TREND_WEEKS = 4               # the trend pools this many weeks against as many before them
+MIN_POOLED = 10               # a window with fewer judged sessions gives no trend
+Z95 = 1.96                    # two-sided 95%
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -420,6 +428,43 @@ def agreement(points: list[dict], conn: sqlite3.Connection) -> dict:
             "clean_total": len(neg), "clean_agreed": sum(neg)}
 
 
+def _window(points: list[dict]) -> dict:
+    judged = sum(int(p.get("judged") or 0) for p in points)
+    corrected = sum(int(p.get("corrected") or 0) for p in points)
+    return {"from": points[0]["week"], "to": points[-1]["week"], "judged": judged,
+            "corrected": corrected, "rate": round(corrected / judged, 4) if judged else None}
+
+
+def trend(points: list[dict]) -> dict | None:
+    """The one trend of the corrected share: the last ``TREND_WEEKS`` weeks pooled against
+    the ``TREND_WEEKS`` before them, weighted by the sessions judged. None with fewer weeks.
+
+    ``{"weeks", "now", "before", "difference", "low", "high", "margin", "direction",
+    "min_judged"}``: each window ``{from, to, judged, corrected, rate}`` (``rate`` the
+    corrected share); ``difference`` = now - before; ``low``/``high`` its 95% interval
+    (Agresti-Caffo: one corrected and one clean session added to each window, so a window
+    at 0% or 100% still has a width); ``margin`` the interval's half-width in whole points.
+    ``direction`` is "better" when the whole interval is below zero (fewer corrected),
+    "worse" when it is above, "same" when it holds zero, None when a window has fewer than
+    ``MIN_POOLED`` judged sessions (then the interval is None too). At about 36 sessions a
+    week the interval is about ±11 points, so a 5-point move is called no visible change."""
+    if len(points) < 2 * TREND_WEEKS:
+        return None
+    now, before = _window(points[-TREND_WEEKS:]), _window(points[-2 * TREND_WEEKS:-TREND_WEEKS])
+    out = {"weeks": TREND_WEEKS, "now": now, "before": before, "difference": None, "low": None,
+           "high": None, "margin": None, "direction": None, "min_judged": MIN_POOLED}
+    if now["judged"] < MIN_POOLED or before["judged"] < MIN_POOLED:
+        return out
+    n1, n2 = now["judged"] + 2, before["judged"] + 2
+    p1, p2 = (now["corrected"] + 1) / n1, (before["corrected"] + 1) / n2
+    half = Z95 * (p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2) ** 0.5
+    low, high = p1 - p2 - half, p1 - p2 + half
+    out.update(difference=round(now["rate"] - before["rate"], 4), low=round(low, 4),
+               high=round(high, 4), margin=max(1, round(half * 100)),
+               direction="better" if high < 0 else "worse" if low > 0 else "same")
+    return out
+
+
 def level(now: datetime | None = None, *, workspace: Path | None = None) -> dict:
     from . import health
     now = now or datetime.now(timezone.utc)
@@ -447,5 +492,5 @@ def level(now: datetime | None = None, *, workspace: Path | None = None) -> dict
     for p in points:                      # the ids checked the judge; the tab needs the counts
         p["record_corrected"], p["record_clean"] = len(p["record_corrected"]), len(p["record_clean"])
     return {"weeks": points, "marks": marks, "covered_from": covered_from.isoformat() if covered_from else None,
-            "latest": latest, "earliest": earlier, "audit": audit(workspace), "used": used,
-            "agreement": agree}
+            "latest": latest, "earliest": earlier, "trend": trend(points), "audit": audit(workspace),
+            "used": used, "agreement": agree}

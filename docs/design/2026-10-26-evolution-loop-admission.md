@@ -291,6 +291,12 @@ Threads 的 Evolution Pipeline 条）。
 - **复发统计**：同一份数据给 HLD 的复发指标用：一条纠错写入之后收到的独立用户证据数和时间间隔，以及对应规则或门禁被接受（`✔ ACCEPTED <date>`）前后的复发率。
 - **过渡**：CDF 阶段 B 上线之前没有 `claim_support`，Count 保持现在的手工 `N/M`。上线之后，Evidence 列里有锚点的行按新规则算，没有锚点的旧行保持手工计数，不做一次性迁移（CDF §13）。
 - **局限**：换了说法的同一类纠正可能被卡 3 漏判成新的一类，计数会被低估。漏判率在 CDF 的 holdout 里单独统计。
+- **实现（2026-11-15）**：数据源用复盘自己记下的重复声明，而不是 `claim_support`：每条 S7 纠错单元的
+  `version_vector.repeats` 记着它重复的那条早先纠错的锚点（`queries.repeats_of`），北极星的重复率也读这份记录，两处同源。
+  Count = 锚点所指的纠错本身和"重复声明指向这些锚点"的纠错里，不同会话的个数（同一个会话只算一次；锚点的会话从它的
+  `cand:` 标记查；查不到会话的锚点单独算一次）。没有锚点的行、或者 `ingestion.db` 读不了，保持手写 `N/M`。被接受的行
+  （`✔ ACCEPTED <date>`）由 `governance_miner.accepted_outcomes` 报：接受日之后到现在、和之前同样长的一段里，重复它的纠错
+  各出现在几个会话里；`GET /api/eval/governance/pending` 的 `accepted` 和 `python -m scripts.north_star` 的详情显示。
 
 **测试（增补 §6 第 1 条）**：
 - Evidence 里两个锚点、`claim_support` 里共 3 个不同的 `user_message` 根 → Count 渲染为 `3/3`，Checked 非空时出提案。

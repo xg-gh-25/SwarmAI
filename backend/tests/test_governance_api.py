@@ -85,3 +85,20 @@ def test_unknown_id_and_invalid_decision(svc):
     service, _evolution = svc
     assert service.decide_governance("NOPE", "accept")["status"] == "not_found"
     assert service.decide_governance("GC14", "frobnicate")["status"] == "error"
+
+
+def test_the_pending_route_lists_accepted_rules_with_their_outcome(svc, monkeypatch):
+    """GET /eval/governance/pending carries `accepted`: an accepted row is listed with
+    whether its before / after repeats could be measured (no anchors here)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import eval as eval_router
+    service, _evolution = svc
+    assert service.decide_governance("GC14", "accept")["status"] == "accepted"
+    monkeypatch.setattr(eval_router, "get_eval_service", lambda: service)
+    app = FastAPI()
+    app.include_router(eval_router.router, prefix="/api/eval")
+    body = TestClient(app).get("/api/eval/governance/pending").json()
+    assert [p["gc_id"] for p in body["proposals"]] == ["GC15"]
+    assert [(a["gc_id"], a["measured"], a["reason"]) for a in body["accepted"]] == [
+        ("GC14", False, "no correction anchors in Evidence")]

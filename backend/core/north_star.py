@@ -9,7 +9,8 @@ it (``core.ingestion.health.overview``) and what waits on the person
   the file only; it never reads a database: SwarmAI TECH, system-prompt purity). The CDF
   line ends with the sizes of MEMORY and EVOLUTION, injected whole with no budget, so the
   agent sees a rise and consolidates by declaration (``_every_turn_sizes``);
-- ``detail``: the full picture, printed by ``python -m scripts.north_star``;
+- ``detail``: the full picture, printed by ``python -m scripts.north_star``, with
+  each accepted governance rule's repeats before and after its acceptance;
 - ``measures``: the same readings as numbers, for the C&M overlay's rail
   (``measures_for_ui``, served by ``GET /api/eval/context-health/lite``).
 
@@ -33,8 +34,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 FILENAME = "north_star.json"
-#: how far the latest week may sit from the earlier weeks' mean and still be "flat"
-FLAT_BAND = 0.05
 
 
 def path() -> Path:
@@ -46,24 +45,44 @@ def _pct(x: float | None) -> str:
     return "n/a" if x is None else f"{round(x * 100)}%"
 
 
+def trend_verdict(trend: dict | None) -> str:
+    """The verdict on the corrected share's trend (``cognition_level.trend``), in the words
+    the cognition tab and the C&M rail also use (en locale ``cogLevel.verdict``; both are
+    held to ``tests/fixtures/north_star_trend_wording.json``): "better" or "worse" only
+    when the 95% interval excludes zero, otherwise "no visible change (±X points)"."""
+    direction = (trend or {}).get("direction")
+    if direction in ("better", "worse"):
+        return direction
+    if direction == "same":
+        return f"no visible change (±{trend['margin']} points)"
+    return "too few sessions for a trend"
+
+
+def _points(x: float | None) -> str:
+    return "n/a" if x is None else f"{round(x * 100):+d}"
+
+
 def _cognition(level: dict) -> tuple[str, list[str], dict | None]:
-    """The headline line, the detail lines and the measures of the cognition level."""
+    """The headline line, the detail lines and the measures of the cognition level. The
+    trend is the backend's one (``level["trend"]``: four weeks pooled against the four
+    before, with its 95% interval); this only words it."""
     weeks = [w for w in level.get("weeks") or [] if w.get("not_corrected_rate") is not None]
     detail = ["Cognition level (outcomes, not storage):"]
-    if not weeks:
-        return "Cognition: no week with enough sessions yet.", detail + ["  no data"], None
-    corrected = [(w["week"], 1 - w["not_corrected_rate"], w["sessions"]) for w in weeks]
-    week, rate, sessions = corrected[-1]
-    earlier = [r for _w, r, _n in corrected[:-1]]
-    mean = sum(earlier) / len(earlier) if earlier else None
-    if earlier:
-        # fewer corrected sessions is better
-        move = ("better than" if rate < mean - FLAT_BAND else "worse than" if rate > mean + FLAT_BAND
-                else "about the same as")
-        trend = f"{move} the {len(earlier)} weeks before (mean {_pct(mean)}, range " \
-                f"{_pct(min(earlier))}–{_pct(max(earlier))})"
+    tr = level.get("trend") or None
+    now = (tr or {}).get("now") or {}
+    before = (tr or {}).get("before") or {}
+    verdict = trend_verdict(tr)
+    if now.get("rate") is not None:
+        week, rate, sessions = now["to"], now["rate"], now["judged"]
+        compared = (f", {_pct(before['rate'])} in the {tr['weeks']} weeks before"
+                    if before.get("rate") is not None else "")
+        head = (f"Cognition ({tr['weeks']} weeks to {week}, {sessions} sessions judged): "
+                f"you corrected me in {_pct(rate)} of them{compared}: {verdict}")
+    elif weeks:
+        week, rate, sessions = weeks[-1]["week"], 1 - weeks[-1]["not_corrected_rate"], weeks[-1]["sessions"]
+        head = f"Cognition ({week}, {sessions} sessions): you corrected me in {_pct(rate)} of them; {verdict}"
     else:
-        trend = "no earlier week to compare"
+        return "Cognition: no week with enough sessions yet.", detail + ["  no data"], None
     latest = level.get("latest") or {}
     repeats = (f"repeats {_pct(latest.get('repeat_rate'))} of {latest.get('corrections')} recorded corrections"
                if latest.get("repeat_rate") is not None else "repeats: not measured yet")
@@ -76,10 +95,15 @@ def _cognition(level: dict) -> tuple[str, list[str], dict | None]:
             f"{k} {_pct(v / total)}" for k, v in top)
     else:
         sources = ""
-    line = (f"Cognition ({week}, {sessions} sessions): you corrected me in {_pct(rate)} of them, {trend}; "
-            f"{repeats}{sources}.")
-    for w, r, n in corrected:
-        detail.append(f"  {w}: corrected {_pct(r)} of {n} sessions")
+    line = f"{head}; {repeats}{sources}."
+    for w in weeks:
+        detail.append(f"  {w['week']}: corrected {_pct(1 - w['not_corrected_rate'])} of {w['sessions']} sessions")
+    if now.get("judged") is not None:
+        interval = (f"; difference {_points(tr['difference'])} points, 95% interval "
+                    f"{_points(tr['low'])} to {_points(tr['high'])}" if tr.get("low") is not None else "")
+        detail.append(f"  trend: {now['from']}–{now['to']} corrected {_pct(now.get('rate'))} of {now['judged']} "
+                      f"judged, {before['from']}–{before['to']} {_pct(before.get('rate'))} of "
+                      f"{before['judged']}{interval}: {verdict}")
     detail.append(f"  {repeats}")
     if total:
         detail.append(f"  where mistakes come from ({audit.get('month')}, {total}): " +
@@ -93,10 +117,12 @@ def _cognition(level: dict) -> tuple[str, list[str], dict | None]:
                   f"{agree.get('corrected_total', 0)}, clean {agree.get('clean_agreed', 0)}/"
                   f"{agree.get('clean_total', 0)}")
     measures = {
+        # the trend's window when there is one (four weeks to ``week``), else the latest week
         "week": week, "sessions": sessions, "corrected_rate": round(rate, 4),
-        "earlier_mean": round(mean, 4) if mean is not None else None, "earlier_weeks": len(earlier),
-        "direction": (None if mean is None else "better" if rate < mean - FLAT_BAND
-                      else "worse" if rate > mean + FLAT_BAND else "same"),
+        "window_weeks": tr["weeks"] if now.get("rate") is not None else 1,
+        "before_rate": before.get("rate") if now.get("rate") is not None else None,
+        "margin": (tr or {}).get("margin"), "low": (tr or {}).get("low"), "high": (tr or {}).get("high"),
+        "direction": (tr or {}).get("direction") if now.get("rate") is not None else None,
         "repeat_rate": latest.get("repeat_rate"), "corrections": latest.get("corrections"),
     }
     return line, detail, measures
@@ -240,8 +266,31 @@ def compute(now: datetime | None = None) -> dict:
         detail += more + [""]
         if name != "needs_you":
             measures[name] = measure
+    try:
+        detail += _governance_lines(_accepted(now))
+    except Exception:  # noqa: BLE001 -- the accepted rules are detail only, never fatal
+        logger.warning("north star: accepted rules unreadable", exc_info=True)
     return {"at": now.isoformat(timespec="seconds"), "headline": lines, "detail": detail,
             "measures": measures}
+
+
+def _governance_lines(accepted: list[dict]) -> list[str]:
+    """Whether each accepted rule stopped its mistake recurring (detail only)."""
+    if not accepted:
+        return []
+    out = ["Accepted rules (repeats of their mistake, the same number of days before and after):"]
+    for a in accepted:
+        if a.get("measured"):
+            out.append(f"  {a['gc_id']} accepted {a['accepted_on']} ({a['days']} days): "
+                       f"{a['before']} before, {a['after']} after — {a['title']}")
+        else:
+            out.append(f"  {a['gc_id']} accepted {a['accepted_on']}: not measured ({a.get('reason')}) — {a['title']}")
+    return out + [""]
+
+
+def _accepted(now: datetime) -> list[dict]:
+    from core.evolution.governance_miner import accepted_outcomes, workspace_gc_table
+    return accepted_outcomes(workspace_gc_table(), now=now)
 
 
 def _attention() -> dict:

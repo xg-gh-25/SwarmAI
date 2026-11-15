@@ -201,6 +201,8 @@ def test_route(env, monkeypatch):
     app.include_router(cognition_health.level_router)
     body = TestClient(app).get("/api/ingestion/cognition-level").json()
     assert len(body["weeks"]) == cl.WEEKS_SHOWN and body["audit"] is None
+    # the one trend the headline and the tab read: too few judged sessions, no direction
+    assert body["trend"]["weeks"] == cl.TREND_WEEKS and body["trend"]["direction"] is None
     out = env["ws"] / "Knowledge" / "JobResults"
     out.mkdir(parents=True)
     (out / "baseline-x-brain-mistake-audit.json").write_text(json.dumps(
@@ -210,3 +212,30 @@ def test_route(env, monkeypatch):
     body = TestClient(app).get("/api/ingestion/cognition-level").json()
     assert body["audit"]["previous"] == {"month": "2026-10-30", "outcomes": body["audit"]["previous"]["outcomes"],
                                          "total": 1, "baseline": True}
+
+
+# ── the trend: four weeks pooled against the four before, called outside its interval ──
+
+def _pts(before: tuple[int, int], now: tuple[int, int]) -> list[dict]:
+    return [{"week": f"W{i}", "judged": j, "corrected": c}
+            for i, (j, c) in enumerate([before] * 4 + [now] * 4)]
+
+
+def test_the_trend_is_called_only_outside_its_interval():
+    t = cl.trend(_pts((36, 18), (36, 16)))       # about 36 sessions a week, a 5-point move
+    assert t["now"] == {"from": "W4", "to": "W7", "judged": 144, "corrected": 64, "rate": 0.4444}
+    assert t["before"]["rate"] == 0.5 and t["difference"] == -0.0556
+    p1, p2 = 65 / 146, 73 / 146                  # Agresti-Caffo: one of each added per window
+    half = 1.96 * ((p1 * (1 - p1) + p2 * (1 - p2)) / 146) ** 0.5
+    assert (t["low"], t["high"]) == (round(p1 - p2 - half, 4), round(p1 - p2 + half, 4))
+    assert t["margin"] == 11 and t["direction"] == "same"          # inside the noise
+    assert cl.trend(_pts((36, 18), (36, 10)))["direction"] == "better"   # fewer corrected
+    assert cl.trend(_pts((36, 18), (36, 25)))["direction"] == "worse"
+    zero = cl.trend(_pts((10, 0), (10, 0)))       # 0% in both: the interval still has a width
+    assert zero["direction"] == "same" and zero["high"] - zero["low"] > 0.1
+    edge = cl.trend(_pts((36, 18), (3, 0)))       # 12 judged now: enough
+    assert edge["direction"] is not None
+    few = cl.trend(_pts((36, 18), (2, 1)))        # 8 judged now: too few
+    assert few["direction"] is None and few["low"] is None and few["margin"] is None
+    assert few["now"]["judged"] == 8
+    assert cl.trend(_pts((36, 18), (36, 18))[1:]) is None    # seven weeks

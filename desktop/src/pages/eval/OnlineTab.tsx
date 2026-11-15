@@ -2,10 +2,11 @@
  * Live sessions — the owner's real sessions of the last week (backend
  * jobs/handlers/session_quality). It leads with the one number a person feels (how
  * many sessions they had to correct), then the two code checks on every turn, the
- * judge's sample in one sentence, and the sessions it scored low: one line each,
- * opened in place for the full reason, "agree / disagree" (the judge's calibration,
- * only when this batch takes labels) and hand-offs. No expected answer; every
- * measure here is in the watch tier and never blocks a release.
+ * judge's sample in one sentence (its random layer said apart, and "not calibrated"
+ * until the owner's labels check it both ways), the sessions it scored low and the
+ * random ones it scored normal: one line each, opened in place for the full reason, a
+ * label (the judge's calibration, only when this batch takes labels) and hand-offs. No
+ * expected answer; every measure here is in the watch tier and never blocks a release.
  */
 import { useState } from 'react';
 import { useCalibrate, useEvalHealth, useRunOnline, useSessionQuality, errorDetail, type OnlineCheck, type OnlineLow } from './api';
@@ -24,6 +25,7 @@ export function OnlineTab() {
   const health = useEvalHealth();
   const run = useRunOnline();
   const [allLow, setAllLow] = useState(false);
+  const [allNormal, setAllNormal] = useState(false);
   if (q.isError) return <ErrorState />;
   if (q.isLoading || !q.data) return <Loading />;
   const on = q.data;
@@ -35,6 +37,10 @@ export function OnlineTab() {
   const goal = on.checks?.O4_GOAL;
   const tool = on.checks?.O5_TOOLS;
   const ok = (k?: OnlineCheck) => (k?.checked != null && k.failed != null ? k.checked - k.failed : null);
+  const randomLayer = on.judge_layers?.random;
+  const normal = on.normal_details ?? [];
+  // O4/O5 count the targeted layer only (backend session_quality); the random layer apart
+  const judgedAll = (goal?.checked ?? 0) + (randomLayer?.judged ?? 0);
   const low = [...on.low_details].sort((a, b) => (a.goal_score ?? 1) + (a.tool_score ?? 1) - ((b.goal_score ?? 1) + (b.tool_score ?? 1)));
 
   return (
@@ -68,14 +74,28 @@ export function OnlineTab() {
         </div>
       </Zone>
 
-      <Zone title={t(`A judge read ${goal?.checked ?? 0} sessions`, `judge 看了 ${goal?.checked ?? 0} 个会话`)}
-            sub={t('corrected and long ones first, so it skews low', '先挑被纠正的和特别长的，所以偏低')}>
+      <Zone title={t(`A judge read ${judgedAll} sessions`, `judge 看了 ${judgedAll} 个会话`)}
+            sub={randomLayer?.sampled
+              ? t(`corrected and long ones, which skew low, plus ${randomLayer.sampled} drawn at random`, `被纠正的和特别长的（所以偏低），另加 ${randomLayer.sampled} 个随机抽的`)
+              : t('corrected and long ones first, so it skews low', '先挑被纠正的和特别长的，所以偏低')}>
         {on.judge_error ? <p className="text-small text-[var(--color-status-error)]">{t('The judge failed on every sampled session: ', 'judge 在所有抽查会话上都失败了：')}{on.judge_error}</p>
-          : !goal?.checked ? <p className="text-body text-[var(--color-text-muted)]" data-testid="online-judge-empty">{on.judge_failed ? t('The judge failed; nothing was scored.', 'judge 失败了，没有打出分。') : t('Nothing to score this time.', '这次没有可评的会话。')}</p>
-            : <p className="text-body text-[var(--color-text-muted)]" data-testid="online-judge">
+          : !judgedAll ? <p className="text-body text-[var(--color-text-muted)]" data-testid="online-judge-empty">{on.judge_failed ? t('The judge failed; nothing was scored.', 'judge 失败了，没有打出分。') : t('Nothing to score this time.', '这次没有可评的会话。')}</p>
+            : !!goal?.checked && <p className="text-body text-[var(--color-text-muted)]" data-testid="online-judge">
+              {!!randomLayer?.judged && t('Corrected and long ones: ', '被纠正的和特别长的：')}
               <b className="text-[var(--color-text)] font-semibold">{t(`${ok(goal)} of ${goal.checked}`, `${goal.checked} 个里 ${ok(goal)} 个`)}</b>{t(' delivered what was asked', '交付了要的东西')}
               {tool?.checked ? <> · <b className="text-[var(--color-text)] font-semibold">{t(`${ok(tool)} of ${tool.checked}`, `${tool.checked} 个里 ${ok(tool)} 个`)}</b>{t(' used sensible tools.', '工具用得合理。')}</> : '.'}
             </p>}
+        {!!randomLayer?.judged && (
+          <p className="text-small text-[var(--color-text-muted)] mt-1" data-testid="online-random-layer">
+            {t(`Of the ${randomLayer.judged} drawn at random, it scored ${randomLayer.low} low.`, `随机抽的 ${randomLayer.judged} 个里，打了低分的 ${randomLayer.low} 个。`)}
+          </p>
+        )}
+        {cal?.calibrated === false && !!judgedAll && (
+          <p className="text-small text-[var(--color-status-warning)] mt-1" data-testid="online-not-calibrated">
+            {t(`Not calibrated: these scores are not checked against your labels yet (${(cal.low?.labels ?? 0) + (cal.normal?.labels ?? 0)} of ${cal.min_labels ?? 20}, on low and on normal scores).`,
+              `未校准：这些分还没和你的标注对过（${(cal.low?.labels ?? 0) + (cal.normal?.labels ?? 0)} / ${cal.min_labels ?? 20} 条，低分和正常分都要有）。`)}
+          </p>
+        )}
         {!on.judge_error && !!on.judge_failed && !!goal?.checked && (
           <p className="text-small text-[var(--color-status-warning)] mt-1" data-testid="online-judge-partial">
             {t(`The judge failed on ${on.judge_failed} of ${on.judge_sampled ?? '?'} sampled sessions; they are not counted.`,
@@ -101,6 +121,19 @@ export function OnlineTab() {
           </LinkBtn>
         )}
       </Zone>
+
+      {normal.length > 0 && (
+        <Zone id="normal" title={t(`${normal.length} drawn at random it scored normal`, `随机抽的、打了正常分的 ${normal.length} 个`)}
+              sub={t('did it miss a problem? your answer measures what it misses', '它漏掉问题了吗？你的回答用来量它漏判了多少')}>
+          {(allNormal ? normal : normal.slice(0, LOW_SHOWN)).map((l) => <LowRow key={l.session_id ?? l.title} l={l} judged="normal" accepting={!!cal?.accepting} label={cal?.labels?.[l.session_id ?? '']} lang={lang} />)}
+          <div className="border-t border-[var(--color-border)]" />
+          {normal.length > LOW_SHOWN && (
+            <LinkBtn className="text-small text-[var(--color-text-muted)] mt-2" onClick={() => setAllNormal((v) => !v)}>
+              {allNormal ? t('Show fewer', '收起') : t(`${normal.length - LOW_SHOWN} more`, `还有 ${normal.length - LOW_SHOWN} 个`)}
+            </LinkBtn>
+          )}
+        </Zone>
+      )}
     </div>
   );
 }
@@ -148,14 +181,16 @@ function Meter({ id, check }: { id: string; check?: OnlineCheck }) {
 
 const firstSentence = (s?: string) => (s ?? '').match(/^(.+?[.。!！?？])(\s|$)/s)?.[1] ?? (s ?? '');
 
-function LowRow({ l, accepting, label, lang }: { l: OnlineLow; accepting: boolean; label?: 'agree' | 'disagree'; lang: string }) {
+/** A judged session: a low score (agree: there was a problem) or, drawn at random, a
+ *  normal one (agree: there was none; disagree: the judge missed a problem). */
+function LowRow({ l, accepting, label, lang, judged = 'low' }: { l: OnlineLow; accepting: boolean; label?: 'agree' | 'disagree'; lang: string; judged?: 'low' | 'normal' }) {
   const { t } = useLang();
   const { askSwarm, openSession } = useEvalActions();
   const calibrate = useCalibrate();
   const [open, setOpen] = useState(false);
   const sid = l.session_id ?? '';
   return (
-    <div className="border-t border-[var(--color-border)]" data-testid="low-session">
+    <div className="border-t border-[var(--color-border)]" data-testid={judged === 'low' ? 'low-session' : 'normal-session'}>
       <div className="flex gap-4 items-center py-3 hover:bg-[var(--color-hover)]/40">
         <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)}
                 className="grid grid-cols-[1fr_auto] gap-4 items-center min-w-0 flex-1 text-left cursor-pointer">
@@ -177,9 +212,11 @@ function LowRow({ l, accepting, label, lang }: { l: OnlineLow; accepting: boolea
             </span>
           )}
           {accepting && !!sid && (['agree', 'disagree'] as const).map((h) => (
-            <Btn key={h} testId={`calibrate-${h}`} disabled={calibrate.isPending} kind={label === h ? 'primary' : 'normal'}
+            <Btn key={h} testId={judged === 'low' ? `calibrate-${h}` : `calibrate-normal-${h}`} disabled={calibrate.isPending} kind={label === h ? 'primary' : 'normal'}
                  onClick={() => calibrate.mutate({ session_id: sid, human: h })}>
-              {h === 'agree' ? t('Agree with the judge', '同意 judge') : t('Disagree', '不同意')}
+              {judged === 'low'
+                ? (h === 'agree' ? t('Agree with the judge', '同意 judge') : t('Disagree', '不同意'))
+                : (h === 'agree' ? t('No problem', '没问题') : t('There was a problem', '其实有问题'))}
             </Btn>
           ))}
           <Btn kind="ghost" onClick={() => askSwarm(lang === 'zh' ? `复盘会话 ${sid} 哪里没做好，值不值得写成一条 case` : `Review session ${sid}: where it went wrong, and whether it deserves a case.`)}>

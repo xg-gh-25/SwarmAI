@@ -383,7 +383,7 @@ use, so the deny has zero cost.
 |-----|-------|
 | **Overview** | the release verdict, the four release checks in order, "needs you" (problems with the evaluation itself) and Evolution Suggestion (behaviour signals), the five dimensions with 12-week trends, where the results come from |
 | **Golden Cases** | cases by line (quick check / offline case) and category with their release tier (red / gate / watch), case detail, your own cases: add / edit / delete / try with every admission check; product cases are read-only |
-| **Online Eval** | per-turn code checks, the weekly judge sample, low-scored sessions with agree / disagree (the judge's calibration) |
+| **Online Eval** | per-turn code checks, the weekly judge sample (targeted sessions and a random layer, reported apart), low-scored sessions and randomly drawn normal-scored ones to label (the judge's calibration both ways; "not calibrated" until a prompt version has 20 labels on both) |
 | **Offline Eval** | the quick check with its day row, offline cases with the session → trajectory → step drill-down, the release record (each full run's four checks and its HTML report) |
 | **LLM Judges** | the two judges as they run (model, prompt, settings), how much of the release uses a judge, the method's requirements against what is done, the judge model setting |
 | **Guide** | the Eval-First method in twelve sections |

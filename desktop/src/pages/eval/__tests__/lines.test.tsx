@@ -69,6 +69,45 @@ describe('Live sessions', () => {
   });
 });
 
+describe('Live sessions: the judge checked both ways', () => {
+  const both = (calibrated: boolean) => ({
+    ...online(true), judge_layers: { targeted: { sampled: 7, judged: 7, low: 3 }, random: { sampled: 3, judged: 3, low: 1 } },
+    checks: { O4_GOAL: { checked: 7, failed: 3, rate: 0.43, examples: [] } },
+    normal_details: [{ session_id: 'n1', title: 'Rename a file', goal_score: 0.9, tool_score: 1, reason: 'done', layer: 'random' }],
+    calibration: { accepting: true, reason: null, labels: {}, calibrated, min_labels: 20,
+      low: { labels: 5, agree: 4, rate: 0.8 }, normal: { labels: 2, problem: 0, rate: 0 } },
+  });
+
+  it('reports the random layer apart and marks the scores not calibrated', async () => {
+    routes['GET /eval/session-quality'] = both(false);
+    show(<OnlineTab />);
+    expect((await screen.findByTestId('online-random-layer')).textContent).toBe('Of the 3 drawn at random, it scored 1 low.');
+    // O4 counts the targeted layer; the title counts every session the judge read
+    expect(screen.getByText('A judge read 10 sessions')).toBeTruthy();
+    expect(screen.getByTestId('online-judge').textContent).toContain('Corrected and long ones: 4 of 7 delivered what was asked');
+    expect(screen.getByTestId('online-not-calibrated').textContent).toContain('Not calibrated');
+    expect(screen.getByTestId('online-not-calibrated').textContent).toContain('7 of 20');
+  });
+
+  it('says nothing about calibration once it is calibrated', async () => {
+    routes['GET /eval/session-quality'] = both(true);
+    show(<OnlineTab />);
+    await screen.findByTestId('online-random-layer');
+    expect(screen.queryByTestId('online-not-calibrated')).toBeNull();
+  });
+
+  it('posts a label for a random session the judge scored normal', async () => {
+    routes['GET /eval/session-quality'] = both(false);
+    routes['POST /eval/calibration'] = { status: 'ok' };
+    show(<OnlineTab />);
+    const row = await screen.findByTestId('normal-session');
+    fireEvent.click(within(row).getByText('Rename a file'));
+    expect(within(row).getByTestId('calibrate-normal-disagree').textContent).toBe('There was a problem');
+    fireEvent.click(within(row).getByTestId('calibrate-normal-disagree'));
+    await waitFor(() => expect(calls.find((c) => c.url === '/eval/calibration')?.body).toEqual({ session_id: 'n1', human: 'disagree' }));
+  });
+});
+
 describe('Live sessions: nothing to score is a reason, not a zero', () => {
   it('says the judge failed on part of the sample', async () => {
     routes['GET /eval/session-quality'] = { ...online(true), judge_sampled: 5, judge_failed: 2,
@@ -99,7 +138,8 @@ const judges = (agentModel: string, temperature = 0) => ({
   judges: [
     { id: 'offline_decision', line: 'offline', prompt: 'P1', system: 'S1', temperature, max_tokens: 400, case_ids: ['OFF_A'], calibration: null },
     { id: 'online_session', line: 'online', prompt: 'P2', system: 'S2', temperature: 0, max_tokens: 500, prompt_sha: 'abc',
-      calibration: { prompt_sha: 'abc', labels: 4, agree: 3, agreement: 0.75 } },
+      calibration: { prompt_sha: 'abc', labels: 7, agree: 5, agreement: 0.714, calibrated: false, min_labels: 20,
+        low: { labels: 4, agree: 3, rate: 0.75 }, normal: { labels: 3, problem: 1, rate: 0.333 } } },
   ],
 });
 
@@ -112,7 +152,11 @@ describe('Judges (in Method)', () => {
     const ratio = await screen.findByTestId('judge-ratio');
     expect(ratio.textContent).toContain('0/36');
     expect(ratio.textContent).toContain('10/46');
-    expect(screen.getByTestId('judge-agreement').textContent).toContain('75%');
+    // both ways: low scores the owner agreed with, random normal ones that hid a problem
+    expect(screen.getByTestId('judge-rate-low').textContent).toBe('75%of the 4 low scores you labelled had a problem');
+    expect(screen.getByTestId('judge-rate-normal').textContent).toBe('33%of the 3 random normal scores you labelled had a problem it missed');
+    expect(screen.getByTestId('judge-calibrated').textContent).toContain('Not calibrated: it needs 20 labels');
+    expect(screen.getByTestId('judge-requirements').textContent).toContain('not calibrated');
     const sel = (await screen.findByTestId('judge-model')) as HTMLSelectElement;
     await waitFor(() => expect(sel.options.length).toBe(2));
     fireEvent.change(sel, { target: { value: 'claude-opus-4-8' } });

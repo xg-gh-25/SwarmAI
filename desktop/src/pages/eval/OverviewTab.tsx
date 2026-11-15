@@ -243,6 +243,8 @@ const ONLINE_LABEL: Record<string, { en: string; zh: string }> = {
   O5_TOOLS: { en: 'Judge sample: sensible tools', zh: 'judge 抽查：工具合理' },
 };
 export const onlineLabel = ONLINE_LABEL;
+/** The online checks a judge scores (the rest are code checks). */
+const JUDGED = new Set(['O4_GOAL', 'O5_TOOLS']);
 
 interface Signal { label: string; share: number; cases?: boolean }
 
@@ -262,9 +264,12 @@ function Dimensions() {
   const summary = health.data?.dimension_summary;
   const on = online.data;
 
+  // the judge's own signals carry "not calibrated" until the owner's labels check it both ways
+  const uncalibrated = on?.calibration?.calibrated === false;
   const onlineSignals = (ids: string[]): Signal[] => ids.flatMap((id) => {
     const k = on?.checks?.[id];
-    return k?.rate != null && k.checked ? [{ label: ONLINE_LABEL[id][lang], share: 1 - k.rate }] : [];
+    const label = ONLINE_LABEL[id][lang] + (uncalibrated && JUDGED.has(id) ? t(' (not calibrated)', '（未校准）') : '');
+    return k?.rate != null && k.checked ? [{ label, share: 1 - k.rate }] : [];
   });
   const caseCol = (dim: string, ids: string[]) => {
     const gate = tierCounts(summary, dim, GATING);

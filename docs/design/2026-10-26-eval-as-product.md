@@ -201,7 +201,10 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
   - **确定性检查，跑全部会话**：不调模型，按每一轮回复检查，例如回复语言是否跟随用户（R19）、工具调用前是否写了多余的字
     （R20）、有没有被用户纠正。和离线 behavior case 共用同一组检查函数（`_behavior_check_failures`），一份规则两处用。
   - **judge 检查，抽样**：任务有没有完成、工具选得对不对，沿用现有的 `session_scorer`，每周最多抽 10 个会话（有纠错或轮数
-    异常的优先）。
+    异常的优先）。r2（2026-11-15）：这 10 个分两层，`targeted`（有纠错、轮数异常的，最多 7 个）和 `random`（其余名额，至少
+    3 个，用固定种子从别的会话里随机抽），两层分开报（状态里的 `judge_layers`）。O4/O5 的比例、趋势和"比上周差"只算
+    `targeted` 这一层，这样随机会话占多少不会让它们跳动；随机层单独计数，judge 打了正常分的会话放在
+    `normal_details`，主人可以标"没问题 / 其实有问题"，这样才量得到 judge 漏判了多少。
 - **只看最近 7 天**：现在的采样没有时间窗，统计的是全部历史会话（`database/sqlite.py:1167-1175`），每周基本在重评同一批老会话。
   改成只取最后一条消息在 7 天内的会话，纠错也只取 7 天内的。
 - **补上写入方**：handler 每次运行写 `SwarmWS/.context/.session-quality-state.json`：
@@ -384,7 +387,7 @@ Reports 并入 Offline Eval 的放行记录。下面每一项写清写入方和�
 | 2 | `core/eval_followups` | 每项加 `kind`：`eval`（评测本身：快速检查失败、没测成、新题首跑失败、该跑没跑、case 本身坏了、golden set 超限、sampler / judge 出错）或 `evolution`（agent 行为信号：线上检查比上周差或失败率 ≥10%、本周有纠正、低分会话、离线考题从通过变成不通过） | `/api/eval/health` 拆成 `follow_ups` 和 `evolution`；HTML 报告两节；Overview |
 | 3 | `EvalService.add_case / update_case / delete_case` | 新增和修改都跑 `validate_case` 全部检查（另加上限、purpose）；快速检查类保存前实际执行反例，必须输出反例标记；修改后重新盖章；删除私有 case 是硬删除 | Golden Cases 表单；`POST /golden-set/try` 试跑不保存 |
 | 4 | `jobs/handlers/session_quality` | judge 理由用提问的语言；状态加 `judge_prompt_sha`；`metrics: {turns, turn_p50_s, cost_p50_usd}`；trend 每周带 `metrics`；trend 缺的历史周第一次从数据库补算（O1/O2/成本/耗时，不补 judge 和纠正） | Overview 五维趋势、Online Eval |
-| 5 | `POST /api/eval/calibration` | `.context/.judge-calibration.jsonl` 一行一条：`{at, session_id, judge_prompt_sha, judge: low, human: agree/disagree}`；状态里没有 `judge_prompt_sha` 的那批不收 | `GET /api/eval/judges` 算一致率（只用当前 prompt 的标注） |
+| 5 | `POST /api/eval/calibration` | `.context/.judge-calibration.jsonl` 一行一条：`{at, session_id, judge_prompt_sha, judge: low/normal, human: agree/disagree}`；收上次运行的低分会话（`judge: low`）和随机层里打了正常分的会话（`judge: normal`，r2）；状态里没有 `judge_prompt_sha` 的那批不收 | `GET /api/eval/judges` 报两个比例（只用当前 prompt 的标注）：judge 打低分、主人同意的比例；judge 打正常分、主人说其实有问题的比例。一个 prompt 版本标注不到 20 条、或两种都没有，它的趋势标为"未校准" |
 | 6 | `GET /api/eval/judges` | 两个 judge 的模型、被测 agent 模型、prompt 原文、温度、输出上限、用 judge 的 case 数、校准一致率 | LLM Judges；判决 prompt 从 f-string 抽成模块常量，运行和展示读同一份 |
 | 7 | 每日 canary（`context_health_hook`） | canary 状态加 `days`：最近 30 天每天 `{date, passed, total, not_run}` | Offline Eval 的每日格子 |
 | 8 | `get_history` | 每条加 `release_checks` 和 `report`（同名 HTML 报告存在时的文件名） | Offline Eval 放行记录 |
