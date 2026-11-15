@@ -220,3 +220,12 @@ def test_canvas_artifacts_keep_the_sessions_run_documents(tmp_path, monkeypatch)
     assert [r["absolutePath"] for r in got] == [str(p) for p in docs]
     assert {r["role"] for r in got} == {"Pipeline"}
     assert cs.run_document(str(docs[0]), None) is False
+
+
+def test_deliverable_turns_returns_every_listed_file():
+    """The session_outputs backfill imports every file of a 14-file turn, from the block
+    the router builds for it."""
+    from core.session_router import _deliverables_block
+    files = [{"path": f"f{i}.md", "absolutePath": f"/ws/f{i}.md"} for i in range(14)]
+    got = cs.deliverable_turns([("2026-11-15T10:00", [_deliverables_block(files)])])
+    assert got == [("2026-11-15T10:00", files)]

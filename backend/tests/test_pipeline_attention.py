@@ -269,6 +269,7 @@ async def test_products_become_one_persisted_block_before_result():
 
 @pytest.mark.asyncio
 async def test_no_products_no_block_and_the_cap_holds():
+    from core.session_router import MAX_TURN_DELIVERABLES
     put, router = AsyncMock(), _Router()
     with patch("database.db.messages.put", put):
         assert await router._persist_stream_event("sid", {"type": "result"}, [], files={}) == []
@@ -276,8 +277,15 @@ async def test_no_products_no_block_and_the_cap_holds():
         for i in range(20):
             await router._persist_stream_event("sid", _fc(f"out/{i}.md", "content"), [], files=files)
         (ev,) = await router._persist_stream_event("sid", {"type": "result"}, [], files=files)
-    assert len(ev["content"][0]["files"]) == 12
-    assert put.await_count == 1
+        # every file the turn wrote is listed (a Hive run returns what the block lists);
+        # the end card shows 12 of them itself
+        assert len(ev["content"][0]["files"]) == 20 and "omitted" not in ev["content"][0]
+        for i in range(MAX_TURN_DELIVERABLES + 1):
+            await router._persist_stream_event("sid", _fc(f"big/{i}.md", "content"), [], files=files)
+        (ev,) = await router._persist_stream_event("sid", {"type": "result"}, [], files=files)
+    # past the safety limit the block says how many it does not list
+    assert len(ev["content"][0]["files"]) == MAX_TURN_DELIVERABLES and ev["content"][0]["omitted"] == 1
+    assert put.await_count == 2
 
 
 # ── none of the three re-enters a resumed prompt ─────────────────────────────

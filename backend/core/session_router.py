@@ -46,14 +46,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# A turn lists at most this many products (a bulk export should not flood the chat).
-MAX_TURN_DELIVERABLES = 12
+# A safety limit on the files a turn's block lists. The block is the turn's whole file
+# list: a Hive run returns every file it lists (core/hive_files), so this is not the chat
+# end card's limit; the card shows the first 12 itself (desktop OutputCard). What bounds
+# the bytes that come back is the run record's own budget (hive_records MAX_KEPT_BYTES per
+# run): a file sealed past it comes back as a marked line without its bytes, so a turn of
+# many large files can return its last-written file as that line.
+MAX_TURN_DELIVERABLES = 200
 
 
 def _deliverables_block(files: list) -> dict:
-    """The turn's ``turn_deliverables`` block: the first MAX_TURN_DELIVERABLES files and,
-    when there were more, how many are not listed (``omitted``), so the end card says
-    "+N" instead of reading as the whole list (turn_changes does the same)."""
+    """The turn's ``turn_deliverables`` block: every file, up to the MAX_TURN_DELIVERABLES
+    safety limit, and, when there were more, how many are not listed (``omitted``), so a
+    reader says "+N" instead of reading it as the whole list (turn_changes does the same)."""
     block = {"type": "turn_deliverables", "files": files[:MAX_TURN_DELIVERABLES]}
     if len(files) > MAX_TURN_DELIVERABLES:
         block["omitted"] = len(files) - MAX_TURN_DELIVERABLES

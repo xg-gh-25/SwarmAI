@@ -124,6 +124,23 @@ def test_a_long_reply_is_kept_whole_with_its_length():
 
 # ── summarize: what it did ────────────────────────────────────────────────────
 
+def test_a_14_file_turn_lists_all_14():
+    from core.session_router import _deliverables_block
+    files = [{"path": f"Outputs/so_x/f{i:02d}.md", "absolutePath": f"/ws/Outputs/so_x/f{i:02d}.md",
+              "kind": "content"} for i in range(14)]
+    r = summarize([U(), A(_deliverables_block(files), out())])
+    assert [f["path"] for f in r["work"]["files"]] == [f["path"] for f in files]
+    assert r["work"]["files_omitted"] == 0
+
+
+def test_a_turn_over_the_safety_limit_says_how_many_were_omitted():
+    from core.session_router import MAX_TURN_DELIVERABLES, _deliverables_block
+    files = [{"path": f"f{i}.md", "kind": "content"} for i in range(MAX_TURN_DELIVERABLES + 5)]
+    r = summarize([U(), A(_deliverables_block(files), out())])
+    shown = len(r["work"]["files"])
+    assert r["work"]["files_omitted"] == len(files) - shown and r["work"]["files_omitted"] >= 5
+
+
 def test_files_by_kind_deduplicated_with_omitted_counts():
     d1 = {"type": "turn_deliverables", "files": [{"path": "docs/a.md", "kind": "content"},
                                                   {"path": "/tmp/x.py", "kind": "external-diff"}], "omitted": 3}

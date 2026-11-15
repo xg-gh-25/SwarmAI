@@ -136,6 +136,25 @@ describe('the ending card', () => {
     expect(card.textContent).toContain('4 deliverables');
   });
 
+  it('shows 12 of 14 deliverables and says +2', () => {
+    const paths = Array.from({ length: 14 }, (_, i) => `/u/Desktop/f${String(i).padStart(2, '0')}.md`);
+    render(view([tx('Done.'), deliv(...paths)], false));
+    const card = screen.getByTestId('output-card');
+    const tiles = card.querySelectorAll('[data-testid="deliverable"]');
+    expect([...tiles].map((t) => t.getAttribute('data-path'))).toEqual(paths.slice(0, 12));
+    expect(screen.getByTestId('deliverables-omitted').textContent).toBe('2 more files are not listed.');
+    expect(card.textContent).toContain('14 deliverables');
+  });
+
+  it("adds the backend's omitted count to the files past 12", () => {
+    const paths = Array.from({ length: 14 }, (_, i) => `/u/Desktop/g${i}.md`);
+    const block = { ...(deliv(...paths) as object), omitted: 3 } as ContentBlock;
+    render(view([tx('Done.'), block], false));
+    expect(screen.getByTestId('output-card').querySelectorAll('[data-testid="deliverable"]')).toHaveLength(12);
+    expect(screen.getByTestId('deliverables-omitted').textContent).toBe('5 more files are not listed.');
+    expect(screen.getByTestId('output-card').textContent).toContain('17 deliverables');
+  });
+
   it('a turn whose only product is remote has a card', () => {
     render(view([bash('m1', 'post'), tr('m1'), remoteP('m1'), tx('Done.')], false));
     expect(screen.getByTestId('output-card').textContent).toContain('Posted to Slack');

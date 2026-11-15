@@ -253,6 +253,10 @@ export function RunLine({ summary }: { summary: PipelineSummaryContent }) {
   );
 }
 
+/** Deliverable files the end card lists; the rest are counted on its "not listed" line
+ *  (a bulk export does not flood the chat). The block itself lists every file. */
+export const MAX_SHOWN_DELIVERABLES = 12;
+
 /**
  * The turn's ONE output card (chat turn spec v6 §8): a code-changes section (the
  * backend's turn_changes rows, ChangesCard) and a deliverables section (what the turn
@@ -264,7 +268,7 @@ export function OutputCard({ changes, deliverables, summary, remote = [], omitte
   changes?: TurnChangesContent; deliverables: TurnDeliverable[]; summary?: PipelineSummaryContent;
   /** The turn's remote products (turn_product blocks), in order. */
   remote?: RemoteProduct[];
-  /** Deliverable files the backend did not list (it keeps the first 12). */
+  /** Deliverable files the backend did not list (past its safety limit). */
   omitted?: number;
   /** The message's session: the changes card reads its diffs there. */
   sessionId?: string;
@@ -274,6 +278,8 @@ export function OutputCard({ changes, deliverables, summary, remote = [], omitte
   // line names a missing required one)
   const runDocs = (summary?.docs ?? []).filter((d) => !!d.absolutePath);
   const nDeliv = deliverables.length + remote.length + runDocs.length + omitted;
+  const shown = deliverables.slice(0, MAX_SHOWN_DELIVERABLES);
+  const notListed = deliverables.length - shown.length + omitted;
   if (!changes && !nDeliv) return null;
   const title = nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv });
   return (
@@ -284,11 +290,11 @@ export function OutputCard({ changes, deliverables, summary, remote = [], omitte
           <ItemBox testId="product-box" title={title}>
             {runDocs.map((d) => <FileItemRow key={d.absolutePath} testId="deliverable" data={{ name: d.name }}
               file={{ path: d.name, absolutePath: d.absolutePath! }} />)}
-            {deliverables.map((f) => <FileItemRow key={f.absolutePath} testId="deliverable" file={f} />)}
+            {shown.map((f) => <FileItemRow key={f.absolutePath} testId="deliverable" file={f} />)}
             {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
-            {omitted > 0 && (
+            {notListed > 0 && (
               <div data-testid="deliverables-omitted" className="text-small text-[var(--color-text-muted)] px-3 py-1">
-                {tf(t, 'chat.turn.changes.omitted', '{{n}} more files are not listed.', { n: omitted })}
+                {tf(t, 'chat.turn.changes.omitted', '{{n}} more files are not listed.', { n: notListed })}
               </div>
             )}
           </ItemBox>

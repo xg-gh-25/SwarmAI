@@ -543,7 +543,8 @@ export interface SwarmOutDispatchContent {
 export interface TurnDeliverablesContent {
   type: 'turn_deliverables';
   files: TurnDeliverable[];
-  /** files the block does not list (the backend keeps the first 12) */
+  /** files the block does not list (past the backend's safety limit; the end card
+   *  itself shows the first 12 of `files`) */
   omitted?: number;
 }
 

@@ -773,3 +773,12 @@ describe('a Bash write-only command counts as a changed file', () => {
     expect(w('Running: R=run_x; cat > /tmp/x/c2.py <<EOF')).toMatchObject({ verb: 'edit', object: 'c2.py' });
   });
 });
+
+describe('deriveTurnView — turn_deliverables', () => {
+  it('collects every file of a 14-file turn_deliverables block', () => {
+    const files = Array.from({ length: 14 }, (_, i) => ({ path: `f${i}.md`, absolutePath: `/u/f${i}.md`, kind: 'content' }));
+    const view = deriveTurnView([tx('Done.'), { type: 'turn_deliverables', files } as unknown as ContentBlock], false);
+    expect(view.deliverables.map((d) => d.absolutePath)).toEqual(files.map((f) => f.absolutePath));
+    expect(view.deliverablesOmitted).toBe(0);
+  });
+});

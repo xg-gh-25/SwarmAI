@@ -215,3 +215,31 @@ def test_a_fifo_or_a_non_file_path_is_never_taken(hive_ws):
     assert _files(hive_ws) == []
     assert hr._valid_entry({"seq": 1, "kind": "turn", "size": 1, "sha256": "a" * 64, "path": "x"}, 1) == "bad_entry"
     assert hr._valid_entry({"seq": 1, "kind": "turn", "size": 1, "sha256": "a" * 64, "listed": "x"}, 1) == "bad_entry"
+
+
+def test_a_turn_that_writes_14_files_returns_all_14(hive_ws):
+    """A research turn wrote 13 scratch files and its report: the block the router builds
+    lists all 14 (not the end card's 12), so all 14 are sealed into the run record, the
+    report among them."""
+    from core import hive_records as hr
+    from core.session_router import _deliverables_block
+    paths = [_write(hive_ws / "Outputs" / "so_aaaaaaaaaaaa" / f"scratch{i:02d}.md", f"s{i}") for i in range(13)]
+    paths.append(_write(hive_ws / "Knowledge" / "Reports" / "report.md", "# the report"))
+    block = _deliverables_block([{"path": p, "absolutePath": p, "kind": "content", "operation": "written"}
+                                 for p in paths])
+    rows = _turn_rows("done")
+    rows[-1]["content"].insert(0, block)
+    hr.seal_turn(hive_ws, SID, rows)
+    sealed = [e["path"] for e in _files(hive_ws)]
+    assert len(sealed) == 14 and "Knowledge/Reports/report.md" in sealed
+
+
+def test_a_turn_of_200_files_is_projected_whole():
+    """The turn entry the host summarises keeps a 200-file block whole, within its cap."""
+    from core import hive_records as hr
+    rows = _rows_listing(*[f"/ws/Outputs/so_aaaaaaaaaaaa/deep/folder/file-{i:03d}.md" for i in range(200)])
+    body = hr.turn_projection(rows)
+    assert len(body) <= hr.MAX_BYTES["turn"]
+    import json
+    blocks = [b for r in json.loads(body)["rows"] for b in r["content"] if b["type"] == "turn_deliverables"]
+    assert len(blocks[0]["files"]) == 200 and "truncated" not in json.loads(body)

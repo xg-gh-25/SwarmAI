@@ -600,11 +600,16 @@ async def test_rows_and_landings_share_one_finish_budget(repo, monkeypatch):
 
 
 
-def test_deliverables_block_counts_what_it_does_not_list():
-    """Fixing spec D3: the end card keeps the first 12 deliverables and says "+N"."""
+def test_deliverables_block_keeps_every_file_up_to_the_safety_limit():
+    """The block is the turn's whole file list (a Hive run returns what it lists, core/
+    hive_files); only past the safety limit does it count what it does not list. The
+    chat end card shows the first 12 itself (desktop OutputCard)."""
     from core.session_router import MAX_TURN_DELIVERABLES, _deliverables_block
 
-    files = [{"path": f"f{i}.md"} for i in range(MAX_TURN_DELIVERABLES + 3)]
-    block = _deliverables_block(files)
-    assert len(block["files"]) == MAX_TURN_DELIVERABLES and block["omitted"] == 3
-    assert "omitted" not in _deliverables_block(files[:2])
+    fourteen = [{"path": f"f{i}.md"} for i in range(14)]
+    block = _deliverables_block(fourteen)
+    assert block["files"] == fourteen and "omitted" not in block
+    assert MAX_TURN_DELIVERABLES >= 200
+    over = [{"path": f"f{i}.md"} for i in range(MAX_TURN_DELIVERABLES + 3)]
+    block = _deliverables_block(over)
+    assert block["files"] == over[:MAX_TURN_DELIVERABLES] and block["omitted"] == 3
