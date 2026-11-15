@@ -159,8 +159,13 @@ def _provision_download(monkeypatch, sha_status: int, sha_body: str):
 
 
 def test_a_package_matching_its_checksum_is_uploaded(monkeypatch):
+    import hashlib
     _, uploads = _provision_download(monkeypatch, 200, "GOOD  swarmai-hive-v9.9.9-linux-arm64.tar.gz\n")
-    assert len(uploads) == 1 and uploads[0]["Key"] == "v9.9.9/swarmai-hive-v9.9.9-linux-arm64.tar.gz"
+    # the package, then the checksums.txt a Hive checks it against (hive/user_data)
+    assert [u["Key"] for u in uploads] == ["v9.9.9/swarmai-hive-v9.9.9-linux-arm64.tar.gz",
+                                          "v9.9.9/checksums.txt"]
+    good = hashlib.sha256(b"package-bytes").hexdigest()
+    assert uploads[1]["Body"] == f"{good}  swarmai-hive-v9.9.9-linux-arm64.tar.gz\n".encode()
 
 
 @pytest.mark.parametrize("status,body", [(404, "Not Found"), (200, "0" * 64 + "  x"), (200, "")])

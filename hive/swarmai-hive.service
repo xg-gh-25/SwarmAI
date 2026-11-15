@@ -27,6 +27,10 @@ Environment=SWARMAI_MODE=hive
 Environment=SWARMAI_PORT=18321
 Environment=CLAUDE_CODE_USE_BEDROCK=1
 Environment=CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+# A resumed session's history goes in the first query, not the system prompt, so it reuses
+# the prompt cache new sessions share (core/prompt_builder; the desktop daemon sets it in
+# desktop/resources/daemon/swarmai_backend.sh). An update installs this unit when it differs.
+Environment=SWARM_RESUME_VIA_QUERY=true
 # Shared hive-auth credential (HIVE_USER / HIVE_PASS_HASH) for app-layer auth
 # (middleware/hive_auth.py — the INNER defense-in-depth layer). Written by user_data.py
 # step [6b/9]; rotated by provisioner.reset_password(). Same credential Caddy validates.

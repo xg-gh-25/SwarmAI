@@ -562,6 +562,7 @@
           "only_free": "the only one free",
           "idle": "idle at the time",
           "least_busy": "the least busy ({{n}} running)",
+          "started": "started for this task (every Hive was stopped)",
           "named": "you named it"
         },
         "sync": {

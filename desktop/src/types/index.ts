@@ -510,7 +510,7 @@ export interface SwarmOutDispatchContent {
   title: string;
   brief: string | null;
   hive: string | null;
-  /** pick_hive's code: named / only_free / idle / least_busy:<n> */
+  /** pick_hive's code: named / only_free / idle / least_busy:<n>, or started (dispatch_spec started a stopped Hive) */
   hiveReason: string | null;
   brain: string | null;
   mode: string | null;

@@ -18,7 +18,9 @@ Key design decisions (from approved design doc):
 """
 
 import asyncio
+import copy
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -176,19 +178,155 @@ def _boundary_arn(session, iam) -> Optional[str]:
         return None
 
 
-def _put_hive_role_policy(iam, role_name: str) -> None:
-    """Write the current HIVE_IAM_POLICY as the role's inline policy (replaces it), and
-    make sure the role carries its HiveName tag: every bridge statement is scoped by
-    ``${aws:PrincipalTag/HiveName}``, which resolves to nothing on an untagged role.
-    Called at create and at every update, so an existing Hive picks up a changed
-    policy (an inline policy is replaced whole, so a removed statement is removed)."""
+def elastic_ip_or_none(value: Any) -> Optional[str]:
+    """*value* as a public IPv4 address (the shape an Elastic IP has), else None."""
+    try:
+        ip = ipaddress.IPv4Address(str(value or "").strip())
+    except ValueError:
+        return None
+    return str(ip) if ip.is_global else None
+
+
+_VPC_ID_RE = re.compile(r"^vpc-[0-9a-f]{8,17}$")
+
+
+def hive_iam_policy(source_ip: Optional[str] = None, vpc_id: Optional[str] = None) -> dict:
+    """HIVE_IAM_POLICY, plus Denies that make the role's credentials useless off the Hive
+    (anything on the Hive can read them):
+
+    - with *source_ip*, the Hive's Elastic IP: every request that does not come from it.
+      With *vpc_id* as well, only requests over the internet: one through a VPC endpoint
+      carries ``aws:SourceVpc`` and no public ``aws:SourceIp``, so it is left to the next
+      statement (else an account with an S3 or SSM endpoint in the Hive's VPC would cut the
+      Hive off). Without a known VPC, endpoint requests are refused too (closed, never
+      open: the credentials must not work through someone else's endpoint);
+    - with *vpc_id*, the Hive's VPC (whether or not the Elastic IP is known): every
+      request through a VPC endpoint of another VPC.
+
+    Calls an AWS service makes on the Hive's behalf (``aws:ViaAWSService``) stay allowed.
+    A value that is not a public IPv4 leaves the statements out, never written with
+    another address (an IP that is not the Hive's would cut the Hive off)."""
+    policy = copy.deepcopy(HIVE_IAM_POLICY)
+    ip = elastic_ip_or_none(source_ip)
+    vpc = vpc_id if isinstance(vpc_id, str) and _VPC_ID_RE.match(vpc_id) else None
+    if ip:
+        condition: dict[str, Any] = {"NotIpAddress": {"aws:SourceIp": f"{ip}/32"}}
+        if vpc:
+            condition["Null"] = {"aws:SourceVpc": "true"}
+        condition["Bool"] = {"aws:ViaAWSService": "false"}
+        policy["Statement"].append({
+            "Sid": "DenyOutsideHiveElasticIp",
+            "Effect": "Deny",
+            "Action": "*",
+            "Resource": "*",
+            "Condition": condition,
+        })
+    if vpc:
+        policy["Statement"].append({
+            "Sid": "DenyOutsideHiveVpc",
+            "Effect": "Deny",
+            "Action": "*",
+            "Resource": "*",
+            "Condition": {
+                "StringNotEquals": {"aws:SourceVpc": vpc},
+                "Null": {"aws:SourceVpc": "false"},
+                "Bool": {"aws:ViaAWSService": "false"},
+            },
+        })
+    return policy
+
+
+#: describe_instances tries before the Hive's VPC counts as unreadable (hive_network)
+_VPC_READ_TRIES = 3
+
+
+def hive_network(session, region: str, ec2_id: Optional[str],
+                 alloc_id: Optional[str] = None) -> tuple[Optional[str], Optional[str], bool]:
+    """(the Elastic IP of *alloc_id*, the VPC of instance *ec2_id*, whether the VPC was
+    read). Blocking boto3. An Elastic IP that cannot be read is None (the policy is then
+    written without the Elastic IP statement). The VPC is read up to _VPC_READ_TRIES
+    times; ``read`` is False when every try failed (a failed read is not a VPC that is not
+    known). What the caller does then is _refresh_role_policy's: an update keeps the
+    role's current policy, a deploy writes the closed one (no VPC: requests through any
+    VPC endpoint are refused, the Hive's own included)."""
+    ec2 = session.client("ec2", region_name=region)
+    ip = vpc = None
+    read = True
+    if alloc_id:
+        try:
+            addrs = ec2.describe_addresses(AllocationIds=[alloc_id]).get("Addresses") or []
+            ip = addrs[0].get("PublicIp") if addrs else None
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning("Elastic IP %s could not be read: %s", alloc_id, type(e).__name__)
+    if ec2_id:
+        read = False
+        for attempt in range(_VPC_READ_TRIES):
+            try:
+                res = ec2.describe_instances(InstanceIds=[ec2_id])["Reservations"]
+                vpc = res[0]["Instances"][0].get("VpcId") if res else None
+                read = True
+                break
+            except Exception as e:  # noqa: BLE001 — retried, then reported as not read
+                logger.warning("the VPC of %s could not be read (try %d): %s", ec2_id, attempt + 1,
+                               type(e).__name__)
+                if attempt + 1 < _VPC_READ_TRIES:
+                    time.sleep(1.0)
+    vpc = vpc if isinstance(vpc, str) else None
+    if ec2_id and read and vpc is None:
+        logger.warning("the VPC of %s is not known; its role refuses requests through any VPC "
+                       "endpoint", ec2_id)
+    return (ip if isinstance(ip, str) else None), vpc, read
+
+
+def _refresh_role_policy(session, region: str, role_name: str, ec2_id: Optional[str],
+                         stored_ip: Optional[str] = None, alloc_id: Optional[str] = None,
+                         keep_on_failed_read: bool = True) -> str:
+    """Write the role's policy with the Hive's Elastic IP (*stored_ip*, else read back by
+    *alloc_id*) and VPC (hive_network). Blocking. When the VPC cannot be read:
+    *keep_on_failed_read* (update: the current policy already carries the Hive's address)
+    keeps the role's current policy (``kept``), since written with no VPC it would refuse
+    the Hive's own VPC endpoints; otherwise (deploy: the current policy is step 3's, with no
+    Deny) the policy is written with no VPC: ``closed`` when the Elastic IP is known (its
+    Deny refuses endpoint traffic too), ``open`` when it is not (no Deny can be written).
+    ``written``: the VPC was read and the policy written with it."""
+    eip, vpc, read = hive_network(session, region, ec2_id, None if stored_ip else alloc_id)
+    if not read and keep_on_failed_read:
+        logger.warning("%s: its VPC could not be read; its role policy is left as it is until "
+                       "the next update", role_name)
+        return "kept"
+    eip = stored_ip or eip
+    known_ip = elastic_ip_or_none(eip) is not None
+    if not known_ip:
+        logger.warning("%s: no Elastic IP known; its role policy is written without the Elastic "
+                       "IP condition", role_name)
+    elif not read:
+        logger.warning("%s: its VPC could not be read; its role refuses requests through any VPC "
+                       "endpoint until the next update", role_name)
+    _put_hive_role_policy(session.client("iam"), role_name, eip, vpc)
+    if read:
+        return "written"
+    return "closed" if known_ip else "open"
+
+
+def _put_hive_role_policy(iam, role_name: str, source_ip: Optional[str] = None,
+                          vpc_id: Optional[str] = None) -> None:
+    """Write the current policy (``hive_iam_policy(source_ip, vpc_id)``) as the role's
+    inline policy (replaces it), and make sure the role carries its HiveName tag: every
+    bridge statement is scoped by ``${aws:PrincipalTag/HiveName}``, which resolves to
+    nothing on an untagged role. Called at create (no Elastic IP yet), again once the
+    Elastic IP is associated, and at every update with the Hive's address, so an existing
+    Hive picks up a changed policy (an inline policy is replaced whole, so a removed
+    statement is removed)."""
     if role_name.startswith("SwarmAI-Hive-"):
         iam.tag_role(RoleName=role_name,
                      Tags=[{"Key": "HiveName", "Value": role_name[len("SwarmAI-Hive-"):]}])
+    if source_ip and not elastic_ip_or_none(source_ip):
+        logger.warning("Hive role %s: %r is not a public IPv4 address; its policy is written "
+                       "without the Elastic IP condition", role_name, source_ip)
     iam.put_role_policy(
         RoleName=role_name,
         PolicyName="SwarmAI-Hive-Policy",
-        PolicyDocument=json.dumps(HIVE_IAM_POLICY),
+        PolicyDocument=json.dumps(hive_iam_policy(source_ip, vpc_id)),
     )
 
 
@@ -321,6 +459,13 @@ echo "Origin guard {mode}: done"
 # trailing newline.
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*")
 UPDATE_STALE_S = 15 * 60
+
+
+def _script_error(output: str, limit: int = 300) -> str:
+    """What a failed on-box script says went wrong: its last ``ERROR:`` line (the
+    package check, a failed start), else the start of its output."""
+    errors = [ln.strip() for ln in (output or "").splitlines() if ln.strip().startswith("ERROR:")]
+    return (errors[-1] if errors else (output or "").strip())[:limit]
 DELETING_STALE_S = 60 * 60
 
 class HiveProvisioner:
@@ -499,27 +644,55 @@ class HiveProvisioner:
     async def _sync_release_to_s3(
         self, session, bucket: str, version: str, region: str
     ) -> None:
-        """Download the Hive package from the GitHub release, check it against the
-        release's ``.sha256``, and upload it to the account's S3 bucket."""
-        s3_key = f"v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz"
+        """Make sure the bucket holds the Hive package of *version* and the
+        ``checksums.txt`` beside it, which first boot and every update check the package
+        against before unpacking it (hive/user_data.PACKAGE_CHECK_SH). A package not in the
+        bucket comes from the GitHub release, checked against the release's ``.sha256``;
+        its checksum is written with it. A package already there without one (put there by
+        an older SwarmAI) gets the release's published checksum; ``hive/release.sh`` uploads
+        both itself."""
+        package = f"swarmai-hive-v{version}-linux-arm64.tar.gz"
+        s3_key = f"v{version}/{package}"
+        sums_key = f"v{version}/checksums.txt"
 
-        def _check_exists():
+        def _exists(key: str) -> bool:
             s3 = session.client("s3", region_name=region)
             try:
-                s3.head_object(Bucket=bucket, Key=s3_key, **bucket_owner(bucket))
+                s3.head_object(Bucket=bucket, Key=key, **bucket_owner(bucket))
                 return True
             except Exception:
                 return False
 
-        if await asyncio.to_thread(_check_exists):
+        def _put(key: str, body: bytes) -> None:
+            s3 = session.client("s3", region_name=region)
+            s3.put_object(Bucket=bucket, Key=key, Body=body, **bucket_owner(bucket))
+            logger.info("Uploaded s3://%s/%s (%d bytes)", bucket, key, len(body))
+
+        def _sums(digest: str) -> bytes:
+            return f"{digest}  {package}\n".encode()
+
+        gh_url = (
+            f"https://github.com/{GITHUB_REPO}/releases/download/"
+            f"v{version}/{package}"
+        )
+
+        if await asyncio.to_thread(_exists, s3_key):
             logger.info("Release v%s already in S3", version)
+            if await asyncio.to_thread(_exists, sums_key):
+                return
+            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+                sums = await client.get(gh_url + ".sha256")
+            expected = sums.text.split()[0].lower() if sums.status_code == 200 and sums.text.split() else ""
+            if not re.fullmatch(r"[0-9a-f]{64}", expected):
+                raise RuntimeError(
+                    f"Hive release v{version}: s3://{bucket}/{s3_key} has no checksums.txt beside "
+                    f"it, and no published checksum was found (HTTP {sums.status_code} for "
+                    f"{gh_url}.sha256), so a Hive cannot check the package. Fix: from a source "
+                    f"checkout run `./hive/release.sh {version}`, which uploads both.")
+            await asyncio.to_thread(_put, sums_key, _sums(expected))
             return
 
         # Download from GitHub
-        gh_url = (
-            f"https://github.com/{GITHUB_REPO}/releases/download/"
-            f"v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz"
-        )
         logger.info("Downloading %s", gh_url)
 
         async with httpx.AsyncClient(follow_redirects=True, timeout=120) as client:
@@ -548,13 +721,10 @@ class HiveProvisioner:
                     f"checksum (HTTP {sums.status_code} for {gh_url}.sha256). Not uploaded."
                 )
 
-        # Upload to S3
-        def _upload():
-            s3 = session.client("s3", region_name=region)
-            s3.put_object(Bucket=bucket, Key=s3_key, Body=data, **bucket_owner(bucket))
-            logger.info("Uploaded %s to s3://%s/%s (%d bytes)", version, bucket, s3_key, len(data))
-
-        await asyncio.to_thread(_upload)
+        # Upload to S3: the package, then its checksum (a package without one is refused
+        # on the box, so a failed second put is repaired by the next sync above)
+        await asyncio.to_thread(_put, s3_key, data)
+        await asyncio.to_thread(_put, sums_key, _sums(actual))
 
     # ── IAM ────────────────────────────────────────────────────────
 
@@ -1173,14 +1343,25 @@ class HiveProvisioner:
                 elastic_ip_alloc_id=alloc_id,
                 ec2_public_ip=public_ip,
             )
+            # Step 8b: the role's credentials work only from this address (and its VPC's
+            # endpoints) from now on (hive_iam_policy); written once the Elastic IP is the
+            # instance's address
+            # (a VPC that cannot be read: the Elastic IP Deny refusing endpoint traffic too,
+            # not step 3's policy with no Deny; with no valid Elastic IP either, step 3's stays)
+            role_policy = await asyncio.to_thread(
+                _refresh_role_policy, session, region, f"SwarmAI-Hive-{name}", ec2_id, public_ip,
+                None, False)
 
             # Step 9: Wait for healthy (via EC2 tag, not HTTP — SG blocks non-CF traffic)
             healthy = await self._wait_healthy_via_tag(session, ec2_id, region, timeout=300)
             if not healthy:
+                note = (" The Hive's VPC could not be read, so its role refused requests through "
+                        "this VPC's endpoints (an S3 or SSM endpoint there stops the setup); retry "
+                        "once EC2 answers." if role_policy == "closed" else "")
                 await self._update_instance(
                     instance_id,
                     status="error",
-                    error_message="EC2 setup timeout — check /var/log/hive-setup.log",
+                    error_message="EC2 setup timeout — check /var/log/hive-setup.log." + note,
                 )
                 # Cleanup partial resources on health timeout
                 try:
@@ -1245,35 +1426,37 @@ class HiveProvisioner:
                 error_message=f"{str(e)[:400]} [resources: {cleanup_status}]",
             )
 
-    # ── CloudFront toggle ────────────────────────────────────────────
+    # ── CloudFront left enabled ──────────────────────────────────────
 
-    async def _set_cloudfront_enabled(
-        self, session, dist_id: str, enabled: bool
-    ) -> None:
-        """Enable or disable a CloudFront distribution (G3).
+    async def _ensure_cloudfront_enabled(self, session, dist_id: str) -> None:
+        """Enable a distribution an older SwarmAI disabled when it stopped the Hive.
 
-        Best-effort: logs warning on failure, never blocks stop/start.
+        Stop and start no longer touch the distribution: it stays enabled while the Hive
+        is stopped (a distribution with no traffic costs nothing), so a dispatch right
+        after a start does not wait minutes for CloudFront to propagate. A Hive stopped by
+        an older version still has a disabled one: start enables it once (that start then
+        waits for it like before). No call is made to change an enabled distribution.
+        Best-effort: logs a warning on failure, never blocks start.
         """
         if not dist_id:
             return
 
-        def _toggle():
+        def _enable():
             cf = session.client("cloudfront")
             try:
                 dist = cf.get_distribution(Id=dist_id)
                 config = dist["Distribution"]["DistributionConfig"]
-                if config["Enabled"] == enabled:
-                    return  # already in desired state
-                config["Enabled"] = enabled
+                if config["Enabled"]:
+                    return
+                config["Enabled"] = True
                 cf.update_distribution(
                     Id=dist_id, DistributionConfig=config, IfMatch=dist["ETag"]
                 )
-                logger.info("CloudFront %s %s", dist_id, "enabled" if enabled else "disabled")
+                logger.info("CloudFront %s enabled (an older version had disabled it)", dist_id)
             except Exception as e:
-                logger.warning("Failed to %s CloudFront %s: %s",
-                               "enable" if enabled else "disable", dist_id, e)
+                logger.warning("Failed to enable CloudFront %s: %s", dist_id, e)
 
-        await asyncio.to_thread(_toggle)
+        await asyncio.to_thread(_enable)
 
     # ── Lifecycle operations ───────────────────────────────────────
 
@@ -1291,6 +1474,21 @@ class HiveProvisioner:
             await conn.commit()
             if cursor.rowcount == 0:
                 raise RuntimeError(f"Instance {instance_id} is not in 'running' state")
+
+    async def release_stop_claim(self, instance_id: str) -> bool:
+        """Give back a claim_stop nothing has acted on yet (stopping → running): the idle
+        stop's claim when a dispatch to the Hive began meanwhile (core/hive_idle). True
+        when the claim was given back."""
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            await conn.execute("PRAGMA foreign_keys = ON")
+            cursor = await conn.execute(
+                "UPDATE hive_instances SET status = 'running', updated_at = datetime('now') "
+                "WHERE id = ? AND status = 'stopping'",
+                (instance_id,),
+            )
+            await conn.commit()
+            return cursor.rowcount == 1
 
     async def restart(self, instance_id: str) -> None:
         """Stop a Hive the restart route claimed (claim_stop), then start it: the owner
@@ -1310,8 +1508,9 @@ class HiveProvisioner:
             logger.warning("Hive %s restart: the start failed (%s)", instance_id, type(e).__name__)
 
     async def stop(self, instance_id: str, claimed: bool = False) -> None:
-        """Stop a running Hive (EC2 stop + disable CloudFront). ``claimed``: the caller
-        already moved it to 'stopping' (claim_stop)."""
+        """Stop a running Hive (EC2 stop). Its CloudFront distribution stays enabled
+        (_ensure_cloudfront_enabled). ``claimed``: the caller already moved it to
+        'stopping' (claim_stop)."""
         if not claimed:
             await self.claim_stop(instance_id)
 
@@ -1343,18 +1542,16 @@ class HiveProvisioner:
                 error_message=f"Stop failed: {str(e)[:300]}",
             )
             raise
-        # G3: Disable CloudFront to avoid 502s for users
-        await self._set_cloudfront_enabled(
-            session, instance.get("cloudfront_dist_id"), enabled=False
-        )
         await self._update_instance(instance_id, status="stopped")
 
     async def start(self, instance_id: str) -> None:
-        """Start a stopped Hive (EC2 start + wait healthy + enable CloudFront).
+        """Start a stopped Hive (EC2 start + wait healthy). Its CloudFront distribution
+        stayed enabled, so nothing waits for CloudFront; one an older version disabled is
+        enabled here (_ensure_cloudfront_enabled).
 
         Also the non-destructive recovery for an errored Hive whose instance still exists
         (a failed stop/start/health check): start_instances on a running instance is a
-        no-op, then the same health check and CloudFront re-enable run."""
+        no-op, then the same health check runs."""
         # H1: Atomic status gate — prevents concurrent start calls
         async with aiosqlite.connect(str(self.db_path)) as conn:
             await conn.execute("PRAGMA busy_timeout = 3000")
@@ -1399,15 +1596,14 @@ class HiveProvisioner:
             )
             raise
         await self._update_instance(instance_id, status="installing")
+        # a distribution an older version disabled at stop: enabled while the health
+        # check runs (an enabled one is left as it is)
+        await self._ensure_cloudfront_enabled(session, instance.get("cloudfront_dist_id"))
 
         # Health check via SSM (SG blocks non-CloudFront HTTP traffic)
         if ec2_id:
             healthy = await self._wait_healthy_via_ssm(session, ec2_id, region, timeout=180)
             if healthy:
-                # G3: Re-enable CloudFront after successful start
-                await self._set_cloudfront_enabled(
-                    session, instance.get("cloudfront_dist_id"), enabled=True
-                )
                 await self._update_instance(instance_id, status="running")
             else:
                 await self._update_instance(
@@ -1506,12 +1702,15 @@ class HiveProvisioner:
             # Ensure new version is in S3
             await self._sync_release_to_s3(session, bucket, version, region)
 
-            # Refresh the role's inline policy so a policy change reaches existing Hives
+            # Refresh the role's inline policy so a policy change reaches existing Hives,
+            # with the Hive's Elastic IP (stored at deploy step 8; read back from EC2 when
+            # the row has none) and its VPC
             await asyncio.to_thread(
-                _put_hive_role_policy, session.client("iam"), f"SwarmAI-Hive-{instance['name']}")
+                _refresh_role_policy, session, region, f"SwarmAI-Hive-{instance['name']}", ec2_id,
+                instance.get("ec2_public_ip"), instance.get("elastic_ip_alloc_id"))
 
             # SSM Run Command
-            from hive.user_data import TMP_ON_DISK_SH, health_exempt_fix_sh
+            from hive.user_data import PACKAGE_CHECK_SH, TMP_ON_DISK_SH, health_exempt_fix_sh
             health_fix_sh = health_exempt_fix_sh()
             update_script = f"""#!/bin/bash
 set -euo pipefail
@@ -1531,6 +1730,10 @@ rsync -a --exclude='backend/.venv' /opt/swarmai/ /opt/swarmai.bak/
 # the files of the failed version would be deployed with this one.
 rm -rf /tmp/hive-new /tmp/hive-update.tar.gz
 aws s3 cp s3://{bucket}/v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz /tmp/hive-update.tar.gz --region {region}
+# Unpacked only when it is the package checksums.txt (uploaded with it) names; a mismatch
+# stops here, before /opt/swarmai is touched.
+{PACKAGE_CHECK_SH}
+verify_hive_package /tmp/hive-update.tar.gz {bucket} {version} {region}
 mkdir -p /tmp/hive-new
 tar xzf /tmp/hive-update.tar.gz --strip-components=1 -C /tmp/hive-new/
 
@@ -1707,7 +1910,7 @@ echo "=== Update to v{version} verified ==="
             else:
                 await self._update_instance(
                     instance_id, status="running",
-                    error_message=f"Update failed: {status}. {output[:200]}",
+                    error_message=f"Update failed: {status}. {_script_error(output)}",
                 )
                 _update_succeeded = True
                 raise RuntimeError(f"SSM update failed: {status}")

@@ -92,7 +92,7 @@ export function hiveReasonLabel(t: TFunction, code: string | null): string | nul
   if (!code) return null;
   const busy = /^least_busy:(\d+)$/.exec(code);
   if (busy) return tf(t, 'chat.swarmOut.dispatch.reason.least_busy', 'the least busy ({{n}} running)', { n: busy[1] });
-  if (code === 'only_free' || code === 'idle' || code === 'named') {
+  if (code === 'only_free' || code === 'idle' || code === 'named' || code === 'started') {
     return tf(t, `chat.swarmOut.dispatch.reason.${code}`, code);
   }
   return code;

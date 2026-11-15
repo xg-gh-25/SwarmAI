@@ -158,10 +158,17 @@ _MIN_STEP_S = 1.0
 
 
 class _Deadline:
-    """What is left of one dispatch's DISPATCH_DEADLINE_S, on the monotonic clock."""
+    """What is left of one dispatch's DISPATCH_DEADLINE_S, on the monotonic clock, and
+    how long each step took (``timings``: ``{step, seconds}`` in order, kept on the
+    dispatch's row so a slow dispatch says which step was slow)."""
 
     def __init__(self, seconds: float):
         self._at = time.monotonic() + seconds
+        self.timings: list[dict[str, Any]] = []
+
+    def took(self, step: str, since: float) -> None:
+        """Record *step*, started at monotonic *since*, as ended now."""
+        self.timings.append({"step": step, "seconds": round(time.monotonic() - since, 2)})
 
     def left(self) -> float:
         return self._at - time.monotonic()
@@ -182,14 +189,132 @@ async def _within(deadline: _Deadline, step: str, cap: float, make, keep: Option
                   hint: str = "") -> Any:
     """``await make()`` within *step*'s budget (``_Deadline.budget``; *keep* defaults to
     the session's window). A step that runs past it is stopped and fails as
-    SwarmOutError naming the step: it comes before the session, so nothing was sent."""
+    SwarmOutError naming the step: it comes before the session, so nothing was sent.
+    The step's name and how long it took are recorded on the deadline (``timings``),
+    whether it ended well or not."""
     t = deadline.budget(step, cap, SESSION_ID_WAIT_S if keep is None else keep)
+    started = time.monotonic()
     try:
         return await asyncio.wait_for(make(), t)
     except asyncio.TimeoutError:
         raise SwarmOutError(f"{step} did not finish in the {t:.0f} s the dispatch had left "
                             f"(a dispatch has {DISPATCH_DEADLINE_S:g} s in all); nothing was sent"
                             + (f". {hint}" if hint else "")) from None
+    finally:
+        deadline.took(step, started)
+
+
+#: how long a stopped Hive may take to come up inside a dispatch (EC2 start and the
+#: health check take a few minutes); the rest of DISPATCH_DEADLINE_S is for the dispatch
+START_TIMEOUT_S = 270
+
+#: Hive ref (the id or the name the dispatch was given) -> dispatches to it in progress
+#: (dispatch_spec / dispatch): one has no row and no open run until its session starts,
+#: so the idle stop (core/hive_idle) and the restart route leave a Hive alone while this
+#: is set
+_IN_FLIGHT: dict[str, int] = {}
+
+
+def dispatch_in_flight(hive_id: str, name: Optional[str] = None) -> bool:
+    """Whether a dispatch to this Hive (by its id or its name) is in progress here."""
+    return any(_IN_FLIGHT.get(str(k), 0) > 0 for k in (hive_id, name) if k)
+
+
+class _Dispatching:
+    """Marks a dispatch to *hive_ref* (an id or a name) in flight while the ``with``
+    block runs. Set synchronously on entry, before anything is awaited."""
+
+    def __init__(self, hive_ref: str):
+        self.hive_id = str(hive_ref)
+
+    def __enter__(self):
+        _IN_FLIGHT[self.hive_id] = _IN_FLIGHT.get(self.hive_id, 0) + 1
+        return self
+
+    def __exit__(self, *exc):
+        n = _IN_FLIGHT.get(self.hive_id, 0) - 1
+        if n > 0:
+            _IN_FLIGHT[self.hive_id] = n
+        else:
+            _IN_FLIGHT.pop(self.hive_id, None)
+        return False
+
+
+async def _ensure_running(row: dict[str, Any], deadline: _Deadline) -> bool:
+    """Bring a stopped (or stopping) Hive up before a dispatch to it, as the step
+    ``starting Hive <name>`` (core/hive_idle.wake). True when it had to; False for a Hive
+    in any other status (``_instance`` says why it cannot take a task). The start goes on
+    when the step runs out of time; the dispatch then fails and sent nothing."""
+    from core import hive_idle
+    if row.get("status") not in hive_idle.WAKES_FROM:
+        return False
+    try:
+        await _within(deadline, f"starting Hive {row['name']}", START_TIMEOUT_S,
+                      lambda: hive_idle.wake(row["id"]),
+                      hint="The Hive goes on starting; send the task again in a few minutes")
+    except hive_idle.WakeError as e:
+        raise SwarmOutError(f"{e}; nothing was sent") from None
+    return True
+
+
+def _held_refusal(name: str) -> SwarmOutError:
+    return SwarmOutError(f"Hive {name} holds this Brain for a running Swarm Run at another "
+                         "version; send it to another Hive, or when that run ends")
+
+
+async def _instance_up(hive_ref: str, deadline: _Deadline, held: frozenset = frozenset()) -> dict[str, Any]:
+    """``_instance``, after bringing a stopped Hive up (``_ensure_running``): a dispatch
+    to a stopped Hive starts it first. Only a Hive whose status is the one thing wrong
+    is started: one whose address, bucket, credentials or account are not usable is
+    refused for that, and one in *held* (ids: another Swarm Run holds this Brain there)
+    is refused before it is started. A Hive found running again (an idle stop's claim
+    given back meanwhile) is taken as it is. Any other status is refused as before."""
+    try:
+        return await _instance(hive_ref)
+    except SwarmOutError as refused:
+        try:
+            row, acct = await _row_and_account(hive_ref)
+        except Exception:  # noqa: BLE001 — no single Hive / store unreadable: the refusal stands
+            raise refused from None
+        if row.get("status") == "running":
+            return await _instance(hive_ref)
+        from core import hive_idle
+        if row.get("status") not in hive_idle.WAKES_FROM:
+            raise
+        _validate_instance({**row, "status": "running"}, acct)     # unusable: its own reason
+        if str(row.get("id")) in held:
+            raise _held_refusal(str(row.get("name"))) from None
+        await _ensure_running(row, deadline)
+    return await _instance(hive_ref)
+
+
+async def _held_names(held: frozenset) -> frozenset:
+    """The names of the Hives whose ids are in *held*; empty when there are none or the
+    store cannot be read (a held Hive chosen anyway is still refused before anything is
+    sent to it: ``_instance_up``, ``_dispatch_spec_on``)."""
+    if not held:
+        return frozenset()
+    try:
+        return frozenset(str(h["name"]) for h in (await hives())["hives"] if str(h["id"]) in held)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        logger.warning("swarm_out: reading the Hives' names failed (%s)", type(e).__name__)
+        return frozenset()
+
+
+def pick_stopped(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] = None,
+                 exclude: frozenset = frozenset()) -> Optional[str]:
+    """The stopped Hive a task with no Hive named starts, when no Hive is running at all
+    (``pick_hive`` found none): the fewest of this Host's runs still open there, then the
+    name. None when a Hive is running (one that cannot take the task is not a reason to
+    start another) or none is stopped. ``exclude``: names (or ids) not to choose (another
+    Swarm Run holds the task's Brain there)."""
+    if any(h.get("status") == "running" for h in hives):
+        return None
+    held = open_runs or {}
+    stopped = sorted((h for h in hives if h.get("status") == "stopped"
+                      and str(h.get("name")) not in exclude and str(h.get("id")) not in exclude),
+                     key=lambda h: (held.get(str(h.get("name")), 0), str(h.get("name"))))
+    return str(stopped[0]["name"]) if stopped else None
 
 
 def _state_dir() -> Path:
@@ -232,8 +357,8 @@ async def _hive_statuses() -> dict[str, str]:
         return {r[0]: r[1] for r in await cur.fetchall()}
 
 
-async def _instance(hive_ref: str) -> dict[str, Any]:
-    """A running Hive by id or name, with its account row; validated fields only."""
+async def _row_and_account(hive_ref: str) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """The Hive's row (by id or name) and its account row, unvalidated."""
     import aiosqlite
     async with aiosqlite.connect(_db_path()) as conn:
         conn.row_factory = aiosqlite.Row
@@ -246,7 +371,12 @@ async def _instance(hive_ref: str) -> dict[str, Any]:
         inst = rows[0]
         cur = await conn.execute("SELECT * FROM hive_accounts WHERE id = ?", (inst["account_ref"],))
         acct = await cur.fetchone()
-    return _validate_instance(inst, dict(acct) if acct is not None else None)
+    return inst, (dict(acct) if acct is not None else None)
+
+
+async def _instance(hive_ref: str) -> dict[str, Any]:
+    """A running Hive by id or name, with its account row; validated fields only."""
+    return _validate_instance(*await _row_and_account(hive_ref))
 
 
 def _validate_instance(inst: dict[str, Any], acct: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -486,80 +616,92 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
     except task_repos.TaskRepoError as e:
         raise SwarmOutError(str(e)) from None
     deadline = deadline or _Deadline(DISPATCH_DEADLINE_S)
-    inst = await _instance(hive_ref)
-    name = inst["name"]
-    async with _client(inst) as client:
-        r = await _within(deadline, f"checking Hive {name}", HTTP_TIMEOUT_S,
-                          lambda: client.get("/api/chat/sessions/admission-state"))
-        if r.status_code != 200:
-            raise SwarmOutError(f"Hive {inst['name']} did not answer (HTTP {r.status_code})")
-        if r.json().get("saturated"):
-            raise SwarmOutError(f"Hive {inst['name']} is busy; try again later")
-        if r.json().get("work_orders") is not True:
-            raise SwarmOutError(f"Hive {inst['name']}'s version cannot prepare a task's workspace; update it once")
-        # the task runs on the model this host runs on (core/swarm_out_model); only a
-        # Hive that can take the task has its model set
-        from core import swarm_out_model
-        try:
-            # at most three requests (read the settings, check the model, set it)
-            await _within(deadline, f"setting Hive {name}'s model", 3 * HTTP_TIMEOUT_S,
-                          lambda: swarm_out_model.align(client, inst["name"], model))
-        except swarm_out_model.ModelAlignError as e:
-            raise SwarmOutError(f"{e}; the task was not sent") from None
-        # the Hive's backend makes the work order real before the session starts
-        # (design 2026-10-30-run-spec §4.3): a failure there sends nothing
-        dispatch_id = dispatch_id or new_dispatch_id()
-        work = _work_repos(declared)
-        prepare_step = f"preparing the workspace on Hive {name}"
-        deadline.budget(prepare_step, PREPARE_TIMEOUT_S, SESSION_ID_WAIT_S)   # nothing asked yet
-        try:
-            order = await _within(deadline, prepare_step, PREPARE_TIMEOUT_S,
-                                  lambda: _prepare_work(client, inst, dispatch_id, work, checks),
-                                  hint="A first clone of a large repository can take this long; the Hive "
-                                       "goes on building its copy, so sending the task again in a few "
-                                       "minutes is usually faster")
-        except BaseException:
-            await _release_work(client, dispatch_id)     # a prepare this side gave up on
-            _release_again_later(inst, dispatch_id)      # ... may still be running there
-            raise
-        from core import hive_workspace
-        declared = hive_workspace.task_repos_of(order)
-        taken: list = []                  # set once the Hive answered the request with 200
-        try:
-            # the window held back for it, or what is left when that is less
-            wait = deadline.budget(f"starting the session on Hive {name}", SESSION_ID_WAIT_S)
-            session_id = await asyncio.wait_for(
-                _start_session(client, task_message(segment + task, order), dispatch_id,
-                               _pin_request(agent, task), on_accepted=lambda: taken.append(True)),
-                wait)
-        except BaseException as e:
-            if not (taken or isinstance(e, _MAYBE_TAKEN)):
-                await _release_work(client, dispatch_id)     # the request never reached the Hive
+    # in flight from before the Hive's status is read until the row is written (hive_idle)
+    with _Dispatching(hive_ref):
+        inst = await _instance_up(hive_ref, deadline)
+        name = inst["name"]
+        async with _client(inst) as client:
+            r = await _within(deadline, f"checking Hive {name}", HTTP_TIMEOUT_S,
+                              lambda: client.get("/api/chat/sessions/admission-state"))
+            if r.status_code != 200:
+                raise SwarmOutError(f"Hive {inst['name']} did not answer (HTTP {r.status_code})")
+            if r.json().get("saturated"):
+                raise SwarmOutError(f"Hive {inst['name']} is busy; try again later")
+            if r.json().get("work_orders") is not True:
+                raise SwarmOutError(f"Hive {inst['name']}'s version cannot prepare a task's workspace; update it once")
+            # the task runs on the model this host runs on (core/swarm_out_model); only a
+            # Hive that can take the task has its model set
+            from core import swarm_out_model
+            try:
+                # at most three requests (read the settings, check the model, set it)
+                await _within(deadline, f"setting Hive {name}'s model", 3 * HTTP_TIMEOUT_S,
+                              lambda: swarm_out_model.align(client, inst["name"], model))
+            except swarm_out_model.ModelAlignError as e:
+                raise SwarmOutError(f"{e}; the task was not sent") from None
+            # the Hive's backend makes the work order real before the session starts
+            # (design 2026-10-30-run-spec §4.3): a failure there sends nothing
+            dispatch_id = dispatch_id or new_dispatch_id()
+            work = _work_repos(declared)
+            prepare_step = f"preparing the workspace on Hive {name}"
+            deadline.budget(prepare_step, PREPARE_TIMEOUT_S, SESSION_ID_WAIT_S)   # nothing asked yet
+            try:
+                order = await _within(deadline, prepare_step, PREPARE_TIMEOUT_S,
+                                      lambda: _prepare_work(client, inst, dispatch_id, work, checks),
+                                      hint="A first clone of a large repository can take this long; the Hive "
+                                           "goes on building its copy, so sending the task again in a few "
+                                           "minutes is usually faster")
+            except BaseException:
+                await _release_work(client, dispatch_id)     # a prepare this side gave up on
+                _release_again_later(inst, dispatch_id)      # ... may still be running there
                 raise
-            # The Hive may be running the task (fixing spec J1, e2e-fixes #3): record the
-            # dispatch without a session so it is listed and this Hive's questions still
-            # are, keep the work order, and say so instead of a generic failure
-            _record_maybe_sent(extra, inst, title, origin, declared, agent, dispatch_id)
-            if not isinstance(e, Exception):
-                raise                                        # a cancel stays a cancel
-            waited = isinstance(e, (asyncio.TimeoutError, httpx.ReadTimeout))
-            raise SwarmOutMaybeSent(
-                f"Hive {name} " + (f"did not name the session within {wait:.0f}s" if waited
-                                   else "took the task, but the connection ended before it "
-                                        "named the session")
-                + "; the task may be running there. Check the Hive's own page before "
-                "sending it again.") from None
-        if not session_id or not KEY_RE.match(session_id):
-            # answered with 200 (the only way to get here) but named no usable session
-            _record_maybe_sent(extra, inst, title, origin, declared, agent, dispatch_id)
-            raise SwarmOutMaybeSent(
-                f"Hive {name} took the task but did not name the session; the task may be "
-                "running there. Check the Hive's own page before sending it again.")
-    row = {**(extra or {}), **_log_row(inst, session_id, title, origin, declared, agent, dispatch_id)}
-    line = json.dumps(row, ensure_ascii=False) + "\n"
-    await asyncio.to_thread(_append, line)
-    logger.info("swarm_out: dispatched %s to %s (session %s)", row["dispatch_id"], inst["name"], session_id)
-    return row
+            from core import hive_workspace
+            declared = hive_workspace.task_repos_of(order)
+            taken: list = []                  # set once the Hive answered the request with 200
+            session_step = f"starting the session on Hive {name}"
+            started = time.monotonic()
+            try:
+                # the window held back for it, or what is left when that is less
+                wait = deadline.budget(session_step, SESSION_ID_WAIT_S)
+                session_id = await asyncio.wait_for(
+                    _start_session(client, task_message(segment + task, order), dispatch_id,
+                                   _pin_request(agent, task), on_accepted=lambda: taken.append(True)),
+                    wait)
+            except BaseException as e:
+                deadline.took(session_step, started)
+                if not (taken or isinstance(e, _MAYBE_TAKEN)):
+                    await _release_work(client, dispatch_id)     # the request never reached the Hive
+                    raise
+                # The Hive may be running the task (fixing spec J1, e2e-fixes #3): record the
+                # dispatch without a session so it is listed and this Hive's questions still
+                # are, keep the work order, and say so instead of a generic failure
+                _record_maybe_sent(_timed(extra, deadline), inst, title, origin, declared, agent, dispatch_id)
+                if not isinstance(e, Exception):
+                    raise                                        # a cancel stays a cancel
+                waited = isinstance(e, (asyncio.TimeoutError, httpx.ReadTimeout))
+                raise SwarmOutMaybeSent(
+                    f"Hive {name} " + (f"did not name the session within {wait:.0f}s" if waited
+                                       else "took the task, but the connection ended before it "
+                                            "named the session")
+                    + "; the task may be running there. Check the Hive's own page before "
+                    "sending it again.") from None
+            deadline.took(session_step, started)
+            if not session_id or not KEY_RE.match(session_id):
+                # answered with 200 (the only way to get here) but named no usable session
+                _record_maybe_sent(_timed(extra, deadline), inst, title, origin, declared, agent, dispatch_id)
+                raise SwarmOutMaybeSent(
+                    f"Hive {name} took the task but did not name the session; the task may be "
+                    "running there. Check the Hive's own page before sending it again.")
+        row = {**_timed(extra, deadline), **_log_row(inst, session_id, title, origin, declared, agent, dispatch_id)}
+        line = json.dumps(row, ensure_ascii=False) + "\n"
+        await asyncio.to_thread(_append, line)
+        logger.info("swarm_out: dispatched %s to %s (session %s)", row["dispatch_id"], inst["name"], session_id)
+        return row
+
+
+def _timed(extra: Optional[dict], deadline: _Deadline) -> dict:
+    """What the row carries besides its own fields: *extra* and the dispatch's step
+    timings (``timings``: ``[{step, seconds}]``, in order)."""
+    return {**(extra or {}), "timings": list(deadline.timings)}
 
 
 def _record_maybe_sent(extra: Optional[dict], inst: dict[str, Any], title: str, origin: str,
@@ -678,16 +820,21 @@ def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] =
     Raises SwarmOutError when none can take a task. ``reason`` is a
     code the card words (core/swarm_out_card, the desktop card): ``only_free``, ``idle``
     (nothing open, nothing streaming) or ``least_busy:<n>`` (n: the larger of the two);
-    a named Hive's is ``named``. ``exclude``: Hive ids not to choose (another Swarm Run
-    holds the task's Brain there at another version, core/swarm_run.held_hives)."""
+    a named Hive's is ``named``. ``exclude``: Hive ids or names not to choose (another
+    Swarm Run holds the task's Brain there at another version, core/swarm_run.held_hives;
+    the fleet's rows carry names only)."""
     held = open_runs or {}
     up = [h for h in hives if h.get("status") == "running" and h.get("reachable") is True
           and h.get("saturated") is False and isinstance(h.get("streaming"), int)]
     ok = [h for h in up if h.get("capable") is True]
-    if exclude and ok and all(str(h.get("id")) in exclude for h in ok):
+
+    def excluded(h: dict[str, Any]) -> bool:
+        # by id, or by name: the fleet's rows carry no id (FLEET_KEYS)
+        return str(h.get("id")) in exclude or str(h.get("name")) in exclude
+    if exclude and ok and all(excluded(h) for h in ok):
         raise SwarmOutError("every Hive that could take it holds this Brain for a running Swarm Run "
                             "at another version; send it when that run ends")
-    ok = [h for h in ok if str(h.get("id")) not in exclude]
+    ok = [h for h in ok if not excluded(h)]
     if not ok and up:
         raise SwarmOutError("no running Hive has this version yet: update one with no open runs "
                             "(update-hive), then send the task")
@@ -824,10 +971,36 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
         hive_reason = "named"
     else:
         # the Hives are probed at once, each within PROBE_TIMEOUT_S
-        hive_ref, hive_reason = pick_hive((await _within(deadline, "choosing a Hive", 4 * PROBE_TIMEOUT_S,
-                                                         fleet))["hives"],
-                                          await asyncio.to_thread(open_runs_by_hive), exclude=held)
-    inst = await _instance(hive_ref)
+        known = (await _within(deadline, "choosing a Hive", 4 * PROBE_TIMEOUT_S, fleet))["hives"]
+        open_runs = await asyncio.to_thread(open_runs_by_hive)
+        # ``held`` is ids and the fleet's rows carry names: both pickers get both
+        avoid = held | await _held_names(held)
+        try:
+            hive_ref, hive_reason = pick_hive(known, open_runs, exclude=avoid)
+        except SwarmOutError:
+            # no Hive is running (an idle one was stopped, core/hive_idle): start one that
+            # no other Swarm Run holds
+            hive_ref = pick_stopped(known, open_runs, avoid)
+            if hive_ref is None:
+                if pick_stopped(known, open_runs) is not None:
+                    raise SwarmOutError(f"every stopped Hive holds {brain} for a running Swarm Run at "
+                                        "another version; send it when that run ends") from None
+                raise
+            hive_reason = "started"
+    # in flight from before the Hive's status is read until the row is written (hive_idle)
+    with _Dispatching(hive_ref):
+        return await _dispatch_spec_on(deadline, ws, lead, hive_ref, hive_reason, held, spec, frozen,
+                                       brain, title, origin, brief, dispatched_from, wp)
+
+
+async def _dispatch_spec_on(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: str, hive_reason: str,
+                            held: frozenset, spec: dict[str, Any], frozen: Optional[dict[str, Any]],
+                            brain: str, title: str, origin: str, brief: str,
+                            dispatched_from: Optional[str], wp: Optional[str]) -> dict[str, Any]:
+    """The rest of ``_dispatch_spec`` once the Hive is chosen: bring it up when it is
+    stopped, check it, sync the Brain, ship the repositories, dispatch."""
+    from core import brain_sync_host, swarm_run, task_spec
+    inst = await _instance_up(hive_ref, deadline, held)
     if str(inst.get("id")) in held:
         raise SwarmOutError(f"Hive {inst['name']} holds {brain} for a running Swarm Run at another "
                             "version; send it to another Hive, or when that run ends")

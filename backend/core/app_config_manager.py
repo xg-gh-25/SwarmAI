@@ -127,6 +127,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # e.g. "*.corp.example.com") a Hive cannot reach. A task that needs one is refused
     # before anything is sent. The user's own list; the product ships none.
     "swarm_out_private_hosts": [],
+    # A running Hive idle this many minutes is stopped by the Host, and the next dispatch
+    # to it starts it again (core/hive_idle); 0 turns idle stopping off.
+    "hive_idle_stop_minutes": 120,
     "evolution": {
         "enabled": True,
         "max_retries": 3,

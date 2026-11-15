@@ -562,6 +562,7 @@
           "only_free": "唯一能接的",
           "idle": "当时空闲",
           "least_busy": "当时最空闲（{{n}} 个在跑）",
+          "started": "为这次任务启动（所有 Hive 都已停止）",
           "named": "你指定的"
         },
         "sync": {

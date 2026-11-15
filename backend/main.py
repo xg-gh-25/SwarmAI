@@ -1606,6 +1606,13 @@ async def lifespan(app: FastAPI):
         from core.swarm_out import run_refresh_loop as _swarm_out_refresh_loop
         _swarm_out_refresh_task = asyncio.create_task(_swarm_out_refresh_loop(), name="swarm-out-refresh")
 
+    # ── Hives idle for hive_idle_stop_minutes are stopped (host only) ──
+    # A dispatch to a stopped Hive starts it again (core/hive_idle).
+    _hive_idle_task: asyncio.Task | None = None
+    if backend_mode != "hive" and _bjson_written:
+        from core.hive_idle import run_loop as _hive_idle_loop
+        _hive_idle_task = asyncio.create_task(_hive_idle_loop(), name="hive-idle-stop")
+
     # ── Read-only content origin for "Open in browser" (desktop launchers only) ──
     # docs/design/2026-10-31-swarm-out-ops-registry.md §5.5; core/content_origin.py.
     _content_origin_on = os.environ.get("SWARMAI_MODE") in ("daemon", "subprocess")
@@ -1761,6 +1768,8 @@ async def lifespan(app: FastAPI):
         _swarm_out_bridge_task.cancel()
     if _swarm_out_refresh_task and not _swarm_out_refresh_task.done():
         _swarm_out_refresh_task.cancel()
+    if _hive_idle_task and not _hive_idle_task.done():
+        _hive_idle_task.cancel()
     if _content_origin_on:
         from core import content_origin as _content_origin
         await _content_origin.stop()

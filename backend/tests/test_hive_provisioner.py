@@ -1068,37 +1068,20 @@ class TestG2CredentialsDesktopGuard:
             "G2: credentials endpoint must check desktop mode"
 
 
-class TestG3CloudFrontToggle:
-    """G3: stop() disables CF, start() enables CF."""
-
-    def test_stop_calls_cf_disable(self):
-        """stop() must call _set_cloudfront_enabled(False)."""
-        import inspect
-        from hive.provisioner import HiveProvisioner
-
-        source = inspect.getsource(HiveProvisioner.stop)
-        assert "_set_cloudfront_enabled" in source
-        assert "enabled=False" in source
-
-    def test_start_calls_cf_enable(self):
-        """start() must call _set_cloudfront_enabled(True)."""
-        import inspect
-        from hive.provisioner import HiveProvisioner
-
-        source = inspect.getsource(HiveProvisioner.start)
-        assert "_set_cloudfront_enabled" in source
-        assert "enabled=True" in source
+class TestG3CloudFrontStaysEnabled:
+    """Stop and start leave the distribution enabled (a distribution with no traffic costs
+    nothing); start only enables one an older version disabled."""
 
     @pytest.mark.asyncio
-    async def test_cf_toggle_handles_no_dist_id(self):
-        """_set_cloudfront_enabled with None dist_id is a no-op."""
+    async def test_cf_ensure_handles_no_dist_id(self):
+        """_ensure_cloudfront_enabled with no dist_id makes no call."""
         from hive.provisioner import HiveProvisioner
 
         p = HiveProvisioner(Path("/tmp/test.db"))
         session = MagicMock()
-        # Should not raise
-        await p._set_cloudfront_enabled(session, None, enabled=False)
-        await p._set_cloudfront_enabled(session, "", enabled=True)
+        await p._ensure_cloudfront_enabled(session, None)
+        await p._ensure_cloudfront_enabled(session, "")
+        session.client.assert_not_called()
 
 
 class TestG4UnifiedCaddyfile:
@@ -1331,8 +1314,9 @@ class TestStopBehavioral:
     """M11: Behavioral tests for stop()."""
 
     @pytest.mark.asyncio
-    async def test_stop_calls_ec2_and_disables_cf(self):
-        """stop() must: atomic lock → EC2 stop → wait stopped → disable CF → status=stopped."""
+    async def test_stop_calls_ec2_and_leaves_cf(self):
+        """stop() must: atomic lock → EC2 stop → wait stopped → status=stopped; the
+        CloudFront distribution is not touched."""
         p, inst, acc, mock_conn = _make_provisioner_and_mocks()
         mock_ec2 = MagicMock()
         mock_ec2.stop_instances = MagicMock()
@@ -1344,7 +1328,7 @@ class TestStopBehavioral:
         with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=inst), \
              patch.object(p, "_get_account", new_callable=AsyncMock, return_value=acc), \
              patch.object(p, "_update_instance", new_callable=AsyncMock) as mock_update, \
-             patch.object(p, "_set_cloudfront_enabled", new_callable=AsyncMock) as mock_cf, \
+             patch.object(p, "_ensure_cloudfront_enabled", new_callable=AsyncMock) as mock_cf, \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
              patch("hive.provisioner.asyncio.to_thread", side_effect=_run_inline):
@@ -1352,7 +1336,8 @@ class TestStopBehavioral:
             await p.stop("inst-1")
 
             mock_ec2.stop_instances.assert_called_once_with(InstanceIds=["i-abc123"])
-            mock_cf.assert_called_once_with(mock_session, "EDIST123", enabled=False)
+            mock_cf.assert_not_called()
+            mock_ec2.update_distribution.assert_not_called()
             mock_update.assert_called_with("inst-1", status="stopped")
 
     @pytest.mark.asyncio
@@ -1370,8 +1355,9 @@ class TestStartBehavioral:
     """M11: Behavioral tests for start()."""
 
     @pytest.mark.asyncio
-    async def test_start_calls_ec2_and_enables_cf(self):
-        """start() must: atomic lock → EC2 start → wait running → health → enable CF → status=running."""
+    async def test_start_calls_ec2_and_checks_cf_is_enabled(self):
+        """start() must: atomic lock → EC2 start → wait running → (a distribution an older
+        version disabled is enabled) → health → status=running."""
         p, inst, acc, mock_conn = _make_provisioner_and_mocks()
         mock_ec2 = MagicMock()
         mock_ec2.start_instances = MagicMock()
@@ -1383,7 +1369,7 @@ class TestStartBehavioral:
         with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=inst), \
              patch.object(p, "_get_account", new_callable=AsyncMock, return_value=acc), \
              patch.object(p, "_update_instance", new_callable=AsyncMock) as mock_update, \
-             patch.object(p, "_set_cloudfront_enabled", new_callable=AsyncMock) as mock_cf, \
+             patch.object(p, "_ensure_cloudfront_enabled", new_callable=AsyncMock) as mock_cf, \
              patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=True), \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
@@ -1392,7 +1378,8 @@ class TestStartBehavioral:
             await p.start("inst-1")
 
             mock_ec2.start_instances.assert_called_once_with(InstanceIds=["i-abc123"])
-            mock_cf.assert_called_once_with(mock_session, "EDIST123", enabled=True)
+            mock_cf.assert_called_once_with(mock_session, "EDIST123")
+            mock_update.assert_called_with("inst-1", status="running")
 
     @pytest.mark.asyncio
     async def test_start_sets_error_if_health_fails(self):
@@ -1441,12 +1428,12 @@ class TestCleanupBehavioral:
             assert "deleted" in statuses, "Must set 'deleted' after cleanup"
 
 
-class TestCFToggleBehavioral:
-    """M11: Behavioral tests for _set_cloudfront_enabled()."""
+class TestCFEnsureBehavioral:
+    """M11: Behavioral tests for _ensure_cloudfront_enabled()."""
 
     @pytest.mark.asyncio
-    async def test_cf_toggle_swallows_api_errors(self):
-        """_set_cloudfront_enabled must log warning on API error, not raise."""
+    async def test_cf_ensure_swallows_api_errors(self):
+        """_ensure_cloudfront_enabled must log warning on API error, not raise."""
         from hive.provisioner import HiveProvisioner
         p = HiveProvisioner(Path("/tmp/test.db"))
         mock_session = MagicMock()
@@ -1455,7 +1442,7 @@ class TestCFToggleBehavioral:
         mock_session.client.return_value = mock_cf
 
         # Should NOT raise — best-effort design
-        await p._set_cloudfront_enabled(mock_session, "EDIST123", enabled=False)
+        await p._ensure_cloudfront_enabled(mock_session, "EDIST123")
 
 
 class TestM13TemplateVariableCheck:

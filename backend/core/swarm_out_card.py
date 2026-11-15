@@ -307,6 +307,8 @@ def hive_reason_text(code: Optional[str]) -> Optional[str]:
         return "the only one free"
     if code == "idle":
         return "idle"
+    if code == "started":
+        return "started for this task (every Hive was stopped)"
     m = re.fullmatch(r"least_busy:(\d+)", code)
     return f"the least busy ({m.group(1)} running)" if m else code
 

@@ -1,8 +1,9 @@
 """User-data script renderer for Hive EC2 instances.
 
 Generates a parameterized bash script that EC2 runs on first boot.
-Downloads the hive package from S3, installs dependencies, configures
-Caddy with basic auth, starts services, and tags the instance ready.
+Downloads the hive package from S3 and checks it against the checksums.txt beside it,
+installs dependencies, installs a pinned Caddy release (checksum checked) and configures
+it with basic auth, starts services, and tags the instance ready.
 """
 
 import re
@@ -45,6 +46,10 @@ echo "[3/9] Downloading hive package from S3..."
 mkdir -p "$INSTALL_DIR"
 aws s3 cp "s3://$HIVE_S3_BUCKET/v$HIVE_VERSION/swarmai-hive-v$HIVE_VERSION-linux-arm64.tar.gz" \
     /tmp/hive.tar.gz --region "$HIVE_REGION"
+# Unpacked only when it is the package checksums.txt (uploaded with it) names: a mismatch
+# stops the setup here, before anything is installed.
+${package_check}
+verify_hive_package /tmp/hive.tar.gz "$HIVE_S3_BUCKET" "$HIVE_VERSION" "$HIVE_REGION"
 tar xzf /tmp/hive.tar.gz --strip-components=1 -C "$INSTALL_DIR"
 chown -R "$SWARM_USER:$SWARM_USER" "$INSTALL_DIR"
 rm /tmp/hive.tar.gz
@@ -63,14 +68,11 @@ sudo -u "$SWARM_USER" .venv/bin/pip install -q -e . 2>&1 | tail -3
 
 # ── 5. Install Caddy ──
 echo "[5/9] Installing Caddy..."
-curl -sL "https://caddyserver.com/api/download?os=linux&arch=arm64" -o /tmp/caddy
-if file /tmp/caddy | grep -q "ELF.*executable"; then
-    mv /tmp/caddy /usr/bin/caddy && chmod +x /usr/bin/caddy
-else
-    echo "ERROR: Caddy download failed integrity check" >&2
-    # H2: Abort immediately — continuing without Caddy = instance looks healthy but 401s everything
-    exit 1
-fi
+# A pinned release from GitHub, checked against that release's checksum (CADDY_VERSION).
+# H2: a failure aborts the setup: continuing without Caddy = instance looks healthy but
+# 401s everything.
+${caddy_install}
+install_caddy /usr/bin/caddy
 mkdir -p /etc/caddy /var/log/caddy
 
 # ── 6. Configure Caddy (HTTP, CloudFront terminates TLS) ──
@@ -680,6 +682,69 @@ else
 fi"""
 
 
+# ── Hive package check ──
+# Shared by first boot (render_user_data) and the update script (provisioner.update).
+# checksums.txt sits beside the package in the bucket: hive/release.sh uploads it with the
+# package, provisioner._sync_release_to_s3 writes it with a package from GitHub Releases.
+# Each line is `<sha256>  <file>` (sha256sum's format); the package is accepted only when
+# its line exists and its hash is the package's. Every failure prints one ERROR line (to
+# stdout and stderr: an update's card shows the stdout one) and returns 1, which stops a
+# `set -e` script before the package is unpacked.
+PACKAGE_CHECK_SH = r"""verify_hive_package() {  # <package file> <bucket> <version> <region>
+    local file="$1" bucket="$2" version="$3" region="$4"
+    local name="swarmai-hive-v$version-linux-arm64.tar.gz" sums want got
+    if ! sums=$(aws s3 cp "s3://$bucket/v$version/checksums.txt" - --region "$region"); then
+        echo "ERROR: the Hive package v$version cannot be checked: s3://$bucket/v$version/checksums.txt could not be read; nothing was installed" | tee /dev/stderr
+        return 1
+    fi
+    want=$(printf '%s\n' "$sums" | awk -v f="$name" '$2 == f || $2 == "*" f { print tolower($1); exit }')
+    if ! printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$'; then
+        echo "ERROR: the Hive package v$version cannot be checked: checksums.txt has no sha256 line for $name; nothing was installed" | tee /dev/stderr
+        return 1
+    fi
+    got=$(sha256sum "$file" | cut -d' ' -f1)
+    if [ "$got" != "$want" ]; then
+        echo "ERROR: the Hive package v$version does not match its checksum (sha256 $got, checksums.txt says $want); nothing was installed" | tee /dev/stderr
+        return 1
+    fi
+    echo "Hive package v$version matches checksums.txt (sha256 $got)"
+}"""
+
+
+# ── Caddy: a pinned release ──
+# Caddy is the Hive's only public entry and its auth layer. It is the GitHub release below,
+# and the archive is installed only when its SHA-512 is the one that release's
+# caddy_<version>_checksums.txt lists for caddy_<version>_linux_arm64.tar.gz (copied here,
+# so the value cannot change with the release asset). To move to another release: take its
+# checksums file's line for linux_arm64.tar.gz, and check the rendered Caddyfile with that
+# binary (`caddy validate --adapter caddyfile`). v2.11.9 validates it.
+CADDY_VERSION = "2.11.9"
+CADDY_ARM64_SHA512 = ("9e5e76d7888542924de2c25353ae87c5f77e2a22c5b1198633cae13688922282"  # pragma: allowlist secret  (a public release checksum, not a credential)
+                      "e05383d142599205c88d8d80eee5e967d291214d7abce4835329a191b20dd6e0")  # pragma: allowlist secret  (a public release checksum, not a credential)
+CADDY_INSTALL_SH = r"""install_caddy() {  # <destination>
+    local dest="$1" work
+    work=$(mktemp -d)
+    local archive="$work/caddy.tar.gz"
+    local url="https://github.com/caddyserver/caddy/releases/download/v@CADDY_VERSION@/caddy_@CADDY_VERSION@_linux_arm64.tar.gz"
+    if ! curl -fsSL "$url" -o "$archive"; then
+        echo "ERROR: Caddy v@CADDY_VERSION@ could not be downloaded from $url; nothing was installed" | tee /dev/stderr
+        rm -rf "$work"; return 1
+    fi
+    local got
+    got=$(sha512sum "$archive" | cut -d' ' -f1)
+    if [ "$got" != "@CADDY_SHA512@" ]; then
+        echo "ERROR: Caddy v@CADDY_VERSION@ does not match its release checksum (sha512 $got); nothing was installed" | tee /dev/stderr
+        rm -rf "$work"; return 1
+    fi
+    if ! tar xzf "$archive" -C "$work" caddy || ! install -m 755 "$work/caddy" "$dest"; then
+        echo "ERROR: Caddy v@CADDY_VERSION@ could not be unpacked to $dest" | tee /dev/stderr
+        rm -rf "$work"; return 1
+    fi
+    rm -rf "$work"
+    echo "Caddy v@CADDY_VERSION@ installed (sha512 checked)"
+}""".replace("@CADDY_VERSION@", CADDY_VERSION).replace("@CADDY_SHA512@", CADDY_ARM64_SHA512)
+
+
 # ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
 # When a pre-baked custom AMI is used, the heavy on-machine install steps are
 # already固化 in the image, so render_user_data(prebaked=True) strips these two
@@ -781,6 +846,8 @@ def render_user_data(
         auth_hash_b64=auth_hash_b64,
         region=region,
         tmp_on_disk=TMP_ON_DISK_SH,
+        package_check=PACKAGE_CHECK_SH,
+        caddy_install=CADDY_INSTALL_SH,
     )
     if origin_secret is not None:
         values["origin_secret"] = origin_secret
@@ -805,7 +872,7 @@ def render_user_data(
     # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
     # Only check for our known template vars (shell vars like ${i}, ${HASH} are expected).
     _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region",
-                      "origin_secret", "tmp_on_disk"}
+                      "origin_secret", "tmp_on_disk", "package_check", "caddy_install"}
     for var in _TEMPLATE_VARS:
         if f"${{{var}}}" in result:
             raise ValueError(f"Unresolved template variable: ${{{var}}}")

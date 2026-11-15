@@ -627,8 +627,9 @@ async def restart_instance(instance_id: str):
     (``scripts.swarm_out restart-hive``; the person has Stop and Start). Refused (409)
     when this Host has an open run on it or cannot tell (an unreadable dispatch log), when
     the Hive does not answer its status check or has a session streaming, or when it is
-    not running. Then it is claimed (running → stopping) and the stop and the start run
-    in the background, as an update does: the Hive ends 'running', or 'error' with why."""
+    not running, or while a task is being sent to it. Then it is claimed (running →
+    stopping) and the stop and the start run in the background, as an update does: the
+    Hive ends 'running', or 'error' with why."""
     _require_desktop()
     async with _conn() as c:
         cursor = await c.execute("SELECT name, status FROM hive_instances WHERE id = ?", (instance_id,))
@@ -655,11 +656,19 @@ async def restart_instance(instance_id: str):
     if probe["streaming"] > 0:
         raise HTTPException(status_code=409, detail=(
             f"Hive {name} has {probe['streaming']} session(s) streaming: a restart would cut them off"))
+    # a dispatch to it has no open run until its session starts (swarm_out._Dispatching)
+    in_flight = (f"a task is being sent to Hive {name}: a restart would cut it off; "
+                 "restart it once the dispatch ends")
+    if swarm_out.dispatch_in_flight(instance_id, name):
+        raise HTTPException(status_code=409, detail=in_flight)
     provisioner = _get_provisioner()
     try:
         await provisioner.claim_stop(instance_id)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    if swarm_out.dispatch_in_flight(instance_id, name):    # began while the claim was made
+        await provisioner.release_stop_claim(instance_id)
+        raise HTTPException(status_code=409, detail=in_flight)
     _keep(asyncio.create_task(provisioner.restart(instance_id), name=f"hive-restart-{instance_id[:8]}"))
     return {"status": "restarting"}
 
