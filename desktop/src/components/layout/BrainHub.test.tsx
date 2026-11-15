@@ -656,9 +656,19 @@ describe('BrainHub — detail search box (run_d0cd4414, AC7)', () => {
       await openBrain();
       // the search row is present at the shell level (spans all sub-tabs)
       const input = screen.getByTestId('brainhub-search-input');
-      fireEvent.change(input, { target: { value: 'recall' } });
+      // The search is debounced (350ms). Pass that time with fake timers rather than
+      // waiting for it in real time: on a loaded CI runner the real wait outran
+      // waitFor's 1s and the test failed with no recall call.
+      vi.useFakeTimers();
+      try {
+        fireEvent.change(input, { target: { value: 'recall' } });
+        expect(mockBrainRecall).not.toHaveBeenCalled();
+        await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      } finally {
+        vi.useRealTimers();
+      }
       // debounced → brainRecall fires with (name, q) and hits render
-      await waitFor(() => expect(mockBrainRecall).toHaveBeenCalledWith('SwarmAI', 'recall'));
+      expect(mockBrainRecall).toHaveBeenCalledWith('SwarmAI', 'recall');
       await waitFor(() => expect(screen.getByTestId('brainhub-search-results')).toBeTruthy());
       const hit = screen.getByTestId('brainhub-search-hit');
       expect(hit.textContent).toContain('TECH.md § Recall');
