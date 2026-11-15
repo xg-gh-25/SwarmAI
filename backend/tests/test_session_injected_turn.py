@@ -329,7 +329,7 @@ async def test_a_dead_reader_at_idle_is_respawned_not_reported_busy():
 
     crashes: list = []
 
-    async def _crash(*, clear_identity=False):
+    async def _crash(*, clear_identity=False, graceful=None):
         crashes.append(clear_identity)
         unit._client = None
         unit._transition(SessionState.DEAD)

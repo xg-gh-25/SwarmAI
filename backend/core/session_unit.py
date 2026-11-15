@@ -844,9 +844,15 @@ class SessionUnit:
         # there is no background task / pending-result / teardown-cancel to track.
 
         # ── Hook tracking ─────────────────────────────────────────
-        # True after hooks enqueued for current IDLE period.
-        # Reset on every STREAMING transition so next IDLE fires fresh.
+        # True after hooks enqueued for the quiet period since the last turn.
+        # Reset on every STREAMING transition so the next quiet period fires fresh.
         self._hooks_enqueued: bool = False
+        # True once this unit has entered STREAMING in this daemon (never reset).
+        # The idle-hook sweep (LifecycleManager._fire_idle_hooks) also takes a COLD
+        # unit with this set: a turn that ended in a recycle (user Stop, compaction,
+        # SSE disconnect) leaves the unit COLD, not IDLE. A unit restored COLD at
+        # startup has it False, so it never fires hooks before it streams.
+        self._ran_turn: bool = False
 
         # ── Memory watermark ──────────────────────────────────────
         # Peak tree RSS (CLI + all MCP children) observed during lifetime.
@@ -1789,10 +1795,11 @@ class SessionUnit:
         elif old_state == SessionState.STREAMING and new_state != SessionState.STREAMING:
             _streaming_count = max(0, _streaming_count - 1)  # clamp: never negative
 
-        # Reset hook tracking when entering STREAMING — the next IDLE
-        # period is a fresh conversation turn that deserves its own hooks.
+        # Reset hook tracking when entering STREAMING — the quiet period after
+        # this turn (IDLE, or COLD after a recycle) deserves its own hooks.
         if new_state == SessionState.STREAMING:
             self._hooks_enqueued = False
+            self._ran_turn = True
             # Fail-closed: a turn is presumed poisoned until it reaches the
             # success-result transition that re-blesses it. Clearing here (the
             # single STREAMING-entry chokepoint, NOT in send()'s reset batch)
@@ -4594,7 +4601,9 @@ class SessionUnit:
           corrupt turn-state, so it is immediately recycled via
           ``_crash_to_cold_async(clear_identity=False)`` (PIT01 zombie fix).
           ``_sdk_session_id`` is preserved, so the next ``send()`` respawns
-          clean WITH ``--resume``. The subprocess does NOT stay warm.
+          clean WITH ``--resume``. The subprocess does NOT stay warm. The
+          session's post-session hooks still follow after the idle grace:
+          ``LifecycleManager._fire_idle_hooks`` takes a COLD unit that ran a turn.
         - autonomous=True (tool-hang watchdog only): STREAMING → IDLE,
           subprocess stays WARM and reusable so the model can reroute
           mid-stream without a respawn (recycling would collapse the warm
@@ -4647,6 +4656,8 @@ class SessionUnit:
             self._transition(SessionState.DEAD)
             self._cleanup_internal()
             self._transition(SessionState.COLD)
+            # the turn ended now: the idle-hook grace runs from here
+            self.last_used = awake_time()
             return False
 
         # Capture client reference — send() may replace self._client

@@ -3678,9 +3678,9 @@ class SessionRouter:
         )
 
         # Fire hooks before killing — Gap 1 fix
+        # (enqueue_hooks_for_unit marks the unit, and unmarks it if the build failed)
         if self._lifecycle_manager and not victim._hooks_enqueued:
             await self._lifecycle_manager.enqueue_hooks_for_unit(victim)
-            victim._hooks_enqueued = True
 
         await victim.kill()
         return True
@@ -6606,9 +6606,9 @@ class SessionRouter:
         for unit in alive:
             try:
                 # Fire hooks before killing (shutdown fix)
+                # (enqueue_hooks_for_unit marks the unit)
                 if self._lifecycle_manager and not unit._hooks_enqueued:
                     await self._lifecycle_manager.enqueue_hooks_for_unit(unit)
-                    unit._hooks_enqueued = True
                 await unit.kill()
                 # NOTE: clear_session_identity() intentionally REMOVED (Design §2C).
                 # sdk_session_id is preserved in session_state.json for fast resume.

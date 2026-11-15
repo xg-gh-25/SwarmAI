@@ -269,16 +269,28 @@ class LifecycleManager:
             return None
 
     async def enqueue_hooks_for_unit(self, unit) -> None:
-        """Build HookContext and enqueue hooks for a SessionUnit.
+        """Build HookContext and enqueue hooks for a SessionUnit, and mark the
+        unit's ``_hooks_enqueued`` so no other path fires them again for the same
+        quiet period (the TTL kill and orphan reap leave a COLD unit that
+        ``_fire_idle_hooks`` would otherwise take).
 
-        Public convenience method used by SessionRouter (eviction, shutdown).
-        No-op if hook_executor is not wired or context build fails.
+        Used by SessionRouter (eviction, shutdown) and the TTL / orphan paths.
+        No-op if hook_executor is not wired or context build fails (the flag
+        goes back to False, so a later pass tries again).
+
+        The flag is set BEFORE the context build's await: a send that starts the
+        next turn during that await clears it (``_transition`` to STREAMING), and
+        that new quiet period keeps its own hooks. Set after the await, the stale
+        True would mark the new turn as already fired.
         """
         if not self._hook_executor:
             return
+        unit._hooks_enqueued = True
         ctx = await self._build_hook_context(unit)
         if ctx:
             self.enqueue_hooks(ctx)
+        else:
+            unit._hooks_enqueued = False
 
     # ── Background loop ───────────────────────────────────────────
 
@@ -536,11 +548,8 @@ class LifecycleManager:
                 )
 
                 # Fire hooks before killing (same pattern as Tier 1 eviction)
-                if not unit._hooks_enqueued and self._hook_executor:
-                    ctx = await self._build_hook_context(unit)
-                    if ctx:
-                        self.enqueue_hooks(ctx)
-                        unit._hooks_enqueued = True
+                if not unit._hooks_enqueued:
+                    await self.enqueue_hooks_for_unit(unit)
 
                 # compact → kill (preserves _sdk_session_id for lazy resume)
                 # 30s timeout prevents compact hang from blocking maintenance loop.
@@ -957,13 +966,23 @@ class LifecycleManager:
                 await unit.force_unstick_waiting_input()
 
     async def _fire_idle_hooks(self) -> None:
-        """Fire hooks for IDLE units past the grace period (Gap 2 fix).
+        """Fire hooks for units quiet past the grace period after a turn (Gap 2 fix).
 
-        After a conversation turn completes (STREAMING → IDLE), we wait
-        IDLE_HOOK_GRACE seconds before firing hooks. This prevents
-        double-firing during rapid back-and-forth messages.
+        After a conversation turn ends, we wait IDLE_HOOK_GRACE seconds (from
+        ``unit.last_used``) before firing hooks. This prevents double-firing
+        during rapid back-and-forth messages.
 
-        Uses ``unit._hooks_enqueued`` flag to fire only once per IDLE
+        A turn ends IDLE (STREAMING → IDLE), or COLD when the unit was recycled
+        as it ended: a user Stop or the compaction guard (``interrupt``), an SSE
+        disconnect, a retry that gave up. Those go STREAMING → … → DEAD → COLD
+        inside one call, so neither this IDLE sweep nor ``_cleanup_dead`` ever saw
+        them and the session's hooks waited for the next message or the next
+        startup. So a COLD unit is taken too, when it ran a turn in this daemon
+        (``unit._ran_turn``: a unit restored COLD at startup has not) and its
+        session is not busy (a Stop still recycling it, a turn claimed on it, a
+        retry waiting between attempts).
+
+        Uses ``unit._hooks_enqueued`` flag to fire only once per quiet
         period. The flag is reset when the unit transitions back to
         STREAMING.
         """
@@ -972,7 +991,12 @@ class LifecycleManager:
 
         now = awake_time()
         for unit in self._router.list_units():
-            if unit.state != SessionState.IDLE:
+            if unit.state == SessionState.COLD:
+                if getattr(unit, "_ran_turn", False) is not True:
+                    continue  # restored at startup / never streamed here
+                if self._busy(unit.session_id) or getattr(unit, "_retrying", False) is True:
+                    continue  # a Stop recycling it, a turn admitted on it, a retry's backoff
+            elif unit.state != SessionState.IDLE:
                 continue
             if unit._hooks_enqueued:
                 continue
@@ -984,10 +1008,14 @@ class LifecycleManager:
                 "lifecycle_manager.idle_hooks session_id=%s idle=%.0fs",
                 unit.session_id, idle_seconds,
             )
+            # marked before the await, as in enqueue_hooks_for_unit: a turn that
+            # starts during it clears the mark and keeps its own hooks
+            unit._hooks_enqueued = True
             ctx = await self._build_hook_context(unit)
             if ctx:
                 self.enqueue_hooks(ctx)
-                unit._hooks_enqueued = True
+            else:
+                unit._hooks_enqueued = False
 
     async def _check_ttl(self) -> None:
         """Kill SessionUnits that have been IDLE longer than TTL.
@@ -1194,11 +1222,8 @@ class LifecycleManager:
         """
         for unit in self._router.list_units():
             if unit.state == SessionState.DEAD:
-                if not unit._hooks_enqueued and self._hook_executor:
-                    ctx = await self._build_hook_context(unit)
-                    if ctx:
-                        self.enqueue_hooks(ctx)
-                        unit._hooks_enqueued = True
+                if not unit._hooks_enqueued:
+                    await self.enqueue_hooks_for_unit(unit)
                 # TOCTOU re-check (run_ace705df Gate-2 HIGH): the hook-context
                 # build above is an `await` — during it a concurrent send()
                 # DEAD-recovery (session_unit send() auto_recover_dead) can drive
@@ -1663,11 +1688,8 @@ class LifecycleManager:
                     len(idle_units),
                 )
 
-                if not victim._hooks_enqueued and self._hook_executor:
-                    ctx = await self._build_hook_context(victim)
-                    if ctx:
-                        self.enqueue_hooks(ctx)
-                        victim._hooks_enqueued = True
+                if not victim._hooks_enqueued:
+                    await self.enqueue_hooks_for_unit(victim)
 
                 await victim.kill()
                 evicted += 1
