@@ -1511,10 +1511,15 @@ class HiveProvisioner:
                 _put_hive_role_policy, session.client("iam"), f"SwarmAI-Hive-{instance['name']}")
 
             # SSM Run Command
-            from hive.user_data import TMP_ON_DISK_SH
+            from hive.user_data import TMP_ON_DISK_SH, health_exempt_fix_sh
+            health_fix_sh = health_exempt_fix_sh()
             update_script = f"""#!/bin/bash
 set -euo pipefail
 echo "=== Updating to v{version} ==="
+
+# First, before the install is touched: the Caddyfile's /health exemption becomes the
+# literal request path (a failure restores the file and stops here).
+{health_fix_sh}
 
 # G7: Backup for rollback — exclude .venv (~300MB, never overwritten by rsync).
 # Same denylist as deploy: backup what deploy touches, skip what it skips.
@@ -1546,8 +1551,9 @@ cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 bash /opt/swarmai/hive/ensure-node.sh || echo "WARN: the Hive's Node is older than the frontend needs; its frontend tests cannot run"
 
 # NOTE: /etc/caddy/Caddyfile lives OUTSIDE /opt/swarmai/ — never touched by rsync.
-# The deployed Caddyfile has inline bcrypt auth written by user_data.py.
-# Caddy config changes require a dedicated SSM command (update_caddyfile).
+# The deployed Caddyfile has inline bcrypt auth written by user_data.py. It changes only
+# through its own edits: the /health step at the top of this script, the origin guard
+# (_origin_guard_script) and update_caddyfile.
 
 # ── MIGRATION (idempotent): backfill /etc/swarmai/hive-auth.env for hives provisioned
 # BEFORE app-layer auth existed. Those instances have no env file, so the new

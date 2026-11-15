@@ -98,17 +98,19 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
         reverse_proxy 127.0.0.1:18321
     }
 
+    # /health is exempt from the origin guard and basic auth only as the literal request
+    # path, a query allowed: {http.request.uri} is the raw request target. The path matcher
+    # and {http.request.uri.path} clean, decode and case-fold, but the backend gets the raw
+    # path, so /x/../health, //health, /HEALTH and /%68ealth must not pass.
     # ORIGIN-GUARD-RULE-BEGIN
-    # /health is exempt only as the literal request path: the path matcher cleans dot
-    # segments, but the backend gets the raw path, so /x/../health must not pass.
     @foreign_origin {
-        not expression `{http.request.uri.path} == "/health"`
+        not expression `{http.request.uri} == "/health" || {http.request.uri}.startsWith("/health?")`
         not header X-Swarm-Origin ${origin_secret}
     }
     respond @foreign_origin 403
     request_header -X-Swarm-Origin
     # ORIGIN-GUARD-RULE-END
-    @protected not path /health
+    @protected not expression `{http.request.uri} == "/health" || {http.request.uri}.startsWith("/health?")`
     basic_auth @protected {
         ${auth_user} ${auth_hash}
     }
@@ -343,10 +345,29 @@ _GUARD_MARK_PATTERN = (r"^[ \t]*# ORIGIN-GUARD-(GLOBAL|RULE|LOG)-BEGIN\n.*?"
                        r"^[ \t]*# ORIGIN-GUARD-\1-END\n")
 _GUARD_MARK_RE = re.compile(_GUARD_MARK_PATTERN, re.S | re.M)
 _CADDY_HEREDOC_OPEN = "cat > /etc/caddy/Caddyfile << 'CADDY'\n"
+
+# ── /health: exempt only as the literal request path ──
+# The origin guard and basic auth both exempt /health with this expression on the raw
+# request target. Caddy's path matcher and {http.request.uri.path} compare a cleaned,
+# decoded, case-folded path while the backend gets the raw one, so a path matcher also
+# exempted /x/../health, //health, /HEALTH and /%68ealth. A query stays allowed (the path
+# is still /health). The heredoc above writes these lines; health_exempt_fix_sh() below
+# gives an existing Hive the same file on its next update.
+HEALTH_EXEMPT_EXPR = '{http.request.uri} == "/health" || {http.request.uri}.startsWith("/health?")'
+HEALTH_PROTECTED_LINE = f"    @protected not expression `{HEALTH_EXEMPT_EXPR}`\n"
+_HEALTH_EXEMPT_COMMENT = (
+    "    # /health is exempt from the origin guard and basic auth only as the literal request\n"
+    "    # path, a query allowed: {http.request.uri} is the raw request target. The path matcher\n"
+    "    # and {http.request.uri.path} clean, decode and case-fold, but the backend gets the raw\n"
+    "    # path, so /x/../health, //health, /HEALTH and /%68ealth must not pass.\n")
+# What a Hive rendered before the fix has in place of the comment and HEALTH_PROTECTED_LINE
+# (its guard block, when it has one, is replaced whole from the template).
+_LEGACY_PROTECTED_LINE = "    @protected not path /health\n"
+
 # (block name, the line it sits next to in the Caddyfile, before/after that line)
 _GUARD_ANCHORS = (
     ("GLOBAL", ":80 {\n", "before"),
-    ("RULE", "    @protected not path /health\n", "before"),
+    ("RULE", HEALTH_PROTECTED_LINE, "before"),
     ("LOG", "    log {\n", "after"),
 )
 
@@ -385,7 +406,8 @@ if mode == "apply":
         if out.count(anchor) != 1:
             sys.exit("ERROR: this Caddyfile is not in the layout the origin guard needs "
                      "(a line it goes next to is missing or repeated); Caddyfile not changed. "
-                     "Redeploy the Hive, or add the guard by hand")
+                     "Update the Hive first (its update rewrites the /health lines the guard "
+                     "goes next to), or redeploy it")
         block = block.replace("${origin_secret}", secret)
         out = out.replace(anchor, block + anchor if where == "before" else anchor + block, 1)
 elif mode != "remove":
@@ -410,6 +432,203 @@ def origin_guard_editor_source() -> str:
 
 
 _guard_blocks()  # a template edit that moves a guard block fails at import, not on a Hive
+
+
+def _check_health_exempt_lines() -> None:
+    """The template carries the exemption as the update step writes it: the comment and
+    HEALTH_PROTECTED_LINE together once (outside the guard), and the guard's own line."""
+    caddy = _USER_DATA_TEMPLATE.split(_CADDY_HEREDOC_OPEN, 1)[1].split("\nCADDY\n", 1)[0]
+    base = _GUARD_MARK_RE.sub("", caddy + "\n")
+    rule = [m.group(0) for m in _GUARD_MARK_RE.finditer(caddy + "\n") if m.group(1) == "RULE"]
+    if (base.count(_HEALTH_EXEMPT_COMMENT + HEALTH_PROTECTED_LINE) != 1
+            or _LEGACY_PROTECTED_LINE in caddy or len(rule) != 1
+            or f"        not expression `{HEALTH_EXEMPT_EXPR}`\n" not in rule[0]):
+        raise RuntimeError("the /health exemption lines drifted from the template")
+
+
+_check_health_exempt_lines()
+
+
+# Runs on the instance (python3 3.9, stdlib only), from the update script.
+#   edit <Caddyfile>: prints changed / unchanged / unknown / stuck. A file with the legacy
+#     line gets the template's comment and line in its place, and a guard it has is taken
+#     out and put back from the template with its own secret, so the result is the file a
+#     new Hive renders. Written atomically (mode kept) only when changed. A file it cannot
+#     edit is left alone: unknown when its basic auth is one of two shapes known safe
+#     (on every request, as the oldest `basicauth *` layout; or `@protected` defined once,
+#     as exactly HEALTH_PROTECTED_LINE), stuck otherwise (it may still exempt by path).
+#   origin-header <Caddyfile>: prints "X-Swarm-Origin: <secret>" when the file has the
+#     guard (the caller sends it to a 0600 file, never to the output), else nothing.
+_HEALTH_FIX_EDITOR_TEMPLATE = r"""
+import os, re, shutil, sys
+BLOCKS = __BLOCKS__
+MARK = re.compile(__MARK__, re.S | re.M)
+LEGACY, FIXED, PROTECTED = __LEGACY__, __FIXED__, __PROTECTED__
+def basic_auth_is_safe(text):
+    # An allowlist of the two shapes whose basic auth exempts at most the literal /health:
+    # basic auth with no matcher (the oldest `basicauth *` layout), or `@protected` defined
+    # once, as exactly the fixed line. Anything else may still exempt by path. Checked line
+    # by line, as the files this update renders are written: a hand edit that nests basic
+    # auth in a handle or adds a site block is not verified here.
+    lines = [l.strip() for l in text.splitlines()]
+    lines = [l for l in lines if l and not l.startswith("#")]
+    auth = [l for l in lines if l.split()[0] in ("basic_auth", "basicauth")]
+    defs = [l for l in lines if l.split()[0] == "@protected"]
+    if len(auth) != 1:
+        return False
+    if auth[0] in ("basic_auth * {", "basicauth * {", "basic_auth {", "basicauth {"):
+        return True
+    return auth[0] == "basic_auth @protected {" and defs == [PROTECTED.strip()]
+mode, path = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    text = f.read()
+marked = list(MARK.finditer(text))
+rule = [m.group(0) for m in marked if m.group(1) == "RULE"]
+secret = None
+if rule:
+    found = re.search(r"not header X-Swarm-Origin (\S+)", rule[0])
+    if len(rule) == 1 and found and re.fullmatch(__SECRET_RE__, found.group(1)):
+        secret = found.group(1)
+if mode == "origin-header":
+    if secret is not None:
+        sys.stdout.write("X-Swarm-Origin: " + secret + "\n")
+    sys.exit(0)
+if mode != "edit":
+    sys.exit("ERROR: unknown mode")
+def unknown():
+    print("unknown" if basic_auth_is_safe(text) else "stuck")
+    sys.exit(0)
+if marked and secret is None:
+    unknown()  # a guard this editor cannot read: leave the file as it is
+out = MARK.sub("", text)
+if out.count(LEGACY) == 1 and FIXED not in out:
+    out = out.replace(LEGACY, FIXED, 1)
+elif out.count(FIXED) != 1 or LEGACY in out:
+    unknown()
+if secret is not None:
+    for block, anchor, where in BLOCKS:
+        if out.count(anchor) != 1:
+            unknown()
+        block = block.replace("${origin_secret}", secret)
+        out = out.replace(anchor, block + anchor if where == "before" else anchor + block, 1)
+if out == text:
+    print("unchanged")
+    sys.exit(0)
+tmp = path + ".health-new"
+with open(tmp, "w") as f:
+    f.write(out)
+shutil.copymode(path, tmp)
+os.replace(tmp, path)
+print("changed")
+"""
+
+
+def health_fix_editor_source() -> str:
+    """The Python the update script runs on an existing Hive (modes: see above)."""
+    return (_HEALTH_FIX_EDITOR_TEMPLATE
+            .replace("__BLOCKS__", repr(_guard_blocks()))
+            .replace("__MARK__", repr(_GUARD_MARK_PATTERN))
+            .replace("__LEGACY__", repr(_LEGACY_PROTECTED_LINE))
+            .replace("__FIXED__", repr(_HEALTH_EXEMPT_COMMENT + HEALTH_PROTECTED_LINE))
+            .replace("__PROTECTED__", repr(HEALTH_PROTECTED_LINE))
+            .replace("__SECRET_RE__", repr(ORIGIN_SECRET_PATTERN)))
+
+
+# The update script's first step (provisioner.update), before the install is touched:
+# an existing Hive's /etc/caddy/Caddyfile gets the /health lines a new Hive renders. When
+# the file changed: caddy validate, restart, then check both ways (Brain convention: a
+# deny-only check passes a rule that blocks everyone): /health is still answered, and
+# /x/../health is refused without the origin header and, on a guarded Hive, gets 401
+# (basic auth) with this Hive's secret. Any failure puts the previous file back (and
+# restarts Caddy with it when it had been restarted) and stops the update, so the Hive
+# keeps its version and the card shows the reason. So does a file the editor cannot edit
+# whose basic auth is not one of the two shapes known safe (editor: basic_auth_is_safe):
+# the update stops, file unchanged. A safe one it cannot edit (the oldest `basicauth *`
+# layout, or a fixed file edited by hand) is left as it is with a WARN.
+_HEALTH_FIX_SH_TEMPLATE = r"""# ── Caddy: /health exempt only as the literal request path (hive/user_data.py) ──
+HEALTH_CADDYFILE="/etc/caddy/Caddyfile"
+HEALTH_FIX_PY=$(echo '__EDITOR_B64__' | base64 -d)
+health_fix_fail() {
+  cp -p "$HEALTH_CADDYFILE.health-bak" "$HEALTH_CADDYFILE"
+  rm -f "$HEALTH_CADDYFILE.health-bak"
+  if [ "$1" = restarted ]; then
+    systemctl restart caddy || true
+  fi
+  echo "ERROR: Caddy /health fix: $2; previous Caddyfile restored, Hive not updated"
+  exit 1
+}
+health_code() {
+  # $1 path (sent as is), $2 optional header file: the code Caddy answers once it is up
+  local code="000" i
+  for i in $(seq 1 15); do
+    if [ -n "${2:-}" ]; then
+      code=$(curl --path-as-is -s -o /dev/null -w '%{http_code}' -H "@$2" "http://127.0.0.1$1" || true)
+    else
+      code=$(curl --path-as-is -s -o /dev/null -w '%{http_code}' "http://127.0.0.1$1" || true)
+    fi
+    if [ "$code" != "000" ]; then
+      break
+    fi
+    sleep 1
+  done
+  echo "$code"
+}
+if [ -f "$HEALTH_CADDYFILE" ]; then
+  cp -p "$HEALTH_CADDYFILE" "$HEALTH_CADDYFILE.health-bak"
+  HEALTH_FIX=$(python3 -c "$HEALTH_FIX_PY" edit "$HEALTH_CADDYFILE") || health_fix_fail no "the edit failed"
+  case "$HEALTH_FIX" in
+    unchanged)
+      rm -f "$HEALTH_CADDYFILE.health-bak"
+      echo "Caddy /health exemption: already the literal request path"
+      ;;
+    changed)
+      caddy validate --config "$HEALTH_CADDYFILE" --adapter caddyfile >/dev/null 2>&1 \
+        || health_fix_fail no "caddy validate rejected the edited file"
+      systemctl restart caddy || health_fix_fail restarted "caddy did not restart"
+      CODE=$(health_code /health)
+      case "$CODE" in
+        000|401|403) health_fix_fail restarted "/health answered $CODE" ;;
+      esac
+      CODE=$(health_code /x/../health)
+      case "$CODE" in
+        401|403) ;;
+        *) health_fix_fail restarted "/x/../health answered $CODE without the origin header" ;;
+      esac
+      HEALTH_HDR=$(mktemp)
+      python3 -c "$HEALTH_FIX_PY" origin-header "$HEALTH_CADDYFILE" > "$HEALTH_HDR" || true
+      if [ -s "$HEALTH_HDR" ]; then
+        CODE=$(health_code /x/../health "$HEALTH_HDR")
+        if [ "$CODE" != "401" ]; then
+          rm -f "$HEALTH_HDR"
+          health_fix_fail restarted "/x/../health answered $CODE with the origin secret, not 401"
+        fi
+      fi
+      rm -f "$HEALTH_HDR" "$HEALTH_CADDYFILE.health-bak"
+      echo "Caddy /health exemption: now the literal request path only"
+      ;;
+    stuck)
+      rm -f "$HEALTH_CADDYFILE.health-bak"
+      echo "ERROR: Caddy /health fix: the Caddyfile's basic-auth exemption is not one this update can verify or edit; fix it by hand or redeploy. Hive not updated"
+      exit 1
+      ;;
+    unknown)
+      rm -f "$HEALTH_CADDYFILE.health-bak"
+      echo "WARN: Caddy /health exemption: $HEALTH_CADDYFILE cannot be edited by this update; its one basic-auth line has no matcher or the literal /health one (nesting not checked); left as it is"
+      ;;
+    *)
+      health_fix_fail no "unexpected editor result '$HEALTH_FIX'"
+      ;;
+  esac
+else
+  echo "WARN: no $HEALTH_CADDYFILE; the Caddy /health fix was skipped"
+fi"""
+
+
+def health_exempt_fix_sh() -> str:
+    """The update-script step that gives an existing Hive the literal /health exemption."""
+    import base64
+    editor_b64 = base64.b64encode(health_fix_editor_source().encode()).decode()
+    return _HEALTH_FIX_SH_TEMPLATE.replace("__EDITOR_B64__", editor_b64)
 
 
 def valid_origin_secret(value) -> bool:

@@ -1254,24 +1254,25 @@ class TestG11HealthExemptFromAuth:
     """G11: /health must be excluded from auth via @protected matcher."""
 
     def test_repo_caddyfile_uses_protected_matcher(self):
-        """hive/Caddyfile must use @protected not path /health."""
+        """hive/Caddyfile exempts only the literal /health from @protected."""
+        from hive.user_data import HEALTH_PROTECTED_LINE
         caddyfile = Path(__file__).parent.parent.parent / "hive" / "Caddyfile"
         content = caddyfile.read_text()
-        assert "@protected not path /health" in content, \
+        assert HEALTH_PROTECTED_LINE in content, \
             "G11: Caddyfile must use @protected matcher to exclude /health"
         assert "basic_auth @protected" in content, \
             "G11: Auth must scope to @protected (not basicauth *)"
 
     def test_user_data_caddyfile_uses_protected_matcher(self):
-        """user_data.py template must use @protected not path /health."""
-        from hive.user_data import render_user_data
+        """user_data.py template exempts only the literal /health from @protected."""
+        from hive.user_data import HEALTH_PROTECTED_LINE, render_user_data
 
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
             auth_user="admin", auth_hash="$2a$14$test",
             region="us-east-1",
         )
-        assert "@protected not path /health" in result, \
+        assert HEALTH_PROTECTED_LINE in result, \
             "G11: user_data template must use @protected matcher"
         assert "basic_auth @protected" in result, \
             "G11: user_data auth must scope to @protected"

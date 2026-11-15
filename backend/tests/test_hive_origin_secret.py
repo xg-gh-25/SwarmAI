@@ -267,8 +267,10 @@ async def test_user_data_and_distribution_carry_secret(caplog):
     rule = re.search(r"@foreign_origin \{\n(.*?)\n    \}\n    respond @foreign_origin 403\n"
                      r"    request_header -X-Swarm-Origin\n", caddy, re.S)
     assert rule, caddy
-    # /health is exempt only as the literal path (the path matcher would clean /x/../health)
-    assert 'not expression `{http.request.uri.path} == "/health"`' in rule.group(1)
+    # /health is exempt only as the literal request target (a path matcher would clean
+    # /x/../health, and {http.request.uri.path} would decode /%68ealth)
+    from hive.user_data import HEALTH_EXEMPT_EXPR
+    assert f"not expression `{HEALTH_EXEMPT_EXPR}`" in rule.group(1)
     assert f"not header X-Swarm-Origin {secret}" in rule.group(1)
     # respond is ordered before basic_auth (Caddy's default order runs basic_auth first).
     assert re.search(r"^\{\n    order respond before basic_auth\n", caddy, re.M)
@@ -324,7 +326,8 @@ def test_guard_editor_turns_a_legacy_caddyfile_into_a_fresh_one(tmp_path):
     assert run("remove").returncode == 0
     assert f.read_text() == legacy
     # An anchor that is missing leaves the file untouched.
-    f.write_text(legacy.replace("    @protected not path /health\n", ""))
+    from hive.user_data import HEALTH_PROTECTED_LINE
+    f.write_text(legacy.replace(HEALTH_PROTECTED_LINE, ""))
     before = f.read_text()
     r = run("apply", secret)
     assert r.returncode != 0 and f.read_text() == before and secret not in r.stdout + r.stderr
@@ -351,7 +354,8 @@ def test_rendered_caddyfile_passes_caddy_validate(tmp_path):
     # not(raw path == /health OR header == secret)
     negated = guard["match"][0]["not"]
     assert {"header": {"X-Swarm-Origin": ["V" * 43]}} in negated
-    assert {"expression": '{http.request.uri.path} == "/health"'} in negated
+    from hive.user_data import HEALTH_EXEMPT_EXPR
+    assert {"expression": HEALTH_EXEMPT_EXPR} in negated
 
 
 def _free_port() -> int:

@@ -31,8 +31,8 @@ DESIGN NOTES (each earned — do not "simplify" away)
 * **Fail-closed.** Missing header, malformed base64, non-Basic scheme, wrong user,
   unset ``hive_pass_hash``, or ANY exception during verification → 401. It never
   fails open to "no auth".
-* **Public allow-list is tiny + explicit.** ``/health`` (monitors, matches Caddy's
-  ``@protected not path /health``) and ``OPTIONS`` preflight (so browser CORS is not
+* **Public allow-list is tiny + explicit.** ``/health`` (monitors, matches the
+  Caddyfile's /health exemption) and ``OPTIONS`` preflight (so browser CORS is not
   broken — the CORS middleware must still see the preflight).
 * **Reuses ``core.auth.verify_password``** (bcrypt) — no new hash comparison; the same
   primitive the JWT auth path uses. ``HIVE_PASS_HASH`` is a bcrypt hash (as produced by
@@ -84,7 +84,7 @@ logger = logging.getLogger(__name__)
 
 # Public allow-list: paths reachable WITHOUT a credential even in hive mode.
 # Keep this tiny and explicit — every entry is an unauthenticated attack surface.
-# /health: liveness/readiness monitors (mirrors hive/Caddyfile "@protected not path /health").
+# /health: liveness/readiness monitors (mirrors the Caddyfile's /health exemption).
 _PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
 
 # Success cache bounds. A Hive is single-tenant with one credential, so 32 entries is far

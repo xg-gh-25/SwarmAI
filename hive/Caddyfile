@@ -40,12 +40,15 @@
         reverse_proxy 127.0.0.1:18321
     }
 
+    # /health is exempt from the origin guard and basic auth only as the literal request
+    # path, a query allowed: {http.request.uri} is the raw request target. The path matcher
+    # and {http.request.uri.path} clean, decode and case-fold, but the backend gets the raw
+    # path, so /x/../health, //health, /HEALTH and /%68ealth must not pass.
+
     # --- Origin guard: 403 for anything but /health without this Hive's secret ---
     # Unset HIVE_ORIGIN_SECRET falls back to a value no distribution sends (fail closed).
-    # /health is exempt only as the literal request path: the path matcher cleans dot
-    # segments, but the backend gets the raw path, so /x/../health must not pass.
     @foreign_origin {
-        not expression `{http.request.uri.path} == "/health"`
+        not expression `{http.request.uri} == "/health" || {http.request.uri}.startsWith("/health?")`
         not header X-Swarm-Origin {$HIVE_ORIGIN_SECRET:INVALID_NOT_A_REAL_SECRET}
     }
     respond @foreign_origin 403
@@ -54,7 +57,7 @@
     # --- Authentication (MVP: basic auth) ---
     # @protected excludes /health so external monitors can reach it (G11)
     # Use basic_auth (not deprecated basicauth)
-    @protected not path /health
+    @protected not expression `{http.request.uri} == "/health" || {http.request.uri}.startsWith("/health?")`
     basic_auth @protected {
         {$HIVE_USER:admin} {$HIVE_PASS_HASH:INVALID_NOT_A_REAL_HASH}
     }
