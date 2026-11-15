@@ -589,7 +589,7 @@ class TestR4RecoveryTransaction:
 
         force_kill_calls = []
 
-        async def _slow_force_kill():
+        async def _slow_force_kill(graceful=False):
             # Simulate real teardown taking time → widens the TOCTOU window so a
             # lockless impl would let the 2nd task interleave.
             force_kill_calls.append(1)
