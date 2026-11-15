@@ -131,6 +131,10 @@ _POOL_SPECS: dict[str, int] = {
                       # the repos other sessions wrote in (seconds when there are several).
                       # Only discard commands use it, so it never holds a 'gate' worker
                       # every other tool call's judgment waits on.
+    "hive_auth": 2,   # middleware/hive_auth: the bcrypt check (cost 14, about 1 s) of a
+                      # credential not yet in its success cache. A wrong password is never
+                      # cached, so a flood of them lands here (the middleware caps how many
+                      # are pending), never on a pool the chat path or /health waits on.
 }
 
 _pools: dict[str, ThreadPoolExecutor] = {}

@@ -76,7 +76,10 @@ class TestEndpointContract:
             "---\nname: internal-fixture\ndescription: \"Owner-only test skill.\"\n"
             "tier: lazy\nvisibility: internal\n---\n# Internal fixture\n", encoding="utf-8")
         monkeypatch.setattr(skill_manager, "plugin_skills_path", plugin)
-        monkeypatch.setattr(HiveAuthMiddleware, "_is_authorized", lambda self, scope: True)
+        async def _allow(self, scope):  # _is_authorized is async (cache + bcrypt pool)
+            return True
+
+        monkeypatch.setattr(HiveAuthMiddleware, "_is_authorized", _allow)
         skill_manager.invalidate_cache()
         yield
         skill_manager.invalidate_cache()

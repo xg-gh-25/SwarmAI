@@ -225,7 +225,10 @@ class TestHealthEndpointFailSafe:
         # skill name as a health-map key.
         monkeypatch.setenv("SWARMAI_MODE", "hive")
         from middleware.hive_auth import HiveAuthMiddleware
-        monkeypatch.setattr(HiveAuthMiddleware, "_is_authorized", lambda self, scope: True)
+        async def _allow(self, scope):  # _is_authorized is async (cache + bcrypt pool)
+            return True
+
+        monkeypatch.setattr(HiveAuthMiddleware, "_is_authorized", _allow)
         resp = client.get("/api/skills/health")
         assert resp.status_code == 200
         for folder_name in resp.json():
