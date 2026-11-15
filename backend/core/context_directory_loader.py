@@ -23,8 +23,10 @@ centralized directory.  It is responsible for:
                                   ensure_directory(), and estimate_tokens()
 
 The ``user_customized`` field drives two-mode copy behavior in
-``ensure_directory()`` (always-overwrite vs copy-only-if-missing) and
-readonly enforcement (0o444 vs 0o600).  The ``truncate_from`` field
+``ensure_directory()`` (always-overwrite vs copy-only-if-missing, the latter
+recording the copied template for ``core.context_template_drift`` only for a
+``template_owned`` file) and
+readonly enforcement (0o444 vs 0o644).  The ``truncate_from`` field
 controls truncation direction in ``_enforce_token_budget()`` — ``"tail"``
 keeps the beginning (default), ``"head"`` keeps the end (newest content).
 
@@ -306,6 +308,13 @@ class ContextFileSpec:
         truncate_from:   Legacy truncation direction metadata.
         inject_budget_tokens: Optional whole-unit selector budget.
         selector:         Optional named selector; ``timeline`` selects whole events.
+        template_owned:   ``True`` for a seeded file whose content the PRODUCT
+                         owns: the template IS the content (today only SELF.md).
+                         Only these files are checked for template drift
+                         (``core.context_template_drift``). False for files whose
+                         template is a starting skeleton the user or the agent fills
+                         (USER, STEERING, TOOLS, MEMORY, EVOLUTION, KNOWLEDGE,
+                         TIMELINE): they differ from it by design.
     """
 
     filename: str
@@ -316,6 +325,7 @@ class ContextFileSpec:
     truncate_from: Literal["head", "tail"] = "tail"
     inject_budget_tokens: int | None = None
     selector: str | None = None
+    template_owned: bool = False
 
 
 # Ownership model:
@@ -326,8 +336,13 @@ class ContextFileSpec:
 #
 #   user_customized=True  → RUNTIME-OWNED: copy-only-if-missing, writable (0o644).
 #     Source of truth: .context/<file>.md (workspace).
-#     Template only used for initial provisioning. Never overwritten after.
+#     Template only used for initial provisioning; never overwritten automatically.
 #     Sub-categories (enforced by convention, not code):
+#       - Product-owned (template_owned=True): SELF.md — the template IS the content.
+#         The copied template's hash is recorded (.context/.template-seeds.json); when
+#         the template later changes, core.context_template_drift raises one Need-You
+#         item and the file is updated only on the person's confirmation (never when
+#         it was edited).
 #       - User-owned:  USER.md, STEERING.md, TOOLS.md — user edits freely
 #       - Agent-owned: MEMORY.md, EVOLUTION.md — agent writes via hooks/locked_write
 #       - Auto-generated: KNOWLEDGE.md — agent rebuilds from filesystem scans
@@ -340,11 +355,14 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     # SELF.md — resident self-portrait (self-knowledge-loop M3). Non-truncatable,
     # always injected (priority 2 tier = strong attention). Runtime-owned, so the
     # LIVE `.context/SELF.md` is authoritative: the template is copied only when
-    # that file is ABSENT and never overwrites it afterwards — a seed-only edit
-    # therefore does not reach an existing install. No code hard-blocks writes to it
+    # that file is ABSENT and never overwrites it afterwards. A later edit of the
+    # template reaches an existing install only through the person: the startup
+    # drift check (core.context_template_drift) raises one Need-You item, and the
+    # file changes only when they confirm. No code hard-blocks writes to it
     # (the protected-zone list was removed). Small enough that it never pressures the
     # budget.
-    ContextFileSpec("SELF.md",              2,  "Self-Portrait",      False, True,  "tail"),
+    ContextFileSpec("SELF.md",              2,  "Self-Portrait",      False, True,  "tail",
+                    template_owned=True),
     ContextFileSpec("AGENT.md",             3,  "Agent Directives",   True,  False, "tail"),
     # ── User-owned (user edits, never overwritten) ───────────────────
     ContextFileSpec("USER.md",              4,  "User",               True,  True,  "tail"),
@@ -637,7 +655,11 @@ class ContextDirectoryLoader:
           overwrite" step (run_6a7e5a2f).
         - **User-customized** (``user_customized=True``): copy only if the
           destination file does not exist, then set ``chmod 0o644`` (read-write).
-          Existing user files are never overwritten.
+          Existing files are never overwritten here. For a product-owned file
+          (``template_owned=True``) the copied template's hash + text are recorded
+          (``core.context_template_drift.record_seed``): a later template change is
+          detected at startup by ``context_template_drift.check`` and reaches the
+          person as a Need-You item, written only on their confirmation.
 
         All ``chmod`` calls are wrapped in ``try/except OSError`` for Windows
         compatibility (best-effort).
@@ -681,8 +703,19 @@ class ContextDirectoryLoader:
                     if dest.exists():
                         continue
                     # Atomic write @ 0644 (public) — run_6a7e5a2f.
-                    _atomic_write_bytes(dest, src.read_bytes(), 0o644)
+                    seed_bytes = src.read_bytes()
+                    _atomic_write_bytes(dest, seed_bytes, 0o644)
                     created.append(spec.filename)
+                    # Product-owned file: remember which template was copied, so a later
+                    # product change to it is noticed (context_template_drift.check).
+                    if not spec.template_owned:
+                        continue
+                    try:
+                        from core.context_template_drift import record_seed
+                        record_seed(self.context_dir, spec.filename, seed_bytes)
+                    except Exception as exc:  # noqa: BLE001 — best-effort; never stops the seeding
+                        logger.warning("Failed to record the template of %s: %s",
+                                       spec.filename, exc)
                 else:
                     # Always-overwrite: system defaults refreshed every startup
                     # Single read of source, compare against dest to skip no-ops

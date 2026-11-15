@@ -685,6 +685,82 @@ def _collect_local_roots() -> list[AttentionItem]:
     return items
 
 
+_DRIFT_TITLES = {
+    "untouched": ("The product updated a context file you never edited \u2014 update your copy?",
+                  "your copy is unedited"),
+    "edited": ("The product updated a context file you edited \u2014 merge the changes?",
+               "your copy has your own edits"),
+    "unrecorded": ("A context file differs from the product's current version \u2014 compare and decide",
+                   "copied before SwarmAI recorded which version it was"),
+}
+
+
+def _collect_template_drift(workspace_root: Path) -> list[AttentionItem]:
+    """A product-owned seeded context file (today SELF.md) whose template changed
+    since it was copied → one REVIEW item per file (core.context_template_drift owns
+    the state; this only reads it). The message asks the agent to show the change and to write only on the
+    person's yes. OS-level (brain=None). Read-only; fail-soft."""
+    items: list[AttentionItem] = []
+    try:
+        from core import context_template_drift as ctd
+
+        context_dir = Path(workspace_root) / ".context"
+        cli = '"$SWARM_BACKEND_BIN" py -m core.context_template_drift'
+        for row in ctd.pending_drifts(context_dir):
+            name, kind, sha = row["file"], row["kind"], row["template_sha256"]
+            title, summary_tail = _DRIFT_TITLES[kind]
+            facts: list[tuple[str, str]] = [("File", str(context_dir / name))]
+            if kind != "unrecorded":
+                # product text only: the live file may hold private content and is never inlined
+                diff = ctd.template_change_diff(context_dir, name)
+                if diff and len(diff) <= ctd.INLINE_DIFF_MAX:
+                    facts.append(("What the product changed", f"\n```diff\n{diff.rstrip()}\n```"))
+                elif diff:
+                    facts.append(("What the product changed",
+                                  f"{len(diff.splitlines())} diff lines, too long for this note; "
+                                  "the show command prints it whole"))
+            facts.append(("To see everything", f"`{cli} show {name}`"))
+            if kind == "untouched":
+                ask = (f"The product's template for {name} changed after it was copied into my "
+                       "workspace, and my copy has not been edited since. Tell me in plain words "
+                       "what the new version changes, and update my file only if I say yes.")
+                facts.append(("If I say yes", f"`{cli} apply {name}`"))
+                facts.append(("If I keep mine", f"`{cli} resolve {name}`"))
+            elif kind == "edited":
+                ask = (f"The product's template for {name} changed after it was copied, and my "
+                       "copy has my own edits. Show me what the product changed next to my edits, "
+                       "propose a merge that keeps everything I wrote, and change the file only "
+                       "if I agree.")
+                facts.append(("When it is merged, or if I keep mine", f"`{cli} resolve {name}`"))
+            else:
+                ask = (f"My {name} differs from the product's current template, and SwarmAI did "
+                       "not record which version it was copied from. Show me the differences, "
+                       "tell me which ones look like product updates and which look like my own "
+                       "text, and change nothing unless I say so.")
+                facts.append(("When it is settled, or if I keep mine", f"`{cli} resolve {name}`"))
+            items.append(AttentionItem(
+                id=f"template_drift:{name}:{sha[:12]}",
+                source="template_drift",
+                tier=TIER_REVIEW,
+                brain=None,
+                title=title,
+                summary=f"{name} \u00b7 {summary_tail}",
+                detail=(f"{name} differs from the product's current template, and the version it "
+                        "was copied from is not known. Nothing is changed without your yes."
+                        if kind == "unrecorded" else
+                        f"{name} was copied from a product template that has changed since. "
+                        "Nothing is changed without your yes."),
+                dispatch={
+                    "message": _prompt(ask, facts, [f"context file {name}, template {sha[:12]}"]),
+                    "context": {"kind": "template_drift", "file": name,
+                                "drift": kind, "template_sha256": sha},
+                },
+            ))
+    except Exception as exc:
+        logger.warning("attention: template_drift source failed: %s", exc)
+    return items
+
+
 def _session_title(session_id: str) -> "tuple[bool, str]":
     """(whether the app session still exists, its title). Read only; a missing or
     unreadable database reads as existing. Whether a run is its dispatching agent's is
@@ -1143,6 +1219,7 @@ def collect(
     items += _collect_db_recovery()  # OS-level (brain=None), like governance
     items += _collect_ingestion()  # OS-level CDF anomalies; missing DB is silent
     items += _collect_local_roots()  # a repository a Brain started reading
+    items += _collect_template_drift(workspace_root)  # product-owned context file behind its template
     items += _collect_swarm_out()    # OS-level summary of what Swarm Out waits on
     items += _collect_stale_todos()  # open ToDos nobody touched for long
     items += _collect_aws_account()  # the SwarmAI account's sign-in, and the Hive count

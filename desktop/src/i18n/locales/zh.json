@@ -2273,7 +2273,8 @@
       "local_root": "代码仓库",
       "swarm_out": "Swarm Out",
       "todo": "待办",
-      "aws_account": "账号"
+      "aws_account": "账号",
+      "template_drift": "上下文文件"
     },
     "fillHint": "放进聊天输入框",
     "sendNow": "直接发送",

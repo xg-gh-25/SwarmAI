@@ -27,6 +27,23 @@ INITIAL_DELAY_MS = 100  # 100ms, 200ms, 400ms
 T = TypeVar('T')
 
 
+def refresh_context_files(workspace_path: str) -> list[dict]:
+    """Refresh ``<workspace>/.context`` from the templates, then check every
+    product-owned seeded file (``ContextFileSpec.template_owned``, today SELF.md)
+    against its template (``core.context_template_drift.check``): a template that
+    changed since its file was copied is recorded once as a pending drift, which the
+    Need-You channel shows. Never writes a seeded file. Returns the pending drifts.
+    Blocking: run it off the event loop."""
+    from pathlib import Path
+    from core.context_directory_loader import ContextDirectoryLoader
+    from core import context_template_drift
+
+    context_dir = Path(workspace_path) / ".context"
+    templates_dir = Path(__file__).resolve().parent.parent / "context"
+    ContextDirectoryLoader(context_dir=context_dir, templates_dir=templates_dir).ensure_directory()
+    return context_template_drift.check(context_dir, templates_dir)
+
+
 async def retry_with_backoff(
     operation: Callable[[], T],
     operation_name: str,
@@ -363,7 +380,8 @@ class InitializationManager:
             0. Clean stale git index.lock (safe at startup — no git ops in flight)
             1. Re-scan skills (populates cache with latest built-in skills)
             2. Re-project skill symlinks (creates/removes symlinks based on cache)
-            3. Refresh built-in context files (overwrites with latest source)
+            3. Refresh built-in context files (system-owned ones overwritten from source;
+               seeded ones checked for template drift, never overwritten)
 
         Validates: Requirements 2.1, 2.3
         """
@@ -435,14 +453,15 @@ class InitializationManager:
         # because initialization_manager.py always passes templates_dir
         # explicitly. The sys._MEIPASS fallback is only needed in
         # SkillManager where builtin_path defaults from __file__.
+        # OFF-LOOP: both steps are blocking filesystem work (copy, hash, state file).
         try:
-            from core.context_directory_loader import ContextDirectoryLoader
-            loader = ContextDirectoryLoader(
-                context_dir=Path(workspace_path) / ".context",
-                templates_dir=Path(__file__).resolve().parent.parent / "context",
-            )
-            loader.ensure_directory()
+            pending = await executors.run_in("io", refresh_context_files, workspace_path)
             logger.info("Context directory refreshed during refresh")
+            if pending:
+                logger.warning(
+                    "Context templates changed since they were copied (Need-You): %s",
+                    ", ".join(f"{p['file']} ({p['kind']})" for p in pending),
+                )
         except Exception as e:
             logger.error("Context refresh failed during refresh (non-fatal): %s", e)
 

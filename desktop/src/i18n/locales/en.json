@@ -2273,7 +2273,8 @@
       "local_root": "Repository",
       "swarm_out": "Swarm Out",
       "todo": "ToDo",
-      "aws_account": "Account"
+      "aws_account": "Account",
+      "template_drift": "Context file"
     },
     "fillHint": "Add to the chat input",
     "sendNow": "Send now",
