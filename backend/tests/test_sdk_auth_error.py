@@ -77,11 +77,15 @@ def test_errors_that_only_mention_tokens_or_401_are_not_sign_in_failures():
     failures: they keep their own text and code (else the card says "sign in again" and
     a successful re-verify hides the real error)."""
     from core.session_utils import sdk_error_code
-    for raw in ("API Error (bedrock): input length and max_tokens exceed context limit",
-                "ValidationException: max_tokens is invalid for this model",
-                "Input is too long for requested model (bedrock). prompt tokens 210000",
-                "Request failed after 401 ms"):
-        assert sdk_error_code(raw) == "SDK_ERROR", raw
+    for raw, code in (
+            # an oversized request has its own code (core.transcript_media sheds it)
+            ("API Error (bedrock): input length and max_tokens exceed context limit",
+             "CONTEXT_TOO_LARGE"),
+            ("ValidationException: max_tokens is invalid for this model", "SDK_ERROR"),
+            ("Input is too long for requested model (bedrock). prompt tokens 210000",
+             "CONTEXT_TOO_LARGE"),
+            ("Request failed after 401 ms", "SDK_ERROR")):
+        assert sdk_error_code(raw) == code, raw
         friendly, _ = _sanitize_sdk_error(raw)
         assert "sign-in" not in friendly.lower() and "bearer" not in friendly.lower(), raw
 

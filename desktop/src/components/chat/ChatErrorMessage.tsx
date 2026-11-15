@@ -50,6 +50,8 @@ export interface ChatErrorMessageProps {
 const OWN_ACTION_CODES = new Set([
   'CREDENTIALS_EXPIRED', 'ACCOUNT_NOT_CONNECTED', 'QUEUE_TIMEOUT', 'RATE_LIMIT_EXCEEDED',
   'SERVICE_UNAVAILABLE',
+  // the same oversized history fails again; the text names the real actions
+  'CONTEXT_TOO_LARGE',
 ]);
 
 export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessageProps) {

@@ -461,8 +461,8 @@ async def bedrock_gateway(model_id: str, action: str, request: Request):
             # DEBUG, only a non-200 stays visible.
             (logger.debug if resp.status_code == 200 else logger.warning)(
                         "bedrock_gw.forwarded model=%s action=%s status=%d injected=%s "
-                        "bytes=%d dur=%.1fs", model_id, action, resp.status_code, injected,
-                        total, time.time() - t0)
+                        "req_bytes=%d bytes=%d dur=%.1fs", model_id, action, resp.status_code,
+                        injected, len(new_body), total, time.time() - t0)
 
     out_headers = {k: v for k, v in resp.headers.items()
                    if k.lower() in _PASS_RESPONSE_HEADERS or k.lower().startswith("x-amzn-bedrock-")}

@@ -375,12 +375,42 @@ _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
 ]
 
 
+#: The model service refused the request as too large for its limit: Bedrock's
+#: ``400 Input is too long.`` (a body-size rejection, and also its token-window one),
+#: the Anthropic API's ``prompt is too long`` / ``request_too_large`` / "Request too
+#: large", and the context-limit 400. The same history fails the same way on every
+#: resend, so it is never retried as is (core.transcript_media sheds old images first).
+_CONTEXT_OVERFLOW_RE = re.compile(
+    r"Input is too long|prompt is too long|Request too large|request_too_large"
+    r"|input length and `?max_tokens`? exceed context limit",
+    re.IGNORECASE,
+)
+
+CONTEXT_TOO_LARGE_CODE = "CONTEXT_TOO_LARGE"
+CONTEXT_TOO_LARGE_TEXT = (
+    "This conversation is too large for the model's request limit.",
+    "Sending it again will fail the same way. Compact the conversation, or start a "
+    "new chat tab and continue there.",
+)
+
+#: Raised by the orchestrator when an overflow can be fixed by shedding old images
+#: from the transcript; send() hands it to RetryManager._handle_media_shed_restart.
+MEDIA_SHED_MARKER = "Context overflow media shed restart"
+
+
+def is_context_overflow(raw_error: object) -> bool:
+    """True when ``raw_error`` is the model service refusing an oversized request."""
+    return isinstance(raw_error, str) and bool(_CONTEXT_OVERFLOW_RE.search(raw_error))
+
+
 def _sanitize_sdk_error(raw_error: str) -> tuple[str, Optional[str]]:
     """Map raw SDK error strings to user-friendly messages.
 
     Returns ``(friendly_message, suggested_action)``.  If no pattern
     matches, returns the original message with a generic suggestion.
     """
+    if is_context_overflow(raw_error):
+        return CONTEXT_TOO_LARGE_TEXT
     for pattern, friendly, action in _SDK_ERROR_PATTERNS:
         if re.search(pattern, raw_error, re.IGNORECASE):
             if friendly == _SIGN_IN:
@@ -391,9 +421,13 @@ def _sanitize_sdk_error(raw_error: str) -> tuple[str, Optional[str]]:
 
 
 def sdk_error_code(raw_error: str, default: str = "SDK_ERROR") -> str:
-    """The error code for a raw SDK error: ``CREDENTIALS_EXPIRED`` when it is a sign-in
-    failure (the chat card then offers "Fix the sign-in"), else *default*. The same
+    """The error code for a raw SDK error: ``CONTEXT_TOO_LARGE`` first when the request
+    was too large for the model service (the card then offers no Continue),
+    ``CREDENTIALS_EXPIRED`` when it is a sign-in failure (the chat card then offers
+    "Fix the sign-in"), else *default*. The same
     pattern order as :func:`_sanitize_sdk_error`, so code and text always agree."""
+    if is_context_overflow(raw_error):
+        return CONTEXT_TOO_LARGE_CODE
     for pattern, friendly, _action in _SDK_ERROR_PATTERNS:
         if re.search(pattern, raw_error or "", re.IGNORECASE):
             return "CREDENTIALS_EXPIRED" if friendly == _SIGN_IN else default
@@ -434,6 +468,10 @@ def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
             "Daemon restart required. Error: %s",
             raw_error[:200],
         )
+        return False
+
+    # An oversized request fails the same way on every resend of the same history.
+    if is_context_overflow(raw_error):
         return False
 
     retriable_patterns = [

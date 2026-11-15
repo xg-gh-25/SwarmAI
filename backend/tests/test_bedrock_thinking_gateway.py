@@ -467,3 +467,25 @@ class TestBuildOptionsWiring:
     async def test_channel_session_env_untouched(self):
         opts = await _options(channel_context={"channel_id": "c1", "channel_type": "slack"})
         assert "ANTHROPIC_BEDROCK_BASE_URL" not in opts.env
+
+
+def test_non_200_log_has_request_bytes(monkeypatch, caplog):
+    """A rejected relay logs the request body size, so a body-size rejection
+    ("400 Input is too long.") can be told apart from a token-count one."""
+    def upstream(request: httpx.Request) -> httpx.Response:
+        request.read()
+        return httpx.Response(400, stream=_Chunks([b'{"message":"Input is too long."}']),
+                              headers={"content-type": "application/json"})
+
+    monkeypatch.setattr(gw, "_http_client", httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
+    monkeypatch.setattr(gw, "_resolve_credentials", lambda akid: Credentials(AK, SK, TOK).get_frozen_credentials())
+    monkeypatch.setattr(gw, "_config_region", lambda: REGION)
+    app = FastAPI()
+    app.include_router(gw.router, prefix=gw.GATEWAY_PREFIX)
+    client = TestClient(app, base_url=f"http://{HOST}")
+    with caplog.at_level("WARNING", logger=gw.logger.name):
+        r = client.post(PATH, content=BODY, headers=_sign())
+    assert r.status_code == 400
+    sent = len(gw.rewrite_thinking_display(BODY)[0])
+    lines = [rec.getMessage() for rec in caplog.records if "bedrock_gw.forwarded" in rec.getMessage()]
+    assert lines and f"req_bytes={sent} " in lines[-1] and "status=400" in lines[-1]

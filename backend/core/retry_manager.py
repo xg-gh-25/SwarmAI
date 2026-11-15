@@ -6,6 +6,8 @@ This module contains retry/recovery orchestration (~530 LOC):
 - _handle_buffer_overflow(): 10MB JSONRPC buffer overflow recovery
 - _handle_leak_poison_restart(): repeated tool-call leak → clean CLI
   transcript, --resume, continue the turn (once per message)
+- _handle_media_shed_restart(): request too large for the model service → strip
+  the oldest images from the CLI transcript, --resume, continue (once per message)
 - _inject_abandon_continuation(): context injection on retry timeout
 
 Architecture:
@@ -241,6 +243,105 @@ class RetryManager:
         except Exception as recovery_exc:
             logger.warning(
                 "Leak restart resume failed for session %s: %s",
+                parent.session_id, str(recovery_exc)[:200],
+            )
+            yield {
+                "_fallthrough_error": str(recovery_exc),
+                "_fallthrough_tb": traceback.format_exc(),
+            }
+
+    async def _handle_media_shed_restart(
+        self,
+        options: ClaudeAgentOptions,
+        config: Optional[Any],
+    ) -> AsyncIterator[dict]:
+        """Shed old images from an oversized CLI transcript and continue the turn.
+
+        Raised for by the orchestrator when the model service refused the turn as
+        too large (``session_utils.is_context_overflow``) on the primary send()
+        stream, at most once per user message (``_media_shed_done``, set first).
+        Resending the same history fails identically, so: stop the CLI (identity
+        kept; it owns the file and holds the history in memory) → back up the
+        transcript and strip its oldest images/documents (core.transcript_media) →
+        spawn with --resume → send the short continuation prompt. When nothing can
+        be removed (no media, no transcript, a failed rewrite) the turn ends with
+        the terminal CONTEXT_TOO_LARGE error and the transcript is left as it was.
+
+        Sentinels match ``_handle_leak_poison_restart``: ``_recovered`` on
+        success, ``_abort`` after a terminal error or a spawn failure,
+        ``_fallthrough_error`` if the resumed stream raised.
+        """
+        from .leak_transcript import find_transcript
+        from .session_unit import SessionState
+        from .session_utils import (
+            CONTEXT_TOO_LARGE_CODE,
+            CONTEXT_TOO_LARGE_TEXT,
+            _build_error_event,
+            _sanitize_sdk_error,
+            sdk_error_code,
+        )
+        from .streaming_orchestrator import StreamingOrchestrator
+        from .transcript_media import shed_transcript_media
+
+        parent = self._parent
+        parent._media_shed_done = True
+        resume_sid = parent._sdk_session_id
+        await parent._crash_to_cold_async()  # keep identity → --resume
+
+        try:
+            path = await asyncio.to_thread(find_transcript, resume_sid)
+            result = await asyncio.to_thread(shed_transcript_media, path) if path else None
+        except Exception as exc:  # noqa: BLE001 — any failure ends in the terminal error
+            logger.warning("session_unit.context_overflow_shed_failed session_id=%s: %s",
+                           parent.session_id, exc)
+            path, result = None, None
+        logger.warning(
+            "session_unit.context_overflow_shed_done session_id=%s transcript_found=%s "
+            "removed_blocks=%s removed_bytes=%s remaining_bytes=%s error=%s",
+            parent.session_id, path is not None,
+            getattr(result, "removed_blocks", 0), getattr(result, "removed_bytes", 0),
+            getattr(result, "remaining_bytes", None), getattr(result, "error", None),
+        )
+        if result is None or not result.removed_blocks:
+            message, suggested = CONTEXT_TOO_LARGE_TEXT
+            yield _build_error_event(
+                code=CONTEXT_TOO_LARGE_CODE, message=message,
+                suggested_action=suggested, terminal=True,
+            )
+            yield {"_abort": True}
+            return
+
+        yield {"type": "reconnecting", "reason": "context_too_large",
+               "message": "Older images were removed from the conversation to fit the "
+                          "model's request size limit; continuing",
+               "attempt": 1, "delay": 0}
+
+        retry_options = parent._build_retry_options(options, resume_sid)
+        try:
+            await parent._spawn(retry_options, config)
+        except Exception as spawn_exc:
+            spawn_tb = traceback.format_exc()
+            await parent._crash_to_cold_async(clear_identity=True)
+            friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
+            yield _build_error_event(
+                code=sdk_error_code(str(spawn_exc), "SPAWN_FAILED"),
+                message=friendly,
+                detail=spawn_tb,
+                suggested_action=suggested,
+            )
+            yield {"_abort": True}
+            return
+
+        parent._transition(SessionState.STREAMING)
+        try:
+            async for event in parent._streaming_orchestrator.stream_query(
+                StreamingOrchestrator._MEDIA_SHED_CONTINUATION_PROMPT,
+            ):
+                yield event
+            yield {"_recovered": True}
+        except Exception as recovery_exc:
+            logger.warning(
+                "Media shed resume failed for session %s: %s",
                 parent.session_id, str(recovery_exc)[:200],
             )
             yield {

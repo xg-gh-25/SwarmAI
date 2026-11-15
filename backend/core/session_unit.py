@@ -780,6 +780,18 @@ class SessionUnit:
         # (core.output_degeneration). The next send() recycles any warm process
         # and cleans the transcript (leak_transcript) before --resume reads it.
         self._transcript_poisoned: bool = False
+        # Request-size overflow (core.transcript_media). _media_shed_eligible is True
+        # only while send()'s primary stream runs and the message has not shed yet
+        # (_media_shed_done, reset per user message): an overflow there sheds the
+        # transcript's oldest images and resumes once. _media_shed_due is set after
+        # a turn when the live history's media passed MEDIA_SHED_TRIGGER_BYTES, so
+        # the next send() sheds before writing; _media_measured_size is the
+        # transcript size at the last measure (a file that did not grow is skipped).
+        self._media_shed_eligible: bool = False
+        self._media_shed_done: bool = False
+        self._media_shed_due: bool = False
+        self._media_measured_size: int = 0
+        self._media_measured_sid: Optional[str] = None
 
         # ── Streaming timeout ────────────────────────────────────────
         # Updated on every yielded event during STREAMING.  The
@@ -1462,6 +1474,7 @@ class SessionUnit:
         # _interrupted is cleared by the caller (send() Layer 0 / begin_injected_turn)
         self._buffer_overflow_recovery = False
         self._leak_restart_done = False  # per-message: one leak restart budget
+        self._media_shed_done = False  # per-message: one overflow shed budget
         self._compaction_guard.reset()  # New user turn — reset tool tracking
         self._last_call_usage = None  # an interrupted turn's last usage must not leak in
         self._context_recorded_this_turn = False
@@ -2714,6 +2727,10 @@ class SessionUnit:
         # (getattr: some fixtures build a unit with __new__, skipping __init__.)
         if getattr(self, "_transcript_poisoned", False):
             await self._clean_poisoned_transcript()
+        # The history's images passed the shed trigger after the last turn: shed
+        # them before this message, or the request may be refused as too large.
+        if getattr(self, "_media_shed_due", False):
+            await self._shed_transcript_media_if_due()
 
         if self._should_poison_guard_recycle():
             logger.info(
@@ -2881,6 +2898,7 @@ class SessionUnit:
         query_content = self._apply_stop_note(query_content)
         try:
             self._leak_restart_eligible = not self._leak_restart_done
+            self._media_shed_eligible = not self._media_shed_done
             # Pre-first-token phase for the UI: the query goes to the model now.
             yield turn_phase_event(TURN_PHASE_WAITING)
             try:
@@ -2888,6 +2906,9 @@ class SessionUnit:
                     yield event
             finally:
                 self._leak_restart_eligible = False
+                self._media_shed_eligible = False
+            # Measure the history's images off the event loop for the next send.
+            self._schedule_media_measure()
             # Success — reset counters (session is healthy)
             self._consecutive_oom_kills = 0
             self._consecutive_unstick_timeouts = 0
@@ -3000,6 +3021,29 @@ class SessionUnit:
                 "Error during streaming for session %s: %s",
                 self.session_id, error_str[:200],
             )
+
+            # ── Request too large — shed old images + resume (once) ──
+            # The orchestrator raises this only on the primary stream and only
+            # once per message; a second overflow ends in the terminal error.
+            from .session_utils import MEDIA_SHED_MARKER
+            if MEDIA_SHED_MARKER in error_str:
+                recovered = False
+                async for event in self._retry_manager._handle_media_shed_restart(
+                    options, config,
+                ):
+                    if event.get("_abort"):
+                        return  # nothing to shed / spawn failed (error already yielded)
+                    if event.get("_recovered"):
+                        recovered = True
+                        continue
+                    if "_fallthrough_error" in event:
+                        error_str = event["_fallthrough_error"]
+                        tb_str = event.get("_fallthrough_tb", tb_str)
+                        continue
+                    yield event
+                if recovered:
+                    return
+                # Resumed stream failed — fall through to the normal handling.
 
             # ── Repeated tool-call leak — clean transcript + resume (once) ──
             # The orchestrator raises this only on the primary stream and only
@@ -5440,6 +5484,84 @@ class SessionUnit:
                 self.session_id, exc_info=True,
             )
             return {}
+
+    def _schedule_media_measure(self) -> None:
+        """Start the post-turn media measure in the background (never raises).
+
+        Off the critical path: the turn has ended, and the measure itself runs
+        in a thread. A small transcript costs one stat."""
+        if not self._sdk_session_id or self._media_shed_due:
+            return
+        try:
+            task = asyncio.ensure_future(self._measure_transcript_media())
+        except RuntimeError:  # no running loop (a sync test fixture)
+            return
+        _BACKGROUND_RECORDS.add(task)
+        task.add_done_callback(_BACKGROUND_RECORDS.discard)
+
+    async def _measure_transcript_media(self) -> None:
+        """Set ``_media_shed_due`` when the live history's images passed the trigger.
+
+        Skips the scan when the transcript is under the trigger size (its media
+        cannot be over it) or has grown less than 1 MiB since the last scan."""
+        from .leak_transcript import find_transcript
+        from .transcript_media import MEDIA_SHED_TRIGGER_BYTES, MIB, live_media_bytes
+
+        sid = self._sdk_session_id
+        try:
+            path = await asyncio.to_thread(find_transcript, sid)
+            if path is None:
+                return
+            size = (await asyncio.to_thread(path.stat)).st_size
+            if self._media_measured_sid != sid:  # a new transcript: no baseline yet
+                self._media_measured_sid, self._media_measured_size = sid, 0
+            if size <= MEDIA_SHED_TRIGGER_BYTES or size - self._media_measured_size < MIB:
+                return
+            self._media_measured_size = size
+            media = await asyncio.to_thread(live_media_bytes, path)
+            if media is not None and media > MEDIA_SHED_TRIGGER_BYTES \
+                    and sid == self._sdk_session_id:
+                self._media_shed_due = True
+                logger.info(
+                    "session_unit.media_shed_due session_id=%s live_media_bytes=%d",
+                    self.session_id, media,
+                )
+        except Exception as exc:  # noqa: BLE001 — a measure must never break the session
+            logger.warning("session_unit.media_measure_failed session_id=%s: %s",
+                           self.session_id, exc)
+
+    async def _shed_transcript_media_if_due(self) -> None:
+        """Shed the transcript's oldest images before the next turn reads it.
+
+        The live CLI holds its history in memory, so a warm process is recycled
+        first (identity kept → the following spawn uses --resume on the smaller
+        file). One-shot: the flag is cleared up front. Never raises."""
+        from .leak_transcript import find_transcript
+        from .transcript_media import shed_transcript_media
+
+        self._media_shed_due = False
+        sid = self._sdk_session_id
+        if not sid:
+            return
+        t0 = time.monotonic()
+        try:
+            if self.is_alive:
+                await self._arm_recovery_checkpoint("media_shed_recycle")
+                await self._crash_to_cold_async(clear_identity=False)
+            path = await asyncio.to_thread(find_transcript, sid)
+            result = await asyncio.to_thread(shed_transcript_media, path) if path else None
+            self._media_measured_size = 0
+            logger.warning(
+                "session_unit.media_shed_before_send session_id=%s transcript_found=%s "
+                "removed_blocks=%s remaining_bytes=%s error=%s dur_ms=%d",
+                self.session_id, path is not None,
+                getattr(result, "removed_blocks", 0),
+                getattr(result, "remaining_bytes", None), getattr(result, "error", None),
+                (time.monotonic() - t0) * 1000,
+            )
+        except Exception as exc:  # noqa: BLE001 — shedding must not block send()
+            logger.warning("session_unit.media_shed_failed session_id=%s: %s",
+                           self.session_id, exc)
 
     async def _clean_poisoned_transcript(self) -> None:
         """Clean a poisoned CLI transcript (glitch prefix / degenerate

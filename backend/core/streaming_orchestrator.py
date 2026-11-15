@@ -349,6 +349,29 @@ class StreamingOrchestrator:
     # must not say it failed. No tool-call markup and no glitch word in it.
     _GLITCH_CONTINUATION_PROMPT = "Continue the task where you left off."
 
+    # Continuation after an overflow shed (core.transcript_media). The rejected
+    # request never reached the model, so nothing of the step ran.
+    _MEDIA_SHED_CONTINUATION_PROMPT = (
+        "Your last request was rejected because the conversation was larger than the "
+        "model's request size limit, so the previous step did not run. The oldest "
+        "images and documents were removed from the history to make it fit; each is "
+        "marked where it was, and the files themselves are unchanged. Tell the user "
+        "in one sentence that older images were dropped from the conversation, then "
+        "continue the task from where you stopped. Read an image again only if you "
+        "still need it."
+    )
+
+    def _should_restart_for_overflow(self) -> bool:
+        """True when an overflow error on this turn may shed media and resume once."""
+        parent = self._parent
+        if not getattr(parent, "_media_shed_eligible", False):
+            return False  # not the primary send() stream, or already shed this message
+        if not parent._sdk_session_id:
+            return False  # nothing to --resume
+        if parent._interrupted or getattr(parent, "_user_stopped_current_turn", False):
+            return False
+        return True
+
     def _should_restart_for_glitch(self) -> bool:
         """True at a tool-result boundary where the glitch restart is safe."""
         parent = self._parent
@@ -2932,6 +2955,24 @@ class StreamingOrchestrator:
                             f"Zombie subprocess detected: error_during_execution "
                             f"with no content in {streaming_dur:.1f}s "
                             f"(session_id={self._parent.session_id})"
+                        )
+
+                    # ── Request too large for the model service → shed media once ──
+                    # Resending the same history fails identically, so on the
+                    # primary send() stream (once per user message) hand off to
+                    # send()'s restart: stop the CLI, strip the oldest images from
+                    # the transcript, --resume and continue. Otherwise it falls
+                    # through to the terminal CONTEXT_TOO_LARGE error below.
+                    from .session_utils import MEDIA_SHED_MARKER, is_context_overflow
+                    if is_context_overflow(error_text) and self._should_restart_for_overflow():
+                        self._parent._media_shed_eligible = False
+                        logger.warning(
+                            "session_unit.context_overflow_shed session_id=%s "
+                            "error_text=%.120s — shedding transcript media + resume",
+                            self._parent.session_id, error_text,
+                        )
+                        raise RuntimeError(
+                            f"{MEDIA_SHED_MARKER} (session_id={self._parent.session_id})"
                         )
 
                     if _is_retriable_error(error_text):
