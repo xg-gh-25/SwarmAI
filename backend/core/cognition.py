@@ -387,13 +387,17 @@ class Got:
 
 
 def _brain_of(path: Path) -> Optional[str]:
-    """The Brain whose dir holds *path* (resolved): the General Brain, or ``Projects/<P>``."""
-    from core import addressing
+    """The Brain whose dir holds *path* (resolved): the General Brain, ``Projects/<P>``, or
+    a version of either a Hive keeps for running turns (``core.brain_versions``)."""
+    from core import addressing, brain_versions
     from core.project_agent import GENERAL_BRAIN
-    lib = addressing.brain_root(GENERAL_BRAIN)
+    from core.project_registry import get_projects_dir, get_swarmws
+    kept = brain_versions.brain_of(get_swarmws(), path)     # a kept version on a Hive
+    if kept is not None:
+        return kept if kept == GENERAL_BRAIN or addressing.project_root(kept) is not None else None
+    lib = addressing.stable_root(GENERAL_BRAIN)
     if lib is not None and path.is_relative_to(lib.resolve()):
         return GENERAL_BRAIN
-    from core.project_registry import get_projects_dir
     try:
         rel = path.relative_to(get_projects_dir().resolve())
     except (OSError, ValueError):

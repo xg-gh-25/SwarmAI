@@ -262,9 +262,10 @@ def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, 
     from core.run_protocol import project_binding
     binding = project_binding.resolve(project, repos)          # run-knowledge §3.2
     from core.project_agent import ModeError, contract_for_run
-    from core.project_agent_session import PinError, brain_dir
+    from core.project_agent_session import PinError, brain_view
     try:
-        brain = brain_dir(_workspace(), binding.project)
+        # the version this session's turn reads (a Hive keeps it while a newer one lands)
+        brain = brain_view(_workspace(), binding.project, session_id or None)
     except PinError:
         brain = None
     if agent_mode is not None and brain is None:

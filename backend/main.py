@@ -1360,6 +1360,14 @@ async def lifespan(app: FastAPI):
     # anyway is never touched). Non-fatal; startup waits for it, about one read of the
     # repositories per turn it closes (SessionRouter._task_repo_facts, bounded there).
     if _detect_run_mode() == "hive":
+        # the Brain versions an earlier process kept for its turns (core/brain_versions):
+        # none of those turns is alive, so none is read any more
+        try:
+            from core import brain_versions as _brain_versions, executors as _executors
+            from core.project_registry import get_swarmws as _ws
+            await _executors.run_in("brain_versions", _brain_versions.clear, _ws())
+        except Exception as exc:  # pragma: no cover - non-fatal startup guard
+            logger.warning("brain_versions.clear failed (non-fatal): %s", exc)
         try:
             closed = await hive_boot.close_open_turns(session_registry.session_router)
             if closed:

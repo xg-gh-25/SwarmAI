@@ -920,7 +920,9 @@ def _load_ddd_docs_text(project: Optional[str]):
     from the SSOTs — ``DDD_CANONICAL_DOCS`` for the doc set and ``ddd_path`` for where
     each doc lives — so nothing here knows any section name or directory layout.
 
-    Returns ``(None, {})`` for no project / an unknown project; a missing or
+    On a Hive the docs are those of the version the session reads
+    (``core.brain_versions.view``). Returns ``(None, {})`` for no project / an unknown
+    project; a missing or
     unreadable doc is simply absent (a project with zero docs is a complete brain,
     not an error).
     """
@@ -931,6 +933,10 @@ def _load_ddd_docs_text(project: Optional[str]):
     base = get_projects_dir() / project
     if not base.exists():
         return None, {}
+    # on a Hive, the version the session's turn holds when a newer one was installed
+    from core import brain_versions
+    from core.project_registry import get_swarmws
+    base = brain_versions.view(get_swarmws(), project, base)
 
     from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
     from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)

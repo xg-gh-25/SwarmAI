@@ -17,7 +17,8 @@ on its own and cite what it found:
 - ``get(project, ref)`` — one unit by id or ``path:line``.
 - ``projects()`` — every project and whether it has a DDD (``knowledge map --projects``).
 - ``brain_root(name)`` — the Brain's dir: a project's dir, or ``Knowledge/Library`` for the
-  built-in General Brain. Every function above takes a Brain name, so ``General`` has a unit
+  built-in General Brain (on a Hive, the version the session's turn holds when a newer one
+  was installed since: ``core.brain_versions``; ``stable_root`` is always the stable dir). Every function above takes a Brain name, so ``General`` has a unit
   table, a map and ids like a project DDD (cognition entrance design §1.3 item 6): its
   top-level ``*.md`` files are its documents (the same set as CDF's ``brain_files``), the
   ``*.md`` files of its subfolders its corpus. ``project_root`` stays the project's dir only:
@@ -103,15 +104,30 @@ def is_general(name: str) -> bool:
     return is_general_name(name)
 
 
-def brain_root(name: str) -> Optional[Path]:
-    """The Brain's dir: ``Knowledge/Library`` for the General Brain (its name in any case),
-    else ``project_root(name)``. None when it does not exist or is a symlink."""
+def stable_root(name: str) -> Optional[Path]:
+    """The Brain's stable dir: ``Knowledge/Library`` for the General Brain (its name in any
+    case), else ``project_root(name)``. None when it does not exist or is a symlink."""
     if is_general(name):
         from core.project_agent import general_brain_dir
         from core.project_registry import get_swarmws
         lib = general_brain_dir(get_swarmws())
         return lib if lib.is_dir() and not lib.is_symlink() else None
     return project_root(name)
+
+
+def brain_root(name: str, session_id: Optional[str] = None) -> Optional[Path]:
+    """The Brain's dir as this session reads it: on a Hive, the version its turn holds
+    when a newer one was installed since (``core.brain_versions.view``; the session
+    defaults to ``SWARM_APP_SESSION_ID``), else ``stable_root(name)``. None when the
+    Brain does not exist."""
+    root = stable_root(name)
+    if root is None:
+        return None
+    from core import brain_versions
+    from core.project_agent import GENERAL_BRAIN
+    from core.project_registry import get_swarmws
+    return brain_versions.view(get_swarmws(), GENERAL_BRAIN if is_general(name) else root.name, root,
+                               session_id)
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -232,7 +248,8 @@ def ddd_units(project: str) -> UnitTable:
     root = brain_root(project)
     general = is_general(project)
     from core.project_agent import GENERAL_BRAIN
-    name = GENERAL_BRAIN if general else (root.name if root is not None else project)  # its own spelling
+    stable = stable_root(project) if root is not None and not general else None
+    name = GENERAL_BRAIN if general else (stable.name if stable is not None else project)  # its own spelling
     table = UnitTable(name, root)
     if root is None:
         return table
@@ -481,6 +498,19 @@ def matches(project: str, ref: str) -> list[Unit]:
         path = path.resolve()
     except OSError:
         return []
+    stable = stable_root(project)
+    from core import brain_versions
+    from core.project_agent import GENERAL_BRAIN
+    from core.project_registry import get_swarmws
+    kept = brain_versions.in_version(get_swarmws(), path)
+    if stable is not None and kept is not None \
+            and kept[0] == (GENERAL_BRAIN if is_general(project) else stable.name):
+        # a path of a version a turn of this session read before (a citation made then)
+        # names the same file of the version it reads now
+        path = table.root.resolve() / kept[1]
+    elif stable is not None and table.root != stable and _inside(path, stable):
+        # a path under the stable dir names the same file of the version this session reads
+        path = table.root.resolve() / path.relative_to(stable.resolve())
     line = int(m.group("line"))
     if line < 1 or not _inside(path, table.root):
         return []

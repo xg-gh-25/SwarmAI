@@ -46,10 +46,13 @@ class SyncRefused(ValueError):
 # text is never shown
 _REFUSALS = {
     404: "this Hive's version cannot receive Brains; update it once, then sync",
-    423: "the Hive is busy with {brain} (a run is using it, or it is being installed); "
-         "sync again when it finishes",
+    # a Hive whose turns hold the Brain installs beside them; an older Hive still answers
+    # 423 for that
+    423: "the Hive is busy with {brain} (it is being installed, or on an older Hive a run is "
+         "using it); sync again in a moment",
     409: "the Hive's copy of {brain} cannot be written (a link or a file where a directory "
-         "belongs, or a Brain whose name differs only in case); fix it on the Hive, then sync",
+         "belongs, a Brain whose name differs only in case, or the version its running turns "
+         "use could not be kept); fix it on the Hive, then sync",
     413: "{brain} is larger than the Hive accepts",
     400: "the Hive did not accept the package of {brain} (its content did not match its digest)",
 }
@@ -140,18 +143,48 @@ def _package(workspace: Path, brain: str, default: bool) -> tuple[bytes, str, in
     return data, brain_sync.content_digest(files), len(files)
 
 
+# one push of a Brain to a Hive at a time from this host (dispatches, the console and
+# the default sync all push through ``sync``): the Hive refuses a second install of a
+# Brain while one runs
+_push_locks: dict[tuple[str, str], tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+
+
+def _push_lock(inst: dict[str, Any], brain: str) -> asyncio.Lock:
+    key = (str(inst.get("id") or inst.get("name") or ""), brain)
+    loop = asyncio.get_running_loop()
+    held = _push_locks.get(key)
+    if held is None or held[0] is not loop:       # a lock belongs to one event loop
+        held = _push_locks[key] = (loop, asyncio.Lock())
+    return held[1]
+
+
 async def sync(inst: dict[str, Any], brain: str, workspace: Optional[Path] = None,
                package: Optional[tuple[bytes, str, int]] = None) -> dict[str, Any]:
     """Push *brain* to the Hive; returns ``{brain, digest, files, installed_at}``.
     *package*: these bytes instead of packaging the Brain now (a Swarm Run's frozen
-    Brain, core/swarm_run.freeze)."""
+    Brain, core/swarm_run.freeze). Pushes of one Brain to one Hive run one at a time; a
+    push that waited for another is not made again when the Hive now has exactly this
+    version, unchanged."""
     from core.project_registry import get_swarmws
-    from core.swarm_out import _client
     ws = workspace or get_swarmws()
     try:
         data, digest, n = package or await asyncio.to_thread(_package, ws, brain, brain in DEFAULT_BRAINS)
     except brain_sync.SyncError as exc:
         raise SyncRefused(str(exc)) from None
+    lock = _push_lock(inst, brain)
+    waited = lock.locked()
+    async with lock:
+        if waited:
+            have = (await hive_brains(inst))["brains"].get(brain) or {}
+            if have.get("digest") == digest and have.get("current_digest") == digest:
+                logger.info("brain sync: %s -> %s already at %s", brain, inst.get("name"), digest[:12])
+                return {"brain": brain, "digest": digest, "files": n,
+                        "installed_at": have.get("installed_at")}
+        return await _push(inst, brain, data, digest, n)
+
+
+async def _push(inst: dict[str, Any], brain: str, data: bytes, digest: str, n: int) -> dict[str, Any]:
+    from core.swarm_out import _client
     async with _client(inst, SYNC_TIMEOUT_S) as client:
         r = await client.put(f"/api/hive/brains/{brain}", content=data,
                              headers={"X-Brain-Digest": digest, "Content-Type": "application/gzip"})

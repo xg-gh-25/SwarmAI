@@ -288,13 +288,17 @@ sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/
 - 一个 run 开始时、以及每次执行 gate 之前，都**从文件内容重新计算** digest，再和这个值比对（§8.2）。不读 `.brain.json`，因为它是 Hive 上的文件，agent 改得了。
 - 安装接口的 basic auth 防的是外面的人，不保护 Hive 上 Brain 的完整性。Hive 上的 agent 本来就能直接写 `Projects/<brain>/`，也能改掉凭据的 hash 再重启后端（按 P5，这在防范范围之外）。
 
-**安装和 turn 互斥（`core/brain_use.py`）：** 按 turn 计，不按会话计。
-- 一个 Project Agent 会话的每个 turn，从第一个事件之前到 turn 结束，都占用它的 Brain。所有 turn 都经过 `SessionRouter._published_turn`，占用就放在这里。新会话的 Brain 来自派发的 pin，老会话的来自会话记录。只在 Hive 上这样做。
-- 有 turn 占用时，安装直接拒绝（423），本机提示"Hive 正忙，等它跑完再同步"。不排队等：一个 pipeline turn 可能跑一个小时，HTTP 请求等不了这么久。派发前的自动同步遇到 423，就不派，并说明原因。
+**安装和 turn 共存（`core/brain_use.py`、`core/brain_versions.py`）：** 按 turn 计，不按会话计。一个 turn 从开始到结束读它开始时的那个版本；新 turn 读最新版本；没有 turn 再用的旧版本删掉。（2026-11-15 改：原来有 turn 占用时安装一律 423，本机的 Brain 每几分钟就被 CDF 改一次，一台能跑 8–10 个会话的 Hive 实际一次只能接同一个 Brain 的一个任务。）
+- 一个 Project Agent 会话的每个 turn，从第一个事件之前到 turn 结束，都占用它的 Brain 的当前版本。所有 turn 都经过 `SessionRouter._published_turn`，占用就放在这里，并记下 turn 所属的会话（新会话在第一个带 sessionId 的事件到达时补上）。新会话的 Brain 来自派发的 pin，老会话的来自会话记录。只在 Hive 上这样做。
+- `Projects/<brain>`（通用 Brain 是 `Knowledge/Library`）永远是最新版本，是稳定路径：所有写入方、`.artifacts/`、Hive 改动检查、新会话的 pin 都只认它。
+- 安装时如果有 turn 在读当前版本：先把当前版本的白名单文件（照磁盘上的样子，含 Hive 上的改动）复制到 `Hive/brains/<brain>/versions/<id>/`（先建在临时目录里再 rename 进去），把这些 turn 挪到这个副本上，给每个会话写 `Hive/brains/<brain>/turns/<session>`（内容是版本 id），这些都做完才写新版本的任何文件。副本做不出来就回 409，什么都不装。
+- 读 Brain 的地方统一经过 `brain_versions.view`：会话有标记就读它的副本，否则读稳定路径。会话来自调用方（Brain gate 钩子传自己的会话），或者来自给单个会话跑的进程的 `SWARM_APP_SESSION_ID`（agent 跑的 `cognition find`、pipeline 的 CLI）。跟着走的有：`addressing.brain_root`（find / get / map、run 的引用检查）、`recall_multi._load_ddd_docs_text`（DDD recall）、Brain gate（`run_gates`）、建 run 时读的 contract。不跟着走的：投影到全工作区 `.claude/skills` 的 domain skill（CLI 只有一套 skill），以及 agent 直接按 `Projects/<brain>/` 路径读文件——这两样读的是最新版本。
+- turn 结束时，如果它在副本上：它的会话标记删掉；副本的最后一个 turn 结束时，副本删掉。一个 turn 开始前要等它的 Brain 上还没做完的清理，所以会话的下一个 turn 读不到上一个 turn 的标记。这些磁盘操作都在单线程的 `brain_versions` 执行器上，不在事件循环上，也不占聊天路径等的线程池。Hive 后端启动时清空 `Hive/brains/`（上一个进程的 turn 都已经不在了）。
+- 同一个 Brain 同时只装一个：第二个安装回 423（"正在安装"）。本机这边，同一台 Hive 同一个 Brain 的推送一个接一个（`brain_sync_host.sync` 里的锁）；等过别人的推送，就先重读 Hive 的 Brain 列表，Hive 已经是这个 digest 且没改过就不再推。
 - 正在安装时，新的 turn 等安装和 skill 重扫做完再开始，不会读到装了一半的 Brain。
-- 判断和标记之间没有 `await`，都在事件循环里完成，所以没有"先查再装"中间插进一个 turn 的窗口。
-- 读不出会话记录的 turn（数据库一时读不了）占用所有 Brain，不会有安装落在它下面。
-- 已知取舍：排队等 CLI slot 的 turn 也算占用。几个会话的 turn 一直首尾相接时，安装会一直被拒（控制台显示"正忙"）。两种情况都只是同步推迟，不会读到装了一半的 Brain。
+- 判断和标记之间没有 `await`，都在事件循环里完成。
+- 读不出会话记录的 turn（数据库一时读不了）占用所有 Brain 的当前版本：任何一个 Brain 安装时，它和这个 Brain 自己的 turn 一样被留在旧版本上，不再挡住安装。
+- `GET /api/hive/brains` 里每个 Brain 的 `running` 是占着它任何一个版本的 turn 数，`versions` 是每个版本的 digest 和占着它的 turn 数（当前版本在前）。
 - 不同的 Brain 之间互不影响。
 - 一个会话的两个 turn 之间，Brain 可以被更新。下一个 turn 用新文件、旧 pin。gate 不一样时，Brain gate 钩子会拦下它的 gated 动作（"Brain 的 gate 被改过"），这个任务要重新派发，而不是在派发时没定过的规则下继续跑。
 
@@ -712,7 +716,7 @@ sequenceDiagram
     H->>XG: ④ 确认：Brain · mode · profile · 验收 · 仓库 · revision r
     XG-->>H: 派
     H->>HB: ⑤ GET /api/hive/brains → digest 过期
-    H->>HB: PUT /api/hive/brains/SwarmAI（包 + digest）<br/>核对后按文件替换，重扫 Brain 的 skill（有 turn 在用就 423）
+    H->>HB: PUT /api/hive/brains/SwarmAI（包 + digest）<br/>核对后按文件替换，重扫 Brain 的 skill（有 turn 在用就先把旧版本留给它们；只有同时两个安装才 423）
     H->>HV: ⑥ dispatch_spec：任务 = 项目段（task_spec.segment）+ Task<br/>pin 请求 = brain · mode · revision r
     HV->>HB: make_pin：读副本里的定义，revision 必须等于 r<br/>定下 mode · 保留动作 · gates · 3-gates 的 digest，写进会话记录
     HV->>HV: 每个 turn 持有这个 Brain（brain_use），同步不能中途替换它
@@ -754,7 +758,7 @@ sequenceDiagram
 ### 14.3 Hive 上一个会话的生命周期
 
 1. **启动：** 收到带 pin 请求的任务。没有 revision 的 pin 直接拒（`routers/chat.py`）。`make_pin` 从 Hive 上的 Brain 副本读定义，比对 revision，把 mode、保留动作、gates、`3-gates/` digest 写进会话记录。会话记录写不进去，会话就不启动。
-2. **每个 turn：** 先持有这个 Brain（`brain_use`），这期间本机推来的新包会收到 423。turn 结束才放开。
+2. **每个 turn：** 先持有这个 Brain 的当前版本（`brain_use`），这期间本机推来的新包照样装上，这个 turn 继续读它开始时的版本（`brain_versions`）。turn 结束才放开，没人再用的旧版本随之删掉。
 3. **每次调用工具：** 钩子从会话记录读 pin（重启后也是同一份）。读不到 pin 时，Bash、Write、Edit 一律拒。命令命中保留动作，就走审批。`3-gates/` 和 pin 记下的 digest 不一致，或某个 gate 拒绝、出错，这次调用就被拦下并计数。
 4. **turn 结束：** 写 `turn_outcome`，内容是结局、每个仓库的事实（base、head、commit 数、文件数、有没有推）、bundle 的 sha256、gate 拦截数。
 5. **会话之后：** Hive 自己的 CDF 照常复盘，也会写进 Hive 那份 Brain。那些写入下次同步时被还原，教训经 ⑩ 回到本机。

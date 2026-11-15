@@ -4188,21 +4188,29 @@ class SessionRouter:
         project_agent: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
         """``_published_events`` for one turn, holding the turn's Brain on a Hive
-        (core/brain_use: a turn never reads a Brain while it is being installed, and an
-        install waits for no turn — it is refused while one holds the Brain).
-        ``project_agent`` is the pin of a new session; an existing one's is read from
-        its record."""
+        (core/brain_use: a turn never reads a Brain while it is being installed, and it
+        reads the version it started with until it ends — an install made meanwhile
+        keeps that version for it). The turn is bound to its session, so the session's
+        readers find that version (core/brain_versions.view): the session id given, or
+        a new session's, from its first published event. ``project_agent`` is the pin of
+        a new session; an existing one's is read from its record."""
         from . import brain_use
         brain = await brain_use.brain_of_turn(session_id, project_agent)
         key = uuid4().hex
         if brain is not None:
-            await brain_use.hold(brain, key)
+            await brain_use.hold(brain, key, session_id)
+        bound = brain is None or session_id is not None
         try:
             async with aclosing(self._published_events(
                 agen, session_id=session_id, turn_client_id=turn_client_id, source=source,
                 start_on_session_start=start_on_session_start, writer=writer, opener=opener,
             )) as events:
                 async for ev in events:
+                    if not bound and isinstance(ev, dict):
+                        sid = ev.get("sessionId") or ev.get("session_id")
+                        if isinstance(sid, str) and sid:
+                            brain_use.bind_session(key, sid)
+                            bound = True
                     yield ev
         finally:
             if brain is not None:

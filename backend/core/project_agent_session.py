@@ -15,7 +15,9 @@ drained message and a session after a backend restart are all pinned to the same
 values. A pin that cannot be read gives ``{"broken": <why>}``: Bash, Write and Edit
 are refused, never let through.
 
-**The gates** (``run_gates``): every file of ``3-gates/`` is read once; the digest of
+**The gates** (``run_gates``): every file of ``3-gates/`` of the Brain version the
+session's turn reads (``brain_view``: on a Hive a turn keeps its version while a newer
+one is installed) is read once; the digest of
 those bytes must equal the pinned one ("the Brain's gates were changed" otherwise),
 and each enforced gate runs from those same bytes, copied into an empty temporary
 directory: the backend's own interpreter (isolated mode in a source checkout), that
@@ -73,6 +75,14 @@ def brain_dir(workspace: Path, brain: str) -> Path:
         # the one on disk, or a Hive (case-sensitive) gets a second copy
         raise PinError(f"no Brain named {brain}")
     return d
+
+
+def brain_view(workspace: Path, brain: str, session_id: Optional[str] = None) -> Path:
+    """``brain_dir`` as the session's turn reads it: on a Hive, the version it holds when
+    a newer one was installed since (``core.brain_versions.view``; the session defaults
+    to ``SWARM_APP_SESSION_ID``). For reading only: writers use ``brain_dir``."""
+    from core import brain_versions
+    return brain_versions.view(workspace, brain, brain_dir(workspace, brain), session_id)
 
 
 _RUN_ID_RE = re.compile(r"run_[0-9a-f]{8}")
@@ -357,16 +367,18 @@ def _run_one(name: str, body: bytes, payload: bytes) -> Optional[str]:
         return f"Brain gate {name} failed (exit {proc.returncode}){': ' + text if text else ''}"
 
 
-def run_gates(workspace: Path, pin: dict[str, Any], input_data: dict[str, Any]) -> Optional[str]:
+def run_gates(workspace: Path, pin: dict[str, Any], input_data: dict[str, Any],
+              session_id: Optional[str] = None) -> Optional[str]:
     """Run the pinned Brain's enforced gates for one tool call; the refusal reason, or
-    None when every gate lets it through."""
+    None when every gate lets it through. The gates are those of the Brain version the
+    session's turn reads (``brain_view``)."""
     if pin.get("broken"):
         return f"This Project Agent session cannot run its gates: {pin['broken']}"
     names = [g for g in pin.get("gates") or [] if isinstance(g, str)]
     if not names:
         return None
     try:
-        d = brain_dir(workspace, str(pin.get("brain")))
+        d = brain_view(workspace, str(pin.get("brain")), session_id)
         digest, files = gates_snapshot(d)
     except (PinError, OSError) as exc:
         return f"The Brain's gates cannot be read: {exc}"
@@ -438,7 +450,8 @@ def create_brain_gate_hook(session_context: dict[str, Any]):
         try:
             from core import executors
             from core.project_registry import get_swarmws
-            reason = await executors.run_in("brain_gate", run_gates, get_swarmws(), pin, input_data)
+            reason = await executors.run_in("brain_gate", run_gates, get_swarmws(), pin, input_data,
+                                            session_context.get("sdk_session_id"))
         except Exception as exc:  # noqa: BLE001 — a gate that cannot run refuses, never lets through
             reason = f"The Brain's gates could not run ({type(exc).__name__}); the call is refused"
         if not reason:

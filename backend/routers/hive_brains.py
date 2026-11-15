@@ -8,11 +8,15 @@ checked again in the app).
 ``PUT /api/hive/brains/{brain}``: body = the package (``core.brain_sync.pack``), header
 ``X-Brain-Digest`` = its content digest. Checked before anything is written (name,
 size before reading, members, digest); then installed and the domain skills
-re-scanned and projected, while no turn holds the Brain and no new turn can take it
-(``core.brain_use``). A Brain a turn holds answers 423 (try again when it finishes);
-every other refusal keeps its own status and says why. ``GET /api/hive/brains``: for every Brain installed this
-way, its recorded digest, revision and time, how many of its files changed on the
-Hive since, and how many turns hold it now. Nothing else.
+re-scanned and projected, while no new turn can take the Brain (``core.brain_use``).
+Turns holding the Brain go on reading the version they started with: it is kept
+beside the new one first (``core.brain_versions``; 409 when that copy cannot be made,
+and nothing is installed). Only a second install of the same Brain while one runs
+answers 423; every other refusal keeps its own status and says why.
+``GET /api/hive/brains``: for every Brain installed this way, its recorded digest,
+revision and time, how many of its files changed on the Hive since, the digest of its
+files now, how many turns hold a version of it (``running``) and, per version, its
+digest and how many turns hold it (``versions``, the current one first). Nothing else.
 
 ``PUT /api/hive/repos?url=&branch=&sha=``: keep the host's commit of a dispatched
 task's repository (body = a git bundle from core/repo_ship) as
@@ -42,7 +46,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import brain_sync, brain_use
+from core import brain_sync, brain_use, brain_versions
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -96,12 +100,31 @@ async def put_brain(brain: str, request: Request) -> dict:
     except brain_sync.SyncError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from None
     if not brain_use.begin_install(brain):
-        n = brain_use.in_use(brain)
-        raise HTTPException(status_code=423, detail=(
-            f"{n} turn(s) using {brain} are running; sync again when they finish" if n
-            else f"{brain} is being installed already"))
-    work = asyncio.ensure_future(asyncio.to_thread(brain_sync.install, ws, brain, files, digest))
+        raise HTTPException(status_code=423, detail=f"{brain} is being installed already; sync again in a moment")
+    work = None
+    vid = None
     try:
+        if brain_use.needs_keep(brain):
+            # the turns holding the Brain keep reading these files: copied first, and
+            # their sessions marked, before any file of the new version is written
+            vid = brain_use.reserve(brain)
+            try:
+                kept = await brain_use.run_disk(brain_versions.keep, ws, brain, vid)
+            except (brain_sync.SyncError, OSError) as exc:
+                logger.warning("hive brains: the version of %s running turns use was not kept: %s", brain, exc)
+                raise HTTPException(status_code=409, detail=(
+                    f"the version of {brain} running turns use could not be kept; nothing was installed")) from None
+            n = brain_use.retire(brain, vid, kept, ws)
+            try:
+                await brain_use.sync_disk(brain)
+            except (brain_sync.SyncError, OSError) as exc:
+                # without their markers the turns would read the new files: not installed
+                brain_use.unretire(brain, vid)
+                logger.warning("hive brains: the sessions using %s could not be marked: %s", brain, exc)
+                raise HTTPException(status_code=409, detail=(
+                    f"the version of {brain} running turns use could not be kept; nothing was installed")) from None
+            logger.info("hive brains: kept %s for %d running turn(s)", brain, n)
+        work = asyncio.ensure_future(asyncio.to_thread(brain_sync.install, ws, brain, files, digest))
         try:
             record = await asyncio.shield(work)
         except brain_sync.SyncError as exc:
@@ -111,12 +134,14 @@ async def put_brain(brain: str, request: Request) -> dict:
         # cancelled while the files are written: the Brain stays marked until the
         # thread is done, so no turn reads it half-written. A further cancel while
         # waiting must not end the wait early (that unmarked the Brain mid-write).
-        while not work.done():
+        while work is not None and not work.done():
             try:
                 await asyncio.wait({work})
             except asyncio.CancelledError:
                 logger.info("hive brains: install of %s cancelled again; waiting for "
                             "its files to finish", brain)
+        if vid is not None:
+            brain_use.unreserve(brain, vid, ws)   # not retired onto: its copy is removed
         brain_use.end_install(brain)
     logger.info("hive brains: installed %s (%s, %d files)", brain, digest[:12], len(files))
     return {"brain": brain, "digest": record["digest"], "revision": record["revision"],
@@ -353,4 +378,6 @@ async def list_brains() -> dict:
     brains = await asyncio.to_thread(_work)
     for b in brains:
         b["running"] = brain_use.in_use(b["brain"])
+        b["versions"] = [{"digest": b["digest"], "current": True, "running": brain_use.live_count(b["brain"])}] + [
+            {"digest": v["digest"], "current": False, "running": v["running"]} for v in brain_use.versions(b["brain"])]
     return {"brains": brains}

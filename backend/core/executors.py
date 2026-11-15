@@ -124,6 +124,12 @@ _POOL_SPECS: dict[str, int] = {
     "brain_gate": 2,  # core/project_agent_session: a Project Agent session's Brain gates
                       # (one short subprocess per gate per Bash / Write / Edit call). Only
                       # those sessions use it, so other sessions' gates never wait on it.
+    "brain_versions": 1,  # core/brain_versions on a Hive: the copy of a Brain version turns
+                      # still use, its session markers and their removal. One thread, so a
+                      # cleanup never runs alongside the copy it would remove. A turn's start
+                      # waits only for a cleanup of its own Brain, which may queue behind
+                      # another Brain's copy (measured: 9 ms for a 4.7 MB Brain) but never
+                      # behind any other class of work.
     "aws_account": 2,  # core/aws_account: credential resolution for every child process's
                       # `swarmai` profile (ada up to a minute, STS). One lock serializes it,
                       # so it must not hold 'spawn' workers a cold session's preflight needs.

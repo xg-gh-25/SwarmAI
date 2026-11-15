@@ -9,8 +9,9 @@ package with a link, a directory entry, a path outside the allowlist, `..`, an
 absolute path, a wrong digest or too much data, before writing anything; does a
 symlink planted in the Brain redirect no write; are files the package no longer has
 deleted while run records stay; does the Hive recompute the host's digest from its
-own disk, and count files changed there; are the endpoints Hive-only, refuse while a
-session using the Brain runs, and answer the console's questions; does a draft stay
+own disk, and count files changed there; are the endpoints Hive-only, install while a
+session using the Brain runs (core/brain_versions keeps its version: test_brain_versions),
+and answer the console's questions; does a draft stay
 on the host while the default Brains still sync.
 """
 from __future__ import annotations
@@ -308,20 +309,20 @@ def test_push_install_and_list_end_to_end(hive_app, tmp_path, monkeypatch):
     assert remote["brains"]["Lib"]["current_digest"] == out["digest"]
     row = host._row(host.local_brain(local, "Lib"), remote["brains"]["Lib"], True)
     assert row["synced"] and row["dispatchable"] and row["hive_changed_files"] == 0
-    # a turn holds the Brain: no install, and the console row counts it
+    # a turn holds the Brain: the new version is installed beside it, and the console
+    # row still counts the turn (core/brain_use, core/brain_versions)
     from core import brain_use
 
     async def held():
         await brain_use.hold("Lib", "turn-1")
         try:
             (local / "Projects" / "Lib" / "AGENTS.md").write_text("# Lib v2\n")
-            with pytest.raises(host.SyncRefused, match="busy"):
-                await host.sync(inst, "Lib", local)
+            await host.sync(inst, "Lib", local)
             return (await host.hive_brains(inst))["brains"]["Lib"]["running"]
         finally:
             brain_use.release("Lib", "turn-1")
     assert asyncio.run(held()) == 1
-    assert (ws / "Projects" / "Lib" / "AGENTS.md").read_text() == "# Lib\n"
+    assert (ws / "Projects" / "Lib" / "AGENTS.md").read_text() == "# Lib v2\n"
 
 
 def test_the_hive_checks_size_and_digest_before_reading(hive_app, monkeypatch):
@@ -428,7 +429,7 @@ def test_the_hive_recomputes_the_hosts_revision_and_gates_digest(tmp_path):
     assert set(pa.gate_files(on_hive)) == set(pa.gate_files(b)) == {"no_push"}
 
 
-def test_turns_and_installs_exclude_each_other():
+def test_a_turn_waits_for_an_install_and_installs_are_one_at_a_time():
     from core import brain_use
 
     async def go():
@@ -439,10 +440,11 @@ def test_turns_and_installs_exclude_each_other():
         assert not waiter.done() and brain_use.in_use("B") == 0   # waits for the install
         brain_use.end_install("B")
         await asyncio.wait_for(waiter, 1)
-        assert brain_use.in_use("B") == 1 and not brain_use.begin_install("B")
-        brain_use.release("B", "t1")
-        assert brain_use.in_use("B") == 0 and brain_use.begin_install("B")
+        # a turn holding the Brain no longer stops an install: the install keeps its version
+        assert brain_use.in_use("B") == 1 and brain_use.needs_keep("B") and brain_use.begin_install("B")
         brain_use.end_install("B")
+        brain_use.release("B", "t1")
+        assert brain_use.in_use("B") == 0 and not brain_use.needs_keep("B")
     asyncio.run(go())
 
 
@@ -683,7 +685,7 @@ def test_a_turn_whose_record_cannot_be_read_holds_every_brain(monkeypatch):
     async def go():
         assert await brain_use.brain_of_turn("s1", None) == brain_use.ANY
         await brain_use.hold(brain_use.ANY, "t")
-        refused = not brain_use.begin_install("Lib")
+        refused = brain_use.needs_keep("Lib")     # an install keeps the version it reads
         brain_use.release(brain_use.ANY, "t")
         assert brain_use.begin_install("Lib")
         waiter = asyncio.create_task(brain_use.hold(brain_use.ANY, "t2"))

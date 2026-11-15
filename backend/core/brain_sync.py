@@ -1,7 +1,9 @@
 """Brain sync to a Hive (design docs/design/2026-10-28-project-agent-flow.md §6).
 
-The host is the only writer; a Hive's copy of a Brain is a cache of one version. One
-module holds both sides so they share one allowlist and one digest:
+The host is the only writer; a Hive's copy of a Brain (``Projects/<brain>``) is a cache
+of the newest version it was sent, beside which it keeps the older versions turns still
+read until they end (``core.brain_versions``). One module holds both sides so they share
+one allowlist and one digest:
 
 - **What travels** (``allowlisted``): a Brain's ``AGENTS.md``, ``SYSTEM_PROMPT.md``,
   ``CONTEXT.md``, ``REFRESHER.md``, ``project-agent.yaml``,
@@ -52,6 +54,7 @@ import re
 import secrets
 import stat
 import tarfile
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -229,9 +232,27 @@ def is_ignored(rel: str, patterns: list[str]) -> bool:
     return any(fnmatchcase(low, pat) for pat in patterns)
 
 
+_collect_locks: dict[str, threading.Lock] = {}
+_collect_locks_guard = threading.Lock()
+
+
+def _collect_lock(root: Path) -> threading.Lock:
+    key = os.path.realpath(root)
+    with _collect_locks_guard:
+        return _collect_locks.setdefault(key, threading.Lock())
+
+
 def collect(root: Path, general: bool) -> dict[str, bytes]:
     """The files of the Brain at *root* that travel, as they travel (host side): the
-    allowlisted ones, less those its ``.hive-ignore`` keeps home."""
+    allowlisted ones, less those its ``.hive-ignore`` keeps home. Two packagings of one
+    Brain in this process run one after the other: each takes every document's
+    ``.md.lock`` without waiting, so side by side the second read the first's lock as a
+    writer's ("being written") and two dispatches of one Brain refused each other."""
+    with _collect_lock(root):
+        return _collect(root, general)
+
+
+def _collect(root: Path, general: bool) -> dict[str, bytes]:
     from utils.file_lock import md_lock
     if not general and old_layout(root):
         raise SyncError("this Brain is in the old layout (docs at its root); migrate it to "
