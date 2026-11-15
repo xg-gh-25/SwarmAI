@@ -180,6 +180,10 @@ def parser() -> argparse.ArgumentParser:
     base_tree.add_argument("--project", required=True)
     base_tree.add_argument("--run-id", required=True)
     base_tree.add_argument("--repo", required=True)
+    # the prompt for a clean-context BUILD sub-agent (app setting pipeline_clean_build)
+    build_handoff = sub.add_parser("build-handoff")
+    build_handoff.add_argument("--project", required=True)
+    build_handoff.add_argument("--run-id", required=True)
     report_tests = sub.add_parser("report-tests")      # a TEST report in DELIVER (S6-1)
     report_tests.add_argument("--project", required=True)
     report_tests.add_argument("--run-id", required=True)
@@ -393,8 +397,10 @@ def execute(args) -> dict[str, Any]:
 
 
 # read the run, never write it: no operation lock (r6 §2.2)
-# base-tree writes only a copy of the base under the temp dir, never the run's state
-_READ_ONLY = frozenset({"status", "events", "findings", "base-tree"})
+# base-tree writes only a copy of the base under the temp dir, never the run's state;
+# build-handoff writes only a content-addressed prompt blob, never an event (it still
+# refuses a session that does not own the run)
+_READ_ONLY = frozenset({"status", "events", "findings", "base-tree", "build-handoff"})
 
 
 def _missing_worktrees(engine: RunEngine) -> bool:
@@ -473,6 +479,15 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
             return {"ok": True, **base_tree_protocol.extract(engine, args.repo)}
         except base_tree_protocol.BaseTreeError as exc:
             return {"ok": False, "error": str(exc)}
+    if args.command == "build-handoff":
+        from core.run_protocol import build_handoff as build_handoff_protocol
+        refused = _not_owner(engine, args.run_id)
+        if refused:
+            return refused
+        state = engine.projection()
+        if state["status"] != "active" or state["stage"] != "build":
+            return {"ok": False, "error": "build-handoff is for a run at BUILD"}
+        return {"ok": True, **build_handoff_protocol.write(engine)}
     if args.command == "review-proof":
         return {"ok": True, **engine.review_proof(_json_arg(args.artifact))}
     if args.command == "land":

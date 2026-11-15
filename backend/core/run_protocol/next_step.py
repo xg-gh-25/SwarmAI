@@ -330,6 +330,8 @@ def next_step(engine, *, previous_stage: str | None = None,
                            + '. Give a command that runs one "validation": "<its id>"; the REPORT '
                            "lists each check as its result or not run")
         _note_main_overlap(engine, out)
+        if stage == "build":
+            _note_build_handoff(engine, out)
         if stage == "build" and previous_stage == "plan":
             _note_split(engine, out)
         if stage == "build":
@@ -344,6 +346,21 @@ def next_step(engine, *, previous_stage: str | None = None,
                why=f"{len(blocking)} {stage} check(s) do not pass yet")
     _note_children(engine, out)
     return out
+
+
+def _note_build_handoff(engine, out: dict[str, Any]) -> None:
+    """With the app setting ``pipeline_clean_build`` on: BUILD is done by one sub-agent
+    with a clean context (``run_protocol.build_handoff``). Off: nothing changes."""
+    from core.run_protocol import build_handoff
+    if not build_handoff.enabled():
+        return
+    out["build_handoff"] = _cmd(engine, "build-handoff")
+    out["why"] = ("BUILD goes to a clean-context sub-agent: run `build_handoff`, spawn one "
+                  "general-purpose sub-agent in the foreground with its `spawn_prompt` "
+                  "unchanged, then pass the sub-agent's final message (the validation "
+                  "report JSON) to `command` on stdin after you read the change it left in "
+                  "the worktree. The builder may not change the run (run_owner_gate refuses "
+                  "it); " + out["why"])
 
 
 def split_groups(tasks: Any) -> list[list[str]]:

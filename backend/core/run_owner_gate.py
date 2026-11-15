@@ -29,6 +29,10 @@ For a ``pipeline_v1.py`` command:
   ``scripts.swarm_out`` gets the export too (it is no landing): the Swarm Out CLI records
   the session that dispatches a run and gives commands on it (design
   2026-10-31-swarm-out-agent-owns-its-runs §2.1).
+- **builder**: a sub-agent spawned as a clean-context BUILD builder (its spawn prompt
+  starts with ``BUILD-HANDOFF:``) may run only read-only pipeline-v1 commands; any
+  other is denied (``run_protocol.build_handoff.builder_refusal``): the orchestrator
+  submits its report.
 - **approval**: the authorized actions (``AFTER_APPROVAL`` with ``--request``)
   are handled in the ``phase="approved"`` registration, after dangerous_command_gate
   recorded the approval for this exact command (the person's, or for a landing the
@@ -743,6 +747,19 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         if not isinstance(command, str) or not (pipeline_command.mentions(command)
                                                 or "/api/pipelines/" in command):
             return sw_allow(command) if sw_allow else {"decision": "approve"}  # no IO
+        if phase == "check" and input_data.get("agent_id"):
+            # a clean-context BUILD sub-agent never changes the run (build_handoff):
+            # only a sub-agent's pipeline call reads its spawn prompt head, off the loop
+            from core.run_protocol import build_handoff
+            try:
+                refused = await asyncio.wait_for(
+                    executors.run_in("gate", build_handoff.builder_refusal, command,
+                                     dict(input_data)), timeout=_DECIDE_TIMEOUT)
+            except Exception:  # noqa: BLE001 — incl. TimeoutError: the checks below still run
+                logger.warning("run_owner_gate: builder check failed", exc_info=True)
+                refused = None
+            if refused:
+                return _deny(refused)
         res = await _pipeline_decision(command, tool_input, input_data, tool_use_id)
         if sw_allow is None:
             return res
