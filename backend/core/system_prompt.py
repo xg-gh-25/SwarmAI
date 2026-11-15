@@ -47,8 +47,9 @@ class SystemPromptBuilder:
                 tests), append the volatile per-request sections (datetime +
                 runtime) so the returned string is a complete framing block.
                 The production assembly path (``build_system_prompt``) passes
-                False and instead appends ``build_volatile_tail()`` AFTER the
-                ~76K context files — see that method's docstring for why.
+                False: the system prompt must stay byte-stable, and
+                ``build_volatile_tail()`` closes the session-context block that
+                rides the first query instead — see that method's docstring.
         """
         sections = [
             self._section_identity(),
@@ -72,18 +73,16 @@ class SystemPromptBuilder:
     def build_volatile_tail(self) -> str:
         """Return ONLY the volatile per-request sections (datetime + runtime).
 
-        These are deliberately kept OUT of the stable prefix returned by
-        ``build(include_volatile=False)``. Rationale — Bedrock prompt caching
-        matches on a byte-exact PREFIX: the first differing byte invalidates
-        everything after it. ``_section_datetime`` has minute precision
-        (``%H:%M``), so if it sits BEFORE the ~76K context files, the entire
-        stable constitution (SWARMAI/SOUL/AGENT/... = the biggest cacheable
-        block) is forced to re-``cache_creation`` every minute. Appending this
-        tail AFTER the context files instead lets that 76K prefix stay cached
-        until a context file is actually edited/rebuilt — the minute-level
-        churn now lands next to the already-per-turn-volatile recall/resume
-        content, costing nothing extra. Attention-wise datetime is not a
-        judgment input, so trailing position is fine.
+        These are deliberately kept OUT of the system prompt. Prompt caching
+        matches a byte-exact prefix, and the Claude CLI sends the whole system
+        prompt as ONE cache block: any differing byte anywhere in it — the
+        minute-precision ``_section_datetime`` (``%H:%M``) included, even at the
+        very end — makes a new session's first call rewrite the whole block
+        instead of reading the one the previous session wrote (measured: only
+        the CLI's own prefix was read). ``build_system_prompt`` therefore puts
+        this tail last in the session-context block, which the router sends in
+        front of the first query of each new subprocess; the system prompt keeps
+        only the framing and the governed context files.
         """
         parts = [self._section_datetime(), self._section_runtime()]
         return "\n\n".join(p for p in parts if p)

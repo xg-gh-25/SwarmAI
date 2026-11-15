@@ -3,8 +3,9 @@
 What is tested:
 - A: on a warm-reuse turn the full "## Current UI State" block is sent only when it
   differs from the last one this subprocess received; an identical one becomes a
-  single "unchanged" line. A cold turn (UI state rides the system prompt) sends no
-  prefix and forgets what was sent (the next warm turn sends the full block once).
+  single "unchanged" line. The first query of a new subprocess forgets what an
+  earlier one received and sends the full block (the system prompt never carries
+  the UI state).
   A Canvas that went from something to nothing says so once, then stays silent.
   A real compaction (compact_boundary) forgets it too — the old block may have
   been summarized away. The decided block is what the prefix builder uses (one
@@ -36,28 +37,35 @@ def _ctx(path="a.md", count=1):
 
 def test_warm_full_then_unchanged_then_changed():
     u = _Unit()
-    first = _decide_ui_block(u, _ctx(), warm=True)
+    first = _decide_ui_block(u, _ctx(), first_query=False)
     assert first.startswith("## Current UI State") and "`a.md`" in first
-    assert _decide_ui_block(u, _ctx(), warm=True) == UI_STATE_UNCHANGED
-    changed = _decide_ui_block(u, _ctx("b.md"), warm=True)
+    assert _decide_ui_block(u, _ctx(), first_query=False) == UI_STATE_UNCHANGED
+    changed = _decide_ui_block(u, _ctx("b.md"), first_query=False)
     assert "`b.md`" in changed
-    assert _decide_ui_block(u, _ctx("b.md"), warm=True) == UI_STATE_UNCHANGED
+    assert _decide_ui_block(u, _ctx("b.md"), first_query=False) == UI_STATE_UNCHANGED
 
 
-def test_cold_sends_no_prefix_and_forgets():
+def test_first_query_sends_the_full_block_and_forgets_the_old_one():
+    """A new subprocess (first query) has received no UI block: it gets the full
+    one even when an earlier subprocess got the same block, never "unchanged".
+    Mutation: return None on a first query (the old cold rule) → RED."""
     u = _Unit()
-    _decide_ui_block(u, _ctx(), warm=True)
-    assert _decide_ui_block(u, _ctx(), warm=False) is None
+    _decide_ui_block(u, _ctx(), first_query=False)
+    first = _decide_ui_block(u, _ctx(), first_query=True)
+    assert first.startswith("## Current UI State\n") and "`a.md`" in first
+    assert u._last_ui_block == first
+    assert _decide_ui_block(u, _ctx(), first_query=False) == UI_STATE_UNCHANGED
+    # nothing to show on a first query: nothing sent, nothing remembered
+    assert _decide_ui_block(u, None, first_query=True) is None
     assert u._last_ui_block is None
-    assert _decide_ui_block(u, _ctx(), warm=True).startswith("## Current UI State\n")
 
 
 def test_going_empty_is_said_once():
     u = _Unit()
-    assert _decide_ui_block(u, None, warm=True) is None  # never had anything
-    _decide_ui_block(u, _ctx(), warm=True)
-    assert _decide_ui_block(u, None, warm=True) == UI_STATE_NOTHING
-    assert _decide_ui_block(u, None, warm=True) == UI_STATE_UNCHANGED
+    assert _decide_ui_block(u, None, first_query=False) is None  # never had anything
+    _decide_ui_block(u, _ctx(), first_query=False)
+    assert _decide_ui_block(u, None, first_query=False) == UI_STATE_NOTHING
+    assert _decide_ui_block(u, None, first_query=False) == UI_STATE_UNCHANGED
 
 
 def test_compaction_forgets_the_last_block():
@@ -66,7 +74,7 @@ def test_compaction_forgets_the_last_block():
     unit = SessionUnit(session_id="sess-ui", agent_id="default")
     unit.state = SessionState.STREAMING
     unit._hook_session_context = {}
-    _decide_ui_block(unit, _ctx(), warm=True)
+    _decide_ui_block(unit, _ctx(), first_query=False)
     assert unit._last_ui_block
     StreamingOrchestrator(unit)._compaction_events(
         "compact_boundary", {"compact_metadata": {"trigger": "auto"}})

@@ -10,7 +10,8 @@ Contract: scripts/_probe_kit.py. Subcommands:
             EVOLUTION, TOOLS, and only the STEERING text wrapped in channel markers
   cache     the shared prompt cache never serves the owner's files to a non-owner,
             and an edited MEMORY.md reaches the next build
-  dynamic   per-turn content (the open file) stays out of the cacheable base prompt
+  dynamic   per-session / per-turn content (the open file, the date/time line) stays
+            out of the system prompt and rides the first query of a new subprocess
 """
 from __future__ import annotations
 
@@ -186,16 +187,34 @@ def cache(negative: bool) -> int:
 _EDITOR = {"file_path": "/x/probe_open_file.py", "file_name": "probe_open_file.py"}
 
 
+class _NewUnit:
+    """A subprocess's unit before its first query (what the prefix path reads)."""
+    session_id = "probe"
+    _last_ui_block = None
+    _recall_query_block = None
+
+    def __init__(self) -> None:
+        self._hook_session_context: dict = {}
+
+
 def _dynamic_holds(ws: Path, base_builder) -> tuple[bool, str]:
+    from core.session_router import _compose_turn_prefix
+
     base = arun(base_builder(ws))
     cfg: dict = {}
-    arun(_builder().build_system_prompt(agent_config=cfg, working_directory=str(ws),
-                                        editor_context=_EDITOR))
-    full = _full(cfg)
-    if "probe_open_file.py" in base:
-        return False, "the open file reached the cacheable base prompt"
-    if "probe_open_file.py" not in full:
-        return False, "the open file is missing from the full per-turn prompt"
+    system_prompt = arun(_builder().build_system_prompt(
+        agent_config=cfg, working_directory=str(ws), editor_context=_EDITOR))
+    first = _compose_turn_prefix(_NewUnit(), _EDITOR, first_query=True,
+                                 session_block=cfg.get("_session_context_block")) or ""
+    for name, text in (("cacheable base prompt", base), ("system prompt", system_prompt)):
+        if "probe_open_file.py" in text:
+            return False, f"the open file reached the {name}"
+        if "Current date/time:" in text:
+            return False, f"the date/time line reached the {name}"
+    if "probe_open_file.py" not in first:
+        return False, "the open file is missing from the first query"
+    if "Current date/time:" not in first:
+        return False, "the date/time line is missing from the first query"
     return True, ""
 
 
@@ -205,11 +224,14 @@ def dynamic(negative: bool) -> int:
             return _builder().build_default_system_prompt(
                 agent_config={}, working_directory=str(w), editor_context=_EDITOR)
 
-        async def full_as_base(w):  # broken: the per-turn build used as the base
+        async def full_as_base(w):  # broken: the per-turn parts put back into the base
+            from core.session_router import _compose_turn_prefix
             cfg: dict = {}
-            await _builder().build_system_prompt(agent_config=cfg, working_directory=str(w),
-                                                 editor_context=_EDITOR)
-            return _full(cfg)
+            prompt = await _builder().build_system_prompt(
+                agent_config=cfg, working_directory=str(w), editor_context=_EDITOR)
+            return prompt + (_compose_turn_prefix(
+                _NewUnit(), _EDITOR, first_query=True,
+                session_block=cfg.get("_session_context_block")) or "")
         return verdict("CTX_DYNAMIC_LAYER", negative,
                        lambda: _dynamic_holds(ws, default_base),
                        lambda: _dynamic_holds(ws, full_as_base))

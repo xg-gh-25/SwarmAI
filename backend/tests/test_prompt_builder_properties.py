@@ -481,7 +481,11 @@ class TestEphemeralBudgetCeiling:
         ), caplog.at_level(logging.WARNING, logger="core.prompt_builder"):
             agent_config = self._run_build(tmp_path)
 
-        full = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "")
+        # The ephemeral sections ride the session-context block (first query), not
+        # the byte-stable system prompt.
+        system_prompt = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "")
+        assert marker not in system_prompt
+        full = agent_config.get("_session_context_block", "")
         # 1) Content NOT truncated — the whole oversized briefing survived.
         assert full.count(marker) >= 12000, (
             f"ephemeral briefing was truncated (found {full.count(marker)} of 12000 "
@@ -568,8 +572,10 @@ class TestSystemPromptFaultIsolation:
             "daily_activity_dir NameError still fires (regression 039c4f32 unfixed)"
         for hdr in self._CORE_HEADERS:
             assert hdr in full, f"core section {hdr!r} missing after daily-activity path"
-        # The daily section itself should also have made it in.
-        assert "## Daily Activity (recent days)" in full
+        # The daily section itself should also have made it in — in the session
+        # block the first query carries, never the system prompt.
+        assert "## Daily Activity (recent days)" in cfg["_session_context_block"]
+        assert "## Daily Activity (recent days)" not in full
 
     def test_the_north_star_headline_is_in_the_desktop_prompt(self, tmp_path):
         """SWARMAI.md § My North Star: the headline (read from its file) reaches every
@@ -578,10 +584,11 @@ class TestSystemPromptFaultIsolation:
         self._seed_daily(tmp_path)
         headline = "(as of 2026-10-31T12:00+00:00, 1 min ago)\n- Cognition: NORTH-STAR-LINE"
         with mock.patch("core.north_star.headline_for_prompt", return_value=headline):
-            full = self._full(self._run_build(tmp_path))
-            assert "## My North Star\n" + headline in full
+            cfg = self._run_build(tmp_path)
+            assert "## My North Star\n" + headline in cfg["_session_context_block"]
+            assert "NORTH-STAR-LINE" not in self._full(cfg)
             with mock.patch("core.app_role.is_worker", return_value=True):
-                assert "NORTH-STAR-LINE" not in self._full(self._run_build(tmp_path))
+                assert "NORTH-STAR-LINE" not in self._run_build(tmp_path)["_session_context_block"]
 
     # ── AC2: ephemeral fault isolation ──────────────────────────────────
     def test_ac2_ephemeral_failure_leaves_core_intact(self, tmp_path):
@@ -683,7 +690,7 @@ class TestSystemPromptFaultIsolation:
         # The ephemeral seam also reconnected (daily rode through). A leftover
         # .needs_distillation flag no longer asks for a manual distill: the
         # distillation hook and its fallback were retired at the CDF cutover.
-        assert "## Daily Activity (recent days)" in out
+        assert "## Daily Activity (recent days)" in cfg["_session_context_block"]
         assert "## Memory Maintenance Required" not in out
 
     # ── AC4: fail-loud ──────────────────────────────────────────────────

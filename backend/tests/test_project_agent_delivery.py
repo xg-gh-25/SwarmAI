@@ -82,13 +82,16 @@ def _settle(monkeypatch, unit, options, project=("Demo", "signal2_bound_repo")):
     from core import session_router as sr
     monkeypatch.setattr(sr, "_resolve_active_project", lambda *a: project)
     monkeypatch.setattr(sr, "_inject_ddd_for_active_project", lambda *a, **k: None)
-    asyncio.run(sr._maybe_inject_ddd("继续", options, unit, None, True))
+    asyncio.run(sr._maybe_inject_ddd("继续", options, unit, None))
 
 
 def test_the_chat_gets_the_contract_once(ws, monkeypatch):
     unit, options = _unit(), SimpleNamespace(system_prompt="BASE")
     _settle(monkeypatch, unit, options)
-    prompt = options.system_prompt
+    # delivered on the query (inside the first query's session block); the system
+    # prompt stays byte-stable
+    assert options.system_prompt == "BASE"
+    prompt = unit._recall_query_block
     assert prompt.count("## Project Agent — Demo") == 1 and unit._ddd_injected
     assert f"「{RULE}」" in prompt and "written into the file by hand" not in prompt
     assert "hot paths: measured timings" in prompt and "s_demo" in prompt
@@ -96,10 +99,10 @@ def test_the_chat_gets_the_contract_once(ws, monkeypatch):
     assert "the-setup-thing" not in prompt
     assert "scripts.project_agent_rule add --brain Demo" in prompt
     assert unit._hook_session_context["_project_agent_block"] in prompt
-    # a warm turn: the block goes to the query prefix
+    # a warm turn: the block goes to the query prefix as well
     unit2, options2 = _unit(), SimpleNamespace(system_prompt="BASE")
     from core import session_router as sr
-    asyncio.run(sr._maybe_inject_contract("Demo", options2, unit2, False))
+    asyncio.run(sr._maybe_inject_contract("Demo", options2, unit2))
     assert options2.system_prompt == "BASE" and "## Project Agent — Demo" in unit2._recall_query_block
 
 
@@ -109,8 +112,9 @@ def test_no_contract_where_the_task_text_is_the_contract(ws, monkeypatch):
 
     def run(project="Demo"):
         unit, options = _unit(), SimpleNamespace(system_prompt="BASE")
-        asyncio.run(sr._maybe_inject_contract(project, options, unit, True))
-        return options.system_prompt, unit
+        asyncio.run(sr._maybe_inject_contract(project, options, unit))
+        assert options.system_prompt == "BASE"
+        return "BASE" + (unit._recall_query_block or ""), unit
 
     monkeypatch.setattr(app_role, "is_worker", lambda: True)
     assert run()[0] == "BASE"
@@ -318,9 +322,9 @@ def test_text_with_a_newline_reaches_every_prompt_as_one_line(ws, monkeypatch):
 def test_a_respawn_that_delivers_nothing_keeps_no_earlier_block(ws, monkeypatch):
     from core import session_router as sr
     unit, options = _unit(), SimpleNamespace(system_prompt="BASE")
-    asyncio.run(sr._maybe_inject_contract("Demo", options, unit, True))
+    asyncio.run(sr._maybe_inject_contract("Demo", options, unit))
     assert "_project_agent_block" in unit._hook_session_context
     # the subprocess respawns and the session now settles on a Brain without a definition
     (ws / "Projects" / "Empty").mkdir()
-    asyncio.run(sr._maybe_inject_contract("Empty", SimpleNamespace(system_prompt="BASE"), unit, True))
+    asyncio.run(sr._maybe_inject_contract("Empty", SimpleNamespace(system_prompt="BASE"), unit))
     assert "_project_agent_block" not in unit._hook_session_context

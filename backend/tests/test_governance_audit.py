@@ -34,15 +34,15 @@ def test_cli_mark(tmp_path, capsys):
 
 
 def test_briefing_uses_default_model_not_the_tab_override(tmp_path):
-    """The hint reaches the system prompt, and a per-tab model override does not
-    change the comparison (it uses config.default_model)."""
+    """The hint reaches the session-context block (first query), and a per-tab model
+    override does not change the comparison (it uses config.default_model)."""
     from tests.test_prompt_builder_properties import _make_builder
 
     ga.record_baseline(tmp_path, "older-model")             # builder's default is claude-sonnet-4-6
     for agent_config in ({}, {"model": "older-model"}):
         builder = _make_builder()
         asyncio.run(builder.build_system_prompt(agent_config=agent_config, working_directory=str(tmp_path)))
-        full = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "")
+        full = agent_config.get("_session_context_block", "")
         assert "Default model changed to claude-sonnet-4-6" in full, agent_config
 
 

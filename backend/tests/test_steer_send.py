@@ -268,6 +268,31 @@ async def test_t18_a_steer_carries_the_terminal_and_ui_prefixes_and_no_recall():
 
 
 @pytest.mark.asyncio
+async def test_a_steer_is_never_a_first_query_for_the_ui_state():
+    """A steer goes to the live process mid-turn: an unchanged UI state is the
+    one-line form, and a UI that went empty says so, never a full block sent again
+    as if to a new subprocess (prompt-cache change: _decide_ui_block's third
+    argument is ``first_query``)."""
+    from core.prompt_builder import _render_ui_context_section
+    from core.session_router import UI_STATE_NOTHING, UI_STATE_UNCHANGED
+    ctx = {"canvas": {"open": True, "tab": "Changes"}}
+    b = _Busy("s-steer-ui-unchanged")
+    await b.open_turn()
+    b.unit._last_ui_block = _render_ui_context_section(ctx).lstrip("\n")
+    await b.send(text="same screen", editor_context=ctx)
+    (msg,) = b.sdk.written
+    assert UI_STATE_UNCHANGED in str(msg["message"]["content"])
+    b.close()
+    b = _Busy("s-steer-ui-gone")
+    await b.open_turn()
+    b.unit._last_ui_block = _render_ui_context_section(ctx).lstrip("\n")
+    await b.send(text="closed it", editor_context=None)
+    (msg,) = b.sdk.written
+    assert UI_STATE_NOTHING in str(msg["message"]["content"])
+    b.close()
+
+
+@pytest.mark.asyncio
 async def test_a_stop_clicked_queues_a_new_steer_before_the_unit_is_marked_stopping():
     b = _Busy("s-steer-stopclick")
     await b.open_turn()

@@ -188,9 +188,11 @@ def test_a_worker_injects_no_daily_activity(as_role, tmp_path):
         "summary_sentence": "EARLIER DISPATCH MARKER did a thing.", "next_items": [], "resolves": []}) + "\n")
 
     def full_text() -> str:
+        # what the model gets: the system prompt and the first query's session block
         cfg: dict = {}
         asyncio.run(_make_builder().build_system_prompt(agent_config=cfg, working_directory=str(ws)))
-        return cfg.get("_system_prompt_metadata", {}).get("full_text", "")
+        return (cfg.get("_system_prompt_metadata", {}).get("full_text", "")
+                + cfg.get("_session_context_block", ""))
     as_role(None, None)
     assert "EARLIER DISPATCH MARKER" in full_text()
     as_role("hive", None)
@@ -290,9 +292,11 @@ def test_a_worker_injects_no_governance_audit_hint(as_role, tmp_path, monkeypatc
                         lambda wd, model: "- EARLIER BRIEFING MARKER")
 
     def full_text() -> str:
+        # what the model gets: the system prompt and the first query's session block
         cfg: dict = {}
         asyncio.run(_make_builder().build_system_prompt(agent_config=cfg, working_directory=str(ws)))
-        return cfg.get("_system_prompt_metadata", {}).get("full_text", "")
+        return (cfg.get("_system_prompt_metadata", {}).get("full_text", "")
+                + cfg.get("_session_context_block", ""))
     as_role(None, None)
     assert "EARLIER BRIEFING MARKER" in full_text()
     as_role("hive", "reference")
@@ -308,7 +312,7 @@ def test_a_worker_recalls_only_its_brain(as_role, monkeypatch):
     from core import session_router as sr
     ddd_calls: list[str] = []
 
-    async def fake_ddd(user_message, options, unit, editor_context, mutate):
+    async def fake_ddd(user_message, options, unit, editor_context):
         ddd_calls.append(user_message)
     monkeypatch.setattr(sr, "_maybe_inject_ddd", fake_ddd)
 
@@ -318,7 +322,10 @@ def test_a_worker_recalls_only_its_brain(as_role, monkeypatch):
         opts = MagicMock(system_prompt="## Base")
         with patch.object(sr, "_unified_recall_body", return_value=("OTHER DISPATCH RECALL", [])):
             asyncio.run(sr._maybe_inject_recall(user_message=msg, options=opts, unit=unit))
-        return opts.system_prompt, unit
+        # recall is delivered on the query stash, never the system prompt
+        assert opts.system_prompt == "## Base"
+        stash = unit._recall_query_block
+        return (stash if isinstance(stash, str) else ""), unit
     as_role(None, None)
     sp, _ = run("How does the evolution pipeline work?")
     assert "OTHER DISPATCH RECALL" in sp

@@ -2,9 +2,9 @@
 
 ARCHITECTURE: there is NO in-prompt index and NO L0/L1 tiering (the generator
 functions were DELETED 2026-08-14). Injection is not this module's job any more:
-``core.memory_injection.select_context_file`` puts MEMORY.md in the prompt whole when
-it fits, otherwise by query-free whole-entry selection (CDF r16.6 §12). Nothing trims
-the file. Recall is keyword-only.
+``core.memory_injection.select_context_file`` puts MEMORY.md (and EVOLUTION.md) in the
+prompt whole, every unit — nothing is chosen by a score, cut to a budget or trims the
+file. Recall is keyword-only.
 
 ARCHIVE REACHABILITY — several routes reach ``.context/*-archive*.md``, and the
 recurring defect here is not naming the wrong one, it is writing a CLOSED list or a

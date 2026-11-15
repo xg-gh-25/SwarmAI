@@ -341,15 +341,15 @@ def _system_prompt_cache_to_pass(
     """Decide what cached system prompt (if any) to hand build_options this turn
     (per-session cache, run_1dc710db).
 
-    Return the cache ONLY on a warm-reuse turn (``will_reuse_live``) — the sole turn
-    where options.system_prompt is DISCARDED (send() reuses the live subprocess via
-    client.query()), so serving a possibly-stale cache is harmless AND saves the
-    ~85K re-assembly. On ANY spawn turn (cold entry / respawn / resume),
-    options.system_prompt IS consumed by _spawn() and MUST be a fresh build carrying
-    this turn's volatile bits (UI-state/open-file snapshot + datetime tail) — so we
-    pass None and build_options assembles fresh. (Gate-2 HIGH run_1dc710db: an
+    Return the cache ONLY when ``will_reuse_live`` — the caller passes True only
+    when the query is NOT the first one its subprocess receives (send(): ``not
+    _first_query``), so the prompt is discarded anyway and the re-assembly is saved.
+    For a first query (cold entry / respawn / resume / first message to a pre-warmed
+    unit) pass None: build_options assembles fresh, because the same build produces
+    the session-context block that query carries (DailyActivity, sibling digest,
+    deferred MCPs, the date/time + runtime line). (Gate-2 HIGH run_1dc710db: an
     evicted→respawn turn keeps _sdk_session_id, so it is NOT a cold_resume and would
-    otherwise wrongly reuse turn-1's stale UI-state.)"""
+    otherwise wrongly reuse turn-1's build.)"""
     return cached if will_reuse_live else None
 
 
@@ -441,21 +441,15 @@ def _prepend_ui_state_to_query(
     editor_context: Optional[dict],
     should_prefix: bool,
 ) -> Any:
-    """Prefix the request-time UI-state (SENSE) onto the user query for a REUSED
-    live subprocess (run_5d460dd5). Pure — no IO, no mutation of inputs.
+    """Prefix the request-time UI-state (SENSE) onto the user query (run_5d460dd5).
+    Pure — no IO, no mutation of inputs.
 
-    Why the query channel (not system_prompt): UI-state normally rides
-    ``options.system_prompt`` (``_render_ui_context_section``), but a reused live
+    Why the query channel (not system_prompt): the system prompt never carries the
+    UI state (it stays byte-identical across sessions), and a reused live
     ClaudeSDKClient is only handed ``system_prompt`` at ``_spawn`` — subsequent
-    turns send ONLY the query. So for a warm-reuse turn the freshly-built
-    system_prompt (carrying THIS turn's canvas) is discarded, and the query is the
-    ONLY per-message path that reaches the subprocess. A COLD/spawning turn already
-    gets it via system_prompt, so we must NOT double-inject there.
-
-    ``should_prefix`` is the caller's reuse discriminator (state==IDLE AND
-    _client is not None AND _last_turn_clean — the exact complement of the
-    poison-guard recycle at session_unit.py, which would otherwise respawn and
-    re-carry system_prompt → double-inject).
+    turns send ONLY the query. send() itself goes through ``_compose_turn_prefix``;
+    this is the SENSE-only form of the same builder. ``should_prefix`` False returns
+    the query unchanged.
 
     Returns ``query_content`` UNCHANGED when: not reusing, or the UI-state block is
     empty (no file/canvas/overlay — e.g. channel sessions). For a ``str`` query the
@@ -509,19 +503,19 @@ def _dispatch_digest(session: Optional[str]) -> Optional[str]:
         return None
 
 
-def _decide_ui_block(unit: Any, editor_context: Optional[dict], warm: bool) -> Optional[str]:
+def _decide_ui_block(unit: Any, editor_context: Optional[dict], first_query: bool) -> Optional[str]:
     """The UI-state block to put on THIS turn's query, or None. The one writer and
     reader of ``unit._last_ui_block`` (what this subprocess last received).
 
-    Cold turn → None (the UI state rides the system prompt) and forget, so the next
-    warm turn sends the full block once (no assumption about what the spawn
-    carried). Warm turn → the rendered block; ``UI_STATE_UNCHANGED`` when it is
-    character-for-character the last one; ``UI_STATE_NOTHING`` once when the UI went
-    from something to nothing (a silent prefix would leave the old block standing).
+    The first query of a new subprocess (``first_query``) → forget what an earlier
+    subprocess received, then decide as below, so the new one gets the full block
+    (the system prompt never carries the UI state). Otherwise → the rendered block;
+    ``UI_STATE_UNCHANGED`` when it is character-for-character the last one;
+    ``UI_STATE_NOTHING`` once when the UI went from something to nothing (a silent
+    prefix would leave the old block standing).
     """
-    if not warm:
+    if first_query:
         unit._last_ui_block = None
-        return None
     from .prompt_builder import _render_ui_context_section
 
     block = _render_ui_context_section(editor_context).lstrip("\n") or None
@@ -542,33 +536,27 @@ def _prepend_dynamic_context_to_query(
     recall_block: Optional[str],
     should_prefix: bool,
     ui_block: Any = _RENDER,
+    session_block: Optional[str] = None,
 ) -> Any:
-    """阶段二 prompt-builder 两分 — prefix the per-turn DYNAMIC segment (recall +
-    UI-SENSE) onto the user query for a REUSED live subprocess. Pure — no IO, no
-    mutation of inputs. Generalizes ``_prepend_ui_state_to_query`` (which now
-    delegates here with ``recall_block=None``).
+    """Prefix the per-turn DYNAMIC segment (session context on a first query,
+    recall, UI-SENSE) onto the user query. Pure — no IO, no mutation of inputs.
+    Generalizes ``_prepend_ui_state_to_query`` (which delegates here with
+    ``recall_block=None``).
 
-    Why the query channel (not system_prompt): a reused live ClaudeSDKClient is
-    only handed ``system_prompt`` at ``_spawn`` — subsequent turns send ONLY the
-    query. So a warm-reuse turn's freshly-built system_prompt (carrying THIS
-    turn's recall + canvas) is discarded; the query is the ONLY per-message path
-    to the subprocess. A COLD/spawning turn already gets both via system_prompt,
-    so we must NOT double-inject there (``should_prefix`` is False on cold).
+    Why the query channel (not system_prompt): the system prompt is kept
+    byte-identical across sessions so its prompt cache is reused, and a reused live
+    ClaudeSDKClient is only handed ``system_prompt`` at ``_spawn`` anyway. So the
+    query is the one per-message path, for a cold spawn and a warm reuse alike.
 
-    ``should_prefix`` is the caller's reuse discriminator (state==IDLE AND
-    _client is not None AND _last_turn_clean — the exact complement of the
-    poison-guard recycle at session_unit.py, which would otherwise respawn and
-    re-carry system_prompt → double-inject).
-
-    Segment order: recall_block FIRST (carrying its verbatim ``[RECALLED]``
-    provenance header — the block is passed through UNCHANGED), then the UI-SENSE
-    block. Returns ``query_content`` UNCHANGED when: not reusing, or BOTH the
-    recall_block and the UI-state block are empty. For a ``str`` query the segment
-    is prepended as text; for a multimodal ``list`` it is a leading ``{type:text}``.
+    Segment order: see ``_build_dynamic_prefix_block``. Returns ``query_content``
+    UNCHANGED when ``should_prefix`` is False or every segment is empty. For a
+    ``str`` query the segment is prepended as text; for a multimodal ``list`` it is
+    a leading ``{type:text}``.
     """
     if not should_prefix:
         return query_content
-    block = _build_dynamic_prefix_block(editor_context, recall_block, ui_block=ui_block)
+    block = _build_dynamic_prefix_block(editor_context, recall_block, ui_block=ui_block,
+                                        session_block=session_block)
     if not block:  # nothing dynamic to report → clean no-op
         return query_content
     if isinstance(query_content, list):
@@ -576,14 +564,44 @@ def _prepend_dynamic_context_to_query(
     return f"{block}\n\n{query_content}"
 
 
+def _build_session_context_block(
+    session_block: Optional[str], recall_block: Optional[str],
+) -> Optional[str]:
+    """The session-context block the first query of a new subprocess carries: the
+    sections ``build_system_prompt`` kept out of the system prompt
+    (``session_block``) and this turn's DDD / Project Agent / recall stash, inside
+    the ``SESSION_CONTEXT_HEADER`` / ``SESSION_CONTEXT_FOOTER`` wrapper the hooks
+    strip (core.injected_blocks). ``None`` when both are empty."""
+    from .injected_blocks import (
+        SESSION_CONTEXT_FOOTER, SESSION_CONTEXT_HEADER, quote_session_context_markers,
+    )
+
+    parts = [p.strip() for p in (session_block, recall_block)
+             if isinstance(p, str) and p.strip()]
+    if not parts:
+        return None
+    # The block carries text from elsewhere (DailyActivity, recall hits, sibling
+    # titles, MCP descriptions): a footer line inside it would end the block early
+    # for the model and present what follows as the user's message. Exactly one
+    # real footer, the last line.
+    body = quote_session_context_markers("\n\n".join(parts))
+    return f"{SESSION_CONTEXT_HEADER}\n\n{body}\n\n{SESSION_CONTEXT_FOOTER}"
+
+
 def _build_dynamic_prefix_block(
     editor_context: Optional[dict],
     recall_block: Optional[str],
     ui_block: Any = _RENDER,
+    session_block: Optional[str] = None,
 ) -> Optional[str]:
     """TSCC/security-scan alignment (run_380413c5) — SSoT builder for the
-    recall+UI-SENSE prefix block. Returns the exact block string that
-    ``_prepend_dynamic_context_to_query`` prepends (or ``None`` when empty).
+    session-context + recall + UI-SENSE prefix block. Returns the exact block string
+    that ``_prepend_dynamic_context_to_query`` prepends (or ``None`` when empty).
+
+    ``session_block`` not None (the first query of a new subprocess): the block
+    starts with the wrapped session context, which holds ``recall_block`` too.
+    ``session_block`` None (any later query): ``recall_block`` alone, as before.
+    The UI-SENSE block comes last in both.
 
     Extracted so the send-site can capture EXACTLY what was delivered onto the
     query (for TSCC ``full_text`` + the security-scan panel) without a fragile
@@ -598,8 +616,12 @@ def _build_dynamic_prefix_block(
     from .prompt_builder import _render_ui_context_section
 
     parts: list[str] = []
+    if session_block is not None:
+        wrapped = _build_session_context_block(session_block, recall_block)
+        if wrapped:
+            parts.append(wrapped)
     # recall_block passed through VERBATIM — preserves the [RECALLED] header (AC4).
-    if recall_block and recall_block.strip():
+    elif recall_block and recall_block.strip():
         parts.append(recall_block.strip())
     if ui_block is _RENDER:
         ui_block = _render_ui_context_section(editor_context)
@@ -649,10 +671,10 @@ def _prepend_terminal_to_query(
     """Run 2 (prompt-injection root-fix) — prefix the attached-terminal
     UNTRUSTED-DATA block onto the user query. Pure — no IO, no mutation of inputs.
 
-    UNLIKE ``_prepend_dynamic_context_to_query`` (recall + UI-SENSE, gated on
-    ``should_prefix=_will_reuse_live``) and the resume prefix (gated on
-    ``_should_prefix_resume``), the terminal block is prefixed **UNCONDITIONALLY
-    — on BOTH the cold-spawn and warm-reuse paths**. That is the whole point of
+    Like the dynamic prefix (``_compose_turn_prefix``, every turn) and UNLIKE the
+    resume prefix (gated on ``_should_prefix_resume``), the terminal block is
+    prefixed **UNCONDITIONALLY — on BOTH the cold-spawn and warm-reuse paths**. That
+    is the whole point of
     Run 2: terminal DATA no longer rides the system prompt on ANY path (the
     build_system_prompt injection was deleted), so the query channel is its ONLY
     delivery — and both cold and warm send ``query_content`` to the subprocess as
@@ -709,8 +731,9 @@ def _prepend_resume_to_query(
     the user query for a COLD-resume spawning turn. Pure — no IO, no mutation of
     inputs.
 
-    INDEPENDENT of ``_prepend_dynamic_context_to_query`` (recall + UI-SENSE) on
-    purpose. The two are ORTHOGONAL by turn state and must not be merged:
+    INDEPENDENT of the dynamic prefix (``_compose_turn_prefix``: session context,
+    recall, UI-SENSE) on purpose — distinct content with its own gate and its own
+    confabulation guard:
 
     * resume rides the query on a COLD-resume turn (``is_cold_resume`` — state==COLD,
       no live subprocess yet). Historically resume rode ``options.system_prompt``,
@@ -719,12 +742,10 @@ def _prepend_resume_to_query(
       ``resume`` field from the ALREADY-built options → blank respawn). Riding the
       query instead means the fallback — which only edits options, never the query —
       keeps the resume block. Strangler-gated by ``SWARM_RESUME_VIA_QUERY``.
-    * recall + UI-SENSE ride the query on a WARM-reuse turn (``_is_warm_reuse`` —
-      state==IDLE, live subprocess). These two conditions NEVER hold on the same
-      turn (COLD ≠ IDLE), so a single turn's query gets at most one of the two
-      prefixes. Reusing ``_prepend_dynamic_context_to_query`` for resume would ALSO
-      render SENSE (it unconditionally appends the UI block) — double-injecting a
-      SENSE block that is already in the cold turn's system_prompt (Gate-1 F).
+    * the dynamic prefix rides the query on EVERY turn (on the first query of a new
+      subprocess wrapped as the session context). On a cold-resume turn the query
+      carries both: the resume history first, then the session context. Reusing
+      the dynamic builder for resume would render SENSE a second time (Gate-1 F).
 
     Wraps the resume block in ``_RESUME_QUERY_HEADER`` / ``_RESUME_QUERY_FOOTER``
     (the confabulation guard, AC3). Returns ``query_content`` UNCHANGED when
@@ -775,8 +796,9 @@ _FULLTEXT_PREFIX_SEPARATOR = (
 def _compose_full_text(base_system_prompt: str, delivered_prefix: Optional[str]) -> str:
     """TSCC/security-scan alignment (run_380413c5) — compose the published
     ``full_text`` from the stable base system prompt + this turn's delivered
-    query-channel prefix (resume on a cold-resume turn, recall+SENSE on a warm
-    turn, or nothing).
+    query-channel prefix (any of: the resume block, the session context on a
+    subprocess's first query, recall, the UI state, the terminal or dispatch
+    block; or nothing).
 
     ALWAYS recomposed from ``base_system_prompt`` (never from a prior turn's
     full_text) so consecutive turns do not COMPOUND prefixes. Empty prefix →
@@ -791,22 +813,22 @@ def _compose_full_text(base_system_prompt: str, delivered_prefix: Optional[str])
 
 def _is_warm_reuse(unit: Any) -> bool:
     """Single source of the warm-reuse predicate (阶段二 R27 — was duplicated at
-    two send() sites: the system-prompt cache gate + the dynamic-context prefix
-    gate). A warm turn reuses the LIVE subprocess via ``client.query()``, so
-    ``options.system_prompt`` is discarded and per-turn dynamic content (recall +
-    UI-SENSE) must ride ``query_content`` instead.
+    two send() sites: the system-prompt cache gate + the first-query decision,
+    ``_first_query_due``). A warm turn reuses the LIVE subprocess via
+    ``client.query()``, so ``options.system_prompt`` is discarded; every turn's
+    dynamic content rides ``query_content`` anyway (``_compose_turn_prefix``).
 
     This is the EXACT COMPLEMENT of the poison-guard recycle in
     ``session_unit.send()`` (IDLE ∧ client ∧ NOT clean ∧ NOT prewarm →
-    recycle→COLD→respawn, where system_prompt DOES carry it): within the
+    recycle→COLD→respawn, whose new subprocess gets the session context): within the
     (IDLE ∧ client-alive) domain, warm-reuse ⟺ (last-turn-clean OR prewarm),
     poison-recycle ⟺ (NOT last-turn-clean AND NOT prewarm). Keeping both off this
-    ONE predicate makes the two gates provably non-double-injecting / non-dropping.
+    ONE predicate makes the session context provably sent once per subprocess.
 
     Gate-1 F1: a fresh PREWARM unit (never streamed → last_turn_clean=False) is
     warm-reuse-ELIGIBLE — it reuses the pre-spawned live subprocess via query(),
-    and 阶段二 routes its first-message recall/SENSE through query_content (not the
-    discarded system_prompt), so nothing is lost. It is keyed on the `prewarm-`
+    and its first message carries the session context through query_content
+    (``_first_query_due``), so nothing is lost. It is keyed on the `prewarm-`
     PREFIX, NOT `_sdk_session_id is None`: a first-message turn that ended
     unclean (crash, interrupt) has the identical (clean=False, sdk_session_id=None)
     shape but a normal id — it must recycle, so the prefix is the only safe signal."""
@@ -822,6 +844,75 @@ def _is_warm_reuse(unit: Any) -> bool:
             # one-shot flag survives the re-key and is cleared at STREAMING entry.
             or getattr(unit, "_adopted_prewarm_fresh", False)
         )
+    )
+
+
+def _first_query_due(unit: Any, will_reuse_live: bool) -> bool:
+    """True when THIS turn's query is the first message its subprocess receives,
+    so it must carry the session-context block (the per-session sections the
+    byte-stable system prompt leaves out): every turn that spawns — cold entry,
+    poison recycle, cold resume, the complement of ``_is_warm_reuse`` — and the
+    first message to a pre-warmed or adopted pre-warmed unit, whose subprocess was
+    spawned without one (same signals as ``_is_warm_reuse``'s prewarm branches).
+
+    A spawn that resumes the transcript (an evicted session's next turn) gets a
+    fresh block too, as it used to get a freshly built system prompt: the restored
+    transcript still holds the earlier block, and the newest one is the one in
+    force (its header says it was set when THIS process started)."""
+    if not will_reuse_live:
+        return True
+    return (unit.session_id.startswith(PREWARM_SESSION_PREFIX)
+            or bool(getattr(unit, "_adopted_prewarm_fresh", False)))
+
+
+def _keep_session_context(unit: Any, block: Optional[str], sections: Optional[str]) -> None:
+    """Record (or clear) the session-context block the new subprocess was given
+    (``block``, wrapped) and the per-session sections it was built from
+    (``sections``), on the hook context the post-compaction hook and a late
+    first-query fallback read. Called on EVERY first query, so a respawn that
+    delivers nothing never leaves an earlier process's block behind to be re-sent
+    after a later compaction."""
+    ctx = getattr(unit, "_hook_session_context", None)
+    if not isinstance(ctx, dict):
+        return
+    for key, value in ((KEPT_SESSION_CONTEXT_KEY, block), (KEPT_SESSION_SECTIONS_KEY, sections)):
+        if value:
+            ctx[key] = value
+        else:
+            ctx.pop(key, None)
+
+
+def _kept_session_sections(unit: Any) -> str:
+    """The per-session sections the previous first query carried, or ""."""
+    ctx = getattr(unit, "_hook_session_context", None)
+    value = ctx.get(KEPT_SESSION_SECTIONS_KEY) if isinstance(ctx, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _compose_turn_prefix(
+    unit: Any,
+    editor_context: Optional[dict],
+    *,
+    first_query: bool,
+    session_block: Optional[str],
+) -> Optional[str]:
+    """The dynamic prefix of THIS turn's query — one decision for what is
+    prepended and what the TSCC capture records (cold spawn and warm reuse use the
+    same path).
+
+    First query of a new subprocess: the wrapped session context
+    (``session_block`` + this turn's DDD/contract/recall stash), then the full
+    UI-state block; the wrapped block is kept for the post-compaction hook. Any
+    later query: the recall stash and the UI-state block (or its one-line forms),
+    as before. ``None`` when there is nothing to prefix."""
+    ui_block = _decide_ui_block(unit, editor_context, first_query=first_query)
+    recall_block = getattr(unit, "_recall_query_block", None)
+    if first_query:
+        _keep_session_context(unit, _build_session_context_block(session_block, recall_block),
+                              session_block)
+    return _build_dynamic_prefix_block(
+        editor_context, recall_block, ui_block=ui_block,
+        session_block=(session_block or "") if first_query else None,
     )
 
 
@@ -1132,19 +1223,41 @@ def _resolve_active_project(
                                  session_bound_project=session_bound_project)
 
 
-def _deliver_block(options: Any, unit: Any, block: str, should_mutate_system_prompt: bool) -> None:
-    """Put an injected block where this turn's model will see it: the system
-    prompt on a cold spawn, else the per-turn query-prefix stash (a reused
-    subprocess discards system_prompt). Appends, so a DDD block and a recall
-    block on the same turn both arrive. Every recall-side injection goes through
-    here, so this is where the session's injected size (the budget) is counted."""
+def _deliver_block(unit: Any, block: str) -> None:
+    """Put an injected block where this turn's model will see it: the per-turn
+    query-prefix stash, on a cold spawn and a warm reuse alike. The system prompt is
+    never touched: it stays byte-identical across sessions so its cache is reused,
+    and a reused subprocess would discard it anyway. Appends, so a DDD block and a
+    recall block on the same turn both arrive. Every recall-side injection goes
+    through here, so this is where the session's injected size (the budget) is
+    counted."""
     unit._recall_chars = _recall_chars_used(unit) + len(block)
-    if should_mutate_system_prompt:
-        options.system_prompt = (options.system_prompt or "") + block
-    else:
-        prev = getattr(unit, "_recall_query_block", None)
-        prev = prev if isinstance(prev, str) else ""
-        unit._recall_query_block = (prev + "\n\n" + block.strip()) if prev else block.strip()
+    prev = getattr(unit, "_recall_query_block", None)
+    prev = prev if isinstance(prev, str) else ""
+    unit._recall_query_block = (prev + "\n\n" + block.strip()) if prev else block.strip()
+
+
+# The hook-context key of the session-context block the subprocess got with its
+# first query: re-sent once after a compaction (runtime_hooks
+# create_post_compact_injection) and part of what recall dedupes against.
+from .injected_blocks import KEPT_SESSION_CONTEXT_KEY  # noqa: E402
+# The per-session sections themselves (unwrapped), for a query that turns out to be
+# its subprocess's first only after the build ran from the prompt cache.
+KEPT_SESSION_SECTIONS_KEY = "_session_context_sections"
+
+
+def _recall_seen_text(options: Any, unit: Any, session_block: Optional[str]) -> str:
+    """The prompt text recall dedupes against: the system prompt plus the
+    session-context block the subprocess was given with its first query (this
+    turn's ``session_block``, else the copy kept from the process's first turn)."""
+    block = session_block
+    if block is None:
+        ctx = getattr(unit, "_hook_session_context", None)
+        block = ctx.get(KEPT_SESSION_CONTEXT_KEY) if isinstance(ctx, dict) else None
+    system_prompt = getattr(options, "system_prompt", None) or ""
+    if isinstance(block, str) and block:
+        return f"{system_prompt}\n{block}"
+    return system_prompt
 
 
 def _session_bound_project(unit: Any) -> "str | None":
@@ -1158,7 +1271,6 @@ def _session_bound_project(unit: Any) -> "str | None":
 
 async def _maybe_inject_ddd(
     user_message: str, options: Any, unit: Any, editor_context: Optional[dict],
-    should_mutate_system_prompt: bool,
 ) -> None:
     """Resolve the session's project and, once one is known, run the DDD leg once.
 
@@ -1196,7 +1308,7 @@ async def _maybe_inject_ddd(
         await asyncio.wait_for(
             executors.run_in(
                 "io", _inject_ddd_for_active_project, options, user_message, project,
-                lambda block: _deliver_block(options, unit, block, should_mutate_system_prompt)),
+                lambda block: _deliver_block(unit, block)),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
@@ -1209,7 +1321,7 @@ async def _maybe_inject_ddd(
                        type(exc).__name__, exc)
     finally:
         unit._ddd_injected = True
-    await _maybe_inject_contract(project[0], options, unit, should_mutate_system_prompt)
+    await _maybe_inject_contract(project[0], options, unit)
 
 
 def _contract_block(project: str) -> str:
@@ -1224,8 +1336,7 @@ def _contract_block(project: str) -> str:
     return render_contract(d, project)
 
 
-async def _maybe_inject_contract(project: str, options: Any, unit: Any,
-                                 should_mutate_system_prompt: bool) -> None:
+async def _maybe_inject_contract(project: str, options: Any, unit: Any) -> None:
     """Deliver the session's Brain's Project Agent contract once, with the DDD block, and
     keep it for the first prompt after a compaction (design
     2026-11-09-project-agent-contract §3.1). Not on a worker Hive or in a session pinned
@@ -1247,7 +1358,7 @@ async def _maybe_inject_contract(project: str, options: Any, unit: Any,
                                        timeout=_RECALL_DISASTER_TIMEOUT_S)
         if not block:
             return
-        _deliver_block(options, unit, "\n\n" + block + "\n", should_mutate_system_prompt)
+        _deliver_block(unit, "\n\n" + block + "\n")
         if isinstance(ctx, dict):
             ctx["_project_agent_block"] = block
     except Exception:  # noqa: BLE001 — an additive block never breaks the turn
@@ -1310,14 +1421,15 @@ def _channel_recall_allowed(channel_context: Optional[dict]) -> bool:
 
 
 async def _maybe_followup_recall(
-    user_message: str, options: Any, unit: Any, should_mutate_system_prompt: bool,
+    user_message: str, options: Any, unit: Any, session_block: Optional[str] = None,
 ) -> Optional[float]:
     """Recall again when a later message starts a new topic (bounded).
 
     Same unified path, relevance gate and budget as the first recall. The
-    prompt text it dedupes against is the system prompt plus everything recalled
-    earlier in this session, so a follow-up only adds what is new. Returns the
-    leg ms when it ran, else None. Never raises.
+    prompt text it dedupes against is what the subprocess was given (see
+    ``_recall_seen_text``) plus everything recalled earlier in this session, so a
+    follow-up only adds what is new. Returns the leg ms when it ran, else None.
+    Never raises.
     """
     try:
         if getattr(unit, "is_channel_session", False):
@@ -1335,7 +1447,8 @@ async def _maybe_followup_recall(
         if not _is_new_topic(getattr(unit, "_recall_terms", None), terms):
             return None
         from core import executors
-        seen = (options.system_prompt or "") + "\n" + (getattr(unit, "_recall_history", "") or "")
+        seen = (_recall_seen_text(options, unit, session_block) + "\n"
+                + (getattr(unit, "_recall_history", "") or ""))
         project = getattr(unit, "_active_project", None) or (None, "no_signal")
         t0 = time.perf_counter()
         body, _hits = await asyncio.wait_for(
@@ -1369,10 +1482,9 @@ async def _maybe_followup_recall(
             logger.info("follow-up recall (new topic) matched nothing | keywords=%s | %.0fms",
                         keywords[:80], ms)
             return ms
-        _deliver_block(options, unit, f"\n\n{block}", should_mutate_system_prompt)
-        logger.info("follow-up recall (new topic #%d) injected: +%d chars into %s | "
+        _deliver_block(unit, f"\n\n{block}")
+        logger.info("follow-up recall (new topic #%d) injected: +%d chars into the query | "
                     "keywords=%s | %.0fms", unit._recall_followups, len(body),
-                    "system prompt" if should_mutate_system_prompt else "query (warm-reuse)",
                     keywords[:80], ms)
         return ms
     except asyncio.TimeoutError:
@@ -1392,23 +1504,20 @@ async def _maybe_inject_recall(
     options: Any,
     unit: SessionUnit,
     editor_context: Optional[dict] = None,
-    should_mutate_system_prompt: bool = True,
     channel_context: Optional[dict] = None,
+    session_block: Optional[str] = None,
 ) -> Optional[float]:
     """Top-level FAULT-ISOLATION wrapper (A): recall can NEVER crash the builder.
 
     ``channel_context``: a channel message recalls only per ``_channel_recall_allowed``
     (G4); anything else returns None without touching the once-per-session guard.
 
-    ``should_mutate_system_prompt`` (阶段二 prompt-builder 两分, default True =
-    today's behavior): the recall DESTINATION. True (COLD-spawn turn) → append the
-    recall block to ``options.system_prompt`` (the spawn carries it). False
-    (WARM-reuse turn — the reused subprocess DISCARDS system_prompt) → do NOT touch
-    system_prompt; instead stash the block on ``unit._recall_query_block`` for the
-    caller to prefix onto ``query_content`` via ``_prepend_dynamic_context_to_query``.
-    Passed ``not _will_reuse_live`` by send() — the exact warm-reuse discriminator
-    (the complement of the poison-guard recycle). This prevents a silent recall DROP
-    on a warm turn (system_prompt written but never sent) without double-injecting.
+    The recall DESTINATION is always ``unit._recall_query_block`` (``_deliver_block``):
+    the caller prefixes it onto ``query_content``, on a cold spawn inside the
+    session-context block (``_compose_turn_prefix``), on a warm reuse as before. The
+    system prompt is never touched, so it stays byte-identical across sessions.
+    ``session_block`` is the session-context block this turn's query carries (None
+    on a warm turn); recall dedupes against it like against the system prompt.
 
     The system-prompt builder commits the core context files BEFORE the router
     appends recall (prompt_builder core-commit-first, run_e47c1cfb), so a recall
@@ -1425,8 +1534,8 @@ async def _maybe_inject_recall(
         return await _maybe_inject_recall_inner(
             user_message=user_message, options=options, unit=unit,
             editor_context=editor_context,
-            should_mutate_system_prompt=should_mutate_system_prompt,
             channel_context=channel_context,
+            session_block=session_block,
         )
     except Exception as exc:  # noqa: BLE001 — recall must never reach the send path
         _record_recall_degraded(f"toplevel_exception:{type(exc).__name__}")
@@ -1450,15 +1559,13 @@ async def _maybe_inject_recall_inner(
     options: Any,
     unit: SessionUnit,
     editor_context: Optional[dict] = None,
-    should_mutate_system_prompt: bool = True,
     channel_context: Optional[dict] = None,
+    session_block: Optional[str] = None,
 ) -> Optional[float]:
-    """Augment the system prompt with recalled knowledge from the user's query.
+    """Recall knowledge for the user's query into this turn's query stash.
 
-    阶段二: when ``should_mutate_system_prompt`` is False (warm-reuse turn), the
-    recall block is stashed on ``unit._recall_query_block`` instead of appended to
-    ``options.system_prompt`` (which a reused subprocess discards). See the wrapper
-    ``_maybe_inject_recall`` docstring for the full rationale.
+    The block is stashed on ``unit._recall_query_block`` (never the system prompt);
+    see the wrapper ``_maybe_inject_recall`` docstring for the full rationale.
 
     CORRECTNESS-FIRST (run_4d06640b): runs the recall leg to COMPLETION
     synchronously before generating, so the answer is built on the FULL brain —
@@ -1507,8 +1614,7 @@ async def _maybe_inject_recall_inner(
     # project. Until a project is found the leg re-checks each message — signal-2
     # usually appears after the agent's first tool calls, not before message 1.
     if not getattr(unit, "_ddd_injected", False):
-        await _maybe_inject_ddd(user_message, options, unit, editor_context,
-                                should_mutate_system_prompt)
+        await _maybe_inject_ddd(user_message, options, unit, editor_context)
     _active_project = getattr(unit, "_active_project", None) or (None, "no_signal")
 
     # A worker Hive runs tasks for other dispatches and Brains: its sessions,
@@ -1524,7 +1630,7 @@ async def _maybe_inject_recall_inner(
         # The first recall already ran; a later message on a NEW topic gets a
         # bounded follow-up recall (see _maybe_followup_recall).
         return await _maybe_followup_recall(
-            user_message, options, unit, should_mutate_system_prompt)
+            user_message, options, unit, session_block)
 
     # Extract keywords — skip if message too short/generic.
     #
@@ -1556,7 +1662,8 @@ async def _maybe_inject_recall_inner(
     # (estimate_tokens) — NOT the old `len//4` — so the number matches the
     # assembly-log estimator (design §1: kill the dual-estimator divergence).
     from .context_directory_loader import ContextDirectoryLoader
-    _base_tok = ContextDirectoryLoader.estimate_tokens(options.system_prompt or "")
+    _seen_text = _recall_seen_text(options, unit, session_block)
+    _base_tok = ContextDirectoryLoader.estimate_tokens(_seen_text)
     _t_recall_start = time.perf_counter()
     _recall_ms: Optional[float] = None  # set once the recall leg completes (any outcome)
 
@@ -1576,7 +1683,7 @@ async def _maybe_inject_recall_inner(
             # the session-init hot path — must not compete for a default-pool worker
             # with bulk work (which would starve the readiness sampler → false offline).
             executors.run_in("io", _unified_recall_body, keywords, _active_project,
-                             options.system_prompt or "",
+                             _seen_text,
                              getattr(unit, "_app_session_id", None) or unit.session_id,
                              time.monotonic() + _RECALL_DISASTER_TIMEOUT_S),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
@@ -1631,10 +1738,9 @@ async def _maybe_inject_recall_inner(
             _recall_block = (
                 f"{RECALL_HEADER}\n{_provenance}{recalled}{_agentic_hint}"
             )
-            # COLD-spawn: system_prompt carries it; WARM-reuse: the reused
-            # subprocess discards system_prompt, so it goes to the query-prefix
-            # stash (阶段二), after any DDD block this turn already put there.
-            _deliver_block(options, unit, f"\n\n{_recall_block}", should_mutate_system_prompt)
+            # Into the query-prefix stash, after any DDD block this turn already
+            # put there (cold spawn and warm reuse alike).
+            _deliver_block(unit, f"\n\n{_recall_block}")
             _remember_recall(unit, keywords, recalled)
             # Observability (loud-on-success counterpart to loud-on-degradation):
             # recall succeeds SILENTLY otherwise, so "0 recall lines in the log"
@@ -1671,12 +1777,8 @@ async def _maybe_inject_recall_inner(
                 logger.debug("_maybe_inject_recall_inner: suppressed exception on a fail-safe path", exc_info=True)
                 pass
             logger.info(
-                "recall injected: +%d chars (~%d tok) into %s | keywords=%s",
-                len(recalled), _recall_tok,
-                # 阶段二: recall rides system_prompt on a cold-spawn turn but the
-                # query_content prefix on a warm-reuse turn — log the real target.
-                "system prompt" if should_mutate_system_prompt else "query (warm-reuse)",
-                keywords[:80],
+                "recall injected: +%d chars (~%d tok) into the query | keywords=%s",
+                len(recalled), _recall_tok, keywords[:80],
             )
             logger.info(
                 "first-msg context assembled: base=%d tok + recall=%d tok = "
@@ -1700,7 +1802,7 @@ async def _maybe_inject_recall_inner(
             # recall (the keyword-only blind spot).
             from .injected_blocks import RECALL_MISS as _miss_block
             _remember_recall(unit, keywords, "")
-            _deliver_block(options, unit, f"\n\n{_miss_block}", should_mutate_system_prompt)
+            _deliver_block(unit, f"\n\n{_miss_block}")
             # Stash a snapshot for the TSCC panel on THIS branch too. Recall ran
             # — it just matched nothing. Without a snapshot the endpoint returns
             # its default (ran=False) and the panel says "no recall this session",
@@ -1976,9 +2078,10 @@ def _inject_ddd_for_active_project(
     NOTHING (Gate-2 L1: the counter distinguishes 'correctly declined' from 'detector
     broken').
 
-    ``deliver(block)`` places the block (default: append to
-    ``options.system_prompt``). A warm-reuse turn must pass one that writes the
-    query-prefix stash instead: the reused subprocess discards system_prompt.
+    ``deliver(block)`` places the block. The router always passes
+    ``_deliver_block`` (the per-turn query-prefix stash): the system prompt stays
+    byte-stable. The default, appending to ``options.system_prompt``, is only for
+    direct callers outside a chat turn.
     """
     if deliver is None:
         def deliver(block: str) -> None:
@@ -4656,7 +4759,8 @@ class SessionRouter:
         # the message as the CLI takes it, with the prefixes a send carries on a live
         # process (D2 table): attachments, UI state, terminal outermost; no recall
         query = await _convert_attachment_blocks(content, session_id)
-        ui_block = _decide_ui_block(unit, editor_context, True)
+        # a steer goes to the live process mid-turn: never its first query
+        ui_block = _decide_ui_block(unit, editor_context, first_query=False)
         query = _prepend_dynamic_context_to_query(query, editor_context, recall_block=None,
                                                   should_prefix=True, ui_block=ui_block)
         query = _prepend_terminal_to_query(query, terminal_context)
@@ -5290,28 +5394,21 @@ class SessionRouter:
         await _rehydrate_pipeline_run_id(unit._hook_session_context, session_id)
 
         # PER-SESSION SYSTEM-PROMPT CACHE (run_1dc710db): a chat-tab session's
-        # system prompt is essentially constant for its life; re-assembling the full
-        # ~85K every user message is waste. But the
-        # ONLY turn where the assembled prompt is discarded — and therefore the only
-        # turn where reusing a possibly-stale cache is HARMLESS — is a WARM reuse
-        # (send() reuses the live subprocess via client.query(); options.system_prompt
-        # is never delivered). On ANY turn that SPAWNS (cold entry / respawn after
-        # eviction-or-crash / cold-or-channel resume), options.system_prompt IS
-        # consumed by _spawn(), so it MUST be a FRESH build carrying THIS turn's
-        # volatile bits — the UI-state / open-file snapshot (_render_ui_context_section,
-        # agent SENSE) and the datetime tail — which a turn-1 cache would serve stale
-        # (Gate-2 HIGH, run_1dc710db: an evicted→respawn turn keeps _sdk_session_id so
-        # is_cold_resume is False, and _prepend_ui_state_to_query is skipped for COLD
-        # because it assumes system_prompt carries the fresh UI-state).
-        #
-        # So gate cache-reuse on _will_reuse_live (the exact warm-reuse predicate,
-        # the complement of every spawn path — mirrors _prepend_ui_state_to_query's
-        # gate below) — NOT merely "not a resume turn". And only STORE the cache from
-        # a NON-resume build: a resume build carries a one-shot history block that
-        # must not be re-served on a later turn (Gate-2 MED).
+        # system prompt is constant for its life (framing + context files);
+        # re-assembling it every user message is waste. The cache is reused only
+        # when this query is NOT the first one its subprocess receives: a first query
+        # (cold entry / respawn after eviction-or-crash / cold-or-channel resume / the
+        # first message to a pre-warmed unit) needs a FRESH build, because the build
+        # also produces this session's session-context block (DailyActivity, sibling
+        # digest, deferred MCPs, the date/time + runtime line) that rides that query
+        # — a turn-1 cache would carry none (Gate-2 HIGH, run_1dc710db: an
+        # evicted→respawn turn keeps _sdk_session_id, so is_cold_resume is False).
+        # And only STORE the cache from a NON-resume build: a resume build carries a
+        # one-shot history block that must not be re-served on a later turn (Gate-2 MED).
         _will_reuse_live = _is_warm_reuse(unit)
+        _first_query = _first_query_due(unit, _will_reuse_live)
         _cache_in = _system_prompt_cache_to_pass(
-            unit._cached_system_prompt, will_reuse_live=_will_reuse_live
+            unit._cached_system_prompt, will_reuse_live=not _first_query
         )
         options = await self._prompt_builder.build_options(
             agent_config=agent_config,
@@ -5332,6 +5429,9 @@ class SessionRouter:
         # every send, so a non-cold turn's .get() returns None and wipes any prior
         # turn's stash. (The _cleanup_internal reset covers a recycle mid-send.)
         unit._resume_query_block = agent_config.get("_resume_query_block")
+        # The session-context block build_system_prompt kept out of the system prompt
+        # (None when this query is not its subprocess's first: that one already got it).
+        _session_block = (agent_config.get("_session_context_block") or "") if _first_query else None
         # Seed/refresh the cache ONLY from a fresh, non-resume build — that is a
         # complete prompt safe to reuse on a later warm turn. Never store a resume
         # build (its injected history block is one-shot) and never re-store the
@@ -5348,8 +5448,8 @@ class SessionRouter:
         # SENT: send() reuses a live subprocess on turn 2+ and discards
         # options.system_prompt entirely. So the authoritative publish happens at
         # delivery, in SessionUnit._spawn(), which is the only consumer of
-        # options.system_prompt (it also folds in the recall block appended
-        # below, after this point).
+        # options.system_prompt (it composes full_text with the query-channel
+        # prefix captured below, session context and recall included).
         #
         # Here we only (a) hand the unit the pending metadata to publish on its
         # next spawn, and (b) seed the registry when the session has NO entry yet,
@@ -5396,31 +5496,28 @@ class SessionRouter:
             # Return value is the recall-leg ms IF recall ran THIS turn, else None
             # (turn 2+ / channel / keyword-miss). Feeds the TTFT probe's recall
             # segment — None → labelled n/a, never faked as 0 (Gate-1).
-            # recall DESTINATION follows the same warm-reuse discriminator as the
-            # SENSE prefix below. COLD-spawn (_will_reuse_live False) → recall into
-            # options.system_prompt (spawn carries it). WARM-reuse (True) → recall
-            # discards system_prompt, so _maybe_inject_recall stashes the block on
-            # unit._recall_query_block for the query_content prefix below.
+            # Recall runs to completion HERE, before the query is sent, and stashes
+            # its block on unit._recall_query_block; the prefix below delivers it
+            # (inside the session-context block on a first query). The system
+            # prompt is never touched.
             _ttft_recall_ms = await _maybe_inject_recall(
                 user_message=_user_text,
                 options=options,
                 unit=unit,
                 editor_context=editor_context,
-                should_mutate_system_prompt=not _will_reuse_live,
                 channel_context=channel_context,
+                session_block=_session_block,
             )
             # Copy the recall snapshot to the registry for the read-only TSCC panel.
             # Guarded + best-effort: a panel-observability copy must never perturb
             # the send path.
             #
-            # full_text needs NO refresh here. _maybe_inject_recall has just
-            # appended the "## Recalled Knowledge" block to options.system_prompt,
-            # and _spawn() publishes full_text off that same object at delivery —
-            # so the block is included when the prompt is actually sent, and no
-            # stale value is written when it is not. An earlier version tried to
-            # re-point full_text here, gated on `_ttft_recall_ms is not None`; the
-            # gate was moot because the build-time write above had already
-            # overwritten turn 1's value (review run_abab234c, HIGH #1).
+            # full_text needs NO refresh here. The recall block rides the query
+            # prefix captured below in unit._delivered_query_prefix, and both
+            # _spawn() and the post-stream metadata compose full_text = the
+            # delivered system prompt + that prefix — so the block is shown when it
+            # is actually sent, and no stale value is written when it is not
+            # (review run_abab234c, HIGH #1).
             try:
                 _rsnap = getattr(unit, "_recall_snapshot", None)
                 if _rsnap and session_id:
@@ -5446,27 +5543,26 @@ class SessionRouter:
         # prompt assembly via runtime_hooks). Shadow validation data is no
         # longer needed. See: 2026-05-02-evolution-activation-design.md.
 
-        # ── SENSE for a REUSED live subprocess (run_5d460dd5) ──────────────
-        # UI-state (canvas/overlay) rode options.system_prompt, but a warm-reuse
-        # turn discards the rebuilt system_prompt (the SDK client only gets it at
-        # _spawn). So for a reuse turn, deliver THIS turn's UI-state via the query
-        # channel — the only per-message path to a live subprocess. Gate mirrors
-        # send()'s poison-guard: reuse ⟺ IDLE AND client alive AND last turn clean
-        # (a non-clean IDLE recycles→COLD→respawn inside send(), where system_prompt
-        # DOES carry it → prefixing there would double-inject). COLD/spawn: no prefix.
-        _will_reuse_live = _is_warm_reuse(unit)
+        # ── Dynamic context on the query, cold and warm alike ──────────────
+        # The system prompt holds only framing + context files (byte-identical
+        # across sessions, so its prompt cache is reused), and a reused subprocess
+        # is never handed a system prompt again. So every per-session / per-turn
+        # part rides the query: on the first query of a new subprocess the wrapped
+        # session context (session block + DDD/contract/recall) and the full UI
+        # state, on a later query the recall stash and the UI state.
+        # Re-checked after the awaits above: a subprocess that died meanwhile makes
+        # this query the first one of its replacement (only False → True can flip).
+        # This turn's build came from the prompt cache, which makes no session
+        # block, so the sections the previous first query carried are sent again.
+        if not _first_query and _first_query_due(unit, _is_warm_reuse(unit)):
+            _first_query = True
+            _session_block = (agent_config.get("_session_context_block")
+                              or _kept_session_sections(unit))
         # ONE decision for the delivered prefix and the TSCC capture below (§10).
-        _ui_block = _decide_ui_block(unit, editor_context, _will_reuse_live)
-        # 阶段二: the dynamic segment = recall (stashed above on a warm turn) +
-        # UI-SENSE, prefixed onto the query for a reused subprocess (which discards
-        # system_prompt). recall_query_block is None on a cold turn (recall wrote
-        # system_prompt instead) or when no recall ran → clean SENSE-only prefix.
-        query_content = _prepend_dynamic_context_to_query(
-            query_content, editor_context,
-            recall_block=getattr(unit, "_recall_query_block", None),
-            should_prefix=_will_reuse_live,
-            ui_block=_ui_block,
+        _dyn_block = _compose_turn_prefix(
+            unit, editor_context, first_query=_first_query, session_block=_session_block,
         )
+        query_content = _prepend_block_to_query(query_content, _dyn_block)
         # resume-context-injection去根 (run_d108b914): INDEPENDENT resume-only prefix,
         # carrying the resume block that build_options stashed this turn.
         #
@@ -5479,11 +5575,11 @@ class SessionRouter:
         # unit is IDLE/warm so system_prompt is discarded anyway → the query is the
         # ONLY correct delivery path.
         #
-        # No double-inject with the recall/SENSE prefix above: that prefix carries
-        # THIS-turn recall + UI-SENSE; this one carries PRIOR-conversation history —
-        # distinct content. They co-occur only on a channel-resume warm turn, where
-        # both correctly ride the query (system_prompt discarded). recall/SENSE are
-        # never rendered here (resume-only fn), so neither is duplicated.
+        # No double-inject with the dynamic prefix above: that prefix carries the
+        # session context / THIS-turn recall + UI-SENSE; this one carries
+        # PRIOR-conversation history — distinct content. On a resume turn both ride
+        # the query, this one in front. recall/SENSE are never rendered here
+        # (resume-only fn), so neither is duplicated.
         query_content = _prepend_resume_to_query(
             query_content,
             getattr(unit, "_resume_query_block", None),
@@ -5491,7 +5587,7 @@ class SessionRouter:
         )
         # Run 2 (prompt-injection root-fix): prefix the attached-terminal
         # UNTRUSTED-DATA block UNCONDITIONALLY — on BOTH cold-spawn and warm-reuse.
-        # Unlike recall/SENSE (gated _will_reuse_live) and resume (gated
+        # Like the dynamic prefix and unlike resume (gated
         # _should_prefix_resume), terminal has NO system-prompt sink anymore (the
         # build_system_prompt injection was deleted), so the query channel is its
         # ONLY carrier on every path — hence unconditional, no double-inject. This
@@ -5516,29 +5612,20 @@ class SessionRouter:
         #     system-prompt sink, so it ALWAYS rides the query; captured FIRST
         #     because _prepend_terminal_to_query runs LAST and is thus the
         #     OUTERMOST/leading prefix in the delivered query_content.
-        #   - dynamic (recall + UI-SENSE) = gated _will_reuse_live.
+        #   - dynamic (session context on a first query, recall, UI-SENSE) = the
+        #     _compose_turn_prefix result, every turn.
         #   - resume = gated _should_prefix_resume(...).
-        # The dynamic/resume PAIR is still "at most one fires" (COLD-resume vs
-        # warm-reuse are mutually exclusive; a channel-resume-over-prewarm warm
-        # turn can carry both — join them). Terminal is ORTHOGONAL to that pair —
-        # it co-occurs with whichever of them fires (or neither, on a plain cold
-        # non-resume spawn, which is exactly the case the old gated-only capture
-        # left with full_text=None and the terminal DATA invisible to the
-        # security-scan panel — Gate-1 BLOCK, now fixed). Written UNCONDITIONALLY
-        # (None when nothing fires) so a stale prior-turn prefix never leaks (P3).
+        # Terminal is ORTHOGONAL — it co-occurs with whichever fire. Written
+        # UNCONDITIONALLY (None when nothing fires) so a stale prior-turn prefix
+        # never leaks (P3).
         _prefix_parts: list[str] = []
         _term = _build_terminal_prefix_block(terminal_context)
         if _term:
             _prefix_parts.append(_term)
         if _dispatch_block:
             _prefix_parts.append(_dispatch_block)
-        if _will_reuse_live:
-            _dyn = _build_dynamic_prefix_block(
-                editor_context, getattr(unit, "_recall_query_block", None),
-                ui_block=_ui_block,
-            )
-            if _dyn:
-                _prefix_parts.append(_dyn)
+        if _dyn_block:
+            _prefix_parts.append(_dyn_block)
         if _should_prefix_resume(is_cold_resume, needs_channel_resume):
             _res = _build_resume_prefix_block(getattr(unit, "_resume_query_block", None))
             if _res:

@@ -140,16 +140,14 @@ async def test_ddd_runs_on_a_later_message_once_the_project_is_known():
             patch("core.recall_multi.list_project_names", return_value=["SwarmAI"]), \
             patch.object(sr, "_inject_ddd_for_active_project", side_effect=_fake_ddd), \
             patch.object(sr, "_unified_recall_body", return_value=("", None)):
-        await sr._maybe_inject_recall("帮我看下这个 pipeline worktree 问题", o, u,
-                                      should_mutate_system_prompt=True)
+        await sr._maybe_inject_recall("帮我看下这个 pipeline worktree 问题", o, u)
         assert calls == [] and u._ddd_injected is False      # no project yet: retry later
         bound["v"] = "SwarmAI"                              # the agent touched the repo
         u._recall_query_block = None
-        await sr._maybe_inject_recall("继续修 worktree 隔离", o, u,
-                                      should_mutate_system_prompt=False)
+        await sr._maybe_inject_recall("继续修 worktree 隔离", o, u)
     assert calls == [("SwarmAI", "signal2_bound_repo")]
     assert u._ddd_injected is True
-    # A warm turn discards system_prompt: the block must be in the query stash.
+    # Every turn delivers on the query: the block is in the stash, never the system prompt.
     assert "[DDD:SwarmAI]" in (u._recall_query_block or "")
     assert "[DDD:" not in o.system_prompt
 
@@ -158,8 +156,8 @@ def test_warm_turn_keeps_both_ddd_and_recall_blocks():
     import core.session_router as sr
     u, o = _unit(), MagicMock()
     o.system_prompt = "BASE"
-    sr._deliver_block(o, u, "\n\n## Project DDD — [DDD:X]", False)
-    sr._deliver_block(o, u, "\n\n## Recalled Knowledge\nbody", False)
+    sr._deliver_block(u, "\n\n## Project DDD — [DDD:X]")
+    sr._deliver_block(u, "\n\n## Recalled Knowledge\nbody")
     assert "[DDD:X]" in u._recall_query_block and "Recalled Knowledge" in u._recall_query_block
     assert o.system_prompt == "BASE"
 

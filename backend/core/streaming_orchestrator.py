@@ -2039,6 +2039,8 @@ class StreamingOrchestrator:
                 if _dkey[0] is None:  # main agent only: sub-agent calls overlap in time
                     if event_type == "message_start":
                         _rate.message_start()
+                        if getattr(self._parent, "_first_call_cache_pending", False) is True:
+                            self._parent._record_first_call_cache(event_data)
                     elif event_type == "content_block_start":
                         _rate.block_start(awake_time())
                     elif event_type == "message_delta":

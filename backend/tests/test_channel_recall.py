@@ -56,7 +56,8 @@ async def _recall(unit, options, ctx, msg="How does the evolution pipeline work?
 @pytest.mark.asyncio
 async def test_owner_private_chat_recalls(unit, options):
     await _recall(unit, options, _ctx("im"))
-    assert "REMEMBERED" in options.system_prompt
+    assert "REMEMBERED" in unit._recall_query_block   # delivered on the query
+    assert options.system_prompt == "## Base"
 
 
 @pytest.mark.asyncio
@@ -87,7 +88,8 @@ async def test_followup_recall_follows_the_same_rule(unit, options):
 @pytest.mark.asyncio
 async def test_desktop_tab_recalls_as_before(unit, options):
     await _recall(unit, options, None)
-    assert "REMEMBERED" in options.system_prompt
+    assert "REMEMBERED" in unit._recall_query_block   # delivered on the query
+    assert options.system_prompt == "## Base"
 
 
 def test_rule():

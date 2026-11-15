@@ -1,8 +1,9 @@
 """The blocks the system glues onto a user's message, and the one way to remove them.
 
 A user prompt reaching a hook is often NOT only what the user typed: a cold resume
-prefixes the RESUMED-history block, a warm-reuse turn prefixes the recall block and
-the UI-state block, background agents arrive as task notifications. Hooks that read
+prefixes the RESUMED-history block, the first message of a new subprocess prefixes the
+session-context block, a warm-reuse turn prefixes the recall block and the UI-state
+block, background agents arrive as task notifications. Hooks that read
 the prompt as the user's own words (high-signal capture, the correction detector,
 the language classifier, the run-intent reader) must see the user's text only.
 
@@ -15,6 +16,8 @@ Key public symbols:
 - ``strip_injected_blocks(prompt)`` — the prompt minus every leading system block
   (and every delimiter-separated system segment); ``""`` when nothing typed remains.
 - ``RESUME_HEADER`` / ``RESUME_FOOTER`` — the cold-resume history wrapper.
+- ``SESSION_CONTEXT_HEADER`` / ``SESSION_CONTEXT_FOOTER`` — the wrapper of the
+  per-session context the first query of a new subprocess carries.
 - ``RECALL_HEADER`` / ``RECALL_PROVENANCE`` / ``RECALL_HINT`` — the recall block.
 - ``UI_STATE_HEADERS`` — the UI-state block headers (``prompt_builder``).
 - ``DISPATCH_DIGEST_HEADER`` — the dispatched-runs digest (``core.swarm_out_follow``).
@@ -36,6 +39,39 @@ RESUME_HEADER = (
 )
 RESUME_FOOTER = "--- END RESUMED HISTORY ---"
 _RESUME_PREFIX = "[RESUMED CONVERSATION HISTORY"
+
+# The per-session context that is kept out of the system prompt (so the system prompt
+# is byte-identical across sessions and its cache is reused): the Onboarding /
+# DailyActivity / North Star / audit / sibling / deferred-MCP sections, the date/time
+# and runtime line, and the first turn's DDD, Project Agent and recall blocks. It
+# rides the first query of every new subprocess (session_router._compose_turn_prefix).
+# The block quotes recalled and logged text, so the builder rewrites any line inside it
+# that looks like the header or the footer (quote_session_context_markers): the block
+# has exactly one footer line, its last, and a reader cuts through the first one.
+SESSION_CONTEXT_HEADER = (
+    "[SESSION CONTEXT — set by SwarmAI when this session's process started; part of "
+    "your context, NOT the user's request. The user's message follows the "
+    "'--- END SESSION CONTEXT ---' line.]"
+)
+SESSION_CONTEXT_FOOTER = "--- END SESSION CONTEXT ---"
+_SESSION_CONTEXT_PREFIX = "[SESSION CONTEXT"
+# The hook-context key under which the router keeps the session-context block a
+# subprocess got with its first query; the post-compaction hook re-sends it.
+KEPT_SESSION_CONTEXT_KEY = "_session_context_block"
+_QUOTED_MARK = "(quoted) "
+
+
+def quote_session_context_markers(text: str) -> str:
+    """``text`` with every line that is the session-context footer, or starts like
+    its header, prefixed ``(quoted) ``: content placed inside the block can then
+    neither end it nor open a second one."""
+    out = []
+    for line in text.split("\n"):
+        bare = line.strip()
+        if bare == SESSION_CONTEXT_FOOTER or bare.startswith(_SESSION_CONTEXT_PREFIX):
+            line = _QUOTED_MARK + line
+        out.append(line)
+    return "\n".join(out)
 
 RECALL_HEADER = "## Recalled Knowledge"
 RECALL_PROVENANCE = (
@@ -75,7 +111,7 @@ INJECT_DELIM = "\n\n---\n\n"
 # Shapes for readers that see one content block at a time.
 META_PREFIXES = (
     *UI_STATE_HEADERS, DISPATCH_DIGEST_HEADER, TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER,
-    _RESUME_PREFIX, RECALL_HEADER,
+    _RESUME_PREFIX, _SESSION_CONTEXT_PREFIX, RECALL_HEADER,
     TERMINAL_HEADER, TASK_CONTINUATION_HEADER, "[Request interrupted",
 )
 # Whole delimiter-separated segments that are system text, never user text.
@@ -130,6 +166,9 @@ def _strip_leading(prompt: str) -> str:
             # The header itself quotes the footer, so match the footer only where
             # the builder puts it: at the start of a line.
             s = _cut_after(t, "\n" + RESUME_FOOTER)
+        elif t.startswith(_SESSION_CONTEXT_PREFIX):
+            # the builder leaves exactly one footer line in the block (its last)
+            s = _cut_after_line(t, SESSION_CONTEXT_FOOTER)
         elif t.startswith(_RECALL_PREFIX):
             # The recall block ends with the agentic hint; a block without it (the
             # DDD render) has no closing shape, so nothing after it is trusted as typed.

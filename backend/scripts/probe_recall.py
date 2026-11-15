@@ -4,8 +4,9 @@
 Contract: scripts/_probe_kit.py. Runs in the isolated workspace / data dir the
 eval runner gives a product case. Subcommands:
   provenance  injected recall is always labelled as retrieved ([RECALLED]) before
-              its content, on a cold spawn (system prompt) and on a warm reuse
-              (prefixed to the user message)
+              its content and rides the user message (on a subprocess's first
+              query inside the session-context block); the system prompt is
+              never written
   privacy     only a desktop tab or the owner's private chat gets recall, and a
               file excluded for the session cannot be read through recall
   ddd_scope   project-doc recall stays inside the active project, and a question
@@ -40,14 +41,20 @@ def _options():
     return o
 
 
-def _inject(unit, options, *, ctx=None, warm=False):
+def _inject(unit, options, *, ctx=None):
     from core import session_router as sr
 
     with mock.patch("core.session_router._unified_recall_body", return_value=(None, None)), \
          mock.patch("core.session_router._recall_for_query", return_value=BODY):
         asyncio.run(sr._maybe_inject_recall(
             user_message="How does the evolution pipeline work?", options=options, unit=unit,
-            channel_context=ctx, should_mutate_system_prompt=not warm))
+            channel_context=ctx))
+
+
+def _delivered(unit) -> str:
+    """What recall put on this turn's query (it never writes the system prompt)."""
+    block = getattr(unit, "_recall_query_block", None)
+    return block if isinstance(block, str) else ""
 
 
 # ── provenance ────────────────────────────────────────────────────────────────
@@ -56,18 +63,13 @@ def _provenance_holds() -> tuple[bool, str]:
     from core.injected_blocks import RECALL_HEADER
 
     label = RECALL_HEADER + "\n> **[RECALLED]**"
-    cold_u, cold_o = _unit(), _options()
-    _inject(cold_u, cold_o)
-    sp = cold_o.system_prompt
-    if BODY not in sp or label not in sp or sp.index(label) > sp.index(BODY):
-        return False, "cold spawn: recall content without the [RECALLED] label before it"
-    warm_u, warm_o = _unit(), _options()
-    _inject(warm_u, warm_o, warm=True)
-    block = warm_u._recall_query_block or ""
-    if warm_o.system_prompt != "## Base":
-        return False, "warm reuse wrote the system prompt (the reused process ignores it)"
+    u, o = _unit(), _options()
+    _inject(u, o)
+    block = _delivered(u)
+    if o.system_prompt != "## Base":
+        return False, "recall wrote the system prompt (it must stay byte-stable across sessions)"
     if BODY not in block or label not in block or block.index(label) > block.index(BODY):
-        return False, "warm reuse: recall block missing or unlabelled"
+        return False, "recall block on the query missing or unlabelled"
     return True, ""
 
 
@@ -92,7 +94,9 @@ def _privacy_holds() -> tuple[bool, str]:
                         (_ctx("group"), False), (_ctx("im", owner=False), False)):
         u, o = _unit(), _options()
         _inject(u, o, ctx=ctx)
-        got = BODY in o.system_prompt
+        if o.system_prompt != "## Base":
+            return False, f"recall wrote the system prompt for {ctx}"
+        got = BODY in _delivered(u)
         if got != should:
             return False, f"recall {'missing' if should else 'injected'} for {ctx}"
     memory = "## Secrets\n\nSENTINEL_PRIVATE_MEMORY_7f3 owner only.\n"

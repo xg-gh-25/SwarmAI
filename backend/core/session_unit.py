@@ -648,6 +648,10 @@ class SessionUnit:
         # (no spawn) relays None and a prior cold turn's value can never leak into
         # a later turn's log. Pure observability — never read by control flow.
         self._last_turn_spawn_ms: Optional[float] = None
+        # True from a spawn until that subprocess's first API call starts: its cache
+        # read / write is logged once (_record_first_call_cache), the cross-session
+        # prompt-cache signal a whole-turn total hides.
+        self._first_call_cache_pending: bool = False
         self._model_name: Optional[str] = None
         # Set at send() from options.cwd (the CLI's working directory).
         self._cwd: Optional[str] = None
@@ -661,12 +665,12 @@ class SessionUnit:
         # attribute (a future direct read won't AttributeError); the live read in
         # session_router uses getattr(..., None) so None == "no snapshot".
         self._recall_snapshot: Optional[dict] = None
-        # 阶段二 prompt-builder 两分: on a WARM-reuse turn recall cannot ride the
-        # (discarded) system_prompt, so _maybe_inject_recall stashes the recall
-        # block here for send() to prefix onto query_content via
-        # _prepend_dynamic_context_to_query. None = no warm recall this turn (cold
-        # turn wrote system_prompt instead, or no recall ran). send() clears it at
-        # the top of each turn; the router read uses getattr(..., None) too.
+        # The recall / DDD / Project Agent blocks of THIS turn: _maybe_inject_recall
+        # stashes them here on every turn (the system prompt is never written), and
+        # the router prefixes them onto query_content (_compose_turn_prefix; inside
+        # the session-context block on a subprocess's first query). None = nothing
+        # recalled this turn. The router clears it at the top of each turn; its
+        # read uses getattr(..., None) too.
         self._recall_query_block: Optional[str] = None
         # resume-context-injection去根 (run_d108b914): on a COLD-resume turn the
         # resume block (prior conversation summary, up to 150K) is stashed here by
@@ -681,7 +685,8 @@ class SessionUnit:
         self._resume_query_block: Optional[str] = None
         # TSCC/security-scan alignment (run_380413c5): the ACTUAL query-channel
         # prefix delivered onto query_content THIS turn — the resume block on a
-        # cold-resume turn, or the recall+SENSE block on a warm-reuse turn, or None.
+        # cold-resume turn, the dynamic block (session context on a first query,
+        # recall, UI state), the terminal / dispatch blocks, or None.
         # Set UNCONDITIONALLY every send by the ROUTER (writes None when no prefix,
         # mirroring _resume_query_block's clear-on-transfer semantics — so a stale
         # prior-turn prefix can never leak into full_text). Read at the EVERY-TURN
@@ -3552,6 +3557,55 @@ class SessionUnit:
             return None
         return dict(snap)
 
+    def _with_kept_session_context(self, query_content: Any) -> Any:
+        """``query_content`` with the session-context block this session's first
+        query carried (kept by session_router._compose_turn_prefix) in front, for a
+        respawn inside a turn that starts WITHOUT the transcript (an abandoned
+        --resume): the system prompt no longer carries it. A retry that keeps
+        --resume needs nothing (the restored transcript holds the first query); a
+        later turn on a new subprocess gets a fresh block from the router. Unchanged
+        when nothing is kept or the query already carries a session-context block."""
+        from .injected_blocks import KEPT_SESSION_CONTEXT_KEY, SESSION_CONTEXT_HEADER
+
+        ctx = self._hook_session_context
+        block = ctx.get(KEPT_SESSION_CONTEXT_KEY) if isinstance(ctx, dict) else None
+        if not isinstance(block, str) or not block:
+            return query_content
+        if isinstance(query_content, str):
+            if SESSION_CONTEXT_HEADER in query_content:
+                return query_content
+            return f"{block}\n\n{query_content}"
+        if isinstance(query_content, list):
+            if any(isinstance(p, dict) and SESSION_CONTEXT_HEADER in str(p.get("text") or "")
+                   for p in query_content):
+                return query_content
+            return [{"type": "text", "text": block}, *query_content]
+        return query_content
+
+    def _record_first_call_cache(self, event: Optional[dict]) -> None:
+        """Log the cache read / write of this subprocess's FIRST API call, once.
+
+        Called with the main agent's ``message_start`` stream event while
+        ``_first_call_cache_pending`` is set (armed in ``_spawn``). A new session
+        whose system prompt matches the previous session's reads that block from
+        the prompt cache here; a read no larger than the CLI's own prefix means the
+        system prompt changed. One attribute check per API call, one log line per
+        subprocess; never raises."""
+        self._first_call_cache_pending = False
+        try:
+            message = event.get("message") if isinstance(event, dict) else None
+            usage = message.get("usage") if isinstance(message, dict) else None
+            usage = usage if isinstance(usage, dict) else {}
+            logger.info(
+                "session_unit.first_call_cache session_id=%s input=%s cache_read=%s "
+                "cache_write=%s model=%s",
+                self.session_id, usage.get("input_tokens"),
+                usage.get("cache_read_input_tokens"),
+                usage.get("cache_creation_input_tokens"), self._model_name,
+            )
+        except Exception:  # noqa: BLE001 — telemetry never breaks the stream
+            logger.debug("first_call_cache record failed", exc_info=True)
+
     def _record_compact_boundary(self, metadata: Optional[dict]) -> dict:
         """Record the CLI's post-compaction size; return the SSE event.
 
@@ -3761,8 +3815,9 @@ class SessionUnit:
             if spm:
                 # TSCC/security-scan alignment (run_380413c5): recompose full_text
                 # HERE — this runs at the end of EVERY response (cold AND warm),
-                # unlike _spawn() which fires ONLY on a COLD turn (Gate-1 P5). A
-                # warm-reuse turn's recall+SENSE ride the query and _spawn never
+                # unlike _spawn() which fires ONLY on a COLD turn (Gate-1 P5). Every
+                # turn's dynamic context rides the query (recall, UI state; the
+                # session context on a first query), and on a warm turn _spawn never
                 # runs, so without this the warm-turn query-channel context would
                 # stay invisible to the "System Prompt" modal + the security-scan
                 # panel. Recompose from the STORED base (never from the prior
@@ -4095,6 +4150,7 @@ class SessionUnit:
         # probe never mistakes a prior turn's spawn for this turn's inference. Pure
         # observability — nothing in the control flow reads this field.
         self._last_turn_spawn_ms = _total_ms
+        self._first_call_cache_pending = True
 
         # ── Publish TSCC prompt metadata AT DELIVERY ──────────────────
         # This is the ONLY place options.system_prompt reaches the CLI: send()

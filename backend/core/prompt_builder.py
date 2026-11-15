@@ -12,7 +12,9 @@ with filesystem fixtures or mocked loaders.
 Key public symbols:
 
 - ``PromptBuilder``              — Main class; accepts ``AppConfigManager``
-- ``build_system_prompt()``      — Assemble system prompt from context + runtime
+- ``build_system_prompt()``      — Assemble the byte-stable system prompt (framing +
+                                   context files); the per-session block goes on
+                                   ``agent_config["_session_context_block"]``
 - ``build_options()``            — Orchestrate helpers → ``ClaudeAgentOptions``
 - ``resolve_model()``            — Model ID with Bedrock conversion
 - ``resolve_allowed_tools()``    — Allowed tool list from agent config
@@ -1363,19 +1365,24 @@ class PromptBuilder:
     ) -> Any:
         """Build the system prompt with centralized context directory.
 
-        Assembly order:
-        1. ContextDirectoryLoader — global context from SwarmWS/.context/
-        2. SystemPromptBuilder — non-file sections (safety, datetime, runtime)
+        The returned string holds only what is identical across sessions:
+        1. SystemPromptBuilder — the stable framing (identity, safety, workspace)
+        2. ContextDirectoryLoader — the governed context files from SwarmWS/.context/
+        (plus, only when SWARM_RESUME_VIA_QUERY is off, a cold resume's history).
+        The Claude CLI sends the system prompt as ONE cache block, so a single
+        changed byte anywhere in it makes a new session's first call rewrite the
+        whole block. Everything that differs per session or per turn — the
+        Onboarding/DailyActivity/North Star/audit-hint/sibling-digest/deferred-MCP
+        sections and the date/time + runtime tail — is therefore NOT in the
+        returned string: with ``include_ephemeral`` True it is stored, in that
+        order, on ``agent_config["_session_context_block"]``, and the router puts
+        it in front of the first query the new subprocess receives
+        (session_router._compose_turn_prefix). The UI state is rendered by the
+        router itself (_decide_ui_block), never here.
 
-        ``include_ephemeral`` (阶段二 prompt-builder 两分, default True = old
-        behavior byte-for-byte): when False, the per-turn EPHEMERAL layers
-        (BOOTSTRAP/DailyActivity/audit-hint/user-suggestions/session-digest/
-        UI-SENSE/terminal/deferred-MCP) AND the resume-context injection are
-        SKIPPED, yielding the input-INDEPENDENT base — the cacheable/warmable
-        "default" half that ``build_default_system_prompt`` returns. The core
-        context files + stable framing + volatile datetime/runtime tail still
-        assemble exactly as usual. This is a pure skip-gate: with the default
-        True, not one byte of the assembled prompt changes (strangler-fig R26).
+        ``include_ephemeral`` False skips building that block and the
+        resume-context injection (the ``build_default_system_prompt`` half); the
+        returned string is the same either way for a session without resume.
 
         After loading context files, metadata (file list, token counts,
         full prompt text) is stored on ``agent_config``
@@ -1416,6 +1423,10 @@ class PromptBuilder:
         # flag set, and a fully-successful call #2 would still be reported degraded
         # (the metadata mirror below would copy the stale flag into a healthy prompt).
         agent_config.pop("_context_degraded", None)
+        # The session-context block is a fresh per-build value too: a build that
+        # skips it (include_ephemeral=False) must not leave an earlier one behind.
+        agent_config.pop("_session_context_block", None)
+        _session_sections = ""
         prompt_metadata: dict = {"files": [], "total_tokens": 0, "full_text": ""}
         context_text = ""
         # Explicit core-commit flag (run_e47c1cfb REVIEW MEDIUM#2): the except
@@ -1576,17 +1587,14 @@ class PromptBuilder:
                 return bootstrap, daily_activity, north_star
 
             # ── Ephemeral sections (each isolated) append to `ephemeral_text`,
-            #    which is committed to system_prompt ONCE, AFTER core is already
-            #    committed ABOVE. A failure in any ephemeral section can never
-            #    drop the core context files.
-            # 阶段二 prompt-builder 两分: `include_ephemeral=False` (default_builder)
-            # skips EVERY per-turn ephemeral sub-block below (bootstrap/daily, audit hint,
-            # user-suggestions, session-digest, UI-SENSE/terminal/deferred-MCP), yielding
-            # the input-independent cacheable base. Each of the 5 sub-blocks carries its
-            # own `if include_ephemeral` guard (NOT a single raise — a raise only aborts
-            # the FIRST block and lets the audit hint/SENSE leak into the base; Gate-2 HIGH
-            # run_f638ebc3). Core context files were committed ABOVE this region, so
-            # skipping here never drops them.
+            #    which becomes the session-context block (never the system prompt;
+            #    see the docstring). A failure in any ephemeral section loses only
+            #    that section and can never drop the core context files.
+            # `include_ephemeral=False` (default_builder) skips EVERY ephemeral
+            # sub-block below (bootstrap/daily, audit hint, session-digest,
+            # deferred-MCP). Each sub-block carries its own `if include_ephemeral`
+            # guard (NOT a single raise — a raise only aborts the FIRST block and lets
+            # the later ones run; Gate-2 HIGH run_f638ebc3).
             ephemeral_text = ""
             try:
                 if include_ephemeral:
@@ -1656,15 +1664,13 @@ class PromptBuilder:
             # (after the except) so it runs even when ContextDirectoryLoader
             # fails.  See "Resume context injection" section below.
 
-            # ── UI-state context injection (ephemeral, per-request) ──
-            # Agent proprioception (SENSE): the request-time snapshot of the
-            # agent's own UI — open file + Canvas state + which nav overlay is
-            # open. Superset of the legacy "## Currently Open File" (which a
-            # file-only payload still degrades to). See _render_ui_context_section.
+            # ── UI-state context (agent proprioception, SENSE) ──
+            # Not rendered here: the router decides the UI-state block for every
+            # query, the first one of a new subprocess included
+            # (session_router._decide_ui_block), so one decision serves cold and
+            # warm turns and the "unchanged" one-liner knows what was sent.
+            # editor_context is therefore not consumed by build_system_prompt.
             try:
-                if include_ephemeral:
-                    ephemeral_text += _render_ui_context_section(editor_context)
-
                 # ── Terminal context injection (P2 — observable terminal) ──
                 # When the user explicitly attaches a terminal's output (a human
                 # action in the terminal panel), the session gets a READ-ONLY view
@@ -1689,18 +1695,12 @@ class PromptBuilder:
             except Exception as exc:
                 logger.warning("UI/terminal/MCP ephemeral injection failed: %s", exc)
 
-            # ── COMMIT EPHEMERAL (append to the already-committed core) ────
-            # Core was committed right after load_all above; here the ephemeral
-            # block is appended ONCE. The old single-commit of `context_text`
-            # (core+ephemeral together) is intentionally REMOVED — committing
-            # core early + ephemeral here avoids double-appending core (Gate-1
-            # CHECK5). A failed ephemeral section simply contributes an empty
-            # string; core is untouched.
-            if ephemeral_text:
-                existing = agent_config.get("system_prompt", "") or ""
-                agent_config["system_prompt"] = (
-                    existing + "\n\n" + ephemeral_text if existing else ephemeral_text
-                )
+            # ── KEEP EPHEMERAL OUT OF THE SYSTEM PROMPT ────────────────────
+            # The ephemeral group is handed to the router as the session-context
+            # block (completed with the date/time + runtime tail below); it rides
+            # the first query of the new subprocess. A failed ephemeral section
+            # simply contributes an empty string; core is untouched.
+            _session_sections = ephemeral_text.strip("\n")
             if context_text or ephemeral_text:
                 _t_total = time.perf_counter() - _t_total_start
                 # recall#G: ephemeral = the block appended after the budgeted loader
@@ -1884,22 +1884,21 @@ class PromptBuilder:
             channel_context=channel_context,
             add_dirs=sdk_add_dirs,
         )
-        # Stable framing ONLY (identity/safety/workspace) — the volatile
-        # datetime/runtime tail is split off and appended AFTER the context
-        # files below, so the ~76K constitution stays a byte-stable cache
-        # prefix instead of being invalidated every minute by the datetime
-        # header. See SystemPromptBuilder.build_volatile_tail() for the full
-        # cache-prefix rationale.
+        # Stable framing ONLY (identity/safety/workspace). The datetime/runtime
+        # tail closes the session-context block instead: the minute-precision
+        # datetime would make every new session's system prompt differ.
         builder_text = prompt_builder.build(include_volatile=False)
-        volatile_tail = prompt_builder.build_volatile_tail()
 
-        # ── 3. Combine: stable framing + context files + volatile tail ─
-        # SystemPromptBuilder provides identity/safety framing (stable) and
-        # a datetime/runtime tail (volatile).  Context files (11 files +
-        # DailyActivity) were loaded into agent_config["system_prompt"] by
-        # step 1 above.  Final byte order (cache-optimal):
-        #   [stable framing] + [76K context files] + [volatile datetime/runtime]
+        # ── 3. Combine: stable framing + governed context files ────────
+        # Context files were loaded into agent_config["system_prompt"] by step 1
+        # above. Final byte order: [stable framing] + [context files] — the same
+        # bytes for every new session while no context file changes.
         context_text_final = agent_config.get("system_prompt", "") or ""
+        if include_ephemeral:
+            volatile_tail = prompt_builder.build_volatile_tail()
+            agent_config["_session_context_block"] = "\n\n".join(
+                part for part in (_session_sections, volatile_tail) if part
+            )
 
         # ── Completeness gate (fail-loud, run_e47c1cfb) ────────────────
         # Runs OUTSIDE the assembly try above, so a gate failure is never
@@ -1949,14 +1948,11 @@ class PromptBuilder:
         if _degraded:
             prompt_metadata["degraded"] = _degraded
 
-        # Volatile tail (datetime/runtime) goes LAST — after the 76K context
-        # files — so the stable prefix (framing + constitution) is cacheable.
-        _tail = f"\n\n{volatile_tail}" if volatile_tail else ""
         if context_text_final:
-            return f"{builder_text}\n\n{context_text_final}{_tail}"
-        # No context files (degraded / channel edge case): still emit the tail
-        # so datetime/runtime are never lost.
-        return f"{builder_text}{_tail}"
+            return f"{builder_text}\n\n{context_text_final}"
+        # No context files (degraded / channel edge case): the framing alone; the
+        # datetime/runtime tail still reaches the model in the session block.
+        return builder_text
 
     async def build_default_system_prompt(
         self,
@@ -1968,12 +1964,12 @@ class PromptBuilder:
     ) -> str:
         """阶段二 prompt-builder 两分 — the input-INDEPENDENT "default" half.
 
-        Returns the cacheable/warmable base system prompt STRING = 11 context
-        files + stable framing + volatile datetime/runtime tail, parameterized
-        ONLY by (session_type × model) via ``channel_context`` and the model in
-        ``agent_config`` — NO per-turn ephemeral (audit hint/UI-SENSE/DailyActivity/
-        recall/resume). This is exactly ``build_system_prompt`` with the ephemeral
-        block skipped.
+        Returns the base system prompt STRING = stable framing + the governed
+        context files, parameterized ONLY by (session_type × model) via
+        ``channel_context`` and the model in ``agent_config``. This is exactly
+        ``build_system_prompt`` without building the session-context block and
+        without resume history, so for a session without resume it is the same
+        string ``build_system_prompt`` returns.
 
         ⚠️ Returns a STRING, never a ``ClaudeAgentOptions`` object. Caching the
         whole options object froze session identity → cross-session bleed +

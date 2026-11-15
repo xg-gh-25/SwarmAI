@@ -584,6 +584,10 @@ class RetryManager:
                     _consecutive_timeouts, self._parent.session_id, injected,
                 )
                 resume_session_id = None
+                # The blank respawn starts without the transcript, so without the
+                # session context the first query carried (the system prompt no
+                # longer holds it): give it that block again.
+                query_content = self._parent._with_kept_session_context(query_content)
 
             # Failure-type-aware backoff:
             # OOM → exponential 30/60/120s, Rate limit → wait for reset

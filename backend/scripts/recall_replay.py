@@ -203,6 +203,9 @@ def _replay_session(args: tuple) -> list[dict]:
     unit = SessionUnit(sid, "default")
     unit._sdk_session_id = sid
     unit._app_session_id = sid
+    # where production keeps the first query's session-context block (recall dedups
+    # against it, session_router._recall_seen_text)
+    unit._hook_session_context = {}
     opts = _Options(prompt)
     seen_tool = 0
     records = []
@@ -216,14 +219,15 @@ def _replay_session(args: tuple) -> list[dict]:
         _CUTOFF.ts = ts
         rf._today = (lambda d=ts[:10]: d)
         _CAPTURE.clear()
-        before = opts.system_prompt
         unit._recall_query_block = None
         t0 = time.perf_counter()
-        asyncio.run(sr._maybe_inject_recall(
-            msg, opts, unit, should_mutate_system_prompt=(i == 0)))
+        asyncio.run(sr._maybe_inject_recall(msg, opts, unit))
         ms = (time.perf_counter() - t0) * 1000.0
-        injected = (opts.system_prompt[len(before):] if opts.system_prompt.startswith(before)
-                    else opts.system_prompt) + (unit._recall_query_block or "")
+        # recall never writes the system prompt: what a turn got is its query stash
+        injected = unit._recall_query_block or ""
+        if i == 0:  # the first query: what production keeps for its process
+            sr._keep_session_context(
+                unit, sr._build_session_context_block(None, unit._recall_query_block), None)
         hits = _CAPTURE.get("hits")
         rec = {"sid": sid, "i": i, "n": len(msgs), "ts": ts, "msg": msg[:600],
                "kw": sr._extract_query_keywords(msg), "ran": "hits" in _CAPTURE,
@@ -232,7 +236,10 @@ def _replay_session(args: tuple) -> list[dict]:
                "project": list(getattr(unit, "_active_project", None) or [None, None]),
                "hits": [{k: h.get(k) for k in ("domain", "source", "text")} for h in hits or []]}
         if counterfactual and not rec["ran"] and rec["kw"]:
-            seen = opts.system_prompt + "\n" + (getattr(unit, "_recall_history", "") or "")
+            # what production dedupes against (session_router._maybe_followup_recall):
+            # the prompt plus the kept session block, then the recall history
+            seen = (sr._recall_seen_text(opts, unit, None) + "\n"
+                    + (getattr(unit, "_recall_history", "") or ""))
             body, would = sr._unified_recall_body(rec["kw"], unit._active_project, seen, sid,
                                                   time.monotonic() + 8.0, True)
             rec["would"] = [{k: h.get(k) for k in ("domain", "source", "text")}

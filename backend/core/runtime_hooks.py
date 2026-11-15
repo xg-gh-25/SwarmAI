@@ -1207,6 +1207,8 @@ def create_post_compact_injection(
     the next UserPromptSubmit injects ``additionalContext`` with:
     - Files touched during this session (for re-reading)
     - Basic session continuity instructions
+    - The session context the subprocess got with its first query (kept by
+      session_router._compose_turn_prefix), and the Project Agent block
 
     Fire-once: resets ``_compacted`` flag after injection.
     """
@@ -1271,10 +1273,20 @@ def create_post_compact_injection(
         ctx["_compacted"] = False
 
         text = " ".join(parts)
+        # The session context the subprocess got with its first query (DailyActivity,
+        # North Star, deferred MCPs, date/time + runtime, the first turn's DDD and
+        # recall): it used to sit in the system prompt, which a compaction keeps; it
+        # now rides the first message, which the compaction summarized, so it is
+        # re-sent once here (session_router._compose_turn_prefix keeps it).
+        from core.injected_blocks import KEPT_SESSION_CONTEXT_KEY
+        kept = ctx.get(KEPT_SESSION_CONTEXT_KEY)
+        if isinstance(kept, str) and kept:
+            text += "\n\n" + kept
         # the Brain's Project Agent contract the session got with its DDD block: the
-        # compaction folded it into the summary (design 2026-11-09-project-agent-contract §3.1)
+        # compaction folded it into the summary (design 2026-11-09-project-agent-contract §3.1).
+        # Not repeated when the kept session context above already carries it.
         block = ctx.get("_project_agent_block")
-        if isinstance(block, str) and block:
+        if isinstance(block, str) and block and block not in text:
             text += "\n\n" + block
         return {
             "hookSpecificOutput": {
