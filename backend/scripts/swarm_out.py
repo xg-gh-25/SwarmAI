@@ -271,7 +271,8 @@ def _run_command(args) -> int:
         return _call("POST", path + "/return/prepare", {**actor, "url": args.url}, timeout=300)
     if args.cmd == "return-land":
         # the repository's protected paths you reviewed land too (their paths are kept in
-        # the run's decision record); git hooks and filters never do (hive_return.land).
+        # the run's decision record); the person-only paths never do (hive_return.PERSON_ONLY:
+        # git hooks and filters, CI pipelines, coding-agent configuration).
         # The landed commit's message carries this summary (yours, from the review), never
         # the Hive's own commit messages
         try:

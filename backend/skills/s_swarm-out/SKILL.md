@@ -216,10 +216,19 @@ numbered text options ("reply with a number"). Only this question.
      its green tests say nothing about this machine. It lands on this
      machine only: pushing stays the person's, and is not part of the run. When prepare
      lists protected paths (they guard the agent or run code here), read those files'
-     diff with extra care and say in `--why` what they change and why it is right: they
-     land with the rest. Git hooks, filters and submodules never land from a Hive (git would run its code here on
-     its own): `rerun` asking the Hive to leave them out, or make that
-     change yourself in this session, with its own tests and review.
+     diff with extra care and say in `--why` what they change and why it is right: the
+     repository's own protected paths land with the rest. Two kinds never land from an
+     agent, in any repository: git hooks, filters and submodules (git would run their code
+     here on its own), and CI and agent configuration, which run code on push or steer a
+     coding agent: CI pipelines such as `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`,
+     `Jenkinsfile`; coding-agent settings and rules such as `.claude/`, `.mcp.json`,
+     `.cursor/`, `.kiro/`, `.gemini/`, `.codex/`, `.swarmai/`, `.vscode/tasks.json`,
+     `.devcontainer/`; and `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` at any depth (the
+     refusal names the files it holds, the first ten and how many more). `return-land` refuses them: `rerun` asking the
+     Hive to leave them out, or make that change yourself in this session, with its own
+     tests and review. The person may land them from the run's card; never send a landing
+     in the person's name. A repository's `[hive_return] protected` adds paths to read
+     with care; it cannot remove these.
      When `return-land` is refused (a conflict, rewritten commits): take the change over
      yourself in this session, then `discard` the run saying so (its commits stay in
      `refs/hive/...` here once prepared, so nothing is lost); or `rerun` it on the current

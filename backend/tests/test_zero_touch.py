@@ -470,9 +470,12 @@ def test_skill_matches_the_code():
     # no discard after accept; the bundle that could not be sealed; the third re-send
     assert "an accepted run settles by itself" in skill
     assert "variant `manual`" in skill and "take it over" in skill
-    # protected paths: the agent lands them once reviewed; what runs code on its own never
-    # (design 2026-11-02-hive-run-decision-record §2)
-    assert "they\n     land with the rest" in skill and "never land from a Hive" in skill
+    # the repository's protected paths: the agent lands them once reviewed; git hooks, CI
+    # and agent configuration never (hive_return.PERSON_ONLY; design
+    # 2026-11-02-hive-run-decision-record §2)
+    flat = " ".join(skill.split())
+    assert "the repository's own protected paths land with the rest" in flat
+    assert "never land from an agent, in any repository" in flat
 
 
 def test_z11_dispatch_asks_only_for_acceptance():

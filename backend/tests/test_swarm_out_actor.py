@@ -259,7 +259,7 @@ def test_the_land_route_lets_an_agent_land_reviewed_protected_paths_but_never_gi
     body = {**AGENT, "key": "k", "tip": "t", "summary": "s"}
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
     # an agent lands the repository's protected paths it reviewed, never the git hooks
-    # and filters that run code here (design 2026-11-02-hive-run-decision-record §2);
+    # and filters, CI or agent configuration (hive_return.PERSON_ONLY; design 2026-11-02-hive-run-decision-record §2);
     # its summary becomes the landed commit's message body
     assert landed == [(DID, "k", "t", False, "s")]
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land",

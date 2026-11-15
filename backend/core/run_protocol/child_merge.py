@@ -9,9 +9,9 @@ and put, in the order given, on a chain of commits on this run's snapshot ref
 worktree's change as it is now (tracked edits and new untracked files), parent the
 worktree's HEAD (the run's base). Each child is a three-way ``merge-tree`` of the
 chain's tip and the child's tip over the child's own base; a conflict is reported and
-leaves the chain as it was. A child whose commits change a path that makes git run code
-here on its own (``hive_return.GIT_PROTECTED``) is refused, the rule an agent's landing
-follows; ``.aidlc/deliverables/`` stays as the chain has it (a child pipeline run's own
+leaves the chain as it was. A child whose commits change a person-only path
+(``hive_return.PERSON_ONLY``: git hooks and filters, CI pipelines, coding-agent
+configuration) is refused, the rule an agent's landing follows; ``.aidlc/deliverables/`` stays as the chain has it (a child pipeline run's own
 records, added, changed or deleted there, are never the lead run's). One child's or
 repository's failure is reported as that item's; the others go on.
 
@@ -176,12 +176,11 @@ def _merge_one(engine, did: str, row: dict, r: dict) -> dict[str, Any]:
                            "why": f"take {row.get('wp')}'s commits into Swarm Run {engine.run_id}"})
     if got.get("ok") is False:
         return {"dispatch_id": did, "repo": r.get("name"), "ok": False, "detail": got.get("detail")}
-    git_exec = [p for p in got.get("protected_files") or []
-                if hive_return._is_protected(p, list(hive_return.GIT_PROTECTED))]
-    if git_exec:
+    files = [f.get("path") for f in got.get("files") or [] if isinstance(f, dict) and isinstance(f.get("path"), str)]
+    held = hive_return.person_only(sorted({*(got.get("protected_files") or []), *files}))
+    if held:
         return {"dispatch_id": did, "repo": r.get("name"), "ok": False, "refused": True,
-                "detail": "these commits change files that make this machine run code on its "
-                          "own (git hooks, filters, submodules): " + ", ".join(git_exec[:10])
+                "detail": hive_return.person_only_reason(held)
                           + "; re-run the child asking it to leave them out"}
     name, wt = _repo_of(engine, got)
     if wt is None:

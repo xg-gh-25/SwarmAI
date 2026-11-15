@@ -16,7 +16,7 @@
  * last and apart. Each command is its name, one line of what it does and its key. A
  * command that needs words (re-run with a correction, discard) turns the panel into a
  * big box in place, never a dialog: the deliverable stays in view. Landing commits shows
- * the review of each repository in the panel (protected paths ticked separately).
+ * the review of each repository in the panel (protected paths listed apart).
  *
  * The card is a dialog layer (hooks/useLayer): focus moves in and back, Tab stays
  * inside, Esc goes to the topmost layer. Keys: J / K the next / previous run waiting for
@@ -739,7 +739,7 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
     // a changed file's diff (swarm:open-file-versions) is only ever sent by a click on
     // this card's row, after its reads: the card steps aside unless a correction or a
     // discard note is being typed, or an answer is half given (landing is not lost:
-    // reading a protected file before ticking it is what the diff is for)
+    // reading a protected file before landing is what the diff is for)
     const onOpenVersions = () => {
       if (modeRef.current === 'rerun' || modeRef.current === 'discard' || askDirtyRef.current) return;
       onClose();

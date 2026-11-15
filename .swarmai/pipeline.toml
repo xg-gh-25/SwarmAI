@@ -12,8 +12,10 @@ trailer = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
 link = ["desktop/node_modules", "backend/.venv"]
 
 [hive_return]
-# Changes a Hive run made here need their own approval before they land
-# (docs/design/2026-10-28-project-agent-flow.md §7 ⑨): code that guards the agent,
+# Changes a Hive run made here are marked for the reviewer, who reads them with care
+# before landing (docs/design/2026-10-28-project-agent-flow.md §7 ⑨; an agent lands them
+# once reviewed, except the person-only paths in core/hive_return PERSON_ONLY, which every
+# repository has and this list cannot remove): code that guards the agent,
 # the agent's own configuration and context, what runs at build or in CI, the manifests.
 protected = [
   "backend/core/security_hooks.py", "backend/core/hook_builder.py", "backend/hooks/**",

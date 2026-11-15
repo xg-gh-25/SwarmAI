@@ -17,17 +17,24 @@ here, trusting nothing the Hive reported beyond "there is a bundle with this sha
 
 What the person reviews: the files with their line counts, the commits (their messages
 are the Hive's text, shown as data and never put into an agent's context), and the
-files under the repository's own protected paths (``.swarmai/pipeline.toml``
-``[hive_return] protected``, read from this machine's main branch), marked so the reviewer
-reads them with care; they land with the rest, and the landed commit names them.
+protected files, marked so the reviewer reads them with care. Protected are, in every
+repository, the person-only paths (``PERSON_ONLY``: what changes how git behaves here,
+``GIT_PROTECTED``, and what runs on push or configures a coding agent, CI pipelines,
+agent settings, MCP servers, SwarmAI's own ``.swarmai/`` and AGENTS.md / CLAUDE.md at
+any depth, ``CI_AGENT_PROTECTED``), plus the repository's own globs
+(``.swarmai/pipeline.toml`` ``[hive_return] protected``, read from this machine's main
+branch). Those globs only widen what is marked: no setting removes a person-only path
+(a default one file in the repository could switch off would protect nothing where that
+file says so). The repository's globs land with the rest; the landed commit names every
+protected file.
 
 ``land(dispatch_id, key, tip, allow_git_exec)``: only for the tip prepared and shown;
 merges the reviewed change (``base..tip``; for a later turn of the same run, what came
 after the tip that landed) onto the run's branch from objects only (no working tree, no
 hook, no filter), as one commit with a message this host writes (the Hive's commits stay at the ``refs/hive/`` ref),
 and fast-forwards the branch to it. Paths under an ignored or linked directory of the
-checkout are refused at prepare (git would write a file into a virtualenv), and paths
-that change git's own behaviour are protected in every repository (``GIT_PROTECTED``). Not good enough is
+checkout are refused at prepare (git would write a file into a virtualenv), and the
+person-only paths (``PERSON_ONLY``) are protected in every repository. Not good enough is
 not recorded here: the person re-runs the task with a correction or discards it. Qualifying the change (build, tests,
 deploy) is the repository's own process and the person's, after this.
 """
@@ -317,6 +324,41 @@ def _verify_and_fetch(repo: Path, branch: str, bundle: Path, local_ref: str,
 #: submodules, hooks kept in the tree): protected in every repository
 GIT_PROTECTED = ("**/.gitattributes", ".gitattributes", ".lfsconfig", "**/.lfsconfig", ".gitmodules",
                  ".husky/**", ".githooks/**", ".pre-commit-config.yaml")
+#: paths that run code on push (CI pipelines and the local actions they call) or that
+#: configure a coding agent run here (its settings, hooks, MCP servers, rules and the
+#: instruction files it reads, at any depth; SwarmAI's own ``.swarmai/``, whose review
+#: guidance goes into its reviewers' prompts), and editor / container tasks that run on
+#: open: protected in every repository, like GIT_PROTECTED
+CI_AGENT_PROTECTED = (
+    ".github/workflows/**", ".github/actions/**", ".gitlab-ci.yml", ".circleci/**",
+    "azure-pipelines.yml", "azure-pipelines.yaml", "Jenkinsfile", "**/Jenkinsfile",
+    ".claude/**", "**/.claude/**", ".mcp.json", "**/.mcp.json", ".cursor/**", "**/.cursor/**",
+    ".kiro/**", "**/.kiro/**", ".gemini/**", "**/.gemini/**", ".codex/**", ".amazonq/**",
+    ".windsurf/**", ".windsurfrules", ".clinerules/**", ".github/copilot-instructions.md",
+    ".github/instructions/**", ".cursorrules", ".aider.conf.yml", ".roo/**", ".roomodes",
+    ".roorules", ".roorules-*", ".kilocode/**", ".continue/**", ".continuerc.json", ".junie/**",
+    ".swarmai/**",
+    "AGENTS.md", "**/AGENTS.md", "CLAUDE.md", "**/CLAUDE.md", "GEMINI.md", "**/GEMINI.md",
+    ".vscode/tasks.json", ".devcontainer/**", ".devcontainer.json")
+#: what an agent never lands from a Hive (the person may): refused to the agent's landing
+#: here and to a Swarm Run's child merge (core/run_protocol/child_merge). Who is the person
+#: is the route's actor (core/swarm_out_actor): like every person-only step in Swarm Out
+#: this stops the agent's own mistakes, not an agent set on getting past it (the agent and
+#: the daemon share an OS user)
+PERSON_ONLY = GIT_PROTECTED + CI_AGENT_PROTECTED
+
+
+def person_only(paths: list[str]) -> list[str]:
+    """The *paths* an agent may not land (``PERSON_ONLY``)."""
+    return [p for p in paths if _is_protected(p, list(PERSON_ONLY))]
+
+
+def person_only_reason(paths: list[str]) -> str:
+    """Why an agent's landing of *paths* (from ``person_only``) is refused."""
+    more = f" and {len(paths) - 10} more" if len(paths) > 10 else ""
+    return ("these commits change files that make code run on their own, here or on push, or that "
+            "configure the coding agents (git hooks and filters, submodules, CI pipelines, agent "
+            "settings and instructions): " + ", ".join(paths[:10]) + more)
 _BAD_CHARS = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 
@@ -342,7 +384,7 @@ def _unsafe_paths(repo: Path, paths: list[str]) -> list[str]:
 
 def _review(repo: Path, base: str, tip: str, globs: list[str]) -> dict[str, Any]:
     raw = _out(repo, "diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", base, tip)
-    globs = [*GIT_PROTECTED, *globs]
+    globs = [*PERSON_ONLY, *globs]
     files = []
     for entry in raw.split("\0"):
         parts = entry.split("\t", 2)
@@ -562,10 +604,12 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     """Land the prepared tip the person or the dispatching agent reviewed: landing is the
     judgment, so protected paths need no approval of their own (the landed commit's
     message names them). The agent's landing (the route passes ``allow_git_exec`` False
-    for it: design 2026-11-02-hive-run-decision-record §2) refuses the git hooks and
-    filters (``GIT_PROTECTED``), which make git run code on this machine on its own; the
-    person may land them. The flow judges whether the result is the one
-    asked for; it is not where security is enforced (that is its own work). The commit is built from objects only
+    for it: design 2026-11-02-hive-run-decision-record §2) refuses the person-only paths
+    (``PERSON_ONLY``): git hooks and filters, which make git run code on this machine on
+    its own, and CI pipelines and coding-agent configuration, which run code on push or
+    steer an agent on this machine; the person may land them (``allow_git_exec`` decides
+    the whole ``PERSON_ONLY`` set; the name is from when it held git hooks only). A
+    repository's own protected globs the agent lands once reviewed. The commit is built from objects only
     (``merge-tree --write-tree`` of the branch and the tip over the reviewed base, then
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
     main checkout fast-forwards to it, which runs no hook either."""
@@ -575,11 +619,11 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     repo = Path(state["repo"])
     if _git(repo, "rev-parse", "--verify", "--quiet", f"{state['ref']}^{{commit}}").stdout.decode().strip() != tip:
         raise ReturnError("the ref of these commits moved since they were shown; review them again")
-    git_exec = [p for p in state["protected_files"] if _is_protected(p, list(GIT_PROTECTED))]
-    if git_exec and not allow_git_exec:
-        raise ReturnError("these commits change files that make this machine run code on its own "
-                          "(git hooks, filters, submodules): "
-                          + ", ".join(git_exec[:10])
+    # from every file, not only the marked ones: a review prepared before a path joined
+    # PERSON_ONLY did not mark it
+    held = person_only(sorted({*state["protected_files"], *(f["path"] for f in state["files"])}))
+    if held and not allow_git_exec:
+        raise ReturnError(person_only_reason(held)
                           + "; an agent does not land them: re-run asking the Hive to leave them out")
     if state["files_total"] > len(state["files"]):
         raise ReturnError(f"the commits change {state['files_total']} files, more than the review shows; "
@@ -600,7 +644,7 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     row = swarm_out._log_row_of(dispatch_id)
     title = " ".join(str(row.get("title") or "").split())[:72] or "a Hive run"
     msg = landing_message(title, row.get("hive"), dispatch_id, state["ref"], state["files"],
-                          state["protected_files"], summary)
+                          sorted({*state["protected_files"], *held}), summary)
     try:   # the repository's own author and trailer ([landing] in .swarmai/pipeline.toml)
         settings = landing_settings(str(repo), branch)
     except LandingError as e:

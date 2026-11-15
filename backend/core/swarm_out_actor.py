@@ -32,9 +32,12 @@ agent the routes refuse what is the person's to decide:
 The agent lands commits that change the repository's own protected paths once it has
 reviewed them (design 2026-11-02-hive-run-decision-record §2: the funnel lands on this
 host or re-runs, never hands unlanded work to the person); the land entry keeps the
-paths and its reason. Paths that make this machine run code on their own (git hooks,
-filters, submodules: core/hive_return ``GIT_PROTECTED``) an agent never lands: it re-runs the task
-asking the Hive to leave them out, or makes the change itself in its own session.
+paths and its reason. The person-only paths (core/hive_return ``PERSON_ONLY``: git hooks,
+filters and submodules, which make this machine run code on their own, and CI pipelines and
+coding-agent configuration such as ``.github/workflows/``, ``.claude/``, ``.mcp.json`` and
+AGENTS.md / CLAUDE.md at any depth) an agent never lands: it re-runs the task asking the
+Hive to leave them out, or makes the change itself in its own session; the person may land
+them. A repository's ``[hive_return]`` adds protected paths, it never removes these.
 
 Every command, the agent's and the person's, is one entry of the run's decision record
 (core/swarm_out_record: by, session, time, decision, reason, and the facts this host saw),

@@ -619,10 +619,109 @@ def test_a_git_hook_from_a_hive_is_refused_to_the_agent(world, monkeypatch):
     _hive_bundle(world)
     st = asyncio.run(hive_return.prepare(DID, URL))
     before = git(world["host"], "rev-parse", "main")
-    with pytest.raises(hive_return.ReturnError, match="make this machine run code"):
+    with pytest.raises(hive_return.ReturnError, match="make code run on their own"):
         hive_return.land(DID, st["key"], st["tip"], allow_git_exec=False)
     assert git(world["host"], "rev-parse", "main") == before
     assert hive_return.land(DID, st["key"], st["tip"])["landed"]   # the person may
+
+
+#: one path of each kind in CI_AGENT_PROTECTED, nested agent files included
+CI_AGENT_PATHS = [".github/workflows/ci.yml", ".gitlab-ci.yml", ".circleci/config.yml",
+                  "azure-pipelines.yml", "Jenkinsfile", ".claude/settings.json", ".mcp.json",
+                  ".cursor/rules/x.mdc", ".kiro/steering/x.md", "AGENTS.md", "pkg/sub/AGENTS.md",
+                  "CLAUDE.md", "docs/CLAUDE.md", ".vscode/tasks.json", ".devcontainer/devcontainer.json"]
+
+
+@pytest.mark.parametrize("path", [".github/workflows/ci.yml", "pkg/sub/AGENTS.md", ".claude/settings.json",
+                                  ".mcp.json", ".gitlab-ci.yml"])
+def test_ci_and_agent_config_files_are_held_for_the_person(world, monkeypatch, path):
+    """A CI or agent-configuration file from a Hive is held for the person exactly like a
+    git hook: the agent's landing is refused and main stays; the person's lands it and
+    the landed commit names it."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], "src/a.py", "a = 2\n", "ordinary")
+    _commit(world["hive"], path, "x: 1\n", "ci or agent config")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["protected_files"] == [path]
+    before = git(world["host"], "rev-parse", "main")
+    with pytest.raises(hive_return.ReturnError, match="make code run on their own") as e:
+        hive_return.land(DID, st["key"], st["tip"], allow_git_exec=False)
+    assert path in str(e.value)
+    assert git(world["host"], "rev-parse", "main") == before
+    assert hive_return.land(DID, st["key"], st["tip"])["landed"]   # the person may
+    assert (world["host"] / path).read_text() == "x: 1\n"
+    assert f"Changes protected paths: {path}" in git(world["host"], "log", "--format=%b", f"{before}..main")
+
+
+def test_a_review_prepared_before_a_path_was_held_still_holds_it(world, monkeypatch):
+    """A review state saved by an older version marked only GIT_PROTECTED: the agent's
+    landing checks every file, not only the marked ones."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], ".github/workflows/ci.yml", "on: x\n", "ci")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    state = hive_return.load(DID, st["key"])
+    state["protected_files"] = []
+    for f in state["files"]:
+        f["protected"] = False
+    hive_return._save(DID, st["key"], state)
+    with pytest.raises(hive_return.ReturnError, match=r"\.github/workflows/ci\.yml"):
+        hive_return.land(DID, st["key"], st["tip"], allow_git_exec=False)
+
+
+def test_ci_and_agent_config_files_are_marked_without_a_hive_return_table(world, monkeypatch):
+    """The default set applies to a repository with no .swarmai/pipeline.toml at all."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    git(world["host"], "rm", "-q", "-r", ".swarmai")              # read from this machine's main
+    git(world["host"], "commit", "-q", "-m", "no config")
+    for p in CI_AGENT_PATHS:
+        _commit(world["hive"], p, "x\n", p)
+    _commit(world["hive"], "src/a.py", "a = 2\n", "ordinary")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert sorted(st["protected_files"]) == sorted(CI_AGENT_PATHS)
+    assert {f["path"]: f["protected"] for f in st["files"]}["src/a.py"] is False
+
+
+def test_the_person_only_set_matches_ci_and_agent_files_only():
+    from core import hive_return
+    held = CI_AGENT_PATHS + ["deep/a/b/.claude/hooks/x.sh", "Agents.md", ".GITHUB/Workflows/X.yml",
+                             "svc/.mcp.json", ".github/actions/setup/action.yml", ".devcontainer.json",
+                             ".pre-commit-config.yaml", "lib/.gitattributes", ".swarmai/review.md",
+                             ".swarmai/pipeline.toml", "GEMINI.md", "pkg/GEMINI.md", ".gemini/settings.json",
+                             ".codex/config.toml", ".github/copilot-instructions.md", ".clinerules",
+                             ".windsurfrules", ".amazonq/rules/x.md", ".cursorrules", ".aider.conf.yml",
+                             ".roo/rules/x.md", ".roomodes", ".continue/config.yaml", ".junie/guidelines.md",
+                             ".roorules", ".roorules-code", ".kilocode/rules/x.md", ".continuerc.json"]
+    assert hive_return.person_only(held) == held
+    ordinary = ["src/a.py", "scripts/build.sh", "README.md", "docs/agents-guide.md", "MY_AGENTS.md",
+                "AGENTS.md.bak", "github/workflows/ci.yml", ".github/CODEOWNERS", ".vscode/settings.json",
+                "src/claude.py", "x.claude/y"]
+    assert hive_return.person_only(ordinary) == []
+
+
+def test_the_refusal_says_how_many_files_it_did_not_name():
+    from core import hive_return
+    paths = [f"pkg{i}/AGENTS.md" for i in range(12)]
+    reason = hive_return.person_only_reason(paths)
+    assert "pkg9/AGENTS.md" in reason and "pkg10/AGENTS.md" not in reason and reason.endswith(" and 2 more")
+    assert "more" not in hive_return.person_only_reason(paths[:10])
+
+
+def test_the_docs_name_the_person_only_set():
+    """The texts an agent follows say what it never lands, and that [hive_return] only adds."""
+    from core import hive_return, swarm_out_actor
+    from core.run_protocol import child_merge
+    for doc in (hive_return.__doc__, swarm_out_actor.__doc__, child_merge.__doc__):
+        assert "PERSON_ONLY" in doc
+    assert "no setting removes a person-only path" in hive_return.__doc__
+    skill = (Path(__file__).resolve().parents[1] / "skills" / "s_swarm-out" / "SKILL.md").read_text()
+    for word in (".github/workflows/", "AGENTS.md", ".mcp.json", "cannot remove these"):
+        assert word in skill
 
 
 def test_a_swarm_run_childs_commits_may_build_on_its_lead_runs_snapshot(world, monkeypatch, tmp_path):

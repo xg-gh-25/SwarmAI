@@ -269,8 +269,11 @@ def test_agent_lands_protected_but_not_git_executing_paths(env, monkeypatch):
     monkeypatch.setattr(hive_return, "_target_branch", reached)
     with pytest.raises(hive_return.ReturnError, match="git hooks"):
         real_land(DID, "k", "t" * 40, False)
-    state["protected_files"] = ["backend/core/security_hooks.py", "backend/tests/conftest.py",
-                                ".claude/settings.json"]
+    # CI and agent configuration are held for the person too (hive_return.PERSON_ONLY)
+    state["protected_files"] = ["backend/core/security_hooks.py", ".claude/settings.json"]
+    with pytest.raises(hive_return.ReturnError, match=r"\.claude/settings\.json"):
+        real_land(DID, "k", "t" * 40, False)
+    state["protected_files"] = ["backend/core/security_hooks.py", "backend/tests/conftest.py"]
     with pytest.raises(hive_return.ReturnError, match="reached the merge"):
         real_land(DID, "k", "t" * 40, False)
 

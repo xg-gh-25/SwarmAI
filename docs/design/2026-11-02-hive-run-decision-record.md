@@ -140,3 +140,4 @@ flowchart TD
 - r3.1（2026-11-02）：XG："run card 上要有这个决策漏斗信息。"加 §3.1 卡上怎么看和 mock：标题下一行漏斗、"决定"页按关分组、给人的卡、列表行的状态词。
 - r3.2（2026-11-03）：对照已实现的代码（commit 0959a2a6b）对齐文字：front matter 的 `status`；§4 第二条写清说的是"结果"不是"等待"，按 `_host_wait_items`
   写出照旧进 Needs You 的三种等待（`escalate` 的、不属于 `HOST_CLASSES` 的、派单会话已不存在的）。内容和实现一致，没有新决定。
+- r4（2026-11-15）：agent 不能落的底线从 `GIT_PROTECTED` 扩成 `PERSON_ONLY` = `GIT_PROTECTED` + `CI_AGENT_PROTECTED`（CI 流水线、`.claude/`、`.mcp.json`、`.cursor/`、`.kiro/`、`.gemini/`、SwarmAI 自己的 `.swarmai/`、任意深度的 `AGENTS.md` / `CLAUDE.md` / `GEMINI.md`、`.vscode/tasks.json`、`.devcontainer/` 等：push 时跑代码或指挥本机编码 agent 的文件），每个仓库都适用；人照旧能在面板上落。仓库自己的 `[hive_return] protected` 只加标记、agent 审过照旧能落，不能删掉默认的路径（仓库里一个文件就能关掉的默认，在那个仓库里什么都护不住）。这条推翻 r3 里"落地漏斗不是做安全的地方"对这些路径的取舍，是 2026-11-15 人提的要求。§2 第 2 行按此读。

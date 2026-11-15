@@ -257,8 +257,9 @@ async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     The agent lands the repository's protected paths it reviewed (design
     2026-11-02-hive-run-decision-record §2: the funnel lands or re-runs, it never hands
     unlanded work to the person; the land entry keeps the paths and the reason), but
-    never the git hooks and filters that run code on this machine (``allow_git_exec``
-    False: it re-runs without them, or makes the change itself)."""
+    never the person-only paths (``hive_return.PERSON_ONLY``: git hooks and filters, CI
+    pipelines, coding-agent configuration; ``allow_git_exec`` False: it re-runs without
+    them, or makes the change itself)."""
     _require_desktop()
     import asyncio
     from core import hive_return

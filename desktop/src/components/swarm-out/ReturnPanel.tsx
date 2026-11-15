@@ -6,7 +6,7 @@
  * "Fetch and review" takes the bundle back and checks it (backend core/hive_return.prepare;
  * nothing lands). The review shows the files with their line counts, the commits (their
  * subjects are the Hive's text, shown as data), and the files under the repository's
- * protected paths, which need their own tick. "Approve landing" lands exactly the tip
+ * protected paths, listed apart to be read with care. "Approve landing" lands exactly the tip
  * shown (landing them is accepting the run: the big card's command panel shows this
  * panel for each repository, ``autoPrepare``). Not good enough is a re-run with a
  * correction or a discard, on the card. Building and testing the change is the

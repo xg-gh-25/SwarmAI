@@ -204,7 +204,7 @@ def test_merge_refuses_git_hooks_and_reports_a_conflict_without_changing_the_cha
     d1, d2 = fake.rows[0]["dispatch_id"], fake.rows[1]["dispatch_id"]
     _prepared(rig, fake, d1, {".pre-commit-config.yaml": "repos: []\n"}, protected=[".pre-commit-config.yaml"])
     out = _exec(rig, "merge", d1)
-    assert not out["ok"] and out["merged"][0]["refused"] and "run code on its own" in out["merged"][0]["detail"]
+    assert not out["ok"] and out["merged"][0]["refused"] and "run on their own" in out["merged"][0]["detail"]
     _prepared(rig, fake, d2, {"x.txt": "one\n"})
     assert _exec(rig, "merge", d2)["ok"]
     chain = child_merge.rw.snapshot_ref(rig.run_id, child_merge._label("chain", "repo"))
@@ -215,6 +215,23 @@ def test_merge_refuses_git_hooks_and_reports_a_conflict_without_changing_the_cha
     out = _exec(rig, "merge", "so_eeeeeeeeeeee")
     assert not out["ok"] and out["merged"][0]["conflicts"] == ["x.txt"]
     assert _g(rig.repo, "rev-parse", chain) == tip                             # left as it was
+
+
+def test_merge_refuses_ci_and_agent_config_files(run):
+    """A child's CI or agent-configuration file is refused like a git hook (the rule an
+    agent's landing follows: hive_return.PERSON_ONLY), whether or not the review marked it."""
+    rig, fake = run
+    _exec(rig, "plan", "--file", "-", stdin=json.dumps(PLAN))
+    _exec(rig, "dispatch", "W1", "W2")
+    d1, d2 = fake.rows[0]["dispatch_id"], fake.rows[1]["dispatch_id"]
+    _prepared(rig, fake, d1, {"a.py": "x\n", ".github/workflows/ci.yml": "on: x\n"},
+              protected=[".github/workflows/ci.yml"])
+    _prepared(rig, fake, d2, {"b.py": "y\n", "pkg/sub/AGENTS.md": "rules\n"})
+    out = _exec(rig, "merge", d1, d2)
+    assert not out["ok"]
+    assert [m["refused"] for m in out["merged"]] == [True, True]
+    assert ".github/workflows/ci.yml" in out["merged"][0]["detail"]
+    assert "pkg/sub/AGENTS.md" in out["merged"][1]["detail"]
 
 
 def test_a_child_can_start_from_the_runs_worktree_as_it_is_now(run):
