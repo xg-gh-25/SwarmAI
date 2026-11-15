@@ -27,6 +27,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out reverted <dispatch_id> [--commit <sha> ...] --why <what you did>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out update-hive --hive <name> [--version <v>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out start-hive --hive <name>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out restart-hive --hive <name>
 
 The commands on a run are the dispatching agent's as well as the person's (design
 2026-10-31-swarm-out-agent-owns-its-runs §2.1): each says ``by: agent``, this session
@@ -228,6 +229,9 @@ def _parser() -> argparse.ArgumentParser:
     es.add_argument("--why", required=True, help="one sentence the person reads: why they decide it")
     s = sub.add_parser("start-hive", help="start a stopped Hive (when none runs)")
     s.add_argument("--hive", required=True, help="the Hive's name")
+    rs = sub.add_parser("restart-hive", help="stop and start a running Hive that holds none of "
+                                             "this Host's open runs and has no session streaming")
+    rs.add_argument("--hive", required=True, help="the Hive's name")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id", type=_dispatch_id)
     dg = sub.add_parser("diagnose", help="why the run's Hive session stopped: OOM kills, service stops, "
@@ -302,6 +306,10 @@ def _fetch(path: str) -> "dict | None":
 #: agent's Bash ceiling; past it the agent reads ``hives`` again)
 UPDATE_WAIT_S = 480
 UPDATE_EVERY_S = 15
+#: how long restart-hive waits for the daemon's stop and start to end (an EC2 stop and
+#: start plus the Hive's health check: a few minutes), under the agent's 600 s Bash limit
+RESTART_WAIT_S = 540
+RESTART_EVERY_S = 15
 
 
 def _hive_id(name: str) -> "str | None":
@@ -419,6 +427,37 @@ def _start_hive(args) -> int:
     return _call("POST", f"/instances/{hid}/start", None, api="hive")
 
 
+def _restart_hive(args) -> int:
+    """Restart a running Hive nothing is using. The daemon checks it (none of this Host's
+    open runs, unknown refuses; it answers its status check with no session streaming;
+    it is running), claims it, and runs the stop and the start in the background, so a
+    caller cut off while waiting never leaves the Hive stopped. This waits until it runs
+    again (``RESTART_WAIT_S``) or ends in error. A stopped Hive is not started here: that
+    is start-hive's, and only when no Hive runs."""
+    import time
+    hid = _hive_id(args.hive)
+    if hid is None:
+        return 1
+    rc = _call("POST", f"/instances/{hid}/restart", None, api="hive")
+    if rc != 0:
+        return rc
+    deadline = time.monotonic() + RESTART_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(RESTART_EVERY_S)
+        st = _status_of(args.hive)
+        if st == "running":
+            print(json.dumps({"ok": True, "hive": args.hive, "restarted": True, "status": st}))
+            return 0
+        if st in ("error", None):
+            print(json.dumps({"ok": False, "hive": args.hive, "status": st, "detail": (
+                "the restart did not end with the Hive running; the Hive page in the left "
+                "navigation shows why")}))
+            return 1
+    print(json.dumps({"ok": False, "hive": args.hive, "status": _status_of(args.hive), "detail": (
+        "still restarting (the daemon carries on); read `hives` again in a few minutes")}))
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     from core.knowledge_cli import RESTRICTED_ENV
@@ -437,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
         return _update_hive(args)
     if args.cmd == "start-hive":
         return _start_hive(args)
+    if args.cmd == "restart-hive":
+        return _restart_hive(args)
     if args.cmd == "watch":
         # the route answers within WATCH_MAX_S (540 s); this waits a little longer
         return _call("POST", "/watch", {"ids": args.dispatch_ids, "since": args.since,

@@ -708,22 +708,27 @@ def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] =
     return str(best["name"]), reason
 
 
-def open_runs_by_hive() -> dict[str, int]:
+def open_runs_by_hive(strict: bool = False) -> "dict[str, int] | None":
     """This Host's runs still open on each Hive (by name): dispatched under a Project
     Agent and neither settled nor discarded. A row without one never settles
-    (swarm_out_settle), so it is not counted."""
+    (swarm_out_settle), so it is not counted. For picking a Hive this is only a
+    tie-breaker, so an unreadable log counts nothing; ``strict`` is for a caller about to
+    end what runs on a Hive (a restart, the fleet's ``open_runs``): an unreadable log is
+    None (unknown) and a run whose record cannot be read counts as open."""
     from core import swarm_out_settle
     out: dict[str, int] = {}
     try:
         rows = _read_log()
     except (OSError, ValueError):
-        return {}                 # only a tie-breaker: an unreadable log never fails a dispatch
+        return None if strict else {}   # an unreadable log never fails a dispatch
     for r in rows:
         if not isinstance(r.get("project_agent"), dict) or not isinstance(r.get("dispatch_id"), str):
             continue
         try:
             rec = swarm_out_settle.load(r["dispatch_id"])
         except swarm_out_settle.SettleError:
+            if strict:
+                out[str(r.get("hive"))] = out.get(str(r.get("hive")), 0) + 1
             continue
         if rec.get("settled") or rec.get("abandoned_at"):
             continue
@@ -2143,11 +2148,12 @@ async def fleet() -> dict[str, Any]:
     running = [h for h in found if h["status"] == "running"]
     probes = dict(zip([h["id"] for h in running],
                       await asyncio.gather(*(_admission(h["id"]) for h in running))))
-    held = await asyncio.to_thread(open_runs_by_hive)
+    held = await asyncio.to_thread(open_runs_by_hive, True)
     out = []
     for h in found:
         row = {k: h.get(k) for k in ("name", "status", "version", "region", "instance_type")}
-        row["open_runs"] = held.get(str(h.get("name")), 0)
+        # None when the dispatch log cannot be read: update-hive then refuses (unknown)
+        row["open_runs"] = None if held is None else held.get(str(h.get("name")), 0)
         if h["status"] == "running":
             p = probes.get(h["id"])
             row.update({"reachable": p is not None, "streaming": p and p["streaming"],

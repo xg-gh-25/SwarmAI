@@ -462,7 +462,7 @@ def test_skill_matches_the_code():
     commands = set(re.findall(r"scripts\.swarm_out ([a-z-]+)", skill))
     sub = next(a for a in cli._parser()._actions if a.dest == "cmd")
     assert commands - {"stop|discard"} <= set(sub.choices), commands - set(sub.choices)
-    for needed in ("card", "answer", "start-hive", "update-hive"):
+    for needed in ("card", "answer", "start-hive", "update-hive", "restart-hive"):
         assert needed in commands
     assert "waits" not in sub.choices
     # nothing in the flow hands a wait to the person: no escalation, no person's card
@@ -669,6 +669,214 @@ def test_update_hive_refuses_when_it_cannot_see_the_open_runs(monkeypatch, capsy
                             {"hives": [{"id": "i1", "name": "h1", "status": "running"}]})
         assert cli.main(["update-hive", "--hive", "h1"]) == 1, fleet
     assert calls == []
+
+
+class _RestartProvisioner:
+    def __init__(self, claim_error=None):
+        self.claim_error, self.claimed, self.restarted = claim_error, [], []
+
+    async def claim_stop(self, instance_id):
+        if self.claim_error:
+            raise self.claim_error
+        self.claimed.append(instance_id)
+
+    async def restart(self, instance_id):
+        self.restarted.append(instance_id)
+
+
+def _restart_route(monkeypatch, tmp_path, *, status="running", held=None, probe=None, claim_error=None):
+    """POST /api/hive/instances/i1/restart against one Hive row; returns (response, fake)."""
+    import aiosqlite
+    from contextlib import asynccontextmanager
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from core import swarm_out
+    from routers import hive as hive_router
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db = tmp_path / "h.db"
+
+    async def make():
+        async with aiosqlite.connect(db) as c:
+            await c.execute("CREATE TABLE hive_instances (id TEXT, name TEXT, status TEXT)")
+            await c.execute("INSERT INTO hive_instances VALUES ('i1', 'h1', ?)", (status,))
+            await c.commit()
+    asyncio.run(make())
+
+    @asynccontextmanager
+    async def conn():
+        c = await aiosqlite.connect(db)
+        c.row_factory = aiosqlite.Row
+        try:
+            yield c
+        finally:
+            await c.close()
+
+    async def admission(hive_id):
+        return probe
+
+    fake = _RestartProvisioner(claim_error)
+    monkeypatch.setattr(hive_router, "_conn", conn)
+    monkeypatch.setattr(hive_router, "_get_provisioner", lambda: fake)
+    monkeypatch.delenv("SWARMAI_MODE", raising=False)
+    monkeypatch.setattr(swarm_out, "open_runs_by_hive",
+                        lambda strict=False: None if held == "unknown" else (held or {}))
+    monkeypatch.setattr(swarm_out, "_admission", admission)
+    app = FastAPI()
+    app.include_router(hive_router.router, prefix="/api/hive")
+    with TestClient(app) as client:
+        return client.post("/api/hive/instances/i1/restart"), fake
+
+
+_QUIET = {"streaming": 0, "saturated": False, "memory_percent": 20, "capable": True}
+
+
+def _restart_cli(monkeypatch, statuses, rc=0):
+    """restart-hive with the route answering ``rc`` and /hives reporting ``statuses`` in
+    turn; returns (exit code, the routes called, the CLI's last JSON line)."""
+    import io
+    from contextlib import redirect_stdout
+    from scripts import swarm_out as cli
+    calls: list = []
+    seen = iter(statuses)
+    monkeypatch.setattr(cli, "RESTART_EVERY_S", 0)
+    monkeypatch.setattr(cli, "_hive_id", lambda name: "i1")
+    monkeypatch.setattr(cli, "_status_of", lambda name: next(seen, "stopping"))
+    monkeypatch.setattr(cli, "_call", lambda method, path, *a, **k: calls.append((path, k.get("api"))) or rc)
+    out = io.StringIO()
+    with redirect_stdout(out):
+        code = cli.main(["restart-hive", "--hive", "h1"])
+    lines = out.getvalue().strip().splitlines()
+    return code, calls, json.loads(lines[-1]) if lines else None
+
+
+def test_restart_hive_stops_then_starts_an_idle_running_hive(monkeypatch, tmp_path):
+    from hive.provisioner import HiveProvisioner
+    # the route claims an idle running Hive and leaves the stop and start to the daemon
+    r, fake = _restart_route(monkeypatch, tmp_path, held={"other": 2}, probe=_QUIET)
+    assert r.status_code == 200 and r.json() == {"status": "restarting"}
+    assert fake.claimed == ["i1"] and fake.restarted == ["i1"]
+    # which stops the claimed Hive, then starts it
+    p, order = HiveProvisioner(tmp_path / "x.db"), []
+
+    async def stop(iid, claimed=False):
+        order.append(("stop", iid, claimed))
+
+    async def start(iid):
+        order.append(("start", iid))
+    monkeypatch.setattr(p, "stop", stop)
+    monkeypatch.setattr(p, "start", start)
+    asyncio.run(p.restart("i1"))
+    assert order == [("stop", "i1", True), ("start", "i1")]
+    # and the CLI calls the route once, then waits until the Hive runs again
+    code, calls, out = _restart_cli(monkeypatch, ["stopping", "stopped", "starting", "running"])
+    assert code == 0 and calls == [("/instances/i1/restart", "hive")]
+    assert out == {"ok": True, "hive": "h1", "restarted": True, "status": "running"}
+
+
+def test_restart_hive_refuses_a_busy_or_unknown_hive(monkeypatch, tmp_path):
+    from core import swarm_out
+    for i, (held, probe) in enumerate((({"h1": 1}, _QUIET), ("unknown", _QUIET), ({}, None),
+                                       ({}, {**_QUIET, "streaming": 2}))):
+        r, fake = _restart_route(monkeypatch, tmp_path / str(i), held=held, probe=probe)
+        assert r.status_code == 409 and fake.claimed == [] and fake.restarted == [], (held, probe)
+    # unknown, not idle: an unreadable dispatch log, or a run whose record cannot be read
+    monkeypatch.undo()
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: (_ for _ in ()).throw(OSError("x")))
+    assert swarm_out.open_runs_by_hive(True) is None
+    assert swarm_out.open_runs_by_hive() == {}       # picking a Hive: only a tie-breaker
+    monkeypatch.setattr(swarm_out, "_read_log",
+                        lambda: [{"dispatch_id": "so_0123456789ab", "hive": "h1", "project_agent": {}}])
+    from core import swarm_out_settle
+    monkeypatch.setattr(swarm_out_settle, "load",
+                        lambda did: (_ for _ in ()).throw(swarm_out_settle.SettleError("x")))
+    assert swarm_out.open_runs_by_hive(True) == {"h1": 1} and swarm_out.open_runs_by_hive() == {}
+
+
+def test_restart_hive_refuses_a_hive_that_is_not_running(monkeypatch, tmp_path):
+    for status in ("stopped", "error", "updating", "stopping"):
+        r, fake = _restart_route(monkeypatch, tmp_path / status, status=status, probe=_QUIET)
+        assert r.status_code == 409 and fake.claimed == [] and fake.restarted == [], status
+    # one that left 'running' between the read and the claim (another stop or update)
+    r, fake = _restart_route(monkeypatch, tmp_path / "raced", probe=_QUIET,
+                             claim_error=RuntimeError("not in 'running' state"))
+    assert r.status_code == 409 and fake.restarted == []
+    # the CLI gives the route's refusal and waits for nothing
+    code, calls, _ = _restart_cli(monkeypatch, [], rc=1)
+    assert code == 1 and calls == [("/instances/i1/restart", "hive")]
+
+
+def test_restart_hive_does_not_start_after_a_failed_stop(monkeypatch, tmp_path):
+    from hive.provisioner import HiveProvisioner
+    p, started = HiveProvisioner(tmp_path / "x.db"), []
+
+    async def stop(iid, claimed=False):
+        raise RuntimeError("EC2 refused")
+
+    async def start(iid):
+        started.append(iid)
+    monkeypatch.setattr(p, "stop", stop)
+    monkeypatch.setattr(p, "start", start)
+    asyncio.run(p.restart("i1"))
+    assert started == []
+
+
+def test_a_stop_that_fails_before_ec2_leaves_the_hive_in_error_not_stopping(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from hive.provisioner import HiveProvisioner
+    p = HiveProvisioner(tmp_path / "x.db")
+    updates = AsyncMock()
+    monkeypatch.setattr(p, "_update_instance", updates)
+    monkeypatch.setattr(p, "_get_instance", AsyncMock(return_value={"account_ref": "a", "region": "r"}))
+    monkeypatch.setattr(p, "_get_account", AsyncMock(return_value={}))
+    monkeypatch.setattr(p, "_lifecycle_session", AsyncMock(return_value=object()))
+    with pytest.raises(ValueError):
+        asyncio.run(p.stop("i1", claimed=True))      # no EC2 instance id
+    assert updates.await_args.kwargs["status"] == "error"
+    assert "No EC2 instance ID" in updates.await_args.kwargs["error_message"]
+
+
+def test_a_start_that_fails_before_ec2_leaves_the_hive_in_error_not_starting(monkeypatch, tmp_path):
+    """The second half of a restart: start() claims stopped -> starting, then fails before
+    EC2 (an account that is gone); the Hive must end in error, not stay 'starting'."""
+    import aiosqlite
+    from unittest.mock import AsyncMock
+    from hive.provisioner import HiveProvisioner
+    db = tmp_path / "h.db"
+
+    async def make():
+        async with aiosqlite.connect(db) as c:
+            await c.execute("CREATE TABLE hive_instances (id TEXT, status TEXT, error_message TEXT, "
+                            "updated_at TEXT, ec2_instance_id TEXT)")
+            await c.execute("INSERT INTO hive_instances VALUES ('i1', 'stopped', NULL, NULL, 'i-1')")
+            await c.commit()
+    asyncio.run(make())
+    p = HiveProvisioner(db)
+    updates = AsyncMock()
+    monkeypatch.setattr(p, "_update_instance", updates)
+    monkeypatch.setattr(p, "_get_instance", AsyncMock(return_value={"account_ref": "a", "region": "r",
+                                                                   "ec2_instance_id": "i-1"}))
+    monkeypatch.setattr(p, "_get_account", AsyncMock(side_effect=ValueError("Account a not found")))
+    with pytest.raises(ValueError):
+        asyncio.run(p.start("i1"))
+    assert updates.await_args.kwargs["status"] == "error"
+    assert "Account a not found" in updates.await_args.kwargs["error_message"]
+
+
+def test_restart_hive_says_the_hive_stayed_stopped_when_start_fails(monkeypatch):
+    """A start that fails (or a Hive that never got healthy) ends 'error': the CLI says the
+    restart did not end with the Hive running; a restart still going is never called done."""
+    code, calls, out = _restart_cli(monkeypatch, ["stopping", "starting", "error"])
+    assert code == 1 and out["ok"] is False and out["status"] == "error"
+    assert "did not end with the Hive running" in out["detail"]
+    from scripts import swarm_out as cli
+    monkeypatch.setattr(cli, "RESTART_WAIT_S", 0)
+    code, calls, out = _restart_cli(monkeypatch, [])
+    assert code == 1 and "still restarting" in out["detail"]
+
+
+def test_restart_needs_no_more_than_the_bash_limit():
+    from scripts import swarm_out as cli
+    assert cli.RESTART_WAIT_S + cli.RESTART_EVERY_S < 600
 
 
 def test_a_new_brain_has_no_dangling_reference(tmp_path):

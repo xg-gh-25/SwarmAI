@@ -621,6 +621,49 @@ async def start_instance(instance_id: str):
     return {"status": "running"}
 
 
+@router.post("/instances/{instance_id}/restart")
+async def restart_instance(instance_id: str):
+    """Stop and start a running Hive nothing is using: the owner agent's restart
+    (``scripts.swarm_out restart-hive``; the person has Stop and Start). Refused (409)
+    when this Host has an open run on it or cannot tell (an unreadable dispatch log), when
+    the Hive does not answer its status check or has a session streaming, or when it is
+    not running. Then it is claimed (running → stopping) and the stop and the start run
+    in the background, as an update does: the Hive ends 'running', or 'error' with why."""
+    _require_desktop()
+    async with _conn() as c:
+        cursor = await c.execute("SELECT name, status FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+    name, status = dict(row)["name"], dict(row)["status"]
+    if status != "running":
+        raise HTTPException(status_code=409, detail=f"Hive {name} is {status}, not running: "
+                                                    "only a running Hive is restarted")
+    from core import swarm_out
+    held = await asyncio.to_thread(swarm_out.open_runs_by_hive, True)
+    if held is None:
+        raise HTTPException(status_code=409, detail=(
+            f"cannot tell whether Hive {name} holds open runs (the dispatch log could not be read)"))
+    if held.get(str(name), 0) > 0:
+        raise HTTPException(status_code=409, detail=(
+            f"Hive {name} holds {held[str(name)]} open run(s): a restart would end them"))
+    probe = await swarm_out._admission(instance_id)
+    if probe is None:
+        raise HTTPException(status_code=409, detail=(
+            f"Hive {name} did not answer its status check, so whether a session is streaming "
+            "on it is unknown: the person restarts it from the Hive page"))
+    if probe["streaming"] > 0:
+        raise HTTPException(status_code=409, detail=(
+            f"Hive {name} has {probe['streaming']} session(s) streaming: a restart would cut them off"))
+    provisioner = _get_provisioner()
+    try:
+        await provisioner.claim_stop(instance_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    _keep(asyncio.create_task(provisioner.restart(instance_id), name=f"hive-restart-{instance_id[:8]}"))
+    return {"status": "restarting"}
+
+
 @router.get("/latest-version")
 async def latest_version():
     """The latest published SwarmAI release: what a Hive can be updated to."""

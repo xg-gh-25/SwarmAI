@@ -150,6 +150,13 @@ def test_fleet_lists_every_hive_with_validated_load(fleet_env):
     assert by["w-off"]["reachable"] is None and by["w-off"]["status"] == "stopped"
 
 
+def test_fleet_says_open_runs_are_unknown_when_the_dispatch_log_cannot_be_read(fleet_env, monkeypatch):
+    # update-hive and restart-hive end what runs on a Hive: unknown must not read as none
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: (_ for _ in ()).throw(OSError("unreadable")))
+    out = asyncio.run(swarm_out.fleet())
+    assert out["hives"] and all(h["open_runs"] is None for h in out["hives"])
+
+
 def test_fleet_rows_carry_no_address_or_credential(fleet_env):
     out = asyncio.run(swarm_out.fleet())
     for h in out["hives"]:

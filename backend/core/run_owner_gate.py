@@ -496,6 +496,11 @@ def _user_only_deny_of(command: str) -> "dict | None":
                      "be withdrawn and why; they decide.")
     from core import swarm_out_ops
     run_op = swarm_out_ops.agent_limited_match(command)
+    hive_cli = {"hive.start": "start-hive", "hive.restart": "restart-hive"}
+    if run_op is not None and run_op.name in hive_cli:
+        return _deny(f"`{run_op.name}` is given with the Swarm Out CLI "
+                     f"(`\"$SWARM_BACKEND_BIN\" py -m scripts.swarm_out {hive_cli[run_op.name]} "
+                     "--hive <name>`), never as a direct HTTP call: the CLI checks when it may run.")
     if run_op is not None:
         return _deny(f"`{run_op.name}` is given with the Swarm Out CLI "
                      "(`\"$SWARM_BACKEND_BIN\" py -m scripts.swarm_out <command> <dispatch_id> --why …`), "

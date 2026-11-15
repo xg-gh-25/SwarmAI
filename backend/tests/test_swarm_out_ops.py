@@ -94,6 +94,25 @@ def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
     assert got == _AGENT_IRREVERSIBLE
 
 
+def test_only_restart_widens_the_agents_hive_rights():
+    """The owner agent restarts a Hive only through restart-hive (agent-limited, so a direct
+    call stays refused, and the refusal names the command); stopping, creating, deleting
+    and resetting a Hive's password stay the person's, and the person keeps Stop and Start."""
+    by_name = {op.name: op for op in swarm_out_ops.ops()}
+    restart = by_name["hive.restart"]
+    assert OWNER in restart.callers and "hive.restart" in swarm_out_ops.AGENT_LIMITED
+    for name in ("hive.stop", "hive.create", "hive.delete", "hive.reset_password",
+                 "hive.account.create", "hive.account.delete"):
+        assert by_name[name].callers == {PERSON}, name
+    assert PERSON in by_name["hive.start"].callers
+    # beyond reads, the owner agent's Hive rights are exactly these three
+    hive_agent = {op.name for op in swarm_out_ops.ops()
+                  if op.name.startswith("hive.") and OWNER in op.callers and op.weight != "read"}
+    assert hive_agent == {"hive.restart", "hive.start", "hive.update"}, hive_agent
+    d = _user_only_deny("curl -s -X POST http://127.0.0.1:18321/api/hive/instances/i1/restart")
+    assert d is not None and "scripts.swarm_out restart-hive --hive" in d["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 _SAMPLE = {"dispatch_id": "so_0123456789ab", "run_id": "run_0123456789ab", "sid": "s-abc123", "hive_id": "hv1",
            "session_id": "s-abc123", "request_id": "req1", "account_id": "acc1",
            "instance_id": "inst1", "brain": "SwarmAI", "work_id": "w1", "key": "k1",
@@ -252,6 +271,7 @@ _CLI_ARGS = {
     "answer": ["so_0123456789ab", "req1", "--pick", "A", "--why", "w"],
     "escalate": ["so_0123456789ab", "req1", "--why", "w"],
     "start-hive": ["--hive", "h1"],
+    "restart-hive": ["--hive", "h1"],
     "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
     "stop": ["so_0123456789ab", "--why", "w"],
     "return-prepare": ["so_0123456789ab", "--why", "w", "--url", "https://x/y.git"],
@@ -273,23 +293,27 @@ def test_cli_calls_only_owner_agent_ops(monkeypatch):
     fetched: list = []
     monkeypatch.setenv("SWARM_APP_SESSION_ID", "s-abc123")
     monkeypatch.setattr(cli, "UPDATE_EVERY_S", 0)
+    monkeypatch.setattr(cli, "RESTART_EVERY_S", 0)
     monkeypatch.setattr(cli, "_host_version", lambda: "2.4.0")
     # /fleet: h1 takes this Host's runs once updated (capable) and is not running now,
-    # so start-hive may start it; /hives: it runs again after the update
+    # so start-hive may start it (restart-hive needs it running and idle); /hives: it runs
+    # again after the update
+    fleet_status = {"now": "stopped"}
     monkeypatch.setattr(cli, "_fetch", lambda path: fetched.append(path) or {
-        "hives": [{"id": "inst1", "name": "h1", "open_runs": 0, "capable": True,
-                   "status": "stopped" if path == "/fleet" else "running"}],
+        "hives": [{"id": "inst1", "name": "h1", "open_runs": 0, "capable": True, "streaming": 0,
+                   "status": fleet_status["now"] if path == "/fleet" else "running"}],
         "runs": [{"dispatch_id": "so_0123456789ab", "hive_id": "inst1", "session_id": "s1"}], "asks": []})
     monkeypatch.setattr(cli, "_call", lambda method, path, *a, api="swarm-out", **k:
                         calls.append((method, f"/api/{api}{path}")) or 0)
     for name, args in _CLI_ARGS.items():
+        fleet_status["now"] = "running" if name == "restart-hive" else "stopped"
         before = len(calls)
         assert cli.main([name, *args]) == 0
         assert len(calls) == before + 1, name
-        method, path = calls[-1]
-        op = swarm_out_ops.match(method, path)
-        assert op is not None, (name, method, path)
-        assert OWNER in op.callers, (name, op.name)
+        for method, path in calls[before:]:
+            op = swarm_out_ops.match(method, path)
+            assert op is not None, (name, method, path)
+            assert OWNER in op.callers, (name, op.name)
 
 
 # ── invariant 4 for the second caller: a Swarm Run's ``pipeline-v1 child`` commands ──

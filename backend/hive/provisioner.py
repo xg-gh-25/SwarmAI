@@ -1277,9 +1277,9 @@ class HiveProvisioner:
 
     # ── Lifecycle operations ───────────────────────────────────────
 
-    async def stop(self, instance_id: str) -> None:
-        """Stop a running Hive (EC2 stop + disable CloudFront)."""
-        # H1: Atomic status gate — prevents concurrent stop calls
+    async def claim_stop(self, instance_id: str) -> None:
+        """H1: atomic status gate running → stopping; raises RuntimeError when the Hive is
+        not running (or another stop or restart holds it)."""
         async with aiosqlite.connect(str(self.db_path)) as conn:
             await conn.execute("PRAGMA busy_timeout = 3000")
             await conn.execute("PRAGMA foreign_keys = ON")
@@ -1292,12 +1292,42 @@ class HiveProvisioner:
             if cursor.rowcount == 0:
                 raise RuntimeError(f"Instance {instance_id} is not in 'running' state")
 
-        instance = await self._get_instance(instance_id)
-        account = await self._get_account(instance["account_ref"])
-        session = await self._lifecycle_session(instance_id, account, instance["region"], "stop")
-        ec2_id = instance.get("ec2_instance_id")
-        if not ec2_id:
-            raise ValueError("No EC2 instance ID")
+    async def restart(self, instance_id: str) -> None:
+        """Stop a Hive the restart route claimed (claim_stop), then start it: the owner
+        agent's restart (scripts.swarm_out restart-hive), run in the background so the
+        start never depends on the caller still waiting. A failed stop is not followed by
+        a start (stop leaves the Hive in error with the reason); start records its own
+        outcome (running, or error with the reason)."""
+        try:
+            await self.stop(instance_id, claimed=True)
+        except Exception as e:  # noqa: BLE001 — stop recorded it on the Hive; nothing to start
+            logger.warning("Hive %s restart: the stop failed (%s); not starting it",
+                           instance_id, type(e).__name__)
+            return
+        try:
+            await self.start(instance_id)
+        except Exception as e:  # noqa: BLE001 — start recorded it on the Hive
+            logger.warning("Hive %s restart: the start failed (%s)", instance_id, type(e).__name__)
+
+    async def stop(self, instance_id: str, claimed: bool = False) -> None:
+        """Stop a running Hive (EC2 stop + disable CloudFront). ``claimed``: the caller
+        already moved it to 'stopping' (claim_stop)."""
+        if not claimed:
+            await self.claim_stop(instance_id)
+
+        try:
+            instance = await self._get_instance(instance_id)
+            account = await self._get_account(instance["account_ref"])
+            session = await self._lifecycle_session(instance_id, account, instance["region"], "stop")
+            ec2_id = instance.get("ec2_instance_id")
+            if not ec2_id:
+                raise ValueError("No EC2 instance ID")
+        except Exception as e:
+            # claimed but never reached EC2: 'stopping' would stay forever (nothing resets
+            # it and start takes only stopped or error), so say why on the Hive
+            await self._update_instance(instance_id, status="error",
+                                        error_message=f"Stop failed: {str(e)[:300]}")
+            raise
 
         def _stop():
             ec2 = session.client("ec2", region_name=instance["region"])
@@ -1340,13 +1370,19 @@ class HiveProvisioner:
             if cursor.rowcount == 0:
                 raise RuntimeError(f"Instance {instance_id} is not in 'stopped' state")
 
-        instance = await self._get_instance(instance_id)
-        account = await self._get_account(instance["account_ref"])
-        region = instance["region"]
-        session = await self._lifecycle_session(instance_id, account, region, "manage")
-        ec2_id = instance.get("ec2_instance_id")
-        if not ec2_id:
-            raise ValueError("No EC2 instance ID")
+        try:
+            instance = await self._get_instance(instance_id)
+            account = await self._get_account(instance["account_ref"])
+            region = instance["region"]
+            session = await self._lifecycle_session(instance_id, account, region, "manage")
+            ec2_id = instance.get("ec2_instance_id")
+            if not ec2_id:
+                raise ValueError("No EC2 instance ID")
+        except Exception as e:
+            # claimed but never reached EC2: 'starting' would stay forever, as in stop()
+            await self._update_instance(instance_id, status="error",
+                                        error_message=f"Start failed: {str(e)[:300]}")
+            raise
 
         def _start():
             ec2 = session.client("ec2", region_name=region)

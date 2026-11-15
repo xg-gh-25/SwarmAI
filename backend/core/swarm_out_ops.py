@@ -139,6 +139,9 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.instance.get", "GET", f"{_HV}/instances/{{instance_id}}", _P, "read"),
     _op("hive.delete", "DELETE", f"{_HV}/instances/{{instance_id}}", _P, "irreversible"),
     _op("hive.stop", "POST", f"{_HV}/instances/{{instance_id}}/stop", _P, "change"),
+    # restarting a running Hive nothing uses (none of this Host's open runs, no session
+    # streaming: the route checks both) is the owner agent's too, through restart-hive
+    _op("hive.restart", "POST", f"{_HV}/instances/{{instance_id}}/restart", _PO, "change"),
     # starting a stopped Hive resumes a machine the person already has: the dispatching
     # agent may, when no Hive runs (zero-touch §1); creating, deleting, replacing one is
     # the person's
@@ -270,7 +273,9 @@ AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land"
                            "run.rerun", "run.stop", "run.discard",
                            "ask.answer_host", "ask.escalate", "run.ask_person", "run.reverted",
                            # only when no Hive takes this Host's runs: the CLI checks it
-                           "hive.start"})
+                           "hive.start",
+                           # through restart-hive, which waits for the restart to end
+                           "hive.restart"})
 
 
 @lru_cache(maxsize=1)
