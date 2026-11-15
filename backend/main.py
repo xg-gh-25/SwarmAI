@@ -518,15 +518,20 @@ def _detect_backend_port() -> int:
     """Detect the port this backend is listening on.
 
     Resolution order:
-    1. ``--port N`` in sys.argv (production — set by desktop_main.py via Tauri)
+    1. ``--port N`` / ``--port=N`` in sys.argv (production — set by desktop_main.py via Tauri)
     2. ``PORT`` env var
     3. ``settings.port`` (dev default: 8000)
     """
-    # 1. Check sys.argv for --port N
+    # 1. Check sys.argv for --port N or --port=N (both start the daemon: desktop_main)
     for i, arg in enumerate(sys.argv):
+        value = None
         if arg == "--port" and i + 1 < len(sys.argv):
+            value = sys.argv[i + 1]
+        elif arg.startswith("--port="):
+            value = arg[len("--port="):]
+        if value is not None:
             try:
-                return int(sys.argv[i + 1])
+                return int(value)
             except ValueError:
                 pass
 
@@ -1548,14 +1553,15 @@ async def lifespan(app: FastAPI):
 
     # ── Start managed subsidiary services (Slack bot, etc.) ─────────────
     # Deferred to background so it never blocks startup.  Services
-    # discover the backend via ~/.swarm-ai/backend.port written here.
+    # discover the backend via ~/.swarm-ai/backend.port. Only the backend that owns
+    # backend.json starts them and writes (and on stop removes) that file.
     from core.service_manager import service_manager as _svc_mgr
 
     async def _deferred_services_startup() -> None:
         try:
             ws_path = initialization_manager.get_cached_workspace_path()
             backend_port = _detect_backend_port()
-            await _svc_mgr.start_all(ws_path, backend_port)
+            await _svc_mgr.start_all(ws_path, backend_port, owns_data_dir=_bjson_written)
         except Exception:
             logger.exception("Managed services startup failed (non-fatal)")
 
@@ -1565,8 +1571,11 @@ async def lifespan(app: FastAPI):
     # Replaces the external com.swarmai.scheduler launchd job.
     # Benefits: no path fragility, catches up after sleep, self-monitoring,
     # and inherits the daemon's credentials/env.
+    # Owner only (_bjson_written), like the loops below that have no single-instance
+    # lock of their own: a second backend on the same data dir (a probe, an accidental
+    # launch) must not run the same jobs, sweeps and refreshes a second time.
     _scheduler_task: asyncio.Task | None = None
-    if backend_mode in ("daemon", "hive"):
+    if backend_mode in ("daemon", "hive") and _bjson_written:
         _scheduler_task = asyncio.create_task(
             _run_inprocess_scheduler(),
             name="inprocess-scheduler",
@@ -1577,7 +1586,7 @@ async def lifespan(app: FastAPI):
     # Mirrors this Hive's open prompts to S3 and delivers the Host's answers
     # (core/swarm_out_bridge.py). Off when the instance has no Hive identity.
     _swarm_out_bridge_task: asyncio.Task | None = None
-    if backend_mode == "hive":
+    if backend_mode == "hive" and _bjson_written:   # owner only, like the scheduler
         from core.swarm_out_bridge import run_bridge_loop
         _swarm_out_bridge_task = asyncio.create_task(run_bridge_loop(), name="swarm-out-bridge")
 
@@ -1585,7 +1594,7 @@ async def lifespan(app: FastAPI):
     # Settling, releasing a Hive's workspace and expiry do not wait for the panel to
     # poll (docs/design/2026-10-31-swarm-out-run-review.md §3.1).
     _swarm_out_refresh_task: asyncio.Task | None = None
-    if backend_mode != "hive":
+    if backend_mode != "hive" and _bjson_written:
         from core.swarm_out import run_refresh_loop as _swarm_out_refresh_loop
         _swarm_out_refresh_task = asyncio.create_task(_swarm_out_refresh_loop(), name="swarm-out-refresh")
 
@@ -1598,7 +1607,8 @@ async def lifespan(app: FastAPI):
 
     # ── Hive spend into the host's usage ledger (host only) ───────────
     # Pulls each running Hive's new usage rows (core/usage_hive_sync), every 15 min.
-    if backend_mode != "hive":
+    # Owner only: its read cursor (usage_sync.json) is shared by the data dir.
+    if backend_mode != "hive" and _bjson_written:
         from core.usage_hive_sync import run_loop as _usage_hive_loop
         asyncio.create_task(_usage_hive_loop(), name="usage-hive-sync")
 
@@ -1612,7 +1622,8 @@ async def lifespan(app: FastAPI):
     # ── Pipeline-run worktree sweep at startup (daemon/hive only, §8.3) ──
     # After a restart nothing else would release worktrees of runs that ended while
     # the daemon was down. Deferred + off-loop; a failure is logged, never fatal.
-    if backend_mode in ("daemon", "hive"):
+    # Owner only (_bjson_written): a second backend must not sweep the owner's runs.
+    if backend_mode in ("daemon", "hive") and _bjson_written:
         async def _startup_run_recovery() -> None:
             # run recovery first and on its own: the worktree sweep below has no
             # whole-job deadline and must not hold REFLECT back (B-e re-audit MED)
@@ -1669,9 +1680,11 @@ async def lifespan(app: FastAPI):
     # thread) can never be misread as *dead* by the Tauri watchdog → false
     # offline. daemon/hive only — the subprocess (dev/Windows/Linux) path has no
     # launchd-managed liveness contract and the Tauri watchdog reads the file
-    # only in daemon mode. See core/heartbeat.py.
+    # only in daemon mode. See core/heartbeat.py. Owner only (_bjson_written): the
+    # file is per data dir, and a second backend would overwrite it with its own pid
+    # and unlink it on exit, hiding or removing the owner's liveness.
     _loop_tick_task = None
-    if backend_mode in ("daemon", "hive"):
+    if backend_mode in ("daemon", "hive") and _bjson_written:
         from core import heartbeat
         heartbeat.start_heartbeat()
         _loop_tick_task = asyncio.create_task(heartbeat.loop_tick_loop())
@@ -1758,7 +1771,9 @@ async def lifespan(app: FastAPI):
         await swarm_out_relay.manager().stop_all()
     except Exception as exc:  # noqa: BLE001 — shutdown goes on
         logger.debug("swarm_out_relay stop failed: %s", exc)
-    await _svc_mgr.stop_all()
+    # still the owner only while backend.json names no other live backend: after a
+    # restart overlap the new owner's backend.port must survive this shutdown
+    await _svc_mgr.stop_all(still_owner=_other_live_backend() is None)
     logger.info("Managed services stopped")
     await channel_gateway.shutdown()
     logger.info("Channel gateway stopped")

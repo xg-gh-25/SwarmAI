@@ -8,16 +8,18 @@ services automatically.
 Design:
 - Services are discovered from ``SwarmWS/Services/*/service.json``
 - Each service.json declares: name, command, enabled, restart_policy
-- The backend writes ``~/.swarm-ai/backend.port`` so services can
-  discover the backend without lsof scanning
+- Only the backend that owns ``backend.json`` (``owns_data_dir=True``) starts the
+  services and writes ``~/.swarm-ai/backend.port`` so they can discover it without
+  lsof scanning; a second backend on the same data dir starts no service and neither
+  writes nor removes the port file
 - Services receive SIGTERM on shutdown (graceful) with a 5s fallback to SIGKILL
 - Health monitor runs every 30s, only restarts if restart_policy == "always"
 - All failures are non-fatal — a broken service never blocks the backend
 
 Public API:
     service_manager = ServiceManager()
-    await service_manager.start_all(workspace_path, backend_port)
-    await service_manager.stop_all()
+    await service_manager.start_all(workspace_path, backend_port, owns_data_dir=True)
+    await service_manager.stop_all(still_owner=True)
     service_manager.get_status() -> list[dict]
 """
 
@@ -115,20 +117,32 @@ class ServiceManager:
         self._monitor_task: Optional[asyncio.Task] = None
         self._running = False
         self._backend_port: Optional[int] = None
+        self._wrote_port_file = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    async def start_all(self, workspace_path: str, backend_port: int) -> None:
+    async def start_all(self, workspace_path: str, backend_port: int, *,
+                        owns_data_dir: bool = False) -> None:
         """Discover and start all enabled services.
 
         Args:
             workspace_path: Path to SwarmWS (e.g. ``~/.swarm-ai/SwarmWS``)
             backend_port: The port the backend is listening on
+            owns_data_dir: True only for the backend that wrote ``backend.json``
+                (``main.write_backend_json`` returned True). Any other backend (a
+                probe, an accidental second launch) starts no service (a second
+                Slack bot on the same token) and leaves the owner's ``backend.port``
+                alone. The default is False, so a caller that does not say does
+                neither.
         """
         self._backend_port = backend_port
-        self._write_port_file(backend_port)
+        if not owns_data_dir:
+            logger.info("Not the backend that owns backend.json: no managed services, "
+                        "backend.port left to the owner")
+            return
+        self._wrote_port_file = self._write_port_file(backend_port)
 
         # Discover services
         services_dir = Path(workspace_path) / "Services"
@@ -174,8 +188,14 @@ class ServiceManager:
         self._running = True
         self._monitor_task = asyncio.create_task(self._health_monitor())
 
-    async def stop_all(self) -> None:
-        """Stop all running services and clean up."""
+    async def stop_all(self, *, still_owner: bool = True) -> None:
+        """Stop all running services and clean up.
+
+        ``backend.port`` is removed only if this manager wrote it AND
+        ``still_owner`` (the caller re-checked that ``backend.json`` still names this
+        process): after a restart overlap the new owner has written its own file,
+        which the old process must not delete.
+        """
         self._running = False
 
         # Cancel health monitor
@@ -191,8 +211,13 @@ class ServiceManager:
             self._stop_service(svc)
 
         self._services.clear()
-        self._remove_port_file()
-        logger.info("All services stopped, port file removed")
+        if self._wrote_port_file and still_owner:
+            # only the file this manager wrote, while it is still ours
+            self._remove_port_file()
+            self._wrote_port_file = False
+            logger.info("All services stopped, port file removed")
+        else:
+            logger.info("All services stopped (port file not ours, left in place)")
 
     def get_status(self) -> list[dict]:
         """Return status of all managed services."""
@@ -378,14 +403,16 @@ class ServiceManager:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _write_port_file(port: int) -> None:
-        """Write backend port to a well-known file for service discovery."""
+    def _write_port_file(port: int) -> bool:
+        """Write backend port to a well-known file for service discovery; True if written."""
         try:
             PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
             PORT_FILE.write_text(str(port))
             logger.info("Wrote backend port %d to %s", port, PORT_FILE)
+            return True
         except Exception as exc:
             logger.warning("Failed to write port file: %s", exc)
+            return False
 
     @staticmethod
     def _remove_port_file() -> None:

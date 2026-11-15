@@ -206,3 +206,150 @@ def test_py_m_still_finds_a_module_only_the_working_directory_has(tmp_path):
     (tmp_path / "only_here.py").write_text("print('ran from cwd')\n")
     r = _shim("py", "-m", "only_here", cwd=tmp_path)
     assert r.returncode == 0 and r.stdout.strip() == "ran from cwd"
+
+
+# ── the daemon starts only for an explicit daemon invocation ──────────────────
+# An agent once ran `"$SWARM_BACKEND_BIN" -c "..."` expecting an interpreter: main()
+# fell through to the daemon for any first argument it did not know, so extra backends
+# started, ran jobs and overwrote ~/.swarm-ai/backend.port.
+
+def _launcher(monkeypatch):
+    """desktop_main with run_daemon and every subcommand runner recorded, never run."""
+    sys.path.insert(0, str(BACKEND))
+    import desktop_main
+    calls = []
+    monkeypatch.setattr(desktop_main, "run_daemon",
+                        lambda argv: calls.append(("daemon", list(argv))) or 0)
+    for name in ("run_py", "run_pipeline_v1", "run_hook", "run_ingest", "run_aws_credentials"):
+        monkeypatch.setattr(desktop_main, name,
+                            lambda argv, _n=name: calls.append((_n, list(argv))) or 0)
+    monkeypatch.setattr(desktop_main, "run_knowledge",
+                        lambda argv, prog: calls.append((f"run_knowledge:{prog}", list(argv))) or 0)
+    return desktop_main, calls
+
+
+@pytest.mark.parametrize("argv", [["-c", "x"], ["bogus"], ["-m", "json.tool"], ["-"],
+                                  ["pipeline"], ["--log-level", "info"], ["serve"]])
+def test_unknown_first_argument_is_refused_without_starting_the_daemon(monkeypatch, capsys, argv):
+    desktop_main, calls = _launcher(monkeypatch)
+    assert desktop_main.main(argv) == 2
+    assert calls == []
+    err = capsys.readouterr().err
+    assert f"unknown command {argv[0]!r}" in err
+    for word in ("usage:", "daemon", "py ", "pipeline-v1", "cognition", "knowledge",
+                 "hook", "ingest"):
+        assert word in err, word
+
+
+@pytest.mark.parametrize("argv,daemon_argv", [
+    ([], []),                                                      # bare binary
+    (["daemon"], []),                                              # dev shim
+    (["daemon", "--port", "18321"], ["--port", "18321"]),
+    (["--host", "127.0.0.1", "--port", "18321"], ["--host", "127.0.0.1", "--port", "18321"]),
+    (["--port", "8000"], ["--port", "8000"]),
+    (["--port=8000"], ["--port=8000"]),
+    (["--host=127.0.0.1", "--log-level", "info"], ["--host=127.0.0.1", "--log-level", "info"]),
+])
+def test_daemon_invocations_reach_run_daemon(monkeypatch, argv, daemon_argv):
+    # launchd wrapper (swarmai_backend.sh), Tauri's subprocess spawn, verify_build,
+    # verify_installer and newuser_smoke all start it with --host first
+    desktop_main, calls = _launcher(monkeypatch)
+    assert desktop_main.main(argv) == 0
+    assert calls == [("daemon", daemon_argv)]
+
+
+def test_every_daemon_flag_is_an_option_of_the_daemon_parser():
+    sys.path.insert(0, str(BACKEND))
+    import desktop_main
+    for flag in desktop_main.DAEMON_FLAGS:
+        desktop_main._daemon_parser().parse_args([flag, "1"])   # SystemExit if unknown
+
+
+def test_the_callers_that_start_the_daemon_pass_a_daemon_flag_first():
+    repo = BACKEND.parent
+    sources = {
+        "backend/channels/swarmai_backend.sh": '"${DAEMON_BINARY}" \\\n        --host',
+        # the copy the app bundles and launchd runs (lib.rs copies it to ~/.swarm-ai)
+        "desktop/resources/daemon/swarmai_backend.sh": '"${DAEMON_BINARY}" \\\n        --host',
+        "desktop/src-tauri/src/lib.rs": 'cmd.args(["--host", "127.0.0.1", "--port"',
+        "backend/scripts/verify_build.py": '[binary_path, "--host", "127.0.0.1", "--port"',
+        "scripts/verify_installer.sh": 'python-backend$EXE_SUFFIX" --host 127.0.0.1 --port',
+        "backend/scripts/newuser_smoke_e2e.sh": '"$BIN" --host 127.0.0.1 --port',
+    }
+    for rel, needle in sources.items():
+        assert needle in (repo / rel).read_text(), rel
+
+
+@pytest.mark.parametrize("argv", [["-h"], ["--help"], ["help"]])
+def test_help_prints_usage_without_starting_the_daemon(monkeypatch, capsys, argv):
+    desktop_main, calls = _launcher(monkeypatch)
+    assert desktop_main.main(argv) == 0
+    assert calls == []
+    assert "usage:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv,runner", [
+    (["py", "-c", "x"], "run_py"),
+    (["pipeline-v1", "status"], "run_pipeline_v1"),
+    (["hook", "Stop"], "run_hook"),
+    (["cognition", "map"], "run_knowledge:cognition"),
+    (["knowledge", "find"], "run_knowledge:knowledge"),
+    (["ingest", "wake"], "run_ingest"),
+    (["aws-credentials"], "run_aws_credentials"),
+])
+def test_known_subcommands_never_start_the_daemon(monkeypatch, argv, runner):
+    desktop_main, calls = _launcher(monkeypatch)
+    assert desktop_main.main(argv) == 0
+    assert calls == [(runner, argv[1:])]
+
+
+def test_owner_only_work_is_gated_on_owning_backend_json():
+    """The lifespan's per-data-dir work with no single-instance lock of its own runs
+    only in the backend whose write_backend_json succeeded (_bjson_written): the
+    scheduler, the startup run recovery and worktree sweep, the Swarm Out refresh and
+    bridge, the Hive usage sync, the liveness heartbeat, and the managed services with
+    backend.port (ServiceManager owns_data_dir, and still_owner when they stop)."""
+    import ast
+    tree = ast.parse((BACKEND / "main.py").read_text())
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    targets = {"_run_inprocess_scheduler", "_startup_run_recovery", "_startup_worktree_sweep",
+               "_swarm_out_refresh_loop", "_usage_hive_loop", "run_bridge_loop",
+               "start_heartbeat", "loop_tick_loop"}
+
+    def called(node):
+        f = node.func
+        return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+
+    seen = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and called(node) in targets):
+            continue
+        seen.add(called(node))
+        guard, child = parents.get(node), node
+        while guard is not None and not (isinstance(guard, ast.If) and child in guard.body):
+            guard, child = parents.get(guard), guard
+        assert guard is not None, called(node)
+        assert "_bjson_written" in {n.id for n in ast.walk(guard.test)
+                                    if isinstance(n, ast.Name)}, called(node)
+    assert seen == targets
+    # the ServiceManager's calls (_svc_mgr), not another manager's stop_all
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+             and n.func.value.id == "_svc_mgr"]
+    starts = [c for c in calls if called(c) == "start_all"]
+    assert starts and all(
+        any(k.arg == "owns_data_dir" and isinstance(k.value, ast.Name)
+            and k.value.id == "_bjson_written" for k in c.keywords) for c in starts)
+    # at shutdown the port file goes only while backend.json names no other live backend
+    stops = [c for c in calls if called(c) == "stop_all"]
+    assert stops and all(
+        any(k.arg == "still_owner" and "_other_live_backend" in ast.unparse(k.value)
+            for k in c.keywords) for c in stops)
+
+
+@pytest.mark.parametrize("argv", [["x", "--port", "18397"], ["x", "--port=18397"]])
+def test_detect_backend_port_reads_both_daemon_port_forms(monkeypatch, argv):
+    import main
+    monkeypatch.setattr(main.sys, "argv", argv)
+    monkeypatch.delenv("PORT", raising=False)
+    assert main._detect_backend_port() == 18397

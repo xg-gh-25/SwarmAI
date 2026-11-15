@@ -51,7 +51,7 @@ class TestServiceManager:
     async def test_start_all_no_services_dir(self, tmp_path):
         """When Services/ doesn't exist, start_all is a no-op."""
         mgr = ServiceManager()
-        await mgr.start_all(str(tmp_path), 8000)
+        await mgr.start_all(str(tmp_path), 8000, owns_data_dir=True)
         assert mgr.get_status() == []
         await mgr.stop_all()
 
@@ -60,7 +60,7 @@ class TestServiceManager:
         """When Services/ exists but has no service.json, no services started."""
         (tmp_path / "Services").mkdir()
         mgr = ServiceManager()
-        await mgr.start_all(str(tmp_path), 8000)
+        await mgr.start_all(str(tmp_path), 8000, owns_data_dir=True)
         assert mgr.get_status() == []
         await mgr.stop_all()
 
@@ -81,7 +81,7 @@ class TestServiceManager:
         (svc_dir / "service.json").write_text(json.dumps(config))
 
         mgr = ServiceManager()
-        await mgr.start_all(str(tmp_path), 9999)
+        await mgr.start_all(str(tmp_path), 9999, owns_data_dir=True)
 
         statuses = mgr.get_status()
         assert len(statuses) == 1
@@ -108,7 +108,7 @@ class TestServiceManager:
         (svc_dir / "service.json").write_text(json.dumps(config))
 
         mgr = ServiceManager()
-        await mgr.start_all(str(tmp_path), 8000)
+        await mgr.start_all(str(tmp_path), 8000, owns_data_dir=True)
 
         statuses = mgr.get_status()
         assert len(statuses) == 1
@@ -131,12 +131,48 @@ class TestServiceManager:
         mgr = ServiceManager()
         (tmp_path / "Services").mkdir()
 
-        await mgr.start_all(str(tmp_path), 12345)
+        await mgr.start_all(str(tmp_path), 12345, owns_data_dir=True)
         assert _sm.PORT_FILE.exists()
         assert _sm.PORT_FILE.read_text() == "12345"
 
         await mgr.stop_all()
         assert not _sm.PORT_FILE.exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kwargs", [{"owns_data_dir": False}, {}])
+    async def test_non_owner_neither_writes_nor_deletes_port_file(self, tmp_path, kwargs):
+        """A backend that does not own backend.json (a probe, an accidental second
+        launch) leaves the owner's backend.port as it is, on start and on stop, and
+        starts none of the managed services; not saying is the same as not owning."""
+        import core.service_manager as _sm
+        _sm.PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _sm.PORT_FILE.write_text("18321")      # the owner's
+        svc_dir = tmp_path / "Services" / "bot"
+        svc_dir.mkdir(parents=True)
+        (svc_dir / "service.json").write_text(json.dumps({
+            "name": "bot", "command": [sys.executable, "-c", "import time; time.sleep(30)"],
+            "enabled": True}))
+        mgr = ServiceManager()
+
+        await mgr.start_all(str(tmp_path), 8000, **kwargs)
+        assert _sm.PORT_FILE.read_text() == "18321"
+        assert mgr.get_status() == []          # no second copy of the owner's services
+
+        await mgr.stop_all()
+        assert _sm.PORT_FILE.read_text() == "18321"
+
+    @pytest.mark.asyncio
+    async def test_old_owner_keeps_the_new_owners_port_file(self, tmp_path):
+        """Restart overlap: the old owner wrote backend.port, a new owner has taken
+        backend.json over; the old one's stop (still_owner=False) leaves the file."""
+        import core.service_manager as _sm
+        mgr = ServiceManager()
+        (tmp_path / "Services").mkdir()
+        await mgr.start_all(str(tmp_path), 18321, owns_data_dir=True)
+        assert _sm.PORT_FILE.read_text() == "18321"
+
+        await mgr.stop_all(still_owner=False)
+        assert _sm.PORT_FILE.read_text() == "18321"
 
     @pytest.mark.asyncio
     async def test_env_vars_injected(self, tmp_path):
@@ -161,7 +197,7 @@ class TestServiceManager:
         (svc_dir / "service.json").write_text(json.dumps(config))
 
         mgr = ServiceManager()
-        await mgr.start_all(str(tmp_path), 7777)
+        await mgr.start_all(str(tmp_path), 7777, owns_data_dir=True)
 
         # Wait for short-lived process to complete
         await asyncio.sleep(1)

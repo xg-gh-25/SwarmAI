@@ -6,8 +6,11 @@ docs/design/2026-10-24-swarmai-usable-by-anyone.md §3.2).
 Subcommands are dispatched BEFORE FastAPI is imported, so they start fast and need no
 system Python:
 
-- ``daemon [--host H] [--port N]`` — the HTTP backend (also the default when the first
-  argument is a flag or absent, which is how launchd and Tauri start it).
+- ``daemon [--host H] [--port N]`` — the HTTP backend. Also started with no argument or
+  when the first argument is one of the daemon's own flags (``DAEMON_FLAGS``: ``--host`` /
+  ``--port``, also as ``--port=N``), which is how launchd, Tauri and the build probes start
+  it. Any other first argument (``-c``, a typo of a subcommand) prints the usage and exits
+  2 without starting anything; ``-h`` / ``--help`` prints it and exits 0.
 - ``pipeline-v1 <args>`` — the pipeline CLI (``core/run_protocol/cli_main.py``). Not supported on
   Windows: it says so and exits 2.
 - ``cognition map | find | get`` (also ``knowledge``) — read the whole brain on demand: a
@@ -450,7 +453,6 @@ def run_daemon(argv: "list[str]") -> int:
     write_startup_log(f"DATABASE_TYPE: {os.environ.get('DATABASE_TYPE')}")
 
     try:
-        import argparse
         import asyncio
         import uvicorn
         write_startup_log("Importing main app...")
@@ -460,13 +462,11 @@ def run_daemon(argv: "list[str]") -> int:
         write_startup_log(f"Import error: {type(e).__name__}: {e}\n{traceback.format_exc()}")
         return 1
 
-    parser = argparse.ArgumentParser(description="SwarmAI backend")
-    parser.add_argument("--port", type=int, default=8000, help="Port to run on")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
-    # parse_known_args: ignore unknown flags so the binary never crash-loops
-    # if the daemon script or Tauri passes an unexpected argument.
-    # See: 2026-04-02 --log-level crash loop (commit 6829745).
-    args, unknown = parser.parse_known_args(argv)
+    # parse_known_args: ignore unknown flags AFTER a daemon invocation (main() has
+    # already checked the first argument), so the binary never crash-loops if the
+    # daemon script or Tauri passes an unexpected extra flag (a --log-level crash loop
+    # once took the daemon down this way).
+    args, unknown = _daemon_parser().parse_known_args(argv)
     if unknown:
         write_startup_log(f"Ignoring unknown arguments: {unknown}")
 
@@ -487,23 +487,66 @@ def run_daemon(argv: "list[str]") -> int:
     return 0
 
 
+# The daemon's own flags: a first argument that is one of these (or ``<flag>=<value>``)
+# starts the daemon, as the launchd wrapper, Tauri and the build probes call it.
+DAEMON_FLAGS = ("--host", "--port")
+
+USAGE = """usage: python-backend <command> [args]
+
+commands:
+  daemon [--host H] [--port N]   the HTTP backend (also: no argument, or --host/--port first)
+  py <script.py> | -m <module> | -c <code> [args]
+                                 run Python with the interpreter this program carries
+  pipeline-v1 <args>             the pipeline CLI
+  cognition | knowledge <args>   read the brain: map, find, get
+  hook <event> --host <host>     a coding agent host's hook (event JSON on stdin)
+  ingest submit | wake <args>    hand a CDF candidate to the daemon, or wake its worker
+  aws-credentials                credential_process of the swarmai AWS profile
+"""
+
+
+def _daemon_parser():
+    """The daemon's argument parser (``run_daemon``); its options are ``DAEMON_FLAGS``."""
+    import argparse
+    parser = argparse.ArgumentParser(description="SwarmAI backend")
+    parser.add_argument("--port", type=int, default=8000, help="Port to run on")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
+    return parser
+
+
+def _is_daemon_flag(arg: str) -> bool:
+    return arg.split("=", 1)[0] in DAEMON_FLAGS
+
+
+_SUBCOMMANDS = {
+    "py": lambda rest: run_py(rest),
+    "pipeline-v1": lambda rest: run_pipeline_v1(rest),
+    "hook": lambda rest: run_hook(rest),
+    "cognition": lambda rest: run_knowledge(rest, prog="cognition"),
+    "knowledge": lambda rest: run_knowledge(rest, prog="knowledge"),
+    "ingest": lambda rest: run_ingest(rest),
+    "aws-credentials": lambda rest: run_aws_credentials(rest),
+}
+
+
 def main(argv: "list[str] | None" = None) -> int:
+    """Dispatch a subcommand. The daemon starts only for an explicit daemon invocation
+    (no argument, ``daemon``, or a ``DAEMON_FLAGS`` first argument): any other first
+    argument prints ``USAGE`` and returns 2, so a mistaken call (``-c "..."`` expecting
+    an interpreter) never starts a second backend."""
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "py":
-        return run_py(argv[1:])
-    if argv and argv[0] == "pipeline-v1":
-        return run_pipeline_v1(argv[1:])
-    if argv and argv[0] == "hook":
-        return run_hook(argv[1:])
-    if argv and argv[0] in ("cognition", "knowledge"):
-        return run_knowledge(argv[1:], prog=argv[0])
-    if argv and argv[0] == "ingest":
-        return run_ingest(argv[1:])
-    if argv and argv[0] == "aws-credentials":
-        return run_aws_credentials(argv[1:])
-    if argv and argv[0] == "daemon":
-        argv = argv[1:]
-    return run_daemon(argv)
+    if not argv or _is_daemon_flag(argv[0]):
+        return run_daemon(argv)
+    head, rest = argv[0], argv[1:]
+    if head == "daemon":
+        return run_daemon(rest)
+    if head in _SUBCOMMANDS:
+        return _SUBCOMMANDS[head](rest)
+    if head in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    print(f"python-backend: unknown command {head!r}\n\n{USAGE}", end="", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
