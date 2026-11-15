@@ -400,6 +400,10 @@ def _runs_env(monkeypatch, tmp_path, state_handler, asks=()):
     monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
     _answer_env(monkeypatch, {})
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, bucket, hive, *_a: [dict(a) for a in asks])
+
+    async def statuses():
+        return {"h1": "running"}             # the store knows the Hive: its sessions are probed
+    monkeypatch.setattr(swarm_out, "_hive_statuses", statuses)
     _use(monkeypatch, state_handler)
 
 
@@ -407,9 +411,8 @@ OPEN_ASK = {"kind": "approval", "session_id": "sess-1", "request_id": "req-1", "
 
 
 def test_list_runs_marks_the_sessions_streaming_on_the_hive(monkeypatch, tmp_path):
-    # Questions: does a row say running only for a session the Hive reports streaming
-    # (a waiting or finished session is not running), and does a Hive that cannot be
-    # asked leave running unknown (None) instead of False, without losing its questions?
+    # Questions: is a row running only for a session the Hive reports streaming (a waiting
+    # or finished session is not), and are the Hive's open questions still listed?
     def hive(request):
         if request.url.path == "/api/chat/sessions/streaming-state":
             return httpx.Response(200, json={"sessions": {
@@ -418,9 +421,9 @@ def test_list_runs_marks_the_sessions_streaming_on_the_hive(monkeypatch, tmp_pat
     _runs_env(monkeypatch, tmp_path, hive, [OPEN_ASK])
     out = asyncio.run(swarm_out.list_runs())
     by = {r["session_id"]: r for r in out["runs"]}
-    assert by["sess-1"]["running"] is True
-    assert by["sess-2"]["running"] is False      # not streaming (it may be waiting on you)
-    assert by["sess-3"]["running"] is False      # the Hive no longer holds it: ended
+    assert by["sess-1"]["state"] == "running"
+    assert by["sess-2"]["state"] != "running"    # not streaming (it may be waiting on you)
+    assert by["sess-3"]["state"] == "stopped"    # the Hive no longer holds it: ended
     assert [a["session_id"] for a in out["asks"]] == ["sess-1"]
 
 
@@ -431,11 +434,11 @@ def test_list_runs_leaves_running_unknown_when_the_hive_does_not_answer(monkeypa
     out = asyncio.run(swarm_out.list_runs())
     by = {r["session_id"]: r for r in out["runs"]}
     # the Hive did not say: an open mirrored question still says waiting, the rest unknown
-    assert by["sess-1"]["state"] == "waiting" and by["sess-1"]["running"] is False
-    assert by["sess-2"]["running"] is None and by["sess-3"]["state"] == "unknown"
+    assert by["sess-1"]["state"] == "waiting"
+    assert by["sess-2"]["state"] == "unknown" and by["sess-3"]["state"] == "unknown"
     assert len(out["asks"]) == 1                  # questions still listed
 
     def broken(request):
         return httpx.Response(502)
     _runs_env(monkeypatch, tmp_path, broken)
-    assert all(r["running"] is None for r in asyncio.run(swarm_out.list_runs())["runs"])
+    assert all(r["state"] == "unknown" for r in asyncio.run(swarm_out.list_runs())["runs"])

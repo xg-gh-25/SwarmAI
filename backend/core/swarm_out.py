@@ -1985,10 +1985,9 @@ async def _compute_runs() -> dict[str, Any]:
     """Dispatch log rows (newest first) and the open questions of every running Hive
     and of every Hive in the log.
 
-    Each row has ``state`` / ``state_reason`` (run_state) and, derived from it,
-    ``waiting`` and ``running`` (True / False, or None when the state is unknown,
-    never a guess). The Hives are read concurrently, each status probe bounded by
-    PROBE_TIMEOUT_S."""
+    Each row has ``state`` / ``state_reason`` (run_state; ``unknown`` when its Hive did
+    not answer, never a guess). The Hives are read concurrently, each status probe
+    bounded by PROBE_TIMEOUT_S."""
     rows = list(reversed(await asyncio.to_thread(_read_log)))
     errors: list[str] = []
     statuses = await _statuses_or_none(errors)
