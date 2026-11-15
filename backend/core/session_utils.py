@@ -1018,6 +1018,11 @@ _SESSION_NOT_FOUND_PATTERNS = [
     re.compile(r"no\s+such\s+session\s+(?:file|id)", re.IGNORECASE),
     re.compile(r"ENOENT.*\.claude[/\\].*session", re.IGNORECASE),
     re.compile(r"resume.*session.*(?:not found|does not exist|missing)", re.IGNORECASE),
+    # What CLI 2.1.x actually says when --resume names a transcript that is not on
+    # disk; it fails the connect, so it reaches _ensure_spawned's fallback as the
+    # SDK's "Claude Code returned an error result: No conversation found with
+    # session ID: <id> (exit code: 1)".
+    re.compile(r"No conversation found with session ID", re.IGNORECASE),
 ]
 
 

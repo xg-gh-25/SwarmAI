@@ -121,6 +121,7 @@ markers = [
     "slow: marks tests as slow-running (deselect with '-m not slow')",
     "integration: tests requiring external resources",
     "timeout: override per-test timeout in seconds (e.g. @pytest.mark.timeout(60))",
+    "early_spawn: the test exercises SessionUnit.start_early_spawn (conftest stubs it otherwise)",
 ]
 
 [dependency-groups]

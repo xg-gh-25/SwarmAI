@@ -6,7 +6,7 @@ Tests cover:
 - AC3: State file >24hr → discarded
 - AC4: Stale sdk_session_id fallback to cold resume
 - AC5-6: Scoped heal immunity (turn_count<3)
-- AC7: Only IDLE sessions persisted
+- AC7: Live sessions (IDLE, and STREAMING / WAITING_INPUT cut off mid-turn) persisted
 - AC8: No regression in existing behavior
 """
 
@@ -38,45 +38,70 @@ def mock_router(state_file):
 
 
 class TestStatePersistence:
-    """AC1, AC2, AC7: Persist IDLE sessions, skip STREAMING/WAITING_INPUT."""
+    """AC1, AC2, AC7: Persist live sessions, including ones cut off mid-turn."""
 
-    def test_only_idle_sessions_persisted(self, state_file):
-        """AC7: STREAMING and WAITING_INPUT sessions must NOT be in state file."""
+    def test_midturn_sessions_persisted(self, state_file):
+        """A session cut off mid-turn (STREAMING / WAITING_INPUT) is persisted like an
+        IDLE one, so a restart resumes it with --resume; COLD and DEAD units, which
+        have no live conversation, are not."""
         from core.session_unit import SessionState
         from core.session_state_persistence import persist_session_state
 
-        # Create mock units in different states
-        idle_unit = MagicMock()
-        idle_unit.state = SessionState.IDLE
-        idle_unit._sdk_session_id = "sdk-idle-123"
-        idle_unit.session_id = "session-idle"
-        idle_unit.last_used = time.time()
-        idle_unit._health_sensor = MagicMock(turn_count=10)
-
-        streaming_unit = MagicMock()
-        streaming_unit.state = SessionState.STREAMING
-        streaming_unit._sdk_session_id = "sdk-streaming-456"
-        streaming_unit.session_id = "session-streaming"
-
-        waiting_unit = MagicMock()
-        waiting_unit.state = SessionState.WAITING_INPUT
-        waiting_unit._sdk_session_id = "sdk-waiting-789"
-        waiting_unit.session_id = "session-waiting"
+        def unit(state, sdk_id):
+            u = MagicMock()
+            u.state = state
+            u._sdk_session_id = sdk_id
+            u.last_used = time.time()
+            u._health_sensor = MagicMock(turn_count=3)
+            return u
 
         units = {
-            "session-idle": idle_unit,
-            "session-streaming": streaming_unit,
-            "session-waiting": waiting_unit,
+            "session-idle": unit(SessionState.IDLE, "sdk-idle-123"),
+            "session-streaming": unit(SessionState.STREAMING, "sdk-streaming-456"),
+            "session-waiting": unit(SessionState.WAITING_INPUT, "sdk-waiting-789"),
+            "session-cold": unit(SessionState.COLD, "sdk-cold-000"),
+            "session-dead": unit(SessionState.DEAD, "sdk-dead-000"),
+            "session-no-id": unit(SessionState.STREAMING, None),
         }
 
-        persist_session_state(units, state_file)
+        assert persist_session_state(units, state_file) == 3
 
         state = json.loads(state_file.read_text())
-        # Only IDLE session should be persisted
-        assert "session-idle" in state
-        assert "session-streaming" not in state
-        assert "session-waiting" not in state
         assert state["session-idle"]["sdk_session_id"] == "sdk-idle-123"
+        assert state["session-streaming"]["sdk_session_id"] == "sdk-streaming-456"
+        assert state["session-waiting"]["sdk_session_id"] == "sdk-waiting-789"
+        for absent in ("session-cold", "session-dead", "session-no-id"):
+            assert absent not in state
+
+    @pytest.mark.asyncio
+    async def test_persisted_midturn_id_spawns_with_resume(self, state_file):
+        """After a restart, the id saved for a STREAMING session makes the next spawn
+        a --resume of that id (the CLI's own conversation, tool results included)."""
+        from unittest.mock import AsyncMock, patch
+        from claude_agent_sdk import ClaudeAgentOptions
+        from core.session_router import SessionRouter
+        from core.session_unit import SessionState
+        from core.session_state_persistence import load_persisted_state, persist_session_state
+
+        live = MagicMock()
+        live.state = SessionState.STREAMING
+        live._sdk_session_id = "sdk-cut-mid-turn"
+        live.last_used = time.time()
+        live._health_sensor = MagicMock(turn_count=2)
+        persist_session_state({"session-mid": live}, state_file)
+
+        router = SessionRouter(prompt_builder=MagicMock(), config=MagicMock())
+        router._persisted_sdk_ids = load_persisted_state(state_file)
+        unit = router.get_or_create_unit("session-mid", "agent-1")
+        assert unit.state == SessionState.COLD
+        assert unit._sdk_session_id == "sdk-cut-mid-turn"
+
+        spawn = AsyncMock()
+        with patch.object(unit, "_spawn", new=spawn):
+            async for _ in unit._ensure_spawned(ClaudeAgentOptions(), None):
+                pass
+        spawned_options = spawn.await_args.args[0]
+        assert spawned_options.resume == "sdk-cut-mid-turn"
 
     def test_state_file_includes_timestamp(self, state_file):
         """AC2: State file must have _persisted_at for staleness check."""
@@ -396,3 +421,43 @@ class TestStaleSessionIdFallback:
         assert not is_session_not_found_error("Rate limit exceeded")
         assert not is_session_not_found_error("Redis session not found")  # MCP error
         assert not is_session_not_found_error("Session expired in user's app")  # tool error
+
+
+@pytest.mark.asyncio
+async def test_midturn_id_resume_not_found_falls_back(tmp_path):
+    """Forced execution of the recovery path: a mid-turn id persisted before a restart
+    whose transcript is gone. The real _ensure_spawned fallback runs (only the leaf
+    _spawn is mocked): identity dropped (next turn is a cold resume from the DB
+    history) and the error frame marks the message as kept (history_dropped)."""
+    from unittest.mock import AsyncMock, patch
+    from claude_agent_sdk import ClaudeAgentOptions
+    from core.session_router import SessionRouter
+    from core.session_unit import SessionState
+    from core.session_state_persistence import load_persisted_state, persist_session_state
+
+    state_file = tmp_path / "session_state.json"
+    live = MagicMock()
+    live.state = SessionState.WAITING_INPUT
+    live._sdk_session_id = "sdk-gone"
+    live.last_used = time.time()
+    live._health_sensor = MagicMock(turn_count=1)
+    persist_session_state({"session-w": live}, state_file)
+
+    router = SessionRouter(prompt_builder=MagicMock(), config=MagicMock())
+    router._persisted_sdk_ids = load_persisted_state(state_file)
+    unit = router.get_or_create_unit("session-w", "agent-1")
+
+    # the message CLI 2.1.301 gives for a --resume whose transcript is gone (measured)
+    spawn = AsyncMock(side_effect=RuntimeError(
+        "Claude Code returned an error result: No conversation found with session ID: "
+        "sdk-gone (exit code: 1)"))
+    events = []
+    with patch.object(unit, "_spawn", new=spawn):
+        async for ev in unit._ensure_spawned(ClaudeAgentOptions(), None):
+            events.append(ev)
+
+    assert spawn.await_count == 1
+    assert unit._sdk_session_id is None
+    assert unit.state == SessionState.COLD
+    assert any(ev.get("history_dropped") for ev in events), events
+    assert events[-1] == {"_abort": True}

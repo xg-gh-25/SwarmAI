@@ -1038,6 +1038,32 @@ def _fresh_hive_locks(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_model_access_warmup(monkeypatch):
+    """No test starts the model-access warmer's loop (a real CLI handshake, a read of
+    the machine's ~/.claude). Each test gets a fresh warmer whose loop never starts;
+    what the chat path hands it (note_spawn / note_activity) is still recorded.
+    tests/test_model_access_warmer.py builds its own instances."""
+    from core import model_access_warmer
+    fresh = model_access_warmer.ModelAccessWarmer()
+    monkeypatch.setattr(fresh, "_ensure_task", lambda: None)
+    monkeypatch.setattr(model_access_warmer, "WARMER", fresh)
+
+
+@pytest.fixture(autouse=True)
+def _no_early_spawn(request, monkeypatch):
+    """No test starts a real CLI through the router's early spawn (P7: one chokepoint).
+    run_conversation starts a cold unit's spawn before recall
+    (SessionUnit.start_early_spawn); a test that scripts send() or _spawn but drives
+    the real router would otherwise start an actual CLI in the background. A test of
+    the early spawn itself marks itself ``@pytest.mark.early_spawn``."""
+    if request.node.get_closest_marker("early_spawn"):
+        return
+    from core.session_unit import SessionUnit
+    monkeypatch.setattr(SessionUnit, "start_early_spawn",
+                        lambda self, options, config: False)
+
+
+@pytest.fixture(autouse=True)
 def _stub_credential_preflight(request, monkeypatch):
     """Force the credential validator's check() to return 'valid' for EVERY test
     (P7: structural CI-env guard, not per-test discipline). session_unit._ensure_spawned

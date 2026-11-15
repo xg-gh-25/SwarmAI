@@ -3241,6 +3241,16 @@ class SessionRouter:
         """Number of units with alive subprocesses."""
         return sum(1 for u in self._units.values() if u.is_alive)
 
+    def staged_spawn_count(self, exclude: Any = None) -> int:
+        """CLIs started by an early spawn and not adopted yet (their units are still
+        COLD, so alive_count misses them): counted by the spawn budget."""
+        n = 0
+        for u in self._units.values():
+            early = getattr(u, "_early_spawn", None)
+            if u is not exclude and early is not None and not early.closed and not early.claimed:
+                n += 1
+        return n
+
     def has_active_session(self, session_id: str) -> bool:
         """Check if a session has an alive subprocess."""
         unit = self._units.get(session_id)
@@ -4969,6 +4979,10 @@ class SessionRouter:
         _ttft_recorded = False
         _ttft_slot_ms = 0.0
         _ttft_recall_ms: Optional[float] = None
+        # The person is active: the model-access warmer keeps the CLI's model cache
+        # fresh for the next cold start (synchronous, no IO).
+        from . import model_access_warmer
+        model_access_warmer.note_activity()
 
         # Resolve session_id — use provided or generate
         if session_id is None:
@@ -5477,6 +5491,13 @@ class SessionRouter:
             from . import session_registry
             unit._pending_prompt_metadata = _spm
             session_registry.system_prompt_metadata.setdefault(session_id, _spm)
+
+        # Cold turn: start the CLI now, while attachments, the DDD leg and recall run
+        # below. The options are final here (recall and the session context ride the
+        # query, never the system prompt), and send() writes the query only after
+        # they are done, so the first answer is still built on the full recall.
+        if unit.state == SessionState.COLD:
+            unit.start_early_spawn(options, self._config)
 
         # Delegate to SessionUnit — stream response
 
@@ -6034,6 +6055,9 @@ class SessionRouter:
                 return
             raise  # Re-raise non-SessionBusyError exceptions
         finally:
+            # An early spawn this turn's send never adopted (it raised before its spawn
+            # step): close its CLI now (a no-op after an adoption).
+            unit.release_early_spawn()
             # SINGLE-OWNER safety net for a claimed-but-unfinalized coalesced set
             # (Gate-2 HIGH #1). run_conversation is an async generator; if the SSE
             # consumer disconnects mid-turn the generator is CLOSED → GeneratorExit
@@ -6562,7 +6586,7 @@ class SessionRouter:
                 pass
             self._drain_worker_task = None
 
-        # Persist IDLE session identities for fast resume after restart (§2B/2C)
+        # Persist live session identities (idle or mid-turn) for fast resume after restart (§2B/2C)
         try:
             from .session_state_persistence import persist_session_state
             from jobs.paths import APP_DATA_DIR

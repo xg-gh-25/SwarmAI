@@ -210,8 +210,9 @@ def test_router_seeds_metadata_without_overwriting():
 
 
 def test_delivery_publish_lives_in_spawn():
-    """Publication must stay in _spawn, the single point where the prompt
-    reaches the CLI. Moving it back out reopens the never-sent-prompt class.
+    """Publication must stay in the spawn's adoption (_adopt_client), the single
+    point every spawned CLI passes through to become the unit's (a plain _spawn and an
+    early spawn alike). Moving it back out reopens the never-sent-prompt class.
 
     run_380413c5: full_text is now COMPOSED (base + this-turn delivered
     query-channel prefix) rather than raw system_prompt — but the invariant this
@@ -219,7 +220,8 @@ def test_delivery_publish_lives_in_spawn():
     still read off the delivered ``options.system_prompt`` (the query-channel
     prefix rides the query, captured separately). Assert the invariant, not the
     exact old literal."""
-    src = inspect.getsource(SessionUnit._spawn)
+    assert "self._adopt_client(" in inspect.getsource(SessionUnit._spawn)
+    src = inspect.getsource(SessionUnit._adopt_client)
     assert "_pending_prompt_metadata" in src
     # base_full_text is derived from the delivered options.system_prompt, and
     # full_text is composed from it — both still inside _spawn.

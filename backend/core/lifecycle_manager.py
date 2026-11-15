@@ -1564,11 +1564,11 @@ class LifecycleManager:
     # ── Memory pressure relief ─────────────────────────────────────
 
     # ── Session state persistence (Design §2B, PE F7) ──────────────────────
-    # Persist IDLE session sdk_session_ids every 60s for crash recovery.
+    # Persist live (idle or mid-turn) session sdk_session_ids every 60s for crash recovery.
     # On daemon restart, restored IDs enable fast --resume instead of cold resume.
 
     async def _persist_session_state(self) -> None:
-        """Persist IDLE session identities to disk for crash recovery.
+        """Persist live (idle or mid-turn) session identities to disk for crash recovery.
 
         Called every maintenance cycle (~60s). Atomic write ensures no
         corruption if daemon crashes mid-write. Merges unconsumed cached IDs

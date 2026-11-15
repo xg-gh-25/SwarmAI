@@ -43,6 +43,7 @@ from core.awake_clock import awake_time  # liveness durations exclude sleep
 import traceback
 
 from config import get_swarmws as _get_swarmws
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
@@ -91,8 +92,9 @@ _subprocess_executor = subprocess_executor
 
 
 # ── Expected-kill log classification ──────────────────────────────────────
-# Every refresh / release / orphan reap / retry recycle SIGKILLs the CLI via
-# _force_kill, and the SDK's message reader then logs
+# Every retry recycle, and every refresh / release / orphan reap whose CLI does not exit
+# by itself within the graceful-close grace, SIGKILLs the CLI via _force_kill, and the
+# SDK's message reader then logs
 # "ERROR Fatal error in message reader: Command failed with exit code -9".
 # Those ERRORs are our own doing (16 in one day, all intentional) and bury the
 # real ones. Downgrade that one SDK record to INFO when we SIGKILLed a CLI
@@ -459,6 +461,55 @@ def _kill_pids(pids: list[int], reason: str = "tree") -> int:
     return killed
 
 
+# Graceful close of an idle CLI before the kill (non-hung teardowns only). Told to stop
+# (stdin closed), a healthy idle CLI exits by itself and first writes its exit records:
+# ``cost-state`` (the totals ``--resume`` restores, which core/usage_accounting reads as
+# the resumed process's starting point) and ``last-prompt``. Measured with CLI 2.1.301:
+# 8 of 8 idle CLIs exited 20 ms after the stdin close; an immediate SIGKILL kept the last
+# assistant message but lost those records in 4 of 4 tab-close releases. The grace
+# bounds a CLI that does not exit; the SIGKILL sweep then runs as before.
+GRACEFUL_EXIT_GRACE_S = 2.0
+_GRACEFUL_END_INPUT_CAP_S = 1.0
+
+
+def _snapshot_descendant_procs(pid: int) -> list:
+    """The live descendants of *pid* as ``psutil.Process`` objects (empty on failure).
+
+    Taken before a graceful close: once the CLI has exited, its children are
+    reparented and can no longer be found from its pid."""
+    try:
+        import psutil
+        return psutil.Process(pid).children(recursive=True)
+    except Exception as exc:  # noqa: BLE001 — no psutil / the process is gone: nothing to sweep
+        logger.debug("descendant snapshot of pid %s failed: %s", pid, exc)
+        return []
+
+
+def _kill_surviving(procs: list, reason: str) -> int:
+    """SIGKILL the processes of *procs* still running. ``psutil`` compares each one's
+    creation time, so a pid reused by another process meanwhile is never signalled."""
+    alive = []
+    for proc in procs:
+        try:
+            if proc.is_running():
+                alive.append(proc)
+        except Exception as exc:  # noqa: BLE001 — gone or unreadable: nothing to kill
+            logger.debug("process %s unreadable, not killed: %s", getattr(proc, "pid", "?"), exc)
+            continue
+    if not alive:
+        return 0
+    from core import kill_audit
+    kill_audit.record([p.pid for p in alive], reason)
+    killed = 0
+    for proc in alive:
+        try:
+            proc.kill()
+            killed += 1
+        except Exception as exc:  # noqa: BLE001 — exited between the check and the kill
+            logger.debug("kill of process %s failed: %s", proc.pid, exc)
+    return killed
+
+
 # ---------------------------------------------------------------------------
 # OOM / SIGKILL detection
 # ---------------------------------------------------------------------------
@@ -542,6 +593,51 @@ class SessionState(Enum):
 
 #: how long the spawn pre-flight waits for the SwarmAI account check (core/aws_account)
 _ACCOUNT_PREFLIGHT_TIMEOUT_S = 20.0
+
+
+#: How long an early spawn (``SessionUnit.start_early_spawn``) waits for the turn's send
+#: to adopt it before it closes its CLI: the backstop for a turn that ended without
+#: sending (an error before the send, a busy unit, an abandoned stream).
+EARLY_SPAWN_ADOPT_WINDOW_S = 60.0
+_EARLY_CLOSE_TASKS: "set[asyncio.Task]" = set()
+
+
+@dataclass
+class _SpawnedClient:
+    """A CLI started by ``_spawn_client`` and not yet adopted by the unit."""
+    wrapper: Any
+    client: Any
+    lock_wait_ms: float
+    configure_ms: float
+    aenter_ms: float
+    total_ms: float
+
+
+@dataclass
+class _EarlySpawn:
+    """A cold turn's spawn started before its recall finished (one per unit)."""
+    resume: Optional[str]
+    options: Any
+    task: "asyncio.Task"
+    started: float
+    adopted: asyncio.Event = field(default_factory=asyncio.Event)
+    claimed: bool = False
+    closed: bool = False
+    watch: Optional["asyncio.Task"] = None
+
+
+async def _close_spawned(spawned: Optional["_SpawnedClient"], session_id: str, why: str) -> None:
+    """Close a CLI that was spawned but never adopted (SDK close: stdin EOF, wait,
+    terminate, kill)."""
+    if spawned is None:
+        return
+    try:
+        await asyncio.wait_for(spawned.wrapper.__aexit__(None, None, None), timeout=10.0)
+    except Exception:  # noqa: BLE001 — best effort; the orphan reaper is the backstop
+        logger.debug("early spawn close failed session_id=%s", session_id, exc_info=True)
+    logger.info("session_unit.early_spawn_closed session_id=%s pid=%s reason=%s",
+                session_id, getattr(spawned.wrapper, "pid", None), why)
+
 
 class SessionUnit:
     """One tab's complete subprocess lifecycle.
@@ -643,11 +739,15 @@ class SessionUnit:
         self._retry_count: int = 0
         # Per-turn SDK spawn (__aenter__ handshake) wall time in ms, for the TTFT
         # probe to attribute cold-start cost away from send+infer (run_8149838f).
-        # Set ONLY by _spawn (i.e. only when a cold spawn actually ran); reset to
+        # Set ONLY by _adopt_client (i.e. only when a cold spawn actually ran; for an
+        # early spawn, the part send() still waited for); reset to
         # None at the single new-turn admission point in send(), so a warm turn
         # (no spawn) relays None and a prior cold turn's value can never leak into
         # a later turn's log. Pure observability — never read by control flow.
         self._last_turn_spawn_ms: Optional[float] = None
+        # A CLI spawn started before this cold turn's recall finished (start_early_spawn);
+        # the turn's send adopts it in _ensure_spawned. None when nothing is staged.
+        self._early_spawn: Optional[_EarlySpawn] = None
         # True from a spawn until that subprocess's first API call starts: its cache
         # read / write is logged once (_record_first_call_cache), the cross-session
         # prompt-cache signal a whole-turn total hides.
@@ -2745,7 +2845,8 @@ class SessionUnit:
                 self.session_id,
             )
             await self._arm_recovery_checkpoint("poison_guard_recycle")
-            await self._crash_to_cold_async(clear_identity=False)
+            # on the send path, a CLI in a corrupt turn-state: no grace (SIGKILL at once)
+            await self._crash_to_cold_async(clear_identity=False, graceful=False)
 
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
         # Also respawn if IDLE but the client is gone (a teardown that left the
@@ -2761,7 +2862,7 @@ class SessionUnit:
                 "session_unit.dead_stream_respawn session_id=%s error=%s",
                 self.session_id, type(_reader.error).__name__,
             )
-            await self._crash_to_cold_async(clear_identity=False)
+            await self._crash_to_cold_async(clear_identity=False, graceful=False)
         if self.state == SessionState.IDLE and self._client is None:
             self._transition(SessionState.COLD)
         if self.state == SessionState.COLD:
@@ -3134,28 +3235,11 @@ class SessionUnit:
     # Sentinel keys (_abort, _recovered) are internal flow-control
     # signals consumed by send() and never yielded to callers.
 
-    async def _ensure_spawned(
-        self,
-        options: ClaudeAgentOptions,
-        config: Optional[Any],
-    ) -> AsyncIterator[dict]:
-        """Spawn subprocess if COLD, with retry loop on retriable errors.
-
-        Yields status events during retries.  If all retries fail, yields
-        a terminal error event with ``_abort: True`` so the caller can
-        ``return`` without yielding it to the SSE stream.
-
-        State on success: IDLE (spawned and ready).
-        State on failure: COLD (all retries exhausted).
-        """
-        from .session_utils import (
-            _build_error_event,
-            _is_retriable_error,
-            _sanitize_sdk_error,
-            sdk_error_code,
-            classify_failure,
-            compute_backoff,
-        )
+    async def _credential_preflight(self) -> Optional[list[dict]]:
+        """The credential pre-flight of a spawn: the events to yield (an error, then
+        ``{"_abort": True}``) when the spawn must not run, else None. Shared by
+        ``_ensure_spawned`` and the early spawn, which runs it before it starts a CLI."""
+        from .session_utils import _build_error_event
 
         # ── Credential pre-flight (Gate-1 fix) ───────────────────────────
         # Before spawning the CLI subprocess, check credentials. An EXPIRED
@@ -3205,13 +3289,11 @@ class SessionUnit:
                         "session_unit.preflight session_id=%s SwarmAI account %s — "
                         "aborting spawn", self.session_id, _auth,
                     )
-                    yield _build_error_event(
+                    return [_build_error_event(
                         code="CREDENTIALS_EXPIRED",
                         message=_rem["message"],
                         suggested_action=_rem["fix_text"],
-                    )
-                    yield {"_abort": True}
-                    return
+                    ), {"_abort": True}]
             else:
                 _region = _cfg.get("aws_region", "us-east-1")
                 _validator = session_registry.get_credential_validator()
@@ -3231,13 +3313,11 @@ class SessionUnit:
                         "(method=%s) — aborting spawn (avoids invoke stall)",
                         self.session_id, _cfg.get("auth_method"),
                     )
-                    yield _build_error_event(
+                    return [_build_error_event(
                         code="ACCOUNT_NOT_CONNECTED" if _never else "CREDENTIALS_EXPIRED",
                         message=_rem["message"],
                         suggested_action=_rem["fix_text"],
-                    )
-                    yield {"_abort": True}
-                    return
+                    ), {"_abort": True}]
         except Exception as exc:  # noqa: BLE001 — pre-flight must never block spawn on its own bug
             # A bug in the pre-flight itself must not become a self-inflicted
             # outage. Log and fall through to the normal spawn path.
@@ -3247,6 +3327,37 @@ class SessionUnit:
                 self.session_id,
                 type(exc).__name__,
             )
+
+        return None
+
+    async def _ensure_spawned(
+        self,
+        options: ClaudeAgentOptions,
+        config: Optional[Any],
+    ) -> AsyncIterator[dict]:
+        """Spawn subprocess if COLD, with retry loop on retriable errors.
+
+        Yields status events during retries.  If all retries fail, yields
+        a terminal error event with ``_abort: True`` so the caller can
+        ``return`` without yielding it to the SSE stream.
+
+        State on success: IDLE (spawned and ready).
+        State on failure: COLD (all retries exhausted).
+        """
+        from .session_utils import (
+            _build_error_event,
+            _is_retriable_error,
+            _sanitize_sdk_error,
+            sdk_error_code,
+            classify_failure,
+            compute_backoff,
+        )
+
+        _preflight_abort = await self._credential_preflight()
+        if _preflight_abort:
+            for _ev in _preflight_abort:
+                yield _ev
+            return
 
         # ── Resume injection: COLD + _sdk_session_id → spawn with --resume
         # Covers ALL kill-then-respawn paths (proactive restart, eviction,
@@ -3263,6 +3374,10 @@ class SessionUnit:
             # machines and wasted latency on fast ones.
 
         try:
+            # A spawn started before this turn's recall finished is adopted; its error
+            # (if any) goes down the same fallback chain as this spawn's own.
+            if await self._adopt_early_spawn(options):
+                return  # success — state is IDLE
             await self._spawn(options, config)
             return  # success — state is IDLE
         except Exception as exc:
@@ -4001,7 +4116,21 @@ class SessionUnit:
         }
 
     async def _spawn(self, options: ClaudeAgentOptions, config: Optional[Any] = None) -> None:
-        """Spawn a subprocess under ``_spawn_lock`` + ``_env_lock``.
+        """Spawn a subprocess and adopt it: ``_spawn_client`` then ``_adopt_client``.
+
+        State: COLD → IDLE (on success). A unit that already has a client (another
+        path spawned it first) keeps it.
+        """
+        spawned = await self._spawn_client(options, config)
+        if spawned is None:
+            return
+        await self._adopt_client(spawned, options)
+
+    async def _spawn_client(self, options: ClaudeAgentOptions,
+                            config: Optional[Any] = None) -> Optional[_SpawnedClient]:
+        """Start a CLI subprocess under ``_spawn_lock`` + ``_env_lock``; nothing on the
+        unit changes (``_adopt_client`` does that), so an early spawn can run while the
+        unit stays COLD. Returns None when the unit already has a client.
 
         Acquires the module-level ``_spawn_lock`` first (serializes all
         SessionUnit spawns), then the ``_env_lock`` from
@@ -4009,8 +4138,6 @@ class SessionUnit:
         mutations + subprocess creation).  Both locks are released after
         ``wrapper.__aenter__()`` so the subprocess has inherited its
         own copy of ``os.environ``.
-
-        State: COLD → IDLE (on success).
 
         Parameters
         ----------
@@ -4035,7 +4162,9 @@ class SessionUnit:
             from . import session_registry
             router = session_registry.session_router
             if router:
-                _alive = router.alive_count
+                # CLIs already running: the alive units, plus other units' early
+                # spawns not yet adopted (their units are still COLD)
+                _alive = router.alive_count + router.staged_spawn_count(exclude=self)
         except Exception:
             logger.debug("_spawn: suppressed exception on a fail-safe path", exc_info=True)
             pass  # Best-effort — penalty is 0 if registry unavailable
@@ -4073,7 +4202,7 @@ class SessionUnit:
         # ── Cold-spawn instrumentation (run_924de37c, measure-only) ──────
         # Attribute the unexplained pre-model cold-start latency to a real seam.
         # Timestamps are CAPTURED inside the lock (to bound the right work) but
-        # the log is EMITTED only AFTER both locks release below — formatting a
+        # the log is EMITTED only AFTER both locks release (_adopt_client) — formatting a
         # log line inside the critical section would widen the very _spawn_lock
         # we are measuring (and serialize every other tab's spawn). Locals are
         # pre-declared to None so the emit is robust on the config-None path and
@@ -4097,7 +4226,7 @@ class SessionUnit:
                     "another path already spawned this unit's subprocess; reusing it",
                     self.session_id, self.pid,
                 )
-                return
+                return None
             async with _env_lock:
                 if config is not None:
                     _t_cfg0 = time.perf_counter()
@@ -4108,6 +4237,21 @@ class SessionUnit:
                 client = await wrapper.__aenter__()
                 _t_w1 = time.perf_counter()
 
+        _lock_wait_ms = (_t_lock - _t0) * 1000 if _t_lock is not None else 0.0
+        _configure_ms = (_t_cfg1 - _t_cfg0) * 1000 if (_t_cfg0 is not None and _t_cfg1 is not None) else 0.0
+        _wrapper_aenter_ms = (_t_w1 - _t_w0) * 1000 if (_t_w0 is not None and _t_w1 is not None) else 0.0
+        return _SpawnedClient(
+            wrapper=wrapper, client=client, lock_wait_ms=_lock_wait_ms,
+            configure_ms=_configure_ms, aenter_ms=_wrapper_aenter_ms,
+            total_ms=(time.perf_counter() - _t0) * 1000,
+        )
+
+    async def _adopt_client(self, spawned: _SpawnedClient, options: ClaudeAgentOptions, *,
+                            waited_ms: Optional[float] = None) -> None:
+        """Make *spawned* this unit's subprocess: stream reader, timings, TSCC prompt
+        metadata, MCP names, then COLD → IDLE. ``waited_ms``: for an early spawn, the
+        part of it the turn's send still waited for (the rest ran during recall)."""
+        wrapper, client = spawned.wrapper, spawned.client
         self._wrapper = wrapper
         self._client = client
         # the usage ledger counts a resumed process's first result from the totals the
@@ -4132,24 +4276,26 @@ class SessionUnit:
         # queued behind one) ever waits for a turn to start reading.
         self._start_stream_reader(client)
 
-        # Emit AFTER lock release (see note above). Guarded deltas: config-None
-        # → configure_ms=0.0; a seam never reached → its ms stays 0.0.
-        _lock_wait_ms = (_t_lock - _t0) * 1000 if _t_lock is not None else 0.0
-        _configure_ms = (_t_cfg1 - _t_cfg0) * 1000 if (_t_cfg0 is not None and _t_cfg1 is not None) else 0.0
-        _wrapper_aenter_ms = (_t_w1 - _t_w0) * 1000 if (_t_w0 is not None and _t_w1 is not None) else 0.0
-        _total_ms = (time.perf_counter() - _t0) * 1000
+        # Emitted AFTER lock release (the timings were captured inside it, see
+        # _spawn_client). Guarded deltas: config-None → configure_ms=0.0.
         logger.info(
             "spawn_perf session_id=%s lock_wait_ms=%.1f configure_ms=%.1f "
-            "wrapper_aenter_ms=%.1f total_ms=%.1f",
-            self.session_id, _lock_wait_ms, _configure_ms,
-            _wrapper_aenter_ms, _total_ms,
+            "wrapper_aenter_ms=%.1f total_ms=%.1f early=%d wait_ms=%.1f",
+            self.session_id, spawned.lock_wait_ms, spawned.configure_ms,
+            spawned.aenter_ms, spawned.total_ms, waited_ms is not None,
+            spawned.total_ms if waited_ms is None else waited_ms,
         )
         # Relay the cold-spawn wall time to the TTFT probe so it can attribute the
         # handshake cost away from send+infer (run_8149838f). Set here = set ONLY on
         # a cold spawn; a warm turn resets this to None at send() admission, so the
-        # probe never mistakes a prior turn's spawn for this turn's inference. Pure
-        # observability — nothing in the control flow reads this field.
-        self._last_turn_spawn_ms = _total_ms
+        # probe never mistakes a prior turn's spawn for this turn's inference. An early
+        # spawn relays only what send() waited for, so TTFT = pre_send + spawn +
+        # send+infer stays additive. Pure observability — nothing in the control flow
+        # reads this field.
+        self._last_turn_spawn_ms = spawned.total_ms if waited_ms is None else waited_ms
+        # The CLI start the model-access warmer copies (core/model_access_warmer).
+        from . import model_access_warmer
+        model_access_warmer.note_spawn(options, getattr(self, "_last_send_config", None))
         self._first_call_cache_pending = True
 
         # ── Publish TSCC prompt metadata AT DELIVERY ──────────────────
@@ -4222,6 +4368,126 @@ class SessionUnit:
         self._compaction_guard.reset_all()  # Fresh subprocess — full reset
         if self.state == SessionState.COLD:
             self._transition(SessionState.IDLE)
+
+    # ── Early spawn: the cold turn's CLI starts while its recall runs ────────
+
+    def start_early_spawn(self, options: ClaudeAgentOptions, config: Optional[Any]) -> bool:
+        """Start this COLD unit's CLI now, before the turn's recall has finished.
+
+        The router calls it right after ``build_options`` on a cold turn: the options
+        no longer change after that (recall and the session context ride the query,
+        never the system prompt), so the spawn and recall run side by side and the
+        query is written only after both, with the full recall. The unit stays COLD
+        until the send adopts the client (``_ensure_spawned``), so the IDLE-edge drain
+        and the cold-spawn pending claim see the states they always did. Returns
+        whether a spawn was started. Not started when the unit is not COLD or has a
+        client, a Stop is in progress, or the transcript is due a poison clean or a
+        media shed (send() rewrites it before the CLI reads it)."""
+        if (self.state != SessionState.COLD or self._client is not None
+                or self._early_spawn is not None
+                or getattr(self, "_stopping", False)
+                or getattr(self, "_transcript_poisoned", False)
+                or getattr(self, "_media_shed_due", False)):
+            return False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        resume = self._sdk_session_id
+        opts = self._build_retry_options(options, resume) if resume else options
+        task = loop.create_task(self._early_spawn_job(opts, config),
+                                name=f"early-spawn-{self.session_id}")
+        early = _EarlySpawn(resume=resume, options=opts, task=task, started=time.perf_counter())
+        self._early_spawn = early
+        # held on the record: the loop keeps only weak references to tasks
+        early.watch = loop.create_task(self._watch_early_spawn(early))
+        logger.info("session_unit.early_spawn_started session_id=%s resume=%s",
+                    self.session_id, bool(resume))
+        return True
+
+    async def _early_spawn_job(self, options: ClaudeAgentOptions,
+                               config: Optional[Any]) -> Optional[_SpawnedClient]:
+        """The early spawn: the same credential pre-flight as ``_ensure_spawned`` first
+        (an expired credential must not start a CLI that stalls under _spawn_lock), then
+        the client. None when the pre-flight refused: the send's own pre-flight then
+        reports it."""
+        if await self._credential_preflight():
+            return None
+        return await self._spawn_client(options, config)
+
+    async def _watch_early_spawn(self, early: _EarlySpawn) -> None:
+        """Backstop: an early spawn no send adopted within the window is dropped and its
+        CLI closed (a turn that ended without sending, an abandoned stream)."""
+        deadline = early.started + EARLY_SPAWN_ADOPT_WINDOW_S
+        await asyncio.wait({early.task})
+        ok = not early.task.cancelled() and early.task.exception() is None
+        try:
+            await asyncio.wait_for(early.adopted.wait(),
+                                   timeout=max(0.0, deadline - time.perf_counter()))
+            return
+        except asyncio.TimeoutError:
+            pass
+        if early.claimed or early.closed:
+            return  # adopted, or already closed (release_early_spawn)
+        early.closed = True
+        if self._early_spawn is early:
+            self._early_spawn = None
+        if ok:
+            await _close_spawned(early.task.result(), self.session_id, "not adopted")
+
+    def release_early_spawn(self, why: str = "turn ended") -> None:
+        """Close an early spawn no send adopted (the turn ended; or its resume id is
+        stale). No-op when it was adopted or there is none. Synchronous; the close
+        runs in the background."""
+        early = self._early_spawn
+        if early is None or early.claimed:
+            return
+        self._early_spawn = None
+        early.closed = True
+        try:
+            task = asyncio.get_running_loop().create_task(self._close_early(early, why))
+        except RuntimeError:
+            return
+        # the loop keeps only weak references to tasks
+        _EARLY_CLOSE_TASKS.add(task)
+        task.add_done_callback(_EARLY_CLOSE_TASKS.discard)
+
+    async def _close_early(self, early: _EarlySpawn, why: str) -> None:
+        try:
+            spawned = await asyncio.shield(early.task)
+        except asyncio.CancelledError:
+            if early.task.cancelled():
+                return  # the spawn itself was cancelled: nothing to close
+            raise
+        except Exception as exc:  # noqa: BLE001 — a failed spawn has nothing to close
+            logger.debug("early spawn of %s failed (%s): nothing to close",
+                         self.session_id, type(exc).__name__)
+            return
+        await _close_spawned(spawned, self.session_id, why)
+
+    async def _adopt_early_spawn(self, options: ClaudeAgentOptions) -> bool:
+        """Adopt this turn's early spawn, if one is staged. True: adopted (state IDLE).
+        False: none staged, or it was for another resume id (closed). Raises the early
+        spawn's own error, so ``_ensure_spawned``'s fallback chain handles it exactly
+        as an error of its own spawn."""
+        early, self._early_spawn = self._early_spawn, None
+        if early is None:
+            return False
+        if early.resume != self._sdk_session_id or early.closed:
+            # closed in the background: this send spawns at once, without waiting
+            # for the discarded handshake and its close
+            self._early_spawn = early
+            self.release_early_spawn("resume id changed")
+            return False
+        t0 = time.perf_counter()
+        spawned = await asyncio.shield(early.task)
+        if spawned is None or early.closed:
+            return False
+        early.claimed = True
+        early.adopted.set()
+        await self._adopt_client(spawned, early.options,
+                                 waited_ms=(time.perf_counter() - t0) * 1000)
+        return True
 
     async def _read_formatted_response(self) -> AsyncIterator[dict]:
         """Read SDK response stream and yield formatted SSE events.
@@ -4470,7 +4736,9 @@ class SessionUnit:
             # that's about to happen here).
             if not autonomous:
                 await self._arm_recovery_checkpoint("interrupt_recycle")
-                await self._crash_to_cold_async(clear_identity=False)
+                # the CLI is in a corrupt turn-state and the person's next send waits
+                # for this recycle (_wait_for_stop): no graceful-close grace
+                await self._crash_to_cold_async(clear_identity=False, graceful=False)
                 logger.info(
                     "session_unit.interrupt_recycle session_id=%s — poisoned "
                     "subprocess recycled to COLD (resume id preserved)",
@@ -4574,7 +4842,9 @@ class SessionUnit:
             return False
         # an app recycle, not a crash: the exit is classified as a fast recycle
         self._recycle_kill_pending = True
-        await self._crash_to_cold_async(clear_identity=False)
+        # the person asked for the background work to stop now: no graceful-close
+        # grace (a CLI with agents running need not exit on a stdin close)
+        await self._crash_to_cold_async(clear_identity=False, graceful=False)
         # they ended with the process (a no-op when the reader's teardown already said so)
         self.background_agents.lose_all()
         logger.info("session_unit.stop_background session_id=%s — recycled to COLD",
@@ -5202,13 +5472,76 @@ class SessionUnit:
                     self._transition(SessionState.COLD)
                 return
 
+            graceful = self._graceful_teardown_due()
             self._transition(SessionState.DEAD)
-            await self._force_kill()
+            await self._force_kill(graceful=graceful)
             self._cleanup_internal()
             self._transition(SessionState.COLD)
 
-    async def _force_kill(self) -> None:
+    def _graceful_teardown_due(self) -> bool:
+        """Whether a teardown starting now may close the CLI gracefully first: the unit
+        is IDLE (its turn ended) and its stream is alive. A STREAMING / WAITING_INPUT /
+        DEAD unit, or one whose stream already failed, is the hung or dead class and is
+        SIGKILLed at once."""
+        if self.state != SessionState.IDLE:
+            return False
+        reader = getattr(self, "_stream_reader", None)
+        return reader is not None and not reader.dead
+
+    async def _close_cli_gracefully(self, pid: int) -> bool:
+        """Close the idle CLI's stdin and give it ``GRACEFUL_EXIT_GRACE_S`` to exit by
+        itself. True when it did: the descendants that outlived it are then SIGKILLed
+        and no SIGKILL is sent to the CLI. False (nothing to close, closing raised, the
+        grace ran out): the caller's SIGKILL sweep runs."""
+        client = getattr(self._wrapper, "client", None)
+        transport = getattr(client, "_transport", None)
+        process = getattr(transport, "_process", None)
+        if transport is None or process is None:
+            return False
+        loop = asyncio.get_running_loop()
+        t0 = time.perf_counter()
+        try:
+            # read before the exit: the CLI's own process group (when it is not ours),
+            # swept after the exit like the SIGKILL path does, so a process the agent
+            # detached from the tree (reparented to init) still dies with the session
+            pgid = os.getpgid(pid)
+            group = pgid if pgid != os.getpgid(os.getpid()) else None
+            children = await loop.run_in_executor(
+                _subprocess_executor, _snapshot_descendant_procs, pid)
+            await asyncio.wait_for(transport.end_input(), timeout=_GRACEFUL_END_INPUT_CAP_S)
+            await asyncio.wait_for(process.wait(), timeout=GRACEFUL_EXIT_GRACE_S)
+        except Exception as exc:  # noqa: BLE001 — any failure ends in the SIGKILL sweep
+            logger.info(
+                "session_unit.graceful_close_fallback session_id=%s pid=%d after_ms=%.0f "
+                "reason=%s — SIGKILL",
+                self.session_id, pid, (time.perf_counter() - t0) * 1000,
+                type(exc).__name__,
+            )
+            return False
+        exit_ms = (time.perf_counter() - t0) * 1000
+        swept = await loop.run_in_executor(
+            _subprocess_executor, _kill_surviving, children,
+            f"session {self.session_id} children")
+        if group is not None:
+            try:
+                from core import kill_audit
+                kill_audit.record([group], f"session {self.session_id} process group")
+                os.killpg(group, getattr(signal, "SIGKILL", signal.SIGTERM))
+            except (ProcessLookupError, PermissionError):
+                pass  # the group emptied with the CLI's exit
+        logger.info(
+            "session_unit.graceful_close session_id=%s pid=%d exit_ms=%.0f "
+            "children_killed=%d group_swept=%s",
+            self.session_id, pid, exit_ms, swept, group is not None,
+        )
+        return True
+
+    async def _force_kill(self, graceful: bool = False) -> None:
         """Best-effort force-kill of the owned subprocess and its children.
+
+        ``graceful`` (an IDLE unit's teardown, ``_graceful_teardown_due``): first close
+        the CLI's stdin and let it exit by itself (``_close_cli_gracefully``); only a CLI
+        still running after the grace is SIGKILLed below.
 
         Uses process group kill (SIGKILL to entire pgid) to prevent
         grandchild orphans (e.g. MCP servers spawned by Claude CLI).
@@ -5227,7 +5560,8 @@ class SessionUnit:
         priority inversion with the default executor.
         """
         pid = self.pid
-        if pid:
+        exited = bool(pid and graceful and await self._close_cli_gracefully(pid))
+        if pid and not exited:
             # Before the kill: the SDK reader logs its "exit code -9" ERROR
             # within milliseconds of the signal (see _ExpectedKillLogFilter).
             _note_intentional_kill()
@@ -5727,7 +6061,8 @@ class SessionUnit:
             )
             return
 
-    async def _crash_to_cold_async(self, *, clear_identity: bool = False) -> None:
+    async def _crash_to_cold_async(self, *, clear_identity: bool = False,
+                                   graceful: Optional[bool] = None) -> None:
         """Async transition DEAD → COLD with proper wrapper cleanup.
 
         Calls ``await _force_kill()`` which properly closes the wrapper's
@@ -5736,6 +6071,9 @@ class SessionUnit:
         Args:
             clear_identity: If True, also clears ``_sdk_session_id``
                 via ``_full_cleanup()`` (non-retriable crashes).
+            graceful: close the CLI's stdin and let it exit before the kill. None:
+                when ``_graceful_teardown_due()`` (an IDLE unit with a live stream);
+                False: SIGKILL at once (the send-path recycles pass it).
 
         R4 (RecoveryTransaction): this and ``kill()`` are the two kill entry
         points, and BOTH hold ``self._lock`` so they are mutually exclusive —
@@ -5769,8 +6107,10 @@ class SessionUnit:
                 if clear_identity:
                     self._sdk_session_id = None
                 return
+            if graceful is None:
+                graceful = self._graceful_teardown_due()
             self._transition(SessionState.DEAD)
-            await self._force_kill()
+            await self._force_kill(graceful=graceful)
             if clear_identity:
                 self._full_cleanup()
             else:

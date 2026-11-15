@@ -1796,6 +1796,9 @@ async def lifespan(app: FastAPI):
     logger.info("Channel gateway stopped")
     await session_registry.stop_lifecycle()
     logger.info("LifecycleManager stopped")
+    # no model-access warm-up may start a CLI while the sessions are torn down
+    from core import model_access_warmer
+    model_access_warmer.stop()
     await session_registry.disconnect_all()
     logger.info("All sessions disconnected")
     remove_backend_json(startup_mode=backend_mode)

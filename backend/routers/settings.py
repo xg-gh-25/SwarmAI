@@ -544,6 +544,10 @@ async def save_open_tabs(request: dict):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(request, indent=2), encoding="utf-8")
 
+    # a tab was opened, closed or switched to: the person is active, so the
+    # model-access warmer keeps the next cold start's model check cached
+    from core import model_access_warmer
+    model_access_warmer.note_activity()
     try:
         await asyncio.to_thread(_write)
         return {"status": "ok"}

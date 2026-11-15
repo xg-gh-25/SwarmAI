@@ -1,14 +1,22 @@
 """Session state persistence for fast resume after daemon restart.
 
-Persists IDLE session sdk_session_ids to disk every 60s (lifecycle loop)
-and on graceful shutdown. On startup, ``load_persisted_state()`` returns the
-mapping; SessionRouter injects sdk_session_ids lazily at unit creation time.
+Persists the sdk_session_ids of live sessions (IDLE, STREAMING, WAITING_INPUT) to
+disk every 60s (lifecycle loop) and on graceful shutdown. On startup,
+``load_persisted_state()`` returns the mapping; SessionRouter injects
+sdk_session_ids lazily at unit creation time, and the next spawn resumes the CLI's
+own conversation with ``--resume``.
 
 Design reference:
     Knowledge/Designs/2026-06-20-session-stability-graceful-degradation-design.md §2B
 
 Key invariants (PE-reviewed):
-- Only IDLE sessions are persisted (F1: STREAMING/WAITING_INPUT have incomplete state)
+- A session cut off mid-turn is persisted too. The CLI resumes an interrupted
+  conversation intact: measured with CLI 2.1.301, a session SIGKILLed during a Bash
+  call, and one SIGKILLed while a permission prompt was open, resumed with the same
+  id and its transcript unchanged; the CLI added a "Tool call interrupted" result for
+  the open call. Without the id the session came back from the database rebuild,
+  which carries no tool results (the model could not quote an earlier command's
+  output). COLD and DEAD units have no conversation of their own to persist.
 - Atomic write via tmp+rename (crash-safe)
 - Staleness check: discard if >24hr old (F9)
 - File NOT deleted on read — next persist cycle overwrites atomically (crash-safe)
@@ -34,7 +42,7 @@ def persist_session_state(
     state_file: Path,
     pending_ids: Optional[Dict[str, str]] = None,
 ) -> int:
-    """Persist IDLE session metadata to disk for crash/restart recovery.
+    """Persist live session metadata to disk for crash/restart recovery.
 
     Args:
         units: Dict of session_id → SessionUnit (or mock with same interface).
@@ -47,15 +55,17 @@ def persist_session_state(
     """
     from .session_unit import SessionState
 
+    _RESUMABLE_STATES = (SessionState.IDLE, SessionState.STREAMING, SessionState.WAITING_INPUT)
     state: Dict[str, Any] = {
         "_persisted_at": time.time(),
     }
 
     count = 0
     for sid, unit in units.items():
-        # PE F1: ONLY persist IDLE sessions (safe to resume).
-        # STREAMING/WAITING_INPUT have incomplete state — resuming mid-stream corrupts context.
-        if unit.state == SessionState.IDLE and getattr(unit, "_sdk_session_id", None):
+        # A turn in progress (STREAMING / WAITING_INPUT) is persisted like an idle one:
+        # --resume continues it with the interrupted tool call marked as not finished
+        # (module docstring). COLD / DEAD units have no live conversation.
+        if unit.state in _RESUMABLE_STATES and getattr(unit, "_sdk_session_id", None):
             health = getattr(unit, "_health_sensor", None)
             state[sid] = {
                 "sdk_session_id": unit._sdk_session_id,
