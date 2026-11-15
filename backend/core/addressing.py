@@ -442,7 +442,8 @@ def find(project: str, query: str, *, doc: Optional[str] = None, top: int = FIND
     returned one weak hit per file). The query is the agent's own words, chosen for
     what it is looking for -- unlike push recall, which ranks the request's words per
     doc with a quota each. *doc* limits the search to one doc (``TECH.md``) and its
-    archive, or one corpus file by its relative path."""
+    archive, or one corpus file by its relative path. A query with Chinese in it is
+    expanded with the Brain's term map first (``core.term_map``)."""
     from core import memory_index
     table = ddd_units(project)
     pool = list(table.units)          # every unit in a main file is in force
@@ -452,6 +453,8 @@ def find(project: str, query: str, *, doc: Optional[str] = None, top: int = FIND
                 or (u.store == "archive" and u.doc.startswith(f"{stem}-archive"))]
     if not (query or "").strip() or not pool:
         return Found([], [], table.skipped)
+    from core.term_map import expand_for_brain
+    query = expand_for_brain(table.root, query)     # the Brain's Chinese → English terms
     raw = memory_index._bm25_scores(query, {str(i): u.text for i, u in enumerate(pool)})
     scored = sorted(((s, pool[int(k)]) for k, s in raw.items() if s > 0),
                     key=lambda su: su[0], reverse=True)

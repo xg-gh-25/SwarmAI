@@ -9,7 +9,7 @@ WHY: recall's ddd leg re-tokenized the whole DDD corpus (~260K tokens, CJK
 bigram expansion ≈376ms) on EVERY first-message recall, because `_bm25_scores`
 tokenizes `docs` fresh each call. Doc tokenization is a pure function of the
 doc CONTENT (query-independent), so it is safely cacheable; the QUERY
-tokenization at `_bm25_scores`'s `q_terms = _bm25_tokenize(query)` must stay
+tokenization at `_bm25_scores`'s `_bm25_query_weights(query)` must stay
 UNCACHED (varies per query, cheap).
 
 KEY INVARIANTS (the properties, not the implementation):
@@ -39,20 +39,22 @@ class TestCachedEqualsUncached:
     def _uncached_scores(self, query, docs):
         """Recompute BM25 the pre-cache way: tokenize every doc inline with the
         UNcached `_bm25_tokenize`, mirroring the exact math of `_bm25_scores`
-        before this change. This is the independent oracle — NOT a copy of the
-        production function, so it genuinely cross-checks it."""
+        before the cache (each query term weighted by `_bm25_query_weights`: 1 for a
+        word, 1/n for each bigram of an n-bigram Chinese phrase). This is the
+        independent oracle — NOT a copy of the production function, so it genuinely
+        cross-checks it."""
         import math
         if not docs:
             return {}
-        q_terms = memory_index._bm25_tokenize(query)
-        if not q_terms:
+        q_weight = memory_index._bm25_query_weights(query)
+        if not q_weight:
             return {}
         doc_tokens = {k: memory_index._bm25_tokenize(text) for k, text in docs.items()}
         doc_len = {k: len(t) for k, t in doc_tokens.items()}
         n_docs = len(docs)
         avgdl = (sum(doc_len.values()) / n_docs) if n_docs else 0.0
         doc_term_sets = {k: set(t) for k, t in doc_tokens.items()}
-        q_unique = set(q_terms)
+        q_unique = set(q_weight)
         df = {term: sum(1 for s in doc_term_sets.values() if term in s) for term in q_unique}
         idf = {term: math.log(1.0 + (n_docs - df[term] + 0.5) / (df[term] + 0.5)) for term in q_unique}
         K1, B = memory_index.BM25_K1, memory_index.BM25_B
@@ -70,7 +72,7 @@ class TestCachedEqualsUncached:
             score = 0.0
             for term, f in tf.items():
                 denom = f + K1 * (1.0 - B + B * (dl / avgdl if avgdl else 1.0))
-                score += idf[term] * (f * (K1 + 1.0)) / denom
+                score += q_weight[term] * idf[term] * (f * (K1 + 1.0)) / denom
             if score > 0:
                 scores[key] = score
         return scores
@@ -111,9 +113,9 @@ class TestCachedEqualsUncached:
         were reverted to call the bare `_bm25_tokenize` for docs, the warm count
         would equal the cold count and this test goes RED.
 
-        Note: the QUERY is tokenized every call via the bare `_bm25_tokenize`
-        (AC4 — uncached), so warm count is NOT zero in absolute terms; we isolate
-        the DOC tokenizations by subtracting the fixed per-call query cost (1)."""
+        Note: the QUERY is tokenized every call (AC4 — uncached), by
+        `_bm25_query_weights`, which does not go through `_bm25_tokenize`; so every
+        counted call is a DOC tokenization."""
         memory_index._reset_doc_token_cache()
         docs = {f"d{i}": f"doc body number {i} 配置文件 recall" for i in range(8)}
         q = "recall 配置文件 latency"
@@ -126,17 +128,17 @@ class TestCachedEqualsUncached:
             return real(text)
 
         monkeypatch.setattr(memory_index, "_bm25_tokenize", counting)
-        # Cold: 1 query tokenization + 8 doc tokenizations = 9.
+        # Cold: 8 doc tokenizations.
         calls["n"] = 0
         memory_index._bm25_scores(q, docs)
         cold_calls = calls["n"]
-        # Warm (same docs → all 8 doc keys hit cache): only the 1 query remains.
+        # Warm (same docs → all 8 doc keys hit cache): none.
         calls["n"] = 0
         memory_index._bm25_scores(q, docs)
         warm_calls = calls["n"]
 
-        cold_doc = cold_calls - 1   # subtract the single query tokenization
-        warm_doc = warm_calls - 1
+        cold_doc = cold_calls
+        warm_doc = warm_calls
         assert cold_doc == len(docs), f"cold should tokenize all {len(docs)} docs, got {cold_doc}"
         assert warm_doc == 0, f"warm should tokenize ZERO docs (all cached), got {warm_doc}"
         # Drop in doc-tokenization cost = 100% ≥ 70% (AC1).

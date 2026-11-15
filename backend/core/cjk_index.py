@@ -95,8 +95,16 @@ _TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 _RUN_RE = re.compile(f"[{_CJK_CLASS}]+|[^{_CJK_CLASS}]+")
 
 
-def _expand_token(token: str, cap: int | None = None) -> list[str]:
-    """Expand ONE token, preserving any embedded non-CJK text verbatim.
+def expand_cjk_runs(token: str, cap: int | None = None) -> list[list[str]]:
+    """Expand ONE token into one token list per run, preserving any embedded
+    non-CJK text verbatim.
+
+    A token splits into maximal CJK and non-CJK runs (rule 1 above). A CJK run
+    becomes the list of its overlapping bigrams (a lone CJK character is its own
+    one-item list); a non-CJK run becomes a one-item list, connector characters
+    stripped (an empty one is left out). Keeping the runs apart is what lets a
+    scorer treat the bigrams of one Chinese phrase as ONE term
+    (``memory_index._bm25_query_weights``); ``_expand_token`` is the flat view.
 
     ``cap`` bounds how many characters of a single CJK RUN are expanded (query
     side); ``None`` means no bound (index side). An ASCII run is never truncated —
@@ -110,26 +118,32 @@ def _expand_token(token: str, cap: int | None = None) -> list[str]:
         # unfindable. Also made `___` and `___配置` handle the same prefix
         # differently, which is the asymmetry class this module exists to avoid.
         stripped = token.strip("-_")
-        return [stripped] if stripped else []
+        return [[stripped]] if stripped else []
 
-    out: list[str] = []
+    out: list[list[str]] = []
     for run in _RUN_RE.findall(token):
         if _CJK_RE.match(run):
             if len(run) == 1:
-                out.append(run)  # a lone CJK char has no bigram
+                out.append([run])  # a lone CJK char has no bigram
             else:
                 # Bound the bigram count per run (query side only — see
                 # _MAX_CJK_RUN_CHARS). Index side passes cap=None so stored text
                 # is never truncated.
                 span = run if cap is None else run[:cap]
-                out.extend(span[i:i + 2] for i in range(len(span) - 1))
+                out.append([span[i:i + 2] for i in range(len(span) - 1)])
         else:
             # Embedded ASCII (e.g. the "goal-pipeline" of "用goal-pipeline跑").
             # Strip connector chars that would otherwise become lone tokens.
             stripped = run.strip("-_")
             if stripped:
-                out.append(stripped)
+                out.append([stripped])
     return out
+
+
+def _expand_token(token: str, cap: int | None = None) -> list[str]:
+    """Expand ONE token into a flat token list: ``expand_cjk_runs`` with the run
+    boundaries dropped (what an index stores and an FTS clause ANDs)."""
+    return [t for run in expand_cjk_runs(token, cap) for t in run]
 
 
 def expand_cjk(text: str) -> str:

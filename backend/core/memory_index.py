@@ -289,6 +289,48 @@ def _bm25_tokenize(text: str) -> list[str]:
     return out
 
 
+def _bm25_query_weights(query: str) -> dict[str, float]:
+    """The query's BM25 terms, each with its weight: the n bigrams cut from one
+    Chinese phrase share one term's weight (1/n each); an English word, an
+    identifier, a lone CJK character and the ASCII embedded in a mixed token keep
+    weight 1.
+
+    Why: ``_bm25_tokenize`` turns a 4-character phrase into 3 bigrams, and each
+    used to score as a full term, so one Chinese phrase weighed as much as three
+    query words. A document matching every bigram of one phrase outranked one
+    matching two different words of the query, and a document holding one stray
+    bigram (``一致`` inside ``保持一致`` for a query ``不一致``) scored like a word
+    match. With 1/n a phrase found whole counts as one query word found.
+
+    A phrase is one maximal CJK run of a query token (``cjk_index.expand_cjk_runs``):
+    the text between spaces or punctuation, so an unspaced Chinese clause or sentence
+    is one phrase and shares one weight too. That is deliberate: next to it an English
+    word or identifier keeps its full weight, so ``session_router 里派发任务为什么超时``
+    ranks the entries naming ``session_router`` first. (Measured on a 20-pair Chinese /
+    English probe of a real Brain: capping the spread at 3 or 4 bigrams per weight lost
+    a hit that an identifier plus a clause found, and gained none.) Chat keywords are
+    already cut into pieces of at most four characters (``recall_filter._cjk_terms``).
+    A bigram that repeats inside one phrase adds its shares up; a token reached by
+    two phrases, or as a whole word too, takes the larger weight -- a repeated query
+    term was counted once before, and still is. The terms are exactly those of
+    ``_bm25_tokenize(query)``; only the document side is cached, the query is not.
+    """
+    from .cjk_index import expand_cjk_runs
+
+    weights: dict[str, float] = {}
+    for tok in _tokenize_lower(query):
+        if not _CJK_RE.search(tok):
+            weights[tok] = max(weights.get(tok, 0.0), 1.0)
+            continue
+        for run in expand_cjk_runs(tok):
+            share: dict[str, float] = {}
+            for t in run:
+                share[t] = share.get(t, 0.0) + 1.0 / len(run)
+            for t, w in share.items():
+                weights[t] = max(weights.get(t, 0.0), w)
+    return weights
+
+
 # ── Doc-tokenize cache ───────────────────────────────────────────────────────
 # `_bm25_scores` re-tokenizes EVERY doc on EVERY call (line below), but doc
 # tokenization is a pure function of the doc CONTENT — query-independent. On the
@@ -303,7 +345,7 @@ def _bm25_tokenize(text: str) -> list[str]:
 # so eviction changes cache-hit rate, NEVER a result (the opposite of a
 # STEERING #2 cost cap — it never truncates in-flight recall work).
 #
-# The QUERY tokenization in `_bm25_scores` (`q_terms = _bm25_tokenize(query)`)
+# The QUERY tokenization in `_bm25_scores` (`_bm25_query_weights(query)`)
 # stays UNCACHED on purpose: the query varies every call and is short/cheap, so
 # caching it would only grow the cache for zero reuse.
 #
@@ -432,7 +474,9 @@ def _bm25_scores(query: str, docs: dict[str, str]) -> dict[str, float]:
 
     IDF is computed over ``docs`` (the candidate set), so common terms are
     down-weighted relative to THIS corpus — the property the old token-overlap
-    leg lacked. Returns raw BM25 scores, only those > 0 (a doc with no query term is
+    leg lacked. Each query term's contribution is multiplied by its weight
+    (``_bm25_query_weights``): 1 for a word, 1/n for each of the n bigrams of one
+    Chinese phrase, so a query with no CJK scores exactly as before. Returns raw BM25 scores, only those > 0 (a doc with no query term is
     left out); ``_normalize_bm25_scores`` puts them on (0, 1].
 
     Args:
@@ -446,12 +490,12 @@ def _bm25_scores(query: str, docs: dict[str, str]) -> dict[str, float]:
 
     if not docs:
         return {}
-    q_terms = _bm25_tokenize(query)
-    if not q_terms:
+    q_weight = _bm25_query_weights(query)
+    if not q_weight:
         return {}
 
     # DOC tokenization is query-independent → cache it. The QUERY
-    # tokenization above stays on the bare, UNcached `_bm25_tokenize`.
+    # terms above (``_bm25_query_weights``) are not cached.
     doc_tokens = {k: _bm25_tokenize_doc(text) for k, text in docs.items()}
     doc_len = {k: len(toks) for k, toks in doc_tokens.items()}
     n_docs = len(docs)
@@ -459,7 +503,7 @@ def _bm25_scores(query: str, docs: dict[str, str]) -> dict[str, float]:
 
     # Document frequency per query term.
     doc_term_sets = {k: set(toks) for k, toks in doc_tokens.items()}
-    q_unique = set(q_terms)
+    q_unique = set(q_weight)
     df: dict[str, int] = {}
     for term in q_unique:
         df[term] = sum(1 for s in doc_term_sets.values() if term in s)
@@ -485,7 +529,7 @@ def _bm25_scores(query: str, docs: dict[str, str]) -> dict[str, float]:
         score = 0.0
         for term, f in tf.items():
             denom = f + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl if avgdl else 1.0))
-            score += idf[term] * (f * (BM25_K1 + 1.0)) / denom
+            score += q_weight[term] * idf[term] * (f * (BM25_K1 + 1.0)) / denom
         if score > 0:
             scores[key] = score
     return scores
