@@ -1049,6 +1049,26 @@ class TestGallerySlowLog:
         for leg in ("pending", "runs", "summaries"):
             assert leg in msg
 
+    def test_a_slow_learned_count_alone_is_logged(self, monkeypatch, tmp_path, caplog):
+        """Does the total include the learned-this-week count? Measured outside it, a
+        7-9 s gallery (that count) logged nothing."""
+        import asyncio
+        import logging
+        import time
+        import core.brain_knowledge as bk
+        m = self._stub(monkeypatch, tmp_path)
+        monkeypatch.setattr(m, "_SLOW_GALLERY_MS", 150)
+
+        def slow_counts(ws, names, now=None):
+            time.sleep(0.3)
+            return {}
+
+        monkeypatch.setattr(bk, "week_counts", slow_counts)
+        with caplog.at_level(logging.WARNING, logger=m.logger.name):
+            asyncio.run(m.list_brains())
+        msg = next(r.getMessage() for r in caplog.records if "brains gallery slow" in r.getMessage())
+        assert "learned" in msg
+
     def test_fast_gallery_logs_nothing(self, monkeypatch, tmp_path, caplog):
         import asyncio
         import logging

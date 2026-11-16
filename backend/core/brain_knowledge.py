@@ -116,22 +116,29 @@ def _entries(workspace: Path, name: str) -> list[dict[str, Any]]:
 
 def _records(conn: sqlite3.Connection | None, entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """unit id → {written_at, collected, source, source_ref} from the write record, else
-    the evaluation archive (collected time only)."""
+    the evaluation archive (collected time only).
+
+    The write times are one grouped read per chunk, never a subquery per unit:
+    ingestion_writes has no index on unit_id, so a correlated MAX() scanned every 'done'
+    write once per entry (measured: 1924 entries x 5150 writes = 6.9 s, held a 'nav'
+    thread and made the Brain Hub gallery and Brain page take 7-9 s)."""
     if conn is None or not entries:
         return {}
     ids = [e["unit_id"] for e in entries]
     out: dict[str, dict[str, Any]] = {}
     for chunk in (ids[i:i + 500] for i in range(0, len(ids), 500)):
         marks = ",".join("?" * len(chunk))
-        for uid, at, src, ref in conn.execute(
-                f"""SELECT u.unit_id,
-                           (SELECT MAX(w.updated_at) FROM ingestion_writes w WHERE w.unit_id=u.unit_id
-                              AND w.op_kind='ingestion_unit' AND w.step='done'),
-                           COALESCE(i.source_v2, i.source), i.source_ref
+        written = dict(conn.execute(
+            f"""SELECT unit_id, MAX(updated_at) FROM ingestion_writes
+                WHERE op_kind='ingestion_unit' AND step='done' AND unit_id IN ({marks})
+                GROUP BY unit_id""", chunk).fetchall())
+        for uid, src, ref in conn.execute(
+                f"""SELECT u.unit_id, COALESCE(i.source_v2, i.source), i.source_ref
                     FROM ingestion_units u
                     LEFT JOIN ingestion_inbox i ON i.id=u.candidate_id
                     WHERE u.unit_id IN ({marks})""", chunk):
-            out[uid] = {"written_at": at, "collected": False, "source": src, "source_ref": ref}
+            out[uid] = {"written_at": written.get(uid), "collected": False,
+                        "source": src, "source_ref": ref}
         missing = [u for u in chunk if not (out.get(u) or {}).get("written_at")]
         if missing and _has(conn, "ingestion_eval_log"):
             m2 = ",".join("?" * len(missing))

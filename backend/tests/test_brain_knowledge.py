@@ -280,7 +280,9 @@ def test_the_knowledge_view_refuses_a_name_that_is_not_a_brain(ws, monkeypatch):
     from routers import ddd_brain
     monkeypatch.setattr(ddd_brain, "_workspace_root", lambda: ws)
     monkeypatch.setattr(ddd_brain, "_projects_root", lambda: ws / "Projects")
-    assert _titles(asyncio.run(ddd_brain.get_brain_knowledge("General", "week"))) == ["World fact"]
+    # "all": the route measures the range from the real clock, the fixture's entries are
+    # dated from NOW, so "week" here went empty once NOW was more than a week ago
+    assert _titles(asyncio.run(ddd_brain.get_brain_knowledge("General", "all"))) == ["World fact"]
     for name in ("Nope", "..", "../Knowledge"):
         with pytest.raises(HTTPException) as exc:
             asyncio.run(ddd_brain.get_brain_knowledge(name, "week"))
@@ -296,3 +298,26 @@ def test_the_parse_cache_is_per_workspace_root(ws):
     first = brain_knowledge._parse(path, ws)[0]["anchor"]
     other = brain_knowledge._parse(path, ws / "Projects")[0]["anchor"]
     assert first.startswith("Projects/P/") and other.startswith("P/")
+
+
+def test_write_times_are_read_in_one_pass_not_once_per_entry(ws):
+    """Is no statement of the write-time read a per-entry subquery? ingestion_writes has
+    no unit_id index, so a correlated MAX() scans every finished write once per entry
+    (1924 entries took 6.9 s and held a Left Nav thread)."""
+    from core import brain_knowledge as bk
+    from core.ingestion.store import connect_ro
+    entries = bk._entries(ws, "P")
+    conn = connect_ro()
+    seen: list[str] = []
+    conn.set_trace_callback(seen.append)
+    try:
+        recs = bk._records(conn, entries)
+        conn.set_trace_callback(None)
+        selects = [s for s in seen if s.lstrip().upper().startswith("SELECT")]
+        assert selects
+        for sql in selects:                # the trace has the parameters filled in
+            plan = " ".join(str(r[3]) for r in conn.execute("EXPLAIN QUERY PLAN " + sql))
+            assert "CORRELATED" not in plan.upper(), (sql, plan)
+    finally:
+        conn.close()
+    assert recs["cand-n.unit"]["written_at"] == (NOW - timedelta(hours=6)).isoformat()

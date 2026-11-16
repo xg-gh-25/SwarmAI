@@ -1009,13 +1009,6 @@ async def list_brains() -> dict:
         return_exceptions=True,
     )
     leg_ms["summaries"] = (_time.perf_counter() - t_sum) * 1000
-    total_ms = (_time.perf_counter() - t_start) * 1000
-    # Measured 2026-10-23: 0.4-0.9 s warm, 3.8 s on the first call after a restart, with no
-    # single leg dominating in a standalone run. Log the legs when slow, so the next slow
-    # gallery says which one it was (design left-nav-overlay-single-source.md S4).
-    if total_ms > _SLOW_GALLERY_MS:
-        logger.warning("brains gallery slow: %.0f ms (%s, %d projects)", total_ms,
-                       ", ".join(f"{k} {v:.0f}" for k, v in leg_ms.items()), len(dirs))
     brains = []
     for d, r in zip(dirs, results):
         if isinstance(r, Exception):
@@ -1032,13 +1025,22 @@ async def list_brains() -> dict:
         from core.brain_knowledge import week_counts
         from core.project_agent import GENERAL_BRAIN
         names = [b.get("name") for b in brains if b.get("name")] + ([GENERAL_BRAIN] if general else [])
-        weeks = await executors.run_nav(week_counts, _workspace_root(), names)
+        weeks = await _timed("learned", executors.run_nav(week_counts, _workspace_root(), names))
         for b in brains:
             b["learnedWeek"] = weeks.get(b.get("name"), 0)
         if general:
             general["learnedWeek"] = weeks.get(GENERAL_BRAIN, 0)
     except Exception as e:  # never 500 the gallery on the count
         logger.warning("brains gallery: learned-this-week count failed: %s", e)
+    total_ms = (_time.perf_counter() - t_start) * 1000
+    # Measured 2026-10-23: 0.4-0.9 s warm, 3.8 s on the first call after a restart, with no
+    # single leg dominating in a standalone run. Log the legs when slow, so the next slow
+    # gallery says which one it was (design left-nav-overlay-single-source.md S4). The
+    # total covers every leg, the learned-this-week count too: measured outside it, a
+    # 7-9 s gallery (that count) logged nothing.
+    if total_ms > _SLOW_GALLERY_MS:
+        logger.warning("brains gallery slow: %.0f ms (%s, %d projects)", total_ms,
+                       ", ".join(f"{k} {v:.0f}" for k, v in leg_ms.items()), len(dirs))
     # general: the built-in General Brain, second on the card wall (null if unreadable)
     return {"brains": brains, "pinned": get_pinned_projects(), "general": general}
 

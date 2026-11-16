@@ -201,8 +201,9 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
     judge_mount_kind rglob walk, a synchronous sqlite3 session, AND index_code_mount
     (a whole tree-sitter code-graph build) all ran in the async body, so mounting a
     real source tree froze every other request and every chat tab's SSE stream for the
-    duration of the index. All three now run in the sync ``_work`` helper via
-    asyncio.to_thread.
+    duration of the index. All three now run in the sync ``_work`` helper on the
+    ``nav_action`` pool (executors.run_nav_action), not on a 'nav' thread the overlay
+    reads wait on.
 
     The two REJECTION guards stay in the async body on purpose: they must fail fast,
     BEFORE any work is dispatched, and both are cheap (one is_dir() stat, one
@@ -248,12 +249,14 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
             conn.close()
 
     try:
-        return await executors.run_nav(_work)
+        # a docs mount chunks and indexes its files inline (up to the walk's file cap):
+        # an action, not a read, so never on a 'nav' thread every overlay read waits on
+        return await executors.run_nav_action(_work)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("register_mount failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"mount failed: {exc}")
+        raise HTTPException(status_code=500, detail="mount failed")
 
 
 def _normalize_hit_source(domain: str, source: str) -> str:

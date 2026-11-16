@@ -161,3 +161,26 @@ def test_run_nav_does_not_log_an_idle_call(caplog):
     with caplog.at_level(logging.WARNING, logger="core.executors"):
         assert asyncio.run(executors.run_nav(lambda: 1)) == 1
     assert not [r for r in caplog.records if "nav pool:" in r.getMessage()]
+
+
+def test_a_library_mount_runs_on_the_action_pool(monkeypatch, tmp_path):
+    """A docs mount chunks and indexes its files inline: an action that holds its thread
+    for as long as the index takes, so it must not take a 'nav' thread the overlay
+    reads wait on."""
+    import core.library_mounts as lm
+    from core import executors
+    from routers import library_api
+    calls = []
+
+    async def on_nav(fn, *a, **k):
+        raise AssertionError("register_mount ran on the nav pool")
+
+    async def on_action(fn, *a):
+        calls.append(fn)
+        return {"id": "m", "kind": "docs", "status": "indexed", "chunks": 0}
+
+    monkeypatch.setattr(executors, "run_nav", on_nav)
+    monkeypatch.setattr(executors, "run_nav_action", on_action)
+    monkeypatch.setattr(lm, "is_protected_system_path", lambda p: False)
+    out = asyncio.run(library_api.register_mount(path=str(tmp_path), scope="GLOBAL"))
+    assert out["status"] == "indexed" and len(calls) == 1
