@@ -1896,11 +1896,16 @@ def _release_reason(rid, f, data, entries, now) -> "str | None":
 
 def _release_stale(rid, f, entries, live, reason, report, update_run, RunLockTimeout,
                    landed: "set[str] | None" = None) -> None:
+    # The main checkout is named by git through entry_main (an entry written before
+    # git_common_dir was recorded is accepted from the worktree's own git pointer, as
+    # everywhere else); requiring the field here left such a run's worktree in place
+    # forever, re-reported as "main checkout unknown" on every sweep.
     mains = {}
     for e in entries:
-        m = main_of(wt_path(rid, e["repo_name"])) if wt_path(rid, e["repo_name"]).exists() else None
-        if m is not None and _common_dir(m) == e.get("git_common_dir"):
-            mains[e["repo_name"]] = m
+        try:
+            mains[e["repo_name"]] = entry_main(rid, e)
+        except WorktreeError:
+            continue
     holder: dict = {}
 
     def _mut(fresh: dict) -> bool:

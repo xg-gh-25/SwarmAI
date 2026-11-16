@@ -364,6 +364,44 @@ def test_sweep_quarantines_unregistered_and_releases_terminal(env):
     assert data["worktrees"][0]["state"] == "released" and data["worktrees"][0]["ledger"]
 
 
+def _legacy_run(env, entry_main_path):
+    """A finished run whose worktree row predates git_common_dir (the shape older
+    run.json files carry: repo_name, main, path, state only)."""
+    ws = env["tmp"] / "ws"
+    rd = ws / "Projects" / "P" / ".artifacts" / "runs" / RUN
+    rd.mkdir(parents=True)
+    e = rw.create(RUN, "swarmai", env["main"], workspace=ws)
+    (rw.wt_path(RUN, "swarmai") / "a.py").write_text("a = 'wip'\n")
+    legacy = {"repo_name": "swarmai", "main": str(entry_main_path),
+              "path": e["path"] if "path" in e else str(rw.wt_path(RUN, "swarmai")),
+              "state": "active"}
+    (rd / "run.json").write_text(json.dumps({"id": RUN, "status": "completed",
+                                             "worktree_mode": "isolated",
+                                             "worktrees": [legacy]}))
+    return ws, rd
+
+
+def test_sweep_releases_a_legacy_row_without_git_common_dir(env):
+    """An old row without git_common_dir was never released: the sweep reported
+    "main checkout unknown" every hour and kept the worktree forever."""
+    ws, rd = _legacy_run(env, env["main"])
+    rep = rw.sweep(ws, owner_active=lambda sid: False)
+    row = rep["released"][0]["results"][0]
+    assert row["ok"] and row.get("ledger"), row
+    assert not rw.wt_path(RUN, "swarmai").exists()
+    data = json.loads((rd / "run.json").read_text())
+    assert data["worktrees"][0]["state"] == "released"
+
+
+def test_sweep_keeps_a_legacy_row_whose_main_is_another_repo(env):
+    other = _init_repo(env["tmp"] / "else" / "x", env["hooks"])
+    ws, rd = _legacy_run(env, other)
+    rep = rw.sweep(ws, owner_active=lambda sid: False)
+    assert rw.wt_path(RUN, "swarmai").is_dir()
+    assert all(not r["ok"] for x in rep["released"] for r in x["results"])
+    assert json.loads((rd / "run.json").read_text())["worktrees"][0]["state"] == "active"
+
+
 def test_sweep_never_touches_another_workspaces_worktrees(env):
     """A test / second install sweeping its own workspace must not see this install's
     live worktrees as "run record missing" (review HIGH-1)."""
