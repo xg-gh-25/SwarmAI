@@ -113,10 +113,11 @@ _STOP_WORDS: frozenset[str] = frozenset({
 })
 
 # Chinese function words and conversational filler. A CJK run is cut at every
-# occurrence (longest first), and the remaining pieces of 2+ characters are the
-# content words. Without this a whole clause ("的看下我们现在的") became ONE
-# search term whose every bigram had to match -- it matched nothing, while
-# filler-only messages matched everything that shared a filler.
+# occurrence, and the remaining pieces of 2+ characters are the content words.
+# Without this a whole clause ("的看下我们现在的") became ONE search term whose
+# every bigram had to match -- it matched nothing, while filler-only messages
+# matched everything that shared a filler. A word of ``_CJK_KEEP_WORDS`` is never
+# cut (see there).
 _CJK_STOP_WORDS: tuple[str, ...] = tuple(sorted({
     "我们", "你们", "他们", "咱们", "自己", "现在", "目前", "刚才", "之前", "以后",
     "一下", "看下", "看看", "看一下", "查下", "查一下", "帮我", "给我", "你给我",
@@ -133,22 +134,74 @@ _CJK_STOP_WORDS: tuple[str, ...] = tuple(sorted({
     "不", "没", "要", "会", "能", "好", "对", "说", "做", "搞", "帮", "请",
     "这", "那", "哪", "谁", "个", "们", "着", "过", "得", "地", "从", "向",
 }, key=len, reverse=True))
-_CJK_STOP_RE = re.compile("|".join(re.escape(w) for w in _CJK_STOP_WORDS))
+# Common words that hold a one-character stop word (会 in 会话, 能 in 能力, 下 in
+# 上下文, 不 in 不一致). Cutting at that character destroyed the word before recall
+# saw it: 会话卡住 came out as 话卡住. The run is scanned
+# once, leftmost match first and, at one position, the longest word first (forward
+# maximum matching): a stop word is a cut, a word here is content and is never cut.
+# So 会话 beats 会 where both start, and 可以下载 still cuts 可以 before 下载 is read.
+# A run holding none of these words is cut exactly as it was without them, and so
+# is filler made of stop words alone (会不会, 要不要) unless a word here reaches
+# into it: forward matching is not a parser, so 说明白 reads as 说明 + 白. A word
+# belongs here only when it holds a one-character stop word, is content in a chat
+# about work (not filler), has at most _CJK_MAX_TERM characters, and its last
+# character rarely starts the next word: 在线 is left out for 在线上, 去重 for
+# 去重新, 有效 for 有效果, 还原 for 还原来.
+_CJK_KEEP_WORDS: frozenset[str] = frozenset({
+    "会话", "会议", "要求", "摘要", "能力", "功能", "性能", "智能", "技能",
+    "对话", "对象", "对比", "对齐", "说明", "跟踪", "来源", "下载", "下游",
+    "上下文", "请求", "过程", "过滤", "过期", "地址", "本地", "向量", "不一致",
+})
+_CJK_STOP_SET: frozenset[str] = frozenset(_CJK_STOP_WORDS)
+_CJK_WORD_RE = re.compile("|".join(
+    re.escape(w) for w in sorted(_CJK_STOP_SET | _CJK_KEEP_WORDS, key=len, reverse=True)))
 _CJK_RUN_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+")
 # Longest CJK content piece kept as one term; longer pieces are split, because
-# a term's bigrams are AND-ed and a long piece rarely recurs verbatim.
+# a term's bigrams are AND-ed and a long piece rarely recurs verbatim. A longer
+# piece is cut around its _CJK_KEEP_WORDS first, so none of them is split, and the
+# text between them in chunks of this size.
 _CJK_MAX_TERM = 4
+
+
+def _cjk_pieces(run: str) -> list[list[str]]:
+    """The content pieces of one CJK run, the text between its stop words (which are
+    dropped), each as a list of tokens: a word of ``_CJK_KEEP_WORDS`` is one token,
+    any other character a token of its own."""
+    pieces: list[list[str]] = [[]]
+    pos = 0
+    for m in _CJK_WORD_RE.finditer(run):
+        pieces[-1].extend(run[pos:m.start()])
+        if m.group() in _CJK_STOP_SET:
+            pieces.append([])
+        else:
+            pieces[-1].append(m.group())
+        pos = m.end()
+    pieces[-1].extend(run[pos:])
+    return pieces
+
+
+def _piece_terms(tokens: list[str]) -> list[str]:
+    """One piece's terms: the piece whole when it is at most _CJK_MAX_TERM characters;
+    otherwise each kept word, and the text between them in chunks of that size."""
+    piece = "".join(tokens)
+    if len(piece) <= _CJK_MAX_TERM:
+        return [piece]
+    segments: list[str] = [""]
+    for tok in tokens:
+        if len(tok) > 1:  # a kept word: a segment of its own
+            segments += [tok, ""]
+        else:
+            segments[-1] += tok
+    return [seg[i:i + _CJK_MAX_TERM]
+            for seg in segments for i in range(0, len(seg), _CJK_MAX_TERM)]
 
 
 def _cjk_terms(text: str) -> list[str]:
     """Content words from the CJK runs of ``text``, in order, de-duplicated."""
     out: list[str] = []
     for run in _CJK_RUN_RE.findall(text):
-        for piece in _CJK_STOP_RE.split(run):
-            if len(piece) < 2:
-                continue
-            for i in range(0, len(piece), _CJK_MAX_TERM):
-                part = piece[i:i + _CJK_MAX_TERM]
+        for tokens in _cjk_pieces(run):
+            for part in _piece_terms(tokens):
                 if len(part) >= 2 and part not in out:
                     out.append(part)
     return out

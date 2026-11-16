@@ -431,7 +431,7 @@ def ddd_inject_true_failure_total(snapshot: "dict[str, int] | None" = None) -> i
 # Keyword extraction lives in recall_filter (one copy for chat and pipeline recall,
 # run-knowledge §2); the names are kept here for existing callers and tests.
 from .recall_filter import (  # noqa: E402,F401
-    _CJK_MAX_TERM, _CJK_RUN_RE, _CJK_STOP_RE, _CJK_STOP_WORDS, _STOP_WORDS, _cjk_terms,
+    _CJK_MAX_TERM, _CJK_RUN_RE, _CJK_STOP_WORDS, _STOP_WORDS, _cjk_terms,
     extract_query_keywords as _extract_query_keywords,
 )
 

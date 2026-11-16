@@ -231,3 +231,62 @@ def test_ddd_leg_injects_only_relevant_sections(tmp_path, monkeypatch):
     o = SimpleNamespace(system_prompt="")
     _inject_ddd_for_active_project(o, "继续", ("P", "signal1_project_path"))
     assert "[DDD:P]" in o.system_prompt and "§" not in o.system_prompt
+
+
+# ── one-character stop words never cut a kept word (会话 is not 话) ─────────────
+
+def test_cjk_words_holding_a_one_char_stop_word_survive():
+    """会 / 能 / 对 / 说 / 下 / 地 are stop words; the words that hold them are not cut,
+    also where a 4-character term would end inside one (测试本地会话)."""
+    cases = {
+        "会话卡住了": "会话",
+        "看下能力说明": "能力说明",
+        "这个对话为什么断了": "对话",
+        "可以下载": "下载",
+        "测试本地会话": "会话",
+        "一致性检查与会话恢复": "会话",
+        "压缩之后会话上下文会不会丢": "上下文",
+    }
+    for message, word in cases.items():
+        terms = _extract_query_keywords(message).split()
+        assert any(word in t for t in terms), (message, terms)
+    assert _extract_query_keywords("测试本地会话") == "测试 本地 会话"
+    assert _extract_query_keywords("上下文不一致") == "上下文 不一致"
+
+
+def test_one_char_stop_words_still_cut_around_kept_words():
+    assert _extract_query_keywords("我的会话卡住了") == "会话卡住"
+    # a stop word starting earlier wins: 可以 is cut before 下载 is read
+    assert _extract_query_keywords("我可以下载吗") == "下载"
+    # a long piece is cut around its kept words, never inside one
+    assert _extract_query_keywords("用摘要重启一下") == "摘要 重启"
+    # no kept word takes the first character of the word after it (线上, 重新, 效果)
+    assert _extract_query_keywords("我在线上环境测试") == "线上环境 测试"
+    assert _extract_query_keywords("去重新部署") == "重新部署"
+    assert _extract_query_keywords("有效果吗") == "效果"
+
+
+def test_cjk_filler_still_yields_no_keywords():
+    for q in ("会不会", "要不要", "能不能", "你说呢", "好的", "会不会要不要", "你能不能说一下"):
+        assert _extract_query_keywords(q) == "", q
+
+
+def test_english_keywords_unchanged():
+    expected = {
+        "How does the evolution pipeline handle corrections?":
+            "evolution pipeline handle corrections",
+        "why is session_router slow on the first message": "session_router slow first message",
+        "check the pre-tool-use hook for the commit gate": "pre-tool-use hook commit gate",
+        "continue": "",
+    }
+    for message, keywords in expected.items():
+        assert _extract_query_keywords(message) == keywords, message
+
+
+def test_keep_words_each_hold_a_one_char_stop_word():
+    from core.recall_filter import _CJK_KEEP_WORDS, _CJK_MAX_TERM, _CJK_STOP_WORDS
+    one_char = {w for w in _CJK_STOP_WORDS if len(w) == 1}
+    for word in _CJK_KEEP_WORDS:
+        assert 2 <= len(word) <= _CJK_MAX_TERM, word
+        assert word not in _CJK_STOP_WORDS, word
+        assert one_char & set(word), f"{word} holds no one-character stop word: not needed"
