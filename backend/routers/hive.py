@@ -641,7 +641,7 @@ async def restart_instance(instance_id: str):
         raise HTTPException(status_code=409, detail=f"Hive {name} is {status}, not running: "
                                                     "only a running Hive is restarted")
     from core import swarm_out
-    held = await asyncio.to_thread(swarm_out.open_runs_by_hive, True)
+    held = await executors.run_nav(swarm_out.open_runs_by_hive, True)
     if held is None:
         raise HTTPException(status_code=409, detail=(
             f"cannot tell whether Hive {name} holds open runs (the dispatch log could not be read)"))
