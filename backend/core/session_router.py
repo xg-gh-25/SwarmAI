@@ -2106,28 +2106,12 @@ def _inject_ddd_for_active_project(
     ddd_hits: list = []
     base, docs_text = None, {}      # read below when there are keywords; the no-hit pointer uses base
     if keywords:
-        base, docs_text = _load_ddd_docs_text(project)
-        # The Brain's term map (core.term_map): Chinese keywords bring their mapped
-        # English terms. The ddd leg expands its own query; the coverage rule and the
-        # best entry of a section hit below use the same matches.
-        from . import term_map
-        matches = term_map.brain_matches(base, keywords)
-        query = term_map.expand_query(keywords, matches)
         result = recall_all(keywords, project=project, domains=("ddd",))
         raw_hits = result.buckets.get("ddd", []) if hasattr(result, "buckets") else []
+        base, docs_text = _load_ddd_docs_text(project)
         sections = _parse_docs_sections(docs_text) if docs_text else {}
         terms = query_terms(keywords)
         need = _required(terms)
-
-        def covered(text: str) -> int:
-            # A keyword counts when it is in the text, or when a mapped Chinese term
-            # inside it has one of its English terms there as whole words: the map
-            # stands in for a keyword, it never lowers how many must match.
-            low = text.lower()
-            return sum(1 for t in terms if t in low or any(
-                k in t and any(term_map.mentions(low, v) for v in vals)
-                for k, vals in matches.items()))
-
         for h in raw_hits:
             doc, sec = str(h.get("doc") or ""), str(h.get("section") or "")
             text = str(h.get("content") or "") or str((sections.get(doc) or {}).get(sec) or "")
@@ -2136,9 +2120,9 @@ def _inject_ddd_for_active_project(
                     text = (base / doc).read_text(encoding="utf-8")[:65536]
                 except OSError:
                     text = ""
-            if covered(f"{sec}\n{text}") >= need:
+            if _coverage(f"{sec}\n{text}", terms) >= need:
                 ddd_hits.append(h if h.get("content") else
-                                _best_entry_of_section(h, base, docs_text, query))
+                                _best_entry_of_section(h, base, docs_text, keywords))
     _ddd_ms = (time.perf_counter() - _ddd_t0) * 1000.0
     # Recall metrics (run_40091f5c): the ddd leg is a REAL per-prompt daemon recall
     # on its OWN path (excluded from the session_prompt sample) — measure it too, or

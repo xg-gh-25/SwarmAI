@@ -3,31 +3,28 @@
 
 Runs a set of query pairs against one Brain's ``find`` (``core.addressing.find``, what
 ``cognition find --project P --in ddd`` prints) and reports, for each pair, the rank
-of the pair's target entry for the Chinese and the English query, in three modes:
+of the pair's target entry for the Chinese and the English query, in two modes:
 
-- ``base``: the scorer as it was before CJK phrase weighting and the term map (every
-  query term weight 1, no term map) -- the "before" column, from the same run;
+- ``base``: the scorer as it was before CJK phrase weighting (every query term weight
+  1) -- the "before" column, from the same run;
 - ``weighted``: the bigrams of one Chinese phrase share one term's weight
-  (``memory_index._bm25_query_weights``), no term map;
-- ``mapped``: weighted, and the query expanded with the Brain's term map
-  (``core.term_map``), or with ``--term-map FILE`` when given (a file holding a
-  ``## Term map`` section, to measure a map before it is added to the Brain).
+  (``memory_index._bm25_query_weights``).
 
 The pairs file is JSON: ``{"pairs": [{"id", "title", "en", "zh", "set"?}, ...]}``.
 ``title`` is a substring of the target entry's text that occurs in no other entry;
 the target's rank is the position of the first unit of the result holding it.
-``set`` (optional) groups pairs in the summary, e.g. a ``probe`` set the map was
-written with and a ``heldout`` set that was not looked at.
+``set`` (optional) groups pairs in the summary, e.g. a ``probe`` set and a
+``heldout`` set that was not looked at.
 
 Usage::
 
     "$SWARM_BACKEND_BIN" py -m scripts.cjk_recall_probe --project SwarmAI \\
-        --pairs pairs.json [--term-map term-map.md] [--top 8] [--json out.json]
+        --pairs pairs.json [--top 8] [--json out.json]
 
-Exit 1 when a query ranks its target lower (or loses it) in ``weighted`` or ``mapped``
-than in ``base``, so the run is also a regression check; 0 otherwise. For an English
-query that is a sanity check (a query with no CJK is neither weighted nor expanded);
-for a Chinese one it catches the weighting or the map pushing a target down.
+Exit 1 when a query ranks its target lower (or loses it) in ``weighted`` than in
+``base``, so the run is also a regression check; 0 otherwise. For an English query that
+is a sanity check (a query with no CJK is not weighted); for a Chinese one it catches
+the weighting pushing a target down.
 Read-only: it reads the Brain and writes only ``--json``.
 """
 from __future__ import annotations
@@ -44,24 +41,19 @@ BACKEND = Path(__file__).resolve().parents[1]
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-MODES = ("base", "weighted", "mapped")
+MODES = ("base", "weighted")
 LANGS = ("zh", "en")
 
 
 @contextlib.contextmanager
-def mode(name: str, term_map_file: Optional[Path] = None) -> Iterator[None]:
+def mode(name: str) -> Iterator[None]:
     """Score as *name* says while the block runs (see the module docstring)."""
-    from core import memory_index, term_map
+    from core import memory_index
     with contextlib.ExitStack() as stack:
         if name == "base":
             def unweighted(query: str) -> dict[str, float]:
                 return {t: 1.0 for t in memory_index._bm25_tokenize(query)}
             stack.enter_context(mock.patch.object(memory_index, "_bm25_query_weights", unweighted))
-        if name in ("base", "weighted"):
-            stack.enter_context(mock.patch.object(term_map, "load_term_map", lambda _d: {}))
-        elif term_map_file is not None:
-            mapping = term_map.parse_term_map(term_map_file.read_text(encoding="utf-8"))
-            stack.enter_context(mock.patch.object(term_map, "load_term_map", lambda _d: mapping))
         yield
 
 
@@ -76,27 +68,26 @@ def rank_of(project: str, query: str, title: str, top: int) -> Optional[int]:
     return None
 
 
-def run_probe(project: str, pairs: list[dict], *, top: int = 8,
-              term_map_file: Optional[Path] = None) -> list[dict]:
+def run_probe(project: str, pairs: list[dict], *, top: int = 8) -> list[dict]:
     """One row per pair: ``{"id", "set", "<mode>": {"zh": rank, "en": rank}}``."""
     rows = [{"id": p.get("id", str(i)), "set": p.get("set", "all")} for i, p in enumerate(pairs)]
     for name in MODES:
-        with mode(name, term_map_file):
+        with mode(name):
             for row, pair in zip(rows, pairs):
                 row[name] = {lang: rank_of(project, pair[lang], pair["title"], top) for lang in LANGS}
     return rows
 
 
 def regressions(rows: list[dict]) -> list[str]:
-    """Each query whose target ranks lower (or drops out) in ``weighted`` or ``mapped``
-    than in ``base``."""
+    """Each query whose target ranks lower (or drops out) in ``weighted`` than in
+    ``base``."""
     out = []
     for r in rows:
         for lang in LANGS:
             before = r["base"][lang]
             if before is None:
                 continue
-            for m in ("weighted", "mapped"):
+            for m in ("weighted",):
                 after = r[m][lang]
                 if after is None or after > before:
                     out.append(f"{r['id']}: {lang} rank {before} -> {after} ({m})")
@@ -118,12 +109,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--project", required=True)
     ap.add_argument("--pairs", required=True, type=Path)
-    ap.add_argument("--term-map", type=Path, default=None)
     ap.add_argument("--top", type=int, default=8)
     ap.add_argument("--json", type=Path, default=None)
     args = ap.parse_args(argv)
     pairs = json.loads(args.pairs.read_text(encoding="utf-8"))["pairs"]
-    rows = run_probe(args.project, pairs, top=args.top, term_map_file=args.term_map)
+    rows = run_probe(args.project, pairs, top=args.top)
     def cell(v: Optional[int]) -> str:
         return "-" if v is None else str(v)
     print("id    set      " + "  ".join(f"{m:>8} zh/en" for m in MODES))

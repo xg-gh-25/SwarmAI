@@ -103,3 +103,47 @@ def test_an_unspaced_clause_is_one_phrase_next_to_an_identifier():
     got = memory_index._bm25_scores(q, docs)
     assert got["ident"] > got["clause"]
 
+
+
+# ── the probe script: before / after the weighting, as a regression check ─────
+
+_PROBE_TECH = """# TECH
+
+## Architecture
+
+- [model] **Dispatch timeout on the worker** A dispatched task that exceeds its timeout is reported as failed.
+- [model] **Session isolation per tab** Every tab owns its session.
+""" + "\n".join(f"- [pitfall] **Filler {i}** — wombat note number {i}." for i in range(30)) + "\n"
+
+_PROBE_PAIRS = [
+    {"id": "q1", "title": "Dispatch timeout on the worker", "en": "dispatch timeout worker",
+     "zh": "派发超时"},
+    {"id": "q2", "title": "Session isolation per tab", "en": "session isolation tab",
+     "zh": "会话和标签页隔离"},
+]
+
+
+def test_probe_reports_before_and_after_with_no_english_regression(tmp_path, monkeypatch):
+    import json
+    from core import memory_index
+    from scripts import cjk_recall_probe as probe
+    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("SWARMWS", str(tmp_path))
+    root = tmp_path / "Projects" / "P" / "2-understanding"
+    root.mkdir(parents=True)
+    (root / "TECH.md").write_text(_PROBE_TECH, encoding="utf-8")
+    memory_index._reset_doc_token_cache()
+    rows = probe.run_probe("P", _PROBE_PAIRS, top=8)
+    assert probe.MODES == ("base", "weighted")
+    assert all(r["weighted"]["en"] == r["base"]["en"] == 1 for r in rows)
+    assert probe.regressions(rows) == []
+    pairs, out = tmp_path / "pairs.json", tmp_path / "out.json"
+    pairs.write_text(json.dumps({"pairs": _PROBE_PAIRS}), encoding="utf-8")
+    assert probe.main(["--project", "P", "--pairs", str(pairs), "--json", str(out)]) == 0
+    assert [r["id"] for r in json.loads(out.read_text())["rows"]] == ["q1", "q2"]
+
+
+def test_probe_flags_a_rank_that_drops_with_the_weighting():
+    from scripts import cjk_recall_probe as probe
+    rows = [{"id": "x", "set": "s", "base": {"zh": 2, "en": 1}, "weighted": {"zh": 5, "en": 1}}]
+    assert probe.regressions(rows) == ["x: zh rank 2 -> 5 (weighted)"]

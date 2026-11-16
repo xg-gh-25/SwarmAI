@@ -1220,15 +1220,12 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
     comments -- never a part of it (``_take_whole``). ``kind`` is entry / block /
     pinned / pointer / omitted. A ``pooled`` purpose returns entries only, ranked
     across its docs. A doc that is missing or unreadable is simply absent; one that
-    fails to parse is skipped alone (§3.6.5 H1-H3). READ-only, keyword-only; a query
-    with Chinese in it is expanded with the Brain's term map first (``core.term_map``).
+    fails to parse is skipped alone (§3.6.5 H1-H3). READ-only, keyword-only.
     Raises ``KeyError`` only for an unknown *purpose* (a caller bug)."""
     cfg = DDD_PURPOSES[purpose]
     _base, docs_text = _load_ddd_docs_text(project)
     if not docs_text:
         return []
-    from core.term_map import expand_for_brain
-    query = expand_for_brain(_base, query)     # the Brain's Chinese → English terms
     if cfg.get("pooled"):
         return _pooled(query, docs_text, cfg, project)
     w = TYPE_WEIGHT if weight is None else float(weight)
@@ -1268,14 +1265,11 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
 
 def _recall_ddd(query: str, project: Optional[str],
                 max_sections: int) -> tuple[list, str]:
-    """Recall over a project's DDD docs via the generic ##-section scorer. A query
-    with Chinese in it is expanded with the Brain's term map first (``core.term_map``)."""
+    """Recall over a project's DDD docs via the generic ##-section scorer."""
     hits: list = []
     base, _docs_text = _load_ddd_docs_text(project)
     if base is None:
         return hits, "none"
-    from core.term_map import expand_for_brain
-    query = expand_for_brain(base, query)     # the Brain's Chinese → English terms
 
     from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
     scored: list[tuple[str, str, float]] = []  # (doc, section, score)
