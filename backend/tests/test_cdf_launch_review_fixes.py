@@ -258,9 +258,10 @@ def test_both_extraction_prompts_state_the_length_rule_and_card0_drops_nothing_f
 
 
 def test_routine_operations_are_not_events_in_extraction_or_judgment():
-    """TIMELINE is injected every turn: a build, a restart, an install or a dispatched step
-    (rehearsal and live 2026-10-29: 6 of 10 written events) is noise there. The one
-    rule is stated by both extraction prompts (no card judges it afterwards)."""
+    """TIMELINE is read when the work looks back, its month summaries in every session: a
+    build, a restart, an install or a dispatched step (rehearsal and live 2026-10-29: 6 of
+    10 written events) is noise there. The one rule is stated by both extraction prompts
+    (no card judges it afterwards)."""
     from core.ingestion.sources import extract_llm, s7_review
     rule = extract_llm.EVENT_RULE
     for word in ("build", "restart", "install", "test run"):

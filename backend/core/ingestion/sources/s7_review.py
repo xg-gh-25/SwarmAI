@@ -400,11 +400,12 @@ def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, reco
     stays = ks.item(7, " ".join([
         "Record what stays true, as it stands at the end of this record.", ks.NOT_KNOWLEDGE[0],
         "A problem the record leaves open at its end is a gap; one opened and solved within it "
-        "is not. Something that changed how the work stands is an event, worded as it stands now "
-        '("X fixed", not "root cause of X found" when the fix followed). A bug found and fixed '
-        "within this record is not a pitfall: the fix is an event, and a lesson is only the "
-        "general rule that would have caught it, when that rule holds beyond this one piece of "
-        "code.", *ks.NOT_KNOWLEDGE[1:]]))
+        "is not. A decision, milestone or incident is an event, worded as it stands now "
+        '("the outage of X resolved by Y", not "root cause of X found" when the fix followed). '
+        "A bug found and fixed within this record is not a pitfall, and not an event of its "
+        "own: it is a step of the work it belonged to, and a lesson is only the general rule "
+        "that would have caught it, when that rule holds beyond this one piece of code.",
+        *ks.NOT_KNOWLEDGE[1:]]))
     return f"""A conversation you had with the person has been quiet for an hour; it may go on
 later, and an earlier review of it may already have recorded part of it. Review the work
 since your last review and record what is worth keeping, by calling {extract_llm.TOOL_NAME}

@@ -55,7 +55,10 @@ WRITE_WHEN = (
     "still holds with every project, document and incident taken out.",
     "A gap is exactly one problem, with a concrete next step; a note on the progress of the "
     "work is not a gap.",
-    "An event says what was done and what came of it.",
+    "An event is a decision (and why), a milestone or an incident (and how it was resolved) "
+    "that a later session looking back would still need; a step begun and finished within "
+    "the same piece of work (a defect found and fixed while building it, a sync, a rebuild, a "
+    "rollup of where things stand) is not one.",
     "A project's knowledge takes only what changes how a later judgment in that project is "
     "made (a decision, a model, a pitfall with the sign that it is coming); what a piece of "
     "work did is in git and the activity record, not in the project's knowledge.",

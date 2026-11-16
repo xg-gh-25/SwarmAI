@@ -5,6 +5,10 @@ What is tested here, against the real CDF chain where it matters:
   refused at entry, while a plain title with a colon is written;
 - the event standard every extraction prompt carries says one event per deliverable and
   no status;
+- it also says a step begun and finished within the same piece of work (a bug found
+  and fixed while building, a sync, a rebuild, a status rollup) is no event, in every text
+  the lane extracts by (both prompts, the knowledge standard, the month summary), and no
+  check refuses such an event afterwards;
 - a run's ``pipeline-v1 events`` lists the closest recorded TIMELINE events as refs an
   event can declare ``same`` with;
 - the month summary is stored in a real store (the inbox's lane constraint once refused
@@ -135,6 +139,68 @@ def test_event_rule_states_one_event_per_deliverable_and_no_status():
             / "stages" / "deliver.md").read_text(encoding="utf-8")
     # the card is at its size limit: the rule travels in `pipeline-v1 events` (event_rule)
     assert "event_rule" in card and "timeline_events" in card and '"same"' in card
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_a_step_closed_within_the_same_work_is_no_event_in_every_door(monkeypatch):
+    """The CDF judge's dominant TIMELINE miss was the construction log: a layout bug found
+    and fixed in the same session, a sync or rebuild, a rollup of where things stand. Every
+    text the lane's extractors read says such a step is no event, and that an event leads
+    with the decision, milestone or incident it records (the charter's three kinds)."""
+    from core import knowledge_standard as ks
+    from core.ingestion import contracts_v2, summary_lane
+    from core.ingestion.sources import extract_llm, s7_review
+
+    step = contracts_v2.SAME_WORK_STEP
+    assert "found and fixed" in step and "is not an event" in step
+    assert "reached beyond the work in progress" in step     # a real incident still is one
+    rule = contracts_v2.EVENT_RULE
+    assert step in rule
+    for kind in ("a decision", "a milestone", "an incident"):
+        assert kind in rule, kind
+    assert "weeks later" in rule and "leads with what it is" in rule
+    # the incident kind agrees with the step rule: a defect that caused rework inside the
+    # work is a step, not an incident
+    assert "went wrong beyond the work in progress" in rule
+    # both extraction prompts carry the rule whole (pipeline-v1 events returns it too:
+    # test_run_events_lists_closest_timeline_events_resolvable)
+    assert rule in extract_llm.build_prompt("S2", "text", ("event:e",), ("event",))
+    assert rule in s7_review.build_prompt(("event",), s7_review.signals([]), "(index)", "(record)")
+    # the session review's own items no longer call a fix found within the record an event
+    review = _flat(s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", ""))
+    assert "the fix is an event" not in review and "not an event of its own" in review
+    # the knowledge standard's event sentence, rendered in the review (and a new Brain's
+    # entry contract, test_cdf_extraction_structure)
+    event_sentence = next(s for s in ks.WRITE_WHEN if s.startswith("An event"))
+    assert "found and fixed" in event_sentence and "is not one" in event_sentence
+    assert _flat(event_sentence) in review
+    # the month summary writer, as it renders its prompt
+    seen: list[str] = []
+    import jobs.bedrock
+    from core.ingestion import llm
+    monkeypatch.setattr(llm, "BedrockJudge", lambda: SimpleNamespace(model_id="m", temperature=0))
+    monkeypatch.setattr(jobs.bedrock, "structured",
+                        lambda prompt, **_k: seen.append(prompt) or {"summary": "- x"})
+    summary_lane.model_writer("2026-11", "month_summary", ["### 2026-11-02 E\n- what: w"])
+    shown = _flat(seen[0])
+    assert "found and fixed while it was built" in shown
+    assert "leading with the decision, milestone or incident" in shown
+    assert "incidents beyond the work in progress" in shown
+
+
+def test_the_step_rule_is_extraction_only_no_check_refuses_an_event(cdf_env):
+    """The standard is what the extractor reads: an event worded as a same-work step is
+    still written when it reaches CDF (no word list, no per-entry judgment)."""
+    root = _external_root()
+    title = "Settings panel layout bug found and fixed"
+    _enqueue_s4(_event(title, "The panel no longer overlaps the tab row.", [f"doc:{root}"]),
+                source_ref="same-work-step", project="P")
+    rows = _drain(cdf_env)
+    assert [r["state"] for r in rows] == ["written"], [(r["state"], r["reason"]) for r in rows]
+    assert title in _timeline(cdf_env)
 
 
 def _write_timeline(ws: Path, events: list[tuple[str, str]]) -> None:

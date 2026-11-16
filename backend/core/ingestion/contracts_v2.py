@@ -310,12 +310,32 @@ SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
 # ── card 1 v2 answers (re-check) ──────────────────────────────────────────────
 # TIMELINE is read when the work looks back (retros, "when and why did this change"); only
 # its month summaries reach the prompt (memory_injection.select_timeline), and they are
-# drawn from the events. So an event must change how the work stands, one per piece of
-# work. Stated by both extraction prompts (extract_llm, s7_review) and the run report card.
-EVENT_RULE = ("An event is recorded only when it changes how the work stands: a deliverable "
-              "the user asked for landed, a decision or change of direction (and why), a "
-              "milestone, an incident (and how it was resolved), real loss or rework, "
-              "worded as it stands at the end. Routine operations are not events whether "
+# drawn from the events. So an event is one of the charter's three kinds (SWARMAI.md, the
+# context-file table: a decision and why, a milestone, an incident and how it was
+# resolved), led by what it is, one per piece of work. The CDF judge found the timeline's
+# dominant miss was the construction log: a defect found and fixed in the same session, a
+# sync or rebuild, a rollup of where things stand; SAME_WORK_STEP says so where the agent
+# extracts. Stated by both extraction prompts (extract_llm, s7_review) and the run's
+# REFLECT report (``pipeline-v1 events`` returns it as event_rule). The standard is what
+# the extractor reads: nothing checks an event against it.
+SAME_WORK_STEP = ("A step begun and finished within the same piece of work is not an event, "
+                  "however much effort it took: a defect found and fixed while the work was "
+                  "built (a layout bug, a failing test, a review finding), a sync, copy or "
+                  "rebuild, a rollup of where things stand. It records what was done, not "
+                  "what a later session needs, and belongs to the one event of what the work "
+                  "delivered, or to none. A defect is an incident only when it reached beyond "
+                  "the work in progress: a person using the product, a running system, "
+                  "stored data.")
+EVENT_RULE = ("An event is recorded only when a session weeks later, looking back at when and "
+              "why something changed, would still need it, and it is one of three things: a "
+              "decision or change of direction (and why); a milestone, such as a deliverable "
+              "the user asked for landed; an incident, something that went wrong beyond the "
+              "work in progress, with real loss or rework (and how it was resolved). It is "
+              "worded as it stands at the end, and leads with what it is: the title names "
+              "the decision, milestone or "
+              "incident, and the first sentence of what says what was decided, reached or "
+              "went wrong, in plain words, never left inside file names, a checklist or "
+              f"status detail. {SAME_WORK_STEP} Routine operations are not events whether "
               "they succeed or fail: a build, a restart, a deploy, an install, a test run, "
               "checking a result, dispatching the next step of a plan. The steps of one "
               "deliverable are one event, not one each: its notes, docs, copies, CI fixes, "
