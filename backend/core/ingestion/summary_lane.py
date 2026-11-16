@@ -9,7 +9,9 @@ The month summaries are the only part of TIMELINE the prompt carries
 (memory_injection.select_timeline, TIMELINE_BUDGET tokens for two months), so a summary
 states the month's key events and their outcomes, never a count of them. A summary that
 could not be written, or that the store refused, is a failure: the lane counts it and tries
-again later, and nothing contentless is stored in its place.
+again later, and nothing contentless is stored in its place. A writer that could not reach
+the model (credentials not loaded, the endpoint not reachable: ``model_unreachable``) is not
+counted: it says nothing about the summary, and the lane tries again soon.
 
 DailyActivity has no day summary: its rows are already one line per session, and the
 injection shows them for all seven days (design 2026-10-31-daily-activity-useful D7).
@@ -201,6 +203,27 @@ def enqueue_month_summary(conn: sqlite3.Connection, workspace: Path, month: str,
     return event_kind
 
 
+def model_unreachable(exc: BaseException) -> bool:
+    """Whether *exc*, or an error it was raised from, says the model could not be reached:
+    AWS credentials missing or expired (``llm.failure_reason``), or the Bedrock endpoint not
+    reachable (DNS, connection). Any other failure is one of the summary itself."""
+    from .llm import failure_reason
+    if failure_reason(exc):
+        return True
+    try:
+        from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError
+    except ImportError:  # pragma: no cover - botocore ships with the backend
+        return False
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (EndpointConnectionError, ConnectTimeoutError)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 class SummaryLane:
     """Daily scheduler target with bounded failure escalation."""
 
@@ -219,6 +242,10 @@ class SummaryLane:
             self.consecutive_failures = 0
             return changed
         except Exception as exc:
+            if model_unreachable(exc):
+                # an outage is not a failure of the summary: not counted, so it neither
+                # raises summary_failed nor moves the next try a day out (worker.run_once)
+                raise
             self.consecutive_failures += 1
             if self.consecutive_failures >= 3:
                 conn.execute(

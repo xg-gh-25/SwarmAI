@@ -103,3 +103,28 @@ def test_late_month_event_enqueues_supplement(tmp_path, monkeypatch):
     assert source_ref.startswith("summary:2026-09:supplement:")
     assert unit.event_kind == "month_supplement"
     assert unit.evidence == ["unit:.context/TIMELINE.md#2026-09#cand:e2"]
+
+
+def test_an_unreachable_model_is_not_a_counted_failure(tmp_path, monkeypatch):
+    """A night without credentials or DNS used to count three failures, raise summary_failed
+    (a Need You item) and push the next try a day out. Neither credentials nor an
+    unreachable endpoint says anything about the summary: not counted, nothing raised."""
+    from botocore.exceptions import EndpointConnectionError, NoCredentialsError
+    conn = _conn()
+    conn.execute("CREATE TABLE ingestion_events(at TEXT, kind TEXT, detail TEXT)")
+    lane = summary_lane.SummaryLane(tmp_path)
+    now = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    for err in (NoCredentialsError(), EndpointConnectionError(endpoint_url="https://bedrock")):
+        def fail(*_a, err=err, **_k):
+            try:
+                raise err
+            except Exception as exc:  # wrapped as enqueue_month_summary wraps a writer failure
+                raise summary_lane.SummaryNotWritten(f"writer failed: {exc}") from exc
+        monkeypatch.setattr(summary_lane, "enqueue_month_summary", fail)
+        for _ in range(4):
+            try:
+                lane.run_due(conn, now=now)
+            except summary_lane.SummaryNotWritten:
+                pass
+    assert lane.consecutive_failures == 0
+    assert conn.execute("SELECT COUNT(*) FROM ingestion_events").fetchone()[0] == 0
