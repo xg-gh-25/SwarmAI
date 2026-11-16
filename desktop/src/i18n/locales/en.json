@@ -4801,7 +4801,8 @@
       "outcome_failed": "Failed",
       "outcome_running": "Running",
       "outcome_other": "Ended",
-      "whereLabel": "Where it ran"
+      "whereLabel": "Where it ran",
+      "agentMode": "Project Agent {{mode}}"
     },
     "ProjectAgentView": {
       "reservedPush": "push",

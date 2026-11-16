@@ -7,6 +7,7 @@ Public symbols:
 - ``ContractError`` -- the contract is unreadable or is not this run's v1 contract
 - ``contract_path`` / ``read_contract`` / ``is_v1_run``
 - ``integration_branches_path``
+- ``project_agent_fact`` -- which Brain's Project Agent a run went under, for its readers
 """
 from __future__ import annotations
 
@@ -49,3 +50,21 @@ def integration_branches_path(data_dir: str | Path, run_id: str) -> Path:
     (the audit area: agents cannot write it)."""
     return contract_path(data_dir, run_id).parent / "integration_branches.json"
 
+
+def project_agent_fact(contract: Any) -> dict[str, Any] | None:
+    """Which Brain's Project Agent a run was created under, as run.json and REPORT show it:
+    ``{"brain", "mode", "checks", "rules", "watches"}`` (the counts of what the contract
+    recorded at create, cli_commands.create_run -> project_agent.contract_for_run), the
+    Brain being the run's project. None for a run whose contract records none (its Brain
+    has no definition, or the run predates the contract)."""
+    if not isinstance(contract, dict):
+        return None
+    agent = contract.get("project_agent")
+    if not isinstance(agent, dict):
+        return None
+    mode = agent.get("mode")
+    return {"brain": str(contract.get("project") or ""),
+            "mode": mode if isinstance(mode, str) and mode else None,
+            "checks": len([c for c in agent.get("checks") or [] if isinstance(c, dict)]),
+            "rules": len([r for r in agent.get("rules") or [] if isinstance(r, str)]),
+            "watches": len([w for w in agent.get("watches") or [] if isinstance(w, dict)])}

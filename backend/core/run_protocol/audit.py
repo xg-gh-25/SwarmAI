@@ -711,6 +711,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                               "searches": (int(knowledge["searches"])
                                            if isinstance(knowledge.get("searches"), int) else None)}
                              if isinstance(knowledge, Mapping) else None)}
+    from core.run_protocol.contract import project_agent_fact
+    details["project_agent"] = project_agent_fact(dict(contract))
     details["children"] = [dict(c) for c in children if isinstance(c, Mapping)]
     details["decisions"] = _decisions(design, requirements, event_rows, answered)
     from core.run_protocol.schemas import not_taken
@@ -959,6 +961,14 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     lines = [f"# {run_title} · {cutoff}", "", _conclusion(audit), "",
              "## Run Audit", "", "| Dimension | Result | This run |", "|---|---|---|"]
     lines += [f"| {name} | {row['verdict']} | {detail} |" for name, row, detail in rows]
+    agent = details.get("project_agent")
+    if isinstance(agent, Mapping):
+        lines += ["", "Project Agent: " + " · ".join(
+            [_text(agent.get("brain"), 80)] + ([_text(agent["mode"], 40)] if agent.get("mode") else [])
+            + [f"{int(agent.get('checks') or 0)} checks", f"{int(agent.get('rules') or 0)} rules",
+               f"{int(agent.get('watches') or 0)} watches"])]
+    elif "project_agent" in details:
+        lines += ["", "Project Agent: none recorded when the run was created"]
     known = details.get("knowledge")
     if isinstance(known, Mapping):
         parts = [p for p in known.get("parts") or () if isinstance(p, Mapping)] or \

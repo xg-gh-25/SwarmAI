@@ -1148,6 +1148,9 @@ class RunEngine:
                       # repair) can tell a projection the log has moved past (re-audit
                       # ca91762f)
                       "projection_of": _log_tail(events)})
+        # which Brain's Project Agent the run went under (the Pipelines rows read it)
+        from core.run_protocol.contract import project_agent_fact
+        value["project_agent"] = project_agent_fact(self.contract)
         audit_value = self._read_json(self.run_dir / "run_audit.json", {})
         if isinstance(audit_value, Mapping):
             value["audit_card"] = audit_value.get("card")

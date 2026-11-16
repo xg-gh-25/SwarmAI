@@ -41,6 +41,8 @@ export interface PipelineRow {
   hive: string | null;
   title: string;
   brain: string;
+  /** the kind of work of the Brain's Project Agent the run went under; null: none recorded */
+  agentMode: string | null;
   profile: string;
   stage: RowStage;
   task: RowTask | null;
@@ -84,7 +86,7 @@ export function fromLocal(r: PipelineRunSummary, project: string): PipelineRow {
   const iv = r.interventions;
   return {
     key: r.id, runId: r.id, where: 'local', hive: null, title: r.requirement || r.id, brain: project,
-    profile: r.profile, stage, task, outcome, createdAt: r.createdAt, endedAt: r.finishedAt,
+    agentMode: r.agentMode ?? null, profile: r.profile, stage, task, outcome, createdAt: r.createdAt, endedAt: r.finishedAt,
     since: r.updatedAt || r.createdAt, durationMin: r.cycleTimeMin, tokens: r.billedTokens ?? r.tokensActual,
     costUsd: r.costUsd,
     interventions: iv ? { answers: iv.answers, corrections: iv.corrections, rescues: iv.rescues, total: iv.total } : null,
@@ -113,7 +115,7 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
   const human = res?.work.human;
   return {
     key: r.dispatch_id, runId, where: 'hive', hive: r.hive, title: r.title, brain: brainLabel(r),
-    profile: res?.pipeline?.profile ?? r.project_agent?.profile ?? '', stage, task, outcome,
+    agentMode: r.project_agent?.mode ?? res?.project_agent?.mode ?? null, profile: res?.pipeline?.profile ?? r.project_agent?.profile ?? '', stage, task, outcome,
     createdAt: r.sent_at, endedAt: s === 'running' ? null : ended, since: hiveWaitingSince(r, asks) ?? r.sent_at,
     durationMin: Number.isNaN(start) || Number.isNaN(end) || s === 'running' ? null : Math.round((end - start) / 60000),
     tokens: res ? tokenTotal(res) : null, costUsd: res?.cost_usd ?? null,

@@ -336,12 +336,20 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         landed_as=landed_as,
         checkpoint_reason=raw.get("reason"),
         owner_session_id=raw.get("session_id"),
+        agent_mode=_agent_mode(raw),
         not_landed=status == "completed" and raw.get("landing") == "not_landed",
         report_path=(f"Projects/{project}/.artifacts/runs/{raw.get('id')}/REPORT.md"
                      if report.is_file() else None),
         audit_card=raw.get("audit_card"),
         **_card_facts(raw, status),
     )
+
+
+def _agent_mode(raw: dict) -> Optional[str]:
+    """The Project Agent kind of work run.json records (engine.write_projection), or None."""
+    agent = raw.get("project_agent")
+    mode = agent.get("mode") if isinstance(agent, dict) else None
+    return mode[:40] if isinstance(mode, str) and mode else None
 
 
 def _num(v: Any) -> Optional[float]:

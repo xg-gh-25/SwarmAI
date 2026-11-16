@@ -71,6 +71,12 @@ describe('pipelineRows', () => {
     expect(fromHive(hive({ person_decisions: 0 }))!.interventions?.total).toBe(0);
     expect(fromHive(hive({}, { pipeline: null }))).toBeNull();                                  // a native Hive run
     expect(fromHive(hive({}, null))).toBeNull();
+    // the Project Agent kind of work a run went under: the summary's (local), the dispatch's (Hive)
+    expect(fromLocal(run({ agentMode: 'code-change' }), 'P').agentMode).toBe('code-change');
+    expect(fromLocal(run({ agentMode: null }), 'P').agentMode).toBeNull();
+    expect(fromHive(hive())!.agentMode).toBe('change');
+    expect(fromHive(hive({ project_agent: null }, { project_agent: { brain: 'SwarmAI', mode: 'research' } }))!.agentMode).toBe('research');
+    expect(fromHive(hive({ project_agent: null }))!.agentMode).toBeNull();
   });
 
   it('waiting for you: to answer, then to confirm, then stopped, the longest waiting first', () => {

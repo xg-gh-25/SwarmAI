@@ -128,6 +128,8 @@ describe('PipelineOverlay', () => {
     expect(within(screen.getByTestId('pipeline-run-run_drop')).getByTestId('pipeline-row-tag').textContent).toBe('Confirm it landed');
     fireEvent.click(screen.getByTestId('pipeline-section-done'));
     expect(within(screen.getByTestId('pipeline-run-d1')).getByTestId('pipeline-row-where').textContent).toBe('demo');
+    // the row names the Project Agent kind of work beside its Brain
+    expect(screen.getByTestId('pipeline-run-d1').textContent).toContain('SwarmAI · Project Agent change · bugfix');
     expect(within(screen.getByTestId('pipeline-run-run_done')).getByTestId('pipeline-row-where').textContent).toBe('This machine');
     expect(screen.queryByTestId('pipeline-run-native')).toBeNull();     // a native Hive run stays in Swarm Out
     expect(screen.queryByTestId('pipeline-overall')).toBeNull();        // no row of totals

@@ -120,6 +120,8 @@ export interface PipelineRunSummary {
   checkpointReason: string | null;
   /** v1: the chat session that drives the run now. */
   ownerSessionId: string | null;
+  /** the kind of work of the Brain's Project Agent the run was created under; null: none */
+  agentMode: string | null;
   /** A completed run whose change did not land (it is not on main). */
   notLanded: boolean;
   /** Workspace-relative REPORT.md path if the run has a report, else null. The row's
@@ -251,6 +253,7 @@ export function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummar
     landedAs: landedAsOf(r.landed_as),
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
     ownerSessionId: (r.owner_session_id as string | null) ?? null,
+    agentMode: typeof r.agent_mode === 'string' && r.agent_mode ? r.agent_mode : null,
     notLanded: r.not_landed === true,
     reportPath: (r.report_path as string | null) ?? null,
     auditCard: (r.audit_card as string | null) ?? null,

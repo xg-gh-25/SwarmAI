@@ -10,6 +10,9 @@ What is tested, one question per test:
   with its result, and is an id that is not a check a warning, never a refusal?
 - does the REPORT list each check as its result or not run without blocking the
   landing, and show nothing for a run without a mode or a profile without TEST?
+- do run.json, the Pipelines row's summary and the REPORT head name the Brain's Project
+  Agent (kind of work, counts of checks, rules and watches), say "none recorded" for a run
+  without one, and show no line for an audit stored before the line existed?
 - does the design doc say what step 2 is and that the definition-text risk is accepted?
 Methodology: the real CLI through the pipeline rig on a temp repo and workspace; the
 audit's Tests lines driven directly for older and research contracts.
@@ -188,3 +191,44 @@ def test_a_mode_without_checks_is_named_in_the_warning(tmp_path, monkeypatch):
     r.drive(until="test")
     out = r.v1("stage-complete", "--artifact", r.artifact("report", _rows(("pytest -q", "pass", "unit"))))
     assert out.get("ok") is True and any("mode research has no checks" in w for w in out["warnings"]), out
+
+
+def test_run_json_the_pipelines_row_and_report_name_the_project_agent(tmp_path, monkeypatch):
+    """Which Brain's Project Agent a run went under reaches run.json (the Pipelines row's
+    source), the row's summary and the REPORT head; a run without one says so."""
+    import json
+    from routers import pipelines
+    r = Rig(tmp_path / "a", monkeypatch, profile="full")
+    _brain(r)
+    r.create()
+    run_json = lambda: json.loads((r.engine().run_dir / "run.json").read_text(encoding="utf-8"))
+    assert run_json()["project_agent"] == {"brain": PROJECT, "mode": "code-change",
+                                           "checks": 2, "rules": 0, "watches": 0}
+    row = pipelines._summary(pipelines._normalized(run_json(), r.engine().run_id, PROJECT), PROJECT)
+    assert row.agent_mode == "code-change"
+    r.drive(until="test")
+    out = r.v1("stage-complete", "--artifact", r.artifact("report", _rows(("pytest -q", "pass", "unit"))))
+    assert out.get("ok") is True, out
+    assert r.drive()["status"] == "completed"
+    report = (r.engine().run_dir / "REPORT.md").read_text(encoding="utf-8")
+    assert f"Project Agent: {PROJECT} · code-change · 2 checks · 0 rules · 0 watches" in report
+
+    # a Brain with no definition: nothing recorded, and the REPORT says so
+    r = Rig(tmp_path / "b", monkeypatch, profile="full")
+    _brain(r, None)
+    r.create()
+    assert run_json()["project_agent"] is None
+    row = pipelines._summary(pipelines._normalized(run_json(), r.engine().run_id, PROJECT), PROJECT)
+    assert row.agent_mode is None
+    from core.run_protocol import audit
+    a = audit.build(run_id="run_x", projection={"run_id": "run_x", "status": "completed", "landing": "landed",
+                                                "reason": None, "human_decisions": 0},
+                    events=[{"kind": "run_create", "at": "2026-10-22T00:00:00+00:00", "payload": {}},
+                            {"kind": "land", "at": "2026-10-22T00:00:30+00:00", "payload": {}}],
+                    findings=[], contract={"run_id": "run_x", "project": PROJECT, "mode": "isolated",
+                                           "expected_repos": ["repo"]},
+                    open_checks={}, audit_through="COMPLETED")
+    assert "Project Agent: none recorded when the run was created" in audit.render(a, fmt="report")
+    # an audit stored before this line existed renders no line at all
+    del a["details"]["project_agent"]
+    assert "Project Agent:" not in audit.render(a, fmt="report")

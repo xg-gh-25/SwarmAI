@@ -93,6 +93,9 @@ class PipelineRunSummary(BaseModel):
     checkpoint_reason: Optional[str] = None
     owner_session_id: Optional[str] = Field(
         None, description="Pipeline v1: the chat session that drives the run now")
+    agent_mode: Optional[str] = Field(
+        None, description="the kind of work of the Brain's Project Agent the run was created "
+                          "under (run.json project_agent.mode); None when it records none")
     not_landed: bool = Field(
         False, description="a completed run whose change did not land (it is not on main)")
     report_path: Optional[str] = Field(

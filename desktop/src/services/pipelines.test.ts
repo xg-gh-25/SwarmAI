@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 const { apiPatch } = vi.hoisted(() => ({ apiPatch: vi.fn() }));
 vi.mock('./api', () => ({ default: { patch: apiPatch } }));
 
-import { pipelineToCamelCase, pipelinesService } from './pipelines';
+import { pipelineToCamelCase, pipelinesService, runSummaryToCamel } from './pipelines';
 
 describe('pipelineToCamelCase', () => {
   it('maps the renderer-owned audit card', () => {
@@ -23,5 +23,13 @@ describe('pipelinesService.resumeRun', () => {
     apiPatch.mockResolvedValueOnce({});
     await pipelinesService.resumeRun('run_v1');
     expect(apiPatch).toHaveBeenCalledWith('/pipelines/run_v1/resume');
+  });
+});
+
+describe('runSummaryToCamel — the Project Agent kind of work', () => {
+  it('reads agent_mode, null when the run records none', () => {
+    expect(runSummaryToCamel({ id: 'run_a', agent_mode: 'code-change' }).agentMode).toBe('code-change');
+    expect(runSummaryToCamel({ id: 'run_a', agent_mode: null }).agentMode).toBeNull();
+    expect(runSummaryToCamel({ id: 'run_a' }).agentMode).toBeNull();
   });
 });

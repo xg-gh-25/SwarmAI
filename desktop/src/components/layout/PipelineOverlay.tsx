@@ -103,7 +103,8 @@ function Row({ r, now, onOpen, onOpenSession }: {
         <div className="text-body truncate" title={r.title}>{r.title}</div>
         <div className={`text-meta truncate ${muted}`}>
           <span data-testid="pipeline-row-where" style={{ color: WHERE_FILL[r.where] }}>{where}</span>
-          {[r.brain, r.profile, r.runId].filter(Boolean).map((x) => ` · ${x}`).join('')}
+          {[r.brain, r.agentMode && t('ui.PipelineOverlay.agentMode', { mode: r.agentMode, defaultValue: 'Project Agent {{mode}}' }),
+            r.profile, r.runId].filter(Boolean).map((x) => ` · ${x}`).join('')}
         </div>
       </div>
       {word ? <span className="text-meta px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" data-testid="pipeline-row-autonomy"
