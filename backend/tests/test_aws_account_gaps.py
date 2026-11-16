@@ -279,6 +279,9 @@ async def test_a_bucket_name_taken_elsewhere_is_reported(tmp_path):
     s3 = MagicMock()
     s3.exceptions.BucketAlreadyOwnedByYou = Taken
     s3.create_bucket.side_effect = Exception("An error occurred (BucketAlreadyExists)")
+    # the account owns no older 4-digit bucket, so the whole-ID one is created
+    from botocore.exceptions import ClientError
+    s3.head_bucket.side_effect = ClientError({"Error": {"Code": "404"}}, "HeadBucket")
     sess = MagicMock()
     sess.client.return_value = s3
     with pytest.raises(RuntimeError, match="taken by another AWS account"):

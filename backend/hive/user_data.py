@@ -744,6 +744,93 @@ CADDY_INSTALL_SH = r"""install_caddy() {  # <destination>
     echo "Caddy v@CADDY_VERSION@ installed (sha512 checked)"
 }""".replace("@CADDY_VERSION@", CADDY_VERSION).replace("@CADDY_SHA512@", CADDY_ARM64_SHA512)
 
+# The SHA-512 of the caddy binary inside that archive (measured from the archive whose
+# SHA-512 is CADDY_ARM64_SHA512). An update compares /usr/bin/caddy with it: equal means the
+# Hive already runs the pinned build, and nothing is downloaded. Moving to another release
+# changes all three values together.
+CADDY_ARM64_BINARY_SHA512 = ("e2c95f514e1a62364f7068b6a77035e1cec71687f9017c215cc3cdb20a6191a1"  # pragma: allowlist secret  (a public release checksum, not a credential)
+                             "734055285ca4117fa6b2ed169dc5efae2fd4e98c98dc16b430fdd9a6b0f9d536")  # pragma: allowlist secret  (a public release checksum, not a credential)
+
+# The update script's step (provisioner.update) that gives an existing Hive the Caddy binary
+# first boot installs. Hives made before the pin run a binary first boot downloaded from
+# caddyserver.com unchecked; first boot alone never reaches them. When /usr/bin/caddy is not
+# the pinned build: install_caddy (the same function and checksum first boot uses) into a
+# scratch directory, check the unpacked binary is the pinned build, `caddy validate` the
+# Hive's Caddyfile with it, rename it over /usr/bin/caddy (a running binary cannot be
+# written in place), restart Caddy and check both ways: /health is answered, and a request
+# without credentials gets 401/403 (a path no Caddyfile layout exempts). A failure before
+# the rename leaves the old binary untouched; one after it renames the old binary back and
+# restarts Caddy with it. Either way the update stops with the reason before /opt/swarmai is
+# touched, like the Caddyfile /health step above it.
+_CADDY_BINARY_SH_TEMPLATE = r"""# ── Caddy binary: the pinned release first boot installs (hive/user_data.py) ──
+CADDY_BIN="/usr/bin/caddy"
+CADDY_CONFIG="/etc/caddy/Caddyfile"
+__INSTALL__
+caddy_bin_fail() {  # $1 swapped|no, $2 the reason
+  if [ "$1" = swapped ]; then
+    if [ -f "$CADDY_BIN.update-bak" ]; then
+      mv -f "$CADDY_BIN.update-bak" "$CADDY_BIN"
+    else
+      rm -f "$CADDY_BIN"
+    fi
+    systemctl restart caddy || true
+  fi
+  rm -rf "$CADDY_WORK" "$CADDY_BIN.update-new" "$CADDY_BIN.update-bak"
+  echo "ERROR: Caddy binary update: $2; previous Caddy kept, Hive not updated"
+  exit 1
+}
+caddy_bin_code() {
+  # $1 path: the code Caddy answers once it is up
+  local code="000" i
+  for i in $(seq 1 15); do
+    code=$(curl --path-as-is -s -o /dev/null -w '%{http_code}' "http://127.0.0.1$1" || true)
+    if [ "$code" != "000" ]; then
+      break
+    fi
+    sleep 1
+  done
+  echo "$code"
+}
+CADDY_HAVE=$(sha512sum "$CADDY_BIN" 2>/dev/null | cut -d' ' -f1 || true)
+if [ "$CADDY_HAVE" = "@CADDY_BINARY_SHA512@" ]; then
+  echo "Caddy binary: already the pinned v@CADDY_VERSION@"
+else
+  CADDY_WORK=$(mktemp -d)
+  install_caddy "$CADDY_WORK/caddy" \
+    || caddy_bin_fail no "the pinned Caddy v@CADDY_VERSION@ could not be downloaded, did not match its checksum or could not be unpacked (line above)"
+  CADDY_GOT=$(sha512sum "$CADDY_WORK/caddy" | cut -d' ' -f1)
+  if [ "$CADDY_GOT" != "@CADDY_BINARY_SHA512@" ]; then
+    caddy_bin_fail no "the unpacked binary is not the pinned v@CADDY_VERSION@ build (sha512 $CADDY_GOT)"
+  fi
+  "$CADDY_WORK/caddy" validate --config "$CADDY_CONFIG" --adapter caddyfile >/dev/null 2>&1 \
+    || caddy_bin_fail no "Caddy v@CADDY_VERSION@ rejects $CADDY_CONFIG"
+  if [ -e "$CADDY_BIN" ]; then
+    cp -p "$CADDY_BIN" "$CADDY_BIN.update-bak" || caddy_bin_fail no "the current binary could not be backed up"
+  fi
+  install -m 755 "$CADDY_WORK/caddy" "$CADDY_BIN.update-new" \
+    || caddy_bin_fail no "the new binary could not be written beside $CADDY_BIN"
+  mv -f "$CADDY_BIN.update-new" "$CADDY_BIN" || caddy_bin_fail swapped "the new binary could not be moved to $CADDY_BIN"
+  systemctl restart caddy || caddy_bin_fail swapped "caddy did not restart with v@CADDY_VERSION@"
+  CODE=$(caddy_bin_code /health)
+  case "$CODE" in
+    000|401|403) caddy_bin_fail swapped "/health answered $CODE with v@CADDY_VERSION@" ;;
+  esac
+  CODE=$(caddy_bin_code /swarmai-caddy-check)
+  case "$CODE" in
+    401|403) ;;
+    *) caddy_bin_fail swapped "a request without credentials answered $CODE with v@CADDY_VERSION@, not 401/403" ;;
+  esac
+  rm -rf "$CADDY_WORK" "$CADDY_BIN.update-bak"
+  echo "Caddy binary: now the pinned v@CADDY_VERSION@ (sha512 checked)"
+fi"""
+
+
+def caddy_binary_update_sh() -> str:
+    """The update-script step that gives an existing Hive the pinned Caddy binary."""
+    return (_CADDY_BINARY_SH_TEMPLATE.replace("__INSTALL__", CADDY_INSTALL_SH)
+            .replace("@CADDY_VERSION@", CADDY_VERSION)
+            .replace("@CADDY_BINARY_SHA512@", CADDY_ARM64_BINARY_SHA512))
+
 
 # ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
 # When a pre-baked custom AMI is used, the heavy on-machine install steps are

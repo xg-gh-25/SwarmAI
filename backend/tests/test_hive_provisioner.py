@@ -263,15 +263,17 @@ class TestProvisionerS3:
 
     @pytest.mark.asyncio
     async def test_ensure_bucket_account_suffixed(self):
-        """The LIVE scheme: with an account_id, bucket = swarmai-hive-{account}-{region}
-        (the whole ID: a 4-digit suffix could collide in S3's global namespace), and
-        every S3 call on it names the expected owner.
+        """An account that owns no 4-digit bucket (hive/bucket_name.py): with an account_id,
+        bucket = swarmai-hive-{account}-{region} (the whole ID: a 4-digit suffix could
+        collide in S3's global namespace), and every S3 call on it names the expected owner.
         """
+        from botocore.exceptions import ClientError
         from hive.provisioner import HiveProvisioner
 
         p = HiveProvisioner(Path("/tmp/test.db"))
         mock_session = MagicMock()
         mock_s3 = MagicMock()
+        mock_s3.head_bucket.side_effect = ClientError({"Error": {"Code": "404"}}, "HeadBucket")
         mock_session.client.return_value = mock_s3
 
         bucket = await p._ensure_s3_bucket(mock_session, "us-east-1", "533267412361")

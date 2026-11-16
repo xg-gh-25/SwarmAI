@@ -341,9 +341,10 @@ cd "${DIST_DIR}"
 shasum -a 256 "${PACKAGE_NAME}.tar.gz" > checksums.txt
 
 # ---------------------------------------------------------------------------
-# Supply closure (direction Y): auto-upload the tar to the account-suffixed S3
-# bucket the provisioner actually reads (swarmai-hive-{acct4}-{region}), so
-# provision/update find it instead of 404-ing on the (removed) GitHub hive tar.
+# Supply closure (direction Y): auto-upload the tar to the account's S3 bucket the
+# provisioner deploys from, so provision/update find it there. The name comes from
+# backend/hive/bucket_name.py, the rule the provisioner uses: the first candidate this
+# account owns (an older deployment's 4-digit bucket first), else the whole-ID name.
 #
 # BEST-EFFORT + set-e-safe: every aws call is guarded (|| true / 2>/dev/null)
 # so a missing cli / creds / network NEVER aborts the package build — the tar
@@ -355,22 +356,58 @@ if command -v aws >/dev/null 2>&1; then
     S3_REGION="$(aws configure get region 2>/dev/null || true)"
     S3_REGION="${S3_REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
     S3_ACCT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+    # BEGIN hive bucket (tests/test_hive_bucket_name.py runs this block)
+    # The upload goes only to a bucket this account owns (head-bucket with the expected
+    # owner, then every copy pinned to it). 404/403 on a name = not this account's: the next
+    # name is tried. Any other answer (network, throttling, no python3) skips the upload:
+    # guessing would put the release where the Hives do not read it.
+    S3_BUCKET=""      # the account's bucket the release goes to
+    S3_NEW_BUCKET=""  # no bucket owned: the one a first deploy creates
+    S3_LOOKUP=""      # why the bucket could not be decided
     if [ -n "${S3_ACCT}" ] && [ "${S3_ACCT}" != "None" ]; then
-        S3_SUFFIX="${S3_ACCT: -4}"
-        S3_BUCKET="swarmai-hive-${S3_SUFFIX}-${S3_REGION}"
+        if ! command -v python3 >/dev/null 2>&1; then
+            S3_LOOKUP="python3 is needed to name the bucket (backend/hive/bucket_name.py)"
+        elif S3_CANDIDATES="$(python3 "${PROJECT_ROOT}/backend/hive/bucket_name.py" "${S3_ACCT}" "${S3_REGION}")"; then
+            for S3_CANDIDATE in ${S3_CANDIDATES}; do
+                if S3_HEAD_ERR="$(aws s3api head-bucket --bucket "${S3_CANDIDATE}" --expected-bucket-owner "${S3_ACCT}" \
+                        --region "${S3_REGION}" 2>&1 >/dev/null)"; then
+                    S3_BUCKET="${S3_CANDIDATE}"
+                    break
+                elif printf '%s' "${S3_HEAD_ERR}" | grep -Eq '\((404|403)\)'; then
+                    S3_NEW_BUCKET="${S3_CANDIDATE}"
+                else
+                    S3_LOOKUP="head-bucket ${S3_CANDIDATE}: $(printf '%s' "${S3_HEAD_ERR}" | head -n 1)"
+                    break
+                fi
+            done
+        else
+            S3_LOOKUP="account ${S3_ACCT} / region ${S3_REGION} is not a shape the bucket rule accepts"
+        fi
+    fi
+    if [ -n "${S3_BUCKET}" ]; then
         S3_KEY="v${VERSION}/${PACKAGE_NAME}.tar.gz"
         echo "[release] Uploading to s3://${S3_BUCKET}/${S3_KEY} (region ${S3_REGION})..."
-        if aws s3 cp "${ARCHIVE}" "s3://${S3_BUCKET}/${S3_KEY}" --region "${S3_REGION}" 2>/dev/null \
-           && aws s3 cp "${DIST_DIR}/checksums.txt" "s3://${S3_BUCKET}/v${VERSION}/checksums.txt" --region "${S3_REGION}" 2>/dev/null; then
+        # s3api put-object, not `aws s3 cp`: only it takes --expected-bucket-owner
+        if aws s3api put-object --bucket "${S3_BUCKET}" --key "${S3_KEY}" --body "${ARCHIVE}" \
+                --region "${S3_REGION}" --expected-bucket-owner "${S3_ACCT}" >/dev/null 2>&1 \
+           && aws s3api put-object --bucket "${S3_BUCKET}" --key "v${VERSION}/checksums.txt" --body "${DIST_DIR}/checksums.txt" \
+                --region "${S3_REGION}" --expected-bucket-owner "${S3_ACCT}" >/dev/null 2>&1; then
             UPLOADED_TO="s3://${S3_BUCKET}/${S3_KEY}"
             echo "[release] Uploaded to ${UPLOADED_TO}"
         else
             echo "[release] WARN: S3 upload failed (AccessDenied/network?) — place the tar manually:"
-            echo "[release]        aws s3 cp ${ARCHIVE} s3://${S3_BUCKET}/${S3_KEY} --region ${S3_REGION}"
+            echo "[release]        aws s3api put-object --bucket ${S3_BUCKET} --key ${S3_KEY} --body ${ARCHIVE} --region ${S3_REGION} --expected-bucket-owner ${S3_ACCT}"
+            echo "[release]        (and v${VERSION}/checksums.txt beside it)"
         fi
+    elif [ -n "${S3_LOOKUP}" ]; then
+        echo "[release] WARN: could not tell which S3 bucket is this account's (${S3_LOOKUP}) — skipping S3 upload"
+    elif [ -n "${S3_NEW_BUCKET}" ]; then
+        echo "[release] WARN: account ${S3_ACCT} owns no SwarmAI bucket in ${S3_REGION} yet — skipping S3 upload."
+        echo "[release]       The first Hive deploy creates ${S3_NEW_BUCKET}; re-run this script after it."
     else
         echo "[release] WARN: no AWS credentials — skipping S3 upload (provision will 404 until the tar is uploaded)"
     fi
+    # END hive bucket
 else
     echo "[release] WARN: aws cli absent — skipping S3 upload (provision will 404 until the tar is uploaded)"
 fi
@@ -399,6 +436,7 @@ if [ -n "${UPLOADED_TO}" ]; then
     echo "  S3:       ${UPLOADED_TO} (provision/update will find it here)"
 else
     echo "  S3:       NOT uploaded (see WARN above) — provision/update will 404"
-    echo "            until the tar is placed in swarmai-hive-{acct4}-{region}."
+    echo "            until the tar is placed in the account's bucket"
+    echo "            (python3 backend/hive/bucket_name.py <account> <region>: the first one it owns)."
 fi
 echo ""

@@ -7,9 +7,9 @@ All boto3 calls are sync — wrapped in asyncio.to_thread() for async compat.
 Each step updates the local SQLite DB so status is visible in the UI.
 
 Key design decisions (from approved design doc):
-- S3 bucket per account+region: swarmai-hive-{account_id[-4:]}-{region}
-  (account-suffixed; falls back to swarmai-hive-releases-{region} ONLY when no
-  account_id is available). See _ensure_s3_bucket — the suffix is the live scheme.
+- S3 bucket per account+region, named by hive/bucket_name.py (the rule release.sh uses too):
+  the account's existing 4-digit bucket when it owns one, else one named with the whole ID.
+  See _ensure_s3_bucket; update() keeps the bucket recorded at deploy.
 - Security Group: ports 80 + 443 only (no SSH, use SSM)
 - EIP: stable IP for CloudFront origin + stop/start resilience
 - CloudFront: Authorization header forwarded, CachingDisabled for API/SSE
@@ -32,6 +32,8 @@ from typing import Any, Optional
 
 import aiosqlite
 import httpx
+
+from hive import bucket_name as _bucket_name
 
 logger = logging.getLogger(__name__)
 
@@ -66,22 +68,9 @@ AMI_ID_RE = re.compile(r"^ami-[0-9a-f]{8,}$")
 # permission template only allows tags in the create call, and only stop / start /
 # terminate / SSM on tagged instances: core/aws_permissions.py).
 MANAGED_TAG = {"Key": "swarmai:managed", "Value": "true"}
-_BUCKET_OWNER_RE = re.compile(r"^swarmai-hive-(\d{12})-")
-
-
-def bucket_owner(bucket: str) -> dict:
-    """``ExpectedBucketOwner`` for a bucket named with its account (empty for the old
-    names, which carry only 4 digits of it)."""
-    m = _BUCKET_OWNER_RE.match(bucket or "")
-    return {"ExpectedBucketOwner": m.group(1)} if m else {}
-
-
-def swarmai_bucket_name(account_id: str, region: str) -> str:
-    """The SwarmAI bucket of an account in a region. With the whole account ID: the old
-    4-digit suffix could collide in S3's global namespace (old buckets keep their name)."""
-    if re.fullmatch(r"\d{12}", account_id or ""):
-        return f"swarmai-hive-{account_id}-{region}"
-    return f"swarmai-hive-releases-{region}"
+# The bucket name rule lives in hive/bucket_name.py (stdlib only: release.sh runs it too).
+bucket_owner = _bucket_name.owner
+swarmai_bucket_name = _bucket_name.canonical
 
 # IAM policy for Hive instances
 HIVE_IAM_POLICY = {
@@ -597,39 +586,63 @@ class HiveProvisioner:
     # ── S3 ─────────────────────────────────────────────────────────
 
     async def _ensure_s3_bucket(self, session, region: str, account_id: str = "") -> str:
-        """Create the account's SwarmAI bucket in *region* if it doesn't exist. The name
-        carries the whole account ID, so it does not collide by accident; S3 names are
-        global, though, so another account can still take it first: that is reported as
-        such (the Hive is not built into a bucket this account does not own), and every
-        S3 call passes ``ExpectedBucketOwner``."""
-        bucket_name = swarmai_bucket_name(account_id, region)
+        """The account's SwarmAI bucket in *region*, by hive/bucket_name.py's rule: the first
+        of its candidates this account owns (the 4-digit bucket of an older deployment,
+        which hive/release.sh uploads to as well), else the one named with the whole account
+        ID, created here. S3 names are global, so another account can take that one first:
+        that is reported as such (the Hive is not built into a bucket this account does not
+        own), and every S3 call the provisioner makes on either passes ``ExpectedBucketOwner``
+        (``bucket_owner(bucket, account_id)``)."""
+        names = _bucket_name.candidates(account_id, region)
+        bucket_name = names[-1]
+
+        def _owned(s3, name: str) -> bool:
+            # 404: no such bucket; 403: another account's (or not readable); anything
+            # else (network, throttling) stops the deploy rather than make a second bucket.
+            try:
+                s3.head_bucket(Bucket=name, ExpectedBucketOwner=account_id)
+                return True
+            except Exception as e:
+                code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+                if code in ("404", "403", "NoSuchBucket", "NotFound", "Forbidden", "AccessDenied"):
+                    if code not in ("404", "NoSuchBucket", "NotFound"):
+                        logger.warning("S3 bucket %s is not this account's (or it cannot list it: "
+                                       "s3:ListBucket); not used", name)
+                    return False
+                raise
 
         def _create():
+            nonlocal bucket_name
             s3 = session.client("s3", region_name=region)
-            try:
-                if region == "us-east-1":
-                    s3.create_bucket(Bucket=bucket_name)
-                else:
-                    s3.create_bucket(
-                        Bucket=bucket_name,
-                        CreateBucketConfiguration={"LocationConstraint": region},
-                    )
-                logger.info("Created S3 bucket: %s", bucket_name)
-            except s3.exceptions.BucketAlreadyOwnedByYou:
-                logger.info("S3 bucket already exists: %s", bucket_name)
-            except Exception as e:
-                if "BucketAlreadyOwnedByYou" in str(e):
-                    pass
-                elif "BucketAlreadyExists" in str(e):
-                    raise RuntimeError(
-                        f"The S3 bucket name {bucket_name} is taken by another AWS account. "
-                        "SwarmAI only uses a bucket this account owns; ask AWS Support or "
-                        "use another region for the Hive.") from e
-                else:
-                    raise
+            found = next((name for name in names[:-1] if _owned(s3, name)), None)
+            if found:
+                logger.info("Using the account's existing S3 bucket: %s", found)
+                bucket_name = found
+            else:
+                try:
+                    if region == "us-east-1":
+                        s3.create_bucket(Bucket=bucket_name)
+                    else:
+                        s3.create_bucket(
+                            Bucket=bucket_name,
+                            CreateBucketConfiguration={"LocationConstraint": region},
+                        )
+                    logger.info("Created S3 bucket: %s", bucket_name)
+                except s3.exceptions.BucketAlreadyOwnedByYou:
+                    logger.info("S3 bucket already exists: %s", bucket_name)
+                except Exception as e:
+                    if "BucketAlreadyOwnedByYou" in str(e):
+                        pass
+                    elif "BucketAlreadyExists" in str(e):
+                        raise RuntimeError(
+                            f"The S3 bucket name {bucket_name} is taken by another AWS account. "
+                            "SwarmAI only uses a bucket this account owns; ask AWS Support or "
+                            "use another region for the Hive.") from e
+                    else:
+                        raise
             # Block public access
             s3.put_public_access_block(
-                Bucket=bucket_name, **bucket_owner(bucket_name),
+                Bucket=bucket_name, **bucket_owner(bucket_name, account_id),
                 PublicAccessBlockConfiguration={
                     "BlockPublicAcls": True,
                     "IgnorePublicAcls": True,
@@ -642,7 +655,7 @@ class HiveProvisioner:
         return await asyncio.to_thread(_create)
 
     async def _sync_release_to_s3(
-        self, session, bucket: str, version: str, region: str
+        self, session, bucket: str, version: str, region: str, account_id: str = ""
     ) -> None:
         """Make sure the bucket holds the Hive package of *version* and the
         ``checksums.txt`` beside it, which first boot and every update check the package
@@ -654,18 +667,20 @@ class HiveProvisioner:
         package = f"swarmai-hive-v{version}-linux-arm64.tar.gz"
         s3_key = f"v{version}/{package}"
         sums_key = f"v{version}/checksums.txt"
+        # the account's 4-digit bucket carries no owner in its name: *account_id* gives it
+        expected_owner = bucket_owner(bucket, account_id)
 
         def _exists(key: str) -> bool:
             s3 = session.client("s3", region_name=region)
             try:
-                s3.head_object(Bucket=bucket, Key=key, **bucket_owner(bucket))
+                s3.head_object(Bucket=bucket, Key=key, **expected_owner)
                 return True
             except Exception:
                 return False
 
         def _put(key: str, body: bytes) -> None:
             s3 = session.client("s3", region_name=region)
-            s3.put_object(Bucket=bucket, Key=key, Body=body, **bucket_owner(bucket))
+            s3.put_object(Bucket=bucket, Key=key, Body=body, **expected_owner)
             logger.info("Uploaded s3://%s/%s (%d bytes)", bucket, key, len(body))
 
         def _sums(digest: str) -> bytes:
@@ -1285,7 +1300,7 @@ class HiveProvisioner:
             await self._update_instance(instance_id, s3_bucket=bucket)
 
             # Step 2: Sync release to S3
-            await self._sync_release_to_s3(session, bucket, version, region)
+            await self._sync_release_to_s3(session, bucket, version, region, aws_account_id)
 
             # Step 3: IAM
             role_arn = await self._create_iam_role(session, name)
@@ -1700,7 +1715,8 @@ class HiveProvisioner:
                 raise ValueError(f"Invalid version string: {version!r}")
 
             # Ensure new version is in S3
-            await self._sync_release_to_s3(session, bucket, version, region)
+            await self._sync_release_to_s3(session, bucket, version, region,
+                                           account.get("account_id", ""))
 
             # Refresh the role's inline policy so a policy change reaches existing Hives,
             # with the Hive's Elastic IP (stored at deploy step 8; read back from EC2 when
@@ -1710,8 +1726,10 @@ class HiveProvisioner:
                 instance.get("ec2_public_ip"), instance.get("elastic_ip_alloc_id"))
 
             # SSM Run Command
-            from hive.user_data import PACKAGE_CHECK_SH, TMP_ON_DISK_SH, health_exempt_fix_sh
+            from hive.user_data import (PACKAGE_CHECK_SH, TMP_ON_DISK_SH, caddy_binary_update_sh,
+                                        health_exempt_fix_sh)
             health_fix_sh = health_exempt_fix_sh()
+            caddy_binary_sh = caddy_binary_update_sh()
             update_script = f"""#!/bin/bash
 set -euo pipefail
 echo "=== Updating to v{version} ==="
@@ -1719,6 +1737,10 @@ echo "=== Updating to v{version} ==="
 # First, before the install is touched: the Caddyfile's /health exemption becomes the
 # literal request path (a failure restores the file and stops here).
 {health_fix_sh}
+
+# Then the Caddy binary: the pinned, checksum-checked release first boot installs, put in
+# only when /usr/bin/caddy is another build (a failure keeps the old one and stops here).
+{caddy_binary_sh}
 
 # G7: Backup for rollback — exclude .venv (~300MB, never overwritten by rsync).
 # Same denylist as deploy: backup what deploy touches, skip what it skips.
@@ -1753,10 +1775,10 @@ cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 # Node is older than the frontend needs still updates; the reason is in this output.
 bash /opt/swarmai/hive/ensure-node.sh || echo "WARN: the Hive's Node is older than the frontend needs; its frontend tests cannot run"
 
-# NOTE: /etc/caddy/Caddyfile lives OUTSIDE /opt/swarmai/ — never touched by rsync.
-# The deployed Caddyfile has inline bcrypt auth written by user_data.py. It changes only
-# through its own edits: the /health step at the top of this script, the origin guard
-# (_origin_guard_script) and update_caddyfile.
+# NOTE: /etc/caddy/Caddyfile and /usr/bin/caddy live OUTSIDE /opt/swarmai/ — never touched
+# by rsync. The deployed Caddyfile has inline bcrypt auth written by user_data.py. It changes
+# only through its own edits: the /health step at the top of this script, the origin guard
+# (_origin_guard_script) and update_caddyfile; the binary only through the step after it.
 
 # ── MIGRATION (idempotent): backfill /etc/swarmai/hive-auth.env for hives provisioned
 # BEFORE app-layer auth existed. Those instances have no env file, so the new

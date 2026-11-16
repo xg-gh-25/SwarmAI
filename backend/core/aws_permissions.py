@@ -25,12 +25,14 @@ import logging
 import re
 from typing import Any, Optional
 
+from hive import bucket_name
+
 logger = logging.getLogger(__name__)
 
 MANAGED_TAG = "swarmai:managed"
 BOUNDARY_NAME = "SwarmAI-Hive-Boundary"
 ROLE_PREFIX = "SwarmAI-Hive-"
-BUCKET_PREFIX = "swarmai-hive-"
+BUCKET_PREFIX = bucket_name.PREFIX
 SSM_CORE = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 AL2023_ARM64 = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 
@@ -70,6 +72,8 @@ _METHOD_ACTION = {
     "delete_distribution": "cloudfront:DeleteDistribution",
     "get_distribution": "cloudfront:GetDistribution",
     "update_distribution": "cloudfront:UpdateDistribution",
+    # HeadBucket has no IAM action of its own: S3 authorizes it as ListBucket
+    "head_bucket": "s3:ListBucket",
 }
 
 
@@ -329,7 +333,8 @@ def run_hive_checks(sess: Any, region: str, account_id: str, caller_arn: str) ->
     missing += denied
     if problem:
         unknown.append(f"CloudFront: {problem}")
-    bucket = f"arn:aws:s3:::{BUCKET_PREFIX}{account_id}-{region}"
+    # the bucket a new deployment creates (hive/bucket_name.py)
+    bucket = f"arn:aws:s3:::{bucket_name.canonical(account_id, region)}"
     s_denied, s_problem = _simulate(sess, principal, ["s3:CreateBucket", "s3:PutObject",
                                                       "s3:GetObject", "s3:ListBucket"],
                                     [bucket, bucket + "/*"])
