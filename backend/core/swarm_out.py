@@ -858,7 +858,12 @@ def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] =
 def open_runs_by_hive(strict: bool = False) -> "dict[str, int] | None":
     """This Host's runs still open on each Hive (by name): dispatched under a Project
     Agent and neither settled nor discarded. A row without one never settles
-    (swarm_out_settle), so it is not counted. For picking a Hive this is only a
+    (swarm_out_settle), so it is not counted. Nor is an accepted run (a pass verdict on
+    its current result, or its commits landed: ``swarm_out_settle.closed_state``): its
+    session has ended and offers no command, so a restart or update ends nothing of it,
+    and only its files or lessons may still come (core/hive_idle checks lessons itself).
+    Counted, an accepted run whose files never come held its Hive's updates and idle stop
+    until its records expired. For picking a Hive this is only a
     tie-breaker, so an unreadable log counts nothing; ``strict`` is for a caller about to
     end what runs on a Hive (a restart, the fleet's ``open_runs``): an unreadable log is
     None (unknown) and a run whose record cannot be read counts as open."""
@@ -879,6 +884,15 @@ def open_runs_by_hive(strict: bool = False) -> "dict[str, int] | None":
             continue
         if rec.get("settled") or rec.get("abandoned_at"):
             continue
+        try:
+            # accepted: nothing of it runs on the Hive. Not a child its lead run has
+            # handled (handled_at): that one may still be running there.
+            if not rec.get("handled_at") \
+                    and swarm_out_settle.closed_state(rec, r["dispatch_id"]) is not None:
+                continue
+        except Exception:  # noqa: BLE001 — its result unreadable: count it (strict = unknown)
+            if not strict:
+                continue
         out[str(r.get("hive"))] = out.get(str(r.get("hive")), 0) + 1
     return out
 

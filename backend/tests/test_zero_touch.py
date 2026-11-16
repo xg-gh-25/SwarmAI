@@ -795,6 +795,26 @@ def test_restart_hive_refuses_a_busy_or_unknown_hive(monkeypatch, tmp_path):
     assert swarm_out.open_runs_by_hive(True) == {"h1": 1} and swarm_out.open_runs_by_hive() == {}
 
 
+def test_an_accepted_run_does_not_hold_its_hive(monkeypatch):
+    """A run accepted (a pass verdict on its current result) while its files or lessons
+    are still due has no session left on the Hive: it does not hold a restart, an update
+    or the idle stop. A run with no verdict, or a verdict a newer turn replaced, still does."""
+    from core import swarm_out, swarm_out_settle
+    rows = [{"dispatch_id": f"so_{c * 12}", "hive": h, "project_agent": {}}
+            for c, h in (("a", "h1"), ("b", "h1"), ("c", "h2"))]
+    recs = {"so_" + "a" * 12: {"verdict": {"value": "pass", "ended_at": "T1"}},   # accepted
+            "so_" + "b" * 12: {},                                              # no verdict
+            "so_" + "c" * 12: {"verdict": {"value": "pass", "ended_at": "T0"}}}  # replaced
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: rows)
+    monkeypatch.setattr(swarm_out_settle, "load", lambda did: dict(recs[did]))
+    monkeypatch.setattr(swarm_out_settle, "_current_result", lambda did: {"ended_at": "T1"})
+    assert swarm_out.open_runs_by_hive(True) == {"h1": 1, "h2": 1}
+    recs["so_" + "b" * 12] = {"code_landed_at": "2026-11-16T00:00:00Z"}            # landed
+    assert swarm_out.open_runs_by_hive(True) == {"h2": 1}
+    recs["so_" + "b" * 12] = {"handled_at": "2026-11-16T00:00:00Z"}   # a child its lead took:
+    assert swarm_out.open_runs_by_hive(True) == {"h1": 1, "h2": 1}     # it may still run there
+
+
 def test_restart_hive_refuses_a_hive_that_is_not_running(monkeypatch, tmp_path):
     for status in ("stopped", "error", "updating", "stopping"):
         r, fake = _restart_route(monkeypatch, tmp_path / status, status=status, probe=_QUIET)
