@@ -1,13 +1,18 @@
 """The files a Hive run writes, brought back into the run's Brain (design
 docs/design/2026-10-30-hive-run-files-back.md).
 
-**On the Hive** (``seal_files``, from ``hive_records.seal_turn``): each file the turn's
-``turn_deliverables`` block lists is sealed as a ``file`` entry of the run record whose
-manifest line carries ``path``, the file's path relative to the workspace. The file is
-read through directory descriptors opened without following a link, and only as a
-regular file. Not sealed (logged): a path outside the workspace, under ``Hive/``
-(repositories come back as bundles, the record and inbox live there), a secret path, a
-file over ``hive_records.MAX_BYTES["file"]`` (never cut).
+**On the Hive** (``stage_files`` then ``seal_files``, from ``hive_records.seal_turn``):
+each file the turn's ``turn_deliverables`` block lists is sealed as a ``file`` entry of
+the run record whose manifest line carries ``path``, the file's path relative to the
+workspace. The file is read once, before the turn's entry, through directory descriptors
+opened without following a link and only as a regular file, into a temporary file of the
+record; it is sealed from there after the turn's entry. Not sealed: a path outside the
+workspace, under ``Hive/`` (repositories come back as bundles, the record and inbox live
+there), a secret path, a link, a file over ``hive_records.MAX_BYTES["file"]`` (never cut),
+a file that is gone. Each listed file not sealed is named with its reason (one of
+``NOT_SEALED``) and, when known, its ``path`` in the turn entry's ``not_sealed`` list,
+which a host before it ignores. A file read but then not sealed (sealing it failed after
+the turn's entry) has no reason: it holds the run like any file not heard of.
 
 **On the host** (``place``, from ``hive_records.pull`` once an entry is kept and its
 sha256 checked): the entry's ``path`` passed ``safe_rel`` at validation; the bytes are
@@ -17,17 +22,25 @@ through no-follow directory descriptors to a fresh name renamed into place
 (core/brain_sync); the kept copy in the record is then removed. A file that could not be
 placed is tried again at the next pull and its reason kept (``placed``). Returned files
 are deliverables, not knowledge: the Library index skips ``deliverables/hive/``
-(core/knowledge_store), so nothing a Hive wrote reaches recall except through CDF.
+(core/knowledge_store), so nothing a Hive wrote reaches recall except through CDF. After
+each pull ``note_not_sealed`` keeps the reasons the new turn entries give
+(``not-sealed.json``, the newest per listed path, with its turn's seq); ``not_sealed``
+reads them: a ``gone`` one only for a file that never came back in any entry (once it
+came, its placement decides), any other one unless the file came back after it.
 
 - ``safe_rel(rel)``                         — a plain relative path a file may come back as
 - ``deliverable_paths(rows)``               — absolute paths the rows' blocks list
-- ``seal_files(workspace, session, rows)``  — Hive: seal them; never raises
+- ``stage_files(workspace, session, rows)`` — Hive: read them, or say why not; never raises
+- ``seal_files(workspace, session, staged)`` — Hive: seal what was read; never raises
 - ``destination(workspace, row)``           — host: (Brain dir, the run's folder under it)
 - ``place_pending(row, record_dir)``        — host: place every kept entry not placed yet
 - ``placed(dispatch_id)``                   — host: where each one went, or why not
+- ``note_not_sealed(record_dir)`` / ``not_sealed(dispatch_id)`` — host: why a listed file
+  never came
 """
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -42,7 +55,17 @@ logger = logging.getLogger(__name__)
 #: where returned files go, under the Brain's directory
 DELIVERABLES = ("deliverables", "hive")
 PLACED = "placed.json"
+NOT_SEALED_FILE = "not-sealed.json"
 _MAX_REL = 400
+
+#: why a listed file was not sealed (the turn entry's ``not_sealed``). Only ``gone`` (the
+#: file, or a directory on its way, does not exist) lets the host stop waiting for it
+#: (core/swarm_out_settle._files_here): nothing of it is left for the release to remove.
+#: Every other reason may leave bytes that only the Hive has.
+NOT_SEALED = ("gone", "link", "not_regular", "unreadable", "too_large", "outside", "hive",
+              "secret", "not_returnable", "error")
+#: reasons one turn entry gives (a turn_deliverables block lists at most 200 files)
+MAX_NOT_SEALED = 200
 
 
 def is_returned(parts: Any) -> bool:
@@ -82,51 +105,77 @@ def deliverable_paths(rows: list[dict]) -> list[str]:
 
 
 class _Skip(Exception):
-    pass
+    """A listed file that is not sealed; ``why`` is one of NOT_SEALED, ``rel`` its path
+    relative to the workspace once known."""
+
+    def __init__(self, why: str, rel: Optional[str] = None) -> None:
+        super().__init__(why)
+        self.why = why
+        self.rel = rel
 
 
-def _read(workspace: Path, abs_path: str, cap: int) -> tuple[str, bytes]:
-    """(path relative to the workspace, bytes) of one deliverable; _Skip with the reason."""
+def _path_class(rel: str) -> Optional[str]:
+    """None for a path that comes back (``safe_rel``), else why it does not."""
+    from core.brain_bootstrap.repo_read import is_secret_path
+    if safe_rel(rel):
+        return None
+    parts = rel.split("/")
+    if not any(p in ("", ".", "..") for p in parts) and parts[0] == "Hive":
+        return "hive"
+    return "secret" if rel and is_secret_path(rel) else "not_returnable"
+
+
+def _copy(workspace: Path, abs_path: str, cap: int, out: Any) -> str:
+    """Copy one deliverable into the binary file ``out``; its path relative to the
+    workspace, or _Skip with the reason. A missing file or directory on the way
+    (ENOENT) is ``gone``; a link there (ELOOP, or ENOTDIR for a file where a directory
+    belongs) is ``link``, never ``gone``."""
     from core import brain_sync
     p = os.path.normpath(abs_path)
     # the watcher may report the workspace by its link-resolved name or as configured
     ws = next((w for w in (os.path.abspath(str(workspace)), os.path.realpath(str(workspace)))
                if p.startswith(w + os.sep)), None)
     if ws is None:
-        raise _Skip("outside the workspace")
+        raise _Skip("outside")
     rel = p[len(ws) + 1:].replace(os.sep, "/")
-    if not safe_rel(rel):
-        raise _Skip("not a path that comes back")
+    why = _path_class(rel)
+    if why:
+        raise _Skip(why)
     root = os.open(os.path.realpath(str(workspace)), brain_sync._DIR_FLAGS)   # rel is the same under either form
     try:
         try:
             dfd, name = brain_sync._walk_to(root, rel, create=False)
-        except (brain_sync.SyncError, FileNotFoundError):
-            raise _Skip("a directory on the way is a link or gone") from None
+        except FileNotFoundError:
+            raise _Skip("gone", rel) from None
+        except brain_sync.SyncError:
+            raise _Skip("link", rel) from None
     finally:
         os.close(root)
     try:
         try:
             fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
                          dir_fd=dfd)
-        except OSError:
-            raise _Skip("gone or a link") from None
+        except FileNotFoundError:
+            raise _Skip("gone", rel) from None
+        except OSError as exc:
+            raise _Skip("link" if exc.errno in (errno.ELOOP, getattr(errno, "EMLINK", -1)) else "unreadable",
+                        rel) from None
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
-                raise _Skip("not a regular file")
+                raise _Skip("not_regular", rel)
             if st.st_size > cap:
-                raise _Skip("larger than a record holds")
-            chunks, size = [], 0
+                raise _Skip("too_large", rel)
+            size = 0
             while True:
                 b = os.read(fd, 1 << 20)
                 if not b:
                     break
                 size += len(b)
                 if size > cap:
-                    raise _Skip("larger than a record holds")
-                chunks.append(b)
-            return rel, b"".join(chunks)
+                    raise _Skip("too_large", rel)
+                out.write(b)
+            return rel
         finally:
             os.close(fd)
     finally:
@@ -155,26 +204,75 @@ def report_paths(workspace: Path, rows: list[dict]) -> list[str]:
     return out
 
 
-def seal_files(workspace: Path, session_id: str, rows: list[dict]) -> list[dict]:
-    """Seal each deliverable the rows list, and the report of each pipeline run that
-    ended in them (``report_paths``), as a ``file`` entry; the sealed entries. Never
-    raises."""
+def stage_files(workspace: Path, session_id: str, rows: list[dict]) -> tuple[list[tuple[str, str, Path]], list[dict]]:
+    """Read each deliverable the rows list, and the report of each pipeline run that
+    ended in them (``report_paths``), into a temporary file of the session's record, once,
+    before the turn's entry is sealed: ``(staged, not_sealed)``. ``staged``:
+    ``[(listed path, path relative to the workspace, temporary file)]`` for ``seal_files``;
+    ``not_sealed``: ``[{"listed", "why"[, "path"]}]`` for each listed file that is not
+    read, ``why`` one of NOT_SEALED, ``path`` relative to the workspace when it is one (a
+    report no turn lists is only logged), at most MAX_NOT_SEALED.
+    Never raises: what could not be staged is not sealed."""
+    from core import hive_records
+    staged: list[tuple[str, str, Path]] = []
+    not_sealed: list[dict] = []
+    try:
+        listed = deliverable_paths(rows)
+        try:
+            reports = report_paths(workspace, rows)
+        except OSError:
+            reports = []
+        for ap in [*listed, *[r for r in reports if r not in listed]]:
+            tmp: Optional[Path] = None
+            why: Optional[str] = None
+            rel: Optional[str] = None
+            try:
+                if len(ap) > hive_records.LISTED_MAX:
+                    raise _Skip("not_returnable")
+                tmp = hive_records.tmp_path(workspace, session_id, "file")
+                with open(tmp, "xb") as out:
+                    rel = _copy(Path(workspace), ap, hive_records.MAX_BYTES["file"], out)
+                staged.append((ap, rel, tmp))
+                continue
+            except _Skip as skip:
+                why, rel = skip.why, skip.rel
+                logger.info("hive_files: %s not sealed for %s (%s)", os.path.basename(ap), session_id, why)
+            except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
+                why = "error"
+                logger.warning("hive_files: %s not sealed for %s (%s)", os.path.basename(ap), session_id,
+                               type(exc).__name__)
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
+            if ap in listed and len(ap) <= hive_records.LISTED_MAX and len(not_sealed) < MAX_NOT_SEALED:
+                not_sealed.append({"listed": ap, "why": why, **({"path": rel} if rel else {})})
+    except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
+        logger.warning("hive_files: files of %s not staged (%s)", session_id, type(exc).__name__)
+    return staged, not_sealed
+
+
+def seal_files(workspace: Path, session_id: str, staged: list[tuple[str, str, Path]]) -> list[dict]:
+    """Seal each file ``stage_files`` read as a ``file`` entry (its temporary file is moved
+    into the record); the sealed entries. Never raises; a temporary file left over is
+    removed (``discard_staged``)."""
     from core import hive_records
     out = []
-    try:
-        reports = report_paths(workspace, rows)
-    except OSError:
-        reports = []
-    for ap in [*deliverable_paths(rows), *[r for r in reports if r not in deliverable_paths(rows)]]:
+    for ap, rel, tmp in staged:
         try:
-            rel, data = _read(Path(workspace), ap, hive_records.MAX_BYTES["file"])
-            out.append(hive_records.append(workspace, session_id, "file", data=data, path=rel, listed=ap))
-        except _Skip as why:
-            logger.info("hive_files: %s not sealed for %s (%s)", os.path.basename(ap), session_id, why)
+            out.append(hive_records.append(workspace, session_id, "file", src=tmp, path=rel, listed=ap))
         except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
             logger.warning("hive_files: %s not sealed for %s (%s)", os.path.basename(ap), session_id,
                            type(exc).__name__)
+    discard_staged(staged)
     return out
+
+
+def discard_staged(staged: list[tuple[str, str, Path]]) -> None:
+    """Remove the temporary files of ``staged`` not moved into the record. Never raises."""
+    for _ap, _rel, tmp in staged:
+        try:
+            Path(tmp).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # ── host ───────────────────────────────────────────────────────────────────────
@@ -275,3 +373,98 @@ def placed(dispatch_id: str) -> list[dict]:
         return list(_load(hive_records.local_dir(dispatch_id)).values())
     except ValueError:
         return []
+
+
+def _valid_not_sealed(items: Any) -> list[dict]:
+    """The well-formed ``{listed, why[, path]}`` items of a turn entry's ``not_sealed``
+    (the Hive wrote them: anything else is dropped, so its file still holds)."""
+    from core import hive_records
+    out = []
+    for x in (items if isinstance(items, list) else [])[:MAX_NOT_SEALED]:
+        if isinstance(x, dict) and isinstance(x.get("listed"), str) and x["listed"] \
+                and len(x["listed"]) <= hive_records.LISTED_MAX and x.get("why") in NOT_SEALED:
+            path = x.get("path")
+            out.append({"listed": x["listed"], "why": x["why"],
+                        **({"path": path} if isinstance(path, str) and safe_rel(path) else {})})
+    return out
+
+
+def _load_not_sealed(d: Path) -> tuple[int, dict[str, dict]]:
+    """(the last seq read, ``{listed: {why, seq[, path]}}``) of ``not-sealed.json``."""
+    try:
+        got = json.loads((d / NOT_SEALED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0, {}
+    if not isinstance(got, dict):
+        return 0, {}
+    through = got.get("through") if type(got.get("through")) is int else 0
+    why = got.get("why") if isinstance(got.get("why"), dict) else {}
+    return through, {k: v for k, v in why.items() if isinstance(k, str) and isinstance(v, dict)
+                     and v.get("why") in NOT_SEALED and type(v.get("seq")) is int}
+
+
+def note_not_sealed(record_dir: Path) -> dict[str, dict]:
+    """Keep the reasons the kept turn entries not read yet give for their listed files not
+    sealed: ``not-sealed.json`` = ``{through: the last seq read, why: {listed: {why, seq,
+    path?}}}``, ``seq`` the turn entry's, a later turn's reason replacing an earlier one's.
+    A turn kept without its bytes (over the record's budget) gives none; one whose body
+    cannot be read stops the reading there, so the next pull reads it again. Written
+    under the record's lock; never raises."""
+    from core import hive_records
+    d = Path(record_dir)
+    try:
+        with hive_records._Lock(d, ".not-sealed.lock"):
+            through, why = _load_not_sealed(d)
+            new = [e for e in hive_records._read_manifest(d) if e["seq"] > through]
+            read_to = through
+            for e in new:
+                if e.get("kind") == "turn" and not e.get("skipped"):
+                    p = hive_records._entry_path(d, e)
+                    try:
+                        body = json.loads(p.read_text(encoding="utf-8")) if p is not None else None
+                    except (OSError, ValueError):
+                        break                    # read again at the next pull
+                    for x in _valid_not_sealed(body.get("not_sealed") if isinstance(body, dict) else None):
+                        why[x["listed"]] = {"why": x["why"], "seq": e["seq"],
+                                            **({"path": x["path"]} if "path" in x else {})}
+                read_to = e["seq"]
+            if read_to == through:
+                return why
+            tmp = d / f".{NOT_SEALED_FILE}.{secrets.token_hex(6)}.tmp"
+            tmp.write_text(json.dumps({"through": read_to, "why": why}, ensure_ascii=False,
+                                      sort_keys=True), encoding="utf-8")
+            os.replace(tmp, d / NOT_SEALED_FILE)
+            return why
+    except Exception as exc:  # noqa: BLE001 — the record's state never breaks the pull
+        logger.warning("hive_files: reasons of %s not kept (%s)", d.name, type(exc).__name__)
+        return {}
+
+
+def not_sealed(dispatch_id: str) -> dict[str, str]:
+    """``{listed path: reason}`` of the run's listed files whose newest word from its Hive
+    is that it did not seal them (``note_not_sealed``). A ``gone`` file that came back in
+    any kept ``file`` entry is left out: its bytes came here, so its placement decides. Any
+    other reason is left out only when the file came back after it (a newer copy). A file
+    matches an entry by the path it was listed by or by its path in the workspace (the
+    watcher may name the workspace by its link-resolved form)."""
+    from core import hive_records
+    try:
+        d = hive_records.local_dir(dispatch_id)
+    except ValueError:
+        return {}
+    _through, kept = _load_not_sealed(d)
+    if not kept:
+        return {}
+    came: dict[str, int] = {}                    # listed or path -> newest file entry's seq
+    for e in hive_records._read_manifest(d):
+        if e.get("kind") == "file":
+            for k in (e.get("listed"), e.get("path")):
+                if isinstance(k, str):
+                    came[k] = max(came.get(k, 0), e["seq"])
+    out: dict[str, str] = {}
+    for listed, r in kept.items():
+        last = max((came.get(k, 0) for k in (listed, r.get("path")) if isinstance(k, str)), default=0)
+        if (r["why"] == "gone" and last) or last > r["seq"]:
+            continue
+        out[listed] = r["why"]
+    return out

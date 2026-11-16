@@ -24,6 +24,8 @@ and a session's directory may not be links.
   its row was sealed without it); ``turn_rows`` puts them back on their blocks. Sealed
   after every turn end, in a task of its own (core/session_router), in turn order; a
   turn whose rows could not be read seals ``{"error": ...}`` so the gap is visible.
+  ``not_sealed``: each file the turn lists that is not sealed, with why
+  (core/hive_files.NOT_SEALED); its files are read before it is sealed and sealed after it.
 - ``lessons``: the session's lesson units not sealed before (core/hive_lessons.collect),
   sealed when its session job ends (done or failed, also failed by a restart), when a
   pipeline it created lands, and when the session is deleted.
@@ -31,7 +33,8 @@ and a session's directory may not be links.
   with ``path`` (relative to the workspace) in its manifest line (core/hive_files). The
   host checks it like any entry plus ``hive_files.safe_rel(path)``, then places it in the
   run's Brain and drops its own copy (``hive_files.place_pending``); one over the kept
-  budget is listed as ``skipped`` without its bytes instead of stopping the pull.
+  budget is listed as ``skipped`` without its bytes instead of stopping the pull. After
+  placing, the host keeps the turns' ``not_sealed`` reasons (``hive_files.note_not_sealed``).
 - ``closed``: right after the lessons of a session job's end or a deletion: what the
   session produced so far is all here. A later turn appends after it.
 
@@ -200,7 +203,8 @@ def session_dir(workspace: Path, session_id: str) -> Path:
 
 
 def tmp_path(workspace: Path, session_id: str, key: str) -> Path:
-    """Where a bundle is written before the turn seals it."""
+    """Where a bundle, or a file a turn lists (core/hive_files.stage_files), is written
+    before it is sealed."""
     d = session_dir(workspace, session_id)
     d.mkdir(parents=True, exist_ok=True)
     return d / f".tmp-{key}-{secrets.token_hex(6)}"
@@ -371,10 +375,13 @@ def later_answers(rows: list[dict]) -> list[dict]:
 
 
 def turn_projection(rows: list[dict], *, first_turn: bool = False,
-                    answers: Optional[list[dict]] = None) -> bytes:
+                    answers: Optional[list[dict]] = None,
+                    not_sealed: Optional[list[dict]] = None) -> bytes:
     """The turn's rows, keeping what the host's summary reads: role, id, time, the steer
     marks, and the blocks it counts; a tool result keeps its id and error flag only.
-    ``answers``: ``later_answers`` of the rows earlier entries hold."""
+    ``answers``: ``later_answers`` of the rows earlier entries hold. ``not_sealed``: the
+    turn's listed files not sealed, with why (core/hive_files.stage_files); kept whole
+    (at most MAX_NOT_SEALED short items), rows go first when the entry is too large."""
     out = []
     for r in rows:
         if not isinstance(r, dict):
@@ -404,6 +411,8 @@ def turn_projection(rows: list[dict], *, first_turn: bool = False,
     head: dict[str, Any] = {"first_turn": first_turn}
     if answers:
         head["answers"] = answers
+    if not_sealed:
+        head["not_sealed"] = not_sealed
     body = json.dumps({**head, "rows": out}, ensure_ascii=False).encode("utf-8")
     while len(body) > MAX_BYTES["turn"] and (out or head.get("answers")):
         # too large: earlier turns' answers go first (they are repeated by the next
@@ -454,8 +463,12 @@ def _sealed_through(d: Path) -> Optional[str]:
 def seal_turn(workspace: Path, session_id: str, rows: Optional[list[dict]],
               error: Optional[str] = None, *, until: Optional[str] = None) -> Optional[dict]:
     """Seal the turn that just ended (``turn_slice``) and move ``SEALED_TURNS`` to its last
-    row. Rows that could not be read seal ``{"error": ...}`` and leave the marker, so the
-    next turn's entry holds them. Never raises."""
+    row, then the files it lists (core/hive_files): read before the turn's entry, so the
+    entry says which were not and why (``not_sealed``), sealed after it. Rows that could
+    not be read seal ``{"error": ...}`` and leave the marker, so the next turn's entry
+    holds them. Never raises."""
+    from core import hive_files
+    staged: list = []
     try:
         d = session_dir(workspace, session_id)
         with _Lock(d, ".turn.lock"):      # not the entry lock: append takes that one inside
@@ -466,18 +479,21 @@ def seal_turn(workspace: Path, session_id: str, rows: Optional[list[dict]],
             sliced, first = turn_slice(rows, after_id=marker, until=until)
             ids = [r.get("id") if isinstance(r, dict) else None for r in rows]
             earlier = rows[:ids.index(marker) + 1] if marker is not None and marker in ids else []
+            # what the turn wrote, read now into the record's temporary files: the entry
+            # names the files that are not, and a kill before it seals nothing twice
+            staged, not_sealed = hive_files.stage_files(workspace, session_id, sliced)
             entry = append(workspace, session_id, "turn",
-                           data=turn_projection(sliced, first_turn=first, answers=later_answers(earlier)))
+                           data=turn_projection(sliced, first_turn=first, answers=later_answers(earlier),
+                                                not_sealed=not_sealed))
             last = next((r.get("id") for r in reversed(sliced)
                          if isinstance(r, dict) and isinstance(r.get("id"), str)), None)
             if last is not None:
                 tmp = d / f".tmp-sealed-{secrets.token_hex(4)}"
                 tmp.write_text(json.dumps({"last_id": last}), encoding="utf-8")
                 os.replace(tmp, d / SEALED_TURNS)
-            # what the turn wrote, after the turn and its marker (a kill while reading
-            # them never makes the next turn seal these rows again)
-            from core.hive_files import seal_files
-            seal_files(workspace, session_id, sliced)
+            # sealed after the turn and its marker (a kill while sealing them never makes
+            # the next turn seal these rows again)
+            hive_files.seal_files(workspace, session_id, staged)
             return entry
     except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
         logger.error("hive_records: turn of %s not sealed (%s)", session_id, type(exc).__name__)
@@ -488,6 +504,8 @@ def seal_turn(workspace: Path, session_id: str, rows: Optional[list[dict]],
             logger.error("hive_records: the gap of %s not sealed either (%s)", session_id,
                          type(again).__name__)
             return None
+    finally:
+        hive_files.discard_staged(staged)
 
 
 def seal_lessons(workspace: Path, session_id: str) -> Optional[dict]:
@@ -961,8 +979,9 @@ async def pull(row: dict, inst: dict) -> dict:
                     break
             if d.is_dir():
                 await asyncio.to_thread(_prune_bundles, d)
-                from core.hive_files import place_pending   # into the run's Brain, then dropped here
-                await asyncio.to_thread(place_pending, row, d)
+                from core.hive_files import note_not_sealed, place_pending
+                await asyncio.to_thread(place_pending, row, d)   # into the run's Brain, then dropped here
+                await asyncio.to_thread(note_not_sealed, d)      # why a listed file never came
     except swarm_out.SwarmOutError:
         if not (d.is_dir() and local_entries(did)):
             return dict(_UNSUPPORTED)

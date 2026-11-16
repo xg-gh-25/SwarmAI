@@ -870,15 +870,23 @@ _RECORD_TRANSIENT = ("hive_silent", "hive_unusable")
 PULL_TIMEOUT_S = 120
 
 
-def attach_local(result: dict, placed: list[dict]) -> None:
+def attach_local(result: dict, placed: list[dict], not_sealed: Optional[dict] = None) -> None:
     """Give each listed file that came back from the Hive (core/hive_files.placed) its
     ``local`` path here, or ``not_placed`` when it came back and could not be put in
-    the run's Brain. Matched by identity: the path its turn's block listed it under,
+    the run's Brain; one whose newest word from its Hive is that it was not sealed
+    (core/hive_files.not_sealed) gets ``not_sealed``, the reason, instead (a ``gone`` one
+    never came back). Matched by identity: the path its turn's block listed it under,
     exactly (never by a suffix: two files can end the same way)."""
     by_listed = {p["listed"]: p for p in placed if isinstance(p, dict) and isinstance(p.get("listed"), str)}
     files = ((result or {}).get("work") or {}).get("files")
     for f in files if isinstance(files, list) else []:
-        got = by_listed.get(f.get("abs")) if isinstance(f, dict) else None
+        if not isinstance(f, dict):
+            continue
+        why = (not_sealed or {}).get(f.get("abs"))
+        if isinstance(why, str):
+            f["not_sealed"] = why
+            continue
+        got = by_listed.get(f.get("abs"))
         if not got:
             continue
         if isinstance(got.get("local"), str):
@@ -913,7 +921,8 @@ async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
             return False
         rec["result"] = result
         from core import hive_files
-        attach_local(rec["result"], await asyncio.to_thread(hive_files.placed, did))
+        attach_local(rec["result"], await asyncio.to_thread(hive_files.placed, did),
+                     await asyncio.to_thread(hive_files.not_sealed, did))
         rec["summary_version"] = SUMMARY_VERSION
         rec["fetched_at"] = rec["checked_at"]
     rec["etag"] = rec["transcript_rev"] = None

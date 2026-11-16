@@ -243,3 +243,149 @@ def test_a_turn_of_200_files_is_projected_whole():
     import json
     blocks = [b for r in json.loads(body)["rows"] for b in r["content"] if b["type"] == "turn_deliverables"]
     assert len(blocks[0]["files"]) == 200 and "truncated" not in json.loads(body)
+
+
+# ── why a listed file did not come back ───────────────────────────────────────
+
+def _turn_bodies(ws):
+    import json
+    from core import hive_records as hr
+    d = hr.session_dir(ws, SID)
+    return [json.loads((d / hr._name(e["seq"], "turn")).read_text())
+            for e in hr.entries(ws, SID)["entries"] if e["kind"] == "turn"]
+
+
+def test_seal_turn_records_why_each_listed_file_was_not_sealed(hive_ws, tmp_path, monkeypatch):
+    """Question: does the turn entry name each listed file that was not sealed with its
+    own reason, a missing file (or directory on its way) ``gone`` and a link never
+    ``gone``, while a sealed one is not named and is sealed after the entry?"""
+    from core import hive_records as hr
+    out = hive_ws / "Outputs" / "so_aaaaaaaaaaaa"
+    report = _write(out / "report.md", "# the report")
+    scratch = _write(out / "scratch.md", "notes")
+    os.remove(scratch)                                                    # moved away in the turn
+    in_gone_dir = str(out / "scratch" / "notes.md")                     # its folder removed too
+    outside = _write(tmp_path / "outside" / "x.md", "not yours")
+    link = out / "link.md"
+    link.symlink_to(outside)
+    dangling = out / "dangling.md"
+    dangling.symlink_to(tmp_path / "nowhere.md")
+    (out / "linked").symlink_to(tmp_path / "outside", target_is_directory=True)
+    via_link = str(out / "linked" / "x.md")
+    fifo = out / "pipe.md"
+    os.mkfifo(fifo)
+    monkeypatch.setitem(hr.MAX_BYTES, "file", 20)
+    want = {scratch: "gone", in_gone_dir: "gone", str(link): "link", str(dangling): "link",
+            via_link: "link", str(fifo): "not_regular", outside: "outside",
+            _write(hive_ws / "Hive" / "repos" / "x.md"): "hive", _write(hive_ws / ".env", "KEY=1"): "secret",
+            _write(out / "big.md", "x" * 50): "too_large"}
+    hr.seal_turn(hive_ws, SID, _rows_listing(report, *want))
+    (body,) = _turn_bodies(hive_ws)
+    assert {x["listed"]: x["why"] for x in body["not_sealed"]} == want
+    (f,) = _files(hive_ws)
+    assert f["path"] == "Outputs/so_aaaaaaaaaaaa/report.md" and f["listed"] == report
+    turn_seq = next(e["seq"] for e in hr.entries(hive_ws, SID)["entries"] if e["kind"] == "turn")
+    assert f["seq"] > turn_seq                                           # sealed after the turn entry
+    assert not list(hr.session_dir(hive_ws, SID).glob(".tmp-*"))         # nothing staged is left
+    # a turn whose files all came back names none
+    hr.seal_turn(hive_ws, SID, _rows_listing(_write(out / "r2.md", "two"), i="b"))
+    assert "not_sealed" not in _turn_bodies(hive_ws)[-1]
+
+
+def test_the_host_keeps_why_a_listed_file_did_not_come(host, hive_ws, tmp_path, monkeypatch):
+    """Question: does the host keep the reasons (the newest per listed path), leave out a
+    file that came back in an entry, attach them to the result, and keep every entry as
+    before (the turn rows read the same)?"""
+    from core import hive_files, hive_records as hr, swarm_out_results
+    _host_ws(tmp_path, monkeypatch)
+    out = hive_ws / "Outputs" / "so_aaaaaaaaaaaa"
+    report = _write(out / "report.md", "# the report")
+    scratch, big = str(out / "scratch.md"), _write(out / "big.md", "x" * 50)
+    monkeypatch.setitem(hr.MAX_BYTES, "file", 20)
+    hr.seal_turn(hive_ws, SID, _rows_listing(report, scratch, big))
+    assert hive_files.not_sealed(DID) == {}                              # nothing pulled yet
+    got = asyncio.run(hr.pull(ROW, {"id": "h"}))
+    assert got["error"] is None
+    assert [e["seq"] for e in hr.local_entries(DID)] == [e["seq"] for e in hr.entries(hive_ws, SID)["entries"]]
+    assert [r["id"] for r in hr.turn_rows(DID)[0]] == [r["id"] for r in _rows_listing(report)]
+    assert hive_files.not_sealed(DID) == {scratch: "gone", big: "too_large"}
+    result = {"work": {"files": [{"path": p, "abs": p} for p in (report, scratch, big)]}}
+    swarm_out_results.attach_local(result, hive_files.placed(DID), hive_files.not_sealed(DID))
+    files = result["work"]["files"]
+    assert files[0].get("local") and "not_sealed" not in files[0]
+    assert files[1]["not_sealed"] == "gone" and files[2]["not_sealed"] == "too_large"
+    # a later turn: the scratch file is written and comes back, the big one was deleted
+    _write(out / "scratch.md", "now here")
+    os.remove(big)
+    hr.seal_turn(hive_ws, SID, _rows_listing(scratch, big, i="b"))
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    assert hive_files.not_sealed(DID) == {big: "gone"}                  # the newest reason wins
+    # a reported reason for a file that came back in another entry never counts
+    hr.seal_turn(hive_ws, SID, _rows_listing(str(out / "scratch.md"), i="c"))   # sealed again
+    os.remove(out / "scratch.md")
+    hr.seal_turn(hive_ws, SID, _rows_listing(scratch, i="d"))           # now gone
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    assert scratch not in hive_files.not_sealed(DID)
+
+
+def test_a_malformed_reason_from_a_hive_is_dropped(host, hive_ws, tmp_path, monkeypatch):
+    """Question: does a reason of the wrong shape or an unknown value never reach the host
+    (its file still holds)?"""
+    import json
+    from core import hive_files, hive_records as hr
+    _host_ws(tmp_path, monkeypatch)
+    body = json.dumps({"first_turn": True, "rows": [], "not_sealed": [
+        {"listed": "/ws/Outputs/a.md", "why": "gone"}, {"listed": "/ws/Outputs/b.md", "why": "vanished"},
+        {"listed": 7, "why": "gone"}, "gone", {"listed": "x" * (hr.LISTED_MAX + 1), "why": "gone"}]}).encode()
+    hr.append(hive_ws, SID, "turn", data=body)
+    assert hive_files._valid_not_sealed(json.loads(body)["not_sealed"]) == [{"listed": "/ws/Outputs/a.md", "why": "gone"}]
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    assert hive_files.not_sealed(DID) == {"/ws/Outputs/a.md": "gone"}
+    # a kept reasons file changed by hand: an unknown value is still not read
+    d = hr.local_dir(DID)
+    (d / hive_files.NOT_SEALED_FILE).write_text(json.dumps({"through": 1, "why": {"/ws/Outputs/c.md": "vanished"}}))
+    assert hive_files.not_sealed(DID) == {}
+
+
+def test_a_newer_reason_outranks_an_older_copy_and_paths_match_in_either_form(host, hive_ws, tmp_path, monkeypatch):
+    """Question: does a reason given after a file came back still count (a newer copy that
+    may exist only on the Hive), does a ``gone`` reason drop once the file came back under
+    either form of its path, and is a turn body that cannot be read read again later?"""
+    import json
+    from core import hive_files, hive_records as hr, swarm_out_results
+    _host_ws(tmp_path, monkeypatch)
+    out = hive_ws / "Outputs" / "so_aaaaaaaaaaaa"
+    report = _write(out / "report.md", "v1")
+    hr.seal_turn(hive_ws, SID, _rows_listing(report))
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    assert hive_files.placed(DID)[0]["local"]
+    monkeypatch.setitem(hr.MAX_BYTES, "file", 20)
+    _write(out / "report.md", "x" * 50)                                 # rewritten past the cap
+    hr.seal_turn(hive_ws, SID, _rows_listing(report, i="b"))
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    assert hive_files.not_sealed(DID) == {report: "too_large"}
+    result = {"work": {"files": [{"path": report, "abs": report}]}}
+    swarm_out_results.attach_local(result, hive_files.placed(DID), hive_files.not_sealed(DID))
+    assert result["work"]["files"][0] == {"path": report, "abs": report, "not_sealed": "too_large"}
+    # gone under the configured name, sealed under the link-resolved one: it came back
+    other = "/elsewhere/ws/Outputs/so_aaaaaaaaaaaa/moved.md"
+    hr.append(hive_ws, SID, "turn", data=json.dumps({"rows": [], "not_sealed": [
+        {"listed": other, "why": "gone", "path": "Outputs/so_aaaaaaaaaaaa/moved.md"}]}).encode())
+    hr.append(hive_ws, SID, "file", data=b"m", path="Outputs/so_aaaaaaaaaaaa/moved.md",
+              listed=str(out / "moved.md"))
+    # a turn body this host cannot read yet is read at a later pull, not skipped
+    hr.append(hive_ws, SID, "turn", data=json.dumps({"rows": [], "not_sealed": [
+        {"listed": "/ws/Outputs/late.md", "why": "gone"}]}).encode())
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    assert other not in hive_files.not_sealed(DID)
+    assert hive_files.not_sealed(DID)["/ws/Outputs/late.md"] == "gone"
+    d = hr.local_dir(DID)
+    late = hr._entry_path(d, [e for e in hr.local_entries(DID) if e["kind"] == "turn"][-1])
+    (d / hive_files.NOT_SEALED_FILE).unlink()                           # read the record again
+    late.rename(late.with_name("away"))
+    hive_files.note_not_sealed(d)
+    assert "/ws/Outputs/late.md" not in hive_files.not_sealed(DID)
+    assert hive_files._load_not_sealed(d)[0] < hr.local_entries(DID)[-1]["seq"]   # not read past it
+    late.with_name("away").rename(late)
+    hive_files.note_not_sealed(d)
+    assert hive_files.not_sealed(DID)["/ws/Outputs/late.md"] == "gone"

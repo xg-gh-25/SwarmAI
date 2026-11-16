@@ -339,6 +339,21 @@ describe('a run card', () => {
     expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();   // the Canvas opens beneath
   });
 
+  it('a listed file the Hive did not seal says why', async () => {
+    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
+      result: { ...RUN.result!, report: 'Done.', report_chars: 5, work: { ...RUN.result!.work, files: [
+        { path: '/hive/ws/Outputs/x/scratch.md', kind: 'content', not_sealed: 'gone' },
+        { path: '/hive/ws/Outputs/x/big.bin', kind: 'other', not_sealed: 'too_large' },
+        { path: '/hive/ws/Outputs/x/odd.md', kind: 'content', not_sealed: 'a_new_reason' }] } } } } as never);
+    const c = await card('fix the widget');
+    fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    const box = await within(overlay).findByTestId('swarm-out-review-files');
+    const why = within(box).getAllByTestId('swarm-out-review-file-not-sealed').map((x) => x.textContent);
+    expect(why).toEqual(['已不在 Hive 上：本轮结束前被移走或删除', '没有带回：超过运行记录能装的大小', '没有带回']);
+    expect(within(box).queryByText('在 Hive 上，没有带回')).toBeNull();
+  });
+
   it('an answer that wrote files on the Hive does not say they came back', async () => {
     vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
       result: { ...RUN.result!, report: 'Done.', report_chars: 5, work: { ...RUN.result!.work, files: [

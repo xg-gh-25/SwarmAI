@@ -282,8 +282,11 @@ function DeliverableTab({ r, full, fullRead, fullFailed, onRetry, waits }: {
             <ItemRow key={`${i}:${f.path ?? ''}`} testId="swarm-out-review-file-hive" data={{ path: f.path ?? '' }}
               badge={<FileTypeIcon name={baseName(f.path ?? '')} size="sm" />} name={baseName(f.path ?? '')}
               folder={shortFolder(dirOf(f.path ?? ''))} folderTitle={f.path}
-              tail={<span className={`ml-auto pl-3 text-[11.5px] whitespace-nowrap ${muted}`} data-testid={f.not_placed ? 'swarm-out-review-file-not-placed' : undefined}>
-                {f.not_placed ? t('swarmOut.review.notPlaced') : t('swarmOut.review.onHive')}</span>} />
+              tail={<span className={`ml-auto pl-3 text-[11.5px] whitespace-nowrap ${muted}`}
+                data-testid={f.not_placed ? 'swarm-out-review-file-not-placed' : f.not_sealed ? 'swarm-out-review-file-not-sealed' : undefined}>
+                {f.not_placed ? t('swarmOut.review.notPlaced')
+                  : f.not_sealed ? t(`swarmOut.review.notSealed.${f.not_sealed}`, { defaultValue: t('swarmOut.review.notSealed.other') })
+                    : t('swarmOut.review.onHive')}</span>} />
           )))}
         </ItemBox>
       )}

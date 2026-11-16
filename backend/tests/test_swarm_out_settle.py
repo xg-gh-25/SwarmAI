@@ -418,6 +418,54 @@ def test_files_not_placed_hold(env, monkeypatch):
     assert st.derive(rows[DID], kept)["settles"]
 
 
+def test_a_listed_file_the_hive_reported_gone_does_not_hold(env, monkeypatch):
+    """A scratch file listed, then moved or deleted before its turn ended: its Hive says
+    it is gone, so nothing of it is left for the release to remove, and the report that
+    came back is placed: the accepted run settles."""
+    from core import hive_files
+    rows, _ = env
+    rows[DID] = _row("document")
+    st.set_verdict(DID, "pass", "", ENDED)
+    scratch = HOME_OUT.replace("r.md", "scratch.md")
+    monkeypatch.setattr(hive_files, "placed", lambda d: [
+        {"listed": HOME_OUT, "path": f"Outputs/{DID}/r.md", "local": "Projects/A/deliverables/hive/r.md"}])
+    reasons: dict = {}
+    monkeypatch.setattr(hive_files, "not_sealed", lambda d: reasons)
+    kept = K(True)
+    kept["result"] = {"work": {"files": [{"path": p, "abs": p} for p in (HOME_OUT, scratch)]}}
+    assert st.derive(rows[DID], kept)["why_not"] == ["files"]          # no word from the Hive yet
+    reasons[scratch] = "gone"
+    d = st.derive(rows[DID], kept)
+    assert "files" not in d["why_not"] and d["settles"]
+
+
+def test_a_file_not_sealed_for_another_reason_or_unreported_still_holds(env, monkeypatch):
+    """Over size, secret, a link, an error: bytes only the Hive may have, so the run
+    holds; and a record from before the reasons (none kept here) holds as before."""
+    from core import hive_files
+    real = hive_files.not_sealed
+    rows, _ = env
+    rows[DID] = _row("document")
+    st.set_verdict(DID, "pass", "", ENDED)
+    monkeypatch.setattr(hive_files, "placed", lambda d: [])
+    kept = K(True)
+    kept["result"] = {"work": {"files": [{"path": HOME_OUT, "abs": HOME_OUT}]}}
+    for why in ("too_large", "secret", "link", "not_regular", "unreadable", "error"):
+        monkeypatch.setattr(hive_files, "not_sealed", lambda d, why=why: {HOME_OUT: why})
+        assert st.derive(rows[DID], kept)["why_not"] == ["files"], why
+    monkeypatch.setattr(hive_files, "not_sealed", lambda d: {"/elsewhere/r.md": "gone"})   # another file
+    assert st.derive(rows[DID], kept)["why_not"] == ["files"]
+    # an older copy is placed, but the newest word is that a newer one was too large
+    monkeypatch.setattr(hive_files, "placed", lambda d: [
+        {"listed": HOME_OUT, "path": f"Outputs/{DID}/r.md", "local": "Projects/A/deliverables/hive/r.md"}])
+    monkeypatch.setattr(hive_files, "not_sealed", lambda d: {HOME_OUT: "too_large"})
+    assert st.derive(rows[DID], kept)["why_not"] == ["files"]
+    monkeypatch.setattr(hive_files, "placed", lambda d: [])
+    monkeypatch.setattr(hive_files, "not_sealed", real)
+    assert hive_files.not_sealed(DID) == {}                            # an old record: no reasons
+    assert st.derive(rows[DID], kept)["why_not"] == ["files"]
+
+
 def test_files_are_read_from_the_placement_record_not_the_summary(env, monkeypatch):
     """A summary written before ``abs`` / ``local`` existed (a run from before them) never
     carries ``local``: the placement record decides, and a file outside Outputs/<id>/ is

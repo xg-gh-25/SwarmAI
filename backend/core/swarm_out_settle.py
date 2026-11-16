@@ -33,7 +33,8 @@ settles:
 - the code is handled (landed in every repository that brought commits back, landed by
   hand, or none came back);
 - the files are here: every returned file the release would remove (under
-  ``Outputs/<id>/``) is placed in the Brain;
+  ``Outputs/<id>/``) is placed in the Brain, or its Hive said it is gone (a file listed,
+  then moved or deleted before its turn ended: nothing of it is left to remove);
 - the lessons are in: the Hive's run record is closed (or the run has none) and every
   lesson it brought is queued for this machine's CDF; or nothing more is pulled (the
   Hive is stopped or gone, or no new entry for the records backstop). No one takes or
@@ -324,24 +325,36 @@ def _final(res: Optional[dict]) -> bool:
 def _files_here(dispatch_id: str, kept_result: dict) -> bool:
     """Every returned file the release would remove is here: one under ``Outputs/<id>/``
     (core/hive_workspace.outputs_rel, the only file directory the release removes) is
-    placed in the Brain, as core/hive_files.placed records it. A file elsewhere on the
-    Hive is not touched by the release, so it holds nothing back. Read from the
-    placement record, never from the ``local`` the result summary carries: a summary
-    written before that field existed never has it, though its files are placed."""
+    placed in the Brain, as core/hive_files.placed records it, unless its Hive's newest
+    word is that it did not seal it for a reason other than ``gone`` (a newer copy that may
+    exist only there: it holds even when an older copy is placed); a file its Hive said is
+    ``gone`` and that never came back (core/hive_files.not_sealed: it no longer existed
+    when its turn ended) holds nothing, as the release removes nothing of it. A file not
+    placed and not reported holds. A file elsewhere on the Hive is not touched by the
+    release, so it holds nothing back. Read from the placement and record, never from the
+    ``local`` the result summary carries: a summary written before that field existed
+    never has it, though its files are placed."""
     from core import hive_files, hive_workspace
     rel = hive_workspace.outputs_rel(dispatch_id).strip("/") + "/"
     here: set = set()
     for p in hive_files.placed(dispatch_id):
         if isinstance(p, dict) and isinstance(p.get("local"), str) and p["local"]:
             here.update(x for x in (p.get("listed"), p.get("path")) if isinstance(x, str))
+    words: Optional[dict] = None
     for f in ((kept_result.get("work") or {}).get("files") or []):
         if not isinstance(f, dict):
             continue
         names = [x for x in (f.get("abs"), f.get("path")) if isinstance(x, str) and x]
         if not any(("/" + n.lstrip("/")).find("/" + rel) >= 0 for n in names):
             continue                                   # not in the release's scope
-        if not here & set(names):                      # placed under the path it was listed by
+        if words is None:                              # the Hive's newest word, by listed path
+            words = hive_files.not_sealed(dispatch_id)
+        said = {words[n] for n in names if n in words}
+        if said and said != {"gone"}:                  # a copy that may exist only on the Hive
             return False
+        if said or here & set(names):                  # gone, or placed under the path it was listed by
+            continue
+        return False
     return True
 
 
