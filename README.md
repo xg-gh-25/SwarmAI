@@ -101,25 +101,25 @@ Every unit arrives whole: recall decides which entries to show, never how much o
 
 ---
 
-## Autonomous Guideline
+## The Autonomous Engineering Organization
 
-How domain-knowledge-driven autonomous delivery works, page by page. The full deck is a single HTML file: [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html) · [中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) (download it and open it in a browser; the numbered buttons or ← → switch pages, and Builder Loop has its own step-through demo).
+SwarmAI is a working practice of a bigger idea: an organization's advantage is not how many AI tools it uses, but whether its operating model of people + agents keeps compounding organizational intelligence. The deck walks through it in five parts: where the bottleneck moved, a new operating model, from AI-Driven to AI-Autonomous, building trust, and the new engineering organization. The full deck is a single HTML file: [English](./docs/decks/beyond-ai-adoption-v3/beyond-ai-adoption-v3-en.html) · [中文](./docs/decks/beyond-ai-adoption-v3/beyond-ai-adoption-v3-zh.html) (download it and open it in a browser; ← → turn pages, and Builder Loop has its own step-through demo). Every page with notes, in Chinese: [Discussion #119](https://github.com/xg-gh-25/SwarmAI/discussions/119).
 
-![AI-Autonomous, Domain Knowledge Driven](./assets/readme/autonomous/en/00-cover.png)
+![What an Autonomous Engineering Organization looks like](./docs/decks/beyond-ai-adoption-v3/en/02-Definition.png)
 
-![Core Logic](./assets/readme/autonomous/en/01-core-logic.png)
+![Autonomous Rate as the steering wheel](./docs/decks/beyond-ai-adoption-v3/en/05-Autonomous-Rate.png)
 
-![Two Loops, One Brain](./assets/readme/autonomous/en/02-two-loops-one-brain.png)
+![Core Logic](./docs/decks/beyond-ai-adoption-v3/en/12-Core-Logic.png)
 
-![Inside the Builder Loop](./assets/readme/autonomous/en/03-inside-the-builder-loop.png)
+![Two Loops, One Brain](./docs/decks/beyond-ai-adoption-v3/en/13-Two-Loops-One-Brain.png)
 
-![Pipeline Run](./assets/readme/autonomous/en/04-pipeline-run.png)
+![Domain Knowledge Management](./docs/decks/beyond-ai-adoption-v3/en/17-Domain-Knowledge-Management.png)
 
-![Cognition Distill Flow](./assets/readme/autonomous/en/05-cognition-distill-flow.png)
+![Quality and security before the PR](./docs/decks/beyond-ai-adoption-v3/en/21-Before-the-PR.png)
 
-![Autonomous Agent Tenets](./assets/readme/autonomous/en/06-tenets.png)
+![Summary: five questions, our answers](./docs/decks/beyond-ai-adoption-v3/en/27-Summary.png)
 
-![One Move, Three Outcomes](./assets/readme/autonomous/en/07-one-move-three-outcomes.png)
+![The next advantage](./docs/decks/beyond-ai-adoption-v3/en/28-The-Next-Advantage.png)
 
 ---
 
