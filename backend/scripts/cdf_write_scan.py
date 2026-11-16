@@ -11,7 +11,8 @@ caller decides whether a hit is a real governed write or a documented exemption
 (``tests/cdf_materializer_allowlist.txt``).
 
 Sinks: ``open`` / ``io.open`` / ``codecs.open`` / ``os.fdopen`` / ``Path.open`` with a
-write mode, or a mode the scanner cannot read (fail closed); ``os.open`` with a write
+write mode, or a mode the scanner cannot read (fail closed; an ``x.open(...)`` with a
+``timeout=`` keyword is a URL opener, since no file open takes one); ``os.open`` with a write
 flag; ``write_text`` / ``write_bytes`` / ``touch`` / ``unlink``; ``os.remove`` /
 ``os.unlink`` / ``os.truncate`` / ``os.replace`` / ``os.rename``; ``Path.rename``;
 ``Path.replace`` (one argument, so ``str.replace`` is not one); ``shutil.move`` /
@@ -86,6 +87,8 @@ def sink_kind(call: ast.Call) -> str | None:
     if name in _OPEN_FUNCS:
         return "open" if _mode_is_write(call, 1) else None
     if leaf == "open" and isinstance(call.func, ast.Attribute):  # Path.open(mode)
+        if any(k.arg == "timeout" for k in call.keywords):
+            return None  # a URL opener's open(req, timeout=): no file open takes timeout
         return "open" if _mode_is_write(call, 0) else None
     if name in _OS_SINKS:
         return name

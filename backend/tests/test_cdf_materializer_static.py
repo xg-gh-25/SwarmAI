@@ -94,6 +94,13 @@ def test_reads_and_string_replace_are_not_sinks(statement: str) -> None:
     assert not _kinds(statement)
 
 
+def test_a_url_opener_with_a_timeout_is_not_a_file_open() -> None:
+    """``opener.open(req, timeout=...)`` (urllib) is not a file: no file open takes a
+    timeout. Without it the unreadable first argument would read as a write mode."""
+    assert not _kinds("opener.open(a, timeout=120)")
+    assert "open" in _kinds("p.open(m)")           # the same shape without it stays a sink
+
+
 def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
     for rel, text in files.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)

@@ -60,14 +60,12 @@ core/product_registry.py:ProductRegistry._mutate  # exempt: product registry loc
 core/projection_layer.py:ProjectionLayer._cleanup_stale_entries  # exempt: projected skill copies under .claude/skills/
 core/projection_layer.py:ProjectionLayer.project_skills  # exempt: projected skill copies under .claude/skills/
 core/projection_layer.py:project_experts  # exempt: projected expert prompts under .claude/experts/
-core/runtime_hooks.py:_append_correction  # exempt: corrections JSONL log
 core/runtime_hooks.py:create_agent_tool_audit_hook._hook._classify_and_write  # exempt: agent tool audit record
 core/runtime_hooks.py:create_session_checkpoint._hook._write_checkpoint  # exempt: session checkpoint JSON
 core/runtime_hooks.py:write_session_run_map  # exempt: session-to-run map
 core/security_hooks.py:create_active_run_commit_gate._gate  # exempt: via gate_force: force_bypass audit log
 core/security_hooks.py:create_audit_marker_write_gate.audit_marker_write_gate  # exempt: via gate_force: force_bypass audit log
 core/security_hooks.py:create_pre_tool_logger.pre_tool_logger  # exempt: via sel.append_event: security event log
-core/security_hooks.py:load_dangerous_patterns  # exempt: dangerous_commands.json default
 core/session_router.py:SessionRouter._run_conversation_impl  # exempt: opener.open(session_id, unit) is a session opener, not a file (mode unreadable: flagged fail-closed)
 core/session_state_persistence.py:load_persisted_state  # exempt: session state file
 core/session_state_persistence.py:persist_session_state  # exempt: session state file
@@ -85,7 +83,6 @@ core/swarm_workspace_manager.py:SwarmWorkspaceManager._untrack_private_content  
 core/swarm_workspace_manager.py:SwarmWorkspaceManager._untrack_projections  # exempt: git index marker
 core/swarm_workspace_manager.py:SwarmWorkspaceManager._write_project_metadata  # exempt: .project.json
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.create_folder_structure  # exempt: workspace .gitignore
-core/swarm_workspace_manager.py:SwarmWorkspaceManager.create_project  # exempt: via write_setup_state: project setup-state JSON (DDD files are provisioned only-if-absent)
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.migrate_project_to_six_section._migrate_layout_to_numbered._relocate  # exempt: governed docs move through governed_edit.apply_user_edit; shutil.move only for non-governed dirs
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.migrate_project_to_six_section._prune_legacy_scaffold  # exempt: removes shipped legacy README stubs and empty scaffold dirs, none governed
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.provision_project_ddd._create_ddd  # exempt: provisioning; creates DDD files only when absent
@@ -174,9 +171,6 @@ templates/ddd-skills/s_ddd-persist/scripts/locked_write.py:locked_field_modify  
 templates/ddd-skills/s_ddd-persist/scripts/locked_write.py:locked_read_modify_write  # exempt: runs only on hosts without SwarmAI; refuses when SWARM_BACKEND_BIN is set (CDF writes DDD docs there)
 utils/file_lock.py:md_lock  # exempt: the .lock sidecar
 scripts/probe_ddd.py:_bootstrap_holds  # exempt: eval probe fixture in a temp workspace
-scripts/cdf_rehearsal_replay.py:_drain  # exempt: drives CDF's own worker and writer, only on a workspace copy (guard_paths refuses ~/.swarm-ai)
-scripts/cdf_rehearsal_replay.py:main  # exempt: writes the JSON report to --report; governed writes go through _drain
-core/project_agent_draft.py:apply  # exempt: the Project Agent definition (YAML) the drafting step writes, not governed knowledge
 scripts/eval_runner.py:write_gate_manifest  # exempt: eval gate input-hash manifest
 core/project_agent_session.py:_run_one  # exempt: the gate subprocess I/O files in its own temp dir (in.json / err.txt)
 core/code_intel/local_roots.py:_locked  # exempt: local-roots registry JSON lock (bindings dir)
@@ -192,5 +186,30 @@ core/ddd_format.py:_append_moved  # exempt: writes the Brain's deep reference (2
 core/ingestion/pipeline_v2.py:_resolved  # exempt: reads the CDF store's root trust (lineage_external opens it); writes no governed file
 core/memory_injection.py:recorded_selection  # exempt: reads the latest injection selection from the CDF store (standing.connect, read-only here); writes no governed file
 scripts/brain_cleanup.py:_backup  # exempt: writes a tar.gz backup under <data dir>/backups before any cleanup; not a governed file
-scripts/cdf_rehearsal_replay.py:_enqueue  # exempt: hands a session to the after-session review, which writes only through the CDF inbox
 scripts/cdf_move_misrouted.py:run  # exempt: one-time move; files written through governed_edit, records updated in one transaction
+core/attention_authority.py:_collect_template_drift  # exempt: names EVOLUTION.md only in a proposal message; via context_template_drift.pending_drifts it reads the drift state (its shared reader can move a corrupt state file aside), writes no context file
+core/brain_versions.py:_remove_at  # exempt: removes a kept Brain version or its staging dir under Hive/brains/<brain>/, never the live Brain (marker only in the module docstring)
+core/brain_versions.py:keep  # exempt: copies a Brain's files into the version cache Hive/brains/<brain>/versions/<id>/; the live Brain is only read (marker only in the module docstring)
+core/cognition.py:record_library_refs  # exempt: names the context files to read them; writes only the Library hit-id cache <data dir>/state/cognition_library_refs.jsonl
+core/context_directory_loader.py:ContextDirectoryLoader.ensure_directory  # exempt: template seeding (user/agent-owned context files only when absent); via context_template_drift.record_seed: the template drift state and .seed snapshot
+core/ddd_setup_state.py:_write_record  # exempt: names ddd_path to read the DDD docs; writes only .artifacts/setup.json
+core/ingestion/health.py:_pass  # exempt: names the context files for its checks; via north_star.refresh it writes only the north-star snapshot JSON in the app data dir
+core/project_agent_draft.py:_write_draft  # exempt: the Project Agent definition (project-agent.yaml) and its kept previous drafts under .artifacts/project-agent/, not governed knowledge
+core/project_agent_session.py:create_pinned_run  # exempt: via run_protocol create_run: the pipeline run's own state dir (marker only in a docstring)
+core/security_hooks.py:_migrate_patterns_file  # exempt: dangerous_commands.json backup copy and rewrite (app data dir)
+core/security_hooks.py:_write_patterns_file  # exempt: dangerous_commands.json (app data dir)
+core/security_hooks.py:create_ask_question_gate.ask_question_gate  # exempt: via swarm_out_wait_card.forward: the Swarm Out wait-card JSON under the swarm-out state dir
+core/session_router.py:_dispatch_digest  # exempt: via swarm_out_follow.mark_seen: state/swarm-out/seen/<session>.json
+core/session_unit.py:SessionUnit._close_cli_gracefully  # exempt: via kill_audit.record: kill audit log
+core/session_unit.py:_kill_surviving  # exempt: via kill_audit.record: kill audit log
+desktop_main.py:run_hook  # exempt: via host_hooks.main: the pipeline run oplock and hook state, not a governed file (marker only in the module docstring)
+desktop_main.py:run_ingest  # exempt: eval-export writes the --out JSONL; governed writes are the daemon's CDF writer (marker only in the module docstring)
+desktop_main.py:run_pipeline_v1  # exempt: via run_protocol cli_main: pipeline run state (marker only in the module docstring)
+desktop_main.py:write_startup_log  # exempt: startup.log in the log dir (marker only in the module docstring)
+scripts/da_resummarize.py:_rewrite_rows  # exempt: via daily_activity_writer._atomic_write: re-renders DailyActivity day files (working memory) after backup
+scripts/meta_shape_migrate.py:_identities  # exempt: writes a copy into a TemporaryDirectory to parse it (marker only in the module docstring)
+scripts/meta_shape_migrate.py:main  # exempt: one-time; governed files go through governed_edit.apply_user_edit, os.replace only for non-governed deep-reference files, copy2 for the backup
+scripts/migrate_followups_to_todos.py:_append  # exempt: the migration's decision record JSONL
+scripts/migrate_followups_to_todos.py:_tar_backup  # exempt: tar.gz backup of IMPROVEMENT/TIMELINE before the migration; the docs are only read
+scripts/migrate_followups_to_todos.py:backups  # exempt: ToDo list backup JSON (and the tar.gz via _tar_backup)
+scripts/migrate_followups_to_todos.py:review_closed  # exempt: backs up and rewrites the migration's decision record JSONL
