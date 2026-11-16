@@ -890,7 +890,9 @@ def open_runs_by_hive(strict: bool = False) -> "dict[str, int] | None":
             if not rec.get("handled_at") \
                     and swarm_out_settle.closed_state(rec, r["dispatch_id"]) is not None:
                 continue
-        except Exception:  # noqa: BLE001 — its result unreadable: count it (strict = unknown)
+        except Exception as e:  # noqa: BLE001 — its result unreadable: count it (strict = unknown)
+            logger.warning("swarm_out: open-run check of %s failed (%s); counted as open",
+                           r.get("dispatch_id"), type(e).__name__)
             if not strict:
                 continue
         out[str(r.get("hive"))] = out.get(str(r.get("hive")), 0) + 1
