@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Callable, Any, Mapping
 
-from core.run_protocol import checks, decision, schemas
+from core.run_protocol import checks, decision, lifecycle, schemas
 from core.run_protocol.store import AuditStore
 
 
@@ -245,9 +245,14 @@ def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str 
         spec.check_id for spec in checks.stage_checks(profile, stage, variant)]
     forced = dict(forced or {})
     close_interrupted_attempt(store, at=at)
+    payload: dict[str, Any] = {"check_ids": roster}
+    if stage in lifecycle.CONTINUE_ON_EXHAUSTED:
+        # a third refusal degrades this stage and the run goes on to the next one, so
+        # REVIEW and TEST still judge the change (the rule is logged with the attempt)
+        payload["on_exhausted"] = "continue"
     attempt_event, _ = store.append_new(
         writer=store.authority.writer("cli"), kind="stage_attempt", at=at,
-        stage=stage, attempt=attempt, payload={"check_ids": roster},
+        stage=stage, attempt=attempt, payload=payload,
     )
     results: list[dict[str, Any]] = []
     for check_id in roster:

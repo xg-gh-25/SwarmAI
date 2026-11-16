@@ -554,6 +554,10 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         bugfix = False                  # an unknown or removed profile: nothing to say
     fail_to_pass = _fail_to_pass(event_rows) if bugfix else None
     no_fail_to_pass = bugfix and not fail_to_pass
+    # a PLAN the schema refused until its attempts ran out: the run had no DESIGN_SPEC;
+    # one line in the Quality cell, never a block
+    refused = ([PLAN_REFUSED] if (projection.get("stages") or {}).get("plan") == "degraded"
+               else [])
     landing = projection.get("landing")
     reason = _reason(projection, event_rows)
     from core.run_protocol.lifecycle import QUALITY_BLOCK_REASONS   # one list
@@ -563,7 +567,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         quality_verdict = "N/A"
     elif landing == "human_override" or passed < required or closed < total \
             or open_checks or not_run or red_at_base or carried or unreviewed \
-            or no_fail_to_pass:
+            or no_fail_to_pass or refused:
         quality_verdict = "WARN"
     else:
         quality_verdict = "PASS"
@@ -579,7 +583,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                + (["tests not run again after main moved"] if carried else [])
                + (["landed a difference no review saw"] if unreviewed else [])
                + ([NO_FAIL_TO_PASS] if no_fail_to_pass else [])
-               + no_mutation}
+               + refused + no_mutation}
 
     # Interventions (design 2026-11-01-brain-eval-and-runs §3; core.run_interventions):
     # the person's answers and rescues (a person's landing). Accepting a finding is review,
@@ -818,6 +822,9 @@ def _quality_text(quality: Mapping[str, Any], reason: Any) -> str:
 # a bugfix run with no reported command red on its base and green on the change
 NO_FAIL_TO_PASS = ("no fail-to-pass test: no reported command fails on the run's base "
                    "(base_result fail, pipeline-v1 base-tree) and passes on the change")
+# a PLAN the schema refused until its attempts ran out (lifecycle.CONTINUE_ON_EXHAUSTED,
+# or an older run that ended there): the run has no DESIGN_SPEC
+PLAN_REFUSED = "PLAN refused: the run has no DESIGN_SPEC"
 
 # one short sentence per open audit check, for the Quality cell (XG 2026-10-26)
 OPEN_TEXT = {"RV-1a": "correctness review not answered",

@@ -60,6 +60,13 @@ REVIEW_REOPEN_CAP = 2
 # and the REPORT says no review saw it (design 2026-11-01-pipeline-delivery-friction N1).
 DELIVER_REOPEN_CAP = 1
 DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
+# stages whose third failed attempt does not end the run: the stage is degraded and the
+# run goes on to the next stage, so REVIEW and TEST still judge the change and the
+# normal landing guards decide (a PLAN document the schema keeps refusing; any other
+# stage still ends the run not_landed with checks_exhausted). Its producer (documents.complete_stage) records the rule on
+# each attempt as ``on_exhausted: "continue"``: a log written before the rule has no
+# such field and folds as it did.
+CONTINUE_ON_EXHAUSTED = frozenset({"plan"})
 # the not-landed reasons that ARE a count cap being hit
 REASON_CAPS = {"checks_exhausted": "stage_attempt", "land_conflict": "land_attempt",
                "final_stale": "land_attempt", "framing_rejected": "gate0_round",
@@ -292,6 +299,11 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         not isinstance(check, str) or not check for check in check_ids
     ) or len(set(check_ids)) != len(check_ids):
         raise LifecycleError("stage_attempt check_ids must be unique text")
+    on_exhausted = event["payload"].get("on_exhausted")
+    if on_exhausted is not None and (on_exhausted != "continue"
+                                     or stage not in CONTINUE_ON_EXHAUSTED):
+        raise LifecycleError("on_exhausted is \"continue\", only for "
+                             f"{sorted(CONTINUE_ON_EXHAUSTED)}")
     if stage == "land":
         valid_land_sets = {NORMAL_LAND_CHECKS, LG_CHECKS, SKIP_LAND_CHECKS}
         if frozenset(check_ids) not in valid_land_sets:
@@ -314,6 +326,7 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     run["open_attempt"] = {
         "event_id": event["event_id"], "stage": stage, "attempt": expected,
         "check_ids": tuple(check_ids), "results": {}, "details": {}, "causes": {},
+        "on_exhausted": on_exhausted,
     }
 
 
@@ -374,6 +387,13 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
                 _set_pending(run, "land_conflict" if conflict else "final_stale")
         return
     if number - run["attempt_base"].get(stage, 0) - lost >= 3:
+        if attempt.get("on_exhausted") == "continue":
+            # the run goes on (CONTINUE_ON_EXHAUSTED): the stage degraded, the next one
+            # open, no not-landed outcome; the audit says the stage was refused
+            _open_next(run)
+            run["stages"][stage] = "degraded"
+            _schedule(run, event, "active")
+            return
         run["stages"][run["stage"]] = "degraded"
         _set_pending(run, "checks_exhausted")
         run["stage"] = "deliver"

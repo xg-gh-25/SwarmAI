@@ -2532,7 +2532,8 @@ class RunEngine:
                                     context=self.check_context(), at=_now(),
                                     attempt=self._next_attempt(stage), forced=forced)
             self._settle(); self.write_projection()
-            return {"ok": False, "error": str(exc), **result, "state": self.projection()}
+            return self._refused_out(stage, {"ok": False, "error": str(exc), **result,
+                                             "state": self.projection()})
         if stage == "evaluate" and lifecycle.caps(profile).gate0 != "never":
             gate = self.gate0_status(artifact if isinstance(artifact, Mapping) else None)
             if gate["required"]:
@@ -2598,7 +2599,7 @@ class RunEngine:
         self._settle()
         if not result["passed"]:
             self.write_projection()
-            return {"ok": False, **result, "state": self.projection()}
+            return self._refused_out(stage, {"ok": False, **result, "state": self.projection()})
         payload = {"stage_attempt_event_id": result["stage_attempt_event_id"]}
         if stage == "review":       # the code REVIEW signed off on (S6-2: LG-1, RV-4)
             payload.update(bases={k: v for k, v in (context.run.get("run_bases") or {}).items()
@@ -2617,6 +2618,17 @@ class RunEngine:
         out = {"ok": True, **result, "state": self.projection()}
         if design:
             out["knowledge_design"] = design
+        return out
+
+    @staticmethod
+    def _refused_out(stage: str, out: dict[str, Any]) -> dict[str, Any]:
+        """A refused attempt's response; when it was the last one of a stage the run
+        goes on from (lifecycle.CONTINUE_ON_EXHAUSTED), say so: ``ok`` false alone
+        reads as the run having stopped."""
+        if stage in lifecycle.CONTINUE_ON_EXHAUSTED and out["state"]["stage"] != stage:
+            out["note"] = (f"{stage.upper()} was refused 3 times: the run goes on to "
+                           f"{out['state']['stage'].upper()} without its document; REVIEW "
+                           "and TEST still decide, and the audit says it was refused")
         return out
 
     def _doc_paths_since_review(self, context: checks.CheckContext) -> dict[str, list[str]]:

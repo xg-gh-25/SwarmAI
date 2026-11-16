@@ -92,6 +92,15 @@ def test_add_offline_case_needs_prompt_steps_and_a_two_sided_rubric(svc, change,
         svc.add_case(_offline("OFF_BAD", **change))
 
 
+@pytest.mark.parametrize("rubric", [
+    "Passing: the answer names port 8080. Failure: it guesses.",
+    "PASS only if it names port 8080; failing it guesses.",
+])
+def test_a_rubric_may_name_its_pass_and_fail_cases_in_any_listed_form(svc, rubric):
+    case = svc.add_case(_offline("OFF_FORMS", decision_rubric=rubric))
+    assert case["decision_rubric"] == rubric
+
+
 def test_add_offline_case_derives_method_and_tier(svc, tmp_path):
     case = svc.add_case(_offline("OFF1"))
     assert case["eval_method"] == "behavior" and case["tier"] == "behavior"

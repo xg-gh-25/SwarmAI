@@ -385,6 +385,9 @@ def _unreviewed_landing(context: CheckContext, expected: list[str]) -> list[str]
     if any(all(row.get(repo) == current[repo] for repo in expected)
            for row in reviewed if isinstance(row, Mapping)):
         return []
+    if not any(isinstance(row, Mapping) for row in reviewed):
+        # no REVIEW of this run ever completed (its run ended before REVIEW)
+        return [NEVER_REVIEWED + ": no REVIEW of this run completed; it cannot land"]
     return [NEVER_REVIEWED + ": REVIEW completed on other code (the code changed after "
             "REVIEW); it cannot land"]
 

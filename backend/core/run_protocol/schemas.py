@@ -691,17 +691,35 @@ def validate_design_spec(document: Any, *, variant: str,
 
 
 
+# a failure step's condition names the failure with one of these words in one of its
+# forms (fails, failing, errors, rejects, denies: what the PLAN card's "says fail,
+# error, invalid, reject or denied" promises), or with one of the Chinese words. The
+# forms are listed: a word that only starts like one (failover, invalidate) is a
+# normal step, not a failure
+_FAILURE_WORD = re.compile(
+    r"(?:^|\W)(?:fail(?:s|ed|ing|ures?)?|errors?|invalid(?:ated)?"
+    r"|reject(?:s|ed|ing|ions?)?|den(?:y|ies|ied|ying|ials?))(?:\W|$)"
+    r"|失败|错误|拒绝|无效", re.I)
+# the DS-6 refusal: what a step must look like, so one more attempt can satisfy it
+FAILURE_EDGE_MESSAGE = (
+    "must include a separate failure step: a ';'- or line-separated "
+    "'<failure condition> -> <outcome>' whose condition (the text left of its first "
+    "'->') says fail, error, invalid, reject or deny, or one of their forms (fails, "
+    "failing, failure, errors, rejected, denied), or 失败/错误/拒绝/无效; a failure "
+    "named only in the outcome does not count. e.g. 'tests fail -> stop, fix before "
+    "commit'")
+
+
 def _has_explicit_failure_edge(flow: str) -> bool:
-    """A failure branch is a separate ``failure-condition -> outcome`` edge."""
+    """A failure branch is a separate ``failure-condition -> outcome`` edge: a step
+    whose condition (left of its first ``->``) names the failure."""
     for edge in re.split(r"[;\n]+", flow):
         match = re.fullmatch(r"\s*(.+?)\s*->\s*(.+?)\s*", edge)
-        if match and re.search(
-            r"(?:^|\W)(?:fail(?:ure|ed)?|error|invalid|reject(?:ed)?|denied)(?:\W|$)"
-            r"|失败|错误|拒绝|无效",
-            match.group(1), re.I,
-        ):
+        if match and _FAILURE_WORD.search(match.group(1)):
             return True
     return False
+
+
 def validate_contract(requirements: Mapping[str, Any], design: Mapping[str, Any], *,
                       requirement_variant: str, design_variant: str,
                       profile: str, existing_files: set[str] | None = None) -> list[SchemaIssue]:
@@ -752,6 +770,5 @@ def validate_contract(requirements: Mapping[str, Any], design: Mapping[str, Any]
     if design_variant == "full" and isinstance(design.get("design"), Mapping):
         flow = design["design"].get("flow")
         if isinstance(flow, str) and not _has_explicit_failure_edge(flow):
-            _issue(issues, "DS-6", "design.flow",
-                   "must include an explicit failure-condition -> outcome edge")
+            _issue(issues, "DS-6", "design.flow", FAILURE_EDGE_MESSAGE)
     return issues

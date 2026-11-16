@@ -46,7 +46,7 @@ direct is for a small, unambiguous change: `create --profile direct --requiremen
 - REQUIREMENTS uses structured EARS fields. DESIGN_SPEC references R/P/F/T/X IDs.
 - Every stage attempt evaluates the complete registered check roster and returns all failures together.
 - `stage`, `land`, and `push` effects are independent. A land-only check never blocks stage completion.
-- Mechanical failure is fixed autonomously or reaches a bounded not-landed terminal state. It never becomes a user question.
+- Mechanical failure is fixed autonomously or reaches a bounded not-landed terminal state (a PLAN refused three times instead goes on to BUILD, REVIEW and TEST: the PLAN card). It never becomes a user question.
 
 ## Expert handouts
 

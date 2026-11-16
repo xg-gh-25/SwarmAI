@@ -309,8 +309,10 @@ def gate_dimension(case: dict) -> tuple[bool, list[str]]:
     return True, []
 
 
-_RUBRIC_PASS = re.compile(r"\bpass(es|ed)?\b|通过", re.I)
-_RUBRIC_FAIL = re.compile(r"\bfail(s|ed)?\b|不通过|失败", re.I)
+# a rubric names its pass and its fail case, in any of these forms ("Passing: ...",
+# "on failure ...")
+_RUBRIC_PASS = re.compile(r"\bpass(es|ed|ing)?\b|通过", re.I)
+_RUBRIC_FAIL = re.compile(r"\bfail(s|ed|ing|ures?)?\b|不通过|失败", re.I)
 
 
 def gate_offline(case: dict) -> tuple[bool, list[str]]:

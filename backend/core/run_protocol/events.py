@@ -202,7 +202,12 @@ EVENT_SPECS: dict[str, EventSpec] = {
                                 # the Brain's checks a row named: {id: result}
                                 "checks": dict}),
     "stage_attempt": _spec("cli", ("stage", "attempt"), "stage",
-                           {"check_ids": list}),
+                           {"check_ids": list},
+                           # on_exhausted "continue": a third failed attempt of this
+                           # stage degrades it and opens the next one instead of ending
+                           # the run (lifecycle.CONTINUE_ON_EXHAUSTED); absent: the
+                           # run ends not_landed(checks_exhausted), as in older logs
+                           {"on_exhausted": str}),
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),
                    "payload.check_id", {"stage_attempt_event_id": str, "check_id": str,
                    "passed": bool, "detail": str},
