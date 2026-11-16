@@ -391,6 +391,14 @@ def test_sweep_releases_a_legacy_row_without_git_common_dir(env):
     assert not rw.wt_path(RUN, "swarmai").exists()
     data = json.loads((rd / "run.json").read_text())
     assert data["worktrees"][0]["state"] == "released"
+    # the release records the main's common dir, so the next sweep finds the run's
+    # branch (_sweep_branches names mains only from git_common_dir)
+    assert data["worktrees"][0]["git_common_dir"] == os.path.realpath(str(env["main"] / ".git"))
+    branch = f"refs/heads/{rw.branch_name(RUN)}"
+    assert subprocess.run(["git", "-C", str(env["main"]), "show-ref", "--verify", "-q", branch]).returncode == 0
+    rep2 = rw.sweep(ws, owner_active=lambda sid: False)
+    assert any(RUN in b for b in rep2["branches"]), rep2
+    assert subprocess.run(["git", "-C", str(env["main"]), "show-ref", "--verify", "-q", branch]).returncode != 0
 
 
 def test_sweep_keeps_a_legacy_row_whose_main_is_another_repo(env):

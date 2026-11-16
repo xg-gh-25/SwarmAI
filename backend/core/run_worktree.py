@@ -1347,6 +1347,11 @@ def release(run_id: str, run_state: dict, mains: "dict[str, Path]", reason: str,
             continue
         try:
             path = _safe_to_touch(run_id, name, main)
+            if not entry.get("git_common_dir"):
+                # a row written before the field existed: record the common dir of the
+                # main git named for it, so _sweep_branches finds its run/<id> branch
+                # once the worktree is gone (it names mains only from this field)
+                entry["git_common_dir"] = _common_dir(main)
             # *landed*: the repos the run's SIGNED landing says landed; a row claiming
             # "integrated" for any other repo is snapshotted like an active one
             if entry.get("state") == "integrated" and (landed is None or name in landed):
