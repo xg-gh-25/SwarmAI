@@ -139,7 +139,7 @@ built on the definition the rest of CDF already uses, never a second copy of it.
 | # | Check | Measured (7 days unless said) | Requirement |
 |---|---|---|---|
 | C1 | every session reviewed | sessions with a user message since the first review job, older than `s2_jobs.MAX_WAIT + 1h`, with no review job | 0 |
-| C2 | reviews succeed | failed review jobs; S7 attempts `failed` of those finished (a `running` one is neither) | 0 / ≤ 10% |
+| C2 | reviews succeed | failed review jobs; S7 attempts `failed` (or whose relations turn failed) of those finished (a `running` one is neither). A job or attempt that failed because the model could not be reached (`s2_jobs.model_unreachable`: credentials not loaded, API server not reachable) is neither, and is reported as `unreachable` | 0 / ≤ 10% |
 | C3 | review output valid | the validator's refusals over units, as `queries.review_health` counts them | ≤ 5% |
 | C4 | nothing stuck | `status.stalls` (what Need You raises) and units waiting over 24 h, parked deferrals (`PARKED_DEFER_REASONS`) excepted | 0 |
 | C5 | every-turn files keep the rule | written units with a basis row: STEERING/USER/TOOLS not `user`; MEMORY/EVOLUTION neither `user` nor `measured` nor admitted as a repeat (`version_vector.admitted_by`) — the stores and rule of `pipeline_v2._admitted` | 0 |

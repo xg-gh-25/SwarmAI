@@ -84,6 +84,18 @@ def stalls(conn: sqlite3.Connection, *, now: datetime | None = None) -> list[str
     if due and due[0][0]:
         waited = current - (_parse(due[0][0]) or current)
         out.append(f"a session job due {int(waited.total_seconds() // 60)} min ago has not started")
+    else:
+        # a job postponed again and again (no memory, no credentials, the model not
+        # reachable) moves its next attempt each time, so it is never "due" for long:
+        # one first requested longer ago than any planned wait has not been reviewed
+        from .s2_jobs import MAX_WAIT
+        waiting = _rows(conn, "SELECT MIN(requested_at) FROM ingestion_s2_jobs WHERE state='queued' "
+                              "AND requested_at<?",
+                        ((current - MAX_WAIT - JOB_OVERDUE_AFTER).isoformat(),))
+        if waiting and waiting[0][0]:
+            waited = current - (_parse(waiting[0][0]) or current)
+            out.append(f"a session job requested {int(waited.total_seconds() // 3600)} h ago "
+                       "has not been reviewed")
     running = _rows(conn, "SELECT COUNT(*) FROM ingestion_s2_jobs WHERE state='running' AND started_at<?",
                     (before,))
     if running and running[0][0]:

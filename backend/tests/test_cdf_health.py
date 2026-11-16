@@ -390,6 +390,50 @@ def test_a_review_whose_relations_turn_failed_is_an_error(env):
     assert c2["value"]["errored"] == 1 and c2["value"]["attempts"] == 3 and c2["status"] != "pass"
 
 
+# ── C2 judges the reviews that reached the model: an outage (no credentials, no DNS) is
+#    counted apart, never as a review that failed ─────────────────────────────────────
+
+CREDENTIALS = ("RuntimeError: review failed: success: API Error: Could not load AWS credentials "
+               "\u00b7 Could not load credentials from any providers")
+ENOTFOUND = ("RuntimeError: review failed: success: API Error: Can't reach the API server "
+             "\u2014 check your internet or DNS (ENOTFOUND)")
+
+
+def _attempts(env, rows):
+    for i, (status, error) in enumerate(rows):
+        env["ing"].execute("INSERT INTO extraction_attempts(attempt_id,source,evidence_range,extractor_version,"
+                           "started_at,status,error) VALUES (?,?,?,?,?,?,?)",
+                           (f"e{i}", "S7", "{}", "v", iso(timedelta(hours=-i)), status, error))
+
+
+def _c2(env):
+    return next(c for c in health.run_checks(health._ingestion_ro(), None, env["ws"], NOW) if c["id"] == "C2")
+
+
+def test_c2_does_not_count_a_model_that_could_not_be_reached(env):
+    """The measured week: half the attempts failed, every one on the credentials or the
+    DNS error, and each session was reviewed on a later attempt."""
+    _attempts(env, [("failed", CREDENTIALS)] * 20 + [("failed", ENOTFOUND)] * 13 + [("ok", None)] * 34)
+    env["ing"].execute("INSERT INTO ingestion_s2_jobs(session_id,reason,state,requested_at,finished_at,error) "
+                       "VALUES ('s-old','session_end','failed',?,?,?)", (iso(), iso(), CREDENTIALS))
+    c2 = _c2(env)
+    assert c2["status"] == "pass"
+    assert c2["value"] == {"failed": 0, "errored": 0, "attempts": 34, "unreachable": 34}
+
+
+def test_c2_still_fails_on_other_review_errors(env):
+    _attempts(env, [("failed", CREDENTIALS)] * 5 + [("failed", "RuntimeError: model down")] * 2
+              + [("ok", None)] * 8)
+    c2 = _c2(env)
+    assert c2["status"] == "fail" and c2["value"]["errored"] == 2 and c2["value"]["attempts"] == 10
+    env["ing"].execute("DELETE FROM extraction_attempts WHERE error LIKE '%model down%'")
+    assert _c2(env)["status"] == "pass"
+    env["ing"].execute("INSERT INTO ingestion_s2_jobs(session_id,reason,state,requested_at,finished_at,error) "
+                       "VALUES ('s-bad','session_end','failed',?,?,'RuntimeError: model down')", (iso(), iso()))
+    c2 = _c2(env)
+    assert c2["status"] == "fail" and c2["value"]["failed"] == 1
+
+
 def test_a_pass_refreshes_the_north_star_headline(env, monkeypatch):
     """The prompt's headline (core.north_star) follows every health pass."""
     from core import north_star

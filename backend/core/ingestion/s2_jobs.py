@@ -20,9 +20,15 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
   waits ``RETRY_DELAY`` x attempts before it can be claimed again: an immediate retry
   with nothing changed would fail the same way.
 - ``set_waker(fn)`` is called by the executor so ``request`` can wake it.
+- ``postpone(conn, ...)`` puts a claimed job back without spending its attempt: the
+  review did not run (no memory, no credentials), or it could not reach the model.
+- ``model_unreachable(text)`` tells such an environment failure (the CLI could not
+  load credentials or reach the API server) from a failure of the review itself; the
+  executor postpones the first kind and the health check C2 does not count it.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Any, Callable
@@ -38,8 +44,26 @@ REVIEW_DELAY = timedelta(minutes=58)
 # Later activity pushes the review back, but never past this after the first request of
 # the wait: a session that never rests an hour is still reviewed while it is used.
 MAX_WAIT = timedelta(hours=3)
-POSTPONE_DELAY = timedelta(minutes=5)   # a job that waits for memory looks again after this
+POSTPONE_DELAY = timedelta(minutes=5)   # a job that waits for memory or the model looks again after this
+# The CLI's own error result saying the model could not be reached: credentials it
+# could not load ("API Error: Could not load AWS credentials"), an API server it could
+# not reach ("API Error: Can't reach the API server ... (ENOTFOUND)"). Anchored on the
+# start of the text the review raises for an error result (s7_review.sdk_runner:
+# "review failed: <subtype>: <what the CLI said>", recorded with its exception type in
+# front): what the model writes (a reply without structured output, raised as
+# "reply missing: ...") can never match, so a quoted error never postpones a job.
+_UNREACHABLE_RE = re.compile(
+    r"(?:\w+: )?review failed: [^:\s]*: API Error:\s*"
+    r"(?:Could not load (?:AWS )?credentials|Can['\u2019]t reach the API server|[^\n]{0,300}?\bENOTFOUND\b)",
+    re.IGNORECASE)
 _WAKER: Callable[[], None] | None = None
+
+
+def model_unreachable(error: str | None) -> bool:
+    """Whether *error* (an exception's text or a recorded error) says the model could
+    not be reached: credentials that could not be loaded, an API server that could not
+    be resolved. Such a failure says nothing about the review; any other error does."""
+    return bool(error) and _UNREACHABLE_RE.match(error) is not None
 
 
 def _now() -> str:
@@ -175,9 +199,11 @@ def set_watermark(conn: sqlite3.Connection, session_id: str, reviewed_to: str) -
 
 
 def postpone(conn: sqlite3.Connection, session_id: str, delay: timedelta) -> None:
-    """Put a claimed job back without spending its attempt (it did not run). A request
-    that came while it was claimed is folded in (the job has not run, so it covers it),
-    waiting for whichever is later: the delay or that request's not-before."""
+    """Put a claimed job back without spending its attempt: it did not run, or it could
+    not reach the model. Either way the watermark has not moved, so the next run reviews
+    everything since it, and a request that came while it was claimed is folded in (that
+    run covers it), waiting for whichever is later: the delay or that request's
+    not-before."""
     retry_at = (datetime.now(timezone.utc) + delay).isoformat()
     conn.execute(
         """UPDATE ingestion_s2_jobs SET state='queued', attempts=MAX(attempts-1,0),

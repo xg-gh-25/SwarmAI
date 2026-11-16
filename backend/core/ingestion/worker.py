@@ -813,7 +813,8 @@ class RunLaneExecutor:
 
 
 class ReviewPostponed(Exception):
-    """The session review cannot fork its CLI now; the job waits, spending no attempt."""
+    """The session review cannot fork its CLI now (no memory for it, or credentials the
+    chat spawn would refuse); the job waits, spending no attempt."""
 
 
 def _can_fork_review() -> bool:
@@ -836,6 +837,21 @@ def _can_fork_review() -> bool:
     return bool(resource_monitor.spawn_budget(alive_count=alive).can_spawn)
 
 
+def _credentials_unavailable() -> bool:
+    """Whether the chat spawn's credential preflight would refuse a CLI now, read from
+    the readiness sampler's snapshot (``core.readiness_sampler``: the same check, sampled
+    every 10 s off the request path; no network call and no pool here). Only a definitive
+    ``expired`` waits; ``unknown`` (a network blip, a stale snapshot, no sampler in this
+    process) goes ahead, as the chat spawn does: an unreachable API server is then
+    caught from the review's own error (``s2_jobs.model_unreachable``)."""
+    try:
+        from core.readiness_sampler import readiness_cache
+        return readiness_cache.snapshot().get("auth") == "expired"
+    except Exception:  # noqa: BLE001 - an unreadable signal never stops the review
+        logger.debug("CDF review: readiness snapshot unavailable", exc_info=True)
+        return False
+
+
 def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
                     runner: Any = None) -> dict[str, Any]:
     """One session job: the after-session review by the session's own agent (S7; design
@@ -846,6 +862,8 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     session_id = job["session_id"]
     if runner is None and not _can_fork_review():
         raise ReviewPostponed("not enough memory for the review's CLI")
+    if runner is None and _credentials_unavailable():
+        raise ReviewPostponed("the model's credentials are unavailable")
     # the project of the repo the session worked in (s2_jobs.request): the DDD searched
     # for related entries and the fallback project, never a declaration
     snapshot = {"session_project": job["project"]} if job.get("project") else None
@@ -862,13 +880,18 @@ class S2JobExecutor:
     """One thread that runs queued S2 extractions in order (design §12 r16.13).
 
     It only extracts and enqueues units; the scheduler thread judges and writes them.
-    A job waits while the session lane's admission says the host is loaded.
+    A job waits while the session lane's admission says the host is loaded, and the
+    lane waits ``s2_jobs.POSTPONE_DELAY`` after a review that could not reach the model.
     """
 
     POLL_SECONDS = 60
 
     def __init__(self, extract: Any = None) -> None:
         self._extract = extract
+        # after a review that could not reach the model, nothing is claimed before this
+        # (time.monotonic): an outage costs one failing review per POSTPONE_DELAY, not
+        # one per queued job
+        self._held_until = 0.0
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="cdf-s2-jobs", daemon=True)
@@ -924,7 +947,7 @@ class S2JobExecutor:
         from . import s2_jobs
         done = 0
         while not self._stop.is_set():
-            if not ingestion_admission("session").run:
+            if time.monotonic() < self._held_until or not ingestion_admission("session").run:
                 break
             job = s2_jobs.claim(conn)
             if job is None:
@@ -942,7 +965,19 @@ class S2JobExecutor:
                     logger.exception("CDF S2 job %s could not be postponed", job["session_id"])
                     break
                 continue
-            except Exception as exc:  # recorded on the job, retried up to MAX_ATTEMPTS
+            except Exception as exc:
+                if s2_jobs.model_unreachable(str(exc)):
+                    # the model could not be reached (credentials, DNS): not a failure of
+                    # the review, so no attempt is spent; the lane waits for the outage
+                    logger.info("CDF S2 job %s postponed, the model cannot be reached: %s",
+                                job["session_id"], exc)
+                    self._held_until = time.monotonic() + s2_jobs.POSTPONE_DELAY.total_seconds()
+                    try:
+                        s2_jobs.postpone(conn, job["session_id"], s2_jobs.POSTPONE_DELAY)
+                    except Exception:  # noqa: BLE001 - recover would spend the attempt; next pass
+                        logger.exception("CDF S2 job %s could not be postponed", job["session_id"])
+                    break
+                # recorded on the job, retried up to MAX_ATTEMPTS
                 logger.warning("CDF S2 job %s failed: %s", job["session_id"], exc, exc_info=True)
                 state = s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])
             else:

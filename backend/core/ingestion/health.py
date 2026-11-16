@@ -661,7 +661,7 @@ def run_checks(ing: sqlite3.Connection | None, data: sqlite3.Connection | None, 
     from .contracts_v2 import PARKED_DEFER_REASONS
     from .pipeline_v2 import AGENT_SELF_STORES, USER_CONTEXT_STORES
     from .queries import review_health
-    from .s2_jobs import MAX_WAIT
+    from .s2_jobs import MAX_WAIT, model_unreachable
     d7 = now - timedelta(days=7)
     out: list[dict] = []
 
@@ -675,21 +675,38 @@ def run_checks(ing: sqlite3.Connection | None, data: sqlite3.Connection | None, 
     out.append(_check("C1", "no_data" if not due else _ok(missing == 0),
                       {"missing": missing, "sessions": len(due)}, "0"))
 
-    # C2 reviews succeed: no failed review job, at most 10% of review attempts errored
-    failed = ing.execute("SELECT COUNT(*) FROM ingestion_s2_jobs WHERE state='failed' "
-                         "AND COALESCE(finished_at, requested_at) >= ?", (_iso(d7),)).fetchone()[0]
-    attempts, errored = ing.execute(
+    # C2 reviews succeed: no failed review job, at most 10% of review attempts errored.
+    # It judges the reviews that reached the model: an attempt (or a job) that failed
+    # because the model could not be reached (credentials, DNS: s2_jobs.model_unreachable)
+    # says nothing about the review, and the worker postpones such a job without spending
+    # an attempt; it is counted apart, as unreachable
+    failed = unreachable = 0
+    for (error,) in ing.execute("SELECT error FROM ingestion_s2_jobs WHERE state='failed' "
+                                "AND COALESCE(finished_at, requested_at) >= ?", (_iso(d7),)):
+        if model_unreachable(error):
+            unreachable += 1
+        else:
+            failed += 1
+    attempts = errored = 0
+    rows = ing.execute(
         # a review whose relations turn failed wrote its units as new without comparing
         # them: recorded as ok, it is an error all the same
         # (CASE, not AND: SQLite does not promise to skip json_extract on bad JSON)
-        "SELECT COUNT(*), COALESCE(SUM(status = 'failed' OR CASE WHEN json_valid(evidence_range) "
-        "THEN json_extract(evidence_range, '$.relations_failed') IS NOT NULL END),0) "
+        "SELECT status, error, COALESCE(CASE WHEN json_valid(evidence_range) "
+        "THEN json_extract(evidence_range, '$.relations_failed') IS NOT NULL END, 0) "
         "FROM extraction_attempts "
-        "WHERE source='S7' AND started_at >= ? AND status <> 'running'", (_iso(d7),)).fetchone() \
-        if _table(ing, "extraction_attempts") else (0, 0)
+        "WHERE source='S7' AND started_at >= ? AND status <> 'running'", (_iso(d7),)).fetchall() \
+        if _table(ing, "extraction_attempts") else []
+    for status, error, relations_failed in rows:
+        if status == "failed" and model_unreachable(error):
+            unreachable += 1
+            continue
+        attempts += 1
+        errored += int(status == "failed" or bool(relations_failed))
     out.append(_check("C2", "no_data" if not (attempts or failed) else
                       _ok(failed == 0 and errored <= 0.10 * max(1, attempts)),
-                      {"failed": failed, "errored": errored, "attempts": attempts}, "0 / <= 10%"))
+                      {"failed": failed, "errored": errored, "attempts": attempts,
+                       "unreachable": unreachable}, "0 / <= 10%"))
 
     # C3 what reviews write is valid (the validator's refusals, as the review metrics count them)
     rh = review_health(ing, _iso(d7))
