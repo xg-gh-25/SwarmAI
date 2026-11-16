@@ -101,25 +101,25 @@ SwarmAI 只有**一个大脑**。这是有意为之，拒绝的是"多脑"：团
 
 ---
 
-## 自主交付指南
+## 自主工程组织
 
-领域知识驱动的自主交付是怎么运作的，一页一页看。完整 deck 是一个 HTML 文件：[中文](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-zh.html) · [English](./docs/decks/autonomous-guideline/domain-knowledge-driven-autonomous-en.html)（下载后用浏览器打开，点顶部的页码或按 ← → 切换页面；Builder Loop 那页可以逐步演示）。
+SwarmAI 是一个更大想法的落地实践：组织的竞争优势，不在于用了多少 AI 工具，而在于人 + Agents 的运营模式，能否让组织智能持续复利。deck 分五幕讲：瓶颈转移到了哪里、新的运营模式、从 AI-Driven 走向 AI-Autonomous、构建信任、新的工程组织。完整 deck 是一个 HTML 文件：[中文](./docs/decks/beyond-ai-adoption-v3/beyond-ai-adoption-v3-zh.html) · [English](./docs/decks/beyond-ai-adoption-v3/beyond-ai-adoption-v3-en.html)（下载后用浏览器打开，按 ← → 翻页；Builder Loop 那页可以逐步演示）。逐页讲解见 [Discussion #119](https://github.com/xg-gh-25/SwarmAI/discussions/119)。
 
-![AI-Autonomous, Domain Knowledge Driven](./assets/readme/autonomous/zh/00-cover.png)
+![Autonomous Engineering Organization 长什么样](./docs/decks/beyond-ai-adoption-v3/02-Definition.png)
 
-![Core Logic](./assets/readme/autonomous/zh/01-core-logic.png)
+![管理的方向盘：Autonomous Rate](./docs/decks/beyond-ai-adoption-v3/05-Autonomous-Rate.png)
 
-![Two Loops, One Brain](./assets/readme/autonomous/zh/02-two-loops-one-brain.png)
+![Core Logic](./docs/decks/beyond-ai-adoption-v3/12-Core-Logic.png)
 
-![Inside the Builder Loop](./assets/readme/autonomous/zh/03-inside-the-builder-loop.png)
+![Two Loops, One Brain](./docs/decks/beyond-ai-adoption-v3/13-Two-Loops-One-Brain.png)
 
-![Pipeline Run](./assets/readme/autonomous/zh/04-pipeline-run.png)
+![Domain Knowledge Management](./docs/decks/beyond-ai-adoption-v3/17-Domain-Knowledge-Management.png)
 
-![Cognition Distill Flow](./assets/readme/autonomous/zh/05-cognition-distill-flow.png)
+![质量和安全前移到 PR 之前](./docs/decks/beyond-ai-adoption-v3/21-Before-the-PR.png)
 
-![Autonomous Agent Tenets](./assets/readme/autonomous/zh/06-tenets.png)
+![Summary：五个问题，我们的答案](./docs/decks/beyond-ai-adoption-v3/27-Summary.png)
 
-![One Move, Three Outcomes](./assets/readme/autonomous/zh/07-one-move-three-outcomes.png)
+![模型和工具会被替代，复利的组织智能不会](./docs/decks/beyond-ai-adoption-v3/28-The-Next-Advantage.png)
 
 ---
 
