@@ -16,6 +16,7 @@ import type {
   TSCCSource,
   TSCCState,
   SystemPromptMetadata,
+  ProjectAgentFact,
   RecallSnapshot,
   SecurityScanResult,
 } from '../types';
@@ -116,7 +117,16 @@ export function promptMetadataToCamelCase(
     fullText: (data.full_text as string) ?? '',
     effectiveTokenBudget: (data.effective_token_budget as number) ?? 0,
     degraded: (data.degraded as string) ?? '',
+    projectAgent: projectAgentFact(data.project_agent),
   };
+}
+
+/** The ``project_agent`` value as the chat input reads it; null unless it names a Brain. */
+function projectAgentFact(raw: unknown): ProjectAgentFact | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.brain !== 'string' || !r.brain) return null;
+  return { brain: r.brain, pinned: r.pinned === true, mode: typeof r.mode === 'string' ? r.mode : '' };
 }
 
 /** Fetch system prompt metadata for a session (snake_case → camelCase).

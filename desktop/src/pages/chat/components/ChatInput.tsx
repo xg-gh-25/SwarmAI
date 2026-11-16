@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import type { UnifiedAttachment, SystemPromptMetadata } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview, ScreenshotButton } from '../../../components/chat';
 import { TSCCPopoverButton } from './TSCCPopoverButton';
+import { ProjectAgentChip } from './ProjectAgentChip';
 import { ContextUsageRing } from './ContextUsageRing';
 import { SYSTEM_COMMANDS } from '../constants';
 import type { SlashCommand } from '../constants';
@@ -1060,9 +1061,10 @@ export function ChatInput({
                 </span>
               )}
             </div>
-            {/* Right: TSCC, context ring, refresh (acts on the context, so it sits
+            {/* Right: the session's Brain, TSCC, context ring, refresh (acts on the context, so it sits
                 next to the ring), then the one send/stop slot. */}
             <div className="flex items-center gap-2">
+              <ProjectAgentChip fact={promptMetadata?.projectAgent} />
               <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
               <ContextUsageRing pct={contextPct ?? null} level={contextLevel ?? null} size={18} showLabel />
               {onRefreshContext && (

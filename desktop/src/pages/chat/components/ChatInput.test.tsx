@@ -275,3 +275,17 @@ describe('ChatInput — the slash-command list is a layer (hooks/useLayer)', () 
     expect(props.onStop).toHaveBeenCalledTimes(1);
   });
 });
+
+// The session's Brain sits in the bottom row next to TSCC (ProjectAgentChip): shown
+// when the prompt metadata names one, absent otherwise.
+describe('ChatInput — the session Brain chip', () => {
+  const meta = { files: [], totalTokens: 0, fullText: '' };
+  it('shows the Brain the prompt metadata names, and nothing without one', () => {
+    const { unmount } = renderWithProviders(<ChatInput {...createDefaultChatInputProps({
+      promptMetadata: { ...meta, projectAgent: { brain: 'SwarmAI', pinned: false, mode: '' } } })} />);
+    expect(screen.getByTestId('project-agent-chip')).toHaveTextContent('SwarmAI');
+    unmount();
+    renderWithProviders(<ChatInput {...createDefaultChatInputProps({ promptMetadata: meta })} />);
+    expect(screen.queryByTestId('project-agent-chip')).toBeNull();
+  });
+});

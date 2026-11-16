@@ -1382,6 +1382,32 @@ class SessionUnit:
         except Exception:  # noqa: BLE001 — a callback must never break the reader
             logger.exception("session_unit.steer_hook_failed session_id=%s", self.session_id)
 
+    def project_agent_fact(self) -> Optional[dict[str, Any]]:
+        """The Brain whose Project Agent this session works under, for the chat input
+        (TSCC ``SystemPromptMetadata.project_agent``): the pin its hooks enforce once a
+        hook has read it (a dispatched session; ``pinned`` with its mode), else the
+        Brain whose contract block this subprocess was given with its DDD block
+        (session_router._maybe_inject_contract). None when neither. Read from the hook
+        context only, so it never touches the database; never raises."""
+        ctx = getattr(self, "_hook_session_context", None)
+        if not isinstance(ctx, dict):
+            return None
+        try:
+            from .project_agent_session import PIN_KEY, _PIN_FOR
+            pin = ctx.get(PIN_KEY)
+            if (isinstance(pin, dict) and ctx.get(_PIN_FOR) == ctx.get("sdk_session_id")
+                    and isinstance(pin.get("brain"), str) and pin["brain"]):
+                mode = pin.get("mode")
+                return {"brain": pin["brain"], "pinned": True,
+                        "mode": mode if isinstance(mode, str) else ""}
+            from .session_router import PROJECT_AGENT_BRAIN_KEY
+            brain = ctx.get(PROJECT_AGENT_BRAIN_KEY)
+            if isinstance(brain, str) and brain:
+                return {"brain": brain, "pinned": False, "mode": ""}
+        except Exception:  # noqa: BLE001 — a display fact never breaks the turn
+            logger.debug("project_agent_fact failed for %s", self.session_id, exc_info=True)
+        return None
+
     def all_query_prefixes(self) -> Optional[str]:
         """What this turn delivered on the query channel: its first message's prefix
         and every steer's (design chat-steer D2, M7: the security panel sees a
@@ -3957,6 +3983,7 @@ class SessionUnit:
                 spm["full_text"] = _compose_full_text(
                     _base, self.all_query_prefixes()
                 )
+                spm["project_agent"] = self.project_agent_fact()
                 session_registry.system_prompt_metadata[self.session_id] = spm
                 events.append({"type": "system_prompt_metadata", **spm})
         except Exception:
@@ -4351,6 +4378,7 @@ class SessionUnit:
                 _pending["full_text"] = _compose_full_text(
                     _base, self.all_query_prefixes()
                 )
+                _pending["project_agent"] = self.project_agent_fact()
                 session_registry.system_prompt_metadata[self.session_id] = _pending
                 # One-shot: a later respawn must publish ITS own turn's metadata,
                 # never re-publish this one.

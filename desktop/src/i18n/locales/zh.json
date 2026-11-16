@@ -5266,6 +5266,11 @@
       "runsCited": "Run（{{n}}）",
       "cited": "引用 {{n}} 条",
       "citedNone": "没引用这个 Brain 的条目"
+    },
+    "ProjectAgentChip": {
+      "general": "General Brain",
+      "title": "本会话为 {{brain}} 工作：它的 Project Agent 合同已作为工作说明交给 agent（本地不强制执行）。点击打开这个 Brain。",
+      "pinnedTitle": "本会话钉在 {{brain}} 的 Project Agent 下（工作类型：{{mode}}），它的规则和 gate 会被强制执行。点击打开这个 Brain。"
     }
   }
 }

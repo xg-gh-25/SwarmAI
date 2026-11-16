@@ -1324,6 +1324,12 @@ async def _maybe_inject_ddd(
     await _maybe_inject_contract(project[0], options, unit)
 
 
+#: the hook-context key naming the Brain whose contract block this subprocess was given
+#: (set with ``_project_agent_block``, cleared with it): what the chat input shows as the
+#: session's Brain (session_unit.project_agent_fact)
+PROJECT_AGENT_BRAIN_KEY = "_project_agent_brain"
+
+
 def _contract_block(project: str) -> str:
     """The Project Agent block of *project* (core.project_agent.render_contract), or ""."""
     from config import get_swarmws
@@ -1345,6 +1351,7 @@ async def _maybe_inject_contract(project: str, options: Any, unit: Any) -> None:
     ctx = getattr(unit, "_hook_session_context", None)
     if isinstance(ctx, dict):
         ctx.pop("_project_agent_block", None)
+        ctx.pop(PROJECT_AGENT_BRAIN_KEY, None)
     try:
         from core.app_role import is_worker
         if is_worker():
@@ -1361,6 +1368,7 @@ async def _maybe_inject_contract(project: str, options: Any, unit: Any) -> None:
         _deliver_block(unit, "\n\n" + block + "\n")
         if isinstance(ctx, dict):
             ctx["_project_agent_block"] = block
+            ctx[PROJECT_AGENT_BRAIN_KEY] = project
     except Exception:  # noqa: BLE001 — an additive block never breaks the turn
         logger.warning("Project Agent block for %s not delivered", project, exc_info=True)
 

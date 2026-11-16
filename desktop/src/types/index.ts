@@ -1634,6 +1634,18 @@ export interface SystemPromptMetadata {
    *  backend metadata dict verbatim, which omits the key on a healthy build,
    *  while the HTTP endpoint always emits it (schema default ''). */
   degraded?: string;
+  /** The Brain whose Project Agent this session works under (backend
+   *  session_unit.project_agent_fact); null/absent when none. */
+  projectAgent?: ProjectAgentFact | null;
+}
+
+/** See SystemPromptMetadata.projectAgent. ``pinned``: a dispatched session whose hooks
+ *  enforce the contract (``mode`` is its kind of work); otherwise the contract was given
+ *  to the agent as guidance. */
+export interface ProjectAgentFact {
+  brain: string;
+  pinned: boolean;
+  mode: string;
 }
 
 /** One structured recalled hit — real hit that fed the injected block. */

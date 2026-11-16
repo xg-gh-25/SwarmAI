@@ -129,6 +129,17 @@ class SystemPromptFileInfo(BaseModel):
     tokens: int = Field(..., description="Estimated token count for this file")
 
 
+class ProjectAgentFact(BaseModel):
+    """The Brain whose Project Agent this session works under, as the chat input shows
+    it (session_unit.project_agent_fact): the contract delivered to this subprocess
+    with the DDD block (``pinned`` False: guidance the agent reads), or the pin a
+    dispatched session's hooks enforce (``pinned`` True, with its mode)."""
+
+    brain: str = Field(..., description="The Brain's name")
+    pinned: bool = Field(False, description="True when the session is pinned and its hooks enforce the contract")
+    mode: str = Field("", description="The pinned kind of work; empty when not pinned")
+
+
 class SystemPromptMetadata(BaseModel):
     """System prompt metadata returned by the system-prompt endpoint."""
 
@@ -161,6 +172,12 @@ class SystemPromptMetadata(BaseModel):
             "Fail-loud degradation reason (e.g. 'missing_core_sections: SOUL'); "
             "empty when the prompt assembled completely"
         ),
+    )
+    # Declared for the same reason: an undeclared key is dropped at the response
+    # boundary, and the HTTP route (tab switch, reload) must show what the SSE showed.
+    project_agent: Optional[ProjectAgentFact] = Field(
+        None,
+        description="The Brain whose Project Agent this session works under; null when none",
     )
 
 

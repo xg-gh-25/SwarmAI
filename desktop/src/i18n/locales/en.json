@@ -5266,6 +5266,11 @@
       "runsCited": "Runs ({{n}})",
       "cited": "cites {{n}}",
       "citedNone": "cites no entry of this Brain"
+    },
+    "ProjectAgentChip": {
+      "general": "General Brain",
+      "title": "This session works for {{brain}}: its Project Agent contract was given to the agent as guidance (not enforced here). Click to open the Brain.",
+      "pinnedTitle": "This session works under the Project Agent of {{brain}} (kind of work: {{mode}}); its rules and gates are enforced. Click to open the Brain."
     }
   }
 }

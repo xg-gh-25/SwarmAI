@@ -17,6 +17,9 @@ What is tested, one question per test:
 - does definition or rule text with a newline reach the chat block, the reviewers' section
   and the Hive task as one line, and does a respawn that delivers nothing leave no earlier
   block for the post-compaction note?
+- does the chat input learn the session's Brain (the turn's prompt metadata, over SSE and
+  the HTTP route): the Brain whose contract was given, none after a respawn without one,
+  and a pinned session with its mode, only for its own session id?
 Methodology: temp workspaces; the real renderer, router leg, post-compact hook, task
 spec, pin, CDF routing; a pipeline run through the real CLI rig.
 """
@@ -328,3 +331,53 @@ def test_a_respawn_that_delivers_nothing_keeps_no_earlier_block(ws, monkeypatch)
     (ws / "Projects" / "Empty").mkdir()
     asyncio.run(sr._maybe_inject_contract("Empty", SimpleNamespace(system_prompt="BASE"), unit))
     assert "_project_agent_block" not in unit._hook_session_context
+
+
+# ── the chat input names the session's Brain (SystemPromptMetadata.project_agent) ──
+
+def _published_fact(unit):
+    """What the chat input reads after a turn: the system_prompt_metadata SSE event
+    and the HTTP route's response model, from the same registry entry."""
+    from core import session_registry
+    from schemas.tscc import SystemPromptMetadata
+    session_registry.system_prompt_metadata[unit.session_id] = {
+        "files": [], "total_tokens": 0, "full_text": "BASE", "base_full_text": "BASE"}
+    try:
+        events = unit._emit_post_stream_metadata(usage=None, num_turns=1)
+        sse = [e for e in events if e.get("type") == "system_prompt_metadata"]
+        assert len(sse) == 1
+        http = SystemPromptMetadata(**session_registry.system_prompt_metadata[unit.session_id])
+        return sse[0]["project_agent"], (http.project_agent.model_dump() if http.project_agent else None)
+    finally:
+        session_registry.system_prompt_metadata.pop(unit.session_id, None)
+
+
+def _real_unit(sid: str = "s-chip"):
+    from core.session_unit import SessionUnit
+    unit = SessionUnit(session_id=sid, agent_id="default")
+    unit._hook_session_context = {"sdk_session_id": sid}
+    return unit
+
+
+def test_the_chat_input_names_the_brain_whose_contract_was_given(ws, monkeypatch):
+    from core import session_router as sr
+    unit = _real_unit()
+    assert _published_fact(unit) == (None, None)
+    asyncio.run(sr._maybe_inject_contract("Demo", SimpleNamespace(system_prompt="BASE"), unit))
+    want = {"brain": "Demo", "pinned": False, "mode": ""}
+    assert _published_fact(unit) == (want, want)
+    # a respawn settles on a Brain with no definition: no contract, so no Brain shown
+    (ws / "Projects" / "Empty").mkdir()
+    asyncio.run(sr._maybe_inject_contract("Empty", SimpleNamespace(system_prompt="BASE"), unit))
+    assert _published_fact(unit) == (None, None)
+
+
+def test_the_chat_input_shows_a_pinned_session_with_its_mode():
+    from core.project_agent_session import PIN_KEY, _PIN_FOR
+    unit = _real_unit("s-pin")
+    unit._hook_session_context.update({PIN_KEY: {"brain": "Demo", "mode": "research"}, _PIN_FOR: "s-pin"})
+    want = {"brain": "Demo", "pinned": True, "mode": "research"}
+    assert _published_fact(unit) == (want, want)
+    # a pin cached for another session id is not this session's
+    unit._hook_session_context[_PIN_FOR] = "s-other"
+    assert _published_fact(unit) == (None, None)
