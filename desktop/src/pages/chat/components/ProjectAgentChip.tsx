@@ -48,7 +48,7 @@ export function ProjectAgentChip({ fact }: ProjectAgentChipProps) {
       data-testid="project-agent-chip"
       className="btn-sm btn-soft inline-flex items-center gap-1 max-w-[180px]"
     >
-      <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+      <span className="material-symbols-outlined icon-xs" aria-hidden="true">
         {fact.pinned ? 'lock' : 'psychology'}
       </span>
       <span className="truncate">{name}</span>
