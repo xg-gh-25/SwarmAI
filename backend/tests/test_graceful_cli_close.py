@@ -32,8 +32,8 @@ class _Reader:
 
 
 def _unit(state: SessionState = SessionState.IDLE, *, reader_dead: bool = False,
-          end_input=None, wait=None) -> tuple[SessionUnit, MagicMock]:
-    unit = SessionUnit(session_id="graceful-test", agent_id="default")
+          end_input=None, wait=None, sid: str = "graceful-test") -> tuple[SessionUnit, MagicMock]:
+    unit = SessionUnit(session_id=sid, agent_id="default")
     transport = MagicMock()
     transport.end_input = end_input or AsyncMock()
     transport._process = MagicMock()
@@ -297,3 +297,92 @@ async def test_stop_background_recycle_is_immediate():
             p.stop()
     transport.end_input.assert_not_awaited()
     assert sig.sigkills
+
+
+# ── shutdown: idle CLIs close concurrently ────────────────────────────────────
+
+def _router_with(units):
+    from core.session_router import SessionRouter
+    router = SessionRouter(prompt_builder=MagicMock())
+    for u in units:
+        router._units[u.session_id] = u
+    order: list[str] = []
+    lm = MagicMock()
+
+    async def enqueue(unit):
+        order.append(f"hooks:{unit.session_id}")
+        unit._hooks_enqueued = True
+
+    lm.enqueue_hooks_for_unit = AsyncMock(side_effect=enqueue)
+    router._lifecycle_manager = lm
+    return router, order
+
+
+async def _shutdown(router, sig):
+    ps = _patches(sig) + [patch("core.session_state_persistence.persist_session_state",
+                                return_value=0)]
+    for p in ps:
+        p.start()
+    try:
+        await router.disconnect_all()
+    finally:
+        for p in reversed(ps):
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_idle_clis_concurrently():
+    """Four idle CLIs that each ignore the stdin close for the whole grace: shutdown
+    takes about one grace, not four; each unit's hooks are enqueued before its stdin
+    is closed, each keeps the full grace and is SIGKILLed after it."""
+    grace = 0.3
+    sig = _Signals()
+    never = asyncio.Event()
+    units, order = [], None
+
+    def _hang_for(sid):
+        async def hang():
+            await never.wait()
+        return hang
+
+    for i in range(4):
+        sid = f"shutdown-{i}"
+        unit, _ = _unit(sid=sid, wait=AsyncMock(side_effect=_hang_for(sid)))
+        units.append(unit)
+    router, order = _router_with(units)
+    for unit in units:
+        transport = unit._wrapper.client._transport
+        transport.end_input = AsyncMock(
+            side_effect=lambda s=unit.session_id: order.append(f"stdin:{s}"))
+
+    t0 = asyncio.get_running_loop().time()
+    with patch.object(su, "GRACEFUL_EXIT_GRACE_S", grace):
+        await _shutdown(router, sig)
+    elapsed = asyncio.get_running_loop().time() - t0
+
+    assert elapsed >= grace                      # each CLI still got its grace
+    assert elapsed < 2 * grace, f"closed one after another: {elapsed:.2f}s"
+    assert len(sig.sigkills) == 4, sig.events    # and the kill after it
+    for unit in units:
+        assert order.index(f"hooks:{unit.session_id}") < order.index(f"stdin:{unit.session_id}")
+        assert unit.state == SessionState.COLD
+
+
+@pytest.mark.asyncio
+async def test_shutdown_one_failing_unit_does_not_stop_others():
+    sig = _Signals()
+    units = [_unit(sid=f"fail-{i}")[0] for i in range(3)]
+    router, _ = _router_with(units)
+    units[0].kill = AsyncMock(side_effect=RuntimeError("kill failed"))
+    real_enqueue = router._lifecycle_manager.enqueue_hooks_for_unit.side_effect
+
+    async def enqueue(unit):
+        if unit is units[1]:
+            raise RuntimeError("hook context failed")
+        await real_enqueue(unit)
+
+    router._lifecycle_manager.enqueue_hooks_for_unit = AsyncMock(side_effect=enqueue)
+    await _shutdown(router, sig)
+    assert units[1].state == SessionState.COLD    # its hooks failed: its CLI still closed
+    assert units[2].state == SessionState.COLD
+    units[0].kill.assert_awaited_once()

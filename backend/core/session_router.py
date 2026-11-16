@@ -3226,9 +3226,12 @@ class SessionRouter:
         return sum(1 for u in self._units.values() if u.is_alive)
 
     def staged_spawn_count(self, exclude: Any = None) -> int:
-        """CLIs started by an early spawn and not adopted yet (their units are still
-        COLD, so alive_count misses them): counted by the spawn budget."""
-        n = 0
+        """CLIs running outside an alive unit, counted by the spawn budget on top of
+        alive_count: early spawns not adopted yet (their units are still COLD) and a
+        model-access warm-up's CLI (core/model_access_warmer). ``exclude`` is a unit
+        whose own early spawn is not counted."""
+        from . import model_access_warmer
+        n = model_access_warmer.running_count()
         for u in self._units.values():
             early = getattr(u, "_early_spawn", None)
             if u is not exclude and early is not None and not early.closed and not early.claimed:
@@ -4251,7 +4254,9 @@ class SessionRouter:
 
     def _merge_pending_into_query(self, claimed: list, query_content: Any) -> Any:
         """Merge a claimed pending set INTO the arriving turn's query_content
-        (run_25d2b7b8), pending FIFO FIRST, the arriving message LAST.
+        (run_25d2b7b8), pending FIFO FIRST, the arriving message LAST. The caller
+        passes the arriving content before its prefixes and puts them in front of the
+        result, so the session context precedes the queued messages.
 
         Latest-last mirrors ``combine_pending``'s product decision: a correction
         reads as the most-salient (final) instruction. Text and multimodal are
@@ -5583,7 +5588,13 @@ class SessionRouter:
         _dyn_block = _compose_turn_prefix(
             unit, editor_context, first_query=_first_query, session_block=_session_block,
         )
-        query_content = _prepend_block_to_query(query_content, _dyn_block)
+        # The prefixes below go in front of the person's words of this turn through
+        # one helper (_with_turn_prefixes), innermost first: the dynamic block, resume,
+        # the dispatched-runs digest, the terminal block. A cold-spawn coalesce further
+        # down merges queued messages into the unprefixed body and applies the same
+        # helper again, so the queued messages follow every prefix (the session
+        # context among them) instead of landing in front of it.
+        #
         # resume-context-injection去根 (run_d108b914): INDEPENDENT resume-only prefix,
         # carrying the resume block that build_options stashed this turn.
         #
@@ -5601,11 +5612,8 @@ class SessionRouter:
         # PRIOR-conversation history — distinct content. On a resume turn both ride
         # the query, this one in front. recall/SENSE are never rendered here
         # (resume-only fn), so neither is duplicated.
-        query_content = _prepend_resume_to_query(
-            query_content,
-            getattr(unit, "_resume_query_block", None),
-            should_prefix=_should_prefix_resume(is_cold_resume, needs_channel_resume),
-        )
+        _resume_block = getattr(unit, "_resume_query_block", None)
+        _prefix_resume = _should_prefix_resume(is_cold_resume, needs_channel_resume)
         # Run 2 (prompt-injection root-fix): prefix the attached-terminal
         # UNTRUSTED-DATA block UNCONDITIONALLY — on BOTH cold-spawn and warm-reuse.
         # Like the dynamic prefix and unlike resume (gated
@@ -5620,8 +5628,17 @@ class SessionRouter:
         # terminal block, which stays outermost.
         # file reads and one write: off the event loop
         _dispatch_block = await asyncio.to_thread(_dispatch_digest, session_id)
-        query_content = _prepend_block_to_query(query_content, _dispatch_block)
-        query_content = _prepend_terminal_to_query(query_content, terminal_context)
+
+        def _with_turn_prefixes(body: Any) -> Any:
+            """*body* (the person's words of this turn) with this turn's prefixes."""
+            content = _prepend_block_to_query(body, _dyn_block)
+            content = _prepend_resume_to_query(content, _resume_block,
+                                               should_prefix=_prefix_resume)
+            content = _prepend_block_to_query(content, _dispatch_block)
+            return _prepend_terminal_to_query(content, terminal_context)
+
+        _query_body = query_content
+        query_content = _with_turn_prefixes(_query_body)
 
         # TSCC/security-scan alignment (run_380413c5): capture the EXACT
         # query-channel prefix delivered this turn, via the SSoT block-builders (the
@@ -5682,8 +5699,9 @@ class SessionRouter:
         # unit past IDLE → drain_pending's state!=IDLE guard no-ops). So claim the
         # pending set HERE — at the router, before unit.send() spawns — and
         # COALESCE it into THIS turn's query_content (pending FIFO first, the
-        # arriving message last). unit.state is still COLD at this point (the
-        # COLD→IDLE→STREAMING spawn happens INSIDE unit.send()), which is exactly
+        # arriving message last, both after this turn's prefixes). unit.state is
+        # still COLD at this point (the COLD→IDLE→STREAMING spawn happens INSIDE
+        # unit.send()), which is exactly
         # the window _claim_cold_spawn_pending requires. Exactly-once vs the serial
         # worker is held by claim_pending_batch atomicity; delivery is confirmed
         # (mark_sent) / rolled back by _finalize_pending_delivery AFTER the stream.
@@ -5701,9 +5719,12 @@ class SessionRouter:
             if not _drained_pending:
                 _claimed_pending = await self._claim_cold_spawn_pending(unit, session_id)
                 if _claimed_pending:
-                    query_content = self._merge_pending_into_query(
-                        _claimed_pending, query_content,
-                    )
+                    # into the unprefixed body, then the same prefixes, so the queued
+                    # messages follow the session context (terminal blocks, the
+                    # arriving turn's and the claimed rows' below, still lead)
+                    query_content = _with_turn_prefixes(self._merge_pending_into_query(
+                        _claimed_pending, _query_body,
+                    ))
                     # The claimed rows' own terminal output (the arriving turn's is
                     # already prefixed above): same fenced UNTRUSTED block, leading.
                     from . import session_pending as _sp
@@ -6587,12 +6608,17 @@ class SessionRouter:
 
         alive = [u for u in self._units.values() if u.is_alive]
         logger.info("session_router.disconnect_all: killing %d alive units", len(alive))
-        for unit in alive:
+
+        async def _close(unit: SessionUnit) -> None:
             try:
                 # Fire hooks before killing (shutdown fix)
                 # (enqueue_hooks_for_unit marks the unit)
                 if self._lifecycle_manager and not unit._hooks_enqueued:
                     await self._lifecycle_manager.enqueue_hooks_for_unit(unit)
+            except Exception as exc:  # its CLI is still closed below
+                logger.warning("Failed to enqueue hooks for unit %s during disconnect_all: %s",
+                               unit.session_id, exc)
+            try:
                 await unit.kill()
                 # NOTE: clear_session_identity() intentionally REMOVED (Design §2C).
                 # sdk_session_id is preserved in session_state.json for fast resume.
@@ -6601,6 +6627,16 @@ class SessionRouter:
                     "Failed to kill unit %s during disconnect_all: %s",
                     unit.session_id, exc,
                 )
+
+        # All at once: an idle unit's kill waits up to GRACEFUL_EXIT_GRACE_S for its CLI
+        # to exit by itself before the SIGKILL (session_unit._close_cli_gracefully), so
+        # one after another N idle CLIs took up to N graces; concurrently they take one.
+        # Each unit keeps its own lock, grace and kill.
+        t0 = time.perf_counter()
+        await asyncio.gather(*(_close(u) for u in alive))
+        if alive:
+            logger.info("session_router.disconnect_all: closed %d units in %.0f ms",
+                        len(alive), (time.perf_counter() - t0) * 1000)
 
 
 

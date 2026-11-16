@@ -810,3 +810,89 @@ async def test_cold_spawn_multimodal_pending_gets_converted(wired):
     assert "blocks" in captured, "post-merge conversion was NOT called on the multimodal set"
     assert any(b.get("type") == "image" for b in captured["blocks"]), \
         "pending image block never reached the conversion → it would hit the SDK raw"
+
+
+# ── the session context stays first on a merged cold-start query ─────────────
+
+async def _deliver_cold(router, sid, *, user_message="arriving-now", content=None):
+    """Drive the real run_conversation for a COLD unit and return the query_content
+    unit.send received (the session context block comes from the agent config, as
+    build_system_prompt leaves it there)."""
+    from unittest.mock import AsyncMock, patch
+    unit = router.get_or_create_unit(sid, "default")
+    unit._transition(SessionState.COLD) if unit.state != SessionState.COLD else None
+    seen = {}
+
+    async def _capture_send(**kwargs):
+        seen["query_content"] = kwargs.get("query_content")
+        yield {"type": "result", "sessionId": sid}
+
+    router._prompt_builder = MagicMock()
+    router._prompt_builder.build_options = AsyncMock(
+        return_value=MagicMock(model="test", system_prompt="test"))
+    agent_config = {"model": "test", "_session_context_block": "SESSION-SECTIONS"}
+    with patch.object(unit, "send", side_effect=_capture_send), \
+         patch("core.session_router._dispatch_digest", return_value=None), \
+         patch("core.agent_defaults.build_agent_config", new_callable=AsyncMock,
+               return_value=agent_config):
+        async for _ in router.run_conversation(session_id=sid, agent_id="default",
+                                               user_message=user_message, content=content):
+            pass
+    return seen.get("query_content"), unit
+
+
+@pytest.mark.asyncio
+async def test_cold_spawn_merge_puts_session_context_first(wired):
+    """A cold start that merges queued messages (no terminal attached, so no terminal
+    block leads): the session-context block first, then the queued messages in order,
+    then the arriving message."""
+    from core.injected_blocks import SESSION_CONTEXT_FOOTER, SESSION_CONTEXT_HEADER
+    router, sp = wired
+    sid = "sess-ctx-first"
+    router.get_or_create_unit(sid, "default")
+    await sp.persist_pending(sid, user_message="queued-older", content=None, agent_id="a")
+    await sp.persist_pending(sid, user_message="queued-newer", content=None, agent_id="a")
+
+    qc, _ = await _deliver_cold(router, sid)
+    assert isinstance(qc, str)
+    assert qc.startswith(SESSION_CONTEXT_HEADER), qc[:200]
+    assert "SESSION-SECTIONS" in qc
+    footer = qc.index(SESSION_CONTEXT_FOOTER)
+    assert footer < qc.index("queued-older") < qc.index("queued-newer") < qc.index("arriving-now")
+    assert qc.endswith("arriving-now")
+    assert await sp.count_pending(sid) == 0
+
+
+@pytest.mark.asyncio
+async def test_cold_spawn_merge_multimodal_session_context_first(wired, monkeypatch):
+    """A queued row with content blocks makes the merged query a block list (an SDK
+    that takes blocks): its first block is the session context, the queued blocks
+    follow it."""
+    from core import session_router as sr
+    from core.injected_blocks import SESSION_CONTEXT_HEADER
+    monkeypatch.setattr(sr, "_SDK_SUPPORTS_MULTIMODAL", True)
+    router, sp = wired
+    sid = "sess-ctx-first-mm"
+    router.get_or_create_unit(sid, "default")
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                          "data": "iVBORw0KGgo="}}
+    await sp.persist_pending(sid, user_message=None, agent_id="a",
+                             content=[{"type": "text", "text": "queued-block"}, image])
+
+    qc, _ = await _deliver_cold(router, sid)
+    assert isinstance(qc, list), type(qc)
+    assert qc[0]["type"] == "text" and qc[0]["text"].startswith(SESSION_CONTEXT_HEADER)
+    texts = [b.get("text", "") for b in qc]
+    kinds = [b.get("type") for b in qc]
+    assert 0 < texts.index("queued-block") < kinds.index("image") < texts.index("arriving-now")
+
+
+@pytest.mark.asyncio
+async def test_cold_spawn_without_pending_query_unchanged(wired):
+    """Nothing queued: the query is exactly the delivered prefix and the message."""
+    from core.injected_blocks import SESSION_CONTEXT_HEADER
+    router, sp = wired
+    sid = "sess-no-pending"
+    qc, unit = await _deliver_cold(router, sid)
+    assert qc.startswith(SESSION_CONTEXT_HEADER)
+    assert qc == f"{unit._delivered_query_prefix}\n\narriving-now"

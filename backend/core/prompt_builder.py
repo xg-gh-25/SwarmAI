@@ -2299,6 +2299,84 @@ class PromptBuilder:
     # build_options
     # ------------------------------------------------------------------
 
+    def _chat_cli_settings(self, model: Optional[str], channel_context: Optional[dict],
+                           restricted: Optional[dict] = None) -> dict:
+        """The CLI's ``--settings`` for a chat spawn on *model*: the one builder
+        ``build_options`` and ``warm_up_template`` (the model-access warm-up, which must
+        start the CLI with the same settings) both use. *restricted* is a restricted
+        channel session's deny list (``_restricted`` in ``build_options``)."""
+        # ── Autocompact trigger (CLI setting `autoCompactWindow`) ───────────────
+        #
+        # Compaction SUMMARIZES earlier context and CONTINUES the turn; it never
+        # truncates in-flight work, so this is a trigger line, not a cost cap
+        # (STEERING #2). Desktop triggers at 75% of the window (XG 2026-10-14);
+        # channel at a fixed 400K (unattended-safety line, with max_turns=100).
+        #
+        # History: this used to be passed as `task_budget`, which turned out NOT to
+        # move the CLI threshold at all (measured 2026-10-17: still 967K on a 1M
+        # model) — autocompact never fired in practice (7 days, 170 sessions, real
+        # peaks up to 904K, zero auto compactions). task_budget is an API-side
+        # budget the MODEL is told about ("pace tool use and wrap up"), so it is no
+        # longer sent. See AUTOCOMPACT_CLI_BUFFER for the measured mapping.
+        _ctx_window = self.get_model_context_window(model)
+        _ac_trigger = (
+            CHANNEL_AUTOCOMPACT_TRIGGER if channel_context
+            else _compute_desktop_autocompact_trigger(_ctx_window)
+        )
+        from .skill_listing import listing_settings
+        cli_settings = {
+            # The line the CLI asks the agent to end a commit / a PR with: SwarmAI's,
+            # in every repo, machine and Hive (unset, the CLI asks for its own Claude
+            # co-author line — a repo-local rewrite hook only ever fixed one checkout).
+            "attribution": SWARM_ATTRIBUTION,
+            "skillOverrides": CLI_SKILL_OVERRIDES,
+            "autoCompactWindow": _compute_autocompact_window_setting(_ac_trigger, _ctx_window),
+            # Caps each skill description in the CLI's skill listing (core/skill_listing).
+            **listing_settings(),
+            # The CLI's own Bedrock calls use the pinned SwarmAI account (core/aws_account,
+            # design 2026-10-31-swarmai-aws-account §5.3); the agent's shell keeps the
+            # user's AWS configuration. Empty when there is no resolvable account.
+            **_aws_account_cli_settings(self._config),
+        }
+        if restricted:
+            cli_settings.setdefault("permissions", {}).setdefault("deny", []).extend(
+                f"Read({path})" for path in restricted["deny_read"])
+            cli_settings["disableSkillShellExecution"] = True
+        # Compaction summary rules: a PreCompact COMMAND hook whose stdout the CLI
+        # appends to its summary prompt (core/compact_summary.py).
+        from .compact_summary import precompact_settings_hooks
+        _compact_hooks = precompact_settings_hooks()
+        if _compact_hooks:
+            cli_settings["hooks"] = _compact_hooks
+        return cli_settings
+
+    def warm_up_template(self) -> dict:
+        """What a default desktop chat spawn hands the CLI that decides the key of its
+        model-access cache entry (core/model_access_warmer), from the configuration
+        alone: ``model``, ``settings``, ``setting_sources``, ``cwd``, ``cli_path`` and the
+        per-session provider ``env`` (the thinking gateway's base URL). The warmer starts
+        from it after a restart, before any chat spawn told it how chat starts the CLI;
+        each value is the one ``build_options`` computes for ``agent_config={}`` on a
+        desktop session. Reads the configuration and the AWS account record: call it off
+        the event loop."""
+        from .bedrock_thinking_gateway import gateway_env_for_session
+        from .initialization_manager import initialization_manager
+
+        model = self.resolve_model({})
+        rule_model = (self._config.get("default_model") if self._config is not None
+                      else None) or model
+        display = self._build_thinking_display(
+            channel_context=None, effective_mode=self._effective_thinking_mode_for(rule_model))
+        return {
+            "model": model,
+            "settings": json.dumps(self._chat_cli_settings(model, None)),
+            "setting_sources": ["project"],
+            "cwd": initialization_manager.get_cached_workspace_path(),
+            "cli_path": None,
+            "env": gateway_env_for_session(self._config, channel_context=None,
+                                           thinking_display=display),
+        }
+
     async def build_options(
         self,
         agent_config: dict,
@@ -2656,56 +2734,17 @@ class PromptBuilder:
             # make hundreds of model calls; autocompact keeps it in the window.
             max_turns = DESKTOP_MAX_TURNS
 
-        # ── Autocompact trigger (CLI setting `autoCompactWindow`) ───────────────
-        #
-        # Compaction SUMMARIZES earlier context and CONTINUES the turn; it never
-        # truncates in-flight work, so this is a trigger line, not a cost cap
-        # (STEERING #2). Desktop triggers at 75% of the window (XG 2026-10-14);
-        # channel at a fixed 400K (unattended-safety line, with max_turns=100).
-        #
-        # History: this used to be passed as `task_budget`, which turned out NOT to
-        # move the CLI threshold at all (measured 2026-10-17: still 967K on a 1M
-        # model) — autocompact never fired in practice (7 days, 170 sessions, real
-        # peaks up to 904K, zero auto compactions). task_budget is an API-side
-        # budget the MODEL is told about ("pace tool use and wrap up"), so it is no
-        # longer sent. See AUTOCOMPACT_CLI_BUFFER for the measured mapping.
-        _ctx_window = self.get_model_context_window(model)
-        _ac_trigger = (
-            CHANNEL_AUTOCOMPACT_TRIGGER if channel_context
-            else _compute_desktop_autocompact_trigger(_ctx_window)
-        )
-        from .skill_listing import listing_settings, schedule_log_listing
-        cli_settings = {
-            # The line the CLI asks the agent to end a commit / a PR with: SwarmAI's,
-            # in every repo, machine and Hive (unset, the CLI asks for its own Claude
-            # co-author line — a repo-local rewrite hook only ever fixed one checkout).
-            "attribution": SWARM_ATTRIBUTION,
-            "skillOverrides": CLI_SKILL_OVERRIDES,
-            "autoCompactWindow": _compute_autocompact_window_setting(_ac_trigger, _ctx_window),
-            # Caps each skill description in the CLI's skill listing (core/skill_listing).
-            **listing_settings(),
-            # The CLI's own Bedrock calls use the pinned SwarmAI account (core/aws_account,
-            # design 2026-10-31-swarmai-aws-account §5.3); the agent's shell keeps the
-            # user's AWS configuration. Empty when there is no resolvable account.
-            **_aws_account_cli_settings(self._config),
-        }
+        cli_settings = self._chat_cli_settings(model, channel_context, _restricted)
         if _restricted:
-            cli_settings.setdefault("permissions", {}).setdefault("deny", []).extend(
-                f"Read({path})" for path in _restricted["deny_read"])
-            cli_settings["disableSkillShellExecution"] = True
             setting_sources = []
-        # How big that listing is for this session, against its budget. Log only, so
-        # it runs in the background and never delays the spawn.
+        # How big the skill listing is for this session, against its budget. Log only,
+        # so it runs in the background and never delays the spawn.
         _listing_cwd = _channel_sender_dir or working_directory
         if _listing_cwd:
-            schedule_log_listing(Path(_listing_cwd), context_window=_ctx_window,
+            from .skill_listing import schedule_log_listing
+            schedule_log_listing(Path(_listing_cwd),
+                                 context_window=self.get_model_context_window(model),
                                  overrides=CLI_SKILL_OVERRIDES)
-        # Compaction summary rules: a PreCompact COMMAND hook whose stdout the CLI
-        # appends to its summary prompt (core/compact_summary.py).
-        from .compact_summary import precompact_settings_hooks
-        _compact_hooks = precompact_settings_hooks()
-        if _compact_hooks:
-            cli_settings["hooks"] = _compact_hooks
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,

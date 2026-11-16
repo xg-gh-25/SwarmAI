@@ -4122,6 +4122,44 @@ class SessionUnit:
             "missing_servers": missing_names,
         }
 
+    def _spawn_alive_count(self) -> int:
+        """CLIs already running, for the spawn budget: the alive units, plus other
+        units' early spawns not yet adopted (their units are still COLD) and a running
+        model-access warm-up. 0 when the registry is unavailable."""
+        try:
+            from . import session_registry
+            router = session_registry.session_router
+            if router:
+                return router.alive_count + router.staged_spawn_count(exclude=self)
+        except Exception:
+            logger.debug("_spawn: suppressed exception on a fail-safe path", exc_info=True)
+        return 0  # Best-effort — penalty is 0 if registry unavailable
+
+    async def _check_spawn_budget(self) -> None:
+        """Raise ``ResourceExhaustedException`` when the spawn budget refuses this
+        spawn. A chat spawn goes before a model-access warm-up: refused while one runs,
+        the warm-up is ended (its CLI closed and killed) and the budget asked again."""
+        from .resource_monitor import resource_monitor
+        budget = resource_monitor.spawn_budget(alive_count=self._spawn_alive_count())
+        if not budget.can_spawn:
+            from . import model_access_warmer
+            if await model_access_warmer.yield_to_chat():
+                budget = resource_monitor.spawn_budget(alive_count=self._spawn_alive_count())
+        if not budget.can_spawn:
+            from .exceptions import ResourceExhaustedException
+            logger.warning(
+                "session_unit.spawn BLOCKED session_id=%s reason=%s",
+                self.session_id, budget.reason,
+            )
+            raise ResourceExhaustedException(
+                message=budget.reason,
+                detail=(
+                    f"available={budget.available_mb:.0f}MB, "
+                    f"cost={budget.estimated_cost_mb:.0f}MB, "
+                    f"headroom={budget.headroom_mb:.0f}MB"
+                ),
+            )
+
     async def _spawn(self, options: ClaudeAgentOptions, config: Optional[Any] = None) -> None:
         """Spawn a subprocess and adopt it: ``_spawn_client`` then ``_adopt_client``.
 
@@ -4163,33 +4201,7 @@ class SessionUnit:
 
         # Pre-spawn memory gate — check BEFORE acquiring locks
         # to avoid holding locks while waiting or failing.
-        from .resource_monitor import resource_monitor
-        _alive = 0
-        try:
-            from . import session_registry
-            router = session_registry.session_router
-            if router:
-                # CLIs already running: the alive units, plus other units' early
-                # spawns not yet adopted (their units are still COLD)
-                _alive = router.alive_count + router.staged_spawn_count(exclude=self)
-        except Exception:
-            logger.debug("_spawn: suppressed exception on a fail-safe path", exc_info=True)
-            pass  # Best-effort — penalty is 0 if registry unavailable
-        budget = resource_monitor.spawn_budget(alive_count=_alive)
-        if not budget.can_spawn:
-            from .exceptions import ResourceExhaustedException
-            logger.warning(
-                "session_unit.spawn BLOCKED session_id=%s reason=%s",
-                self.session_id, budget.reason,
-            )
-            raise ResourceExhaustedException(
-                message=budget.reason,
-                detail=(
-                    f"available={budget.available_mb:.0f}MB, "
-                    f"cost={budget.estimated_cost_mb:.0f}MB, "
-                    f"headroom={budget.headroom_mb:.0f}MB"
-                ),
-            )
+        await self._check_spawn_budget()
 
         # ── Sanitize: strip null bytes from system prompt & model ────
         # Null bytes (\x00) are invalid in POSIX process arguments and

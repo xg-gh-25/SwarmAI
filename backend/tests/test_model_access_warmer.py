@@ -69,7 +69,8 @@ async def _direct_io(fn, *args):
 def _warmer(tmp_path: Path, clock: Clock, client: FakeClient, budget=lambda: True):
     path = tmp_path / "cache" / "model-access.json"
     w = ModelAccessWarmer(clock=clock, path=lambda: path, client_factory=lambda opts: client,
-                          budget=budget, run_io=_direct_io)
+                          budget=budget, run_io=_direct_io,
+                          state=lambda: tmp_path / "model_access_warm.json")
     opts = MagicMock(model="m", settings='{"a": 1}', setting_sources=["project"],
                      cwd="/ws", cli_path=None, env={"X": "1"})
     w._template = maw.WarmTemplate.from_options(opts)
@@ -190,6 +191,7 @@ async def test_no_warm_when_spawn_budget_refuses(tmp_path):
     w, _ = _warmer(tmp_path, clock, client, budget=lambda: False)
     await w.warm_once({})
     assert client.connected == 0
+    assert w.running_count() == 0
     assert w._not_before == T0 + RETRY_S
 
 
@@ -321,3 +323,342 @@ def test_unreadable_budget_means_no_warm_up():
     from core import session_registry
     with patch.object(session_registry, "session_router", object()):   # no alive_count
         assert maw._budget_allows() is False
+
+
+# ── a restart: warm from a template built from the configuration ─────────────
+
+BUILT = {"model": "m-built", "settings": '{"b": 1}', "setting_sources": ["project"],
+         "cwd": "/ws", "cli_path": None, "env": {"G": "1"}}
+
+
+def _booting(tmp_path: Path, clock: Clock, client, *, factory=None, budget=lambda: True,
+             run_io=_direct_io):
+    """The warmer of a freshly started daemon: no chat spawn yet."""
+    cache = tmp_path / "cache" / "model-access.json"
+    return ModelAccessWarmer(clock=clock, path=lambda: cache,
+                             client_factory=factory or (lambda opts: client),
+                             budget=budget, run_io=run_io,
+                             state=lambda: tmp_path / "model_access_warm.json"), cache
+
+
+async def _stop_at_first_sleep(s):
+    raise _StopLoop()
+
+
+@pytest.mark.asyncio
+async def test_boot_warms_from_built_template_when_person_was_active(tmp_path):
+    """The process before the restart saw the person 5 minutes ago and learned the chat
+    key; the entry expired while the daemon was down. At start, with no chat spawn,
+    the warmer runs one warm-up from the built template, so the first cold start reads
+    a fresh entry instead of paying the probe."""
+    clock = Clock()
+    old, cache = _booting(tmp_path, Clock(T0 - 300), None)
+    old.note_activity()
+    old._key = "CHAT"
+    await old._save_state()
+
+    write_cache(cache, {"CHAT": T0 - FRESH_S - 60, "JOB": T0 - 100})
+    client = FakeClient(cache, clock, rewrites=["CHAT"])
+    seen = {}
+
+    def factory(opts):
+        seen["opts"] = opts
+        return client
+
+    w, _ = _booting(tmp_path, clock, client, factory=factory)
+    w._sleep = _stop_at_first_sleep
+    await w.start(None, lambda: dict(BUILT))
+    assert w._task is not None, "no loop started at boot"
+    with pytest.raises(_StopLoop):
+        await asyncio.wait_for(w._task, timeout=5)
+    assert client.connected == 1
+    o = seen["opts"]
+    assert (o.model, o.settings, o.setting_sources, str(o.cwd)) == ("m-built", '{"b": 1}', ["project"], "/ws")
+    assert o.env["G"] == "1"
+    assert clock() - maw.read_entries(cache)["CHAT"] < FRESH_S   # fresh for the first chat spawn
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["old", "missing", "garbage", "future", "infinite"])
+async def test_boot_without_recent_activity_starts_nothing(tmp_path, state):
+    """Last activity older than the window, no state file, one that is not JSON, or a
+    time after now (a clock set back, a damaged file): nobody is known to be active,
+    so start() starts no loop and no CLI."""
+    clock = Clock()
+    path = tmp_path / "model_access_warm.json"
+    if state == "old":
+        maw.write_state(path, T0 - maw.ACTIVE_WINDOW_S - 1, "CHAT")
+    elif state == "garbage":
+        path.write_text("{not json")
+    elif state == "future":
+        maw.write_state(path, T0 + 3600, "CHAT")
+    elif state == "infinite":
+        path.write_text('{"last_activity": Infinity, "key": "CHAT"}')
+    client = FakeClient(tmp_path / "cache" / "model-access.json", clock, rewrites=["CHAT"])
+    w, _ = _booting(tmp_path, clock, client)
+    await w.start(None, lambda: dict(BUILT))
+    assert w._task is None
+    assert client.connected == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_spawn_replaces_built_template(tmp_path):
+    clock = Clock()
+    captured = []
+    w, _ = _booting(tmp_path, clock, None, factory=lambda opts: captured.append(opts) or
+                    FakeClient(tmp_path / "cache" / "model-access.json", clock))
+    w._template_factory = lambda: dict(BUILT)
+    w._last_activity = clock()
+    await w.warm_once({})
+    w._ensure_task = lambda: None
+    w.note_spawn(MagicMock(model="m-chat", settings='{"c": 3}', setting_sources=["project"],
+                           cwd="/chat", cli_path=None, env={"H": "2"}))
+    w._not_before = float("-inf")
+    await w.warm_once({})
+    assert [o.model for o in captured] == ["m-built", "m-chat"]
+    assert captured[1].env["H"] == "2" and "G" not in captured[1].env
+
+
+@pytest.mark.asyncio
+async def test_persisted_state_holds_no_environment(tmp_path):
+    """The state file carries the last activity and the key only, written through the
+    warmer's IO runner (off the event loop) by its loop, never by note_activity."""
+    clock = Clock()
+    io_calls = []
+
+    async def run_io(fn, *args):
+        io_calls.append(fn.__name__)
+        return fn(*args)
+
+    cache = tmp_path / "cache" / "model-access.json"
+    write_cache(cache, {"CHAT": T0 - 10})
+    client = FakeClient(cache, clock)
+    w, _ = _booting(tmp_path, clock, client, run_io=run_io)
+    w._template = maw.WarmTemplate(model="m", settings='{"awsCredentialExport": "x"}',
+                                   setting_sources=["project"], cwd="/ws", cli_path=None,
+                                   env={"PROVIDER_ONLY_VAR": "env-only-value"})
+    w._key = "CHAT"
+    w._ensure_task = lambda: None
+    w.note_activity()
+    assert not (tmp_path / "model_access_warm.json").exists()   # note_activity: no IO
+    w._sleep = _stop_at_first_sleep
+    with pytest.raises(_StopLoop):
+        await w._run()
+    text = (tmp_path / "model_access_warm.json").read_text()
+    assert json.loads(text) == {"last_activity": T0, "key": "CHAT"}
+    assert "env-only-value" not in text and "awsCredentialExport" not in text
+    assert "write_state" in io_calls
+    # unchanged state: not written again
+    io_calls.clear()
+    with pytest.raises(_StopLoop):
+        await w._run()
+    assert "write_state" not in io_calls
+
+
+@pytest.mark.asyncio
+async def test_built_template_failure_backs_off(tmp_path):
+    """A template the configuration cannot give: the warm-up fails like any other
+    (no CLI, back-off, not counted)."""
+    clock = Clock()
+    client = FakeClient(tmp_path / "cache" / "model-access.json", clock)
+    w, _ = _booting(tmp_path, clock, client)
+
+    def broken():
+        raise RuntimeError("config unreadable")
+
+    w._template_factory = broken
+    await w.warm_once({})
+    assert client.connected == 0
+    assert w.running_count() == 0
+    assert w._not_before == T0 + RETRY_S
+
+
+@pytest.mark.asyncio
+async def test_built_template_matches_desktop_build_options(monkeypatch):
+    """The built template is what build_options gives a default desktop chat spawn with
+    the same configuration: model, settings, setting sources, cwd and the gateway env."""
+    from core import bedrock_thinking_gateway as gw
+    from core.prompt_builder import PromptBuilder
+    monkeypatch.setattr(gw, "_listen_port", 18321)
+    monkeypatch.delenv("SWARMAI_MODE", raising=False)
+    cfg = MagicMock()
+    values = {"thinking_mode": "adaptive", "thinking_effort": "high", "use_bedrock": True,
+              "default_model": "claude-opus-5-5"}
+    cfg.get = MagicMock(side_effect=lambda k, d=None: values.get(k, d))
+    cfg.get_model = MagicMock(return_value="claude-opus-5-5")
+    opts = await PromptBuilder(cfg).build_options(
+        agent_config={}, enable_skills=False, enable_mcp=False, resume_session_id=None,
+        session_context={"sdk_session_id": "sid"}, channel_context=None,
+        editor_context=None, terminal_context=None, cached_system_prompt="CACHED")
+    tpl = maw.WarmTemplate.from_fields(PromptBuilder(cfg).warm_up_template())
+    chat = maw.WarmTemplate.from_options(opts)
+    assert tpl.model == chat.model and tpl.model
+    assert tpl.settings == chat.settings
+    assert tpl.setting_sources == chat.setting_sources
+    assert tpl.cwd == chat.cwd
+    assert tpl.cli_path == chat.cli_path
+    assert tpl.env == {"ANTHROPIC_BEDROCK_BASE_URL": "http://127.0.0.1:18321/bedrock-gw"}
+    assert all(chat.env.get(k) == v for k, v in tpl.env.items())
+
+
+# ── the warm-up's CLI counts in the spawn budget ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_running_warm_up_counts_as_staged_spawn(tmp_path, monkeypatch):
+    """While the warm-up's CLI runs it is a staged spawn: the router's count (which the
+    chat spawn's budget check adds to alive_count) and the warmer's own budget check
+    both see it; once it is closed it is not counted."""
+    from core import session_registry
+    from core.resource_monitor import resource_monitor
+    from core.session_router import SessionRouter
+    clock = Clock()
+    router = SessionRouter(prompt_builder=MagicMock(), config=MagicMock())
+    monkeypatch.setattr(session_registry, "session_router", router)
+    asked: list[int] = []
+    monkeypatch.setattr(resource_monitor, "spawn_budget",
+                        lambda alive_count=0: asked.append(alive_count) or MagicMock(can_spawn=True))
+    client = FakeClient(tmp_path / "cache" / "model-access.json", clock, rewrites=["K"])
+    seen = {}
+    client.on_connect = lambda: seen.update(staged=router.staged_spawn_count(),
+                                            budget_ok=maw._budget_allows())
+    w, _ = _warmer(tmp_path, clock, client, budget=maw._budget_allows)
+    monkeypatch.setattr(maw, "WARMER", w)
+    assert router.staged_spawn_count() == 0
+    await w.warm_once({})
+    assert client.connected == 1
+    assert seen["staged"] == 1
+    assert asked == [0, 1]          # the warm-up's own check, then one made during it
+    assert router.staged_spawn_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_warm_up_count_released_on_failure_and_hang(tmp_path):
+    clock = Clock()
+    path = tmp_path / "cache" / "model-access.json"
+    w, _ = _warmer(tmp_path, clock, FakeClient(path, clock, error=RuntimeError("exit 1")))
+    await w.warm_once({})
+    assert w.running_count() == 0
+    w._client_factory = lambda opts: FakeClient(path, clock, hang=True)
+    w._not_before = float("-inf")
+    with patch.object(maw, "HANDSHAKE_CAP_S", 0.05):
+        await asyncio.wait_for(w.warm_once({}), timeout=5)
+    assert w.running_count() == 0
+    # cancelled mid-handshake (shutdown's stop())
+    w._not_before = float("-inf")
+    task = asyncio.ensure_future(w.warm_once({}))
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if w.running_count():
+            break
+    assert w.running_count() == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert w.running_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_activity_started_loop_lets_the_turn_probe_first(tmp_path):
+    """A loop that a chat turn (or a tab change) starts does not warm beside that turn's
+    own cold spawn: its first warm-up waits AFTER_ACTIVITY_S; start() at boot does not."""
+    clock = Clock()
+    client = FakeClient(tmp_path / "cache" / "model-access.json", clock, rewrites=["K"])
+    w, _ = _booting(tmp_path, clock, client)
+    w._template_factory = lambda: dict(BUILT)
+    w.note_activity()
+    assert w._task is not None
+    w.stop()
+    assert w.next_due({}, T0) == T0 + maw.AFTER_ACTIVITY_S
+
+    booted, _ = _booting(tmp_path, clock, client)
+    maw.write_state(tmp_path / "model_access_warm.json", T0 - 60, None)
+    await booted.start(None, lambda: dict(BUILT))
+    booted.stop()
+    assert booted.next_due({}, T0) == T0
+
+
+
+# ── a chat spawn goes before a warm-up ───────────────────────────────────────
+
+def _budget_full_beside_one_cli(monkeypatch, asked):
+    """A machine at its budget: one more CLI fits only when nothing else runs."""
+    from core.resource_monitor import resource_monitor
+
+    def spawn_budget(alive_count=0):
+        asked.append(alive_count)
+        return MagicMock(can_spawn=alive_count == 0, reason="memory", available_mb=1,
+                         estimated_cost_mb=2, headroom_mb=0)
+
+    monkeypatch.setattr(resource_monitor, "spawn_budget", spawn_budget)
+
+
+@pytest.mark.asyncio
+async def test_chat_spawn_refused_beside_a_warm_up_ends_it_first(tmp_path, monkeypatch):
+    """The budget refuses the chat spawn only because a warm-up's CLI runs: the
+    warm-up is ended (closed, uncounted) and the chat spawn admitted."""
+    from core import session_registry
+    from core.session_router import SessionRouter
+    from core.session_unit import SessionUnit
+    clock = Clock()
+    router = SessionRouter(prompt_builder=MagicMock(), config=MagicMock())
+    monkeypatch.setattr(session_registry, "session_router", router)
+    client = FakeClient(tmp_path / "cache" / "model-access.json", clock, hang=True)
+    w, _ = _warmer(tmp_path, clock, client)
+    monkeypatch.setattr(maw, "WARMER", w)
+    w._task = asyncio.ensure_future(w.warm_once({}))
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if w.running_count():
+            break
+    assert w.running_count() == 1
+    asked: list[int] = []
+    _budget_full_beside_one_cli(monkeypatch, asked)
+    unit = SessionUnit(session_id="chat-first", agent_id="default")
+    await asyncio.wait_for(unit._check_spawn_budget(), timeout=5)   # admitted, no raise
+    assert asked == [1, 0]
+    assert w.running_count() == 0 and w._task.done()
+    assert client.disconnected == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_spawn_refused_without_a_warm_up_still_raises(monkeypatch):
+    from core import session_registry
+    from core.exceptions import ResourceExhaustedException
+    from core.session_unit import SessionUnit
+    monkeypatch.setattr(session_registry, "session_router", None)
+    asked: list[int] = []
+    from core.resource_monitor import resource_monitor
+    monkeypatch.setattr(resource_monitor, "spawn_budget",
+                        lambda alive_count=0: asked.append(alive_count) or MagicMock(
+                            can_spawn=False, reason="memory", available_mb=1,
+                            estimated_cost_mb=2, headroom_mb=0))
+    unit = SessionUnit(session_id="chat-refused", agent_id="default")
+    with pytest.raises(ResourceExhaustedException):
+        await unit._check_spawn_budget()
+    assert asked == [0]
+
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_the_close_still_kills_the_warm_up_cli(tmp_path):
+    """yield_to_chat's cancel lands while the warm-up is closing its CLI (the close
+    hangs): the CLI is still SIGKILLed and the warm-up is no longer counted."""
+    clock = Clock()
+    client = FakeClient(tmp_path / "cache" / "model-access.json", clock, rewrites=["K"])
+    proc = MagicMock(returncode=None, pid=99998)
+    client._transport._process = proc
+    closing = asyncio.Event()
+
+    async def hanging_disconnect():
+        client.disconnected += 1
+        closing.set()
+        await asyncio.Event().wait()
+
+    client.disconnect = hanging_disconnect
+    w, _ = _warmer(tmp_path, clock, client)
+    w._task = asyncio.ensure_future(w.warm_once({}))
+    await asyncio.wait_for(closing.wait(), timeout=5)
+    assert w.running_count() == 1
+    assert await asyncio.wait_for(w.yield_to_chat(), timeout=5) is True
+    proc.kill.assert_called_once()
+    assert w.running_count() == 0

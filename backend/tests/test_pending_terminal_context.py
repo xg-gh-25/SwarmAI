@@ -184,6 +184,6 @@ def test_every_park_and_coalesce_site_carries_the_terminal_output():
     assert len(hand_backs) >= 2
     for c in hand_backs:
         assert c.rstrip(")").rstrip().endswith("terminal_context"), c
-    merge_at = src.index("query_content = self._merge_pending_into_query(")
+    merge_at = src.index("query_content = _with_turn_prefixes(self._merge_pending_into_query(")
     assert "combine_terminal(_claimed_pending)" in src[merge_at:merge_at + 800]
     assert "terminal_context=terminal," in src[src.index("async def drain_pending"):]

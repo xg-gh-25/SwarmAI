@@ -1704,6 +1704,30 @@ async def lifespan(app: FastAPI):
         heartbeat.start_heartbeat()
         _loop_tick_task = asyncio.create_task(heartbeat.loop_tick_loop())
 
+    # The model-access warmer (core/model_access_warmer): after a restart while the
+    # person was active it warms the CLI's model cache before the first chat spawn,
+    # from a template built from the configuration. Owner only (its state file is per
+    # data dir), after the leftover-CLI sweep above (which would kill its CLI) and once
+    # this server accepts requests: the warm-up CLI asks it for the SwarmAI account's
+    # credentials and is pointed at its thinking gateway.
+    _warmer_start_task = None
+    if _bjson_written:
+        async def _start_model_access_warmer() -> None:
+            from core import model_access_warmer
+            for _ in range(300):   # up to about 30 s for uvicorn to listen
+                if await asyncio.to_thread(_is_port_listening, "127.0.0.1", backend_port):
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                logger.info("model_access_warmer: port %d not listening, not started",
+                            backend_port)
+                return
+            pb = session_registry.prompt_builder
+            if pb is not None:
+                await model_access_warmer.start(app_config, pb.warm_up_template)
+
+        _warmer_start_task = asyncio.create_task(_start_model_access_warmer())
+
     yield
     # Shutdown
     _startup_complete = False
@@ -1797,6 +1821,8 @@ async def lifespan(app: FastAPI):
     await session_registry.stop_lifecycle()
     logger.info("LifecycleManager stopped")
     # no model-access warm-up may start a CLI while the sessions are torn down
+    if _warmer_start_task is not None and not _warmer_start_task.done():
+        _warmer_start_task.cancel()
     from core import model_access_warmer
     model_access_warmer.stop()
     await session_registry.disconnect_all()
