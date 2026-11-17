@@ -10,12 +10,27 @@
  * - `COMMENT_POPOVER_CLASS` / `COMMENT_TEXTAREA_CLASS` / `COMMENT_TEXTAREA_ROWS`
  *   — shared sizing, also used by FileEditorCore's selection-comment popover
  * - `clampToViewport` — keeps a fixed-position popover fully on screen
+ * - `useViewportClamp` — places a fixed popover at an anchor and keeps it on screen
+ *   while it, the window or the app zoom changes size
+ *
+ * Coordinates: everything handed to `clampToViewport` / `useViewportClamp` is in
+ * layout CSS px (what `style.top/left` are in). The app zooms with CSS `zoom` on
+ * <html>, under which `getBoundingClientRect()` and `innerWidth/innerHeight` stay in
+ * unzoomed client px, so a rect read for an anchor is multiplied by
+ * `clientToCssScale()` first (utils/layoutViewport.ts). Mixing the two put the
+ * popover past the window's right and bottom edges at any zoom above 100%.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useEscape } from '../../hooks/useLayer';
+import {
+  APP_ZOOM_EVENT,
+  clientToCssScale,
+  layoutViewportHeight,
+  layoutViewportWidth,
+} from '../../utils/layoutViewport';
 
 /** Popover shell: wide enough for a sentence or two of feedback per line. */
 export const COMMENT_POPOVER_CLASS =
@@ -27,19 +42,75 @@ export const COMMENT_TEXTAREA_ROWS = 6;
 
 const VIEWPORT_MARGIN = 8;
 
-/** Clamp a fixed popover's top-left so a `width`×`height` box stays on screen. */
+/**
+ * Clamp a fixed popover's top-left so a `width`×`height` box stays on screen.
+ * All values are layout CSS px (see the module header).
+ */
 export function clampToViewport(
   top: number,
   left: number,
   width: number,
   height: number,
 ): { top: number; left: number } {
-  const maxTop = window.innerHeight - height - VIEWPORT_MARGIN;
-  const maxLeft = window.innerWidth - width - VIEWPORT_MARGIN;
+  const maxTop = layoutViewportHeight() - height - VIEWPORT_MARGIN;
+  const maxLeft = layoutViewportWidth() - width - VIEWPORT_MARGIN;
   return {
     top: Math.max(VIEWPORT_MARGIN, Math.min(top, maxTop)),
     left: Math.max(VIEWPORT_MARGIN, Math.min(left, maxLeft)),
   };
+}
+
+export interface ClampedPlacement {
+  top: number;
+  left: number;
+  /** The popover never grows taller than the window; past this it scrolls inside. */
+  maxHeight: number;
+}
+
+/**
+ * Place the fixed popover in `ref` at `getAnchor()` (layout CSS px), clamped to the
+ * window. Re-places it whenever the popover changes size (the comment box is
+ * drag-resizable, so a box opened at the bottom edge used to push its buttons off
+ * screen), on scroll (the anchor line moves), on window resize and on app zoom
+ * (CSS zoom fires no resize event). Returns null until the first measurement, which
+ * happens in a layout effect, before the first paint.
+ */
+export function useViewportClamp(
+  ref: React.RefObject<HTMLElement | null>,
+  getAnchor: () => { top: number; left: number } | null,
+): ClampedPlacement | null {
+  const [placement, setPlacement] = useState<ClampedPlacement | null>(null);
+
+  const place = useCallback(() => {
+    const el = ref.current;
+    const anchor = getAnchor();
+    if (!el || !anchor) return;
+    const { top, left } = clampToViewport(anchor.top, anchor.left, el.offsetWidth, el.offsetHeight);
+    const maxHeight = layoutViewportHeight() - 2 * VIEWPORT_MARGIN;
+    setPlacement((prev) =>
+      prev && prev.top === top && prev.left === left && prev.maxHeight === maxHeight
+        ? prev
+        : { top, left, maxHeight },
+    );
+  }, [ref, getAnchor]);
+
+  useLayoutEffect(() => {
+    place();
+    const el = ref.current;
+    const observer = el && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => place()) : null;
+    if (el && observer) observer.observe(el);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    window.addEventListener(APP_ZOOM_EVENT, place);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+      window.removeEventListener(APP_ZOOM_EVENT, place);
+    };
+  }, [place, ref]);
+
+  return placement;
 }
 
 interface CommentPopoverProps {
@@ -55,7 +126,7 @@ interface CommentPopoverProps {
   onDelete?: () => void;
   /** Called to immediately send this single comment to the agent. */
   onSendSingle?: (text: string) => void;
-  /** Vertical offset from top of the editor area (px). */
+  /** Vertical offset of the line from the top of the anchor (layout CSS px). */
   topOffset: number;
   /** Ref to the gutter container — used to calculate portal position. */
   anchorRef?: React.RefObject<HTMLDivElement | null>;
@@ -76,28 +147,15 @@ export default function CommentPopover({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  // Calculate screen-absolute position from the gutter anchor.
-  // Re-runs on scroll/resize so the popover tracks the anchor.
-  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
-
-  const recalcPosition = useCallback(() => {
-    if (!anchorRef?.current) return;
+  // Anchor: just right of the gutter, at the clicked line. The gutter rect is client
+  // px, `topOffset` is CSS px (line height × index), so the rect is scaled first.
+  const getAnchor = useCallback(() => {
+    if (!anchorRef?.current) return null;
     const rect = anchorRef.current.getBoundingClientRect();
-    const measuredHeight = popoverRef.current?.offsetHeight ?? 260;
-    const measuredWidth = popoverRef.current?.offsetWidth ?? 448;
-    setPosition(clampToViewport(rect.top + topOffset, rect.right + 4, measuredWidth, measuredHeight));
+    const s = clientToCssScale();
+    return { top: rect.top * s + topOffset, left: rect.right * s + 4 };
   }, [anchorRef, topOffset]);
-
-  // Initial position + reposition on scroll/resize
-  useEffect(() => {
-    recalcPosition();
-    window.addEventListener('scroll', recalcPosition, true);
-    window.addEventListener('resize', recalcPosition);
-    return () => {
-      window.removeEventListener('scroll', recalcPosition, true);
-      window.removeEventListener('resize', recalcPosition);
-    };
-  }, [recalcPosition]);
+  const position = useViewportClamp(popoverRef, getAnchor);
 
   useEffect(() => {
     // Auto-focus and select text on mount
@@ -145,7 +203,9 @@ export default function CommentPopover({
     <div
       ref={popoverRef}
       className={COMMENT_POPOVER_CLASS}
-      style={position ? { top: position.top, left: position.left } : { top: topOffset, left: 0 }}
+      style={position
+        ? { top: position.top, left: position.left, maxHeight: position.maxHeight, overflowY: 'auto' }
+        : { top: topOffset, left: 0 }}
       data-testid="comment-popover"
     >
       {/* Header */}

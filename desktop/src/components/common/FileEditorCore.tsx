@@ -49,9 +49,10 @@ import CommentPopover, {
   COMMENT_POPOVER_CLASS,
   COMMENT_TEXTAREA_CLASS,
   COMMENT_TEXTAREA_ROWS,
-  clampToViewport,
+  useViewportClamp,
 } from './CommentPopover';
 import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
+import { clientToCssScale, layoutViewportWidth } from '../../utils/layoutViewport';
 
 // HIGHLIGHT_MAX_CHARS / shouldProcessSync live in ./editorLimits (shared with the
 // preview table, ./filePreviews, which FileEditorCore imports — no import cycle).
@@ -339,14 +340,11 @@ function SelectionCommentPopover({
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  // Keep the (large) popover on screen: measure after mount, clamp to the viewport.
+  // Keep the (large, drag-resizable) popover on screen while it, the window or the
+  // app zoom changes size. `position` is layout CSS px (see selectionPopoverPos).
   const anchorTop = position.top + 28;
-  const [clamped, setClamped] = useState<{ top: number; left: number } | null>(null);
-  useLayoutEffect(() => {
-    const el = popoverRef.current;
-    if (!el) return;
-    setClamped(clampToViewport(anchorTop, position.left, el.offsetWidth, el.offsetHeight));
-  }, [anchorTop, position.left]);
+  const getAnchor = useCallback(() => ({ top: anchorTop, left: position.left }), [anchorTop, position.left]);
+  const clamped = useViewportClamp(popoverRef, getAnchor);
 
   // Click-outside dismisses
   useEffect(() => {
@@ -374,7 +372,9 @@ function SelectionCommentPopover({
     <div
       ref={popoverRef}
       className={COMMENT_POPOVER_CLASS}
-      style={clamped ?? { top: anchorTop, left: position.left }}
+      style={clamped
+        ? { top: clamped.top, left: clamped.left, maxHeight: clamped.maxHeight, overflowY: 'auto' }
+        : { top: anchorTop, left: position.left }}
       data-testid="selection-comment-popover"
     >
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-hover)] rounded-t-lg">
@@ -741,6 +741,9 @@ export default function FileEditorCore({
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [activeLineNumber, setActiveLineNumber] = useState<number | undefined>(undefined);
   const [selectionText, setSelectionText] = useState('');
+  // Where the selection toolbar / comment popover sit, in layout CSS px (what
+  // `style.top/left` are in). Producers scale client-px rects by clientToCssScale(),
+  // so the popover lands on the selection at any app zoom.
   const [selectionPopoverPos, setSelectionPopoverPos] = useState<{ top: number; left: number } | null>(null);
   const [showSelectionComment, setShowSelectionComment] = useState(false);
   // Lines of the current selection (source view only; the preview has no line map).
@@ -1068,10 +1071,11 @@ export default function FileEditorCore({
     if (sel && text.trim() && box && sel.anchorNode && box.contains(sel.anchorNode)) {
       const range = sel.getRangeAt(0);
       const r = range.getBoundingClientRect();
+      const sc = clientToCssScale();
       lastSelectionRef.current = { kind: 'preview', range: range.cloneRange() };
       setSelectionText(text);
       setSelectionLines(null);
-      setSelectionPopoverPos({ top: r.bottom + 4, left: Math.max(8, Math.min(r.left, window.innerWidth - 240)) });
+      setSelectionPopoverPos({ top: r.bottom * sc + 4, left: Math.max(8, Math.min(r.left * sc, layoutViewportWidth() - 240)) });
     } else if (!showSelectionComment) {
       setSelectionText('');
       setSelectionPopoverPos(null);
@@ -1458,7 +1462,10 @@ export default function FileEditorCore({
         content.slice(0, ta.selectionEnd).split('\n').length,
       ]);
       // Position floating button near end of selection using textarea geometry
-      const rect = ta.getBoundingClientRect();
+      // The rect is client px; padding, line height and scrollTop are CSS px.
+      const sc = clientToCssScale();
+      const cr = ta.getBoundingClientRect();
+      const rect = { top: cr.top * sc, bottom: cr.bottom * sc, left: cr.left * sc, right: cr.right * sc, width: cr.width * sc };
       const computedStyle = window.getComputedStyle(ta);
       const lineHeight = parseFloat(computedStyle.lineHeight) || 24;
       const paddingTop = parseFloat(computedStyle.paddingTop) || 16;
@@ -2052,9 +2059,11 @@ export default function FileEditorCore({
                           if (!changedText.trim()) return; // Guard: no empty selection → stuck UI
                           setSelectionText(changedText);
                           setShowSelectionComment(true);
+                          const rootRect = rootRef.current?.getBoundingClientRect();
+                          const sc = clientToCssScale();
                           setSelectionPopoverPos({
-                            top: (rootRef.current?.getBoundingClientRect().top ?? 0) + 50,
-                            left: (rootRef.current?.getBoundingClientRect().left ?? 0) + 100,
+                            top: (rootRect?.top ?? 0) * sc + 50,
+                            left: (rootRect?.left ?? 0) * sc + 100,
                           });
                           setHighlightedLines(new Set());
                         }}

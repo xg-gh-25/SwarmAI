@@ -2,9 +2,11 @@
  * FileViewerPanel under app zoom (`<html style.zoom>`, useZoom).
  *
  * Under CSS zoom on <html>, window.innerWidth stays in unzoomed px while layout
- * runs in zoomed CSS px (measured in WKWebView and Chromium 143 at zoom 2 on an
- * 1100px window: innerWidth 1100, documentElement.clientWidth 550; pointer
- * clientX and getBoundingClientRect are unzoomed too). The Canvas used innerWidth
+ * runs in zoomed CSS px (pointer clientX and getBoundingClientRect are unzoomed
+ * too). documentElement.clientWidth is NOT a reliable zoom signal: an earlier
+ * engine reported the zoomed width (550 on 1100px at zoom 2), WebKit 26.5 and
+ * Chromium 149 report the window width unchanged; the helpers read
+ * `currentCSSZoom` instead. The Canvas used innerWidth
  * for every width and the raw clientX delta for drags, so at zoom > 1 it took
  * zoom-times its share (chat starved) and its edge outran the pointer.
  *
@@ -42,6 +44,7 @@ let rafSpy: ReturnType<typeof vi.spyOn> | undefined;
 /** Emulate `<html style.zoom = zoom>` on a window `windowPx` wide. */
 function setZoomedViewport(windowPx: number, zoom: number) {
   Object.defineProperty(window, 'innerWidth', { value: windowPx, writable: true, configurable: true });
+  Object.defineProperty(html, 'currentCSSZoom', { value: zoom, configurable: true });
   Object.defineProperty(html, 'clientWidth', { value: Math.round(windowPx / zoom), configurable: true });
   html.getBoundingClientRect = () =>
     ({ x: 0, y: 0, left: 0, top: 0, right: windowPx, bottom: 700, width: windowPx, height: 700, toJSON: () => ({}) }) as DOMRect;
@@ -61,6 +64,7 @@ beforeEach(() => {
 afterEach(() => {
   Object.defineProperty(window, 'innerWidth', { value: origInnerWidth, writable: true, configurable: true });
   delete (html as unknown as Record<string, unknown>).clientWidth;
+  delete (html as unknown as Record<string, unknown>).currentCSSZoom;
   delete (html as unknown as Record<string, unknown>).getBoundingClientRect;
   rafSpy?.mockRestore();
 });
@@ -70,6 +74,14 @@ describe('layoutViewport helpers', () => {
     setZoomedViewport(1100, 2);
     expect(layoutViewportWidth()).toBe(550);
     expect(clientToCssScale()).toBe(0.5);
+  });
+
+  it('read the zoom itself when clientWidth stays unzoomed (WebKit 26.5, Chromium 149)', () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1400, writable: true, configurable: true });
+    Object.defineProperty(html, 'clientWidth', { value: 1400, configurable: true });
+    Object.defineProperty(html, 'currentCSSZoom', { value: 1.2000000476837158, configurable: true });
+    expect(layoutViewportWidth()).toBeCloseTo(1400 / 1.2, 6);
+    expect(clientToCssScale()).toBeCloseTo(1 / 1.2, 6);
   });
 
   it('fall back to innerWidth and scale 1 when there is no layout (jsdom, boot)', () => {
