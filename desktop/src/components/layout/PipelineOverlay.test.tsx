@@ -4,15 +4,18 @@ import type React from 'react';
  * docs/design/2026-11-01-brain-eval-and-runs.md §4).
  *
  * Questions, one per test:
- * - does the Runs tab list this machine's runs and the Hive pipeline runs (a native Hive
- *   run stays out), each tagged where it ran, waiting-for-you on top, the tab's label
- *   carrying the waiting count?
+ * - does the Line tab (the default) list this machine's runs and the Hive pipeline runs (a
+ *   native Hive run stays out), each tagged where it ran (a neutral pill, never the old
+ *   viz-2 orange), waiting-for-you on top, the tab's label carrying the waiting count?
+ * - does the Line draw a run in flight as a track whose chip sits at its stage and opens
+ *   its big card, with ↺N where a stage reran?
  * - does the filter (where, Brain) hold across the two tabs?
  * - does a local row open the big card, whose commands come from the backend, and do
  *   answering, resuming, cancelling and confirming a landing go through the run's routes
  *   (the run's session continues it)?
  * - does a Hive row open Swarm Out's card, and does a run the overlay was opened at open?
- * - does the Metrics tab show the distribution and switch between the five measures?
+ * - does the Eval tab read the S7 measures, with what nothing records said as such
+ *   (never 0), and a By-Brain table?
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
@@ -67,7 +70,10 @@ const ANALYTICS = {
   byProject: [
     { project: 'SwarmAI', runs: [
       run({ id: 'run_done', requirement: 'Ship feature X' }),
-      run({ id: 'run_ask', requirement: 'Pick storage', status: 'paused', pauseKind: 'decision', needsYou: true, landing: null }),
+      run({ id: 'run_ask', requirement: 'Pick storage', status: 'paused', pauseKind: 'decision', needsYou: true, landing: null,
+        stage: 'build', stages: [{ name: 'evaluate', status: 'completed', attempts: 1 }, { name: 'think', status: 'completed', attempts: 1 },
+          { name: 'plan', status: 'completed', attempts: 2 }, { name: 'build', status: 'open', attempts: 1 }, { name: 'review', status: 'pending', attempts: null },
+          { name: 'test', status: 'pending', attempts: null }, { name: 'deliver', status: 'pending', attempts: null }, { name: 'reflect', status: 'pending', attempts: null }] }),
       run({ id: 'run_drop', requirement: 'Dropped one', status: 'abandoned', needsYou: true, landing: null }),
     ] },
     { project: 'AIDLC', runs: [run({ id: 'run_aidlc', requirement: 'Other brain' })] },
@@ -123,7 +129,7 @@ describe('PipelineOverlay', () => {
     const you = screen.getByTestId('pipeline-section-you').nextElementSibling as HTMLElement;
     expect(within(you).getAllByRole('button', { name: /Pick storage|Dropped one/ }).map((b) => b.getAttribute('data-testid')))
       .toEqual(['pipeline-run-run_ask', 'pipeline-run-run_drop']);      // to answer before to confirm
-    expect(screen.getByTestId('pipeline-tab-runs').textContent).toContain('2');
+    expect(screen.getByTestId('pipeline-tab-line').textContent).toContain('2');
     expect(within(screen.getByTestId('pipeline-run-run_ask')).getByTestId('pipeline-row-tag').textContent).toBe('Answer');
     expect(within(screen.getByTestId('pipeline-run-run_drop')).getByTestId('pipeline-row-tag').textContent).toBe('Confirm it landed');
     fireEvent.click(screen.getByTestId('pipeline-section-done'));
@@ -133,6 +139,36 @@ describe('PipelineOverlay', () => {
     expect(within(screen.getByTestId('pipeline-run-run_done')).getByTestId('pipeline-row-where').textContent).toBe('This machine');
     expect(screen.queryByTestId('pipeline-run-native')).toBeNull();     // a native Hive run stays in Swarm Out
     expect(screen.queryByTestId('pipeline-overall')).toBeNull();        // no row of totals
+    const pill = within(screen.getByTestId('pipeline-run-d1')).getByTestId('pipeline-row-where');
+    expect(pill.getAttribute('style') ?? '').not.toContain('viz-2');    // a neutral pill
+  });
+
+  it('the Line: a run in flight is a track at its stage; its chip opens the big card', async () => {
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-track-run_ask')).toBeInTheDocument());
+    const track = screen.getByTestId('pipeline-track-run_ask');
+    expect(track.getAttribute('data-kind')).toBe('you');
+    const chip = screen.getByTestId('pipeline-track-chip-run_ask');
+    expect(chip.closest('[data-station]')?.getAttribute('data-station')).toBe('build');
+    expect(chip.textContent).toContain('Answer');
+    expect(within(track).getByTestId('pipeline-track-rounds').textContent).toBe('↺2');
+    expect(within(track).getByTestId('pipeline-track-rounds').closest('[data-station]')?.getAttribute('data-station')).toBe('plan');
+    expect(screen.getByTestId('pipeline-station-build').textContent).toContain('1');
+    expect(screen.getByTestId('pipeline-line-verdict').textContent).toMatch(/2 runs on the line.*2 wait on you/);
+    expect(screen.queryByTestId('pipeline-track-run_done')).toBeNull();   // finished: in Done, not on the line
+    expect(screen.getByTestId('pipeline-time-none')).toBeInTheDocument();  // no stage times recorded: said, not 0
+    fireEvent.click(chip);
+    await waitFor(() => expect(screen.getByTestId('pipeline-card')).toBeInTheDocument());
+    expect(fetchRunView).toHaveBeenCalledWith('run_ask');
+  });
+
+  it('nothing waits on you: no Waiting strip', async () => {
+    fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [{ project: 'AIDLC', runs: [run({ id: 'run_aidlc', requirement: 'Other brain' })] }] });
+    HIVE = { runs: [], asks: [] };
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-line')).toBeInTheDocument());
+    expect(screen.queryByTestId('pipeline-section-you')).toBeNull();
+    expect(screen.getByTestId('pipeline-line-empty')).toBeInTheDocument();
   });
 
   it('the filter holds across the tabs', async () => {
@@ -140,12 +176,12 @@ describe('PipelineOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('pipeline-where-hive'));
     expect(screen.queryByTestId('pipeline-run-run_ask')).toBeNull();
-    fireEvent.click(screen.getByTestId('pipeline-tab-metrics'));
-    expect(screen.getByTestId('pipeline-dist-total').textContent).toBe('1');
+    fireEvent.click(screen.getByTestId('pipeline-tab-eval'));
+    expect(screen.getAllByTestId('pipeline-eval-brain').map((r) => r.firstElementChild?.textContent)).toEqual(['SwarmAI']);
     fireEvent.click(screen.getByTestId('pipeline-where-all'));
     fireEvent.change(screen.getByTestId('pipeline-brain-filter'), { target: { value: 'AIDLC' } });
-    expect(screen.getByTestId('pipeline-dist-total').textContent).toBe('1');
-    fireEvent.click(screen.getByTestId('pipeline-tab-runs'));
+    expect(screen.getAllByTestId('pipeline-eval-brain').map((r) => r.firstElementChild?.textContent)).toEqual(['AIDLC']);
+    fireEvent.click(screen.getByTestId('pipeline-tab-line'));
     fireEvent.click(screen.getByTestId('pipeline-section-done'));
     expect(screen.getByTestId('pipeline-run-run_aidlc')).toBeInTheDocument();
     expect(screen.queryByTestId('pipeline-run-run_done')).toBeNull();
@@ -227,19 +263,23 @@ describe('PipelineOverlay', () => {
     expect(screen.queryByTestId('pipeline-card')).toBeNull();            // a Brain is not a run to open
   });
 
-  it('Metrics: the distribution, and the five measures each with its chart', async () => {
-    open();
-    await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pipeline-tab-metrics'));
-    expect(screen.getByTestId('pipeline-dist-total').textContent).toBe('5');
-    expect(screen.getByTestId('pipeline-dist-hive').textContent).toContain('demo 1');
-    expect(screen.getByTestId('pipeline-measure-delivery').textContent).toContain('3 / 5');
-    expect(screen.getByTestId('pipeline-drill-delivery')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('pipeline-measure-cost'));
-    expect(screen.getByTestId('pipeline-drill-cost')).toBeInTheDocument();
-    expect(screen.getByTestId('pipeline-measure-cost').textContent).toContain('M');
-    fireEvent.click(screen.getByTestId('pipeline-measure-speed'));
-    fireEvent.click(screen.getAllByTestId('pipeline-speed-dot')[0]);
-    await waitFor(() => expect(screen.getByTestId('pipeline-card')).toBeInTheDocument());
+  it('Eval: the S7 measures in order; what nothing records says so, never 0', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-11-01T12:00:00Z'));
+    try {
+      open();
+      await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('pipeline-tab-eval'));
+      const ids = Array.from(screen.getByTestId('pipeline-eval').querySelectorAll('[data-testid^="pipeline-eval-m"]'))
+        .map((e) => e.getAttribute('data-testid')).filter((x) => /^pipeline-eval-m\d$/.test(x ?? ''));
+      expect(ids).toEqual(['pipeline-eval-m1', 'pipeline-eval-m2', 'pipeline-eval-m3', 'pipeline-eval-m4', 'pipeline-eval-m6', 'pipeline-eval-m5']);
+      expect(screen.getByTestId('pipeline-eval-m3-value').textContent).toBe('not recorded');
+      expect(screen.getByTestId('pipeline-eval-m4-value').textContent).toContain('M');   // tokens recorded, $ not
+      expect(screen.getByTestId('pipeline-eval-m4-value').textContent).not.toContain('$');
+      expect(screen.getByTestId('pipeline-eval-m1-sub').textContent).toMatch(/of \d+ finished runs nobody stepped into · 95% range/);
+      expect(screen.getAllByTestId('pipeline-eval-brain').map((r) => r.firstElementChild?.textContent)).toEqual(['SwarmAI', 'AIDLC']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

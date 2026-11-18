@@ -1948,15 +1948,14 @@ body {
   background-color: color-mix(in srgb, var(--color-primary) 28%, transparent);
 }
 
-/* chart series (Pipelines metrics; dataviz categorical slots 1-3, validated on
-   #f8fafc / #111318): where a run ran (this machine, a Hive), then a third series */
-:root {
-  --viz-1: #2a78d6;
-  --viz-2: #eb6834;
-  --viz-3: #1baf7a;
+/* the Pipelines Line (components/layout/PipelineLine): light purple marks what the
+   dispatching agent holds (it judges a run come back from a Hive); a running track's
+   segment moves, still under reduced motion */
+:root { --line-judge: #6d5bd0; }
+:root.dark { --line-judge: #a395f2; }
+.pipeline-line-flow {
+  background-image: repeating-linear-gradient(90deg, color-mix(in srgb, white 55%, transparent) 0 3px, transparent 3px 14px);
+  animation: pipeline-line-flow 1.1s linear infinite;
 }
-:root.dark {
-  --viz-1: #3987e5;
-  --viz-2: #d95926;
-  --viz-3: #199e70;
-}
+@keyframes pipeline-line-flow { from { background-position: 0 0; } to { background-position: 14px 0; } }
+@media (prefers-reduced-motion: reduce) { .pipeline-line-flow { animation: none; } }

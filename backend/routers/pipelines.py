@@ -341,8 +341,29 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         report_path=(f"Projects/{project}/.artifacts/runs/{raw.get('id')}/REPORT.md"
                      if report.is_file() else None),
         audit_card=raw.get("audit_card"),
+        stage=raw.get("stage") if isinstance(raw.get("stage"), str) and raw.get("stage") else None,
+        stages=_stages(raw) if isinstance(raw.get("stages"), dict) else None,
+        stage_timeline=_timeline(raw),
         **_card_facts(raw, status),
     )
+
+
+def _timeline(raw: dict) -> Optional[dict[str, dict]]:
+    """run.json stage_timeline as the summary carries it: each stage's entry with its
+    readable fields only; None when the run records none."""
+    value = raw.get("stage_timeline")
+    if not isinstance(value, dict):
+        return None
+    out: dict[str, dict] = {}
+    for stage, entry in value.items():
+        if not isinstance(stage, str) or not isinstance(entry, dict):
+            continue
+        out[stage[:20]] = {
+            "entered_at": entry.get("entered_at") if isinstance(entry.get("entered_at"), str) else None,
+            "active_s": _num(entry.get("active_s")),
+            "wait_s": _num(entry.get("wait_s")),
+        }
+    return out
 
 
 def _agent_mode(raw: dict) -> Optional[str]:
@@ -400,8 +421,9 @@ async def pipeline_analytics(
     window: str = Query("30d", description="Trend window: always 30d (kept for old clients)"),
 ) -> PipelineAnalytics:
     """Overall rollup + weekly trend + by-project groups over the v1 runs of the
-    30-day window. Each project lists its newest 20 runs plus every run that needs
-    you. Always 200."""
+    30-day window. Each project lists every run of the window, newest first: the
+    Pipelines Eval compares the window's halves and counts the runs started, so a run
+    left out would skew both. Always 200."""
     all_runs = await executors.run_nav(_load_pipeline_runs)
 
     def _build() -> list[tuple[dict, PipelineRunSummary, str]]:
@@ -436,15 +458,13 @@ async def pipeline_analytics(
     groups = []
     for project, summaries in sorted(by_project.items()):
         summaries.sort(key=lambda s: s.updated_at or s.created_at, reverse=True)
-        newest = summaries[:20]
-        visible = newest + [s for s in summaries[20:] if s.needs_you]
         done = sum(1 for s in summaries if s.status == "completed")
         groups.append(PipelineProjectGroup(
             project=project, run_count=len(summaries),
             completion_rate=round(done / len(summaries), 3),
             avg_cycle_min=_avg([s.cycle_time_min for s in summaries
                                 if s.cycle_time_min is not None]),
-            aborted_count=sum(1 for s in summaries if s.needs_you), runs=visible))
+            aborted_count=sum(1 for s in summaries if s.needs_you), runs=summaries))
     groups.sort(key=lambda g: g.run_count, reverse=True)
     total = len(rows)
     return PipelineAnalytics(

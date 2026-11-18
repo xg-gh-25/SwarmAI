@@ -6,8 +6,11 @@
  * Three sections: Waiting for you (needs your answer > awaiting acceptance > stopped,
  * the longest waiting first; always on top), Running, Recently done (open, the latest to
  * end first; it folds). A row is its status dot, title, Brain · execution · Hive, when it
- * started and ended, the one autonomy word, what it asks of you, how long it waited, an always-visible "Open session ↗", and "■ Stop" while it
- * runs. No accept button on a row (accepting without looking at what came back is not
+ * started and ended, its dispatch track (SENT · ON HIVE · RETURN · LAND · JUDGE, ./track:
+ * where it stands on its way back, amber only when it is yours, light purple while the
+ * dispatching agent holds it), the one autonomy word, what it asks of you, how long it
+ * waited, an always-visible "Open session ↗", and "■ Stop" while it runs. The work
+ * packages of one Swarm Run sit together in their section under one line. No accept button on a row (accepting without looking at what came back is not
  * accepting), no inline expansion, no search: sections, order, Brain chips (made from
  * the rows, with counts) and the card's J / K reach every run.
  */
@@ -20,9 +23,53 @@ import { useOpenRun } from './openSession';
 import { RunOverlay } from './RunOverlay';
 import { actionOf, ago, autonomyWord, brainChips, clock, DONE_STAGES, endedAt, funnelWord, sections, stageLabel, stageOf, taskTag, waitingSince } from './runReview';
 import { runTone, TONE_VAR, type Tone } from './tone';
+import { DISPATCH_STATIONS, dispatchTrack, type ChipKind } from './track';
 
 const muted = 'text-[var(--color-text-muted)]';
 const RUNNING_SHOWN = 5;
+
+/** A track's colour per chip kind: one meaning each (./tone; light purple: the agent's). */
+const KIND_COLOR: Record<ChipKind, string> = {
+  run: TONE_VAR.busy, judge: 'var(--line-judge)', you: TONE_VAR.attention, stop: TONE_VAR.error, done: 'var(--color-text-muted)',
+};
+
+/** The run's place on its way back: five stations, the ones passed filled, its own one
+ *  named and coloured by what it is (./track). */
+export function FunnelTrack({ r }: { r: SwarmOutRun }) {
+  const { t } = useTranslation();
+  const { at, kind } = dispatchTrack(r);
+  const idx = DISPATCH_STATIONS.indexOf(at);
+  const color = KIND_COLOR[kind];
+  return (
+    <div className="min-w-0" data-testid="swarm-out-row-track" data-at={at} data-kind={kind}
+      title={DISPATCH_STATIONS.map((s) => t(`swarmOut.track.${s}`)).join(' → ')}>
+      <div className="flex items-center gap-[3px]" aria-hidden>
+        {DISPATCH_STATIONS.map((s, i) => (
+          <span key={s} className="h-[4px] flex-1 rounded-full"
+            style={{ background: i < idx || kind === 'done' ? `color-mix(in srgb, ${color} 45%, transparent)` : i === idx ? color : 'var(--color-border)',
+              borderStyle: i === idx && kind === 'stop' ? 'dashed' : undefined }} />
+        ))}
+      </div>
+      <div className="text-[11px] mt-0.5 font-semibold truncate" style={{ color }} data-testid="swarm-out-row-station">{t(`swarmOut.track.${at}`)}</div>
+    </div>
+  );
+}
+
+/** The rows in their order, with the work packages of one Swarm Run brought together
+ *  (where its first package stands) under one line. */
+function withSwarmRuns(rows: SwarmOutRun[], all: SwarmOutRun[]): ({ lead: string; count: number } | SwarmOutRun)[] {
+  const out: ({ lead: string; count: number } | SwarmOutRun)[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (!r.parent_run) { out.push(r); continue; }
+    if (seen.has(r.parent_run)) continue;
+    seen.add(r.parent_run);
+    const kids = rows.filter((x) => x.parent_run === r.parent_run);
+    // the line counts every package of the Swarm Run, in any section
+    out.push({ lead: r.parent_run, count: all.filter((x) => x.parent_run === r.parent_run).length }, ...kids);
+  }
+  return out;
+}
 
 function StopButton({ r, onDone }: { r: SwarmOutRun; onDone: () => void }) {
   const { t } = useTranslation();
@@ -86,7 +133,7 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
     <div role="button" tabIndex={0} onClick={onOpen} aria-label={r.title}
       onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
       className="grid items-center gap-2.5 px-2.5 py-[7px] rounded-lg hover:bg-[var(--color-hover)] cursor-pointer min-w-0"
-      style={{ gridTemplateColumns: '10px minmax(0,1fr) auto auto auto auto' }}
+      style={{ gridTemplateColumns: `10px minmax(0,1fr) ${compact ? '96px' : '150px'} auto auto auto auto` }}
       data-testid="swarm-out-row" data-stage={stage} data-id={r.dispatch_id}>
       <Dot tone={tone} className={tone === 'busy' ? 'swarm-out-icon--busy' : ''} />
       <div className="min-w-0">
@@ -97,6 +144,7 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
             ended ? t('swarmOut.review.endedAt', { at: clock(ended, now) }) : null].filter(Boolean).join(' · ')}
         </div>
       </div>
+      <FunnelTrack r={r} />
       {word && !compact ? <span className="text-[11px] px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" style={wordStyle} data-testid="swarm-out-row-autonomy">{word.text}</span> : <span />}
       {tag ? <span className="text-[12px] px-[9px] py-[2px] rounded-md whitespace-nowrap font-semibold" style={TAG_STYLE[tag.key]} data-testid="swarm-out-row-tag">{tag.text}</span>
         : funnel ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.busy }} data-testid="swarm-out-row-funnel">{funnel}</span>
@@ -142,7 +190,11 @@ export function RunList({ runs, asks, answered = [], now, onReload, compact = fa
       <span className={`text-[12px] tabular-nums ${muted}`}>{n}</span>
     </div>
   );
-  const row = (r: SwarmOutRun) => <Row key={r.dispatch_id} r={r} asks={asks} now={now} onOpen={() => openRun(r.dispatch_id)} onReload={onReload} compact={compact} />;
+  const one = (r: SwarmOutRun) => <Row key={r.dispatch_id} r={r} asks={asks} now={now} onOpen={() => openRun(r.dispatch_id)} onReload={onReload} compact={compact} />;
+  const rowsOf = (list: SwarmOutRun[]) => withSwarmRuns(list, shown).map((x) => ('lead' in x
+    ? <div key={`lead-${x.lead}`} className={`px-2.5 pt-1.5 text-[12px] ${muted}`} data-testid="swarm-out-swarm-run">
+        ◆ <span className="font-semibold text-[var(--color-text)]">{t('swarmOut.track.swarmRun', { count: x.count })}</span></div>
+    : one(x)));
   return (
     <div data-testid="swarm-out-run-list">
       {chips.length > 1 && (
@@ -158,10 +210,10 @@ export function RunList({ runs, asks, answered = [], now, onReload, compact = fa
       )}
       {section('you', t('swarmOut.review.section.you'), s.you.length, s.you.length ? TONE_VAR.attention : undefined)}
       {s.you.length === 0 ? <div className={`px-2.5 text-[12.5px] ${muted}`}>{t('swarmOut.waiting.none')}</div>
-        : <div className="flex flex-col">{s.you.map(row)}</div>}
+        : <div className="flex flex-col">{rowsOf(s.you)}</div>}
       {section('running', t('swarmOut.review.section.running'), s.running.length)}
       {s.running.length === 0 ? <div className={`px-2.5 text-[12.5px] ${muted}`}>{t('swarmOut.groups.runningEmpty')}</div>
-        : <div className="flex flex-col">{running.map(row)}</div>}
+        : <div className="flex flex-col">{rowsOf(running)}</div>}
       {s.running.length > running.length && (
         <button type="button" className="px-2.5 py-1.5 text-[12px] text-[var(--color-primary)]" onClick={() => setAllRunning(true)}
           data-testid="swarm-out-running-more">{t('swarmOut.review.moreRunning', { count: s.running.length - running.length })} ›</button>
@@ -172,7 +224,7 @@ export function RunList({ runs, asks, answered = [], now, onReload, compact = fa
         <span className={`text-[12px] tabular-nums ${muted}`}>{s.done.length}</span>
         <span className={`text-[12px] ${muted}`}>{showDone ? t('swarmOut.review.fold') : t('swarmOut.review.unfold')}</span>
       </button>
-      {showDone && <div className="flex flex-col">{s.done.map(row)}</div>}
+      {showDone && <div className="flex flex-col">{rowsOf(s.done)}</div>}
       {pending && pending.length > 0 && (
         <>
           {section('pending', t('swarmOut.review.swarmRun.notDispatched'), pending.length)}

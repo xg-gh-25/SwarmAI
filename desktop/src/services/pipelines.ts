@@ -143,6 +143,36 @@ export interface PipelineRunSummary {
   notLandedReason: string | null;
   rework: number | null;
   audit: { dim: string; verdict: string; detail: string }[];
+  /** where the run stands on the Pipelines Line (run.json); null when not recorded */
+  stage: string | null;
+  /** the profile's stages in order, each with its status and attempt count */
+  stages: PipelineStageInfo[] | null;
+  /** per stage entered: when, and seconds working / waiting on a person
+   *  (core.run_protocol.timeline); null on runs projected before it */
+  stageTimeline: Record<string, PipelineStageTime> | null;
+}
+
+export interface PipelineStageInfo { name: string; status: string | null; attempts: number | null }
+export interface PipelineStageTime { enteredAt: string | null; activeS: number | null; waitS: number | null }
+
+function stagesOf(v: unknown): PipelineStageInfo[] | null {
+  if (!Array.isArray(v)) return null;
+  return v.filter((x) => x && typeof x === 'object' && typeof (x as { name?: unknown }).name === 'string')
+    .map((x) => {
+      const o = x as Record<string, unknown>;
+      return { name: o.name as string, status: typeof o.status === 'string' ? o.status : null, attempts: num(o.attempts) };
+    });
+}
+
+function timelineOf(v: unknown): Record<string, PipelineStageTime> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out: Record<string, PipelineStageTime> = {};
+  for (const [stage, e] of Object.entries(v as Record<string, unknown>)) {
+    if (!e || typeof e !== 'object') continue;
+    const o = e as Record<string, unknown>;
+    out[stage] = { enteredAt: typeof o.entered_at === 'string' ? o.entered_at : null, activeS: num(o.active_s), waitS: num(o.wait_s) };
+  }
+  return out;
 }
 
 /** Answers, corrections (messages into its session while it ran) and rescues (a
@@ -272,6 +302,9 @@ export function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummar
         .map((a) => ({ dim: a.dim as string, verdict: typeof a.verdict === 'string' ? a.verdict : '',
           detail: typeof a.detail === 'string' ? a.detail : '' }))
       : [],
+    stage: typeof r.stage === 'string' && r.stage ? r.stage : null,
+    stages: stagesOf(r.stages),
+    stageTimeline: timelineOf(r.stage_timeline),
   };
 }
 

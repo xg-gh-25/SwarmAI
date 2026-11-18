@@ -8,9 +8,15 @@
  * - are the sections ordered by what waits longest within to answer > to confirm >
  *   stopped, and is a row that asks nothing never "waiting for you"?
  * - does the filter keep where and Brain, and the Brain chips come from the rows?
- * - are the distribution's bars per day until the data spans 14 days, then per week?
- * - does each measure leave out what a run did not record (never a 0), and are tokens
- *   always in M?
+ * - do autonomy and speed leave out what a run did not record (never a 0), and are
+ *   tokens always in M?
+ * - the Line: does each run's track run along its profile's stages with its chip at its
+ *   current stage and ↺N where a stage reran; is a Hive run on its Hive one band (its
+ *   stage not guessed) and back at RETURN / LAND / JUDGE once its funnel says so; do a
+ *   Swarm Run's packages sit under their lead; do the station counts and the sentence
+ *   come from the same tracks; is a run without a stage record left without timing?
+ * - Eval: do the S7 measures split the window in halves, leave unrecorded measures null
+ *   (never 0), and give a Wilson range from k and n?
  * - are a Brain's lanes its live runs only (waiting first, then newest), at most three
  *   with the rest counted, with stage dots only where the engine reported progress?
  */
@@ -18,7 +24,8 @@ import { describe, it, expect } from 'vitest';
 import type { PipelineRunSummary } from '../../services/pipelines';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import {
-  allRows, autonomy, brainChips, brainLanes, cost, delivery, distribution, filterRows, fromHive, fromLocal, quality, sections, speed, tokenM,
+  allRows, autonomy, brainChips, brainLanes, evalByBrain, evalMeasures, filterRows, fromHive, fromLocal, lineGroups, sections, speed,
+  stationCounts, timeGoes, tokenM, trackOf, verdictOf, wilson,
 } from './pipelineRows';
 
 const NOW = Date.parse('2026-11-01T12:00:00Z');
@@ -29,7 +36,7 @@ const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
   notLanded: false, reportPath: null, auditCard: null, finishedAt: '2026-10-31T10:40:00Z', activeS: null,
   billedTokens: 50_000_000, costUsd: null, humanDecisions: 0,
   interventions: { answers: 0, corrections: 0, rescues: 0, total: 0 }, landing: 'landed',
-  notLandedReason: null, rework: 0, audit: [], ...o,
+  notLandedReason: null, rework: 0, audit: [], stage: 'reflect', stages: null, stageTimeline: null, ...o,
 });
 const hive = (o: Record<string, unknown> = {}, res: Record<string, unknown> | null = {}): SwarmOutRun => ({
   dispatch_id: 'd1', hive_id: 'h1', hive: 'demo', session_id: 'sess', title: 'Hive task', origin: 'swarm-out',
@@ -103,20 +110,7 @@ describe('pipelineRows', () => {
     expect(brainChips(rows)).toEqual([{ brain: 'P', count: 2 }, { brain: 'Q', count: 1 }, { brain: 'SwarmAI', count: 1 }]);
   });
 
-  it('the distribution is per day until the data spans 14 days, then per week', () => {
-    const rows = [fromLocal(run({ createdAt: '2026-10-30T10:00:00Z' }), 'P'), fromHive(hive({ sent_at: '2026-11-01T01:00:00Z' }))!];
-    const d = distribution(rows, NOW);
-    expect([d.total, d.local, d.hive, d.weekly]).toEqual([2, 1, 1, false]);
-    expect(d.points.map((p) => [p.label, p.local, p.hive])).toEqual([['2026-10-30', 1, 0], ['2026-10-31', 0, 0], ['2026-11-01', 0, 1]]);
-    expect(d.byHive).toEqual([{ hive: 'demo', count: 1 }]);
-    const old = [...rows, fromLocal(run({ id: 'old', createdAt: '2026-10-10T10:00:00Z' }), 'P')];
-    const w = distribution(old, NOW);
-    expect(w.weekly).toBe(true);
-    expect(w.points.every((p) => new Date(`${p.label}T00:00:00Z`).getUTCDay() === 1)).toBe(true);   // weeks start Monday
-    expect(w.points.reduce((s, p) => s + p.local + p.hive, 0)).toBe(3);
-  });
-
-  it('each measure leaves out what a run did not record, and tokens are in M', () => {
+  it('autonomy and speed leave out what a run did not record, and tokens are in M', () => {
     const rows = [
       fromLocal(run({ id: 'a', cycleTimeMin: 10, billedTokens: 684_000_000, costUsd: 2 }), 'P'),
       fromLocal(run({ id: 'b', cycleTimeMin: 30, billedTokens: null, tokensActual: null, interventions: null, landing: 'not_landed', notLanded: true,
@@ -124,18 +118,11 @@ describe('pipelineRows', () => {
       fromLocal(run({ id: 'c', cycleTimeMin: 116, billedTokens: 400_000, interventions: { answers: 1, corrections: 2, rescues: 1, total: 4 }, landing: 'human_override' }), 'P'),
       fromLocal(run({ id: 'go', status: 'running', cycleTimeMin: null }), 'P'),
     ];
-    const del = delivery(rows, NOW);
-    expect([del.delivered, del.total, del.counts.landed, del.counts.manual, del.counts.not_landed]).toEqual([2, 4, 1, 1, 1]);
     const aut = autonomy(rows);
     expect([aut.finished, aut.known, aut.unattended, aut.avg]).toEqual([3, 2, 1, 2]);   // b unknown: left out, not 0
     expect(aut.bars).toEqual([{ key: 'c', title: 'Fix it', answers: 1, corrections: 2, rescues: 1 }]);
-    const q = quality(rows);
-    expect([q.blocked, q.audited, q.blockedDims]).toEqual([1, 1, [{ dim: 'Speed', count: 1 }]]);
     const sp = speed(rows);
     expect([sp.median, sp.p90, sp.n]).toEqual([30, 99, 3]);
-    const c = cost(rows);
-    expect([c.tokensKnown, c.usd, c.usdKnown, c.top]).toEqual([3, 2, 1, 'a']);   // b recorded none: left out
-    expect(tokenM(c.perDelivery)).toBe('367M');                    // every run's tokens (684M + 0.4M + 50M) over 2 deliveries
     expect([tokenM(684_000_000), tokenM(400_000), tokenM(12_400_000), tokenM(null)]).toEqual(['684M', '0.4M', '12M', '—']);
   });
 });
@@ -177,5 +164,109 @@ describe('brainLanes', () => {
 
   it('is empty when nothing of the Brain is under way', () => {
     expect(brainLanes([fromLocal(run({}), 'P')], 'P')).toEqual({ lanes: [], more: 0, total: 0 });
+  });
+});
+
+const STAGES = (profile: string[], at: string, attempts: Record<string, number> = {}) => profile.map((name, i) => ({
+  name, status: name === at ? 'open' : i < profile.indexOf(at) ? 'completed' : 'pending', attempts: attempts[name] ?? (i <= profile.indexOf(at) ? 1 : null),
+}));
+const FULL = ['evaluate', 'think', 'plan', 'build', 'review', 'test', 'deliver', 'reflect'];
+const RESEARCH = ['evaluate', 'think', 'deliver', 'reflect'];
+
+describe('the Line', () => {
+  it('lineGroups draws each run along its profile', () => {
+    const a = fromLocal(run({ id: 'a', status: 'running', stage: 'review', stages: STAGES(FULL, 'review', { review: 2 }) }), 'P');
+    const b = fromLocal(run({ id: 'b', status: 'running', profile: 'research', stage: 'deliver', stages: STAGES(RESEARCH, 'deliver') }), 'P');
+    const g = lineGroups([a, b]);
+    const ta = g[0].items.find((i) => i.track.row.key === 'a')!.track;
+    expect([ta.at, ta.kind, ta.rounds]).toEqual(['review', 'run', { review: 2 }]);
+    const tb = trackOf(b);
+    expect(tb.path).toEqual(RESEARCH);                 // PLAN..TEST are not on a research run's track
+    expect(tb.at).toBe('deliver');
+  });
+
+  it('a waiting, a stopped and a done run: one meaning per chip', () => {
+    const ask = fromLocal(run({ id: 'ask', status: 'paused', pauseKind: 'decision', needsYou: true, stage: 'plan', stages: STAGES(FULL, 'plan') }), 'P');
+    const stop = fromLocal(run({ id: 'stop', status: 'paused', pauseKind: 'user_stop' as never, needsYou: true, stage: 'test', stages: STAGES(FULL, 'test') }), 'P');
+    expect(trackOf(ask).kind).toBe('you');
+    expect(trackOf(stop).kind).toBe('stop');
+    expect(lineGroups([fromLocal(run({ id: 'd' }), 'P')])).toEqual([]);   // a finished run is not on the line
+  });
+
+  it('a Hive run without a funnel is on its Hive', () => {
+    const r = fromHive(hive({ state: 'running', stage: 'running', settle: null }, { ended: null, ended_at: null }))!;
+    const t = trackOf(r);
+    expect([t.at, t.kind, t.path]).toEqual([null, 'run', []]);     // one band: its stage is not guessed
+    const back = fromHive(hive({ state: 'stopped', stage: 'awaiting', settle: null, needs_person: false,
+      funnel: { gates: [{ key: 'review', state: 'done', by: 'agent', at: null, ref: null }, { key: 'land', state: 'now', by: 'agent', at: null, ref: null }],
+        current: 'land', ask: null, reruns: 0 } }))!;
+    expect([trackOf(back).at, trackOf(back).kind, trackOf(back).path]).toEqual(['land', 'judge', ['return', 'land']]);
+    const mine = fromHive(hive({ dispatch_id: 'd2', state: 'stopped', stage: 'awaiting', settle: null, needs_person: true,
+      funnel: { gates: [{ key: 'judge', state: 'person', by: null, at: null, ref: null }], current: 'judge', ask: null, reruns: 0 } }))!;
+    expect([trackOf(mine).at, trackOf(mine).kind]).toEqual(['judge', 'you']);
+    // the strip and the line agree: the agent's run is not waiting on you, the person's is
+    const s = sections([back, mine]);
+    expect(s.you.map((x) => x.key)).toEqual(['d2']);
+    expect(s.running.map((x) => x.key)).toEqual(['d1']);
+    expect(back.task).toBeNull();
+  });
+
+  it('a Swarm Run\'s work packages sit under their lead; counts and the sentence read the same tracks', () => {
+    const lead = fromLocal(run({ id: 'run_lead', status: 'running', stage: 'build', stages: STAGES(FULL, 'build') }), 'SwarmAI');
+    const child = fromHive(hive({ dispatch_id: 'c1', state: 'running', stage: 'running', settle: null, parent_run: 'run_lead', wp: 'W1' },
+      { ended: null, ended_at: null }))!;
+    const ask = fromLocal(run({ id: 'ask', status: 'paused', pauseKind: 'decision', needsYou: true, stage: 'plan', stages: STAGES(FULL, 'plan'),
+      updatedAt: '2026-11-01T10:00:00Z' }), 'SwarmAI');
+    const g = lineGroups([lead, child, ask]);
+    expect(g).toHaveLength(1);
+    const item = g[0].items.find((i) => i.track.row.key === 'run_lead')!;
+    expect(item.children.map((c) => c.row.key)).toEqual(['c1']);
+    expect(g[0].items.some((i) => i.track.row.key === 'c1')).toBe(false);
+    expect([g[0].count, g[0].running, g[0].waiting]).toEqual([3, 2, 1]);
+    const c = stationCounts(g);
+    expect([c.build.n, c.plan.n, c.plan.you]).toEqual([1, 1, 1]);
+    expect(verdictOf(g)).toMatchObject({ onLine: 3, running: 2, waiting: 1, stopped: 0, oldest: { station: 'plan' } });
+  });
+
+  it('rows without a stage record have no timing', () => {
+    const old = fromLocal(run({ id: 'old', stage: null, stages: null, stageTimeline: null, status: 'running' }), 'P');
+    expect(trackOf(old).at).toBeNull();
+    expect(timeGoes([old]).covered).toBe(0);
+    const timed = fromLocal(run({ id: 't', stages: STAGES(FULL, 'reflect', { review: 3 }), stageTimeline: {
+      evaluate: { enteredAt: 'x', activeS: 600, waitS: 0 }, review: { enteredAt: 'y', activeS: 1200, waitS: 300 } } }), 'P');
+    const untimed = fromLocal(run({ id: 'u', stages: STAGES(FULL, 'reflect', { review: 5 }), stageTimeline: null }), 'P');
+    const tg = timeGoes([old, timed, untimed]);         // an untimed run's rounds are not counted
+    expect(tg.covered).toBe(1);
+    expect(tg.stations.review).toEqual({ agentMin: 20, waitMin: 5, rounds: 2, runs: 1 });
+    expect(tg.stations.plan).toEqual({ agentMin: null, waitMin: null, rounds: 0, runs: 0 });
+  });
+});
+
+describe('Eval', () => {
+  it('evalMeasures leaves unrecorded measures null', () => {
+    const rows = [
+      fromLocal(run({ id: 'a', createdAt: '2026-10-30T10:00:00Z', costUsd: null, billedTokens: null, tokensActual: null, interventions: null }), 'P'),
+    ];
+    const { cur, prev } = evalMeasures(rows, NOW);
+    expect(cur.autonomous).toEqual({ k: 0, n: 0, rate: null, range: null });
+    expect([cur.human.answers, cur.cost.usd, cur.cost.tokens, cur.knowledge]).toEqual([null, null, null, null]);
+    expect(cur.started).toBe(1);
+    expect(prev.started).toBe(0);
+    expect(prev.cycle.median).toBeNull();
+  });
+
+  it('splits the 30-day window in halves; ① is k of n with a Wilson range', () => {
+    const rows = [
+      fromLocal(run({ id: 'a', createdAt: '2026-10-30T10:00:00Z' }), 'P'),
+      fromLocal(run({ id: 'b', createdAt: '2026-10-29T10:00:00Z', interventions: { answers: 2, corrections: 1, rescues: 0, total: 3 } }), 'Q'),
+      fromLocal(run({ id: 'old', createdAt: '2026-10-10T10:00:00Z' }), 'P'),
+    ];
+    const { cur, prev } = evalMeasures(rows, NOW);
+    expect([cur.autonomous.k, cur.autonomous.n, prev.autonomous.n]).toEqual([1, 2, 1]);
+    expect([cur.human.answers, cur.human.unplanned]).toEqual([1, 0.5]);
+    const w = wilson(17, 19)!;
+    expect([Math.round(w.lo * 100), Math.round(w.hi * 100)]).toEqual([69, 97]);
+    expect(wilson(0, 0)).toBeNull();
+    expect(evalByBrain(rows).map((b) => [b.brain, b.m.started])).toEqual([['P', 2], ['Q', 1]]);
   });
 });

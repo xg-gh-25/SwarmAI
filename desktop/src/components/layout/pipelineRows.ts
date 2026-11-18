@@ -12,18 +12,21 @@
  *    first), Running, Done (newest first);
  *  - ``filterRows`` / ``brainChips``: the shared filter (everywhere / this machine / Hive,
  *    and a Brain made from the rows, with counts);
- *  - ``distribution`` and the five measures (``delivery``, ``autonomy``, ``quality``,
- *    ``speed``, ``cost``) with the series their charts draw;
+ *  - ``autonomy`` and ``speed``, read by the Eval measures;
+ *  - the Line (``trackOf``, ``lineGroups``, ``stationCounts``, ``verdictOf``,
+ *    ``timeGoes``) and the Eval (``evalMeasures``, ``evalByBrain``, ``wilson``), in the
+ *    CNTech & IVT S7 order;
  *  - ``brainLanes``: the runs of one Brain going now, one lane each, for the Brain map's
  *    loop (design 2026-11-01-brain-eval-and-runs §2.4: the map reads these same rows,
  *    never a second reading of the runs).
  * A value a run did not record is null and is left out of a measure (with the count it
  * covers), never counted as 0. Tokens are shown in M only (``tokenM``).
  */
-import type { PipelineRunSummary } from '../../services/pipelines';
+import type { PipelineRunSummary, PipelineStageInfo, PipelineStageTime } from '../../services/pipelines';
 import type { SwarmOutAsk, SwarmOutRun } from '../../services/swarmOut';
 import { brainLabel, interventionsOf, tokenTotal } from '../swarm-out/live';
-import { actionsOf, stageOf, waitingSince as hiveWaitingSince } from '../swarm-out/runReview';
+import { actionsOf, DONE_STAGES, stageOf, waitingSince as hiveWaitingSince } from '../swarm-out/runReview';
+import { dispatchTrack, type ChipKind } from '../swarm-out/track';
 
 export type Where = 'local' | 'hive';
 export type RowStage = 'needs_answer' | 'awaiting' | 'stopped' | 'running' | 'done';
@@ -58,6 +61,15 @@ export interface PipelineRow {
   interventions: RowInterventions | null;
   audit: { dim: string; verdict: string }[];
   ownerSessionId: string | null;
+  /** the pipeline stage it is at (a local run); null when not recorded or on a Hive */
+  pipelineStage: string | null;
+  /** its profile's stages in order with status and attempts (a local run), else null */
+  stages: PipelineStageInfo[] | null;
+  /** per stage entered: when, and seconds working / waiting on a person; null if none */
+  timeline: Record<string, PipelineStageTime> | null;
+  /** a Swarm Run's work package: the lead pipeline run's id, and the package */
+  parentRun: string | null;
+  wp: string | null;
   local?: PipelineRunSummary;
   hive_run?: SwarmOutRun;
 }
@@ -90,7 +102,9 @@ export function fromLocal(r: PipelineRunSummary, project: string): PipelineRow {
     since: r.updatedAt || r.createdAt, durationMin: r.cycleTimeMin, tokens: r.billedTokens ?? r.tokensActual,
     costUsd: r.costUsd,
     interventions: iv ? { answers: iv.answers, corrections: iv.corrections, rescues: iv.rescues, total: iv.total } : null,
-    audit: r.audit.map((a) => ({ dim: a.dim, verdict: a.verdict })), ownerSessionId: r.ownerSessionId, local: r,
+    audit: r.audit.map((a) => ({ dim: a.dim, verdict: a.verdict })), ownerSessionId: r.ownerSessionId,
+    pipelineStage: r.stage ?? null, stages: r.stages ?? null, timeline: r.stageTimeline ?? null,
+    parentRun: null, wp: null, local: r,
   };
 }
 
@@ -100,12 +114,20 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
   const runId = res?.pipeline?.run_id ?? null;
   if (!runId) return null;
   const s = stageOf(r);
-  const stage: RowStage = s === 'needs_answer' || s === 'awaiting' || s === 'stopped' || s === 'running' ? s : 'done';
-  // waiting for you only when it asks something (Swarm Out's rule, runReview.sections): a
-  // stopped or awaiting run that only opens its session is done
-  const asksYou = s === 'needs_answer' || actionsOf(r).some((a) => a.key !== 'open_session');
+  const live = !DONE_STAGES.includes(s);
+  // Swarm Out's rule (runReview.sections): when the dispatching session answers for the
+  // run (needs_person is a boolean) it waits for you only when the backend says so; the
+  // agent taking it through the funnel is working on it, not waiting on you. Otherwise a
+  // run waits for you only when it asks something: a stopped or awaiting run that only
+  // opens its session is done.
+  const answered = typeof r.needs_person === 'boolean' && live;
+  const asksYou = answered ? r.needs_person === true
+    : s === 'needs_answer' || actionsOf(r).some((a) => a.key !== 'open_session');
+  const stage: RowStage = answered
+    ? (r.needs_person ? (s === 'running' ? 'needs_answer' : s as RowStage) : 'running')
+    : s === 'needs_answer' || s === 'awaiting' || s === 'stopped' || s === 'running' ? s : 'done';
   const task: RowTask | null = !asksYou ? null
-    : s === 'needs_answer' ? 'answer' : s === 'awaiting' ? 'accept' : s === 'stopped' ? 'stopped' : null;
+    : stage === 'needs_answer' ? 'answer' : stage === 'awaiting' ? 'accept' : stage === 'stopped' ? 'stopped' : null;
   const settled = r.settle?.settled?.outcome;
   const outcome: Outcome = s === 'running' ? 'running'
     : settled === 'passed' ? 'landed' : settled === 'abandoned' ? 'discarded' : settled ? 'other'
@@ -126,7 +148,8 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
       total: r.person_decisions ?? interventionsOf(res),
     } : null,
     audit: (res?.pipeline?.audit ?? []).map((a) => ({ dim: a.dim, verdict: a.verdict ?? '' })),
-    ownerSessionId: r.session_id, hive_run: r,
+    ownerSessionId: r.session_id, pipelineStage: null, stages: null, timeline: null,
+    parentRun: r.parent_run ?? null, wp: r.wp ?? null, hive_run: r,
   };
 }
 
@@ -226,86 +249,6 @@ export function tokenM(n: number | null | undefined): string {
   return m >= 10 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
 }
 
-const dayKey = (t: number) => new Date(t).toISOString().slice(0, 10);
-
-/** The day (or, once the data spans 14 days, the week starting Monday) a time falls in. */
-function bucketOf(t: number, weekly: boolean): string {
-  if (!weekly) return dayKey(t);
-  const d = new Date(t);
-  const back = (d.getUTCDay() + 6) % 7;
-  return dayKey(t - back * DAY_MS);
-}
-
-function buckets(rows: PipelineRow[], now: number): { weekly: boolean; keys: string[] } {
-  const starts = rows.map((r) => ms(r.createdAt)).filter((t) => !Number.isNaN(t));
-  if (!starts.length) return { weekly: false, keys: [] };
-  const first = Math.min(...starts);
-  const weekly = now - first >= 14 * DAY_MS;
-  const keys: string[] = [];
-  for (let t = first; t <= now + DAY_MS; t += weekly ? 7 * DAY_MS : DAY_MS) {
-    const k = bucketOf(t, weekly);
-    if (!keys.includes(k)) keys.push(k);
-  }
-  const last = bucketOf(now, weekly);
-  if (!keys.includes(last)) keys.push(last);
-  return { weekly, keys: keys.filter((k) => k <= last) };
-}
-
-export interface Distribution {
-  total: number; local: number; hive: number;
-  byHive: { hive: string; count: number }[];
-  weekly: boolean;
-  points: { label: string; local: number; hive: number }[];
-  since: string | null;
-}
-
-/** How many runs, where they ran, and when (a bar per day; per week once the data spans
- *  14 days). */
-export function distribution(rows: PipelineRow[], now: number): Distribution {
-  const local = rows.filter((r) => r.where === 'local').length;
-  const by = new Map<string, number>();
-  for (const r of rows) if (r.where === 'hive' && r.hive) by.set(r.hive, (by.get(r.hive) ?? 0) + 1);
-  const { weekly, keys } = buckets(rows, now);
-  const points = keys.map((label) => ({ label, local: 0, hive: 0 }));
-  for (const r of rows) {
-    const t = ms(r.createdAt);
-    if (Number.isNaN(t)) continue;
-    const p = points.find((x) => x.label === bucketOf(t, weekly));
-    if (p) p[r.where] += 1;
-  }
-  const starts = rows.map((r) => ms(r.createdAt)).filter((t) => !Number.isNaN(t));
-  return {
-    total: rows.length, local, hive: rows.length - local,
-    byHive: [...by.entries()].map(([hive, count]) => ({ hive, count })).sort((a, b) => b.count - a.count),
-    weekly, points, since: starts.length ? new Date(Math.min(...starts)).toISOString() : null,
-  };
-}
-
-const DELIVERED: Outcome[] = ['landed', 'manual'];
-
-export interface Delivery {
-  delivered: number; total: number; rate: number | null;
-  counts: Record<'landed' | 'manual' | 'not_landed' | 'discarded' | 'failed' | 'running' | 'other', number>;
-  points: { label: string; landed: number; manual: number; not_landed: number; discarded: number }[];
-}
-
-/** Was it delivered: landed here, landed by hand, or passed on the Host. */
-export function delivery(rows: PipelineRow[], now: number): Delivery {
-  const counts = { landed: 0, manual: 0, not_landed: 0, discarded: 0, failed: 0, running: 0, other: 0 };
-  for (const r of rows) counts[r.outcome] += 1;
-  const delivered = rows.filter((r) => DELIVERED.includes(r.outcome)).length;
-  const { weekly, keys } = buckets(rows, now);
-  const points = keys.map((label) => ({ label, landed: 0, manual: 0, not_landed: 0, discarded: 0 }));
-  for (const r of rows) {
-    const t = ms(r.createdAt);
-    const p = Number.isNaN(t) ? undefined : points.find((x) => x.label === bucketOf(t, weekly));
-    if (!p) continue;
-    if (r.outcome === 'landed' || r.outcome === 'manual' || r.outcome === 'discarded') p[r.outcome] += 1;
-    else if (r.outcome === 'not_landed' || r.outcome === 'failed') p.not_landed += 1;
-  }
-  return { delivered, total: rows.length, rate: rows.length ? delivered / rows.length : null, counts, points };
-}
-
 export interface Autonomy {
   /** finished runs whose interventions are known, and how many of them nobody stepped into */
   known: number; unattended: number; finished: number;
@@ -327,34 +270,6 @@ export function autonomy(rows: PipelineRow[]): Autonomy {
       key: r.key, title: r.title, answers: r.interventions!.answers,
       corrections: r.interventions!.corrections ?? 0, rescues: r.interventions!.rescues,
     })),
-  };
-}
-
-export const DIMS = ['Run Isolation', 'Quality', 'Autonomy', 'Speed', 'Token Cost'] as const;
-
-export interface Quality {
-  blocked: number; audited: number;
-  /** each dimension's BLOCK count, the ones that blocked */
-  blockedDims: { dim: string; count: number }[];
-  matrix: { dim: string; PASS: number; WARN: number; BLOCK: number }[];
-}
-
-/** Was the quality steady: runs with a BLOCK in their audit, and on what. */
-export function quality(rows: PipelineRow[]): Quality {
-  const audited = rows.filter((r) => r.audit.length > 0);
-  const dims = [...DIMS, ...new Set(audited.flatMap((r) => r.audit.map((a) => a.dim)).filter((d) => !(DIMS as readonly string[]).includes(d)))];
-  const matrix = dims.map((dim) => {
-    const row = { dim, PASS: 0, WARN: 0, BLOCK: 0 };
-    for (const r of audited) {
-      const v = r.audit.find((a) => a.dim === dim)?.verdict;
-      if (v === 'PASS' || v === 'WARN' || v === 'BLOCK') row[v] += 1;
-    }
-    return row;
-  }).filter((m) => m.PASS + m.WARN + m.BLOCK > 0);
-  return {
-    blocked: audited.filter((r) => r.audit.some((a) => a.verdict === 'BLOCK')).length, audited: audited.length,
-    blockedDims: matrix.filter((m) => m.BLOCK > 0).map((m) => ({ dim: m.dim, count: m.BLOCK })),
-    matrix,
   };
 }
 
@@ -382,25 +297,195 @@ export function speed(rows: PipelineRow[]): Speed {
   };
 }
 
-export interface Cost {
-  tokens: number | null; tokensKnown: number; perDelivery: number | null;
-  usd: number | null; usdKnown: number; runs: number;
-  bars: { key: string; title: string; tokens: number }[];
-  top: string | null;
+// ── the Line (design: the factory-line overlays, Knowledge/Designs/2026-11-18-
+//    swarmai-factory-line-overlays-mockup.html) ────────────────────────────────
+
+/** The pipeline stages, the same for every Brain, then where a Hive run comes back. */
+export const PIPELINE_STATIONS = ['evaluate', 'think', 'plan', 'build', 'review', 'test', 'deliver', 'reflect'] as const;
+export const RETURN_STATIONS = ['return', 'land', 'judge'] as const;
+export const STATIONS = [...PIPELINE_STATIONS, ...RETURN_STATIONS] as const;
+export type Station = typeof STATIONS[number];
+/** the machine gates: they decide from checks, never a person */
+export const GATES: Partial<Record<Station, string>> = { evaluate: 'Gate-0', review: 'Gate-2' };
+
+export interface Track {
+  row: PipelineRow;
+  /** the station the chip sits at; null: a Hive run on its Hive, its stage not reported
+   *  (the chip spans the pipeline stations as one band) */
+  at: Station | null;
+  kind: ChipKind;
+  /** the stations its track runs along (its profile's stages; a Hive run: the band and the
+   *  return stations it reached) */
+  path: Station[];
+  /** extra attempts at a stage: ↺N with N its attempts */
+  rounds: Partial<Record<Station, number>>;
 }
 
-/** Was it costly: tokens per delivery (every run's tokens, delivered or not, over the
- *  deliveries), the total, and the $ where it was recorded (with how many runs it covers). */
-export function cost(rows: PipelineRow[]): Cost {
-  const withTokens = rows.filter((r) => r.tokens != null);
-  const tokens = withTokens.length ? withTokens.reduce((s, r) => s + (r.tokens as number), 0) : null;
-  const delivered = rows.filter((r) => DELIVERED.includes(r.outcome)).length;
-  const withUsd = rows.filter((r) => r.costUsd != null);
-  const bars = withTokens.map((r) => ({ key: r.key, title: r.title, tokens: r.tokens as number }))
-    .sort((a, b) => b.tokens - a.tokens);
+const isStation = (x: string | null | undefined): x is Station => !!x && (STATIONS as readonly string[]).includes(x);
+
+/** One run in flight as a track: where its chip sits, its colour, the stations it runs along. */
+export function trackOf(r: PipelineRow): Track {
+  if (r.where === 'hive' && r.hive_run) {
+    const t = dispatchTrack(r.hive_run);
+    const back = (RETURN_STATIONS as readonly string[]).includes(t.at) ? t.at as Station : null;
+    const path: Station[] = back ? RETURN_STATIONS.slice(0, RETURN_STATIONS.indexOf(back as typeof RETURN_STATIONS[number]) + 1) : [];
+    return { row: r, at: back, kind: t.kind, path, rounds: {} };
+  }
+  const kind: ChipKind = r.stage === 'running' ? 'run' : r.stage === 'stopped' ? 'stop' : r.stage === 'done' ? 'done' : 'you';
+  const path = (r.stages ?? []).map((s) => s.name).filter(isStation);
+  const rounds: Partial<Record<Station, number>> = {};
+  for (const s of r.stages ?? []) if (isStation(s.name) && (s.attempts ?? 0) > 1) rounds[s.name] = s.attempts as number;
+  return { row: r, at: isStation(r.pipelineStage) ? r.pipelineStage : null, kind, path, rounds };
+}
+
+export interface LineItem { track: Track; children: Track[] }
+export interface LineGroup { brain: string; items: LineItem[]; running: number; waiting: number; count: number }
+
+/** The runs in flight (waiting on you, running, stopped and asking) by Brain: a Hive run
+ *  that is a work package of a local run sits under it. A Brain with more runs first. */
+export function lineGroups(rows: PipelineRow[]): LineGroup[] {
+  const s = sections(rows);
+  const live = [...s.you, ...s.running];
+  const leads = new Map(live.filter((r) => r.where === 'local' && r.runId).map((r) => [r.runId as string, r]));
+  const items = new Map<string, LineItem>();
+  const order: LineItem[] = [];
+  for (const r of live) {
+    if (r.parentRun && leads.has(r.parentRun)) continue;
+    const item = { track: trackOf(r), children: [] as Track[] };
+    items.set(r.key, item); order.push(item);
+  }
+  for (const r of live) {
+    if (!r.parentRun || !leads.has(r.parentRun)) continue;
+    items.get(leads.get(r.parentRun)!.key)?.children.push(trackOf(r));
+  }
+  const by = new Map<string, LineItem[]>();
+  for (const it of order) by.set(it.track.row.brain, [...(by.get(it.track.row.brain) ?? []), it]);
+  return [...by.entries()].map(([brain, list]) => {
+    const all = list.flatMap((i) => [i.track, ...i.children]);
+    return { brain, items: list, count: all.length,
+      running: all.filter((t) => t.kind === 'run' || t.kind === 'judge').length,
+      waiting: all.filter((t) => t.kind === 'you').length };
+  }).sort((a, b) => (b.count - a.count) || a.brain.localeCompare(b.brain));
+}
+
+/** Each station's header: the runs at it and how many of them wait on the person. */
+export function stationCounts(groups: LineGroup[]): Record<Station, { n: number; you: number }> {
+  const out = Object.fromEntries(STATIONS.map((s) => [s, { n: 0, you: 0 }])) as Record<Station, { n: number; you: number }>;
+  for (const t of groups.flatMap((g) => g.items.flatMap((i) => [i.track, ...i.children]))) {
+    if (!t.at) continue;
+    out[t.at].n += 1;
+    if (t.kind === 'you') out[t.at].you += 1;
+  }
+  return out;
+}
+
+export interface Verdict {
+  onLine: number; running: number; waiting: number; stopped: number;
+  oldest: { title: string; station: Station | null; since: string } | null;
+}
+
+/** The one sentence above the Line, from the same tracks. */
+export function verdictOf(groups: LineGroup[]): Verdict {
+  const all = groups.flatMap((g) => g.items.flatMap((i) => [i.track, ...i.children]));
+  const you = all.filter((t) => t.kind === 'you').sort((a, b) => ms(a.row.since) - ms(b.row.since));
   return {
-    tokens, tokensKnown: withTokens.length, perDelivery: tokens != null && delivered ? tokens / delivered : null,
-    usd: withUsd.length ? withUsd.reduce((s, r) => s + (r.costUsd as number), 0) : null, usdKnown: withUsd.length,
-    runs: rows.length, bars, top: bars[0]?.key ?? null,
+    onLine: all.length, running: all.filter((t) => t.kind === 'run' || t.kind === 'judge').length,
+    waiting: you.length, stopped: all.filter((t) => t.kind === 'stop').length,
+    oldest: you[0] ? { title: you[0].row.title, station: you[0].at, since: you[0].row.since } : null,
   };
+}
+
+const median = (xs: number[]): number | null => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+export interface StationTime { agentMin: number | null; waitMin: number | null; rounds: number; runs: number }
+
+/** Where time goes, per pipeline station, over the rows that recorded a timeline: the
+ *  median minutes working and waiting on a person per run that entered it, the extra
+ *  rounds there, and how many runs it covers. ``covered`` 0: nothing is recorded yet. */
+export function timeGoes(rows: PipelineRow[]): { stations: Record<string, StationTime>; covered: number } {
+  const timed = rows.filter((r) => r.timeline && Object.keys(r.timeline).length > 0);
+  const stations: Record<string, StationTime> = {};
+  for (const st of PIPELINE_STATIONS) {
+    const entries = timed.map((r) => r.timeline![st]).filter((e): e is PipelineStageTime => !!e);
+    const agent = entries.map((e) => e.activeS).filter((x): x is number => x != null).map((x) => x / 60);
+    const wait = entries.map((e) => e.waitS).filter((x): x is number => x != null).map((x) => x / 60);
+    // extra rounds (attempts beyond the first), over the same timed runs ``covered`` counts
+    const rounds = timed.reduce((n, r) => n + Math.max(0, (r.stages?.find((x) => x.name === st)?.attempts ?? 1) - 1), 0);
+    stations[st] = { agentMin: median(agent), waitMin: median(wait), rounds, runs: entries.length };
+  }
+  return { stations, covered: timed.length };
+}
+
+// ── Eval, in the CNTech & IVT S7 order ────────────────────────────────────────
+
+/** A 95% Wilson interval for k of n; null when n is 0. */
+export function wilson(k: number, n: number): { lo: number; hi: number } | null {
+  if (n <= 0) return null;
+  const z = 1.96, p = k / n, d = 1 + (z * z) / n;
+  const c = p + (z * z) / (2 * n), w = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
+  return { lo: Math.max(0, (c - w) / d), hi: Math.min(1, (c + w) / d) };
+}
+
+export interface EvalPeriod {
+  /** ① autonomous: k of n finished runs with a known count; rate null when n is 0 */
+  autonomous: { k: number; n: number; rate: number | null; range: { lo: number; hi: number } | null };
+  /** ② per run with a known count: answers, and unplanned (corrections + rescues) */
+  human: { answers: number | null; unplanned: number | null; n: number };
+  /** ③ no source records which knowledge a run used yet */
+  knowledge: null;
+  /** ④ per run where recorded, and how many runs that covers */
+  cost: { usd: number | null; usdRuns: number; tokens: number | null; tokenRuns: number; runs: number };
+  /** ⑥ runs started in the period */
+  started: number;
+  /** ⑤ minutes, finished runs */
+  cycle: { median: number | null; p90: number | null; n: number };
+  /** where runs waited on a person: per station, how many runs waited there */
+  waitedAt: { station: Station; runs: number }[];
+}
+
+function periodOf(rows: PipelineRow[]): EvalPeriod {
+  const a = autonomy(rows);
+  const known = rows.filter((r) => r.stage !== 'running' && r.interventions?.total != null);
+  const withCorr = known.filter((r) => r.interventions!.corrections != null);
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
+  const usd = rows.filter((r) => r.costUsd != null), tok = rows.filter((r) => r.tokens != null);
+  const sp = speed(rows);
+  const waitedAt = PIPELINE_STATIONS.map((st) => ({
+    station: st as Station,
+    runs: rows.filter((r) => (r.timeline?.[st]?.waitS ?? 0) > 0).length,
+  })).filter((x) => x.runs > 0).sort((x, y) => y.runs - x.runs);
+  return {
+    autonomous: { k: a.unattended, n: a.known, rate: a.known ? a.unattended / a.known : null, range: wilson(a.unattended, a.known) },
+    human: { answers: avg(known.map((r) => r.interventions!.answers)),
+      unplanned: avg(withCorr.map((r) => (r.interventions!.corrections as number) + r.interventions!.rescues)), n: known.length },
+    knowledge: null,
+    cost: { usd: avg(usd.map((r) => r.costUsd as number)), usdRuns: usd.length,
+      tokens: avg(tok.map((r) => r.tokens as number)), tokenRuns: tok.length, runs: rows.length },
+    started: rows.length,
+    cycle: { median: sp.median, p90: sp.p90, n: sp.n },
+    waitedAt,
+  };
+}
+
+export const EVAL_HALF_DAYS = 15;
+
+/** The S7 measures for the last 15 days and the 15 before (the 30-day window's halves),
+ *  each over the runs started in it. */
+export function evalMeasures(rows: PipelineRow[], now: number): { cur: EvalPeriod; prev: EvalPeriod } {
+  const cut = now - EVAL_HALF_DAYS * DAY_MS, start = now - 2 * EVAL_HALF_DAYS * DAY_MS;
+  const t = (r: PipelineRow) => ms(r.createdAt);
+  return {
+    cur: periodOf(rows.filter((r) => t(r) >= cut)),
+    prev: periodOf(rows.filter((r) => t(r) >= start && t(r) < cut)),
+  };
+}
+
+/** The same measures per Brain over the whole window, the Brains with more runs first. */
+export function evalByBrain(rows: PipelineRow[]): { brain: string; m: EvalPeriod }[] {
+  return brainChips(rows).map((c) => ({ brain: c.brain, m: periodOf(rows.filter((r) => r.brain === c.brain)) }));
 }

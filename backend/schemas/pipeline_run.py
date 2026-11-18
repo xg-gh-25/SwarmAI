@@ -119,6 +119,13 @@ class PipelineRunSummary(BaseModel):
     not_landed_reason: Optional[str] = None
     rework: Optional[int] = Field(None, description="stage attempts beyond the first, summed")
     audit: list[dict] = Field(default_factory=list, description="the audit's rows: dim, verdict, detail")
+    # where the run stands on the Pipelines Line; None when run.json does not record it
+    stage: Optional[str] = Field(None, description="the current stage (run.json stage)")
+    stages: Optional[list[dict]] = Field(
+        None, description="the profile's stages in order: {name, status, attempts}")
+    stage_timeline: Optional[dict[str, dict]] = Field(
+        None, description="per stage entered: {entered_at, active_s, wait_s} "
+                          "(core.run_protocol.timeline); None on runs projected before it")
 
 
 class PipelineProjectGroup(BaseModel):

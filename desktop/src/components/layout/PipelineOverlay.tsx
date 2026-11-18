@@ -5,14 +5,14 @@
  *
  * Two tabs under one filter row (everywhere / this machine / Hive, and a Brain made
  * from the rows, with counts; switching tabs keeps it):
- * - **Runs** (default): Swarm Out's list. Waiting for you (to answer > to confirm or
- *   accept > stopped, the longest waiting first) always on top, Running, Done (folded,
- *   paged). A row: status dot, title, where it ran (this machine or the Hive's name, in
- *   the distribution chart's colours), Brain, profile, the one autonomy word, what it
- *   asks of you, how long it waited, and Open session. The tab's label carries the
- *   waiting count; no row of totals (a number never shows twice).
- * - **Metrics**: PipelineMetrics (the run distribution and five measures with their
- *   drill-down charts).
+ * - **Line** (default): PipelineLine (design: the factory-line overlays,
+ *   Knowledge/Designs/2026-11-18-swarmai-factory-line-overlays-mockup.html): one sentence,
+ *   the runs waiting for you as rows (to answer > to confirm or accept > stopped, the
+ *   longest waiting first), every run in flight as a track along the stage stations by
+ *   Brain, where time goes, and the finished runs folded. A row: status dot, title, Brain,
+ *   profile, where it ran (a neutral pill), the one autonomy word, what it asks of you,
+ *   how long it waited, and Open session. The tab's label carries the waiting count.
+ * - **Eval**: PipelineEval (the CNTech & IVT S7 measures, in that order).
  * A click on a row opens its big card: a local run the new shell (PipelineRunCard,
  * GET /pipelines/{id}/view, its commands from the backend), a Hive run Swarm Out's card
  * (RunOverlay, with its asks). J / K in a card walk the runs waiting for you there.
@@ -42,7 +42,8 @@ import { useOpenRun } from '../swarm-out/openSession';
 import { ago } from '../swarm-out/runReview';
 import { TONE_VAR, type Tone } from '../swarm-out/tone';
 import { PipelineRunCard } from './PipelineRunCard';
-import { PipelineMetrics } from './PipelineMetrics';
+import { PipelineEval } from './PipelineEval';
+import { PipelineLine, WherePill } from './PipelineLine';
 import { allRows, autonomyOf, brainChips, filterRows, sections, type PipelineRow, type RowFilter } from './pipelineRows';
 
 export interface PipelineContentProps {
@@ -58,8 +59,6 @@ export interface PipelineContentProps {
 }
 
 const muted = 'text-[var(--color-text-muted)]';
-const WHERE_FILL = { local: 'var(--viz-1)', hive: 'var(--viz-2)' } as const;
-const DONE_PAGE = 20;
 const STAGE_TONE: Record<PipelineRow['stage'], Tone> = {
   needs_answer: 'attention', awaiting: 'attention', stopped: 'error', running: 'busy', done: 'unknown',
 };
@@ -91,7 +90,6 @@ function Row({ r, now, onOpen, onOpenSession }: {
   const { t } = useTranslation();
   const word = autonomyOf(r);
   const tone = rowTone(r);
-  const where = r.where === 'local' ? t('ui.PipelineOverlay.local') : r.hive ?? 'Hive';
   return (
     <div role="button" tabIndex={0} onClick={onOpen} aria-label={r.title}
       onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
@@ -101,10 +99,10 @@ function Row({ r, now, onOpen, onOpenSession }: {
       <Dot tone={tone} className={tone === 'busy' ? 'swarm-out-icon--busy' : ''} />
       <div className="min-w-0">
         <div className="text-body truncate" title={r.title}>{r.title}</div>
-        <div className={`text-meta truncate ${muted}`}>
-          <span data-testid="pipeline-row-where" style={{ color: WHERE_FILL[r.where] }}>{where}</span>
-          {[r.brain, r.agentMode && t('ui.PipelineOverlay.agentMode', { mode: r.agentMode, defaultValue: 'Project Agent {{mode}}' }),
-            r.profile, r.runId].filter(Boolean).map((x) => ` · ${x}`).join('')}
+        <div className={`text-meta truncate flex items-center gap-1.5 min-w-0 ${muted}`}>
+          <WherePill r={r} />
+          <span className="truncate">{[r.brain, r.agentMode && t('ui.PipelineOverlay.agentMode', { mode: r.agentMode, defaultValue: 'Project Agent {{mode}}' }),
+            r.profile, r.runId].filter(Boolean).join(' · ')}</span>
         </div>
       </div>
       {word ? <span className="text-meta px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" data-testid="pipeline-row-autonomy"
@@ -135,10 +133,8 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(id); }, []);
 
-  const [tab, setTab] = useState<'runs' | 'metrics'>('runs');
+  const [tab, setTab] = useState<'line' | 'eval'>('line');
   const [filter, setFilter] = useState<RowFilter>({ where: 'all', brain: null });
-  const [donePage, setDonePage] = useState(0);
-  const [showDone, setShowDone] = useState(false);
   const [open, setOpen] = useState<{ key: string; order: string[] } | null>(null);
 
   const rows = useMemo(() => allRows(analytics?.byProject, hive.data?.runs, hive.data?.asks ?? []),
@@ -170,14 +166,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   }, [onContinue, close]);
 
   const openRow = open ? rows.find((r) => r.key === open.key) : undefined;
-  const section = (key: string, title: string, n: number, accent?: string) => (
-    <div className="flex items-baseline gap-2 mt-4 mb-1.5" data-testid={`pipeline-section-${key}`}>
-      <h3 className="m-0 text-body font-semibold" style={accent ? { color: accent } : undefined}>{title}</h3>
-      <span className={`text-small tabular-nums ${muted}`}>{n}</span>
-    </div>
-  );
   const row = (r: PipelineRow) => <Row key={r.key} r={r} now={now} onOpen={() => openKey(r.key)} onOpenSession={openSession} />;
-  const doneShown = s.done.slice(0, (donePage + 1) * DONE_PAGE);
   const segment = (key: RowFilter['where'], label: string) => (
     <button key={key} type="button" role="radio" aria-checked={filter.where === key} onClick={() => setFilter((f) => ({ ...f, where: key, brain: null }))}
       data-testid={`pipeline-where-${key}`}
@@ -188,8 +177,8 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
     <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pipeline-overlay">
       <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-[var(--color-border)]">
         <Tabs value={tab} onChange={setTab} testid="pipeline-tabs" items={[
-          { key: 'runs', label: s.you.length ? t('ui.PipelineOverlay.tabRunsWaiting', { count: s.you.length }) : t('ui.PipelineOverlay.tabRuns'), testid: 'pipeline-tab-runs' },
-          { key: 'metrics', label: t('ui.PipelineOverlay.tabMetrics'), testid: 'pipeline-tab-metrics' },
+          { key: 'line', label: s.you.length ? t('ui.PipelineOverlay.tabLineWaiting', { count: s.you.length }) : t('ui.PipelineOverlay.tabLine'), testid: 'pipeline-tab-line' },
+          { key: 'eval', label: t('ui.PipelineOverlay.tabEval'), testid: 'pipeline-tab-eval' },
         ]} />
         <span className={`text-small ${muted}`}>{t('ui.PipelineOverlay.window')}</span>
         <div className="ml-auto flex flex-wrap items-center gap-2" data-testid="pipeline-filter">
@@ -214,26 +203,10 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
             className="mx-auto my-8 max-w-sm" />
         )}
         {hive.failed && !hive.data && <div className={`text-small mb-2 ${muted}`} data-testid="pipeline-hive-unreadable">{t('ui.PipelineOverlay.hiveUnreadable')}</div>}
-        {tab === 'metrics' ? <PipelineMetrics rows={shown} now={now} onOpen={openKey} /> : (
+        {tab === 'eval' ? <PipelineEval rows={shown} now={now} /> : (
           <div data-testid="pipeline-run-list">
             {analytics && rows.length === 0 && !loadErr && <div className="text-center py-10 text-body text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.empty')}</div>}
-            {section('you', t('swarmOut.review.section.you'), s.you.length, s.you.length ? TONE_VAR.attention : undefined)}
-            {s.you.length === 0 ? <div className={`px-2.5 text-small ${muted}`}>{t('swarmOut.waiting.none')}</div>
-              : <div className="flex flex-col">{s.you.map(row)}</div>}
-            {section('running', t('swarmOut.review.section.running'), s.running.length)}
-            {s.running.length === 0 ? <div className={`px-2.5 text-small ${muted}`}>{t('swarmOut.groups.runningEmpty')}</div>
-              : <div className="flex flex-col">{s.running.map(row)}</div>}
-            <button type="button" className="flex items-baseline gap-2 mt-4 mb-1.5" aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}
-              data-testid="pipeline-section-done">
-              <span className="text-body font-semibold">{t('ui.PipelineOverlay.sectionDone')}</span>
-              <span className={`text-small tabular-nums ${muted}`}>{s.done.length}</span>
-              <span className={`text-small ${muted}`}>{showDone ? t('swarmOut.review.fold') : t('swarmOut.review.unfold')}</span>
-            </button>
-            {showDone && <div className="flex flex-col">{doneShown.map(row)}</div>}
-            {showDone && s.done.length > doneShown.length && (
-              <button type="button" className="text-left px-2.5 py-1.5 text-small text-[var(--color-primary)]" onClick={() => setDonePage((p) => p + 1)}
-                data-testid="pipeline-done-more">{t('ui.PipelineOverlay.moreDone', { count: s.done.length - doneShown.length })} ›</button>
-            )}
+            <PipelineLine rows={shown} now={now} onOpen={openKey} renderRow={row} />
           </div>
         )}
       </div>

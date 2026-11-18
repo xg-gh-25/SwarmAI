@@ -1137,6 +1137,14 @@ class RunEngine:
         value = {key: val for key, val in state.items()
                  if key not in {"expected_transition", "open_attempt", "auth_grants"}}
         value.update(self._read_model(events))
+        # when each stage was entered and where its time went (the Pipelines Line). It is
+        # for display only, so it never stops the projection that every state change
+        # writes: whatever the replay raises leaves the field out, logged with its type
+        from core.run_protocol.timeline import stage_timeline
+        try:
+            value["stage_timeline"] = stage_timeline(events)
+        except Exception as exc:  # noqa: BLE001 -- a display read model never blocks a state change
+            logger.warning("run %s: no stage timeline (%s: %s)", self.run_id, type(exc).__name__, exc)
         value.update({"id": self.run_id, "project": self.project,
                       "session_id": self.owner_session(),
                       "worktree_mode": self.contract["mode"],
