@@ -1984,7 +1984,8 @@
         "process": "Process",
         "cost": "Cost",
         "lessons": "Lessons",
-        "decisions": "Decisions"
+        "decisions": "Decisions",
+        "timings": "How it was sent"
       },
       "section": {
         "you": "Waiting for you",
@@ -1997,8 +1998,6 @@
       "failed": "Did not go through: {{error}}",
       "noResult": "No result yet",
       "noLessons": "No lessons from this run",
-      "stepsSoFar_one": "{{count}} step so far",
-      "stepsSoFar_other": "{{count}} steps so far",
       "landNothing": "No sealed commits to land here: re-run, or discard",
       "landDone": "Done",
       "nothingToDo": "Nothing to do on this run",
@@ -2099,7 +2098,30 @@
         "childOf": "part of Swarm Run “{{run}}”",
         "takenByLead": "Taken or corrected by the lead run; it is woken when you stop or discard this one."
       },
-      "handled": "Handled by the Swarm Run"
+      "handled": "Handled by the Swarm Run",
+      "card": {
+        "sentAs": "Sent as",
+        "doneWhen": "Done when",
+        "checks": "Machine checks",
+        "checksNote": "what came back, never a verdict",
+        "checkedLater": "checked when it comes back",
+        "readAgo": "read {{ago}}",
+        "sentIn": "{{at}} · started in {{n}}s",
+        "steps_one": "{{count}} step",
+        "steps_other": "{{count}} steps",
+        "state": {
+          "run": "Nothing needed from you",
+          "judge": "The dispatching agent has it",
+          "you": "Your turn",
+          "stop": "Stopped",
+          "done": "Settled"
+        },
+        "stateSub": {
+          "run": "It comes back here when it finishes.",
+          "judge": "It reviews, lands and judges; what it cannot decide comes to you.",
+          "stop": "Re-run it with a correction, or discard it."
+        }
+      }
     },
     "wait": {
       "done": "Answered",

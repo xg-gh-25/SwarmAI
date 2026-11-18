@@ -24,15 +24,10 @@ import { useOpenRun } from './openSession';
 import { RunOverlay } from './RunOverlay';
 import { actionOf, ago, autonomyWord, brainChips, clock, DONE_STAGES, endedAt, funnelWord, sections, stageLabel, stageOf, taskTag, waitingSince } from './runReview';
 import { runTone, TONE_VAR, type Tone } from './tone';
-import { DISPATCH_STATIONS, dispatchTrack, type ChipKind } from './track';
+import { CHIP_COLOR as KIND_COLOR, DISPATCH_STATIONS, dispatchTrack } from './track';
 
 const muted = 'text-[var(--color-text-muted)]';
 const RUNNING_SHOWN = 5;
-
-/** A track's colour per chip kind: one meaning each (./tone; light purple: the agent's). */
-const KIND_COLOR: Record<ChipKind, string> = {
-  run: TONE_VAR.busy, judge: 'var(--line-judge)', you: TONE_VAR.attention, stop: TONE_VAR.error, done: 'var(--color-text-muted)',
-};
 
 /** The run's place on its way back: five stations, the ones passed filled, its own one
  *  named and coloured by what it is (./track). */

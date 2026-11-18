@@ -17,6 +17,9 @@
   --color-text-faint: var(--color-text-dim);
   --color-placeholder: #94a3b8;
   --color-status-success: #16a34a;
+  /* running now (an agent is working): a fixed blue, never the accent, so it never reads as
+     the amber that means "waits on you" (components/swarm-out/tone.ts) */
+  --color-status-running: #2b6cee;
   --color-status-error: #dc2626;
   --color-status-warning: #d97706;
   /* Left Nav zone colours (design V2): nav cards, mode badge, overlay frame and
@@ -131,6 +134,7 @@
   --color-text-dim: #545d68;
   --color-placeholder: #6b7280;
   --color-status-success: #22c55e;
+  --color-status-running: #4c8dff;
   --color-status-error: #ef4444;
   --color-status-warning: #f59e0b;
   --color-zone-cognitive: #5fc99a;

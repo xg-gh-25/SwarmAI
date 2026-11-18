@@ -2,9 +2,13 @@
  * RunOverlay — one run's big card, over the Swarm Out tab (design
  * docs/design/2026-10-31-swarm-out-run-review.md §2.2).
  *
- * Left, to look: the acceptance strip on top (what done looks like, and the machine's
- * checks on what came back, each ✓ or △: they mark, they never hold a command), then
- * tabs (the overlays' shared Tabs): what came back, autonomy, process, cost, lessons.
+ * Left, to look, in the order the person decides (design Knowledge/Designs/
+ * 2026-11-18-swarm-out-run-card-redesign-mockup.html; zones in ./runCard): where the run
+ * is (the dispatch track, a pipeline run's stages, the funnel's gates), what its agent
+ * is doing now, what waits on the person, what it was sent to do, what done looks like with
+ * the machine's checks on what came back (each ✓ or △: they mark, they never hold a
+ * command), then the tabs that hold something (./runCardRules.visibleTabs): what came
+ * back, decisions, process, cost, lessons, how it was sent.
  * What came back is drawn with the chat's own parts: the deliverables and a repository's
  * files as the turn cards' rows (pages/chat/components/ItemRows: a file that came back
  * opens in the Canvas, one left on the Hive says so), the final reply as the chat renders
@@ -43,7 +47,7 @@ import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../common/MarkdownRenderer';
 import { swarmOutService, type SwarmOutAction, type SwarmOutAsk, type SwarmOutDecision, type SwarmOutFileVersions, type SwarmOutHostAnswer, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { OPEN_FILE_VERSIONS_EVENT, openFileVersions } from '../file-viewer/utils/fileVersions';
-import { AskPersonCard, DecisionsList, FunnelLine } from './funnel';
+import { AskPersonCard, DecisionsList } from './funnel';
 import { Stats } from './LiveDispatches';
 import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { SectionLabel, Tabs } from '../overlay';
@@ -51,19 +55,21 @@ import { FileTypeIcon } from '../common/FileTypeIcon';
 import { FileItemRow, ItemBox, ItemRow, shortFolder } from '../../pages/chat/components/ItemRows';
 import { RemoteContentContext } from '../../pages/chat/remoteContentContext';
 import { ReturnPanel } from './ReturnPanel';
-import { agentFacts, checksLine, executionLine, gateLine, lessonsLine, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, workLines } from './live';
+import { agentFacts, checksLine, executionLine, gateLine, lessonsLine, resultErrorLabel, runJudge, runStats, tokenStats, workLines } from './live';
 import { useDialogLayer } from '../../hooks/useLayer';
 import { getOverlayCtxBridge } from '../layout/overlayRegistry';
 import { PanelHiddenContext, useOpenRun } from './openSession';
 import { actionsOf, ago, autonomyWord, commandForKey, commandMeta, machineChecks, STAGE_TONE, stageLabel, stageOf, typingIn, waitingSince, waitsOf } from './runReview';
 import { DIMENSIONS, DIMENSION_ROLE } from './shapes';
+import { DispatchHero, DoneWhen, NowLine, SentAs, ZoneLabel } from './runCard';
+import { railState, visibleTabs, type CardTab } from './runCardRules';
 import { TONE_VAR } from './tone';
 import { modKeyLabel } from '../../utils/platform';
 
 const muted = 'text-[var(--color-text-muted)]';
 const btn = 'btn-md btn-secondary disabled:opacity-50';
 
-type Tab = 'deliverable' | 'autonomy' | 'process' | 'cost' | 'lessons';
+type Tab = CardTab;
 /** what the command panel shows: the commands, or one of them taking words or a confirmation */
 export type PanelMode = 'list' | 'rerun' | 'discard' | 'land' | 'manual' | 'keep' | 'revert';
 
@@ -252,12 +258,6 @@ function DeliverableTab({ r, full, fullRead, fullFailed, onRetry, waits }: {
           {showSwarmOut && <button type="button" className={btn} onClick={() => showSwarmOut()}>{t('swarmOut.review.openSwarmOut')}</button>}
         </div>
       )}
-      {stage === 'running' && (
-        <div className="text-[13px]" data-testid="swarm-out-review-now">
-          <span style={{ color: TONE_VAR.busy }}>● </span>{stateLabel(r)}
-          {(full ?? r.result) && <span className={muted}> · {t('swarmOut.review.stepsSoFar', { count: (full ?? r.result)!.work.steps.total })}</span>}
-        </div>
-      )}
       {!full && !fullRead && !fullFailed && stage !== 'needs_answer' && <div className={muted}>{t('swarmOut.loading')}</div>}
       {!full && fullRead && stage !== 'running' && (
         <div className={`text-[13px] ${muted}`} data-testid="swarm-out-review-no-result">
@@ -430,8 +430,17 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
     || r.state_reason === 'background'
     ? t(`swarmOut.review.stateReason.${r.state_reason}`) : null;
 
+  const kind = railState(r);
   const header = (
     <div className="text-[12.5px]" data-testid="swarm-out-review-stage" data-stage={stage}>
+      {mode === 'list' && (
+        // the panel's first sentence: what is needed now, in the person's words
+        <div className="mb-1" data-testid="swarm-out-rail-state" data-kind={kind}>
+          <div className="text-[14px] font-semibold" style={{ color: kind === 'you' ? TONE_VAR.attention : 'var(--color-text)' }}>
+            {t(`swarmOut.review.card.state.${kind}`)}</div>
+          {kind !== 'you' && kind !== 'done' && <div className={`mt-0.5 text-[12.5px] leading-[1.55] ${muted}`}>{t(`swarmOut.review.card.stateSub.${kind}`)}</div>}
+        </div>
+      )}
       <span className={muted}>{t('swarmOut.review.now')} </span>
       <b style={{ color: r.state_reason === 'answer_sent' ? TONE_VAR.busy : STAGE_TONE[stage] }}>{reasonLabel ?? stageLabel(stage, r.why)}</b>
       {r.why && stage !== 'closed' && <span className={muted}> · {t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why })}</span>}
@@ -540,10 +549,13 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
   const cmd = (a: SwarmOutAction, look: 'primary' | 'plain' | 'danger') => {
     const m = commandMeta(a);
     const name = t(m.name);
-    const cls = look === 'danger' || (look === 'primary' && a.key === 'stop') ? 'btn-danger'
-      : look === 'primary' ? 'btn-primary' : 'btn-secondary';
+    // weight follows the decision: accept is the one solid green; stop is outlined red,
+    // never solid (it is not the move the card leads to); the rest are neutral
+    const cls = look === 'primary' && a.key !== 'stop' && a.key !== 'accept' ? 'btn-primary' : 'btn-secondary';
     const style: React.CSSProperties | undefined = look === 'primary' && a.key === 'accept'
-      ? { background: TONE_VAR.ok, color: '#05210f' } : undefined;
+      ? { background: TONE_VAR.ok, color: '#05210f', borderColor: 'transparent' }
+      : a.key === 'stop' ? { color: TONE_VAR.error, background: 'transparent', borderColor: `color-mix(in srgb, ${TONE_VAR.error} 45%, var(--color-border))` }
+        : undefined;
     const disabled = busy || (a.key === 'open_session' && !openRun) || (a.key === 'accept' && a.variant === 'verdict' && !r.result?.ended_at);
     return (
       <button key={`${a.key}:${a.variant ?? ''}`} type="button" disabled={disabled} onClick={() => give(a)}
@@ -592,8 +604,14 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
         </div>
       )}
       {discard && (
-        <div className="mt-auto pt-3 border-t border-[var(--color-border)] flex flex-col gap-1.5">
-          {cmd(discard, 'danger')}
+        // the end of the run, kept apart and quiet: a link, never a button at full weight
+        <div className="mt-auto pt-3 border-t border-[var(--color-border)] flex flex-col gap-1">
+          <button type="button" disabled={busy} onClick={() => give(discard)}
+            className="self-stretch flex items-center justify-between text-[12.5px] hover:underline disabled:opacity-50"
+            style={{ color: TONE_VAR.error }} data-testid="swarm-out-cmd-discard" data-variant={discard.variant}>
+            <span>{(() => { const n = t(commandMeta(discard).name); return n.endsWith('…') ? n : `${n}…`; })()}</span>
+            {commandMeta(discard).hint && <span className="text-[11px] opacity-70" data-testid="swarm-out-command-key">{commandMeta(discard).hint}</span>}
+          </button>
           {help([discard])}
         </div>
       )}
@@ -812,17 +830,26 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   const checksFromRecord = !checksInferred && (full?.checks_from_record ?? r.result?.checks_from_record) === true;
   const delivered = (res?.work.files.length ?? 0) + (full?.work.repos ?? []).filter((x) => x.commits_total > 0).length;
   const lessons = res?.lessons?.returned ?? 0;
-  const running = stageOf(r) === 'running';
-  const tabs: { key: Tab; label: string; count?: number; testid: string }[] = [
-    { key: 'deliverable', label: running ? t('swarmOut.review.tab.now') : t('swarmOut.review.tab.deliverable'), count: running ? undefined : delivered },
+  // only the tabs that hold something; the one shown falls back to the first of them
+  const shown = visibleTabs(r, res, decisions ? decisions.length : null);
+  const all: { key: Tab; label: string; count?: number }[] = [
+    { key: 'deliverable', label: t('swarmOut.review.tab.deliverable'), count: delivered },
     { key: 'autonomy', label: t('swarmOut.review.tab.decisions'), count: decisions ? decisions.length : undefined },
     { key: 'process', label: t('swarmOut.review.tab.process'), count: res?.work.steps.total ?? 0 },
     { key: 'cost', label: t('swarmOut.review.tab.cost') },
     { key: 'lessons', label: t('swarmOut.review.tab.lessons'), count: lessons },
-  ].map((x) => ({ ...x, key: x.key as Tab, testid: `swarm-out-review-tab-${x.key}` }));
+    { key: 'timings', label: t('swarmOut.review.tab.timings'), count: r.timings?.length ?? 0 },
+  ];
+  const tabs = all.filter((x) => shown.includes(x.key)).map((x) => ({ ...x, testid: `swarm-out-review-tab-${x.key}` }));
+  const current: Tab | null = shown.includes(tab) ? tab : shown[0] ?? null;
+  const repo = r.repos?.[0];
+  const repoLine = repo ? `${repo.name ?? baseName(repo.url ?? '')}${repo.ref ? ` @ ${repo.ref}` : ''}${repo.sha ? ` ${repo.sha.slice(0, 7)}` : ''}` : null;
+  const stageNow = stageOf(r);
   const doneAgo = res?.ended_at ? (now - Date.parse(res.ended_at) < 60_000 ? t('swarmOut.review.doneJustNow') : t('swarmOut.review.doneAgo', { ago: ago(res.ended_at, now) })) : null;
-  const meta = [facts.brain, facts.agent, r.hive, doneAgo, res ? t('swarmOut.review.turns', { count: res.turns }) : null,
+  const meta = [facts.brain, facts.agent, r.hive, stageNow === 'running' ? repoLine : null, doneAgo,
+    res ? t('swarmOut.review.turns', { count: res.turns }) : null,
     res?.cost_usd != null ? `$${res.cost_usd.toFixed(1)}` : null].filter(Boolean).join(' · ');
+  const pillTone = r.state_reason === 'answer_sent' ? TONE_VAR.busy : STAGE_TONE[stageNow];
 
   // pt-11: the macOS title bar overlays the top 28px of the window (TitleBarStyle::Overlay,
   // src-tauri/src/lib.rs); the card starts 16px below it, and its height is a share of the
@@ -832,15 +859,21 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
       onMouseDown={(e) => { if (e.target === e.currentTarget && !keeps) onClose(); }} data-testid="swarm-out-review-overlay">
       <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={r.title} onClickCapture={markClick}
         className="flex flex-col w-[1240px] max-w-full h-[min(880px,100%)] rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl overflow-hidden text-[13px] outline-none">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-[var(--color-border)] min-w-0">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-6 pt-[18px] pb-4 border-b border-[var(--color-border)] min-w-0">
           <div className="min-w-0 flex-1 basis-[280px]">
-            <div className="text-[15px] font-semibold truncate" title={r.title}>{r.title}</div>
-            <div className={`text-[12px] truncate ${muted}`}>
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="text-[17px] leading-[1.3] font-semibold truncate text-[var(--color-text)]" title={r.title}>{r.title}</div>
+              <span className="inline-flex items-center gap-1.5 shrink-0 rounded-full px-2.5 py-0.5 text-[12px] font-semibold whitespace-nowrap"
+                style={{ color: pillTone, background: `color-mix(in srgb, ${pillTone} 14%, transparent)` }} data-testid="swarm-out-review-pill" data-stage={stageNow}>
+                <span aria-hidden className={`w-[7px] h-[7px] rounded-full ${stageNow === 'running' ? 'swarm-out-icon--busy' : ''}`} style={{ background: 'currentColor' }} />
+                {stageLabel(stageNow, r.why)}
+              </span>
+            </div>
+            <div className={`mt-1 text-[12.5px] truncate ${muted}`}>
               {meta}
               {word && <> · <button type="button" className="underline-offset-2 hover:underline" style={{ color: word.kind === 'full' || word.state === 'PASS' ? TONE_VAR.ok : TONE_VAR.attention }}
                 onClick={() => setTab('autonomy')} data-testid="swarm-out-review-autonomy-word">{word.text}</button></>}
             </div>
-            <FunnelLine r={r} />
           </div>
           <div className={`ml-auto flex flex-wrap items-center gap-1.5 text-[12px] ${muted}`}>
             {pos >= 0 && <>
@@ -848,39 +881,23 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
               <button type="button" className={btn} onClick={() => step(-1)} disabled={keeps} aria-label={t(walk === 'records' ? 'swarmOut.review.previousRecord' : 'swarmOut.review.previous')}>K</button>
               <button type="button" className={btn} onClick={() => step(1)} disabled={keeps} aria-label={t(walk === 'records' ? 'swarmOut.review.nextRecord' : 'swarmOut.review.next')}>J</button>
             </>}
-            {openRun && actionsOf(r).some((a) => a.key === 'open_session') && (
-              <button type="button" className={`${btn} font-semibold whitespace-nowrap`} style={{ color: 'var(--color-primary)', borderColor: 'var(--color-primary)' }}
-                onClick={() => { leaveTo(); openRun(); }} data-testid="swarm-out-review-open">{t('swarmOut.review.cmd.open.name')} ↗</button>
-            )}
             <button type="button" className={btn} onClick={() => { void refresh(); }} disabled={refreshing}
               title={t('swarmOut.detail.refresh')} data-testid="swarm-out-review-refresh">↻ {t('swarmOut.review.refresh')}</button>
             {refreshError && <span className="text-[12px]" style={{ color: TONE_VAR.error }} role="alert" data-testid="swarm-out-review-refresh-error">{refreshError}</span>}
             <button type="button" className={btn} onClick={onClose} aria-label={t('swarmOut.review.close')} data-testid="swarm-out-review-close">✕</button>
           </div>
         </div>
-        <div className="flex-1 grid min-h-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_290px] overflow-auto md:overflow-hidden">
-          <div className="flex flex-col min-h-0 md:border-r border-[var(--color-border)]">
-            {(acceptance || checks.length > 0) && (
-              <div className="px-4 py-3 border-b border-[var(--color-border)]" data-testid="swarm-out-review-acceptance">
-                {acceptance && <>
-                  <div className={`text-[11.5px] font-semibold ${muted}`}>{t('swarmOut.review.acceptance')}</div>
-                  <div className="text-[14px] mt-0.5 break-words">{acceptance}</div>
-                </>}
-                {checks.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1 text-[12px]">
-                    {checks.map((c) => <span key={c.key} data-testid="swarm-out-review-check" data-ok={c.ok}>
-                      <span style={{ color: c.ok ? TONE_VAR.ok : TONE_VAR.attention }}>{c.ok ? '✓' : '△'}</span> {c.text}
-                      {c.key === 'checks' && checksInferred && <span className={muted} data-testid="swarm-out-review-checks-inferred"> · {t('swarmOut.review.check.inferred')}</span>}
-                      {c.key === 'checks' && checksFromRecord && <span className={muted} data-testid="swarm-out-review-checks-recorded"> · {t('swarmOut.review.check.fromRecord')}</span>}</span>)}
-                  </div>
-                )}
-              </div>
-            )}
+        <div className="flex-1 grid min-h-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_300px] overflow-auto md:overflow-hidden">
+          <div className="min-h-0 md:overflow-auto md:border-r border-[var(--color-border)] px-7 pt-6 pb-8 flex flex-col gap-[30px]">
+            <section data-testid="swarm-out-card-hero">
+              <DispatchHero r={r} now={now} />
+              <NowLine r={r} now={now} />
+            </section>
             {r.funnel?.ask?.state === 'open' && <AskPersonCard ask={r.funnel.ask} />}
             {waits.length > 0 && (
-              // what waits on you is the decision of this moment: above the tabs (design
-              // 2026-10-31-swarm-out-single-loop-fixes §2.2), the chat's own card
-              <div ref={waitsRef} className="px-5 pt-3 flex flex-col gap-2 max-h-[55%] overflow-auto" data-testid="swarm-out-review-waits">
+              // what waits on you is the decision of this moment: right under where the
+              // run is (design 2026-10-31-swarm-out-single-loop-fixes §2.2), the chat's own card
+              <div ref={waitsRef} className="flex flex-col gap-2" data-testid="swarm-out-review-waits">
                 {waits.map((w) => (
                   <SwarmOutWaitCard key={`${w.hive_id}/${w.request_id}`} wait={w} onAnswered={onReload}
                     onDirty={dirtyFor(`${w.hive_id}/${w.request_id}`)}
@@ -888,27 +905,59 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
                 ))}
               </div>
             )}
-            <div className="px-5 py-2 border-b border-[var(--color-border)]"><Tabs items={tabs} value={tab} onChange={setTab} /></div>
-            <div className="flex-1 md:overflow-auto px-5 py-5" role="tabpanel">
-              {tab === 'deliverable' && <DeliverableTab r={r} full={full} fullRead={fullRead} fullFailed={fullFailed} onRetry={() => setFetchKey((k) => k + 1)}
-                waits={waits.length} />}
-              {tab === 'autonomy' && <DecisionsTab res={res} answers={hostAnswers} decisions={decisions}
-                personDecisions={r.person_decisions} now={now} />}
-              {tab === 'process' && (
-                <div className="flex flex-col gap-1 text-[12.5px]" data-testid="swarm-out-review-process">
-                  {res ? [...workLines(res), executionLine(res), checksLine(res), gateLine(res)].filter(Boolean).map((l) => <div key={l!}>{l}</div>)
-                    : <div className={muted}>{t('swarmOut.review.noResult')}</div>}
-                  {res && Object.keys(res.work.steps.by_tool).length > 0 && (
-                    <div className={muted}>{t('swarmOut.detail.toolCalls', { count: res.work.steps.total, list: Object.entries(res.work.steps.by_tool).map(([n, c]) => `${n} ${c}`).join(' · ') })}</div>
+            <SentAs r={r} />
+            {(acceptance || checks.length > 0) && (
+              <section className="flex flex-col gap-4" data-testid="swarm-out-review-acceptance">
+                <DoneWhen acceptance={acceptance}
+                  aside={checks.length === 0 && stageNow === 'running' ? t('swarmOut.review.card.checkedLater') : undefined} />
+                {checks.length > 0 && (
+                  <div>
+                    <ZoneLabel aside={t('swarmOut.review.card.checksNote')}>{t('swarmOut.review.card.checks')}</ZoneLabel>
+                    <div className="flex flex-wrap gap-x-[18px] gap-y-1.5 text-[12.5px] text-[var(--color-text-secondary)]">
+                      {checks.map((c) => <span key={c.key} data-testid="swarm-out-review-check" data-ok={c.ok}>
+                        <span style={{ color: c.ok ? TONE_VAR.ok : TONE_VAR.attention }}>{c.ok ? '✓' : '△'}</span> {c.text}
+                        {c.key === 'checks' && checksInferred && <span className={muted} data-testid="swarm-out-review-checks-inferred"> · {t('swarmOut.review.check.inferred')}</span>}
+                        {c.key === 'checks' && checksFromRecord && <span className={muted} data-testid="swarm-out-review-checks-recorded"> · {t('swarmOut.review.check.fromRecord')}</span>}</span>)}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+            {current && (
+              <section className="min-w-0">
+                <div className="mb-4 border-b border-[var(--color-border)]"><Tabs items={tabs} value={current} onChange={setTab} /></div>
+                <div role="tabpanel">
+                  {current === 'deliverable' && <DeliverableTab r={r} full={full} fullRead={fullRead} fullFailed={fullFailed} onRetry={() => setFetchKey((k) => k + 1)}
+                    waits={waits.length} />}
+                  {current === 'autonomy' && <DecisionsTab res={res} answers={hostAnswers} decisions={decisions}
+                    personDecisions={r.person_decisions} now={now} />}
+                  {current === 'process' && (
+                    <div className="flex flex-col gap-1 text-[12.5px]" data-testid="swarm-out-review-process">
+                      {res ? [...workLines(res), executionLine(res), checksLine(res), gateLine(res)].filter(Boolean).map((l) => <div key={l!}>{l}</div>)
+                        : <div className={muted}>{t('swarmOut.review.noResult')}</div>}
+                      {res && Object.keys(res.work.steps.by_tool).length > 0 && (
+                        <div className={muted}>{t('swarmOut.detail.toolCalls', { count: res.work.steps.total, list: Object.entries(res.work.steps.by_tool).map(([n, c]) => `${n} ${c}`).join(' · ') })}</div>
+                      )}
+                    </div>
+                  )}
+                  {current === 'cost' && (res ? <><Stats stats={runStats(res)} /><Stats stats={tokenStats(res)} testId="swarm-out-run-tokens" min={72} /></>
+                    : <div className={muted}>{t('swarmOut.review.noResult')}</div>)}
+                  {current === 'lessons' && <div className="text-[12.5px]">{(res && lessonsLine(res)) || <span className={muted}>{t('swarmOut.review.noLessons')}</span>}</div>}
+                  {current === 'timings' && (
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-1 text-[12.5px] max-w-[62em]" data-testid="swarm-out-review-timings">
+                      {(r.timings ?? []).map((x, i) => (
+                        <div key={i} className="contents">
+                          <span className="text-[var(--color-text-secondary)] truncate">{x.step}</span>
+                          <span className={`tabular-nums ${muted}`}>{typeof x.seconds === 'number' ? `${x.seconds.toFixed(1)} s` : ''}</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-              )}
-              {tab === 'cost' && (res ? <><Stats stats={runStats(res)} /><Stats stats={tokenStats(res)} testId="swarm-out-run-tokens" min={72} /></>
-                : <div className={muted}>{t('swarmOut.review.noResult')}</div>)}
-              {tab === 'lessons' && <div className="text-[12.5px]">{(res && lessonsLine(res)) || <span className={muted}>{t('swarmOut.review.noLessons')}</span>}</div>}
-            </div>
+              </section>
+            )}
           </div>
-          <div className="p-3.5 bg-[var(--color-bg-chrome)] md:overflow-auto border-t md:border-t-0 border-[var(--color-border)]">
+          <div className="px-5 pt-6 pb-5 bg-[var(--color-bg-chrome)] md:overflow-auto border-t md:border-t-0 border-[var(--color-border)]">
             <CommandPanel r={r} full={full} fullRead={fullRead} fullFailed={fullFailed} onRetry={() => setFetchKey((k) => k + 1)} asks={asks}
               hasWaits={waits.length > 0}
               mode={mode} setMode={setMode} onDone={onDone}

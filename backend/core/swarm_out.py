@@ -2057,7 +2057,7 @@ async def _compute_runs() -> dict[str, Any]:
     except Exception as e:                          # results unreadable: the runs still list
         logger.warning("swarm_out: attaching results failed (%s)", type(e).__name__)
         errors.append("could not read the runs' results")
-    # the stage a running Hive pipeline task is in (core/swarm_out_live); a hint only
+    # where a running Hive task stands and what its agent is doing (core/swarm_out_live); a hint only
     from core import swarm_out_live
     try:
         swarm_out_live.attach(rows, status_of)

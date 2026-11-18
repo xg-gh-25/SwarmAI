@@ -1984,7 +1984,8 @@
         "process": "过程",
         "cost": "花费",
         "lessons": "教训",
-        "decisions": "决定"
+        "decisions": "决定",
+        "timings": "派发过程"
       },
       "section": {
         "you": "等你",
@@ -1997,8 +1998,6 @@
       "failed": "没成功：{{error}}",
       "noResult": "还没有结果",
       "noLessons": "这一单没有教训",
-      "stepsSoFar_one": "已做 {{count}} 步",
-      "stepsSoFar_other": "已做 {{count}} 步",
       "landNothing": "这里没有封好的提交可落地：修正重跑，或丢弃",
       "landDone": "完成",
       "nothingToDo": "这一单没有要做的事",
@@ -2099,7 +2098,30 @@
         "childOf": "属于 Swarm Run「{{run}}」",
         "takenByLead": "由 lead run 验收或修正；你停止或丢弃它，lead run 会被叫醒处理。"
       },
-      "handled": "由 Swarm Run 处理"
+      "handled": "由 Swarm Run 处理",
+      "card": {
+        "sentAs": "派发说明",
+        "doneWhen": "完成标准",
+        "checks": "机器检查",
+        "checksNote": "只看带回了什么，不是结论",
+        "checkedLater": "回来后检查",
+        "readAgo": "{{ago}}读取",
+        "sentIn": "{{at}} · {{n}} 秒后开始",
+        "steps_one": "{{count}} 步",
+        "steps_other": "{{count}} 步",
+        "state": {
+          "run": "你现在不需要做什么",
+          "judge": "派发它的 agent 在处理",
+          "you": "轮到你了",
+          "stop": "已停止",
+          "done": "已了结"
+        },
+        "stateSub": {
+          "run": "跑完会回到这里。",
+          "judge": "它会审查、落地并判断；它判断不了的才会交给你。",
+          "stop": "带修正重跑，或者丢弃。"
+        }
+      }
     },
     "wait": {
       "done": "已回答",

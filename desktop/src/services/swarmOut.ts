@@ -26,7 +26,13 @@ export interface SwarmOutRun {
    *  hive_silent, hive_updating (the Hive is updating), no_session_id */
   state_reason: string;
   /** the repositories the task declared, with the directory each goes to on the Hive */
-  repos?: { url: string; ref: string | null; dir: string }[];
+  repos?: { url: string; ref: string | null; dir: string; sha?: string | null; name?: string }[];
+  /** the dispatching agent's one- or two-sentence summary of the task, for the card
+   *  (backend swarm_out: whitespace collapsed, at most MAX_BRIEF_CHARS); absent for an
+   *  older dispatch. Not the person's own words. */
+  brief?: string | null;
+  /** how the dispatch went, step by step (choosing a Hive, syncing, starting) */
+  timings?: { step: string; seconds: number }[];
   /** The Project Agent the task went under (this machine's own dispatch record; absent
    *  for a dispatch from before Project Agents). brain "General" = the Runner Agent. */
   project_agent?: SwarmOutAgent;
@@ -72,6 +78,19 @@ export interface SwarmOutRun {
    *  (backend core/swarm_out_live; at most every 90 s); null when not running or not
    *  read. Never guessed. */
   live_stage?: SwarmOutLiveStage | null;
+  /** What the agent of a running task (native or pipeline) is doing, read on this host
+   *  from its Hive's in-progress turn with the live stage; null when not running or not
+   *  read. The Hive's words: shown as plain text, never as markdown or links. */
+  live_now?: SwarmOutLiveNow | null;
+}
+
+export interface SwarmOutLiveNow {
+  /** the last line of the agent's newest text */
+  text: string | null;
+  /** its newest tool call, as the chat shows it (the tool's name, its object's first line) */
+  tool: string | null;
+  object: string | null;
+  checked_at: string;
 }
 
 export interface SwarmOutLiveStage {
@@ -217,6 +236,9 @@ export interface SwarmOutAgent {
   returns?: 'answer' | 'document' | 'commits';
   gates?: string[];
   validations?: { id: string; command: string }[];
+  /** how the dispatching agent chose to run it, and why (absent before execution choice) */
+  execution?: 'native' | 'pipeline' | string;
+  execution_why?: string;
 }
 
 /** ran: the run's test record or a Bash call ran the check's command and did not error;

@@ -2,9 +2,10 @@
 
 Questions: does it read the newest stage of the dispatch's run (the next stage after a
 completed one), the run's planned stages, and nothing from another run, an unknown
-stage or a malformed body; is it read only for a running pipeline task on a running
-Hive, at most once per interval; does a failing Hive keep nothing and never raise; does
-attach give it to running rows only?
+stage or a malformed body; does it read what the agent is doing (the newest text line and
+tool call, three checked fields only) for a native task too; is it read only for a
+running task on a running Hive, at most once per interval; does a failing Hive keep
+nothing and never raise; does attach give both to running rows only?
 """
 from __future__ import annotations
 
@@ -33,9 +34,9 @@ def _run_block(stages, run=RUN):
 
 @pytest.fixture(autouse=True)
 def _clean():
-    live._live.clear(); live._checked.clear(); live._inflight.clear()
+    live._live.clear(); live._now.clear(); live._checked.clear(); live._inflight.clear()
     yield
-    live._live.clear(); live._checked.clear(); live._inflight.clear(); live._sems.clear()
+    live._live.clear(); live._now.clear(); live._checked.clear(); live._inflight.clear(); live._sems.clear()
     # asyncio.run closed its loop and left none set: later tests get a fresh one
     asyncio.set_event_loop(asyncio.new_event_loop())
 
@@ -63,11 +64,13 @@ def _row(**o):
     return row
 
 
-def test_due_only_for_a_running_pipeline_task_on_a_running_hive():
+def test_due_only_for_a_running_task_on_a_running_hive():
     assert live.due(_row(), "running", now=1000.0)
+    assert live.due(_row(project_agent={"execution": "native"}), "running", now=1000.0)   # native too
+    assert live.due(_row(project_agent=None), "running", now=1000.0)
     assert not live.due(_row(), "stopped", now=1000.0)
     assert not live.due(_row(state="stopped"), "running", now=1000.0)
-    assert not live.due(_row(project_agent={"execution": "native"}), "running", now=1000.0)
+    assert not live.due(_row(session_id=None), "running", now=1000.0)
     live._checked["so_aaaaaaaaaaaa"] = 1000.0
     assert not live.due(_row(), "running", now=1000.0 + live.LIVE_STAGE_S - 1)
     assert live.due(_row(), "running", now=1000.0 + live.LIVE_STAGE_S)
@@ -147,3 +150,70 @@ def test_an_unsafe_session_id_never_reaches_the_hive(monkeypatch, sid):
     client = _hive(monkeypatch, _Resp(200, _msgs(_stage("build"))))
     assert asyncio.run(live.check(_row(session_id=sid))) is None
     assert client.calls == []
+
+
+def _tool(tool, obj):
+    return {"type": "tool_use", "id": "t1", "name": tool, "input": {"command": "SECRET=1 raw input"},
+            "display": {"tool": tool, "object": obj}}
+
+
+def test_live_now_takes_the_newest_text_line_and_tool_display():
+    body = _msgs({"type": "text", "text": "Reading the runner first."}, _tool("Read", "backend/a.py"),
+                 {"type": "thinking", "thinking": "private reasoning"},
+                 {"type": "text", "text": "Runner is in.\n\nWriting the compare subcommand next.\n"},
+                 _tool("Edit", "backend/scripts/compare.py\nsecond line"))
+    assert live.live_now_of(body) == {"text": "Writing the compare subcommand next.", "tool": "Edit",
+                                      "object": "backend/scripts/compare.py"}
+    # the raw tool input and the thinking are never read
+    assert "SECRET" not in json.dumps(live.live_now_of(body)) and "private" not in json.dumps(live.live_now_of(body))
+    assert live.live_now_of(_msgs(_tool("Bash", "pytest -q"))) == {"text": None, "tool": "Bash", "object": "pytest -q"}
+    assert live.live_now_of(_msgs({"type": "text", "text": "only words"}))["tool"] is None
+    # neither a text line nor a tool call: nothing
+    assert live.live_now_of(_msgs({"type": "thinking", "thinking": "x"}, {"type": "text", "text": "  \n "})) is None
+    assert live.live_now_of(_msgs()) is None
+    # only the newest assistant message counts, never the user's words
+    assert live.live_now_of([{"role": "assistant", "content": [{"type": "text", "text": "old"}]},
+                             {"role": "user", "content": [{"type": "text", "text": "the person's words"}]}])["text"] == "old"
+
+
+def test_live_now_drops_bad_fields_and_control_characters():
+    body = _msgs({"type": "text", "text": {"not": "a string"}},
+                 {"type": "tool_use", "display": {"tool": ["x"], "object": "a.py"}},
+                 {"type": "tool_use", "display": "not a dict"})
+    assert live.live_now_of(body) is None
+    got = live.live_now_of(_msgs({"type": "text", "text": "a\x1b[31mred\u202eevil" + "x" * 500},
+                                 _tool("Bash" + "y" * 100, "rm\x07 -rf " + "z" * 500)))
+    assert got["text"].startswith("a[31mredevil") and len(got["text"]) == live.NOW_TEXT
+    assert "\x1b" not in got["text"] and "\u202e" not in got["text"]
+    assert len(got["tool"]) == live.NOW_TOOL and got["object"].startswith("rm -rf") and len(got["object"]) == live.NOW_OBJECT
+    # a tool name that cleans to nothing takes no object either
+    assert live.live_now_of(_msgs(_tool("\x00\x01", "a.py"))) is None
+    assert live.live_now_of("not a list") is None
+
+
+def test_a_native_task_is_read_within_the_same_limits(monkeypatch):
+    client = _hive(monkeypatch, _Resp(200, _msgs({"type": "text", "text": "Scoring now."}, _tool("Bash", "pytest"))))
+    row = _row(project_agent={"execution": "native"})
+    assert asyncio.run(live.check(row)) is None                                # no pipeline stage
+    assert client.calls == [("GET", "/api/chat/sessions/sess1/messages", {"turns": 1})]
+    assert live._now["so_aaaaaaaaaaaa"]["text"] == "Scoring now."
+    assert live._now["so_aaaaaaaaaaaa"]["checked_at"]
+    assert "so_aaaaaaaaaaaa" not in live._live
+    # over the body cap: nothing kept, the same as a pipeline task
+    live._now.clear()
+    _hive(monkeypatch, _Resp(200, _msgs({"type": "text", "text": "x" * (5 * 1024 * 1024)})))
+    assert asyncio.run(live.check(row)) is None
+    assert live._now == {}
+
+
+def test_attach_gives_live_now_only_to_running_rows():
+    live._now.update({"so_aaaaaaaaaaaa": {"text": "t", "tool": None, "object": None, "checked_at": "x"},
+                      "so_bbbbbbbbbbbb": {"text": "old", "tool": None, "object": None, "checked_at": "x"}})
+    live._checked.update({"so_aaaaaaaaaaaa": 1e12, "so_bbbbbbbbbbbb": 1e12, "so_cccccccccccc": 1e12})   # nothing due
+    rows = [_row(), _row(dispatch_id="so_bbbbbbbbbbbb", state="stopped"), _row(dispatch_id="so_cccccccccccc")]
+    live.attach(rows, {"h1": "running"})
+    assert rows[0]["live_now"]["text"] == "t"
+    assert rows[1]["live_now"] is None and rows[1]["live_stage"] is None
+    assert "so_bbbbbbbbbbbb" not in live._now                                 # forgotten once stopped
+    assert rows[2]["live_now"] is None                                         # never read
+

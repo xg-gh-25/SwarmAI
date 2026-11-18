@@ -462,7 +462,9 @@ describe('the run list', () => {
     const { rerender } = render(<OpenSessionContext.Provider value={open}><PanelHiddenContext.Provider value={false}>
       <RunList runs={[run('a1', 'awaiting')]} asks={[]} now={NOW} onReload={vi.fn()} /></PanelHiddenContext.Provider></OpenSessionContext.Provider>);
     fireEvent.click(screen.getAllByTestId('swarm-out-row')[0]);
-    fireEvent.click(await screen.findByTestId('swarm-out-review-open'));
+    // Open session has one home on the card: the command panel
+    expect(screen.queryByTestId('swarm-out-review-open')).toBeNull();
+    fireEvent.click(await screen.findByTestId('swarm-out-cmd-open_session'));
     expect(open).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();
     fireEvent.click(screen.getAllByTestId('swarm-out-row')[0]);

@@ -17,6 +17,7 @@
  */
 import type { SwarmOutGateKey, SwarmOutRun } from '../../services/swarmOut';
 import { DONE_STAGES, stageOf } from './runReview';
+import { TONE_VAR } from './tone';
 
 export const DISPATCH_STATIONS = ['sent', 'on_hive', 'return', 'land', 'judge'] as const;
 export type DispatchStation = typeof DISPATCH_STATIONS[number];
@@ -25,6 +26,12 @@ export type ChipKind = 'run' | 'judge' | 'you' | 'stop' | 'done';
 const GATE_STATION: Record<SwarmOutGateKey, DispatchStation> = { review: 'return', land: 'land', judge: 'judge' };
 
 export interface DispatchTrack { at: DispatchStation; kind: ChipKind }
+
+/** A track's colour per chip kind: one meaning each (./tone; light purple: the agent's).
+ *  Read by the run list's tracks and the run card's track. */
+export const CHIP_COLOR: Record<ChipKind, string> = {
+  run: TONE_VAR.busy, judge: 'var(--line-judge)', you: TONE_VAR.attention, stop: TONE_VAR.error, done: 'var(--color-text-muted)',
+};
 
 /** The station the run is at and its chip's kind. */
 export function dispatchTrack(r: SwarmOutRun): DispatchTrack {

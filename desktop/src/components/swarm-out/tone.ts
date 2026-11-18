@@ -3,7 +3,8 @@
  * (run cards, history rows, the fleet, the numbers, the daily bars):
  *
  *  - ok        green  done, healthy, a free slot
- *  - busy      blue   running now
+ *  - busy      blue   running now (a fixed status blue, never the accent: with an
+ *                     orange accent, running would read as the amber below)
  *  - attention amber  needs the person (a question) or did not finish normally
  *                     (stopped, paused, a full Hive, checks not run)
  *  - error     red    failed, or a Hive that is up but cannot be reached
@@ -18,7 +19,7 @@ export type Tone = 'ok' | 'busy' | 'attention' | 'error' | 'unknown';
 
 export const TONE_VAR: Record<Tone, string> = {
   ok: 'var(--color-status-success)',
-  busy: 'var(--color-primary)',
+  busy: 'var(--color-status-running)',
   attention: 'var(--color-status-warning)',
   error: 'var(--color-status-error)',
   unknown: 'var(--color-text-dim)',
