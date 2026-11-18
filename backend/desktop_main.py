@@ -34,7 +34,7 @@ system Python:
   skill scripts) uses this instead.
 
 Public: ``main(argv)``, ``run_py(argv)``, ``run_pipeline_v1(argv)``, ``run_hook(argv)``,
-``run_knowledge(argv)``, ``run_aws_credentials(argv)``,
+``run_knowledge(argv)``, ``run_aws_credentials(argv)``, ``reroute_hint(...)``,
 ``WINDOWS_PIPELINE_MESSAGE``.
 """
 import json
@@ -215,6 +215,42 @@ def get_log_dir() -> Path:
 
 # ── ingest ────────────────────────────────────────────────────────────────────
 
+def reroute_hint(destination: dict, decision: "str | None", payload: object) -> str:
+    """Why a unit declared for a file read every turn was kept on demand instead, and what
+    the submitting agent can do about it (design 2026-10-30-cdf-agent-decides §2).
+
+    Three causes keep a unit out, and each needs a different next move, so the hint names
+    the one that fired, read from the unit's recorded decision: the isolated user check
+    found the cited message does not say what the unit claims (re-quoting the same message
+    cannot change that); the unit cites external content; or the user_quote is missing or
+    not in the cited message word for word."""
+    target = destination.get("rerouted_from")
+    where = (f"so this went to {destination.get('relative_path')} (recalled when needed) "
+             f"instead of {target}, which is read every turn.")
+    try:
+        recorded = json.loads(decision or "{}")
+    except (TypeError, ValueError):
+        recorded = {}
+    vector = recorded.get("version_vector") if isinstance(recorded, dict) else None
+    vector = vector if isinstance(vector, dict) else {}
+    check = vector.get("user_check")
+    if isinstance(check, dict) and check.get("holds") is False:
+        return (f"The user check found that the person's message you cited does not say "
+                f"this: {check.get('reason') or 'no reason given'} {where} Quoting the same "
+                "message again will not change it. A point the person made in an earlier "
+                "turn is read by the after-session review, which sees every message of the "
+                "conversation.")
+    if vector.get("basis") == "external":
+        return (f"This unit cites external content, which never goes into a file read every "
+                f"turn, {where}")
+    quote = payload.get("user_quote") if isinstance(payload, dict) else None
+    if not quote:
+        return (f"No user_quote was given, {where} To put it in {target}, copy the person's "
+                "own words from this turn's message into user_quote.")
+    return (f"The user_quote was not found word for word in your message, {where} To put "
+            f"it in {target}, quote the person's own words exactly in user_quote.")
+
+
 def run_ingest(argv: "list[str]") -> int:
     """Enqueue one CDF candidate and optionally poll its stored outcome."""
     import argparse
@@ -393,7 +429,8 @@ def run_ingest(argv: "list[str]") -> int:
                     "SELECT state, versions FROM ingestion_inbox WHERE id=?", (result.candidate_id,)
                 ).fetchone()
                 units = conn.execute(
-                    "SELECT state, destination, reason FROM ingestion_units WHERE candidate_id=? ORDER BY unit_id",
+                    "SELECT state, destination, reason, decision FROM ingestion_units "
+                    "WHERE candidate_id=? ORDER BY unit_id",
                     (result.candidate_id,),
                 ).fetchall()
             finally:
@@ -402,17 +439,12 @@ def run_ingest(argv: "list[str]") -> int:
                 rendered_units = []
                 for unit_row in units:
                     item = dict(unit_row)
+                    decision = item.pop("decision", None)
                     destination = json.loads(item["destination"] or "{}")
                     item["destination"] = destination
                     item["text"] = payloads[i] if i < len(payloads) else None
                     if isinstance(destination, dict) and destination.get("rerouted_from"):
-                        # no user_quote found in the message: kept on demand, not every turn
-                        # (design 2026-10-30-cdf-agent-decides §2)
-                        item["hint"] = (f"The user_quote was not found word for word in your message, "
-                                        f"so this went to {destination.get('relative_path')} (recalled when "
-                                        f"needed) instead of {destination['rerouted_from']}, which is read "
-                                        f"every turn. To put it in {destination['rerouted_from']}, quote "
-                                        "your own words exactly in user_quote.")
+                        item["hint"] = reroute_hint(destination, decision, item["text"])
                     rendered_units.append(item)
                 print(json.dumps({
                     "status": "done", "candidate_id": result.candidate_id,
