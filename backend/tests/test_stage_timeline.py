@@ -198,13 +198,14 @@ def test_projection_carries_knowledge_counts(tmp_path, monkeypatch):
     assert value["knowledge"]["new"] is None                     # no REFLECT report yet
     assert value["knowledge"]["used"] == (len(set(map(str, given.get("items") or [])))
                                           if given.get("status") != "unavailable" else None)
-    (engine.run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+    # the report as reflect-prepare records it (its reflect_report event, then the file)
+    path = engine.run_dir / "artifacts" / "reflect.json"
     bad = {**COGNITION, "type": "not-a-type"}                     # the contract refuses it: not submitted
-    (engine.run_dir / "artifacts" / "reflect.json").write_text(json.dumps({"schema": 2, "sections": {
-        "decisions": [COGNITION, bad], "practices": [COGNITION], "delivered": [EVENT], "gaps": []}}))
+    engine._record_reflect(path, {"schema": 2, "sections": {
+        "decisions": [COGNITION, bad], "practices": [COGNITION], "delivered": [EVENT], "gaps": []}})
     assert json.loads(engine.write_projection().read_text())["knowledge"]["new"] == 2
     # rows outside the five sections are not what CDF reads either
-    (engine.run_dir / "artifacts" / "reflect.json").write_text(json.dumps({"lessons": [COGNITION] * 5}))
+    engine._record_reflect(path, {"lessons": [COGNITION] * 5})
     assert json.loads(engine.write_projection().read_text())["knowledge"]["new"] == 0
 
 

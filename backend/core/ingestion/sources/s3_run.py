@@ -62,8 +62,9 @@ LANDED = ("landed", "human_override")
 def _drop_closes_unless_landed(engine: Any, units: list[Any]) -> list[Any]:
     """An event keeps only the ``closes`` ids that are open gaps of the run's project,
     and none when the run landed no code (it fixed nothing; design
-    2026-10-30-cdf-gap-lifecycle §3). Checked again here, not only at prepare: the
-    report file can be rewritten after it. The dropped ids are logged."""
+    2026-10-30-cdf-gap-lifecycle §3). Checked again here, not only at prepare: whether
+    the run landed is known only now, and a gap may have closed since. The dropped ids
+    are logged."""
     from core.ingestion import gaps
     landing = (engine.projection() or {}).get("landing")
     allowed = gaps.open_gap_ids(engine.project) if landing in LANDED else set()

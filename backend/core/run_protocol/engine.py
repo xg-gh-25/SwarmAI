@@ -555,6 +555,10 @@ class RunEngine:
                         "transcript_ids": list(dict.fromkeys(transcript_ids)),
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
+                        # this run's REFLECT report is the one its reflect_report event
+                        # records (read_reflect_report): never read from the workspace
+                        # file, which only a run created before that event existed does
+                        "reflect_recorded": True,
                         **({"ddd_stale_since": ddd_stale_since} if ddd_stale_since else {}),
                         # the Brain's rules and watches every reviewer checks against
                         **({"project_agent": {"rules": [str(r) for r in project_agent.get("rules") or []],
@@ -1147,8 +1151,9 @@ class RunEngine:
         except Exception as exc:  # noqa: BLE001 -- a display read model never blocks a state change
             logger.warning("run %s: no stage timeline (%s: %s)", self.run_id, type(exc).__name__, exc)
         try:
-            written = (self.run_dir / "artifacts" / "reflect.json").exists()
-            out["knowledge"] = counts(self.contract, events, self.read_reflect_report() if written else None)
+            written = self.reflect_written(events)
+            out["knowledge"] = counts(self.contract, events,
+                                      self.read_reflect_report(events) if written else None)
         except Exception as exc:  # noqa: BLE001 -- as above
             logger.warning("run %s: no knowledge counts (%s: %s)", self.run_id, type(exc).__name__, exc)
         return out
@@ -3698,14 +3703,70 @@ class RunEngine:
         failed = {key: detail for key, (passed, detail) in results.items() if not passed}
         return {"open": failed, "checks": results}
 
-    def read_reflect_report(self) -> dict[str, Any]:
-        """Return the validated five-part report body, or five empty sections."""
+    def _recorded_reflect(self, events: Sequence[Mapping[str, Any]] | None = None,
+                          ) -> tuple[bool, Any]:
+        """(recorded, document): the document of the run's newest ``reflect_report``
+        event, read from its audit blob; ``(False, None)`` when there is none;
+        ``(True, None)`` when the newest one cannot be read. *events*: the run's log
+        when the caller has read it already."""
+        rows = events if events is not None else self.store.read_events()
+        recorded = [e for e in rows if e.get("kind") == "reflect_report"]
+        if not recorded:
+            return False, None
+        raw = (recorded[-1].get("payload") or {}).get("report_json")
+        try:
+            if isinstance(raw, Mapping):
+                raw = self.store.read_blob(str(raw["blob"])).decode("utf-8")
+            return True, json.loads(raw)
+        except Exception as exc:  # noqa: BLE001 -- read as empty below, never the file
+            logger.warning("run %s: recorded REFLECT report unreadable (%s: %s)",
+                           self.run_id, type(exc).__name__, exc)
+            return True, None
+
+    def _reads_reflect_file(self) -> bool:
+        """Only a run created before the reflect_report event existed (its contract has
+        no ``reflect_recorded``) reads its report from artifacts/reflect.json."""
+        return not self.contract.get("reflect_recorded")
+
+    def reflect_written(self, events: Sequence[Mapping[str, Any]] | None = None) -> bool:
+        """Whether REFLECT recorded a report: its event, or for a run created before
+        that event existed, the file."""
+        if self._recorded_reflect(events)[0]:
+            return True
+        return self._reads_reflect_file() and (self.run_dir / "artifacts" / "reflect.json").exists()
+
+    def read_reflect_report(self, events: Sequence[Mapping[str, Any]] | None = None,
+                            ) -> dict[str, Any]:
+        """Return the validated five-part report body, or five empty sections.
+
+        The one read of the report: the RF checks, the CDF submission
+        (s3_run.enqueue_report) and the knowledge count all come here. It is the report
+        reflect-prepare recorded in its newest ``reflect_report`` event, so an edit of
+        artifacts/reflect.json after it changes nothing; an unreadable recorded report,
+        or none (reflect-prepare never ran), reads as empty, never as the file. Only a
+        run created before the event existed reads the file. *events*: the run's log
+        when the caller has read it already."""
         from core.run_protocol.reflect import SECTIONS
-        value = self._read_json(self.run_dir / "artifacts" / "reflect.json", {}) or {}
+        recorded, value = self._recorded_reflect(events)
+        if not recorded and self._reads_reflect_file():
+            value = self._read_json(self.run_dir / "artifacts" / "reflect.json", {}) or {}
         sections = value.get("sections") if isinstance(value, Mapping) else None
         if not isinstance(sections, Mapping):
             return {name: [] for name in SECTIONS}
         return {name: list(sections.get(name) or []) for name in SECTIONS}
+
+    def _record_reflect(self, path: Path, document: Mapping[str, Any]) -> None:
+        """Record *document* as the run's report: the ``reflect_report`` event first
+        (its body an audit blob), then the file as its projection, so a crash between
+        the two leaves the event, which readers use, never a file that looks like a
+        run from before the event."""
+        text = json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2)
+        rows = sum(len(v) for v in (document.get("sections") or {}).values()
+                   if isinstance(v, list))
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="reflect_report", at=_now(),
+            ordinal=NEXT, payload={"report_json": text, "n_rows": rows})
+        DocumentStore._atomic(path, text)
 
     @_one_operation
     def prepare_reflect(self, report: Mapping[str, Any]) -> dict[str, Any]:
@@ -3738,8 +3799,7 @@ class RunEngine:
         dropped = prepared.pop("dropped")
         document = prepared
         path = self.run_dir / "artifacts" / "reflect.json"
-        DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False, sort_keys=True,
-                                               indent=2))
+        self._record_reflect(path, document)
         result = complete_stage(self.store, profile=state["profile"], stage="deliver",
                                 variant=None, context=self.check_context(), at=_now(),
                                 attempt=self._next_attempt("deliver"),
@@ -3748,8 +3808,8 @@ class RunEngine:
         if self.projection().get("reflect") == "degraded":
             document = {"schema": reflect.SCHEMA,
                         "sections": {name: [] for name in reflect.SECTIONS}}
-            DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False,
-                                                   sort_keys=True, indent=2))
+            self._record_reflect(path, document)
+            self.write_projection()   # its knowledge count reads the empty report
         out = {**document, "checks": result["checks"], "passed": result["passed"]}
         warning = reflect.nothing_kept_warning(document, dropped)
         if warning:

@@ -198,6 +198,7 @@ IGNORED = frozenset({
     "owner_transfer", "render_failed",
     "child_dispatched", "frozen_spec",   # a Swarm Run's record of its children (swarm-run §9)
     "knowledge_recalled",       # what THINK / PLAN were given (run-knowledge §3.6.3)
+    "reflect_report",           # the report reflect-prepare recorded (read_reflect_report)
 })
 
 

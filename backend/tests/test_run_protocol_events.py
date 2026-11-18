@@ -137,6 +137,7 @@ CASES.update({
                "payload.name", "wall_seconds"),
     "run_create": ({"payload": {"run_id": "run_abc"}}, "payload.run_id", "run_def"),
     "knowledge_recalled": ({"payload": {"purpose": "design"}}, "payload.purpose", "other"),
+    "reflect_report": ({"ordinal": 1}, "ordinal", 2),
     "stage_complete": ({"stage": "plan", "attempt": 1}, "attempt", 2),
     "infrastructure_failed": ({"ordinal": 1}, "ordinal", 2),
     "session_lost": ({"ordinal": 1}, "ordinal", 2),

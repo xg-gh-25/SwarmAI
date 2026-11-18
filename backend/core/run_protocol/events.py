@@ -333,6 +333,12 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # one per purpose, so a re-completed EVALUATE cannot replace it
     "knowledge_recalled": _spec("cli", ("payload.purpose",), None,
                                 {"purpose": str, "status": str, "items": list}, {"ddd": list}),
+    # the five-part REFLECT report reflect-prepare validated (report_json: always a blob),
+    # the one the RF checks, the CDF submission and the knowledge count read
+    # (RunEngine.read_reflect_report); artifacts/reflect.json is its projection. The
+    # newest one is the run's report (a degraded REFLECT records the empty one after it)
+    "reflect_report": _spec("cli", ("ordinal",), None, {"report_json": (str, dict)},
+                            {"n_rows": int}),
     "resume": _spec("cli", ("ordinal",), None, {"worktree_ready": bool}),
     # the run's infrastructure failed (conformance F11): the CLI that met it records it
     "infrastructure_failed": _spec("cli", ("ordinal",), None, {"reason": str}),
