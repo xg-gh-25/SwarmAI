@@ -176,11 +176,41 @@ eligible user event and must not call S1. Relay the CLI echo to the user
 **unchanged**, including its complete text, actual destination, and hint. A timeout
 means the candidate is visible in Cognitive Distillation Flow, not that it failed.
 
+### Files read every turn need the person's own words (`user_quote`)
+
+STEERING, USER and TOOLS take a unit only on the person's own words; MEMORY and
+EVOLUTION take it on the person's words or on a measured result. For S1 the words are
+`user_quote`: copy part of **this turn's** user message exactly (spacing and quote marks
+do not count). Two checks follow, and both must pass:
+
+1. the quote is found in this turn's message;
+2. an isolated check, shown only the person's own messages and the unit, finds that the
+   quoted words actually say what the unit claims. A short "save this" or "do better"
+   says nothing about the claim, so it fails here even though it is found in step 1.
+
+A unit that fails either check is not lost: it goes to the project's DDD or the General
+Brain (recalled when needed). The `--wait` echo's `hint` names which check failed.
+
+```bash
+printf %s '{"kind":"cognition","type":"correction","scope":"agent","title":"<complete title>","what":"<complete claim>","how":"<action>","why":"<why>","applicability":"<trigger>","user_quote":"<the person'"'"'s words from this turn, copied exactly>","evidence":[]}' | \
+  "$SWARM_BACKEND_BIN" ingest submit --source S1 \
+  --evidence last-user --payload-json - --wait 10
+```
+
+When the point was said in an **earlier** turn and this turn only says "save it", do not
+submit it through S1: S1 cites only this turn, so the isolated check refuses it. The
+after-session review reads every message of the conversation and takes it from the
+earlier words. Tell the person it will be recorded when the session ends, and stop.
+Never submit the same unit again after a refusal: the same evidence gets the same result,
+and every resubmission writes one more copy where the first one landed.
+
 ## Rules
 
 - **Never edit a governed destination directly** — only run `ingest submit`.
 - **Complete claim** — include the conclusion, applicability, and why/how needed to understand it later.
 - **Current evidence** — pass `--evidence last-user`; never cite an older turn.
+- **Every-turn files need `user_quote`** — this turn's own words, saying what the unit
+  claims (§ Files read every turn); without it the unit is kept on demand.
 - **No pre-routing** — scope and project context are hints; CDF owns the final destination.
 - **Governance detection** — behavioral governance still follows its explicit promotion path.
 - **Reach decides the scope** — `"agent"` and `"world"` are read in every future session:
