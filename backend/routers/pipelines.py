@@ -343,9 +343,49 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         audit_card=raw.get("audit_card"),
         stage=raw.get("stage") if isinstance(raw.get("stage"), str) and raw.get("stage") else None,
         stages=_stages(raw) if isinstance(raw.get("stages"), dict) else None,
-        stage_timeline=_timeline(raw),
+        **_display_models(raw),
         **_card_facts(raw, status),
     )
+
+
+#: (run id, its projection's updated_at) -> the display models derived for it
+_DERIVED: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _display_models(raw: dict) -> dict[str, Any]:
+    """The stage timeline and the knowledge counts as the summary carries them: from
+    run.json, or, for a run projected before they existed, derived from the run's own
+    events (RunEngine.display_models), read-only: run.json is never rewritten here.
+    None for whichever cannot be read."""
+    timeline, knowledge = raw.get("stage_timeline"), raw.get("knowledge")
+    if not isinstance(timeline, dict) or not isinstance(knowledge, dict):
+        # a run without them gets no new event (else its projection would carry them):
+        # derived once per projection it has, then kept (about 10 ms a run otherwise)
+        key = (_text(raw.get("id")), _text(raw.get("updated_at")))
+        derived = _DERIVED.get(key)
+        if derived is None:
+            derived = {}
+            try:
+                engine = _load_v1_engine(key[0])
+                if engine is not None:
+                    derived = engine.display_models(engine.store.read_events())
+            except Exception as e:  # noqa: BLE001 -- a run's summary never fails on it
+                logger.debug("pipelines: display models of %s not derived (%s)", key[0], type(e).__name__)
+            if len(_DERIVED) >= 1000:
+                _DERIVED.clear()
+            _DERIVED[key] = derived
+        timeline = timeline if isinstance(timeline, dict) else derived.get("stage_timeline")
+        knowledge = knowledge if isinstance(knowledge, dict) else derived.get("knowledge")
+    return {"stage_timeline": _timeline({"stage_timeline": timeline}), "knowledge": _knowledge(knowledge)}
+
+
+def _knowledge(value: Any) -> Optional[dict[str, Optional[int]]]:
+    """``{used, new}`` with whole numbers only; None when there is nothing readable."""
+    if not isinstance(value, dict):
+        return None
+    whole = lambda v: v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None  # noqa: E731
+    out = {"used": whole(value.get("used")), "new": whole(value.get("new"))}
+    return out if out["used"] is not None or out["new"] is not None else None
 
 
 def _timeline(raw: dict) -> Optional[dict[str, dict]]:

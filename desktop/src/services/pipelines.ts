@@ -148,8 +148,12 @@ export interface PipelineRunSummary {
   /** the profile's stages in order, each with its status and attempt count */
   stages: PipelineStageInfo[] | null;
   /** per stage entered: when, and seconds working / waiting on a person
-   *  (core.run_protocol.timeline); null on runs projected before it */
+   *  (core.run_protocol.timeline; derived from the events for a run projected before
+   *  it); null when it cannot be read */
   stageTimeline: Record<string, PipelineStageTime> | null;
+  /** entries recalled into the run, and cognition units its REFLECT submitted (null:
+   *  before REFLECT); null when not read (core.run_protocol.knowledge_counts) */
+  knowledge: { used: number | null; new: number | null } | null;
 }
 
 export interface PipelineStageInfo { name: string; status: string | null; attempts: number | null }
@@ -305,6 +309,8 @@ export function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummar
     stage: typeof r.stage === 'string' && r.stage ? r.stage : null,
     stages: stagesOf(r.stages),
     stageTimeline: timelineOf(r.stage_timeline),
+    knowledge: r.knowledge && typeof r.knowledge === 'object'
+      ? { used: num((r.knowledge as Record<string, unknown>).used), new: num((r.knowledge as Record<string, unknown>).new) } : null,
   };
 }
 

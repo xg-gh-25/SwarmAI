@@ -8,7 +8,8 @@
  * end first; it folds). A row is its status dot, title, Brain · execution · Hive, when it
  * started and ended, its dispatch track (SENT · ON HIVE · RETURN · LAND · JUDGE, ./track:
  * where it stands on its way back, amber only when it is yours, light purple while the
- * dispatching agent holds it), the one autonomy word, what it asks of you, how long it
+ * dispatching agent holds it; its label is the funnel word while the agent takes it
+ * through the funnel, and the live stage of a pipeline task on its Hive), the one autonomy word, what it asks of you, how long it
  * waited, an always-visible "Open session ↗", and "■ Stop" while it runs. The work
  * packages of one Swarm Run sit together in their section under one line. No accept button on a row (accepting without looking at what came back is not
  * accepting), no inline expansion, no search: sections, order, Brain chips (made from
@@ -38,11 +39,18 @@ const KIND_COLOR: Record<ChipKind, string> = {
 export function FunnelTrack({ r }: { r: SwarmOutRun }) {
   const { t } = useTranslation();
   const { at, kind } = dispatchTrack(r);
+  // one label: the funnel word while the agent takes it through the funnel, else the
+  // station (ON HIVE names the stage this host last read from its Hive)
+  const word = funnelWord(r);
+  const liveStage = at === 'on_hive' && r.live_stage?.stage ? r.live_stage.stage.toUpperCase() : null;
+  // the bars already stand at ON HIVE: the label names the stage alone (the row is narrow)
+  const label = word ?? liveStage ?? t(`swarmOut.track.${at}`);
   const idx = DISPATCH_STATIONS.indexOf(at);
   const color = KIND_COLOR[kind];
   return (
     <div className="min-w-0" data-testid="swarm-out-row-track" data-at={at} data-kind={kind}
-      title={DISPATCH_STATIONS.map((s) => t(`swarmOut.track.${s}`)).join(' → ')}>
+      title={[DISPATCH_STATIONS.map((s) => t(`swarmOut.track.${s}`)).join(' → '),
+        liveStage ? `${t('swarmOut.track.on_hive')} · ${liveStage}` : null].filter(Boolean).join('\n')}>
       <div className="flex items-center gap-[3px]" aria-hidden>
         {DISPATCH_STATIONS.map((s, i) => (
           <span key={s} className="h-[4px] flex-1 rounded-full"
@@ -50,7 +58,8 @@ export function FunnelTrack({ r }: { r: SwarmOutRun }) {
               borderStyle: i === idx && kind === 'stop' ? 'dashed' : undefined }} />
         ))}
       </div>
-      <div className="text-[11px] mt-0.5 font-semibold truncate" style={{ color }} data-testid="swarm-out-row-station">{t(`swarmOut.track.${at}`)}</div>
+      <div className="text-[11px] mt-0.5 font-semibold truncate" style={{ color }}
+        data-testid={word ? 'swarm-out-row-funnel' : 'swarm-out-row-station'}>{label}</div>
     </div>
   );
 }
@@ -147,7 +156,7 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
       <FunnelTrack r={r} />
       {word && !compact ? <span className="text-[11px] px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" style={wordStyle} data-testid="swarm-out-row-autonomy">{word.text}</span> : <span />}
       {tag ? <span className="text-[12px] px-[9px] py-[2px] rounded-md whitespace-nowrap font-semibold" style={TAG_STYLE[tag.key]} data-testid="swarm-out-row-tag">{tag.text}</span>
-        : funnel ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.busy }} data-testid="swarm-out-row-funnel">{funnel}</span>
+        : funnel ? <span />                      /* said once, as the track's label */
         : r.cleanup_soon ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-row-cleanup">{t('swarmOut.review.cleanupSoon')}</span>
         : stage === 'running' ? <span className="text-[12px] whitespace-nowrap" style={{ color: TONE_VAR.busy }}>{stateLabel(r)}</span>
           : <span className={`text-[12px] ${muted}`}>{stageLabel(stage, r.why)}</span>}

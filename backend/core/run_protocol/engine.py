@@ -1131,20 +1131,35 @@ class RunEngine:
                 usage["book_cost_usd"] = float(latest["book_cost_usd"])
         return out
 
+    def display_models(self, events: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """The read models the Pipelines Line and Eval show, from the run's events:
+        ``stage_timeline`` (when each stage was entered and where its time went,
+        run_protocol.timeline) and ``knowledge`` (entries given and written back,
+        run_protocol.knowledge_counts). For display only, so neither ever stops the
+        projection that every state change writes: whatever one raises leaves its field
+        out, logged with its type. The analytics summary calls this too, read-only, for
+        a run projected before these fields existed."""
+        from core.run_protocol.knowledge_counts import counts
+        from core.run_protocol.timeline import stage_timeline
+        out: dict[str, Any] = {}
+        try:
+            out["stage_timeline"] = stage_timeline(events)
+        except Exception as exc:  # noqa: BLE001 -- a display read model never blocks a state change
+            logger.warning("run %s: no stage timeline (%s: %s)", self.run_id, type(exc).__name__, exc)
+        try:
+            written = (self.run_dir / "artifacts" / "reflect.json").exists()
+            out["knowledge"] = counts(self.contract, events, self.read_reflect_report() if written else None)
+        except Exception as exc:  # noqa: BLE001 -- as above
+            logger.warning("run %s: no knowledge counts (%s: %s)", self.run_id, type(exc).__name__, exc)
+        return out
+
     def write_projection(self) -> Path:
         events = self.store.read_events()          # read and verified once
         state = lifecycle.fold(events, self.authority)
         value = {key: val for key, val in state.items()
                  if key not in {"expected_transition", "open_attempt", "auth_grants"}}
         value.update(self._read_model(events))
-        # when each stage was entered and where its time went (the Pipelines Line). It is
-        # for display only, so it never stops the projection that every state change
-        # writes: whatever the replay raises leaves the field out, logged with its type
-        from core.run_protocol.timeline import stage_timeline
-        try:
-            value["stage_timeline"] = stage_timeline(events)
-        except Exception as exc:  # noqa: BLE001 -- a display read model never blocks a state change
-            logger.warning("run %s: no stage timeline (%s: %s)", self.run_id, type(exc).__name__, exc)
+        value.update(self.display_models(events))
         value.update({"id": self.run_id, "project": self.project,
                       "session_id": self.owner_session(),
                       "worktree_mode": self.contract["mode"],

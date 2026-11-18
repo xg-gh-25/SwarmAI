@@ -36,7 +36,7 @@ const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
   notLanded: false, reportPath: null, auditCard: null, finishedAt: '2026-10-31T10:40:00Z', activeS: null,
   billedTokens: 50_000_000, costUsd: null, humanDecisions: 0,
   interventions: { answers: 0, corrections: 0, rescues: 0, total: 0 }, landing: 'landed',
-  notLandedReason: null, rework: 0, audit: [], stage: 'reflect', stages: null, stageTimeline: null, ...o,
+  notLandedReason: null, rework: 0, audit: [], stage: 'reflect', stages: null, stageTimeline: null, knowledge: null, ...o,
 });
 const hive = (o: Record<string, unknown> = {}, res: Record<string, unknown> | null = {}): SwarmOutRun => ({
   dispatch_id: 'd1', hive_id: 'h1', hive: 'demo', session_id: 'sess', title: 'Hive task', origin: 'swarm-out',
@@ -211,6 +211,17 @@ describe('the Line', () => {
     expect(back.task).toBeNull();
   });
 
+  it('a Hive run with a live stage stands at it along its planned stages; without one it is the band', () => {
+    const live = { run_id: 'run_h', stage: 'build', stages: ['evaluate', 'plan', 'build', 'review', 'test', 'deliver', 'reflect'], at: null };
+    const r = fromHive(hive({ state: 'running', stage: 'running', settle: null, live_stage: live }, { ended: null, ended_at: null }))!;
+    const t = trackOf(r);
+    expect([t.at, t.kind, t.path]).toEqual(['build', 'run', live.stages]);
+    const unknown = fromHive(hive({ state: 'running', stage: 'running', settle: null, live_stage: { ...live, stage: 'evil' } }, { ended: null, ended_at: null }))!;
+    expect(trackOf(unknown).at).toBeNull();
+    const ended = fromHive(hive({ live_stage: live }))!;                       // accepted: no live stage used
+    expect(ended.pipelineStage).toBeNull();
+  });
+
   it('a Swarm Run\'s work packages sit under their lead; counts and the sentence read the same tracks', () => {
     const lead = fromLocal(run({ id: 'run_lead', status: 'running', stage: 'build', stages: STAGES(FULL, 'build') }), 'SwarmAI');
     const child = fromHive(hive({ dispatch_id: 'c1', state: 'running', stage: 'running', settle: null, parent_run: 'run_lead', wp: 'W1' },
@@ -249,7 +260,7 @@ describe('Eval', () => {
     ];
     const { cur, prev } = evalMeasures(rows, NOW);
     expect(cur.autonomous).toEqual({ k: 0, n: 0, rate: null, range: null });
-    expect([cur.human.answers, cur.cost.usd, cur.cost.tokens, cur.knowledge]).toEqual([null, null, null, null]);
+    expect([cur.human.answers, cur.cost.usd, cur.cost.tokens, cur.knowledge.used, cur.knowledge.new]).toEqual([null, null, null, null, null]);
     expect(cur.started).toBe(1);
     expect(prev.started).toBe(0);
     expect(prev.cycle.median).toBeNull();
@@ -268,5 +279,10 @@ describe('Eval', () => {
     expect([Math.round(w.lo * 100), Math.round(w.hi * 100)]).toEqual([69, 97]);
     expect(wilson(0, 0)).toBeNull();
     expect(evalByBrain(rows).map((b) => [b.brain, b.m.started])).toEqual([['P', 2], ['Q', 1]]);
+    const k = evalMeasures([
+      fromLocal(run({ id: 'k1', createdAt: '2026-10-30T10:00:00Z', knowledge: { used: 8, new: 3 } }), 'P'),
+      fromLocal(run({ id: 'k2', createdAt: '2026-10-30T11:00:00Z', knowledge: { used: 4, new: null } }), 'P'),
+    ], NOW).cur.knowledge;
+    expect(k).toEqual({ used: 6, new: 3, n: 2, newRuns: 1 });        // a run before REFLECT has no 'new'
   });
 });

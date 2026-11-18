@@ -70,6 +70,8 @@ export interface PipelineRow {
   /** a Swarm Run's work package: the lead pipeline run's id, and the package */
   parentRun: string | null;
   wp: string | null;
+  /** entries given and written back (a local run); null when not read */
+  knowledge: { used: number | null; new: number | null } | null;
   local?: PipelineRunSummary;
   hive_run?: SwarmOutRun;
 }
@@ -104,7 +106,7 @@ export function fromLocal(r: PipelineRunSummary, project: string): PipelineRow {
     interventions: iv ? { answers: iv.answers, corrections: iv.corrections, rescues: iv.rescues, total: iv.total } : null,
     audit: r.audit.map((a) => ({ dim: a.dim, verdict: a.verdict })), ownerSessionId: r.ownerSessionId,
     pipelineStage: r.stage ?? null, stages: r.stages ?? null, timeline: r.stageTimeline ?? null,
-    parentRun: null, wp: null, local: r,
+    parentRun: null, wp: null, knowledge: r.knowledge ?? null, local: r,
   };
 }
 
@@ -148,8 +150,11 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
       total: r.person_decisions ?? interventionsOf(res),
     } : null,
     audit: (res?.pipeline?.audit ?? []).map((a) => ({ dim: a.dim, verdict: a.verdict ?? '' })),
-    ownerSessionId: r.session_id, pipelineStage: null, stages: null, timeline: null,
-    parentRun: r.parent_run ?? null, wp: r.wp ?? null, hive_run: r,
+    ownerSessionId: r.session_id,
+    // the stage it is in while it runs, as this host last read it (never guessed)
+    pipelineStage: live ? r.live_stage?.stage ?? null : null,
+    stages: live && r.live_stage ? r.live_stage.stages.map((name) => ({ name, status: null, attempts: null })) : null,
+    timeline: null, parentRun: r.parent_run ?? null, wp: r.wp ?? null, knowledge: null, hive_run: r,
   };
 }
 
@@ -327,6 +332,11 @@ const isStation = (x: string | null | undefined): x is Station => !!x && (STATIO
 export function trackOf(r: PipelineRow): Track {
   if (r.where === 'hive' && r.hive_run) {
     const t = dispatchTrack(r.hive_run);
+    // on its Hive with a stage read from there: it sits at that stage, along its planned
+    // stages (none drawn when they were not read)
+    if (t.at === 'on_hive' && isStation(r.pipelineStage) && (PIPELINE_STATIONS as readonly string[]).includes(r.pipelineStage)) {
+      return { row: r, at: r.pipelineStage, kind: t.kind, path: (r.stages ?? []).map((x) => x.name).filter(isStation), rounds: {} };
+    }
     const back = (RETURN_STATIONS as readonly string[]).includes(t.at) ? t.at as Station : null;
     const path: Station[] = back ? RETURN_STATIONS.slice(0, RETURN_STATIONS.indexOf(back as typeof RETURN_STATIONS[number]) + 1) : [];
     return { row: r, at: back, kind: t.kind, path, rounds: {} };
@@ -436,8 +446,9 @@ export interface EvalPeriod {
   autonomous: { k: number; n: number; rate: number | null; range: { lo: number; hi: number } | null };
   /** ② per run with a known count: answers, and unplanned (corrections + rescues) */
   human: { answers: number | null; unplanned: number | null; n: number };
-  /** ③ no source records which knowledge a run used yet */
-  knowledge: null;
+  /** ③ per run that records it: entries given (used) and cognition units written back
+   *  (new); each average null when no run records it, with how many runs it covers */
+  knowledge: { used: number | null; new: number | null; n: number; newRuns: number };
   /** ④ per run where recorded, and how many runs that covers */
   cost: { usd: number | null; usdRuns: number; tokens: number | null; tokenRuns: number; runs: number };
   /** ⑥ runs started in the period */
@@ -463,7 +474,10 @@ function periodOf(rows: PipelineRow[]): EvalPeriod {
     autonomous: { k: a.unattended, n: a.known, rate: a.known ? a.unattended / a.known : null, range: wilson(a.unattended, a.known) },
     human: { answers: avg(known.map((r) => r.interventions!.answers)),
       unplanned: avg(withCorr.map((r) => (r.interventions!.corrections as number) + r.interventions!.rescues)), n: known.length },
-    knowledge: null,
+    knowledge: (() => {
+      const k = rows.filter((r) => r.knowledge?.used != null), w = rows.filter((r) => r.knowledge?.new != null);
+      return { used: avg(k.map((r) => r.knowledge!.used as number)), new: avg(w.map((r) => r.knowledge!.new as number)), n: k.length, newRuns: w.length };
+    })(),
     cost: { usd: avg(usd.map((r) => r.costUsd as number)), usdRuns: usd.length,
       tokens: avg(tok.map((r) => r.tokens as number)), tokenRuns: tok.length, runs: rows.length },
     started: rows.length,

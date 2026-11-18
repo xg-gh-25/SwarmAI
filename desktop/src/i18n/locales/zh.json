@@ -4842,7 +4842,7 @@
       "ev_m2": "② Human on the loop",
       "ev_m2Sub": "每个 run 回答几次 · 每个 run 计划外 {{unplanned}} 次（纠偏、救场）· {{n}} 个 run",
       "ev_m3": "③ Knowledge Usage",
-      "ev_m3None": "还没有记录：run 不记它用了哪些知识条目",
+      "ev_m3None": "这段时间还没有 run 记录它",
       "ev_m4": "④ Cost",
       "ev_m4Sub": "每个 run · {{runs}} 个 run 里 {{usdRuns}} 个有金额 · {{tokenRuns}} 个有 token",
       "ev_m6": "⑥ Throughput",
@@ -4859,7 +4859,8 @@
       "fl_period": "。",
       "fl_end": "。",
       "fl_extraRounds_one": "多跑 {{count}} 轮",
-      "fl_extraRounds_other": "多跑 {{count}} 轮"
+      "fl_extraRounds_other": "多跑 {{count}} 轮",
+      "ev_m3Sub": "每个 run 拿到的条目 · 写回的条目 · {{n}} 个 run · {{newRuns}} 个有写回"
     },
     "ProjectAgentView": {
       "reservedPush": "push",

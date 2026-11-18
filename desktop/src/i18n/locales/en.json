@@ -4842,7 +4842,7 @@
       "ev_m2": "② Human on the loop",
       "ev_m2Sub": "answers per run · {{unplanned}} unplanned per run (corrections, rescues) · {{n}} runs",
       "ev_m3": "③ Knowledge Usage",
-      "ev_m3None": "no record yet: runs do not record which knowledge entries they used",
+      "ev_m3None": "no run in this period records it yet",
       "ev_m4": "④ Cost",
       "ev_m4Sub": "per run · $ for {{usdRuns}} of {{runs}} runs · tokens for {{tokenRuns}}",
       "ev_m6": "⑥ Throughput",
@@ -4859,7 +4859,8 @@
       "fl_period": ". ",
       "fl_end": ".",
       "fl_extraRounds_one": "+{{count}} round",
-      "fl_extraRounds_other": "+{{count}} rounds"
+      "fl_extraRounds_other": "+{{count}} rounds",
+      "ev_m3Sub": "entries given · written back, per run · {{n}} runs · written back for {{newRuns}}"
     },
     "ProjectAgentView": {
       "reservedPush": "push",

@@ -97,22 +97,30 @@ def _drop_overrides_unless_landed(engine: Any, units: list[Any]) -> list[Any]:
     return out
 
 
-def enqueue_report(engine: Any) -> list[Any]:
-    """Main pass: enqueue every unit of the validated five-part report, no LLM.
-
-    The read set is every root registered for the run (anti selective citation, §9)."""
+def report_units(report: Any) -> tuple[list[Any], list[dict]]:
+    """(units, invalid) of a five-part report as ``engine.read_reflect_report`` returns
+    it: each row on its own, as REFLECT prepared it (prepare_lenient); a row the contract
+    no longer accepts (a report prepared before the contract changed) is invalid. The one
+    rule for which rows a run submits: enqueue_report and the Eval's knowledge count
+    (core.run_protocol.knowledge_counts) both read it."""
     from core.ingestion import contracts_v2
-    _anchors, root_ids = _roots(engine)
-    report = engine.read_reflect_report()
-    # each row on its own, as REFLECT prepared it (prepare_lenient): a row the contract no
-    # longer accepts (a report prepared before the contract changed) is recorded invalid
-    # and the rest is enqueued
     units, invalid = [], []
-    for raw in (raw for rows in report.values() for raw in rows):
+    from collections.abc import Mapping
+    rows = report.values() if isinstance(report, Mapping) else []
+    for raw in (raw for section in rows for raw in (section or [])):
         try:
             units.append(contracts_v2.SOURCE_UNIT.validate_python(raw))
         except ValueError as exc:
             invalid.append({"raw": raw, "reason": f"invalid_unit: {exc}"[:500]})
+    return units, invalid
+
+
+def enqueue_report(engine: Any) -> list[Any]:
+    """Main pass: enqueue every unit of the validated five-part report, no LLM.
+
+    The read set is every root registered for the run (anti selective citation, §9)."""
+    _anchors, root_ids = _roots(engine)
+    units, invalid = report_units(engine.read_reflect_report())
     if any(getattr(unit, "closes", None) for unit in units):
         units = _drop_closes_unless_landed(engine, units)
     if any(getattr(unit, "overrides", None) for unit in units):

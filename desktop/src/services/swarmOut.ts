@@ -68,6 +68,19 @@ export interface SwarmOutRun {
   /** a child: its lead run's commands on it (accept is variant ``child``); the backend
    *  checks a lead run's command against these */
   lead_actions?: SwarmOutAction[];
+  /** A running pipeline task's stage, read on this host from its Hive's in-progress turn
+   *  (backend core/swarm_out_live; at most every 90 s); null when not running or not
+   *  read. Never guessed. */
+  live_stage?: SwarmOutLiveStage | null;
+}
+
+export interface SwarmOutLiveStage {
+  run_id: string;
+  stage: string;
+  /** the run's planned stages, from its pipeline_run block; empty when not read */
+  stages: string[];
+  at: string | null;
+  checked_at?: string;
 }
 
 /** The head of a Swarm Run's card (backend core/swarm_run.view). */

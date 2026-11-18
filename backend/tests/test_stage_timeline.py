@@ -183,3 +183,67 @@ def test_summary_of_an_old_run_has_no_stage_record():
         raw.pop(key, None)
     s = _summary(raw, "SwarmAI")
     assert s.stage is None and s.stages is None and s.stage_timeline is None
+
+
+#: a cognition unit and an event exactly as REFLECT prepared them in a real run
+COGNITION = {"applicability": "Building or changing an info-dense desktop view.", "evidence": ["doc:6ce6a4a1416ed71fb3bbf2aa5a0b0caaad3612cab12e0cd4f413d6886c4dbfdd", "doc:83724c902ed8ec177797f59ca5028c3f23abe7d081ef3a2beda519eef8912a32"], "kind": "cognition", "overrides": [], "scope": "project:SwarmAI", "title": "Render dense UI with the real components and sample rows before calling it done", "type": "guideline", "what": "For a dense view (a line, a dashboard), render the real components with representative rows in a throwaway harness (vite plus headless Chrome) and look at it; jsdom tests have no layout and miss duplicated labels, wrong punctuation and views that disagree.", "why": "In this run the jsdom suites were green while the rendered view showed four defects."}
+EVENT = {"event_kind": "event", "evidence": ["doc:6ce6a4a1416ed71fb3bbf2aa5a0b0caaad3612cab12e0cd4f413d6886c4dbfdd", "doc:83724c902ed8ec177797f59ca5028c3f23abe7d081ef3a2beda519eef8912a32", "run_event:run_88215315:2de11ce3630ebd99af7bfe09be232d8d4a9faa35aa1f9e5cf1221d3fda1f38d1"], "kind": "event", "outcome": "The person sees at a glance what runs in parallel, where each run is, where work loops back and what waits on them, read the same way the CNTech & IVT standard asks every team to read its runs.", "overrides": [], "scope": "project:SwarmAI", "title": "Pipelines and Swarm Out redesigned as a factory line", "what": "The Pipelines overlay now opens on a Line: every run in flight is a track along the pipeline stages, grouped by Brain, with what waits on the person first, and its Metrics tab became Eval in the CNTech & IVT S7 order; Swarm Out rows show where each dispatched run stands on its way back (sent, on its Hive, return, land, judge).", "when": "2026-11-18"}
+
+
+def test_projection_carries_knowledge_counts(tmp_path, monkeypatch):
+    import json
+    engine = _engine(tmp_path, monkeypatch)
+    value = json.loads(engine.write_projection().read_text())
+    given = engine.contract.get("knowledge") or {}
+    assert value["knowledge"]["new"] is None                     # no REFLECT report yet
+    assert value["knowledge"]["used"] == (len(set(map(str, given.get("items") or [])))
+                                          if given.get("status") != "unavailable" else None)
+    (engine.run_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+    bad = {**COGNITION, "type": "not-a-type"}                     # the contract refuses it: not submitted
+    (engine.run_dir / "artifacts" / "reflect.json").write_text(json.dumps({"schema": 2, "sections": {
+        "decisions": [COGNITION, bad], "practices": [COGNITION], "delivered": [EVENT], "gaps": []}}))
+    assert json.loads(engine.write_projection().read_text())["knowledge"]["new"] == 2
+    # rows outside the five sections are not what CDF reads either
+    (engine.run_dir / "artifacts" / "reflect.json").write_text(json.dumps({"lessons": [COGNITION] * 5}))
+    assert json.loads(engine.write_projection().read_text())["knowledge"]["new"] == 0
+
+
+def test_knowledge_counts_distinct_recalled_ids():
+    from core.run_protocol.knowledge_counts import counts
+    events = [{"kind": "knowledge_recalled", "payload": {"purpose": "design", "status": "recalled", "items": ["b", "c"]}},
+              {"kind": "turn", "payload": {"items": ["zzz"]}}]
+    assert counts({"knowledge": {"status": "recalled", "items": ["a", "b"]}}, events, None) == {"used": 3, "new": None}
+    assert counts({"knowledge": {"status": "recalled", "items": []}}, [],
+                  {"decisions": [COGNITION]}) == {"used": 0, "new": 1}
+    # no recall ran (each unavailable): how much was given is unknown, never 0
+    assert counts({"knowledge": {"status": "unavailable", "items": []}}, [], None) == {"used": None, "new": None}
+    assert counts({}, [], None)["used"] is None
+
+
+def test_enqueue_and_the_count_read_rows_by_one_rule():
+    from core.ingestion.sources.s3_run import report_units
+    units, invalid = report_units({"decisions": [COGNITION, {**COGNITION, "type": "not-a-type"}], "delivered": [EVENT]})
+    assert [u.kind for u in units] == ["cognition", "event"] and len(invalid) == 1
+    from types import MappingProxyType
+    assert len(report_units(MappingProxyType({"decisions": [COGNITION]}))[0]) == 1   # any Mapping, as counts() declares
+
+
+def test_summary_derives_for_an_old_run(monkeypatch, tmp_path):
+    from routers import pipelines
+    monkeypatch.setattr(pipelines, "_DERIVED", {})
+    engine = _engine(tmp_path, monkeypatch)
+    monkeypatch.setattr(pipelines, "_load_v1_engine", lambda run_id: engine)
+    raw = _raw(id="run_tl1")                     # projected before the fields: none in run.json
+    before = (engine.run_dir / "run.json").read_text() if (engine.run_dir / "run.json").exists() else None
+    s = pipelines._summary(raw, "SwarmAI")
+    assert s.stage_timeline and "evaluate" in s.stage_timeline
+    assert s.knowledge is not None and s.knowledge["new"] is None
+    after = (engine.run_dir / "run.json").read_text() if (engine.run_dir / "run.json").exists() else None
+    assert before == after                        # read-only: run.json is not written
+
+    def broken(run_id):
+        raise OSError("unreadable")
+    monkeypatch.setattr(pipelines, "_load_v1_engine", broken)
+    assert pipelines._summary(raw, "SwarmAI").stage_timeline       # derived once, then kept
+    s = pipelines._summary(_raw(id="run_tl2"), "SwarmAI")
+    assert s.stage_timeline is None and s.knowledge is None   # unknown, never 0; still a summary

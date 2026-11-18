@@ -13,8 +13,9 @@
  *   under it. A track runs along its profile's own stages; its chip sits at its current
  *   stage: blue an agent is working, amber it waits on you (the only amber here), a
  *   dashed red border it stopped, light purple the dispatching agent judges it. ↺N marks
- *   a stage that ran N times. A Hive run on its Hive spans the pipeline stations as one
- *   band: the Hive does not report its stage while it runs, so none is guessed;
+ *   a stage that ran N times. A Hive run on its Hive stands at the stage this host last
+ *   read from its in-progress turn (backend core/swarm_out_live); until one is read it
+ *   spans the pipeline stations as one band: no stage is guessed;
  * - Where time goes: per pipeline station, the median minutes working and waiting on you
  *   and the extra rounds, aligned to the station columns (runs that recorded stage times);
  * - Done: the finished runs, folded, as the overlay's rows.
@@ -92,8 +93,10 @@ function Chip({ tr, now, onOpen, band }: { tr: Track; now: number; onOpen: (key:
 function TrackRow({ tr, now, onOpen, child }: { tr: Track; now: number; onOpen: (key: string) => void; child?: boolean }) {
   const r = tr.row;
   const on = new Set(tr.path);
-  // a Hive run, or a run whose stage is not recorded: its pipeline part is one band
-  const band = r.where === 'hive' || tr.at === null;
+  // a run with no pipeline stage to stand at (a Hive run on its Hive whose stage was not
+  // read, or one back on this machine, or a run whose stage is not recorded): its
+  // pipeline part is one band
+  const band = tr.at === null || (r.where === 'hive' && !(PIPELINE_STATIONS as readonly string[]).includes(tr.at));
   const atIdx = tr.at ? STATIONS.indexOf(tr.at) : -1;
   const seg = (s: Station, i: number) => {
     if (band && (PIPELINE_STATIONS as readonly string[]).includes(s)) return null;    // drawn as the band

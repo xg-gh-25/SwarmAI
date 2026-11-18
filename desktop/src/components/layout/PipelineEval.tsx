@@ -8,7 +8,8 @@
  * - ① Autonomous Rate leads, the largest number: k of n finished runs nobody stepped
  *   into, and a 95% Wilson range from those two counts;
  * - ② Human on the loop (answers per run, unplanned corrections and rescues per run),
- *   ③ Knowledge Usage, ④ Cost (per run, and how many runs it covers), ⑥ Throughput
+ *   ③ Knowledge Usage (entries given per run · cognition units written back per run,
+ *   core.run_protocol.knowledge_counts), ④ Cost (per run, and how many runs it covers), ⑥ Throughput
  *   (runs started), ⑤ Cycle time (median, P90), and where runs waited on you, by station;
  * - By Brain: the same measures over the whole window.
  * Which runs count as autonomous, and every count behind ② and ④, are the summary's
@@ -85,7 +86,10 @@ export function PipelineEval({ rows, now }: { rows: PipelineRow[]; now: number }
         </div>
         <Tile testId="pipeline-eval-m2" label={t('ui.PipelineOverlay.ev_m2')} value={f1(cur.human.answers)}
           sub={cur.human.answers == null ? undefined : t('ui.PipelineOverlay.ev_m2Sub', { unplanned: f1(cur.human.unplanned) ?? '—', n: cur.human.n })} />
-        <Tile testId="pipeline-eval-m3" label={t('ui.PipelineOverlay.ev_m3')} value={null} sub={t('ui.PipelineOverlay.ev_m3None')} />
+        <Tile testId="pipeline-eval-m3" label={t('ui.PipelineOverlay.ev_m3')}
+          value={cur.knowledge.used == null ? null : `${f1(cur.knowledge.used)} · ${f1(cur.knowledge.new) ?? '—'}`}
+          sub={cur.knowledge.used == null ? t('ui.PipelineOverlay.ev_m3None')
+            : t('ui.PipelineOverlay.ev_m3Sub', { n: cur.knowledge.n, newRuns: cur.knowledge.newRuns })} />
         <Tile testId="pipeline-eval-m4" label={t('ui.PipelineOverlay.ev_m4')}
           value={cur.cost.usd == null && cur.cost.tokens == null ? null : [usd(cur.cost.usd), cur.cost.tokens == null ? null : tokenM(cur.cost.tokens)].filter(Boolean).join(' · ')}
           sub={t('ui.PipelineOverlay.ev_m4Sub', { usdRuns: cur.cost.usdRuns, tokenRuns: cur.cost.tokenRuns, runs: cur.cost.runs })} />

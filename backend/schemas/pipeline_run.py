@@ -125,7 +125,10 @@ class PipelineRunSummary(BaseModel):
         None, description="the profile's stages in order: {name, status, attempts}")
     stage_timeline: Optional[dict[str, dict]] = Field(
         None, description="per stage entered: {entered_at, active_s, wait_s} "
-                          "(core.run_protocol.timeline); None on runs projected before it")
+                          "(core.run_protocol.timeline); None when it cannot be read")
+    knowledge: Optional[dict] = Field(
+        None, description="{used, new}: entries recalled into the run, cognition units its "
+                          "REFLECT submitted (core.run_protocol.knowledge_counts); None if unread")
 
 
 class PipelineProjectGroup(BaseModel):

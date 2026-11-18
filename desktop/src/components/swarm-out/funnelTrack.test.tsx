@@ -75,10 +75,25 @@ describe('the dispatch track', () => {
     expect(within(rows[0]).getByTestId('swarm-out-row-station').getAttribute('style')).toContain('--color-status-warning');
     const t1 = within(rows[1]).getByTestId('swarm-out-row-track');
     expect([t1.getAttribute('data-at'), t1.getAttribute('data-kind')]).toEqual(['land', 'judge']);
-    expect(within(rows[1]).getByTestId('swarm-out-row-station').getAttribute('style')).toContain('--line-judge');
-    expect(within(rows[1]).getByTestId('swarm-out-row-station').textContent).toBe('LAND');
+    // the agent's run: its label is the funnel word, in the agent's colour, said once
+    expect(within(rows[1]).getByTestId('swarm-out-row-funnel').getAttribute('style')).toContain('--line-judge');
+    expect(within(rows[1]).getByTestId('swarm-out-row-funnel').textContent).not.toBe('');
     fireEvent.click(rows[1]);
     expect(screen.getByTestId('run-card').textContent).toBe('so_agent');      // a click still opens its card
+  });
+
+  it('one label per fact: the funnel word once, the live stage named on its Hive', () => {
+    const judging = run({ dispatch_id: 'so_j', state: 'stopped', stage: 'awaiting', why: 'judge', actions: [A('open_session')],
+      funnel: { gates: [gate('review', 'done'), gate('land', 'done'), gate('judge', 'now')], current: 'judge', ask: null, reruns: 0 } });
+    const live = run({ dispatch_id: 'so_l', live_stage: { run_id: 'run_x', stage: 'review', stages: [], at: null } });
+    render(<RunList runs={[judging, live]} asks={[]} now={NOW} onReload={vi.fn()} />);
+    const rows = screen.getAllByTestId('swarm-out-row');
+    const j = rows.find((x) => x.getAttribute('data-id') === 'so_j')!;
+    expect(within(j).getAllByTestId('swarm-out-row-funnel')).toHaveLength(1);
+    expect(within(j).queryByTestId('swarm-out-row-station')).toBeNull();
+    const l = rows.find((x) => x.getAttribute('data-id') === 'so_l')!;
+    expect(within(l).getByTestId('swarm-out-row-station').textContent).toBe('REVIEW');
+    expect(within(l).getByTestId('swarm-out-row-track').getAttribute('title')).toContain('ON HIVE · REVIEW');
   });
 
   it('one Swarm Run\'s work packages sit together under one line', () => {
