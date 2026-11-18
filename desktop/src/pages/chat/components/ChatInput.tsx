@@ -295,26 +295,33 @@ export function ChatInput({
   // L2: Listen for auto-diff injection from FileEditorPanel save
   // and L3 review feedback. Updates both the visible textarea AND the
   // per-tab draft storage so the text survives tab switches.
-  // Supports `autoSend: true` to immediately dispatch the message to the agent.
+  // Supports `autoSend: true` to immediately dispatch the message to the agent; with
+  // `append` too it sends only when the box was empty (a typed draft is kept, the text
+  // added after it, nothing sent). The outcome is written back on the event detail.
   // Auto-send uses a two-phase approach: set pendingAutoSend flag, then fire
   // onSend in a separate effect AFTER React has flushed the input state update.
   const [pendingAutoSend, setPendingAutoSend] = useState(false);
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const { text: injected, focus, autoSend, append } = (e as CustomEvent<InjectChatInputDetail>).detail ?? { text: '' };
+      const detail = (e as CustomEvent<InjectChatInputDetail>).detail;
+      const { text: injected, focus, autoSend, append } = detail ?? { text: '' };
       if (injected) {
         const current = inputValueRef.current;
-        const text = append && current.trim() ? `${current.replace(/\s+$/, '')}\n\n${injected}` : injected;
+        const keepsDraft = !!append && !!current.trim();
+        const text = keepsDraft ? `${current.replace(/\s+$/, '')}\n\n${injected}` : injected;
         onInputChange(text);
         // Sync to per-tab draft storage so the injected text survives tab switches
         const tabId = activeTabIdRef?.current;
         if (tabId && inputValueMapRef) {
           inputValueMapRef.current.set(tabId, text);
         }
-        if (autoSend) {
+        // A draft the user typed is never sent along unasked (see InjectChatInputDetail.append).
+        // Tell the sender what happened (InjectChatInputDetail.outcome).
+        if (detail) detail.outcome = autoSend && !keepsDraft ? 'sent' : keepsDraft ? 'appended' : 'filled';
+        if (autoSend && !keepsDraft) {
           setPendingAutoSend(true);
-        } else if (focus) {
+        } else if (focus || autoSend) {
           requestAnimationFrame(() => textareaRef.current?.focus());
         }
       }

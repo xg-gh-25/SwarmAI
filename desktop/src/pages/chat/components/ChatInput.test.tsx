@@ -15,7 +15,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChatInput } from './ChatInput';
@@ -249,6 +249,29 @@ describe('swarm:inject-chat-input append', () => {
     renderWithProviders(<ChatInput {...createDefaultChatInputProps({ inputValue: '', onInputChange })} />);
     dispatchInjectChatInput({ text: '> quoted', append: true });
     expect(onInputChange).toHaveBeenLastCalledWith('> quoted');
+  });
+  // The Canvas review comments: autoSend + append sends only when nothing was typed;
+  // a draft is kept and never sent along unasked.
+  it('autoSend + append with a draft appends and does not send', () => {
+    const onInputChange = vi.fn();
+    const onSend = vi.fn();
+    renderWithProviders(<ChatInput {...createDefaultChatInputProps({ inputValue: 'half a thought', onInputChange, onSend })} />);
+    let out = '';
+    act(() => { out = dispatchInjectChatInput({ text: 'review feedback', append: true, autoSend: true, focus: true }); });
+    expect(out).toBe('appended');
+    expect(onInputChange).toHaveBeenLastCalledWith('half a thought\n\nreview feedback');
+    expect(onSend).not.toHaveBeenCalled();
+  });
+  it('with no chat input mounted, nothing listens: the outcome is none', () => {
+    expect(dispatchInjectChatInput({ text: 'x', autoSend: true, append: true })).toBe('none');
+  });
+  it('autoSend + append onto an empty box sends', () => {
+    const onSend = vi.fn();
+    renderWithProviders(<ChatInput {...createDefaultChatInputProps({ inputValue: '  ', onSend })} />);
+    let out = '';
+    act(() => { out = dispatchInjectChatInput({ text: 'review feedback', append: true, autoSend: true }); });
+    expect(out).toBe('sent');
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 });
 

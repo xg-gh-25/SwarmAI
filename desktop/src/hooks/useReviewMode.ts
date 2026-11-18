@@ -4,6 +4,11 @@
  * Manages review mode toggle, comment CRUD operations, and formats
  * structured feedback messages for injection into chat input.
  *
+ * Comments are a batch: every entry point (a gutter line, a diff line, a text
+ * selection in the source view or the markdown preview) adds to the same list, and
+ * the Canvas sends the whole list as ONE message (`formatFeedback`), so the agent
+ * revises once for all of them.
+ *
  * Comments are persisted to sessionStorage keyed by filePath so they
  * survive tab switches within the same browser session (U10 fix).
  *
@@ -52,9 +57,10 @@ export interface DiffContext {
 
 export interface ReviewComment {
   id: string;
-  /** 1-based line number where the comment starts. */
+  /** 1-based line number where the comment starts; 0 when the place has no line
+   *  (a selection in the markdown preview, which has no line map — `quote` says where). */
   lineStart: number;
-  /** 1-based line number where the comment ends (same as lineStart for single-line). */
+  /** 1-based line number where the comment ends (same as lineStart for single-line); 0 with lineStart. */
   lineEnd: number;
   /** The user's comment text. */
   text: string;
@@ -66,6 +72,13 @@ export interface ReviewComment {
   diffContext?: DiffContext;
   /** Snapshot of the target line content at comment creation time. */
   originalLineContent?: string;
+  /** The text the person selected, for a comment made on a selection. */
+  quote?: string;
+}
+
+/** Whether a comment is anchored to source lines (gutter/diff/source selection). */
+export function hasLines(c: ReviewComment): boolean {
+  return c.lineStart >= 1;
 }
 
 function generateId(): string {
@@ -125,6 +138,27 @@ export function useReviewMode(content: string, filePath?: string) {
     [contentLines],
   );
 
+  /** Add a comment on a selection. `lines` is the selection's source lines, or null
+   *  in the markdown preview (no line map). */
+  const addSelectionComment = useCallback(
+    (quote: string, text: string, lines: [number, number] | null): ReviewComment => {
+      const [lineStart, lineEnd] = lines ?? [0, 0];
+      const comment: ReviewComment = {
+        id: generateId(),
+        lineStart,
+        lineEnd,
+        text,
+        sectionHeading: lines ? findNearestHeading(contentLines, lineStart) : null,
+        timestamp: Date.now(),
+        originalLineContent: lines ? contentLines[lineStart - 1] ?? '' : undefined,
+        quote,
+      };
+      setComments((prev) => [...prev, comment]);
+      return comment;
+    },
+    [contentLines],
+  );
+
   const updateComment = useCallback(
     (id: string, text: string) => {
       setComments((prev) =>
@@ -153,50 +187,53 @@ export function useReviewMode(content: string, filePath?: string) {
   const getCommentForLine = useCallback(
     (lineNumber: number): ReviewComment | undefined =>
       comments.find(
-        (c) => lineNumber >= c.lineStart && lineNumber <= c.lineEnd,
+        (c) => hasLines(c) && lineNumber >= c.lineStart && lineNumber <= c.lineEnd,
       ),
     [comments],
   );
 
-  /** Format all comments as structured feedback text for chat injection. */
+  /** Format all comments as ONE structured message for chat injection: comments on
+   *  lines in line order, then preview-selection comments in the order they were made.
+   *  Each comment is shown whole, with the text it was made on. */
   const formatFeedback = useCallback(
-    (fileName: string): string => {
+    (fileRef: string): string => {
       if (comments.length === 0) return '';
 
       const hasDiffComments = comments.some((c) => c.diffContext);
+      const ordered = [...comments].sort((a, b) => {
+        const ka = hasLines(a) ? a.lineStart : Number.MAX_SAFE_INTEGER;
+        const kb = hasLines(b) ? b.lineStart : Number.MAX_SAFE_INTEGER;
+        return ka - kb || a.timestamp - b.timestamp;
+      });
 
-      const lines = comments
-        .sort((a, b) => a.lineStart - b.lineStart)
-        .map((c, i) => {
-          const section = c.sectionHeading || 'top';
-          const lineRef =
-            c.lineStart === c.lineEnd
-              ? `Line ${c.lineStart}`
-              : `Lines ${c.lineStart}-${c.lineEnd}`;
+      const lines = ordered.map((c, i) => {
+        const tags: string[] = [];
+        if (hasLines(c)) {
+          tags.push(`§${c.sectionHeading || 'top'}`);
+          tags.push(c.lineStart === c.lineEnd ? `Line ${c.lineStart}` : `Lines ${c.lineStart}-${c.lineEnd}`);
+        } else {
+          tags.push('preview selection');
+        }
+        if (c.diffContext) tags.push(c.diffContext.type);
 
-          // Base comment line
-          let entry = `${i + 1}. [§${section}, ${lineRef}`;
+        let entry = `${i + 1}. [${tags.join(', ')}] ${c.text}`;
 
-          // Add diff type indicator when diff context is present
-          if (c.diffContext) {
-            entry += `, ${c.diffContext.type}`;
-          }
-
-          entry += `] ${c.text}`;
-
-          // Add code context line for diff comments
-          if (c.diffContext) {
-            const prefix = c.diffContext.type === 'added' ? '+' : c.diffContext.type === 'removed' ? '-' : ' ';
-            entry += `\n   \`${prefix} ${c.diffContext.content}\``;
-          }
-
-          return entry;
-        });
+        if (c.quote) {
+          const quoted = c.quote.replace(/\s+$/, '').split('\n').map((l) => `   > ${l}`).join('\n');
+          entry += `\n${quoted}`;
+        } else if (c.diffContext) {
+          const prefix = c.diffContext.type === 'added' ? '+' : c.diffContext.type === 'removed' ? '-' : ' ';
+          entry += `\n   \`${prefix} ${c.diffContext.content}\``;
+        } else if (c.originalLineContent?.trim()) {
+          // A gutter comment: the line it was made on, so a stale line number still points somewhere.
+          entry += `\n   > ${c.originalLineContent}`;
+        }
+        return entry;
+      });
 
       const header = hasDiffComments
-        ? `📋 Review feedback on \`${fileName}\` (from diff view)`
-        : `📋 Review feedback on \`${fileName}\``;
-
+        ? `📋 Review feedback on \`${fileRef}\` (from diff view)`
+        : `📋 Review feedback on \`${fileRef}\``;
       return `${header}:\n\n${lines.join('\n')}\n\nPlease address each point and update the ${hasDiffComments ? 'code' : 'doc'}.`;
     },
     [comments],
@@ -223,22 +260,10 @@ export function useReviewMode(content: string, filePath?: string) {
     setEditingCommentId(null);
   }, []);
 
-  /** Format a single comment for immediate send to the agent. */
-  const formatSingleComment = useCallback(
-    (comment: ReviewComment, fileName: string): string => {
-      const lineRef =
-        comment.lineStart === comment.lineEnd
-          ? `L${comment.lineStart}`
-          : `L${comment.lineStart}-${comment.lineEnd}`;
-      return `[Review: \`${fileName}\`:${lineRef}] ${comment.text}`;
-    },
-    [],
-  );
-
   /** Check if a comment has been "applied" — its target line content changed. */
   const isCommentApplied = useCallback(
     (comment: ReviewComment): boolean => {
-      if (!comment.originalLineContent) return false;
+      if (!hasLines(comment) || !comment.originalLineContent) return false;
       const currentLine = contentLines[comment.lineStart - 1];
       // If line no longer exists or content differs → applied
       return currentLine === undefined || currentLine !== comment.originalLineContent;
@@ -252,12 +277,12 @@ export function useReviewMode(content: string, filePath?: string) {
     resetReviewMode,
     comments,
     addComment,
+    addSelectionComment,
     updateComment,
     removeComment,
     clearComments,
     getCommentForLine,
     formatFeedback,
-    formatSingleComment,
     isCommentApplied,
     activePopoverLine,
     setActivePopoverLine,

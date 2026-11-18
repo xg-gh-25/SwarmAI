@@ -271,6 +271,25 @@ describe('useReviewMode', () => {
       expect(feedback).toContain('2. [§Section B');
     });
 
+    it('does not reorder the comments it formats (state stays in the order they were added)', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => result.current.addComment(8, 8, 'second'));
+      act(() => result.current.addComment(4, 4, 'first'));
+      result.current.formatFeedback('doc.md');
+      expect(result.current.comments.map((c) => c.text)).toEqual(['second', 'first']);
+    });
+
+    it('a selection comment without lines is quoted after the line comments', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => { result.current.addSelectionComment('some text\nmore', 'from preview', null); });
+      act(() => result.current.addComment(4, 4, 'on a line'));
+      const feedback = result.current.formatFeedback('doc.md');
+      expect(feedback.indexOf('on a line')).toBeLessThan(feedback.indexOf('from preview'));
+      expect(feedback).toContain('2. [preview selection] from preview\n   > some text\n   > more');
+      expect(result.current.getCommentForLine(0)).toBeUndefined();
+      expect(result.current.isCommentApplied(result.current.comments[0])).toBe(false);
+    });
+
     it('formats range comments with Lines X-Y', () => {
       const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
       act(() => result.current.addComment(4, 6, 'range issue'));

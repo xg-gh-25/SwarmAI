@@ -3347,8 +3347,9 @@
     },
     "CommentPopover": {
       "commentOnLine": "Comment on line {{line}}",
-      "placeholder": "Type your feedback...",
-      "sendNowTitle": "Send this comment to agent immediately",
+      "placeholder": "Say what should change…",
+      "sendNowTitle": "Send only this comment to the chat now",
+      "sendNow": "Send now",
       "update": "Update",
       "keyHint": "{{mod}}+Enter to save · Esc to cancel"
     },
@@ -4063,6 +4064,27 @@
       "empty": "{{name}}/ is empty.",
       "treeLabel": "{{name}} file tree"
     },
+    "ReviewCommentsTray": {
+      "count_one": "{{count}} comment",
+      "count_other": "{{count}} comments",
+      "send": "Send to chat",
+      "sendTitle_one": "Send the comment to the chat as one message",
+      "sendTitle_other": "Send all {{count}} comments to the chat as one message",
+      "showList": "Show the comments",
+      "listTitle": "Review comments",
+      "clearAll": "Clear all",
+      "confirmClear_one": "Clear {{count}} comment?",
+      "confirmClear_other": "Clear all {{count}}?",
+      "noChat": "No chat here to send to; the comments are kept.",
+      "appendedToDraft": "Added after your draft in the chat; press Enter to send.",
+      "sent": "Sent to the chat.",
+      "previewSelection": "Selection in preview",
+      "line": "Line {{line}}",
+      "lines": "Lines {{start}}-{{end}}",
+      "diff_added": "added",
+      "diff_removed": "removed",
+      "diff_unchanged": "unchanged"
+    },
     "ReviewModeGutter": {
       "applied": "Applied: {{text}}",
       "comment": "Comment: {{text}}",
@@ -4399,8 +4421,8 @@
     },
     "FileEditorCore": {
       "commentOnSelection": "Comment on selection",
-      "instructionPlaceholder": "Type your instruction...",
-      "sendHint": "{{mod}}+Enter to send · Esc to cancel",
+      "instructionPlaceholder": "Say what should change…",
+      "addHint": "{{mod}}+Enter to add · Esc to cancel",
       "commentOnDiffLine": "Comment on diff line {{line}}",
       "lineBefore": "line before",
       "lineAfter": "line after",

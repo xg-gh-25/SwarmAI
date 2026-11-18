@@ -56,9 +56,14 @@ export function keydownHandlers(code: string): string[] {
     const name = /^[A-Za-z_$][\w$]*/.exec(code.slice(at))?.[0];
     const call = balanced(code, code.indexOf('(', m.index), '(', ')');
     if (name && !code.slice(at + name.length).trimStart().startsWith('(') && !/^(async|function)$/.test(name)) {
-      // a handler by name: its definition (const name = … / function name(…) { … })
-      const def = new RegExp(`(?:const|let|function)\\s+${name}\\b`).exec(code);
-      out.push(def ? balanced(code, code.indexOf('{', def.index), '{', '}') : call);
+      // a handler by name: its definition (const name = … / function name(…) { … }),
+      // the nearest one before the call (a file can define the same name in several
+      // scopes), else the first one after it (a hoisted function). Text order, not
+      // scope: a same-named handler in an earlier sibling scope wins over a hoisted
+      // function after the call — a known limit of this scan.
+      const defs = [...code.matchAll(new RegExp(`(?:const|let|function)\\s+${name}\\b`, 'g'))];
+      const def = defs.filter((d) => d.index! < m!.index).pop() ?? defs[0];
+      out.push(def ? balanced(code, code.indexOf('{', def.index!), '{', '}') : call);
     } else {
       out.push(call);
     }
@@ -83,5 +88,12 @@ describe('Escape belongs to the layer stack', () => {
     expect(keydownHandlers(named).some((h) => h.includes('Escape'))).toBe(true);
     expect(keydownHandlers(inline).some((h) => h.includes('Escape'))).toBe(true);
     expect(keydownHandlers(other).some((h) => h.includes('Escape'))).toBe(false);
+  });
+
+  it('a name defined in several scopes resolves to the definition nearest before the call', () => {
+    const elsewhere = `const onKey = (e) => { if (e.key === 'Escape') close(); };\nfunction B() { const onKey = (e) => { if (e.key === 's') save(); }; document.addEventListener('keydown', onKey); }`;
+    const here = `const onKey = (e) => { if (e.key === 's') save(); };\nfunction B() { const onKey = (e) => { if (e.key === 'Escape') close(); }; document.addEventListener('keydown', onKey); }`;
+    expect(keydownHandlers(elsewhere).some((h) => h.includes('Escape'))).toBe(false);
+    expect(keydownHandlers(here).some((h) => h.includes('Escape'))).toBe(true);
   });
 });

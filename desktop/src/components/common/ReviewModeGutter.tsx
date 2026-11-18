@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import CommentPopover from './CommentPopover';
 import { computeGutterWindow, GUTTER_VIRTUALIZE_MIN_LINES } from './gutterVirtualization';
 import type { ReviewComment } from '../../hooks/useReviewMode';
+import type { InjectOutcome } from '../../pages/chat/injectChatInput';
 
 /** Line height must match the editor textarea (leading-6 = 24px). */
 const LINE_HEIGHT = 24;
@@ -32,12 +33,16 @@ interface ReviewModeGutterProps {
   onRemoveComment: (id: string) => void;
   onCancelPopover: () => void;
   getCommentForLine: (lineNumber: number) => ReviewComment | undefined;
-  /** Send a single comment immediately to the agent. */
-  onSendSingle?: (text: string, lineNumber: number) => void;
+  /** Send a single comment immediately to the agent (it does not stay in the pending
+   *  batch). `existing` is the comment open in the box, if any. Returns what the chat
+   *  did with it: 'none' (no chat listened) keeps the comment. */
+  onSendSingle?: (text: string, lineNumber: number, existing?: ReviewComment) => InjectOutcome;
   /** Check if a comment has been applied (target lines changed). */
   isCommentApplied?: (comment: ReviewComment) => boolean;
   /** Scroll-area viewport height (px) — drives the virtualized line window. */
   viewportHeight?: number;
+  /** The text of a line (1-based), quoted in the comment box. */
+  getLineText?: (lineNumber: number) => string;
 }
 
 export default function ReviewModeGutter({
@@ -55,6 +60,7 @@ export default function ReviewModeGutter({
   onSendSingle,
   isCommentApplied,
   viewportHeight = 0,
+  getLineText,
 }: ReviewModeGutterProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -160,6 +166,7 @@ export default function ReviewModeGutter({
       {activePopoverLine != null && (
         <CommentPopover
           lineNumber={activePopoverLine}
+          lineText={getLineText?.(activePopoverLine)}
           initialText={isEditingExisting && activeComment ? activeComment.text : ''}
           onSubmit={(text) => {
             if (isEditingExisting && activeComment) {
@@ -175,12 +182,16 @@ export default function ReviewModeGutter({
               : undefined
           }
           onSendSingle={onSendSingle ? (text) => {
-            // Add comment first (if new), then send to agent
-            const existingComment = getCommentForLine(activePopoverLine);
-            if (!existingComment) {
-              onAddComment(activePopoverLine, activePopoverLine, text);
-            }
-            onSendSingle(text, activePopoverLine);
+            // Sent now = no longer pending: the comment open in the box leaves the batch,
+            // a new one never joins it, so the batch Send cannot send it a second time.
+            // Nothing listened: it stays (or joins the batch), so the text is not lost.
+            const existing = isEditingExisting ? activeComment : undefined;
+            const outcome = onSendSingle(text, activePopoverLine, existing);
+            if (outcome === 'none') {
+              if (existing) onUpdateComment(existing.id, text);
+              else onAddComment(activePopoverLine, activePopoverLine, text);
+            } else if (existing) onRemoveComment(existing.id);
+            else onCancelPopover();
           } : undefined}
           topOffset={popoverTopOffset}
           anchorRef={containerRef}

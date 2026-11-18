@@ -1948,6 +1948,11 @@ body {
   background-color: color-mix(in srgb, var(--color-primary) 28%, transparent);
 }
 
+/* preview text that already carries a pending (not yet sent) review comment */
+::highlight(swarm-comment-pending) {
+  background-color: rgb(245 158 11 / 0.22);
+}
+
 /* the Pipelines Line (components/layout/PipelineLine): light purple marks what the
    dispatching agent holds (it judges a run come back from a Hive); a running track's
    segment moves, still under reduced motion */

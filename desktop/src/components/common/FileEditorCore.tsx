@@ -17,7 +17,7 @@
  * - `SearchBar`      — Floating Cmd+F search bar
  */
 
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useDeferredValue, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
@@ -40,18 +40,15 @@ import type { SearchMatch } from './FileEditorModal';
 import { useReviewMode } from '../../hooks/useReviewMode';
 import type { DiffContext, ReviewComment } from '../../hooks/useReviewMode';
 import ReviewModeGutter from './ReviewModeGutter';
+import ReviewCommentsTray from './ReviewCommentsTray';
 import {
   computeGutterWindow,
   GUTTER_LINE_HEIGHT,
   GUTTER_VIRTUALIZE_MIN_LINES,
 } from './gutterVirtualization';
-import CommentPopover, {
-  COMMENT_POPOVER_CLASS,
-  COMMENT_TEXTAREA_CLASS,
-  COMMENT_TEXTAREA_ROWS,
-  useViewportClamp,
-} from './CommentPopover';
-import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
+import CommentPopover, { CommentBox, type PopoverTarget } from './CommentPopover';
+import { dispatchInjectChatInput, type InjectOutcome } from '../../pages/chat/injectChatInput';
+import { ToastContext } from '../../contexts/ToastContext';
 import { clientToCssScale, layoutViewportWidth } from '../../utils/layoutViewport';
 
 // HIGHLIGHT_MAX_CHARS / shouldProcessSync live in ./editorLimits (shared with the
@@ -296,6 +293,11 @@ function LineGutter({ lineCount, scrollTop, activeLineNumber, viewportHeight = 0
 /*  Comment selection mark                                              */
 /* ------------------------------------------------------------------ */
 
+/** Where a selection is, in layout CSS px: `top`/`left` are just under it (where the
+ *  selection toolbar goes, kept inside the view), `selTop`/`selBottom` are its own top
+ *  and bottom edges (not clamped: the comment box follows the selection itself). */
+type SelectionPos = { top: number; left: number; selTop: number; selBottom: number };
+
 /** A selection under comment: source-text offsets, or a DOM range in the preview. */
 type CommentMark =
   | { kind: 'source'; start: number; end: number }
@@ -303,6 +305,8 @@ type CommentMark =
 
 /** CSS Custom Highlight name; styled by `::highlight(...)` in index.css. */
 const COMMENT_HIGHLIGHT = 'swarm-comment-selection';
+/** The preview places that already carry a pending (not yet sent) comment. */
+const PENDING_COMMENT_HIGHLIGHT = 'swarm-comment-pending';
 
 type HighlightRegistry = { set: (name: string, h: unknown) => void; delete: (name: string) => void };
 function highlightRegistry(): { registry: HighlightRegistry; Highlight: new (...r: Range[]) => unknown } | null {
@@ -316,112 +320,41 @@ function highlightRegistry(): { registry: HighlightRegistry; Highlight: new (...
 /* ------------------------------------------------------------------ */
 
 /**
- * Lightweight inline popover for selection-based comments.
- * Positioned directly at viewport coords (from selectionPopoverPos)
- * instead of using the anchorRef-based positioning in CommentPopover
- * which is designed for gutter-click review mode.
+ * The comment box for a text selection (source view or markdown preview), placed
+ * next to the selection from `selectionPopoverPos`.
+ *
+ * Add (the primary action, and Cmd/Ctrl+Enter) keeps the comment in the file's
+ * pending list, sent later with the others in one message; Send now sends only
+ * this one at once.
  */
 function SelectionCommentPopover({
-  position,
-  onSubmit,
+  getTarget,
+  quote,
+  onAdd,
+  onSendNow,
   onCancel,
 }: {
-  position: { top: number; left: number };
-  onSubmit: (text: string) => void;
+  /** The selection's live place (it follows scrolling), layout CSS px. */
+  getTarget: () => PopoverTarget | null;
+  quote: string;
+  onAdd: (text: string) => void;
+  onSendNow: (text: string) => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
-  const [text, setText] = useState('');
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
-  // A layer above the editor: Escape cancels the comment (not the editor), wherever
-  // focus is inside it.
-  useEscape(true, onCancel, popoverRef);
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-
-  // Keep the (large, drag-resizable) popover on screen while it, the window or the
-  // app zoom changes size. `position` is layout CSS px (see selectionPopoverPos).
-  const anchorTop = position.top + 28;
-  const getAnchor = useCallback(() => ({ top: anchorTop, left: position.left }), [anchorTop, position.left]);
-  const clamped = useViewportClamp(popoverRef, getAnchor);
-
-  // Click-outside dismisses
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        onCancel();
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [onCancel]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        const trimmed = text.trim();
-        if (trimmed) onSubmit(trimmed);
-      }
-    },
-    [text, onSubmit],
-  );
-
-  return createPortal(
-    <div
-      ref={popoverRef}
-      className={COMMENT_POPOVER_CLASS}
-      style={clamped
-        ? { top: clamped.top, left: clamped.left, maxHeight: clamped.maxHeight, overflowY: 'auto' }
-        : { top: anchorTop, left: position.left }}
-      data-testid="selection-comment-popover"
-    >
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-hover)] rounded-t-lg">
-        <span className="text-xs text-[var(--color-text-muted)] font-medium">
-          {t('ui.FileEditorCore.commentOnSelection')}
-        </span>
-        <button
-          onClick={onCancel}
-          className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
-        >
-          <span className="material-symbols-outlined icon-sm">close</span>
-        </button>
-      </div>
-      <div className="p-2">
-        <textarea
-          ref={inputRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={t('ui.FileEditorCore.instructionPlaceholder')}
-          rows={COMMENT_TEXTAREA_ROWS}
-          className={COMMENT_TEXTAREA_CLASS}
-          data-testid="selection-comment-input"
-        />
-      </div>
-      <div className="flex items-center justify-end gap-1 px-2 pb-2">
-        <button
-          onClick={onCancel}
-          className="px-2 py-1 text-xs rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-        >
-          {t('common.button.cancel')}
-        </button>
-        <button
-          onClick={() => { const trimmed = text.trim(); if (trimmed) onSubmit(trimmed); }}
-          disabled={!text.trim()}
-          className="btn-sm btn-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          data-testid="selection-comment-send"
-        >
-          <span className="material-symbols-outlined icon-xs">send</span>
-          {t('common.button.send')}
-        </button>
-      </div>
-      <div className="px-3 pb-1.5 text-[11px] text-[var(--color-text-dim)]">
-        {t('ui.FileEditorCore.sendHint')}
-      </div>
-    </div>,
-    document.body,
+  return (
+    <CommentBox
+      getTarget={getTarget}
+      label={t('ui.FileEditorCore.commentOnSelection')}
+      quote={quote}
+      placeholder={t('ui.FileEditorCore.instructionPlaceholder')}
+      primaryLabel={t('common.button.add')}
+      onPrimary={onAdd}
+      onSendNow={onSendNow}
+      onCancel={onCancel}
+      hint={t('ui.FileEditorCore.addHint')}
+      testIds={{ root: 'selection-comment-popover', input: 'selection-comment-input', primary: 'selection-comment-add', sendNow: 'selection-comment-send' }}
+    />
   );
 }
 
@@ -577,8 +510,11 @@ function DiffView({
               ? () => onRemoveComment(editingComment.id)
               : undefined
           }
+          lineText={activeLine.content}
           topOffset={activePopoverIndex * DIFF_LINE_HEIGHT - diffScrollTop}
+          lineHeight={DIFF_LINE_HEIGHT}
           anchorRef={scrollRef as unknown as React.RefObject<HTMLDivElement>}
+          anchorEdge="left"
         />
       )}
     </pre>
@@ -744,7 +680,7 @@ export default function FileEditorCore({
   // Where the selection toolbar / comment popover sit, in layout CSS px (what
   // `style.top/left` are in). Producers scale client-px rects by clientToCssScale(),
   // so the popover lands on the selection at any app zoom.
-  const [selectionPopoverPos, setSelectionPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  const [selectionPopoverPos, setSelectionPopoverPos] = useState<SelectionPos | null>(null);
   const [showSelectionComment, setShowSelectionComment] = useState(false);
   // Lines of the current selection (source view only; the preview has no line map).
   const [selectionLines, setSelectionLines] = useState<[number, number] | null>(null);
@@ -944,6 +880,7 @@ export default function FileEditorCore({
   // L3: Review mode — inline comments (used for both normal review and diff review)
   // filePath key enables sessionStorage persistence across tab switches (U10).
   const review = useReviewMode(content, filePath);
+  const contentLinesForReview = useMemo(() => (review.isReviewMode ? content.split('\n') : []), [review.isReviewMode, content]);
 
   // Diff-line comment tracking
   const [activeDiffPopoverIndex, setActiveDiffPopoverIndex] = useState<number | null>(null);
@@ -1033,8 +970,26 @@ export default function FileEditorCore({
   }, []);
 
   // ── Send review comment with full context (filePath + selectedText + comment) ──
+  // Review feedback goes to the chat with autoSend + append: sent when the chat box is
+  // empty, added after the person's draft (not sent) when they were typing. What
+  // happened is said whenever the chat may not show it: a kept draft, the full-screen
+  // editor (the chat is behind it), or no chat input at all (a read-only tab), in
+  // which case the caller keeps the comments.
+  const toast = useContext(ToastContext);
+  const deliverReview = useCallback((text: string): InjectOutcome => {
+    const outcome = dispatchInjectChatInput({ text, focus: true, autoSend: true, append: true });
+    if (outcome === 'none') {
+      toast?.addToast({ severity: 'warning', message: t('ui.ReviewCommentsTray.noChat'), autoDismiss: true });
+    } else if (outcome === 'appended') {
+      toast?.addToast({ severity: 'info', message: t('ui.ReviewCommentsTray.appendedToDraft') });
+    } else if (variant === 'modal') {
+      toast?.addToast({ severity: 'success', message: t('ui.ReviewCommentsTray.sent') });
+    }
+    return outcome;
+  }, [toast, t, variant]);
+
   const handleSendReviewComment = useCallback(
-    (comment: string, selectedTextOverride?: string) => {
+    (comment: string, selectedTextOverride?: string): InjectOutcome => {
       const selected = selectedTextOverride ?? selectionText;
       let message: string;
       if (selected) {
@@ -1043,20 +998,111 @@ export default function FileEditorCore({
         // Fallback: no selection, just file + comment
         message = `[File Review: \`${filePath}\`]\n\nInstruction: ${comment}`;
       }
-      dispatchInjectChatInput({ text: message, focus: true, autoSend: true });
+      const outcome = deliverReview(message);
+      if (outcome === 'none') return outcome; // the caller keeps the comment
       // Clear selection state after send
       setSelectionText('');
       setSelectionPopoverPos(null);
       setShowSelectionComment(false);
+      return outcome;
     },
-    [filePath, selectionText],
+    [filePath, selectionText, deliverReview],
   );
 
-  // Legacy single-line send (for gutter click — now sends line content, not line number)
+  // ── Batch review: comments wait in the file's pending list, sent together ──
+  // Preview DOM ranges of pending selection comments (by comment id), for the
+  // pending highlight. Session-only: a range is dropped once it no longer covers its
+  // comment's quote, and the comment itself (with its quote) stays in the list.
+  const pendingRangesRef = useRef(new Map<string, Range>());
+  const [pendingRangesVersion, setPendingRangesVersion] = useState(0);
+
+  // Where the selection under comment is now: the box sits next to it, never on it,
+  // and follows it when the view scrolls. Preview: the frozen range's own rect;
+  // source: the place measured at selection time, moved by the textarea's scroll since.
+  const commentOpenScrollRef = useRef(0);
+  const getSelectionTarget = useCallback((): PopoverTarget | null => {
+    const pos = selectionPopoverPos;
+    if (!pos) return null;
+    if (commentMark?.kind === 'preview' && typeof commentMark.range.getBoundingClientRect === 'function') {
+      const r = commentMark.range.getBoundingClientRect();
+      if (r.width || r.height) {
+        const sc = clientToCssScale();
+        return { top: r.top * sc, bottom: r.bottom * sc, left: pos.left };
+      }
+    }
+    const shift = commentMark?.kind === 'source' && textareaRef.current
+      ? textareaRef.current.scrollTop - commentOpenScrollRef.current
+      : 0;
+    return { top: pos.selTop - shift, bottom: pos.selBottom - shift, left: pos.left };
+  }, [selectionPopoverPos, commentMark]);
+
+  const handleAddSelectionComment = useCallback(
+    (text: string) => {
+      const added = review.addSelectionComment(selectionText, text, selectionLines);
+      const mark = commentMark;
+      if (mark?.kind === 'preview') {
+        pendingRangesRef.current.set(added.id, mark.range);
+        setPendingRangesVersion((v) => v + 1);
+      }
+      setSelectionText('');
+      setSelectionPopoverPos(null);
+      setSelectionLines(null);
+      setShowSelectionComment(false);
+      window.getSelection()?.removeAllRanges();
+    },
+    [review, selectionText, selectionLines, commentMark],
+  );
+
+  const handleSendAllComments = useCallback(() => {
+    const message = review.formatFeedback(filePath);
+    if (!message) return;
+    // Nothing listened → the comments stay; otherwise they are in the chat now.
+    if (deliverReview(message) !== 'none') review.clearComments();
+  }, [review, filePath, deliverReview]);
+
+  // Paint every pending preview comment (one highlight, many ranges). Ranges of
+  // removed comments are dropped here; collapsed (re-rendered-away) ones paint nothing.
+  useEffect(() => {
+    const ranges = pendingRangesRef.current;
+    const quotes = new Map(review.comments.map((c) => [c.id, c.quote ?? '']));
+    // A range leaves with its comment, and when it no longer covers the quoted text
+    // (the preview re-rendered: React may update text nodes in place).
+    const norm = (x: string) => x.replace(/\s+/g, ' ').trim();
+    for (const [id, r] of [...ranges]) {
+      const q = quotes.get(id);
+      if (q === undefined || norm(r.toString()) !== norm(q)) ranges.delete(id);
+    }
+    const hl = highlightRegistry();
+    if (!hl) return;
+    if (ranges.size === 0) { hl.registry.delete(PENDING_COMMENT_HIGHLIGHT); return; }
+    hl.registry.set(PENDING_COMMENT_HIGHLIGHT, new hl.Highlight(...ranges.values()));
+  }, [review.comments, pendingRangesVersion, previewContent]);
+  useEffect(() => () => highlightRegistry()?.registry.delete(PENDING_COMMENT_HIGHLIGHT), []);
+  // Another file: its preview is a different document, so the old ranges are meaningless.
+  useEffect(() => {
+    pendingRangesRef.current.clear();
+    setPendingRangesVersion((v) => v + 1);
+  }, [filePath]);
+
+  const reviewTray = (
+    <ReviewCommentsTray
+      comments={review.comments}
+      onUpdate={review.updateComment}
+      onRemove={review.removeComment}
+      onClearAll={review.clearComments}
+      onSendAll={handleSendAllComments}
+    />
+  );
+
+  // Send now from a gutter line: the text it is about is the open comment's own (a
+  // selection comment spans its quote), else the clicked line.
   const handleSendSingleComment = useCallback(
-    (text: string, lineNumber: number) => {
-      const lineContent = content.split('\n')[lineNumber - 1] || '';
-      handleSendReviewComment(text, lineContent);
+    (text: string, lineNumber: number, existing?: ReviewComment): InjectOutcome => {
+      const about = existing?.quote
+        ?? (existing && existing.lineEnd > existing.lineStart
+          ? content.split('\n').slice(existing.lineStart - 1, existing.lineEnd).join('\n')
+          : content.split('\n')[lineNumber - 1] || '');
+      return handleSendReviewComment(text, about);
     },
     [content, handleSendReviewComment],
   );
@@ -1075,7 +1121,7 @@ export default function FileEditorCore({
       lastSelectionRef.current = { kind: 'preview', range: range.cloneRange() };
       setSelectionText(text);
       setSelectionLines(null);
-      setSelectionPopoverPos({ top: r.bottom * sc + 4, left: Math.max(8, Math.min(r.left * sc, layoutViewportWidth() - 240)) });
+      setSelectionPopoverPos({ top: r.bottom * sc + 4, left: Math.max(8, Math.min(r.left * sc, layoutViewportWidth() - 240)), selTop: r.top * sc, selBottom: r.bottom * sc });
     } else if (!showSelectionComment) {
       setSelectionText('');
       setSelectionPopoverPos(null);
@@ -1471,11 +1517,16 @@ export default function FileEditorCore({
       const paddingTop = parseFloat(computedStyle.paddingTop) || 16;
       const endPos = ta.selectionEnd;
       const linesBeforeEnd = content.slice(0, endPos).split('\n').length;
+      const linesBeforeStart = content.slice(0, ta.selectionStart).split('\n').length;
       const top = rect.top + paddingTop + (linesBeforeEnd * lineHeight) - ta.scrollTop;
+      const selTop = rect.top + paddingTop + ((linesBeforeStart - 1) * lineHeight) - ta.scrollTop;
       const left = rect.left + Math.min(rect.width * 0.4, 200); // 40% of width, max 200px
+      const shownTop = Math.max(rect.top + 8, Math.min(top, rect.bottom - 40));
       setSelectionPopoverPos({
-        top: Math.max(rect.top + 8, Math.min(top, rect.bottom - 40)),
+        top: shownTop,
         left: Math.min(left, rect.right - 100),
+        selTop,
+        selBottom: top,
       });
     } else if (!showSelectionComment) {
       // Only clear selection state when the comment popover is NOT active.
@@ -1562,11 +1613,6 @@ export default function FileEditorCore({
     >
       <span className="material-symbols-outlined icon-sm">rate_review</span>
       {!iconOnly && (review.isReviewMode ? t('ui.FileEditorCore.exitReview') : t('ui.FileEditorCore.review'))}
-      {review.comments.length > 0 && (
-        <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[11px] font-bold">
-          {review.comments.length}
-        </span>
-      )}
     </button>
   );
   const openExternalBtn = (() => {
@@ -1730,6 +1776,9 @@ export default function FileEditorCore({
         )}
       </div>
       <span className="flex-1" />
+      {review.comments.length > 0 && (
+        <div className="editor-float-group pointer-events-auto">{reviewTray}</div>
+      )}
       {hasUnsavedEdits && !readonly && (
         <Button
           variant="primary"
@@ -1866,7 +1915,7 @@ export default function FileEditorCore({
             onMouseDown={(e) => e.preventDefault()}
             data-testid="selection-toolbar"
           >
-            <button className="btn-sm btn-primary" onClick={() => { setCommentMark(lastSelectionRef.current); setShowSelectionComment(true); }} data-testid="selection-comment-btn">
+            <button className="btn-sm btn-primary" onClick={() => { commentOpenScrollRef.current = textareaRef.current?.scrollTop ?? 0; setCommentMark(lastSelectionRef.current); setShowSelectionComment(true); }} data-testid="selection-comment-btn">
               <span className="material-symbols-outlined icon-xs">comment</span>
               {t('ui.FileEditorCore.comment')}
             </button>
@@ -1879,8 +1928,10 @@ export default function FileEditorCore({
         )}
         {showSelectionComment && selectionText && selectionPopoverPos && (
           <SelectionCommentPopover
-            position={selectionPopoverPos}
-            onSubmit={(text) => handleSendReviewComment(text)}
+            getTarget={getSelectionTarget}
+            quote={selectionText}
+            onAdd={handleAddSelectionComment}
+            onSendNow={(text) => { if (handleSendReviewComment(text) === 'none') handleAddSelectionComment(text); }}
             onCancel={() => { setShowSelectionComment(false); setSelectionPopoverPos(null); }}
           />
         )}
@@ -1981,6 +2032,7 @@ export default function FileEditorCore({
                   getCommentForLine={review.getCommentForLine}
                   onSendSingle={handleSendSingleComment}
                   isCommentApplied={review.isCommentApplied}
+                  getLineText={(n) => contentLinesForReview[n - 1] ?? ''}
                 />
               ) : (
                 <LineGutter
@@ -2057,14 +2109,15 @@ export default function FileEditorCore({
                             .map(n => lines[n - 1] ?? '')
                             .join('\n');
                           if (!changedText.trim()) return; // Guard: no empty selection → stuck UI
+                          const changed = [...highlightedLines].sort((a, b) => a - b);
                           setSelectionText(changedText);
+                          setSelectionLines([changed[0], changed[changed.length - 1]]);
+                          lastSelectionRef.current = null; // nothing selected on screen to mark
                           setShowSelectionComment(true);
                           const rootRect = rootRef.current?.getBoundingClientRect();
                           const sc = clientToCssScale();
-                          setSelectionPopoverPos({
-                            top: (rootRect?.top ?? 0) * sc + 50,
-                            left: (rootRect?.left ?? 0) * sc + 100,
-                          });
+                          const top = (rootRect?.top ?? 0) * sc + 50;
+                          setSelectionPopoverPos({ top, left: (rootRect?.left ?? 0) * sc + 100, selTop: top, selBottom: top });
                           setHighlightedLines(new Set());
                         }}
                         className="btn-sm btn-warning dark:text-amber-300 transition-colors"
@@ -2207,6 +2260,7 @@ export default function FileEditorCore({
             )}
           </div>
           <div className="flex items-center gap-2">
+            {reviewTray}
             {/* Footer Close/Cancel — suppressed in PANEL variant (run_f49d3ff3 R2):
                 the unified FileViewer file-chrome header owns the ONE close there, so a
                 footer "Close" would be a SECOND close affordance for editor types (the

@@ -3347,8 +3347,9 @@
     },
     "CommentPopover": {
       "commentOnLine": "评论第 {{line}} 行",
-      "placeholder": "输入你的反馈...",
-      "sendNowTitle": "立即把这条评论发给 agent",
+      "placeholder": "写下这里要怎么改…",
+      "sendNowTitle": "只把这一条立即发到 chat",
+      "sendNow": "立即发送",
       "update": "更新",
       "keyHint": "{{mod}}+Enter 保存 · Esc 取消"
     },
@@ -4063,6 +4064,27 @@
       "empty": "{{name}}/ 是空的。",
       "treeLabel": "{{name}} 文件树"
     },
+    "ReviewCommentsTray": {
+      "count_one": "{{count}} 条评论",
+      "count_other": "{{count}} 条评论",
+      "send": "发送到 chat",
+      "sendTitle_one": "把这条评论作为一条消息发到 chat",
+      "sendTitle_other": "把全部 {{count}} 条评论合成一条消息发到 chat",
+      "showList": "查看评论",
+      "listTitle": "评审评论",
+      "clearAll": "全部清除",
+      "confirmClear_one": "确定清除这 {{count}} 条？",
+      "confirmClear_other": "确定清除 {{count}} 条？",
+      "noChat": "这里没有可发送的 chat，评论已保留。",
+      "appendedToDraft": "已加到你 chat 草稿的后面，按 Enter 发送。",
+      "sent": "已发送到 chat。",
+      "previewSelection": "预览中的选中内容",
+      "line": "第 {{line}} 行",
+      "lines": "第 {{start}}-{{end}} 行",
+      "diff_added": "新增",
+      "diff_removed": "删除",
+      "diff_unchanged": "未改"
+    },
     "ReviewModeGutter": {
       "applied": "已应用：{{text}}",
       "comment": "评论：{{text}}",
@@ -4399,8 +4421,8 @@
     },
     "FileEditorCore": {
       "commentOnSelection": "评论所选内容",
-      "instructionPlaceholder": "输入你的指令...",
-      "sendHint": "{{mod}}+Enter 发送 · Esc 取消",
+      "instructionPlaceholder": "写下这里要怎么改…",
+      "addHint": "{{mod}}+Enter 添加 · Esc 取消",
       "commentOnDiffLine": "评论 diff 第 {{line}} 行",
       "lineBefore": "修改前的行号",
       "lineAfter": "修改后的行号",

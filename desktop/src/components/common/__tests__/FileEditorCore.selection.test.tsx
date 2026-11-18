@@ -30,8 +30,14 @@ const base = { workspaceId: '', onSave: vi.fn().mockResolvedValue(undefined), on
 const md = { ...base, filePath: 'docs/a.md', fileName: 'a.md', initialContent: '# Title\n\nalpha beta\ngamma\n' };
 
 let injected: InjectChatInputDetail[];
-const onInject = (e: Event) => injected.push((e as CustomEvent<InjectChatInputDetail>).detail);
-beforeEach(() => { injected = []; window.addEventListener(INJECT_CHAT_INPUT, onInject); });
+// Stands in for the chat input: records the event and reports it as sent (or as `reply`).
+let reply: InjectChatInputDetail['outcome'] = 'sent';
+const onInject = (e: Event) => {
+  const d = (e as CustomEvent<InjectChatInputDetail>).detail;
+  injected.push({ ...d });
+  d.outcome = reply;
+};
+beforeEach(() => { injected = []; reply = 'sent'; window.addEventListener(INJECT_CHAT_INPUT, onInject); });
 afterEach(() => { window.removeEventListener(INJECT_CHAT_INPUT, onInject); cleanup(); window.getSelection()?.removeAllRanges(); });
 
 function selectInTextarea(start: number, end: number) {
