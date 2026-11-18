@@ -8,6 +8,11 @@ scripts:
     runtime: python3
     description: "BM25 search engine for UI/UX design knowledge (67 styles, 161 palettes, 57 fonts, 99 UX rules)"
     usage: 'python3 scripts/search.py "<query>" [--domain style|color|chart|landing|product|ux|typography] [--design-system -p "Name"]'
+  - name: web_guidance
+    path: scripts/web_guidance.py
+    runtime: python3
+    description: "Search and retrieve the pinned Modern Web Guidance guides (offline)"
+    usage: 'python3 scripts/web_guidance.py search "<capability>" | retrieve <id>[,<id>] | list'
 
 data:
   - path: data/

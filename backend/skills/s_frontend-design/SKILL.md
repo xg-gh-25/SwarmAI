@@ -20,3 +20,12 @@ Before writing ANY frontend code, run the design system generator to get industr
 ```
 
 This is NOT optional. The database has 161 industry-specific reasoning rules that prevent generic AI aesthetics. Skip this step only if the user explicitly provides a complete design system (colors, fonts, style).
+
+## Before writing HTML, CSS or client-side JS for a UI pattern
+
+Search the pinned Modern Web Guidance guides and follow the ones that match
+(INSTRUCTIONS.md, section "Modern web guidance"):
+
+```bash
+"$SWARM_BACKEND_BIN" py scripts/web_guidance.py search "<2-5 word capability>"
+```

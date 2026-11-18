@@ -15,6 +15,39 @@ composition instead of reusing a generic aesthetic. When a repository already ha
 a design system, its tokens, components, accessibility rules and visual guards are
 authoritative over this general guidance.
 
+## Modern web guidance
+
+Model training data is full of legacy web code, so a guess at "how to build a modal /
+form / table / scroll effect" often lands on an outdated pattern. This skill carries
+the guides of Google Chrome's [Modern Web Guidance](https://github.com/GoogleChrome/modern-web-guidance)
+(maintained with the Edge, Firefox and MDN teams; Apache-2.0), pinned and offline in
+`data/modern-web-guidance/` (source, commit and changes: its `ADAPTATION.md`).
+
+Before you write the HTML, CSS or client-side JS for a UI pattern or platform
+capability, search the guides, then read the ones that match:
+
+```bash
+"$SWARM_BACKEND_BIN" py scripts/web_guidance.py search "light dismiss dialog"
+"$SWARM_BACKEND_BIN" py scripts/web_guidance.py retrieve light-dismiss-a-dialog,dialog
+"$SWARM_BACKEND_BIN" py scripts/web_guidance.py list
+```
+
+- **Query:** 2-5 English words naming one capability or UI primitive (`responsive data
+  table`, `dark mode toggle`, `validate input after interaction`). No framework or
+  product names. Split a page with several patterns into one search each. If the
+  results do not fit, rephrase once with the HTML/CSS noun (`dialog`, `popover`,
+  `select`); a topic the guides do not cover is built without them.
+- **Read:** retrieve the matching use-case guides and the broad guide of their area
+  (`html`, `css`, `forms`, `accessibility`, `performance`, `security`) when one applies.
+  A guide that names another (`web_guidance.py retrieve "<id>"`) means this script.
+- **Apply:** a guide's pattern replaces the generic advice in this file. Features that
+  are Baseline widely available need no fallback; for any other feature follow the
+  guide's fallback, unless the user or the repository states its own browser policy.
+  The guides are vanilla HTML/CSS/JS: in a framework keep the modern feature and adapt
+  the wiring. A repository's own design system stays authoritative over them.
+- **Disclose:** when a guide shaped the code, say which (`<id>`) and the pitfall it
+  avoided, in one line each, when you deliver.
+
 ## Output Location
 
 Save generated files to:
@@ -217,17 +250,18 @@ Muted:      {secondary text, captions}
 
 ### Step 4: Interactive Elements
 
-When the design includes interactivity:
+When the design includes interactivity, read the guides first (section "Modern web
+guidance"); these are the usual starting points:
 
-| Element | Implementation |
-|---------|---------------|
-| Scroll animations | Intersection Observer API |
-| Smooth transitions | CSS transitions + `will-change` |
-| Dark/light toggle | CSS custom properties + `prefers-color-scheme` |
-| Form validation | HTML5 validation + subtle JS enhancement |
-| Navigation | Scroll-spy or smooth scroll anchors |
-| Modals/drawers | `<dialog>` element or minimal JS |
-| Parallax | `transform: translate3d()` on scroll |
+| Element | Guides to retrieve |
+|---------|-------------------|
+| Scroll effects (reveal on scroll, progress, parallax) | `scroll-entry-exit-effects`, `scroll-progress-indicator`, `parallax-scroll-effects` |
+| Page and state transitions | `same-document-transitions`, `cross-document-transitions`, `animate-element-entry-exit` |
+| Dark/light toggle | `dark-mode`, `dark-mode-toggle` |
+| Form validation | `validate-input-after-interaction`, `accessible-error-announcement`, `forms` |
+| Navigation | `navbar`, `navigation-drawer`, `scrollspy` |
+| Modals and popovers | `dialog`, `light-dismiss-a-dialog`, `declarative-dialog-popover-control` |
+| Data tables | `responsive-table`, `sortable-table` |
 
 Keep JavaScript minimal. CSS-first for all animations and transitions.
 

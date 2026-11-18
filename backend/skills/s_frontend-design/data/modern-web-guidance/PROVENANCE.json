@@ -1,0 +1,1285 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "modern-web-guidance",
+      "repository": "https://github.com/GoogleChrome/modern-web-guidance",
+      "commit": "64a6d708f5a43f2cd3fde5d4d7db3905ba1bdf65",
+      "license": "Apache-2.0"
+    }
+  ],
+  "files": [
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/accessibility/accessibility.md",
+      "localPath": "guides/accessibility/accessibility.md",
+      "sha256": "752d3998044bbcdd2736262906ba0951fd6e334efeb52ebf1f8f54cbb6e21217"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/accessibility/accessible-error-announcement.md",
+      "localPath": "guides/accessibility/accessible-error-announcement.md",
+      "sha256": "82b0bc7b4a67cc1aa7d9ddfbbc5c1289560e851bad7597f3fff6db5964ace3c7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/accessibility/accessible-generated-content.md",
+      "localPath": "guides/accessibility/accessible-generated-content.md",
+      "sha256": "41f549013461d609d9077250527515422c72acfc8a8743b45442797426baad4b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/accessibility/respect-os-text-scale.md",
+      "localPath": "guides/accessibility/respect-os-text-scale.md",
+      "sha256": "c6bc60d7b68cb2723dee1ac1cc6b5801bf2fec1b1957c7751a36e05030e38904"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/built-in-ai/language-detection.md",
+      "localPath": "guides/built-in-ai/language-detection.md",
+      "sha256": "75acb2235f39a5df396ace784ce91aad6ba8d0d4743d5c87c9b4ceda09b49fcf"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/built-in-ai/language-model.md",
+      "localPath": "guides/built-in-ai/language-model.md",
+      "sha256": "9edc06cac36c7c6940832678d8f715b7ae199bb1f6811189fbe52962dd5f3830"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/built-in-ai/prompt-api.md",
+      "localPath": "guides/built-in-ai/prompt-api.md",
+      "sha256": "9edc06cac36c7c6940832678d8f715b7ae199bb1f6811189fbe52962dd5f3830"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/built-in-ai/summarizer.md",
+      "localPath": "guides/built-in-ai/summarizer.md",
+      "sha256": "e867bb8c563bfff29442644debd851762deaa09fdcbc69c458238d6e0fee523c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/built-in-ai/translator.md",
+      "localPath": "guides/built-in-ai/translator.md",
+      "sha256": "31f95e20234b6b5e44e878dbfa15d66887afc9d8b581777713c4f455465974b5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/animate-to-intrinsic-sizes.md",
+      "localPath": "guides/css/animate-to-intrinsic-sizes.md",
+      "sha256": "aec9a5b2ef6dbd742d94f0d39c173c9586d25c87410d54d97217acfd218886c7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/atrule-support-conditionals.md",
+      "localPath": "guides/css/atrule-support-conditionals.md",
+      "sha256": "ec27ce4152550f5bdecf49ec759ce761f6398f705ef40d179114d1007c189627"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/calculate-with-intrinsic-sizes.md",
+      "localPath": "guides/css/calculate-with-intrinsic-sizes.md",
+      "sha256": "f5f951be8a6a3199048e67bb8ace9abaebaf8d82287b0eee2a4e20d162bf8d23"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/child-state-based-styling.md",
+      "localPath": "guides/css/child-state-based-styling.md",
+      "sha256": "003e92ac56029dbf40925e5dc01a6b0362ebaaebae6996755d2c35a6b5dafd3e"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/content-based-styling.md",
+      "localPath": "guides/css/content-based-styling.md",
+      "sha256": "e2f89c713bf0959898ff9d3d83f606a69b248abf572da25f47ba68db02aac3e1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/css-layout.md",
+      "localPath": "guides/css/css-layout.md",
+      "sha256": "da7fa26230536bdde5a32fb1d3b529c711b5f25baeaf828e111cef4859e88f01"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/css.md",
+      "localPath": "guides/css/css.md",
+      "sha256": "1a32fb79887417cb93874ff03d02f2e00deff1e88a531c140bb2c61186aaae79"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/design-token-reactivity.md",
+      "localPath": "guides/css/design-token-reactivity.md",
+      "sha256": "b01a7c7f3acbe3dac8ecb0e5f46301cc4ca13a6e5cb25d93ca96a59a798fa906"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/dynamic-sibling-styling.md",
+      "localPath": "guides/css/dynamic-sibling-styling.md",
+      "sha256": "2aeec9f0bc264365b952180594780a3e9e5d8263232791e8220f0d7f7876d712"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/fluid-scaling.md",
+      "localPath": "guides/css/fluid-scaling.md",
+      "sha256": "8b86dfa13f3b8971ed345b758d488c2130b4ff0a6d05f8b71a9308610f962509"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/individual-transform-properties.md",
+      "localPath": "guides/css/individual-transform-properties.md",
+      "sha256": "5dea4d563fe07b39b820feda8683fa25bfa7948a1c6d1ce9de417fb050e2d374"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/overflow-clipping-control.md",
+      "localPath": "guides/css/overflow-clipping-control.md",
+      "sha256": "db3cb3c57960e7ce4c170b5719ea877c8fc41c07fe79a730ff7838e18da1ce2e"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/reduce-style-repetition.md",
+      "localPath": "guides/css/reduce-style-repetition.md",
+      "sha256": "08250d9f19b128548e317ea95e63f8ed967916e2ffac99edcb161e3002660814"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/responsive-design.md",
+      "localPath": "guides/css/responsive-design.md",
+      "sha256": "4bd7f40d677cbaeaebddac90aa2b23a81701ef6c2215b689148906f8d4d2da8f"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/selector-atrule-combinations.md",
+      "localPath": "guides/css/selector-atrule-combinations.md",
+      "sha256": "e26e044839fdf4c62b430438378e27bbac9e91c4527fcb6a4b3d5fa505c11a14"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/size-aware-styling.md",
+      "localPath": "guides/css/size-aware-styling.md",
+      "sha256": "18605ef97e5cd22604ce07be958176ad700c17ac7387790ddeff78ddbce1b7b1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/style-parent-with-has.md",
+      "localPath": "guides/css/style-parent-with-has.md",
+      "sha256": "ae79167408e3b708c7c75b67922329e6ffbb7913b8b34185535c585946d27275"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/css/usage-aware-component-variations.md",
+      "localPath": "guides/css/usage-aware-component-variations.md",
+      "sha256": "515b34e7a6f9174fb4a6bbcc6a9af39d1e78d10adecdceb22f56b6b9bc1516d6"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/animated-select-picker.md",
+      "localPath": "guides/forms/animated-select-picker.md",
+      "sha256": "ece2590624c8e3e4ef8e3142adfa0e49df7e4face93a299066971f2d473dd2e4"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/autofill-address-form.md",
+      "localPath": "guides/forms/autofill-address-form.md",
+      "sha256": "e815c4090a0492773536581db3f4592beba42c8a902596df24d0327cf50e6759"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/autofill-highlight-inputs.md",
+      "localPath": "guides/forms/autofill-highlight-inputs.md",
+      "sha256": "2bb8fe8ea0028bcc5fe38b0932c57415d294f94036b8d769d1afe9344be29c55"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/autofill-payment-form.md",
+      "localPath": "guides/forms/autofill-payment-form.md",
+      "sha256": "67a7bb1c11b4d92384d8ab3fb65386bb02507682243ad5d8e16761314222789f"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/autofill-sign-in-form.md",
+      "localPath": "guides/forms/autofill-sign-in-form.md",
+      "sha256": "c5a0dffe9ea99f3aa4798e40f2bc5df6d6b89b149ebe39f9900bf285f2b1000b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/autofill-sign-up-form.md",
+      "localPath": "guides/forms/autofill-sign-up-form.md",
+      "sha256": "ffeec44068317c566fc97966b744849af174a21fc90ae4ee53ced268afacf55a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/brand-consistent-forms.md",
+      "localPath": "guides/forms/brand-consistent-forms.md",
+      "sha256": "3ef632f3834b42f3289a1afd7947494c9ba631c9eae6192c0dd24d1d7d6a463d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/branded-select-styling.md",
+      "localPath": "guides/forms/branded-select-styling.md",
+      "sha256": "668c499fd8ff48c6b758e1995caf21468a8b832d71e41055dd0922db7787dcd5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/custom-select-picker-layouts.md",
+      "localPath": "guides/forms/custom-select-picker-layouts.md",
+      "sha256": "698a394e930ff5402e303849f110f3b827a7712ed766521f96850e87f92c8837"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/form-fields-automatically-fit-contents.md",
+      "localPath": "guides/forms/form-fields-automatically-fit-contents.md",
+      "sha256": "34f5d124e79b3c438a3ae8541e9974186c628f03ece91a588d19506d1865b502"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/forms.md",
+      "localPath": "guides/forms/forms.md",
+      "sha256": "520189142652662313fd4107ee20232cddc89f33a9e99dedb8d789275367f9c3"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/ime-safe-enter-submit.md",
+      "localPath": "guides/forms/ime-safe-enter-submit.md",
+      "sha256": "aa23bca5b8217e00fe1033741d473e1548e140ba4863a5ae7ac7f2c02132430c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/required-field-feedback.md",
+      "localPath": "guides/forms/required-field-feedback.md",
+      "sha256": "ca405c5cd6f67740d92701780c3967c4d27b7bba41f2ff5a6361350feaefecab"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/rich-media-picker.md",
+      "localPath": "guides/forms/rich-media-picker.md",
+      "sha256": "a1bc156f539a4537a2c1c9a185d65c7eb9bae55f0a1fe670e0f68aa779ad36ae"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/select-menu-interaction.md",
+      "localPath": "guides/forms/select-menu-interaction.md",
+      "sha256": "9a1ee8b7111daaf6dc17bec3c6e7c27397d3616e9c5309d64dcefd11c876e83a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/slider.md",
+      "localPath": "guides/forms/slider.md",
+      "sha256": "1ee48919f3566a852bbf2b2e737444ee8d124d89e2fd3451e303c99cd40851a7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/sms-otp-form.md",
+      "localPath": "guides/forms/sms-otp-form.md",
+      "sha256": "fb464bcddd10e89b3fead8fa54cadc911f3f64dc6bc2d4491756f11d301767c9"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/switch.md",
+      "localPath": "guides/forms/switch.md",
+      "sha256": "5672a65984dec3f24fa4eb32c3eed494c2c4d38dc06c4fa71366065f89a638fd"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/forms/validate-input-after-interaction.md",
+      "localPath": "guides/forms/validate-input-after-interaction.md",
+      "sha256": "82a6c3f553225e8d4122ef7d2dba83f0254224943420722ec38032c13b19d6d7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/accessible-web-components.md",
+      "localPath": "guides/html/accessible-web-components.md",
+      "sha256": "352e79a510212b4c1db3b15f1c0c0622d3b9ccd046b5344661e0a4ff49970b10"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/custom-elements.md",
+      "localPath": "guides/html/custom-elements.md",
+      "sha256": "4466622b5123418a5260bf8898c91b502fe2b8f4b1417ffb8ce2db9c7d2d9ae3"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/form-associated-custom-elements.md",
+      "localPath": "guides/html/form-associated-custom-elements.md",
+      "sha256": "fcd42a21af01cbbe9fcd39130715c13f2bde96267b2face085cfa23259771748"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/html.md",
+      "localPath": "guides/html/html.md",
+      "sha256": "dc036032af7cb0d3e9869722fa143708539b90893ff83efdbaff43541be652b4"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/prerendering-custom-elements.md",
+      "localPath": "guides/html/prerendering-custom-elements.md",
+      "sha256": "f2ca79f7f06265f8ac0cbdcb63301dc6b844c113a45e2f3f26c0411bcc49c06b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/shadow-dom.md",
+      "localPath": "guides/html/shadow-dom.md",
+      "sha256": "d1fc2affdc23b2747735b0a0c5d4cdc0539d35e9ae25b8aa35deb9bb457746f6"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/styling-web-components.md",
+      "localPath": "guides/html/styling-web-components.md",
+      "sha256": "4f7091c06baafc5121bcc384e129a7dad9ba705f58c87ae2903dd769d555d8a7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/html/web-components.md",
+      "localPath": "guides/html/web-components.md",
+      "sha256": "461bda02f56ff44a855180aca8780869b82c3eb9d47cab3efd86a1c3bdfe015e"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/js/calculate-event-differentials.md",
+      "localPath": "guides/js/calculate-event-differentials.md",
+      "sha256": "866733a5e75eb70bfbf57b3529c22f0b27c63bdd6f9a6f3a2b8714d139b61ec7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/js/capture-location-agnostic-data.md",
+      "localPath": "guides/js/capture-location-agnostic-data.md",
+      "sha256": "3a1039daa207f3192a530e609a08a5aa575528178160f75c7dc20de9e906db53"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/js/coordinate-global-events.md",
+      "localPath": "guides/js/coordinate-global-events.md",
+      "sha256": "9cd071b748235939c90490752555df5a8c14ac9a3f9f9820b7f15ab060e1ce9a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/js/js.md",
+      "localPath": "guides/js/js.md",
+      "sha256": "54dffd0bd882f296f7a4b6f5cb0c6045e09ec011987e32f2c93dc61ab269c961"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/js/sort-high-precision-timestamps.md",
+      "localPath": "guides/js/sort-high-precision-timestamps.md",
+      "sha256": "d3ce6cd029606786c215fb19c4971858a03c2c57fa269fcea5598c6cbaa66f2d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/js/support-global-calendar-systems.md",
+      "localPath": "guides/js/support-global-calendar-systems.md",
+      "sha256": "5bb6d639330117efe1b9b6b8ced7d93c1a1443cfe86e013ac764465016244aae"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/batch-analytics-events.md",
+      "localPath": "guides/performance/batch-analytics-events.md",
+      "sha256": "4233400a2e90fdb93ecc5de90a947b561fac0cf16eb1284007ed7c2e23117c72"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/break-up-long-tasks.md",
+      "localPath": "guides/performance/break-up-long-tasks.md",
+      "sha256": "f59316388b8bf1e1a5ac2e655ad3231195de98c71caa5e0da3702ed88f1c0d35"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/calculate-total-foreground-time.md",
+      "localPath": "guides/performance/calculate-total-foreground-time.md",
+      "sha256": "867b01937c2c2734a5165174e712e2d6fcf8f40895e0b8ba752aea4c53654e4d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/conditional-async-dependencies.md",
+      "localPath": "guides/performance/conditional-async-dependencies.md",
+      "sha256": "e591b8f7c8bd0d02db56576755b2dd263e62465a8b50d4b37c339ee18878ad87"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/defer-rendering-heavy-content.md",
+      "localPath": "guides/performance/defer-rendering-heavy-content.md",
+      "sha256": "99f4e9b7b376b7be9c9acd22c04ec66d8bb8b50677a31d212c394d84f74adae9"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/defer-work-until-scroll-ends.md",
+      "localPath": "guides/performance/defer-work-until-scroll-ends.md",
+      "sha256": "f7e93312844a9da5f81d2092072f326a5b6041606f9945992781b01ee83e38ac"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/deliver-optimized-decorative-images.md",
+      "localPath": "guides/performance/deliver-optimized-decorative-images.md",
+      "sha256": "5537b241966ff8a8e9ce99232ed715d887aad8db72965ca77965a328ebc41ab1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/deprioritize-background-fetches.md",
+      "localPath": "guides/performance/deprioritize-background-fetches.md",
+      "sha256": "14836fc6fc94567c2451ef427c11c381a71b1d348ae57f23b4082eceb9773b12"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/detect-initial-visibility-state.md",
+      "localPath": "guides/performance/detect-initial-visibility-state.md",
+      "sha256": "0b25ee2c2c22ea9de9122ec7dada3374573bc0f91c002ef74129e44eedb2aa8c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/efficient-background-processing.md",
+      "localPath": "guides/performance/efficient-background-processing.md",
+      "sha256": "81b62df212b562faa35210d8e05a64265ae0a58ac10f16d52dc854408de0cb42"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/faster-spa-view-transitions.md",
+      "localPath": "guides/performance/faster-spa-view-transitions.md",
+      "sha256": "c8a397c7fb5c41a09e3d52ad8af1988b7c89ee45795a6f45df00efe3ade91a85"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/flicker-free-client-side-ab-testing.md",
+      "localPath": "guides/performance/flicker-free-client-side-ab-testing.md",
+      "sha256": "6b12c61733a35960a52c3a16e35d634f991e5ec1e9117f1d41bff8c2caf173db"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/full-session-analytics.md",
+      "localPath": "guides/performance/full-session-analytics.md",
+      "sha256": "d0867403f262e8eabd35452a49321b451ea84e6200d236be5cc957168021d172"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/identify-heavy-scripts.md",
+      "localPath": "guides/performance/identify-heavy-scripts.md",
+      "sha256": "7b70e9b8e3bcd1cbf142b9242388888888fc922eee9bcad85a01d1a035d70620"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/identify-inp-causes.md",
+      "localPath": "guides/performance/identify-inp-causes.md",
+      "sha256": "2a2a4c8ce12872a62de18690022b00655cc89ca201dd8d2058b65d81b95fa138"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/improve-next-page-load-performance.md",
+      "localPath": "guides/performance/improve-next-page-load-performance.md",
+      "sha256": "64747264bc23cf01e46c542097b2975cf94c2aabc2c878147297b7ea01d07b55"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/interaction-paint-timing.md",
+      "localPath": "guides/performance/interaction-paint-timing.md",
+      "sha256": "65c00b9da9b93482a2bb7f09c165693e655493e846b2fb3de0c806b3773b203f"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/interactions-in-complex-layouts.md",
+      "localPath": "guides/performance/interactions-in-complex-layouts.md",
+      "sha256": "32519cb50656ec3188565cf934826f483c1f1ef3075547dc04414f1908deafc3"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/lazy-load-video-and-audio.md",
+      "localPath": "guides/performance/lazy-load-video-and-audio.md",
+      "sha256": "c0e4753df3153663faa3ecad330dec3cd8d4d18ddf9cff1edb71b4ca13c9e9f1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/optimize-image-priority.md",
+      "localPath": "guides/performance/optimize-image-priority.md",
+      "sha256": "4f1345b87b2e96b3e97185082cd1f38b8fc06f5a2e98f5c66062aa88ed00bc46"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/optimize-preload-priority.md",
+      "localPath": "guides/performance/optimize-preload-priority.md",
+      "sha256": "5239d1bb2718a2698a5288b069018af1cf40385c2a2d997e7ab9d7b49c892bf1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/optimize-script-priority.md",
+      "localPath": "guides/performance/optimize-script-priority.md",
+      "sha256": "a3b6af33195d56febe9ca9490af06e420b0d3c62f37d9cf3594f89233d5ab41a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/out-of-order-html-streaming.md",
+      "localPath": "guides/performance/out-of-order-html-streaming.md",
+      "sha256": "63d94e3c8a026b0eb1795598e86eb483d7d1580826575311b16ca69e4a57fe4c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/performance.md",
+      "localPath": "guides/performance/performance.md",
+      "sha256": "0dde03667a73cb67e56994b7737d33af90ffabb57b594d35a99da2fba2cca273"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/resolution-optimized-pseudo-elements.md",
+      "localPath": "guides/performance/resolution-optimized-pseudo-elements.md",
+      "sha256": "05375d370b54f814e07ce0232f0909ee2a937e03d1a53f7004620dc9e9916fb8"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/performance/schedule-tasks-by-priority.md",
+      "localPath": "guides/performance/schedule-tasks-by-priority.md",
+      "sha256": "89729b3d10964d3fd25e632a41af23ccd477119c32cc2a727a7051cedc8c0895"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/privacy/privacy.md",
+      "localPath": "guides/privacy/privacy.md",
+      "sha256": "0abfb8bbaa1766cd9a986cdf925b05dda21fd7b0d5cf46d52335572cc481e28d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/pwa/install-web-app.md",
+      "localPath": "guides/pwa/install-web-app.md",
+      "sha256": "b9045822a9ba5b62f56035f3a5978b4f3fd8b296d88b3630607c1a71652b86db"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/pwa/migrate-web-app-origin.md",
+      "localPath": "guides/pwa/migrate-web-app-origin.md",
+      "sha256": "39419f5c9d856f61bd7690b523233107fb4d6c56288b334e15f2ac64b54c54e9"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/client-side-encryption.md",
+      "localPath": "guides/security/client-side-encryption.md",
+      "sha256": "1a086e41d3ebde97688db8ccd1184ca93b7b2d22140fdeb7fd199b7edc357c4a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/digital-signatures.md",
+      "localPath": "guides/security/digital-signatures.md",
+      "sha256": "70a97e0adc0c6b6edd3633538b31d145b2107eeb263900de4f91c83e272bdca0"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/local-network-access.md",
+      "localPath": "guides/security/local-network-access.md",
+      "sha256": "be2f670b85f5ff246671f7b22f1afe9b18c8f0cfb01af0c407e86a1b12687db8"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/passkey-authentication.md",
+      "localPath": "guides/security/passkey-authentication.md",
+      "sha256": "8b8e1c551c2b5d7370da843287109632bcd8061ce86a9ab387844552fc311b2d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/passkey-conditional-create.md",
+      "localPath": "guides/security/passkey-conditional-create.md",
+      "sha256": "9f2b1008c469129de63899ef33ce1864d220fdf25e2e6688883a1474f457cc2b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/passkey-management.md",
+      "localPath": "guides/security/passkey-management.md",
+      "sha256": "f2e48785a414f495ae1227a3772783e36f86529d03c828ca0fedd6fd3c7cd5e1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/passkey-reauthentication.md",
+      "localPath": "guides/security/passkey-reauthentication.md",
+      "sha256": "8f3216220c08732f0b3eeb607d9b3e185c7b07500f3ea7ab272fae4d2be8e7db"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/passkey-registration.md",
+      "localPath": "guides/security/passkey-registration.md",
+      "sha256": "d1036912a432a7678c3887eab871eda4406a564c501490de9e115809945e07ca"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/passkeys.md",
+      "localPath": "guides/security/passkeys.md",
+      "sha256": "a6535a72edf617fac23d2bbee66a28ccbd130a1d35fa90bfc6686de1e31843fb"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/quick-sign-ins.md",
+      "localPath": "guides/security/quick-sign-ins.md",
+      "sha256": "c701ca886234ec43f91a24fbee450a9a3f5dae2b9581f89e48246f4baa82f909"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/restrict-outbound-connections.md",
+      "localPath": "guides/security/restrict-outbound-connections.md",
+      "sha256": "9d857d904cf35040ebaa369c5eb98bf1726a88bea4e319d2562415ddabd17165"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/sanitize-untrusted-html.md",
+      "localPath": "guides/security/sanitize-untrusted-html.md",
+      "sha256": "e5fe91dd410e4df88c7fb229b132e33407ef412ed26a05894b51cfcd8a4ae5ef"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/secure-external-subresources.md",
+      "localPath": "guides/security/secure-external-subresources.md",
+      "sha256": "fb62fe3352ee0bb72d73bb8c0e47f251d6d2e676ce359fa56a90212cedb99f71"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/security.md",
+      "localPath": "guides/security/security.md",
+      "sha256": "0856fcb72419329397605700895414536cf0d00f1b697afeee5d4aac5fcf80ff"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/trusted-types.md",
+      "localPath": "guides/security/trusted-types.md",
+      "sha256": "3b3268a10597554e3f4235cd49bc850d07b8a8e7c19fbfffb290736e512b8af5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/validate-origins.md",
+      "localPath": "guides/security/validate-origins.md",
+      "sha256": "26fdd6e817eb891f60750400c574c34a946ba8330c4e2a83820d0f9ee32111f7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/security/verify-email-ownership.md",
+      "localPath": "guides/security/verify-email-ownership.md",
+      "sha256": "215ea066291eddc6c0fcd3846c08596ea85df6761000dac46e0c1a52048fb058"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/carousel-slide-effects.md",
+      "localPath": "guides/ui-atoms/carousel-slide-effects.md",
+      "sha256": "40d50d25208732d99ed46ebd632a058544b01504131a64716a0f9ff9a7a1621a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/component-specific-light-dark-theme.md",
+      "localPath": "guides/ui-atoms/component-specific-light-dark-theme.md",
+      "sha256": "ef4217e0d0bba4fa5c986543d8c8b4fe5c8997f15ec24373ca1157b2a70b2d3f"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/icons.md",
+      "localPath": "guides/ui-atoms/icons.md",
+      "sha256": "2a2af02010b388de90e707b5ecf8f70fa78b5ea67e2c9c063183222515de0eee"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/position-aware-tooltips.md",
+      "localPath": "guides/ui-atoms/position-aware-tooltips.md",
+      "sha256": "9bc5546a7ca0eec2b76a3ea59ba99ca90287ba12ea7a63d410a0dbdd3092f717"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/pull-to-reveal.md",
+      "localPath": "guides/ui-atoms/pull-to-reveal.md",
+      "sha256": "5d32443019753701784cb76e3b673174071b6495e7353e5b818503ac2c94d0b5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/responsive-table.md",
+      "localPath": "guides/ui-atoms/responsive-table.md",
+      "sha256": "b1b1c84034398b83cda29a04fbd152c94aced38b11151791b3eb1c9d05af7666"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/scroll-position-aware-elements.md",
+      "localPath": "guides/ui-atoms/scroll-position-aware-elements.md",
+      "sha256": "1c3361ee7a9dce6f11e7cbe22725013a1237ef015969f1faca1f2268aa869128"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/scroll-progress-indicator.md",
+      "localPath": "guides/ui-atoms/scroll-progress-indicator.md",
+      "sha256": "9dd9ed62c88f99c930671dd5ec1a8aaf42ab509adc21d9d57bf16cf7dacd0faa"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/scrollability-affordance-hints.md",
+      "localPath": "guides/ui-atoms/scrollability-affordance-hints.md",
+      "sha256": "bb1c84eeeed46024bfff8bdaae60797e283f565c2f38970cfaaca727e4b20357"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/shrinking-header-on-scroll.md",
+      "localPath": "guides/ui-atoms/shrinking-header-on-scroll.md",
+      "sha256": "e5e78dae57b0ff09ced03fa348b2f79dd026dd6dec41915c501446afd0820031"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/single-line-overflow.md",
+      "localPath": "guides/ui-atoms/single-line-overflow.md",
+      "sha256": "498cb6dd8f5d5a2dfaf2e0b5076cf314834228d6ef98d04e86ed3c229f8f796c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/state-aware-sticky-headers.md",
+      "localPath": "guides/ui-atoms/state-aware-sticky-headers.md",
+      "sha256": "712fc6c6902c89161518eda7fbf2846ccc2826f133fcfb4d32312547a188d4b3"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-atoms/viewport-aware-dropdowns.md",
+      "localPath": "guides/ui-atoms/viewport-aware-dropdowns.md",
+      "sha256": "38a4126043561cb2575c171a3bce31cef0eff0875e92d02ed4b6aea33e5d3961"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/2d-panning.md",
+      "localPath": "guides/ui-behaviors/2d-panning.md",
+      "sha256": "c1bf693ba5eb1ac7a912be1d46f921d5ba38ea9b79011121661a12cd6841f9d5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/anchor-positioning-tab-underline.md",
+      "localPath": "guides/ui-behaviors/anchor-positioning-tab-underline.md",
+      "sha256": "2736d04294581cc2f604abde0b783894f742a347512c16161be8fb362fd6afe9"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/animate-element-entry-exit.md",
+      "localPath": "guides/ui-behaviors/animate-element-entry-exit.md",
+      "sha256": "2bf30ba88fa7d1fbdc3f7c2e3898bb0d37ea0a938912b8e34ed04de5ac485948"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/animate-to-from-top-layer.md",
+      "localPath": "guides/ui-behaviors/animate-to-from-top-layer.md",
+      "sha256": "50e794695584d7571d9e2cd11951ad47854ba8e183926fe35fa1ba6694ea3ce8"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/carousel-snap-highlights.md",
+      "localPath": "guides/ui-behaviors/carousel-snap-highlights.md",
+      "sha256": "b5fb101bb1ccb6aad294014e4aaa074f3bcdf9131ce22a1f7b83a3a2184896f7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/consistent-cross-document-transitions.md",
+      "localPath": "guides/ui-behaviors/consistent-cross-document-transitions.md",
+      "sha256": "44d41ffd57747c9195eff4bdead8284cde55fe606a49d4a29268dd7fce8d9f4d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/cross-document-transitions.md",
+      "localPath": "guides/ui-behaviors/cross-document-transitions.md",
+      "sha256": "139ebe0cdf97343631b5cc1ab5f4b29a22c65f94f2d6f794e4646dddef1f077b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/custom-button-actions.md",
+      "localPath": "guides/ui-behaviors/custom-button-actions.md",
+      "sha256": "12bd1141c4059a2a52313c9720e545c55efa6993ae72457192a6887caaa6a9b4"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/declarative-dialog-popover-control.md",
+      "localPath": "guides/ui-behaviors/declarative-dialog-popover-control.md",
+      "sha256": "e403bfbe5e1e4509105b35256efb38c0eb422c1e0fca22c10fe573ec76aa66f2"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/directional-navigation-transitions.md",
+      "localPath": "guides/ui-behaviors/directional-navigation-transitions.md",
+      "sha256": "0a584ec619b1688a7245b688c54f682c8acc93009a9376dc9281636c8f381e8f"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/drag-and-drop.md",
+      "localPath": "guides/ui-behaviors/drag-and-drop.md",
+      "sha256": "622f59e07e15344f44401cb16e1f77ac3cfc7608513880c406754a3f6db29fd1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/drag.md",
+      "localPath": "guides/ui-behaviors/drag.md",
+      "sha256": "6cc18565c696f15e1ee613e8cc5c04a22be00954f3a0cc1c0f561c9f6ae2030d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/dynamic-sibling-animations.md",
+      "localPath": "guides/ui-behaviors/dynamic-sibling-animations.md",
+      "sha256": "2c4c49375ff98a206e3849a753ca53562c56efbc7a550d9e5f2b01e1cfbb08b6"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/dynamic-sort.md",
+      "localPath": "guides/ui-behaviors/dynamic-sort.md",
+      "sha256": "60eb7cf5f0095565b216f71dd9218c16e0960134a7e2ad63d1316e896bc44f2e"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/group-element-transitions.md",
+      "localPath": "guides/ui-behaviors/group-element-transitions.md",
+      "sha256": "a559459cf88a35382775f2c80f61701687639fb531ad4ac02ba6b51d46b451df"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/highlight-text-ranges.md",
+      "localPath": "guides/ui-behaviors/highlight-text-ranges.md",
+      "sha256": "5d769ceba3ede009799820c5a2fed9656ca06c6ed7038ef85afbf40fcb3d402d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/interactive-content-reveal.md",
+      "localPath": "guides/ui-behaviors/interactive-content-reveal.md",
+      "sha256": "370ce4169b73a5bc745786dbb2455456c86d43421464a6f7e29cc9135cc730d0"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/interest-triggered-action-previews.md",
+      "localPath": "guides/ui-behaviors/interest-triggered-action-previews.md",
+      "sha256": "3f66ba71860b2609de4d552543c1a4fce5ccbbb28b5709674b0cf0233743167a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/interest-triggered-tooltips.md",
+      "localPath": "guides/ui-behaviors/interest-triggered-tooltips.md",
+      "sha256": "f224a3ea9786f0d305e5e47b27103a61719cd06e01f9a8ea19328e8c9f305758"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/light-dismiss-a-dialog.md",
+      "localPath": "guides/ui-behaviors/light-dismiss-a-dialog.md",
+      "sha256": "7e0a059f72fd761aa2173f13cda52e3e3a6d624e586ebf27b9b0cf5be4ac2e44"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/motion.md",
+      "localPath": "guides/ui-behaviors/motion.md",
+      "sha256": "332a13a46a95bcea8f20385f95c19c0eda49aeeb613c29acdde4f11a9ce76824"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/move-dom-element-without-losing-state.md",
+      "localPath": "guides/ui-behaviors/move-dom-element-without-losing-state.md",
+      "sha256": "98442d73f34e865e9b4faaf86fc3fe8468e4452851641815e761c97ac4bae130"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/parallax-scroll-effects.md",
+      "localPath": "guides/ui-behaviors/parallax-scroll-effects.md",
+      "sha256": "2f464df489cf7289c980c3ade5ff620afb5afecf546e0d8be093ff791067b9a1"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/persistent-top-layer-ui.md",
+      "localPath": "guides/ui-behaviors/persistent-top-layer-ui.md",
+      "sha256": "bb1610227b1098fc30a4ee28adfc1e943a6f2ade9b97ff991aed2ffcef3a27e6"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/physics-based-easing.md",
+      "localPath": "guides/ui-behaviors/physics-based-easing.md",
+      "sha256": "b1bbe494a75fdf31e36af25d7f37b7af01250394e2b317c3f0f8b517ef51f040"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/platform-controls-dismiss-dialog.md",
+      "localPath": "guides/ui-behaviors/platform-controls-dismiss-dialog.md",
+      "sha256": "8dbdbf38a7d6ef02f829a06b708529153e5ce7fc73578db1bab4eb0f2ef3bc51"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/prevent-page-scroll-under-modal-dialog.md",
+      "localPath": "guides/ui-behaviors/prevent-page-scroll-under-modal-dialog.md",
+      "sha256": "33ef136d35c34a4fc1b6ab3e1f64dd523910cb734e3cd0e4790d135b106c5d2c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/same-document-transitions.md",
+      "localPath": "guides/ui-behaviors/same-document-transitions.md",
+      "sha256": "2bc5e0af24ad534d4b3ae336aa2afd229da1eb3951101c19ad6c08ac09a974b5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/scoped-component-transitions.md",
+      "localPath": "guides/ui-behaviors/scoped-component-transitions.md",
+      "sha256": "44352258d7b5e0852f78367045d771d270e733246a7732bb7aa56a29d8924744"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/scroll-completion-effects.md",
+      "localPath": "guides/ui-behaviors/scroll-completion-effects.md",
+      "sha256": "82dbce83a4618efd43bc1be822cc1350fac6f7805b5c9a5bab5995e350fb8d12"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/scroll-entry-exit-effects.md",
+      "localPath": "guides/ui-behaviors/scroll-entry-exit-effects.md",
+      "sha256": "b33f4197dd98525635e6ecb652a405415658db361001aa421743cea311a0cdb4"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/scroll-snap-realtime-feedback.md",
+      "localPath": "guides/ui-behaviors/scroll-snap-realtime-feedback.md",
+      "sha256": "67730e2bec02f6ce27ac7641bce5688f17d48cbde95f1f3aeeb8a737fade598f"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/scroll-snap-state-sync.md",
+      "localPath": "guides/ui-behaviors/scroll-snap-state-sync.md",
+      "sha256": "f24bedcaab8ea76dcc5b074cee58683d404287fd8fbaf2014914f18f878f0288"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/scroll-target-on-load.md",
+      "localPath": "guides/ui-behaviors/scroll-target-on-load.md",
+      "sha256": "bec608e66898110683dceaeedcdf1cecb16d1dce9495fec4842c5ad016d7c4fe"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/scrollytelling.md",
+      "localPath": "guides/ui-behaviors/scrollytelling.md",
+      "sha256": "7f3a25a84f74a1e31f5a3d9fc1fb93d4b80a24b4e822b59614ed9433f114032d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/search-hidden-content.md",
+      "localPath": "guides/ui-behaviors/search-hidden-content.md",
+      "sha256": "d0f1c0d1e354a485c076d210f3164c97d7e4db9dc4e1bbd8ce9ca45d667a8734"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/sortable-table.md",
+      "localPath": "guides/ui-behaviors/sortable-table.md",
+      "sha256": "61f402c7b4b409ae0a2b6eee6a208e3723b09138381c3995e179c9bb1bb3558a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/spatial-navigation.md",
+      "localPath": "guides/ui-behaviors/spatial-navigation.md",
+      "sha256": "edbc7cc716299a9acc810ebfc3fa9607e82aa9ca0d2b832c87890173a612fc67"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/swipe-to-remove.md",
+      "localPath": "guides/ui-behaviors/swipe-to-remove.md",
+      "sha256": "9b258a1f9f1233fc88266b512d7bae7048ccc6eff94422762878b49a166511ad"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-behaviors/swipe-to-reveal.md",
+      "localPath": "guides/ui-behaviors/swipe-to-reveal.md",
+      "sha256": "65d3df7c32c33c3891aaef887b4f72e5eb2cdb19c7ecb47dad17549ac559055e"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/accordion.md",
+      "localPath": "guides/ui-components/accordion.md",
+      "sha256": "3c0bcd860dd992e7ce41877572d061e3b40d846fa2c98b07fecb2624916cde98"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/app-menus.md",
+      "localPath": "guides/ui-components/app-menus.md",
+      "sha256": "1b290233391ed62cd2b15646d5a8a4b383ad9e3878ac544aa74b21b34db773a6"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/breadcrumbs.md",
+      "localPath": "guides/ui-components/breadcrumbs.md",
+      "sha256": "13fda9a780e85f3bfc3e5922f5f6ec4938eaa16bbdda4b8b0c45a6f0ad2347f7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/card.md",
+      "localPath": "guides/ui-components/card.md",
+      "sha256": "18099aaca072463e69ad356a1bc4840002d566d4c13e3fa615e0bb899924d3e5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/carousel.md",
+      "localPath": "guides/ui-components/carousel.md",
+      "sha256": "284773a2f0447de1f59424fc6220d7bf12f1025193fe7b305779fe89af184b42"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/checkbox.md",
+      "localPath": "guides/ui-components/checkbox.md",
+      "sha256": "fd04484f6aef1fd550488d6d6bc9473f09bfc29aa30a37ff10a809b4950c5a76"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/copy-button.md",
+      "localPath": "guides/ui-components/copy-button.md",
+      "sha256": "e50baf93460ba3465cd40cbc9417e6528c8b61b41bd50485020203b34af726e9"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/dark-mode-toggle.md",
+      "localPath": "guides/ui-components/dark-mode-toggle.md",
+      "sha256": "2a99ef825c4a67a75c2b48f8c1e364bdcc59e5ab2ef0345688a8515b44856211"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/dialog.md",
+      "localPath": "guides/ui-components/dialog.md",
+      "sha256": "f9d64f0e0f8788834a9bb1a0f674115b141b44f4f6b76d773d349199a972824b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/hovercard.md",
+      "localPath": "guides/ui-components/hovercard.md",
+      "sha256": "1d30381f5bbcecdc0cf11aa89928cde01d3b581d5409f5420f6503ffce5a9453"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/menu.md",
+      "localPath": "guides/ui-components/menu.md",
+      "sha256": "a76a4b6690205a6fc931688a20d4fec18b4746f267851ee849d5b3a2acb03fae"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/navbar.md",
+      "localPath": "guides/ui-components/navbar.md",
+      "sha256": "c1f2fa87d15d60fa7e727721f7b78a81b5ab4a413dcfed1d45d5b9a79ff7b8b5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/navigation-drawer.md",
+      "localPath": "guides/ui-components/navigation-drawer.md",
+      "sha256": "94597ab44b89e25feb43be3696bca5e420334c25bc236b3f2eed7f39d614dc56"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/persistent-app-tours.md",
+      "localPath": "guides/ui-components/persistent-app-tours.md",
+      "sha256": "bdcd798f6e47d4e7ba527bdd72a01a4977754afbe9ef57409cf80abb4f2ccdb0"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/persistent-toast-notifications.md",
+      "localPath": "guides/ui-components/persistent-toast-notifications.md",
+      "sha256": "312663bd6de058f1c7dee2c471fc11e662c63f9edce147d1e4f8d4080bdb6b0c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/progress-ring.md",
+      "localPath": "guides/ui-components/progress-ring.md",
+      "sha256": "15a2a4a12ffc9d5f77a5d5d2ac373953c17e1bb390dbf69ef26abcdefe0d1ff8"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/progress.md",
+      "localPath": "guides/ui-components/progress.md",
+      "sha256": "50e3067565662bd56f75b36704982c0c122d5759b00878e502334935a995fc54"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/scrollspy.md",
+      "localPath": "guides/ui-components/scrollspy.md",
+      "sha256": "a83db4a958107003caf33d95ffb041e5003855560e7339215526f3120c7f2b19"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/spinner.md",
+      "localPath": "guides/ui-components/spinner.md",
+      "sha256": "f138ff2df179d3f6e89b48cb75a4724ce853ecd2b874101190f635b64d24c0a8"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/stack-drill-down.md",
+      "localPath": "guides/ui-components/stack-drill-down.md",
+      "sha256": "7f85fed871903386daca946372d60f34e413a13a4e1f1bd6c8b3a2337dda26fc"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/tabs.md",
+      "localPath": "guides/ui-components/tabs.md",
+      "sha256": "9621168dd25f18a89e2018d18de4af5ef7658f8074d0b3247415bc28b4470ae8"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/ui-components/toolbar.md",
+      "localPath": "guides/ui-components/toolbar.md",
+      "sha256": "f6af29776c32e2932f08107a5066dab8646121c4b25b21d5429cba766a116a79"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/user-experience/content-first-noise-reduction.md",
+      "localPath": "guides/user-experience/content-first-noise-reduction.md",
+      "sha256": "1ddba28c487c7071d2d013d2c7c9f3b4a17604ba43d5115145e865c625775915"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/user-experience/form-factor-adaptation.md",
+      "localPath": "guides/user-experience/form-factor-adaptation.md",
+      "sha256": "1c9272bca00eb838397061ff4cdfa6fa3833aead68415cb03340d594e8d6ce23"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/user-experience/natural-interactions.md",
+      "localPath": "guides/user-experience/natural-interactions.md",
+      "sha256": "0bcfc962459dee7865ac16ac2056aee7c7a510934bcaf355900fcbb4a2ff5dcd"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/adapt-scrollbar-to-contrast-preferences.md",
+      "localPath": "guides/visual-design/adapt-scrollbar-to-contrast-preferences.md",
+      "sha256": "77ad439049922b3721cee88302395654536c8918f8db5086c211739e4db58446"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/apply-webgl-shaders.md",
+      "localPath": "guides/visual-design/apply-webgl-shaders.md",
+      "sha256": "46c13d09d47b7e17e8c3f3c8d45e92152fc2f7465cf92b628403368821a163d7"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/browser-ui-theming.md",
+      "localPath": "guides/visual-design/browser-ui-theming.md",
+      "sha256": "1276ba601bb6c69f2197bb0d50e645017f6cd5825ac63bd579a528944eebd845"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/color.md",
+      "localPath": "guides/visual-design/color.md",
+      "sha256": "4a6051491fddc3c9b7c2f88affb3a9b15ac4ff815bf8b271aa1b6f4757965b67"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/complex-shapes.md",
+      "localPath": "guides/visual-design/complex-shapes.md",
+      "sha256": "dad784ec45a78656fe6eb3f4be32132f50d6517dd25b087ece2b7b9dcaa6de36"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/contrast-color.md",
+      "localPath": "guides/visual-design/contrast-color.md",
+      "sha256": "85a8d26a47550aa89cd62809dd3e1a84d360adc69fe246d81a10a86f86499927"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/custom-text-decorations.md",
+      "localPath": "guides/visual-design/custom-text-decorations.md",
+      "sha256": "8cbd1811e61cba144b013c7dc6197d2c518378996aab4595904ae7837c47e82c"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/customize-scrollbar-color-and-thickness.md",
+      "localPath": "guides/visual-design/customize-scrollbar-color-and-thickness.md",
+      "sha256": "0da9848aeb53787a1ad062298df38e93ab7d6b1783cf6d5db8a841dfb37a30ab"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/dark-mode.md",
+      "localPath": "guides/visual-design/dark-mode.md",
+      "sha256": "888869fa83f3966365090c1c152febac416a9ca53f3132e05f18206676e97ccd"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/equal-width-text-lines.md",
+      "localPath": "guides/visual-design/equal-width-text-lines.md",
+      "sha256": "fa9f42daf7fb423d51c8e957c41aab2f05805d219788788e313a24601a197539"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/export-html-media-from-canvas.md",
+      "localPath": "guides/visual-design/export-html-media-from-canvas.md",
+      "sha256": "99d619561dd93d230b1466abb5f5978dea8b0b31404e2812347b9f4098a484f5"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/expose-canvas-content-to-browser-features.md",
+      "localPath": "guides/visual-design/expose-canvas-content-to-browser-features.md",
+      "sha256": "3cd9d993befe6a612165d6d1c32211a779f705cbd3190358fa12ce6303d71312"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/improve-text-layout-and-legibility.md",
+      "localPath": "guides/visual-design/improve-text-layout-and-legibility.md",
+      "sha256": "dbcab13d1498b7790694953939db201468034ce67bcb9826f9c9b6536d74a9ae"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/interactive-content-in-3d-scenes.md",
+      "localPath": "guides/visual-design/interactive-content-in-3d-scenes.md",
+      "sha256": "c0bb3ee4c5d443647c6efdb5f68c6e760a791374e983feacabc53494aa5f9bd3"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/precise-text-alignment.md",
+      "localPath": "guides/visual-design/precise-text-alignment.md",
+      "sha256": "c7061a6c41065d52c26b9ad29d1ec4a48edde43e70af2f97a24252840efa56b4"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/shaped-cutouts.md",
+      "localPath": "guides/visual-design/shaped-cutouts.md",
+      "sha256": "6de1c4d19bb48b2eb9b14c7708cdf69ab51e33203b41fef7bae90c1b0ee7a569"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/soft-edge-content-fade.md",
+      "localPath": "guides/visual-design/soft-edge-content-fade.md",
+      "sha256": "f9a4607b1e34c271afe47085bea7d0d6fdc00a85fa7b93bb123cd4a99286b17b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/typography.md",
+      "localPath": "guides/visual-design/typography.md",
+      "sha256": "f72047c1af0828ba0def676c58900bdc8ba3f9f3205507852172af00eadfc828"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/visual-effects.md",
+      "localPath": "guides/visual-design/visual-effects.md",
+      "sha256": "e420f2111083e5fae6ce7a5933953314bf275de09dcdfe7cb00a4d2b6b95eb09"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/visually-stable-font-fallbacks.md",
+      "localPath": "guides/visual-design/visually-stable-font-fallbacks.md",
+      "sha256": "5abff774ec3f29204e47fa64c29923a7ecaf33968ed8df4d644ccccf85f0369e"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/visually-stable-mixed-fonts.md",
+      "localPath": "guides/visual-design/visually-stable-mixed-fonts.md",
+      "sha256": "be0e8769f8da79e5ba7758354fbd5ddbda4996fe9240bb25808fbfab1bb36f1e"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/visual-design/visually-texture-content.md",
+      "localPath": "guides/visual-design/visually-texture-content.md",
+      "sha256": "a7607a7d1144fd2883898219e96a13e6276305fecac26a66df9e9f7eb134a39b"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/wasm/cpp-on-the-web.md",
+      "localPath": "guides/wasm/cpp-on-the-web.md",
+      "sha256": "9ba5e21faea9a9eb80b7620ea2779ed3ff313976bd0ad31659506b6989f5c97a"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/webmcp/agentic-forms.md",
+      "localPath": "guides/webmcp/agentic-forms.md",
+      "sha256": "85e2320343299cd20ed511be1b9dc9fa4d44b9fcf822e3351f2ef24f62d49b05"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/webmcp/agentic-javascript-tools.md",
+      "localPath": "guides/webmcp/agentic-javascript-tools.md",
+      "sha256": "cb5500844c63ee8cf869c33493d3965515a6236df6482daf449abfa74cdcb22d"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "skills/modern-web-guidance/guides/webmcp/webmcp.md",
+      "localPath": "guides/webmcp/webmcp.md",
+      "sha256": "ed20a7cb5bb400b186e234ec0f4ffa0d923ded078447777ff42499cce902afa9"
+    },
+    {
+      "source": "modern-web-guidance",
+      "upstreamPath": "LICENSE",
+      "localPath": "LICENSE.upstream",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  ],
+  "modifications": [
+    {
+      "localPath": "ADAPTATION.md",
+      "description": "SwarmAI's search/retrieve script over the pinned guides and the INSTRUCTIONS.md section that tells the agent when to use them."
+    }
+  ]
+}

@@ -86,13 +86,13 @@
       "app_id": "frontend-design",
       "binding_map_digest": "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81",
       "dependencies": [],
-      "description": "Build production-grade interfaces using SwarmAI design intelligence and pinned Anthropic design guidance.",
+      "description": "Build production-grade interfaces using SwarmAI design intelligence, pinned Anthropic design guidance and pinned Modern Web Guidance.",
       "display_name": "Frontend Design",
       "evidence_state": "catalog-only",
       "execution_release_digest": null,
       "instance_mode": "singleton",
       "lifecycle_controls": [],
-      "package_release_digest": "ee4edd3dac37d59b4022b69e5a620f03a688af39341e5009d911d77bb97b7502",
+      "package_release_digest": "2c67797c1188a05ee5cb1fa40a75f7a6c57d4de2d71fd00a34654e2f4ee8f53c",
       "profile_accounting": [
         {
           "blocked_resources": [],

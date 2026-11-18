@@ -3,7 +3,7 @@
   "id": "frontend-design",
   "version": "2.1.0",
   "displayName": "Frontend Design",
-  "description": "Build production-grade interfaces using SwarmAI design intelligence and pinned Anthropic design guidance.",
+  "description": "Build production-grade interfaces using SwarmAI design intelligence, pinned Anthropic design guidance and pinned Modern Web Guidance.",
   "instanceMode": "singleton",
   "brainInterface": null,
   "resources": [
