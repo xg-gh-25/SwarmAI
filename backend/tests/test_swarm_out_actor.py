@@ -255,6 +255,8 @@ def test_the_land_route_lets_an_agent_land_reviewed_protected_paths_but_never_gi
     from core import hive_return
     landed: list = []
     monkeypatch.setattr(hive_return, "land", lambda *a: landed.append(a) or {"landed": True})
+    from core import swarm_out_results
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"result": {"checks": []}})
     _rows(monkeypatch, _offer("accept", "discard", accept="land"))
     body = {**AGENT, "key": "k", "tip": "t", "summary": "s"}
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
@@ -387,3 +389,33 @@ def test_an_agents_correction_is_sent_as_the_hosts_and_the_persons_is_not(client
     assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={**AGENT, "text": "x"}).status_code == 200
     assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={"by": "person", "text": "x"}).status_code == 200
     assert origins == ["host", None]
+
+
+def test_an_agent_does_not_land_over_an_errored_check(client, monkeypatch):
+    c, _ = client
+    from core import hive_return, swarm_out_results
+    landed: list = []
+    monkeypatch.setattr(hive_return, "land", lambda *a: landed.append(a) or {"landed": True})
+    _rows(monkeypatch, _offer("accept", "discard", accept="land"))
+    checks = {"result": {"checks": [{"id": "test", "status": "errored"}, {"id": "lint", "status": "ran"}]}}
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: checks)
+    body = {**AGENT, "key": "k", "tip": "t", "summary": "s"}
+    r = c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body)
+    assert r.status_code == 403 and "test" in r.json()["detail"] and "errored" in r.json()["detail"]
+    assert landed == []                                              # nothing landed
+    # the person lands it all the same
+    assert c.post(f"/api/swarm-out/runs/{DID}/return/land",
+                  json={"by": "person", "key": "k", "tip": "t"}).status_code == 200
+    # checks that ran, or that the Host did not see run, do not refuse the agent
+    for status in ("ran", "not_seen", "unknown"):
+        checks["result"]["checks"] = [{"id": "test", "status": status}]
+        assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
+    # a result this host cannot read, or none at all, refuses the agent (not the person)
+    def broken(d):
+        raise OSError("gone")
+    for load in (broken, lambda d: None, lambda d: {"result": None}):
+        monkeypatch.setattr(swarm_out_results, "load", load)
+        r = c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body)
+        assert r.status_code == 403 and "cannot be read" in r.json()["detail"]
+    assert c.post(f"/api/swarm-out/runs/{DID}/return/land",
+                  json={"by": "person", "key": "k", "tip": "t"}).status_code == 200

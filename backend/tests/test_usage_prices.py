@@ -58,3 +58,61 @@ def test_the_writer_prices_a_direct_call_with_no_cost(monkeypatch):
     w._price(batch)
     assert (round(batch[0]["cost_usd"], 6), batch[0]["cost_source"]) == (0.0045, "priced")
     assert (batch[1]["cost_usd"], batch[1]["cost_source"]) == (None, "none")
+
+
+def _ledger(rows_by_model):
+    """A usage ledger with the CLI's priced rows of each model id."""
+    import sqlite3
+    import time
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE usage_ledger (id INTEGER PRIMARY KEY, model TEXT, input INT, output INT, "
+                 "cache_read INT, cache_write INT, cost_usd REAL, cost_source TEXT, imported INT, kind TEXT, "
+                 "at_utc TEXT)")
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    for model, rows in rows_by_model.items():
+        for i, o, cr, cw, c in rows:
+            conn.execute("INSERT INTO usage_ledger (model, input, output, cache_read, cache_write, cost_usd, "
+                         "cost_source, imported, kind, at_utc) VALUES (?,?,?,?,?,?,'cli',0,'spend',?)",
+                         (model, i, o, cr, cw, c, now))
+    return conn
+
+
+def test_a_short_model_id_is_priced_at_its_short_name_fit():
+    # the CLI prices the full id; a pipeline run's transcript records the short one
+    prices = up.learn(_ledger({"us.anthropic.claude-opus-5-5[1m]": _rows()}))
+    row = {"input": 1_000_000}
+    assert up.price(prices, "claude-opus-5-5", row) == __import__("pytest").approx(3.0)
+    assert up.price(prices, "eu.anthropic.claude-opus-5-5[1m]", row) == __import__("pytest").approx(3.0)
+    # a full id of the standard tier is not priced at a fit only the [1m] tier taught
+    assert up.price(prices, "us.anthropic.claude-opus-5-5", row) is None
+    # a model id with its own fit uses it, never the short name's
+    own = {**prices, "claude-opus-5-5": {"input": 9e-6}}
+    assert up.price(own, "claude-opus-5-5", row) == __import__("pytest").approx(9.0)
+    # neither its own fit, a short-name fit nor a fallback price: unpriced
+    assert up.price(prices, "claude-unknown-9", row) is None
+    assert up.price(prices, None, row) is None
+
+
+def test_a_short_name_fit_obeys_the_fit_rule():
+    # two ids of one short name, each with its own fit, priced the same: one short fit
+    same = up.learn(_ledger({"us.anthropic.claude-opus-5-5[1m]": _rows(seed=2),
+                             "us.anthropic.claude-opus-5-5": _rows(seed=3)}))
+    assert all(up.short_key("claude-opus-5-5", t) in same for t in ("", "[1m]", "std"))
+    # an id of the short name without enough rows for a fit of its own: no short fit
+    thin = up.learn(_ledger({"us.anthropic.claude-opus-5-5[1m]": _rows(seed=2),
+                             "us.anthropic.claude-opus-5-5": _rows(n=4, seed=3)}))
+    assert up.short_key("claude-opus-5-5") not in thin
+    # priced differently (a context-window tier at twice the price): no short fit
+    double = [(i, o, cr, cw, c * 2) for i, o, cr, cw, c in _rows(seed=5)]
+    split = up.learn(_ledger({"us.anthropic.claude-opus-5-5[1m]": double,
+                              "us.anthropic.claude-opus-5-5": _rows(seed=6)}))
+    assert up.short_key("claude-opus-5-5") not in split
+    assert up.price(split, "claude-opus-5-5", {"input": 1000}) is None
+    # each id keeps its own fit
+    assert "us.anthropic.claude-opus-5-5[1m]" in split and "us.anthropic.claude-opus-5-5" in split
+    # only the standard tier priced: a [1m] id with no fit of its own is not priced at it,
+    # a tierless id is
+    std = up.learn(_ledger({"us.anthropic.claude-opus-5-5": _rows(seed=7)}))
+    assert up.price(std, "eu.anthropic.claude-opus-5-5[1m]", {"input": 1000}) is None
+    assert up.price(std, "claude-opus-5-5", {"input": 1_000_000}) == __import__("pytest").approx(3.0)
+    assert up.price(std, "eu.anthropic.claude-opus-5-5", {"input": 1_000_000}) == __import__("pytest").approx(3.0)

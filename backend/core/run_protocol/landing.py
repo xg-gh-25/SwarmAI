@@ -16,6 +16,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -310,14 +311,38 @@ def check_message(message: str) -> str:
     return text
 
 
-def with_trailer(message: str, trailer: str) -> str:
-    """*message* with the repo's landing *trailer* line added once if missing (none when
-    *trailer* is empty). The trailer comes from the repo's ``.swarmai/pipeline.toml``
-    (``repo_pipeline_config``), frozen in the landing plan."""
+def with_trailer(message: str, trailer: str, extra: Sequence[str] = ()) -> str:
+    """*message* with the repo's landing *trailer* line and the *extra* trailer lines
+    (``Agent-Run: <run_id>``, ``Hive-Dispatch: <id>``: which agent run made the commit)
+    added once each if missing, as one trailer paragraph (none when all are empty). The
+    trailer comes from the repo's ``.swarmai/pipeline.toml`` (``repo_pipeline_config``),
+    frozen in the landing plan."""
     text = check_message(message)
-    if not trailer or trailer in text.splitlines():
+    if not extra:
+        # unchanged since before *extra*: a landing plan froze this message's hash
+        if not trailer or trailer in text.splitlines():
+            return text + "\n"
+        return f"{text}\n\n{trailer}\n"
+    present = set(text.splitlines())
+    lines = [t for t in (trailer, *extra) if t and t not in present]
+    if not lines:
         return text + "\n"
-    return f"{text}\n\n{trailer}\n"
+    last = text.rsplit("\n\n", 1)[-1]
+    if "\n\n" in text and all(_TRAILER_LINE.match(line) for line in last.splitlines()):
+        # the message already ends in a trailer paragraph: git reads trailers only from
+        # the last paragraph, so the new lines join it rather than start another
+        return text + "\n" + "\n".join(lines) + "\n"
+    return text + "\n\n" + "\n".join(lines) + "\n"
+
+
+#: a git trailer line (``Key: value``), as ``git interpret-trailers`` reads one
+_TRAILER_LINE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*: \S")
+
+
+def run_trailer(run_id: str) -> str:
+    """The trailer line naming the pipeline run that landed a commit, so a reader of the
+    history tells an agent run's commit from a person's."""
+    return f"Agent-Run: {run_id}"
 
 
 def _swarm_ident() -> str:
@@ -357,20 +382,28 @@ def _ident_env(author: str) -> dict:
 
 
 def _row_settings(row: Mapping[str, Any]) -> dict:
-    """A plan row's frozen {"author", "trailer"}. Every plan row carries both (written at
-    its first landing attempt); a row without them is from a pipeline this one does not
-    read (no old-run compatibility, design usable-by-anyone r16) → LandingError."""
+    """A plan row's frozen {"author", "trailer"}, and its ``run_trailer`` when it has one.
+    Every plan row carries author and trailer (written at its first landing attempt); a
+    row without them is from a pipeline this one does not read (no old-run
+    compatibility, design usable-by-anyone r16) → LandingError. ``run_trailer`` (the
+    ``Agent-Run`` line) is on every row written since it existed; a row written before
+    lands with the message it froze, without it."""
     author = row.get("author") if isinstance(row, Mapping) else None
     trailer = row.get("trailer") if isinstance(row, Mapping) else None
     if not isinstance(author, str) or not author or not isinstance(trailer, str):
         raise LandingError("landing plan row has no author / trailer; this run's landing "
                            "state is not from this pipeline version")
-    return {"author": author, "trailer": trailer}
+    out = {"author": author, "trailer": trailer}
+    if isinstance(row.get("run_trailer"), str) and row["run_trailer"]:
+        out["run_trailer"] = row["run_trailer"]
+    return out
 
 
 def _row_message(message: str, row: Mapping[str, Any]) -> str:
     """The exact commit message of one plan row."""
-    return with_trailer(message, _row_settings(row)["trailer"])
+    settings = _row_settings(row)
+    return with_trailer(message, settings["trailer"],
+                        (settings["run_trailer"],) if settings.get("run_trailer") else ())
 
 
 def _row_author(row: Mapping[str, Any]) -> str:
@@ -571,14 +604,15 @@ def commit_repos(
         if isinstance(prior, Mapping):
             settings = _row_settings(prior)
         else:
-            settings = landing_settings(integration_roots[name], bases[name])
-        plan[name] = {"base": bases[name],
-                      "delivery_tree": bindings[name]["delivery_tree"],
-                      "message_sha": hashlib.sha256(
-                          with_trailer(message, settings["trailer"]).encode()).hexdigest(),
-                      "branch": _branch(integration_roots[name], (branches or {}).get(name)),
-                      **settings}
-    msgs = {name: with_trailer(message, plan[name]["trailer"]) for name in plan}
+            settings = {**landing_settings(integration_roots[name], bases[name]),
+                        "run_trailer": run_trailer(run_id)}
+        row = {"base": bases[name],
+               "delivery_tree": bindings[name]["delivery_tree"],
+               "branch": _branch(integration_roots[name], (branches or {}).get(name)),
+               **settings}
+        row["message_sha"] = hashlib.sha256(_row_message(message, row).encode()).hexdigest()
+        plan[name] = row
+    msgs = {name: _row_message(message, plan[name]) for name in plan}
     if path.exists():
         try:
             progress = json.loads(path.read_text(encoding="utf-8"))

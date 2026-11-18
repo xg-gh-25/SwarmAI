@@ -17,9 +17,22 @@ before the CLI ever used them.
 
 - ``fit(rows)`` — {kind: USD per token} for one model's (input, output, cache_read,
   cache_write, cost) rows, or None
-- ``learn(conn)`` — the fits of every model from a usage ledger connection
-- ``price(prices, model, row)`` — a row's cost, or None
+- ``learn(conn)`` — the fits of every model from a usage ledger connection, and a short
+  name's fit (``short_key``) where its model ids agree
+- ``price(prices, model, row)`` — a row's cost, or None: the model id's own fit, else its
+  short name's, else ``FALLBACK``
 - ``current()`` — the fits, refreshed from the ledger at most once an hour
+
+A call can record its model as a full Bedrock id (``us.anthropic.claude-opus-5-5[1m]``,
+what the CLI writes) or as a short one (``claude-opus-5-5``, what a transcript writes).
+A short name's fit exists only when every model id of that short name the CLI priced in
+the window has its own accepted fit and those fits agree (each kind within
+``MAX_ERROR``). A full id names its context-window tier: ``[1m]``, or the standard one when
+it has no ``[1m]`` (``us.anthropic.claude-opus-5-5``); with no fit of its own it is priced
+only at a short fit an id of the same tier taught (another region's id, say). Only a bare
+short id (a transcript's ``claude-opus-5-5``, whose tier is not known) is priced at the
+fit every priced id agrees on. Ids that disagree, one without enough rows of its own, or
+a tier no priced id has give no price, and the call stays unpriced rather than mispriced.
 """
 from __future__ import annotations
 
@@ -104,13 +117,54 @@ def learn(conn: sqlite3.Connection) -> dict[str, dict[str, float]]:
         f = fit(rows)
         if f:
             out[m] = f
+    by_short: dict[str, list[str]] = {}
+    for m in sorted(models):
+        if normalize_short_name(m):
+            by_short.setdefault(normalize_short_name(m), []).append(m)
+    for short, ids in by_short.items():
+        fits = [out.get(m) for m in ids]
+        if not all(fits) or not _agree(fits):
+            continue                       # an id without its own fit, or ids that disagree
+        out[short_key(short)] = fits[0]
+        for tier in {_tier(m) for m in ids if _tier(m)}:
+            out[short_key(short, tier)] = fits[0]
     return out
 
 
+def _tier(model: str) -> str:
+    """The context-window tier a model id names: ``[1m]``; ``std`` for a full id without
+    it; "" for a bare short id (a transcript's), whose tier is not known."""
+    if model.endswith("[1m]"):
+        return "[1m]"
+    return "std" if model != normalize_short_name(model) else ""
+
+
+def _agree(fits: Sequence[Mapping[str, float]]) -> bool:
+    """The fits price the same kinds, each within ``MAX_ERROR`` of the others."""
+    kinds = set(fits[0])
+    if any(set(f) != kinds for f in fits):
+        return False
+    for k in kinds:
+        values = [f[k] for f in fits]
+        hi, lo = max(values), min(values)
+        if hi > 0 and (hi - lo) / hi > MAX_ERROR:
+            return False
+    return True
+
+
+def short_key(short_name: str, tier: str = "") -> str:
+    """The key of a short name's fit in ``learn``'s result (with a tier: the fit for ids
+    of that tier; without: for a bare short id): no Bedrock or short model id starts with
+    ``~``, so it never shadows a model id's own fit."""
+    return "~" + short_name + ("@" + tier if tier else "")
+
+
 def price(prices: Mapping[str, Mapping[str, float]], model: Optional[str], row: Mapping[str, Any]) -> Optional[float]:
-    """A row's cost at ``model``'s prices (learned, else ``FALLBACK``); None when the model
-    has none, or the row used a kind it has no price for."""
+    """A row's cost at ``model``'s prices (its own fit, else its short name's fit, else
+    ``FALLBACK``); None when the model has none, or the row used a kind it has no price for."""
     p = prices.get(model or "") if model else None
+    if p is None and model and normalize_short_name(model):
+        p = prices.get(short_key(normalize_short_name(model), _tier(model)))
     if p is None and model:
         # the fallback price is per model, whatever the id's geography ("us.", "eu.",
         # "apac.": the id follows the main region, docs/design/2026-11-01-bedrock-id-follows-region.md)

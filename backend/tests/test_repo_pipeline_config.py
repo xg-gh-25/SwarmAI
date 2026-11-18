@@ -113,7 +113,8 @@ def test_a_declared_repo_lands_as_swarm_with_its_trailer(tmp_path):
                            'trailer = "Co-Authored-By: Swarm <swarm@swarmai.dev>"\n')
     out = _land_one(tmp_path, repo)
     assert out.startswith("Swarm <swarm@swarmai.dev>|Swarm <swarm@swarmai.dev>|feat: x")
-    assert out.rstrip().endswith("Co-Authored-By: Swarm <swarm@swarmai.dev>")
+    # the repository's trailer and the run's own line, in one trailer paragraph
+    assert out.rstrip().endswith("\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>\nAgent-Run: run_cfg")
 
 
 def test_the_swarmai_repo_declares_its_own_conventions():

@@ -110,3 +110,75 @@ def test_the_card_counts_a_persons_messages_from_the_chat_store(tmp_path, monkey
     facts = _card_facts({**RAW, "human_decisions": 0}, "completed")
     assert facts["human_decisions"] == 1
     assert facts["interventions"] == {"answers": 0, "corrections": 1, "rescues": 0, "total": 1}
+
+
+def _ledger(path, rows, *, table=True):
+    """The provenance ledger (core/session_inputs) of the test store: (session, ref, kind)."""
+    conn = sqlite3.connect(path)
+    if table:
+        conn.execute("CREATE TABLE session_inputs (event_id TEXT, session_id TEXT, kind TEXT, ref TEXT, "
+                     "created_at TEXT)")
+        for i, (sid, ref, kind) in enumerate(rows):
+            conn.execute("INSERT INTO session_inputs VALUES (?,?,?,?,?)", (f"input:{i}", sid, kind, ref, "t"))
+    conn.commit()
+    conn.close()
+
+
+def test_system_origin_messages_are_not_corrections(tmp_path):
+    # a Swarm Run wake (system origin) and a Host agent's correction both reach the
+    # session as user rows; the ledger records them as system_prompt. The person's own
+    # "继续" nudge is a correction: the run needed the person to go on.
+    db = _db(tmp_path, [
+        ("s-a", "user", "[Swarm Run 自动继续] Children of your Swarm Run changed", _min(T0, 10)),
+        ("s-a", "user", "继续", _min(T0, 20)),
+        ("s-b", "user", "a Host agent's correction", _min(T1, 15)),
+        ("s-b", "user", "use the other table", _min(T1, 20)),
+    ])
+    _ledger(db, [("s-a", "0", "system_prompt"), ("s-a", "1", "user_message"),
+                 ("s-b", "2", "system_prompt"), ("s-b", "3", "user_message")])
+    got = RI.corrections(RAW, db_path=db)
+    assert [c["text"] for c in got] == ["继续", "use the other table"]
+    # the mark is per row and per session: the same id in another session does not count
+    _ledger_extra = sqlite3.connect(db)
+    _ledger_extra.execute("INSERT INTO session_inputs VALUES ('input:x','s-b','system_prompt','1','t')")
+    _ledger_extra.commit()
+    _ledger_extra.close()
+    assert RI.messages(RAW, db_path=db) == 2
+
+
+def test_messages_without_provenance_use_the_text_rule_and_unreadable_is_unknown(tmp_path, monkeypatch):
+    db = _db(tmp_path, [
+        ("s-a", "user", "use the other table", _min(T0, 20)),
+        ("s-b", "user", RI.CONTINUE_PREFIX + "run_x (project P): run ...", _min(T1, 40)),
+        ("s-b", "user", "where are you?", _min(T1, 45)),
+    ])
+    # a ledger with no row for these messages (written before it existed): the text rule
+    _ledger(db, [("s-b", "other", "system_prompt")])
+    assert RI.messages(RAW, db_path=db) == 2
+    # a ledger that cannot be read is "unknown", never a smaller count
+    real = RI._system_rows
+
+    def broken(conn, sid):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(RI, "_system_rows", broken)
+    assert RI.corrections(RAW, db_path=db) is None
+    assert RI.for_run(RAW, db_path=db)["total"] is None
+    monkeypatch.setattr(RI, "_system_rows", real)
+    # a store without the ledger at all reads every row by its text
+    (tmp_path / "plain").mkdir()
+    plain = _db(tmp_path / "plain", [("s-a", "user", "use the other table", _min(T0, 20))])
+    assert RI.messages(RAW, db_path=plain) == 1
+
+
+def test_the_orphan_autonomous_rate_script_is_gone():
+    # the script read a run.json field no code writes and reported every run as
+    # autonomous; the autonomy figure is the Pipelines view's (unattended / known)
+    from pathlib import Path
+    import subprocess
+    backend = Path(RI.__file__).resolve().parents[1]
+    root = backend.parent
+    assert not (backend / "scripts" / "autonomous_rate.py").exists()
+    out = subprocess.run(["git", "grep", "-l", "autonomous_rate", "--", ".", ":!.aidlc/deliverables",
+                          ":!backend/tests/test_run_interventions.py"],
+                         cwd=root, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 1 and out.stdout == "", out.stdout

@@ -120,3 +120,28 @@ def test_landing_message_always_carries_the_project_trailer():
     assert once.count(TRAILER) == 1 and with_trailer(once, TRAILER) == once
     with pytest.raises(LandingError):
         with_trailer("  ", TRAILER)
+
+
+def test_the_landed_commit_names_its_run(tmp_path):
+    from core.run_protocol.landing import _row_message, run_trailer, with_trailer
+    TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
+    # a new plan row: the repository's trailer and Agent-Run in one trailer paragraph,
+    # whether or not the message already ends in one
+    row = {"author": "A <a@x>", "trailer": TRAILER, "run_trailer": run_trailer("run_one")}
+    assert _row_message("feat: x", row) == f"feat: x\n\n{TRAILER}\nAgent-Run: run_one\n"
+    assert _row_message(f"feat: x\n\n{TRAILER}", row) == f"feat: x\n\n{TRAILER}\nAgent-Run: run_one\n"
+    assert _row_message("feat: x\n\nprose, not a trailer", row) \
+        == f"feat: x\n\nprose, not a trailer\n\n{TRAILER}\nAgent-Run: run_one\n"
+    # a plan row frozen before the run trailer existed lands with the message it froze
+    old = {"author": "A <a@x>", "trailer": TRAILER}
+    assert _row_message("feat: x", old) == with_trailer("feat: x", TRAILER) == f"feat: x\n\n{TRAILER}\n"
+    # the real landing: the commit on main names its run
+    main, worktree, _base, store, context = _rig(tmp_path)
+    prepare_request(store, run_id="run_one", session_id="session_1", action="land",
+                    repos={"repo": str(worktree)}, context=context, at=AT, request_id="q1",
+                    integration_roots={"repo": str(main)}, render_report=lambda *_: b"# Report\n")
+    approve_from_event(store, "q1", now=0, at=AT)
+    execute_request(store, "q1", session_id="session_1", repos={"repo": str(worktree)},
+                    integration_roots={"repo": str(main)}, message="feat: land", at=AT, now=1)
+    trailers = _git(main, "log", "-1", "--format=%(trailers:only,unfold)").splitlines()
+    assert "Agent-Run: run_one" in trailers

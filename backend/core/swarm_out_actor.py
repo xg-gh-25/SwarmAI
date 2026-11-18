@@ -22,6 +22,8 @@ agent the routes refuse what is the person's to decide:
 - re-sending with a correction more than ``MAX_AGENT_RERUNS`` times (``reserve_rerun``
   counts it under the run's lock before it is sent): after that the agent takes the
   task over or discards it;
+- landing a run's commits when a check the Brain declared for it errored on its last
+  run (``land_blocker``): it re-runs the task with the failure to fix or takes it over;
 - discarding while something would be lost: commits not landed that are not on this
   host either (``return-prepare`` takes them into ``refs/hive/...``: once every returned
   tip is there, discarding loses nothing), a file not placed in the Brain, lessons not
@@ -47,7 +49,7 @@ the agent and the daemon share an OS user.
 
 Public: ``Actor``, ``actor``, ``MAX_AGENT_RERUNS``, ``check``, ``row_blocker``,
 ``record``, ``record_wait_answer``, ``reserve_rerun``, ``release_rerun``, ``agent_reruns``,
-``discard_blocker``.
+``discard_blocker``, ``land_blocker``.
 """
 from __future__ import annotations
 
@@ -286,6 +288,36 @@ def _lessons_due() -> str:
     return (f" (its Hive sends them when it reviews the session, about {quiet} minutes after "
             f"the session's last turn and at most {most} hours later; `watch` reports when "
             "they arrive, then discard again)")
+
+
+def land_blocker(dispatch_id: str) -> Optional[str]:
+    """Why an agent may not land this run's commits now, else None: a check the Brain
+    declared for the run whose latest run on the result errored (core/swarm_out_results
+    ``checks``: the Hive's own exit code). A change whose own check last failed is not
+    landed by an agent: it re-runs the task with the failure to fix, takes it over, or
+    the person lands it. ``not_seen`` and ``unknown`` do not refuse: the Host found no
+    call that runs the check, which is not "it did not run" (a check run through a script
+    is not seen). A result this host cannot read refuses: the agent does not land what
+    it cannot see the checks of; it waits for the next refresh, or the person lands it."""
+    from core import swarm_out_results
+    unknown = ("the run's check results cannot be read on this host now: an agent does not land "
+               "without them; try again after the next refresh, or leave it for the person to land")
+    try:
+        kept = swarm_out_results.load(dispatch_id)
+    except Exception as exc:  # noqa: BLE001 -- not knowing the checks is not "no check failed"
+        logging.getLogger(__name__).warning("swarm_out_actor: result of %s unreadable: %s", dispatch_id, exc)
+        return unknown
+    res = kept.get("result") if isinstance(kept, dict) else None
+    if not isinstance(res, dict):
+        return unknown
+    checks = res.get("checks")
+    failed = [str(c.get("id")) for c in checks or [] if isinstance(c, dict)
+              and swarm_out_results.check_status(c.get("status")) == "errored"]
+    if not failed:
+        return None
+    return ("the run's own check errored on its last run (" + ", ".join(failed[:5])
+            + "): an agent does not land a change whose check failed; re-run it with the failure "
+            "to fix (`swarm_out rerun`), take it over, or leave it for the person to land")
 
 
 def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:

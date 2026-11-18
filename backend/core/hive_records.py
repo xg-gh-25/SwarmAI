@@ -360,10 +360,17 @@ def _tool_use(b: dict) -> dict:
 MAX_LATER_ANSWERS = 50            # the newest answered questions a turn entry repeats
 
 
+#: a permission prompt's decision as the stored block carries it (core/permission_prompt)
+_PERMISSION_DECISIONS = ("approve", "deny")
+
+
 def later_answers(rows: list[dict]) -> list[dict]:
-    """``{toolUseId, answers, answered_by}`` of the answered ``ask_user_question`` blocks
-    in *rows* (rows already sealed: their entry may hold the question without its
-    answer), the newest ``MAX_LATER_ANSWERS``."""
+    """What was decided on the waits in *rows* (rows already sealed: their entry may hold
+    the wait without its answer, decided after the turn ended), the newest
+    ``MAX_LATER_ANSWERS``: ``{toolUseId, answers, answered_by}`` of each answered
+    ``ask_user_question`` block and ``{requestId, decision, decided_by}`` of each decided
+    ``cmd_permission_request`` block (``decided_by`` ``host`` when the dispatching agent
+    decided it, else ``person``)."""
     out: list[dict] = []
     for r in rows:
         for b in r.get("content") if isinstance(r, dict) and isinstance(r.get("content"), list) else []:
@@ -371,6 +378,10 @@ def later_answers(rows: list[dict]) -> list[dict]:
                     and isinstance(b.get("toolUseId"), str) and isinstance(b.get("answers"), dict) and b["answers"]:
                 out.append({"toolUseId": _cap(b["toolUseId"], FIELD_MAX), "answers": _cap(b["answers"], FIELD_MAX),
                             "answered_by": b.get("answered_by") if b.get("answered_by") in ("person", "host") else None})
+            elif isinstance(b, dict) and b.get("type") == "cmd_permission_request" \
+                    and isinstance(b.get("requestId"), str) and b.get("decision") in _PERMISSION_DECISIONS:
+                out.append({"requestId": _cap(b["requestId"], FIELD_MAX), "decision": b["decision"],
+                            "decided_by": "host" if b.get("decided_by") == "host" else "person"})
     return out[-MAX_LATER_ANSWERS:]
 
 
@@ -700,6 +711,7 @@ def turn_rows(dispatch_id: str) -> tuple[list[dict], bool, bool]:
     turns = [e for e in local_entries(dispatch_id) if e.get("kind") == "turn"]
     chunks: list[list[dict]] = []
     answers: dict[str, dict] = {}
+    decisions: dict[str, dict] = {}
     used = 0
     partial = False
     for e in reversed(turns):
@@ -714,10 +726,15 @@ def turn_rows(dispatch_id: str) -> tuple[list[dict], bool, bool]:
             for a in body.get("answers") if isinstance(body.get("answers"), list) else []:
                 if isinstance(a, dict) and isinstance(a.get("toolUseId"), str) and isinstance(a.get("answers"), dict):
                     answers.setdefault(a["toolUseId"], a)
+                elif isinstance(a, dict) and isinstance(a.get("requestId"), str) \
+                        and a.get("decision") in _PERMISSION_DECISIONS:
+                    decisions.setdefault(a["requestId"], a)
     first = _read_local(dispatch_id, turns[0]) if turns else None
     complete = isinstance(first, dict) and first.get("first_turn") is True
     rows = [r for c in reversed(chunks) for r in c]
-    # a question answered after its turn was sealed: its answer came with a later entry
+    # a question answered, or a permission decided, after its turn was sealed: what was
+    # decided came with a later entry (the Hive's word: only a decision of the known
+    # values, onto a block of the same id that has none)
     for r in rows:
         for b in r.get("content") if isinstance(r.get("content"), list) else []:
             if isinstance(b, dict) and b.get("type") == "ask_user_question" and not b.get("answers") \
@@ -726,6 +743,12 @@ def turn_rows(dispatch_id: str) -> tuple[list[dict], bool, bool]:
                 b["answers"] = got["answers"]
                 if got.get("answered_by") in ("person", "host"):
                     b["answered_by"] = got["answered_by"]
+            elif isinstance(b, dict) and b.get("type") == "cmd_permission_request" \
+                    and b.get("decision") not in _PERMISSION_DECISIONS and b.get("requestId") in decisions:
+                got = decisions[b["requestId"]]
+                b["decision"] = got["decision"]
+                if got.get("decided_by") == "host":
+                    b["decided_by"] = "host"
     return rows, complete, partial
 
 

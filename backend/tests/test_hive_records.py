@@ -1184,3 +1184,37 @@ def test_a_re_sent_turn_cut_off_before_its_first_record_is_read_from_the_session
     rec = asyncio.run(sor.fetch(ROW))
     assert (rec["result"]["report"], rec["result"]["ended"]) == ("second", "completed")
     assert not any(c.startswith("/api/chat/sessions/") for c in host.calls)
+
+
+def _asked_permission():
+    """A turn that stops on a permission prompt (decided after the turn ended)."""
+    return [
+        {"id": "up", "role": "user", "created_at": "2026-10-29T01:00:00Z", "content": [{"type": "text", "text": "go"}]},
+        {"id": "ap", "role": "assistant", "created_at": "2026-10-29T01:00:01Z", "content": [
+            {"type": "cmd_permission_request", "requestId": "perm_1", "toolName": "Bash",
+             "toolInput": {"command": "rm -rf build"}, "reason": "rm", "options": ["approve", "deny"]},
+            {"type": "turn_outcome", "ended": "paused", "at": "2026-10-29T01:00:01+00:00"}]},
+    ]
+
+
+def test_a_permission_decided_after_its_turn_is_counted_as_decided(host, hive_ws):
+    from core import hive_records as hr
+    from core import swarm_out_results as sor
+    asked = _asked_permission()
+    hr.seal_turn(hive_ws, SID, asked)                         # the turn stops on the prompt
+    decided = json.loads(json.dumps(asked))
+    decided[1]["content"][0]["decision"] = "approve"           # record_decision wrote it later
+    decided[1]["content"][0]["decided_by"] = "host"
+    hr.seal_turn(hive_ws, SID, decided + _turn_rows("ran it", i="b"))
+    second = json.loads((hr.session_dir(hive_ws, SID) / hr.entries(hive_ws, SID)["entries"][1]["file"]).read_text())
+    assert second["answers"] == [{"requestId": "perm_1", "decision": "approve", "decided_by": "host"}]
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    rows, _complete, _partial = hr.turn_rows(DID)
+    (block,) = [b for r in rows for b in r["content"] if b.get("type") == "cmd_permission_request"]
+    assert block["decision"] == "approve" and block["decided_by"] == "host"
+    human = sor.summarize(rows, False, None)["work"]["human"]
+    assert human["unanswered"] == 0 and human["approved"] == 0          # the host's, counted apart
+    # a malformed carried entry changes nothing; the stored summaries are recomputed
+    assert hr.later_answers([{"content": [{"type": "cmd_permission_request", "requestId": "x",
+                                           "decision": "expired"}]}]) == []
+    assert sor.SUMMARY_VERSION == 16

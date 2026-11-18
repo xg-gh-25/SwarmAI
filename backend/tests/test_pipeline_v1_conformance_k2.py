@@ -270,8 +270,11 @@ def test_a_recovered_landed_repo_then_a_preflight_failure_is_a_partial_land(tmp_
     phase-1 check. a IS landed: the result is a partial land, never "nothing moved"."""
     roots, bases, bindings = _repos(tmp_path)
     a = Path(roots["a"])
+    # the commit the landing makes: its message with the repo's trailer and the run's line
+    message = landing.with_trailer("land", landing.landing_settings(roots["a"], bases["a"])["trailer"],
+                                   (landing.run_trailer("run_one"),))
     made = landing._prepare_commit(roots["a"], bases["a"], bindings["a"]["delivery_tree"],
-                                   "land", author="t <t@t>")
+                                   message, author="t <t@t>")
     landing._fast_forward(roots["a"], made)          # the crash came right after this
     b = Path(roots["b"])
     (b / "other.py").write_text("moved\n")

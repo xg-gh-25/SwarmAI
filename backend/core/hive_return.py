@@ -32,7 +32,8 @@ protected file.
 merges the reviewed change (``base..tip``; for a later turn of the same run, what came
 after the tip that landed) onto the run's branch from objects only (no working tree, no
 hook, no filter), as one commit with a message this host writes (the Hive's commits stay at the ``refs/hive/`` ref),
-and fast-forwards the branch to it. Paths under an ignored or linked directory of the
+and fast-forwards the branch to it; the message ends with the repository's own landing
+trailer and ``Hive-Dispatch: <dispatch id>``. Paths under an ignored or linked directory of the
 checkout are refused at prepare (git would write a file into a virtualenv), and the
 person-only paths (``PERSON_ONLY``) are protected in every repository. Not good enough is
 not recorded here: the person re-runs the task with a correction or discards it. Qualifying the change (build, tests,
@@ -587,6 +588,12 @@ def landing_message(title: str, hive: Any, dispatch_id: str, ref: str, files: li
     return msg
 
 
+def dispatch_trailer(dispatch_id: str) -> str:
+    """The trailer line naming the Hive dispatch whose commits a landed commit carries,
+    so a reader of the history tells an agent run's commit from a person's."""
+    return f"Hive-Dispatch: {dispatch_id}"
+
+
 def _summary(summary: Optional[str]) -> Optional[str]:
     if summary is None:
         return None
@@ -650,7 +657,7 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     except LandingError as e:
         raise ReturnError(str(e)) from None
     c = subprocess.run(["git", *_SAFE, "commit-tree", tree, "-p", head, "-F", "-"], cwd=str(repo),
-                       input=with_trailer(msg, settings["trailer"]).encode(),
+                       input=with_trailer(msg, settings["trailer"], (dispatch_trailer(dispatch_id),)).encode(),
                        env={**os.environ, **_ident_env(settings["author"]), "LC_ALL": "C"},
                        capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
     new = c.stdout.decode().strip()

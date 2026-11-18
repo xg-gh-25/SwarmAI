@@ -6,7 +6,13 @@ An intervention is a time the run needed the person to go on, or to go right:
 - **answer** — the person answered a decision the run asked (``human_answer``);
 - **correction** — a message the person sent into the run's session while it ran (the
   same measure as a Hive run's ``said``, ``core/swarm_out_results``). A message that only
-  asks "where are you" counts too: nothing here judges what a message meant;
+  asks "where are you", or only says "go on", counts too: the run needed the person to go
+  on, and nothing here judges what a message meant. Who sent a message is read from the
+  provenance ledger the router writes for every user row (``core/session_inputs``, its
+  ``ref`` the message id): a row recorded as a ``system_prompt`` (a Swarm Out or Swarm
+  Run wake, a Host agent's correction on a Hive, any system-built turn) is not the
+  person's and never counts. A row with no provenance record (written before the ledger
+  existed) is read by its text, as before;
 - **rescue** — the run could not land and the person landed it (``run-land``, landing
   ``human_override``), or confirmed it had already landed (``landed_as`` by a person).
 
@@ -113,11 +119,31 @@ def _text_of(content: Any) -> str:
     return "\n".join(b.get("text", "") for b in blocks if isinstance(b, Mapping) and b.get("type") == "text")
 
 
+#: the provenance kind of a user row the system built (core/session_inputs
+#: ``record_user_input_parts``: every origin but the person's and a channel peer's)
+SYSTEM_KIND = "system_prompt"
+
+
+def _system_rows(conn: sqlite3.Connection, session_id: str) -> set[str]:
+    """The ids of *session_id*'s user rows the provenance ledger records as system-built.
+    A store without the ledger (written before it existed) has none; any other read
+    error is raised, so the caller reports "unknown"."""
+    has_ledger = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_inputs'").fetchone()
+    if not has_ledger:
+        return set()
+    rows = conn.execute(
+        "SELECT ref FROM session_inputs WHERE session_id=? AND kind=? AND ref IS NOT NULL",
+        (session_id, SYSTEM_KIND)).fetchall()
+    return {str(r[0]) for r in rows}
+
+
 def corrections(raw: Mapping[str, Any], *, db_path: Path | None = None,
                 now: datetime | None = None) -> list[dict[str, str]] | None:
     """The person's messages sent into the run's sessions while it ran, oldest first, as
     ``{at, text}`` (``at`` as the chat store keeps it: local time); None when the chat
-    store cannot be read or the run never recorded its start (never [] for "unknown")."""
+    store or its provenance ledger cannot be read, or the run never recorded its start
+    (never [] for "unknown"). A row the ledger records as system-built is left out."""
     if _utc(raw.get("created_at")) is None:
         return None              # a run that never recorded its start: unknown
     spans = windows(raw, now=now)
@@ -133,12 +159,13 @@ def corrections(raw: Mapping[str, Any], *, db_path: Path | None = None,
     try:
         out: list[dict[str, str]] = []
         for sid, start, end in spans:
+            system = _system_rows(conn, sid)
             rows = conn.execute(
-                "SELECT content, created_at FROM messages WHERE session_id=? AND role='user' "
+                "SELECT id, content, created_at FROM messages WHERE session_id=? AND role='user' "
                 "AND created_at > ? AND created_at <= ? ORDER BY created_at",
                 (sid, _local_naive(start), _local_naive(end))).fetchall()
             out += [{"at": str(at), "text": " ".join(_text_of(content).split())[:200]}
-                    for content, at in rows if _is_steer(content)]
+                    for mid, content, at in rows if str(mid) not in system and _is_steer(content)]
         return out
     except sqlite3.Error:
         return None

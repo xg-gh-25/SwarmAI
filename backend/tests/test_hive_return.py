@@ -748,3 +748,18 @@ def test_a_swarm_run_childs_commits_may_build_on_its_lead_runs_snapshot(world, m
     world["row"]["parent_run"] = "run_ffffffffffff"                 # another run's snapshot does not count
     with pytest.raises(hive_return.ReturnError, match="not in this machine.s main"):
         asyncio.run(hive_return.prepare(DID, URL))
+
+
+def test_the_landed_commit_names_its_dispatch(world, monkeypatch):
+    # a reader of the history tells this Hive run's commit from a person's: the landed
+    # commit carries the repository's trailer and Hive-Dispatch in one trailer paragraph
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], "src/a.py", "a = 3\n", "fix")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    before = git(world["host"], "rev-parse", "main")
+    hive_return.land(DID, st["key"], st["tip"])
+    trailers = git(world["host"], "log", "-1", "--format=%(trailers:only,unfold)", "main")
+    assert f"Hive-Dispatch: {DID}" in trailers.splitlines()
+    assert git(world["host"], "rev-list", "--count", f"{before}..main") == "1"

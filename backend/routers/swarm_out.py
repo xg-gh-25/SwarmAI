@@ -180,6 +180,8 @@ async def _allowed(actor, command: str, dispatch_id: str,
     why = await asyncio.to_thread(swarm_out_actor.row_blocker, actor, command, row, ended_at)
     if why is None and actor.agent and command == "discard":
         why = await asyncio.to_thread(swarm_out_actor.discard_blocker, row)
+    if why is None and actor.agent and command == "return_land":
+        why = await asyncio.to_thread(swarm_out_actor.land_blocker, dispatch_id)
     if why:
         who = "an agent" if actor.agent else "you"
         raise HTTPException(status_code=403, detail=f"{who} may not {command.replace('_', ' ')} this run now: {why}")
