@@ -1,6 +1,6 @@
 ---
 name: swarm-out
-description: "Send a task to one of the person's Hives (their SwarmAI on AWS), follow it and finish it. TRIGGER: \"send this to a Hive\", \"run it in the cloud\", \"Swarm Out\", \"派到 Hive\". NOT FOR: a Hive run the person dispatched themselves."
+description: "Send a task to one of the person's Hives (their SwarmAI on AWS), follow and finish it. TRIGGER: \"send this to a Hive\", \"Swarm Out\", \"派到 Hive\", or the person accepts your Hive proposal. NOT FOR: a Hive run the person dispatched themselves."
 tier: always
 ---
 # Swarm Out
@@ -53,6 +53,19 @@ Each prints JSON; a refusal is `{"ok": false, "detail": "..."}`.
 
 Only the person's own session may dispatch (the desktop, or their own channel DM): in
 a session with someone else the commands refuse. Do not try another way.
+
+## Proposing a Hive
+
+The person may never think to ask for a Hive, so you judge where a task runs when you
+take it (AGENT R1). With a running Hive (`hives`), a task leans to a Hive when it is
+long (a full or bugfix pipeline run, a long investigation), has several independent
+parts to run at once, or arrives while this machine is busy or the person is leaving.
+It stays local when it is an interactive back-and-forth or a small change, needs
+internal or private resources (the checks of step 4 refuse those anyway), or is verified
+on this machine's own data, build or daemon. Leaning to a Hive: propose it in one line
+with the reason, as a next step the person can accept, and dispatch only once they
+accept (dispatch sends the work off this machine). No Hive: run it here and propose
+nothing.
 
 ## When to ask the person
 

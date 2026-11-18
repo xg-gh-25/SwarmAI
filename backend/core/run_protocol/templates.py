@@ -51,6 +51,9 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
                           "readings": ["the one reading of the request this run takes"],
                           "evidence": ["<FILE>"], "root_cause": None},
         "knowledge_refs": [],
+        # one run or several (more than one part: say which parts and why)
+        "split": {"decision": "one", "parts": [["R1"]],
+                  "reason": "why the parts are one run, or which stand on their own"},
     },
     # PLAN (full / bugfix): stage-complete --artifact -
     "design_spec": {

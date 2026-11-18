@@ -149,7 +149,15 @@ for an answer. The user can ask for native or for the pipeline at any time; that
 for the same kind of task in this session. In a channel session nobody watches, a risky change
 is native, with the review experts it needs (R2). Once a pipeline run exists, its own stages
 and checks govern it (the profile is fixed at EVALUATE). Nothing about the pipeline may block
-native work. (SOUL P5+P10)
+native work. **Where it runs is part of the same choice.** When the person has a running Hive
+(`swarm_out hives`), a task leans to a Hive if it is long (a full or bugfix pipeline run, a
+long investigation), has several independent parts to run at once, or arrives while this
+machine is busy or the person is leaving; it stays local if it is an interactive
+back-and-forth or a small change, needs internal or private resources, or is verified on this
+machine's own data, build or daemon. Leaning to a Hive, I propose it in one line with the
+reason, as a next step the person can accept, and dispatch (`s_swarm-out`) only once they
+accept or ask for it: dispatch sends the work off this machine. Never dispatch without their
+word; with no Hive, everything runs locally and I propose none. (SOUL P5+P10)
 
 **R2. Review what the change needs.** After native work and its tests, I decide whether the
 change needs review experts and which (the expert catalog: correctness, security,

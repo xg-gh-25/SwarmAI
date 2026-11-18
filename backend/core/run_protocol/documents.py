@@ -59,6 +59,12 @@ def render_requirements(document: Mapping[str, Any]) -> str:
         for row in requirement["acceptance"]:
             lines.append(f"- **{row['id']}** — {_ears(row)}")
         lines.append("")
+    split = document.get("split")
+    if isinstance(split, Mapping):
+        lines += ["## Split", "", f"**{split.get('decision')}** — {split.get('reason') or ''}", ""]
+        lines += [f"- Part {i}: {', '.join(str(ref) for ref in part)}"
+                  for i, part in enumerate(split.get("parts") or (), 1) if isinstance(part, list)]
+        lines.append("")
     bugfix = document.get("bugfix")
     if isinstance(bugfix, Mapping):
         lines += ["## Bugfix contract", ""]

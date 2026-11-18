@@ -317,7 +317,8 @@ def validate_requirements(document: Any, *, variant: str, profile: str) -> list[
         return [SchemaIssue("RQ-1", "$", f"unknown requirements variant {variant!r}")]
     allowed = {"requirements"}
     if variant == "full":
-        allowed |= {"bugfix", "analysis", "clarifications", "understanding", "knowledge_refs"}
+        allowed |= {"bugfix", "analysis", "clarifications", "understanding", "knowledge_refs",
+                    "split"}
     _strict(obj, allowed, out, "RQ-1", "$")
     _requirements(obj.get("requirements"), out, variant)
     if variant == "lite":
@@ -330,7 +331,51 @@ def validate_requirements(document: Any, *, variant: str, profile: str) -> list[
     _clarifications(obj.get("clarifications"), out)
     _understanding(obj.get("understanding"), out)
     _knowledge_refs(obj, out, "RQ-5")
+    if "split" in obj:
+        _split(obj["split"], obj.get("requirements"), out)
     return out
+
+
+SPLIT_DECISIONS = frozenset({"one", "separate"})
+
+
+def _split(value: Any, requirements: Any, out: list[SchemaIssue]) -> None:
+    """Optional ``split``: EVALUATE's decision whether the requirement is one run or
+    several. ``parts`` groups the document's requirement ids; every requirement is in
+    exactly one part, and ``separate`` needs at least two parts. Read by
+    ``next_step._note_split_at_evaluate`` and ``documents.render_requirements``."""
+    obj = _object(value, out, "RQ-1", "split")
+    if obj is None:
+        return
+    _strict(obj, {"decision", "parts", "reason"}, out, "RQ-1", "split")
+    if obj.get("decision") not in SPLIT_DECISIONS:
+        _issue(out, "RQ-1", "split.decision", "must be one or separate")
+    _text(obj, "reason", out, "RQ-1", "split")
+    parts = _list(obj.get("parts"), out, "RQ-1", "split.parts")
+    if parts is None:
+        return
+    rows = requirements if isinstance(requirements, list) else []   # _requirements reports it
+    defined = [row.get("id") for row in rows
+               if isinstance(row, Mapping) and isinstance(row.get("id"), str)]
+    seen: list[str] = []
+    for i, part in enumerate(parts):
+        if not isinstance(part, list) or not part \
+                or any(not isinstance(ref, str) for ref in part):
+            _issue(out, "RQ-1", f"split.parts[{i}]", "must be a non-empty list of requirement ids")
+            continue
+        unknown = [ref for ref in part if ref not in defined]
+        if unknown:
+            _issue(out, "RQ-1", f"split.parts[{i}]",
+                   f"names {', '.join(unknown)}, which the document does not define")
+        seen += part
+    twice = sorted({ref for ref in seen if seen.count(ref) > 1})
+    if twice:
+        _issue(out, "RQ-1", "split.parts", f"{', '.join(twice)} is in more than one part")
+    missing = [ref for ref in defined if ref not in seen]
+    if missing:
+        _issue(out, "RQ-1", "split.parts", f"{', '.join(missing)} is in no part")
+    if obj.get("decision") == "separate" and len(parts) < 2:
+        _issue(out, "RQ-1", "split.parts", "separate needs at least two parts")
 
 
 _KNOWLEDGE_ID = re.compile(r"[0-9a-f]{8}")

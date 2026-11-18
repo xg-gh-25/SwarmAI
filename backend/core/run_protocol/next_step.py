@@ -251,6 +251,8 @@ def next_step(engine, *, previous_stage: str | None = None,
                    command=_cmd(engine, "stage-complete --artifact -"),
                    why=f"write the {stage} artifact the card describes and pass it on stdin "
                        f"(a valid example: `pipeline-v1 template {kind}`)")
+        if stage == "plan":
+            _note_split_at_evaluate(engine, out)
         return out
     if stage == "deliver":
         if not _reflect_prepared(engine.store.read_events(), state):
@@ -340,11 +342,12 @@ def next_step(engine, *, previous_stage: str | None = None,
     if not blocking:
         out.update(action="run", command=_cmd(engine, "stage-complete"),
                    why=f"every {stage} check passes")
-        _note_children(engine, out)        # a research run's THINK fans out too
-        return out
-    out.update(action="fix", command=_cmd(engine, "stage-complete"),
-               why=f"{len(blocking)} {stage} check(s) do not pass yet")
-    _note_children(engine, out)
+    else:
+        out.update(action="fix", command=_cmd(engine, "stage-complete"),
+                   why=f"{len(blocking)} {stage} check(s) do not pass yet")
+    if stage == "think":
+        _note_split_at_evaluate(engine, out)
+    _note_children(engine, out)        # a research run's THINK fans out too
     return out
 
 
@@ -412,7 +415,38 @@ def _note_split(engine, out: dict[str, Any]) -> None:
         f" This plan changes {len(files)} files in {len(tops)} top-level directories, and "
         f"its tasks fall into {len(groups)} groups that share no file ({', '.join('+'.join(g[:4]) + ('…' if len(g) > 4 else '') for g in groups[:6])}). "
         "A group that is useful and revertible on its own reviews and lands faster as its "
-        "own run: abandon this one and create one run per group, or go on as planned.")
+        "own run: abandon this one and create one run per group; or keep one run and hand "
+        "the large groups to the person's Hives as children of this run (the BUILD card's "
+        "Swarm Run), so the change still reviews and lands once; or go on as planned.")
+
+
+def _note_split_at_evaluate(engine, out: dict[str, Any]) -> None:
+    """EVALUATE ended with ``split.decision`` separate (``schemas._split``): say it on every
+    response of THINK and PLAN until PLAN's design is written, so a missed or compacted
+    reply does not lose it. A hint, not a check: the orchestrator decides, and the run
+    goes on until it acts."""
+    try:
+        context = engine.check_context()
+    except Exception:  # an unreadable document is EVALUATE's to report, not this hint's
+        logger.warning("split advice: requirements unreadable", exc_info=True)
+        return
+    if getattr(context, "design", None):
+        return                            # the design is spent: split_hint's turn
+    requirements = getattr(context, "requirements", None) or {}
+    split = requirements.get("split") if isinstance(requirements, Mapping) else None
+    if not isinstance(split, Mapping) or split.get("decision") != "separate":
+        return
+    parts = [part for part in split.get("parts") or ()
+             if isinstance(part, list) and part and all(isinstance(r, str) for r in part)]
+    if len(parts) < 2:
+        return
+    out["split_advice"] = parts
+    out["why"] = (out.get("why") or "") + (
+        f". EVALUATE decided this requirement is {len(parts)} separate runs "
+        f"({'; '.join('+'.join(p) for p in parts)}): {split.get('reason') or ''}. "
+        "Abandon this run now and create one run per part, before any design is spent; "
+        "parts that stand on their own are candidates to run on the person's Hives at the "
+        "same time (AGENT R1: propose it). Or go on as one run if that decision changed.")
 
 
 def _note_children(engine, out: dict[str, Any]) -> None:
