@@ -15,7 +15,8 @@ here, trusting nothing the Hive reported beyond "there is a bundle with this sha
   ``refs/hive/<dispatch>/<key>`` only: no branch or tag here can move;
 - the base is this machine's own ``merge-base`` of that tip and the main branch.
 
-What the person reviews: the files with their line counts, the commits (their messages
+What the person reviews: the files with their line counts in review order
+(``core.review_order``: source, then tests, then supporting files), the commits (their messages
 are the Hive's text, shown as data and never put into an agent's context), and the
 protected files, marked so the reviewer reads them with care. Protected are, in every
 repository, the person-only paths (``PERSON_ONLY``: what changes how git behaves here,
@@ -404,6 +405,8 @@ def _review(repo: Path, base: str, tip: str, globs: list[str]) -> dict[str, Any]
     if bad:
         raise ReturnError("the commits write where they may not on this machine (an ignored or linked "
                           "directory, or a name with control characters): " + ", ".join(repr(b) for b in bad[:5]))
+    from core.review_order import ordered
+    files = ordered(files)   # the heart of the change first; the cap drops supporting files first
     return {"files": files[:MAX_FILES_SHOWN], "files_total": len(files),
             "protected_files": [f["path"] for f in files if f["protected"]], "commits": commits}
 

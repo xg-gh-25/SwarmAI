@@ -114,7 +114,9 @@ def _landing(root: str, dest: str, deadline: Deadline, branch: str, turn: str, o
               ok=(0, 1))[0] == 0
     repo = os.path.basename(root)
     files = []
-    for path, (added, deleted) in sorted(numstat.items()):
+    from core.review_order import ordered
+    for path, (added, deleted) in ((r["path"], (r["added"], r["deleted"])) for r in ordered(
+            {"path": p, "added": a, "deleted": d} for p, (a, d) in numstat.items())):
         binary = added is None
         files.append({
             "path": path, "absolutePath": os.path.join(root, path), "repo": repo,

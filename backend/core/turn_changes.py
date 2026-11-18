@@ -618,7 +618,8 @@ def _diff_top(top: str, rels: list[str], start: Optional[str]) -> list[dict]:
 
 
 def _block(files: list[dict], landings: Optional[dict] = None) -> Optional[dict]:
-    """The card: in-place rows sorted by size, then this turn's landings
+    """The card: in-place rows in review order (core/review_order: source files,
+    largest first, then tests, then supporting files), then this turn's landings
     (core/session_landings). One row budget, MAX_FILES, spans all of them; each
     group says how many it left out. None when there is nothing to show."""
     landings = landings or {}
@@ -626,7 +627,8 @@ def _block(files: list[dict], landings: Optional[dict] = None) -> Optional[dict]
     # a file both edited in place and landed this turn is shown once, under the landing
     under = {(f.get("gitRoot"), f.get("path")) for x in landed for f in x.get("files") or []}
     files = [f for f in files if (f.get("gitRoot"), f.get("path")) not in under]
-    files = sorted(files, key=lambda f: -((f["added"] or 0) + (f["deleted"] or 0)))
+    from core.review_order import ordered
+    files = ordered(files)
     unknown = list(landings.get("unknown") or [])
     unverified = int(landings.get("unverified") or 0)
     truncated = bool(landings.get("truncated"))
