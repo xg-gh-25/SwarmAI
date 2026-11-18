@@ -471,7 +471,9 @@ def relocate(project_dir: Path, repo: str) -> Placed:
     it (moving deletes nothing; ``_move_dir``). Refused, with nothing moved, when another
     Brain uses the same mirror, the target is taken or not allowed, or the binding
     already has its own checkout. ``Placed.note`` says when part of the old folder was
-    left behind."""
+    left behind. The mirror's graph stays in the bindings root (``undo`` may still put
+    the folder back); ``bind`` removes it once the checkout is owned
+    (``brain_teardown.retire_relocated_graphs``)."""
     import shutil
     from core.ddd_bindings import binding_worktree
     from core.project_agent import _bindings, repo_roots

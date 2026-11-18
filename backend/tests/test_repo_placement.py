@@ -172,6 +172,26 @@ def test_relocate_moves_a_clean_mirror_into_the_workspace(env, capsys):
     assert len(b) == 1 and b[0]["delivery_contract"]["review_path"] == "s_expert-review"
 
 
+def test_relocate_removes_the_mirror_graph_once_the_checkout_is_owned(env, capsys):
+    _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
+    for suffix in ("", "-wal", ".write.lock"):
+        (env["bindings"] / f"app.code_intel.db{suffix}").write_text("db")
+    _bind_ok(["--relocate", "app"], capsys)
+    assert not list(env["bindings"].glob("app.code_intel.db*"))
+
+
+def test_a_relocate_put_back_keeps_the_mirror_graph(env, capsys, monkeypatch):
+    from core.code_intel.local_roots import LocalRootError
+    mirror = _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
+    (env["bindings"] / "app.code_intel.db").write_text("db")
+    def _refuse(*a, **k):
+        raise LocalRootError("refused")
+    monkeypatch.setattr("core.code_intel.local_roots.declare", _refuse)
+    code, _ = _bind(["--relocate", "app"], capsys)
+    assert code == 1 and (mirror / "m.py").is_file()
+    assert (env["bindings"] / "app.code_intel.db").read_text() == "db"
+
+
 def test_relocate_moves_a_mirror_with_work_in_it_as_it_is(env, capsys):
     mirror = _mirror_binding(env, _bare_with_commit(env["tmp"] / "remotes" / "app.git"))
     (mirror / "wip.py").write_text("x = 1\n")

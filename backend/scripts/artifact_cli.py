@@ -462,6 +462,13 @@ def _bind_into_workspace(args) -> None:
                                  else "the mirror was put back" if placed.mirror is not None
                                  else "bindings.yaml was restored")}), file=sys.stderr)
         raise
+    if placed is not None and placed.mirror is not None:
+        # owned now, so nothing puts the mirror back: its graph left in the bindings
+        # root is read by nothing (core.brain_teardown.retire_relocated_graphs)
+        from core.brain_teardown import retire_relocated_graphs
+        removed = retire_relocated_graphs(pdir)
+        if removed:
+            print(json.dumps({"removed_mirror_graph": removed}), file=sys.stderr)
 
 
 def _owns(project: str, root: Path) -> bool:

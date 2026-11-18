@@ -327,3 +327,41 @@ def test_a_name_the_bindings_root_keeps_is_never_a_worktree(tmp_path, name):
     b = load_bindings(f).bindings[0]
     with pytest.raises(ValueError, match="reserved"):
         binding_worktree(b, tmp_path / "root")
+
+
+def _relocate_lib(env, brain: str = "Gone") -> None:
+    """*brain*'s ``lib`` binding has its own checkout now and its mirror folder is gone
+    (``repo_placement.relocate``), the mirror's graph left in the bindings root."""
+    import shutil
+    text = _BINDINGS.replace('    clone: "https://example.com/lib.git"\n',
+                             '    clone: "https://example.com/lib.git"\n'
+                             f'    worktree: "{env["checkout"]}"\n')
+    (env["ws"] / "Projects" / brain / "bindings.yaml").write_text(text)
+    if (env["bindings"] / "lib").exists():
+        shutil.rmtree(env["bindings"] / "lib")
+
+
+def test_the_graph_a_relocated_mirror_left_behind_goes_with_the_brain(env):
+    _relocate_lib(env)
+    trash, report = _delete(env)
+    assert "failed" not in report, report
+    assert not list(env["bindings"].glob("lib.code_intel.db*"))
+    assert {p.name for p in (trash / "_outside" / "code-intel").iterdir()} >= {
+        "lib.code_intel.db", "lib.code_intel.db-wal"}
+    assert (env["checkout"] / ".git").is_dir()                # the checkout is untouched
+
+
+def test_a_left_graph_another_relocated_brain_shares_stays(env):
+    _relocate_lib(env)
+    (env["ws"] / "Projects" / "Keep" / "bindings.yaml").write_text("")
+    _relocate_lib(env, "Keep")
+    _delete(env)
+    assert (env["bindings"] / "lib.code_intel.db").exists()
+
+
+def test_a_mirror_folder_still_there_keeps_its_graph(env):
+    _relocate_lib(env)
+    (env["bindings"] / "lib" / ".git").mkdir(parents=True)   # some mirror of lib is back
+    _delete(env)
+    assert (env["bindings"] / "lib.code_intel.db").exists()
+    assert (env["bindings"] / "lib" / ".git").is_dir()

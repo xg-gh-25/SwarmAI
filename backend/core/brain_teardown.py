@@ -5,7 +5,9 @@ Deleting a project moves ``Projects/<name>/`` to ``Projects/.trash/<name>-<stamp
 folder, and they used to stay behind:
 
 - the code-intel graphs of its repos: a bind-managed clone and its db under the
-  bindings root, a local root's db under ``bindings/local``;
+  bindings root, a local root's db under ``bindings/local``, and the db a mirror left
+  in the bindings root when ``repo_placement.relocate`` moved the mirror's folder into
+  the repository workspace (``_relocated_mirror_db``);
 - its rows in the local-roots registry (confirmed and dismissed roots);
 - the runnable bodies of its scheduled jobs in ``user-jobs.yaml`` (its ``kind: job``
   assets), and their scheduler state, which keep running the moved scripts;
@@ -84,6 +86,31 @@ def _registry_projects() -> dict:
         raise _Unreadable(str(exc)) from None
 
 
+def _relocated_mirror_db(binding) -> Path | None:
+    """The graph ``bind_repo`` built beside *binding*'s mirror, when the binding now has
+    its own checkout and no mirror folder is left: ``repo_placement.relocate`` moves the
+    folder into the repository workspace, the graph beside it stays in the bindings root,
+    and nothing reads it (``owned_graphs`` gives such a binding its local-root graph).
+    None otherwise: no ``worktree``, a worktree still under the bindings root, a refused
+    name, or a mirror folder that is there (its graph is that mirror's)."""
+    from core.ddd_bindings import binding_db_path, binding_worktree
+    if not binding.worktree:
+        return None
+    try:
+        binding_worktree(binding)
+        return None
+    except ValueError:
+        pass
+    mirror_binding = binding.model_copy(update={"worktree": None})
+    try:
+        mirror = binding_worktree(mirror_binding)
+    except ValueError:
+        return None
+    if mirror.exists() or mirror.is_symlink():
+        return None
+    return binding_db_path(mirror_binding)
+
+
 def _ownership(project_dir: Path, registry: dict) -> tuple[set[str], list[Path], list[str]]:
     """``(graph dbs, bind-managed clones, job ids)`` *project_dir* owns.
 
@@ -114,7 +141,12 @@ def _ownership(project_dir: Path, registry: dict) -> tuple[set[str], list[Path],
                 clones.append(binding_worktree(b))
                 dbs.add(str(binding_db_path(b).resolve()))
             except ValueError:
-                continue  # the user's own checkout, or a refused name: never ours to move
+                # the user's own checkout, or a refused name: never ours to move; only
+                # the graph a relocated mirror left behind is
+                left = _relocated_mirror_db(b)
+                if left is not None:
+                    dbs.add(str(left.resolve()))
+                continue
         assets = raw.get("governed_assets") if isinstance(raw, dict) else None
         jobs = [a["name"] for a in assets or []
                 if isinstance(a, dict) and a.get("kind") == "job"
@@ -300,6 +332,44 @@ def take_away(owned: Owned, trash_dir: str | Path, workspace_root: str | Path) -
     log = logger.error if "failed" in report else logger.info
     log("brain teardown: %s", json.dumps(report, default=str))
     return report
+
+
+def retire_relocated_graphs(project_dir: str | Path) -> list[str]:
+    """Remove the graphs the relocated mirrors of *project_dir* left in the bindings
+    root (``_relocated_mirror_db``), once the Brain owns their checkouts: called by
+    ``bind --relocate`` / ``bind --url`` after the bind went through, so nothing can put
+    the mirror back. A graph is derived from its checkout, which moved whole and is
+    indexed again in place, so this unlinks rather than preserves. A graph another Brain
+    owns stays, and so does every one when that cannot be read. Returns the file names
+    removed; never raises."""
+    project_dir = Path(project_dir)
+    bindings = project_dir / "bindings.yaml"
+    if not bindings.is_file():
+        return []
+    try:
+        from core.ddd_bindings import load_bindings
+        doc = load_bindings(bindings)
+        keep_dbs, _, _ = _others(project_dir.parent, project_dir.name)
+        dbs = []
+        for b in doc.bindings:
+            if b.kind == "internal" or b.delivery_contract.build_system == "brazil":
+                continue
+            left = _relocated_mirror_db(b)
+            if left is not None and str(left.resolve()) not in keep_dbs:
+                dbs.append(left)
+        _evict_graphs(dbs)
+        removed = []
+        for db in dbs:
+            for suffix in _DB_SIDECARS:
+                f = Path(str(db) + suffix)
+                if f.is_file() and not f.is_symlink():
+                    f.unlink()
+                    removed.append(f.name)
+        return removed
+    except Exception as exc:  # noqa: BLE001 — a leftover graph is only disk; the bind stands
+        logger.warning("brain teardown: retiring %s's relocated graphs failed: %s",
+                       project_dir.name, exc)
+        return []
 
 
 async def refresh_registries(workspace_root: str | Path) -> None:
