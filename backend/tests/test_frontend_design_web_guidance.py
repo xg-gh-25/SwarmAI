@@ -8,9 +8,12 @@ Questions this answers:
     cross-references name ``npx -y modern-web-guidance@latest retrieve``)?
   - Does every guide id INSTRUCTIONS.md cites exist?
   - Does retrieve fail loud on an unknown id instead of printing nothing?
+  - Is no listed guide hidden by .gitignore (the root planning-note rule once hid
+    guides/ui-components/progress.md, so a clean checkout lacked it), while the
+    planning notes it was written for stay ignored?
 
-Pure file and in-process checks: self-verifies in a bare checkout (no workspace, no
-network, no Node).
+Pure file and in-process checks (the ignore check asks the checkout's git): self-verifies
+in a bare checkout (no workspace, no network, no Node).
 """
 from __future__ import annotations
 
@@ -33,6 +36,28 @@ def _script():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_no_listed_guide_is_git_ignored():
+    import subprocess
+    repo = Path(__file__).resolve().parents[2]
+    provenance = load_verified_provenance(DATA)
+    listed = [str((DATA / f.local_path).relative_to(repo)) for f in provenance.files]
+
+    def ignored(path: str) -> bool:
+        # --no-index: the rules, whether or not the file is tracked. The repository's own
+        # rules only: a developer's global excludes file must not change the answer.
+        r = subprocess.run(["git", "-c", "core.excludesFile=/dev/null", "-C", str(repo),
+                            "check-ignore", "-q", "--no-index", path],
+                           capture_output=True, text=True, timeout=30)
+        # 0 = ignored, 1 = not ignored; anything else (not a git work tree) answers nothing
+        assert r.returncode in (0, 1), f"git check-ignore failed ({r.returncode}): {r.stderr}"
+        return r.returncode == 0
+    assert [p for p in listed if ignored(p)] == []
+    # the planning-note names stay ignored outside a skill's data tree
+    for name in ("progress.md", "task_plan.md", "findings.md"):
+        assert ignored(name) and ignored(f"backend/{name}") and ignored(f"desktop/src/{name}")
+        assert not ignored(f"backend/skills/s_x/data/guides/{name}")
 
 
 def test_vendored_guides_match_their_provenance():

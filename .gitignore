@@ -43,6 +43,11 @@ env/
 progress.md
 task_plan.md
 findings.md
+# ...but a skill's vendored data can hold files of those names (a pinned upstream guide
+# such as modern-web-guidance/guides/ui-components/progress.md): those are content
+!backend/skills/**/data/**/progress.md
+!backend/skills/**/data/**/task_plan.md
+!backend/skills/**/data/**/findings.md
 # .claude/ — project settings and hooks are committed (per Claude Code convention)
 # Only ignore local overrides
 .claude/settings.local.json

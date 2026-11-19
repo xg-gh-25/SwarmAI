@@ -106,7 +106,23 @@ SECRETS_EXCLUDE_RE = (r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/s_internal-[^/]*/|
 # shape is skipped: the same hex under any other key, or a longer value, is still scanned.
 # The optional quotes are not decoration: detect-secrets' YAML parser hands the filter
 # the value quoted (`validated_by_4gate: "52cf…"`), so an unquoted pattern never matches.
-SECRETS_EXCLUDE_LINES_RE = r'^\s*validated_by_4gate:\s*"?[0-9a-f]{16}"?\s*$'
+# Content hashes are not secrets either, and are skipped by the same rule, each only in
+# its exact whole-line shape, in any scanned file: a JSON ``"sha256": "<64 lowercase
+# hex>"`` field (provenance files record one per vendored or packaged file, so every
+# refresh wrote new baseline entries by hand) and a ``"commit": "<40 lowercase hex>"``
+# upstream pin, and a
+# Subresource Integrity value on a line of its own, ``integrity="sha384-<base64>"``,
+# ``integrity: 'sha384-…',`` or ``integrity("sha384-…")``, with base64 of exactly that
+# hash's length. The same hex or base64 under any other key, a field of another length,
+# an integrity value inside a longer line, or a secret on a line beside a digest is
+# still scanned.
+_SRI = (r'^\s*integrity\s*[=:(]\s*["\'](?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}'
+        r'|sha512-[A-Za-z0-9+/]{86}==)["\']\s*\)?\s*[;,]?\s*$')
+SECRETS_EXCLUDE_LINES_RE = ('|'.join((
+    r'^\s*validated_by_4gate:\s*"?[0-9a-f]{16}"?\s*$',
+    r'^\s*"sha256":\s*"[0-9a-f]{64}",?\s*$',
+    r'^\s*"commit":\s*"[0-9a-f]{40}",?\s*$',
+    _SRI)))
 
 # The single severity/confidence policy — used identically for baseline generation
 # AND compare, so they can never drift (Gate-1 MUST-FIX-5).

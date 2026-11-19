@@ -20,6 +20,8 @@ Key invariants proven here (the ones Gate-1 flagged as make-or-break):
 """
 from __future__ import annotations
 
+import base64 as _b64
+import hashlib as _hl
 import subprocess
 import sys
 from pathlib import Path
@@ -592,3 +594,70 @@ def test_the_generated_app_index_is_not_secret_scanned_but_its_siblings_are():
     assert pattern.search("backend/generated/apps_index.json")
     assert not pattern.search("backend/generated/app_bindings.py")
     assert not pattern.search("backend/apps/pollinate/app.json")
+
+
+# ── content hashes (provenance digests, upstream pins, SRI) are not secrets; the same
+#    values in any other shape still are. The values are made here, not written out: a
+#    literal digest in this file would itself be a scan finding.
+_HEX64 = _hl.sha256(b"content").hexdigest()
+_HEX40 = _hl.sha1(b"content").hexdigest()
+_SHA384 = "sha384-" + _b64.b64encode(_hl.sha384(b"content").digest()).decode()
+
+
+def test_content_hashes_are_not_secrets(scan_tree: Path):
+    (scan_tree / "backend" / "mod.py").write_text("SAFE = 'nothing here'\n")   # bandit needs code
+    prov = scan_tree / "backend" / "PROVENANCE.json"
+    guide = scan_tree / "backend" / "guide.md"
+    prov.write_text('{"files": []}\n')
+    guide.write_text("# A guide\n")
+    _make_baseline(scan_tree)
+    prov.write_text('{\n  "sources": [{\n    "commit": "' + _HEX40 + '",\n'
+                    '    "license": "Apache-2.0"\n  }],\n  "files": [{\n    "localPath": "a.md",\n'
+                    f'    "sha256": "{_HEX64}"\n  }}]\n}}\n')
+    guide.write_text(f'<script\n  src="https://cdn.example/x.js"\n  integrity="{_SHA384}"\n'
+                     f'  crossorigin="anonymous"></script>\n\n```js\n  integrity: \'{_SHA384}\',\n```\n')
+    r = _run_scan(scan_tree)
+    assert r.returncode == 0, f"digests, pins and SRI values must not block. stdout={r.stdout}"
+    # the same 64 hex under another key is still a secret
+    prov.write_text('{\n  "files": [{\n' f'    "token": "{_HEX64}"\n' '  }]\n}\n')
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, f"a hex value under any other key is still a secret. stdout={r.stdout}"
+    # a sha256 field of another length is not a digest
+    prov.write_text('{\n  "files": [{\n' f'    "sha256": "{_HEX64}ab"\n' '  }]\n}\n')
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, f"a sha256 field that is not 64 hex is scanned. stdout={r.stdout}"
+    # a secret on the line beside a digest is still a secret
+    prov.write_text('{\n  "files": [{\n' f'    "sha256": "{_HEX64}",\n'
+                    '    "key": "AKIAIOSFODNN7EXAMPLE"\n  }]\n}\n')
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, f"a secret beside a digest is still a secret. stdout={r.stdout}"
+    # an integrity value inside a longer line is still scanned: text before it, or after it
+    prov.write_text('{"files": []}\n')
+    for line in (f'  token = "{_HEX64}"; integrity="{_SHA384}"\n',
+                 f'  integrity="{_SHA384}" token="{_HEX64}"\n'):
+        guide.write_text(line)
+        r = _run_scan(scan_tree)
+        # the token beside it is reported itself (detect-secrets judges each finding of a
+        # line against the exclusion, so a too-wide rule would drop exactly this one)
+        assert r.returncode == 1 and "Hex High Entropy String] backend/guide.md:1" in r.stdout, \
+            f"an integrity value inside a longer line is scanned: {line!r}. stdout={r.stdout}"
+
+
+def test_the_hash_exclusions_match_whole_lines_only():
+    """The rule itself, line by line: a hash shape on a line of its own is skipped; the
+    same shape with anything before or after it on the line is not."""
+    import importlib.util
+    import re
+    spec = importlib.util.spec_from_file_location("security_scan_mod", SCAN_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    rule = re.compile(mod.SECRETS_EXCLUDE_LINES_RE)
+    skipped = [f'    "sha256": "{_HEX64}",', f'      "commit": "{"a" * 40}"',
+               f'  integrity="{_SHA384}"', f"  integrity: '{_SHA384}',", f'    integrity("{_SHA384}")',
+               '  validated_by_4gate: 52cfcd83f260dfba']
+    kept = [f'    "token": "{_HEX64}",', f'    "sha256": "{_HEX64}", "key": "x"',
+            f'  integrity="{_SHA384}" token="{_HEX64}"', f'  x = 1; integrity="{_SHA384}"',
+            f'  integrity="{_SHA384[:-1]}"', f'    "sha256": "{_HEX64.upper()}"']
+    assert [x for x in skipped if not rule.search(x)] == []
+    assert [x for x in kept if rule.search(x)] == []
+
