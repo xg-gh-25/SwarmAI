@@ -618,6 +618,14 @@ def test_content_hashes_are_not_secrets(scan_tree: Path):
                      f'  crossorigin="anonymous"></script>\n\n```js\n  integrity: \'{_SHA384}\',\n```\n')
     r = _run_scan(scan_tree)
     assert r.returncode == 0, f"digests, pins and SRI values must not block. stdout={r.stdout}"
+    # the same digest and pin lines in a file not named PROVENANCE.json are still secrets
+    other = scan_tree / "backend" / "settings.json"
+    for line in (f'    "commit": "{_HEX40}"', f'    "sha256": "{_HEX64}"'):
+        other.write_text('{\n' + line + '\n}\n')
+        r = _run_scan(scan_tree)
+        assert r.returncode == 1 and "backend/settings.json:2" in r.stdout, \
+            f"a digest-shaped line outside PROVENANCE.json is scanned: {line!r}. stdout={r.stdout}"
+    other.unlink()
     # the same 64 hex under another key is still a secret
     prov.write_text('{\n  "files": [{\n' f'    "token": "{_HEX64}"\n' '  }]\n}\n')
     r = _run_scan(scan_tree)
@@ -652,8 +660,16 @@ def test_the_hash_exclusions_match_whole_lines_only():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     rule = re.compile(mod.SECRETS_EXCLUDE_LINES_RE)
-    skipped = [f'    "sha256": "{_HEX64}",', f'      "commit": "{"a" * 40}"',
-               f'  integrity="{_SHA384}"', f"  integrity: '{_SHA384}',", f'    integrity("{_SHA384}")',
+    digest = mod.PROVENANCE_DIGEST_LINE_RE
+    digests = [f'    "sha256": "{_HEX64}",', f'      "commit": "{"a" * 40}"']
+    not_digests = [f'    "token": "{_HEX64}",', f'    "sha256": "{_HEX64}", "key": "x"',
+                   f'    "sha256": "{_HEX64.upper()}"', f'    "commit": "{"a" * 41}"',
+                   f'    "sha256": "{_HEX64}" "x"']
+    assert [x for x in digests if not digest.match(x)] == []
+    assert [x for x in not_digests if digest.match(x)] == []
+    # the file-blind line rule no longer skips digest lines: only PROVENANCE.json does
+    assert [x for x in digests if rule.search(x)] == []
+    skipped = [f'  integrity="{_SHA384}"', f"  integrity: '{_SHA384}',", f'    integrity("{_SHA384}")',
                '  validated_by_4gate: 52cfcd83f260dfba']
     kept = [f'    "token": "{_HEX64}",', f'    "sha256": "{_HEX64}", "key": "x"',
             f'  integrity="{_SHA384}" token="{_HEX64}"', f'  x = 1; integrity="{_SHA384}"',

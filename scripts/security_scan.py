@@ -61,6 +61,7 @@ import argparse
 import ast
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -106,23 +107,25 @@ SECRETS_EXCLUDE_RE = (r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/s_internal-[^/]*/|
 # shape is skipped: the same hex under any other key, or a longer value, is still scanned.
 # The optional quotes are not decoration: detect-secrets' YAML parser hands the filter
 # the value quoted (`validated_by_4gate: "52cf…"`), so an unquoted pattern never matches.
-# Content hashes are not secrets either, and are skipped by the same rule, each only in
-# its exact whole-line shape, in any scanned file: a JSON ``"sha256": "<64 lowercase
-# hex>"`` field (provenance files record one per vendored or packaged file, so every
-# refresh wrote new baseline entries by hand) and a ``"commit": "<40 lowercase hex>"``
-# upstream pin, and a
-# Subresource Integrity value on a line of its own, ``integrity="sha384-<base64>"``,
+# A Subresource Integrity value is not a secret either and is skipped by the same rule,
+# in any scanned file, only on a line of its own: ``integrity="sha384-<base64>"``,
 # ``integrity: 'sha384-…',`` or ``integrity("sha384-…")``, with base64 of exactly that
-# hash's length. The same hex or base64 under any other key, a field of another length,
-# an integrity value inside a longer line, or a secret on a line beside a digest is
-# still scanned.
+# hash's length. An integrity value inside a longer line is still scanned.
 _SRI = (r'^\s*integrity\s*[=:(]\s*["\'](?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}'
         r'|sha512-[A-Za-z0-9+/]{86}==)["\']\s*\)?\s*[;,]?\s*$')
 SECRETS_EXCLUDE_LINES_RE = ('|'.join((
     r'^\s*validated_by_4gate:\s*"?[0-9a-f]{16}"?\s*$',
-    r'^\s*"sha256":\s*"[0-9a-f]{64}",?\s*$',
-    r'^\s*"commit":\s*"[0-9a-f]{40}",?\s*$',
     _SRI)))
+# Provenance digests: a ``PROVENANCE.json`` records a ``"sha256": "<64 lowercase hex>"``
+# per vendored or packaged file and a ``"commit": "<40 lowercase hex>"`` upstream pin, so
+# every refresh wrote new baseline entries by hand. Those two lines are dropped, each
+# only in its exact whole-line shape and only in a file named PROVENANCE.json: the same
+# line in any other file is still a finding (a 40-hex secret under a key named commit,
+# such as a GitHub OAuth client secret, must not pass). `--exclude-lines` sees a line
+# without its file, so this filter runs on the scan's results (_secret_fingerprints).
+PROVENANCE_FILE = "PROVENANCE.json"
+PROVENANCE_DIGEST_LINE_RE = re.compile(
+    r'^\s*"(?:sha256":\s*"[0-9a-f]{64}|commit":\s*"[0-9a-f]{40})",?\s*$')
 
 # The single severity/confidence policy — used identically for baseline generation
 # AND compare, so they can never drift (Gate-1 MUST-FIX-5).
@@ -380,11 +383,27 @@ def _secret_fingerprints(root: Path) -> dict[str, dict]:
         relpath = _rel(fn)
         if relpath in ignored:
             continue
+        digest_lines = _provenance_digest_lines(root, relpath)
         for s in secrets:
+            if s.get("line_number") in digest_lines:
+                continue
             key = f"{s.get('type')}\x00{relpath}\x00{s.get('hashed_secret')}"
             fp = hashlib.sha256(key.encode()).hexdigest()
             out[fp] = {"type": s.get("type"), "file": relpath, "line": s.get("line_number")}
     return out
+
+
+def _provenance_digest_lines(root: Path, relpath: str) -> set[int]:
+    """1-based numbers of the provenance digest lines of ``relpath`` (PROVENANCE_DIGEST_LINE_RE),
+    empty for any file not named PROVENANCE.json. A file that cannot be read keeps all its
+    findings (fail closed)."""
+    if Path(relpath).name != PROVENANCE_FILE:
+        return set()
+    try:
+        lines = (root / relpath).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return set()
+    return {i for i, line in enumerate(lines, 1) if PROVENANCE_DIGEST_LINE_RE.match(line)}
 
 
 def _iterable_literal_has_wildcard(node: ast.AST) -> bool:
