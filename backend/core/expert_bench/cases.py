@@ -45,9 +45,9 @@ _SHA = r"[0-9a-f]{40}(?:[0-9a-f]{24})?"     # SHA-1 or SHA-256
 
 
 def _git(repo: Path | str, *args: str, binary: bool = False, ok: Sequence[int] = (0,),
-         env: Optional[dict] = None):
+         env: Optional[dict] = None, stdin: Optional[bytes] = None):
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=120,
-                       env={**os.environ, **_GIT_ENV, **(env or {})})
+                       input=stdin, env={**os.environ, **_GIT_ENV, **(env or {})})
     if r.returncode not in ok:
         raise RuntimeError(f"git {' '.join(args[:3])} failed: {r.stderr.decode(errors='replace')[:300]}")
     return r.stdout if binary else r.stdout.decode("utf-8", "replace")
@@ -153,12 +153,17 @@ def szz(repo: Path | str, fix: str, *, owner_share: float = 0.8,
 
 def _export(repo: Path | str, rev: str, dest: Path) -> None:
     """*rev*'s tree as stored, into *dest*. Not ``git archive``: it follows
-    ``.gitattributes`` (``export-ignore`` leaves files out, ``export-subst`` rewrites them)."""
+    ``.gitattributes`` (``export-ignore`` leaves files out, ``export-subst`` rewrites them).
+    No attribute applies either (they are read from the empty tree, ``GIT_ATTR_SOURCE``)
+    and line endings are not converted, so neither the tree's own ``.gitattributes`` nor
+    the repository's configured filters (a smudge command, git-lfs) run on the export."""
     dest.mkdir(parents=True, exist_ok=True)
+    empty = _git(repo, "hash-object", "-t", "tree", "--stdin", stdin=b"").strip()
     with tempfile.TemporaryDirectory(prefix="expert-bench-index-") as tmp:
-        env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        env = {"GIT_INDEX_FILE": str(Path(tmp) / "index"), "GIT_ATTR_SOURCE": empty}
         _git(repo, "read-tree", rev, env=env)
-        _git(repo, "checkout-index", "-a", "-f", f"--prefix={dest}{os.sep}", env=env)
+        _git(repo, "-c", "core.autocrlf=false", "-c", "core.eol=lf", "checkout-index", "-a", "-f",
+             f"--prefix={dest}{os.sep}", env=env)
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str]:

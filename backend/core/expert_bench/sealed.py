@@ -3,8 +3,8 @@
 Design: docs/design/2026-11-18-expert-review-benchmark.md §4. ``build`` exports the case's
 base tree (B's parent) into a fresh repository with one commit and no remote or other
 ref, then applies B's change to the working tree uncommitted, as a native review sees
-it. Nothing later than B is in it, so ``git log --all`` or a search of the tree cannot
-show the fix.
+it (a file B adds is marked intent-to-add, so ``git diff HEAD`` shows it). Nothing
+later than B is in it, so ``git log --all`` or a search of the tree cannot show the fix.
 
 Public: ``build``.
 """
@@ -42,4 +42,10 @@ def build(repo: Path | str, case: Mapping, dest: Path) -> Path:
                  str(case["base"]), str(case["head"]), binary=True)
     if patch:
         _local(dest, "apply", "--whitespace=nowarn", "-", stdin=patch)
+        # a file the change adds is marked intent-to-add, so the reviewer's `git diff HEAD`
+        # shows it, still uncommitted (`git apply -N` drops the base's entries from the index)
+        added = [p for p in _git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=A",
+                                 str(case["base"]), str(case["head"])).split("\0") if p]
+        if added:
+            _local(dest, "add", "-N", "-f", "--", *added)
     return dest
