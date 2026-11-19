@@ -4,7 +4,7 @@ date: 2026-11-19
 created: 2026-11-19
 updated: 2026-11-19
 project: SwarmAI
-status: REVISED after one premise review (2026-11-19)；建之前先做 spike（§10），并先回答 Q1（§9）
+status: REVISED after one premise review and XG's direction (2026-11-19)；建之前先做 spike（§10）
 related: Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-27-swarm-out-hive-hld.md（Swarm Out v0）；Knowledge/Designs/2026-10-08-swarm-hive-mind-TECH-DESIGN.md（D1 载体、D2 记录先落共享层）；docs/design/2026-10-29-hive-run-record-and-worker-role.md（run record）
 ---
 
@@ -26,8 +26,11 @@ worker 角色），所以 Hive 上的派发、工单、等人、run record 都�
    `PrincipalTag/HiveName` 隔离；AgentCore 上换成 session context key
    `aws:AgentCoreRuntimeSourceSid`。
 
-它只接一类 run：公开 git repo、预计 8 小时内跑完。结果要修正时重新派发，不在同一个 session 里续。内部 repo（要 Midway/brazil/内网）和长 run
-继续走 EC2，或按 D1 走 cloud-desktop。
+**它是一个产品功能，不按任务类型设限制：能在上面跑的任务都可以派。** 它和 EC2 Hive 用同一套派发准入，
+不另加规则。准入里本来就有的能力判断照常起作用：一个任务要访问私有网络里的资源，今天对任何 Hive 都会被拒
+（`backend/core/task_spec.py:388-391`，"it needs a private network no Hive can reach"）。内部 repo 的开发
+不在 AgentCore 上跑，原因就是这个能力边界：AgentCore 拿不到内部权限，访问不到内部的资源和工具（XG，2026-11-19），
+不是一条政策。8 小时是平台的上限，跑到了就按"载体到期"结束，派发时不预判。
 
 ## 1. 要解决什么，不解决什么
 
@@ -39,14 +42,15 @@ worker 角色），所以 Hive 上的派发、工单、等人、run record 都�
 | 并发（次要，没量过） | 最多 8 台 Hive（`backend/hive/accounts.py:52`），一台 Hive 满了就拒绝（`backend/core/swarm_out.py:627-628`）。还没有数据说明 8 台是瓶颈 | 账户级默认 5,000 个活跃 session（us-east-1/us-west-2），每秒最多新建 25 个 |
 | 机群运维 | 起停（启动上限 270 秒，`swarm_out.py:209`）、空闲 120 分钟自动停（`backend/core/hive_idle.py:44-45`）、SSM 升级加回滚（`backend/hive/provisioner.py:1681-1885`） | 没有机群：镜像就是版本，没 run 就没机器 |
 
+**平台本身的边界（是能力，不是限制）：**
+
+- **访问不到内部资源和工具。** AgentCore 拿不到内部权限（Midway、brazil、内网都没有）。需要它们的任务由
+  现有准入拒绝，和对 EC2 Hive 一样（§0）。
+- **一个 microVM 最多活 8 小时。** `maxLifetime` 最大就是 8 小时。超过的 run 按"载体到期"结束（§5.4）。
+
 **不解决的：**
 
-- **内部 repo。** microVM 和公开 EC2 一样没有 Midway、brazil、内网（hive-mind D1）。
-- **超过 8 小时的 run。** 一个 microVM 最多活 8 小时，`maxLifetime` 最大也是 8 小时，不能更长。
-- **替代 EC2。** EC2 Hive 保留：长 run、要 mirror 缓存和 code graph 的大 repo、要人隔天才答的等待。
-- **对同一个 session 的修正（rerun，A5）。** 弹性 Hive 上的 run 一结束就封存、写 `closed`、
-  microVM 退出（§5.4）。修正作为一次新的派发发出。代价是修正要重新冷启动、重新传 repo 和 Brain；
-  好处是"结束"只有一种含义，Host 不用猜 microVM 还在不在。
+- **替代 EC2。** EC2 Hive 保留，弹性 Hive 是多出来的一种选择。
 - **AgentCore 的 Instances 计算类型。** 它在你的账号里起 EC2（最长 14 天），等于换一种方式管 Hive，
   和"用完即弃"无关；而且 session endpoint 不支持它。
 
@@ -220,8 +224,8 @@ sequenceDiagram
 microVM 就会一直开到 8 小时上限（等人回来就是方案 C）。只在状态真的变化时更新 `time_of_last_update`。
 
 **复盘不等 1 小时**：AgentCore 模式下，turn 结束且没有等待、没有后台工作时，立刻请求复盘任务，
-不加 58 分钟的延迟（A9）。那个延迟是为了等一个可能还会继续的 session；弹性 Hive 不接修正（§1），
-turn 结束就是任务结束。复盘结束时 `seal_end` 照旧写 lessons 和 `closed`，写到 S3 之后不再忙。
+不加 58 分钟的延迟（A9）。那个延迟是为了等一个可能还会继续的 session；弹性 Hive 上的修正在一台新的
+microVM 上做（§5.10），所以 turn 结束就是这个 session 的结束。复盘结束时 `seal_end` 照旧写 lessons 和 `closed`，写到 S3 之后不再忙。
 
 **结束的三种方式，Host 都只看 S3 判断**（替代 A8 里 `run_state` 对整台 Hive 的探测）：
 
@@ -264,14 +268,11 @@ runs 刷新读它，不发 HTTP。
 
 ### 5.7 选路
 
-第一版不让系统自动选。派发时可以点名这个弹性 Hive，或者由派发的 agent 按一条规则选：
+弹性 Hive 是 `pick_hive`（`swarm_out.py:813-855`）里普通的一个候选，不看任务类型。准入（`task_spec.admit`）
+对它和对 EC2 一样，通过了就可以派到它上面，也可以被点名。
 
-- 所有 repo 都能不带内部凭据 clone（公开 git）；
-- 不是 pipeline 的 `full` profile（预计时间最长的那种），除非 spike 测出 full 也能稳定在 8 小时内；
-- 没有正在运行且有空的 EC2 Hive。已经在跑的 EC2 已经付了钱，先用它。
-
-`pick_hive`（`swarm_out.py:813-855`）里 AgentCore 行永远不 `saturated`，排在有空的 EC2 之后、
-需要先启动的 EC2（`pick_stopped`）之前；spike 量出冷启动时间后再确认这个顺序。Brain 版本锁
+只有挑选顺序要定：AgentCore 行永远不 `saturated`；它排在已经在跑、还有空的 EC2 之后（那台机器的钱已经付了），
+排在需要先启动的 EC2（`pick_stopped`，启动上限 270 秒）之前。spike 量出冷启动时间后再确认这个顺序。Brain 版本锁
 （`held_hives`，`swarm_out.py:259-262`）不排除 AgentCore 行：每个 run 是独立的 microVM，不存在两个 run
 在一台机器上看到不同版本的问题。
 
@@ -294,7 +295,7 @@ A8 的每一类都要有去处。`_instance` 对 AgentCore 行抛错（§5.1）�
 | `hive_records.pull`、`hive_lessons.take`、`swarm_out_results.fetch` 的 checks | 读 S3（§5.5） |
 | `swarm_out_live.check`、relay、远程 tab 代理、`stop_turn`、discard | 经 `_instance_for`；run 已结束时它抛错，这些操作显示"run 已结束" |
 | `_order_state`、`_release_late`、settle 的 release | 换成 `StopRuntimeSession` 或直接跳过（工单随 microVM 消失） |
-| `_has_cap`、`rerun` | `_has_cap` 经 `_instance_for`；`rerun` 拒绝并说明"弹性 Hive 上的修正请重新派发"（§1） |
+| `_has_cap`、`rerun` | `_has_cap` 经 `_instance_for`；`rerun` 按 §5.10：microVM 在就发进原 session，不在就起新的 |
 | 写答案、列问题 | 按 dispatch 前缀（§5.6） |
 | 用量同步定时器 | 跳过 AgentCore 行；用量从每个 dispatch 的 `usage.json` 读（§5.5） |
 | 空闲自动停（`hive_idle`） | 跳过 AgentCore 行（它会对一行没有 EC2 的记录调 `claim_stop` 和 `provisioner.stop`） |
@@ -302,12 +303,27 @@ A8 的每一类都要有去处。`_instance` 对 AgentCore 行抛错（§5.1）�
 | Brain 同步状态和默认同步（`brain_sync_host.status`、`routers/hive.py:961`） | 跳过：弹性 Hive 没有常驻的 Brain，每个 run 派发时同步 |
 | 诊断（`hive_diagnostics`，经 SSM 跑 `systemctl`/`journalctl`） | 跳过；弹性 Hive 的诊断读 CloudWatch 日志 |
 
+### 5.10 修正（rerun）
+
+人或派发的 agent 对结果提修正，体验和 EC2 Hive 上一样：同一个 dispatch 下多一轮。区别只在执行：
+
+- **microVM 还在**（这一轮还没写 `closed`）：照今天，把修正作为新消息发进同一个 session。
+- **microVM 已经退出**：在一台新的 microVM 上开一个新 session，作为这个 dispatch 的下一轮：
+  - repo 从上一轮带回来的提交开始。Host 在拉结果时已经把它们放在 `refs/hive/<dispatch>/<key>`
+    （`backend/core/hive_return.py:439`），用 `repo_ship.pack(..., pinned=True)` 把那个提交打包发过去
+    （`backend/core/repo_ship.py:160-166` 支持给定任意提交）；
+  - 消息是原任务、上一轮的结果报告和这次的修正；
+  - Brain 和 Project Agent 用这个 dispatch 当初的版本。
+  新 session 有自己的 session id 和 `bridge/` 前缀；dispatch 行记下每一轮的 session，结果按轮次合并显示。
+  上一轮的工作区（没有提交的文件）不会带过去，只带提交和报告。这一点和 EC2 上续同一个工作区不同，
+  写在面板上这一轮的说明里。
+
 ## 6. 改什么，不改什么
 
 | 模块 | 改动 |
 |---|---|
 | `database/sqlite.py` `hive_instances` | 加 `carrier`、`runtime_arn` 两列 |
-| `core/swarm_out.py` | `_instance_for`；`_instance` 对 AgentCore 抛错；`_client` 的 SigV4 分叉；派发前 `InvokeAgentRuntime(start)`，地址写进 dispatch 行；`run_state` 读 `state.json`；`rerun` 拒绝 |
+| `core/swarm_out.py` | `_instance_for`；`_instance` 对 AgentCore 抛错；`_client` 的 SigV4 分叉；派发前 `InvokeAgentRuntime(start)`，地址写进 dispatch 行；`run_state` 读 `state.json`；`rerun` 按 §5.10 起新 session，dispatch 行记多个 session |
 | §5.9 表里的每个调用方 | 按表处理 |
 | `core/hive_records.py` | Host 侧 `pull` 从 S3 读；Hive 侧每条 append 后写 S3（只在 AgentCore 模式） |
 | `core/usage_hive_sync.py` | AgentCore 的用量按 dispatch 读 S3，去重键按 dispatch |
@@ -322,10 +338,10 @@ A8 的每一类都要有去处。`_instance` 对 AgentCore 行抛错（§5.1）�
 
 | 情况 | 结果 |
 |---|---|
-| run 跑过 8 小时 | microVM 终止；已写到 S3 的 record 还在；Host 显示"载体到期"，丢掉重派 |
-| 平台判定 microVM 不健康、换了一台 | 在跑的 turn 没了。新 microVM 收到请求时发现 `started` 已存在，写 `replaced` 并拒绝，Host 显示"载体被替换"，丢掉重派 |
+| run 跑过 8 小时 | microVM 终止；已写到 S3 的 record 还在；Host 显示"载体到期"；可以按 §5.10 从已封存的提交接着跑，或丢掉重派 |
+| 平台判定 microVM 不健康、换了一台 | 在跑的 turn 没了。新 microVM 收到请求时发现 `started` 已存在，写 `replaced` 并拒绝，Host 显示"载体被替换"；同样可以按 §5.10 接着跑或丢掉重派 |
 | Host 合盖几天 | 结果在 S3，等 Host 醒来读；microVM 在 `closed` 之后 15 分钟内就停了 |
-| 人要修正结果 | 重新派发（§1）。旧 run 照常结算 |
+| 人要修正结果，microVM 已退出 | 在新的 microVM 上从上一轮的提交继续（§5.10）；没提交的文件不会带过去 |
 | 写 S3 失败 | 算忙，一直重试；到 8 小时还没写完，那部分结果丢失。每次失败都记日志 |
 | 新建 session 被限流（25 TPS） | 派发失败，返回给派发方，不排队（v0 决策 9） |
 | 快照前建的 SDK client | 凭据不带 session key，写 S3 会被 IAM 拒。规则：Hive 侧所有 AWS client 都在 start 之后创建；supervisor 自己不建 client |
@@ -346,7 +362,7 @@ A8 的每一类都要有去处。`_instance` 对 AgentCore 行抛错（§5.1）�
 
 | # | 问题 | 谁定 |
 |---|---|---|
-| Q1 | TOOLS.md 记着"内部开发环境不允许在 AgentCore 上搭 agent team"。这条管不管 SwarmAI 产品在用户自己账户里起 run？如果管，本设计只对外部用户有意义 | XG |
+| Q1 | ~~AgentCore 是否受内部政策限制~~ 已定（XG，2026-11-19）：没有这种限制。内部 repo 不在上面开发，是因为 AgentCore 拿不到内部权限、访问不到内部资源和工具；这由现有准入处理（§0） | 已定 |
 | Q2 | 镜像怎么分发：每个用户在自己账户里构建并推 ECR（需要 Docker/Finch 或 CodeBuild），还是产品发布一个公共镜像、用户复制到自己的 ECR | 设计，spike 后定 |
 | Q3 | microVM 本地盘多大？一个大 repo 的 clone 加构建放得下吗 | spike |
 | Q4 | 更新 runtime 版本时，正在跑的 session 会怎样 | spike |
@@ -386,6 +402,8 @@ spike 的结论写回本文档 §3 和 §9，再决定建不建。
 6. AgentCore 模式下，没有 `X-Swarm-Hive-Auth` 或值不对的请求一律 401。
 7. `started` 已存在时，start 被拒绝且不启动后端。
 8. 两个 AgentCore run 的用量行都进了本地用量表，没有被当成重复丢掉。
+9. 对已写 `closed` 的 AgentCore dispatch 发修正：起一个新 session，它的 repo 的 HEAD 等于上一轮
+   `refs/hive/<dispatch>/<key>` 的提交；不向旧 session 发任何请求。
 
 **评审**：设计先做一次零上下文的前提审查。实现分两步（Host 侧的读，Hive 侧的写），各自做
 correctness + security 专家审查。security 重点看 §5.3 的凭据传递和 §5.6 的 IAM。
