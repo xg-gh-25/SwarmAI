@@ -2733,7 +2733,7 @@ class RunEngine:
             reports = validation_report.parse(artifact, expected)
         except validation_report.ReportError as exc:
             raise EngineError(f"validation report: {exc}") from exc
-        _roots, code_trees, bases, _existing, _changed = self._current_code(expected)
+        roots, code_trees, bases, _existing, changed = self._current_code(expected)
         unknown = sorted(name for name in expected
                          if not code_trees.get(name) or not bases.get(name))
         if unknown:
@@ -2746,6 +2746,129 @@ class RunEngine:
                 writer=self.authority.writer("cli"), kind="validation_report", at=_now(),
                 ordinal=NEXT, payload=validation_report.event_payload(
                     stage, report, code_trees[report["repo"]], check_ids))
+        if stage == "test":
+            self._record_feature_checks(roots, code_trees, bases, changed)
+
+    # ── Feature Map (design 2026-11-18-feature-map §8) ───────────────────────────
+    def _project_dir(self) -> Path | None:
+        project = self.contract.get("project")
+        if not project or not self.workspace:
+            return None
+        return Path(self.workspace) / "Projects" / str(project)
+
+    def feature_map_repos(self) -> dict[str, str]:
+        """{repo: worktree} of the run's repos that have a feature folder."""
+        from core.feature_map import files as fm_files
+        project_dir = self._project_dir()
+        out = {}
+        for name, root in self.effective_repos().items():
+            folder, _mode = fm_files.location(project_dir, name, Path(root))
+            if folder is not None:
+                out[name] = root
+        return out
+
+    def _record_feature_checks(self, roots: Mapping[str, str], code_trees: Mapping[str, Any],
+                               bases: Mapping[str, Any], changed: Mapping[str, Any]) -> None:
+        """One ``feature_checks`` event per repo with a feature folder: the reached
+        walks' results at the run's current tree, read from the ledger the CLI wrote
+        (never from the agent's report rows), the switch's value, and the evidence copied
+        into the run's records so the REPORT and the card keep it after app-data pruning.
+        Facts that cannot be computed never crash the TEST report and never pass in
+        silence: the event records the error as not decided (FM-1 refuses it while the
+        switch is on)."""
+        from config import settings
+        from core.feature_map import ledger as fm_ledger
+        from core.feature_map import pipeline as fm_pipeline
+        project_dir = self._project_dir()
+        brain = fm_ledger.brain_key(self.contract.get("project"))
+        blocking = bool(getattr(settings, "feature_checks_block", True))
+        try:
+            since = datetime.fromisoformat(str(self.contract.get("created_at"))).timestamp()
+        except (TypeError, ValueError):
+            since = None
+        out_rows: dict[str, Any] = {}
+        for name, root in sorted(roots.items()):
+            tree, base = code_trees.get(name), bases.get(name)
+            if not tree or not base:
+                continue
+            try:
+                facts = fm_pipeline.facts(
+                    project_dir=project_dir, project=brain, repo=name, root=Path(root),
+                    base=base, code_tree=tree, run_id=self.run_id,
+                    changed=list(changed.get(name) or ()), blocking=blocking, since=since)
+            except Exception as exc:  # noqa: BLE001 — recorded as not decided, never a crash
+                logging.getLogger(__name__).warning("run %s: feature checks of %s unreadable",
+                                                    self.run_id, name, exc_info=True)
+                from core.feature_map import files as fm_files
+                try:
+                    if fm_files.location(project_dir, name, Path(root))[0] is None:
+                        continue
+                except Exception:  # noqa: BLE001 — even where the folder is is unknown: not decided
+                    pass
+                facts = {"repo": name, "blocking": blocking, "code_tree": tree, "rows": [],
+                         "missing": [], "reached": [], "unplaced": [], "changed_expectations": [],
+                         "error": f"the facts could not be computed: {type(exc).__name__}: {exc}"[:600],
+                         "error_blocks": True}
+            if facts is None:
+                continue
+            facts = self._copy_feature_evidence(name, facts)
+            out_rows[name] = {"rows": fm_pipeline.evidence_rows(facts),
+                              "changed_expectations": facts.get("changed_expectations") or [],
+                              "missing": facts.get("missing") or [],
+                              "blocking": facts["blocking"], "error": facts.get("error") or ""}
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="feature_checks", at=_now(),
+                ordinal=NEXT, payload={
+                    "repo": name, "code_tree": tree, "blocking": facts["blocking"],
+                    "n_fail": len(fm_pipeline.failures(facts)), "n_rows": len(facts["rows"]),
+                    "n_missing": len(facts["missing"]),
+                    "n_unreplayed": len(fm_pipeline.unreplayed(facts)),
+                    "error_blocks": bool(facts.get("error_blocks")),
+                    "error": str(facts.get("error") or "")[:300],
+                    "report_json": json.dumps(facts, ensure_ascii=False, sort_keys=True)})
+        if out_rows:
+            DocumentStore._atomic(self.run_dir / "artifacts" / "feature-checks.json",
+                                  json.dumps(out_rows, ensure_ascii=False, indent=2))
+
+    def _copy_feature_evidence(self, repo: str, facts: dict[str, Any]) -> dict[str, Any]:
+        """Copy each row's evidence files under the run dir and point the row at them.
+        Only files the CLI put in the ledger's own evidence folder are copied: a path
+        anywhere else (a spec can name any file as an attachment) is dropped."""
+        import shutil
+        from core.feature_map import ledger as fm_ledger
+        allowed = (fm_ledger.ledger_dir(fm_ledger.brain_key(self.contract.get("project")), repo)
+                   / "evidence").resolve()
+        dest_root = self.run_dir / "artifacts" / "feature-checks" / repo
+        for i, row in enumerate(facts.get("rows") or []):
+            copied = []
+            for j, src in enumerate(row.get("evidence") or []):
+                p = Path(str(src)).resolve()
+                if not p.is_file() or not p.is_relative_to(allowed):
+                    continue
+                dest = dest_root / str(i) / f"{j}-{p.name}"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, dest)
+                copied.append(str(dest))
+            row["evidence"] = copied
+        return facts
+
+    def feature_check_facts(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """The latest ``feature_checks`` facts of each repo (their blobs), for the REPORT."""
+        latest: dict[str, Mapping[str, Any]] = {}
+        for e in rows:
+            if e.get("kind") == "feature_checks":
+                latest[str(e["payload"].get("repo"))] = e
+        out = []
+        for _repo, e in sorted(latest.items()):
+            raw = e["payload"].get("report_json")
+            try:
+                if isinstance(raw, Mapping):
+                    raw = self.store.read_blob(raw["blob"]).decode("utf-8")
+                out.append(json.loads(raw))
+            except (OSError, ValueError, KeyError, TypeError):
+                out.append({"repo": _repo, "error": "the feature checks record is unreadable",
+                            "rows": [], "missing": []})
+        return out
 
     def brain_checks(self) -> list[dict[str, str]]:
         """The checks of the Brain's kind of work recorded at create (``[{"id",
@@ -3678,6 +3801,7 @@ class RunEngine:
             run_id=self.run_id, projection=lifecycle.fold(rows, self.authority),
             events=rows, findings=projected_findings,
             test_reports=self._test_reports(rows), lessons=self._reflected_lessons(),
+            feature_checks=self.feature_check_facts(rows),
             knowledge=self._knowledge_summary(rows),
             children=self._children_summary(rows),
             contract={**self.contract, "requirement": self._delivered_summary()},

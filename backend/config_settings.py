@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # debug block in main.py). localhost:1420 is the Tauri devUrl and stays.
     cors_origins: list[str] = ["http://localhost:1420", "tauri://localhost", "https://tauri.localhost", "http://tauri.localhost"]
 
+    # Feature Map (design 2026-11-18-feature-map §13 D2): a failed walk that a pipeline
+    # run's change reaches keeps the run in TEST. False = the one switch that makes those
+    # failures listed only (env FEATURE_CHECKS_BLOCK=false).
+    feature_checks_block: bool = True
+
     # Database
     database_type: str = "sqlite"
 

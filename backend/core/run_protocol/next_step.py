@@ -331,6 +331,8 @@ def next_step(engine, *, previous_stage: str | None = None,
                            "change touches: " + "; ".join(f"{c['id']}: `{c['command']}`" for c in brain_checks)
                            + '. Give a command that runs one "validation": "<its id>"; the REPORT '
                            "lists each check as its result or not run")
+        if stage == "test":
+            _note_feature_map(engine, out)
         _note_main_overlap(engine, out)
         if stage == "build":
             _note_build_handoff(engine, out)
@@ -349,6 +351,22 @@ def next_step(engine, *, previous_stage: str | None = None,
         _note_split_at_evaluate(engine, out)
     _note_children(engine, out)        # a research run's THINK fans out too
     return out
+
+
+def _note_feature_map(engine, out: dict[str, Any]) -> None:
+    """At TEST, name the Feature Map replay for each run repo that has a feature folder
+    (design 2026-11-18-feature-map §8). FM-1 reads what this command records, never the
+    report row the agent writes for it. Nothing for a run without one."""
+    fm_repos = engine.feature_map_repos() if hasattr(engine, "feature_map_repos") else {}
+    if not fm_repos:
+        return
+    command = f'"$SWARM_BACKEND_BIN" py -m scripts.feature_map replay --affected --run {engine.run_id}'
+    out["feature_map"] = [{"repo": name, "cwd": root, "command": command}
+                          for name, root in sorted(fm_repos.items())]
+    out["why"] = (out.get("why") or "") + (
+        "; the run's repo has a Feature Map: in its worktree replay the features this change "
+        f"reaches with `{command}` before you report (a failed reached walk, and a reached "
+        "feature not replayed on this tree, keep TEST red; a walk not run for an environment reason is listed)")
 
 
 def _note_build_handoff(engine, out: dict[str, Any]) -> None:

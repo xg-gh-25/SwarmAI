@@ -287,6 +287,11 @@ def _doc_paths_not_reviewed(event_rows) -> dict[str, list[str]]:
     return {repo: sorted(paths) for repo, paths in sorted(out.items())}
 
 
+def _feature_check_lines(feature_checks: Sequence[Mapping[str, Any]]) -> list[str]:
+    from core.feature_map.pipeline import report_lines
+    return report_lines(feature_checks) if feature_checks else []
+
+
 def _validation_lines(event_rows, contract: Mapping[str, Any] | None = None) -> list[str]:
     """The REPORT's Tests lines; with the Brain's checks the run recorded, for a profile
     that has TEST (design 2026-11-09-project-agent-contract §3.2)."""
@@ -456,7 +461,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
           untracked: Mapping[str, Any] | None = None,
           children: Sequence[Mapping[str, Any]] = (),
           requirements: Mapping[str, Any] | None = None,
-          answered: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+          answered: Sequence[Mapping[str, Any]] = (),
+          feature_checks: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """*test_reports*: repo -> the latest TEST validation report (its commands are
     listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
     the run because their project has no DDD are listed in the REPORT); *open_checks*:
@@ -685,6 +691,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
                "validation": _validation_lines(event_rows, contract),
+               # the Feature Map's reached walks, from the engine's recorded facts
+               "feature_checks": _feature_check_lines(feature_checks),
                # whether a review expert answered after reading the agent's reports
                "reports_reviewed": _reports_reviewed(event_rows),
                "trace_matrix": trace_protocol.matrix(design),
@@ -1009,6 +1017,8 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                   f"{_text(details['ddd_stale_since'], 100)} was still processing; the run did not wait."]
     if details.get("validation"):
         lines += [""] + [str(line) for line in details["validation"]]
+    if details.get("feature_checks"):
+        lines += [""] + [str(line) for line in details["feature_checks"]]
     for repo, commands in (details.get("test_reports") or {}).items():
         if commands and commands[0].get("result") == "unreadable":
             lines += ["", f"TEST · {_text(repo, 80)}: the report could not be read ("

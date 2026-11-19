@@ -446,6 +446,16 @@ export const pipelinesService = {
           rescues: list(iv.rescues).map((x) => ({ at: typeof x.at === 'string' ? x.at : null, kind: String(x.kind ?? '') })),
         } : null,
         acceptance: list(data.acceptance).map((a) => ({ id: String(a.id ?? ''), text: String(a.text ?? '') })),
+        featureChecks: list(data.featureChecks).map((f) => ({
+          repo: String(f.repo ?? ''), blocking: f.blocking !== false,
+          rows: list(f.rows).map((r) => ({ feature: String(r.feature ?? ''), walk: String(r.walk ?? ''),
+            project: String(r.project ?? ''), result: String(r.result ?? ''), preExisting: r.preExisting === true,
+            files: Array.isArray(r.files) ? (r.files as unknown[]).filter((x): x is string => typeof x === 'string') : [] })),
+          missing: Array.isArray(f.missing) ? (f.missing as unknown[]).map(String) : [],
+          changedExpectations: list(f.changedExpectations).map((c) => ({ file: String(c.file ?? ''),
+            change: String(c.change ?? ''), line: String(c.line ?? '') })),
+          error: String(f.error ?? ''),
+        })),
         actions: list(data.actions).filter((a) => typeof a.key === 'string')
           .map((a) => ({ key: a.key as PipelineCommand, primary: a.primary === true })),
       };
@@ -477,7 +487,20 @@ export interface PipelineRunView {
     rescues: { at: string | null; kind: string }[];
   } | null;
   acceptance: { id: string; text: string }[];
+  /** the Feature Map checks recorded at TEST (one entry per repo with a feature folder) */
+  featureChecks: FeatureCheckRepo[];
   actions: { key: PipelineCommand; primary: boolean }[];
+}
+
+export interface FeatureCheckRepo {
+  repo: string;
+  /** false: the switch made failures listed only */
+  blocking: boolean;
+  rows: { feature: string; walk: string; project: string; result: string; preExisting: boolean; files: string[] }[];
+  /** reached features with no result on the run's final tree */
+  missing: string[];
+  changedExpectations: { file: string; change: string; line: string }[];
+  error: string;
 }
 
 function detailToCamel(raw: unknown): PipelineRunDetail | null {

@@ -22,13 +22,13 @@
  * back from a box, then out. It is a dialog layer (hooks/useLayer). A file opened by a
  * click inside closes the card and the overlay, so the Canvas is in view.
  *
- * Exports: PipelineRunCard
+ * Exports: PipelineRunCard, FeatureChecks (one repo's Feature Map checks)
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { pipelinesService, type PipelineCommand, type PipelineRunView } from '../../services/pipelines';
+import { pipelinesService, type FeatureCheckRepo, type PipelineCommand, type PipelineRunView } from '../../services/pipelines';
 import api from '../../services/api';
 import { SectionLabel, Tabs } from '../overlay';
 import { FileItemRow, ItemBox, ItemRow } from '../../pages/chat/components/ItemRows';
@@ -256,6 +256,46 @@ export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onRe
   );
 }
 
+const FC_MARK: Record<string, string> = { pass: '✓', fail: '✗', flaky: '~', not_run: '–' };
+const FC_TONE: Record<string, string> = { pass: TONE_VAR.ok, fail: TONE_VAR.error, flaky: TONE_VAR.attention };
+
+/** The Feature Map checks of one repo: each reached walk with its result and its
+ *  screenshots (rows that open in the Canvas), the features not replayed on the final
+ *  tree, and the expectations this run changed — what the person judges at the end
+ *  (design 2026-11-18-feature-map §8). */
+export function FeatureChecks({ fc }: { fc: FeatureCheckRepo }) {
+  const { t } = useTranslation();
+  const title = [t('ui.PipelineOverlay.featureChecks'), fc.repo].filter(Boolean).join(' · ');
+  return (
+    <ItemBox title={title} testId="pipeline-card-feature-checks">
+      {!fc.blocking && <div className={`text-small ${muted}`}>{t('ui.PipelineOverlay.featureChecksListedOnly')}</div>}
+      {fc.error && <div className="text-small" style={{ color: TONE_VAR.error }}>{fc.error}</div>}
+      {fc.rows.map((r, i) => (
+        <div key={`${r.feature}${r.walk}${r.project}${i}`} data-testid="pipeline-card-feature-row">
+          <ItemRow testId="pipeline-card-feature-result" badge={<span style={{ color: FC_TONE[r.result] }}>{FC_MARK[r.result] ?? '?'}</span>}
+            name={`${r.feature} · ${r.walk}`}
+            folder={[r.project, r.preExisting ? t('ui.PipelineOverlay.featurePreExisting') : ''].filter(Boolean).join(' · ')} />
+          {r.files.map((f) => (
+            <FileItemRow key={f} file={{ path: f.split('/').slice(-1)[0], absolutePath: f }} testId="pipeline-card-feature-shot" />
+          ))}
+        </div>
+      ))}
+      {fc.missing.map((m) => (
+        <ItemRow key={`m${m}`} testId="pipeline-card-feature-missing" badge={<span className={muted}>–</span>}
+          name={m} folder={t('ui.PipelineOverlay.featureNotReplayed')} />
+      ))}
+      {fc.changedExpectations.length > 0 && (
+        <div className="mt-1" data-testid="pipeline-card-feature-expectations">
+          <div className={`text-small ${muted}`}>{t('ui.PipelineOverlay.featureExpectationsChanged')}</div>
+          {fc.changedExpectations.map((c, i) => (
+            <div key={i} className="text-meta font-mono whitespace-pre-wrap break-all">{`${c.change} ${c.file}: ${c.line}`}</div>
+          ))}
+        </div>
+      )}
+    </ItemBox>
+  );
+}
+
 function Deliverable({ view }: { view: PipelineRunView }) {
   const { t } = useTranslation();
   const d = view.detail;
@@ -274,6 +314,7 @@ function Deliverable({ view }: { view: PipelineRunView }) {
           ))}
         </ItemBox>
       )}
+      {(view.featureChecks ?? []).map((fc) => <FeatureChecks key={fc.repo} fc={fc} />)}
       {d.reportPath && (
         <ItemBox title={t('ui.PipelineOverlay.documents')} testId="pipeline-card-docs">
           <FileItemRow file={{ path: d.reportPath, absolutePath: d.reportPath }} testId="pipeline-card-report" />

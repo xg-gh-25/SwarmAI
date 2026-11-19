@@ -156,6 +156,10 @@ _SPECS = [
 ]
 _SPECS += [
     _c("TS-1", "validation_report", "stage audit", "test", "test", CODE),
+    # a walk of the Feature Map that the change reaches and that failed at the current
+    # tree keeps TEST red, decided from the facts the engine recorded from the CLI's
+    # ledger, never from the agent's rows (design 2026-11-18-feature-map §8)
+    _c("FM-1", "validation_report", "stage", "test", "test", CODE),
     _c("TS-3", "test_report", "", "test", "test", DESIGN),
     # every DESIGN_SPEC test reference names a file of the tested code (DS-2a also
     # accepted a file the plan said it would create; nothing checked it was)
@@ -318,6 +322,50 @@ CARRIED_MARK = "tests carried over a main move:"
 UNREVIEWED_MARK = "landed without review of:"
 
 
+def _feature_check(context: CheckContext) -> Result:
+    """FM-1: per repo, the latest ``feature_checks`` event at the repo's current code
+    tree. Recorded with blocking on, TEST stays red for its ``n_fail`` failed reached
+    walks, its ``n_unreplayed`` reached features not replayed on this tree, and facts
+    not decided (``error_blocks``). No event at the current tree (no Feature Map, or
+    facts from an older tree that TS-1 already refuses) is nothing to refuse."""
+    current = context.run.get("code_trees")
+    if not isinstance(current, Mapping):
+        return True, "no code trees: no feature checks"
+    latest: dict[str, Mapping[str, Any]] = {}
+    for event in context.events:
+        if event.get("kind") == "feature_checks":
+            payload = event.get("payload") or {}
+            latest[str(payload.get("repo"))] = payload
+    problems, listed = [], []
+    for repo, payload in sorted(latest.items()):
+        if payload.get("code_tree") != current.get(repo):
+            continue
+        n_fail = int(payload.get("n_fail") or 0)
+        n_unreplayed = int(payload.get("n_unreplayed") or 0)
+        undecided = bool(payload.get("error_blocks"))
+        if not payload.get("blocking", True):
+            if n_fail or n_unreplayed or undecided:
+                listed.append(f"{repo}: {n_fail} failed, {n_unreplayed} not replayed"
+                              + (", not decided" if undecided else "")
+                              + " (blocking off: listed only)")
+            continue
+        if n_fail:
+            problems.append(f"{repo}: {n_fail} reached feature walk(s) failed on this tree; "
+                            "fix the product or, if the change meant it, the walk, then "
+                            "replay and report again")
+        if n_unreplayed:
+            problems.append(f"{repo}: {n_unreplayed} reached feature(s) not replayed on this "
+                            "tree; run `feature_map replay --affected --run <run id>` in the "
+                            "repo's worktree, then report again")
+        if undecided:
+            problems.append(f"{repo}: the feature checks could not be decided "
+                            f"({str(payload.get('error') or '')[:200]}); fix the feature "
+                            "folder, then replay and report again")
+    if problems:
+        return False, "; ".join(problems)
+    return True, "; ".join(listed) if listed else "no reached feature walk failed"
+
+
 def _report_check(check_id: str, context: CheckContext) -> Result:
     """BX-3 / TS-1 / LG-1 (S6-1): for every expected repo, the latest validation report
     of BUILD (BX-3) or TEST (TS-1, LG-1) is on the repo's current code tree; TS-1 and
@@ -424,6 +472,8 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         return _document_check(check_id, context)
     if check_id in ("BX-3", "TS-1", "LG-1"):
         return _report_check(check_id, context)
+    if check_id == "FM-1":
+        return _feature_check(context)
     if check_id == "RV-1a":
         handouts = [event for event in context.events if event.get("kind") == "handout"
                     and event["payload"].get("expert_id") == "correctness"

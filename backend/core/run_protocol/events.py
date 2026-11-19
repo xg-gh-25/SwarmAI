@@ -41,6 +41,7 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "address": ("payload.canonical_id", "payload.pass", "attempt"),
     "proof": ("payload.canonical_id", "payload.pass", "attempt"),
     "validation_report": ("ordinal",),
+    "feature_checks": ("ordinal",),
     "stage_attempt": ("stage", "attempt"),
     "check": ("payload.stage_attempt_event_id", "payload.check_id"),
     "transition": ("payload.from", "payload.to", "payload.trigger_event_id"),
@@ -201,6 +202,18 @@ EVENT_SPECS: dict[str, EventSpec] = {
                                 "n_fail_to_pass": int,
                                 # the Brain's checks a row named: {id: result}
                                 "checks": dict}),
+    # the Feature Map facts a TEST is decided from (core/feature_map/pipeline.py):
+    # recorded by the engine from the ledger the CLI wrote, never from the agent's rows;
+    # n_fail = the failed reached walks that keep TEST red (not red at base, not
+    # quarantined); n_unreplayed = reached features not replayed on this tree (not
+    # quarantined); error_blocks = facts not decided (the run made the folder invalid,
+    # or they could not be computed); blocking = the feature_checks_block setting when
+    # it was recorded
+    "feature_checks": _spec("cli", ("ordinal",), "payload.repo",
+                            {"repo": str, "code_tree": str, "blocking": bool,
+                             "n_fail": int, "n_rows": int, "report_json": (str, dict)},
+                            {"n_missing": int, "n_unreplayed": int, "error_blocks": bool,
+                             "error": str}),
     "stage_attempt": _spec("cli", ("stage", "attempt"), "stage",
                            {"check_ids": list},
                            # on_exhausted "continue": a third failed attempt of this
@@ -442,6 +455,13 @@ def _event_contract(event: Mapping[str, Any], *, allow_missing_ckey: bool) -> st
         if not isinstance(ids, list) or not ids or len(ids) != len(set(ids)) \
                 or any(not isinstance(item, str) or not item.startswith("CF-") for item in ids):
             raise EventError("R2 handout requires unique canonical finding_ids")
+    if kind == "feature_checks":
+        tree = payload["code_tree"]
+        if len(tree) != 40 or any(char not in "0123456789abcdef" for char in tree):
+            raise EventError("feature_checks code_tree must be a git tree id")
+        if min(payload["n_fail"], payload["n_rows"], payload.get("n_missing", 0),
+               payload.get("n_unreplayed", 0)) < 0:
+            raise EventError("feature_checks counts must not be negative")
     if kind == "validation_report":
         if payload["stage"] not in {"build", "review", "test"}:
             raise EventError("validation_report stage is invalid")

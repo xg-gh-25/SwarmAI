@@ -57,8 +57,8 @@ Map changes to what needs testing:
 
 ```
 Changed backend router → run related pytest module
-Changed React component → visual test that route
-Changed CSS/Tailwind → check responsive breakpoints
+Changed React component → replay the features its target reaches (Step 4)
+Changed CSS/Tailwind → replay too: specs run at 1440×900 and 1024×640
 Changed database schema → run migration + integration tests
 Changed config → verify startup still works
 ```
@@ -82,14 +82,23 @@ Report results clearly:
 - Total: X passed, Y failed, Z skipped
 - For each failure: file, test name, error summary (one line)
 
-### Step 4: VISUAL TEST (if UI files changed)
+### Step 4: FEATURE CHECKS (user-visible behaviour)
 
-Only run if `.tsx`, `.css`, `.html`, or `.vue` files are in the changeset.
+Replay the product's features the change reaches, from the user's side, with the Feature
+Map (skill `s_feature-map`):
 
-1. Start the dev server if not running (read TECH.md for the command, or detect from package.json)
-2. Use `s_browser-agent` to navigate to affected routes
-3. Take screenshots of each affected page
-4. Check for: layout breaks, missing content, console errors, responsive issues
+1. `"$SWARM_BACKEND_BIN" py -m scripts.feature_map affected` — which features the change
+   reaches (by target; a path under no target is listed as unplaced, never "none").
+2. `"$SWARM_BACKEND_BIN" py -m scripts.feature_map replay --affected` — replays them in a
+   sandbox with no model; each result is recorded by the program, with screenshots.
+3. Report each reached feature's result (pass / fail / flaky / not run and why) and the
+   screenshot paths. Exit 2 (not run: runtime, dependencies, target could not start) is
+   an environment problem, reported as such, never as a product failure.
+4. A user-visible change to something that has no feature yet: write its walk (see
+   `s_feature-map`) and `verify` it before committing, so the next change is checked.
+
+When the repo has no feature folder (`feature_map affected` says so), open the affected
+screens with `s_browser-agent`, take screenshots and say that no walk checked them.
 
 ### Step 5: FIX LOOP
 
@@ -160,8 +169,8 @@ Summarize results:
 1. <issue description> — <file:line> — <diagnosis>
 2. ...
 
-### Visual Test Results
-- [route]: OK / FAIL (screenshot attached)
+### Feature Checks
+- [feature · walk · viewport]: pass / fail / flaky / not run (reason), screenshot paths
 ```
 
 **L1+:** Include this structured form with the report:
@@ -184,7 +193,7 @@ The agent will rationalize cutting corners. These rebuttals are non-negotiable:
 | Agent Shortcut | Required Response |
 |---|---|
 | "Tests pass, so the code works" | Tests prove what they test. Walk the real user path to catch what they miss. |
-| "This is a minor fix, visual testing isn't needed" | Minor CSS changes cause major layout breaks. If UI files changed, test visually. |
+| "This is a minor fix, the feature checks aren't needed" | Minor CSS changes cause major layout breaks. If the change reaches a target, replay its features. |
 | "The WTF gate score is close but not quite 5" | Score of 4 means one decision away from risky. Slow down and assess. |
 | "I'll fix this test failure by adjusting the test" | Fix the CODE, not the test. Changing a test = changing the spec. |
 | "Running the full suite would take too long" | Run scoped tests for changed files. Never skip testing to save time. |
@@ -199,7 +208,7 @@ Before marking QA complete, show evidence for each:
 - [ ] **Zero silent skips** — every skipped test has an explicit reason
 - [ ] **Fix commits listed** — each fix has atomic commit hash + one-line description
 - [ ] **WTF score calculated** — show the score breakdown, even if 0
-- [ ] **Visual test evidence** — screenshots shown or "no UI files in changeset" stated
+- [ ] **Feature check evidence** — the reached features' results and screenshots shown, or "no feature reached" / "no feature folder" stated
 - [ ] **Remaining issues documented** — every unfixed issue has diagnosis + file:line
 - [ ] **QA Report generated** — all subsections filled (Summary, Fixes, Remaining, Visual)
 

@@ -111,6 +111,10 @@ class Binding(BaseModel):
     # Declares WHICH DDD docs flow back from the bound repo into SwarmWS, and where.
     # Absent (None) => sync_back is a no-op for this binding (opt-in, safe default).
     sync_back: Optional[dict[str, str]] = None
+    # Where this repo's Feature Map lives (design 2026-11-18-feature-map §4.4): "repo"
+    # (<checkout>/.swarmai/features/) or "brain" (<Brain>/.artifacts/feature-map/<repo>/).
+    # Written once, by core/feature_map/files.choose_location; absent = not decided yet.
+    features: Optional[Literal["repo", "brain"]] = None
 
 
 class BindingsDoc(BaseModel):

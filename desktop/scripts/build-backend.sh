@@ -269,6 +269,9 @@ for _src in _shipped_skill_files('skills'):
     datas.append((_src, _os.path.dirname(_src)))
 # Include DDD templates for default project provisioning
 datas += [('templates', 'templates')]
+# Feature Map's pinned Playwright runtime (package.json + lockfile, installed with npm ci
+# on first use into app data; core/feature_map/runtime.py)
+datas += [('core/feature_map/runtime_lock', 'core/feature_map/runtime_lock')]
 # App Platform Phase A: canonical built-in manifests are provenance inputs; runtime
 # consumes only the generated immutable index (no manifest scan on request paths).
 datas += [('apps', 'apps')]

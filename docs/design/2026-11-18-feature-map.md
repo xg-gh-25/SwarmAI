@@ -217,7 +217,8 @@ whether a finer join is ever added.
 files:
 
 - a target is **reached** when a changed path is under its `root` or `paths`, or it `needs`
-  a reached target; all its walks (minus quarantined ones) are selected;
+  a reached target; all its walks are selected (a quarantined one too: it is replayed and
+  recorded, so it can earn its release, and never blocks);
 - a changed path under no target is **unplaced** and listed; it reaches every target whose
   root is the repo root, and the answer says so instead of "none";
 - a change to the feature folder itself reaches the features whose files changed.
@@ -286,8 +287,9 @@ Per walk, from Playwright's JSON report: `pass`; `fail` (the failing step and Pl
 error: expected vs received); `flaky` (Playwright's own outcome: failed, then passed on the
 retry); `not_run` with a reason (bad file, runtime unavailable, dependencies missing, needs a
 service, launch failed, not ready, port taken). A walk flaky 3 times in its last 10 replays
-is **quarantined** until 5 greens in a row: TEST does not replay it (so `not_run:
-quarantined` is true), a manual replay still does. Retries never turn a result green: a
+is **quarantined** until 5 greens in a row: it is still replayed and recorded (that is how
+it earns the release), but its result never blocks and never sets the exit code; it is
+told apart by its exact key, never by a title pattern. Retries never turn a result green: a
 `flaky` result is reported as flaky.
 
 Exit codes: 0 all replayed walks passed; 1 one failed; 3 none failed, one was flaky; 2
@@ -327,10 +329,16 @@ same `affected` function:
   (`checks.py:354-356`), unless it is `pre_existing`: it also fails at the run's base
   (replayed once in a base worktree, only for walks that failed at head) — listed, not
   blocking;
-- a reached walk with no ledger line from this run is listed in the REPORT as "feature check
-  not run" — noted for the person, never blocking, so an environment problem never stops a
-  landing;
+- a reached feature with no ledger line from this run at the current tree (the replay was
+  not run since the last edit) keeps the run in TEST: running it is the agent's step. An
+  environment problem is not this case: it records `not_run` lines with their reason,
+  which are listed, never blocking;
+- a feature folder the run made invalid (or facts that could not be computed) keeps the
+  run in TEST as not decided;
 - flaky and quarantined walks are listed, never blocking.
+
+What this guards against is a missed or mistaken replay: the ledger is a local file, and an
+agent with a shell could write it like any local record.
 
 `next` at TEST names the `feature_map replay --affected` command when the run's repo has a
 Feature Map. The run's evidence is copied into the run's records (the REPORT is a function
@@ -404,8 +412,11 @@ external login with no test mode.
 
 - **D1. Where the folder lives**: §4.4, chosen once and recorded on the binding.
 - **D2. Pipeline**: a failed reached walk keeps the run in TEST, decided from the ledger; a
-  walk not run is noted, never blocking (§8). Taken on the owner's go-ahead for the core
-  loop (2026-11-19); a single switch reverts it to "listed only".
+  walk `not_run` for an environment reason is noted, never blocking (§8). Taken on the
+  owner's go-ahead for the core loop (2026-11-19); a single switch reverts it to "listed
+  only". Review of the build added: a reached feature never replayed on the current tree,
+  and a feature folder the run made invalid, block too (otherwise the gate passes by not
+  running the command); the switch covers them.
 - **D3. Product rule text** ("before committing a change that reaches a target, replay its
   features") in AGENT.md through s_self-evolution, proposed once the core is in use.
 
@@ -438,7 +449,7 @@ Invariant tests, chosen now:
 4. Runtime missing, dependencies missing, a needed service missing, launch failure, not
    ready, a taken port, a bad file: exit 2, `not_run` with that reason, never `fail`.
 5. Fail-then-pass is `flaky` (exit 3), never `pass`; 3 in 10 quarantine; 5 greens release;
-   TEST never replays a quarantined walk; editing a walk starts its history over.
+   a quarantined walk is replayed but never blocks; editing a walk starts its history over.
 6. Specs resolve the pinned `@playwright/test` even when the repo has its own Playwright.
 7. `affected`: a change under a target's root reaches all its walks and its dependents; a
    change under no root is `unplaced`, never "none"; untracked files count.

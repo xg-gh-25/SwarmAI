@@ -17,6 +17,8 @@ EXPECTED = {
     "DS-1", "DS-2a", "DS-3", "DS-4a", "DS-5", "DS-6",
     "DS-7", "DS-9a", "BX-3", "RV-1a", "RV-1b", "RV-1c",
     "DC-1", "DC-2", "RV-2", "RV-4", "RV-5", "RV-6", "FX-1", "TS-1", "TS-3", "TS-4", "DV-1",
+    # the Feature Map's TEST check (design 2026-11-18-feature-map §8)
+    "FM-1",
     "LG-1", "LG-3", "LG-4",
     "RF-1", "RF-2", "RF-3", "RF-4", "RF-5",
 }

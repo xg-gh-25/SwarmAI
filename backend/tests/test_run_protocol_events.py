@@ -49,6 +49,8 @@ def _make(kind: str, *, previous=None, **overrides):
         payload.update({"code_tree": "1" * 40})
     if kind == "validation_report":
         payload.update({"stage": "build", "repo": "repo", "code_tree": "1" * 40})
+    if kind == "feature_checks":
+        payload.update({"repo": "repo", "code_tree": "1" * 40, "n_fail": 0, "n_rows": 0})
     if kind == "run_create":
         payload["run_id"] = overrides.get("run_id", "run_abc")
     if kind == "auth_consumed":
@@ -142,6 +144,7 @@ CASES.update({
     "infrastructure_failed": ({"ordinal": 1}, "ordinal", 2),
     "session_lost": ({"ordinal": 1}, "ordinal", 2),
     "validation_report": ({"ordinal": 1}, "ordinal", 2),
+    "feature_checks": ({"ordinal": 1}, "ordinal", 2),
     "user_stop": ({"ordinal": 1}, "ordinal", 2),
     "review_reopen": ({"ordinal": 1}, "ordinal", 2),
     "worktree_unavailable": ({"ordinal": 1}, "ordinal", 2),

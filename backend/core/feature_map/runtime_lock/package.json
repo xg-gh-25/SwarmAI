@@ -1,0 +1,7 @@
+{
+  "name": "swarmai-feature-map-runtime",
+  "private": true,
+  "dependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

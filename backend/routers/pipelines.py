@@ -652,6 +652,41 @@ def _stages(raw: dict) -> list[dict]:
             for name in lifecycle.PROFILE_STAGES.get(str(raw.get("profile") or ""), ())]
 
 
+def _feature_checks(run_dir: Path) -> list[dict]:
+    """The Feature Map checks the engine recorded at TEST (artifacts/feature-checks.json:
+    each repo's reached walks, results, the screenshots copied into the run dir, the
+    expectations the run changed); [] for a run without them. Paths outside the run dir
+    are dropped."""
+    path = Path(run_dir) / "artifacts" / "feature-checks.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        return []
+    root = Path(run_dir).resolve()
+    out = []
+    for repo, value in sorted(raw.items()) if isinstance(raw, dict) else []:
+        if not isinstance(value, dict):
+            continue
+        rows = []
+        for row in value.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            files = [str(f) for f in row.get("files") or []
+                     if isinstance(f, str) and Path(f).resolve().is_relative_to(root)]
+            rows.append({"feature": str(row.get("feature") or ""), "walk": str(row.get("walk") or ""),
+                         "project": str(row.get("project") or ""), "result": str(row.get("result") or ""),
+                         "preExisting": bool(row.get("pre_existing")), "files": files})
+        out.append({"repo": str(repo), "blocking": bool(value.get("blocking", True)), "rows": rows,
+                    "missing": [str((m or {}).get("feature") or "") for m in value.get("missing") or []
+                                if isinstance(m, dict)],
+                    "changedExpectations": [
+                        {"file": str(c.get("file") or ""), "change": str(c.get("change") or ""),
+                         "line": str(c.get("line") or "")}
+                        for c in value.get("changed_expectations") or [] if isinstance(c, dict)][:20],
+                    "error": str(value.get("error") or "")})
+    return out
+
+
 @router.get("/{run_id}/view")
 async def pipeline_run_view(run_id: str):
     """Everything a local run's big card shows, in one read: the row's facts
@@ -687,6 +722,7 @@ async def pipeline_run_view(run_id: str):
             "stages": _stages(raw),
             "interventions": steps,
             "acceptance": _acceptance(engine.run_dir),
+            "featureChecks": _feature_checks(engine.run_dir),
             "actions": run_actions(summary, decision),
         }
 

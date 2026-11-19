@@ -38,7 +38,8 @@ def test_trivial_keeps_its_stages_and_document_checks():
     RV-5 (every addressed finding went to R2) came with the review-closure design;
     RV-6 (review coverage from the transcript, audit only) with the delivery-friction one;
     2026-10-26 removed MD-1 / MD-3 and renamed the "push" effect "audit" (no push
-    verdict); every other trivial check is as the frozen snapshot recorded it."""
+    verdict); FM-1 (the Feature Map's TEST check) came with design 2026-11-18-feature-map;
+    every other trivial check is as the frozen snapshot recorded it."""
     snap = json.loads(SNAPSHOT.read_text())
     removed = {"DS-2b", "DS-4b", "DS-9b", "BX-1", "BX-2", "TS-2", "LG-2", "LG-5",
                "QX-1", "QX-2", "MD-2",
@@ -46,7 +47,7 @@ def test_trivial_keeps_its_stages_and_document_checks():
                "MD-1", "MD-3"}        # 2026-10-26: no push verdict
     assert list(lifecycle.PROFILE_STAGES["trivial"]) == snap["stages"]
     now = {s.check_id: s for s in checks._for("trivial")}
-    assert set(now) == (set(snap["checks"]) - removed) | {"BX-3", "RV-4", "RV-5", "RV-6", "TS-4"}
+    assert set(now) == (set(snap["checks"]) - removed) | {"BX-3", "RV-4", "RV-5", "RV-6", "TS-4", "FM-1"}
     for cid, row in snap["checks"].items():
         if cid in removed or cid == "TS-1":
             continue
