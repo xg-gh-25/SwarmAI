@@ -126,6 +126,24 @@ def _slack_ts(raw: dict) -> Optional[str]:
     return f"{seconds:.6f}" if seconds > 0 else None
 
 
+_WRAPPED_RE = re.compile(r"\A<slack-user-content(?:\s[^>]*)?>\n?((?:(?!</?slack-user-content).)*?)\n?</slack-user-content>\s*\Z", re.S)
+_MARK = "\ue000"
+
+
+def _plain_text(value: Any) -> str:
+    """A message's own text. ``slack-mcp`` hands every text back as one
+    ``<slack-user-content author=… ts=…>…</slack-user-content>`` block with each space
+    of the body replaced by U+E000 (its marking of untrusted text): that block is undone
+    here, so triage, drafts, the screen and the sent-reply match see what the person
+    wrote. Inbox fences external text with its own nonce before any model reads it.
+    Text that is not exactly one such block is returned as it came."""
+    text = str(value or "")
+    found = _WRAPPED_RE.match(text)
+    if found is None:
+        return text
+    return found.group(1).replace(_MARK, " ")
+
+
 def _first(d: dict, *names: str) -> Any:
     for name in names:
         value = d.get(name)
@@ -445,7 +463,7 @@ class _SlackSource:
             or _first(profile, "real_name", "display_name", "name")
             or user_id
         )
-        text = str(raw.get("text") or "")
+        text = _plain_text(raw.get("text"))
         is_dm = is_dm or channel.startswith("D") or bool(raw.get("is_im"))
         thread_ts = _first(raw, "thread_ts", "threadTs") or self._thread_ts_from_link(raw)
         thread_ts = str(thread_ts) if thread_ts else None

@@ -395,3 +395,41 @@ def test_history_rows_with_an_iso_timestamp_keep_the_permalink_ts():
     no_link = _slack_ts({"timestamp": "2026-11-20T01:02:03Z"})
     assert no_link is not None and abs(float(no_link) - _ts("2026-11-20T01:02:03Z")) < 1e-6
     assert _ts("2026-11-20T01:02:03Z") > 1.7e9 and _ts("nonsense") == 0.0
+
+
+def _wrapped(author: str, ts_: str, body: str) -> str:
+    """Text the way slack-mcp returns it: one tagged block, spaces marked U+E000."""
+    return f'<slack-user-content author="{author}" ts="{ts_}">\n{body.replace(" ", chr(0xE000))}\n</slack-user-content>'
+
+
+async def test_marked_text_from_slack_mcp_reads_as_written_and_the_sent_reply_is_found():
+    # Live get_thread shape: user as an object, ISO timestamp, the ts only in the permalink.
+    root_ts, reply_ts = ts(60), ts(30)
+
+    def iso(t):
+        return datetime.fromtimestamp(float(t), tz=timezone.utc).isoformat()
+
+    def link(t):
+        return "https://x.slack.com/archives/D0SELF/p" + t.replace(".", "")
+
+    thread = {"threadTs": root_ts, "messages": [
+        {"text": _wrapped(ME, root_ts, "[Inbox test] root"), "user": {"id": ME, "name": "me"},
+         "timestamp": iso(root_ts), "threadTs": root_ts, "permalink": link(root_ts), "isThreadParent": True},
+        {"text": _wrapped(ME, reply_ts, "[Inbox test] thread reply, ignore"), "user": {"id": ME, "name": "me"},
+         "timestamp": iso(reply_ts), "threadTs": root_ts, "permalink": link(reply_ts)},
+    ]}
+    src = SlackMcpSource(_config(), client=FakeMcp(_mcp_handlers(get_thread=thread)))
+    ref = ThreadRef("slack", {"channel": "D0SELF", "thread_ts": root_ts})
+    after = datetime.fromtimestamp(NOW - 45, tz=timezone.utc)
+    found = await src.find_sent(ref, after, "[Inbox test] thread reply, ignore")
+    assert found is not None and found.external_msg_id == f"D0SELF:{reply_ts}"
+    msgs = await src._thread_messages(ref, 0)
+    assert [m.text for m in msgs] == ["[Inbox test] root", "[Inbox test] thread reply, ignore"]
+
+
+def test_text_that_is_not_one_marked_block_is_kept_as_is():
+    from core.inbox.sources.slack import _plain_text
+
+    assert _plain_text("plain <b>text</b>") == "plain <b>text</b>"
+    two = _wrapped(ME, "1", "a b") + "\n" + _wrapped(ME, "2", "c")
+    assert _plain_text(two) == two
