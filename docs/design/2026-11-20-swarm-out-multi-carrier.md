@@ -4,7 +4,7 @@ date: 2026-11-20
 created: 2026-11-20
 updated: 2026-11-20
 project: SwarmAI
-status: 评审中，D1、D5 已定（2026-11-20）；评审稿（合并了 2026-11-19 AgentCore 载体设计和 2026-11-20 派发层设计，两份各做过一次零上下文前提审查，审查结论已改进正文）
+status: 评审中，D1、D4、D5、D7 已定（2026-11-20）；评审稿（合并了 2026-11-19 AgentCore 载体设计和 2026-11-20 派发层设计，两份各做过一次零上下文前提审查，审查结论已改进正文）
 related: docs/design/2026-10-30-dispatch-center.md（派单中心）；Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-27-swarm-out-hive-hld.md（Swarm Out v0）；Knowledge/Designs/2026-10-08-swarm-hive-mind-TECH-DESIGN.md（D1 载体、D2 记录先落共享层）；docs/design/2026-10-29-hive-run-record-and-worker-role.md（run record）；图：Knowledge/Designs/2026-11-20-agentcore-carrier-e2e.html
 ---
 
@@ -32,10 +32,10 @@ Swarm Out 今天只有一种执行机：一台台常驻的 EC2 Hive。本设计�
 | D1 | 派发层放在 Host 进程里，还是做成云上控制面 | Host 进程里（A） | §3 | **已定**（XG 2026-11-20） |
 | D2 | 第二种执行面用 AgentCore Runtime microVM，跑现在的 Hive 包 | 是 | §6.1 | 待定 |
 | D3 | AgentCore run 的结果怎么活过 microVM | run record 封存时写 S3（B），不用 session storage | §6.2 | 待定 |
-| D4 | 调度顺序 | 在跑有空的 EC2 → 弹性 → 停着的 EC2，层内按负载 | §4.4 | 待定 |
+| D4 | 调度顺序 | 在跑有空的 EC2 → 弹性 → 停着的 EC2，层内按负载 | §4.4 | **已定**（XG 2026-11-20） |
 | D5 | 在跑的 EC2 都满、**且这时用不了弹性 Hive**（没开通、到配额、被限流、镜像版本不对）时，启动停着的 EC2 | 是（改 `pick_stopped` 的旧规则）。有弹性 Hive 时，满了先走弹性（D4 第 2 层） | §4.4 | **已定**（XG 2026-11-20） |
 | D6 | 开 run 前位置不可用时换一个 | 只在对那台机器还没写任何东西时换 | §4.4 | 待定 |
-| D7 | AgentCore 上的修正 | microVM 在就发进原 session；不在就新起一台，从上一轮带回的提交接着做 | §6.6 | 待定 |
+| D7 | AgentCore 上的修正 | microVM 在就发进原 session；不在就新起一台，从上一轮带回的提交接着做 | §6.6 | **已定**（XG 2026-11-20） |
 | D8 | Gateway | 不进执行面这一层；工具层单独设计 | §7 | 待定 |
 | D9 | 落地顺序 | 先抽 EC2 执行面（行为不变）→ 位置和句柄 → 调度三处变化 → spike → AgentCore | §12 | 待定 |
 
