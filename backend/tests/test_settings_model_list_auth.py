@@ -40,7 +40,7 @@ def test_api_key_mode_ignores_another_token_in_the_environment(stub, monkeypatch
 
 def test_a_sigv4_sign_in_never_lists_with_a_token_in_the_environment(stub, monkeypatch):  # noqa: F811
     monkeypatch.setenv(_KEY, "a-token-from-the-shell-0123456789")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLEEXAMPLE00")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "stub-access-key-id")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "example-secret-key-for-the-stub-only")
     _list(monkeypatch, None)
     assert stub.requests[-1]["authorization"].startswith("AWS4-HMAC-SHA256 ")
