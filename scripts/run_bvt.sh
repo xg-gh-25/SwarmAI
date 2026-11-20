@@ -27,5 +27,11 @@ echo "BVT: running ${#files[@]} curated test files"
 # python there; a worktree's .venv links the main checkout's), else the python on PATH (CI)
 py=python
 if [ -x .venv/bin/python ]; then py=.venv/bin/python; fi
+# The code-intel grammars, as every source install gets them (the backend never downloads
+# one itself, core/code_intel/grammars.py): a test of code intel on a fresh HOME reads
+# them from generated/tree_sitter_grammars. A no-op once they are there; offline it only
+# warns, and those tests then see code intel's regex path.
+"$py" scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline 120 \
+  || echo "BVT: tree-sitter grammars not bundled; code intel uses its regex path" >&2
 SWARMAI_SUITE=1 exec "$py" -m pytest -n 0 --timeout=60 --timeout-method=thread \
   -q --tb=short -p no:cacheprovider -m "not slow and not pbt" "${files[@]}"
