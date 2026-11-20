@@ -322,18 +322,27 @@ def _final(res: Optional[dict]) -> bool:
     return isinstance(res, dict) and res.get("ended") in ENDED and res.get("provisional") is not True
 
 
+#: reasons a listed file was not sealed after which waiting brings nothing back: ``gone``
+#: (nothing of it is left) and ``hive`` (under the Hive's own ``Hive/`` area, never returned)
+_NEVER_BACK = frozenset({"gone", "hive"})
+
+
 def _files_here(dispatch_id: str, kept_result: dict) -> bool:
-    """Every returned file the release would remove is here: one under ``Outputs/<id>/``
-    (core/hive_workspace.outputs_rel, the only file directory the release removes) is
-    placed in the Brain, as core/hive_files.placed records it, unless its Hive's newest
-    word is that it did not seal it for a reason other than ``gone`` (a newer copy that may
-    exist only there: it holds even when an older copy is placed); a file its Hive said is
-    ``gone`` and that never came back (core/hive_files.not_sealed: it no longer existed
-    when its turn ended) holds nothing, as the release removes nothing of it. A file not
-    placed and not reported holds. A file elsewhere on the Hive is not touched by the
-    release, so it holds nothing back. Read from the placement and record, never from the
-    ``local`` the result summary carries: a summary written before that field existed
-    never has it, though its files are placed."""
+    """Every returned file the release would remove is here. A file listed under
+    ``Outputs/<id>/`` (core/hive_workspace.outputs_rel; the release also removes
+    ``Hive/work/<id>/``, and a path there with ``Outputs/<id>/`` in it is in scope too) is
+    placed in the Brain, as core/hive_files.placed records it, unless its Hive's newest word
+    is that it did not seal it for a reason that a later turn could change (a newer copy
+    that may exist only there: it holds even when an older copy is placed). Two reasons
+    hold nothing (``_NEVER_BACK``): ``gone`` (core/hive_files.not_sealed: it no longer
+    existed when its turn ended, so the release removes nothing of it) and ``hive`` (it lies
+    under the Hive's own ``Hive/`` area, which never comes back: no later pull can bring it,
+    so holding would only keep the run open until its records expire; measured: a pipeline
+    run wrote its scratch files into ``Hive/work/<id>/Outputs/<id>/`` and could be neither
+    settled nor discarded). A file not placed and not reported holds. A file elsewhere on
+    the Hive is not touched by the release, so it holds nothing back. Read from the
+    placement and record, never from the ``local`` the result summary carries: a summary
+    written before that field existed never has it, though its files are placed."""
     from core import hive_files, hive_workspace
     rel = hive_workspace.outputs_rel(dispatch_id).strip("/") + "/"
     here: set = set()
@@ -350,9 +359,9 @@ def _files_here(dispatch_id: str, kept_result: dict) -> bool:
         if words is None:                              # the Hive's newest word, by listed path
             words = hive_files.not_sealed(dispatch_id)
         said = {words[n] for n in names if n in words}
-        if said and said != {"gone"}:                  # a copy that may exist only on the Hive
+        if said and not said <= _NEVER_BACK:           # a copy that may exist only on the Hive
             return False
-        if said or here & set(names):                  # gone, or placed under the path it was listed by
+        if said or here & set(names):                  # gone or never returnable, or placed
             continue
         return False
     return True

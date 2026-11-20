@@ -439,6 +439,25 @@ def test_a_listed_file_the_hive_reported_gone_does_not_hold(env, monkeypatch):
     assert "files" not in d["why_not"] and d["settles"]
 
 
+def test_a_listed_file_under_hive_does_not_hold(env, monkeypatch):
+    """A file the agent wrote under Hive/ (here its outputs path resolved under its work
+    folder): its Hive never returns anything there, so no pull can bring it and the run
+    settles instead of waiting until its records expire."""
+    from core import hive_files
+    rows, _ = env
+    rows[DID] = _row("document")
+    st.set_verdict(DID, "pass", "", ENDED)
+    stray = f"/home/swarm/.swarm-ai/SwarmWS/Hive/work/{DID}/Outputs/{DID}/requirements.json"
+    monkeypatch.setattr(hive_files, "placed", lambda d: [])
+    kept = K(True)
+    kept["result"] = {"work": {"files": [{"path": stray, "abs": stray}]}}
+    monkeypatch.setattr(hive_files, "not_sealed", lambda d: {})
+    assert st.derive(rows[DID], kept)["why_not"] == ["files"]          # no word from the Hive yet
+    monkeypatch.setattr(hive_files, "not_sealed", lambda d: {stray: "hive"})
+    d = st.derive(rows[DID], kept)
+    assert "files" not in d["why_not"] and d["settles"]
+
+
 def test_a_file_not_sealed_for_another_reason_or_unreported_still_holds(env, monkeypatch):
     """Over size, secret, a link, an error: bytes only the Hive may have, so the run
     holds; and a record from before the reasons (none kept here) holds as before."""

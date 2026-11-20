@@ -58,10 +58,11 @@ PLACED = "placed.json"
 NOT_SEALED_FILE = "not-sealed.json"
 _MAX_REL = 400
 
-#: why a listed file was not sealed (the turn entry's ``not_sealed``). Only ``gone`` (the
-#: file, or a directory on its way, does not exist) lets the host stop waiting for it
-#: (core/swarm_out_settle._files_here): nothing of it is left for the release to remove.
-#: Every other reason may leave bytes that only the Hive has.
+#: why a listed file was not sealed (the turn entry's ``not_sealed``). Two let the host stop
+#: waiting for it (core/swarm_out_settle._files_here): ``gone`` (the file, or a directory on
+#: its way, does not exist: nothing of it is left for the release to remove) and ``hive``
+#: (it lies under ``Hive/``, which never comes back, so no wait can bring it). Every other
+#: reason may leave bytes that only the Hive has and that a later turn could still return.
 NOT_SEALED = ("gone", "link", "not_regular", "unreadable", "too_large", "outside", "hive",
               "secret", "not_returnable", "error")
 #: reasons one turn entry gives (a turn_deliverables block lists at most 200 files)

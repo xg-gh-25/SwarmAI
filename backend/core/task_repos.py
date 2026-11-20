@@ -175,7 +175,8 @@ def task_text(order: Optional[dict[str, Any]]) -> str:
     checked out."""
     if not order:
         return ""
-    lines = ["Workspace (prepared for this task; paths are relative to your workspace):"]
+    lines = ["Workspace (prepared for this task; every path below is relative to the workspace "
+             "root, the directory this session starts in, never to a folder you `cd` into):"]
     for r in order.get("repos") or []:
         sha = str(r.get("sha") or "")[:12]
         if r.get("access") == "write":
@@ -184,8 +185,12 @@ def task_text(order: Optional[dict[str, Any]]) -> str:
         else:
             lines.append(f"- {r['dir']}: {r['name']} at {sha}, read-only. Do not commit here: "
                          "nothing in it comes back.")
-    lines.append(f"- {order['outputs']}/: put documents, data and other deliverables that do not "
-                 "go into a repository here.")
+    commits = (" except the commits on the branches above"
+               if any(r.get("access") == "write" for r in order.get("repos") or []) else "")
+    lines.append(f"- {order['outputs']}/ at the workspace root, next to Hive/: put documents, data "
+                 "and other deliverables that do not go into a repository here. Nothing under Hive/ "
+                 f"comes back{commits}, so never write a deliverable there (not as "
+                 f"Hive/work/{order['work_id']}/{order['outputs']}/ either).")
     lines.append("Do not clone, fetch, pull or check out anything: the workspace is ready.")
     return "\n".join(lines) + "\n\n"
 

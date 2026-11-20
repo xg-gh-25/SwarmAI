@@ -244,7 +244,14 @@ def test_the_task_text_names_the_worktrees_and_no_git_command(world):
     text = task_repos.task_text(order)
     assert f"Hive/work/{W1}/repos/lib: lib at {sha[:12]} on branch hive/{W1}" in text
     assert f"Hive/work/{W1}/repos/docs: docs at {sha[:12]}, read-only" in text
-    assert f"Outputs/{W1}/" in text
+    assert f"Outputs/{W1}/ at the workspace root" in text
+    # the outputs path is not resolved under the work folder (a pipeline run once wrote its
+    # files to Hive/work/<id>/Outputs/<id>/, which never comes back)
+    assert "relative to the workspace root, the directory this session starts in" in text
+    assert "Nothing under Hive/ comes back except the commits on the branches above" in text
+    assert f"Hive/work/{W1}/Outputs/{W1}/" in text
+    read_only = task_repos.task_text({**order, "repos": [r for r in order["repos"] if r["access"] == "read"]})
+    assert "Nothing under Hive/ comes back, so never" in read_only   # no branch to point at
     assert "git " not in text and "clone " not in text.replace("Do not clone", "")
     assert task_repos.task_text(None) == ""
 
