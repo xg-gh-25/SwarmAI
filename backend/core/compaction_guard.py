@@ -24,7 +24,17 @@ Loop detection uses four complementary strategies:
      Catches real loops (same files/patterns repeating) but NOT normal
      code research (reading different files, grepping different patterns).
   2. Set-overlap (ACTIVE only): >60% of post-compaction calls match pre-compaction baseline
-  3. Single-tool repetition (ACTIVE only): any (tool_name, input_hash) pair appears ≥5 times
+  3. Single-tool repetition (ACTIVE only): one call identity (tool, input and result)
+     appears ≥5 times
+
+What a call is: a call's identity is (tool, input hash) until its result arrives
+(``record_tool_result``, by tool_use_id), then (tool, input hash + ":" + a fingerprint of
+the result with durations, clock times, sizes and ids removed). Every detector and the
+rolling baseline compare that identity, so one resumable command whose output keeps
+changing is progress, while the same command returning the same output is still a loop.
+A call whose result has not arrived (the one being checked) or never arrives is compared
+on tool and input, as before. A result for a call the guard did not record (a
+sub-agent's) is ignored.
 
 Bash command normalization:
   Bash tool calls are normalized before hashing — ``| tail -N`` suffixes,
@@ -99,7 +109,7 @@ _MIN_POST_COMPACTION_CALLS = 5
 """Minimum post-compaction calls before set-overlap detection activates."""
 
 _SINGLE_TOOL_REPEAT_LIMIT = 5
-"""A single (tool_name, input_hash) pair repeated this many times → loop."""
+"""A single call identity (tool, input hash and, once it arrived, result) repeated this many times → loop."""
 
 _COMPACTION_DROP_THRESHOLD = 30
 """Context % drop between consecutive updates that triggers heuristic compaction detection."""
@@ -145,6 +155,41 @@ _CONSEC_KILL_READONLY: int = 10
 
 _GRACE_WINDOW: int = 3
 """Calls after an escalation event before the next escalation is allowed."""
+
+_RESULT_EDGE_CHARS: int = 4000
+"""A result fingerprint reads the first and last this many characters of the result."""
+
+_PENDING_MAX: int = 256
+"""Calls awaiting a result kept at most (a result that never arrives is dropped first)."""
+
+# What in a result changes without the work moving: temporary paths (pytest's numbered
+# tmp_path, tempfile names), addresses and hex ids (0x7f.., git and object hashes),
+# UUIDs, host:port pairs and port numbers, ISO timestamps, epoch timestamps (a 10-digit
+# second count from 1.6e9 or its 13-digit millisecond form, or a 9-13 digit number after
+# ts= / time= / epoch=), random seeds (pytest-randomly prints a new one every run), clock
+# times, durations, memory sizes, process and session ids. Any other number (a count of
+# cases done, rows processed, an epoch counter) is kept, so it reads as progress; the one
+# exception is a bare count between 1.6e9 and 2e9, which reads as a timestamp. Paths go
+# first: a temp path holds digits the later patterns would otherwise cut into pieces.
+_RESULT_NOISE = [re.compile(p, re.I) for p in (
+    r"(?:/private)?/(?:tmp|var/folders)/\S*",
+    r"\bpytest-(?:of-\S+?|\d+)\b",
+    r"\btmp[\w.-]{6,}",
+    r"\b0x[0-9a-f]+\b",
+    r"(?:\blocalhost|\b\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f]*:[0-9a-f:]*\]):\d+",
+    r"\bport\s*[=:#]?\s*\d+",
+    r"(?<![.\w])(?:ts|time|timestamp|epoch)\s*[=:]\s*\d{9,13}(?:\.\d+)?\b",
+    r"\b(?:random(?:ly)?[_ -]?)?seed\s*[=:]?\s*\d+",
+    r"\b1[6-9]\d{8}(?:\d{3})?\b",
+    r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:z|[+-]\d{2}:?\d{2})?",
+    r"\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b",
+    r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds?|m|mins?|minutes?|h|hrs?|hours?)\b",
+    r"\b\d+(?:\.\d+)?\s?(?:[kmgt]i?b)\b",
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{8,}\b",
+    r"\b(?:pid|session(?:[_ -]?id)?)\s*[=:#]?\s*\S+",
+)]
+
 
 # NOTE: A per-turn raw tool-call count/duration budget (Root 2 / AC6) was
 # removed 2026-06-21. Counting total calls per turn cannot distinguish a
@@ -195,6 +240,11 @@ class CompactionGuard:
 
         # Tool tracking — sets and sequences
         self._pre_compaction_set: set[tuple[str, str]] = set()
+        # (tool, input hash) of every pre-compaction call, and of those whose result had
+        # not arrived at compaction; rebuilt only when _pre_compaction_set is replaced
+        self._pre_index_of: set | None = None
+        self._pre_bases: set[tuple[str, str]] = set()
+        self._pre_bare: set[tuple[str, str]] = set()
         self._rolling_baseline_set: set[tuple[str, str]] = set()
         self._post_compaction_sequence: list[tuple[str, str]] = []
 
@@ -210,6 +260,12 @@ class CompactionGuard:
         # Consecutive identical call detection — fires at low call counts
         self._last_pair: tuple[str, str] | None = None
         self._consec_count: int = 0
+
+        # Calls awaiting their result, by tool_use_id: (tool, input hash), and the ids
+        # of the entries of _recent_calls / _post_compaction_sequence (same order)
+        self._pending: dict[str, tuple[str, str]] = {}
+        self._recent_ids: list[Optional[str]] = []
+        self._post_ids: list[Optional[str]] = []
 
         # Grace period — pause between escalation levels
         self._grace_calls_remaining: int = 0
@@ -349,13 +405,15 @@ class CompactionGuard:
     # ── record_tool_call() ───────────────────────────────────────
 
     def record_tool_call(
-        self, tool_name: str, tool_input: dict | str | None
+        self, tool_name: str, tool_input: dict | str | None,
+        tool_use_id: Optional[str] = None,
     ) -> None:
         """Record a tool call for loop detection and work summary.
 
         Hashes the input, creates a ToolRecord with the first 200 chars
         of JSON-serialized input as input_detail, appends to tracking
-        structures.
+        structures. With *tool_use_id*, ``record_tool_result`` can later give
+        the call its result-aware identity.
         """
         try:
             input_hash = self._hash_input(tool_input)
@@ -381,6 +439,7 @@ class CompactionGuard:
 
             # Append to post-compaction sequence (used for loop detection)
             self._post_compaction_sequence.append(pair)
+            self._post_ids.append(tool_use_id)
 
             # Add to rolling baseline set (used for heuristic compaction detection)
             self._rolling_baseline_set.add(pair)
@@ -388,20 +447,81 @@ class CompactionGuard:
             # Append full record for work summary
             self._tool_records.append(record)
 
-            # Consecutive identical call tracking
-            if pair == self._last_pair:
-                self._consec_count += 1
-            else:
-                self._last_pair = pair
-                self._consec_count = 1
-
             # Sliding window for diversity-based stall detection
             self._recent_calls.append(pair)
+            self._recent_ids.append(tool_use_id)
             if len(self._recent_calls) > _STALL_ESCALATION_WINDOW:
                 self._recent_calls = self._recent_calls[-_STALL_ESCALATION_WINDOW:]
+                self._recent_ids = self._recent_ids[-_STALL_ESCALATION_WINDOW:]
+
+            # Consecutive identical call tracking: the run of earlier calls with this
+            # tool and input that share one result (a call without a result matches)
+            self._last_pair = pair
+            self._consec_count = self._streak(pair)
+
+            if tool_use_id:
+                self._pending[tool_use_id] = pair
+                while len(self._pending) > _PENDING_MAX:
+                    self._pending.pop(next(iter(self._pending)))
 
         except Exception:
             logger.exception("compaction_guard.record_tool_call failed")
+
+    def _streak(self, pair: tuple[str, str]) -> int:
+        """How many of the latest calls in the window repeat *pair*: same tool and input,
+        and, among those whose result arrived, one and the same result."""
+        tool, inp = pair
+        streak, ref = 0, None
+        for t, h in reversed(self._recent_calls):
+            base, _sep, fp = h.partition(":")
+            if t != tool or base != inp:
+                break
+            if fp:
+                if ref is None:
+                    ref = fp
+                elif fp != ref:
+                    break
+            streak += 1
+        return streak
+
+    @staticmethod
+    def _fingerprint(content: object, is_error: bool = False) -> str:
+        """A short hash of a tool result with what changes without progress removed."""
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                text = block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
+                parts.append(text if isinstance(text, str) else str(block))
+            text = "\n".join(parts)
+        else:
+            text = "" if content is None else str(content)
+        if len(text) > 2 * _RESULT_EDGE_CHARS:
+            text = text[:_RESULT_EDGE_CHARS] + "\n" + text[-_RESULT_EDGE_CHARS:]
+        for pattern in _RESULT_NOISE:
+            text = pattern.sub("#", text)
+        text = ("error:" if is_error else "") + " ".join(text.split())
+        return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()[:12]
+
+    def record_tool_result(self, tool_use_id: Optional[str], content: object,
+                           is_error: bool = False) -> None:
+        """Give a recorded call its result-aware identity. A result for a call this
+        guard did not record (a sub-agent's, or one dropped by a reset) is ignored."""
+        try:
+            pair = self._pending.pop(tool_use_id, None) if tool_use_id else None
+            if pair is None:
+                return
+            keyed = (pair[0], f"{pair[1]}:{self._fingerprint(content, bool(is_error))}")
+            for ids, calls in ((self._recent_ids, self._recent_calls),
+                               (self._post_ids, self._post_compaction_sequence)):
+                for i in range(len(ids) - 1, -1, -1):
+                    if ids[i] == tool_use_id:
+                        calls[i] = keyed
+                        break
+            if not any(p == pair for p in self._pending.values()):
+                self._rolling_baseline_set.discard(pair)
+            self._rolling_baseline_set.add(keyed)
+        except Exception:
+            logger.exception("compaction_guard.record_tool_result failed")
 
     # ── update_context_usage() ───────────────────────────────────
 
@@ -473,6 +593,7 @@ class CompactionGuard:
             self._phase = GuardPhase.ACTIVE
             self._pre_compaction_set = set(self._rolling_baseline_set)
             self._post_compaction_sequence = []
+            self._post_ids = []
 
             logger.info(
                 "compaction_guard.activated baseline_size=%d context_pct=%.1f",
@@ -494,20 +615,50 @@ class CompactionGuard:
         seen.add(key)
         logger.warning(msg, *args)
 
+    @staticmethod
+    def _resolved(seq: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """*seq* with each call still awaiting its result read as the latest earlier
+        call of the same tool and input whose result arrived (as ``_streak`` does), so
+        the call in flight is not a different call from the ones it repeats."""
+        latest: dict[tuple[str, str], tuple[str, str]] = {}
+        out: list[tuple[str, str]] = []
+        for tool, h in seq:
+            base, sep, _fp = h.partition(":")
+            if sep:
+                latest[(tool, base)] = (tool, h)
+                out.append((tool, h))
+            else:
+                out.append(latest.get((tool, base), (tool, h)))
+        return out
+
+    def _pre_index(self) -> tuple[set, set]:
+        """The bases of the pre-compaction set, and its entries without a result."""
+        if self._pre_index_of is not self._pre_compaction_set:
+            self._pre_index_of = self._pre_compaction_set
+            self._pre_bases = {(t, h.partition(":")[0]) for t, h in self._pre_compaction_set}
+            self._pre_bare = {(t, h) for t, h in self._pre_compaction_set if ":" not in h}
+        return self._pre_bases, self._pre_bare
+
     def _detect_loop(self) -> bool:
         """Detect loop via set-overlap and single-tool repetition.
 
         Returns True if a loop pattern is detected. Caches the detection
         reason in ``_last_pattern_desc`` for ``_build_pattern_description()``.
         """
-        seq = self._post_compaction_sequence
+        seq = self._resolved(self._post_compaction_sequence)
         total = len(seq)
         self._last_pattern_desc = ""
 
-        # Set-overlap detection
+        # Set-overlap detection. When either side of a match has no result (a call still
+        # waiting after compaction, or one still waiting when compaction came), the two
+        # overlap by tool and input alone.
         if total >= _MIN_POST_COMPACTION_CALLS:
+            pre_bases, pre_bare = self._pre_index()
             overlap_count = sum(
-                1 for pair in seq if pair in self._pre_compaction_set
+                1 for pair in seq
+                if pair in self._pre_compaction_set
+                or (":" not in pair[1] and pair in pre_bases)
+                or (pair[0], pair[1].partition(":")[0]) in pre_bare
             )
             if overlap_count / total > _OVERLAP_THRESHOLD:
                 self._log_detection_once("set_overlap",
@@ -538,7 +689,7 @@ class CompactionGuard:
                 )
                 self._last_pattern_desc = (
                     f"Tool {most_common_pair[0]} called {most_common_count} times "
-                    f"with identical input"
+                    f"with identical input and result"
                 )
                 return True
 
@@ -624,7 +775,8 @@ class CompactionGuard:
         Detection strategy (priority order):
 
         0. Consecutive identical calls (all phases, no minimum window):
-           - 3 consecutive identical (tool, hash) → SOFT_WARN
+           - 3 consecutive identical calls (tool, input and, once it arrived,
+             result) → SOFT_WARN
            - 5 consecutive → HARD_WARN
            - 7 consecutive → KILL
            Catches small loops (6-8 calls) at low context, no compaction needed.
@@ -636,7 +788,7 @@ class CompactionGuard:
 
         2. Context threshold + loop detection (ACTIVE only):
            - Set-overlap >60% matching baseline → SOFT_WARN
-           - Single-tool repetition ≥5 → SOFT_WARN
+           - Single-tool repetition ≥5 (same tool, input and result) → SOFT_WARN
            - Capped at SOFT_WARN: post-compaction re-reads are expected, so
              this layer never interrupts the self-continuing turn
 
@@ -673,7 +825,7 @@ class CompactionGuard:
                     self._escalation = consec_level
                     self._grace_calls_remaining = _GRACE_WINDOW
                     self._last_pattern_desc = (
-                        f"Same {tool_name} command repeated "
+                        f"Same {tool_name} command with the same result repeated "
                         f"{self._consec_count} consecutive times"
                     )
                     return consec_level
@@ -886,6 +1038,7 @@ class CompactionGuard:
         """
         try:
             self._post_compaction_sequence = []
+            self._post_ids = []
             self._last_pattern_desc = ""
             self._grace_calls_remaining = 0
             self._logged_detections = set()
@@ -912,6 +1065,9 @@ class CompactionGuard:
             self._context_window = DEFAULT_CONTEXT_WINDOW
             self._last_pair = None
             self._consec_count = 0
+            self._pending = {}
+            self._recent_ids = []
+            self._post_ids = []
             self._grace_calls_remaining = 0
             self._logged_detections = set()
         except Exception:

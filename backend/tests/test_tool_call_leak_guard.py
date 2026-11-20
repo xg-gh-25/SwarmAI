@@ -519,6 +519,7 @@ def _make_orchestrator():
 
     parent._compaction_guard = types.SimpleNamespace(
         record_tool_call=lambda *a, **k: None,
+        record_tool_result=lambda *a, **k: None,
         check=lambda: EscalationLevel.MONITORING,
     )
     parent._open_tool_uses = {}

@@ -2194,6 +2194,10 @@ class StreamingOrchestrator:
                         if not isinstance(_blk, ToolResultBlock):
                             continue
                         _tuid = getattr(_blk, "tool_use_id", None)
+                        # The main agent's results arrive here: the loop guard tells
+                        # progress from a loop by them; a sub-agent's id is not its own
+                        self._parent._compaction_guard.record_tool_result(
+                            _tuid, _blk.content, getattr(_blk, "is_error", False))
                         if not getattr(_blk, "is_error", False):
                             _um_written: list[dict] = []
                             if _tuid in _pending_file_changes:
@@ -2590,7 +2594,7 @@ class StreamingOrchestrator:
                         level = EscalationLevel.MONITORING
                         if _am_parent is None:
                             self._parent._compaction_guard.record_tool_call(
-                                block.name, block.input
+                                block.name, block.input, tool_use_id=block.id
                             )
                             level = self._parent._compaction_guard.check()
                         if level != EscalationLevel.MONITORING:
@@ -2629,6 +2633,10 @@ class StreamingOrchestrator:
                         self._parent._tool_hang_interrupt_at = None
                         # Recovery + progress → reset escalation counter (v2 MED).
                         self._parent._tool_hang_episodes = 0
+                        # The loop guard tells progress from a loop by the result too;
+                        # it ignores a result for a call it did not record (a sub-agent's)
+                        self._parent._compaction_guard.record_tool_result(
+                            block.tool_use_id, block.content, getattr(block, "is_error", False))
                         block_content = str(block.content) if block.content else ""
                         if _has_tool_summarizer:
                             truncated, was_truncated = truncate_tool_result(block_content)
