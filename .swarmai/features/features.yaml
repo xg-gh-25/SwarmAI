@@ -1,0 +1,60 @@
+schema: 1
+features:
+  - id: first-run-setup-q8rx
+    title: A fresh install opens the setup wizard, and Configure later reaches the chat
+    reach: Start SwarmAI for the first time
+    expect: The Setup Wizard asks to connect an AWS account (ADA or AWS SSO); Configure later opens the chat
+    target: app
+    spec: specs/first-run-setup-q8rx.spec.ts
+  - id: pipeline-view-vmna
+    title: Open the Pipeline view from the left nav
+    reach: Click Pipeline in the left nav
+    expect: The Pipeline panel opens inside the window and Close dismisses it
+    target: app
+    spec: specs/pipeline-view-vmna.spec.ts
+  - id: todo-view-55s5
+    title: Open ToDo from the left nav
+    reach: Click ToDo in the left nav
+    expect: The ToDo panel opens inside the window and Close dismisses it
+    target: app
+    spec: specs/todo-view-55s5.spec.ts
+  - id: jobs-view-k98s
+    title: Open Jobs & Runs from the left nav
+    reach: Click Jobs & Runs in the left nav
+    expect: The Jobs & Runs panel opens inside the window and Close dismisses it
+    target: app
+    spec: specs/jobs-view-k98s.spec.ts
+  - id: settings-view-ze9a
+    title: Open Settings and close it with Escape
+    reach: Click Settings in the left nav
+    expect: Settings opens inside the window with its sections; Escape closes it
+    target: app
+    spec: specs/settings-view-ze9a.spec.ts
+  - id: brain-hub-bvcc
+    title: Brain Hub shows the two built-in Brains
+    reach: Click Brain Hub in the left nav
+    expect: The SwarmAI Brain and the General Brain are shown, with New Brain
+    target: app
+    spec: specs/brain-hub-bvcc.spec.ts
+  - id: capabilities-view-6qa4
+    title: Apps & Capabilities lists the built-in apps
+    reach: Click Apps & Capabilities in the left nav
+    expect: The Apps view lists app cards, with Skills, Experts and Connections views to switch to
+    target: app
+    spec: specs/capabilities-view-6qa4.spec.ts
+  - id: chat-tab-draft-nfu9
+    title: Each chat tab keeps its own unsent draft
+    reach: Type in the chat input, then click New Session, then switch back
+    expect: The new tab starts empty; the first tab still holds what was typed
+    target: app
+    spec: specs/chat-tab-draft-nfu9.spec.ts
+  - id: no-account-banner-6atk
+    title: With no AWS account, the banner leads to Settings
+    reach: Open SwarmAI with no account connected
+    expect: A banner says no AWS account is connected; Open settings opens Settings
+    target: app
+    spec: specs/no-account-banner-6atk.spec.ts
+  - id: api-health-q56c
+    title: The backend answers health checks
+    target: app
+    run: [curl, -sf, "http://127.0.0.1:{port.api}/health"]

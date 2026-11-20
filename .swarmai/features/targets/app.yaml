@@ -1,0 +1,33 @@
+# The SwarmAI app as a user meets it: a fresh backend (its own data folder in the
+# sandbox, no account, no scheduler, no channels) and the desktop UI built for a
+# browser, pointed at that backend.
+id: app
+kind: web
+root: desktop/
+paths: [backend/]
+prepare:
+  - [npm, ci, --no-audit, --no-fund]
+  - [npx, vite, build]
+  - [uv, sync, --directory, "{checkout}/backend", --frozen, --no-dev]
+services:
+  - id: api
+    # subprocess mode: no channel gateway, no scheduled jobs; NO_CLI_SWEEP: a throwaway
+    # instance never sweeps the machine's claude processes (the new-user smoke test's settings)
+    argv: [uv, run, --directory, "{checkout}/backend", --frozen, --no-sync, python, -m, uvicorn,
+           main:app, --host, 127.0.0.1, --port, "{port.api}"]
+    ready: "http://127.0.0.1:{port.api}/health"
+  - id: ui
+    argv: [npx, vite, preview, --port, "{port.ui}", --strictPort, --host, 127.0.0.1]
+    ready: "http://127.0.0.1:{port.ui}/"
+base_url: "http://127.0.0.1:{port.ui}/"
+ready_timeout_s: 240
+env:
+  SWARMAI_MODE: subprocess
+  SWARMAI_NO_CLI_SWEEP: "1"
+  DATABASE_TYPE: sqlite
+  SWARM_DATA_DIR: "{sandbox}/data"
+  CORS_ORIGINS: '["http://127.0.0.1:{port.ui}"]'
+  # read by the UI build and by specs that reset backend state
+  VITE_API_URL: "http://127.0.0.1:{port.api}"
+start_states:
+  home: {setup: [[curl, -sf, -X, PUT, "http://127.0.0.1:{port.api}/api/system/onboarding-complete"]]}
