@@ -20,6 +20,8 @@ test('one error, no spinner, the next message works', { tag: '@start:chat' }, as
   await mine.click();
   await expect(shown('turn-answer').last()).toContainText('Hello from the scripted model.', { timeout: 30_000 });
   await expect(refusal).toHaveCount(1);
+  // the same card as live, with its suggested action (a line of text before)
+  await expect(panel.getByText('Send your message again to continue').filter({ visible: true })).toBeVisible();
   const same = tabs.filter({ hasText: 'refuse this [fm:invalid]' });   // an earlier walk's tab may share the title
   const n = await same.count();
   await tabs.filter({ hasText: 'refuse this [fm:invalid]' }).last().getByRole('button', { name: /^Close / }).click();

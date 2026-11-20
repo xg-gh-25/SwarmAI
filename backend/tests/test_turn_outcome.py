@@ -63,6 +63,21 @@ def test_a_failed_turn_ended_by_a_result_keeps_the_errors_message():
     assert rec.block()["message"] is None, "a turn that went on and finished is not an error"
 
 
+def test_a_failed_turn_keeps_its_suggested_action():
+    """A reload shows the failed turn's card from this block, so the error's suggested
+    action is kept with it; a turn that did not end in an error keeps none."""
+    rec = OutcomeRecorder()
+    rec.note({"type": "error", "code": "MODEL_ERROR", "message": "refused",
+              "suggested_action": "Send it again. " * 40})
+    rec.note({"type": "result", "subtype": "sdk_error", "stop_reason": "error"})
+    b = rec.block()
+    assert b["suggested_action"].startswith("Send it again.") and len(b["suggested_action"]) == 300
+    rec = OutcomeRecorder()
+    rec.note({"type": "error", "code": "MODEL_ERROR", "message": "throttled", "suggested_action": "wait"})
+    rec.note({"type": "result", "subtype": "success"})
+    assert rec.block()["suggested_action"] is None
+
+
 def test_a_crash_wins_and_keeps_only_the_type_name():
     rec = OutcomeRecorder()
     rec.note({"type": "result", "subtype": "success"})

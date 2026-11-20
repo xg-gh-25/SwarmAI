@@ -115,6 +115,8 @@ class OutcomeRecorder:
             "subtype": _clip((r or {}).get("subtype"), 32),
             "code": _clip((e or {}).get("code"), 64),
             "message": _clip((e or {}).get("message"), 300),
+            # what the person can do about it (the live card's 💡 line), for a reload
+            "suggested_action": _clip((e or {}).get("suggested_action"), 300),
             "exception": self._exception,
             "duration_ms": _int((r or {}).get("duration_ms")),
             "num_turns": _int((r or {}).get("num_turns")),
@@ -138,7 +140,8 @@ def daemon_stopped_block(repos: Optional[list] = None, at: Optional[str] = None,
     ``at``: when the turn last wrote (now when not known)."""
     block: dict[str, Any] = {
         "type": BLOCK_TYPE, "ended": "daemon_stopped", "subtype": None, "code": None,
-        "message": None, "exception": None, "duration_ms": None, "num_turns": None,
+        "message": None, "suggested_action": None, "exception": None, "duration_ms": None,
+        "num_turns": None,
         "cli_cost_total": None, "cli_pid": None, "usage": None,
         "at": at or datetime.now(timezone.utc).isoformat(),
         "gate_refusals": {}, "gate_refusals_partial": partial,

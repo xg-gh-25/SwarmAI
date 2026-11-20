@@ -84,6 +84,7 @@ import type {
   SwarmRunContent,
   TurnStopContent,
   TurnProductContent,
+  TurnOutcomeContent,
   TextContent,
   SubAgentProgress,
 } from '../../types';
@@ -180,6 +181,10 @@ export interface LiveStage { stage: string; ordinal: number | null }
 
 export interface TurnView {
   units: TurnUnit[];
+  /** The message's last turn ended in an error and only its persisted `turn_outcome`
+   *  says so (a reloaded turn: the live error line and its card are gone). Shown as the
+   *  same error card as live, not as a unit. */
+  failure?: { code?: string; message: string; suggestedAction?: string };
   /** While streaming a pipeline turn: the stage now running — the `next` of the
    *  latest stage row, or the plan's first stage before any row has arrived. */
   liveStage?: LiveStage;
@@ -428,6 +433,8 @@ export function deriveTurnView(
   let changes: TurnChangesContent | undefined;
   /** Where the turn being read began: after the last `turn_outcome` (the end of a turn). */
   let turnFrom = 0;
+  /** The text unit a persisted error outcome was shown as, and that outcome. */
+  let failedOutcome: { unit: TurnUnit; block: TurnOutcomeContent } | undefined;
   // One tool step (and its sub-agent children) into the open process segment. `stand`:
   // a stand-in Agent step for sub-agent calls whose Agent was called in an earlier turn
   // (a background agent still running): running while the turn streams, else done.
@@ -546,15 +553,18 @@ export function deriveTurnView(
     if (block.type === 'turn_outcome') {
       // A turn that ended in an error says so once, where it ended (one message can
       // hold several turns). Live, the error line the stream handler wrote
-      // (`_liveError`) says it; a reloaded turn has only its persisted outcome, so its
-      // message is shown then. A turn persisted while the CLI's own "API Error: ..."
-      // line was still shown as a reply holds that line: not twice.
+      // (`_liveError`) and its card say it; a reloaded turn has only its persisted
+      // outcome. The message's last turn then gets the same card as live (`failure`,
+      // set below: its Continue acts on the latest turn); an earlier one keeps a line.
+      // A turn persisted while the CLI's own "API Error: ..." line was still shown as
+      // a reply holds that line: not twice.
       const failed = block.ended === 'error' ? block.message?.trim() : undefined;
       if (failed && !content.slice(turnFrom, index).some((b) => b.type === 'text'
           && ((b as TextContent)._liveError || (b.text || '').includes(failed)))) {
         seg = null;
         units.push({ kind: 'outcome', text: `⚠️ ${failed}`, index, textOrdinal: texts });
         texts += 1;
+        failedOutcome = { unit: units[units.length - 1], block };
       }
       turnFrom = index + 1;
       return;
@@ -643,6 +653,22 @@ export function deriveTurnView(
     if (block.type === 'tool_use') { pushToolStep(block, index); return; }
   });
 
+  // The message's last turn failed and only its outcome says so: the error card, not
+  // a line (an outcome before the end of the content is an earlier turn's: its line).
+  // It is the last turn's when no turn ended after it: no later turn_outcome, and only
+  // display blocks after it (a turn stopped at once writes no text, but its own outcome).
+  let failure: TurnView['failure'];
+  if (failedOutcome && content.slice(content.indexOf(failedOutcome.block) + 1)
+    .every((b) => b.type !== 'turn_outcome' && DISPLAY_TYPES.has(b.type))) {
+    units.splice(units.indexOf(failedOutcome.unit), 1);
+    const b = failedOutcome.block;
+    failure = {
+      message: (b.message || '').trim(),
+      ...(b.code ? { code: b.code } : {}),
+      ...(b.suggested_action ? { suggestedAction: b.suggested_action } : {}),
+    };
+  }
+
   if (!isStreaming && lastToolIdx >= 0 && !laterBlock[lastToolIdx]) {
     for (const u of units) {
       if (u.kind !== 'process') continue;
@@ -717,6 +743,7 @@ export function deriveTurnView(
     .map((u) => u.text)
     .join('\n\n');
   return { units, nextSteps, copyText, run, attention, summary, deliverables, deliverablesOmitted, products, changes, liveStage, midWork, pipelineStart,
+    ...(failure ? { failure } : {}),
     // a receipt for background agents only (no turn ran) does not stop this turn
     stoppedMarker: stoppedMarker || (!!stopReceipt && stopReceipt.turn !== false),
     ...(stopReceipt ? { stopReceipt } : {}), notice, backgroundFinished };

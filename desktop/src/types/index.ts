@@ -617,6 +617,9 @@ export interface TurnOutcomeContent {
   subtype?: string | null;
   code?: string | null;
   message?: string | null;
+  /** What the person can do about the error (the live card's 💡 line); outcomes
+   *  persisted before it was saved have none. */
+  suggested_action?: string | null;
   exception?: string | null;
   duration_ms?: number | null;
   num_turns?: number | null;

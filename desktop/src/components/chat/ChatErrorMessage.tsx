@@ -44,6 +44,9 @@ export interface ChatErrorMessageProps {
   onRetry?: () => void;
   /** Ask the agent to continue (sends "continue"); shown unless the card has its own action. */
   onContinue?: () => void;
+  /** A card rebuilt from a reloaded turn's record: the failure is over, so mounting it
+   *  starts nothing (no health check for SERVICE_UNAVAILABLE). */
+  reloaded?: boolean;
 }
 
 /** Codes whose card already carries the one action that fixes it: no Continue. */
@@ -54,16 +57,16 @@ const OWN_ACTION_CODES = new Set([
   'CONTEXT_TOO_LARGE',
 ]);
 
-export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessageProps) {
+export function ChatErrorMessage({ error, onRetry, onContinue, reloaded }: ChatErrorMessageProps) {
   const { t } = useTranslation();
   const { triggerHealthCheck } = useHealth();
 
-  // SERVICE_UNAVAILABLE triggers immediate health check
+  // SERVICE_UNAVAILABLE triggers immediate health check (a live failure only)
   useEffect(() => {
-    if (error.code === 'SERVICE_UNAVAILABLE') {
+    if (error.code === 'SERVICE_UNAVAILABLE' && !reloaded) {
       triggerHealthCheck();
     }
-  }, [error.code, triggerHealthCheck]);
+  }, [error.code, triggerHealthCheck, reloaded]);
 
   return (
     <div

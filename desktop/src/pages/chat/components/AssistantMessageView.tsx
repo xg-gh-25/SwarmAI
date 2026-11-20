@@ -309,6 +309,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     () => deriveTurnView(turnContent, !!isStreaming, message.subAgentProgress),
     [turnContent, isStreaming, message.subAgentProgress],
   );
+  /** The turn ended in an error (live, or reloaded from its persisted outcome). */
+  const failed = !!message.isError || !!view.failure;
 
   /** All non-error text the message carries — gates the action row exactly as before
    *  the projection. The terminal notice is never copied as part of the answer. */
@@ -516,19 +518,26 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       </div>,
     );
   }
-  if (message.isError) {
-    const errorCode = message.errorCode;
+  // The turn ended in an error: live, the stream handler marked the message; reloaded,
+  // only the turn's persisted outcome says so (view.failure). The same card either way.
+  if (failed) {
+    const errorCode = message.isError ? message.errorCode : view.failure?.code;
     contentBlocks.push(
       <div key="terminal-error" className={contentBlocks.length ? ZONE_GAP : ''}>
         <ChatErrorMessage
-          error={{
+          error={message.isError ? {
             code: errorCode,
             message: terminalErrorText ?? tf(t, 'chat.list.errorFallback', 'An error occurred'),
             detail: message.errorDetail,
             suggestedAction: message.suggestedAction,
             retryAfter: (message as Message & { retryAfter?: number }).retryAfter,
+          } : {
+            code: errorCode,
+            message: view.failure!.message,
+            suggestedAction: view.failure!.suggestedAction,
           }}
           onRetry={errorCode === 'QUEUE_TIMEOUT' ? onRetryError : undefined}
+          reloaded={!message.isError}
           onContinue={isLastAssistant ? onContinue : undefined}
         />
       </div>,
@@ -579,7 +588,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
       {/* Next steps — the reply's trailing ```next-steps block as clickable chips.
           Only on the latest successful answer (older or interrupted suggestions are stale). */}
-      {!readOnly && ending && !message.isError && isLastAssistant && <NextSteps steps={view.nextSteps} />}
+      {!readOnly && ending && !failed && isLastAssistant && <NextSteps steps={view.nextSteps} />}
 
       {/* Action buttons — appear on hover below content, hidden until the turn ends
           (stream done and no background agent of this turn still running). Hidden

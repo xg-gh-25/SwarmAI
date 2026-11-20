@@ -85,7 +85,7 @@ features:
   - id: chat-model-error-b3qz
     title: A request the model refuses shows one error and the chat goes on
     reach: Send a message the model refuses
-    expect: The error is shown once with how to go on; no spinner stays; the next message gets its answer; after a reload the error is still shown, once
+    expect: The error is shown once with how to go on; no spinner stays; the next message gets its answer; after a reload the same error card is shown, once, with how to go on
     target: app
     spec: specs/chat-model-error-b3qz.spec.ts
   - id: chat-thinking-t5wq
