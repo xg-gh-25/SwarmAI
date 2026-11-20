@@ -532,3 +532,13 @@ class TestReposDir:
         assert good.status_code == 200 and good.json()["repos_dir"] == str(tmp_path / "Repos")
         reset = client.put("/api/settings", json={"repos_dir": ""})
         assert reset.status_code == 200 and reset.json()["repos_dir"] == "~/SwarmAI-Repos"
+
+
+class TestUiLanguage:
+    """ui_language: the app's language, mirrored by the desktop for text the backend writes
+    for the person (the Inbox's reason lines and trend titles)."""
+
+    def test_zh_and_en_are_stored_anything_else_is_refused(self, client: TestClient):
+        assert client.put("/api/settings", json={"ui_language": "zh"}).json()["ui_language"] == "zh"
+        assert client.put("/api/settings", json={"ui_language": "fr"}).status_code == 422
+        assert client.get("/api/settings").json()["ui_language"] == "zh"

@@ -108,6 +108,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # The repository workspace: where `artifact_cli bind --url` clones a Brain's code
     # repository, so it has one checkout the person can see and work in (core/repo_placement).
     "repos_dir": "~/SwarmAI-Repos",
+    # the language the person uses the desktop app in ("zh" / "en"), set by the app:
+    # what the Inbox writes its own sentences in (core/inbox/runner._user_profile)
+    "ui_language": "",
     "sandbox_enabled_default": False,
     "sandbox_auto_allow_bash": True,
     "sandbox_excluded_commands": "docker,ps,pgrep,pkill,top,open,screencapture,osascript,launchctl",

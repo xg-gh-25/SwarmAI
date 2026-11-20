@@ -411,15 +411,33 @@ async def _context(source_id: str) -> triage.TriageContext:
     return triage.TriageContext(user_profile=profile, examples=tuple(examples))
 
 
+_LANGUAGES = {"zh": "Chinese (简体中文)", "en": "English"}
+
+
+def _app_language() -> str:
+    try:
+        from core.app_config_manager import AppConfigManager
+        return _LANGUAGES.get(str(AppConfigManager.instance().get("ui_language") or ""), "")
+    except Exception as exc:  # noqa: BLE001 — no setting: the profile's language
+        logger.debug("inbox: ui_language unreadable (%s)", type(exc).__name__)
+        return ""
+
+
 def _user_profile() -> str:
-    """The person's profile (USER.md), as triage context. Blocking: a file read."""
+    """The person's profile (USER.md) as triage and trend context, after the language
+    they use the app in when the app has said it (``ui_language``): the Inbox's own
+    sentences (the reason line, trend titles) are written in that language. Measured: a
+    profile written in English made every reason English for a person using the app in
+    Chinese. Blocking: a file read."""
+    language = _app_language()
+    head = f"App language: {language}\n\n" if language else ""
     try:
         from core.project_registry import get_swarmws
         path = get_swarmws() / ".context" / "USER.md"
-        return path.read_text(encoding="utf-8")[:3000] if path.is_file() else ""
+        return head + (path.read_text(encoding="utf-8")[:3000] if path.is_file() else "")
     except Exception as exc:  # noqa: BLE001 — no profile: triage without it
         logger.debug("inbox: USER.md unreadable (%s)", type(exc).__name__)
-        return ""
+        return head
 
 
 async def _triage(source_id: str, candidates: list[Candidate]) -> int:

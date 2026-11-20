@@ -9,6 +9,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { defaultDataDir, joinDir } from './utils/platform';
 import { useZoom } from './hooks/useZoom';
+import { startUiLanguageSync } from './i18n/syncUiLanguage';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -85,6 +86,9 @@ const isDev = import.meta.env.DEV;
 export default function App() {
   // Track if backend is ready - prevents routes from mounting before backend is initialized
   const [isBackendReady, setIsBackendReady] = useState(isDev);
+  const { i18n } = useTranslation();
+  // the backend writes some text for the person (the Inbox): it needs the app's language
+  useEffect(() => (isBackendReady ? startUiLanguageSync(i18n) : undefined), [isBackendReady, i18n]);
 
   // App-wide zoom: Cmd+Plus / Cmd+Minus / Cmd+0
   useZoom();

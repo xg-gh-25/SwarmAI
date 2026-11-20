@@ -94,8 +94,9 @@ For every item also give:
   asked to do or why the item matters to them, as the headline they read first (the question
   they must answer, the decision, the thing to check). No preamble, no quotes, no item id.
 
-The person's language is the language their profile below is written in; without a profile,
-use the language of the item.
+The person's language is the app language their profile below names ("App language: ..."); when
+it names none, the language the profile is written in; without a profile, the language of the
+item.
 
 Answer only through the answer tool, with exactly one entry for every item id you are given
 and no other ids."""
@@ -126,5 +127,5 @@ For each pick give:
 - why: one sentence, in the person's language, on why it matters to this person (their work,
   their projects), not a summary of the item.
 
-The person's language is the language their profile below is written in; without a profile,
-use English. Pick each item at most once. Answer only through the answer tool."""
+The person's language is the app language their profile below names ("App language: ..."); when
+it names none, the language the profile is written in; without a profile, English. Pick each item at most once. Answer only through the answer tool."""

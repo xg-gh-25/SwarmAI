@@ -419,3 +419,23 @@ async def test_a_new_loop_does_not_inherit_a_summary(env):
     assert task is not None
     await task
     stale.cancel()
+
+
+def test_the_profile_names_the_app_language_when_the_app_has_set_one(monkeypatch, tmp_path):
+    """The Inbox writes its own sentences in the language the person uses the app in, not
+    the language USER.md happens to be written in."""
+    from core.app_config_manager import AppConfigManager
+    ctx = tmp_path / ".context"
+    ctx.mkdir()
+    (ctx / "USER.md").write_text("Name: XG. Role: builder.", encoding="utf-8")
+    monkeypatch.setattr("core.project_registry.get_swarmws", lambda: tmp_path)
+    values = {"ui_language": "zh"}
+
+    class Cfg:
+        def get(self, key, default=None):
+            return values.get(key, default)
+    monkeypatch.setattr(AppConfigManager, "instance", classmethod(lambda cls: Cfg()))
+    profile = runner._user_profile()
+    assert profile.startswith("App language: Chinese") and "Name: XG." in profile
+    values["ui_language"] = ""
+    assert runner._user_profile() == "Name: XG. Role: builder."

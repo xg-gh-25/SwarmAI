@@ -375,6 +375,10 @@ async def update_app_configuration(request: Request):
                 detail="default_model must be in available_models",
             )
 
+    # ui_language: the app's language, mirrored by the desktop (i18n/syncUiLanguage.ts)
+    if "ui_language" in updates and updates["ui_language"] not in ("", "zh", "en"):
+        raise HTTPException(status_code=422, detail="ui_language must be zh, en or empty")
+
     # Validation: thinking_mode must be one of the valid values
     _VALID_THINKING_MODES = {"adaptive", "enabled", "disabled"}
     if "thinking_mode" in updates:
