@@ -1,5 +1,5 @@
 {
-  "channels/adapters/slack.py": 12,
+  "channels/adapters/slack.py": 9,
   "channels/gateway.py": 8,
   "channels/streaming.py": 6,
   "core/backup_manager.py": 1,

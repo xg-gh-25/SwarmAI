@@ -15,5 +15,6 @@ backend/core/auth_remediation.py | mwinit | 4 | the fix shown only to an ADA / M
 backend/core/aws_account.py | mwinit | 2 | recognises and reports an expired Midway sign-in on the ADA path only
 backend/core/session_unit.py | mwinit | 1 | MCP auth hint, used only when the account signs in with ADA (_mcp_failure_hint)
 backend/jobs/cli_result.py | mwinit | 1 | matches auth-error text a CLI prints; a pattern over output, not an instruction
+backend/core/inbox/sources/common.py | mwinit | 3 | Inbox MCP auth fix: shown only when the MCP server's own error text names Midway/mwinit; a pattern over output
 backend/scripts/golden_case_validator.py | cmhk | 2 | temporary: the golden-case privacy word list; generalising it to the owner's own terms is a ToDo
 backend/scripts/memory_relocate.py | IVT | 1 | temporary: a one-time move of the owner's own entries; delete the script after it ran (ToDo)

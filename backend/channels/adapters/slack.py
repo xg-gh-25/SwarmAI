@@ -22,11 +22,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import threading
 import time
 from collections import OrderedDict
-from pathlib import Path
 from typing import Optional
 
 try:
@@ -38,6 +36,7 @@ except ImportError:
     SLACK_BOLT_AVAILABLE = False
 
 from config import get_app_data_dir, get_swarmws
+from core.mcp_stdio_client import McpError, McpStdioClient, McpToolError
 from channels.base import (
     ATTACH_TYPE_FILE,
     ATTACH_TYPE_IMAGE,
@@ -226,174 +225,39 @@ def _find_slack_mcp_config() -> Optional[dict]:
     return None
 
 
-class SlackMcpBridge:
-    """Async stdio JSON-RPC 2.0 bridge to the slack-mcp binary.
+class SlackMcpBridge(McpStdioClient):
+    """The bot adapter's fallback path to the slack-mcp binary (stdio JSON-RPC 2.0).
 
-    Spawns the slack-mcp process on first use via ``asyncio.create_subprocess_exec``,
-    performs the MCP initialization handshake, then reuses the connection for
-    subsequent calls.  Concurrency-safe via ``asyncio.Lock``.
-
-    Previous design used ``threading.Lock`` + ``subprocess.Popen`` + a reader
-    thread for timeouts — three layers of thread nesting.  Now native async
-    throughout: proper ``asyncio.wait_for`` timeouts, no thread pool.
+    The transport is ``core.mcp_stdio_client.McpStdioClient``: the server is spawned on
+    first use, initialized once and reused; every call has its own timeout. This class only
+    keeps the adapter's own contract: the server is found by ``_find_slack_mcp_config``,
+    and ``call_tool`` returns the JSON-RPC ``result`` dict or ``None`` on any failure (the
+    callers fall back further on ``None``).
     """
 
     def __init__(self) -> None:
-        config = _find_slack_mcp_config()
-        if config:
-            self._command: str = config["command"]
-            self._args: list = config["args"]
-            self._env: dict = config["env"]
-        else:
-            self._command = ""
-            self._args = []
-            self._env = {}
-        self._process: Optional[asyncio.subprocess.Process] = None
-        self._initialized = False
-        self._request_id = 0
-        self._lock = asyncio.Lock()
+        config = _find_slack_mcp_config() or {}
+        super().__init__(
+            config.get("command", ""),
+            config.get("args", []),
+            config.get("env", {}),
+            name="slack-mcp",
+            client_name="swarm-slack-adapter",
+            call_timeout=15.0,
+            init_timeout=10.0,
+        )
 
-    @property
-    def available(self) -> bool:
-        """True if a slack-mcp binary was found in config."""
-        return bool(self._command)
-
-    def _build_request(self, tool_name: str, arguments: dict) -> dict:
-        """Build a JSON-RPC 2.0 tools/call request."""
-        self._request_id += 1
-        return {
-            "jsonrpc": "2.0",
-            "id": self._request_id,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }
-
-    async def _spawn(self) -> bool:
-        """Spawn the slack-mcp subprocess if not already running."""
-        if self._process and self._process.returncode is None:
-            return True  # already alive
-
-        if not self._command:
-            return False
-
-        cmd_path = Path(self._command)
-        if not cmd_path.is_file():
-            logger.warning("slack-mcp binary not found: %s", self._command)
-            return False
-
-        env = {**os.environ, **self._env}
+    async def call_tool(self, tool_name: str, arguments: dict, *, timeout: Optional[float] = None) -> Optional[dict]:
+        """Call an MCP tool and return the result, or ``None`` on any error."""
+        if not self.available:
+            return None
         try:
-            self._process = await asyncio.create_subprocess_exec(
-                self._command, *self._args,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            self._initialized = False
-            return True
-        except Exception:
-            logger.exception("Failed to spawn slack-mcp process")
-            self._process = None
-            return False
-
-    async def _send_receive(self, request: dict, timeout: float = 15.0) -> Optional[dict]:
-        """Send a JSON-RPC request and read the response line."""
-        proc = self._process
-        if not proc or proc.returncode is not None:
-            return None
-
-        line = json.dumps(request) + "\n"
-        try:
-            proc.stdin.write(line.encode())
-            await proc.stdin.drain()
-
-            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
-            if not raw:
-                return None
-            return json.loads(raw)
-        except asyncio.TimeoutError:
-            logger.warning("slack-mcp response timed out after %.1fs", timeout)
-            return None
-        except Exception:
-            logger.debug("slack-mcp send/receive failed", exc_info=True)
-            return None
-
-    async def _ensure_initialized(self) -> bool:
-        """Perform the MCP initialize + initialized notification handshake."""
-        if self._initialized:
-            return True
-
-        if not await self._spawn():
-            return False
-
-        # Step 1: send initialize
-        init_req = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "swarm-slack-adapter", "version": "1.0"},
-            },
-        }
-        self._request_id = 1
-        resp = await self._send_receive(init_req, timeout=10.0)
-        if not resp or "result" not in resp:
-            logger.warning("slack-mcp initialize handshake failed: %s", resp)
-            await self.close()
-            return False
-
-        # Step 2: send initialized notification (no id, no response expected)
-        notif = {
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-            "params": {},
-        }
-        proc = self._process
-        if proc and proc.returncode is None:
-            try:
-                proc.stdin.write((json.dumps(notif) + "\n").encode())
-                await proc.stdin.drain()
-            except Exception:
-                pass
-
-        self._initialized = True
-        logger.info("slack-mcp bridge initialized (pid=%s)", proc.pid if proc else "?")
-        return True
-
-    async def call_tool(self, tool_name: str, arguments: dict) -> Optional[dict]:
-        """Call an MCP tool and return the result.
-
-        Returns the ``result`` dict from the JSON-RPC response, or None
-        on any error.  Concurrency-safe via asyncio.Lock.
-        """
-        async with self._lock:
-            if not await self._ensure_initialized():
-                return None
-            request = self._build_request(tool_name, arguments)
-            resp = await self._send_receive(request)
-            if resp and "result" in resp:
-                return resp["result"]
-            if resp and "error" in resp:
-                logger.warning("slack-mcp tool error: %s", resp["error"])
-            return None
-
-    async def close(self) -> None:
-        """Terminate the MCP subprocess."""
-        proc = self._process
-        if proc:
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=3)
-            except (asyncio.TimeoutError, Exception):
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            self._process = None
-            self._initialized = False
+            return await self.call_tool_raw(tool_name, arguments, timeout=timeout)
+        except McpToolError as exc:
+            logger.warning("slack-mcp tool error: %s", exc)
+        except McpError as exc:
+            logger.warning("slack-mcp call failed: %s", exc)
+        return None
 
 
 class SlackChannelAdapter(ChannelAdapter):

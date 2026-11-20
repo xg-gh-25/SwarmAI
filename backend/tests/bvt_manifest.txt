@@ -79,6 +79,12 @@ test_eval_release.py  # release decision: tiers, five dimensions, the four check
 test_hive_package_publish.py  # the Hive package published with a release carries no workspace content
 test_hive_update.py  # Hive update from the desktop: failures end running with the reason, background update, stale updates released
 test_hive_retry.py  # Retry on an errored Hive: confirmation and disk snapshots before anything holding data is deleted
+test_mcp_stdio_client.py  # MCP stdio client: server by exact configured id, call timeout kills the server, close, result parsing
+test_inbox_sources_common.py  # Inbox sources: pull/thread/find_sent use only READ_TOOLS, writes only in reply, all kinds registered, secrets only from the credential store
+test_inbox_source_slack.py  # Inbox Slack source (slack-mcp mapping, Web API): identity, dedup, reply into the given thread, find_sent, expired auth
+test_inbox_source_mail.py  # Inbox mail source (aws-outlook-mcp mapping, IMAP/SMTP): conversation split, Reply-To/external flags, read-only pulls, replies
+test_inbox_source_github.py  # Inbox GitHub source: notification reasons, feed-only tokens, per-subject replies, find_sent, gh auth errors
+test_inbox_source_feeds.py  # Inbox feed sources: one kind per signal fetcher, read only, cursor by publication time
 test_wide_scope.py  # the dev-box refusal of a test run wider than one change's tests (conftest)
 test_run_bvt_python.py  # run_bvt.sh runs the checkout's own venv python when it has one, else the python on PATH (CI)
 test_frontend_design_web_guidance.py  # s_frontend-design: pinned Modern Web Guidance verifies, searches, never runs npx
