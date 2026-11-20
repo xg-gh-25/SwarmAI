@@ -27,12 +27,19 @@ when ``Reply-To`` is not the sender, and ``external_domain`` when a recipient is
 the domains of the person's own addresses.
 
 Identity: the From address of the person's own latest sent mail (Outlook) or the IMAP
-login when it is an address, plus ``options["addresses"]`` (the person's aliases).
+login when it is an address, plus ``options["extra_addresses"]`` (the person's aliases).
+
+``status_detail()`` says, after ``can_send``, why sending is off (no ``email_reply``, the
+writes switch not set, no SMTP server). A reply refused for expired credentials raises
+``SendFailed`` with the fix. ``own_messages_to(thread)``: when a reply to the thread goes to
+exactly one address and that is the sender's own (no ``Reply-To`` elsewhere), the person's
+own sent mail of the last ``history_days`` (60) with that address in To, quoted history
+stripped, for drafting; none otherwise.
 
 IMAP options: ``host``, ``port`` (993), ``username``, ``folder`` (INBOX), ``sent_folder``
 (found by its ``\\Sent`` flag when not given), ``smtp_host``, ``smtp_port`` (465),
 ``smtp_security`` (``ssl`` | ``starttls``), ``max_messages`` (50). Both backends:
-``addresses``, ``first_pull_hours`` (24), ``pull_budget_s`` (120).
+``extra_addresses``, ``first_pull_hours`` (24), ``pull_budget_s`` (120), ``history_days`` (60).
 
 Key public symbols: ``OutlookMcpSource``, ``ImapSmtpSource``, ``MailRecord``,
 ``split_conversations``, ``MCP_FAMILIES``, ``create``.
@@ -281,8 +288,9 @@ class _MailSource:
         self._gate = ToolGate(
             f"mail:{config.id}", self.READ_TOOLS, self.WRITE_TOOLS, self.ALLOWED_ARGS, require_args=self.ARGS_LISTED
         )
-        self._extra_addresses = [str(a).strip().lower() for a in opts.get("addresses") or () if "@" in str(a)]
+        self._extra_addresses = [str(a).strip().lower() for a in opts.get("extra_addresses") or () if "@" in str(a)]
         self._first_pull_s = float(opts.get("first_pull_hours", 24)) * 3600
+        self._history_s = float(opts.get("history_days", 60)) * 86400
         self._budget_s = float(opts.get("pull_budget_s", 120))
         self._deadline: Optional[Deadline] = None
         self._me: Optional[Identity] = None
@@ -400,6 +408,32 @@ class _MailSource:
                 return SendReceipt(external_msg_id=rec.message_id, url=rec.url, sent_at=rec.received_at)
         return None
 
+    def status_detail(self) -> str:
+        """Why sending is off, set by ``can_send`` ('' when it can send)."""
+        return self.read_only_reason
+
+    async def _sent_to(self, address: str, since: datetime) -> list[MailRecord]:
+        raise NotImplementedError
+
+    async def own_messages_to(self, thread: Thread, limit: int = 10) -> list[Message]:
+        """The person's own latest sent mail to the one address a reply to ``thread`` goes
+        to, oldest first: only when that is the sender's own address (one recipient, no
+        Reply-To elsewhere); quoted history is stripped, mail from anyone else dropped."""
+        me = await self.whoami()
+        target = thread.target
+        if target is None or target.public or "reply_to_differs" in target.flags or len(target.recipients) != 1:
+            return []
+        address = str(target.recipients[0] or "").strip().lower()
+        if "@" not in address or any(c in address for c in "\r\n\0\"") or me.is_me(address):
+            return []
+        mine = self._mine(me)
+        since = datetime.now(timezone.utc) - timedelta(seconds=self._history_s)
+        records = [r for r in self._dedup(await self._sent_to(address, since))
+                   if r.from_addr in mine and address in r.to]
+        if not limit:
+            return []
+        return [self._to_message(r, me) for r in records[-int(limit):]]
+
     async def close(self) -> None:
         return None
 
@@ -497,14 +531,15 @@ class OutlookMcpSource(_MailSource):
         try:
             names = {t.get("name") for t in await client.list_tools()}
         except Exception as exc:  # noqa: BLE001 - an unreadable tool list means: do not offer sending
-            self.read_only_reason = f"tools/list failed: {type(exc).__name__}"
+            self.read_only_reason = f"读不到 MCP server「{self.server_id}」的工具列表（{type(exc).__name__}），先不能发送"
             return False
         if "email_reply" not in names:
-            self.read_only_reason = "the server does not offer email_reply"
+            self.read_only_reason = f"MCP server「{self.server_id}」没有 email_reply 工具，只能收不能发"
             return False
         env = {**os.environ, **(getattr(client, "env", None) or {})}
         if str(env.get(self.WRITES_ENV, "")).strip().lower() not in _TRUE:
-            self.read_only_reason = f"sending is off: the server's {self.WRITES_ENV} is not true"
+            self.read_only_reason = (f"发送没开：MCP server「{self.server_id}」的 {self.WRITES_ENV} 不是 true；"
+                                     "在它的 MCP 配置里设成 true 后点重试")
             return False
         self.read_only_reason = ""
         return True
@@ -576,7 +611,9 @@ class OutlookMcpSource(_MailSource):
         try:
             me = await self.whoami()
             rec = self._reply_record(ref, self._dedup(await self._thread_records(ref)), me)
-        except (SourceUnavailable, SourceAuthError, McpError) as exc:
+        except SourceAuthError as exc:
+            raise SendFailed(f"could not read the thread before replying: {exc}", fix=exc.fix) from exc
+        except (SourceUnavailable, McpError) as exc:
             raise SendFailed(f"could not read the thread before replying: {exc}") from exc
         if rec is None or not rec.item_id or not rec.change_key:
             raise SendFailed("the message to reply to is no longer in the mailbox")
@@ -593,12 +630,18 @@ class OutlookMcpSource(_MailSource):
             except McpTimeout:
                 raise
             except (McpToolError, McpToolRefused, McpUnavailable) as exc:
-                raise SendFailed(str(exc)) from exc
+                auth = self._auth_error(str(exc))
+                raise SendFailed(str(exc), fix=auth.fix if auth else "") from exc
         data = parse_tool_result(result)
         msg_id = ""
         if isinstance(data, dict):
             msg_id = str(_get(data, "internetMessageId", "messageId", "itemId", "id") or "")
         return SendReceipt(external_msg_id=msg_id, sent_at=datetime.now(timezone.utc))
+
+    async def _sent_to(self, address: str, since: datetime) -> list[MailRecord]:
+        # the sent folder of the window, filtered by recipient here: no search syntax to trust
+        data = await self._call("email_folders", {"folder": "sentitems", "startDate": since.date().isoformat(), "limit": 50})
+        return [r for r in split_conversations(data) if r.received_at is None or r.received_at >= since]
 
     async def close(self) -> None:
         if self._client is not None:
@@ -762,6 +805,7 @@ def _parse_rfc822(raw: bytes, fallback_id: str) -> MailRecord:
 
 class ImapSmtpSource(_MailSource):
     ARGS_LISTED: ClassVar[bool] = False  # IMAP commands and SMTP take no argument dicts: names only
+    SECRET_NAMES: ClassVar[frozenset[str]] = frozenset({"password", "smtp_password"})
     READ_TOOLS: ClassVar[frozenset[str]] = frozenset({"LOGIN", "EXAMINE", "UID SEARCH", "UID FETCH", "LIST", "LOGOUT"})
     WRITE_TOOLS: ClassVar[frozenset[str]] = frozenset({"SMTP SEND"})
 
@@ -820,7 +864,7 @@ class ImapSmtpSource(_MailSource):
 
     async def can_send(self) -> bool:
         if not self.smtp_host:
-            self.read_only_reason = "no smtp_host configured"
+            self.read_only_reason = "没填 SMTP 服务器，只能收不能发；在渠道设置里加上 SMTP 后点重试"
             return False
         self.read_only_reason = ""
         return True
@@ -912,6 +956,21 @@ class ImapSmtpSource(_MailSource):
     async def _sent_candidates(self, ref: ThreadRef, after: datetime, text: str) -> list[MailRecord]:
         return await asyncio.wait_for(asyncio.to_thread(self._sent_sync, ref, after), timeout=_CALL_CAP_S)
 
+    def _sent_to_sync(self, address: str, since: datetime) -> list[MailRecord]:
+        imap = self._session()
+        try:
+            folder = self._find_sent_folder(imap)
+            if not folder:
+                return []
+            validity, _ = imap.examine(folder)
+            uids = imap.search("SINCE", since.strftime("%d-%b-%Y"), "TO", imap_quote(address))
+            return [_parse_rfc822(raw, f"imap:{validity}:{uid}") for uid, raw in imap.fetch(sorted(uids)[-50:])]
+        finally:
+            imap.logout()
+
+    async def _sent_to(self, address: str, since: datetime) -> list[MailRecord]:
+        return await asyncio.wait_for(asyncio.to_thread(self._sent_to_sync, address, since), timeout=_CALL_CAP_S)
+
     # -- reply ------------------------------------------------------------------------
 
     async def reply(self, ref: ThreadRef, text: str) -> SendReceipt:
@@ -920,7 +979,9 @@ class ImapSmtpSource(_MailSource):
         try:
             me = await self.whoami()
             rec = self._reply_record(ref, self._dedup(await self._thread_records(ref)), me)
-        except (SourceUnavailable, SourceAuthError, OSError, asyncio.TimeoutError) as exc:
+        except SourceAuthError as exc:
+            raise SendFailed(f"could not read the thread before replying: {exc}", fix=exc.fix) from exc
+        except (SourceUnavailable, OSError, asyncio.TimeoutError) as exc:
             raise SendFailed(f"could not read the thread before replying: {exc}") from exc
         if rec is None:
             raise SendFailed("the message to reply to is no longer in the mailbox")
@@ -951,10 +1012,12 @@ class ImapSmtpSource(_MailSource):
         self._gate.check("SMTP SEND", write=True)
         password = self._secret("smtp_password") or self._secret("password")
         if not password:
-            raise SendFailed("no mail password stored for this source")
+            raise SendFailed("no mail password stored for this source", fix=_LOGIN_FIX)
         try:
             smtp = self._smtp_factory(self.smtp_host, self.smtp_port, self.smtp_security)
             smtp.login(self.username, password)
+        except smtplib.SMTPAuthenticationError as exc:
+            raise SendFailed("the mail server refused the login", fix=_LOGIN_FIX) from exc
         except Exception as exc:  # noqa: BLE001 - nothing is sent before DATA: every failure here is "not sent"
             raise SendFailed(f"the mail server did not accept the session: {type(exc).__name__}") from exc
         try:

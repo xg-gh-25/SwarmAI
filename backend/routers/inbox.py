@@ -8,11 +8,21 @@ send, caller).
   ``/sends/{id}/not-sent``, ``/sends/{id}/resend``) require ``X-Swarm-User-Action`` and
   pass the caller check (``core/inbox/caller.py``): a request from the backend itself or
   from any process it started is 403, as is one whose peer process cannot be found. The
-  other POSTs that change Inbox state (``/redraft``, ``/action``, ``/refresh``,
-  ``/sources/{id}/retry``) require the header too, so a web page cannot trigger them.
-- 409 answers carry ``detail = {"code": ..., "message": ..., ...}``: ``target_changed``
-  (with the fresh ``target``), ``redacted`` (with ``spans``), ``not_open``,
-  ``cannot_send``, ``not_unknown``, ``not_failed``.
+  other writes (``/redraft``, ``/action``, ``/refresh``, every ``/sources`` POST, PATCH
+  and DELETE) require the header too, so a web page cannot trigger them.
+- Their 403/409 answers carry ``detail`` = ``schemas.inbox.SendRefusalOut``:
+  ``target_changed`` (with the fresh ``target``), ``redacted`` (with ``spans``),
+  ``not_open``, ``cannot_send``, ``not_unknown``, ``not_failed``, ``source_removed``,
+  ``forbidden``. A refused source write carries ``SourceRefusalOut`` (with the source's
+  ``fix`` when its ``whoami`` failed); adding, changing and removing sources is
+  ``core/inbox/connect.py``.
+- The source writes (add, change, remove, store a secret) pass the same caller check:
+  they decide whose messages are read and whose credentials are used. Listing what can be
+  connected needs the header (it starts the configured MCP servers to list their tools).
+- The draft's history is the person's own messages of the thread plus, when the source
+  offers ``own_messages_to(thread)``, their recent messages to the one person a reply to
+  this thread reaches (the source returns none when a reply reaches anyone else: a channel
+  thread, a Reply-To elsewhere); any message by someone else is dropped before drafting.
 - Feed configuration moved here from ``/api/community/feeds`` unchanged in behaviour: same
   bodies, validation, status codes and the one write path ``jobs.config_io.mutate_config``.
   The community routes stay until the Community page is deleted.
@@ -31,17 +41,28 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from core import executors
-from core.inbox import caller, drafts, runner, send, store
+from core.inbox import caller, connect, drafts, runner, send, store
 from core.inbox.models import ItemState, SendStatus
 from schemas.inbox import (
+    AvailableSourceOut,
     DraftOut,
+    FeedOut,
+    FeedsOut,
     InboxCounts,
     ItemActionRequest,
     ItemOut,
+    SecretRequest,
     SendOut,
+    SendRefusalBody,
+    SendRefusalOut,
     SendRequest,
     SendsOut,
+    SourceCreateRequest,
+    SourceDeletedOut,
     SourceOut,
+    SourcePatchRequest,
+    SourceRefusalBody,
+    SourceRefusalOut,
     TargetOut,
     TrendPoint,
     TrendSummaryOut,
@@ -51,13 +72,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/inbox", tags=["inbox"])
 
 SNOOZE_S = 3 * 3600
+DRAFT_HISTORY_TIMEOUT_S = 30.0
 _UA = Header(default=None, alias="X-Swarm-User-Action")
+_SEND_ERRORS = {403: {"model": SendRefusalBody}, 409: {"model": SendRefusalBody}}
+_SOURCE_ERRORS = {400: {"model": SourceRefusalBody}, 403: {"model": SourceRefusalBody},
+                  404: {"model": SourceRefusalBody}, 409: {"model": SourceRefusalBody},
+                  422: {"model": SourceRefusalBody}}
 
 
 def _require_app(user_action: Optional[str]) -> None:
     if not user_action:
-        raise HTTPException(status_code=403, detail={"code": "forbidden",
-                                                     "message": "X-Swarm-User-Action required"})
+        raise HTTPException(status_code=403, detail=SendRefusalOut(
+            code="forbidden", message="X-Swarm-User-Action required").model_dump())
 
 
 async def _require_desktop_ui(request: Request, user_action: Optional[str]) -> None:
@@ -69,12 +95,15 @@ async def _require_desktop_ui(request: Request, user_action: Optional[str]) -> N
         await store.run_blocking(caller.check_caller, client, tuple(server) if server else None)
     except caller.CallerRefused as exc:
         logger.warning("inbox: send refused, caller is not the desktop UI (%s)", exc.reason)
-        raise HTTPException(status_code=403, detail={
-            "code": "forbidden", "message": "only the desktop UI may send", "reason": exc.reason})
+        raise HTTPException(status_code=403, detail=SendRefusalOut(
+            code="forbidden", message="only the desktop UI may send", reason=exc.reason).model_dump())
 
 
 def _refused(exc: send.SendRefused) -> HTTPException:
-    return HTTPException(status_code=exc.status, detail=exc.detail())
+    extra = exc.extra
+    return HTTPException(status_code=exc.status, detail=SendRefusalOut(
+        code=exc.code, message=exc.message, spans=extra.get("spans") or [],
+        target=extra.get("target")).model_dump())
 
 
 async def _item(item_id: str) -> dict:
@@ -131,7 +160,9 @@ async def _make_draft(item: dict) -> dict:
     try:
         me = store.identity_from_row(source_row) or await source.whoami()
         thread = await source.thread(store.ref_from_json(item["thread_ref"]))
-        history = [m for m in thread.messages if me.is_me(m.author_id)]
+        history = list(thread.messages) + await _own_messages_to(source, thread)
+        # only the person's own words: whatever a source returns, nobody else's text is drafted from
+        history = [m for m in history if me.is_me(m.author_id)]
         draft = await drafts.make_draft(thread, me, history)
     except HTTPException:
         raise
@@ -151,6 +182,21 @@ async def _make_draft(item: dict) -> dict:
     return row
 
 
+async def _own_messages_to(source, thread) -> list:
+    """The source's optional ``own_messages_to``: the person's own recent messages to the
+    one person a reply to ``thread`` reaches (none when the source has no such method, the
+    reply reaches anyone else, or it fails)."""
+    fn = getattr(source, "own_messages_to", None)
+    if not callable(fn):
+        return []
+    try:
+        return list(await asyncio.wait_for(fn(thread, drafts.HISTORY_MESSAGES),
+                                           DRAFT_HISTORY_TIMEOUT_S))
+    except Exception as exc:  # noqa: BLE001 — the thread alone still makes a draft
+        logger.info("inbox: own messages to the counterparty unavailable (%s)", type(exc).__name__)
+        return []
+
+
 @router.get("/items/{item_id}/draft", response_model=DraftOut)
 async def get_draft(item_id: str) -> DraftOut:
     """The latest draft; the first read makes one (one at a time per item)."""
@@ -168,7 +214,7 @@ async def redraft(item_id: str, user_action: Optional[str] = _UA) -> DraftOut:
     return _draft_out(await _make_draft(await _item(item_id)))
 
 
-@router.post("/items/{item_id}/send", response_model=SendOut)
+@router.post("/items/{item_id}/send", response_model=SendOut, responses=_SEND_ERRORS)
 async def send_reply(item_id: str, body: SendRequest, request: Request,
                      user_action: Optional[str] = _UA) -> SendOut:
     """The only route that sends (design §8)."""
@@ -227,7 +273,7 @@ async def list_sends(filter: Literal["all", "mine", "auto"] = "all") -> SendsOut
                     total_7d=counts["sent"], auto_7d=counts["auto"])
 
 
-@router.post("/sends/{send_id}/not-sent", response_model=SendOut)
+@router.post("/sends/{send_id}/not-sent", response_model=SendOut, responses=_SEND_ERRORS)
 async def mark_not_sent(send_id: str, request: Request, user_action: Optional[str] = _UA) -> SendOut:
     await _require_desktop_ui(request, user_action)
     try:
@@ -236,7 +282,7 @@ async def mark_not_sent(send_id: str, request: Request, user_action: Optional[st
         raise _refused(exc)
 
 
-@router.post("/sends/{send_id}/resend", response_model=SendOut)
+@router.post("/sends/{send_id}/resend", response_model=SendOut, responses=_SEND_ERRORS)
 async def resend(send_id: str, request: Request, user_action: Optional[str] = _UA) -> SendOut:
     await _require_desktop_ui(request, user_action)
     try:
@@ -279,6 +325,93 @@ async def list_sources() -> list[SourceOut]:
     return await _sources_out()
 
 
+def _source_refused(exc: connect.ConnectRefused) -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=SourceRefusalOut(**exc.detail()).model_dump())
+
+
+def _require_app_source(user_action: Optional[str]) -> None:
+    if not user_action:
+        raise HTTPException(status_code=403, detail=SourceRefusalOut(
+            code="forbidden", message="X-Swarm-User-Action required").model_dump())
+
+
+async def _require_desktop_ui_source(request: Request, user_action: Optional[str]) -> None:
+    """The source writes pass the caller check of the send routes (design §8)."""
+    _require_app_source(user_action)
+    client = (request.client.host, request.client.port) if request.client else None
+    server = request.scope.get("server")
+    try:
+        await store.run_blocking(caller.check_caller, client, tuple(server) if server else None)
+    except caller.CallerRefused as exc:
+        logger.warning("inbox: source write refused, caller is not the desktop UI (%s)", exc.reason)
+        raise HTTPException(status_code=403, detail=SourceRefusalOut(
+            code="forbidden", message="only the desktop UI may change channels").model_dump())
+
+
+async def _source_out(source_id: str) -> SourceOut:
+    for out in await _sources_out():
+        if out.id == source_id:
+            return out
+    raise HTTPException(status_code=404, detail=SourceRefusalOut(
+        code="not_found", message="no such source").model_dump())
+
+
+@router.get("/sources/available", response_model=list[AvailableSourceOut], responses=_SOURCE_ERRORS)
+async def available_sources(refresh: bool = False, user_action: Optional[str] = _UA) -> list[AvailableSourceOut]:
+    """What this machine can connect without typing anything (``core/inbox/connect.py``).
+    Needs the header: it starts the configured MCP servers to list their tools."""
+    _require_app_source(user_action)
+    return [AvailableSourceOut(**a) for a in await connect.available(refresh=refresh)]
+
+
+@router.post("/sources", response_model=SourceOut, responses=_SOURCE_ERRORS)
+async def add_source(body: SourceCreateRequest, request: Request,
+                     user_action: Optional[str] = _UA) -> SourceOut:
+    """Add a conversation source; stored only after its ``whoami`` succeeded."""
+    await _require_desktop_ui_source(request, user_action)
+    secrets = {name: value.get_secret_value() for name, value in body.secrets.items()}
+    try:
+        row = await connect.add(body.kind, body.backend, body.options, secrets)
+    except connect.ConnectRefused as exc:
+        raise _source_refused(exc)
+    return await _source_out(row["id"])
+
+
+@router.patch("/sources/{source_id}", response_model=SourceOut, responses=_SOURCE_ERRORS)
+async def update_source(source_id: str, body: SourcePatchRequest, request: Request,
+                        user_action: Optional[str] = _UA) -> SourceOut:
+    await _require_desktop_ui_source(request, user_action)
+    try:
+        await connect.update(source_id, enabled=body.enabled, interval_s=body.interval_s,
+                             lists={"watched_channels": body.watched_channels,
+                                    "extra_addresses": body.extra_addresses})
+    except connect.ConnectRefused as exc:
+        raise _source_refused(exc)
+    return await _source_out(source_id)
+
+
+@router.delete("/sources/{source_id}", response_model=SourceDeletedOut, responses=_SOURCE_ERRORS)
+async def delete_source(source_id: str, request: Request,
+                        user_action: Optional[str] = _UA) -> SourceDeletedOut:
+    await _require_desktop_ui_source(request, user_action)
+    try:
+        return SourceDeletedOut(**await connect.remove(source_id))
+    except connect.ConnectRefused as exc:
+        raise _source_refused(exc)
+
+
+@router.post("/sources/{source_id}/secret", response_model=SourceOut, responses=_SOURCE_ERRORS)
+async def set_source_secret(source_id: str, body: SecretRequest, request: Request,
+                            user_action: Optional[str] = _UA) -> SourceOut:
+    """Store a token or password of the source; the value is never returned or logged."""
+    await _require_desktop_ui_source(request, user_action)
+    try:
+        await connect.set_secret(source_id, body.name, body.value.get_secret_value())
+    except connect.ConnectRefused as exc:
+        raise _source_refused(exc)
+    return await _source_out(source_id)
+
+
 @router.post("/sources/{source_id}/retry", response_model=SourceOut)
 async def retry_source(source_id: str, user_action: Optional[str] = _UA) -> SourceOut:
     from database import db
@@ -310,13 +443,13 @@ def _config_path():
     return CONFIG_FILE
 
 
-@router.get("/feeds")
-async def list_feeds() -> dict:
+@router.get("/feeds", response_model=FeedsOut)
+async def list_feeds() -> FeedsOut:
     """Configured feeds (a view of config.yaml ``feeds:``), the shape of
     ``GET /api/community/sources``."""
     from core.community_data import parse_sources
     sources = await executors.run_nav(parse_sources, _config_path())
-    return {"count": len(sources), "sources": sources}
+    return FeedsOut(count=len(sources), sources=[FeedOut(**s) for s in sources])
 
 
 class NewFeed(BaseModel):

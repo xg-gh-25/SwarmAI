@@ -25,7 +25,12 @@ One pull of a source:
    candidate id being the item's row id. The answer's lane is applied, never below the
    rule's floor and never to PROPOSED (only ``inbox submit`` makes those).
 4. Health: ``SourceAuthError`` -> ``auth_failed`` with its ``fix`` (Needs You shows it),
-   any other error -> ``error``; neither is retried before the next interval.
+   any other error -> ``error``; neither is retried before the next interval. A source
+   that pulls but cannot send is ``read_only``, with its ``status_detail()`` kept in the
+   ``fix`` column (the channel row shows why).
+
+Removing a source (``remove_source``) takes the pull lock, so no pull of it is half-way
+when its rows go and none writes items for it afterwards.
 
 The first pull after 07:00 local each day also writes the trend summary
 (``trends.summarize`` over the last 24 h of TREND items).
@@ -35,7 +40,7 @@ Triage, drafting and the trend summary are async contract functions (``core/inbo
 own blocking work (file reads) runs on the Inbox pool (``store.run_blocking``).
 
 Public: ``should_run``, ``start``, ``stop``, ``wake``, ``pull_now``, ``run_cycle``,
-``pull_source``, ``pull_window``, ``next_delay``, ``kick_summary``.
+``pull_source``, ``remove_source``, ``pull_window``, ``next_delay``, ``kick_summary``.
 """
 from __future__ import annotations
 
@@ -58,6 +63,7 @@ MAX_SLEEP_S = 900.0   # also how soon a config.yaml feed edit made elsewhere is 
 MIN_SLEEP_S = 5.0
 TREND_SUMMARY_HOUR = 7
 SUMMARY_TIMEOUT_S = 300.0
+REMOVE_WAIT_S = 15.0   # how long a removal waits for a running pull before answering "busy"
 
 _LANE_RANK = {Lane.REPLY: 0, Lane.AWARE: 1, Lane.TREND: 2, Lane.SKIP: 3}
 
@@ -253,6 +259,26 @@ async def _summarize_once() -> None:
         logger.exception("inbox: trend summary failed")
 
 
+class PullRunning(Exception):
+    """A pull holds the lock longer than a removal waits."""
+
+
+async def remove_source(source_id: str) -> Optional[dict]:
+    """Remove a source and everything it pulled, between pulls (``store.delete_source_rows``:
+    the counts removed, ``None`` when there is no such source, ``SendInFlight`` while one of
+    its sends is reserved). Waits at most ``REMOVE_WAIT_S`` for a running pull, then raises
+    ``PullRunning``: the person tries again, nothing is half removed."""
+    lock, _ = _primitives()
+    try:
+        await asyncio.wait_for(lock.acquire(), REMOVE_WAIT_S)
+    except asyncio.TimeoutError:
+        raise PullRunning(source_id) from None
+    try:
+        return await store.delete_source_rows(source_id)
+    finally:
+        lock.release()
+
+
 async def _pull_locked(source_id: str, at: Optional[datetime] = None) -> None:
     from database import db
     lock, _ = _primitives()
@@ -285,11 +311,12 @@ async def pull_source(row: dict, at: Optional[datetime] = None) -> str:
         await ingest(row, me, category, list(result.messages))
         health = (SourceHealth.OK if category is SourceCategory.FEED or can_send
                   else SourceHealth.READ_ONLY).value
+        detail = store.status_detail_of(source) if health == SourceHealth.READ_ONLY.value else ""
         stamp = store.ts(store.now())
         await db.inbox_update_source(
             sid, stamp, cursor=result.cursor if result.cursor is not None else row.get("cursor"),
             me=store.identity_to_json(me), can_send=1 if can_send else 0, health=health,
-            fix="", last_error="", last_pull_at=stamp)
+            fix=detail, last_error="", last_pull_at=stamp)
         return health
     except SourceAuthError as exc:
         logger.warning("inbox: source %s needs sign-in again", sid)
@@ -300,7 +327,7 @@ async def pull_source(row: dict, at: Optional[datetime] = None) -> str:
     except Exception as exc:  # noqa: BLE001 — retried at the next interval
         logger.warning("inbox: pull of source %s failed: %s", sid, type(exc).__name__)
         await db.inbox_update_source(sid, store.ts(store.now()), health=SourceHealth.ERROR.value,
-                                     last_error=_err(exc))
+                                     fix="", last_error=_err(exc))
         return SourceHealth.ERROR.value
     finally:
         if source is not None:

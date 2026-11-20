@@ -18,11 +18,34 @@ Routes:
 - ``POST /api/inbox/sends/{id}/resend``         -> ``SendOut``       (only a failed send whose source can send)
 - ``GET  /api/inbox/trends/summary``            -> ``TrendSummaryOut``
 - ``GET  /api/inbox/sources``                   -> ``list[SourceOut]``
+- ``GET  /api/inbox/sources/available``         -> ``list[AvailableSourceOut]`` (what this machine can
+  connect without typing anything: a configured MCP server whose tool list matches a shipped
+  mapping, ``gh`` when it is logged in; ``?refresh=true`` probes again; needs
+  ``X-Swarm-User-Action``, since it starts the servers)
+- ``POST /api/inbox/sources``  ``SourceCreateRequest`` -> ``SourceOut`` (stored only after the
+  source's ``whoami`` succeeded; 400 ``whoami_failed`` with ``fix``, 409 ``already_added``,
+  422 ``invalid_source``: ``SourceRefusalOut``, nothing stored)
+- ``PATCH /api/inbox/sources/{id}`` ``SourcePatchRequest`` -> ``SourceOut``
+- ``DELETE /api/inbox/sources/{id}``            -> ``SourceDeletedOut`` (the row, its items, drafts,
+  sends, feedback and secrets; 409 ``send_in_flight``, 422 ``feed_source``)
+- ``POST /api/inbox/sources/{id}/secret`` ``SecretRequest`` -> ``SourceOut`` (``slack-web`` /
+  ``imap``; the value is never returned or logged)
 - ``POST /api/inbox/sources/{id}/retry``        -> ``SourceOut``
 - ``POST /api/inbox/refresh``                   -> ``InboxCounts`` (pull every due source now)
 - feed configuration moves here from ``/api/community/feeds`` unchanged in shape:
   ``GET/POST /api/inbox/feeds``, ``PUT/DELETE /api/inbox/feeds/{id}``,
-  ``POST/DELETE /api/inbox/feeds/{id}/members``.
+  ``POST/DELETE /api/inbox/feeds/{id}/members``. ``GET /api/inbox/feeds`` -> ``FeedsOut``.
+
+**Writes carry ``X-Swarm-User-Action``.** Every POST, PATCH and DELETE above is refused with
+403 without it (a web page cannot set that header), except the feed routes, which keep the
+exact behaviour of ``/api/community/feeds`` until the Community page is deleted (the desktop
+sends the header there too). The three routes that send or unlock a send, and the source
+writes (add, change, remove, store a secret), also pass the caller check
+(``core/inbox/caller.py``).
+
+**Errors** use FastAPI's envelope ``{"detail": ...}``. The 403/409 of ``/send``,
+``/not-sent`` and ``/resend`` is ``SendRefusalBody`` (``detail`` is a ``SendRefusalOut``);
+a refused source write is ``SourceRefusalBody``.
 
 Times are ISO-8601 strings with offset. Ids are strings.
 """
@@ -30,7 +53,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 LaneName = Literal["reply", "proposed", "aware", "trend"]
 SendStatusName = Literal["reserved", "sent", "failed", "unknown"]
@@ -150,3 +173,103 @@ class SourceOut(BaseModel):
     last_error: str = ""
     can_send: bool = False
     detail: str = ""             # "关注 3 个频道", "22 个 feed"
+    status_detail: str = ""      # why sending is off (read_only): "邮件发送没开：…"
+    enabled: bool = True
+    options: dict = Field(default_factory=dict)  # watched_channels, extra_addresses, ... (never a secret)
+
+
+class RedactionSpan(BaseModel):
+    start: int                   # [start, end) in code points of the text sent
+    end: int
+    replacement: str = ""
+
+
+class SendRefusalOut(BaseModel):
+    """Why a send was not attempted: ``forbidden`` (403: no X-Swarm-User-Action, or the
+    caller is not the desktop UI), ``target_changed`` (with the fresh ``target``),
+    ``redacted`` (with ``spans``), ``not_open``, ``cannot_send``, ``not_unknown``,
+    ``not_failed``, ``source_removed`` (409)."""
+    code: str
+    message: str = ""
+    spans: list[RedactionSpan] = Field(default_factory=list)
+    target: Optional[TargetOut] = None
+    reason: str = ""             # 403 from the caller check: which check refused
+
+
+class SendRefusalBody(BaseModel):
+    detail: SendRefusalOut
+
+
+class FeedOut(BaseModel):
+    """One feed of config.yaml ``feeds:``, the shape of ``GET /api/community/sources``."""
+    id: str
+    name: str
+    type: str
+    tier: str = "engineering"
+    enabled: bool = True
+    managed_by: str = "manual"
+    member_kind: Optional[str] = None
+    member_count: int = 0
+    members: list[str] = Field(default_factory=list)
+    members_truncated: bool = False
+    tags: list[str] = Field(default_factory=list)
+
+
+class FeedsOut(BaseModel):
+    count: int
+    sources: list[FeedOut]
+
+
+class AvailableSourceOut(BaseModel):
+    """A source this machine can connect with one click (``POST /api/inbox/sources`` with
+    ``kind``, ``backend`` and ``options`` as given)."""
+    kind: str                    # slack | mail | github
+    backend: str                 # "mcp:<server id>", "gh"
+    channel_label: str
+    label: str                   # what the row shows: the server id, "GitHub CLI"
+    options: dict = Field(default_factory=dict)  # e.g. {"tool_family": "slack-mcp"}
+    identity: str = ""           # known before adding (gh: the login); MCP: found on 接入
+    detail: str = ""             # e.g. the reason a GitHub login can only read trends
+    added: bool = False
+    source_id: Optional[str] = None  # the row it was added as
+
+
+class SourceCreateRequest(BaseModel):
+    kind: str = Field(min_length=1, max_length=40)
+    backend: str = Field(min_length=1, max_length=200)
+    options: dict = Field(default_factory=dict)
+    # slack-web: user_token; imap: password (and smtp_password): stored in the OS
+    # credential store before whoami, deleted again when it fails; never in options
+    secrets: dict[str, SecretStr] = Field(default_factory=dict)
+
+
+class SourcePatchRequest(BaseModel):
+    enabled: Optional[bool] = None
+    interval_s: Optional[int] = Field(default=None, ge=300, le=604_800)
+    watched_channels: Optional[list[str]] = Field(default=None, max_length=50)   # slack
+    extra_addresses: Optional[list[str]] = Field(default=None, max_length=50)    # mail
+
+
+class SecretRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    value: SecretStr
+
+
+class SourceRefusalOut(BaseModel):
+    """A refused source write: ``whoami_failed`` (400, with the source's ``fix``),
+    ``already_added`` / ``send_in_flight`` / ``pull_running`` (409), ``invalid_source`` / ``feed_source`` /
+    ``invalid_secret`` (422), ``not_found`` (404), ``forbidden`` (403)."""
+    code: str
+    message: str = ""
+    fix: str = ""
+
+
+class SourceRefusalBody(BaseModel):
+    detail: SourceRefusalOut
+
+
+class SourceDeletedOut(BaseModel):
+    id: str
+    items: int = 0
+    drafts: int = 0
+    sends: int = 0

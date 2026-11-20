@@ -89,7 +89,7 @@ describe('NeedsYouRow labels follow the interface language', () => {
     const en = (await import('../../i18n/locales/en.json')).default as { needYou: { source: Record<string, string> } };
     const zh = (await import('../../i18n/locales/zh.json')).default as { needYou: { source: Record<string, string> } };
     const sources: AttentionEntry['source'][] = ['escalation', 'paused_run', 'governance', 'job', 'job_digest',
-      'db_recovery', 'ingestion', 'local_root', 'swarm_out', 'todo', 'aws_account', 'template_drift'];
+      'db_recovery', 'ingestion', 'local_root', 'swarm_out', 'todo', 'aws_account', 'template_drift', 'inbox'];
     for (const s of sources) {
       expect(en.needYou.source[s]).toBeTruthy();
       expect(zh.needYou.source[s]).toBeTruthy();

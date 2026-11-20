@@ -32,13 +32,20 @@ The cursor is ``{"v": 2, "ts": <newest ts>, "dm": {<dm id>: [<ts read up to>, <c
 at>]}}`` as JSON; a bare ts from an older pull is read as ``ts``.
 
 ``reply`` posts into the thread (``thread_ts``); a DM message outside a thread is answered
-in the DM. Identity comes from the backend: ``auth.test`` for the Web API; for slack-mcp,
+in the DM. A post Slack refuses for the token (expired, revoked) raises ``SendFailed`` with
+the fix, so the send path marks the source ``auth_failed``.
+
+``own_messages_to(thread)``: for a thread in a 1:1 DM (the only place a reply reaches just
+that one person), the person's own messages of the last ``history_days`` (30) in that DM,
+for drafting in the person's voice; the other person's messages are dropped here. A
+channel thread or a group DM gets none: its reply reaches others, so another
+conversation's words must not be drafted into it. Identity comes from the backend: ``auth.test`` for the Web API; for slack-mcp,
 which has no "who am I" tool, the author of the person's own latest message (search
 ``from:me``).
 
 Options: ``watched_channels``, ``tool_family`` (mcp), ``max_dms`` (50), ``max_threads``
 (20), ``max_pages`` (5), ``thread_lookback_days`` (7), ``first_pull_hours`` (24),
-``pull_budget_s`` (120).
+``pull_budget_s`` (120), ``history_days`` (30).
 
 Key public symbols: ``SlackMcpSource``, ``SlackWebSource``, ``MCP_FAMILIES``, ``create``.
 """
@@ -206,6 +213,7 @@ class _SlackSource:
         self._thread_lookback_s = float(opts.get("thread_lookback_days", 7)) * 86400
         self._first_pull_s = float(opts.get("first_pull_hours", 24)) * 3600
         self._budget_s = float(opts.get("pull_budget_s", 120))
+        self._history_s = float(opts.get("history_days", 30)) * 86400
         self._deadline: Optional[Deadline] = None
         self._me: Optional[Identity] = None
         self._me_id = ""
@@ -382,6 +390,20 @@ class _SlackSource:
             if me.is_me(m.author_id) and m.received_at > after and matches_sent(m.text, text):
                 return SendReceipt(external_msg_id=m.external_id, url=m.url, sent_at=m.received_at)
         return None
+
+    async def own_messages_to(self, thread: Thread, limit: int = 10) -> list[Message]:
+        """The person's own latest messages in the 1:1 DM ``thread`` is in, oldest first;
+        none for a channel thread or a group DM (a reply there reaches others). Only the
+        person's messages: the other side's are dropped."""
+        me = await self.whoami()
+        channel, _thread_ts = self._ref_parts(thread.ref)
+        if not channel.startswith("D") or not limit:
+            return []
+        own = [m for m in (self._to_message(raw, channel, is_dm=True)
+                           for raw in await self._history(channel, time.time() - self._history_s))
+               if m is not None and me.is_me(m.author_id)]
+        own.sort(key=lambda m: m.received_at)
+        return own[-int(limit):]
 
     async def close(self) -> None:
         return None
@@ -646,7 +668,8 @@ class SlackMcpSource(_SlackSource):
             except McpTimeout:
                 raise
             except (McpToolError, McpToolRefused, McpUnavailable) as exc:
-                raise SendFailed(str(exc)) from exc
+                auth = self._auth_error(str(exc))
+                raise SendFailed(str(exc), fix=auth.fix if auth else "") from exc
         data = parse_tool_result(result)
         ts, url = "", ""
         if isinstance(data, dict):
@@ -697,6 +720,7 @@ class SlackWebSource(_SlackSource):
     """Slack Web API over httpx with a user token from the OS credential store."""
 
     API_BASE: ClassVar[str] = "https://slack.com/api/"
+    SECRET_NAMES: ClassVar[frozenset[str]] = frozenset({"user_token"})
     READ_TOOLS: ClassVar[frozenset[str]] = frozenset({
         "auth.test", "conversations.list", "conversations.history", "conversations.replies",
         "search.messages", "chat.getPermalink",
@@ -829,7 +853,9 @@ class SlackWebSource(_SlackSource):
         with self._gate.allow_writes("chat.postMessage"):
             try:
                 data = await self._api("chat.postMessage", params, write=True)
-            except (SourceAuthError, SlackApiError) as exc:
+            except SourceAuthError as exc:
+                raise SendFailed(str(exc), fix=exc.fix) from exc  # Slack refused the token: nothing was posted
+            except SlackApiError as exc:
                 raise SendFailed(str(exc)) from exc  # Slack answered: nothing was posted
         ts = str(data.get("ts") or "")
         url = ""

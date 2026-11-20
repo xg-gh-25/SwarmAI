@@ -152,6 +152,10 @@ class FakeImap:
             return [u for u in box if u >= low] or ([max(box)] if box else [])
         if args[0] == "SINCE" and len(args) == 2:
             return sorted(box)
+        if "TO" in args:   # SINCE <date> TO "<address>": the To header holds the address
+            want = args[args.index("TO") + 1].strip('"').lower()
+            return sorted(u for u, raw in box.items()
+                          if want in str(email.message_from_bytes(raw, policy=email.policy.default).get("To") or "").lower())
         wanted = [a.strip('"') for a in args if isinstance(a, str) and a.startswith('"')]
         out = []
         for uid, raw in box.items():

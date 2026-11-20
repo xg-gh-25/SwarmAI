@@ -36,3 +36,19 @@ def test_registry_replaces_and_reports_missing():
 
 def test_lanes_are_the_designed_four_plus_skip():
     assert {l.value for l in Lane} == {"reply", "proposed", "aware", "trend", "skip"}
+
+
+def test_send_failed_carries_an_optional_fix():
+    assert base.SendFailed("nope").fix == ""
+    failed = base.SendFailed("token revoked", fix="paste a new token")
+    assert str(failed) == "token revoked" and failed.fix == "paste a new token"
+
+
+def test_refusal_and_source_shapes():
+    from schemas import inbox as contract
+    refusal = contract.SendRefusalOut(code="redacted", spans=[{"start": 1, "end": 4, "replacement": "[x]"}])
+    assert refusal.spans[0].end == 4 and refusal.target is None and refusal.message == ""
+    assert set(contract.SendRefusalOut.model_fields) == {"code", "message", "spans", "target", "reason"}
+    assert {"status_detail", "enabled", "options"} <= set(contract.SourceOut.model_fields)
+    secret = contract.SourceCreateRequest(kind="slack", backend="slack-web", secrets={"user_token": "s3cr3t"})
+    assert "s3cr3t" not in repr(secret) and "s3cr3t" not in secret.model_dump_json()

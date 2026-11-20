@@ -39,6 +39,7 @@ const svc = vi.hoisted(() => ({
   trendSummary: vi.fn(),
   sources: vi.fn(),
   retrySource: vi.fn(),
+  availableSources: vi.fn(), addSource: vi.fn(), updateSource: vi.fn(), removeSource: vi.fn(), setSourceSecret: vi.fn(),
   refresh: vi.fn(),
   listFeeds: vi.fn(),
   addFeed: vi.fn(), updateFeed: vi.fn(), deleteFeed: vi.fn(), addFeedMember: vi.fn(), deleteFeedMember: vi.fn(),
@@ -108,6 +109,7 @@ beforeEach(() => {
   svc.trendSummary.mockResolvedValue({ generated_at: ago(0), points: [], feeds: 0, watched_repos: 0 });
   svc.sources.mockResolvedValue([]);
   svc.listFeeds.mockResolvedValue([]);
+  svc.availableSources.mockResolvedValue([]);
   svc.refresh.mockResolvedValue(counts());
 });
 

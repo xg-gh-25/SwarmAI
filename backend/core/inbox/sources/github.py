@@ -8,7 +8,7 @@ Design: ``docs/design/2026-11-20-inbox.md`` §4. Everything goes through the per
 - ``whoami``: ``gh api user`` (login and numeric id), then one probe of the notifications
   endpoint. A token that cannot read notifications (a fine-grained PAT, a GitHub App
   token) makes the source **feed-only**: ``pull`` returns nothing, ``can_send`` is false,
-  and ``feed_only_reason`` says why.
+  and ``feed_only_reason`` (``status_detail()``) says why.
 - ``pull``: ``notifications?all=true&since=<cursor>`` (``all`` because the default
   returns only unread ones, and anything opened on the web would be lost), then the latest
   comment of each thread for its text. ``reason`` ``mention``/``team_mention``/
@@ -17,7 +17,8 @@ Design: ``docs/design/2026-11-20-inbox.md`` §4. Everything goes through the per
 - ``reply`` by subject: an issue or PR conversation comment (REST), a reply in a PR review
   thread (``pulls/<n>/comments/<id>/replies``), a Discussion comment (GraphQL
   ``addDiscussionComment``). The target names the thread; comments on a public
-  repository carry the ``public`` flag.
+  repository carry the ``public`` flag. A reply refused because the login expired raises
+  ``SendFailed`` with the ``gh auth login`` fix.
 - More than ``max_pages`` × 50 notifications since the cursor (a first pull, a long time
   offline) are not all read: the newest are, the overflow is logged, and the cursor moves
   on. The older ones stay unread on GitHub; the Inbox does not page back for them.
@@ -246,6 +247,14 @@ class GitHubSource:
     async def can_send(self) -> bool:
         await self.whoami()
         return not self.feed_only
+
+    @property
+    def login(self) -> str:
+        """The person's GitHub login, known after ``whoami``."""
+        return self._login
+
+    def status_detail(self) -> str:
+        return self.feed_only_reason if self.feed_only else ""
 
     # -- pull --------------------------------------------------------------------
 
@@ -531,8 +540,11 @@ class GitHubSource:
                     data = await self._api("issue_comment_create", f"repos/{repo}/issues/{number}/comments",
                                            method="POST", body={"body": text}, write=True)
                 prefix = "issue_comment"
-        except (_ApiError, _NotPermitted, SourceAuthError) as exc:
-            # GitHub answered (4xx/5xx, a refused token, an expired login): nothing was posted
+        except SourceAuthError as exc:
+            # the login expired: nothing was posted, and the source needs gh auth login
+            raise SendFailed(str(exc), fix=exc.fix) from exc
+        except (_ApiError, _NotPermitted) as exc:
+            # GitHub answered (4xx/5xx, a refused token): nothing was posted
             raise SendFailed(str(exc)) from exc
         data = data or {}
         return SendReceipt(external_msg_id=f"{prefix}:{data.get('id')}", url=str(data.get("html_url") or ""),

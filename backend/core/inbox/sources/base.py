@@ -17,6 +17,21 @@ Rules every source keeps:
   the source ``auth_failed`` and Needs You shows the fix); a send the source knows did not
   happen raises ``SendFailed``; any other exception during ``reply`` means the outcome is
   unknown, and the send path records it as ``unknown`` and never resends automatically.
+  A ``SendFailed`` caused by expired credentials carries their ``fix``: the send path then
+  marks the source ``auth_failed`` with that fix, as a pull would.
+
+Optional members (a source without them works; callers look them up with ``getattr``):
+
+- ``status_detail() -> str``: why the source cannot send (a GitHub token that cannot read
+  notifications, mail writes turned off), valid after ``can_send``; shown in the channel row.
+- ``own_messages_to(thread, limit) -> list[Message]``: the person's own recent messages to
+  the one person a reply to ``thread`` reaches (a Slack 1:1 DM: its history; mail whose
+  reply goes only to its sender: the mail sent to that address), oldest first; none when
+  a reply would reach anyone else (a channel thread, a Reply-To that differs). Drafting
+  uses them for the person's voice; they hold only text the person wrote, and the caller
+  drops any message by someone else again.
+- ``SECRET_NAMES``: the secrets the backend reads from ``sources/credentials.py`` under
+  ``<source id>:<name>`` (``user_token`` for the Slack Web API, ``password`` for IMAP).
 
 Key public symbols: ``Source``, ``SourceConfig``, ``SourceAuthError``, ``SendFailed``,
 ``SourceNotFound``, ``register_source``, ``create_source``, ``registered_kinds``.
@@ -47,7 +62,12 @@ class SourceAuthError(Exception):
 
 
 class SendFailed(Exception):
-    """The source is sure the reply was not sent."""
+    """The source is sure the reply was not sent. ``fix`` is set when the cause is expired
+    credentials: the action shown to the person, as on ``SourceAuthError``."""
+
+    def __init__(self, message: str = "", fix: str = "") -> None:
+        super().__init__(message)
+        self.fix = fix
 
 
 class SourceNotFound(LookupError):

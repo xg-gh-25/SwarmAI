@@ -15,7 +15,13 @@ caller check (``core/inbox/caller.py``) first; this module does the rest, in ord
    reserved / unknown row per item: a double click, or a second click with edited text,
    gets that row back and sends nothing.
 5. ``source.reply`` -> ``sent`` and the item ``replied``; ``SendFailed`` -> ``failed`` (may
-   be sent again); any other exception or a timeout -> ``unknown``.
+   be sent again); any other exception or a timeout -> ``unknown``. A ``SendFailed`` with a
+   ``fix`` (the credentials expired) also marks the source ``auth_failed`` with that fix,
+   so Needs You shows it and resend stays off until the source works again.
+
+A source removed while a send was being checked (``DELETE /api/inbox/sources/{id}``) gets
+no reservation: the row reserved after the removal is dropped again and the send refused
+(``source_removed``); the removal itself refuses while a reservation exists.
 
 ``unknown`` is never resent automatically. Each pull of the source asks ``find_sent``
 (``reconcile_unknown``); a hit records ``sent``. The person may confirm it did not go out
@@ -197,6 +203,7 @@ async def send_item(item_id: str, text: str, shown_sha: str,
             if existing is None:     # settled between the two statements: read it again
                 raise SendRefused(409, "not_open", "the item was just sent")
             return await store.send_out(existing, item=item, source=source_row)
+        await _refuse_if_removed(item, row["id"])
         handed_over = True
         return await _deliver(source, row, item, source_row, ref)
     finally:
@@ -204,14 +211,23 @@ async def send_item(item_id: str, text: str, shown_sha: str,
             await _close(source)
 
 
+async def _refuse_if_removed(item: dict, send_id: str) -> None:
+    """The source was removed after the checks and before the reservation: drop it."""
+    from database import db
+    if await db.inbox_get_source(item["source_id"]) is None:
+        await store.purge_send(send_id)
+        raise SendRefused(409, "source_removed", "the channel was removed")
+
+
 async def _deliver(source: Source, row: dict, item: dict, source_row: dict,
                    ref: ThreadRef) -> dict:
-    """Run the reply in its own task (kept in ``_IN_FLIGHT``) and wait for it shielded."""
+    """Run the reply in its own task (kept in ``_IN_FLIGHT``) and wait for it shielded.
+    The answer reads the source again: a failed send may have just marked it auth_failed."""
     task = asyncio.get_running_loop().create_task(_reply_and_record(source, row, item, ref))
     _IN_FLIGHT.add(task)
     task.add_done_callback(_IN_FLIGHT.discard)
     final = await asyncio.shield(task)
-    return await store.send_out(final, item=item, source=source_row)
+    return await store.send_out(final, item=item)
 
 
 async def _reply_and_record(source: Source, row: dict, item: dict, ref: ThreadRef) -> dict:
@@ -223,6 +239,8 @@ async def _reply_and_record(source: Source, row: dict, item: dict, ref: ThreadRe
                   "sent_at": store.ts(receipt.sent_at or store.now())}
     except SendFailed as exc:
         status, fields = SendStatus.FAILED.value, {"error": _err(exc)}
+        if exc.fix:
+            await _source_signed_out(row["source_id"], exc.fix, fields["error"])
     except asyncio.TimeoutError:
         fields = {"error": f"no answer from the source within {int(REPLY_TIMEOUT_S)} s"}
     except BaseException as exc:  # noqa: BLE001 — the outcome is unknown, whatever it was
@@ -233,6 +251,16 @@ async def _reply_and_record(source: Source, row: dict, item: dict, ref: ThreadRe
     finally:
         await _close(source)
     return await _record(row, item, status, fields)
+
+
+async def _source_signed_out(source_id: str, fix: str, error: str) -> None:
+    """The source said the reply was not sent because its credentials expired."""
+    try:
+        await store.mark_auth_failed(source_id, fix, error)
+    except Exception as exc:  # noqa: BLE001 — the send's own outcome is recorded regardless
+        logger.warning("inbox: could not mark source %s signed out (%s)", source_id, type(exc).__name__)
+    else:
+        logger.info("inbox: source %s needs sign-in again (a send was refused)", source_id)
 
 
 async def _record(row: dict, item: dict, status: str, fields: dict) -> dict:
@@ -312,7 +340,10 @@ async def resend(send_id: str) -> dict:
                                           expect_status=SendStatus.FAILED.value,
                                           status=SendStatus.RESERVED.value, error=""):
             existing = await db.inbox_open_send(row["item_id"]) or await db.inbox_get_send(send_id)
+            if existing is None:   # the source (and with it this send) was removed meanwhile
+                raise SendRefused(409, "source_removed", "the channel was removed")
             return await store.send_out(existing, item=item, source=source_row)
+        await _refuse_if_removed(item, send_id)
         handed_over = True
         return await _deliver(source, {**row, "status": SendStatus.RESERVED.value}, item,
                               source_row, ref)

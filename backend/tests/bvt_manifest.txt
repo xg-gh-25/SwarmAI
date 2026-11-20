@@ -97,5 +97,6 @@ test_inbox_runner.py  # Inbox runner: daemon/subprocess only, dedup, own message
 test_inbox_send.py  # Inbox send path: target_sha 409, one reply per double click, unknown never resent, redaction 409, 403s
 test_inbox_caller.py  # Inbox caller check on real loopback sockets: backend and its children refused, unknown peer refused
 test_inbox_submit.py  # inbox submit: PROPOSED only after the thread check; --sent records without calling reply; CLI
-test_inbox_api.py  # /api/inbox: every contract route and model; draft on first read; feed CRUD same as community
+test_inbox_api.py  # /api/inbox: every contract route and model; draft on first read, own words only; refusal bodies; feed CRUD same as community
+test_inbox_connect.py  # Inbox sources: available list by real MCP tool lists and gh login, added only after whoami, secrets never returned or logged, delete removes items/drafts/sends
 test_inbox_attention.py  # Needs You: one blocking item per Inbox source whose sign-in expired

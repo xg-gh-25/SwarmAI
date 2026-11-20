@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from core.inbox.models import ThreadRef
+from core.inbox.models import ReplyTarget, Thread, ThreadRef
 from core.inbox.sources.base import SendFailed, SourceAuthError, SourceConfig
 from core.inbox.sources.common import ReadToolRefused
 from core.inbox.sources.mail import ImapSmtpSource, OutlookMcpSource, create, split_conversations
@@ -72,7 +72,7 @@ def test_conversation_is_split_into_one_record_per_message():
 
 async def test_whoami_from_the_sent_mail_plus_aliases():
     mcp = _outlook()
-    me = await OutlookMcpSource(_cfg(addresses=["Me.Alias@corp.example"]), client=mcp).whoami()
+    me = await OutlookMcpSource(_cfg(extra_addresses=["Me.Alias@corp.example"]), client=mcp).whoami()
     assert me.ids == frozenset({ME, "me.alias@corp.example"})
     assert mcp.calls[0] == ("email_folders", {"folder": "sentitems", "limit": 3})
 
@@ -408,3 +408,69 @@ async def test_the_sent_and_received_copies_of_one_mail_show_once():
     src = OutlookMcpSource(_cfg(), client=_outlook(email_read=lambda a: conv))
     thread = await src.thread(ThreadRef("mail", {"conversation_id": "CONV-L"}))
     assert [m.text for m in thread.messages] == ["Hello list", "Second mail"]
+
+# ---------------------------------------------------------------------------
+# The person's own mail to one counterparty, status_detail, fixes on refused sends
+# ---------------------------------------------------------------------------
+
+
+async def test_outlook_own_messages_to_is_sent_mail_to_that_address():
+    sent = {"emails": [{"conversationId": "CONV-9", "messages": [
+        {"itemId": "S1", "internetMessageId": "<s1@corp.example>", "from": _addr("Me", ME),
+         "toRecipients": [_addr("Priya", "priya@corp.example")], "receivedDateTime": "2026-11-19T10:00:00Z",
+         "subject": "Re: Budget", "body": "Approved.\n\nOn Wed, Priya wrote:\n> please approve the budget"},
+        {"itemId": "S2", "internetMessageId": "<s2@corp.example>", "from": _addr("Me", ME),
+         "toRecipients": [_addr("Sam", "sam@corp.example")], "receivedDateTime": "2026-11-19T11:00:00Z",
+         "body": "To someone else"},
+        {"itemId": "S3", "internetMessageId": "<s3@corp.example>", "from": _addr("Priya", "priya@corp.example"),
+         "toRecipients": [_addr("Priya", "priya@corp.example")], "receivedDateTime": "2026-11-19T12:00:00Z",
+         "body": "Not mine"},
+    ]}]}
+    mcp = _outlook(email_folders=lambda a: sent)
+    src = OutlookMcpSource(_cfg(history_days=36500), client=mcp)
+    to_priya = Thread(ref=ThreadRef("mail", {"conversation_id": "C"}), messages=(),
+                      target=ReplyTarget(label="Priya", recipients=("priya@corp.example",)))
+    own = await src.own_messages_to(to_priya, 10)
+    assert [m.external_id for m in own] == ["<s1@corp.example>"]
+    assert own[0].text == "Approved.", "the quoted history of the other person is not kept"
+    folders = [a for t, a in mcp.calls if t == "email_folders"]
+    assert folders and all(a["folder"] == "sentitems" for a in folders)
+    # a reply that goes elsewhere than the sender (Reply-To), or to several people: none
+    redirected = Thread(ref=to_priya.ref, messages=(), target=ReplyTarget(
+        label="billing", recipients=("priya@corp.example",), flags=("reply_to_differs",)))
+    several = Thread(ref=to_priya.ref, messages=(), target=ReplyTarget(
+        label="two", recipients=("priya@corp.example", "sam@corp.example")))
+    assert await src.own_messages_to(redirected, 10) == []
+    assert await src.own_messages_to(several, 10) == []
+    assert await src.own_messages_to(Thread(ref=to_priya.ref, messages=(), target=None), 10) == []
+
+
+async def test_status_detail_says_why_sending_is_off():
+    off = _outlook()
+    off.env = {}
+    src = OutlookMcpSource(_cfg(), client=off)
+    assert not await src.can_send()
+    assert "OUTLOOK_MCP_ENABLE_WRITES" in src.status_detail()
+    on = OutlookMcpSource(_cfg(), client=_outlook())
+    assert await on.can_send() and on.status_detail() == ""
+    no_smtp = _imap_source(FakeImap(_inbox()), smtp_host="")
+    assert not await no_smtp.can_send() and "SMTP" in no_smtp.status_detail()
+
+
+async def test_imap_own_messages_to_and_an_smtp_login_refusal_keeps_the_fix():
+    imap = FakeImap(_inbox(), flags={"Sent": "\\Sent"})
+    src = _imap_source(imap, history_days=36500)
+    to_lee = Thread(ref=ThreadRef("mail", {"root": "<a1@x.example>"}), messages=(),
+                    target=ReplyTarget(label="Lee", recipients=("lee@x.example",)))
+    own = await src.own_messages_to(to_lee, 10)
+    assert [m.text for m in own] == ["Thanks, will read."]
+    assert ImapSmtpSource.SECRET_NAMES == frozenset({"password", "smtp_password"})
+
+    class RefusingLogin(FakeSmtp):
+        def login(self, user, password):
+            raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+
+    with pytest.raises(SendFailed) as info:
+        await _imap_source(FakeImap(_inbox()), RefusingLogin()).reply(
+            ThreadRef("mail", {"root": "<a1@x.example>", "message_id": "<a1@x.example>"}), "x")
+    assert "密码" in info.value.fix

@@ -4,20 +4,27 @@
  * truth: a field added there is added here under the same (snake_case) name, so the UI
  * reads exactly what the router returns.
  *
- * Sending is the one place that differs from the other services: `send` returns a
- * refusal (403 caller is not the desktop UI, 409 target_changed / redacted / not_open)
- * as a VALUE instead of throwing, because the overlay shows the server's reason under
- * the draft and must never retry a send by itself. The shared axios interceptor would
- * flatten FastAPI's `{detail: {...}}` body (the reason code and the redacted spans), so
- * `send` accepts 403/409 through `validateStatus` and parses the body here. No method in
- * this file retries.
+ * Two calls return a refusal as a VALUE instead of throwing, because the UI shows the
+ * server's reason in place and must never retry by itself:
+ *   - `send`: 403 (caller is not the desktop UI) / 409 (target_changed, redacted,
+ *     not_open, ...), whose body is `{detail: SendRefusalOut}`;
+ *   - `addSource`: 400 whoami_failed (with the source's `fix`), 409 already_added, 422,
+ *     503 secret_store_unavailable, whose body is `{detail: SourceRefusalOut}`.
+ * The shared axios interceptor would flatten FastAPI's `{detail: {...}}` body (the
+ * reason code, the redacted spans, the fix), so these accept those statuses through
+ * `validateStatus` and parse the body here. No method in this file retries.
+ *
+ * Secrets (a Slack user token, a mail password) are sent once in a request body and
+ * never come back: no type below has a field that could hold one.
  *
  * Feed configuration (`/api/inbox/feeds`) moved here from `/api/community/feeds` in the
- * same shape; `listFeeds` maps it to the `CommunitySource` shape the feed editor reads.
+ * same shape (`FeedsOut`); `listFeeds` maps it to the `CommunitySource` shape the feed
+ * editor reads.
  *
  * Every write carries `X-Swarm-User-Action` (USER_ACTION_HEADER).
  *
- * Key exports: `inboxService`, the schema types, `parseSendRefusal`, `channelKey`.
+ * Key exports: `inboxService`, the schema types, `parseSendRefusal`,
+ * `parseSourceRefusal`, `channelKey`.
  */
 import api from './api';
 import type { CommunitySource } from './community';
@@ -138,17 +145,82 @@ export interface SourceOut {
   last_error: string;
   can_send: boolean;
   detail: string;
+  /** why sending is off (read_only): shown in the channel row */
+  status_detail: string;
+  enabled: boolean;
+  /** watched_channels, extra_addresses, ... (never a secret) */
+  options: Record<string, unknown>;
 }
 
-/** A send the server refused. `code` is the reason the router names (`target_changed`,
- *  `redacted`, `not_open`, or `forbidden` for a 403); `message` is its text for the
- *  person; `spans` are the [start, end) character ranges of the draft that redaction
- *  would change (only for `redacted`). */
+/** A source this machine can connect with one click (`addSource` with its kind,
+ *  backend and options). */
+export interface AvailableSourceOut {
+  kind: string;
+  backend: string;
+  channel_label: string;
+  label: string;
+  options: Record<string, unknown>;
+  identity: string;
+  detail: string;
+  added: boolean;
+  source_id: string | null;
+}
+
+export interface SourceCreateRequest {
+  kind: string;
+  backend: string;
+  options?: Record<string, unknown>;
+  /** slack-web: user_token; imap: password (and smtp_password) */
+  secrets?: Record<string, string>;
+}
+
+export interface SourcePatchRequest {
+  enabled?: boolean;
+  interval_s?: number;
+  watched_channels?: string[];
+  extra_addresses?: string[];
+}
+
+export interface SourceDeletedOut {
+  id: string;
+  items: number;
+  drafts: number;
+  sends: number;
+}
+
+/** `SourceRefusalOut` with the HTTP status: why a source was not added. */
+export interface SourceRefusal {
+  status: number;
+  code: string;
+  message: string;
+  fix: string;
+}
+
+export type AddSourceResult = { ok: true; source: SourceOut } | { ok: false; refusal: SourceRefusal };
+
+export interface FeedOut {
+  id: string; name: string; type: string; tier: string; enabled: boolean; managed_by: string;
+  member_kind: string | null; member_count: number; members: string[]; members_truncated: boolean; tags: string[];
+}
+
+export interface FeedsOut {
+  count: number;
+  sources: FeedOut[];
+}
+
+/** `SendRefusalOut` (backend/schemas/inbox.py) with the HTTP status. `code` is the
+ *  reason (`target_changed`, `redacted`, `not_open`, `cannot_send`, `source_removed`,
+ *  `forbidden` for a 403); `message` its text for the person; `spans` the [start, end)
+ *  code-point ranges of the draft redaction would change (only for `redacted`);
+ *  `target` the fresh target (only for `target_changed`); `reason` which caller check
+ *  refused (403). */
 export interface SendRefusal {
   status: number;
   code: string;
   message: string;
   spans: Array<{ start: number; end: number }>;
+  target?: TargetOut | null;
+  reason?: string;
 }
 
 export type SendResult = { ok: true; send: SendOut } | { ok: false; refusal: SendRefusal };
@@ -175,39 +247,42 @@ function spansOf(raw: unknown): Array<{ start: number; end: number }> {
   if (!Array.isArray(raw)) return [];
   const out: Array<{ start: number; end: number }> = [];
   for (const s of raw) {
-    let start: unknown;
-    let end: unknown;
-    if (Array.isArray(s)) [start, end] = s;
-    else if (s && typeof s === 'object') ({ start, end } = s as { start?: unknown; end?: unknown });
+    if (!s || typeof s !== 'object') continue;
+    const { start, end } = s as { start?: unknown; end?: unknown };
     if (typeof start === 'number' && typeof end === 'number' && end > start && start >= 0) out.push({ start, end });
   }
   return out;
 }
 
-/** Read a 403/409 body. FastAPI puts the reason in `detail`: a string (the code or a
- *  sentence) or an object `{code | reason, message, spans}`. A top-level `{code,
- *  message}` is read too. The contract does not fix this shape yet (see the run's
- *  merge notes), so every form above is accepted. */
+const str = (v: unknown) => (typeof v === 'string' ? v : '');
+
+/** The `detail` object of a FastAPI error body, or `{message}` for a string detail (a
+ *  framework 4xx that is not the contract's). */
+function detailOf(body: unknown): Record<string, unknown> {
+  const detail = body && typeof body === 'object' ? (body as Record<string, unknown>).detail : undefined;
+  if (typeof detail === 'string') return { message: detail };
+  return detail && typeof detail === 'object' && !Array.isArray(detail) ? (detail as Record<string, unknown>) : {};
+}
+
+/** Read a 403/409 body of a sending route: `{detail: SendRefusalOut}`. Malformed spans
+ *  are dropped, never trusted. */
 export function parseSendRefusal(status: number, body: unknown): SendRefusal {
-  const data = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-  const detail = data.detail;
-  let code = '';
-  let message = '';
-  let spans: Array<{ start: number; end: number }> = [];
-  if (typeof detail === 'string') {
-    if (/^[a-z_]+$/.test(detail)) code = detail;
-    else message = detail;
-  } else if (detail && typeof detail === 'object') {
-    const d = detail as Record<string, unknown>;
-    code = typeof d.code === 'string' ? d.code : typeof d.reason === 'string' ? d.reason : '';
-    message = typeof d.message === 'string' ? d.message : '';
-    spans = spansOf(d.spans);
-  }
-  if (!code && typeof data.code === 'string') code = data.code;
-  if (!message && typeof data.message === 'string') message = data.message;
-  if (!spans.length) spans = spansOf(data.spans);
-  if (!code) code = status === 403 ? 'forbidden' : 'conflict';
-  return { status, code, message, spans };
+  const d = detailOf(body);
+  const target = d.target && typeof d.target === 'object' ? (d.target as TargetOut) : null;
+  return {
+    status,
+    code: str(d.code) || (status === 403 ? 'forbidden' : 'conflict'),
+    message: str(d.message),
+    spans: spansOf(d.spans),
+    ...(target ? { target } : {}),
+    ...(str(d.reason) ? { reason: str(d.reason) } : {}),
+  };
+}
+
+/** Read a refused source write: `{detail: SourceRefusalOut}` (400/409/422/503). */
+export function parseSourceRefusal(status: number, body: unknown): SourceRefusal {
+  const d = detailOf(body);
+  return { status, code: str(d.code) || 'refused', message: str(d.message), fix: str(d.fix) };
 }
 
 function toCounts(raw: unknown): InboxCounts {
@@ -227,10 +302,6 @@ function toCounts(raw: unknown): InboxCounts {
 
 const list = <T,>(raw: unknown): T[] => (Array.isArray(raw) ? (raw as T[]) : []);
 
-interface RawFeed {
-  id: string; name: string; type: string; tier: string; enabled: boolean; managed_by?: string;
-  members?: string[]; member_count?: number; members_truncated?: boolean; member_kind?: string | null; tags?: string[];
-}
 
 export const inboxService = {
   async counts(): Promise<InboxCounts> {
@@ -290,15 +361,39 @@ export const inboxService = {
   async retrySource(id: string): Promise<SourceOut> {
     return (await api.post<SourceOut>(`/inbox/sources/${enc(id)}/retry`, undefined, ua('retry'))).data;
   },
+  /** What this machine can connect without typing anything; `refresh` probes again. It
+   *  starts the configured MCP servers to list their tools, so it carries the header too. */
+  async availableSources(refresh = false): Promise<AvailableSourceOut[]> {
+    return list<AvailableSourceOut>((await api.get(`/inbox/sources/available${refresh ? '?refresh=true' : ''}`, ua('available'))).data);
+  },
+  /** One POST; the backend stores the source only after its whoami succeeded. A refusal
+   *  (whoami failed with its fix, already added, invalid) comes back as a value. */
+  async addSource(body: SourceCreateRequest): Promise<AddSourceResult> {
+    const res = await api.post('/inbox/sources', body, {
+      ...ua('add-source'),
+      validateStatus: (s) => (s >= 200 && s < 300) || s === 400 || s === 409 || s === 422 || s === 503,
+    });
+    if (res.status >= 400) return { ok: false, refusal: parseSourceRefusal(res.status, res.data) };
+    return { ok: true, source: res.data as SourceOut };
+  },
+  async updateSource(id: string, patch: SourcePatchRequest): Promise<SourceOut> {
+    return (await api.patch<SourceOut>(`/inbox/sources/${enc(id)}`, patch, ua('update-source'))).data;
+  },
+  async removeSource(id: string): Promise<SourceDeletedOut> {
+    return (await api.delete<SourceDeletedOut>(`/inbox/sources/${enc(id)}`, ua('remove-source'))).data;
+  },
+  /** Store a token or password of a source; it is never returned. */
+  async setSourceSecret(id: string, name: string, value: string): Promise<SourceOut> {
+    return (await api.post<SourceOut>(`/inbox/sources/${enc(id)}/secret`, { name, value }, ua('secret'))).data;
+  },
   async refresh(): Promise<InboxCounts> {
     return toCounts((await api.post('/inbox/refresh', undefined, ua('refresh'))).data);
   },
 
   // ── feed configuration (moved from /api/community/feeds, same shapes) ──
   async listFeeds(): Promise<CommunitySource[]> {
-    const d = (await api.get('/inbox/feeds')).data as { sources?: RawFeed[]; feeds?: RawFeed[] } | RawFeed[] | undefined;
-    const raw = Array.isArray(d) ? d : (d?.sources ?? d?.feeds ?? []);
-    return raw.map((s) => ({
+    const d = (await api.get('/inbox/feeds')).data as Partial<FeedsOut> | undefined;
+    return list<Partial<FeedOut> & Pick<FeedOut, 'id' | 'name' | 'type' | 'tier' | 'enabled'>>(d?.sources).map((s) => ({
       id: s.id,
       name: s.name,
       type: s.type,

@@ -245,3 +245,17 @@ async def test_notifications_are_read_past_the_first_page():
     result = await _source(gh).pull("2026-11-20T00:00:00Z")
     assert "issue_comment:701" in {m.external_id for m in result.messages}
     assert len(result.messages) == 51
+
+
+async def test_status_detail_and_an_expired_login_on_reply():
+    gh = _routes({("GET", "notifications?per_page=1"): (1, "gh: Resource not accessible by personal access token (HTTP 403)")})
+    src = _source(gh)
+    assert not await src.can_send()
+    assert src.status_detail() == src.feed_only_reason and "PAT" in src.status_detail()
+    assert src.login
+    ok = _source(_routes())
+    assert await ok.can_send() and ok.status_detail() == ""
+    expired = _routes({("POST", "repos/acme/widgets/issues/7/comments"): (1, "HTTP 401: Bad credentials")})
+    with pytest.raises(SendFailed) as info:
+        await _source(expired).reply(ThreadRef("github", {"repo": "acme/widgets", "number": 7, "kind": "issue"}), "x")
+    assert info.value.fix == "gh auth login"

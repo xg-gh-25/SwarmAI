@@ -433,3 +433,57 @@ def test_text_that_is_not_one_marked_block_is_kept_as_is():
     assert _plain_text("plain <b>text</b>") == "plain <b>text</b>"
     two = _wrapped(ME, "1", "a b") + "\n" + _wrapped(ME, "2", "c")
     assert _plain_text(two) == two
+
+# ---------------------------------------------------------------------------
+# The person's own messages to one counterparty (drafting context)
+# ---------------------------------------------------------------------------
+
+
+def _thread_in(channel, thread_ts=None):
+    from core.inbox.models import Thread
+    return Thread(ref=ThreadRef("slack", {"channel": channel, "thread_ts": thread_ts}), messages=(), target=None)
+
+
+async def test_own_messages_to_are_the_persons_messages_in_that_dm_only():
+    def history(a):
+        if a["channel"] == "D0BOB":
+            return {"messages": [{"ts": ts(900), "user": "U0BOB", "text": "can you send the doc?"},
+                                 {"ts": ts(800), "user": ME, "text": "sure, here it is"},
+                                 {"ts": ts(700), "user": ME, "text": "anything else?"}]}
+        return {"messages": [{"ts": ts(600), "user": ME, "text": "a message in a channel"}]}
+
+    mcp = FakeMcp(_mcp_handlers(get_messages=history))
+    src = SlackMcpSource(_config(), client=mcp)
+    own = await src.own_messages_to(_thread_in("D0BOB", ts(900)), 10)
+    assert [m.text for m in own] == ["sure, here it is", "anything else?"]
+    assert all(m.author_id == ME for m in own)
+    assert [a["channel"] for t, a in mcp.calls if t == "get_messages"] == ["D0BOB"]
+    assert await src.own_messages_to(_thread_in("D0BOB"), 1) == own[-1:]
+    # a reply in a channel thread or a group DM reaches others: no history from elsewhere
+    assert await src.own_messages_to(_thread_in("C0TEAM", ts(900)), 10) == []
+    assert await src.own_messages_to(_thread_in("G0GROUP"), 10) == []
+
+
+async def test_web_own_messages_to_and_a_revoked_token_on_post():
+    def api(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", 1)[-1]
+        data = {
+            "auth.test": {"ok": True, "user_id": ME, "user": "me.person"},
+            "conversations.list": {"ok": True, "channels": [{"id": "D0ANA", "is_im": True, "user": "U0ANA"}],
+                                   "response_metadata": {"next_cursor": ""}},
+            "conversations.history": {"ok": True, "messages": [{"ts": ts(500), "user": "U0ANA", "text": "hi"},
+                                                               {"ts": ts(400), "user": ME, "text": "hello Ana"}]},
+            "chat.postMessage": {"ok": False, "error": "token_revoked"},
+        }.get(method, {"ok": False, "error": "unknown_method"})
+        return httpx.Response(200, json=data)
+
+    src = SlackWebSource(SourceConfig(id="w", kind="slack", backend="slack-web"),
+                         transport=httpx.MockTransport(api), token_reader=lambda: "xoxp-1")  # pragma: allowlist secret
+    try:
+        assert [m.text for m in await src.own_messages_to(_thread_in("D0ANA"), 10)] == ["hello Ana"]
+        with pytest.raises(SendFailed) as info:
+            await src.reply(ThreadRef("slack", {"channel": "D0ANA", "thread_ts": None}), "x")
+        assert "token" in info.value.fix, "a refused token keeps the fix, so the source is marked signed out"
+    finally:
+        await src.close()
+    assert SlackWebSource.SECRET_NAMES == frozenset({"user_token"})

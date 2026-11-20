@@ -151,6 +151,24 @@ async def test_auth_failure_marks_source_and_waits_for_interval(env):
     assert await runner.run_cycle(at=later) == 1 and fake.calls["pull"] == 2
 
 
+async def test_a_source_that_cannot_send_keeps_its_status_detail(env):
+    fake, _, _ = env
+    fake.sendable = False
+    fake.status_detail = lambda: "sending is off: writes are not enabled"
+    assert await runner.pull_source(await _source()) == "read_only"
+    out = store.source_out(await _source())
+    assert out["status_detail"] == "sending is off: writes are not enabled" and out["fix"] == ""
+    fake.pull_error = RuntimeError("network down")
+    assert await runner.pull_source(await _source()) == "error"
+    out = store.source_out(await _source())
+    assert out["fix"] == "" and out["status_detail"] == "", "an error does not keep the old read-only reason"
+    fake.pull_error = None
+    fake.sendable = True
+    assert await runner.pull_source(await _source()) == "ok"
+    out = store.source_out(await _source())
+    assert out["status_detail"] == "" and out["fix"] == ""
+
+
 async def test_other_error_marks_error_and_hides_secrets(env):
     fake, _, _ = env
     token_like = "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz0123456789"   # built here: no literal in the source

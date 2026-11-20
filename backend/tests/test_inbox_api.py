@@ -6,6 +6,9 @@
   redraft adds one; later / dismiss / done move the item.
 - Feed configuration under /api/inbox/feeds behaves exactly as /api/community/feeds:
   the same requests give the same status codes and the same config.yaml.
+- The draft's history holds the person's own messages only: the thread's and, when the
+  source offers them, those to the same counterparty; another person's never.
+- The 403/409 of the sending routes are SendRefusalOut bodies.
 """
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ from tests import inbox_fakes as fx
 def _contract_routes() -> set[tuple[str, str]]:
     doc = contract.__doc__
     routes = set()
-    for method, path in re.findall(r"``(GET|POST|PUT|DELETE)\s+(/api/inbox/[^`?\s]+)", doc):
+    for method, path in re.findall(r"``(GET|POST|PUT|PATCH|DELETE)\s+(/api/inbox/[^`?\s]+)", doc):
         routes.add((method, path))
     feeds = re.search(r"``GET/POST /api/inbox/feeds``, ``PUT/DELETE /api/inbox/feeds/\{id\}``,"
                       r"\s+``POST/DELETE /api/inbox/feeds/\{id\}/members``", doc)
@@ -43,7 +46,10 @@ def _norm(path: str) -> str:
 def test_every_contract_route_exists():
     served = {(m, _norm(r.path)) for r in router.routes for m in r.methods}
     expected = {(m, _norm(p)) for m, p in _contract_routes()}
-    assert len(expected) >= 20
+    assert len(expected) >= 25
+    assert {("PATCH", "/api/inbox/sources/{id}"), ("DELETE", "/api/inbox/sources/{id}"),
+            ("POST", "/api/inbox/sources"), ("GET", "/api/inbox/sources/available"),
+            ("POST", "/api/inbox/sources/{id}/secret")} <= expected
     assert expected - served == set()
 
 
@@ -63,6 +69,16 @@ def test_routes_return_the_contract_models():
     assert by_route[("GET", "/api/inbox/sources")] == list[contract.SourceOut]
     assert by_route[("POST", "/api/inbox/sources/{id}/retry")] is contract.SourceOut
     assert by_route[("POST", "/api/inbox/refresh")] is contract.InboxCounts
+    assert by_route[("GET", "/api/inbox/feeds")] is contract.FeedsOut
+    assert by_route[("GET", "/api/inbox/sources/available")] == list[contract.AvailableSourceOut]
+    assert by_route[("POST", "/api/inbox/sources")] is contract.SourceOut
+    assert by_route[("PATCH", "/api/inbox/sources/{id}")] is contract.SourceOut
+    assert by_route[("DELETE", "/api/inbox/sources/{id}")] is contract.SourceDeletedOut
+    assert by_route[("POST", "/api/inbox/sources/{id}/secret")] is contract.SourceOut
+    declared = {(m, _norm(r.path)): r.responses for r in router.routes for m in r.methods}
+    for path in ("/api/inbox/items/{id}/send", "/api/inbox/sends/{id}/not-sent", "/api/inbox/sends/{id}/resend"):
+        assert declared[("POST", path)][403]["model"] is contract.SendRefusalBody
+        assert declared[("POST", path)][409]["model"] is contract.SendRefusalBody
 
 
 @pytest.fixture
@@ -122,6 +138,64 @@ async def test_draft_is_made_on_first_read_only(env):
     assert three.json()["text"] == "draft 2"
     latest = (await http.get(f"/api/inbox/items/{item['id']}/draft")).json()
     assert latest["id"] == three.json()["id"]
+
+
+async def test_draft_history_is_own_messages_to_the_counterparty(env):
+    fake, http, made, _cfg = env
+    item = await fx.add_item()
+    fake.thread_messages = [fx.msg("e1"), fx.msg("mine", author="U_ME", minutes=3),
+                            fx.msg("e2", author="U_PRIYA", minutes=4)]
+    asked = []
+
+    async def own_messages_to(thread, limit):
+        asked.append(([m.external_id for m in thread.messages], limit))
+        # a source that also returns someone else's message must not leak it into the draft
+        return [fx.msg("dm-mine", author="U_ME", thread=7, minutes=-60),
+                fx.msg("dm-theirs", author="U_PRIYA", thread=7, minutes=-61),
+                fx.msg("dm-third", author="U_EVE", thread=7, minutes=-62)]
+
+    fake.own_messages_to = own_messages_to
+    r = await http.get(f"/api/inbox/items/{item['id']}/draft")
+    assert r.status_code == 200, r.text
+    assert asked == [(["e1", "mine", "e2"], drafts.HISTORY_MESSAGES)], "the source is asked with the thread itself"
+    assert sorted(made[0][1]) == ["dm-mine", "mine"], "only the person's own words reach the draft"
+
+
+async def test_draft_without_counterparty_history_still_drafts_when_it_fails(env):
+    fake, http, made, _cfg = env
+    item = await fx.add_item()
+    fake.thread_messages = [fx.msg("e1"), fx.msg("mine", author="U_ME", minutes=3)]
+
+    async def broken(thread, limit):
+        raise RuntimeError("search is down")
+
+    fake.own_messages_to = broken
+    assert (await http.get(f"/api/inbox/items/{item['id']}/draft")).status_code == 200
+    assert made[0][1] == ["mine"]
+
+
+async def test_send_refusals_are_send_refusal_out_bodies(env, monkeypatch):
+    fake, http, _made, _cfg = env
+    item = await fx.add_item()
+    sha = (await http.get(f"/api/inbox/items/{item['id']}/target")).json()["target_sha"]
+    no_header = await http.post(f"/api/inbox/items/{item['id']}/send", json={"text": "x", "target_sha": sha})
+    assert no_header.status_code == 403
+    assert contract.SendRefusalBody(**no_header.json()).detail.code == "forbidden"
+    fake.target = fx.ReplyTarget(label="Other", recipients=("other@example.com",))
+    changed = await http.post(f"/api/inbox/items/{item['id']}/send", headers=fx.UA,
+                              json={"text": "x", "target_sha": sha})
+    body = contract.SendRefusalBody(**changed.json()).detail
+    assert changed.status_code == 409 and body.code == "target_changed"
+    assert body.target is not None and body.target.recipients == ["other@example.com"]
+    monkeypatch.setattr(caller, "check_caller", _refuse)
+    refused = await http.post(f"/api/inbox/items/{item['id']}/send", headers=fx.UA,
+                              json={"text": "x", "target_sha": sha})
+    detail = contract.SendRefusalBody(**refused.json()).detail
+    assert refused.status_code == 403 and detail.code == "forbidden" and detail.reason == "in the backend tree"
+
+
+def _refuse(client, server):
+    raise caller.CallerRefused("in the backend tree")
 
 
 async def test_item_actions(env):

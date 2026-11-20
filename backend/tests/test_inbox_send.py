@@ -131,6 +131,47 @@ async def test_send_failed_is_failed_and_resend_sends_once_more(env):
     assert nf.status_code == 409 and nf.json()["detail"]["code"] == "not_unknown"
 
 
+async def test_send_failed_with_a_fix_marks_the_source_auth_failed(env):
+    """A definite not-sent auth failure keeps its fix and marks the source, like a pull."""
+    from database import db
+    fake, item, http = env
+    sha = await _sha(http, item["id"])
+    fake.reply_error = SendFailed("token revoked", fix="paste a new token, then retry")
+    r = await http.post(f"/api/inbox/items/{item['id']}/send", headers=fx.UA,
+                        json={"text": "ok", "target_sha": sha})
+    assert r.json()["status"] == "failed" and "token revoked" in r.json()["error"]
+    assert r.json()["blocked_by_source"] is True, "resend stays off until the source works"
+    source = await db.inbox_get_source("s1")
+    assert source["health"] == "auth_failed" and source["fix"] == "paste a new token, then retry"
+    counts = (await http.get("/api/inbox/counts")).json()
+    assert counts["unhealthy_sources"] == ["s1"]
+    again = await http.post(f"/api/inbox/sends/{r.json()['id']}/resend", headers=fx.UA)
+    assert again.status_code == 409 and again.json()["detail"]["code"] == "cannot_send"
+    assert fake.calls["reply"] == 1
+
+
+async def test_resend_of_a_source_removed_meanwhile_is_refused_not_a_crash(env, monkeypatch):
+    from core.inbox import store
+    from database import db
+    fake, item, http = env
+    sha = await _sha(http, item["id"])
+    fake.reply_error = SendFailed("nope")
+    r = await http.post(f"/api/inbox/items/{item['id']}/send", headers=fx.UA,
+                        json={"text": "ok", "target_sha": sha})
+    fake.reply_error = None
+    real_can_send = fake.can_send
+
+    async def removed_during_checks():
+        ok = await real_can_send()
+        await store.delete_source_rows("s1")
+        return ok
+
+    monkeypatch.setattr(fake, "can_send", removed_during_checks)
+    again = await http.post(f"/api/inbox/sends/{r.json()['id']}/resend", headers=fx.UA)
+    assert again.status_code == 409 and again.json()["detail"]["code"] == "source_removed"
+    assert fake.calls["reply"] == 1 and await db.inbox_get_send(r.json()["id"]) is None
+
+
 async def test_resend_refuses_a_source_that_cannot_send(env):
     fake, item, http = env
     sha = await _sha(http, item["id"])

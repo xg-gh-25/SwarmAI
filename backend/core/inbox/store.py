@@ -19,10 +19,20 @@ Rules this module keeps:
 - **Times** are UTC ISO-8601 strings of one width (``ts``), so a string comparison in SQL is
   a time comparison.
 
+- **A source's explanation of its health** lives in the ``fix`` column: the action for
+  ``auth_failed`` (the source's ``fix``), or, for ``read_only``, the source's
+  ``status_detail()`` (why it cannot send). ``source_out`` shows the first as ``fix`` and
+  the second as ``status_detail``.
+- **Removing a source** (``delete_source_rows``) removes its row, items, drafts, sends and
+  feedback in one write; it refuses while a send of the source is ``reserved`` (the send
+  would record its outcome on a removed row). All writes of this process share one write
+  connection under one lock, so the check and the deletes see no send reserved between them.
+
 Key public symbols: ``ts`` / ``parse_ts`` / ``now``, ``run_blocking``, ``channel_label``,
 ``ensure_sources_loaded``, ``sync_feed_source``, ``open_source``, ``identity_from_row``,
 ``message_to_item_row``, ``item_message``, ``item_out``, ``send_out``, ``source_out``,
-``counts``, ``FEED_SOURCE_ID``, ``DEFAULT_INTERVAL_S``.
+``counts``, ``mark_auth_failed``, ``delete_source_rows``, ``purge_send``, ``SendInFlight``,
+``FEED_SOURCE_ID``, ``DEFAULT_INTERVAL_S``.
 """
 from __future__ import annotations
 
@@ -56,6 +66,12 @@ EXCERPT_CHARS = 2_000
 LATE_AFTER = timedelta(days=2)
 
 _CHANNEL_LABELS = {"slack": "Slack", "mail": "邮件", "github": "GitHub", "feed": "信息流"}
+
+#: the options ``source_out`` shows: an allowlist, so an option that should never have been
+#: stored (a secret under an unexpected name) is never echoed back
+SHOWN_OPTIONS = frozenset({
+    "watched_channels", "extra_addresses", "watched_repos", "tool_family", "hostname",
+    "host", "port", "username", "folder", "sent_folder", "smtp_host", "smtp_port", "smtp_security"})
 
 # The Inbox's own threads: the caller check (a psutil scan of the machine's TCP
 # connections) and its file reads. Not the default pool and none of the pools the chat
@@ -298,7 +314,9 @@ async def send_out(row: dict, *, item: Optional[dict] = None,
 # ── sources out, counts ──────────────────────────────────────────────────────
 
 def source_out(row: dict, *, feeds: Optional[int] = None) -> dict:
-    """A source as ``schemas.inbox.SourceOut`` fields."""
+    """A source as ``schemas.inbox.SourceOut`` fields. ``fix`` is shown only for a source
+    that needs signing in again or fails; for a read-only source the same column holds its
+    ``status_detail``."""
     me = identity_from_row(row)
     identity = (me.display or (sorted(me.ids)[0] if me.ids else "")) if me else ""
     options = json.loads(row.get("config") or "{}")
@@ -310,13 +328,79 @@ def source_out(row: dict, *, feeds: Optional[int] = None) -> dict:
             if isinstance(options.get(key), list) and options[key]:
                 parts.append(f"关注 {len(options[key])} 个{word}")
         detail = " · ".join(parts)
+    read_only = row["health"] == SourceHealth.READ_ONLY.value
     return {
         "id": row["id"], "kind": row["kind"], "channel_label": channel_label(row["kind"]),
         "backend": row["backend"], "identity": identity, "interval_s": int(row["interval_s"]),
-        "health": row["health"], "fix": row["fix"] or "", "last_pull_at": row["last_pull_at"],
+        "health": row["health"], "fix": "" if read_only else (row["fix"] or ""),
+        "last_pull_at": row["last_pull_at"],
         "last_error": row["last_error"] or "", "can_send": bool(row["can_send"]),
-        "detail": detail,
+        "detail": detail, "status_detail": (row["fix"] or "") if read_only else "",
+        "enabled": bool(row["enabled"]),
+        "options": {k: v for k, v in options.items() if k in SHOWN_OPTIONS} if isinstance(options, dict) else {},
     }
+
+
+def status_detail_of(source: Any) -> str:
+    """The source's optional ``status_detail()`` ('' when it has none or it fails)."""
+    fn = getattr(source, "status_detail", None)
+    if not callable(fn):
+        return ""
+    try:
+        return str(fn() or "")[:300]
+    except Exception as exc:  # noqa: BLE001 — an explanation that fails explains nothing
+        logger.debug("inbox: status_detail failed (%s)", type(exc).__name__)
+        return ""
+
+
+async def mark_auth_failed(source_id: str, fix: str, error: str) -> None:
+    """The source's credentials expired (a pull, or a send refused for them): Needs You
+    shows ``fix``; the runner tries again at the next interval."""
+    from database import db
+    await db.inbox_update_source(source_id, ts(now()), health=SourceHealth.AUTH_FAILED.value,
+                                 fix=str(fix or "")[:300], last_error=str(error or "")[:500])
+
+
+class SendInFlight(Exception):
+    """A send of the source is reserved: it is being sent now."""
+
+
+async def delete_source_rows(source_id: str) -> Optional[dict]:
+    """Remove a source with its items, drafts, sends and feedback, in one write. Returns the
+    counts removed, ``None`` when there is no such source; raises ``SendInFlight`` while one
+    of its sends is reserved."""
+    from database import db
+    from database.sqlite import _get_pool
+    async with _get_pool(str(db.db_path)).borrow(readonly=False) as conn:
+        if await (await conn.execute("SELECT 1 FROM inbox_sources WHERE id = ?",
+                                     (source_id,))).fetchone() is None:
+            return None
+        if await (await conn.execute(
+                "SELECT 1 FROM inbox_sends WHERE source_id = ? AND status = 'reserved' LIMIT 1",
+                (source_id,))).fetchone() is not None:
+            raise SendInFlight(source_id)
+        items = "SELECT id FROM inbox_items WHERE source_id = ?"
+        drafts = (await conn.execute(f"DELETE FROM inbox_drafts WHERE item_id IN ({items})",
+                                     (source_id,))).rowcount
+        sends = (await conn.execute(
+            f"DELETE FROM inbox_sends WHERE source_id = ? OR item_id IN ({items})",
+            (source_id, source_id))).rowcount
+        await conn.execute(f"DELETE FROM inbox_feedback WHERE source_id = ? OR item_id IN ({items})",
+                           (source_id, source_id))
+        removed_items = (await conn.execute("DELETE FROM inbox_items WHERE source_id = ?",
+                                            (source_id,))).rowcount
+        await conn.execute("DELETE FROM inbox_sources WHERE id = ?", (source_id,))
+        await conn.commit()
+    return {"items": removed_items, "drafts": drafts, "sends": sends}
+
+
+async def purge_send(send_id: str) -> None:
+    """Remove one send row (a reservation made for a source removed meanwhile)."""
+    from database import db
+    from database.sqlite import _get_pool
+    async with _get_pool(str(db.db_path)).borrow(readonly=False) as conn:
+        await conn.execute("DELETE FROM inbox_sends WHERE id = ?", (send_id,))
+        await conn.commit()
 
 
 async def counts() -> dict:
