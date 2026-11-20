@@ -53,6 +53,8 @@ export interface ReplyLaneProps {
   /** Channel labels of the sources that are not healthy (the banner). */
   unhealthy: string[];
   onFixChannels: () => void;
+  /** No channel to reply in is set up (only feeds, or none): the empty state offers 接入. */
+  noChannels?: boolean;
   awareCount: number;
   onGoAware: () => void;
   onToChat: (item: ItemOut) => void;
@@ -116,6 +118,23 @@ export function ReplyLane(props: ReplyLaneProps) {
     return (
       <div className="flex-1">
         <OverlayError testid="inbox-load-error" retryTestid="inbox-load-retry" message={t('ui.InboxOverlay.loadError')} onRetry={props.onRetry} />
+      </div>
+    );
+  }
+  if (!selected && props.noChannels) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-center" data-testid="inbox-reply-no-channels">
+        <div className="max-w-sm">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full text-[var(--color-primary)]"
+            style={{ background: 'color-mix(in srgb, var(--color-primary) 12%, transparent)' }}>
+            <span className="material-symbols-outlined icon-lg" aria-hidden>add_link</span>
+          </div>
+          <h2 className="text-title font-semibold text-[var(--color-text)]">{t('ui.InboxOverlay.reply.noChannelsTitle')}</h2>
+          <p className="mt-1 text-body text-[var(--color-text-muted)]">{t('ui.InboxOverlay.reply.noChannelsBody')}</p>
+          <button type="button" className="btn-md btn-primary mt-4" onClick={props.onFixChannels} data-testid="inbox-add-channels">
+            {t('ui.InboxOverlay.reply.noChannelsAction')}
+          </button>
+        </div>
       </div>
     );
   }

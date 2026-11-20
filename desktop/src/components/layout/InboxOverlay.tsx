@@ -84,7 +84,9 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
   const awareQ = useQuery({ ...overlayQuery.inboxItems('aware'), enabled: view === 'aware' });
   const trendQ = useQuery({ ...overlayQuery.inboxItems('trend'), enabled: view === 'trend' });
   const unhealthyIds = counts.data?.unhealthy_sources ?? [];
-  const sourcesQ = useQuery({ ...overlayQuery.inboxSources(), enabled: unhealthyIds.length > 0 });
+  const sourcesQ = useQuery(overlayQuery.inboxSources());
+  // no channel to reply in yet (only feeds, or none): the reply lane says so and offers 接入
+  const noConversation = sourcesQ.isSuccess && !sourcesQ.data.some((s) => s.kind !== 'feed');
 
   const queue = useMemo<ItemOut[]>(
     () => [...(replyQ.data ?? []), ...(proposedQ.data ?? [])].filter((x) => !gone.has(x.id)),
@@ -198,6 +200,7 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
             narrow={narrow} showDetail={showDetail} onBack={() => setShowDetail(false)}
             onHandled={onHandled} edits={edits} onEdit={onEdit}
             unhealthy={unhealthyLabels} onFixChannels={() => setView('channels')}
+            noChannels={noConversation}
             awareCount={c?.aware ?? awareItems.length} onGoAware={() => goTab('aware')}
             onToChat={toChat} notify={notify} rootRef={rootRef} />
         )}

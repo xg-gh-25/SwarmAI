@@ -359,8 +359,19 @@ describe('Inbox reply lane', () => {
     await waitFor(() => expect(selectedRow()?.getAttribute('data-item-id')).toBe('r2'));
   });
 
+  it('with only feeds set up, the reply lane offers 接入 and opens the channel settings', async () => {
+    svc.items.mockResolvedValue([]);
+    svc.sources.mockResolvedValue([{ id: 'feed', kind: 'feed', channel_label: '信息流', backend: 'feed', identity: '', interval_s: 21600, health: 'ok', fix: '', last_pull_at: null, last_error: '', can_send: false, detail: '22 feeds' }]);
+    setup();
+    await waitFor(() => expect(screen.getByTestId('inbox-reply-no-channels')).toHaveTextContent('No channel to reply in yet'));
+    expect(screen.queryByTestId('inbox-reply-empty')).toBeNull();
+    fireEvent.click(screen.getByTestId('inbox-add-channels'));
+    await waitFor(() => expect(screen.getByTestId('inbox-channels')).toBeInTheDocument());
+  });
+
   it('shows 都回完了 with a link to 需要知道 when nothing waits', async () => {
     svc.items.mockImplementation(async (lane) => (lane === 'aware' ? AWARE : []));
+    svc.sources.mockResolvedValue([{ id: 'slack-1', kind: 'slack', channel_label: 'Slack', backend: 'mcp:slack', identity: '@me', interval_s: 900, health: 'ok', fix: '', last_pull_at: null, last_error: '', can_send: true, detail: '' }]);
     setup();
     await waitFor(() => expect(screen.getByTestId('inbox-reply-empty')).toHaveTextContent("You're all caught up"));
     fireEvent.click(screen.getByTestId('inbox-empty-go-aware'));
