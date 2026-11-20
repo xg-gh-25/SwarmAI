@@ -259,6 +259,8 @@ def test_noise_rules_keep_counts_and_drop_seeds():
     assert fp("Using --randomly-seed=2847562934\nFAILED 1") == fp("Using --randomly-seed=3912345678\nFAILED 1")
     # counts next to a time label, a file extension or an index are progress
     assert fp("epoch: 3 of 10") != fp("epoch: 4 of 10")
+    assert fp("seed 3 of 10 done") != fp("seed 4 of 10 done")
+    assert fp("seed: 3 of 10") != fp("seed: 4 of 10")
     assert fp("error at src/a.ts:12") != fp("error at src/a.ts:40")
     assert fp("arr[1]:5 done") != fp("arr[1]:6 done")
     # a labelled timestamp is still noise

@@ -166,7 +166,8 @@ _PENDING_MAX: int = 256
 # tmp_path, tempfile names), addresses and hex ids (0x7f.., git and object hashes),
 # UUIDs, host:port pairs and port numbers, ISO timestamps, epoch timestamps (a 10-digit
 # second count from 1.6e9 or its 13-digit millisecond form, or a 9-13 digit number after
-# ts= / time= / epoch=), random seeds (pytest-randomly prints a new one every run), clock
+# ts= / time= / epoch=), random seeds (5+ digits after seed= or seed:, as pytest-randomly
+# prints a new one every run; 'seed 3 of 10' is a count), clock
 # times, durations, memory sizes, process and session ids. Any other number (a count of
 # cases done, rows processed, an epoch counter) is kept, so it reads as progress; the one
 # exception is a bare count between 1.6e9 and 2e9, which reads as a timestamp. Paths go
@@ -179,7 +180,7 @@ _RESULT_NOISE = [re.compile(p, re.I) for p in (
     r"(?:\blocalhost|\b\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f]*:[0-9a-f:]*\]):\d+",
     r"\bport\s*[=:#]?\s*\d+",
     r"(?<![.\w])(?:ts|time|timestamp|epoch)\s*[=:]\s*\d{9,13}(?:\.\d+)?\b",
-    r"\b(?:random(?:ly)?[_ -]?)?seed\s*[=:]?\s*\d+",
+    r"\b(?:random(?:ly)?[_ -]?)?seed\s*[=:]\s*\d{5,}",
     r"\b1[6-9]\d{8}(?:\d{3})?\b",
     r"\b\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:z|[+-]\d{2}:?\d{2})?",
     r"\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b",
