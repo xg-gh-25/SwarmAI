@@ -95,7 +95,7 @@ lessons（`swarm_out_results.py:690-781`）。代码以 git bundle 的形式封�
 没有按它分支的读者。
 
 **A8 很多调用和定时器是按 Hive 发的，不按 run。** `_instance(hive_ref)` 和 `_instance_up` 在
-`core/`、`routers/` 里有 36 处调用（2026-11-19 grep），分在 12 个文件。除了 A1 列的，还有：
+`core/`、`routers/`、`jobs/` 里有 22 处调用（按词边界 grep，2026-11-20 重数），分在 10 个文件。除了 A1 列的，还有：
 `hive_records.pull`（真正拉 record 的地方，`backend/core/hive_records.py:940`）、`hive_lessons.take`、
 `swarm_out_live.check`、relay（`swarm_out_relay.py`，每 15 秒查状态）、远程 tab 代理
 （`routers/swarm_out_remote.py`）、`stop_turn`、discard、`_order_state`、`_has_cap`、`_release_late`，
@@ -146,6 +146,9 @@ Claude CLI 子进程在快照恢复的 microVM 里是否一切正常。
 ## 5. 推荐设计（方案 B）
 
 ### 5.1 一个 AgentCore Hive 在 Host 上是什么
+
+> **2026-11-20：** §5.1、§5.7、§5.9 被派发层设计取代（`docs/design/2026-11-20-swarm-out-dispatch-layer.md`）：
+> `_instance_for` 变成 run 句柄，选路变成调度的第 2 层，§5.9 的表变成位置和句柄的方法。下面保留原文作为来由。
 
 在 `hive_instances` 里加一行，新增列 `carrier`（`ec2` 或 `agentcore`，旧行默认 `ec2`），
 外加 `runtime_arn`。它在 Swarm Out 面板上显示为一个"弹性 Hive"：不起停、不升级，
