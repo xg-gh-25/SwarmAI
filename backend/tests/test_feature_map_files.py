@@ -113,3 +113,32 @@ def test_content_hash_changes_with_the_spec(tmp_path):
     h1 = files.content_hash(fmap, fmap.features[0])
     (f / "specs" / "home.spec.ts").write_text("// edited\n")
     assert files.content_hash(fmap, fmap.features[0]) != h1
+
+
+def test_content_hash_follows_the_specs_local_imports(tmp_path):
+    """A shared helper a spec imports changes the walk as much as the spec does; a spec
+    without local imports keeps the hash it had before imports were counted."""
+    f = _folder(tmp_path)
+    fmap = files.load_folder(f)
+    spec = f / "specs" / "home.spec.ts"
+    spec.write_text("import { test } from '@playwright/test';\n")
+    import hashlib, json
+    plain = hashlib.sha256(json.dumps(fmap.features[0].raw, sort_keys=True, ensure_ascii=False).encode())
+    plain.update(spec.read_bytes())
+    assert files.content_hash(fmap, fmap.features[0]) == plain.hexdigest()[:16], "unchanged without imports"
+    spec.write_text("import { test } from '@playwright/test';\nimport { open } from './helpers';\n")
+    (f / "specs" / "helpers.ts").write_text("import { more } from './lib/more';\nexport const open = 1;\n")
+    (f / "specs" / "lib").mkdir()
+    (f / "specs" / "lib" / "more.ts").write_text("export const more = 1;\n")
+    h1 = files.content_hash(fmap, fmap.features[0])
+    (f / "specs" / "helpers.ts").write_text("import { more } from './lib/more';\nexport const open = 2;\n")
+    h2 = files.content_hash(fmap, fmap.features[0])
+    assert h2 != h1, "editing the helper starts the walk over"
+    (f / "specs" / "lib" / "more.ts").write_text("export const more = 2;\n")
+    assert files.content_hash(fmap, fmap.features[0]) != h2, "and a file the helper imports"
+    outside = tmp_path / "outside.ts"
+    outside.write_text("x")
+    spec.write_text("import { x } from '../../../outside';\n")
+    h3 = files.content_hash(fmap, fmap.features[0])
+    outside.write_text("y")
+    assert files.content_hash(fmap, fmap.features[0]) == h3, "nothing outside the folder is read"

@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -293,15 +294,49 @@ def load_folder(folder: Path) -> FeatureMap:
     return FeatureMap(folder, tuple(features), targets)
 
 
+_LOCAL_IMPORT = re.compile(r"""(?:\bfrom|\bimport)\s*\(?\s*['"](\.{1,2}/[^'"\n]+)['"]""")
+_IMPORT_SUFFIXES = ("", ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs",
+                    "/index.ts", "/index.js")
+
+
+def _local_imports(folder: Path, spec: Path) -> list[Path]:
+    """Files *spec* imports by a relative path, and theirs in turn, inside *folder*, in
+    the order first met. A shared helper changes what a walk does as much as the spec
+    itself, so it belongs to the walk's identity."""
+    root = folder.resolve()
+    seen: list[Path] = []
+    todo = [spec]
+    while todo:
+        current = todo.pop(0)
+        try:
+            text = current.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for ref in _LOCAL_IMPORT.findall(text):
+            for suffix in _IMPORT_SUFFIXES:
+                hit = (current.parent / (ref + suffix)).resolve()
+                if hit.is_file():
+                    if hit.is_relative_to(root) and hit != spec.resolve() and hit not in seen:
+                        seen.append(hit)
+                        todo.append(hit)
+                    break
+    return seen
+
+
 def content_hash(fmap: FeatureMap, feature: Feature) -> str:
-    """The walk's identity in the ledger: its feature entry and its spec file. Editing
-    either starts the walk's history over (design §7)."""
+    """The walk's identity in the ledger: its feature entry, its spec file and the files
+    the spec imports from the folder. Editing any of them starts the walk's history over
+    (design §7)."""
     h = hashlib.sha256(json.dumps(feature.raw, sort_keys=True, ensure_ascii=False).encode())
     if feature.spec:
+        spec = fmap.folder / feature.spec
         try:
-            h.update((fmap.folder / feature.spec).read_bytes())
+            h.update(spec.read_bytes())
         except OSError:
             h.update(b"(spec unreadable)")
+        root = fmap.folder.resolve()
+        for dep in _local_imports(fmap.folder, spec):
+            h.update(b"\0" + dep.relative_to(root).as_posix().encode() + b"\0" + dep.read_bytes())
     return h.hexdigest()[:16]
 
 
