@@ -306,7 +306,7 @@ worker 角色）。Host 调的还是同一套 Hive HTTP API，只是经 session 
 | runtime 创建到 READY | 约 6 分钟；更新版本到 READY 约 3.5 分钟 | 发版要先推镜像、更新 runtime，等 READY 后新的派发才用上新版本 |
 | 新 session 首次调用 | 17.1 秒 | 弹性 offer 的"多久能开始"= 这一段 + 后端启动 + 传 Brain 和 bundle |
 | Hive 后端在 microVM 里启动 | 36.5 秒（本机容器 1.6 秒；2 vCPU 加首次初始化工作区） | 同上；镜像里预先初始化工作区可以缩短 |
-| 规格 | 2 vCPU、8 GB（默认，未配 resource configuration） | 可以加大到峰值 8 vCPU/32 GB、盘 32 GB（Q3） |
+| 规格 | 2 vCPU、8 GB（默认，未配 resource configuration） | 产品默认改用 8192：峰值 8 vCPU/32 GB、盘 32 GB（Q3） |
 | 本地盘 | 共 9.8 GB，镜像占 3.4 GB，**可用约 5.9 GB**（EC2 是 50 GB） | 镜像越大，工作区越小；预装工具链要和这点一起权衡（Q3） |
 | 凭据 | 容器里没有 AWS 凭据环境变量，SDK 走 `iam-role` 通道 | Hive 侧照常用默认凭据链 |
 | 两层鉴权 | 签名但不带 `X-Swarm-Hive-Auth`：401（app 拒）；带凭据不签名：403（平台拒） | §6.3 的做法成立 |
@@ -423,7 +423,7 @@ session 发请求会新起一台空 microVM，这必须在结构上做不到，�
 ### 6.8 开通
 
 左侧导航 System 区的 Hive 页（overlay `hive`，`desktop/src/components/layout/overlayIds.ts:48`）加"弹性 Hive"：在用户自己的
-账户里建 ECR repo 并推镜像、建 execution role、`CreateAgentRuntime`（网络 PUBLIC，`allowedPorts` 8080 和 8081，V2 平台）、
+账户里建 ECR repo 并推镜像、建 execution role、`CreateAgentRuntime`（网络 PUBLIC，`allowedPorts` 8080 和 8081，V2 平台，`resourceConfigurations` 为 `minimumMemoryInMiB: 8192`：基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB，XG 2026-11-20 定；每次更新 runtime 都要带上同一个值，否则会退回默认规格）、
 建或复用 S3 桶。一个账户一个 runtime。发版时更新镜像版本；不用 session storage，所以版本更新不丢已写进 S3 的结果。
 `hive_instances` 加 `carrier`、`runtime_arn` 两列；弹性 Hive 不计入 `MAX_HIVES`。
 
@@ -556,7 +556,7 @@ security 重点看 §6.3 的凭据传递和 §6.7 的 IAM。
 |---|---|---|
 | Q1 | 弹性 offer 的"多久能开始"取多少 | spike：首次调用 17 秒 + 后端 37 秒 ≈ 1 分钟，再加传 Brain 和 bundle；比冷 EC2（≤270 秒）快，比在跑的 EC2 慢，D4 的顺序成立 |
 | Q2 | 镜像怎么分发：用户在自己账户构建推 ECR（需要 Docker/Finch 或 CodeBuild），还是产品发公共镜像、用户复制 | spike 后定 |
-| Q3 | 默认规格（2 vCPU/8 GB、盘约 10 GB，扣掉镜像后约 5.9 GB）对编码偏小。V2 的 resource configuration 可以加大，盘跟着变大：`minimumMemoryInMiB` 4096 = 基线 1 vCPU/4 GB、峰值 4 vCPU/16 GB、盘 16 GB；8192 = 基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB（[文档](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html#runtime-v2-resource-configurations)）。设了规格就按基线计到 session 结束（较低单价），超出基线的部分按秒另算。一个 runtime 只有一种规格。建议默认 8192：编码时盘是最先不够的；没实测，下次用一个大 repo（如 SwarmAI 自己）验证盘和速度 | 设计（XG 定默认规格）+ 实测 |
+| Q3 | ~~默认规格~~ 已定（XG 2026-11-20）：弹性 Hive 默认 `minimumMemoryInMiB: 8192`（基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB）。默认规格（2 vCPU/8 GB、盘约 10 GB，扣掉镜像后约 5.9 GB）对编码偏小。设了规格就按基线计到 session 结束（较低单价），超出基线的部分按秒另算；一个 runtime 只有一种规格（[文档](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html#runtime-v2-resource-configurations)）。还没实测：用一个大 repo（如 SwarmAI 自己）验证盘和速度 | 已定，待实测 |
 | Q4 | ~~更新 runtime 版本时正在跑的 session 会怎样~~ 已答：不受影响，留在原 microVM 和旧版本上 | spike |
 | Q5 | 第 3 层要不要受"最多同时启动几台"的约束 | 第 3 步上线后看实际启动次数；先不加 |
 | Q6 | EC2 也改成 record 写 S3，Host 只认一种取法 | AgentCore 落地后再定 |
