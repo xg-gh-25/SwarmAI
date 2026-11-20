@@ -146,15 +146,23 @@ class _NoCredentials:
         return None
 
 
-def bearer_client(key: str, region: str, boto_config: Any) -> Any:
-    """A bedrock-runtime client that sends *key* as ``Authorization: Bearer``.
+def chat_api_key() -> str | None:
+    """The saved Bedrock API key when chat runs on one, else None: what a client meant
+    for chat's own credentials signs with (the job clients here, Settings' model list)."""
+    return _bedrock_key()
+
+
+def bearer_client(key: str, region: str, boto_config: Any, service: str = "bedrock-runtime") -> Any:
+    """A *service* client (``bedrock-runtime``, or the ``bedrock`` control plane) that
+    sends *key* as ``Authorization: Bearer``.
 
     Its own botocore session holds the key as that session's token provider and the
     client config pins ``signature_version="bearer"``: nothing is read from or written
     to ``os.environ`` (botocore's own ``AWS_BEARER_TOKEN_BEDROCK`` route is process-wide,
     and botocore reads it when it signs each request, not when the client is built),
     so it is safe with other threads building other clients at the same time. Also used
-    by the Settings verify (``routers.system._verify_bedrock``) for a key not yet saved."""
+    by the Settings verify (``routers.system._verify_bedrock``) for a key not yet saved,
+    and by Settings' model list (``routers.settings._bedrock_client``)."""
     import boto3
     import botocore.session
     from botocore.config import Config as BotoConfig
@@ -164,7 +172,7 @@ def bearer_client(key: str, region: str, boto_config: Any) -> Any:
     core_session.register_component("credential_provider", _NoCredentials())
     session = boto3.Session(botocore_session=core_session, region_name=region)
     config = boto_config.merge(BotoConfig(signature_version="bearer"))
-    return session.client("bedrock-runtime", region_name=region, config=config)
+    return session.client(service, region_name=region, config=config)
 
 
 def sigv4_config(boto_config: Any) -> Any:

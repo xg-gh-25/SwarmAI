@@ -112,13 +112,24 @@ _BEDROCK_PROFILE_PREFIXES = ("us.anthropic.", "global.anthropic.")
 
 
 def _bedrock_client(region: str | None = None):
-    """Return a bedrock control-plane client on the daemon's DEFAULT credential
-    chain (same chain that already serves live inference — NOT a per-Hive-account
-    session). Isolated for test patching.
-    """
+    """A bedrock control-plane client on the credentials chat uses (NOT a per-Hive-account
+    session): the saved Bedrock API key as a bearer token when chat runs on one, else the
+    pinned account or the default chain with sigv4 set in code. Isolated for test patching.
+
+    Neither follows ``AWS_BEARER_TOKEN_BEDROCK`` in ``os.environ``: botocore reads it when
+    it signs each request, so a client without a signature version set in code listed the
+    models of whatever token a chat spawn (or the person's shell) had put there — none
+    before the first chat in API-key mode, another account's for an ada/sso sign-in."""
+    from botocore.config import Config
     from core import aws_account
+    from jobs import bedrock as jb
+    key = jb.chat_api_key()
+    if key:
+        return jb.bearer_client(key, region or aws_account.region(), Config(), service="bedrock")
     session = aws_account.boto_session(region)  # no account: boto3's own default session
-    return session.client("bedrock", region_name=region) if region else session.client("bedrock")
+    config = jb.sigv4_config(Config())
+    return (session.client("bedrock", region_name=region, config=config) if region
+            else session.client("bedrock", config=config))
 
 
 def _family_ge_48(short: str) -> bool:
