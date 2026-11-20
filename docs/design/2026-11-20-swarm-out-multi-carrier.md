@@ -33,7 +33,7 @@ Swarm Out 今天只有一种执行机：一台台常驻的 EC2 Hive。本设计�
 | D2 | 第二种执行面用 AgentCore Runtime microVM，跑现在的 Hive 包 | 是 | §6.1 | 待定 |
 | D3 | AgentCore run 的结果怎么活过 microVM | run record 封存时写 S3（B），不用 session storage | §6.2 | 待定 |
 | D4 | 调度顺序 | 在跑有空的 EC2 → 弹性 → 停着的 EC2，层内按负载 | §4.4 | 待定 |
-| D5 | 在跑的 Hive 都满时，启动停着的那台 | 是（改 `pick_stopped` 的旧规则） | §4.4 | 待定 |
+| D5 | 在跑的 EC2 都满、**且这时用不了弹性 Hive**（没开通、到配额、被限流、镜像版本不对）时，启动停着的 EC2 | 是（改 `pick_stopped` 的旧规则）。有弹性 Hive 时，满了先走弹性（D4 第 2 层） | §4.4 | 待定 |
 | D6 | 开 run 前位置不可用时换一个 | 只在对那台机器还没写任何东西时换 | §4.4 | 待定 |
 | D7 | AgentCore 上的修正 | microVM 在就发进原 session；不在就新起一台，从上一轮带回的提交接着做 | §6.6 | 待定 |
 | D8 | Gateway | 不进执行面这一层；工具层单独设计 | §7 | 待定 |
@@ -224,7 +224,7 @@ handle = {carrier, location_id, round, run_ref, address, auth_ref}
 
 两处行为变化：
 
-- **D5（G2）**：在跑的 Hive **都满了**时，停着的也是候选。版本不够不算满，不会因此启动一台更旧的。Hive 的台数是人定的
+- **D5（G2）**：在跑的 EC2 都满时，先走第 2 层的弹性 Hive；**只有这时用不了弹性 Hive**（这个账户没开通、到配额、被限流、runtime 镜像不是本 Host 的版本），才轮到第 3 层停着的 EC2。版本不够不算满，不会因此启动一台更旧的。Hive 的台数是人定的
   （`hive_fleet.desired_count`，`backend/hive/fleet.py`），用上它们在人的同意之内；空闲 120 分钟后仍会自动停。
 - **G4**：排序键加"正在派发数"。`_IN_FLIGHT` 改成只按 hive id 记，在调度选定时加一次（今天派发 spec 时套了两层
   `_Dispatching`，`:620`、`:1007`，同一个派发记了两次）。
