@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { openRestored } from './chat-helpers';
 
 // Open tabs persist in the backend, so this walk counts what is there instead of
 // assuming one tab, and closes the tab it opened.
 test('a new tab starts empty and the first keeps its draft', { tag: '@start:home' }, async ({ page }) => {
-  await page.goto('/');
+  await openRestored(page);
   const input = page.getByTestId('chat-input');
   const tabs = page.getByRole('tablist', { name: 'Session tabs' }).getByRole('tab');
   await expect(input).toBeVisible();

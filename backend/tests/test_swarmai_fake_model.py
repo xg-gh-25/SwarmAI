@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
-import socket
 import threading
 import urllib.error
 import urllib.request
@@ -102,6 +101,11 @@ SYSTEM = {"role": "system", "content": "reminder"}
     ({"messages": [_user("[fm:tool-bash]")]}, (None, 0, "")),
     # plain string content
     ({"tools": TOOLS, "messages": [{"role": "user", "content": "x [fm:hello]"}]}, ("hello", 0, "")),
+    # context the CLI adds after the typed text (a system-reminder quoting an older marker)
+    ({"tools": TOOLS, "messages": [{"role": "user", "content": [
+        {"type": "text", "text": "now [fm:slow-b]"},
+        {"type": "text", "text": "<system-reminder>recalled: earlier [fm:slow-a]</system-reminder>"}]}]},
+     ("slow-b", 0, "")),
 ])
 def test_choose(doc, expected):
     assert fake.choose(doc) == expected
@@ -114,6 +118,11 @@ def test_steps_end_with_the_default_and_a_missing_script_says_so(tmp_path):
     assert chosen == "one:end" and step == {"text": fake.DEFAULT_TEXT}, "past the end: the turn ends"
     assert fake.load_step(tmp_path, "nope", 0)[1] == "nope:missing"
     assert fake.load_step(tmp_path, None, 0)[1] == "default"
+    # a malformed script says so instead of failing the request
+    (tmp_path / "list.yaml").write_text("- text: a\n")
+    assert fake.load_step(tmp_path, "list", 0)[1] == "list:invalid"
+    (tmp_path / "num.yaml").write_text("steps:\n  - {text: a, chunk: many}\n")
+    assert fake.load_step(tmp_path, "num", 0)[1] == "num:invalid"
 
 
 @pytest.fixture()
@@ -123,18 +132,17 @@ def server(tmp_path):
     (scripts / "hello.yaml").write_text("steps:\n  - text: Hello from the script.\n")
     (scripts / "bad.yaml").write_text(
         "steps:\n  - error: {status: 400, type: ValidationException, message: Scripted refusal.}\n")
+    saved = (fake.Handler.scripts, fake.Handler.log_path)
     fake.Handler.scripts = scripts
     fake.Handler.log_path = tmp_path / "model.jsonl"
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), fake.Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)   # the port is its own
+    port = httpd.server_address[1]
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     yield f"http://127.0.0.1:{port}", tmp_path / "model.jsonl"
     httpd.shutdown()
     httpd.server_close()
+    fake.Handler.scripts, fake.Handler.log_path = saved
 
 
 def _post(url, doc):

@@ -132,7 +132,11 @@ def _blocks(message: dict) -> list:
 
 
 def _texts(message: dict) -> str:
-    return "\n".join(str(b.get("text", "")) for b in _blocks(message) if b.get("type") == "text")
+    """The message's own text: blocks the CLI adds as context (``<system-reminder>``, which
+    may quote an earlier walk's marker) are not the typed text."""
+    return "\n".join(str(b.get("text", "")) for b in _blocks(message)
+                     if b.get("type") == "text"
+                     and not str(b.get("text", "")).lstrip().startswith("<system-reminder>"))
 
 
 def _tool_output(block: dict) -> str:
@@ -168,13 +172,22 @@ def load_step(scripts: Path, name: str | None, index: int) -> tuple[dict, str]:
         return {"text": DEFAULT_TEXT}, "default"
     path = scripts / f"{name}.yaml"
     try:
-        steps = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("steps") or []
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return {"text": f"No script {name}."}, f"{name}:missing"
+    steps = doc.get("steps") if isinstance(doc, dict) else None
+    if not isinstance(steps, list):
+        return {"text": f"Script {name} has no list of steps."}, f"{name}:invalid"
     if index >= len(steps):
         return {"text": DEFAULT_TEXT}, f"{name}:end"
-    step = steps[index]
-    return (step if isinstance(step, dict) else {"text": str(step)}), f"{name}:{index}"
+    step = steps[index] if isinstance(steps[index], dict) else {"text": str(steps[index])}
+    for key in ("chunk", "repeat", "delay_ms"):
+        try:
+            int(step.get(key) or 0)
+        except (TypeError, ValueError):
+            # refused before the stream starts, so the log says why
+            return {"text": f"Script {name} step {index}: {key} is not a number."}, f"{name}:invalid"
+    return step, f"{name}:{index}"
 
 
 # ── HTTP ────────────────────────────────────────────────────────────────────

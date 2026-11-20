@@ -4,7 +4,7 @@ date: 2026-11-20
 created: 2026-11-20
 updated: 2026-11-20
 project: SwarmAI
-status: r2 — after one premise review; §4.2a (start states isolated) built 2026-11-20, the rest not built. Owner direction 2026-11-20: "设计沙箱里的假模型端点".
+status: built 2026-11-20 (all of §7, the thinking step included); as built in §10. Owner direction 2026-11-20: "设计沙箱里的假模型端点".
 related: docs/design/2026-11-18-feature-map.md; core/feature_map; core/claude_environment; core/bedrock_thinking_gateway; core/session_unit (pre-flight); .swarmai/features
 ---
 
@@ -287,3 +287,26 @@ Found in passing, outside this design: the Settings verify of a Bedrock API key 
 the key is not already in the process environment, because botocore reads the token when
 the request is signed, not when the client is built (`routers/system.py:466-475,516-534`;
 reproduced with botocore 1.42.59). Fixed as its own change.
+
+## 10. As built (2026-11-20)
+
+- **Thinking step**: built. The CLI sends the earlier thought back with its placeholder
+  signature and the stand-in answers; walk `chat-thinking-t5wq` covers the next turn.
+- **Walk 3** walks one order of finishing: the second tab finishes while the first still
+  streams (about 20 s), then the first is checked whole (every word, no other tab's). The
+  other order adds no isolation case this one lacks, so it is not walked.
+- **Walk 4** holds the app's stop request for 1.5 s, so the reply streams on after the click
+  and the walk sees whether any of it reaches the stopped turn. Once the stop lands the turn
+  shows its record (what the model wrote before the stop landed), as a reload would.
+- **Walk 5** also reloads: the error is still shown, once (the persisted outcome).
+- **Each walk proves something**: one product mutation per walk turned it red: a tab's
+  session not saved (walk 1), the tool strip's name gone (walk 2), streamed text written
+  into the active tab's reply (walk 3), the Stop guard off (walk 4), the thought not shown
+  (thinking walk); walk 5 was red on the double-error bug before its fix.
+- **Review**: a correctness review of the stand-in and the walks found three walks proving
+  less than their `expect` (no real overlap in walk 3, walk 4 blind to text above the
+  marker, walk 1's "input free" true mid-stream), a tab-restore race in the shared helper
+  and the draft walk, and script-reading gaps in the stand-in; all fixed with the changes
+  above, the helper's wait for the saved tabs, and table rows for a trailing
+  system-reminder and a malformed script.
+

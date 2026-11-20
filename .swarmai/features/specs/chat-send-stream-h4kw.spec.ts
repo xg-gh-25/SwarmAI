@@ -9,6 +9,7 @@ test('send, stream, survive a reload', { tag: '@start:chat' }, async ({ page }) 
   const answer = shown('turn-answer').last();
   await expect(answer).toContainText('Hello from the scripted model.', { timeout: 60_000 });
   await expect(shown('streaming-bee')).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: 'Stop generation (Esc)' })).toHaveCount(0);   // the turn is over
   await expect(input).toBeEditable();
   await page.reload();
   const mine = tabs.filter({ hasText: 'hello [fm:hello]' }).last();   // by its title, not its place

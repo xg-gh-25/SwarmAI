@@ -1,2 +1,3 @@
+# ~20 s: still streaming while the second tab sends and finishes
 steps:
-  - {text: "alpha ", repeat: 40, chunk: 6, delay_ms: 60}
+  - {text: "alpha ", repeat: 200, chunk: 6, delay_ms: 100}

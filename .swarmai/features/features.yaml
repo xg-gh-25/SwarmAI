@@ -73,7 +73,7 @@ features:
   - id: chat-tabs-apart-x7tn
     title: Two tabs stream at the same time and keep their own replies
     reach: Send in one tab, open a new tab while it streams, send there too
-    expect: Each tab shows only its own reply, when both have finished
+    expect: The second tab finishes while the first still streams; each tab shows only its own reply
     target: app
     spec: specs/chat-tabs-apart-x7tn.spec.ts
   - id: chat-stop-p9ds
@@ -88,3 +88,9 @@ features:
     expect: The error is shown once with how to go on; no spinner stays; the next message gets its answer; after a reload the error is still shown, once
     target: app
     spec: specs/chat-model-error-b3qz.spec.ts
+  - id: chat-thinking-t5wq
+    title: A reply that thinks first shows its thought and the chat goes on
+    reach: Send a message the model thinks about before it answers
+    expect: The thought is shown with the answer; the next message, which sends the thought back, gets its answer
+    target: app
+    spec: specs/chat-thinking-t5wq.spec.ts

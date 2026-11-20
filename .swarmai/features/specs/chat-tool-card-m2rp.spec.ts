@@ -8,7 +8,8 @@ test('a Bash step, then the answer that quotes it', { tag: '@start:chat' }, asyn
   await input.press('Enter');
   await expect(shown('turn-result').last()).toContainText('The command printed: feature-map-marker', { timeout: 60_000 });
   const group = shown('group-toggle').last();
-  await expect(group).toContainText('1 step');
+  await expect(group).toContainText('Worked');
+  await expect(group).toContainText(/(^|\D)1 step\b/);
   await group.click();
   const strip = shown('tool-strip').last();
   await expect(strip.getByTestId('strip-tool')).toContainText('Bash');
