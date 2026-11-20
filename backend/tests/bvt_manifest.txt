@@ -82,3 +82,4 @@ test_hive_retry.py  # Retry on an errored Hive: confirmation and disk snapshots 
 test_wide_scope.py  # the dev-box refusal of a test run wider than one change's tests (conftest)
 test_run_bvt_python.py  # run_bvt.sh runs the checkout's own venv python when it has one, else the python on PATH (CI)
 test_frontend_design_web_guidance.py  # s_frontend-design: pinned Modern Web Guidance verifies, searches, never runs npx
+test_inbox_contract.py  # Inbox shared contract: target fingerprint, identity aliases, source registry, lanes

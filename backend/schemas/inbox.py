@@ -1,0 +1,152 @@
+"""Inbox HTTP API contract (``/api/inbox``), shared by the router and the desktop client.
+
+Design: ``docs/design/2026-11-20-inbox.md`` §7-§8; the desktop mirror of these shapes is
+``desktop/src/services/inbox.ts``. Every route below is served by ``routers/inbox.py``.
+
+Routes:
+
+- ``GET  /api/inbox/counts``                    -> ``InboxCounts``   (tab counts and the nav badge)
+- ``GET  /api/inbox/items?lane=reply|proposed|aware|trend`` -> ``list[ItemOut]`` (open items, most urgent first)
+- ``GET  /api/inbox/items/{id}/target``         -> ``TargetOut``     (resolved fresh from the source)
+- ``GET  /api/inbox/items/{id}/draft``          -> ``DraftOut``      (the latest draft; made on first read)
+- ``POST /api/inbox/items/{id}/redraft``        -> ``DraftOut``
+- ``POST /api/inbox/items/{id}/send``  ``SendRequest`` -> ``SendOut`` (403 caller is not the desktop UI;
+  409 ``target_changed`` / ``redacted`` / ``not_open``; the only route that sends)
+- ``POST /api/inbox/items/{id}/action`` ``ItemActionRequest`` -> ``ItemOut`` (later / dismiss / done)
+- ``GET  /api/inbox/sends?filter=all|mine|auto`` -> ``SendsOut``     (needs-you first, then sent by day)
+- ``POST /api/inbox/sends/{id}/not-sent``       -> ``SendOut``       (the person confirms an unknown send failed)
+- ``POST /api/inbox/sends/{id}/resend``         -> ``SendOut``       (only a failed send whose source can send)
+- ``GET  /api/inbox/trends/summary``            -> ``TrendSummaryOut``
+- ``GET  /api/inbox/sources``                   -> ``list[SourceOut]``
+- ``POST /api/inbox/sources/{id}/retry``        -> ``SourceOut``
+- ``POST /api/inbox/refresh``                   -> ``InboxCounts`` (pull every due source now)
+- feed configuration moves here from ``/api/community/feeds`` unchanged in shape:
+  ``GET/POST /api/inbox/feeds``, ``PUT/DELETE /api/inbox/feeds/{id}``,
+  ``POST/DELETE /api/inbox/feeds/{id}/members``.
+
+Times are ISO-8601 strings with offset. Ids are strings.
+"""
+from __future__ import annotations
+
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+LaneName = Literal["reply", "proposed", "aware", "trend"]
+SendStatusName = Literal["reserved", "sent", "failed", "unknown"]
+SourceHealthName = Literal["ok", "auth_failed", "error", "read_only"]
+
+
+class InboxCounts(BaseModel):
+    reply: int = 0               # open items in REPLY (the nav badge and the first tab's count)
+    proposed: int = 0
+    aware: int = 0
+    trend: int = 0
+    sends_need_you: int = 0      # failed + unknown sends: the red dot on the 已发 tab
+    skipped: int = 0             # SKIP items in the last 24 h ("另有 N 条没显示")
+    unhealthy_sources: list[str] = Field(default_factory=list)  # source ids not ok
+    updated_at: Optional[str] = None  # the latest successful pull of any source
+
+
+class ItemOut(BaseModel):
+    id: str
+    lane: LaneName
+    state: Literal["open", "replied", "done", "dismissed", "snoozed"]
+    source_id: str
+    source_kind: str             # slack | mail | github | feed:<type>: picks the channel colour
+    channel_label: str           # "Slack", "邮件", "GitHub", "信息流": the channel pill text
+    author: str
+    author_role: str = ""        # "你的经理", a repo, an address: the detail header
+    where: str = ""              # "Slack 私信", "邮件 · To 你", "#team-leads"
+    received_at: str
+    late: bool = False           # waiting longer than two days
+    ask: str = ""                # the one sentence: what the person is asked (the detail headline)
+    ask_sub: str = ""
+    excerpt: str = ""            # the message text, first 2,000 characters
+    url: str = ""
+    priority: int = 3
+    producer: Optional[str] = None   # PROPOSED items: who submitted it ("github-outreach")
+
+
+class TargetOut(BaseModel):
+    label: str                    # after "回复到"
+    recipients: list[str]
+    public: bool = False
+    flags: list[str] = Field(default_factory=list)  # red warnings above the draft
+    target_sha: str
+    can_send: bool
+
+
+class DraftOut(BaseModel):
+    id: str
+    item_id: str
+    text: str
+    lang: str = ""
+    note: str = ""               # "参考了你和周琳的 6 条往来"
+    created_at: str
+
+
+class SendRequest(BaseModel):
+    draft_id: Optional[str] = None
+    text: str = Field(min_length=1)
+    target_sha: str
+
+
+class SendOut(BaseModel):
+    id: str
+    item_id: str
+    origin: Literal["click", "auto"]
+    producer: Optional[str] = None
+    status: SendStatusName
+    to_label: str
+    source_kind: str
+    channel_label: str
+    text: str
+    url: str = ""
+    created_at: str
+    sent_at: Optional[str] = None
+    error: str = ""
+    blocked_by_source: bool = False  # failed because the source is unhealthy: resend disabled
+    has_reply: bool = False          # a later message in the thread came back as an item
+    reply_item_id: Optional[str] = None
+
+
+class SendsOut(BaseModel):
+    need_you: list[SendOut]      # failed + unknown, newest first
+    sent: list[SendOut]          # status sent, newest first (the client groups by day)
+    total_7d: int = 0
+    auto_7d: int = 0
+
+
+class ItemActionRequest(BaseModel):
+    action: Literal["later", "dismiss", "done"]
+
+
+class TrendPoint(BaseModel):
+    title: str
+    why: str
+    source_label: str
+    item_id: Optional[str] = None
+    url: str = ""
+
+
+class TrendSummaryOut(BaseModel):
+    generated_at: Optional[str] = None
+    points: list[TrendPoint] = Field(default_factory=list)
+    feeds: int = 0
+    watched_repos: int = 0
+
+
+class SourceOut(BaseModel):
+    id: str
+    kind: str
+    channel_label: str
+    backend: str                 # "mcp:slack-mcp", "slack-web", "imap", "gh", "feed"
+    identity: str = ""           # "@xg", an address, a login
+    interval_s: int
+    health: SourceHealthName
+    fix: str = ""                # the action shown for auth_failed ("运行 mwinit -f")
+    last_pull_at: Optional[str] = None
+    last_error: str = ""
+    can_send: bool = False
+    detail: str = ""             # "关注 3 个频道", "22 个 feed"
