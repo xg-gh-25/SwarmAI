@@ -83,3 +83,6 @@ test_wide_scope.py  # the dev-box refusal of a test run wider than one change's 
 test_run_bvt_python.py  # run_bvt.sh runs the checkout's own venv python when it has one, else the python on PATH (CI)
 test_frontend_design_web_guidance.py  # s_frontend-design: pinned Modern Web Guidance verifies, searches, never runs npx
 test_inbox_contract.py  # Inbox shared contract: target fingerprint, identity aliases, source registry, lanes
+test_inbox_triage.py  # Inbox triage: rule lanes, one answer tool only, whole-batch rejection on a missing/extra/repeated id, floors, external text only in a nonce fence in the user turn
+test_inbox_drafts.py  # Inbox drafts: no tools; context is this thread plus the person's own messages, never another person's text
+test_inbox_trends.py  # Inbox trend summary: 3-5 distinct points referencing items passed in, last 24 h only
