@@ -885,7 +885,11 @@ def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dic
         out["bedrock"] = {"status": "unknown", "detail": "no Bedrock model id for the default model"}
     else:
         try:
-            sess.client("bedrock-runtime").converse(
+            from botocore.config import Config
+            # v4 set in code: botocore otherwise signs with bearer whenever
+            # AWS_BEARER_TOKEN_BEDROCK is in os.environ when the request is signed
+            # (an API-key chat spawn's, or the person's export), not this account
+            sess.client("bedrock-runtime", config=Config(signature_version="v4")).converse(
                 modelId=model_id, messages=[{"role": "user", "content": [{"text": "ok"}]}],
                 inferenceConfig={"maxTokens": 1})
             out["bedrock"] = {"status": "ok", "detail": model_id}

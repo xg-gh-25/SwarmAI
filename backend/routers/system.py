@@ -461,33 +461,35 @@ async def set_auth_method(req: SetAuthMethodRequest):
     return {"status": "ok", "auth_method": req.method}
 
 
-_MISSING = object()  # sentinel: an env var that was ABSENT (restore = pop, not "")
-
-
 async def _verify_bedrock(config: dict) -> dict:
     """Verify Bedrock auth with a minimal invoke.
 
-    Supports bearer-token (bedrock_api_key) auth: botocore reads
-    AWS_BEARER_TOKEN_BEDROCK from os.environ at CLIENT-CONSTRUCTION time (the
-    token is frozen into the signer there — botocore>=1.35). So for a
-    not-yet-persisted bearer token arriving in the verify override, we must set
-    the env var around `boto3.client(...)` ONLY.
+    Each verify builds a client that carries exactly the credentials it is asked to
+    test, and touches no process environment:
 
-    Concurrency (Gate-1 fix): os.environ is process-global and shared with the
-    spawn path (_configure_claude_environment), which mutates env under the
-    module-level `_env_lock`. So the client-construction env mutation here MUST
-    also hold `_env_lock` — otherwise a concurrent session spawn could read this
-    verify token, or its finally-restore could strip a token a concurrent bedrock
-    spawn just injected. The blocking invoke_model runs in a thread OUTSIDE the
-    lock (the token is already frozen into the client), so the event loop and the
-    lock are both freed during the ~15s network call.
+    - ``bedrock_api_key``: ``jobs.bedrock.bearer_client`` — a client of its own botocore
+      session whose token provider returns this config's key, with
+      ``signature_version="bearer"``. The key may not be saved yet and is often not in
+      ``os.environ`` (no chat has run in API-key mode).
+    - any other (sigv4) method: the default credential chain with
+      ``signature_version="v4"`` set in code.
+
+    Why not ``AWS_BEARER_TOKEN_BEDROCK`` in ``os.environ``: botocore reads that variable
+    when it SIGNS each request, both to choose bearer over sigv4 (when no signature
+    version is set in code) and for the token itself — not when the client is built.
+    Setting it only around ``boto3.client(...)`` left the request without a token, and
+    keeping it set for the ~15 s call would expose it to every other reader of the
+    process-global environment (chat spawns under ``core.claude_environment._env_lock``,
+    job executors) and need that lock across a network call. The same per-request choice
+    is why the sigv4 client pins v4: a token a concurrent spawn puts in the environment
+    would otherwise switch this verify to bearer mid-call. So no lock is taken here.
     """
     region = config.get("aws_region", "us-east-1")
     model = config.get("default_model", DEFAULT_CONFIG["default_model"])
     # the id's profile geography follows the region this verify calls from
     bedrock_model = get_bedrock_model_id(model, config.get("bedrock_model_map"), region=region)
-    # Only inject a bearer token when THIS verify is for the bedrock_api_key
-    # method (else a stray persisted token could shadow a legit sigv4 verify).
+    # Use a bearer token only when THIS verify is for the bedrock_api_key method
+    # (else a stray persisted token could shadow a legit sigv4 verify).
     bearer_token = (
         config.get("aws_bearer_token_bedrock")
         if config.get("auth_method") == "bedrock_api_key"
@@ -501,40 +503,19 @@ async def _verify_bedrock(config: dict) -> dict:
         # ~60s botocore default × retries. Matches the timeout pattern used at
         # every other Bedrock call site (memory_extractor, embedding_client,
         # summarization, …). max_attempts=1 = no silent retry storm on verify.
-        # NOTE: do NOT set signature_version here — it would set
-        # has_in_code_configuration=True and suppress botocore's bearer-token
-        # preference over sigv4 (Gate-0 skeptic finding).
         from botocore.config import Config as _BotoConfig
+        from jobs.bedrock import bearer_client, sigv4_config
         _verify_cfg = _BotoConfig(
             connect_timeout=5,
             read_timeout=10,
             retries={"max_attempts": 1},
         )
-        from core.claude_environment import _env_lock
-        _KEY = "AWS_BEARER_TOKEN_BEDROCK"
-        async with _env_lock:
-            # Set the bearer token for a bedrock_api_key verify; for a sigv4
-            # method (ada/sso), REMOVE any residual token so botocore can't
-            # prefer a leftover bearer (injected by a prior bedrock_api_key
-            # spawn in this long-lived daemon) over the sigv4 creds we mean to
-            # test (Gate-2 correctness finding). Either way, restore os.environ
-            # to its prior state after the client is constructed (token frozen
-            # into the signer at construction, so this window is minimal).
-            _prev = os.environ.get(_KEY, _MISSING)
-            if bearer_token:
-                os.environ[_KEY] = bearer_token
-            else:
-                os.environ.pop(_KEY, None)
-            try:
-                # botocore freezes the token/creds into the signer HERE.
-                client = boto3.client(
-                    "bedrock-runtime", region_name=region, config=_verify_cfg
-                )
-            finally:
-                if _prev is _MISSING:
-                    os.environ.pop(_KEY, None)
-                else:
-                    os.environ[_KEY] = _prev
+        if bearer_token:
+            client = bearer_client(bearer_token, region, _verify_cfg)
+        else:
+            client = boto3.client(
+                "bedrock-runtime", region_name=region, config=sigv4_config(_verify_cfg)
+            )
 
         def _invoke():
             return client.invoke_model(
@@ -547,8 +528,7 @@ async def _verify_bedrock(config: dict) -> dict:
                     "messages": [{"role": "user", "content": "hi"}],
                 }),
             )
-        # Blocking network call off the event loop (token already frozen into
-        # the client above; no env dependency remains here).
+        # Blocking network call off the event loop.
         resp = await asyncio.to_thread(_invoke)
         latency = int((time.monotonic() - start) * 1000)
         _ledger_probe(resp, bedrock_model)

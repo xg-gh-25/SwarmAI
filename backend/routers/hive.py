@@ -419,7 +419,12 @@ async def verify_account(account_id: str):
 
         # Bedrock
         try:
-            models = session.client("bedrock").list_foundation_models(byProvider="Anthropic")
+            from botocore.config import Config
+            # v4 set in code: botocore otherwise signs with bearer whenever
+            # AWS_BEARER_TOKEN_BEDROCK is in os.environ (an API-key chat spawn's, or
+            # the person's export), and the check would answer for that key's account
+            bedrock = session.client("bedrock", config=Config(signature_version="v4"))
+            models = bedrock.list_foundation_models(byProvider="Anthropic")
             claude_models = [m for m in models.get("modelSummaries", []) if "claude" in m["modelId"]]
             n = len(claude_models)
             checks["bedrock"] = {"status": "pass" if n > 0 else "fail", "claude_models": n}

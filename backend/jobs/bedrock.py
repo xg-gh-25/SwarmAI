@@ -146,13 +146,15 @@ class _NoCredentials:
         return None
 
 
-def _bearer_client(key: str, region: str, boto_config: Any) -> Any:
+def bearer_client(key: str, region: str, boto_config: Any) -> Any:
     """A bedrock-runtime client that sends *key* as ``Authorization: Bearer``.
 
     Its own botocore session holds the key as that session's token provider and the
     client config pins ``signature_version="bearer"``: nothing is read from or written
-    to ``os.environ`` (botocore's own ``AWS_BEARER_TOKEN_BEDROCK`` route is process-wide),
-    so it is safe with other threads building other clients at the same time."""
+    to ``os.environ`` (botocore's own ``AWS_BEARER_TOKEN_BEDROCK`` route is process-wide,
+    and botocore reads it when it signs each request, not when the client is built),
+    so it is safe with other threads building other clients at the same time. Also used
+    by the Settings verify (``routers.system._verify_bedrock``) for a key not yet saved."""
     import boto3
     import botocore.session
     from botocore.config import Config as BotoConfig
@@ -163,6 +165,18 @@ def _bearer_client(key: str, region: str, boto_config: Any) -> Any:
     session = boto3.Session(botocore_session=core_session, region_name=region)
     config = boto_config.merge(BotoConfig(signature_version="bearer"))
     return session.client("bedrock-runtime", region_name=region, config=config)
+
+
+def sigv4_config(boto_config: Any) -> Any:
+    """*boto_config* with ``signature_version="v4"`` set in code, for a sigv4 client.
+
+    With no signature version set in code, botocore signs with bearer whenever
+    ``AWS_BEARER_TOKEN_BEDROCK`` is in ``os.environ`` at the moment a request is signed
+    (``botocore.handlers._set_auth_scheme_preference_signer``). That variable is
+    process-wide: a chat spawn in API-key mode, or the person's own export, would switch
+    a client meant for the account's credentials to that token mid-flight."""
+    from botocore.config import Config as BotoConfig
+    return boto_config.merge(BotoConfig(signature_version="v4"))
 
 
 def _resolve_credentials() -> dict[str, str]:
@@ -241,12 +255,13 @@ def get_client(*, force_new: bool = False, region: str | None = None) -> Any:
 
     _client_mode = mode
     if key:
-        _client = _bearer_client(key, region, boto_config)
+        _client = bearer_client(key, region, boto_config)
         _client_region = region
         _client_created_at = time.monotonic()
         logger.debug("Created Bedrock client with the Bedrock API key for region=%s", region)
         return _client
 
+    boto_config = sigv4_config(boto_config)
     from core import aws_account
     if aws_account.active():
         # The pinned SwarmAI account; its credentials refresh before they expire, and
@@ -329,7 +344,8 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
     )
     key = _bedrock_key()
     if key:
-        return _bearer_client(key, region, boto_config)
+        return bearer_client(key, region, boto_config)
+    boto_config = sigv4_config(boto_config)
     from core import aws_account
     if aws_account.active():  # the pinned account; raises instead of another chain
         return aws_account.boto_session(region).client("bedrock-runtime", config=boto_config)
