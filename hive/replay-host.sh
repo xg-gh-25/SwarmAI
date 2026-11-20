@@ -1,7 +1,9 @@
 #!/bin/bash
 # SwarmAI Hive — the host side of Feature Map replay (design docs/design/2026-11-18-feature-map.md
 # §6.3). Run as root by a Hive's first boot (backend/hive/user_data.py) and by every update (the
-# provisioner's SSM update script), each under a deadline; a failure only warns, and replay then
+# provisioner's SSM update script), each under a deadline, from a root-owned copy
+# (/usr/local/libexec/swarmai/replay-host.sh; an update takes it from the checked package, never
+# from the install tree the Hive user owns); a failure only warns, and replay then
 # reports its walks `not_run: runtime unavailable` (the engine checks all of this itself before
 # it runs anything: backend/core/feature_map/replay_user.py).
 #

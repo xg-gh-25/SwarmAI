@@ -1793,7 +1793,9 @@ cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 {TREE_SITTER_GRAMMARS_SH}
 
 # Feature Map replay on this Hive: Chromium's packages, the replay user and its firewall rule
-# (hive/replay-host.sh, from the package just synced; bounded, warn-only).
+# (hive/replay-host.sh, taken from the checked package, never from the synced tree the Hive
+# user owns; bounded, warn-only).
+REPLAY_HOST_TARBALL=/tmp/hive-update.tar.gz
 {REPLAY_HOST_SH}
 
 # The newest installed Node as the default node / npm / npx (design

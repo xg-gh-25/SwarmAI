@@ -17,6 +17,11 @@ Hive user cannot do for processes and files that user owns. Standard library onl
         the caller's own processes.
     replay_user_helper.py rm <path>
         Remove <path> as far as this user may: its own folders made writable first.
+    replay_user_helper.py mkdir <path>
+        Make the folder <path> (its parent must exist; exit 1 when it cannot be made).
+    replay_user_helper.py copy <src> <dest>
+        Copy the file or folder <src> to <dest>, links as links, a folder merged into an
+        existing one (exit 1 with the reason on stderr when it fails).
     replay_user_helper.py probe [<path> ...]
         Exit 0 when a TCP connection to the instance metadata service (169.254.169.254:80,
         [fd00:ec2::254]:80) fails and every <path> is readable (and runnable when it has an
@@ -158,6 +163,28 @@ def _rm(path):
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _mkdir(path):
+    try:
+        os.mkdir(path)
+    except OSError as exc:
+        sys.stderr.write("feature-map: mkdir %s: %s\n" % (path, exc))
+        sys.exit(1)
+
+
+def _copy(src, dest):
+    try:
+        if os.path.isdir(src):
+            shutil.copytree(src, dest, symlinks=True, dirs_exist_ok=True)
+        else:
+            parent = os.path.dirname(dest)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            shutil.copy2(src, dest, follow_symlinks=False)
+    except (OSError, shutil.Error) as exc:
+        sys.stderr.write("feature-map: copy %s to %s: %s\n" % (src, dest, exc))
+        sys.exit(1)
+
+
 def _probe(paths):
     problems = []
     for host, port in METADATA:
@@ -189,6 +216,10 @@ def main(argv):
         _kill(argv[1], argv[2:] == ["--prefix"])
     elif len(argv) == 2 and argv[0] == "rm":
         _rm(argv[1])
+    elif len(argv) == 2 and argv[0] == "mkdir":
+        _mkdir(argv[1])
+    elif len(argv) == 3 and argv[0] == "copy":
+        _copy(argv[1], argv[2])
     elif argv and argv[0] == "probe":
         _probe(argv[1:])
     else:

@@ -101,10 +101,10 @@ def _config(sb: Sandbox, folder_copy: Path, rt: Runtime, base_url: str, locale: 
         "projects": [{"name": n, "use": {"viewport": {"width": w, "height": h}}}
                      for n, w, h in VIEWPORTS],
     }
-    path = sb.dir / f"playwright.config.{int(time.time() * 1000)}.mjs"
-    path.write_text(f"import {{ defineConfig }} from {json.dumps(url)};\n"
-                    f"export default defineConfig({json.dumps(cfg)});\n", encoding="utf-8")
-    return path
+    # a new file, never one at a name a process of the sandbox could have set up (Sandbox.write_new)
+    return sb.write_new("playwright.config", ".mjs",
+                        f"import {{ defineConfig }} from {json.dumps(url)};\n"
+                        f"export default defineConfig({json.dumps(cfg)});\n")
 
 
 def _pw(rt: Runtime, sb: Sandbox, target, args: list[str], cwd: Path) -> subprocess.CompletedProcess:
@@ -174,7 +174,7 @@ def _list_states(target, sb: Sandbox, rt: Runtime, folder_copy: Path, base_url: 
     cfg = _config(sb, folder_copy, rt, base_url, target.locale, sb.dir / "out-list", listing)
     _pw(rt, sb, target, ["--config", str(cfg), "--list", *files], folder_copy)
     try:
-        listed = _walk_specs(json.loads(listing.read_text(encoding="utf-8")))
+        listed = _walk_specs(json.loads(sb.read_new(listing)))
     except (OSError, json.JSONDecodeError):
         return None
     states: dict[str, set[str]] = {}
@@ -199,7 +199,7 @@ def _run_state(target, state: str, spec_files: set[str], by_spec: dict[str, Feat
     started = time.monotonic()
     _pw(rt, sb, target, [*args, *sorted(spec_files)], folder_copy)
     try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report = json.loads(sb.read_new(report_path))
     except (OSError, json.JSONDecodeError):
         hit = [by_spec[f] for f in sorted(spec_files) if f in by_spec]
         return _not_run(hit, "launch failed", "Playwright wrote no report"), set(spec_files)
@@ -302,7 +302,7 @@ def _target(fmap: FeatureMap, target, features: list[Feature], sb: Sandbox,
 
 def _command(target, feature: Feature, sb: Sandbox) -> dict:
     argv = [sb.expand(a) for a in feature.run or ()]
-    log = sb.dir / "logs" / f"{target.id}-walk-{feature.id}.log"   # where Sandbox._run writes it
+    log = sb.log_path(f"{target.id}-walk-{feature.id}.log")   # where Sandbox._run writes it
     started = time.monotonic()
     try:
         sb._run(argv, target, "fail", f"walk-{feature.id}")
@@ -366,6 +366,7 @@ def replay(fmap: FeatureMap, root: Path, sel: Selection, *,
         else:
             folder_copy = sb.dir / "features"
             shutil.copytree(fmap.folder, folder_copy, ignore=shutil.ignore_patterns("node_modules"))
+        sb.features = folder_copy               # fixtures are copied from here
         if needs_web:
             _link_pinned(folder_copy, rt)
         by_target: dict[str, list[Feature]] = {}
@@ -389,5 +390,14 @@ def replay(fmap: FeatureMap, root: Path, sel: Selection, *,
         for _sid, proc in reversed(sb.procs):
             _kill_group(proc)
         sb.procs.clear()
-        sb.stop_user()          # nothing the replay user started outlives the replay
+        clean = sb.stop_user()  # nothing the replay user started outlives the replay
+        sb.close_logs()
+    if not clean:
+        # a process of the replay user may still be changing the sandbox: its files are not
+        # copied out as evidence (a link swapped in would copy one of the person's files)
+        for r in results:
+            if r.get("evidence"):
+                r["evidence"] = []
+                r["error"] = ((r.get("error") or "") + " [evidence dropped: a process of the "
+                              "replay user outlived the replay]").strip()
     return results, sb.dir

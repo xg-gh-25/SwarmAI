@@ -307,8 +307,17 @@ that stays the Hive user can ptrace the backend or rewrite the code it runs; a g
 (`newgrp`) or a delegated cgroup can be left by the process itself. One start of the
 sandbox is stopped by a spawn tag in its processes' environment (also one that left its
 process group), all of them when the sandbox closes, and the sandbox's files are removed as
-that user first. A machine that does not need it (a desktop) runs the sandbox as the
-person, as before.
+that user first. The sandbox folder is shared with that user, so once a process of it has
+run, the Hive user's own process (which can reach the role) writes nothing there by a name
+that process could have set up as a link: a spawn's environment file and the generated
+Playwright config are new files (a random name, exclusive create, no link followed), each
+log is opened once, exclusively, under the `logs` folder handle taken before the folder was
+given away, a start state's folder and its fixture are made by the replay user, and `HOME`,
+`TMPDIR` and the empty AWS file are made before anything runs; the proxy variables are not
+passed to the replayed app (a proxy is a way around the firewall rule). Root runs a
+root-owned copy of `hive/replay-host.sh` (`/usr/local/libexec/swarmai/`), taken on an update
+from the checked package itself, never the copy in the install tree the Hive user owns. A
+machine that does not need it (a desktop) runs the sandbox as the person, as before.
 
 On Linux the pinned headless shell also needs system libraries and fonts (on Amazon Linux
 2023 the package set in `hive/replay-host.sh`, found with `ldd` and a launch that renders

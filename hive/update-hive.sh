@@ -89,8 +89,11 @@ sudo -u swarm /opt/swarmai/backend/.venv/bin/pip install -q -e '/opt/swarmai/bac
 
 # Feature Map replay: Chromium's system packages, the replay user and its firewall rule
 # (hive/replay-host.sh, as in the provisioner's update; bounded, warn-only).
+# Root runs a root-owned copy, never the one in /opt/swarmai (the Hive user owns that tree).
+sudo mkdir -p -m 0755 /usr/local/libexec/swarmai
+sudo install -m 0700 /tmp/hive-config/replay-host.sh /usr/local/libexec/swarmai/replay-host.sh
 sudo cp /tmp/hive-config/replay-host.sh /opt/swarmai/hive/replay-host.sh
-sudo timeout 240 env SWARM_USER=swarm REPLAY_HOST_DNF_DEADLINE_S=200 bash /opt/swarmai/hive/replay-host.sh \
+sudo timeout 240 env SWARM_USER=swarm REPLAY_HOST_DNF_DEADLINE_S=200 bash /usr/local/libexec/swarmai/replay-host.sh \
     || echo "WARN: Feature Map replay host step incomplete; replay reports its walks not_run"
 
 # Restart

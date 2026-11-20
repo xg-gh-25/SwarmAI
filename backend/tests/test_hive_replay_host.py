@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hive.provisioner import UPDATE_WAIT_INTERVAL_S, UPDATE_WAIT_POLLS
-from hive.user_data import (REPLAY_HOST_DEADLINE_S, REPLAY_HOST_DNF_DEADLINE_S, REPLAY_HOST_SH,
-                            TREE_SITTER_GRAMMARS_SH, TREE_SITTER_SETUP_DEADLINE_S,
+from hive.user_data import (REPLAY_HOST_BIN, REPLAY_HOST_DEADLINE_S, REPLAY_HOST_DNF_DEADLINE_S,
+                            REPLAY_HOST_SH, TREE_SITTER_GRAMMARS_SH, TREE_SITTER_SETUP_DEADLINE_S,
                             render_user_data)
 from tests.test_tree_sitter_bundle_setup import _RENDER, _update_script
 
@@ -44,10 +44,22 @@ def _logical(text: str) -> list[str]:
 
 
 def _step_line(text: str) -> str:
-    lines = [ln for ln in _logical(text) if "hive/replay-host.sh" in ln and not ln.lstrip().startswith("#")
-             and "cp " not in ln]
+    """The one line that runs replay-host.sh (bash <path>)."""
+    lines = [ln for ln in _logical(text) if re.search(r"\bbash \S*replay-host\.sh|bash \"\$REPLAY_HOST_BIN\"", ln)
+             and not ln.lstrip().startswith("#")]
     assert len(lines) == 1, lines
     return lines[0]
+
+
+def _timeout_shim(tmp_path: Path) -> str:
+    """PATH with a stand-in `timeout` when this machine has none (a macOS dev machine; the
+    step runs on Amazon Linux, coreutils timeout), so a test stays about the step."""
+    shim = tmp_path / "bin"
+    shim.mkdir(exist_ok=True)
+    (shim / "timeout").write_text("#!/bin/sh\nshift\nexec \"$@\"\n")
+    (shim / "timeout").chmod(0o755)
+    path = os.environ.get("PATH", "")
+    return f"{shim}{os.pathsep}{path}" if shutil.which("timeout") is None else path
 
 
 @pytest.mark.parametrize("variant", [{}, {"prebaked": True}, {"origin_secret": "a" * 48}])
@@ -60,9 +72,12 @@ def test_every_setup_path_runs_the_step_bounded_and_warn_only(variant):
     assert script.index("tar xzf /tmp/hive.tar.gz") < script.index(TREE_SITTER_GRAMMARS_SH) < at
     assert at < script.index("# ── 5. Install Caddy ──") < script.index("systemctl start swarmai-hive")
     line = _step_line(script)
-    assert line.startswith(f"timeout {REPLAY_HOST_DEADLINE_S} env ")
-    assert 'bash "${INSTALL_DIR:-/opt/swarmai}/hive/replay-host.sh"' in line
+    assert f"timeout {REPLAY_HOST_DEADLINE_S} env " in line and 'bash "$REPLAY_HOST_BIN"' in line
     assert re.search(r"\|\|\s*echo \"WARN:", line), line
+    # root runs its own copy; the first boot takes it from the tree it has just unpacked
+    assert f'REPLAY_HOST_BIN="${{REPLAY_HOST_BIN:-{REPLAY_HOST_BIN}}}"' in REPLAY_HOST_SH
+    assert REPLAY_HOST_BIN.startswith("/usr/local/libexec/")
+    assert "REPLAY_HOST_TARBALL=" not in script
     r = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
     assert r.returncode == 0, r.stderr
 
@@ -72,6 +87,10 @@ def test_every_setup_path_runs_the_step_bounded_and_warn_only(variant):
     at = update.index(REPLAY_HOST_SH)
     assert update.index("/tmp/hive-new/ /opt/swarmai/") < update.index(TREE_SITTER_GRAMMARS_SH) < at
     assert at < update.index("systemctl restart swarmai-hive --no-block")
+    # the update takes the script from the checked package, not from the synced tree
+    assert update.index("verify_hive_package /tmp/hive-update.tar.gz") \
+        < update.index("REPLAY_HOST_TARBALL=/tmp/hive-update.tar.gz\n") < at
+    assert update.index("rm -rf /opt/swarmai.bak /tmp/hive-new /tmp/hive-update.tar.gz") > at
 
     # the manual reference scripts run the same step
     for path, before, after in (("hive/setup.sh", "bundle_tree_sitter_grammars.py", "[5/10]"),
@@ -80,6 +99,8 @@ def test_every_setup_path_runs_the_step_bounded_and_warn_only(variant):
         text = (REPO / path).read_text()
         line = _step_line(text)
         assert re.search(r"timeout \d+ env ", line) and re.search(r"\|\|\s*echo \"", line), line
+        if path == "hive/update-hive.sh":
+            assert "bash /usr/local/libexec/swarmai/replay-host.sh" in line
         assert text.index(before) < text.index(line.split(" bash ")[0].strip()) < text.index(after)
         assert subprocess.run(["bash", "-n", str(REPO / path)]).returncode == 0
 
@@ -91,10 +112,46 @@ def test_the_step_only_warns_when_the_script_fails(tmp_path):
     (tmp_path / "hive" / "replay-host.sh").write_text("echo \"as $SWARM_USER\"; exit 1\n")
     script = "set -euo pipefail\n" + REPLAY_HOST_SH + "echo AFTER\n"
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
-                       env={**os.environ, "INSTALL_DIR": str(tmp_path), "SWARM_USER": "someone"})
+                       env={**os.environ, "PATH": _timeout_shim(tmp_path), "INSTALL_DIR": str(tmp_path),
+                            "SWARM_USER": "someone",
+                            "REPLAY_HOST_BIN": str(tmp_path / "libexec" / "replay-host.sh")})
     assert r.returncode == 0, r.stderr
     assert "as someone" in r.stdout and "WARN: Feature Map replay host step incomplete" in r.stdout
     assert r.stdout.rstrip().endswith("AFTER")
+
+
+def _gnu_tar() -> bool:
+    try:
+        return "GNU tar" in subprocess.run(["tar", "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _gnu_tar(), reason="the update step uses GNU tar (Amazon Linux)")
+def test_the_update_runs_the_packages_script_not_the_synced_tree(tmp_path):
+    """The Hive user owns /opt/swarmai: a replay-host.sh changed there is never what root
+    runs on an update; the copy root runs comes from the checked package, is root's own file
+    (mode 0700) and replaces what was there."""
+    pkg = tmp_path / "pkg" / "swarmai-hive-v9.9.9"
+    (pkg / "hive").mkdir(parents=True)
+    (pkg / "hive" / "replay-host.sh").write_text('echo "from the package"\n')
+    tarball = tmp_path / "hive-update.tar.gz"
+    subprocess.run(["tar", "czf", str(tarball), "-C", str(pkg.parent), pkg.name], check=True)
+    install = tmp_path / "opt"
+    (install / "hive").mkdir(parents=True)
+    (install / "hive" / "replay-host.sh").write_text('echo "changed by the Hive user"\n')
+    bin_ = tmp_path / "libexec" / "replay-host.sh"
+    bin_.parent.mkdir()
+    bin_.write_text('echo "an older copy"\n')
+    r = subprocess.run(["bash", "-c", "set -euo pipefail\nREPLAY_HOST_TARBALL=" + str(tarball) + "\n"
+                        + REPLAY_HOST_SH],
+                       capture_output=True, text=True, timeout=60,
+                       env={**os.environ, "PATH": _timeout_shim(tmp_path), "INSTALL_DIR": str(install),
+                            "REPLAY_HOST_BIN": str(bin_)})
+    assert r.returncode == 0, r.stderr
+    assert "from the package" in r.stdout and "changed by the Hive user" not in r.stdout, r.stdout
+    assert (bin_.stat().st_mode & 0o777) == 0o700
+    assert not bin_.with_name(bin_.name + ".new").exists()
 
 
 def test_the_deadlines_fit_inside_the_update_wait():

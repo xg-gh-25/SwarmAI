@@ -177,7 +177,7 @@ def _check_every_start(results, sbdir, probed, log, user):
     home, tag, value = (Path(sbdir) / "walk.out").read_text().strip().split("|")
     assert home == str(Path(sbdir) / "home") and value == "only-in-the-env-file"
     assert tag.startswith(Path(sbdir).name + "/")
-    assert list((Path(sbdir) / "spawn").iterdir()) == [], "env files are deleted once read"
+    assert not list(Path(sbdir).glob(".spawn.*")), "env files are deleted once read"
     assert (Path(sbdir) / "prepared").read_text().strip() == "prepared"
     replay_user.remove_tree(sbdir)
     assert not Path(sbdir).exists()
@@ -205,7 +205,7 @@ def test_caches_are_the_replay_users_own(tmp_path, monkeypatch):
 def _sandbox_with(tmp_path: Path, user, name: str = "swarm-feature-map-a") -> sandbox.Sandbox:
     sb = sandbox.Sandbox(tmp_path, user=user)
     sb.dir = tmp_path / name                 # a tag's prefix: the sandbox folder's own name
-    (sb.dir / "spawn").mkdir(parents=True)
+    sb.dir.mkdir(parents=True)
     return sb
 
 
@@ -605,3 +605,42 @@ def test_processes_are_listed_by_the_real_uid_in_status_not_the_folder_owner(mon
         stat=lambda path: SimpleNamespace(st_uid=owner[path])))
     monkeypatch.setattr(helper, "open", lambda path, mode="r": io.BytesIO(status[path]), raising=False)
     assert helper._mine() == [777]
+
+
+def test_a_second_resolve_still_refuses_a_survivor(tmp_path, fresh, monkeypatch):
+    """A base and a head replay in one process: the second resolve also stops that user's
+    processes first and refuses when one is left."""
+    fake, _log = _fake_sudo(tmp_path)
+    user = _user(tmp_path, fake)
+    monkeypatch.setattr(replay_user, "needs_replay_user", lambda: True)
+    monkeypatch.setattr(replay_user, "REPLAY_USER", user.name)
+    monkeypatch.setattr(replay_user.pwd, "getpwnam", lambda name: SimpleNamespace(
+        pw_uid=user.uid, pw_dir=str(user.home)))
+    monkeypatch.setattr(replay_user, "_find_sudo", lambda: str(fake))
+    monkeypatch.setattr(replay_user.ReplayUser, "probe", lambda self, paths=(): [])
+    left = iter([0, 1])
+    monkeypatch.setattr(replay_user.ReplayUser, "kill_all", lambda self: next(left))
+    assert replay_user.resolve() is not None
+    with pytest.raises(replay_user.Unavailable, match="outlived an earlier replay"):
+        replay_user.resolve()
+
+
+def test_no_evidence_is_copied_out_while_a_replay_users_process_survives(tmp_path, fresh, monkeypatch):
+    fake, _log = _fake_sudo(tmp_path)
+    user = _user(tmp_path, fake)
+    monkeypatch.setattr(replay_user, "needs_replay_user", lambda: True)
+    monkeypatch.setattr(replay_user, "REPLAY_USER", user.name)
+    monkeypatch.setattr(replay_user.pwd, "getpwnam", lambda name: SimpleNamespace(
+        pw_uid=user.uid, pw_dir=str(user.home)))
+    monkeypatch.setattr(replay_user, "_find_sudo", lambda: str(fake))
+    monkeypatch.setattr(replay_user.ReplayUser, "probe", lambda self, paths=(): [])
+    calls = iter([0])                          # resolve: none left; the replay's end: one left
+    monkeypatch.setattr(replay_user.ReplayUser, "kill_all", lambda self: next(calls, 1))
+    root = make_repo(tmp_path / "r", specs={}, target=TARGET, features=WALKS)
+    fmap = files.load_folder(root / ".swarmai/features")
+    results, sbdir = replay(fmap, root, Selection(list(fmap.features)))
+    try:
+        assert [r["result"] for r in results] == ["pass"], results
+        assert results[0]["evidence"] == [] and "evidence dropped" in results[0]["error"]
+    finally:
+        replay_user.remove_tree(sbdir)

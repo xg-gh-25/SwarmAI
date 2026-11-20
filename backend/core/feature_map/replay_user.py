@@ -25,10 +25,12 @@ touches the next replay's files.
 
 Every start goes ``sudo -n -u swarm-replay -- /usr/bin/env -i FEATURE_MAP_SPAWN=<tag>
 <python> -I replay_user_helper.py exec <envfile> <cwd> <program> ...``: the environment
-travels in a 0660 file inside the sandbox (never on a command line), the tag in every
-process of that start, so stopping one start (``kill``, between start states) finds its
-tree by its tag, and acts as the replay user (the Hive user may not signal it). Files the
-replay user wrote are removed as that user first (``remove_tree``).
+travels in a new file of the sandbox only the two users read (``Sandbox.write_new``; never on
+a command line), the tag in every process of that start, so stopping one start (``kill``,
+between start states) finds its tree by its tag, and acts as the replay user (the Hive user
+may not signal it). Files the replay user wrote are removed as that user first
+(``remove_tree``); a start state's folder and its fixture are made as that user (``mkdir``,
+``copy``), because by then a process of that user may have put links in the sandbox.
 
 Exports: REPLAY_USER, ReplayUser, Unavailable, current, imds_answers, needs_replay_user,
 remove_tree, resolve.
@@ -136,6 +138,27 @@ class ReplayUser:
         except (OSError, subprocess.SubprocessError):
             pass
 
+    def _must(self, mode: str, *args: str) -> str:
+        """Run helper *mode*; "" when it succeeded, else why not."""
+        try:
+            proc = self._helper(mode, *args)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"sudo -u {self.name} {mode} could not run: {exc}"
+        if proc.returncode == 0:
+            return ""
+        return (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()[-300:]
+
+    def mkdir(self, path: Path) -> None:
+        """Make folder *path* as this user (its parent must exist). Raises ``OSError``."""
+        problem = self._must("mkdir", str(path))
+        if problem:
+            raise OSError(f"{self.name} could not make {path}: {problem}")
+
+    def copy(self, src: Path, dest: Path) -> str:
+        """Copy file or folder *src* to *dest* as this user (links copied as links, a
+        folder merged into an existing one); "" when done, else why not."""
+        return self._must("copy", str(src), str(dest))
+
     def probe(self, paths: Iterable[Path | str] = ()) -> list[str]:
         """Why this user cannot be used ([] = it can): sudo refused, the metadata service
         answers it, or a path it must read or run is out of its reach."""
@@ -241,12 +264,14 @@ def resolve(paths: Iterable[Path | str] = (), *, lock_wait_s: float = LOCK_WAIT_
             raise Unavailable(f"no sudo to start the replay as {REPLAY_USER}")
         user = ReplayUser(REPLAY_USER, pw.pw_uid, Path(pw.pw_dir), sudo, sys.executable)
         _take_lock(lock_wait_s)
-        left = user.kill_all()
-        if left is None:
-            raise Unavailable(f"sudo -n -u {REPLAY_USER} could not stop that user's processes")
-        if left:
-            raise Unavailable(f"{left} process(es) of {REPLAY_USER} outlived an earlier replay "
-                              "and could not be stopped")
+    # every replay of this process, also the second (a base and a head replay): none of that
+    # user's processes may be left from an earlier one
+    left = user.kill_all()
+    if left is None:
+        raise Unavailable(f"sudo -n -u {REPLAY_USER} could not stop that user's processes")
+    if left:
+        raise Unavailable(f"{left} process(es) of {REPLAY_USER} outlived an earlier replay "
+                          "and could not be stopped")
     problems = user.probe(paths)
     if problems:
         raise Unavailable(f"replay user {REPLAY_USER}: " + "; ".join(problems))

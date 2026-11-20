@@ -859,12 +859,26 @@ TREE_SITTER_GRAMMARS_SH = r"""# Code-intel grammars (the backend never downloads
 # failure only warns, and Feature Map replay then reports its walks not_run (the engine checks
 # the boundary itself before it runs anything, core/feature_map/replay_user.py). This deadline
 # and the grammar step's fit the provisioner's wait (provisioner.UPDATE_WAIT_POLLS).
+# Root runs a root-owned copy of the script (REPLAY_HOST_BIN), never the file in the install
+# tree, which the Hive user owns and could change before root runs it: an update takes it from
+# the checked package itself (REPLAY_HOST_TARBALL), the first boot from the tree it unpacked
+# from that package moments before (the backend has never run yet).
 REPLAY_HOST_DEADLINE_S = 240
 REPLAY_HOST_DNF_DEADLINE_S = 200
+REPLAY_HOST_BIN = "/usr/local/libexec/swarmai/replay-host.sh"
 REPLAY_HOST_SH = r"""# Feature Map replay host: browser packages, the replay user, no metadata service for it
-timeout @DEADLINE@ env SWARM_USER="${SWARM_USER:-swarm}" REPLAY_HOST_DNF_DEADLINE_S=@DNF@ bash "${INSTALL_DIR:-/opt/swarmai}/hive/replay-host.sh" \
+REPLAY_HOST_BIN="${REPLAY_HOST_BIN:-@BIN@}"
+{ mkdir -p -m 0755 "${REPLAY_HOST_BIN%/*}" \
+  && if [ -n "${REPLAY_HOST_TARBALL:-}" ]; then
+       (umask 077; tar xzf "$REPLAY_HOST_TARBALL" --wildcards --no-wildcards-match-slash -O '*/hive/replay-host.sh' > "$REPLAY_HOST_BIN.new") \
+         && [ -s "$REPLAY_HOST_BIN.new" ]
+     else
+       install -m 0700 "${INSTALL_DIR:-/opt/swarmai}/hive/replay-host.sh" "$REPLAY_HOST_BIN.new"
+     fi \
+  && chmod 0700 "$REPLAY_HOST_BIN.new" && mv -f "$REPLAY_HOST_BIN.new" "$REPLAY_HOST_BIN" \
+  && timeout @DEADLINE@ env SWARM_USER="${SWARM_USER:-swarm}" REPLAY_HOST_DNF_DEADLINE_S=@DNF@ bash "$REPLAY_HOST_BIN"; } \
   || echo "WARN: Feature Map replay host step incomplete; replay reports its walks not_run until the next update"
-""".replace("@DEADLINE@", str(REPLAY_HOST_DEADLINE_S)).replace("@DNF@", str(REPLAY_HOST_DNF_DEADLINE_S))
+""".replace("@BIN@", REPLAY_HOST_BIN).replace("@DEADLINE@", str(REPLAY_HOST_DEADLINE_S)).replace("@DNF@", str(REPLAY_HOST_DNF_DEADLINE_S))
 
 
 # ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
