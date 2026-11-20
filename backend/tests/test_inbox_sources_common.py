@@ -13,7 +13,7 @@ import pytest
 from core.inbox.models import ThreadRef
 from core.inbox.sources import credentials
 from core.inbox.sources.base import SourceConfig, registered_kinds
-from core.inbox.sources.common import ReadToolRefused, ToolGate, matches_sent, normalize_text
+from core.inbox.sources.common import ReadToolRefused, ToolGate, matches_sent, normalize_text, strip_mail_quotes
 from core.inbox.sources.github import GitHubSource
 from core.inbox.sources.mail import ImapSmtpSource, OutlookMcpSource
 from core.inbox.sources.slack import SlackMcpSource, SlackWebSource
@@ -243,3 +243,13 @@ def test_keychain_write_refuses_a_line_break_that_would_start_another_command(mo
         assert credentials._keychain_write("src:token", bad) is False
     assert credentials._keychain_write("src\nx", "tok") is False
     assert calls == []
+
+
+def test_an_outlook_header_with_the_sender_on_its_own_line_starts_the_quoted_history():
+    """The text rendering of a forwarded or replied Outlook mail (measured): the sender is
+    on the line after From:, and blank lines separate every header line."""
+    body = ("Please provide your ETA today.\n\nThanks\n\nTitus\n\nFrom:\n\n"
+            '"tiancho@amazon.com" <tiancho@amazon.com>\n\nDate: Wednesday, November 18, 2026 at 17:37\n\n'
+            "To: \"Wang, Bo\" <cwangbo@amazon.com>\n\nSubject: WS owners")
+    assert strip_mail_quotes(body) == "Please provide your ETA today.\n\nThanks\n\nTitus"
+    assert strip_mail_quotes("From: here to there\nwe walked") == "From: here to there\nwe walked"

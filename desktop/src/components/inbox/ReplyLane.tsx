@@ -16,7 +16,7 @@
  * The parent (InboxContent) owns the selection, the locally hidden ids and the draft
  * edits, so they survive switching items and tabs.
  */
-import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, invalidateOverlay } from '../layout/overlayQueries';
@@ -25,6 +25,7 @@ import { inboxService, type ItemAction, type ItemOut, type SendOut, type SendRef
 import { modKeyLabel } from '../../utils/platform';
 import { isApiError } from '../../services/api';
 import { Avatar, ChannelPill, relTime } from './parts';
+import { openExternal } from '../../utils/openExternal';
 
 export interface DraftEdit { text: string; draftId: string | null }
 
@@ -276,6 +277,36 @@ function MarkedText({ text, spans }: { text: string; spans: SendRefusal['spans']
   return <p data-testid="inbox-redacted-preview" className="mt-2 whitespace-pre-wrap text-small text-[var(--color-text-secondary)]">{parts}</p>;
 }
 
+/** A message as paragraphs: mail rendered as text puts a blank line between every line,
+ *  so a blank line becomes paragraph spacing, not a full empty line. Long messages show
+ *  their first lines with a fade and 展开全文; the reply box stays in view. */
+export function MessageBody({ text, testid }: { text: string; testid?: string }) {
+  const { t } = useTranslation();
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [long, setLong] = useState(false);
+  const paragraphs = text.trim().split(/\n[ \t]*(?:\n[ \t]*)+/).filter((p) => p.trim());
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && !open) setLong(el.scrollHeight > el.clientHeight + 1);
+  }, [text, open]);
+  return (
+    <div data-testid={testid}>
+      <div ref={ref} data-open={open || undefined}
+        className={`flex flex-col gap-2 ${open ? '' : 'max-h-[13.5em] overflow-hidden'}`}
+        style={!open && long ? { maskImage: 'linear-gradient(to bottom, black 70%, transparent)', WebkitMaskImage: 'linear-gradient(to bottom, black 70%, transparent)' } : undefined}>
+        {paragraphs.map((p, i) => <p key={i} className="whitespace-pre-line break-words">{p.trim()}</p>)}
+      </div>
+      {(long || open) && (
+        <button type="button" className="mt-1.5 text-small text-[var(--color-primary)] hover:underline"
+          onClick={() => setOpen(!open)} data-testid="inbox-original-toggle">
+          {open ? t('ui.InboxOverlay.reply.showLess') : t('ui.InboxOverlay.reply.showMore')}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ReplyDetail({ item, narrow, onBack, edit, onEdit, sendRef, acting, onLater, onDismiss, onToChat, onSent }: {
   item: ItemOut; narrow: boolean; onBack: () => void;
   edit: DraftEdit | undefined; onEdit: (e: DraftEdit) => void;
@@ -370,8 +401,10 @@ function ReplyDetail({ item, narrow, onBack, edit, onEdit, sendRef, acting, onLa
           <Avatar name={item.author} size="sm" icon={bot ? 'smart_toy' : undefined} />
           <span className="text-body font-semibold text-[var(--color-text)]">{item.author}</span>
           <ChannelPill kind={item.source_kind} label={item.channel_label} large />
-          <span className="truncate">{[item.author_role, relTime(item.received_at, t)].filter(Boolean).join(' · ')}</span>
+          <span className="truncate">{[item.author_role, item.where, relTime(item.received_at, t)].filter(Boolean).join(' · ')}</span>
           <span className="ml-auto flex shrink-0 gap-0.5">
+            {item.url && <IconAction icon="open_in_new" label={t('ui.InboxOverlay.reply.openOriginal')}
+              onClick={() => { void openExternal(item.url).catch(() => undefined); }} testid="inbox-open-original" />}
             <IconAction icon="chat" label={t('ui.InboxOverlay.toChat')} onClick={onToChat} testid="inbox-to-chat" />
             <IconAction icon="schedule" label={t('ui.InboxOverlay.reply.later')} onClick={onLater} testid="inbox-later" disabled={acting} />
             <IconAction icon="done" label={t('ui.InboxOverlay.reply.dismiss')} onClick={onDismiss} testid="inbox-dismiss" disabled={acting} />
@@ -382,10 +415,9 @@ function ReplyDetail({ item, narrow, onBack, edit, onEdit, sendRef, acting, onLa
         {item.ask_sub && <p className="mt-1.5 text-small text-[var(--color-text-dim)]">{item.ask_sub}</p>}
 
         <div className="mt-7 flex flex-col gap-5">
-          <div className="max-w-[88%] self-start whitespace-pre-line rounded-[4px_16px_16px_16px] px-4 py-3 text-body text-[var(--color-text)]"
+          <div className="max-w-[88%] self-start rounded-[4px_16px_16px_16px] px-4 py-3 text-body leading-relaxed text-[var(--color-text)]"
             style={{ background: 'color-mix(in srgb, var(--color-text) 5%, transparent)' }} data-testid="inbox-original">
-            {item.where && <span className="mb-1 block text-meta text-[var(--color-text-dim)]">{item.where}</span>}
-            {item.excerpt}
+            <MessageBody text={item.excerpt} />
           </div>
 
           <div className="w-[92%] self-end">

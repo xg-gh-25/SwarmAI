@@ -152,7 +152,8 @@ _QUOTE_HEADERS = (
     re.compile(r"^\s*-----\s*原始邮件\s*-----\s*$"),
 )
 _SIGNATURE = re.compile(r"^-- ?$")
-_FROM_LINE = re.compile(r"^\s*(From|发件人|寄件者)\s*[:：]\s*\S", re.I)
+# the sender may be on the same line or, in a text rendering of Outlook's header, the next
+_FROM_LINE = re.compile(r"^\s*(From|发件人|寄件者)\s*[:：]", re.I)
 _SENT_LINE = re.compile(r"^\s*(Sent|Date|发送时间|日期|寄件日期)\s*[:：]", re.I)
 
 
@@ -164,7 +165,7 @@ def strip_mail_quotes(text: str) -> str:
     for i, line in enumerate(lines):
         if _SIGNATURE.match(line) or any(p.match(line) for p in _QUOTE_HEADERS):
             break
-        if _FROM_LINE.match(line) and any(_SENT_LINE.match(n) for n in lines[i + 1:i + 5]):
+        if _FROM_LINE.match(line) and any(_SENT_LINE.match(n) for n in lines[i + 1:i + 7]):
             break  # Outlook's header block of the quoted mail: From: ... Sent:/Date: ...
         if line.lstrip().startswith(">"):
             continue
