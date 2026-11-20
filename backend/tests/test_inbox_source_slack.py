@@ -487,3 +487,10 @@ async def test_web_own_messages_to_and_a_revoked_token_on_post():
     finally:
         await src.close()
     assert SlackWebSource.SECRET_NAMES == frozenset({"user_token"})
+
+
+def test_an_app_users_name_comes_from_slack_mcps_realname():
+    src = SlackMcpSource(_config(), client=FakeMcp(_mcp_handlers()))
+    m = src._to_message({"ts": ts(10), "text": "Signal Digest", "user": {
+        "id": "U0APP", "name": "", "realName": "Swarm", "isBot": True}}, "D0APP", is_dm=True)
+    assert m.author_name == "Swarm" and m.author_id == "U0APP" and m.is_bot

@@ -491,3 +491,33 @@ async def test_outlook_own_messages_to_reads_sent_conversations_when_the_listing
     to_priya = Thread(ref=ThreadRef("mail", {"conversation_id": "C"}), messages=(),
                       target=ReplyTarget(label="Priya", recipients=("priya@corp.example",)))
     assert [m.text for m in await src.own_messages_to(to_priya, 10)] == ["Approved."]
+
+
+def test_an_english_gbk_mail_whose_only_non_ascii_is_a_curly_quote_is_decoded():
+    body = _as_latin1("Thanks for joining today’s meeting. Here are the notes.", "gbk")
+    records = split_conversations({"conversationId": "C", "messages": [
+        {"itemId": "I", "from": _addr("A", "a@corp.example"), "receivedDateTime": "2026-11-20T01:00:00Z", "body": body}]})
+    assert records[0].body == "Thanks for joining today’s meeting. Here are the notes."
+
+
+async def test_the_external_sender_banner_is_not_the_message_text():
+    banner = ("CAUTION: This email originated from outside of the organization. Do not click links "
+              "or open attachments unless you can confirm the sender and know the content is safe.")
+    conv = {"conversationId": "CONV-X", "messages": [
+        {"itemId": "X1", "changeKey": "CK", "internetMessageId": "<x1@ext.example>", "subject": "Hello",
+         "from": _addr("Alan", "alan@ext.example"), "toRecipients": [_addr("Me", ME)],
+         "receivedDateTime": "2026-11-20T01:00:00Z", "body": f"{banner}\n\nHi Xiaogang,\n\nCan we meet?"}]}
+    src = OutlookMcpSource(_cfg(), client=_outlook(email_read=lambda a: conv))
+    thread = await src.thread(ThreadRef("mail", {"conversation_id": "CONV-X"}))
+    assert thread.messages[-1].text.startswith("Hi Xiaogang,")
+    from core.inbox.sources.mail import _without_banner
+    assert _without_banner("CAUTION: wet floor\n\nreal text") == "CAUTION: wet floor\n\nreal text"
+
+
+def test_a_gbk_body_with_symbols_and_user_defined_characters_is_decoded():
+    text = "会议纪要：① 上传知识 · 结果×2 ← 完成"
+    raw = text.encode("gbk") + b"\xaa\xa1" + "。".encode("gbk")      # AAA1: GBK user-defined, decodes to U+E000
+    records = split_conversations({"conversationId": "C", "messages": [
+        {"itemId": "I", "from": _addr("A", "a@corp.example"), "receivedDateTime": "2026-11-20T01:00:00Z",
+         "body": raw.decode("latin-1")}]})
+    assert records[0].body.startswith(text)

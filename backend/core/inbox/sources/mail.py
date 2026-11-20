@@ -145,7 +145,30 @@ _SENT_TO_READS = 5  # sent conversations read for drafting context when the serv
 
 _LATIN1_HIGH = re.compile(r"[\x80-\xff]")
 _CJK = re.compile(r"[\u3400-\u9fff]")
-_CJK_TEXT = re.compile(r"[\u2000-\u206f\u3000-\u303f\u3400-\u9fff\uff00-\uffef]")
+_PUNCT = re.compile(r"[\u2000-\u206f\u3000-\u303f\uff00-\uffef]")
+#: what a GBK body holds besides ideographs: its symbol rows (middle dot, times, Greek,
+#: Cyrillic, arrows, box drawing, circled numbers, kana) and its user-defined areas, which
+#: decode to private use (measured: a Chinese meeting-notes mail carried two)
+_GBK_TEXT = re.compile(r"[\u00b7\u00d7\u00f7\u0391-\u03c9\u0401-\u0451\u2000-\u27bf\u3000-\u33ff"
+                       r"\u3400-\u9fff\ue000-\uf8ff\ufe30-\ufe4f\uff00-\uffef]")
+
+
+_BANNER_PARA = re.compile(r"\s*(.+?)(?:\n\s*\n|\Z)", re.S)
+_BANNER_WORDS = re.compile(
+    r"originated from outside|from an external sender|external (?:e-?mail|sender|message)|"
+    r"外部邮件|来自(?:组织|公司)?外部|外部发件人", re.I)
+
+
+def _without_banner(text: str) -> str:
+    """The body without the external-sender banner many mail systems put first
+    ("CAUTION: This email originated from outside of the organization..."): the first
+    paragraph is dropped when it is short and says the mail came from outside. Measured:
+    every external mail in the list began with it, so the excerpt showed no content."""
+    found = _BANNER_PARA.match(text or "")
+    if found and len(found.group(1)) <= 600 and _BANNER_WORDS.search(found.group(1)):
+        rest = text[found.end():].strip()
+        return rest or text
+    return text
 
 
 def _undo_latin1(text: str) -> str:
@@ -153,8 +176,9 @@ def _undo_latin1(text: str) -> str:
     decoded again. Measured on real mail: some Chinese bodies come back as ``²âÊÔ``
     (GBK ``测试``) or ``çŽ‹`` (UTF-8 ``王``) while the subject is right. Repaired only
     when every character fits in one byte, some are above ASCII, and the bytes decode
-    strictly: as UTF-8, or as GB18030 into Chinese text and punctuation only (so a
-    Latin-1 body with accents is left alone). Anything else is returned unchanged."""
+    strictly: as UTF-8, or as GB18030 into Chinese text (ideographs with GBK's own
+    symbols and user-defined characters) or into English whose only non-ASCII is
+    punctuation (so a Latin-1 body with accents is left alone). Anything else is returned unchanged."""
     if not _LATIN1_HIGH.search(text.replace("\xa0", "")):
         return text  # nothing above ASCII but no-break spaces, which HTML bodies are full of
     try:
@@ -170,8 +194,10 @@ def _undo_latin1(text: str) -> str:
     except UnicodeDecodeError:
         return text
     wide = [c for c in fixed if ord(c) > 0x7F]
-    if len(_CJK.findall(fixed)) >= 2 and all(_CJK_TEXT.match(c) for c in wide):
-        return fixed
+    if len(_CJK.findall(fixed)) >= 2 and all(_GBK_TEXT.match(c) for c in wide):
+        return fixed                       # Chinese text
+    if wide and not _CJK.search(fixed) and all(_PUNCT.match(c) for c in wide):
+        return fixed                       # English whose only non-ASCII is punctuation (today’s)
     return text
 
 
@@ -336,7 +362,7 @@ class _MailSource:
             author_id=rec.from_addr,
             author_name=rec.from_name or rec.from_addr,
             received_at=rec.received_at or datetime.now(timezone.utc),
-            text=strip_mail_quotes(rec.body) or rec.body,
+            text=strip_mail_quotes(_without_banner(rec.body)) or rec.body,
             url=rec.url,
             title=rec.subject,
             is_direct=in_to,

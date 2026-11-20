@@ -475,8 +475,10 @@ class _SlackSource:
         user_name = ""
         is_bot = bool(raw.get("bot_id")) or raw.get("subtype") == "bot_message"
         if isinstance(user, dict):
-            user_name = str(_first(user, "real_name", "display_name", "name") or "")
-            is_bot = is_bot or bool(user.get("is_bot"))
+            # Slack Web API keys and slack-mcp's camelCase ones (an app's user has an empty
+            # ``name`` and only ``realName``)
+            user_name = str(_first(user, "real_name", "realName", "display_name", "displayName", "name") or "")
+            is_bot = is_bot or bool(user.get("is_bot") or user.get("isBot"))
             user = user.get("id")
         user_id = str(user or _first(raw, "user_id", "userId", "bot_id") or "")
         profile = raw.get("user_profile") if isinstance(raw.get("user_profile"), dict) else {}
