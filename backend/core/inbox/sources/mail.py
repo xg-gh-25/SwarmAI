@@ -141,6 +141,8 @@ def _body_text(value: Any) -> str:
     return text.strip()
 
 
+_SENT_TO_READS = 5  # sent conversations read for drafting context when the server lists no messages
+
 _LATIN1_HIGH = re.compile(r"[\x80-\xff]")
 _CJK = re.compile(r"[\u3400-\u9fff]")
 _CJK_TEXT = re.compile(r"[\u2000-\u206f\u3000-\u303f\u3400-\u9fff\uff00-\uffef]")
@@ -639,9 +641,19 @@ class OutlookMcpSource(_MailSource):
         return SendReceipt(external_msg_id=msg_id, sent_at=datetime.now(timezone.utc))
 
     async def _sent_to(self, address: str, since: datetime) -> list[MailRecord]:
-        # the sent folder of the window, filtered by recipient here: no search syntax to trust
-        data = await self._call("email_folders", {"folder": "sentitems", "startDate": since.date().isoformat(), "limit": 50})
-        return [r for r in split_conversations(data) if r.received_at is None or r.received_at >= since]
+        # The sent folder of the window; the caller keeps only mail whose To holds the
+        # address, so no search result is trusted. aws-outlook-mcp lists conversations,
+        # not messages (measured: 50 listed, 0 messages): there a search for the address
+        # only picks which few sent conversations to read.
+        start = since.date().isoformat()
+        data = await self._call("email_folders", {"folder": "sentitems", "startDate": start, "limit": 50})
+        records = split_conversations(data)
+        if not records:
+            found = await self._call("email_search", {"query": address, "folder": "sentitems", "startDate": start})
+            for cid in conversation_ids(found)[:_SENT_TO_READS]:
+                records.extend(split_conversations(
+                    await self._call("email_read", {"conversationId": cid, "format": "text"}), cid))
+        return [r for r in records if r.received_at is None or r.received_at >= since]
 
     async def close(self) -> None:
         if self._client is not None:

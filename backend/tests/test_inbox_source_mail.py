@@ -426,7 +426,8 @@ async def test_outlook_own_messages_to_is_sent_mail_to_that_address():
          "toRecipients": [_addr("Priya", "priya@corp.example")], "receivedDateTime": "2026-11-19T12:00:00Z",
          "body": "Not mine"},
     ]}]}
-    mcp = _outlook(email_folders=lambda a: sent)
+    whoami_listing = _outlook().handlers["email_folders"]  # the person's address comes from the default sent listing
+    mcp = _outlook(email_folders=lambda a: sent if a.get("startDate") else whoami_listing(a))
     src = OutlookMcpSource(_cfg(history_days=36500), client=mcp)
     to_priya = Thread(ref=ThreadRef("mail", {"conversation_id": "C"}), messages=(),
                       target=ReplyTarget(label="Priya", recipients=("priya@corp.example",)))
@@ -474,3 +475,19 @@ async def test_imap_own_messages_to_and_an_smtp_login_refusal_keeps_the_fix():
         await _imap_source(FakeImap(_inbox()), RefusingLogin()).reply(
             ThreadRef("mail", {"root": "<a1@x.example>", "message_id": "<a1@x.example>"}), "x")
     assert "密码" in info.value.fix
+
+
+async def test_outlook_own_messages_to_reads_sent_conversations_when_the_listing_has_no_messages():
+    # aws-outlook-mcp lists conversations, not messages: the address search picks which to read
+    summaries = {"emails": [{"conversationId": "CONV-S", "topic": "Re: Budget", "items": []}]}
+    whoami_listing = _outlook().handlers["email_folders"]
+    conv = {"conversationId": "CONV-S", "messages": [
+        {"itemId": "S1", "from": _addr("Me", ME), "recipients": [_addr("Priya", "priya@corp.example")],
+         "dateTimeSent": "2026-11-19T10:00:00Z", "recievedAt": "2026-11-19T10:00:00Z", "body": "Approved."}]}
+    mcp = _outlook(email_folders=lambda a: summaries if a.get("startDate") else whoami_listing(a),
+                   email_search=lambda a: summaries if a.get("query") == "priya@corp.example" else {"emails": []},
+                   email_read=lambda a: conv if a["conversationId"] == "CONV-S" else _conversation())
+    src = OutlookMcpSource(_cfg(history_days=36500), client=mcp)
+    to_priya = Thread(ref=ThreadRef("mail", {"conversation_id": "C"}), messages=(),
+                      target=ReplyTarget(label="Priya", recipients=("priya@corp.example",)))
+    assert [m.text for m in await src.own_messages_to(to_priya, 10)] == ["Approved."]
