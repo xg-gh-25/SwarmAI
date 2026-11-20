@@ -317,6 +317,21 @@ worker 角色）。Host 调的还是同一套 Hive HTTP API，只是经 session 
 | 容器里跑容器 | 没有 docker；user namespace 可以建 | 用 rootless 容器跑 testcontainers 一类测试是否可行，没测 |
 | 费用 | CloudWatch 只有调用次数、时长、延迟，没有 CPU 和内存用量；这个 session 在 2 vCPU/8 GB 上活了约 13 分钟，估计不到 $0.05 | 实际数字要看 Cost Explorer（一天后） |
 
+**8192 规格实测**（2026-11-20，同一账户，用 SwarmAI 自己的 repo；测完已删除）：
+
+| 步骤 | 结果 |
+|---|---|
+| 规格 | 8 vCPU、32 GB 内存；盘 32 GB，镜像占 3.4 GB 后可用约 27 GB |
+| 新 session 首次调用 / 后端启动 | 16.0 秒 / 34.9 秒（和默认规格几乎一样：这两段不吃核数） |
+| 工单 clone SwarmAI（`xg-gh-25/SwarmAI` main，经 `POST /api/hive/work`） | 8.6 秒；mirror 255 MB，工作区 417 MB |
+| backend 从零装依赖（`pip install -e ".[dev]"`） | 24 秒；`.venv` 654 MB |
+| desktop `npm ci` | 16 秒；`node_modules` 493 MB |
+| desktop `tsc --noEmit` | 23 秒，零错误 |
+| backend `pytest tests/test_task_spec.py` | 27 个用例 6 秒全过 |
+| 盘 | 以上全部做完用掉 5.2 GB，还剩约 25 GB |
+
+结论：8192 规格下，一个 SwarmAI 量级的 repo 从派发到能写代码、跑检查，冷启动约 1 分钟加准备工作区约 1 分钟；盘和内存都够。弹性 Hive 慢在每个 run 从零开始的这一两分钟，不在算力。
+
 
 ### 6.2 结果怎么活过 microVM（D3）
 
@@ -556,7 +571,7 @@ security 重点看 §6.3 的凭据传递和 §6.7 的 IAM。
 |---|---|---|
 | Q1 | 弹性 offer 的"多久能开始"取多少 | spike：首次调用 17 秒 + 后端 37 秒 ≈ 1 分钟，再加传 Brain 和 bundle；比冷 EC2（≤270 秒）快，比在跑的 EC2 慢，D4 的顺序成立 |
 | Q2 | 镜像怎么分发：用户在自己账户构建推 ECR（需要 Docker/Finch 或 CodeBuild），还是产品发公共镜像、用户复制 | spike 后定 |
-| Q3 | ~~默认规格~~ 已定（XG 2026-11-20）：弹性 Hive 默认 `minimumMemoryInMiB: 8192`（基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB）。默认规格（2 vCPU/8 GB、盘约 10 GB，扣掉镜像后约 5.9 GB）对编码偏小。设了规格就按基线计到 session 结束（较低单价），超出基线的部分按秒另算；一个 runtime 只有一种规格（[文档](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html#runtime-v2-resource-configurations)）。还没实测：用一个大 repo（如 SwarmAI 自己）验证盘和速度 | 已定，待实测 |
+| Q3 | ~~默认规格~~ 已定（XG 2026-11-20）：弹性 Hive 默认 `minimumMemoryInMiB: 8192`（基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB）。默认规格（2 vCPU/8 GB、盘约 10 GB，扣掉镜像后约 5.9 GB）对编码偏小。设了规格就按基线计到 session 结束（较低单价），超出基线的部分按秒另算；一个 runtime 只有一种规格（[文档](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html#runtime-v2-resource-configurations)）。已实测（§6.1 的 8192 表）：SwarmAI repo 全套装好只用 5.2 GB，冷启动加准备约 2 分钟 | 已定，已实测 |
 | Q4 | ~~更新 runtime 版本时正在跑的 session 会怎样~~ 已答：不受影响，留在原 microVM 和旧版本上 | spike |
 | Q5 | 第 3 层要不要受"最多同时启动几台"的约束 | 第 3 步上线后看实际启动次数；先不加 |
 | Q6 | EC2 也改成 record 写 S3，Host 只认一种取法 | AgentCore 落地后再定 |
