@@ -529,8 +529,16 @@ class TestTreeSitterLiveAST:
         RED on old get_parser (parse(bytes) raises → probe False for all langs).
         """
         import core.code_intel.parser as P
+        from core.code_intel import grammars
         P._ts_live_cache.clear()
-        for lang in ("python", "javascript", "typescript", "go", "rust"):
+        on_disk = [lang for lang in ("python", "javascript", "typescript", "go", "rust")
+                   if grammars.shipped(lang)]
+        if not on_disk:
+            # The backend never downloads a grammar (core.code_intel.grammars): with
+            # none on disk every language takes the regex path, nothing to probe.
+            pytest.skip("no tree-sitter grammar on disk: run `python "
+                        "scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars`")
+        for lang in on_disk:
             assert P._tree_sitter_live(lang) is True, (
                 f"tree-sitter must be LIVE for {lang} — got False (AST path dead, "
                 f"regex fallback). The parser constructor is broken.")
@@ -618,6 +626,9 @@ class TestTreeSitterLiveAST:
         """
         import core.code_intel.parser as P
         P._ts_live_cache.clear()
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not on disk: the backend never downloads one "
+                        "(scripts/bundle_tree_sitter_grammars.py)")
         src = (
             "import os\n"                 # line 1
             "\n"                          # line 2
@@ -655,6 +666,9 @@ class TestTreeSitterLiveAST:
         """
         import core.code_intel.parser as P
         P._ts_live_cache.clear()
+        if not P._tree_sitter_live("javascript"):
+            pytest.skip("tree-sitter javascript grammar not on disk: the backend never downloads one "
+                        "(scripts/bundle_tree_sitter_grammars.py)")
         f = tmp_path / "sample.js"
         f.write_text("class JsCls {\n  deepMethod() {\n    return 1;\n  }\n}\n")
         result, status = P.parse_file_with_status(f, tmp_path)
@@ -1479,7 +1493,12 @@ class TestGitignoreHonoring:
         assert "model/main.smithy" in refs, refs
 
     def test_js_ts_module_variants_are_parsed_and_config_is_not_a_hole(self, tmp_path):
+        import core.code_intel.parser as P
         from core.code_intel.parser import parse_repo_with_coverage
+        if not (P._tree_sitter_live("javascript") and P._tree_sitter_live("typescript")):
+            # without them the repo is reported AST-degraded, a hole by design
+            pytest.skip("tree-sitter javascript/typescript grammars not on disk: the backend "
+                        "never downloads one (scripts/bundle_tree_sitter_grammars.py)")
         repo = self._git_repo(tmp_path)
         (repo / "a.mjs").write_text("export function a() { return 1 }\n", encoding="utf-8")
         (repo / "b.cts").write_text("export function b(): number { return 1 }\n", encoding="utf-8")

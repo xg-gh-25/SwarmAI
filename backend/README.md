@@ -29,6 +29,7 @@ Alternatively, run the backend standalone:
 cd backend
 uv sync
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars  # code-intel grammars (the backend never downloads them; without them code intel uses its regex path)
 python main.py
 ```
 

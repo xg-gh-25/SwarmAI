@@ -66,6 +66,8 @@ sudo -u "$SWARM_USER" python3.12 -m venv .venv
 sudo -u "$SWARM_USER" .venv/bin/pip install -q --upgrade pip
 sudo -u "$SWARM_USER" .venv/bin/pip install -q -e . 2>&1 | tail -3
 
+${tree_sitter_grammars}
+
 # ── 5. Install Caddy ──
 echo "[5/9] Installing Caddy..."
 # A pinned release from GitHub, checked against that release's checksum (CADDY_VERSION).
@@ -832,6 +834,21 @@ def caddy_binary_update_sh() -> str:
             .replace("@CADDY_BINARY_SHA512@", CADDY_ARM64_BINARY_SHA512))
 
 
+# The code-intel grammars, put on disk by the first boot and by every update, never by the
+# backend itself: the library's own download holds the GIL and stops every thread of the
+# server (core/code_intel/grammars.py). Outside the prebaked-stripped segments, so a
+# prebaked AMI runs it too. A no-op when they are there for the installed library version;
+# a failure (offline) only warns, and code intel takes its regex path. The deadline bounds a
+# stalled download well inside the time the provisioner waits for an update script
+# (provisioner.UPDATE_WAIT_POLLS x UPDATE_WAIT_INTERVAL_S); a release-bump rebuild from AWS
+# takes seconds.
+TREE_SITTER_SETUP_DEADLINE_S = 120
+TREE_SITTER_GRAMMARS_SH = r"""# Code-intel grammars (the backend never downloads one itself)
+(cd "${INSTALL_DIR:-/opt/swarmai}/backend" && sudo -H -u "${SWARM_USER:-swarm}" .venv/bin/python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline @DEADLINE@) \
+  || echo "WARN: tree-sitter grammars not bundled; code intel uses its regex path for the missing languages"
+""".replace("@DEADLINE@", str(TREE_SITTER_SETUP_DEADLINE_S))
+
+
 # ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
 # When a pre-baked custom AMI is used, the heavy on-machine install steps are
 # already固化 in the image, so render_user_data(prebaked=True) strips these two
@@ -935,6 +952,7 @@ def render_user_data(
         tmp_on_disk=TMP_ON_DISK_SH,
         package_check=PACKAGE_CHECK_SH,
         caddy_install=CADDY_INSTALL_SH,
+        tree_sitter_grammars=TREE_SITTER_GRAMMARS_SH,
     )
     if origin_secret is not None:
         values["origin_secret"] = origin_secret
@@ -959,7 +977,8 @@ def render_user_data(
     # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
     # Only check for our known template vars (shell vars like ${i}, ${HASH} are expected).
     _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region",
-                      "origin_secret", "tmp_on_disk", "package_check", "caddy_install"}
+                      "origin_secret", "tmp_on_disk", "package_check", "caddy_install",
+                      "tree_sitter_grammars"}
     for var in _TEMPLATE_VARS:
         if f"${{{var}}}" in result:
             raise ValueError(f"Unresolved template variable: ${{{var}}}")

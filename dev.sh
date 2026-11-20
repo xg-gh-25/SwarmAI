@@ -102,6 +102,15 @@ _kill_backend() {
     fi
 }
 
+# The tree-sitter grammars code intel loads, put on disk here and never by the backend
+# itself: the library's download holds the GIL and stops every thread of the server
+# (backend/core/code_intel/grammars.py). A no-op once they are there for the installed
+# library version; offline it only warns, and code intel uses its regex path.
+_bundle_grammars() {
+    python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline 120 \
+        || _warn "tree-sitter grammars not bundled: code intel uses its regex path for the missing languages"
+}
+
 _start_backend() {
     _kill_backend
     _log "Starting backend on port $BACKEND_PORT..."
@@ -114,6 +123,7 @@ _start_backend() {
     fi
     source .venv/bin/activate
     uv sync --group dev
+    _bundle_grammars
 
     # Start in background, log to separate dev file (don't clobber daemon's backend.log)
     # SWARMAI_MODE=dev prevents channel gateway startup (avoids Slack Socket Mode conflict

@@ -40,6 +40,12 @@ _start_backend() {
         source .venv/bin/activate
     fi
 
+    # The tree-sitter grammars code intel loads, put on disk here and never by the
+    # backend itself (backend/core/code_intel/grammars.py). A no-op once they are
+    # there; offline it only warns, and code intel uses its regex path.
+    python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline 120 \
+        || echo "[swarm] ⚠️  tree-sitter grammars not bundled: code intel uses its regex path for the missing languages"
+
     DATABASE_TYPE=sqlite python main.py --port $BACKEND_PORT \
         > "$LOG_DIR/backend.log" 2>&1 &
     local pid=$!

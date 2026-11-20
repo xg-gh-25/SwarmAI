@@ -111,6 +111,7 @@ That's it. The app opens at `http://localhost:1420` with backend on port 18321.
 ```bash
 cd backend
 uv sync && source .venv/bin/activate
+python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars  # code-intel grammars; the backend never downloads them (./dev.sh and npm run tauri:dev do this for you)
 SWARMAI_MODE=dev python main.py    # port 8000, no channels/jobs
 ```
 

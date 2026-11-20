@@ -963,7 +963,9 @@ def _run_scheduler_safe() -> None:
 
 def _prewarm_tree_sitter_body() -> None:
     """Load the tree-sitter grammar libraries once (process-wide dlopen), so the
-    first parse anywhere does not pay the first load. Never raises."""
+    first parse anywhere does not pay the first load. Only grammars already on disk
+    load (core.code_intel.grammars): with none there it loads nothing and returns at
+    once, never a download. Never raises."""
     try:
         import tree_sitter_language_pack  # noqa: F401
         from core.code_intel.grammars import get_language
@@ -1255,9 +1257,12 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_prewarm_recall())
 
     # Pre-load the tree-sitter grammars code intel uses most, so the first parse
-    # does not pay the dlopen. They come from the grammars the app ships
-    # (core.code_intel.grammars): never a download, which would hold the GIL and
-    # stop every thread (192 s on a fresh HOME, 2026-10-28). Off the loop, best-effort.
+    # does not pay the dlopen. In every mode they come only from disk
+    # (core.code_intel.grammars: the shipped or generated/tree_sitter_grammars
+    # directory, else what the library's cache already holds), never a download,
+    # which would hold the GIL and stop every thread (192 s on a fresh HOME,
+    # 2026-10-28; a stalled one never ends). scripts/bundle_tree_sitter_grammars.py
+    # puts them on disk, outside this process. Off the loop, best-effort.
     async def _prewarm_tree_sitter():
         await asyncio.to_thread(_prewarm_tree_sitter_body)
     asyncio.create_task(_prewarm_tree_sitter())

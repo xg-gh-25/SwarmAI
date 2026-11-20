@@ -57,6 +57,7 @@ deploy_to() {
     rsync -az --delete \
         --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
         --exclude='tests/' --exclude='.pytest_cache' \
+        --exclude='generated/tree_sitter_grammars*' \
         -e "ssh -i ${SSH_KEY} ${SSH_OPTS}" \
         "${PROJECT_ROOT}/backend/" \
         "ec2-user@${IP}:/tmp/hive-backend/"
@@ -78,6 +79,13 @@ sudo chown -R swarm:swarm /opt/swarmai/desktop/dist /opt/swarmai/backend /opt/sw
 
 # Sync pip dependencies (catches new imports from pyproject.toml)
 sudo -u swarm /opt/swarmai/backend/.venv/bin/pip install -q -e '/opt/swarmai/backend[all]' 2>&1 | tail -1
+
+# The code-intel grammars, put on disk here: the backend never downloads one itself
+# (backend/core/code_intel/grammars.py). Kept across updates (the sync above has no
+# --delete and the upload excludes this machine's own); rebuilt only when the library
+# version changed. Offline it only warns (regex path).
+(cd /opt/swarmai/backend && sudo -H -u swarm .venv/bin/python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline 120) \
+    || echo "WARN: tree-sitter grammars not bundled; code intel uses its regex path for the missing languages"
 
 # Restart
 sudo systemctl restart swarmai-hive

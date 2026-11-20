@@ -448,6 +448,11 @@ echo "Origin guard {mode}: done"
 # trailing newline.
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*")
 UPDATE_STALE_S = 15 * 60
+# How long update() waits for its SSM update script: every bounded step in that script
+# (the tree-sitter grammar step's deadline, user_data.TREE_SITTER_SETUP_DEADLINE_S) must
+# fit well inside it, or a slow step reports a failed update while the script still runs.
+UPDATE_WAIT_POLLS = 60
+UPDATE_WAIT_INTERVAL_S = 5
 
 
 def _script_error(output: str, limit: int = 300) -> str:
@@ -1726,8 +1731,8 @@ class HiveProvisioner:
                 instance.get("ec2_public_ip"), instance.get("elastic_ip_alloc_id"))
 
             # SSM Run Command
-            from hive.user_data import (PACKAGE_CHECK_SH, TMP_ON_DISK_SH, caddy_binary_update_sh,
-                                        health_exempt_fix_sh)
+            from hive.user_data import (PACKAGE_CHECK_SH, TMP_ON_DISK_SH, TREE_SITTER_GRAMMARS_SH,
+                                        caddy_binary_update_sh, health_exempt_fix_sh)
             health_fix_sh = health_exempt_fix_sh()
             caddy_binary_sh = caddy_binary_update_sh()
             update_script = f"""#!/bin/bash
@@ -1760,15 +1765,20 @@ mkdir -p /tmp/hive-new
 tar xzf /tmp/hive-update.tar.gz --strip-components=1 -C /tmp/hive-new/
 
 # Single rsync: sync EVERYTHING from tarball, protect ONLY runtime state.
-# Denylist (protect): .venv (installed deps), .hive-bucket (deploy-time config)
+# Denylist (protect): .venv (installed deps), .hive-bucket (deploy-time config), the
+# code-intel grammars (gitignored, so never in the package; the step below rebuilds them
+# only when the library version changed).
 # Anything new in the tarball is automatically deployed — no allowlist to maintain.
 rsync -a --delete \
   --exclude='backend/.venv' \
   --exclude='.hive-bucket' \
+  --exclude='backend/generated/tree_sitter_grammars' \
   /tmp/hive-new/ /opt/swarmai/
 
 # Re-install Python package (picks up new deps from pyproject.toml)
 cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
+
+{TREE_SITTER_GRAMMARS_SH}
 
 # The newest installed Node as the default node / npm / npx (design
 # 2026-10-31-swarm-out-single-loop-fixes §2.7). The backend needs no Node, so a Hive whose
@@ -1884,14 +1894,14 @@ echo "=== Update to v{version} verified ==="
                 command_id = resp["Command"]["CommandId"]
 
                 import time as _time
-                for _ in range(60):
+                for _ in range(UPDATE_WAIT_POLLS):
                     result = ssm.get_command_invocation(
                         CommandId=command_id, InstanceId=ec2_id
                     )
                     status = result["Status"]
                     if status in ("Success", "Failed", "Cancelled", "TimedOut"):
                         return status, result.get("StandardOutputContent", "")
-                    _time.sleep(5)
+                    _time.sleep(UPDATE_WAIT_INTERVAL_S)
                 return "TimedOut", ""
 
             status, output = await asyncio.to_thread(_run_command)

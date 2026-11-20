@@ -102,6 +102,10 @@ sudo -u "${SWARM_USER}" .venv/bin/pip install --quiet --upgrade pip
 sudo -u "${SWARM_USER}" .venv/bin/pip install --quiet -e ".[all]" 2>/dev/null \
     || sudo -u "${SWARM_USER}" .venv/bin/pip install --quiet -r requirements.txt 2>/dev/null \
     || echo "[hive] WARNING: pip install may have had errors, check logs"
+# The code-intel grammars, put on disk here: the backend never downloads one itself
+# (backend/core/code_intel/grammars.py). Offline it only warns (regex path).
+sudo -H -u "${SWARM_USER}" .venv/bin/python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline 120 \
+    || echo "[hive] WARNING: tree-sitter grammars not bundled; code intel uses its regex path for the missing languages"
 
 # ---------------------------------------------------------------------------
 # 5. Build React frontend

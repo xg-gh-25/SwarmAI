@@ -656,8 +656,8 @@ def _get_cached_parser(language: str):
         # exposes root_node as a property, as _tree_sitter_live / _extract_from_tree
         # expect. Constructed per-thread here (the TLS cache above) because the
         # native Parser is PyO3-`unsendable` — see the cache header comment.
-        # grammars.get_language: the shipped grammar only, never a download (a
-        # language not shipped raises and takes the regex path).
+        # grammars.get_language: a grammar already on disk only, never a download
+        # (a language not on disk raises and takes the regex path).
         parser = tree_sitter.Parser(grammars.get_language(language))
         cache[language] = parser
         return parser
