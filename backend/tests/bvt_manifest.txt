@@ -86,3 +86,10 @@ test_inbox_contract.py  # Inbox shared contract: target fingerprint, identity al
 test_inbox_triage.py  # Inbox triage: rule lanes, one answer tool only, whole-batch rejection on a missing/extra/repeated id, floors, external text only in a nonce fence in the user turn
 test_inbox_drafts.py  # Inbox drafts: no tools; context is this thread plus the person's own messages, never another person's text
 test_inbox_trends.py  # Inbox trend summary: 3-5 distinct points referencing items passed in, last 24 h only
+test_inbox_store.py  # Inbox v20 tables, one row per message, one open send per item, never in backups or knowledge stores
+test_inbox_runner.py  # Inbox runner: daemon/subprocess only, dedup, own message closes thread, rule floor, auth_failed waits, find_sent
+test_inbox_send.py  # Inbox send path: target_sha 409, one reply per double click, unknown never resent, redaction 409, 403s
+test_inbox_caller.py  # Inbox caller check on real loopback sockets: backend and its children refused, unknown peer refused
+test_inbox_submit.py  # inbox submit: PROPOSED only after the thread check; --sent records without calling reply; CLI
+test_inbox_api.py  # /api/inbox: every contract route and model; draft on first read; feed CRUD same as community
+test_inbox_attention.py  # Needs You: one blocking item per Inbox source whose sign-in expired

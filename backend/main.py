@@ -1590,6 +1590,15 @@ async def lifespan(app: FastAPI):
         )
         logger.info("In-process scheduler started (60min interval)")
 
+    # ── Inbox runner (daemon/subprocess, owner only) ─────────────────
+    # Pulls the person's channels on their own intervals (core/inbox/runner.py, design
+    # 2026-11-20-inbox §9). Not on a Hive (no access to the person's channels), not in
+    # dev, and only by the backend that owns backend.json (one runner per data dir).
+    from core.inbox import runner as _inbox_runner
+    _inbox_runner_on = _inbox_runner.should_run(backend_mode, _bjson_written)
+    if _inbox_runner_on:
+        _inbox_runner.start()
+
     # ── Swarm Out bridge (hive only) ──────────────────────────────────
     # Mirrors this Hive's open prompts to S3 and delivers the Host's answers
     # (core/swarm_out_bridge.py). Off when the instance has no Hive identity.
@@ -1800,6 +1809,8 @@ async def lifespan(app: FastAPI):
     if backend_mode != "hive":
         from core.swarm_out import cancel_refresh as _swarm_out_cancel_refresh
         _swarm_out_cancel_refresh()
+    if _inbox_runner_on:
+        await _inbox_runner.stop()
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
         try:
@@ -1994,6 +2005,11 @@ app.include_router(recall_metrics_router, tags=["recall-metrics"])  # prefix set
 
 from routers.community_api import router as community_router
 app.include_router(community_router, tags=["community"])  # prefix set in router
+
+# Inbox (design 2026-11-20-inbox): /api/inbox, incl. the feed configuration moved from
+# /api/community/feeds (those routes stay until the Community page is deleted).
+from routers.inbox import router as inbox_router
+app.include_router(inbox_router, tags=["inbox"])  # prefix set in router
 
 # Register development-only router when DEBUG=true
 if settings.debug:

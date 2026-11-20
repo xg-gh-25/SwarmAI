@@ -1136,6 +1136,48 @@ def _collect_aws_account() -> list[AttentionItem]:
     return items
 
 
+def _collect_inbox_sources() -> list[AttentionItem]:
+    """Inbox sources whose credentials expired (design 2026-11-20-inbox §9): one BLOCKING
+    item per enabled source with health ``auth_failed``, its title naming the channel and
+    the fix the source gave (e.g. "gh auth login"). Only the system state is shown here;
+    the messages themselves never come to Needs You. Read-only (data.db opened read
+    only); fail-soft; a missing database or table is silent."""
+    items: list[AttentionItem] = []
+    try:
+        import sqlite3
+        from core.inbox.store import channel_label
+
+        db_path = Path(get_app_data_dir()) / "data.db"
+        if not db_path.exists():
+            return []
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+        try:
+            rows = conn.execute(
+                "SELECT id, kind, fix, last_error FROM inbox_sources "
+                "WHERE health = 'auth_failed' AND enabled = 1 ORDER BY id").fetchall()
+        except sqlite3.OperationalError:   # schema older than v20: no Inbox yet
+            rows = []
+        finally:
+            conn.close()
+        for source_id, kind, fix, last_error in rows:
+            label = channel_label(kind)
+            fix = _one_line(fix or "", 200)
+            title = (f"Inbox: {label} needs signing in again — {fix}" if fix
+                     else f"Inbox: {label} needs signing in again")
+            items.append(AttentionItem(
+                id=f"inbox:{source_id}", source="inbox", tier=TIER_BLOCKING, brain=None,
+                title=title, summary=f"{label} · {source_id}",
+                detail=_one_line(last_error or "", 400),
+                dispatch={"message": _prompt(
+                    f"My Inbox can no longer read {label}: its sign-in expired. Help me fix it"
+                    + (f" ({fix})" if fix else "") + ", then retry the source in the Inbox.",
+                    [("channel", label), ("fix", fix)],
+                    [f"inbox source {source_id}"])}))
+    except Exception as exc:
+        logger.warning("attention: inbox source failed: %s", exc)
+    return items
+
+
 # ── Aggregator ───────────────────────────────────────────────────────────────
 
 
@@ -1223,6 +1265,7 @@ def collect(
     items += _collect_swarm_out()    # OS-level summary of what Swarm Out waits on
     items += _collect_stale_todos()  # open ToDos nobody touched for long
     items += _collect_aws_account()  # the SwarmAI account's sign-in, and the Hive count
+    items += _collect_inbox_sources()  # Inbox channels whose sign-in expired
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

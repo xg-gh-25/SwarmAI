@@ -143,6 +143,13 @@ def run_knowledge(argv: "list[str]", prog: str = "knowledge") -> int:
     return knowledge_main(argv, prog=prog)
 
 
+def run_inbox(argv: "list[str]") -> int:
+    """``inbox submit``: jobs and skills hand the Inbox a proposed reply, or a record of
+    one they sent (core/inbox/submit.py). There is no HTTP route for it."""
+    from core.inbox.submit import main as inbox_main
+    return inbox_main(argv)
+
+
 # ── aws-credentials ───────────────────────────────────────────────────────────
 
 def run_aws_credentials(argv: "list[str]") -> int:
@@ -534,6 +541,7 @@ commands:
   hook <event> --host <host>     a coding agent host's hook (event JSON on stdin)
   ingest submit | wake <args>    hand a CDF candidate to the daemon, or wake its worker
   aws-credentials                credential_process of the swarmai AWS profile
+  inbox submit [--sent] --json F hand a proposed reply, or a record of a sent one, to the Inbox
 """
 
 
@@ -558,6 +566,7 @@ _SUBCOMMANDS = {
     "knowledge": lambda rest: run_knowledge(rest, prog="knowledge"),
     "ingest": lambda rest: run_ingest(rest),
     "aws-credentials": lambda rest: run_aws_credentials(rest),
+    "inbox": lambda rest: run_inbox(rest),
 }
 
 

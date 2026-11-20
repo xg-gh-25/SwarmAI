@@ -2114,7 +2114,119 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 16 — session_inputs: append-only provenance ledger for CDF (2026-10-27)
 # 17 — session_inputs.root_id + measured trust for CDF v2 (2026-10-27)
 # 18 — usage_ledger: the platform's one record of model usage and spend (2026-10-29)
-CURRENT_SCHEMA_VERSION = 19
+# 19 — hive_instances.origin_secret (2026-11-04)
+# 20 — Inbox: inbox_sources / items / drafts / sends / feedback / trend_summaries (2026-11-20)
+CURRENT_SCHEMA_VERSION = 20
+
+#: Inbox tables (v20, core/inbox/store.py, design docs/design/2026-11-20-inbox.md §5). The
+#: person's own messages: never in a backup (core/backup_manager.L2_TABLES lists what is),
+#: never in the workspace's knowledge folders or a recall index. Times are UTC ISO-8601 of one fixed width, so a
+#: string comparison is a time comparison.
+_INBOX_DDL = (
+    """CREATE TABLE IF NOT EXISTS inbox_sources (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        backend TEXT NOT NULL,
+        category TEXT NOT NULL CHECK (category IN ('conversation', 'feed')),
+        config TEXT NOT NULL DEFAULT '{}',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        interval_s INTEGER NOT NULL,
+        cursor TEXT,
+        me TEXT,
+        can_send INTEGER NOT NULL DEFAULT 0,
+        health TEXT NOT NULL DEFAULT 'ok'
+            CHECK (health IN ('ok', 'auth_failed', 'error', 'read_only')),
+        fix TEXT NOT NULL DEFAULT '',
+        last_pull_at TEXT,
+        last_attempt_at TEXT,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS inbox_items (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        thread_key TEXT NOT NULL,
+        thread_ref TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        author TEXT NOT NULL DEFAULT '',
+        author_id TEXT NOT NULL DEFAULT '',
+        received_at TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        excerpt TEXT NOT NULL DEFAULT '',
+        url TEXT NOT NULL DEFAULT '',
+        meta TEXT NOT NULL DEFAULT '{}',
+        lane TEXT NOT NULL CHECK (lane IN ('reply', 'proposed', 'aware', 'trend', 'skip')),
+        rule_lane TEXT NOT NULL,
+        floor TEXT,
+        priority INTEGER NOT NULL DEFAULT 3,
+        reason TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL DEFAULT 'open'
+            CHECK (state IN ('open', 'replied', 'done', 'dismissed', 'snoozed')),
+        snooze_until TEXT,
+        triaged_at TEXT,
+        answered_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (source_id, external_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_items_lane_state ON inbox_items(lane, state)",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_items_thread ON inbox_items(source_id, thread_key)",
+    """CREATE TABLE IF NOT EXISTS inbox_drafts (
+        id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        lang TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_drafts_item ON inbox_drafts(item_id, created_at)",
+    """CREATE TABLE IF NOT EXISTS inbox_sends (
+        id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        draft_id TEXT,
+        origin TEXT NOT NULL,
+        target TEXT NOT NULL DEFAULT '{}',
+        target_sha TEXT NOT NULL DEFAULT '',
+        text TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('reserved', 'sent', 'failed', 'unknown')),
+        external_msg_id TEXT,
+        url TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        sent_at TEXT,
+        updated_at TEXT NOT NULL
+    )""",
+    # at most one send in flight or of unknown outcome per item: a double click, or the
+    # same item sent again with edited text, finds this row instead of sending twice
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_inbox_sends_open ON inbox_sends(item_id) "
+    "WHERE status IN ('reserved', 'unknown')",
+    # one row per message the source assigned an id (a job recording the same comment twice)
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_inbox_sends_msg ON inbox_sends(source_id, external_msg_id) "
+    "WHERE external_msg_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_sends_status ON inbox_sends(status, created_at)",
+    """CREATE TABLE IF NOT EXISTS inbox_feedback (
+        id TEXT PRIMARY KEY,
+        item_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('relane', 'dismiss', 'edit_sent')),
+        from_lane TEXT,
+        to_lane TEXT,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_feedback_source ON inbox_feedback(source_id, created_at)",
+    """CREATE TABLE IF NOT EXISTS inbox_trend_summaries (
+        id TEXT PRIMARY KEY,
+        day TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        points TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_trend_summaries_day ON inbox_trend_summaries(day)",
+)
 
 #: usage_ledger (v18). ``kind``: spend rows are what was spent and the only rows any
 #: total adds; attribution rows split spend rows (a pipeline run inside a chat turn).
@@ -3604,6 +3716,23 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.rollback()
                 raise
             logger.info("Migration v19: hive_instances.origin_secret")
+
+        if current_version < 20 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 19:
+            # Version 20: the Inbox tables (_INBOX_DDL, design 2026-11-20-inbox §5). New
+            # tables only, nothing existing is touched; DDL and the version bump in one
+            # transaction, so a failed CREATE leaves user_version at 19 and startup retries.
+            await conn.execute("BEGIN")
+            try:
+                for stmt in _INBOX_DDL:
+                    await conn.execute(stmt)
+                await conn.execute("PRAGMA user_version = 20")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v20: Inbox tables")
+
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 
@@ -4453,6 +4582,347 @@ class SQLiteDatabase(BaseDatabase):
                 "DELETE FROM send_requests WHERE created_at < ?", (before,))
             await conn.commit()
             return cursor.rowcount
+
+    # ── Inbox (schema v20, core/inbox/store.py) ───────────────────────
+    # Thin typed access; the domain rules (what a state change means, which source a row
+    # opens) live in core/inbox/store.py. Every UPDATE names its columns from a fixed set.
+    INBOX_SOURCE_COLS = ("id", "kind", "backend", "category", "config", "enabled", "interval_s",
+                         "cursor", "me", "can_send", "health", "fix", "last_pull_at",
+                         "last_attempt_at", "last_error", "created_at", "updated_at")
+    INBOX_ITEM_COLS = ("id", "source_id", "external_id", "source_kind", "thread_key", "thread_ref",
+                       "origin", "author", "author_id", "received_at", "title", "excerpt", "url",
+                       "meta", "lane", "rule_lane", "floor", "priority", "reason", "state",
+                       "snooze_until", "triaged_at", "answered_at", "created_at", "updated_at")
+    INBOX_DRAFT_COLS = ("id", "item_id", "text", "lang", "note", "model", "created_at")
+    INBOX_SEND_COLS = ("id", "item_id", "source_id", "draft_id", "origin", "target", "target_sha",
+                       "text", "status", "external_msg_id", "url", "error", "created_at",
+                       "sent_at", "updated_at")
+    INBOX_FEEDBACK_COLS = ("id", "item_id", "source_id", "action", "from_lane", "to_lane",
+                           "created_at")
+    _INBOX_SOURCE_SET = frozenset(("kind", "backend", "category", "config", "enabled",
+                                   "interval_s", "cursor", "me", "can_send", "health", "fix",
+                                   "last_pull_at", "last_attempt_at", "last_error"))
+    _INBOX_ITEM_SET = frozenset(("lane", "priority", "reason", "state", "snooze_until",
+                                 "triaged_at"))
+    _INBOX_SEND_SET = frozenset(("status", "external_msg_id", "url", "error", "sent_at"))
+
+    @staticmethod
+    def _inbox_values(cols: tuple, row: dict) -> tuple:
+        return tuple(row.get(c) for c in cols)
+
+    async def _inbox_fetch(self, sql: str, params: tuple = (), cols: tuple = ()) -> list[dict]:
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
+        return [dict(zip(cols, r)) for r in rows]
+
+    async def _inbox_update(self, table: str, allowed: frozenset, key: str, now: str,
+                            fields: dict, where_extra: str = "", extra_params: tuple = ()) -> bool:
+        bad = set(fields) - allowed
+        if bad or not fields:
+            raise ValueError(f"{table}: cannot set {sorted(bad) or 'nothing'}")
+        cols = sorted(fields)
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                f"UPDATE {table} SET {', '.join(f'{c} = ?' for c in cols)}, updated_at = ? "
+                f"WHERE id = ?{where_extra}",
+                (*(fields[c] for c in cols), now, key, *extra_params))
+            await conn.commit()
+            return cursor.rowcount == 1
+
+    # sources
+    async def inbox_put_source(self, row: dict) -> None:
+        """Insert a source, or update its configuration (kind, backend, category, config,
+        enabled, interval_s); its cursor, identity and health are kept."""
+        cols = self.INBOX_SOURCE_COLS
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            await conn.execute(
+                f"INSERT INTO inbox_sources ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)}) "
+                "ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, backend = excluded.backend, "
+                "category = excluded.category, config = excluded.config, "
+                "enabled = excluded.enabled, interval_s = excluded.interval_s, "
+                "updated_at = excluded.updated_at",
+                self._inbox_values(cols, row))
+            await conn.commit()
+
+    async def inbox_get_source(self, source_id: str) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_SOURCE_COLS)} FROM inbox_sources WHERE id = ?",
+            (source_id,), self.INBOX_SOURCE_COLS)
+        return rows[0] if rows else None
+
+    async def inbox_list_sources(self) -> list[dict]:
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_SOURCE_COLS)} FROM inbox_sources ORDER BY category, id",
+            (), self.INBOX_SOURCE_COLS)
+
+    async def inbox_update_source(self, source_id: str, now: str, **fields: Any) -> bool:
+        return await self._inbox_update("inbox_sources", self._INBOX_SOURCE_SET, source_id, now, fields)
+
+    # items
+    async def inbox_insert_items(self, rows: list[dict]) -> dict[str, tuple[str, bool]]:
+        """Insert items unless their (source_id, external_id) exists, in one transaction.
+        Returns ``{external_id: (item id, inserted)}``: an existing row keeps its id."""
+        cols = self.INBOX_ITEM_COLS
+        out: dict[str, tuple[str, bool]] = {}
+        if not rows:
+            return out
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            for row in rows:
+                cursor = await conn.execute(
+                    f"INSERT OR IGNORE INTO inbox_items ({', '.join(cols)}) "
+                    f"VALUES ({', '.join('?' for _ in cols)})", self._inbox_values(cols, row))
+                if cursor.rowcount == 1:
+                    out[row["external_id"]] = (row["id"], True)
+                    continue
+                found = await (await conn.execute(
+                    "SELECT id FROM inbox_items WHERE source_id = ? AND external_id = ?",
+                    (row["source_id"], row["external_id"]))).fetchone()
+                out[row["external_id"]] = (found[0], False)
+            await conn.commit()
+        return out
+
+    async def inbox_get_item(self, item_id: str) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items WHERE id = ?",
+            (item_id,), self.INBOX_ITEM_COLS)
+        return rows[0] if rows else None
+
+    async def inbox_get_item_by_external(self, source_id: str, external_id: str) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items "
+            "WHERE source_id = ? AND external_id = ?",
+            (source_id, external_id), self.INBOX_ITEM_COLS)
+        return rows[0] if rows else None
+
+    async def inbox_list_items(self, lane: str, state: str = "open", limit: int = 200) -> list[dict]:
+        """Items of a lane and state, most urgent first: priority, then oldest first."""
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items WHERE lane = ? AND state = ? "
+            "ORDER BY priority ASC, received_at ASC, id ASC LIMIT ?",
+            (lane, state, limit), self.INBOX_ITEM_COLS)
+
+    async def inbox_items_since(self, lane: str, since: str, limit: int = 200) -> list[dict]:
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items WHERE lane = ? "
+            "AND received_at >= ? ORDER BY received_at DESC, id ASC LIMIT ?",
+            (lane, since, limit), self.INBOX_ITEM_COLS)
+
+    async def inbox_untriaged_items(self, source_id: str, limit: int = 200) -> list[dict]:
+        """Pulled items of a source that no triage answer has covered yet (a rejected or
+        failed batch): offered to triage again at the next pull."""
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items WHERE source_id = ? "
+            "AND origin = 'pull' AND triaged_at IS NULL AND state = 'open' "
+            "ORDER BY received_at ASC, id ASC LIMIT ?",
+            (source_id, limit), self.INBOX_ITEM_COLS)
+
+    async def inbox_update_item(self, item_id: str, now: str, *, expect_state: Optional[str] = None,
+                                **fields: Any) -> bool:
+        """Set fields of one item; with ``expect_state`` only while it is in that state."""
+        if expect_state is None:
+            return await self._inbox_update("inbox_items", self._INBOX_ITEM_SET, item_id, now, fields)
+        return await self._inbox_update("inbox_items", self._INBOX_ITEM_SET, item_id, now, fields,
+                                        " AND state = ?", (expect_state,))
+
+    async def inbox_close_thread(self, source_id: str, thread_key: str, until: str, now: str) -> int:
+        """The person wrote in a thread at ``until``: every open or snoozed REPLY / PROPOSED
+        item of that thread received at or before then is replied, triaged or not (by rule
+        a direct ask, now answered; a later answer lowering it to AWARE leaves it replied).
+        An item of another lane no triage answer has covered yet is only marked
+        ``answered_at``: it becomes replied if its answer later puts it in REPLY / PROPOSED
+        (``inbox_close_if_answered``), and stays open where it is otherwise."""
+        where = ("WHERE source_id = ? AND thread_key = ? AND received_at <= ? "
+                 "AND state IN ('open', 'snoozed') ")
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "UPDATE inbox_items SET state = 'replied', snooze_until = NULL, updated_at = ? "
+                + where + "AND lane IN ('reply', 'proposed')",
+                (now, source_id, thread_key, until))
+            closed = cursor.rowcount
+            await conn.execute(
+                "UPDATE inbox_items SET answered_at = ?, updated_at = ? " + where
+                + "AND triaged_at IS NULL AND (answered_at IS NULL OR answered_at < ?)",
+                (until, now, source_id, thread_key, until, until))
+            await conn.commit()
+            return closed
+
+    async def inbox_close_if_answered(self, item_id: str, now: str) -> bool:
+        """After a triage answer: an item the person answered in its thread while it was
+        untriaged, now in REPLY / PROPOSED, is replied."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "UPDATE inbox_items SET state = 'replied', snooze_until = NULL, updated_at = ? "
+                "WHERE id = ? AND answered_at IS NOT NULL AND lane IN ('reply', 'proposed') "
+                "AND state IN ('open', 'snoozed')", (now, item_id))
+            await conn.commit()
+            return cursor.rowcount == 1
+
+    async def inbox_wake_snoozed(self, now: str) -> int:
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "UPDATE inbox_items SET state = 'open', snooze_until = NULL, updated_at = ? "
+                "WHERE state = 'snoozed' AND snooze_until IS NOT NULL AND snooze_until <= ?",
+                (now, now))
+            await conn.commit()
+            return cursor.rowcount
+
+    async def inbox_item_counts(self, skipped_since: str) -> dict[str, int]:
+        """Open items per lane, and SKIP items received since ``skipped_since``."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            rows = await (await conn.execute(
+                "SELECT lane, COUNT(*) FROM inbox_items WHERE state = 'open' GROUP BY lane")).fetchall()
+            skipped = await (await conn.execute(
+                "SELECT COUNT(*) FROM inbox_items WHERE lane = 'skip' AND received_at >= ?",
+                (skipped_since,))).fetchone()
+        out = {lane: int(n) for lane, n in rows}
+        out["skipped"] = int(skipped[0])
+        return out
+
+    async def inbox_later_item(self, source_id: str, thread_key: str, after: str) -> Optional[str]:
+        """The first pulled item of a thread received after ``after`` (a reply came back)."""
+        rows = await self._inbox_fetch(
+            "SELECT id FROM inbox_items WHERE source_id = ? AND thread_key = ? AND origin = 'pull' "
+            "AND received_at > ? ORDER BY received_at ASC, id ASC LIMIT 1",
+            (source_id, thread_key, after), ("id",))
+        return rows[0]["id"] if rows else None
+
+    # drafts
+    async def inbox_insert_draft(self, row: dict) -> None:
+        cols = self.INBOX_DRAFT_COLS
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            await conn.execute(
+                f"INSERT INTO inbox_drafts ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+                self._inbox_values(cols, row))
+            await conn.commit()
+
+    async def inbox_latest_draft(self, item_id: str) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_DRAFT_COLS)} FROM inbox_drafts WHERE item_id = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (item_id,), self.INBOX_DRAFT_COLS)
+        return rows[0] if rows else None
+
+    async def inbox_get_draft(self, draft_id: str) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_DRAFT_COLS)} FROM inbox_drafts WHERE id = ?",
+            (draft_id,), self.INBOX_DRAFT_COLS)
+        return rows[0] if rows else None
+
+    # sends
+    async def inbox_insert_send(self, row: dict) -> bool:
+        """Insert a send; False when a unique index refuses it (the item already has a
+        reserved / unknown send, or the source's message id is already recorded)."""
+        cols = self.INBOX_SEND_COLS
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            try:
+                await conn.execute(
+                    f"INSERT INTO inbox_sends ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+                    self._inbox_values(cols, row))
+            except aiosqlite.IntegrityError:
+                return False
+            await conn.commit()
+            return True
+
+    async def inbox_get_send(self, send_id: str) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_SEND_COLS)} FROM inbox_sends WHERE id = ?",
+            (send_id,), self.INBOX_SEND_COLS)
+        return rows[0] if rows else None
+
+    async def inbox_open_send(self, item_id: str) -> Optional[dict]:
+        """The item's send that is reserved or of unknown outcome, if any (at most one)."""
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_SEND_COLS)} FROM inbox_sends WHERE item_id = ? "
+            "AND status IN ('reserved', 'unknown')", (item_id,), self.INBOX_SEND_COLS)
+        return rows[0] if rows else None
+
+    async def inbox_send_by_msg(self, source_id: str, external_msg_id: str) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_SEND_COLS)} FROM inbox_sends WHERE source_id = ? "
+            "AND external_msg_id = ?", (source_id, external_msg_id), self.INBOX_SEND_COLS)
+        return rows[0] if rows else None
+
+    async def inbox_update_send(self, send_id: str, now: str, *, expect_status: str,
+                                **fields: Any) -> bool:
+        """Move one send out of ``expect_status`` (atomic: of two concurrent moves one
+        wins). False when it is no longer in that state, or a unique index refuses."""
+        try:
+            return await self._inbox_update("inbox_sends", self._INBOX_SEND_SET, send_id, now,
+                                            fields, " AND status = ?", (expect_status,))
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def inbox_sends(self, statuses: tuple[str, ...], *, source_id: Optional[str] = None,
+                          origin: Optional[str] = None, since: Optional[str] = None,
+                          open_items_only: bool = False, limit: int = 200) -> list[dict]:
+        """Sends in ``statuses``, newest first. ``origin``: 'click' or 'auto' (every
+        auto:<producer>). ``open_items_only``: only sends whose item is still open or
+        snoozed (a failed send the item was answered after no longer needs the person)."""
+        where = [f"status IN ({', '.join('?' for _ in statuses)})"]
+        if open_items_only:
+            where.append("item_id IN (SELECT id FROM inbox_items WHERE state IN ('open', 'snoozed'))")
+        params: list[Any] = list(statuses)
+        if source_id is not None:
+            where.append("source_id = ?")
+            params.append(source_id)
+        if origin == "click":
+            where.append("origin = 'click'")
+        elif origin == "auto":
+            where.append("origin LIKE 'auto%'")
+        if since is not None:
+            where.append("created_at >= ?")
+            params.append(since)
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_SEND_COLS)} FROM inbox_sends WHERE {' AND '.join(where)} "
+            "ORDER BY created_at DESC, id ASC LIMIT ?", (*params, limit), self.INBOX_SEND_COLS)
+
+    async def inbox_send_counts(self, since: str) -> dict[str, int]:
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            need = await (await conn.execute(
+                "SELECT COUNT(*) FROM inbox_sends WHERE status IN ('failed', 'unknown') "
+                "AND item_id IN (SELECT id FROM inbox_items WHERE state IN ('open', 'snoozed'))"
+            )).fetchone()
+            sent = await (await conn.execute(
+                "SELECT COUNT(*), SUM(CASE WHEN origin LIKE 'auto%' THEN 1 ELSE 0 END) "
+                "FROM inbox_sends WHERE status = 'sent' AND created_at >= ?", (since,))).fetchone()
+        return {"need_you": int(need[0]), "sent": int(sent[0] or 0), "auto": int(sent[1] or 0)}
+
+    async def inbox_reserved_to_unknown(self, now: str) -> int:
+        """A send left reserved by a process that stopped may have gone out: unknown."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            cursor = await conn.execute(
+                "UPDATE inbox_sends SET status = 'unknown', updated_at = ?, "
+                "error = CASE WHEN error = '' THEN 'the backend stopped while sending' ELSE error END "
+                "WHERE status = 'reserved'", (now,))
+            await conn.commit()
+            return cursor.rowcount
+
+    # feedback and trend summaries
+    async def inbox_insert_feedback(self, row: dict) -> None:
+        cols = self.INBOX_FEEDBACK_COLS
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            await conn.execute(
+                f"INSERT INTO inbox_feedback ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+                self._inbox_values(cols, row))
+            await conn.commit()
+
+    async def inbox_recent_feedback(self, source_id: str, limit: int = 10) -> list[dict]:
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_FEEDBACK_COLS)} FROM inbox_feedback WHERE source_id = ? "
+            "ORDER BY created_at DESC, id ASC LIMIT ?", (source_id, limit), self.INBOX_FEEDBACK_COLS)
+
+    async def inbox_put_trend_summary(self, row: dict) -> None:
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            await conn.execute(
+                "INSERT INTO inbox_trend_summaries (id, day, generated_at, points) VALUES (?, ?, ?, ?)",
+                (row["id"], row["day"], row["generated_at"], row["points"]))
+            await conn.commit()
+
+    async def inbox_latest_trend_summary(self) -> Optional[dict]:
+        rows = await self._inbox_fetch(
+            "SELECT id, day, generated_at, points FROM inbox_trend_summaries "
+            "ORDER BY generated_at DESC LIMIT 1", (), ("id", "day", "generated_at", "points"))
+        return rows[0] if rows else None
 
     # ── Recall Metrics (batch flush) ─────────────────────────────────────
     # ── Compactions (schema v12, core/compact_summary.py) ─────────────
