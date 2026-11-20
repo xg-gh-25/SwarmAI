@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from core.feature_map import ledger
 from core.feature_map.replay import contained
@@ -194,3 +195,79 @@ def test_base_replay_error_is_json_too(tmp_path, app_data, monkeypatch, capsys):
     # --keep: the head sandbox (the failing walk) is named, and the base one too
     assert out["sandbox"] == str(head_sb) and head_sb.is_dir()
     assert out["base_sandbox"] == str(tmp_path / "base-sandbox")
+
+
+def test_a_wall_clock_cap_stops_the_sandbox_services(tmp_path, app_data):  # noqa: F811
+    """The CLI under `perl -e 'alarm N; exec ...'` gets SIGALRM: its services must not outlive it."""
+    import os
+    import signal
+    import socket
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+    port = 20000 + os.getpid() % 10000
+    target = (f"id: web\nkind: command\nservices:\n"
+              f"  - {{id: s, argv: [{sys.executable}, -m, http.server, \"{port}\", --bind, 127.0.0.1], "
+              f"ready: \"http://127.0.0.1:{port}/\"}}\n")
+    root = make_repo(tmp_path / "r", specs={}, target=target, features=(
+        "schema: 1\nfeatures:\n  - {id: wait-a1, title: Wait, target: web, run: "
+        f"[{sys.executable}, -c, \"import time; time.sleep(60)\"]}}\n"))
+
+    def answers():
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.3).close()
+            return True
+        except OSError:
+            return False
+    backend = Path(__file__).resolve().parents[1]
+    proc = subprocess.Popen([sys.executable, "-m", "scripts.feature_map", "replay", "--repo-root", str(root),
+                             "--project", "B", "--repo", "app"], cwd=str(backend),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ)
+    deadline = time.monotonic() + 30
+    while not answers() and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert answers(), "the service came up"
+    proc.send_signal(signal.SIGALRM)
+    proc.wait(timeout=30)
+    deadline = time.monotonic() + 10
+    while answers() and time.monotonic() < deadline:
+        time.sleep(0.2)
+    assert not answers(), "the sandbox's service outlived the capped CLI"
+
+
+def test_an_interrupted_playwright_run_takes_its_group_with_it(tmp_path):
+    import os
+    import signal
+    import sys
+    import time
+    from types import SimpleNamespace
+
+    import pytest
+    from core.feature_map import replay
+    script = tmp_path / "pw.py"
+    script.write_text("import os, time\nopen(os.environ['PID_FILE'], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+    pid_file = tmp_path / "pid"
+    rt = SimpleNamespace(node=Path(sys.executable), playwright_cli=script, env=lambda: {})
+    sb = SimpleNamespace(env=lambda target: {"PATH": os.environ["PATH"], "PID_FILE": str(pid_file)})
+
+    def interrupt(*_a):
+        raise KeyboardInterrupt
+    old = signal.signal(signal.SIGALRM, interrupt)
+    signal.setitimer(signal.ITIMER_REAL, 1.5)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            replay._pw(rt, sb, None, [], tmp_path)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    alive = True
+    while alive and time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+            time.sleep(0.1)
+        except ProcessLookupError:
+            alive = False
+    assert not alive, "the Playwright process outlived the interrupted replay"

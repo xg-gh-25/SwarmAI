@@ -116,6 +116,9 @@ def _pw(rt: Runtime, sb: Sandbox, target, args: list[str], cwd: Path) -> subproc
     except subprocess.TimeoutExpired as exc:
         _kill_group(proc)
         raise SandboxError("not ready", f"Playwright did not finish in {PLAYWRIGHT_TIMEOUT_S}s") from exc
+    except BaseException:
+        _kill_group(proc)              # interrupted: Playwright and its browsers go too
+        raise
     return subprocess.CompletedProcess(proc.args, proc.returncode, out, "")
 
 

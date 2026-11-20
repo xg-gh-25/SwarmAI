@@ -244,7 +244,10 @@ def main(argv: list[str] | None = None) -> int:
 
     def _stop(signum, _frame):           # a capped caller's signal: clean up our children
         raise KeyboardInterrupt(f"signal {signum}")
-    for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+    # SIGALRM too: a wall-clock cap (`perl -e 'alarm N; exec ...'`) ends us with it, and
+    # its default action would kill this process with the sandbox's services still running
+    for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None), getattr(signal, "SIGALRM", None),
+                signal.SIGINT):
         if sig is not None:
             signal.signal(sig, _stop)
 
