@@ -73,10 +73,42 @@ def _path(text: str, root: Optional[str]) -> Optional[str]:
     return p or None
 
 
+# a label a reviewer writes before the text of a finding laid out over several lines
+_LABEL = re.compile(r"^[-*+]?\s*[*_`]*\s*(what breaks|what|failure|problem|issue|why|"
+                    r"description|impact|fix|suggested fix|remedy)\s*[*_`]*\s*:\s*[*_`]*\s*",
+                    re.I)
+_FIX_LABELS = {"fix", "suggested fix", "remedy"}
+
+
+def _below(lines: list[str], start: int) -> tuple[str, str, list[str]]:
+    """(what, fix, the lines taken) a header-only finding writes under its header: the
+    lines up to the next finding, a heading, or a blank line once some text was read."""
+    what: list[str] = []
+    fix: list[str] = []
+    taken: list[str] = []
+    for raw in lines[start:]:
+        text = raw.strip()
+        if _FINDING.match(raw) or text.startswith("#"):
+            break
+        if not text:
+            if what or fix:
+                break
+            continue
+        taken.append(text)
+        m = _LABEL.match(text)
+        body = text[m.end():].strip() if m else text.lstrip("-*+ ").strip()
+        (fix if m and m.group(1).lower() in _FIX_LABELS else what).append(body)
+    return " ".join(what).strip(), " ".join(fix).strip(), taken
+
+
 def parse(reply: Optional[str], root: Optional[str] = None) -> list[Finding]:
-    """The findings in *reply*; *root* (the sealed case) is cut from absolute paths."""
+    """The findings in *reply*; *root* (the sealed case) is cut from absolute paths. A
+    finding written as a ``SEVERITY | path:line`` header with its failure and fix on the
+    lines below takes them from there (and they join its ``raw`` text); a finding on one
+    line keeps that line as ``raw``."""
     out: list[Finding] = []
-    for raw in (reply or "").splitlines():
+    lines = (reply or "").splitlines()
+    for i, raw in enumerate(lines):
         m = _FINDING.match(raw)
         if not m:
             continue
@@ -98,7 +130,12 @@ def parse(reply: Optional[str], root: Optional[str] = None) -> list[Finding]:
             what, fix = " | ".join(cells[1:-1]), cells[-1]
         else:
             what, fix = (cells[1] if len(cells) > 1 else ""), ""
-        out.append(Finding(_SEV[m.group(1).upper()], path, line, end, what, fix, raw.strip()))
+        text = raw.strip()
+        if not what and not fix:
+            what, fix, taken = _below(lines, i + 1)
+            if taken:
+                text = "\n".join([text, *taken])
+        out.append(Finding(_SEV[m.group(1).upper()], path, line, end, what, fix, text))
     return out
 
 

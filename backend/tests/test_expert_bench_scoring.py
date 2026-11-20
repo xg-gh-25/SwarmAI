@@ -262,3 +262,29 @@ def test_concurrent_judging_asks_each_pair_once_and_scores_the_same():
     parallel = asyncio.run(scoring.score(cases, results, judge=judge2, concurrency=8))
     assert parallel == serial
     assert len(asked2) == 4                       # 2 cases x 2 distinct findings, each asked once
+
+
+def test_a_header_only_finding_takes_its_description_from_the_lines_below():
+    # "SEVERITY | path:line" alone on a line, the failure and fix written underneath: the
+    # judge must see that text, or it answers NO for want of a description
+    reply = "\n".join([
+        "HIGH | backend/a.py:12",
+        "The guard is inverted, so every caller is let through.",
+        "Fix: flip the comparison.",
+        "",
+        "MEDIUM | b.py:3 |",
+        "- **What breaks:** leaks a handle",
+        "- **Fix:** close it",
+        "LOW | c.py:1 | inline | ok",
+        "## Unchecked",
+        "HIGH | d.py:5",
+        "## Next section",
+    ])
+    a, b, c, d = scoring.parse(reply)
+    assert (a.what, a.fix) == ("The guard is inverted, so every caller is let through.",
+                               "flip the comparison.")
+    assert "The guard is inverted" in a.raw
+    assert (b.what, b.fix) == ("leaks a handle", "close it")
+    # a finding written on one line keeps its raw text, so judge answers cached under it hold
+    assert (c.what, c.fix, c.raw) == ("inline", "ok", "LOW | c.py:1 | inline | ok")
+    assert (d.what, d.raw) == ("", "HIGH | d.py:5")      # a heading ends the description
