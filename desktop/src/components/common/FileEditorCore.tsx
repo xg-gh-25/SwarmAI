@@ -33,7 +33,7 @@ import api from '../../services/api';
 import { useDialogLayer, useEscape } from '../../hooks/useLayer';
 import { CopyPathButton, copyPathNow } from './CopyPathButton';
 import { previewKindOf, canDrawPreview, PreviewBody } from './filePreviews';
-import { openExternal, openInSystemApp } from '../../utils/openExternal';
+import { openInSystemApp } from '../../utils/openExternal';
 import { subscribeFileChanged } from '../../hooks/fileChangedBroker';
 import { detectLanguage, isDirtyState, findAllMatches } from './FileEditorModal';
 import type { SearchMatch } from './FileEditorModal';
@@ -1626,11 +1626,9 @@ export default function FileEditorCore({
         onClick={async () => {
           const absolutePath = getAbsolutePath();
           try {
-            if (useBrowser) {
-              await openExternal(`file://${absolutePath}`);
-            } else {
-              await openInSystemApp(absolutePath);
-            }
+            // html/svg open in the default browser through their default app; a file://
+            // URL is not an external link (openExternal refuses it)
+            await openInSystemApp(absolutePath);
           } catch {
             // Fallback: copy the path so the user can paste it (toast on failure)
             await copyPathNow(absolutePath);

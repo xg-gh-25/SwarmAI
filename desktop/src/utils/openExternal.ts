@@ -10,12 +10,27 @@
  * @exports revealInFolder — reveal a file in the OS file manager (Finder/Explorer)
  */
 
-/** Open a URL in the system's default browser. */
+/** The schemes a link may open with. Anything else (file:, javascript:, a custom app
+ *  scheme) is refused here instead of being handed to the webview: the opener plugin's own
+ *  scope refuses those too, and the old catch-all fallback then passed them to
+ *  window.open, which bypassed that scope. Local files go through openInSystemApp. */
+const ALLOWED_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+
+/** Open a URL in the system's default browser. Rejects a URL whose scheme is not
+ *  http, https or mailto, before anything is opened. */
 export async function openExternal(url: string): Promise<void> {
+  let scheme: string;
+  try {
+    scheme = new URL(url).protocol;
+  } catch {
+    throw new Error(`not a URL: ${url}`);
+  }
+  if (!ALLOWED_SCHEMES.has(scheme)) throw new Error(`refused to open a ${scheme} link`);
   try {
     const { openUrl } = await import('@tauri-apps/plugin-opener');
     await openUrl(url);
   } catch {
+    // outside Tauri (the browser dev server) the plugin is missing: open a new tab
     window.open(url, '_blank', 'noopener,noreferrer');
   }
 }
