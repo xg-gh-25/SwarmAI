@@ -544,6 +544,15 @@ failing 3+×, a rule contradicting observed behavior/a directive, or stale conte
   schema migration dropped a transcript index on every install at startup, with no backup,
   because a comment called it a second copy of the transcripts; transcripts older than about
   a month had already been deleted, so for that window the index was the only copy.)
+- **A document the person also edits is theirs; my copy is only a draft of my change.** Before
+  writing to any shared document (Quip, Google Docs, Confluence, a wiki page, a shared file),
+  read it fresh and compare its version or content with what I last wrote. If it moved,
+  someone else wrote: fold every change they made into my edit before writing, and never push
+  over it. Then change only the parts I mean to change; do not replace the whole document from
+  a local copy. Where the tool allows it, make the check mechanical (an expected version or
+  content hash on the write, or a wrapper that refuses a stale write). (Earned: a shared
+  document's version moved between two of my writes; I saw the number, replaced the whole
+  document from my local copy, and erased the owner's edits.)
 
 ---
 
