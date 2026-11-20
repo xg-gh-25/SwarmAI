@@ -204,3 +204,16 @@ async def test_submit_refuses_an_id_of_another_thread_or_a_handled_proposal(env)
     with pytest.raises(submit.SubmitRefused):
         await submit.submit(_req(external_id="p1"))
     assert (await submit.submit(_req(external_id="p2")))["created"] is True
+
+
+async def test_no_source_id_means_the_one_conversation_source_of_the_kind(env):
+    from database import db
+    env.thread_messages = [fx.msg("q1", thread=7, author="U_ME", direct=False)]
+    await fx.add_source("feedish", category="feed")  # a feed of the same kind is not a candidate
+    out = await submit.submit(_req(source_id=""))
+    assert (await db.inbox_get_item(out["item_id"]))["source_id"] == "s1"
+    sent = await submit.submit_sent(_rec(source_id=""))
+    assert (await db.inbox_get_send(sent["send_id"]))["source_id"] == "s1"
+    await fx.add_source("s2")
+    with pytest.raises(submit.SubmitRefused, match="2 Inbox sources"):
+        await submit.submit_sent(_rec(source_id="", external_msg_id="IC_999"))

@@ -101,7 +101,16 @@ def _check_producer(producer: str) -> None:
 
 
 async def _source_row(source_id: str, ref: ThreadRef) -> dict:
+    """The source row a submission names; with no ``source_id``, the one conversation
+    source of the thread's kind (a job that posts as the person on GitHub need not know
+    which id the person gave their GitHub source). None or several is refused."""
     from database import db
+    if not source_id:
+        rows = [r for r in await db.inbox_list_sources()
+                if r["kind"] == ref.source_kind and r["category"] == SourceCategory.CONVERSATION.value]
+        if len(rows) != 1:
+            raise SubmitRefused(f"{len(rows)} Inbox sources of kind {ref.source_kind!r}: pass source_id")
+        return rows[0]
     row = await db.inbox_get_source(source_id)
     if row is None:
         raise SubmitRefused(f"no Inbox source {source_id!r}")
@@ -118,10 +127,11 @@ async def submit(req: SubmitRequest) -> dict:
     from database import db
     _check_producer(req.producer)
     row = await _source_row(req.source_id, req.thread_ref)
+    source_id = row["id"]
     try:
         source = await store.open_source(row)
     except Exception as exc:  # noqa: BLE001
-        raise SubmitRefused(f"source {req.source_id!r} cannot be opened ({type(exc).__name__})")
+        raise SubmitRefused(f"source {source_id!r} cannot be opened ({type(exc).__name__})")
     try:
         try:
             me = await source.whoami()
@@ -146,7 +156,7 @@ async def submit(req: SubmitRequest) -> dict:
         author_name=req.author or (first.author_name if first else req.producer),
         received_at=store.now(), text=req.text or (first.text if first else ""),
         url=req.url or (first.url if first else ""), title=req.title or (first.title if first else ""))
-    item_row = store.message_to_item_row(req.source_id, msg, Lane.PROPOSED, None,
+    item_row = store.message_to_item_row(source_id, msg, Lane.PROPOSED, None,
                                          origin=f"submit:{req.producer}", reason=req.ask[:300],
                                          producer=req.producer, triaged=True)
     stored = await db.inbox_insert_items([item_row])
@@ -170,8 +180,8 @@ async def submit_sent(rec: SentRecord) -> dict:
     _check_producer(rec.producer)
     if not rec.external_msg_id.strip():
         raise SubmitRefused("--sent needs the sent message's external_msg_id")
-    await _source_row(rec.source_id, rec.thread_ref)
-    existing = await db.inbox_send_by_msg(rec.source_id, rec.external_msg_id)
+    source_id = (await _source_row(rec.source_id, rec.thread_ref))["id"]
+    existing = await db.inbox_send_by_msg(source_id, rec.external_msg_id)
     if existing is not None:
         return {"item_id": existing["item_id"], "send_id": existing["id"], "created": False}
     sent_at = rec.sent_at or store.now()
@@ -179,7 +189,7 @@ async def submit_sent(rec: SentRecord) -> dict:
         external_id=_item_key(rec.producer, rec.external_id or f"sent:{rec.external_msg_id}"),
         thread=rec.thread_ref, author_id=rec.producer, author_name=rec.producer,
         received_at=sent_at, text=rec.text, url=rec.url, title=rec.title)
-    item_row = store.message_to_item_row(rec.source_id, msg, Lane.PROPOSED, None,
+    item_row = store.message_to_item_row(source_id, msg, Lane.PROPOSED, None,
                                          origin=f"submit:{rec.producer}",
                                          state=ItemState.REPLIED, producer=rec.producer,
                                          triaged=True)
@@ -188,7 +198,7 @@ async def submit_sent(rec: SentRecord) -> dict:
         await _check_existing(item_id, rec.producer, rec.thread_ref, need_open=False)
     stamp = store.ts(store.now())
     send_row = {
-        "id": store.new_id("snd"), "item_id": item_id, "source_id": rec.source_id,
+        "id": store.new_id("snd"), "item_id": item_id, "source_id": source_id,
         "draft_id": None, "origin": f"auto:{rec.producer}",
         "target": json.dumps({"label": rec.to_label or rec.title or rec.url, "recipients": [],
                               "public": False, "flags": []}, ensure_ascii=False),
@@ -196,7 +206,7 @@ async def submit_sent(rec: SentRecord) -> dict:
         "external_msg_id": rec.external_msg_id, "url": rec.url, "error": "",
         "created_at": stamp, "sent_at": store.ts(sent_at), "updated_at": stamp}
     if not await db.inbox_insert_send(send_row):
-        existing = await db.inbox_send_by_msg(rec.source_id, rec.external_msg_id)
+        existing = await db.inbox_send_by_msg(source_id, rec.external_msg_id)
         if existing is None:
             raise SubmitRefused("the record could not be stored")
         return {"item_id": existing["item_id"], "send_id": existing["id"], "created": False}
@@ -208,7 +218,8 @@ async def submit_sent(rec: SentRecord) -> dict:
 USAGE = """usage: python-backend inbox submit [--sent] --json <file | ->
 
 The JSON object (UTF-8):
-  source_id     the Inbox source the thread belongs to (GET /api/inbox/sources)
+  source_id     the Inbox source the thread belongs to (GET /api/inbox/sources); empty or
+                absent: the one conversation source of the thread's kind
   thread_ref    {"source_kind": ..., "data": {...}}: the source's own address of the thread
   producer      who submits: letters, digits, '.', '_' or '-' (shown in the Inbox)
 plain submit (a proposed reply, sent only on the person's click):
