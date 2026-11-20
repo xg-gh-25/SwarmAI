@@ -161,6 +161,12 @@ _STATIC: "tuple[Op, ...]" = (
         _P, "off_machine"),
     _op("hive.brain.sync", "POST", f"{_HV}/instances/{{instance_id}}/brains/{{brain}}/sync", _P,
         "off_machine"),
+    # the elastic Hive (hive/agentcore_provisioner; design 2026-11-20-swarm-out-multi-carrier
+    # §6.8): the same callers as a Hive's list, create, update and delete
+    _op("hive.elastic.status", "GET", f"{_HV}/elastic", _P, "read"),
+    _op("hive.elastic.enable", "POST", f"{_HV}/elastic", _P, "off_machine"),
+    _op("hive.elastic.update", "POST", f"{_HV}/elastic/{{location_id}}/update", _PO, "change"),
+    _op("hive.elastic.disable", "DELETE", f"{_HV}/elastic/{{location_id}}", _P, "irreversible"),
     # ── the SwarmAI AWS account (routers/aws_account.py; design
     # 2026-10-31-swarmai-aws-account §7.7): reads for the person and the agent; signing
     # in, connecting, keys and creating Hives for the person only; the credentials route
@@ -197,6 +203,8 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.serve.work_release", "POST", f"{_HV}/work/{{work_id}}/release", (HOST,), "irreversible"),
     _op("hive.serve.bundle", "GET", f"{_HV}/bundles/{{session_id}}/{{key}}", (HOST,), "read"),
     _op("hive.serve.usage", "GET", f"{_HV}/usage", (HOST,), "read"),
+    # an AgentCore Hive's own busy answer (core/hive_agentcore.busy; 404 on any other)
+    _op("hive.serve.busy", "GET", f"{_HV}/busy", (HOST,), "read"),
     _op("hive.serve.records", "GET", f"{_HV}/records/{{session_id}}", (HOST,), "read"),
     _op("hive.serve.record", "GET", f"{_HV}/records/{{session_id}}/{{seq}}", (HOST,), "read"),
     _op("hive.serve.lessons", "GET", f"{_HV}/lessons/{{session_id}}", (HOST,), "read"),

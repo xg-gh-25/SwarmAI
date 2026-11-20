@@ -1,0 +1,812 @@
+"""The elastic Hive: the account's AgentCore Runtime (design
+docs/design/2026-11-20-swarm-out-multi-carrier.md §6.8, requirements R6.1-R6.3).
+
+One runtime per account. Turning it on (``ElasticHive.enable``) makes, in the account and
+region the Host manages:
+
+- the S3 bridge bucket, public access blocked (the one ``hive/provisioner`` uses, by
+  ``hive/bucket_name``'s rule; reused when it exists);
+- the execution role ``SwarmAI-ElasticHive-<region>``: trusted only by
+  ``bedrock-agentcore.amazonaws.com`` for this account's runtimes in this region
+  (``aws:SourceAccount`` and ``aws:SourceArn`` conditions), its policy
+  ``core.carriers.agentcore.execution_role_policy`` (reused and refreshed when it exists);
+- the runtime ``swarmai_elastic_hive`` (``runtime_spec``: platform V2, network PUBLIC,
+  protocol HTTP, ports 8080 and 8081, idle timeout 900 s, lifetime 28800 s, and
+  ``resourceConfigurations`` ``minimumMemoryInMiB: 8192``: 2 vCPU / 8 GB baseline, 8 vCPU /
+  32 GB peak, 32 GB disk), its image the configured repository at this Host's version
+  (``image_location``). A runtime of that name already in the account that SwarmAI made
+  (tagged ``swarmai:managed``: an elastic Hive whose row was lost) is updated to the same
+  spec instead of created twice; one SwarmAI did not make is refused, as is a role of the
+  role's name that SwarmAI did not make for this or that carries other policies.
+
+The ``hive_instances`` row (``carrier='agentcore'``, ``runtime_arn``, name ``elastic``) is
+what ``core.carriers.agentcore`` offers from. It is written before the AWS steps, so a
+runtime created by an enable that later failed is still known and ``disable`` deletes it;
+the carrier offers a row only once it has a runtime ARN and is not changing, and asks AWS
+whether that runtime is READY at this Host's version every time. A transient status left by
+a SwarmAI that quit is settled from the runtime's live state (``ElasticHive.status``). The row never takes an EC2 status (``running``,
+``stopped``, ``updating``, ``deleting``, ``error``): EC2 offers, idle stop, stale-update release
+and the EC2 routes act on those, so the elastic row keeps its own (``STATUSES``). It does not
+count toward MAX_HIVES (``hive.accounts.COUNTED_SQL``).
+
+``update(version)`` sends the whole ``runtime_spec`` again, ``resourceConfigurations``
+included: an UpdateAgentRuntime without it falls back to the default size (2 vCPU, 8 GB,
+10 GB disk) without an error. ``disable`` deletes the runtime and the row; the bucket stays
+(it holds the runs' results and the EC2 Hives' packages) and so does the role (reused by the
+next enable).
+
+**Where the image comes from** (``image_location``): the config key ``hive_agentcore_image``,
+a repository without a tag. The release publishes the image to public ECR
+(``.github/workflows/release.yml`` ``agentcore-image``: ``<repo>:<version>``), and
+CreateAgentRuntime's ``containerUri`` accepts ``public.ecr.aws/...`` as well as
+``<account>.dkr.ecr.<region>.amazonaws.com/...`` (the ``RuntimeContainerUri`` pattern of the
+API model, botocore 1.44): a public image is used as it is, and the role gets no ECR
+permission; a private one must be this account's, in this region, and the role may pull
+exactly that repository. Anything else is refused before anything is created.
+
+Every boto3 call runs off the event loop (``asyncio.to_thread``); ARNs are built with
+string formatting only.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+import aiosqlite
+
+from core.carriers import agentcore as ac
+from core.carriers.base import AGENTCORE
+
+logger = logging.getLogger(__name__)
+
+#: the config key naming the elastic Hive image repository (no tag)
+IMAGE_SETTING = "hive_agentcore_image"
+#: the runtime's name in the account (AgentRuntimeName: [a-zA-Z][a-zA-Z0-9_]{0,47})
+RUNTIME_NAME = "swarmai_elastic_hive"
+#: the hive_instances name of the elastic Hive (how a person or agent names it); another
+#: account's (legacy mode, several accounts) is ``elastic-<account id>``
+ELASTIC_NAME = "elastic"
+ROLE_PREFIX = "SwarmAI-ElasticHive-"
+ROLE_POLICY_NAME = "SwarmAI-ElasticHive"
+PLATFORM_VERSION = "V2"
+NETWORK_MODE = "PUBLIC"
+SERVER_PROTOCOL = "HTTP"
+PORTS = (8080, ac.BACKEND_PORT)
+IDLE_TIMEOUT_S = 900
+MAX_LIFETIME_S = ac.MAX_RUN_S
+#: the product size (design Q3): 2 vCPU / 8 GB baseline, 8 vCPU / 32 GB peak, 32 GB disk
+MEMORY_MIB = 8192
+SIZE = {"vcpu_base": 2, "memory_gib_base": 8, "vcpu_peak": 8, "memory_gib_peak": 32, "disk_gib": 32}
+#: what CreateAgentRuntime / UpdateAgentRuntime must know for the size to hold
+SDK_FIELDS = ("platformVersion", "allowedPorts", "resourceConfigurations")
+
+ENABLING, READY, UPGRADING, DISABLING, FAILED = "enabling", "ready", "upgrading", "disabling", "failed"
+STATUSES = (ENABLING, READY, UPGRADING, DISABLING, FAILED)
+TRANSIENT = (ENABLING, UPGRADING, DISABLING)   # the carrier skips these (ac.CHANGING_ROW_STATUSES)
+
+#: the spike measured about 6 minutes to READY after a create, 3.5 after an update
+CREATE_WAIT_S = 20 * 60
+UPDATE_WAIT_S = 15 * 60
+DELETE_WAIT_S = 10 * 60
+POLL_S = 10.0
+#: a role just created is not yet assumable everywhere (IAM is eventually consistent)
+ROLE_RETRIES = 6
+ROLE_RETRY_S = 10.0
+LIST_PAGES_MAX = 20
+
+PUBLIC_REGISTRY = "public.ecr.aws"
+_PRIVATE_RE = re.compile(r"^(\d{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com(\.cn)?/(.+)$")
+_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*$")
+
+#: elastic rows a task in this process is working on (a transient status nobody holds is
+#: settled from the runtime's live state by ``status``)
+_WORKING: set[str] = set()
+
+
+class ElasticRefused(Exception):
+    """The elastic Hive cannot be turned on, updated or off now; nothing was changed."""
+
+
+def _sleep(seconds: float):
+    return asyncio.sleep(seconds)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _partition(region: str) -> str:
+    return "aws-cn" if region.startswith("cn-") else "aws-us-gov" if region.startswith("us-gov-") else "aws"
+
+
+def _host_version() -> str:
+    from config import settings
+    return str(settings.app_version).removeprefix("v")
+
+
+def configured_image() -> Optional[str]:
+    """The ``hive_agentcore_image`` setting, or None when it is not set."""
+    try:
+        from core.app_config_manager import AppConfigManager
+        value = AppConfigManager.instance().get(IMAGE_SETTING, None)
+    except Exception as exc:  # noqa: BLE001 — an unreadable config: no image
+        logger.warning("elastic hive: reading %s failed (%s)", IMAGE_SETTING, type(exc).__name__)
+        return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+NO_IMAGE = (f"No elastic Hive image is configured. Set {IMAGE_SETTING} in SwarmAI's config.json to "
+            "the image repository the release publishes, without a tag (for example "
+            "public.ecr.aws/<alias>/swarmai-hive); SwarmAI adds this version's tag.")
+
+
+def image_location(configured: Optional[str], account: str, region: str, version: str) -> tuple[str, Optional[str]]:
+    """The one place that decides the runtime's image: ``(containerUri, repository pulled)``.
+
+    ``configured`` is a repository without a tag. A public ECR repository
+    (``public.ecr.aws/<alias>/<name>``) is used as it is and pulls without credentials: the
+    repository is None, and the execution role gets no ECR permission. A private one must
+    be this account's, in this region: the repository is its path, the only one the role may
+    pull. The tag is *version*, as the release pushes it. Raises ElasticRefused otherwise."""
+    if not configured:
+        raise ElasticRefused(NO_IMAGE)
+    if not isinstance(version, str) or len(version) > 32 or not _VERSION_RE.fullmatch(version):
+        raise ElasticRefused(f"Not a release version: {str(version)[:40]!r}.")
+    ref = configured.strip().rstrip("/")
+    if "://" in ref or "@" in ref or ":" in ref.rsplit("/", 1)[-1]:
+        raise ElasticRefused(f"{IMAGE_SETTING} must name a repository without a scheme, tag or digest "
+                             f"(it is {ref[:120]!r}); SwarmAI adds this version's tag.")
+    host, _, path = ref.partition("/")
+    if host == PUBLIC_REGISTRY:
+        if "/" not in path or not ac.IMAGE_REPO_RE.fullmatch(path):
+            raise ElasticRefused(f"{ref[:120]!r} is not a public ECR repository (public.ecr.aws/<alias>/<name>).")
+        return f"{ref}:{version}", None
+    m = _PRIVATE_RE.fullmatch(ref)
+    if m is None or not ac.IMAGE_REPO_RE.fullmatch(m.group(4)):
+        raise ElasticRefused(f"The elastic Hive image must be on public ECR or in this account's ECR "
+                             f"({ref[:120]!r} is neither).")
+    if m.group(1) != account or m.group(2) != region:
+        raise ElasticRefused(f"The image repository is in account {m.group(1)}, region {m.group(2)}: the "
+                             f"elastic Hive pulls only from public ECR or from account {account} in {region}.")
+    return f"{ref}:{version}", m.group(4)
+
+
+_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+#: what the registry may answer for a tag: a multi-platform index or one manifest
+_MANIFEST_TYPES = ", ".join((
+    "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"))
+DIGEST_TIMEOUT_S = 20.0
+
+
+def _public_manifest_digest(path: str, tag: str) -> Optional[str]:
+    """The digest public ECR serves for ``public.ecr.aws/<path>:<tag>`` (the registry's
+    anonymous pull token, then the manifest's ``Docker-Content-Digest``), or None. Only
+    ever asks PUBLIC_REGISTRY; *path* and *tag* are checked by the caller."""
+    import httpx
+    base = f"https://{PUBLIC_REGISTRY}"
+    with httpx.Client(timeout=DIGEST_TIMEOUT_S, follow_redirects=False) as c:
+        t = c.get(f"{base}/token/", params={"scope": f"repository:{path}:pull"})
+        token = t.json().get("token") if t.status_code == 200 else None
+        if not isinstance(token, str) or not token:
+            return None
+        r = c.head(f"{base}/v2/{path}/manifests/{tag}",
+                   headers={"Authorization": f"Bearer {token}", "Accept": _MANIFEST_TYPES})
+    d = r.headers.get("docker-content-digest") if r.status_code == 200 else None
+    return d if isinstance(d, str) and _DIGEST_RE.fullmatch(d) else None
+
+
+def pinned_uri(uri: str, repo: Optional[str], session: Any, region: str) -> str:
+    """*uri* (``<repository>:<version>``, from ``image_location``) with the digest the
+    registry serves for it now: the runtime is made or updated on that content, so a tag
+    pushed again later never changes what an elastic Hive runs. Raises ElasticRefused when
+    the registry does not name one (no such tag, or it did not answer)."""
+    ref, _, tag = uri.rpartition(":")
+    try:
+        if repo is None:                                  # public ECR
+            digest = _public_manifest_digest(ref.partition("/")[2], tag)
+        else:                                             # this account's ECR
+            ecr = session.client("ecr", region_name=region)
+            got = ecr.describe_images(repositoryName=repo, imageIds=[{"imageTag": tag}])
+            details = got.get("imageDetails") or []
+            digest = details[0].get("imageDigest") if details else None
+    except Exception as exc:  # noqa: BLE001 — named in the refusal
+        raise ElasticRefused(f"The image {uri} could not be looked up ({type(exc).__name__}); nothing was "
+                             "changed.") from None
+    if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
+        raise ElasticRefused(f"The image {uri} was not found in its registry; nothing was changed.")
+    return f"{uri}@{digest}"
+
+
+def runtime_spec(container_uri: str, role_arn: str) -> dict[str, Any]:
+    """Everything CreateAgentRuntime and UpdateAgentRuntime send, the same every time (an
+    update without ``resourceConfigurations`` silently falls back to the default size)."""
+    return {
+        "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": container_uri}},
+        "roleArn": role_arn,
+        "networkConfiguration": {"networkMode": NETWORK_MODE},
+        "protocolConfiguration": {"serverProtocol": SERVER_PROTOCOL},
+        "lifecycleConfiguration": {"idleRuntimeSessionTimeout": IDLE_TIMEOUT_S, "maxLifetime": MAX_LIFETIME_S},
+        "platformVersion": PLATFORM_VERSION,
+        "allowedPorts": [{"port": p} for p in PORTS],
+        "resourceConfigurations": [{"minimumMemoryInMiB": MEMORY_MIB}],
+    }
+
+
+def trust_policy(account: str, region: str) -> dict[str, Any]:
+    """Only AgentCore, for this account's elastic Hive runtime in this region (runtime ids
+    start with their name), may assume the role."""
+    return {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Sid": "AgentCoreRuntime", "Effect": "Allow",
+            "Principal": {"Service": "bedrock-agentcore.amazonaws.com"},
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {"aws:SourceAccount": account},
+                "ArnLike": {"aws:SourceArn":
+                            f"arn:{_partition(region)}:bedrock-agentcore:{region}:{account}:runtime/{RUNTIME_NAME}-*"},
+            },
+        }],
+    }
+
+
+def role_name(region: str) -> str:
+    return f"{ROLE_PREFIX}{region}"
+
+
+def sdk_missing() -> list[str]:
+    """What this machine's AWS SDK does not know of the runtime spec (empty: all of it).
+    A field the SDK does not know is refused by it, or with validation off, left out of
+    the request, and the runtime then gets the default size."""
+    try:
+        import botocore.session
+        model = botocore.session.get_session().get_service_model(ac.CONTROL_SERVICE)
+    except Exception:  # noqa: BLE001 — no AgentCore in this SDK at all
+        return list(SDK_FIELDS)
+    missing: list[str] = []
+    for op in ("CreateAgentRuntime", "UpdateAgentRuntime"):
+        members = model.operation_model(op).input_shape.members
+        missing += [f for f in SDK_FIELDS if f not in members and f not in missing]
+    return missing
+
+
+def _check_sdk() -> None:
+    missing = sdk_missing()
+    if missing:
+        import botocore
+        raise ElasticRefused(f"This SwarmAI's AWS SDK (botocore {botocore.__version__}) does not know the "
+                             f"elastic Hive's {', '.join(missing)}; without them the runtime would get the "
+                             "default size. Update SwarmAI.")
+
+
+# ── the blocking AWS steps (run in a thread) ─────────────────────────────────────
+
+def _account_of(session) -> str:
+    from botocore.config import Config
+    sts = session.client("sts", config=Config(connect_timeout=10, read_timeout=15, retries={"max_attempts": 2}))
+    account = str(sts.get_caller_identity()["Account"])
+    if not ac.ACCOUNT_RE.fullmatch(account):
+        raise RuntimeError("STS answered no account id")
+    return account
+
+
+ROLE_TAG = "swarmai:elastic-hive"
+
+
+def _check_adopted_role(iam, name: str, region: str) -> None:
+    """A role of the elastic Hive's name that already exists is adopted only when SwarmAI
+    made it for this (its two tags) and nothing but the elastic Hive's own policy is on
+    it: a role someone else made, or one with more permissions attached, would give the
+    runtime those permissions (or have its trust rewritten). Raises ElasticRefused."""
+    from hive.provisioner import MANAGED_TAG
+    role = iam.get_role(RoleName=name).get("Role") or {}
+    tags = {t.get("Key"): t.get("Value") for t in role.get("Tags") or []}
+    if tags.get(MANAGED_TAG["Key"]) != MANAGED_TAG["Value"] or tags.get(ROLE_TAG) != region:
+        raise ElasticRefused(f"An IAM role named {name} exists that SwarmAI did not make for the elastic "
+                             "Hive: delete or rename it, then turn the elastic Hive on again.")
+    attached = iam.list_attached_role_policies(RoleName=name).get("AttachedPolicies") or []
+    inline = [p for p in iam.list_role_policies(RoleName=name).get("PolicyNames") or [] if p != ROLE_POLICY_NAME]
+    if attached or inline:
+        extra = [str(p.get("PolicyName")) for p in attached] + inline
+        raise ElasticRefused(f"The IAM role {name} has other policies on it ({', '.join(extra)[:200]}): remove "
+                             "them, then try again. The elastic Hive's role carries only its own policy.")
+
+
+def _ensure_role(session, account: str, region: str, bucket: str, repo: Optional[str]) -> tuple[str, bool]:
+    """The execution role (created, or adopted, its trust and policy refreshed):
+    ``(arn, created)``."""
+    from hive.provisioner import MANAGED_TAG, _boundary_arn
+    iam = session.client("iam")
+    name = role_name(region)
+    trust = json.dumps(trust_policy(account, region))
+    created = False
+    boundary = _boundary_arn(session, iam)
+    try:
+        kwargs: dict[str, Any] = {"PermissionsBoundary": boundary} if boundary else {}
+        iam.create_role(RoleName=name, AssumeRolePolicyDocument=trust,
+                        Description=f"SwarmAI elastic Hive (AgentCore Runtime) in {region}",
+                        Tags=[MANAGED_TAG, {"Key": ROLE_TAG, "Value": region}], **kwargs)
+        created = True
+    except Exception as exc:  # noqa: BLE001 — classified
+        if ac._error_code(exc) != "EntityAlreadyExists":
+            raise
+        _check_adopted_role(iam, name, region)
+        if boundary:  # the account's boundary, on an adopted role as on a new one
+            iam.put_role_permissions_boundary(RoleName=name, PermissionsBoundary=boundary)
+        iam.update_assume_role_policy(RoleName=name, PolicyDocument=trust)
+    iam.put_role_policy(RoleName=name, PolicyName=ROLE_POLICY_NAME,
+                        PolicyDocument=json.dumps(ac.execution_role_policy(account, region, bucket, repo)))
+    return f"arn:{_partition(region)}:iam::{account}:role/{name}", created
+
+
+def _control(session, region: str):
+    return session.client(ac.CONTROL_SERVICE, region_name=region, config=ac._boto_config(60))
+
+
+#: the runtime's tags: SwarmAI made it, and which elastic row turned it on last
+MANAGED_RUNTIME_TAG = ("swarmai:managed", "true")
+ROW_TAG = "swarmai:elastic-row"
+
+
+def _runtime_arn(account: str, region: str, runtime_id: str) -> str:
+    return f"arn:{_partition(region)}:bedrock-agentcore:{region}:{account}:runtime/{runtime_id}"
+
+
+def _find_runtime(ctl, account: str, region: str) -> Optional[dict]:
+    """The account's runtime named RUNTIME_NAME in this region with its tags
+    (``{"agentRuntimeId", "tags"}``), or None."""
+    kw: dict[str, Any] = {}
+    for _ in range(LIST_PAGES_MAX):
+        page = ctl.list_agent_runtimes(**kw)
+        for rt in page.get("agentRuntimes") or []:
+            if rt.get("agentRuntimeName") == RUNTIME_NAME and rt.get("agentRuntimeId"):
+                rid = str(rt["agentRuntimeId"])
+                tags = ctl.list_tags_for_resource(resourceArn=_runtime_arn(account, region, rid)).get("tags") or {}
+                return {"agentRuntimeId": rid, "tags": tags}
+        if not page.get("nextToken"):
+            return None
+        kw["nextToken"] = page["nextToken"]
+    return None
+
+
+def _ours(found: dict) -> bool:
+    return (found.get("tags") or {}).get(MANAGED_RUNTIME_TAG[0]) == MANAGED_RUNTIME_TAG[1]
+
+
+def _checked_arn(arn: Any, account: str, region: str) -> str:
+    parsed = ac.parse_runtime_arn(arn)
+    if parsed is None or parsed["account"] != account or parsed["region"] != region:
+        raise RuntimeError(f"AgentCore answered an unexpected runtime ARN: {str(arn)[:200]!r}")
+    return str(arn)
+
+
+def _role_not_ready(exc: BaseException) -> bool:
+    """A just-created role AgentCore cannot assume yet."""
+    if ac._error_code(exc) not in ("ValidationException", "AccessDeniedException"):
+        return False
+    return "role" in str(exc).lower()
+
+
+def _wait_status(ctl, runtime_id: str, wait_s: float, want: str = "READY") -> dict:
+    """Poll the runtime until it is *want*; raises on a failed state or after *wait_s*."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        rt = ctl.get_agent_runtime(agentRuntimeId=runtime_id)
+        status = rt.get("status")
+        if status == want:
+            return rt
+        if status in ("CREATE_FAILED", "UPDATE_FAILED"):
+            raise RuntimeError(f"AgentCore says {status}: {str(rt.get('failureReason') or 'no reason given')[:300]}")
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"The runtime is still {status} after {int(wait_s // 60)} minutes; "
+                               "its state is shown again on the Hive page.")
+        time.sleep(POLL_S)
+
+
+def _wait_gone(ctl, runtime_id: str, wait_s: float) -> None:
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        try:
+            ctl.get_agent_runtime(agentRuntimeId=runtime_id)
+        except Exception as exc:  # noqa: BLE001 — classified
+            if ac._error_code(exc) in ac.NOT_FOUND_CODES:
+                return
+            raise
+        time.sleep(POLL_S)
+    raise RuntimeError(f"The runtime is still being deleted after {int(wait_s // 60)} minutes.")
+
+
+# ── the elastic Hive ─────────────────────────────────────────────────────────────
+
+class ElasticHive:
+    """Turn the account's elastic Hive on, update its image, turn it off, read its state."""
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+
+    async def _conn(self):
+        conn = await aiosqlite.connect(str(self.db_path))
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA busy_timeout = 3000")
+        await conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    async def rows(self, account_ref: Optional[str] = None) -> list[dict]:
+        conn = await self._conn()
+        try:
+            sql = "SELECT * FROM hive_instances WHERE carrier = ?" + (" AND account_ref = ?" if account_ref else "")
+            cur = await conn.execute(sql + " ORDER BY created_at", (AGENTCORE, account_ref) if account_ref else (AGENTCORE,))
+            return [dict(r) for r in await cur.fetchall()]
+        finally:
+            await conn.close()
+
+    async def _row(self, location_id: str) -> dict:
+        conn = await self._conn()
+        try:
+            cur = await conn.execute("SELECT * FROM hive_instances WHERE id = ? AND carrier = ?", (location_id, AGENTCORE))
+            row = await cur.fetchone()
+        finally:
+            await conn.close()
+        if row is None:
+            raise LookupError("no elastic Hive with this id")
+        return dict(row)
+
+    async def _account(self, account_ref: str) -> dict:
+        conn = await self._conn()
+        try:
+            cur = await conn.execute("SELECT * FROM hive_accounts WHERE id = ?", (account_ref,))
+            row = await cur.fetchone()
+        finally:
+            await conn.close()
+        if row is None:
+            raise LookupError("account not found")
+        return dict(row)
+
+    async def _set(self, location_id: str, **fields: Any) -> None:
+        allowed = {"status", "error_message", "runtime_arn", "s3_bucket", "iam_role_name", "version"}
+        if set(fields) - allowed:
+            raise ValueError(f"not an elastic Hive column: {sorted(set(fields) - allowed)}")
+        conn = await self._conn()
+        try:
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            await conn.execute(f"UPDATE hive_instances SET {sets}, updated_at = ? WHERE id = ? AND carrier = ?",
+                               (*fields.values(), _now(), location_id, AGENTCORE))
+            await conn.commit()
+        finally:
+            await conn.close()
+
+    async def _claim(self, location_id: str, to: str, from_: tuple[str, ...]) -> dict:
+        """Move the row to *to* only from one of *from_* (or from a transient status no task
+        here holds: what a quit SwarmAI left); ElasticRefused otherwise."""
+        row = await self._row(location_id)
+        status = row.get("status")
+        if status not in from_ and not (status in TRANSIENT and location_id not in _WORKING):
+            raise ElasticRefused(f"The elastic Hive is {status}: try again when that has finished.")
+        conn = await self._conn()
+        try:
+            cur = await conn.execute("UPDATE hive_instances SET status = ?, error_message = NULL, updated_at = ? "
+                                     "WHERE id = ? AND carrier = ? AND status = ?",
+                                     (to, _now(), location_id, AGENTCORE, status))
+            await conn.commit()
+            if cur.rowcount != 1:
+                raise ElasticRefused("The elastic Hive changed state: refresh and try again.")
+        finally:
+            await conn.close()
+        _WORKING.add(location_id)
+        return {**row, "status": to}
+
+    # ── turn on ──
+
+    async def claim(self, account_ref: str, region: str) -> dict:
+        """Check what turning on needs and write the row (status ``enabling``). Raises
+        ElasticRefused, creating nothing, when there is no usable image, the SDK cannot
+        carry the size, or the account already has one. No AWS call."""
+        if not ac.REGION_RE.fullmatch(region or ""):
+            raise ElasticRefused(f"Not an AWS region: {str(region)[:40]!r}.")
+        acct = await self._account(account_ref)
+        refusal = await self.refusal(acct.get("account_id"), region)
+        if refusal:
+            raise ElasticRefused(refusal)
+        from hive import accounts as hive_accounts
+        now = _now()
+        row = {"id": str(uuid.uuid4()), "name": ELASTIC_NAME, "owner_name": None, "hive_type": "shared",
+               "account_ref": account_ref, "region": region, "instance_type": AGENTCORE, "status": ENABLING,
+               "version": _host_version(), "error_message": None, "created_at": now, "updated_at": now,
+               "carrier": AGENTCORE, "runtime_arn": None}
+        async with hive_accounts.fleet_lock:
+            conn = await self._conn()
+            try:
+                cur = await conn.execute("SELECT name FROM hive_instances WHERE carrier = ? AND account_ref = ?",
+                                         (AGENTCORE, account_ref))
+                if await cur.fetchone():
+                    raise ElasticRefused("This account's elastic Hive is already on.")
+                # the first elastic Hive is "elastic"; another account's is named after it
+                cur = await conn.execute("SELECT 1 FROM hive_instances WHERE name = ?", (ELASTIC_NAME,))
+                if await cur.fetchone():
+                    row["name"] = f"{ELASTIC_NAME}-{acct.get('account_id')}"
+                    cur = await conn.execute("SELECT 1 FROM hive_instances WHERE name = ?", (row["name"],))
+                    if await cur.fetchone():
+                        raise ElasticRefused(f"A Hive is already named {row['name']!r}: rename or delete it first.")
+                cols = ", ".join(row)
+                await conn.execute(f"INSERT INTO hive_instances ({cols}) VALUES ({', '.join('?' for _ in row)})",
+                                   tuple(row.values()))
+                await conn.commit()
+            finally:
+                await conn.close()
+        _WORKING.add(row["id"])
+        return row
+
+    async def provision(self, location_id: str) -> dict:
+        """The AWS steps of turning on (bucket, role, runtime, READY); the row ends
+        ``ready``, or ``failed`` with why. Returns the row."""
+        _WORKING.add(location_id)
+        try:
+            row = await self._row(location_id)
+            acct = await self._account(row["account_ref"])
+            region = row["region"]
+            from hive.accounts import session_for
+            session = await asyncio.to_thread(session_for, acct, region, "manage")
+            account = await asyncio.to_thread(_account_of, session)
+            if acct.get("account_id") and str(acct["account_id"]) != account:
+                raise RuntimeError(f"The credentials reach account {account}, not {acct['account_id']}.")
+            uri, repo = image_location(configured_image(), account, region, row.get("version") or _host_version())
+            uri = await asyncio.to_thread(pinned_uri, uri, repo, session, region)
+            from hive.provisioner import HiveProvisioner
+            bucket = await HiveProvisioner(self.db_path)._ensure_s3_bucket(session, region, account)
+            if not ac.BUCKET_RE.fullmatch(bucket or ""):
+                raise RuntimeError(f"Unexpected bucket name {bucket!r}.")
+            role_arn, created = await asyncio.to_thread(_ensure_role, session, account, region, bucket, repo)
+            await self._set(location_id, s3_bucket=bucket, iam_role_name=role_name(region))
+            spec = runtime_spec(uri, role_arn)
+            ctl = await asyncio.to_thread(_control, session, region)
+            arn, runtime_id = await self._create_or_reuse(ctl, spec, created, account, region, location_id)
+            await self._set(location_id, runtime_arn=arn)
+            await asyncio.to_thread(_wait_status, ctl, runtime_id, CREATE_WAIT_S)
+            await self._set(location_id, status=READY, error_message=None)
+            logger.info("elastic hive: %s is ready (%s)", arn, uri)
+            return await self._row(location_id)
+        except Exception as exc:  # noqa: BLE001 — the row says why
+            logger.warning("elastic hive: turning on failed: %s", exc)
+            await self._set(location_id, status=FAILED, error_message=str(exc)[:300])
+            raise
+        finally:
+            _WORKING.discard(location_id)
+
+    async def _create_or_reuse(self, ctl, spec: dict, role_created: bool, account: str,
+                               region: str, location_id: str) -> tuple[str, str]:
+        """Create the runtime, or update one of the same name SwarmAI made (an elastic Hive
+        whose row was lost); one of that name SwarmAI did not make is refused."""
+        found = await asyncio.to_thread(_find_runtime, ctl, account, region)
+        if found and not _ours(found):
+            raise ElasticRefused(f"An AgentCore runtime named {RUNTIME_NAME} exists in this account and region "
+                                 "that SwarmAI did not make: delete or rename it, then try again.")
+        if found:
+            logger.info("elastic hive: taking over the account's runtime %s", found["agentRuntimeId"])
+            await asyncio.to_thread(lambda: ctl.tag_resource(
+                resourceArn=_runtime_arn(account, region, found["agentRuntimeId"]), tags={ROW_TAG: location_id}))
+        tries = ROLE_RETRIES if role_created else 1
+        for attempt in range(tries):
+            try:
+                if found:
+                    r = await asyncio.to_thread(lambda: ctl.update_agent_runtime(
+                        agentRuntimeId=found["agentRuntimeId"], **spec))
+                else:
+                    r = await asyncio.to_thread(lambda: ctl.create_agent_runtime(
+                        agentRuntimeName=RUNTIME_NAME, description="SwarmAI elastic Hive",
+                        tags={MANAGED_RUNTIME_TAG[0]: MANAGED_RUNTIME_TAG[1], ROW_TAG: location_id}, **spec))
+                return _checked_arn(r.get("agentRuntimeArn"), account, region), str(r["agentRuntimeId"])
+            except Exception as exc:  # noqa: BLE001 — classified
+                if attempt + 1 >= tries or not _role_not_ready(exc):
+                    raise
+                logger.info("elastic hive: the new role is not assumable yet; again in %ss", ROLE_RETRY_S)
+                await _sleep(ROLE_RETRY_S)
+        raise AssertionError("unreachable")
+
+    async def enable(self, account_ref: str, region: str) -> dict:
+        """Turn the account's elastic Hive on and wait until it is READY."""
+        row = await self.claim(account_ref, region)
+        return await self.provision(row["id"])
+
+    # ── update ──
+
+    async def claim_update(self, location_id: str, version: Optional[str] = None) -> tuple[dict, str]:
+        """Check the update can be made (image, SDK) and claim the row (``upgrading``)."""
+        version = (version or _host_version()).removeprefix("v")
+        row = await self._row(location_id)
+        if not row.get("runtime_arn"):
+            raise ElasticRefused("The elastic Hive has no runtime yet: turn it off and on again.")
+        arn = ac.parse_runtime_arn(row["runtime_arn"])
+        if arn is None:
+            raise ElasticRefused("The elastic Hive's runtime ARN is not readable.")
+        image_location(configured_image(), arn["account"], arn["region"], version)
+        await asyncio.to_thread(_check_sdk)
+        return await self._claim(location_id, UPGRADING, (READY, FAILED)), version
+
+    async def run_update(self, location_id: str, version: str) -> dict:
+        """UpdateAgentRuntime with the whole spec (the size every time), then READY."""
+        _WORKING.add(location_id)
+        try:
+            row = await self._row(location_id)
+            arn = ac.parse_runtime_arn(row["runtime_arn"])
+            acct = await self._account(row["account_ref"])
+            from hive.accounts import session_for
+            session = await asyncio.to_thread(session_for, acct, arn["region"], "manage")
+            uri, repo = image_location(configured_image(), arn["account"], arn["region"], version)
+            uri = await asyncio.to_thread(pinned_uri, uri, repo, session, arn["region"])
+            bucket = row.get("s3_bucket") or ""
+            if not ac.BUCKET_RE.fullmatch(bucket):
+                raise RuntimeError("The elastic Hive has no bridge bucket recorded: turn it off and on again.")
+            role_arn, _ = await asyncio.to_thread(_ensure_role, session, arn["account"], arn["region"], bucket, repo)
+            ctl = await asyncio.to_thread(_control, session, arn["region"])
+            spec = runtime_spec(uri, role_arn)
+            await asyncio.to_thread(lambda: ctl.update_agent_runtime(agentRuntimeId=arn["runtime_id"], **spec))
+            await asyncio.to_thread(_wait_status, ctl, arn["runtime_id"], UPDATE_WAIT_S)
+            await self._set(location_id, status=READY, version=version, error_message=None)
+            return await self._row(location_id)
+        except Exception as exc:  # noqa: BLE001 — the row says why
+            logger.warning("elastic hive: update failed: %s", exc)
+            await self._set(location_id, status=FAILED, error_message=f"Update to {version} failed: {exc}"[:300])
+            raise
+        finally:
+            _WORKING.discard(location_id)
+
+    async def update(self, location_id: str, version: Optional[str] = None) -> dict:
+        """Update the runtime's image to *version* (default: this Host's) and wait for READY."""
+        _, version = await self.claim_update(location_id, version)
+        return await self.run_update(location_id, version)
+
+    # ── turn off ──
+
+    async def claim_disable(self, location_id: str) -> dict:
+        return await self._claim(location_id, DISABLING, (READY, FAILED))
+
+    async def run_disable(self, location_id: str) -> None:
+        """Delete the runtime (one found by name when the row has none recorded), then
+        the row. The bucket and the role stay."""
+        _WORKING.add(location_id)
+        try:
+            row = await self._row(location_id)
+            acct = await self._account(row["account_ref"])
+            region = row["region"]
+            from hive.accounts import session_for
+            session = await asyncio.to_thread(session_for, acct, region, "manage")
+            ctl = await asyncio.to_thread(_control, session, region)
+            arn = ac.parse_runtime_arn(row.get("runtime_arn"))
+            runtime_id = arn["runtime_id"] if arn else None
+            if runtime_id is None:
+                # no ARN recorded (the enable stopped between create and record): only the
+                # runtime this row turned on, never another one of the same name
+                account = await asyncio.to_thread(_account_of, session)
+                found = await asyncio.to_thread(_find_runtime, ctl, account, region)
+                runtime_id = found["agentRuntimeId"] if found and _ours(found) \
+                    and found["tags"].get(ROW_TAG) == location_id else None
+            if runtime_id:
+                try:
+                    await asyncio.to_thread(lambda: ctl.delete_agent_runtime(agentRuntimeId=runtime_id))
+                except Exception as exc:  # noqa: BLE001 — classified
+                    if ac._error_code(exc) not in ac.NOT_FOUND_CODES:
+                        raise
+                await asyncio.to_thread(_wait_gone, ctl, runtime_id, DELETE_WAIT_S)
+            conn = await self._conn()
+            try:
+                await conn.execute("DELETE FROM hive_instances WHERE id = ? AND carrier = ?", (location_id, AGENTCORE))
+                await conn.commit()
+            finally:
+                await conn.close()
+            logger.info("elastic hive: turned off (%s)", row.get("runtime_arn") or runtime_id)
+        except Exception as exc:  # noqa: BLE001 — the row says why
+            logger.warning("elastic hive: turning off failed: %s", exc)
+            await self._set(location_id, status=FAILED, error_message=f"Turning off failed: {exc}"[:300])
+            raise
+        finally:
+            _WORKING.discard(location_id)
+
+    async def disable(self, location_id: str) -> None:
+        """Delete the runtime and the row (not the bucket)."""
+        await self.claim_disable(location_id)
+        await self.run_disable(location_id)
+
+    # ── state ──
+
+    async def refusal(self, account: Any, region: Any) -> Optional[str]:
+        """Why the elastic Hive cannot be turned on in *account* / *region*, or None: no
+        image configured, an image this account cannot pull, an SDK that cannot carry the
+        size. No AWS call (the account id is checked against STS before anything is made)."""
+        if not ac.ACCOUNT_RE.fullmatch(str(account or "")):
+            return "The AWS account's id is not known: verify the account first."
+        if not ac.REGION_RE.fullmatch(str(region or "")):
+            return f"Not an AWS region: {str(region)[:40]!r}."
+        try:
+            image_location(configured_image(), str(account), str(region), _host_version())
+            await asyncio.to_thread(_check_sdk)
+        except ElasticRefused as exc:
+            return str(exc)
+        return None
+
+    async def status(self, target: Optional[tuple[Any, Any]] = None) -> dict[str, Any]:
+        """What the Hive page shows: whether it can be turned on in *target* (account id,
+        region) and why not, and each elastic Hive with its runtime's live state. A
+        transient status no task here holds is settled from that live state."""
+        host = _host_version()
+        reason = await self.refusal(*target) if target else (None if configured_image() else NO_IMAGE)
+        out = []
+        for row in await self.rows():
+            live = await self._live(row)
+            if row.get("status") in TRANSIENT and row["id"] not in _WORKING:
+                row = await self._settle(row, live)
+                if row is None:
+                    continue
+            image = live.get("image_version")
+            open_runs = await asyncio.to_thread(ac._active_sessions, row["id"])
+            out.append({"id": row["id"], "name": row["name"], "account_ref": row["account_ref"],
+                        "region": row["region"], "status": row["status"], "error_message": row.get("error_message"),
+                        "runtime_status": live.get("runtime_status"), "image_version": image,
+                        "up_to_date": image is not None and image.removeprefix("v") == host,
+                        "open_runs": open_runs, "working": row["id"] in _WORKING})
+        return {"host_version": host, "can_enable": reason is None, "reason": reason, "size": dict(SIZE),
+                "hives": out}
+
+    async def _settle(self, row: dict, live: dict) -> Optional[dict]:
+        """A transient status no task here holds (SwarmAI quit or the task died), settled
+        from the runtime's live state; None when the row is gone (a turn-off that deleted
+        the runtime). The write applies only if the row is still in the status read, so a
+        claim made meanwhile is never overwritten."""
+        rs, status = live.get("runtime_status"), row["status"]
+        if status == DISABLING and rs == "NOT_FOUND":
+            conn = await self._conn()
+            try:
+                await conn.execute("DELETE FROM hive_instances WHERE id = ? AND carrier = ? AND status = ?",
+                                   (row["id"], AGENTCORE, DISABLING))
+                await conn.commit()
+            finally:
+                await conn.close()
+            return None
+        if rs == "READY" and status != DISABLING:
+            to, why = READY, None
+        elif rs in ("CREATE_FAILED", "UPDATE_FAILED"):
+            to, why = FAILED, live.get("failure_reason")
+        elif rs == "NOT_FOUND":
+            to, why = FAILED, "The runtime is no longer in AWS: turn the elastic Hive off and on again."
+        elif status == ENABLING and not row.get("runtime_arn"):
+            to, why = FAILED, "Turning on was interrupted (SwarmAI stopped): turn it off, then on again."
+        elif status == DISABLING and (rs == "READY" or not row.get("runtime_arn")):
+            to, why = FAILED, "Turning off was interrupted (SwarmAI stopped): turn it off again."
+        else:
+            return row          # still changing in AWS, or not readable now: shown as it is
+        conn = await self._conn()
+        try:
+            await conn.execute("UPDATE hive_instances SET status = ?, error_message = ?, updated_at = ? "
+                               "WHERE id = ? AND carrier = ? AND status = ?",
+                               (to, why, _now(), row["id"], AGENTCORE, status))
+            await conn.commit()
+        finally:
+            await conn.close()
+        return await self._row(row["id"])
+
+    async def _live(self, row: dict) -> dict[str, Any]:
+        arn = ac.parse_runtime_arn(row.get("runtime_arn"))
+        if arn is None:
+            return {}
+        try:
+            acct = await self._account(row["account_ref"])
+            from hive.accounts import session_for
+            session = await asyncio.to_thread(session_for, acct, arn["region"], "read")
+            ctl = await asyncio.to_thread(_control, session, arn["region"])
+            rt = await asyncio.to_thread(lambda: ctl.get_agent_runtime(agentRuntimeId=arn["runtime_id"]))
+        except Exception as exc:  # noqa: BLE001 — shown as not known
+            code = ac._error_code(exc)
+            if code in ac.NOT_FOUND_CODES:
+                return {"runtime_status": "NOT_FOUND"}
+            logger.info("elastic hive: runtime state not read (%s)", code or type(exc).__name__)
+            return {}
+        uri = ((rt.get("agentRuntimeArtifact") or {}).get("containerConfiguration") or {}).get("containerUri")
+        return {"runtime_status": rt.get("status"), "image_version": ac._image_tag(uri),
+                "failure_reason": str(rt.get("failureReason") or "")[:300] or None}

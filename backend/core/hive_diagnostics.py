@@ -191,11 +191,22 @@ async def _target(dispatch_id: str) -> dict[str, Any]:
         raise NotReachable("no_session: the Hive never named this run's session")
     if not SESSION_ID_RE.fullmatch(str(sid)):
         raise ValueError("not a session id this read can use")
-    if not row.get("hive_id"):
+    # the machine of the run's current round, on a carrier whose machine logs can be read
+    # (the EC2 carrier: SSM and the journal; design 2026-11-20-swarm-out-multi-carrier §4.5)
+    from core.carriers import registry
+    from core.carriers.base import DIAGNOSTICS, current_handle
+    handle = current_handle(row)
+    try:
+        car = registry.carrier(handle.carrier)
+    except KeyError:
+        car = None
+    if car is None or DIAGNOSTICS not in getattr(car, "duties", ()):
+        raise NotReachable(f"no_diagnostics: a {handle.carrier} run's machine logs are not read here")
+    if not handle.location_id:
         raise NotReachable("hive_gone: the run's record names no Hive")
     p = HiveProvisioner(db.db_path)
     try:
-        inst = await p._get_instance(row["hive_id"])
+        inst = await p._get_instance(handle.location_id)
     except ValueError:
         raise NotReachable("hive_gone: the Hive is no longer in this Host's store") from None
     if inst.get("status") != "running":

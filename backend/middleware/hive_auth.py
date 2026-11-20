@@ -28,6 +28,11 @@ DESIGN NOTES (each earned — do not "simplify" away)
   (daemon/subprocess) binds 127.0.0.1 (``config.host``) and has no login flow — forcing
   auth there would lock out the single local user. Off-hive, this middleware is a
   pure pass-through.
+* **AgentCore carrier.** In a Hive backend inside an AgentCore microVM
+  (``SWARMAI_CARRIER=agentcore``, core/hive_agentcore) the credential comes in
+  ``X-Swarm-Hive-Auth``, same format, same check: the session endpoint takes
+  ``Authorization`` for its SigV4 signature and strips it before forwarding. There,
+  ``Authorization`` is never read.
 * **Fail-closed.** Missing header, malformed base64, non-Basic scheme, wrong user,
   unset ``hive_pass_hash``, or ANY exception during verification → 401. It never
   fails open to "no auth".
@@ -163,15 +168,24 @@ def _hive_enforcement_active() -> bool:
     return os.environ.get("SWARMAI_MODE", "daemon") == "hive"
 
 
+def _credential_header() -> bytes:
+    """The header the credential comes in: ``X-Swarm-Hive-Auth`` on an AgentCore Hive,
+    else ``Authorization``."""
+    from core import hive_agentcore
+    return hive_agentcore.AUTH_HEADER if hive_agentcore.active() else b"authorization"
+
+
 def _extract_basic_credential(scope: Scope) -> tuple[str, str] | None:
-    """Parse ``Authorization: Basic <base64(user:pass)>`` from the ASGI scope headers.
+    """Parse ``Basic <base64(user:pass)>`` from the credential header
+    (``_credential_header``) of the ASGI scope headers.
 
     Returns ``(user, password)`` or ``None`` if the header is absent/malformed/not-Basic.
     Fail-closed: any parse problem returns None (→ the caller denies)."""
     # scope["headers"] is a list of (name, value) byte-tuples, names lower-cased.
+    header = _credential_header()
     raw = None
     for name, value in scope.get("headers", []):
-        if name == b"authorization":
+        if name == header:
             raw = value
             break
     if raw is None:

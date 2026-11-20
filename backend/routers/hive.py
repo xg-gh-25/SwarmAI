@@ -114,6 +114,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_elastic(row: dict) -> bool:
+    """The elastic Hive's row (``carrier='agentcore'``): its own routes (/elastic) act on it,
+    never the EC2 ones."""
+    from core.carriers.base import AGENTCORE
+    return row.get("carrier") == AGENTCORE
+
+
+ELASTIC_NOT_EC2 = "This is the elastic Hive: turn it off in its own section of the Hive page."
+
+
 # ── Models ──────────────────────────────────────────────────────────
 
 class HiveAccountCreate(BaseModel):
@@ -491,7 +501,8 @@ async def list_instances():
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances ORDER BY created_at DESC")
         rows = [dict(r) for r in await cursor.fetchall()]
-    return [HiveInstanceResponse(**r) for r in rows]
+    # the elastic Hive is not an EC2 Hive: it has its own section (GET /elastic)
+    return [HiveInstanceResponse(**r) for r in rows if not _is_elastic(r)]
 
 
 @router.post("/instances", response_model=HiveInstanceResponse, status_code=201)
@@ -661,7 +672,7 @@ async def restart_instance(instance_id: str):
     if probe["streaming"] > 0:
         raise HTTPException(status_code=409, detail=(
             f"Hive {name} has {probe['streaming']} session(s) streaming: a restart would cut them off"))
-    # a dispatch to it has no open run until its session starts (swarm_out._Dispatching)
+    # a dispatch to it has no open run until its session starts (swarm_out._IN_FLIGHT)
     in_flight = (f"a task is being sent to Hive {name}: a restart would cut it off; "
                  "restart it once the dispatch ends")
     if swarm_out.dispatch_in_flight(instance_id, name):
@@ -729,9 +740,12 @@ async def delete_instance(instance_id: str):
     replaced, never deleted (design §7.3: at least one)."""
     _require_desktop()
     async with _conn() as c:
-        cursor = await c.execute("SELECT id FROM hive_instances WHERE id = ?", (instance_id,))
-        if not await cursor.fetchone():
+        cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
+        found = await cursor.fetchone()
+        if not found:
             raise HTTPException(status_code=404, detail="Instance not found")
+    if _is_elastic(dict(found)):
+        raise HTTPException(status_code=409, detail=ELASTIC_NOT_EC2)
     from hive import fleet
     if hive_accounts.swarmai_account() is not None and await fleet.is_last(db.db_path, instance_id):
         raise HTTPException(status_code=409, detail=(
@@ -758,6 +772,11 @@ async def delete_instance(instance_id: str):
 async def replace_instance(instance_id: str):
     """Build a new Hive like this one; when it runs, this one is deleted."""
     _require_desktop()
+    async with _conn() as c:
+        cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
+        found = await cursor.fetchone()
+    if found and _is_elastic(dict(found)):
+        raise HTTPException(status_code=409, detail=ELASTIC_NOT_EC2)
     from hive import fleet
     try:
         return await fleet.replace(db.db_path, instance_id, start_deploy=start_deploy)
@@ -974,11 +993,135 @@ async def instance_sync_default_brains(instance_id: str) -> dict:
 async def instance_sync_brain(instance_id: str, brain: str) -> dict:
     """Push one Brain to this Hive now."""
     from core import brain_sync_host
-    from core.swarm_out import SwarmOutError, _instance
+    from core.swarm_out import SwarmOutError
     try:
-        inst = await _instance(instance_id)
+        inst = await brain_sync_host.hive_of(instance_id)
         return await brain_sync_host.sync(inst, brain)
     except (SwarmOutError, brain_sync_host.SyncRefused) as exc:
         raise _brain_sync_error(exc) from None
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"the Hive did not answer ({type(exc).__name__})") from None
+
+
+# ── The elastic Hive (design 2026-11-20-swarm-out-multi-carrier §6.8) ─────────────
+#
+# One AgentCore Runtime per account (hive/agentcore_provisioner). Turning it on, updating
+# its image and turning it off are claimed here (the answer says at once whether it can be
+# done) and run in the background; the Hive page reads GET /elastic until the row settles.
+
+_elastic: Optional["ElasticHive"] = None
+
+
+def _get_elastic():
+    from hive.agentcore_provisioner import ElasticHive
+    global _elastic
+    if _elastic is None or _elastic.db_path != db.db_path:
+        _elastic = ElasticHive(db.db_path)
+    return _elastic
+
+
+class ElasticEnable(BaseModel):
+    # with the SwarmAI account connected: omitted or 'swarmai'; otherwise the account to use
+    # (omitted: the only one there is)
+    account_ref: Optional[str] = None
+    region: Optional[str] = None  # omitted: the account's region
+
+
+async def _elastic_target(account_ref: Optional[str], region: Optional[str]) -> tuple[str, Optional[str], str]:
+    """(account row id, its AWS account id, region) the elastic Hive is turned on in,
+    chosen as create_instance chooses an account; HTTPException when there is none."""
+    mode = hive_accounts.swarmai_account()
+    if mode is not None:
+        if account_ref not in (None, hive_accounts.SWARMAI_ROW_ID):
+            raise HTTPException(status_code=409, detail="The elastic Hive is turned on in the SwarmAI account.")
+        await hive_accounts.ensure_swarmai_row(db.db_path)
+        account_ref = hive_accounts.SWARMAI_ROW_ID
+    elif account_ref == hive_accounts.SWARMAI_ROW_ID:
+        raise HTTPException(status_code=409, detail=(
+            "The SwarmAI account is not connected: connect it in Settings > SwarmAI account."))
+    async with _conn() as c:
+        if account_ref is None:
+            cursor = await c.execute("SELECT id FROM hive_accounts WHERE auth_method NOT IN (?, ?, ?)",
+                                     (hive_accounts.MERGED_METHOD, hive_accounts.RECORD_METHOD,
+                                      hive_accounts.SWARMAI_METHOD))
+            ids = [r["id"] for r in await cursor.fetchall()]
+            if not ids:
+                raise HTTPException(status_code=409, detail="Add an AWS account first.")
+            if len(ids) > 1:
+                raise HTTPException(status_code=422, detail="Choose the AWS account for the elastic Hive.")
+            account_ref = ids[0]
+        cursor = await c.execute("SELECT account_id, auth_method, default_region FROM hive_accounts WHERE id = ?",
+                                 (account_ref,))
+        acct = await cursor.fetchone()
+    if not acct or acct["auth_method"] in (hive_accounts.MERGED_METHOD, hive_accounts.RECORD_METHOD):
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account_ref, acct["account_id"], region or (mode or {}).get("region") or acct["default_region"] or "us-east-1"
+
+
+def _elastic_error(exc: Exception) -> HTTPException:
+    from hive.agentcore_provisioner import ElasticRefused
+    if isinstance(exc, ElasticRefused):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail="Elastic Hive not found")
+    raise exc
+
+
+@router.get("/elastic")
+async def elastic_status():
+    """Whether the elastic Hive can be turned on here (and why not), and each one there is
+    with its runtime's live state (hive/agentcore_provisioner.ElasticHive.status)."""
+    elastic = _get_elastic()
+    try:
+        _, account_id, region = await _elastic_target(None, None)
+    except HTTPException as exc:
+        out = await elastic.status()
+        if not out["hives"]:
+            out.update(can_enable=False, reason=str(exc.detail))
+        return out
+    return await elastic.status((account_id, region))
+
+
+@router.post("/elastic", status_code=202)
+async def elastic_enable(body: Optional[ElasticEnable] = None):
+    """Turn the elastic Hive on: refused (409) with the reason when there is no usable
+    image or it is already on, before anything is created; otherwise the row is written
+    ('enabling') and the bucket, role and runtime are made in the background."""
+    _require_desktop()
+    body = body or ElasticEnable()
+    account_ref, _, region = await _elastic_target(body.account_ref, body.region)
+    elastic = _get_elastic()
+    try:
+        row = await elastic.claim(account_ref, region)
+    except Exception as exc:  # noqa: BLE001 — mapped, or raised again
+        raise _elastic_error(exc) from None
+    _keep(asyncio.create_task(elastic.provision(row["id"]), name=f"hive-elastic-on-{row['id'][:8]}"))
+    return {"id": row["id"], "status": row["status"]}
+
+
+@router.post("/elastic/{location_id}/update", status_code=202)
+async def elastic_update(location_id: str, body: Optional[HiveInstanceUpdate] = None):
+    """Update the elastic Hive's image to a release (default: this SwarmAI's version),
+    with its size every time; runs in the background, the row ends 'ready' or 'failed'."""
+    _require_desktop()
+    elastic = _get_elastic()
+    try:
+        _, version = await elastic.claim_update(location_id, body.version if body else None)
+    except Exception as exc:  # noqa: BLE001 — mapped, or raised again
+        raise _elastic_error(exc) from None
+    _keep(asyncio.create_task(elastic.run_update(location_id, version), name=f"hive-elastic-up-{location_id[:8]}"))
+    return {"id": location_id, "status": "upgrading", "version": version}
+
+
+@router.delete("/elastic/{location_id}", status_code=202)
+async def elastic_disable(location_id: str):
+    """Turn the elastic Hive off: its runtime and its row are deleted in the background
+    (runs on it end); the bucket and the execution role stay."""
+    _require_desktop()
+    elastic = _get_elastic()
+    try:
+        await elastic.claim_disable(location_id)
+    except Exception as exc:  # noqa: BLE001 — mapped, or raised again
+        raise _elastic_error(exc) from None
+    _keep(asyncio.create_task(elastic.run_disable(location_id), name=f"hive-elastic-off-{location_id[:8]}"))
+    return {"id": location_id, "status": "disabling"}

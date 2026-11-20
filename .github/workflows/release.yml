@@ -33,7 +33,23 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      agentcore: ${{ steps.agentcore.outputs.enabled }}
     steps:
+      # A job's `if` cannot read secrets, so whether the elastic Hive image is pushed
+      # (agentcore-image) is decided here: only when both its settings are present.
+      - name: Is the elastic Hive image pushed
+        id: agentcore
+        env:
+          REPO: ${{ vars.AGENTCORE_IMAGE_REPO }}
+          ROLE: ${{ secrets.AGENTCORE_PUSH_ROLE_ARN }}
+        run: |
+          if [ -n "$REPO" ] && [ -n "$ROLE" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "AGENTCORE_IMAGE_REPO or AGENTCORE_PUSH_ROLE_ARN is not set: the elastic Hive image is not pushed"
+          fi
+
       - name: Get version
         id: version
         run: |
@@ -227,6 +243,48 @@ jobs:
             dist/swarmai-hive-*.tar.gz
             dist/swarmai-hive-*.tar.gz.sha256
           if-no-files-found: error
+
+  agentcore-image:
+    # The elastic Hive image (design docs/design/2026-11-20-swarm-out-multi-carrier.md §6.3):
+    # the Hive package just built, plus hive/agentcore/supervisor.py, as a linux/arm64 image
+    # pushed as <version> (no moving tag: a Host pins its digest) to the public ECR repository AGENTCORE_IMAGE_REPO
+    # (e.g. public.ecr.aws/<alias>/swarmai-hive). Skipped when that variable or the
+    # AGENTCORE_PUSH_ROLE_ARN secret is not set; publish does not wait for it, so it never
+    # holds back the release.
+    needs: [prepare, build-hive]
+    if: needs.prepare.outputs.agentcore == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write  # OIDC for the push role
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: hive/agentcore
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: hive-package
+          path: dist
+
+      # Public ECR is served from us-east-1 only.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AGENTCORE_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Build and push the elastic Hive image
+        env:
+          REPO: ${{ vars.AGENTCORE_IMAGE_REPO }}
+        run: bash hive/agentcore/build_image.sh "$VERSION" --push "$REPO"
 
   verify:
     # G1/G2 on a fresh runner: no checkout of the build job, no build tools on the PATH the

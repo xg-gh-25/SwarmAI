@@ -806,16 +806,16 @@ async def release_due(rows: list[dict]) -> None:
 
 
 async def _tell(r: dict) -> None:
+    """Release the run's workspace through its carrier (``Carrier.release`` of the
+    current round; a row written before rounds: the round its Hive and session name)."""
     import asyncio
-    from core import swarm_out
+    from core.carriers import registry
     try:
-        inst = await swarm_out._instance(r["hive_id"])
-        async with swarm_out._client(inst, swarm_out.PROBE_TIMEOUT_S * 4) as c:
-            resp = await c.post(f"/api/hive/work/{r['dispatch_id']}/release")
-        ok = resp.status_code in (200, 404)
-        why = f"http_{resp.status_code}"
+        handle = registry.handle_of(r)
+        await registry.carrier(handle.carrier).release(handle, r["dispatch_id"])
+        ok, why = True, "released"
     except Exception as exc:  # noqa: BLE001 — told again after the backoff
-        ok, why = False, type(exc).__name__
+        ok, why = False, str(exc)[:200] or type(exc).__name__
     if not ok and not (((r.get("settle") or {}).get("settled") or {}).get("tries")):
         logger.info("swarm_out_settle: %s not released yet (%s), trying again later", r.get("dispatch_id"), why)
     await asyncio.to_thread(mark_released, r["dispatch_id"], ok)

@@ -587,4 +587,4 @@ async def test_migration_v19_adds_origin_secret_column(tmp_path):
     async with aiosqlite.connect(str(tmp_path / "m.db")) as conn:
         cols = {r[1] for r in await (await conn.execute("PRAGMA table_info(hive_instances)")).fetchall()}
         assert "origin_secret" in cols
-        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == CURRENT_SCHEMA_VERSION == 19
+        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == CURRENT_SCHEMA_VERSION >= 19

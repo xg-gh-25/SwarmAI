@@ -105,17 +105,25 @@ def test_only_restart_widens_the_agents_hive_rights():
                  "hive.account.create", "hive.account.delete"):
         assert by_name[name].callers == {PERSON}, name
     assert PERSON in by_name["hive.start"].callers
-    # beyond reads, the owner agent's Hive rights are exactly these three
+    # beyond reads, the owner agent's Hive rights are exactly these: restart, start, and
+    # keeping a Hive up to date (an EC2 Hive's update, the elastic Hive's image update)
     hive_agent = {op.name for op in swarm_out_ops.ops()
                   if op.name.startswith("hive.") and OWNER in op.callers and op.weight != "read"}
-    assert hive_agent == {"hive.restart", "hive.start", "hive.update"}, hive_agent
+    assert hive_agent == {"hive.restart", "hive.start", "hive.update", "hive.elastic.update"}, hive_agent
+    by_name = {op.name: op for op in swarm_out_ops.ops()}
+    for name in ("hive.elastic.enable", "hive.elastic.disable"):          # costs money / deletes
+        assert by_name[name].callers == {PERSON}, name
+    # its status read: as the Hive list (GET /api/hive/instances), the person's
+    assert by_name["hive.elastic.status"].callers == by_name["hive.instance.list"].callers == {PERSON}
+    # an AgentCore Hive's busy answer is served by a Hive, called by no agent
+    assert by_name["hive.serve.busy"].callers == by_name["hive.serve.usage"].callers
     d = _user_only_deny("curl -s -X POST http://127.0.0.1:18321/api/hive/instances/i1/restart")
     assert d is not None and "scripts.swarm_out restart-hive --hive" in d["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 _SAMPLE = {"dispatch_id": "so_0123456789ab", "run_id": "run_0123456789ab", "sid": "s-abc123", "hive_id": "hv1",
            "session_id": "s-abc123", "request_id": "req1", "account_id": "acc1",
-           "instance_id": "inst1", "brain": "SwarmAI", "work_id": "w1", "key": "k1",
+           "instance_id": "inst1", "location_id": "loc1", "brain": "SwarmAI", "work_id": "w1", "key": "k1",
            "seq": "3", "client_id": "c1", "task_id": "t1"}
 
 

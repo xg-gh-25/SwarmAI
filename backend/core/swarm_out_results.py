@@ -713,7 +713,17 @@ async def _fetch(row: dict) -> dict:
         rec["fetch_error"] = "no session"
         return rec
     try:
-        inst = await swarm_out._instance(row.get("hive_id") or "")
+        # the run's current round, reached through its carrier (a row written before
+        # rounds: the one its Hive and session name, core/carriers/base.rounds_of)
+        from core.carriers import registry
+        handle = registry.handle_of(row)
+        car = registry.carrier(handle.carrier)
+        if getattr(car, "run_scoped", False):
+            # a round that is a machine of its own (the elastic Hive): its record, checks
+            # and usage are read from where it wrote them (S3), never from the session,
+            # which may have ended (a request to it would boot an empty microVM)
+            return await _keep(await _from_round(row, rec, prev, car, handle))
+        inst = await car.connect(handle)
         # the Hive's check record (scripts/task_checks), for a task sent with checks by
         # id; kept here, because the Hive removes it with the workspace
         await _take_check_records(row, inst, rec)
@@ -736,7 +746,7 @@ async def _fetch(row: dict) -> dict:
         same_checks = rec.get("check_records") == prev.get("check_records")
         headers = {"If-None-Match": rec["etag"]} \
             if rec["etag"] and rec["result"] is not None and current and same_checks else {}
-        async with swarm_out._client(inst) as client:
+        async with registry.client_for(inst) as client:
             r = await client.get(f"/api/chat/sessions/{sid}/messages",
                                  params={"turns": FETCH_TURNS}, headers=headers)
         if r.status_code == 304:
@@ -776,6 +786,36 @@ async def _fetch(row: dict) -> dict:
     return await _keep(rec)
 
 
+async def _from_round(row: dict, rec: dict, prev: dict, car: Any, handle: Any) -> dict:
+    """``_fetch`` for a round read from its carrier's store (``Carrier.outputs``: the
+    record entries and the check record, as ``hive_records.pull`` and the Hive's check
+    route give them). There is no other way to read it: a record that cannot give the
+    result yet leaves the previous one. The round's usage rows are stored here too (the
+    carrier's ``usage``, keyed per dispatch and round: read again, nothing is stored
+    twice). Raises like the HTTP read; ``_fetch`` maps it."""
+    did = rec["dispatch_id"]
+    if not DISPATCH_ID_RE.fullmatch(did):
+        rec["fetch_error"] = "no session"
+        return rec
+    pulled = await asyncio.wait_for(car.outputs(handle, did, row), PULL_TIMEOUT_S)
+    agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
+    if agent.get("checks_by_id") is True and isinstance(pulled.get("check_records"), list):
+        rec["check_records"] = pulled["check_records"]
+    usage = getattr(car, "usage", None)
+    if usage is not None:
+        try:
+            await asyncio.wait_for(usage(handle, did), PULL_TIMEOUT_S)
+        except Exception as e:  # noqa: BLE001 — usage is read again with the next result
+            logger.warning("swarm_out_results: usage of %s not read (%s)", did, type(e).__name__)
+    if not pulled.get("supported"):
+        rec["records"] = None                # nothing written yet (no turn ended)
+        return rec
+    # False: the record does not hold the whole turn yet; the previous result stays and
+    # the next check reads it again
+    await _from_records(row, rec, prev, pulled)
+    return rec
+
+
 #: lines of a check record taken from a Hive (a task has at most a few dozen checks,
 #: each run a few times)
 MAX_CHECK_LINES = 500
@@ -792,17 +832,19 @@ def _records_of(row: dict, rec: dict) -> Optional[list[dict]]:
     return got if isinstance(got, list) else []
 
 
-async def _take_check_records(row: dict, inst: dict, rec: dict) -> None:
+async def _take_check_records(row: dict, inst: Any, rec: dict) -> None:
     """Read the Hive's check record of this task (``GET /api/hive/work/<id>/checks``)
     into ``rec["check_records"]``. A failed read keeps what an earlier check kept: the
-    record is gone from the Hive once the workspace is released."""
+    record is gone from the Hive once the workspace is released. *inst*: the run's
+    connection (its carrier's ``connect``, as ``registry.client_for`` takes it)."""
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
     did = row.get("dispatch_id") or ""
     if agent.get("checks_by_id") is not True or not DISPATCH_ID_RE.fullmatch(did):
         return
     from core import swarm_out
+    from core.carriers import registry
     try:
-        async with swarm_out._client(inst, swarm_out.PROBE_TIMEOUT_S) as client:
+        async with registry.client_for(inst, swarm_out.PROBE_TIMEOUT_S) as client:
             r = await client.get(f"/api/hive/work/{did}/checks")
         body = r.json() if r.status_code == 200 else None
     except Exception as e:  # noqa: BLE001 — Hive slow or unreachable: keep the kept record
@@ -981,7 +1023,10 @@ def check_due(row: dict, hive_status: Optional[str], kept: Optional[dict]) -> bo
     without a new entry. Without records, while it is recent (``RECENT_S`` from sending)."""
     if hive_status != "running" or not row.get("session_id"):
         return False
-    if row.get("state") != "stopped" or row.get("state_reason") not in ("idle", "not_held"):
+    # a round that is a machine of its own ends closed, at its carrier's lifetime or
+    # replaced (core/carriers/agentcore ``state``): its record in S3 is read then too
+    if row.get("state") != "stopped" or row.get("state_reason") not in (
+            "idle", "not_held", "closed", "carrier_expired", "carrier_replaced"):
         return False
     if kept is None:
         return True

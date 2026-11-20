@@ -266,7 +266,18 @@ class SessionExtractionHook:
             from core import hive_records
             await asyncio.to_thread(hive_records.on_session_deleted, context.session_id)
         if not context.deleting:
+            from core import hive_agentcore
             from core.ingestion import s2_jobs
+            if hive_agentcore.active():
+                # an AgentCore Hive asked for the review when the turn ended, with no delay
+                # (hive_agentcore.request_review); here only a turn that ended without one
+                # (background work or a wait at its end, a failed request), again with no
+                # delay: a delayed one would hold the microVM an hour
+                if await asyncio.to_thread(hive_agentcore.review_wanted, context.session_id):
+                    await asyncio.to_thread(
+                        s2_jobs.request, context.session_id, "session_end",
+                        sdk_session_id=getattr(context, "sdk_session_id", None))
+                return
             await asyncio.to_thread(
                 s2_jobs.request, context.session_id, "session_end",
                 sdk_session_id=getattr(context, "sdk_session_id", None),

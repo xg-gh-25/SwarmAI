@@ -138,9 +138,10 @@ async def _running_hives() -> list[dict[str, Any]]:
 
 
 async def _sessions(hive_id: str) -> Optional[dict[str, dict[str, Any]]]:
-    from core import swarm_out
+    from core.carriers import registry
+    from core.carriers.base import EC2
     try:
-        return await swarm_out._session_states(await swarm_out._instance(hive_id))
+        return await registry.carrier(EC2).location(hive_id).sessions()
     except Exception as e:  # noqa: BLE001 — unreachable, not answering: unknown (busy)
         logger.info("hive_idle: session probe of %s failed (%s)", hive_id, type(e).__name__)
         return None
@@ -177,10 +178,14 @@ async def _stop(prov, hive_id: str, name: str) -> None:
 
 async def check_once(now: Optional[float] = None) -> list[str]:
     """One look at every running Hive; stop each one idle for the idle time. Returns
-    the names of the Hives whose stop it started."""
+    the names of the Hives whose stop it started. The idle stop is a duty of the EC2
+    carrier (its Hives are EC2 instances this Host stops); without that carrier nothing
+    is looked at (design 2026-11-20-swarm-out-multi-carrier §4.5)."""
     from core import swarm_out
+    from core.carriers import registry
+    from core.carriers.base import EC2, IDLE_STOP
     idle_s = idle_after_s()
-    if idle_s is None:
+    if idle_s is None or EC2 not in {c.kind for c in registry.with_duty(IDLE_STOP)}:
         return []
     now = time.time() if now is None else now
     hives = await _running_hives()

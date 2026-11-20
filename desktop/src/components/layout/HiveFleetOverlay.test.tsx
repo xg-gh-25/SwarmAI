@@ -38,6 +38,13 @@ vi.mock('../../services/hive', async () => {
   };
 });
 
+// the Elastic Hive section reads its own route (awsAccount/HiveFleet): answered here
+const elasticStatus = vi.fn();
+vi.mock('../../services/awsAccount', async () => {
+  const actual = await vi.importActual<typeof import('../../services/awsAccount')>('../../services/awsAccount');
+  return { ...actual, awsAccountService: { ...actual.awsAccountService, elasticStatus: () => elasticStatus() } };
+});
+
 import { HiveFleetContent } from './HiveFleetOverlay';
 import { resetLatestHiveVersion } from '../settings/hiveComponents';
 import { isNewerVersion } from '../../services/hive';
@@ -80,6 +87,8 @@ beforeEach(() => {
   stopInstance.mockResolvedValue(undefined);
   updateInstance.mockResolvedValue(undefined);
   latestVersion.mockResolvedValue('2.3.0');
+  elasticStatus.mockResolvedValue({ host_version: '2.3.0', can_enable: false, reason: 'No elastic Hive image is configured.',
+    size: { vcpu_base: 2, memory_gib_base: 8, vcpu_peak: 8, memory_gib_peak: 32, disk_gib: 32 }, hives: [] });
   resetLatestHiveVersion();
 });
 
@@ -222,6 +231,13 @@ describe('HiveFleetOverlay', () => {
     // xg-hive is the running 'my' instance → its card offers Stop
     fireEvent.click(screen.getAllByRole('button', { name: /^Stop$/ })[0]);
     await waitFor(() => expect(stopInstance).toHaveBeenCalledWith('i1'));
+  });
+
+  it('the Fleet view shows the Elastic Hive section, with why it cannot be turned on', async () => {
+    renderQ(<HiveFleetContent close={() => {}} />);
+    expect(await screen.findByTestId('elastic-hive')).toBeInTheDocument();
+    expect(await screen.findByTestId('elastic-reason')).toHaveTextContent('No elastic Hive image is configured.');
+    expect(screen.getByTestId('elastic-enable')).toBeDisabled();
   });
 
   it('view toggle carries aria-selected (accessible tabs)', async () => {

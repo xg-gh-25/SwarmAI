@@ -6,7 +6,8 @@ anything is asked of it, then send the task; (2) does a start that ends in error
 that takes longer than the dispatch has, fail naming the step and saying nothing was
 sent, with a start still going left to finish; (3) is a Hive in another status refused
 as before, without a start; (4) with no Hive named and none running, is a stopped one
-started (fewest open runs, then name) and the reason ``started``; (5) does the row of a
+started (placement: one last probed able at its version, fewest open runs, then name) and
+the reason ``started``; (5) does the row of a
 dispatch (sent, or may have been sent) carry each step and its seconds, in order;
 (6) is the dispatch marked in flight while it runs.
 """
@@ -153,13 +154,35 @@ def test_pick_stopped_starts_one_only_when_none_runs():
     assert so.pick_stopped(hives, exclude=frozenset({"a", "b"})) is None
 
 
+def _offered(monkeypatch, rows, probes=None, capable=()):
+    """The Hives placement is offered (core/carriers/ec2 ``offers``): *rows* as the store
+    has them (id, name, status), each running one answering *probes* (by id), each id in
+    *capable* last probed able at its version (a stopped Hive is offered only then, D5)."""
+    from core.carriers import ec2
+    from hive import accounts
+    full = [{"version": "2.5.2", "auth_method": "access_keys", "account_id": None, **r} for r in rows]
+
+    async def hive_rows():
+        return [dict(r) for r in full]
+
+    async def admission(hid):
+        return (probes or {}).get(hid)
+    monkeypatch.setattr(ec2, "_hive_rows", hive_rows)
+    monkeypatch.setattr(ec2, "_read_probes", lambda: {h: {"version": "2.5.2", "capable": True} for h in capable})
+    monkeypatch.setattr(accounts, "swarmai_account", lambda: None)      # legacy rows: the Host's own
+    monkeypatch.setattr(so, "_admission", admission)
+
+
+CAPABLE = {"streaming": 0, "saturated": False, "memory_percent": 10.0, "capable": True}
+
+
 def test_a_spec_dispatch_with_no_hive_named_starts_a_stopped_one(hive, stopped, monkeypatch, ws):
+    # placement (design 2026-11-20-swarm-out-multi-carrier §4.4): with none running, a
+    # stopped Hive last probed able at its version is started (layer 3, ``started``);
+    # one never probed is not offered as able, and the refusal says why (D5)
     from core import brain_sync_host as host
     from core.project_agent import revision
     rev = revision(_brain(ws))
-
-    async def fleet():
-        return {"hives": [{"name": "worker-1", "status": stopped["status"]}], "running": 0}
 
     async def hive_brains(inst):
         return {"supported": True, "brains": {"Lib": {"digest": "0" * 64, "current_digest": "0" * 64}}}
@@ -169,14 +192,20 @@ def test_a_spec_dispatch_with_no_hive_named_starts_a_stopped_one(hive, stopped, 
 
     async def nothing(*a, **kw):
         return None
-    monkeypatch.setattr(so, "fleet", fleet)
     monkeypatch.setattr(host, "hive_brains", hive_brains)
     monkeypatch.setattr(host, "sync", sync)
     monkeypatch.setattr(so, "_require_work_orders", nothing)
     monkeypatch.setattr(so, "_ship_repos", nothing)
+    _offered(monkeypatch, [{"id": INST["id"], "name": "worker-1", "status": "stopped"}])
+    with pytest.raises(so.SwarmOutError, match="worker-1: unknown_version"):
+        asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native",
+                                     returns="commits", seen_revision=rev))
+    assert stopped["starts"] == 0
+    _offered(monkeypatch, [{"id": INST["id"], "name": "worker-1", "status": "stopped"}], capable={INST["id"]})
     out = asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native",
                                        returns="commits", seen_revision=rev))
     assert stopped["starts"] == 1 and out["hive_reason"] == "started"
+    assert out["placement"]["layer"] == 3 and out["placement"]["location"] == "worker-1"
     steps = [t["step"] for t in out["timings"]]
     assert steps[0] == "choosing a Hive" and steps[1] == "starting Hive worker-1"
     from core.swarm_out_card import hive_reason_text
@@ -196,23 +225,14 @@ def test_no_hive_named_skips_a_stopped_hive_another_swarm_run_holds(hive, stoppe
         refs.append(ref)
         return await real(ref)
     monkeypatch.setattr(so, "_row_and_account", row_and_account)
-
-    async def fleet():
-        return {"hives": [{"name": "worker-0", "status": "stopped"},
-                          {"name": "worker-1", "status": stopped["status"]}], "running": 0}
-
-    async def known():
-        return {"hives": [{"id": "h0", "name": "worker-0", "status": "stopped", "region": "us-east-1"},
-                          {"id": INST["id"], "name": "worker-1", "status": "stopped", "region": "us-east-1"}],
-                "running": 0}
+    _offered(monkeypatch, [{"id": "h0", "name": "worker-0", "status": "stopped"},
+                           {"id": INST["id"], "name": "worker-1", "status": "stopped"}], capable={"h0", INST["id"]})
 
     async def hive_brains(inst):
         return {"supported": True, "brains": {"Lib": {"digest": "0" * 64, "current_digest": "0" * 64}}}
 
     async def nothing(*a, **kw):
         return None
-    monkeypatch.setattr(so, "fleet", fleet)
-    monkeypatch.setattr(so, "hives", known)
     monkeypatch.setattr(swarm_run, "held_hives", lambda *a, **kw: held)
     monkeypatch.setattr(host, "hive_brains", hive_brains)
     monkeypatch.setattr(host, "sync", nothing)
@@ -221,13 +241,13 @@ def test_no_hive_named_skips_a_stopped_hive_another_swarm_run_holds(hive, stoppe
     go = so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native",
                           returns="commits", seen_revision=rev)
     if len(held) == 2:
-        # every stopped Hive is held: refused for that, nothing started
-        with pytest.raises(so.SwarmOutError, match="every stopped Hive holds Lib"):
+        # every stopped Hive is held: refused for that (each one named), nothing started
+        with pytest.raises(so.SwarmOutError, match="worker-0: held; worker-1: held"):
             asyncio.run(go)
         assert refs == [] and stopped["starts"] == 0
         return
     out = asyncio.run(go)
-    assert refs[0] == "worker-1" and out["hive_reason"] == "started" and stopped["starts"] == 1
+    assert refs[0] == INST["id"] and out["hive_reason"] == "started" and stopped["starts"] == 1
 
 
 def test_a_running_hive_another_swarm_run_holds_is_skipped_by_name():
@@ -254,7 +274,7 @@ def test_held_names_are_read_from_the_store_and_tolerate_a_failure(monkeypatch):
 
 
 def test_no_hive_named_skips_a_running_hive_another_swarm_run_holds(hive, stopped, monkeypatch, ws):
-    # the fleet's rows carry no id: the held id reaches pick_hive as the Hive's name
+    # the held id leaves its Hive out of placement (by id: offers carry it)
     from core import brain_sync_host as host
     from core import swarm_run
     from core.project_agent import revision
@@ -267,25 +287,15 @@ def test_no_hive_named_skips_a_running_hive_another_swarm_run_holds(hive, stoppe
         refs.append(ref)
         return await real(ref)
     monkeypatch.setattr(so, "_row_and_account", row_and_account)
-    up = {"status": "running", "reachable": True, "saturated": False, "streaming": 0, "capable": True,
-          "memory_percent": 10, "version": "2.5.2", "region": "us-east-1", "instance_type": "m7g.large",
-          "open_runs": 0}
-
-    async def fleet():
-        return {"hives": [{**up, "name": "worker-0"}, {**up, "name": "worker-1"}], "running": 2}
-
-    async def known():
-        return {"hives": [{"id": "h0", "name": "worker-0", "status": "running", "region": "us-east-1"},
-                          {"id": INST["id"], "name": "worker-1", "status": "running", "region": "us-east-1"}],
-                "running": 2}
+    _offered(monkeypatch, [{"id": "h0", "name": "worker-0", "status": "running"},
+                           {"id": INST["id"], "name": "worker-1", "status": "running"}],
+             probes={"h0": CAPABLE, INST["id"]: CAPABLE})
 
     async def hive_brains(inst):
         return {"supported": True, "brains": {"Lib": {"digest": "0" * 64, "current_digest": "0" * 64}}}
 
     async def nothing(*a, **kw):
         return None
-    monkeypatch.setattr(so, "fleet", fleet)
-    monkeypatch.setattr(so, "hives", known)
     monkeypatch.setattr(swarm_run, "held_hives", lambda *a, **kw: {"h0"})
     monkeypatch.setattr(host, "hive_brains", hive_brains)
     monkeypatch.setattr(host, "sync", nothing)
@@ -293,7 +303,8 @@ def test_no_hive_named_skips_a_running_hive_another_swarm_run_holds(hive, stoppe
     monkeypatch.setattr(so, "_ship_repos", nothing)
     out = asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native",
                                        returns="commits", seen_revision=rev))
-    assert refs[0] == "worker-1" and out["hive_reason"] == "only_free" and stopped["starts"] == 0
+    assert refs[0] == INST["id"] and out["hive_reason"] == "only_free" and stopped["starts"] == 0
+    assert ["worker-0", "held"] in out["placement"]["skipped"]
 
 
 # ── (5) timings on the row ──

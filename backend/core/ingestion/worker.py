@@ -941,9 +941,10 @@ class S2JobExecutor:
                 conn.rollback()
             return
         # a job a restart failed for good ends its session too (core/hive_records)
-        from core import hive_records
+        from core import hive_agentcore, hive_records
         for sid in failed:
-            hive_records.on_session_job_end(sid, "failed")
+            with hive_agentcore.hold():
+                hive_records.on_session_job_end(sid, "failed")
 
     def drain(self, conn: sqlite3.Connection) -> int:
         from . import s2_jobs
@@ -954,40 +955,45 @@ class S2JobExecutor:
             job = s2_jobs.claim(conn)
             if job is None:
                 break
-            try:
-                if self._extract is not None:
-                    self._extract(job["session_id"])
-                else:
-                    run_session_job(conn, job)
-            except ReviewPostponed as exc:
-                logger.info("CDF S2 job %s postponed: %s", job["session_id"], exc)
+            # the job's end and its record seal are one step for an AgentCore Hive's busy
+            # check (core/hive_agentcore): between ``finish`` and ``seal_end`` nothing else
+            # says the lessons and ``closed`` are still to come (a counter elsewhere)
+            from core import hive_agentcore
+            with hive_agentcore.hold():
                 try:
-                    s2_jobs.postpone(conn, job["session_id"], s2_jobs.POSTPONE_DELAY)
-                except Exception:  # noqa: BLE001 - recover would spend the attempt; next pass
-                    logger.exception("CDF S2 job %s could not be postponed", job["session_id"])
-                    break
-                continue
-            except Exception as exc:
-                if s2_jobs.model_unreachable(str(exc)):
-                    # the model could not be reached (credentials, DNS): not a failure of
-                    # the review, so no attempt is spent; the lane waits for the outage
-                    logger.info("CDF S2 job %s postponed, the model cannot be reached: %s",
-                                job["session_id"], exc)
-                    self._held_until = time.monotonic() + s2_jobs.POSTPONE_DELAY.total_seconds()
+                    if self._extract is not None:
+                        self._extract(job["session_id"])
+                    else:
+                        run_session_job(conn, job)
+                except ReviewPostponed as exc:
+                    logger.info("CDF S2 job %s postponed: %s", job["session_id"], exc)
                     try:
                         s2_jobs.postpone(conn, job["session_id"], s2_jobs.POSTPONE_DELAY)
                     except Exception:  # noqa: BLE001 - recover would spend the attempt; next pass
                         logger.exception("CDF S2 job %s could not be postponed", job["session_id"])
-                    break
-                # recorded on the job, retried up to MAX_ATTEMPTS
-                logger.warning("CDF S2 job %s failed: %s", job["session_id"], exc, exc_info=True)
-                state = s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])
-            else:
-                state = s2_jobs.finish(conn, job["session_id"])
-            # on a Hive, a job that ended (done, or failed for good) seals the session's
-            # lessons and ``closed`` into its run record (core/hive_records)
-            from core import hive_records
-            hive_records.on_session_job_end(job["session_id"], state)
+                        break
+                    continue
+                except Exception as exc:
+                    if s2_jobs.model_unreachable(str(exc)):
+                        # the model could not be reached (credentials, DNS): not a failure of
+                        # the review, so no attempt is spent; the lane waits for the outage
+                        logger.info("CDF S2 job %s postponed, the model cannot be reached: %s",
+                                    job["session_id"], exc)
+                        self._held_until = time.monotonic() + s2_jobs.POSTPONE_DELAY.total_seconds()
+                        try:
+                            s2_jobs.postpone(conn, job["session_id"], s2_jobs.POSTPONE_DELAY)
+                        except Exception:  # noqa: BLE001 - recover would spend the attempt; next pass
+                            logger.exception("CDF S2 job %s could not be postponed", job["session_id"])
+                        break
+                    # recorded on the job, retried up to MAX_ATTEMPTS
+                    logger.warning("CDF S2 job %s failed: %s", job["session_id"], exc, exc_info=True)
+                    state = s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])
+                else:
+                    state = s2_jobs.finish(conn, job["session_id"])
+                # on a Hive, a job that ended (done, or failed for good) seals the session's
+                # lessons and ``closed`` into its run record (core/hive_records)
+                from core import hive_records
+                hive_records.on_session_job_end(job["session_id"], state)
             done += 1
         return done
 

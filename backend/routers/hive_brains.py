@@ -30,6 +30,10 @@ task (core/hive_workspace).
 ``GET /api/hive/usage?after_id=``: this Hive's usage ledger rows after an id, the
 accounting columns only (core/usage_accounting.rows_after), for the host's ledger.
 
+``GET /api/hive/busy``: only on an AgentCore Hive (core/hive_agentcore; 404 elsewhere):
+``{"busy", "reasons"}``, whether this run still has something to produce or to write
+to S3, for the supervisor's ``/ping``.
+
 ``GET /api/hive/records/{session}`` and ``.../{seq}``: a dispatched session's run
 record (core/hive_records), what the host takes back. Kept for a host that does not read
 records yet: ``GET /api/hive/bundles/{session}/{key}`` (the newest sealed bundle of a
@@ -299,6 +303,16 @@ async def get_usage(after_id: int = 0, limit: int = 1000) -> dict:
     _hive_only()
     from core import usage_accounting
     return await asyncio.to_thread(usage_accounting.rows_after, max(0, after_id), max(1, min(limit, 2000)))
+
+
+@router.get("/busy")
+async def get_busy() -> dict:
+    """``{"busy": bool, "reasons": [...]}`` (core/hive_agentcore.busy). AgentCore Hive only."""
+    _hive_only()
+    from core import hive_agentcore
+    if not hive_agentcore.active():
+        raise HTTPException(status_code=404, detail="Not Found")
+    return await hive_agentcore.busy()
 
 
 @router.get("/records/{session_id}")

@@ -113,9 +113,10 @@ def _clean_remote(row: Any) -> Optional[dict[str, Any]]:
 
 async def hive_brains(inst: dict[str, Any]) -> dict[str, Any]:
     """``{supported, brains: {name: row}}``; supported False when the Hive's version
-    has no Brains endpoint."""
-    from core.swarm_out import _client
-    async with _client(inst) as client:
+    has no Brains endpoint. *inst*: the Hive's record, or a run's connection (its
+    carrier's ``connect``, as ``registry.client_for`` takes it: an elastic round)."""
+    from core.carriers import registry
+    async with registry.client_for(inst) as client:
         r = await client.get("/api/hive/brains")
     if r.status_code == 404:
         return {"supported": False, "brains": {}}
@@ -150,7 +151,10 @@ _push_locks: dict[tuple[str, str], tuple[asyncio.AbstractEventLoop, asyncio.Lock
 
 
 def _push_lock(inst: dict[str, Any], brain: str) -> asyncio.Lock:
-    key = (str(inst.get("id") or inst.get("name") or ""), brain)
+    # per machine: a Hive by its id; an elastic round (a machine of its own) by its run
+    round_of = inst.get("_handle")
+    run = getattr(round_of, "run_ref", None)
+    key = (f"run:{run}" if run else str(inst.get("id") or inst.get("name") or ""), brain)
     loop = asyncio.get_running_loop()
     held = _push_locks.get(key)
     if held is None or held[0] is not loop:       # a lock belongs to one event loop
@@ -173,19 +177,35 @@ async def sync(inst: dict[str, Any], brain: str, workspace: Optional[Path] = Non
         raise SyncRefused(str(exc)) from None
     lock = _push_lock(inst, brain)
     waited = lock.locked()
-    async with lock:
-        if waited:
-            have = (await hive_brains(inst))["brains"].get(brain) or {}
-            if have.get("digest") == digest and have.get("current_digest") == digest:
-                logger.info("brain sync: %s -> %s already at %s", brain, inst.get("name"), digest[:12])
-                return {"brain": brain, "digest": digest, "files": n,
-                        "installed_at": have.get("installed_at")}
-        return await _push(inst, brain, data, digest, n)
+    try:
+        async with lock:
+            if waited:
+                have = (await hive_brains(inst))["brains"].get(brain) or {}
+                if have.get("digest") == digest and have.get("current_digest") == digest:
+                    logger.info("brain sync: %s -> %s already at %s", brain, inst.get("name"), digest[:12])
+                    return {"brain": brain, "digest": digest, "files": n,
+                            "installed_at": have.get("installed_at")}
+            return await _push(inst, brain, data, digest, n)
+    finally:
+        _forget_run_lock(inst, brain, lock)
+
+
+def _forget_run_lock(inst: dict[str, Any], brain: str, lock: asyncio.Lock) -> None:
+    """Drop an elastic round's push lock once nobody holds or waits for it: a round is a
+    machine of its own, so its key is never used again after its pushes (a Hive's key
+    stays: it is the same machine run after run)."""
+    run = getattr(inst.get("_handle"), "run_ref", None)
+    if not run or lock.locked() or getattr(lock, "_waiters", None):
+        return
+    key = (f"run:{run}", brain)
+    held = _push_locks.get(key)
+    if held is not None and held[1] is lock:
+        _push_locks.pop(key, None)
 
 
 async def _push(inst: dict[str, Any], brain: str, data: bytes, digest: str, n: int) -> dict[str, Any]:
-    from core.swarm_out import _client
-    async with _client(inst, SYNC_TIMEOUT_S) as client:
+    from core.carriers import registry
+    async with registry.client_for(inst, SYNC_TIMEOUT_S) as client:
         r = await client.put(f"/api/hive/brains/{brain}", content=data,
                              headers={"X-Brain-Digest": digest, "Content-Type": "application/gzip"})
     if r.status_code != 200:
@@ -227,10 +247,21 @@ def _row(local: dict[str, Any], remote: Optional[dict[str, Any]], supported: boo
             "syncable": supported and (local["brain"] in DEFAULT_BRAINS or local["status"] == "ready")}
 
 
+async def hive_of(hive_ref: str) -> dict[str, Any]:
+    """The record of a Hive that keeps Brains between runs, through its location: Brains
+    are kept per machine on the EC2 carrier (its ``brain_sync`` duty; an elastic run gets
+    its Brain with each dispatch). SwarmOutError when it is not running or not usable."""
+    from core.carriers import registry
+    from core.carriers.base import BRAIN_SYNC, EC2
+    from core.swarm_out import SwarmOutError
+    if EC2 not in {c.kind for c in registry.with_duty(BRAIN_SYNC)}:
+        raise SwarmOutError("no Hive here keeps Brains between runs")
+    return await registry.carrier(EC2).location(hive_ref).hive()
+
+
 async def status(hive_ref: str) -> dict[str, Any]:
     from core.project_registry import get_swarmws
-    from core.swarm_out import _instance
-    inst = await _instance(hive_ref)
+    inst = await hive_of(hive_ref)
     local, remote = await asyncio.gather(asyncio.to_thread(local_brains, get_swarmws()), hive_brains(inst))
     return {"hive": inst["name"], "supported": remote["supported"],
             "brains": [_row(b, remote["brains"].get(b["brain"]), remote["supported"]) for b in local]}
@@ -240,8 +271,7 @@ async def sync_defaults(hive_ref: str) -> dict[str, Any]:
     """Sync the SwarmAI and General Brains to the Hive when they are missing there or
     out of date. Returns ``{synced: [...], skipped: {brain: why}}``."""
     from core.project_registry import get_swarmws
-    from core.swarm_out import _instance
-    inst = await _instance(hive_ref)
+    inst = await hive_of(hive_ref)
     remote = await hive_brains(inst)
     out: dict[str, Any] = {"synced": [], "skipped": {}}
     if not remote["supported"]:

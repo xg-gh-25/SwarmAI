@@ -376,23 +376,32 @@ def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypa
     assert calls["dispatch"] == []
 
 
-def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypatch):
+def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypatch, tmp_path):
     import core.swarm_out as so
+    from core.carriers import ec2
     from core.project_agent import revision
+    from hive import accounts
     rev = revision(_brain(ws))
     calls = _fake_hive(monkeypatch, "0" * 64)
+    monkeypatch.setattr(so, "_state_dir", lambda: tmp_path)
 
-    async def fleet():
-        return {"hives": [{"name": "busy", "status": "running", "reachable": True, "saturated": False,
-                           "streaming": 2, "memory_percent": 10.0, "capable": True},
-                          {"name": "calm", "status": "running", "reachable": True, "saturated": False,
-                           "streaming": 0, "memory_percent": 50.0, "capable": True}]}
-    monkeypatch.setattr(so, "fleet", fleet)
+    # the Hives placement is offered (core/carriers/ec2): two running ones of this Host
+    async def hive_rows():
+        return [{"id": n, "name": n, "status": "running", "version": "2.5.2", "auth_method": "access_keys",
+                 "account_id": None} for n in ("busy", "calm")]
+
+    async def admission(hid):
+        return {"streaming": 2 if hid == "busy" else 0, "saturated": False,
+                "memory_percent": 10.0 if hid == "busy" else 50.0, "capable": True}
+    monkeypatch.setattr(ec2, "_hive_rows", hive_rows)
+    monkeypatch.setattr(so, "_admission", admission)
+    monkeypatch.setattr(accounts, "swarmai_account", lambda: None)
     asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision=rev,
                                  brief="  fix   the\nthing  "))
     d = calls["dispatch"][0]
     assert d["hive"] == "calm"
     assert d["extra"] == {"brief": "fix the thing", "hive_reason": "idle", "brain_sync": "synced",
+                          "placement": {"location": "calm", "layer": 1, "reason": "idle", "tried": [], "skipped": []},
                           "dispatched_from": None,
                           "repo_notes": [{"name": d["extra"]["repo_notes"][0]["name"],
                                           "url": "https://github.com/acme/lib.git", "dirty": 0}]}

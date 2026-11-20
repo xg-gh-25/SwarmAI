@@ -426,8 +426,13 @@ async def swarmai_row_account(db_path: Path) -> Optional[str]:
 
 # ── how many Hives (design §7.3) ───────────────────────────────────────────────
 
-#: a Hive counts while its EC2 instance may exist: everything but a failed create
-COUNTED_SQL = "NOT (status = 'error' AND ec2_instance_id IS NULL) AND status != 'deleted'"
+#: a Hive counts while its EC2 instance may exist: everything but a failed create. The
+#: elastic Hive (``carrier = 'agentcore'``, hive/agentcore_provisioner) is not a machine
+#: the person keeps running and never counts toward MAX_HIVES (design
+#: 2026-11-20-swarm-out-multi-carrier §6.8). ``carrier`` is NOT NULL since migration v21;
+#: COALESCE keeps a row written without it an EC2 Hive.
+COUNTED_SQL = ("COALESCE(carrier, 'ec2') = 'ec2' "
+               "AND NOT (status = 'error' AND ec2_instance_id IS NULL) AND status != 'deleted'")
 
 
 async def counted(conn, *, excluding: Optional[str] = None) -> int:

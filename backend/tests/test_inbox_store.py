@@ -19,7 +19,7 @@ import pytest
 
 from core.inbox import store
 from core.inbox.models import Lane
-from database.sqlite import SQLiteDatabase, close_all_pools
+from database.sqlite import CURRENT_SCHEMA_VERSION, SQLiteDatabase, close_all_pools
 from tests import inbox_fakes as fx
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -47,7 +47,7 @@ async def test_v20_migration_creates_tables_and_is_idempotent(tmp_path):
     path = tmp_path / "data.db"
     await SQLiteDatabase(db_path=str(path)).initialize()
     await close_all_pools()
-    assert _version(path) == 20
+    assert _version(path) == CURRENT_SCHEMA_VERSION
     # back to a v19 database: the Inbox tables are gone
     conn = sqlite3.connect(path)
     for t in fx.INBOX_TABLES:
@@ -60,12 +60,12 @@ async def test_v20_migration_creates_tables_and_is_idempotent(tmp_path):
     names = _tables(path)
     assert set(fx.INBOX_TABLES) <= names
     assert {"ux_inbox_sends_open", "ux_inbox_sends_msg"} <= names
-    assert _version(path) == 20
+    assert _version(path) == CURRENT_SCHEMA_VERSION
     before = sqlite3.connect(path).execute("SELECT sql FROM sqlite_master ORDER BY name").fetchall()
     await SQLiteDatabase(db_path=str(path)).initialize()
     await close_all_pools()
     after = sqlite3.connect(path).execute("SELECT sql FROM sqlite_master ORDER BY name").fetchall()
-    assert before == after and _version(path) == 20
+    assert before == after and _version(path) == CURRENT_SCHEMA_VERSION
 
 
 async def test_one_message_is_one_row():

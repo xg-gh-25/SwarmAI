@@ -165,8 +165,8 @@ async def check(row: dict) -> Optional[dict[str, Any]]:
         return None
     try:
         from core import swarm_out_remote
-        inst = await swarm_out._instance(row.get("hive_id") or "")
-        async with swarm_out._client(inst) as client:
+        from core.carriers import registry
+        async with registry.client_for(registry.handle_of(row)) as client:
             # streamed and capped: a long pipeline turn is never buffered past the cap
             async with client.stream("GET", f"/api/chat/sessions/{sid}/messages", params={"turns": 1}) as r:
                 if r.status_code != 200:

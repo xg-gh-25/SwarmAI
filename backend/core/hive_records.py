@@ -38,6 +38,9 @@ and a session's directory may not be links.
 - ``closed``: right after the lessons of a session job's end or a deletion: what the
   session produced so far is all here. A later turn appends after it.
 
+On an AgentCore Hive (core/hive_agentcore) each append is also written to S3, under
+``bridge/<sid>/records/``, once its file and manifest line are on disk.
+
 Served read-only by ``GET /api/hive/records/{session}`` (with ``last``, the newest seq)
 and ``.../{seq}`` (routers/hive_brains). ``sweep`` removes records untouched for
 ``RETENTION_DAYS``.
@@ -216,6 +219,7 @@ def append(workspace: Path, session_id: str, kind: str, *, data: Optional[bytes]
     """Seal one entry: ``data`` bytes, or the temporary file ``src`` (moved, not copied).
     ``path``: a ``file`` entry's path relative to the workspace; ``listed``: the path its
     turn's ``turn_deliverables`` block lists it under (core/hive_files)."""
+    from core import hive_agentcore
     from core.hive_files import safe_rel
     if kind not in KINDS or (kind == "bundle") != (key is not None):
         raise ValueError("not an entry kind")
@@ -261,7 +265,11 @@ def append(workspace: Path, session_id: str, kind: str, *, data: Optional[bytes]
                  "at": _now(), **({"key": key} if key else {}), **({"path": path} if path else {}),
                  **({"listed": listed} if listed else {})}
         _append_line(d, entry)
-        return entry
+    if hive_agentcore.active():
+        # an AgentCore Hive: the entry goes to S3 now (fsynced and renamed above); a
+        # write that fails stays pending for the bridge's next pass. Never raises.
+        hive_agentcore.note_append(workspace, session_id)
+    return entry
 
 
 def entries(workspace: Path, session_id: str, after: int = 0, limit: int = PAGE) -> dict:
@@ -569,7 +577,13 @@ def _lesson_batches(lessons: list[dict]) -> list[list[dict]]:
 
 def seal_end(workspace: Path, session_id: str, reason: str) -> None:
     """A session job ended or the session was deleted: its lessons, then ``closed``.
-    Never raises."""
+    Never raises. On an AgentCore Hive the whole seal counts as busy (core/hive_agentcore)."""
+    from core import hive_agentcore
+    with hive_agentcore.hold():
+        _seal_end(workspace, session_id, reason)
+
+
+def _seal_end(workspace: Path, session_id: str, reason: str) -> None:
     try:
         seal_lessons(workspace, session_id)
     except Exception as exc:  # noqa: BLE001
@@ -926,18 +940,20 @@ def _prune_bundles(d: Path) -> int:
 _UNSUPPORTED = {"supported": False, "seq": 0, "closed": False, "last_at": None, "error": None}
 
 
-async def pull(row: dict, inst: dict) -> dict:
+async def pull(row: dict, inst: Any) -> dict:
     """Take the run's new entries from its Hive. Returns ``{supported, seq, closed,
     last_at, error}``; ``supported`` False when nothing is kept here and the Hive has no
-    record of the session (an older Hive, no turn ended yet, or no answer)."""
+    record of the session (an older Hive, no turn ended yet, or no answer). *inst*: the
+    run's connection (its carrier's ``connect``, as ``registry.client_for`` takes it)."""
     from core import swarm_out
+    from core.carriers import registry
     did, sid = row.get("dispatch_id") or "", row.get("session_id")
     if not isinstance(sid, str) or not SESSION_RE.fullmatch(sid):
         return dict(_UNSUPPORTED)          # a session a Hive cannot keep a record for
     d = local_dir(did)
     out = {"supported": True, "error": None}
     try:
-        async with swarm_out._client(inst) as client:
+        async with registry.client_for(inst) as client:
             for _ in range(PULL_PAGES):
                 kept = local_entries(did) if d.is_dir() else []
                 cur = kept[-1]["seq"] if kept else 0

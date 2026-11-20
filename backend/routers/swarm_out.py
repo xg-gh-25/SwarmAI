@@ -26,7 +26,7 @@ def _require_desktop() -> None:
 
 
 class DispatchBody(BaseModel):
-    # None: the daemon picks one (swarm_out.pick_hive)
+    # None: the dispatch layer places it (core/carriers/placement)
     hive: Optional[str] = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=swarm_out.MAX_TITLE_CHARS * 2)
     task: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)

@@ -224,7 +224,7 @@ def _from_record(dispatch_id: str, b: dict, dest: Path) -> bool:
 
 
 async def _download(row: dict, b: dict, dest: Path) -> None:
-    from core import hive_bundle, swarm_out
+    from core import hive_bundle
     dest.parent.mkdir(parents=True, exist_ok=True)
     import asyncio
     if await asyncio.to_thread(_from_record, row["dispatch_id"], b, dest):
@@ -232,7 +232,17 @@ async def _download(row: dict, b: dict, dest: Path) -> None:
     if isinstance(b.get("seq"), int):
         raise ReturnError("the run's record here does not hold this bundle yet; refresh the result, "
                           "then take the commits back")
-    inst = await swarm_out._instance(row.get("hive_id") or "")
+    # the run's current round, reached through its carrier (a row written before rounds:
+    # the one its Hive and session name)
+    from core.carriers import registry
+    handle = registry.handle_of(row)
+    car = registry.carrier(handle.carrier)
+    if getattr(car, "run_scoped", False):
+        # a round that is a machine of its own (the elastic Hive) hands its bundles over
+        # in its record only: its session is never asked (it may have ended)
+        raise ReturnError("the run's record here does not hold this bundle yet; refresh the result, "
+                          "then take the commits back")
+    inst = await car.connect(handle)
     tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
     h = hashlib.sha256()
     n = 0
@@ -248,7 +258,7 @@ async def _download(row: dict, b: dict, dest: Path) -> None:
             raise ReturnError(stale)
         h.update(chunk)
     try:
-        async with swarm_out._client(inst, 300) as client:
+        async with registry.client_for(inst, 300) as client:
             async with client.stream("GET", f"/api/hive/bundles/{row['session_id']}/{b['key']}") as r:
                 if r.status_code != 200:
                     raise ReturnError(f"the Hive did not send the bundle (HTTP {r.status_code})")

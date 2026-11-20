@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from core import swarm_out, swarm_out_relay
+from core.carriers import registry
 from core.swarm_out_remote import (
     ID_RE, MAX_BODY_BYTES, LineTooLong, RemoteError, build_body, build_query, clean_event, closed_for,
     filter_headers, iter_sse_lines, match_route, parse_data_line, read_capped, resolve_session,
@@ -71,8 +72,9 @@ def _client_id(body: Any) -> str:
     return cid
 
 
-async def _target(sid: str, write: bool) -> dict[str, Any]:
-    """The running Hive of a session this Host dispatched, unless the run is closed to
+async def _target(sid: str, write: bool) -> Any:
+    """The connection to a session this Host dispatched (its current round, through its
+    carrier's ``connect``: the running Hive's record on EC2), unless the run is closed to
     this request (core/swarm_out_remote.closed_for: discarded runs to every request,
     accepted runs to writes)."""
     try:
@@ -83,7 +85,8 @@ async def _target(sid: str, write: bool) -> dict[str, Any]:
     if closed is not None:
         raise HTTPException(status_code=closed.status, detail=str(closed))
     try:
-        return await swarm_out._instance(row["hive_id"])
+        handle = registry.handle_of(row)
+        return await registry.carrier(handle.carrier).connect(handle)
     except swarm_out.SwarmOutError:
         raise HTTPException(status_code=502, detail="the session's Hive is not reachable")
 
@@ -96,7 +99,7 @@ async def start_relay(sid: str, request: Request) -> dict[str, Any]:
         entry = await swarm_out_relay.manager().acquire(sid, client_id, inst)
     except RemoteError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
-    except httpx.HTTPError:
+    except (httpx.HTTPError, swarm_out.SwarmOutError):     # an elastic round that ended among them
         raise HTTPException(status_code=502, detail="the session's Hive is not reachable")
     return {"session_id": sid, "state": entry}
 
@@ -129,7 +132,7 @@ async def proxy(sid: str, path: str, request: Request):
 
     if not route.stream:
         try:
-            async with swarm_out._client(inst) as client:
+            async with registry.client_for(inst) as client:
                 async with client.stream(request.method, upstream, params=query or None,
                                          json=body if route.body else None) as r:
                     if r.status_code >= 300:
@@ -139,15 +142,19 @@ async def proxy(sid: str, path: str, request: Request):
                     status = r.status_code
         except RemoteError as e:
             return JSONResponse({"detail": str(e)}, status_code=e.status)
-        except httpx.HTTPError:
+        except (httpx.HTTPError, swarm_out.SwarmOutError):  # an elastic round that ended among them
             raise HTTPException(status_code=502, detail="the session's Hive is not reachable")
         return Response(content=content, status_code=status, headers=headers)
 
-    client = swarm_out._client(inst, timeout=httpx.Timeout(swarm_out.HTTP_TIMEOUT_S, read=STREAM_READ_TIMEOUT_S))
+    try:
+        # an elastic round that ended refuses here, before anything is sent
+        client = registry.client_for(inst, httpx.Timeout(swarm_out.HTTP_TIMEOUT_S, read=STREAM_READ_TIMEOUT_S))
+    except swarm_out.SwarmOutError:
+        raise HTTPException(status_code=502, detail="the session's Hive is not reachable")
     try:
         upstream_req = client.build_request(request.method, upstream, json=body)
         r = await client.send(upstream_req, stream=True)
-    except httpx.HTTPError:
+    except (httpx.HTTPError, swarm_out.SwarmOutError):
         await client.aclose()
         raise HTTPException(status_code=502, detail="the session's Hive is not reachable")
     if r.status_code != 200:

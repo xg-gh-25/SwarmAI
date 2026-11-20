@@ -37,12 +37,21 @@ on it: the Hive name is the suffix of the instance-profile role
 ``SwarmAI-Hive-<name>`` (IMDSv2), the bucket is the deploy-time ``.hive-bucket``
 file. The IAM role scopes every key to ``bridge/${aws:PrincipalTag/HiveName}/``.
 
+In a Hive backend inside an AgentCore microVM (``SWARMAI_CARRIER=agentcore``,
+core/hive_agentcore) the Hive name is the runtime session id and the bucket comes from
+the supervisor's environment (``SWARMAI_AC_SID``, ``SWARMAI_AC_BUCKET``); IMDS is never
+read, and the S3 client is made on first use, never before the run started. Each pass
+there also writes what ``hive_agentcore.sync_pass`` holds pending (record entries, the
+state, checks and usage objects). The execution role scopes every key to
+``bridge/${aws:AgentCoreRuntimeSourceSid}/``.
+
 Public symbols:
 - ``run_bridge_loop`` — the background task started in hive mode (``main.py``).
 - ``Bridge`` — ``reconcile`` at start, then one pass (``tick``) at a time; tests drive it
   with a fake store and a fake router.
 - ``resolve_identity`` — (hive_name, bucket, region) from IMDS, or None
-  (``identity_from`` checks the parts).
+  (``identity_from`` checks the parts); ``agentcore_identity`` the same from the
+  AgentCore supervisor's environment.
 """
 from __future__ import annotations
 
@@ -81,10 +90,22 @@ class Store(Protocol):
 
 
 class S3Store:
-    def __init__(self, bucket: str, region: str):
-        from core import aws_account  # on a Hive: its instance role (the default chain)
-        self._s3 = aws_account.boto_session(region).client("s3", region_name=region)
+    """``lazy``: make the client on first use instead of here (the AgentCore Hive)."""
+
+    def __init__(self, bucket: str, region: Optional[str], *, lazy: bool = False):
         self._bucket = bucket
+        self._region = region
+        self._client = None if lazy else self._make()
+
+    def _make(self):
+        from core import aws_account  # on a Hive: its instance role (the default chain)
+        return aws_account.boto_session(self._region).client("s3", region_name=self._region)
+
+    @property
+    def _s3(self):
+        if self._client is None:
+            self._client = self._make()
+        return self._client
 
     def put(self, key: str, body: bytes) -> None:
         self._s3.put_object(Bucket=self._bucket, Key=key, Body=body,
@@ -462,14 +483,35 @@ class Bridge:
                 await asyncio.to_thread(self.store.put, f"{self.prefix}closed/{m.session_id}/{key}.json", body)
 
 
+def agentcore_identity() -> Optional[tuple[str, str, Optional[str]]]:
+    """(session id, bucket, region) of an AgentCore Hive, from its environment only."""
+    from . import hive_agentcore
+    ident = hive_agentcore.identity()
+    if ident is None:
+        logger.warning("swarm_out_bridge: SWARMAI_CARRIER=agentcore without a valid "
+                       "SWARMAI_AC_SID / SWARMAI_AC_BUCKET; bridge off")
+    return ident
+
+
 async def run_bridge_loop() -> None:
     """Background task for hive mode. Off when the instance has no Hive identity."""
-    ident = await asyncio.to_thread(resolve_identity)
-    if ident is None:
-        return
-    hive, bucket, region = ident
-    bridge = Bridge(hive, await asyncio.to_thread(S3Store, bucket, region))
+    from . import hive_agentcore
+    agentcore = hive_agentcore.active()
+    if agentcore:
+        ident = agentcore_identity()          # never IMDS: there is none in a microVM
+        if ident is None:
+            return
+        hive, bucket, region = ident
+        bridge = Bridge(hive, S3Store(bucket, region, lazy=True))
+    else:
+        ident = await asyncio.to_thread(resolve_identity)
+        if ident is None:
+            return
+        hive, bucket, region = ident
+        bridge = Bridge(hive, await asyncio.to_thread(S3Store, bucket, region))
     logger.info("swarm_out_bridge: on for hive %s", hive)
+    if agentcore:
+        await hive_agentcore.sync_pass()
     try:
         await bridge.reconcile()
     except Exception as e:
@@ -477,6 +519,8 @@ async def run_bridge_loop() -> None:
     last_error = 0.0
     while True:
         await asyncio.sleep(POLL_SECONDS)
+        if agentcore:
+            await hive_agentcore.sync_pass()   # never raises: the prompts still get their pass
         try:
             await bridge.tick()
         except asyncio.CancelledError:

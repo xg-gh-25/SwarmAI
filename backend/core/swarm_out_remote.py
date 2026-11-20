@@ -298,6 +298,11 @@ async def resolve_session(sid: str) -> dict[str, Any]:
         raise RemoteError(404, "not found")
     import asyncio
     rows = [r for r in await asyncio.to_thread(swarm_out._read_log) if r.get("session_id") == sid]
+    if not rows:
+        # a later round's session (a carrier that opened one for a correction): its row
+        # names it once its rounds are read (settle records; only when no row has it)
+        rows = [r for r in await asyncio.to_thread(
+            lambda: [swarm_out._with_rounds(x) for x in swarm_out._read_log()]) if r.get("session_id") == sid]
     hives = {r.get("hive_id") for r in rows}
     if len(rows) == 0 or len(hives) != 1 or not next(iter(hives)):
         raise RemoteError(404, "not found")

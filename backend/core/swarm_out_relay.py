@@ -67,9 +67,12 @@ class _Relay:
         self.task: Optional[asyncio.Task] = None
 
 
-def _client(inst: dict[str, Any], read: Optional[float] = None) -> httpx.AsyncClient:
+def _client(inst: Any, read: Optional[float] = None) -> httpx.AsyncClient:
+    """A client to the session's run: *inst* is its connection (its carrier's
+    ``connect``, as ``registry.client_for`` takes it; routers/swarm_out_remote)."""
+    from core.carriers import registry
     timeout = httpx.Timeout(swarm_out.HTTP_TIMEOUT_S, read=read) if read else swarm_out.HTTP_TIMEOUT_S
-    return swarm_out._client(inst, timeout=timeout)
+    return registry.client_for(inst, timeout)
 
 
 async def read_state(inst: dict[str, Any], sid: str) -> Optional[dict[str, Any]]:
@@ -310,6 +313,18 @@ class RelayManager:
                     attempt = 0
                 except asyncio.CancelledError:
                     raise
+                except swarm_out.SwarmOutError as exc:
+                    # the run's round cannot be reached any more (an elastic round that
+                    # ended refuses before anything is sent): nothing to relay, so it is
+                    # shown idle and not tried again
+                    logger.info("swarm_out_relay: %s round out of reach (%s)", relay.sid[:8], type(exc).__name__)
+                    relay.connected = False
+                    if self._current(relay, gen) and (relay.entry.get("activity") != "idle"
+                                                      or relay.entry.get("streaming")):
+                        relay.entry = _idle(relay.entry)
+                        self._publish(relay, gen, {"type": "session_activity", "activity": "idle",
+                                                   "activity_seq": relay.entry["activity_seq"]})
+                    return
                 except (LineTooLong, RemoteError, httpx.HTTPError, ValueError) as exc:
                     logger.info("swarm_out_relay: %s upstream closed (%s)", relay.sid[:8], type(exc).__name__)
                 except Exception as exc:  # noqa: BLE001 — Hive data must never end a current relay

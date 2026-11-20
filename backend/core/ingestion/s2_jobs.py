@@ -13,6 +13,7 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
   later, so a review waits for 60 quiet minutes (never more than ``MAX_WAIT`` after the
   first request of the wait); no delay means now. A request while the job runs sets ``again`` (with its own not-before) so the session is
   read once more after it finishes.
+- ``open_jobs()`` counts the jobs queued or running (busy on an AgentCore Hive).
 - ``set_watermark`` / the claimed job's ``reviewed_to`` keep where the review stopped.
 - ``claim(conn)`` / ``finish(conn, ...)`` move a job queued -> running -> done/failed.
 - ``recover(conn)`` puts jobs left running by a crash back in the queue; after
@@ -84,6 +85,35 @@ def known(session_id: str) -> bool:
                             (session_id,)).fetchone() is not None
     finally:
         conn.close()
+
+
+def open_jobs(session_id: str | None = None, *, younger_than: timedelta | None = None) -> int:
+    """How many session jobs are queued or running, whatever their not-before (an AgentCore
+    Hive counts them as busy, core/hive_agentcore): of one session when given, and only
+    those requested within ``younger_than`` when given. 0 when the store or its table does
+    not exist yet; any other read error raises."""
+    from .api import connect_ro
+    sql = "SELECT COUNT(*) FROM ingestion_s2_jobs WHERE state IN ('queued','running')"
+    args: list = []
+    if session_id is not None:
+        sql += " AND session_id=?"
+        args.append(session_id)
+    if younger_than is not None:
+        sql += " AND requested_at >= ?"
+        args.append((datetime.now(timezone.utc) - younger_than).isoformat())
+    try:
+        conn = connect_ro()
+    except FileNotFoundError:
+        return 0
+    try:
+        row = conn.execute(sql, args).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return 0
+        raise
+    finally:
+        conn.close()
+    return int(row[0])
 
 
 def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,

@@ -351,11 +351,13 @@ def _keep_legacy(did: str, lessons: list[dict]) -> None:
     os.replace(tmp, path)
 
 
-async def take(row: dict, inst: dict, prev: Optional[dict]) -> Optional[dict]:
+async def take(row: dict, inst: Any, prev: Optional[dict]) -> Optional[dict]:
     """From a Hive that keeps no run records: fetch the run's lessons, keep them here and
     queue them (``settle``). The new ``lessons`` part, or None for a run not dispatched
-    under a Project Agent."""
+    under a Project Agent. *inst*: the run's connection (its carrier's ``connect``, as
+    ``registry.client_for`` takes it)."""
     from core import swarm_out
+    from core.carriers import registry
     got = _agent_of(row)
     sid = row.get("session_id")
     if got is None or not isinstance(sid, str):
@@ -363,7 +365,7 @@ async def take(row: dict, inst: dict, prev: Optional[dict]) -> Optional[dict]:
     did, brain = got
     old = prev if isinstance(prev, dict) else {}
     try:
-        async with swarm_out._client(inst) as client:
+        async with registry.client_for(inst) as client:
             status, body = await _get_body(client, f"/api/hive/lessons/{sid}")
     except swarm_out.SwarmOutError:
         return pending_state(did, brain, old, error="hive_unusable")

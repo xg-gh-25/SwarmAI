@@ -117,12 +117,14 @@ def _dispatches() -> dict[tuple[str, str], str]:
 
 async def _pull(hive_id: str, after: int, dispatches: dict) -> tuple[list[dict], int, bool]:
     """The rows of one Hive after ``after`` (up to ``PAGES_PER_PASS`` pages): (rows, last
-    id read, whether the Hive serves usage)."""
-    from core import swarm_out
-    inst = await swarm_out._instance(hive_id)
+    id read, whether the Hive serves usage). The Hive is an EC2 location."""
+    from core.carriers import registry
+    from core.carriers.base import EC2
+    loc = registry.carrier(EC2).location(hive_id)
+    inst = await loc.hive()
     name = _text(inst.get("name")) or hive_id
     rows: list[dict] = []
-    async with swarm_out._client(inst) as client:
+    async with registry.client_for(inst) as client:
         for _ in range(PAGES_PER_PASS):
             r = await client.get("/api/hive/usage", params={"after_id": after, "limit": PAGE})
             if r.status_code == 404:
@@ -145,19 +147,23 @@ async def _pull(hive_id: str, after: int, dispatches: dict) -> tuple[list[dict],
 
 
 async def sync_once() -> dict[str, int]:
-    """One pass: every running Hive's new rows into the ledger. {hive_id: rows taken}."""
-    from core import swarm_out
+    """One pass: every running Hive's new rows into the ledger. {hive_id: rows taken}.
+    Usage is pulled per location from the carriers with that duty (the EC2 carrier's
+    running Hives); a carrier without it is skipped (design
+    2026-11-20-swarm-out-multi-carrier §4.5)."""
+    from core.carriers import registry
+    from core.carriers.base import USAGE_SYNC
     taken: dict[str, int] = {}
-    try:
-        statuses = await swarm_out._hive_statuses()
-    except Exception as e:  # noqa: BLE001 — no Hive store: nothing to do this pass
-        logger.debug("usage_hive_sync: no Hive list (%s)", type(e).__name__)
-        return taken
+    hive_ids: list[str] = []
+    for car in registry.with_duty(USAGE_SYNC):
+        try:
+            hive_ids.extend(loc.id for loc in await car.running())
+        except Exception as e:  # noqa: BLE001 — no Hive store: nothing of it this pass
+            logger.debug("usage_hive_sync: no %s list (%s)", car.kind, type(e).__name__)
+            continue
     state = await asyncio.to_thread(_read_state)
     dispatches = await asyncio.to_thread(_dispatches)
-    for hive_id, status in sorted(statuses.items()):
-        if status != "running":
-            continue
+    for hive_id in hive_ids:
         try:
             rows, last, served = await _pull(hive_id, state.get(hive_id, 0), dispatches)
         except Exception as e:  # noqa: BLE001 — a Hive slow or down: try it next pass

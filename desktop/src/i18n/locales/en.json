@@ -3132,6 +3132,27 @@
     "existing_one": "This account already has {{count}} Hive.",
     "existing_other": "This account already has {{count}} Hives.",
     "createDefaultVpc": "Create a default VPC in {{region}}",
+    "elastic": {
+      "title": "Elastic Hive",
+      "lead": "Each task runs on its own fresh cloud machine in your AWS account (AgentCore Runtime), which is gone when the task ends. You pay only while a task runs.",
+      "size": "{{vcpu}} vCPU / {{mem}} GB at peak, {{disk}} GB disk",
+      "turnOn": "Turn on the elastic Hive",
+      "turningOn": "Turning on…",
+      "turnOff": "Turn off",
+      "offNote": "Turning it off deletes its runtime; results kept in your S3 bucket stay.",
+      "offRuns_one": "{{count}} task still runs on it and will stop.",
+      "offRuns_other": "{{count}} tasks still run on it and will stop.",
+      "outdated": "Its image is {{image}}; this SwarmAI is {{version}}. It takes tasks again once updated.",
+      "update": "Update",
+      "loadFailed": "Could not read the elastic Hive.",
+      "status": {
+        "enabling": "turning on (about 6 minutes)",
+        "ready": "on",
+        "upgrading": "updating",
+        "disabling": "turning off",
+        "failed": "error"
+      }
+    },
     "status": {
       "pending": "waiting to build",
       "provisioning": "being built",

@@ -300,7 +300,8 @@ def failure(detail: str, title: Optional[str], brain: Optional[str], hive: Optio
 
 
 def hive_reason_text(code: Optional[str]) -> Optional[str]:
-    """Why this Hive, in words (``swarm_out.pick_hive``'s code); None for a named one."""
+    """Why this Hive, in words (the placement reason, core/carriers/placement); None for a
+    named one."""
     if not code or code == "named":
         return None
     if code == "only_free":

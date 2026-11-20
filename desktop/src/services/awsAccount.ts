@@ -73,6 +73,35 @@ export interface AwsAccountView {
   hive?: FleetStatus | null;
 }
 
+/** One elastic Hive (backend hive/agentcore_provisioner; design
+ *  2026-11-20-swarm-out-multi-carrier §6.8): the account's AgentCore Runtime. */
+export interface ElasticHive {
+  id: string;
+  name: string;
+  account_ref: string;
+  region: string;
+  status: 'enabling' | 'ready' | 'upgrading' | 'disabling' | 'failed';
+  error_message: string | null;
+  /** the runtime's live state in AWS (READY, CREATING, UPDATING, ..., NOT_FOUND), null when not read */
+  runtime_status: string | null;
+  image_version: string | null;
+  /** the runtime's image is this SwarmAI's version (only then does it take runs) */
+  up_to_date: boolean;
+  /** runs this machine opened there that have not ended */
+  open_runs: number;
+  /** a task in this SwarmAI is changing it now (false for a change a quit SwarmAI left) */
+  working: boolean;
+}
+
+export interface ElasticStatus {
+  host_version: string;
+  /** whether it can be turned on here; `reason` says why not (no image configured, ...) */
+  can_enable: boolean;
+  reason: string | null;
+  size: { vcpu_base: number; memory_gib_base: number; vcpu_peak: number; memory_gib_peak: number; disk_gib: number };
+  hives: ElasticHive[];
+}
+
 /** The one-click fix for a sign-in problem (backend core/auth_remediation `action`; design
  *  2026-11-01-settings-account-merge §4.2). A terminal command is built by the backend only. */
 export type RemediationAction =
@@ -200,5 +229,21 @@ export const awsAccountService = {
   },
   async setFleet(body: { desired_count?: number; instance_type?: string; region?: string; dismissed?: boolean }): Promise<AwsAccountView> {
     return (await api.put<AwsAccountView>('/aws-account/hive-fleet', body, USER_ACTION)).data;
+  },
+  // ── the elastic Hive (backend routers/hive.py /elastic) ──
+  async elasticStatus(): Promise<ElasticStatus> {
+    return (await api.get<ElasticStatus>('/hive/elastic')).data;
+  },
+  /** refused (409, with the reason) before anything is created; otherwise it is built in the background */
+  async enableElastic(): Promise<{ id: string; status: string }> {
+    return (await api.post<{ id: string; status: string }>('/hive/elastic', null, USER_ACTION)).data;
+  },
+  /** update its image to this SwarmAI's version (the size is sent again every time) */
+  async updateElastic(id: string): Promise<{ id: string; status: string; version: string }> {
+    return (await api.post<{ id: string; status: string; version: string }>(
+      `/hive/elastic/${encodeURIComponent(id)}/update`, null, USER_ACTION)).data;
+  },
+  async disableElastic(id: string): Promise<{ id: string; status: string }> {
+    return (await api.delete<{ id: string; status: string }>(`/hive/elastic/${encodeURIComponent(id)}`, USER_ACTION)).data;
   },
 };

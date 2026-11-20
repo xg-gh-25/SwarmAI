@@ -2116,7 +2116,8 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 18 — usage_ledger: the platform's one record of model usage and spend (2026-10-29)
 # 19 — hive_instances.origin_secret (2026-11-04)
 # 20 — Inbox: inbox_sources / items / drafts / sends / feedback / trend_summaries (2026-11-20)
-CURRENT_SCHEMA_VERSION = 20
+# 21 — hive_instances.carrier + runtime_arn: the AgentCore carrier (2026-11-20)
+CURRENT_SCHEMA_VERSION = 21
 
 #: Inbox tables (v20, core/inbox/store.py, design docs/design/2026-11-20-inbox.md §5). The
 #: person's own messages: never in a backup (core/backup_manager.L2_TABLES lists what is),
@@ -3732,6 +3733,30 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.rollback()
                 raise
             logger.info("Migration v20: Inbox tables")
+
+        if current_version < 21 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 20:
+            # Version 21: hive_instances.carrier and runtime_arn (design
+            # 2026-11-20-swarm-out-multi-carrier §6.8). ``carrier`` says which executor a row
+            # is (``ec2``: a Hive EC2 instance, every row before this; ``agentcore``: the
+            # account's AgentCore runtime, core/carriers/agentcore); ``runtime_arn`` is that
+            # runtime's ARN. Additive only: each column added when missing, no row touched
+            # (every existing row reads ``ec2`` through the default).
+            await conn.execute("BEGIN")
+            try:
+                cols = {r[1] for r in await (await conn.execute(
+                    "PRAGMA table_info(hive_instances)")).fetchall()}
+                if cols and "carrier" not in cols:      # no table: nothing to add to
+                    await conn.execute(
+                        "ALTER TABLE hive_instances ADD COLUMN carrier TEXT NOT NULL DEFAULT 'ec2'")
+                if cols and "runtime_arn" not in cols:
+                    await conn.execute("ALTER TABLE hive_instances ADD COLUMN runtime_arn TEXT")
+                await conn.execute("PRAGMA user_version = 21")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v21: hive_instances.carrier, runtime_arn")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.

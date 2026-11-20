@@ -24,7 +24,9 @@ dependencies = [
     # Rate limiting
     "slowapi>=0.1.9",
     # AWS SDK (credential validation via STS, credential chain probing)
-    "boto3>=1.35.0",
+    # >=1.44.7: CreateAgentRuntime's platformVersion, allowedPorts, resourceConfigurations
+    # (the elastic Hive's size, hive/agentcore_provisioner)
+    "boto3>=1.44.7",
     # System monitoring
     "psutil>=5.9.0",
     # Vector search for hybrid memory retrieval

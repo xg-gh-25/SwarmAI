@@ -3132,6 +3132,27 @@
     "existing_one": "这个账号里已有 {{count}} 台 Hive。",
     "existing_other": "这个账号里已有 {{count}} 台 Hive。",
     "createDefaultVpc": "在 {{region}} 创建默认 VPC",
+    "elastic": {
+      "title": "弹性 Hive",
+      "lead": "每个任务在你 AWS 账号里一台全新的云端机器上运行（AgentCore Runtime），任务结束机器就销毁。只在任务运行时付费。",
+      "size": "峰值 {{vcpu}} vCPU / {{mem}} GB，盘 {{disk}} GB",
+      "turnOn": "开启弹性 Hive",
+      "turningOn": "开启中…",
+      "turnOff": "关闭",
+      "offNote": "关闭会删除它的 runtime；S3 桶里的结果保留。",
+      "offRuns_one": "上面还有 {{count}} 个任务在运行，会被停止。",
+      "offRuns_other": "上面还有 {{count}} 个任务在运行，会被停止。",
+      "outdated": "它的镜像是 {{image}}，这台 SwarmAI 是 {{version}}。更新后才会再接任务。",
+      "update": "更新",
+      "loadFailed": "读不到弹性 Hive 的状态。",
+      "status": {
+        "enabling": "开启中（约 6 分钟）",
+        "ready": "已开启",
+        "upgrading": "更新中",
+        "disabling": "关闭中",
+        "failed": "出错"
+      }
+    },
     "status": {
       "pending": "等待创建",
       "provisioning": "创建中",

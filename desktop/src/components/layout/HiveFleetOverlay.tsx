@@ -11,7 +11,8 @@
  * Two views inside the host panel (Fleet | Accounts):
  *   • FLEET — overview strip (running/provisioning/stopped/error counts) + My/Shared
  *     Hive sections (reusing HiveSection/InstanceCard/DeployProgress/AuthDisplay), with
- *     a Deploy New Hive launcher. Polls listInstances every 5s ONLY while an instance
+ *     a Deploy New Hive launcher, and the Elastic Hive section (awsAccount/HiveFleet:
+ *     its own /hive/elastic routes; the EC2 list never carries it). Polls listInstances every 5s ONLY while an instance
  *     is transitional (mirrors the former HiveTab poll) — no idle polling.
  *   • ACCOUNTS — the AWS-account roster (AccountCard) + Add Account, the same surface
  *     the slim Settings Hive tab shows (shared components, no drift).
@@ -34,6 +35,7 @@ import { OverlayError } from './OverlayState';
 import { classifyLoadError } from '../../services/api';
 import { HiveSection, AccountCard, AddAccountDialog, DeployHiveDialog } from '../settings/hiveComponents';
 import { WorkbenchToolbar } from './overlayShell';
+import { ElasticHiveSection } from '../awsAccount/HiveFleet';
 
 export interface HiveFleetContentProps {
   /** Host-owned close (kept for symmetry with sibling overlays; the Fleet surface
@@ -222,6 +224,7 @@ function FleetView({ myHives, sharedHives, instances, accounts, limitReached, on
           limitReached={limitReached}
           showEmpty
         />
+        <ElasticHiveSection />
       </div>
     </div>
   );
