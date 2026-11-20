@@ -150,8 +150,13 @@ def resolve_server(server_id: str, workspace: Optional[Path] = None) -> McpServe
 # Result parsing
 # ---------------------------------------------------------------------------
 
-_UNTRUSTED_RE = re.compile(r"<untrusted_content\b[^>]*>(.*?)</untrusted_content\s*>", re.S | re.I)
-_UNTRUSTED_OPEN_RE = re.compile(r"<untrusted_content\b[^>]*>", re.I)
+# The tag may carry a boundary suffix (``<untrusted_content_ba28ac51cf93064b>``): then only
+# the closing tag with the same suffix ends the block, which the wrapped data cannot forge.
+_UNTRUSTED_OPEN_RE = re.compile(r"<untrusted_content(_[A-Za-z0-9]+)?(?=[\s>/])[^>]*>", re.I)
+
+
+def _closing_re(suffix: str) -> re.Pattern[str]:
+    return re.compile(r"</untrusted_content" + re.escape(suffix) + r"\s*>", re.I)
 
 
 def unwrap_untrusted(text: str) -> str:
@@ -169,18 +174,30 @@ def unwrap_untrusted(text: str) -> str:
     opening = _UNTRUSTED_OPEN_RE.search(text)
     if not opening:
         return text.strip()
-    close = text.lower().rfind("</untrusted_content")
-    if close < opening.end():
+    suffix = opening.group(1) or ""
+    closing = _closing_re(suffix)
+    closes = [m for m in closing.finditer(text) if m.start() >= opening.end()]
+    if not closes:
         return text[opening.end():].strip()
-    outer = text[opening.end():close].strip()
+    outer = text[opening.end():closes[-1].start()].strip()
     try:
         json.loads(outer)
         return outer
     except ValueError:
         pass
-    blocks = _UNTRUSTED_RE.findall(text)
+    blocks = []
+    pos = 0
+    while True:
+        o = _UNTRUSTED_OPEN_RE.search(text, pos)
+        if not o:
+            break
+        c = _closing_re(o.group(1) or "").search(text, o.end())
+        if not c:
+            break
+        blocks.append(text[o.end():c.start()].strip())
+        pos = c.end()
     if len(blocks) > 1:
-        return "\n".join(b.strip() for b in blocks)
+        return "\n".join(blocks)
     return outer
 
 

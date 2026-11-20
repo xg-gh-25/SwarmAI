@@ -138,6 +138,7 @@ _ITEM_ID_KEYS = ("itemId", "ItemId", "item_id", "id", "Id")
 _FROM_KEYS = ("from", "From", "sender", "Sender")
 _DATE_KEYS = (
     "receivedDateTime", "dateTimeReceived", "DateTimeReceived", "received", "receivedAt",
+    "recievedAt",  # sic: the aws-outlook-mcp family spells it this way
     "sentDateTime", "dateTimeSent", "DateTimeSent", "date", "Date",
 )
 
@@ -173,7 +174,7 @@ def _record(d: dict, conversation: str) -> MailRecord:
         from_name=from_name,
         from_addr=from_addr,
         reply_to=reply_to,
-        to=[a for _, a in parse_addresses(_get(d, "toRecipients", "to", "To", "ToRecipients"))],
+        to=[a for _, a in parse_addresses(_get(d, "toRecipients", "to", "To", "ToRecipients", "recipients"))],
         cc=[a for _, a in parse_addresses(_get(d, "ccRecipients", "cc", "Cc", "CcRecipients"))],
         bcc=[a for _, a in parse_addresses(_get(d, "bccRecipients", "bcc", "Bcc", "BccRecipients"))],
         received_at=parse_time(_get(d, *_DATE_KEYS)),
@@ -427,8 +428,25 @@ class OutlookMcpSource(_MailSource):
         return ThreadRef(KIND, {"conversation_id": rec.conversation, "message_id": rec.message_id})
 
     async def _own_addresses(self) -> list[str]:
-        records = split_conversations(await self._call("email_folders", {"folder": "sentitems", "limit": 1}))
-        return [r.from_addr for r in records if r.from_addr][:1]
+        """The person's address: the sender found in every one of their latest sent
+        conversations. A folder listing names conversations, not senders' addresses, so
+        each is read; a conversation also holds the other side's replies, which is why one
+        is not enough."""
+        listing = await self._call("email_folders", {"folder": "sentitems", "limit": 3})
+        records = split_conversations(listing)          # a server that lists messages directly
+        per_conv: list[set[str]] = []
+        if records:
+            per_conv.append({r.from_addr.lower() for r in records if r.from_addr})
+        else:
+            for cid in conversation_ids(listing)[:3]:
+                read = split_conversations(await self._call("email_read", {"conversationId": cid}), cid)
+                senders = {r.from_addr.lower() for r in read if r.from_addr}
+                if senders:
+                    per_conv.append(senders)
+        if not per_conv:
+            return []
+        common = set.intersection(*per_conv)
+        return sorted(common) if len(common) == 1 else []   # two candidates left: not sure who
 
     async def can_send(self) -> bool:
         client = await self._get_client()
@@ -469,9 +487,11 @@ class OutlookMcpSource(_MailSource):
             else:
                 logger.warning("mail source %s: there may be more than %d conversations since the cursor; older ones are not read this pull",
                                self.config.id, self._max_pages * self._max_conversations)
-            for i in range(0, len(ids), 10):
-                data = await self._call("email_read", {"conversationId": ids[i:i + 10], "format": "text"})
-                found = split_conversations(data)
+            # One conversation per read: the messages in an email_read answer carry no
+            # conversationId of their own, so a read of several could not tell which
+            # message belongs to which thread (and a reply needs its thread).
+            for cid in ids:
+                found = split_conversations(await self._call("email_read", {"conversationId": cid, "format": "text"}), cid)
                 if not found:
                     raise SourceUnavailable("email_read answered in a shape this mapping does not read")
                 records.extend(found)

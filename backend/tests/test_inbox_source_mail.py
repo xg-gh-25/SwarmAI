@@ -51,7 +51,7 @@ def _outlook(**overrides):
             if a.get("folder") == "sentitems"
             else {"emails": [{"conversationId": "CONV-1", "subject": "Budget"}, {"conversationId": "CONV-1"}]}
         ),
-        "email_read": lambda a: [_conversation()] if isinstance(a["conversationId"], list) else _conversation(),
+        "email_read": lambda a: _conversation(),
         "email_search": {"results": []},
         "email_reply": {"success": True, "itemId": "NEW-1"},
     }
@@ -74,7 +74,7 @@ async def test_whoami_from_the_sent_mail_plus_aliases():
     mcp = _outlook()
     me = await OutlookMcpSource(_cfg(addresses=["Me.Alias@corp.example"]), client=mcp).whoami()
     assert me.ids == frozenset({ME, "me.alias@corp.example"})
-    assert mcp.calls[0] == ("email_folders", {"folder": "sentitems", "limit": 1})
+    assert mcp.calls[0] == ("email_folders", {"folder": "sentitems", "limit": 3})
 
 
 async def test_pull_splits_dedups_and_sets_the_rule_facts():
@@ -90,7 +90,7 @@ async def test_pull_splits_dedups_and_sets_the_rule_facts():
     assert result.cursor == "2026-11-20T02:00:00+00:00"
     # the listing named CONV-1 twice; it was read once, never with markAs
     reads = [a for t, a in mcp.calls if t == "email_read"]
-    assert reads == [{"conversationId": ["CONV-1"], "format": "text"}]
+    assert reads == [{"conversationId": "CONV-1", "format": "text"}]  # one conversation per read
     listing = [a for t, a in mcp.calls if t == "email_folders" and a.get("folder") == "inbox"]
     assert listing == [{"folder": "inbox", "startDate": "2026-11-20", "limit": 50, "offset": 0}]
 
@@ -286,7 +286,7 @@ async def test_outlook_listing_is_paged():
         {"itemId": "IT-9", "changeKey": "CK-9", "internetMessageId": "<m9@corp.example>", "from": _addr("Lee", "lee@corp.example"),
          "toRecipients": [_addr("Me", ME)], "receivedDateTime": "2026-11-20T03:00:00Z", "body": "page two"}]}
     by_id = {"CONV-1": _conversation(), "CONV-2": second}
-    mcp = _outlook(email_folders=folders, email_read=lambda a: [by_id[c] for c in a["conversationId"]])
+    mcp = _outlook(email_folders=folders, email_read=lambda a: by_id[a["conversationId"]])
     result = await OutlookMcpSource(_cfg(max_conversations=1), client=mcp).pull("2026-11-20T00:00:00+00:00")
     assert "<m9@corp.example>" in {m.external_id for m in result.messages}
 
@@ -316,3 +316,47 @@ async def test_outlook_call_cut_short_by_the_budget_keeps_the_position():
     mcp = _outlook(email_read=lambda a: mcp_timeout())
     result = await OutlookMcpSource(_cfg(pull_budget_s=5), client=mcp).pull("2026-11-20T00:00:00+00:00")
     assert result.cursor is None and result.messages == ()
+
+
+# The shapes the live aws-outlook-mcp server returns: a folder listing names conversations
+# (display names only, no messages); email_read gives content.emails with sender/from
+# {name, email}, recipients, ccRecipients and the field spelled "recievedAt"; the messages
+# carry no conversationId of their own.
+
+def _live_read(cid, senders):
+    return {"success": True, "content": {"message": "Found", "emails": [
+        {"itemId": f"{cid}-{i}", "itemChangeKey": "K", "subject": "Topic",
+         "sender": {"name": n, "email": e}, "from": {"name": n, "email": e},
+         "recievedAt": f"2026-11-20T0{i + 1}:00:00+08:00", "dateTimeSent": f"2026-11-20T0{i + 1}:00:00+09:00",
+         "recipients": [{"name": "Me", "email": ME}], "ccRecipients": [], "bccRecipients": [], "replyTo": [],
+         "body": "<html><body><p>hello</p></body></html>", "itemClass": "IPM.Note"}
+        for i, (n, e) in enumerate(senders)]}}
+
+
+def _live_outlook():
+    sent = {"success": True, "content": {"emails": [
+        {"conversationId": c, "topic": "t", "senders": ["Me"], "items": []} for c in ("S1", "S2", "S3")]}}
+    inbox = {"success": True, "content": {"emails": [{"conversationId": "IN1", "topic": "t", "senders": ["Priya"], "items": []}]}}
+    reads = {"S1": _live_read("S1", [("Me", ME), ("Priya", "priya@corp.example")]),
+             "S2": _live_read("S2", [("Me", ME)]),
+             "S3": _live_read("S3", [("Lee", "lee@corp.example"), ("Me", ME)]),
+             "IN1": _live_read("IN1", [("Priya", "priya@corp.example")])}
+    return _outlook(email_folders=lambda a: sent if a.get("folder") == "sentitems" else inbox,
+                    email_read=lambda a: reads[a["conversationId"]])
+
+
+async def test_live_shape_whoami_is_the_sender_of_every_sent_conversation():
+    me = await OutlookMcpSource(_cfg(), client=_live_outlook()).whoami()
+    assert ME in me.ids and "priya@corp.example" not in me.ids
+
+
+async def test_live_shape_pull_keeps_the_conversation_and_reads_recipients():
+    src = OutlookMcpSource(_cfg(), client=_live_outlook())
+    result = await src.pull("2026-11-19T00:00:00+00:00")
+    assert len(result.messages) == 1
+    m = result.messages[0]
+    assert m.thread.data["conversation_id"] == "IN1"      # a reply needs its thread
+    assert m.is_direct and m.text == "hello"              # To: me, HTML body as words
+    assert m.received_at.isoformat() == "2026-11-20T01:00:00+08:00"  # when it arrived, not when it was sent
+    thread = await src.thread(m.thread)
+    assert thread.target is not None and len(thread.messages) == 1
