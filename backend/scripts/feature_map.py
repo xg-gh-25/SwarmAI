@@ -48,6 +48,7 @@ if str(BACKEND) not in sys.path:
 
 from core.feature_map import files, ledger, reach  # noqa: E402
 from core.feature_map.replay import Selection, replay  # noqa: E402
+from core.feature_map.replay_user import remove_tree  # noqa: E402
 
 
 def _git(root: Path, *args: str) -> str:
@@ -175,7 +176,7 @@ def _record(brain: str, repo: str, fmap, results, *, root: Path, trigger: str, r
             "evidence_files": copied})
     written = ledger.append(brain, repo, lines) if lines else []
     if sandbox and not keep:
-        shutil.rmtree(sandbox, ignore_errors=True)
+        remove_tree(sandbox)
     ledger.prune_evidence(brain, repo)
     return written
 
@@ -221,7 +222,7 @@ def _base_replay(root: Path, base: str, fmap_rel: str | None, folder: Path, fail
             if sbdir and keep:
                 exc.sandbox_dir = str(sbdir)
             elif sbdir:
-                shutil.rmtree(sbdir, ignore_errors=True)
+                remove_tree(sbdir)
             raise
         # base lines carry the base folder's walk keys; the run's facts pair them with the
         # head lines by key, so a walk the run renamed has no pair and counts as new
@@ -361,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
                                       args.run, args.keep)
     except (KeyboardInterrupt, Exception) as exc:  # noqa: BLE001 — nothing judged, said as JSON
         if sbdir and not args.keep:
-            shutil.rmtree(sbdir, ignore_errors=True)
+            remove_tree(sbdir)
         error = ("interrupted" if isinstance(exc, KeyboardInterrupt)
                  else f"{type(exc).__name__}: {exc}"[:600])
         # --keep: the head replay's sandbox (kept once recorded, or still in sbdir), and a

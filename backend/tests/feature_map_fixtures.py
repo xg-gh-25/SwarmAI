@@ -30,7 +30,17 @@ def app_data(tmp_path, monkeypatch):
     d = tmp_path / "appdata"
     d.mkdir()
     monkeypatch.setenv("SWARM_DATA_DIR", str(d))
+    no_metadata_service(monkeypatch)
     return d
+
+
+def no_metadata_service(monkeypatch) -> None:
+    """These tests replay the product's own fixtures, as the person: the machine (a Hive, a
+    cloud CI runner) is taken as one that does not need the replay user. The replay user
+    has its own tests (test_feature_map_replay_user.py)."""
+    from core.feature_map import replay_user
+    monkeypatch.setattr(replay_user, "needs_replay_user", lambda: False)
+    monkeypatch.setattr(replay_user, "_current", None)
 
 
 @pytest.fixture(scope="session")

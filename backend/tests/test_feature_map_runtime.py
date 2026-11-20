@@ -85,3 +85,73 @@ def test_safe_extract_refuses_escapes_and_extracts_a_good_archive(tmp_path):
                        (zipf("g.zip", ["node-v/node.exe"]), tmp_path / "gz")):
         top = _safe_extract(good, dest)
         assert top == dest.resolve() / "node-v" and any(top.rglob("node*"))
+
+
+def _fake_runtime(tmp_path):
+    """A runtime folder of the pinned layout whose headless shell is a stand-in file."""
+    folder = tmp_path / "rt"
+    (folder / "node" / "bin").mkdir(parents=True)
+    (folder / "node" / "bin" / "node").write_text("")
+    cli = folder / "pw" / "node_modules" / "@playwright" / "test"
+    cli.mkdir(parents=True)
+    (cli / "cli.js").write_text("")
+    shell = folder / "browsers" / "chromium_headless_shell-1" / "chrome-headless-shell-linux-arm64"
+    shell.mkdir(parents=True)
+    (shell / "chrome-headless-shell").write_text("")
+    return folder
+
+
+def _fake_ldd(tmp_path, monkeypatch, output):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ldd").write_text("#!/bin/sh\ncat <<'EOF'\n" + output + "EOF\n")
+    (bin_dir / "ldd").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+
+
+def test_missing_system_libraries_are_runtime_unavailable(tmp_path, app_data, monkeypatch):  # noqa: F811
+    """On Linux a headless shell that cannot load its system libraries is reported as
+    'runtime unavailable' naming them (walks not_run), never handed out to fail every walk."""
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("POSIX fake ldd")
+    monkeypatch.setattr(runtime, "_platform", lambda: ("linux", "arm64"))
+    monkeypatch.setenv("SWARM_FEATURE_MAP_RUNTIME", str(_fake_runtime(tmp_path)))
+    _fake_ldd(tmp_path, monkeypatch,
+              "\tlinux-vdso.so.1 (0x0000)\n\tlibatk-1.0.so.0 => not found\n"
+              "\tlibgbm.so.1 => not found\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000)\n")
+    with pytest.raises(runtime.RuntimeUnavailable) as exc:
+        runtime.ensure()
+    assert "libatk-1.0.so.0, libgbm.so.1" in exc.value.reason
+    assert "hive/replay-host.sh" in exc.value.reason and "install-deps chromium" in exc.value.reason
+
+    # every library found: the runtime is handed out
+    (tmp_path / "bin" / "ldd").write_text("#!/bin/sh\necho '\tlibc.so.6 => /lib64/libc.so.6'\n")
+    assert runtime.ensure().folder == tmp_path / "rt"
+
+
+def test_web_walks_are_not_run_when_libraries_are_missing(tmp_path, app_data, monkeypatch):  # noqa: F811
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("POSIX fake ldd")
+    from core.feature_map import files
+    from core.feature_map.replay import Selection, replay
+    from tests.feature_map_fixtures import make_repo
+    monkeypatch.setattr(runtime, "_platform", lambda: ("linux", "arm64"))
+    monkeypatch.setenv("SWARM_FEATURE_MAP_RUNTIME", str(_fake_runtime(tmp_path)))
+    _fake_ldd(tmp_path, monkeypatch, "\tlibX11.so.6 => not found\n")
+    root = make_repo(tmp_path / "r", specs={"home.spec.ts": "test('x', async () => {});\n"},
+                     features="schema: 1\nfeatures:\n  - {id: home-a1, title: Home, target: web, spec: specs/home.spec.ts}\n")
+    fmap = files.load_folder(root / ".swarmai/features")
+    results, _sb = replay(fmap, root, Selection(list(fmap.features)))
+    assert [(r["result"], r["reason"]) for r in results] == [("not_run", "runtime unavailable")]
+    assert "libX11.so.6" in results[0]["error"]
+
+
+def test_no_check_off_linux_or_without_ldd(tmp_path, monkeypatch):
+    rt = runtime._layout(_fake_runtime(tmp_path))
+    monkeypatch.setattr(runtime, "_platform", lambda: ("darwin", "arm64"))
+    assert runtime.missing_libraries(rt) == []
+    monkeypatch.setattr(runtime, "_platform", lambda: ("linux", "arm64"))
+    monkeypatch.setattr(runtime.shutil, "which", lambda *_a, **_k: None)
+    assert runtime.missing_libraries(rt) == []

@@ -277,9 +277,44 @@ other host, by name or by IP address; a stub is the way to give a page an outsid
 (DNS-only blocking was considered and rejected: a literal IP address bypasses it.) It does **not** contain the app's own
 server-side network calls or the repo's own files (a repo-local `.env` is part of the
 checkout) — exactly like running the repo's tests. This is said in the CLI's help and in the
-skill. (On a Hive the instance metadata service is enabled and the role can call Bedrock,
-`backend/hive/provisioner.py:80-85,1007-1010`; that is why Hive replay is not in the core,
-§10.)
+skill.
+
+**A machine with an instance metadata service** (a Hive, any cloud machine): the metadata
+service hands the instance role's credentials (on a Hive: Bedrock) to any local process, and
+an emptied environment does not stop that. So on a machine that needs it every process the
+sandbox starts (prepare, setup, services, command walks, Playwright and its browser) runs as
+the unprivileged **replay user** `swarm-replay`, through `sudo -n -u swarm-replay`, and only
+after a probe run as that user fails to connect to 169.254.169.254 and [fd00:ec2::254] and
+reaches the pinned runtime; otherwise every selected walk is `not_run: runtime unavailable`
+and nothing of the repo starts (`core/feature_map/replay_user.py`). Which machines need it
+is decided from fixed facts first, never only from a probe that a slow connect would turn
+into "no": a Hive (`SWARMAI_MODE=hive`) and a Linux machine where the replay user exists
+always do; elsewhere a TCP connect to the metadata service decides (a desktop: it does not
+answer), and that "no" is never remembered. One replay at a time uses the replay user on a
+machine (a lock its CLI process holds); every process of that user is stopped before the
+replay starts (replay is refused if one survives) and again when its sandbox closes, so
+nothing a replay started outlives it, also a process that cleared its environment. The host sets the user up as root:
+`hive/replay-host.sh`, run by a Hive's first boot and every update, creates it (its own
+home holds its package caches; traverse-only on the Hive user's home, so the tools that
+user runs run for replay too), lets only the Hive user run commands as it (a visudo-checked
+sudoers drop-in, no pty, no PAM session), and loads at every boot an nftables table that
+rejects that uid's traffic to the two metadata addresses. The replay user can read what the
+Hive user's home leaves readable to other users (the traverse it needs for the task's tools
+and the pinned runtime) and write none of it: before this boundary the replayed app ran as
+the Hive user itself. A separate uid is what holds: a
+network namespace without network breaks prepare and the app's own calls, and a process
+that stays the Hive user can ptrace the backend or rewrite the code it runs; a group
+(`newgrp`) or a delegated cgroup can be left by the process itself. One start of the
+sandbox is stopped by a spawn tag in its processes' environment (also one that left its
+process group), all of them when the sandbox closes, and the sandbox's files are removed as
+that user first. A machine that does not need it (a desktop) runs the sandbox as the
+person, as before.
+
+On Linux the pinned headless shell also needs system libraries and fonts (on Amazon Linux
+2023 the package set in `hive/replay-host.sh`, found with `ldd` and a launch that renders
+text); `runtime.ensure` names any missing library (`not_run: runtime unavailable`, never
+a failed walk), and `hive/smoke_package.sh` starts the browser from the package it
+installed.
 
 ### 6.4 Results
 
@@ -381,7 +416,7 @@ trigger is read from the ledger and the correction records, not from a feeling.
 | **Features tab** in Brain Hub (`BrainHub.tsx:84-92` `TABS` made computed) | One page: what fails, since when, with screenshots; Replay, Fix, Retire | A repo has 15+ features, or the person asks to see the map |
 | **Needs You collector** (`core/attention_authority.collect()`) | A walk that turns red outside the agent's work becomes a review item | Nightly replay exists |
 | **Nightly replay** (one system job in `backend/jobs/system_jobs.py`, detached worktree at the remote default branch) | Regressions from someone else's commit or a dependency bump | The ledger shows a walk turning red at a commit the agent did not make, twice in a month |
-| **Hive replay** (AL2023 arm64 browser libraries in the AMI bake and update path; replay user with the metadata service dropped; a Chromium launch in `hive/smoke_package.sh`) | Swarm Out runs bring the same evidence back | Swarm Out runs on repos with a Feature Map, and their TEST reports `not_run: runtime unavailable` |
+| **Hive replay** — built (§6.3): AL2023 arm64 browser libraries and fonts by first boot and every update (`hive/replay-host.sh`); the replay user with the metadata service rejected; a Chromium launch in `hive/smoke_package.sh` | Swarm Out runs bring the same evidence back | Built: Swarm Out runs on repos with a Feature Map reported `not_run: runtime unavailable` |
 | **Suggested features** in New Brain P2 and *Suggest features* | The map is not empty on day one for a new repo | The core is in use on 2+ repos and writing the first features by hand proves slow |
 | **`cognition find` features leg** (`core/cognition.py:70-83`) | "the Pipeline view does not open" finds the feature to replay | A bug report was reproduced by hand although its feature existed |
 | **Model-driven checks** (Playwright planner/healer, a model judging screenshots of new features) | Evidence for features not yet walked; repair proposals | Never as a gate; as evidence only, once the core's replay is steady |

@@ -17,10 +17,19 @@ versioned folder per pin: ``<app data>/feature_map/runtime/node-<v>-pw-<v>/``.
 A failure (no network, a checksum mismatch, an unsupported platform) raises
 ``RuntimeUnavailable`` with the reason; a replay reports it as ``not_run``. A finished
 install writes ``ready.json`` last, so a half-written folder is never used.
+
+On Linux the headless shell also needs system libraries the runtime cannot carry (on Amazon
+Linux 2023: libatk, libX11, libgbm, ...; ``hive/replay-host.sh`` installs them on a Hive).
+``ensure`` checks them with ``ldd`` every time it hands out the runtime, and raises
+``RuntimeUnavailable`` naming the missing ones: a browser that cannot start is an environment
+problem (walks ``not_run``), never N failed walks. ``launch_check`` (``python -m
+core.feature_map.runtime --launch``, run by ``hive/smoke_package.sh``) starts the shell and
+renders text: without fonts it starts but lays out every glyph at zero width.
 ``SWARM_FEATURE_MAP_RUNTIME`` may point at an existing runtime folder of the same layout
 (used by tests and by a machine that pre-provisions it).
 
-Exports: NODE_VERSION, PLAYWRIGHT_VERSION, Runtime, RuntimeUnavailable, ensure, runtime_dir.
+Exports: NODE_VERSION, PLAYWRIGHT_VERSION, Runtime, RuntimeUnavailable, ensure, launch_check,
+missing_libraries, runtime_dir.
 """
 from __future__ import annotations
 
@@ -99,6 +108,89 @@ def _layout(folder: Path) -> Runtime:
     node = node_dir / ("node.exe" if system == "win32" else "bin/node")
     pkg = folder / "pw" / "node_modules" / "@playwright" / "test"
     return Runtime(folder, node, pkg / "cli.js", pkg, folder / "browsers")
+
+
+def headless_shell(rt: Runtime) -> Path | None:
+    """The pinned Chromium headless shell binary of *rt* (None when it is not there)."""
+    name = "chrome-headless-shell.exe" if _platform()[0] == "win32" else "chrome-headless-shell"
+    hits = sorted(rt.browsers.glob(f"chromium_headless_shell-*/*/{name}"))
+    return hits[-1] if hits else None
+
+
+def missing_libraries(rt: Runtime) -> list[str]:
+    """On Linux, the shared libraries the headless shell cannot load (``ldd`` "not found");
+    [] elsewhere, and when ldd cannot tell (no ldd, no shell, not an ELF binary)."""
+    if _platform()[0] != "linux":
+        return []
+    shell, ldd = headless_shell(rt), shutil.which("ldd")
+    if shell is None or ldd is None:
+        return []
+    try:
+        proc = subprocess.run([ldd, str(shell)], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return sorted({line.split("=>")[0].strip() for line in proc.stdout.splitlines()
+                   if "=> not found" in line})
+
+
+def _checked(rt: Runtime) -> Runtime:
+    missing = missing_libraries(rt)
+    if missing:
+        raise RuntimeUnavailable(
+            f"the pinned Chromium cannot load {', '.join(missing)}: install the system packages "
+            "that provide them (Amazon Linux 2023: the list in hive/replay-host.sh; Debian or "
+            f"Ubuntu: npx playwright@{PLAYWRIGHT_VERSION} install-deps chromium)")
+    return rt
+
+
+# Starts the headless shell and lays out text; prints {"version", "text_width"}. The pinned
+# package's index.mjs comes in FM_PLAYWRIGHT (a file: URL).
+_LAUNCH_JS = r"""
+const { chromium } = await import(process.env.FM_PLAYWRIGHT);
+const browser = await chromium.launch({ timeout: 60000 });
+try {
+  const page = await browser.newPage();
+  await page.setContent('<span id="t" style="font-family:sans-serif">Feature Map 回放 ✓</span>');
+  const width = await page.evaluate(() => document.getElementById('t').getBoundingClientRect().width);
+  console.log(JSON.stringify({ version: browser.version(), text_width: width }));
+} finally {
+  await browser.close();
+}
+"""
+
+
+def launch_check(rt: Runtime, timeout_s: int = 180) -> dict:
+    """Start *rt*'s headless shell, render a line of text, and return ``{"version",
+    "text_width"}``. Raises ``RuntimeUnavailable`` when it does not start or lays the text
+    out at zero width (no fonts)."""
+    from urllib.request import pathname2url
+    _checked(rt)
+    index = (rt.playwright_pkg / "index.mjs").resolve()
+    url = "file:" + pathname2url(str(index)) if _platform()[0] != "win32" else index.as_uri()
+    env = {k: v for k, v in os.environ.items()
+           if k in ("PATH", "HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "SystemRoot", "LANG")}
+    env.update(rt.env())
+    env["FM_PLAYWRIGHT"] = url
+    try:
+        proc = subprocess.run([str(rt.node), "--input-type=module", "-e", _LAUNCH_JS],
+                              capture_output=True, text=True, timeout=timeout_s, env=env)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeUnavailable(f"the pinned Chromium did not start in {timeout_s}s") from exc
+    except OSError as exc:
+        raise RuntimeUnavailable(f"the pinned Node could not start: {exc}") from exc
+    if proc.returncode != 0:
+        tail = [ln for ln in (proc.stderr or proc.stdout or "").strip().splitlines()
+                if ln.strip()][-4:]
+        raise RuntimeUnavailable(f"the pinned Chromium did not start (exit {proc.returncode}): "
+                                 + " | ".join(tail)[:800])
+    try:
+        out = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError) as exc:
+        raise RuntimeUnavailable(f"the launch check printed no result: {proc.stdout[-200:]}") from exc
+    if not out.get("text_width"):
+        raise RuntimeUnavailable("the pinned Chromium starts but renders no text (no fonts: "
+                                 "install fontconfig and a font)")
+    return out
 
 
 def _ready(rt: Runtime) -> bool:
@@ -240,25 +332,31 @@ def ensure(*, install: bool = True,
         rt = _layout(Path(override))
         if not rt.node.is_file() or not rt.playwright_cli.is_file():
             raise RuntimeUnavailable(f"SWARM_FEATURE_MAP_RUNTIME={override} is not a runtime folder")
-        return rt
+        return _checked(rt)
     folder = runtime_dir()
     rt = _layout(folder)
     if _ready(rt):
-        return rt
+        return _checked(rt)
     if not install:
         raise RuntimeUnavailable("the pinned runtime is not installed")
     lock = _lock(folder)
     try:
         if _ready(rt):
-            return rt
-        return _install(folder, download)
+            return _checked(rt)
+        return _checked(_install(folder, download))
     finally:
         shutil.rmtree(lock, ignore_errors=True)
 
 
-if __name__ == "__main__":  # pragma: no cover — manual provisioning
+if __name__ == "__main__":  # pragma: no cover — manual provisioning, hive/smoke_package.sh
+    # python -m core.feature_map.runtime [--launch]: install (when missing) and, with --launch,
+    # start the browser and render text. JSON on stdout; exit 2 when unavailable.
     try:
-        print(json.dumps({"ok": True, "folder": str(ensure().folder)}))
+        rt = ensure()
+        result = {"ok": True, "folder": str(rt.folder)}
+        if "--launch" in sys.argv[1:]:
+            result.update(launch_check(rt))
+        print(json.dumps(result))
     except RuntimeUnavailable as exc:
         print(json.dumps({"ok": False, "reason": exc.reason}))
         sys.exit(2)

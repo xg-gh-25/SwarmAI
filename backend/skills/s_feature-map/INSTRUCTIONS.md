@@ -136,6 +136,9 @@ First decide whether the product is broken or the walk is outdated, and say whic
 - The product is broken: fix the product, replay, report.
 - Most walks fail at their first step: the target did not come up (look at the not_run
   reason and the service log), not N regressions.
+- A walk that passes on one machine and fails on another depends on that machine (a tool
+  the app detects, the person's files): take the app's own way to the state the walk checks
+  (a switch, a setup step), so it gives the same result everywhere.
 
 Never edit an expectation just to make a walk pass. Flaky walks are quarantined after 3
 flakes in their last 10 results and come back after 5 passes in a row (a quarantined walk
@@ -148,6 +151,12 @@ away from the replayed app, and keeps the browser off the network. It does not c
 app's own server-side network calls or the repo's own files (a repo-local `.env` is part of
 the copy): replaying is as trusted as running the repo's tests. Replay runs only when you or
 the person ask for it.
+
+On a machine with an instance metadata service (a Hive, any cloud machine) the service
+would hand the instance's credentials to the replayed app, so every process of the replay
+runs as a separate replay user the host's firewall keeps off it, one replay at a time.
+Where that user is not set up (a Hive before its next update), the walks are `not_run:
+runtime unavailable` with the reason, never run without it.
 
 Not covered by a walk: native windows, menus and dialogs of desktop apps, mobile apps,
 colour and contrast, timing races, live third-party services.

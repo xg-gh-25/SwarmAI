@@ -1,0 +1,262 @@
+"""The replay user: who a replay's processes run as on a machine with an instance metadata
+service (design §6.3).
+
+On a cloud machine the metadata service (169.254.169.254, and fd00:ec2::254 on EC2) hands
+the instance role's credentials to any process that asks; emptying the environment does not
+stop that. So on such a machine every process the sandbox starts (prepare, setup, services,
+command walks, Playwright and its browser) runs as a separate unprivileged user,
+``swarm-replay``, whose traffic to those addresses the host's firewall rejects. The host
+sets that up as root (``hive/replay-host.sh`` on a Hive: the user, an nftables rule matching
+its uid, and a sudoers rule letting the Hive user run commands as it); this module only uses
+it, and checks it first: a probe run as that user must fail to connect to the metadata
+service, or replay is ``not_run: runtime unavailable`` and nothing of the repo starts.
+
+Which machines need it (``needs_replay_user``) is decided from fixed facts first, never from
+a probe that could fail open: a Hive (``SWARMAI_MODE=hive``) and a Linux machine where the
+replay user exists always do; only elsewhere does a TCP connect to the metadata service
+decide (a desktop: it does not answer, and the sandbox runs as the person, as before). That
+"not needed" answer is never cached.
+
+One replay at a time uses the replay user on a machine: ``resolve`` takes a lock (held until
+the process ends) and stops every process of the replay user before the replay starts, and
+refuses when one survives; ``Sandbox.close`` stops them all again. So nothing a replay
+started, also a process that cleared its environment or left its group, outlives it or
+touches the next replay's files.
+
+Every start goes ``sudo -n -u swarm-replay -- /usr/bin/env -i FEATURE_MAP_SPAWN=<tag>
+<python> -I replay_user_helper.py exec <envfile> <cwd> <program> ...``: the environment
+travels in a 0660 file inside the sandbox (never on a command line), the tag in every
+process of that start, so stopping one start (``kill``, between start states) finds its
+tree by its tag, and acts as the replay user (the Hive user may not signal it). Files the
+replay user wrote are removed as that user first (``remove_tree``).
+
+Exports: REPLAY_USER, ReplayUser, Unavailable, current, imds_answers, needs_replay_user,
+remove_tree, resolve.
+"""
+from __future__ import annotations
+
+import json
+import os
+import pwd
+import shutil
+import socket
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+REPLAY_USER = "swarm-replay"
+METADATA = (("169.254.169.254", 80), ("fd00:ec2::254", 80))
+HELPER = Path(__file__).resolve().with_name("replay_user_helper.py")
+LOCK_WAIT_S = 2 * 3600          # a hang guard for another replay holding the replay user
+_HELPER_TIMEOUT_S = 60
+_SUDO_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+
+
+class Unavailable(RuntimeError):
+    """The machine needs the replay user and it cannot be used; ``reason`` says why."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+def imds_answers(timeout_s: float = 0.5) -> bool:
+    """Whether a TCP connection from this process to an instance metadata address succeeds."""
+    for host, port in METADATA:
+        try:
+            socket.create_connection((host, port), timeout=timeout_s).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def _user_exists() -> bool:
+    try:
+        pwd.getpwnam(REPLAY_USER)
+        return True
+    except KeyError:
+        return False
+
+
+def needs_replay_user() -> bool:
+    """Whether a replay here must run as the replay user: on a Hive, on a Linux machine
+    where the replay user exists, and wherever the metadata service answers."""
+    if os.environ.get("SWARMAI_MODE") == "hive":
+        return True
+    if sys.platform.startswith("linux") and _user_exists():
+        return True
+    return imds_answers()
+
+
+@dataclass(frozen=True)
+class ReplayUser:
+    name: str
+    uid: int
+    home: Path                  # its own home: its package caches
+    sudo: str
+    python: str
+
+    def command(self, mode: str, *args: str, tag: str | None = None) -> list[str]:
+        """The argv that runs the helper's *mode* as this user."""
+        env = [f"FEATURE_MAP_SPAWN={tag}"] if tag else []
+        return [self.sudo, "-n", "-u", self.name, "--", "/usr/bin/env", "-i", *env,
+                self.python, "-I", str(HELPER), mode, *args]
+
+    def _helper(self, mode: str, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(self.command(mode, *args), capture_output=True, text=True,
+                              timeout=_HELPER_TIMEOUT_S, env=_SUDO_ENV, stdin=subprocess.DEVNULL)
+
+    def kill(self, tag: str, *, prefix: bool = False) -> None:
+        """Stop every process of this user tagged *tag* (or tagged with a value starting
+        with *tag*): TERM, up to 3 s, KILL."""
+        try:
+            self._helper("kill", tag, *(["--prefix"] if prefix else []))
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def kill_all(self) -> int | None:
+        """Stop every process of this user (TERM, up to 3 s, KILL); how many are still
+        there after it (None: the helper did not answer)."""
+        if self.uid == os.getuid():
+            return None                  # never the caller's own processes
+        try:
+            proc = self._helper("kill", "--all", str(os.getuid()))
+            return int(json.loads(proc.stdout.strip().splitlines()[-1])["left"])
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError):
+            return None
+
+    def remove(self, path: Path) -> None:
+        """Remove what this user may of *path* (the caller removes the rest)."""
+        try:
+            self._helper("rm", str(path))
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def probe(self, paths: Iterable[Path | str] = ()) -> list[str]:
+        """Why this user cannot be used ([] = it can): sudo refused, the metadata service
+        answers it, or a path it must read or run is out of its reach."""
+        try:
+            proc = self._helper("probe", *[str(p) for p in paths])
+        except subprocess.TimeoutExpired:
+            return [f"sudo -u {self.name} did not answer in {_HELPER_TIMEOUT_S}s"]
+        except OSError as exc:
+            return [f"sudo could not start: {exc}"]
+        try:
+            out = json.loads(proc.stdout.strip().splitlines()[-1])
+        except (IndexError, ValueError):
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-2:]
+            return [f"sudo -n -u {self.name} failed (exit {proc.returncode}): "
+                    + " | ".join(tail)[:300]]
+        if out.get("uid") != self.uid:
+            return [f"the probe ran as uid {out.get('uid')}, not {self.name} ({self.uid})"]
+        return list(out.get("problems") or ([] if proc.returncode == 0 else
+                                             [f"probe exit {proc.returncode}"]))
+
+    def grant(self, folder: Path) -> None:
+        """Give this user rwX on *folder* and everything in it, and on what is made in it
+        later (default ACL), keeping the person's own access to what this user makes."""
+        me = os.getuid()
+        spec = f"u:{self.uid}:rwX,d:u:{self.uid}:rwX,d:u:{me}:rwX"
+        try:
+            proc = subprocess.run(["setfacl", "-R", "-m", spec, str(folder)],
+                                  capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise Unavailable(f"setfacl could not give {self.name} the sandbox: {exc}") from exc
+        if proc.returncode != 0:
+            raise Unavailable(f"setfacl could not give {self.name} the sandbox: "
+                              f"{(proc.stderr or '').strip()[:300]}")
+
+
+_current: ReplayUser | None = None
+_lock_fd: int | None = None
+
+
+def current() -> ReplayUser | None:
+    """The replay user this process resolved (None when it runs as the person or has not
+    resolved yet)."""
+    return _current
+
+
+def _find_sudo() -> str | None:
+    return shutil.which("sudo", path=_SUDO_ENV["PATH"])
+
+
+def _lock_path() -> Path:
+    from config import get_app_data_dir
+    return Path(get_app_data_dir()) / "feature_map" / "replay-user.lock"
+
+
+def _take_lock(wait_s: float) -> None:
+    """Hold the machine's replay-user lock until this process ends (one replay at a time
+    uses the replay user). Raises ``Unavailable`` when it is not free within *wait_s*."""
+    global _lock_fd
+    if _lock_fd is not None:
+        return
+    import fcntl
+    path = _lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_fd = fd
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise Unavailable(f"another replay has used {REPLAY_USER} for over "
+                                  f"{int(wait_s)}s (lock {path})") from None
+            time.sleep(1)
+
+
+def resolve(paths: Iterable[Path | str] = (), *, lock_wait_s: float = LOCK_WAIT_S) -> ReplayUser | None:
+    """Who the sandbox runs as: None when this machine does not need the replay user (the
+    person, as before); else the replay user, once this process holds the machine's
+    replay-user lock, no process of that user is left, and a probe as that user found the
+    metadata service closed and *paths* within reach. Raises ``Unavailable`` when the
+    replay user is needed and cannot be used. Only a usable replay user is remembered."""
+    global _current
+    user = _current
+    if user is None:
+        if not needs_replay_user():
+            return None
+        if not sys.platform.startswith("linux"):
+            raise Unavailable("this machine has an instance metadata service, and replay keeps "
+                              "it from the replayed app only on Linux (a replay user the "
+                              "firewall keeps off it)")
+        try:
+            pw = pwd.getpwnam(REPLAY_USER)
+        except KeyError:
+            raise Unavailable(
+                f"this machine needs a replay user and has no {REPLAY_USER}: replay runs the "
+                f"repo's code only as a user the firewall keeps off the instance metadata "
+                f"service (on a Hive the next update sets it up, hive/replay-host.sh)") from None
+        sudo = _find_sudo()
+        if sudo is None:
+            raise Unavailable(f"no sudo to start the replay as {REPLAY_USER}")
+        user = ReplayUser(REPLAY_USER, pw.pw_uid, Path(pw.pw_dir), sudo, sys.executable)
+        _take_lock(lock_wait_s)
+        left = user.kill_all()
+        if left is None:
+            raise Unavailable(f"sudo -n -u {REPLAY_USER} could not stop that user's processes")
+        if left:
+            raise Unavailable(f"{left} process(es) of {REPLAY_USER} outlived an earlier replay "
+                              "and could not be stopped")
+    problems = user.probe(paths)
+    if problems:
+        raise Unavailable(f"replay user {REPLAY_USER}: " + "; ".join(problems))
+    _current = user
+    return user
+
+
+def remove_tree(path: Path | str) -> None:
+    """Remove *path*: first as the replay user (the files it wrote), then as the person."""
+    user = current()
+    if user is not None and Path(path).exists():
+        user.remove(Path(path))
+    shutil.rmtree(path, ignore_errors=True)

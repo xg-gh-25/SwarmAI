@@ -9,7 +9,11 @@
 #   - the first boot seeded the workspace: the 5 public context files, config.json and
 #     the default project's DDD docs;
 #   - a non-public route is refused with 401 when no Hive credential is configured (the
-#     app-layer auth fails closed).
+#     app-layer auth fails closed);
+#   - the pinned Chromium of Feature Map replay starts and renders text: the package's own
+#     backend installs the pinned runtime into the temp data folder (core/feature_map/runtime.py)
+#     and launches it, so a build or a machine that cannot start the browser (missing system
+#     libraries or fonts: hive/replay-host.sh installs them on a Hive) fails here.
 # It never touches this machine's own SwarmAI data: the backend starts with an empty
 # environment except PATH, HOME and SWARM_DATA_DIR (both in the temp dir) and the port, with
 # AWS credential files and the instance metadata service switched off.
@@ -106,5 +110,14 @@ echo "[smoke] ok: workspace seeded (public context, config, default project)"
 CODE="$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api/hive/instances")"
 [ "${CODE}" = "401" ] || fail "a non-public route answered HTTP ${CODE} without credentials (expected 401)"
 echo "[smoke] ok: non-public routes refuse without credentials (401)"
+
+echo "[smoke] installing the pinned Feature Map runtime and starting its Chromium..."
+BROWSER="$(cd "${APP}/backend" && env -i PATH="${PATH}" TMPDIR="${TMPDIR:-/tmp}" LANG=C.UTF-8 \
+    HOME="${HOME_DIR}" SWARM_DATA_DIR="${HOME_DIR}/.swarm-ai" \
+    AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
+    timeout 900 .venv/bin/python -m core.feature_map.runtime --launch 2>>"${LOG}")" \
+    || fail "the pinned Chromium did not start: ${BROWSER:-no output}"
+CHROMIUM="$(printf '%s' "${BROWSER}" | python3 -c "import sys, json; print(json.load(sys.stdin).get('version', ''))")"
+echo "[smoke] ok: Chromium ${CHROMIUM} starts and renders text"
 
 echo "[smoke] all checks passed"

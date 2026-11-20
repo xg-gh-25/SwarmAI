@@ -24,11 +24,19 @@ The repo's commands do not decide it:
   per target (``prepare``). A target that keeps its data under ``{state_dir}`` starts
   every state from a clean app; what it keeps elsewhere (``HOME``, the checkout) is
   shared by the states;
-- removed after the run unless ``keep``.
+- removed after the run unless ``keep``;
+- on a machine that needs it (a Hive, a Linux machine where the replay user exists, one
+  whose instance metadata service answers), every process it starts runs as the replay
+  user (``user``, ``core.feature_map.replay_user``),
+  whose traffic to the metadata service the host's firewall rejects: the folder is given to
+  that user (ACL), each start goes through sudo with a spawn tag, stopping a start stops
+  every process with its tag as that user, closing stops every process of that user, and
+  the package caches are that user's own.
 
 What it does not contain: the app's own server-side network calls and the repo's own
 files (a repo-local ``.env`` is part of the checkout) — the trust of running the repo's
-tests. The browser is kept off the network by the replay's proxy (``replay``).
+tests; on a machine with a metadata service, the instance's credentials are out of reach
+(the replay user). The browser is kept off the network by the replay's proxy (``replay``).
 
 Failures raise ``SandboxError`` whose ``reason`` is a not_run reason: ``dependencies
 missing``, ``needs <command>``, ``launch failed``, ``not ready``, ``port taken``.
@@ -39,6 +47,8 @@ Exports: Sandbox, SandboxError, allowed_env, cache_dirs, loopback_url.
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
 import shutil
 import signal
@@ -53,6 +63,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from core.feature_map.files import FeatureMap, Target
+from core.feature_map.replay_user import ReplayUser
 
 STEP_TIMEOUT_S = 1200          # a hang guard per prepare/setup command, never a budget
 PORT_CLOSE_S = 10              # how long a stopped service's port may take to close
@@ -104,9 +115,12 @@ class SandboxError(RuntimeError):
         super().__init__(f"{reason}: {detail}" if detail else reason)
 
 
-def allowed_env(sandbox: Path, real_home: Path, extra: Mapping[str, str] | None = None) -> dict[str, str]:
+def allowed_env(sandbox: Path, real_home: Path, extra: Mapping[str, str] | None = None,
+                *, own_caches: bool = True) -> dict[str, str]:
     """The services' environment: the allowlist, a sandbox HOME, empty AWS files,
-    the real package caches, then *extra* (the target's own ``env``)."""
+    the real package caches, then *extra* (the target's own ``env``). *own_caches* False
+    (another user runs the services): the caches under *real_home* only, never the
+    person's own cache variables."""
     names = _POSIX_ALLOW + (_WIN_ALLOW if sys.platform == "win32" else ())
     env = {k: os.environ[k] for k in names if k in os.environ}
     home, tmp = sandbox / "home", sandbox / "tmp"
@@ -118,7 +132,7 @@ def allowed_env(sandbox: Path, real_home: Path, extra: Mapping[str, str] | None 
                 "TMP": str(tmp), "AWS_CONFIG_FILE": str(empty),
                 "AWS_SHARED_CREDENTIALS_FILE": str(empty), "AWS_EC2_METADATA_DISABLED": "true",
                 "FEATURE_MAP_SANDBOX": str(sandbox), "CI": "1"})
-    env.update(cache_dirs(real_home))
+    env.update(cache_dirs(real_home) if own_caches else cache_dirs(real_home, environ={}))
     env.setdefault("LANG", "C.UTF-8")
     env.update(dict(extra or {}))
     return env
@@ -196,6 +210,9 @@ def _copy_checkout(root: Path, dest: Path) -> None:
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
+    kill_tag = getattr(proc, "fm_kill", None)
+    if kill_tag is not None:
+        kill_tag()                         # every process of that start, as the replay user
     if proc.poll() is not None and sys.platform == "win32":
         return
     try:
@@ -222,10 +239,12 @@ class Sandbox:
     sb.setup(fmap, target, "home")``."""
 
     def __init__(self, root: Path, *, keep: bool = False, real_home: Path | None = None,
-                 folder_copy: Path | None = None):
+                 folder_copy: Path | None = None, user: ReplayUser | None = None):
         self.root = Path(root)
         self.keep = keep
-        self.real_home = Path(real_home or Path.home())
+        self.user = user                        # who its processes run as (None: the person)
+        self.real_home = Path(user.home if user else (real_home or Path.home()))
+        self._spawns = 0
         self.folder_copy = folder_copy          # a Brain-home feature folder to copy in
         self.dir: Path | None = None
         self.checkout: Path | None = None
@@ -245,6 +264,9 @@ class Sandbox:
         (self.dir / "logs").mkdir()
         self.state_dir = self.dir / "state" / PREPARE_STATE
         self.state_dir.mkdir(parents=True)
+        if self.user is not None:
+            (self.dir / "spawn").mkdir()
+            self.user.grant(self.dir)
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -254,8 +276,56 @@ class Sandbox:
         for _sid, proc in reversed(self.procs):
             _kill_group(proc)
         self.procs.clear()
+        self.stop_user()
         if self.dir and not self.keep:
-            shutil.rmtree(self.dir, ignore_errors=True)
+            self._remove(self.dir)
+
+    def stop_user(self) -> None:
+        """Stop every process of the replay user (this process holds the machine's
+        replay-user lock, ``replay_user.resolve``), also one that cleared its tag or left its
+        group; at least every tagged one of this sandbox when that cannot run."""
+        if self.user is not None and self.dir:
+            left = self.user.kill_all()
+            if left is None:
+                self.user.kill(self.dir.name + "/", prefix=True)
+            elif left:
+                # the next replay's resolve refuses until they are gone
+                logging.getLogger(__name__).warning(
+                    "feature map: %d process(es) of %s survived the replay", left, self.user.name)
+
+    def _remove(self, path: Path) -> None:
+        """Remove *path*: what the replay user wrote first, as that user, then the rest."""
+        if self.user is not None and path.exists():
+            self.user.remove(path)
+        shutil.rmtree(path, ignore_errors=True)
+
+    def popen(self, argv: list[str], *, cwd: Path, env: Mapping[str, str],
+              **kwargs) -> subprocess.Popen:
+        """Start *argv* in its own process group (session), as the replay user when there is
+        one: through sudo, its environment in a file only the two users read, a spawn tag in
+        it that ``_kill_group`` stops it by. ``FileNotFoundError`` when the program is not
+        on the environment's PATH."""
+        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}  # type: ignore[attr-defined]
+                 if sys.platform == "win32" else {"start_new_session": True})
+        if self.user is None:
+            return subprocess.Popen(argv, cwd=str(cwd), env=dict(env), **kwargs, **group)
+        program = argv[0]
+        if os.sep not in program:
+            program = shutil.which(program, path=env.get("PATH", "")) or ""
+            if not program:
+                raise FileNotFoundError(f"{argv[0]} is not on PATH")
+        self._spawns += 1
+        tag = f"{self.dir.name}/{self._spawns}"
+        envfile = self.dir / "spawn" / f"{self._spawns}.json"
+        fd = os.open(envfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o660)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({**env, "FEATURE_MAP_SPAWN": tag}, fh)
+        cmd = self.user.command("exec", str(envfile), str(cwd), program, *argv[1:], tag=tag)
+        kwargs.setdefault("stdin", subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, cwd=str(cwd), env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+                                **kwargs, **group)
+        proc.fm_kill = lambda: self.user.kill(tag)       # type: ignore[attr-defined]
+        return proc
 
     # placeholders: {port.<service>}, {sandbox}, {checkout}, {state_dir}
     def expand(self, text: str) -> str:
@@ -267,7 +337,8 @@ class Sandbox:
 
     def env(self, target: Target) -> dict[str, str]:
         return allowed_env(self.dir, self.real_home,
-                           {k: self.expand(v) for k, v in target.env.items()})
+                           {k: self.expand(v) for k, v in target.env.items()},
+                           own_caches=self.user is None)
 
     def _cwd(self, target: Target) -> Path:
         return self.checkout / target.root if target.root else self.checkout
@@ -275,12 +346,10 @@ class Sandbox:
     def _run(self, argv: Iterable[str], target: Target, reason: str, label: str) -> None:
         argv = [self.expand(a) for a in argv]
         log = self.dir / "logs" / f"{target.id}-{label}.log"
-        kwargs = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}  # type: ignore[attr-defined]
-                  if sys.platform == "win32" else {"start_new_session": True})
         try:
             with open(log, "ab") as out:
-                proc = subprocess.Popen(argv, cwd=str(self._cwd(target)), env=self.env(target),
-                                        stdout=out, stderr=subprocess.STDOUT, **kwargs)
+                proc = self.popen(argv, cwd=self._cwd(target), env=self.env(target),
+                                  stdout=out, stderr=subprocess.STDOUT)
         except FileNotFoundError as exc:
             raise SandboxError(f"needs {argv[0]}", str(exc)) from exc
         try:
@@ -335,12 +404,10 @@ class Sandbox:
             log = self.dir / "logs" / f"{target.id}-{svc.id}.log"
             self.logs[svc.id] = log
             argv = [self.expand(a) for a in svc.argv]
-            kwargs = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}  # type: ignore[attr-defined]
-                      if sys.platform == "win32" else {"start_new_session": True})
+            out = open(log, "ab")
             try:
-                out = open(log, "ab")
-                proc = subprocess.Popen(argv, cwd=str(self._cwd(target)), env=self.env(target),
-                                        stdout=out, stderr=subprocess.STDOUT, **kwargs)
+                proc = self.popen(argv, cwd=self._cwd(target), env=self.env(target),
+                                  stdout=out, stderr=subprocess.STDOUT)
             except FileNotFoundError as exc:
                 raise SandboxError(f"needs {argv[0]}", str(exc)) from exc
             finally:
@@ -376,7 +443,9 @@ class Sandbox:
         self.stop()
         try:
             if folder.exists():
-                shutil.rmtree(folder)
+                self._remove(folder)
+                if folder.exists():
+                    raise OSError(f"{folder} could not be removed")
             folder.mkdir(parents=True)
         except OSError as exc:
             raise SandboxError("launch failed", f"the folder of start state {state} could not "

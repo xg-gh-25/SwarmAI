@@ -85,6 +85,9 @@ def test_run_writes_the_ledger_the_engine_reads(tmp_path, app_data, monkeypatch,
 def test_replay_leaves_no_sandbox_behind_on_errors(tmp_path, monkeypatch):
     import tempfile
 
+    from tests.feature_map_fixtures import no_metadata_service
+    no_metadata_service(monkeypatch)
+
     import pytest
     from core.feature_map import files, sandbox
     from core.feature_map.replay import Selection, replay
@@ -104,6 +107,7 @@ def test_replay_leaves_no_sandbox_behind_on_errors(tmp_path, monkeypatch):
     assert list(temp.iterdir()) == []
     monkeypatch.undo()
     monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    no_metadata_service(monkeypatch)
 
     # an error while replaying: raised, and the folder (returned to nobody) removed
     def broken_start(self, fmap, target):
@@ -221,7 +225,12 @@ def test_a_wall_clock_cap_stops_the_sandbox_services(tmp_path, app_data):  # noq
         except OSError:
             return False
     backend = Path(__file__).resolve().parents[1]
-    proc = subprocess.Popen([sys.executable, "-m", "scripts.feature_map", "replay", "--repo-root", str(root),
+    # the CLI as `-m scripts.feature_map`, on a machine taken as one that does not need the
+    # replay user (as app_data does in-process), so it replays as the person on a Hive too
+    main = ("import runpy, sys; sys.path.insert(0, '.'); import core.feature_map.replay_user as r; "
+            "r.needs_replay_user = lambda: False; "
+            "runpy.run_module('scripts.feature_map', run_name='__main__')")
+    proc = subprocess.Popen([sys.executable, "-c", main, "replay", "--repo-root", str(root),
                              "--project", "B", "--repo", "app"], cwd=str(backend),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ)
     deadline = time.monotonic() + 30
@@ -249,7 +258,10 @@ def test_an_interrupted_playwright_run_takes_its_group_with_it(tmp_path):
     script.write_text("import os, time\nopen(os.environ['PID_FILE'], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
     pid_file = tmp_path / "pid"
     rt = SimpleNamespace(node=Path(sys.executable), playwright_cli=script, env=lambda: {})
-    sb = SimpleNamespace(env=lambda target: {"PATH": os.environ["PATH"], "PID_FILE": str(pid_file)})
+    sb = SimpleNamespace(env=lambda target: {"PATH": os.environ["PATH"], "PID_FILE": str(pid_file)},
+                         user=None)
+    from core.feature_map.sandbox import Sandbox
+    sb.popen = lambda argv, **kw: Sandbox.popen(sb, argv, **kw)   # the sandbox's own start
 
     def interrupt(*_a):
         raise KeyboardInterrupt

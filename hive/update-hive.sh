@@ -87,6 +87,12 @@ sudo -u swarm /opt/swarmai/backend/.venv/bin/pip install -q -e '/opt/swarmai/bac
 (cd /opt/swarmai/backend && sudo -H -u swarm .venv/bin/python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline 120) \
     || echo "WARN: tree-sitter grammars not bundled; code intel uses its regex path for the missing languages"
 
+# Feature Map replay: Chromium's system packages, the replay user and its firewall rule
+# (hive/replay-host.sh, as in the provisioner's update; bounded, warn-only).
+sudo cp /tmp/hive-config/replay-host.sh /opt/swarmai/hive/replay-host.sh
+sudo timeout 240 env SWARM_USER=swarm REPLAY_HOST_DNF_DEADLINE_S=200 bash /opt/swarmai/hive/replay-host.sh \
+    || echo "WARN: Feature Map replay host step incomplete; replay reports its walks not_run"
+
 # Restart
 sudo systemctl restart swarmai-hive
 sleep 8

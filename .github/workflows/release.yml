@@ -227,8 +227,18 @@ jobs:
       - name: Verify it is safe to publish
         run: bash hive/verify_package.sh --public "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz"
 
+      # The smoke step also starts the pinned Chromium of Feature Map replay: the runner gets
+      # the system libraries it needs from the pinned Playwright's own list (a Hive gets
+      # them from hive/replay-host.sh).
+      - name: Install the browser's system libraries
+        working-directory: ./backend
+        run: |
+          PW="$(python -c 'from core.feature_map.runtime import PLAYWRIGHT_VERSION; print(PLAYWRIGHT_VERSION)')"
+          npx --yes "playwright@${PW}" install-deps chromium
+
       # Install it the way a Hive's first boot does and start it: /health must report this
-      # version, the workspace must be seeded, and a non-public route must refuse (401).
+      # version, the workspace must be seeded, a non-public route must refuse (401), and the
+      # pinned Chromium must start and render text.
       - name: Install and start the package (smoke)
         run: bash hive/smoke_package.sh "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz"
 

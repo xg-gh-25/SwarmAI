@@ -44,7 +44,8 @@ from pathlib import Path
 from typing import Any
 
 from core.feature_map.files import Feature, FeatureMap
-from core.feature_map.runtime import Runtime, RuntimeUnavailable, ensure
+from core.feature_map import replay_user
+from core.feature_map.runtime import Runtime, RuntimeUnavailable, ensure, headless_shell
 from core.feature_map.sandbox import Sandbox, SandboxError, _kill_group, loopback_url
 
 PLAYWRIGHT_TIMEOUT_S = 1800     # a hang guard for one Playwright run, never a budget
@@ -109,11 +110,8 @@ def _config(sb: Sandbox, folder_copy: Path, rt: Runtime, base_url: str, locale: 
 def _pw(rt: Runtime, sb: Sandbox, target, args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     env = {**sb.env(target), **rt.env()}
     env["PATH"] = str(rt.node.parent) + os.pathsep + env.get("PATH", "")
-    kwargs = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}  # type: ignore[attr-defined]
-              if sys.platform == "win32" else {"start_new_session": True})
-    proc = subprocess.Popen([str(rt.node), str(rt.playwright_cli), "test", *args], cwd=str(cwd),
-                            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            **kwargs)
+    proc = sb.popen([str(rt.node), str(rt.playwright_cli), "test", *args], cwd=cwd, env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         out, _ = proc.communicate(timeout=PLAYWRIGHT_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
@@ -341,11 +339,23 @@ def replay(fmap: FeatureMap, root: Path, sel: Selection, *,
                 more, sbdir = replay(fmap, root, Selection(rest), runtime=None, keep=keep)
                 return results + more, sbdir
             return results, None
+    # who the sandbox's processes run as: the person, or (the machine's metadata service
+    # answers) the replay user, checked first; it must reach the pinned runtime too
+    reach = ([rt.node, rt.playwright_cli, *filter(None, [headless_shell(rt)])]
+             if rt is not None else [])
+    try:
+        user = replay_user.resolve(reach)
+    except replay_user.Unavailable as exc:
+        return _not_run(sel.features, "runtime unavailable", exc.reason), None
     in_repo = fmap.folder.resolve().is_relative_to(root.resolve())
     results: list[dict] = []
-    sb = Sandbox(root, keep=True)
+    sb = Sandbox(root, keep=True, user=user)
     try:
         sb.__enter__()
+    except replay_user.Unavailable as exc:
+        if sb.dir:
+            shutil.rmtree(sb.dir, ignore_errors=True)
+        return _not_run(sel.features, "runtime unavailable", exc.reason), None
     except (subprocess.SubprocessError, OSError) as exc:
         if sb.dir:
             shutil.rmtree(sb.dir, ignore_errors=True)
@@ -369,13 +379,15 @@ def replay(fmap: FeatureMap, root: Path, sel: Selection, *,
         for _sid, proc in reversed(sb.procs):
             _kill_group(proc)
         sb.procs.clear()
+        sb.stop_user()
         if keep:
             exc.sandbox_dir = str(sb.dir)
         else:
-            shutil.rmtree(sb.dir, ignore_errors=True)
+            sb._remove(sb.dir)
         raise
     finally:
         for _sid, proc in reversed(sb.procs):
             _kill_group(proc)
         sb.procs.clear()
+        sb.stop_user()          # nothing the replay user started outlives the replay
     return results, sb.dir

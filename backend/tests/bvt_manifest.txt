@@ -79,6 +79,7 @@ test_eval_release.py  # release decision: tiers, five dimensions, the four check
 test_hive_package_publish.py  # the Hive package published with a release carries no workspace content
 test_hive_update.py  # Hive update from the desktop: failures end running with the reason, background update, stale updates released
 test_hive_retry.py  # Retry on an errored Hive: confirmation and disk snapshots before anything holding data is deleted
+test_hive_replay_host.py  # Feature Map replay on a Hive: every setup and update path runs the bounded, warn-only replay host step; the replay user's nft rule and sudoers drop-in
 test_mcp_stdio_client.py  # MCP stdio client: server by exact configured id, call timeout kills the server, close, result parsing
 test_inbox_sources_common.py  # Inbox sources: pull/thread/find_sent use only READ_TOOLS, writes only in reply, all kinds registered, secrets only from the credential store
 test_inbox_source_slack.py  # Inbox Slack source (slack-mcp mapping, Web API): identity, dedup, reply into the given thread, find_sent, expired auth

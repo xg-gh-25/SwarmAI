@@ -449,9 +449,11 @@ echo "Origin guard {mode}: done"
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*")
 UPDATE_STALE_S = 15 * 60
 # How long update() waits for its SSM update script: every bounded step in that script
-# (the tree-sitter grammar step's deadline, user_data.TREE_SITTER_SETUP_DEADLINE_S) must
-# fit well inside it, or a slow step reports a failed update while the script still runs.
-UPDATE_WAIT_POLLS = 60
+# (the tree-sitter grammar step's deadline, user_data.TREE_SITTER_SETUP_DEADLINE_S, and the
+# Feature Map replay host step's, user_data.REPLAY_HOST_DEADLINE_S: the first update installs
+# Chromium's packages) must fit well inside it, or a slow step reports a failed update while
+# the script still runs. Below UPDATE_STALE_S, so a waiting update is never taken as stale.
+UPDATE_WAIT_POLLS = 150
 UPDATE_WAIT_INTERVAL_S = 5
 
 
@@ -526,6 +528,15 @@ class HiveProvisioner:
                 f"UPDATE hive_instances SET {sets}, updated_at = datetime('now') WHERE id = ?",
                 vals,
             )
+            await conn.commit()
+
+    async def _touch_updating(self, instance_id: str) -> None:
+        """Refresh updated_at of a row that is still 'updating' (nothing else changes)."""
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            await conn.execute(
+                "UPDATE hive_instances SET updated_at = datetime('now') "
+                "WHERE id = ? AND status = 'updating'", (instance_id,))
             await conn.commit()
 
     async def _get_account(self, account_ref: str) -> dict:
@@ -1638,10 +1649,10 @@ class HiveProvisioner:
         """End rows no background work can still be on (SwarmAI quit or crashed in the
         middle), so the card offers its actions again. Returns how many rows changed.
 
-        - 'updating' older than *max_age_s* → 'running' (an update takes at most about 12
-          minutes: S3 sync, the SSM command's 300 s, our 300 s poll, the 60 s health check;
-          the origin-secret step that may follow waits up to 20 more minutes for
-          CloudFront, and refreshes updated_at at every poll of that wait);
+        - 'updating' older than *max_age_s* → 'running' (an update's waits refresh
+          updated_at at every poll: the SSM update script's (up to UPDATE_WAIT_POLLS x
+          UPDATE_WAIT_INTERVAL_S) and the origin-secret step's, up to 20 minutes for
+          CloudFront; between them only the S3 sync and the 60 s health check run);
         - 'deleting' older than *deleting_max_age_s* → 'error', keeping the last step the
           retry recorded (snapshots up to 40 minutes, then the cleanup), so the person
           knows how far it got; the next Retry checks the instance again."""
@@ -1731,8 +1742,9 @@ class HiveProvisioner:
                 instance.get("ec2_public_ip"), instance.get("elastic_ip_alloc_id"))
 
             # SSM Run Command
-            from hive.user_data import (PACKAGE_CHECK_SH, TMP_ON_DISK_SH, TREE_SITTER_GRAMMARS_SH,
-                                        caddy_binary_update_sh, health_exempt_fix_sh)
+            from hive.user_data import (PACKAGE_CHECK_SH, REPLAY_HOST_SH, TMP_ON_DISK_SH,
+                                        TREE_SITTER_GRAMMARS_SH, caddy_binary_update_sh,
+                                        health_exempt_fix_sh)
             health_fix_sh = health_exempt_fix_sh()
             caddy_binary_sh = caddy_binary_update_sh()
             update_script = f"""#!/bin/bash
@@ -1779,6 +1791,10 @@ rsync -a --delete \
 cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 
 {TREE_SITTER_GRAMMARS_SH}
+
+# Feature Map replay on this Hive: Chromium's packages, the replay user and its firewall rule
+# (hive/replay-host.sh, from the package just synced; bounded, warn-only).
+{REPLAY_HOST_SH}
 
 # The newest installed Node as the default node / npm / npx (design
 # 2026-10-31-swarm-out-single-loop-fixes §2.7). The backend needs no Node, so a Hive whose
@@ -1881,6 +1897,18 @@ rm -rf /opt/swarmai.bak /tmp/hive-new /tmp/hive-update.tar.gz
 echo "=== Update to v{version} verified ==="
 """
 
+            loop = asyncio.get_running_loop()
+
+            def _heartbeat() -> None:
+                # The wait can pass UPDATE_STALE_S: refresh updated_at at every poll so that
+                # release_stale_updates never takes this running update for an interrupted one;
+                # only while the row is still 'updating' (a cancelled update() has ended it).
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._touch_updating(instance_id), loop).result(timeout=10)
+                except Exception as e:  # noqa: BLE001 — a missed beat only risks a stale release
+                    logger.debug("Hive update heartbeat failed: %s", e)
+
             def _run_command():
                 ssm = session.client("ssm", region_name=region)
                 _command_sent[0] = True
@@ -1901,6 +1929,7 @@ echo "=== Update to v{version} verified ==="
                     status = result["Status"]
                     if status in ("Success", "Failed", "Cancelled", "TimedOut"):
                         return status, result.get("StandardOutputContent", "")
+                    _heartbeat()
                     _time.sleep(UPDATE_WAIT_INTERVAL_S)
                 return "TimedOut", ""
 

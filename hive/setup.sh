@@ -106,6 +106,10 @@ sudo -u "${SWARM_USER}" .venv/bin/pip install --quiet -e ".[all]" 2>/dev/null \
 # (backend/core/code_intel/grammars.py). Offline it only warns (regex path).
 sudo -H -u "${SWARM_USER}" .venv/bin/python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars --deadline 120 \
     || echo "[hive] WARNING: tree-sitter grammars not bundled; code intel uses its regex path for the missing languages"
+# Feature Map replay: Chromium's system packages, the replay user and its firewall rule
+# (hive/replay-host.sh, as in backend/hive/user_data.py; bounded, warn-only).
+timeout 240 env SWARM_USER="${SWARM_USER}" REPLAY_HOST_DNF_DEADLINE_S=200 bash "${INSTALL_DIR}/hive/replay-host.sh" \
+    || echo "[hive] WARNING: Feature Map replay host step incomplete; replay reports its walks not_run"
 
 # ---------------------------------------------------------------------------
 # 5. Build React frontend

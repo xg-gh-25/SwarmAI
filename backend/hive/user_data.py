@@ -68,6 +68,8 @@ sudo -u "$SWARM_USER" .venv/bin/pip install -q -e . 2>&1 | tail -3
 
 ${tree_sitter_grammars}
 
+${replay_host}
+
 # ── 5. Install Caddy ──
 echo "[5/9] Installing Caddy..."
 # A pinned release from GitHub, checked against that release's checksum (CADDY_VERSION).
@@ -849,6 +851,22 @@ TREE_SITTER_GRAMMARS_SH = r"""# Code-intel grammars (the backend never downloads
 """.replace("@DEADLINE@", str(TREE_SITTER_SETUP_DEADLINE_S))
 
 
+# The host side of Feature Map replay (hive/replay-host.sh): the packages the pinned Chromium
+# headless shell needs on AL2023, the replay user, and the firewall rule that keeps that user
+# off the instance metadata service. Run as root by the first boot and by every update, outside
+# the prebaked-stripped segments (a prebaked AMI runs it too; a no-op when it is all in place).
+# The deadline bounds a stalled dnf (the script gives dnf REPLAY_HOST_DNF_DEADLINE_S of it); a
+# failure only warns, and Feature Map replay then reports its walks not_run (the engine checks
+# the boundary itself before it runs anything, core/feature_map/replay_user.py). This deadline
+# and the grammar step's fit the provisioner's wait (provisioner.UPDATE_WAIT_POLLS).
+REPLAY_HOST_DEADLINE_S = 240
+REPLAY_HOST_DNF_DEADLINE_S = 200
+REPLAY_HOST_SH = r"""# Feature Map replay host: browser packages, the replay user, no metadata service for it
+timeout @DEADLINE@ env SWARM_USER="${SWARM_USER:-swarm}" REPLAY_HOST_DNF_DEADLINE_S=@DNF@ bash "${INSTALL_DIR:-/opt/swarmai}/hive/replay-host.sh" \
+  || echo "WARN: Feature Map replay host step incomplete; replay reports its walks not_run until the next update"
+""".replace("@DEADLINE@", str(REPLAY_HOST_DEADLINE_S)).replace("@DNF@", str(REPLAY_HOST_DNF_DEADLINE_S))
+
+
 # ── Prebaked-AMI segments (must match _USER_DATA_TEMPLATE byte-for-byte) ──
 # When a pre-baked custom AMI is used, the heavy on-machine install steps are
 # already固化 in the image, so render_user_data(prebaked=True) strips these two
@@ -953,6 +971,7 @@ def render_user_data(
         package_check=PACKAGE_CHECK_SH,
         caddy_install=CADDY_INSTALL_SH,
         tree_sitter_grammars=TREE_SITTER_GRAMMARS_SH,
+        replay_host=REPLAY_HOST_SH,
     )
     if origin_secret is not None:
         values["origin_secret"] = origin_secret
@@ -978,7 +997,7 @@ def render_user_data(
     # Only check for our known template vars (shell vars like ${i}, ${HASH} are expected).
     _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region",
                       "origin_secret", "tmp_on_disk", "package_check", "caddy_install",
-                      "tree_sitter_grammars"}
+                      "tree_sitter_grammars", "replay_host"}
     for var in _TEMPLATE_VARS:
         if f"${{{var}}}" in result:
             raise ValueError(f"Unresolved template variable: ${{{var}}}")
