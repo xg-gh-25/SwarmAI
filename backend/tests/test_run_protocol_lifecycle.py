@@ -559,3 +559,27 @@ def test_a_decision_logged_before_its_content_was_stored_folds_and_fails_dc1():
                               authority=stream.authority)
     ok, detail = checks.evaluate("DC-1", ctx)
     assert ok is False and "q1" in detail, detail
+
+
+def test_every_event_kind_the_log_accepts_has_a_lifecycle_rule():
+    """A kind the event log accepts but the fold has no rule for raises at every later
+    fold, so the run can never move again (a TEST that recorded its Feature Map facts
+    could not complete). Every registered kind is either a state rule or IGNORED."""
+    s = Stream()
+    run = lc.fold(s.rows, s.authority)
+    for kind in ev.EVENT_SPECS:
+        try:
+            lc._apply(copy.deepcopy(run), {"kind": kind, "payload": {}, "run_id": "run_x",
+                                           "event_id": "e", "stage": None, "attempt": None})
+        except lc.LifecycleError as exc:
+            assert f"unhandled lifecycle event {kind}" not in str(exc), kind
+        except Exception:   # noqa: BLE001 — a rule that needs more payload is still a rule
+            pass
+
+
+def test_a_feature_checks_event_folds():
+    s = Stream(profile="bugfix")
+    s.add("feature_checks", {"repo": "app", "code_tree": "a" * 40, "blocking": True,
+                             "n_fail": 0, "n_rows": 2, "report_json": {}})
+    assert s.projection()["stage"] == "evaluate"
+

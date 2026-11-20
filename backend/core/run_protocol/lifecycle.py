@@ -199,6 +199,7 @@ IGNORED = frozenset({
     "child_dispatched", "frozen_spec",   # a Swarm Run's record of its children (swarm-run §9)
     "knowledge_recalled",       # what THINK / PLAN were given (run-knowledge §3.6.3)
     "reflect_report",           # the report reflect-prepare recorded (read_reflect_report)
+    "feature_checks",           # a repo's Feature Map facts; checks.py (FM-1) reads them
 })
 
 
