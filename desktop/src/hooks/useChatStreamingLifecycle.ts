@@ -2927,6 +2927,26 @@ export function useChatStreamingLifecycle(
           ? tabMapRef.current.get(capturedTabId)
           : undefined;
 
+        // After the user's Stop the stopped turn takes no more text or thoughts. The
+        // backend streams on until its stop lands, and the window's subscription (not
+        // aborted with this tab's POST) delivers it to this turn's handler: appended to
+        // the Stopped marker it read "Stoppedword", and a confirmation added the rest
+        // of the paragraph. The turn is told by its handler, so a turn begun after the
+        // Stop (a new send, a turn the CLI starts once background agents finish)
+        // streams as usual. Tool calls, results and the backend's display blocks (its
+        // stop receipt) still come through.
+        if (tabState && tabState._stoppedHandler === handlerToken) {
+          if (event.type === 'text_delta' || event.type === 'thinking_delta'
+              || event.type === 'text_start' || event.type === 'thinking_start') {
+            return;
+          }
+          if (event.type === 'assistant' && Array.isArray(event.content)) {
+            const kept = event.content.filter((b) => b.type !== 'text' && b.type !== 'thinking');
+            if (!kept.length) return;
+            event = { ...event, content: kept };
+          }
+        }
+
         // When capturedTabId is null (initial tab before registration), treat as active.
         // The null case only occurs for the first tab before initTabState fires.
         const isActiveTab = capturedTabId === null || capturedTabId === activeTabIdRef.current;
@@ -3658,7 +3678,7 @@ export function useChatStreamingLifecycle(
           // Build the error content block — use friendly tone, not scary "Error:" prefix.
           // Backend already sanitizes SDK errors into user-friendly messages.
           const errorContent: ContentBlock[] = [
-            { type: 'text' as const, text: `⚠️ ${fullError}` },
+            { type: 'text' as const, text: `⚠️ ${fullError}`, _liveError: true },
           ];
 
           // Carry the backend error CODE (+ detail + suggestedAction) onto the
@@ -4728,13 +4748,19 @@ export function useChatStreamingLifecycle(
     }
     if (tab._disconnectTimeoutId) { clearTimeout(tab._disconnectTimeoutId); tab._disconnectTimeoutId = undefined; }
     tab.isReconnecting = false;
+    // a replay of the turn the user stopped (a resync while the backend still ran it,
+    // or its turn_start drained after the Stop): it stays stopped
+    const stopped = tab._stoppedTurn;
+    const stoppedReplay = !!stopped && ((!!ev.turnId && ev.turnId === stopped.turnId)
+      || (!!cid && cid === stopped.clientId));
     // (the bee comes from the session's activity, not from this event)
-    updateTabStatus(tabId, 'streaming');
+    if (!stoppedReplay) updateTabStatus(tabId, 'streaming');
     // this tab's own POST of this same turn is taken over: its later events are
     // expected discards, not a lost stream
     tab._handedOverGen = postBubble ? tab.latestStreamGen : undefined;
     incrementStreamGen();
     handlers.subRender = createStreamHandler(id, tabId, 'sub');
+    if (stoppedReplay) tab._stoppedHandler = tab.latestStreamHandler;
     handlers.subComplete = createCompleteHandler(tabId, 'sub');
     if (tabId === activeTabIdRef.current) setMessages(store.getSnapshot());
   };

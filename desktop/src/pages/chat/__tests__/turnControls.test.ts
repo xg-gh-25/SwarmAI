@@ -420,6 +420,13 @@ describe('stopTurn / stopBackground (one Stop at a time)', () => {
     expect(h.stopSession).toHaveBeenCalledTimes(2);
   });
 
+  it('Stop names the handler of the stopped turn, so its late streamed text is dropped', () => {
+    const h = running();
+    h.tabs.get('A')!.latestStreamHandler = 41;
+    stopTurn(h.d);
+    expect(h.tabs.get('A')!._stoppedHandler).toBe(41);
+  });
+
   it('a failed backend stop lifts the guard too', async () => {
     const h = running();
     vi.spyOn(console, 'warn').mockImplementation(() => {});

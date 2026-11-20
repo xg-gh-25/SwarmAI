@@ -107,3 +107,36 @@ async def test_a_user_stop_during_the_wait_is_respected(_no_wait):
 ])
 def test_detector(text, hit):
     assert _is_transient_api_error_text(text) is hit
+
+
+BAD = "API Error: 400 The scripted model refused this request."
+
+
+def _refusal_round(text=BAD):
+    return [AssistantMessage(content=[TextBlock(text=text)], model="<synthetic>"),
+            ResultMessage(subtype="success", duration_ms=10, duration_api_ms=10, is_error=True, num_turns=1,
+                          session_id="sdk-test", result=text, usage={"input_tokens": 1, "output_tokens": 0})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worked_before", [False, True])
+@pytest.mark.parametrize("text", [BAD, "API Error: Could not load AWS credentials"])
+async def test_a_non_transient_error_is_shown_once_as_the_error(worked_before, text):
+    """The CLI's error line is not shown as a reply: the error event carries it, once."""
+    orch = _make_orchestrator()
+    orch._parent._content_emitted = worked_before
+    events, raised = await _drive(orch, [*(_tool_round() if worked_before else []), *_refusal_round(text)])
+    assert raised is None
+    assert not any(text in (t or "") for t in _texts(events)), "the error line is not an answer"
+    errors = [e for e in events if e.get("type") == "error"]
+    assert len(errors) == 1
+    assert orch._parent._client.queries == [], "not continued"
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_quotes_an_api_error_is_still_shown():
+    """Only the CLI's own synthetic line is hidden: the model may say the words."""
+    orch = _make_orchestrator()
+    quoted = "API Error: 400 is what the log says; the model id was wrong."
+    events, raised = await _drive(orch, _reply(quoted))
+    assert quoted in _texts(events)

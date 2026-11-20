@@ -69,6 +69,28 @@ describe('session turn wiring', () => {
     fake.conn.clear();
   });
 
+  it('a replay of the turn the user stopped takes no text; another turn does', () => {
+    // Stop, then the subscription begins that same turn again (a resync while the
+    // backend still ran it): it stays stopped. A later turn streams as usual.
+    renderHook(() => useChatStreamingLifecycle(createMockDeps()));
+    act(() => { initTestTab('t1'); });
+    const tab = testTabMap.get('t1')!;
+    tab.sessionId = 'S';
+    tab._stoppedTurn = { turnId: 'R' };
+    act(() => {
+      fake.emit(env('R', 1, { type: 'turn_start', source: 'chat', turnClientId: 'local-r' }));
+      fake.emit(env('R', 2, text('late words of the stopped turn')));
+    });
+    expect(JSON.stringify(messageStoreRegistry.get('t1')!.messages)).not.toContain('late words');
+    expect(tab.status).not.toBe('streaming');
+    act(() => {
+      fake.emit(env('R', 3, { type: 'turn_end' }));
+      fake.emit(env('N', 4, { type: 'turn_start', source: 'injected', turnClientId: 'injected-n' }));
+      fake.emit(env('N', 5, text('a new turn')));
+    });
+    expect(JSON.stringify(lastAssistant('t1')!.content)).toContain('a new turn');
+  });
+
   it('an idle tab renders a CLI-initiated turn live from the subscription (AC2)', () => {
     const { result } = renderHook(() => useChatStreamingLifecycle(createMockDeps()));
     act(() => { initTestTab('t1'); });

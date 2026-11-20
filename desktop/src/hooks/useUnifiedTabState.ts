@@ -166,6 +166,13 @@ export interface UnifiedTab {
    *  tell it from the handler it replaces; this token can. Only the newest handler
    *  may write message content (deltas, assistant, tool_result). */
   latestStreamHandler?: number;
+  /** The handler of the turn the user stopped (``latestStreamHandler`` at Stop):
+   *  text and thoughts it still receives are dropped. A later turn has its own handler. */
+  _stoppedHandler?: number;
+  /** The turn the user stopped, for a replay of it the subscription begins later
+   *  (beginSubscriptionTurn): its id when the tab had bound it, else its send's
+   *  client id. */
+  _stoppedTurn?: { turnId?: string; clientId?: string };
   status: TabStatus;
   /** Per-tab display of the backend context-usage snapshot (null = empty ring).
    *  Backend snapshots (SSE + GET) land via the lifecycle hook's

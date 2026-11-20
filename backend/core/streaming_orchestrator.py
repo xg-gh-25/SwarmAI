@@ -137,6 +137,15 @@ async def _api_error_wait(seconds: float) -> None:
     await asyncio.sleep(seconds)
 
 
+_API_ERROR_LINE_RE = __import__("re").compile(r"^\s*API Error\b")
+
+
+def _is_api_error_line(text: Any) -> bool:
+    """The CLI's synthetic error line for a failed model request ("API Error: 400 ...",
+    "API Error: Could not load AWS credentials")."""
+    return isinstance(text, str) and bool(_API_ERROR_LINE_RE.match(text))
+
+
 def _is_transient_api_error_text(text: Any) -> bool:
     """The CLI's error line for a transient model-service failure (5xx, 429,
     overloaded), e.g. "API Error: 503 Bedrock is unable to process your request"."""
@@ -2307,14 +2316,16 @@ class StreamingOrchestrator:
                 for block in message.content:
                     if _am_parent is not None and isinstance(block, (TextBlock, ThinkingBlock)):
                         continue
-                    if (_synthetic and isinstance(block, TextBlock)
-                            and _is_transient_api_error_text(block.text)
-                            and self._parent._content_emitted
-                            and _api_error_continuations < self._MAX_API_ERROR_CONTINUATIONS):
-                        # the CLI's own "API Error: 503 ..." line after real work:
-                        # the result below continues the turn; not a reply
+                    if _synthetic and isinstance(block, TextBlock) and _is_api_error_line(block.text):
+                        # the CLI's own "API Error: ..." line is never a reply: the
+                        # result below shows it once, as the turn's error (a 400 was
+                        # shown twice, as text and as the error card), or, after
+                        # real work and for a transient error, continues the turn
                         _api_error_text = block.text
-                        _api_error_after_content = True
+                        _api_error_after_content = (
+                            _is_transient_api_error_text(block.text)
+                            and self._parent._content_emitted
+                            and _api_error_continuations < self._MAX_API_ERROR_CONTINUATIONS)
                         continue
                     if isinstance(block, TextBlock):
                         # ── Tool-call XML leak guard (strip, never terminate) ──

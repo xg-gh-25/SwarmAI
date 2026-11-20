@@ -1012,6 +1012,9 @@ ERROR_CODES = frozenset({
     "RETRY_SPAWN", "SDK_ERROR", "SERIALIZATION_ERROR", "SERVICE_UNAVAILABLE",
     "SESSION_BUSY", "SESSION_NOT_FOUND", "SPAWN_FAILED", "TURN_ABANDONED",
     "error_max_turns", "error_during_execution", "turn_limit_reached",
+    # a failed turn's outcome (core/turn_outcome) carries the error's code, else its
+    # result's subtype
+    "CONTEXT_TOO_LARGE", "sdk_error",
 })
 _LANDINGS = ("landed", "not_landed", "no_code", "human_override")
 

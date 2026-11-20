@@ -31,6 +31,10 @@ from core.turn_writer import TurnWriter
     ([{"type": "error", "code": "MODEL_ERROR", "message": "throttled"}], "error"),
     ([{"type": "result", "subtype": "error_during_execution", "is_error": True}], "error"),
     ([{"type": "result", "subtype": "output_degenerated"}], "error"),
+    ([{"type": "error", "code": "MODEL_ERROR", "message": "refused"},
+      {"type": "result", "subtype": "sdk_error", "stop_reason": "error"}], "error"),
+    ([{"type": "error", "code": "MODEL_ERROR", "message": "throttled"},
+      {"type": "result", "subtype": "success"}], "completed"),
     ([{"type": "turn_limit_reached"}, {"type": "result", "subtype": "turn_limit_reached",
                                        "is_error": True}], "turn_limit"),
     ([{"type": "ask_user_question"}], "paused"),
@@ -43,6 +47,20 @@ def test_ended_follows_the_last_terminal_event(events, ended):
     for e in events:
         rec.note(e)
     assert rec.block()["ended"] == ended
+
+
+def test_a_failed_turn_ended_by_a_result_keeps_the_errors_message():
+    """The orchestrator sends `error`, then a `sdk_error` result: a reload reads the
+    message from this block, so it must be there (it was recorded as completed)."""
+    rec = OutcomeRecorder()
+    rec.note({"type": "error", "code": "MODEL_ERROR", "message": "API Error: 400 refused"})
+    rec.note({"type": "result", "subtype": "sdk_error", "stop_reason": "error"})
+    b = rec.block()
+    assert (b["ended"], b["code"], b["message"]) == ("error", "MODEL_ERROR", "API Error: 400 refused")
+    rec = OutcomeRecorder()
+    rec.note({"type": "error", "code": "MODEL_ERROR", "message": "throttled"})
+    rec.note({"type": "result", "subtype": "success"})
+    assert rec.block()["message"] is None, "a turn that went on and finished is not an error"
 
 
 def test_a_crash_wins_and_keeps_only_the_type_name():

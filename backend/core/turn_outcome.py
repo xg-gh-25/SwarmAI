@@ -11,7 +11,8 @@ started (queued, rejected) writes nothing.
 
 ``ended``, in order: ``crashed`` (an exception left the turn), ``error`` (the last
 terminal event is an ``error``, or an erroring ``result`` other than the turn limit;
-``output_degenerated`` is one), ``turn_limit`` (a ``result`` with subtype
+``output_degenerated`` is one, and so is ``sdk_error``, the result that follows the
+orchestrator's own ``error`` event, whose code and message the block then carries), ``turn_limit`` (a ``result`` with subtype
 ``turn_limit_reached``), ``completed`` (any other ``result``), ``paused`` (no terminal
 event; the turn stopped on a question or a permission prompt, whose continuation
 writes its own outcome), ``none`` (no terminal event: a Stop — its ``turn_stop`` block
@@ -95,7 +96,9 @@ class OutcomeRecorder:
             r = self._result or {}
             if r.get("subtype") == "turn_limit_reached":
                 return "turn_limit"
-            if r.get("is_error") or r.get("subtype") == "output_degenerated":
+            # sdk_error: the result the orchestrator sends after its own `error` event
+            # (the turn failed; the result only ends it)
+            if r.get("is_error") or r.get("subtype") in ("output_degenerated", "sdk_error"):
                 return "error"
             return "completed"
         if self._last == "pause":
@@ -104,7 +107,8 @@ class OutcomeRecorder:
 
     def block(self, repos: Optional[list] = None) -> dict:
         r = self._result if self._last == "result" else None
-        e = self._error if self._last == "error" else None
+        # the error event's code and message, also when a result ended the failed turn
+        e = self._error if self.ended() == "error" else None
         usage = (r or {}).get("usage")
         block: dict[str, Any] = {
             "type": BLOCK_TYPE, "ended": self.ended(),

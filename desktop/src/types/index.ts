@@ -219,6 +219,9 @@ export interface TextContent {
   _confirmed?: boolean;
   /** A provisional block's streamed block key (StreamEvent.block). */
   _streamBlock?: string;
+  /** The live error line the stream handler wrote for an `error` event (not persisted;
+   *  a reloaded turn shows its `turn_outcome` error instead). */
+  _liveError?: boolean;
 }
 
 export interface ToolUseContent {

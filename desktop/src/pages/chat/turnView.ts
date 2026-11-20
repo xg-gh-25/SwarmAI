@@ -84,6 +84,7 @@ import type {
   SwarmRunContent,
   TurnStopContent,
   TurnProductContent,
+  TextContent,
   SubAgentProgress,
 } from '../../types';
 
@@ -425,6 +426,8 @@ export function deriveTurnView(
   /** Files that already have an in-turn product row (one row per file per turn). */
   const shownFiles = new Set<string>();
   let changes: TurnChangesContent | undefined;
+  /** Where the turn being read began: after the last `turn_outcome` (the end of a turn). */
+  let turnFrom = 0;
   // One tool step (and its sub-agent children) into the open process segment. `stand`:
   // a stand-in Agent step for sub-agent calls whose Agent was called in an earlier turn
   // (a background agent still running): running while the turn streams, else done.
@@ -540,6 +543,22 @@ export function deriveTurnView(
       return;
     }
     if (block.type === 'turn_stop') return; // stopReceipt, read above
+    if (block.type === 'turn_outcome') {
+      // A turn that ended in an error says so once, where it ended (one message can
+      // hold several turns). Live, the error line the stream handler wrote
+      // (`_liveError`) says it; a reloaded turn has only its persisted outcome, so its
+      // message is shown then. A turn persisted while the CLI's own "API Error: ..."
+      // line was still shown as a reply holds that line: not twice.
+      const failed = block.ended === 'error' ? block.message?.trim() : undefined;
+      if (failed && !content.slice(turnFrom, index).some((b) => b.type === 'text'
+          && ((b as TextContent)._liveError || (b.text || '').includes(failed)))) {
+        seg = null;
+        units.push({ kind: 'outcome', text: `⚠️ ${failed}`, index, textOrdinal: texts });
+        texts += 1;
+      }
+      turnFrom = index + 1;
+      return;
+    }
     if (block.type === 'turn_notice') {
       notice = { reason: String(block.reason || ''), cause: block.cause, index };
       return;

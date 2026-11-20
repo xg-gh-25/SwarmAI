@@ -549,7 +549,8 @@ export function stopBackground(d: TurnControlDeps, tabId: string): void {
   }).finally(() => { tab._stopInFlight = false; });
 }
 
-const stopped = (): ContentBlock => ({ type: 'text', text: '\n\n---\n*Stopped*' });
+// confirmed: never the block a later delta or confirmation of the stopped turn merges into
+const stopped = (): ContentBlock => ({ type: 'text', text: '\n\n---\n*Stopped*', _confirmed: true } as ContentBlock);
 
 /**
  * The Stop button (the active tab). UI feedback is synchronous; the backend stop is
@@ -582,6 +583,15 @@ export function stopTurn(d: TurnControlDeps): void {
     tab._sendToken = undefined;   // a send still reading its attachments stops
     tab._preparingSend = undefined;   // and a busy send still preparing
     tab.userStopped = true;
+    // the stopped turn: its late streamed text is dropped (by its handler), and a replay
+    // of it the subscription begins later stays stopped (by its turn id, or by the send's
+    // client id while the send has not bound a turn yet)
+    tab._stoppedHandler = tab.latestStreamHandler;
+    const route = tab._turnRoute;
+    tab._stoppedTurn = {
+      turnId: route?.bound && !route.bound.completed ? route.bound.turnId : undefined,
+      clientId: route?.postPending ? tab._openSendCid : undefined,
+    };
     if (tab.abortController) {
       try { tab.abortController.abort(); } catch { /* already aborted */ }
       tab.abortController = null;
