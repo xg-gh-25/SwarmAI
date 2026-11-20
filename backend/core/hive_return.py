@@ -374,15 +374,31 @@ def person_only_reason(paths: list[str]) -> str:
 _BAD_CHARS = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 
-def _unsafe_paths(repo: Path, paths: list[str]) -> list[str]:
+def _unsafe_paths(repo: Path, paths: list[str], base: Optional[str] = None) -> list[str]:
     """Paths the commits may not write on this machine: under a directory this checkout
     ignores (a dependency dir such as a virtualenv), under a link, or with control or
-    bidi characters (a name that would not read as what it is)."""
+    bidi characters (a name that would not read as what it is). A path *base* already
+    tracks is not ignored (git never ignores a tracked file, whatever a pattern says: a
+    lock file under ``*.lock``)."""
     out = [p for p in paths if _BAD_CHARS.search(p)]
     ok = [p for p in paths if p not in out]
-    if ok:
+    tracked: set[str] = set()
+    if ok and base is not None:
+        # on stdin, one ``<base>:<path>`` a line (no control character in a path here), so
+        # any number of paths fits; a failure leaves every path to the ignore check
+        try:
+            r = subprocess.run(["git", "cat-file", "--batch-check=%(objecttype)"], cwd=str(repo),
+                               input="".join(f"{base}:{p}\n" for p in ok).encode(), capture_output=True,
+                               timeout=GIT_TIMEOUT_S, check=False)
+        except (OSError, subprocess.SubprocessError):
+            r = None
+        lines = r.stdout.decode("utf-8", "replace").splitlines() if r is not None and r.returncode == 0 else []
+        if len(lines) == len(ok):
+            tracked = {p for p, kind in zip(ok, lines) if kind == "blob"}
+    unknown = [p for p in ok if p not in tracked]
+    if unknown:
         r = subprocess.run(["git", "check-ignore", "--no-index", "--stdin", "-z"], cwd=str(repo),
-                           input="\0".join(ok).encode(), capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
+                           input="\0".join(unknown).encode(), capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
         out += [p for p in r.stdout.decode("utf-8", "replace").split("\0") if p]
     for p in ok:
         cur = repo
@@ -411,7 +427,7 @@ def _review(repo: Path, base: str, tip: str, globs: list[str]) -> dict[str, Any]
         sha, _, subject = rec.strip().partition("\x1f")
         if _SHA_RE.fullmatch(sha):
             commits.append({"sha": sha, "subject": subject[:300]})
-    bad = _unsafe_paths(repo, [f["path"] for f in files])
+    bad = _unsafe_paths(repo, [f["path"] for f in files], base)
     if bad:
         raise ReturnError("the commits write where they may not on this machine (an ignored or linked "
                           "directory, or a name with control characters): " + ", ".join(repr(b) for b in bad[:5]))
@@ -451,7 +467,13 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
 
     def _work() -> dict[str, Any]:
         branch = _target_branch(repo, declared.get("ref"))
-        tip, base = _verify_and_fetch(repo, branch, bundle, local_ref, _lead_refs(repo, row))
+        lead = _lead_refs(repo, row)
+        tip, base = _verify_and_fetch(repo, branch, bundle, local_ref, lead)
+        # a Swarm Run child starts from a snapshot of its lead run's worktree, which may hold
+        # the lead's own edits: what the child changed is what came after that snapshot
+        start = _child_base(repo, declared.get("sha"), lead, tip)
+        if start is not None:
+            base = start
         landed = before.get("landed_tip")
         if landed == tip:
             raise ReturnError("these commits already landed")
@@ -472,6 +494,28 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
         _save(dispatch_id, b["key"], state)
         return state
     return await asyncio.to_thread(_work)
+
+
+#: a Swarm Run child's start snapshot (``refs/swarm/snapshots/<run>/b<n>-<repo>``,
+#: core/run_protocol/child_cli), not the run's chain or the worktree it last took
+_CHILD_BASE_REF = re.compile(r"refs/swarm/snapshots/run_[0-9a-f]{8,32}/b[0-9]+-[A-Za-z0-9_-]+")
+
+
+def _child_base(repo: Path, sha: Any, lead: tuple[str, ...], tip: str) -> Optional[str]:
+    """The commit a Swarm Run child started from when it is the tip of one of its lead
+    run's child-start snapshots (in *lead*, ``_lead_refs``) and an ancestor of *tip*, else
+    None. A ref that no longer resolves is passed over."""
+    if not lead or not isinstance(sha, str) or not _SHA_RE.fullmatch(sha):
+        return None
+    tips = set()
+    for r in lead:
+        if _CHILD_BASE_REF.fullmatch(r):
+            p = _git(repo, "rev-parse", "--verify", "-q", f"{r}^{{commit}}")
+            if p.returncode == 0:
+                tips.add(p.stdout.decode("utf-8", "replace").strip())
+    if sha not in tips or _git(repo, "merge-base", "--is-ancestor", sha, tip).returncode != 0:
+        return None
+    return sha
 
 
 def _lead_refs(repo: Path, row: dict) -> tuple[str, ...]:

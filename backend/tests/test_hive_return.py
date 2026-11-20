@@ -750,6 +750,106 @@ def test_a_swarm_run_childs_commits_may_build_on_its_lead_runs_snapshot(world, m
         asyncio.run(hive_return.prepare(DID, URL))
 
 
+def test_a_swarm_run_child_is_reviewed_from_its_own_base_snapshot(world, monkeypatch, tmp_path):
+    """A child starts from a snapshot of its lead run's worktree, which may hold the lead's
+    own edits (a CI file, a tracked lock file an ignore pattern matches). What the child
+    changed is what came after that snapshot: the lead's edits are never refused as the
+    child's, and a tracked file is not "ignored" because a pattern matches its name."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    _commit(host, ".gitignore", "*.lock\n", "ignore locks")
+    (host / "uv.lock").write_text("v1\n")
+    git(host, "add", "-f", "uv.lock")
+    git(host, "commit", "-qm", "a tracked lock")
+    git(host, "push", "-q", "origin", "main")
+    # the lead run's worktree as its child's base: a CI job and a lock bump of its own
+    (host / ".github" / "workflows").mkdir(parents=True)
+    (host / ".github" / "workflows" / "release.yml").write_text("on: push\n")
+    (host / "uv.lock").write_text("v2\n")
+    git(host, "add", "-A", "-f")
+    snap = git(host, "commit-tree", git(host, "write-tree"), "-p", "HEAD", "-m", "a child's base")
+    git(host, "reset", "-q", "--hard", "HEAD")
+    run = "run_0123456789ab"
+    git(host, "update-ref", f"refs/swarm/snapshots/{run}/b1-lib", snap)
+    git(host, "read-tree", snap)
+    (host / "src" / "a.py").write_text("a = 2\n")
+    git(host, "add", "src/a.py")
+    child = git(host, "commit-tree", git(host, "write-tree"), "-p", snap, "-m", "the child's work")
+    git(host, "read-tree", "HEAD")
+    git(host, "checkout", "-q", "--", ".")
+    git(host, "update-ref", "refs/tmp/child", child)
+    f = tmp_path / "child.bundle"
+    git(host, "bundle", "create", "-q", str(f), "refs/tmp/child", f"^{snap}")
+    git(host, "update-ref", "-d", "refs/tmp/child")
+    _hive_bundle(world, file=f)
+    world["row"]["parent_run"] = run
+    world["row"]["repos"][0]["sha"] = snap
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert [x["path"] for x in st["files"]] == ["src/a.py"] and st["protected_files"] == []
+    # a lead snapshot that is not an ancestor of the returned tip is no start of it
+    other = git(host, "commit-tree", git(host, "write-tree"), "-p", "HEAD", "-m", "unrelated")
+    git(host, "update-ref", f"refs/swarm/snapshots/{run}/b2-lib", other)
+    world["row"]["repos"][0]["sha"] = other
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["base"] != other and st["protected_files"] == [".github/workflows/release.yml"]
+    # the run's chain is no child's start
+    git(host, "update-ref", f"refs/swarm/snapshots/{run}/chain-lib", snap)
+    git(host, "update-ref", "-d", f"refs/swarm/snapshots/{run}/b1-lib")
+    world["row"]["repos"][0]["sha"] = snap
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["base"] != snap
+    git(host, "update-ref", f"refs/swarm/snapshots/{run}/b1-lib", snap)
+    # a child naming a start that is not one of its lead's snapshots is reviewed from main:
+    # the lead's CI file then counts as the child's (the merge refuses it, PERSON_ONLY)
+    world["row"]["repos"][0]["sha"] = git(host, "rev-parse", "HEAD")
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["protected_files"] == [".github/workflows/release.yml"]
+
+
+def test_a_tracked_file_an_ignore_pattern_matches_may_be_changed(world, monkeypatch):
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    for repo in (world["host"], world["hive"]):
+        (repo / ".gitignore").write_text("*.lock\n")
+        (repo / "uv.lock").write_text("v1\n")
+        git(repo, "add", "-f", ".gitignore", "uv.lock")
+        git(repo, "commit", "-qm", "a tracked lock")
+    git(world["host"], "push", "-q", "-f", "origin", "main")
+    git(world["hive"], "remote", "set-url", "origin", str(world["origin"]))
+    git(world["hive"], "fetch", "-q", "origin")
+    git(world["hive"], "reset", "-q", "--hard", "origin/main")
+    git(world["hive"], "remote", "set-url", "origin", URL)
+    _commit(world["hive"], "uv.lock", "v2\n", "bump")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert [x["path"] for x in st["files"]] == ["uv.lock"]
+
+
+def test_a_new_file_under_an_ignored_directory_is_refused_beside_a_tracked_one(world, monkeypatch):
+    # only a path the base tracks escapes the ignore check: a new one beside it does not
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    for repo in (world["host"], world["hive"]):
+        (repo / ".gitignore").write_text("vendor/\n")
+        (repo / "vendor").mkdir(exist_ok=True)
+        (repo / "vendor" / "keep.txt").write_text("v1\n")
+        git(repo, "add", "-f", ".gitignore", "vendor/keep.txt")
+        git(repo, "commit", "-qm", "a tracked vendored file")
+    git(world["host"], "push", "-q", "-f", "origin", "main")
+    git(world["hive"], "remote", "set-url", "origin", str(world["origin"]))
+    git(world["hive"], "fetch", "-q", "origin")
+    git(world["hive"], "reset", "-q", "--hard", "origin/main")
+    git(world["hive"], "remote", "set-url", "origin", URL)
+    (world["hive"] / "vendor" / "keep.txt").write_text("v2\n")
+    (world["hive"] / "vendor" / "evil.pth").write_text("import os\n")
+    git(world["hive"], "add", "-f", "vendor/keep.txt", "vendor/evil.pth")
+    git(world["hive"], "commit", "-qm", "x")
+    _hive_bundle(world)
+    with pytest.raises(hive_return.ReturnError, match="vendor/evil.pth"):
+        asyncio.run(hive_return.prepare(DID, URL))
+
+
 def test_the_landed_commit_names_its_dispatch(world, monkeypatch):
     # a reader of the history tells this Hive run's commit from a person's: the landed
     # commit carries the repository's trailer and Hive-Dispatch in one trailer paragraph

@@ -188,8 +188,10 @@ def _merge_one(engine, did: str, row: dict, r: dict) -> dict[str, Any]:
                 "detail": "this run has no worktree of that repository"}
     with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", engine.run_id):
         chain, tip = _chain_start(wt, engine.run_id, name)
-        # over the commit the child started from (its declared sha), else prepare's base
-        tree, conflicts = _merge_tree(wt, r.get("sha") or got["base"], tip, got["tip"])
+        # over the base prepare reviewed the child's files from (its start snapshot when it
+        # declared one of its lead's, else the merge base with main): the merge takes from
+        # the child exactly what the review listed
+        tree, conflicts = _merge_tree(wt, got["base"], tip, got["tip"])
         if tree is None:
             return {"dispatch_id": did, "repo": name, "ok": False, "conflicts": conflicts,
                     "detail": "these paths conflict with what the chain has; nothing was "
