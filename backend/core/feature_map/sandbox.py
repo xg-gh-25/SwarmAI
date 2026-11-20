@@ -11,7 +11,8 @@ The repo's commands do not decide it:
 - the environment emptied to a per-OS allowlist, plus the target's ``env``: a ``HOME``
   inside the sandbox, AWS credential and config files pointed at an empty file,
   ``AWS_EC2_METADATA_DISABLED`` set;
-- free ports chosen here; a port that already answers is refused;
+- free ports chosen here, below the OS's ephemeral range (``PORT_RANGE``); a port
+  that already answers is refused;
 - every service in its own session / process group (a new process group on Windows),
   so cleanup kills the whole group and never the caller's (a capped helper that killed
   its own group once took the agent and the daemon with it); readiness counts only while
@@ -27,7 +28,7 @@ missing``, ``needs <command>``, ``launch failed``, ``not ready``, ``port taken``
 A readiness URL and a base URL must be http(s) to a loopback host (``loopback_url``):
 a target file cannot make the person's machine poll another host.
 
-Exports: Sandbox, SandboxError, allowed_env, loopback_url.
+Exports: Sandbox, SandboxError, allowed_env, cache_dirs, loopback_url.
 """
 from __future__ import annotations
 
@@ -51,9 +52,41 @@ _POSIX_ALLOW = ("PATH", "LANG", "LC_ALL", "TERM", "TZ", "HTTPS_PROXY", "HTTP_PRO
                 "NO_PROXY", "https_proxy", "http_proxy", "no_proxy")
 _WIN_ALLOW = ("SystemRoot", "windir", "COMSPEC", "PATHEXT", "SystemDrive",
               "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS")
-# the caches a prepare step reuses: pointed at the person's real cache folders
-_CACHE_VARS = {"npm_config_cache": ".npm", "YARN_CACHE_FOLDER": ".cache/yarn",
-               "PIP_CACHE_DIR": ".cache/pip", "GOMODCACHE": "go/pkg/mod"}
+# the caches a prepare step reuses, pointed at the person's real cache folders: each
+# tool's own default for the platform (the sandbox HOME would otherwise make every
+# replay start from a cold cache). Each entry: (macOS, Linux, Windows) relative to the
+# real home; "XDG:" = under $XDG_CACHE_HOME when set, "LOCAL:" = under %LOCALAPPDATA%.
+_CACHE_VARS = {
+    "npm_config_cache": (".npm", ".npm", "LOCAL:npm-cache"),
+    "YARN_CACHE_FOLDER": ("Library/Caches/Yarn", "XDG:yarn", "LOCAL:Yarn/Cache"),
+    "PIP_CACHE_DIR": ("Library/Caches/pip", "XDG:pip", "LOCAL:pip/Cache"),
+    "UV_CACHE_DIR": ("Library/Caches/uv", "XDG:uv", "LOCAL:uv/cache"),
+    "GOMODCACHE": ("go/pkg/mod", "go/pkg/mod", "go/pkg/mod"),
+}
+
+
+def cache_dirs(real_home: Path, platform: str | None = None,
+               environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """{variable: folder} of the package caches for *platform* (default: this one). A
+    variable the person set themselves wins."""
+    platform = platform or sys.platform
+    environ = os.environ if environ is None else environ
+    column = 0 if platform == "darwin" else 2 if platform == "win32" else 1
+    out = {}
+    for var, defaults in _CACHE_VARS.items():
+        if environ.get(var):
+            out[var] = environ[var]
+            continue
+        rel = defaults[column]
+        if rel.startswith("XDG:"):
+            base = Path(environ.get("XDG_CACHE_HOME") or real_home / ".cache")
+            out[var] = str(base / rel[4:])
+        elif rel.startswith("LOCAL:"):
+            base = Path(environ.get("LOCALAPPDATA") or real_home / "AppData" / "Local")
+            out[var] = str(base / rel[6:])
+        else:
+            out[var] = str(real_home / rel)
+    return out
 
 
 class SandboxError(RuntimeError):
@@ -76,8 +109,7 @@ def allowed_env(sandbox: Path, real_home: Path, extra: Mapping[str, str] | None 
                 "TMP": str(tmp), "AWS_CONFIG_FILE": str(empty),
                 "AWS_SHARED_CREDENTIALS_FILE": str(empty), "AWS_EC2_METADATA_DISABLED": "true",
                 "FEATURE_MAP_SANDBOX": str(sandbox), "CI": "1"})
-    for var, rel in _CACHE_VARS.items():
-        env[var] = os.environ.get(var) or str(real_home / rel)
+    env.update(cache_dirs(real_home))
     env.setdefault("LANG", "C.UTF-8")
     env.update(dict(extra or {}))
     return env
@@ -100,10 +132,28 @@ def loopback_url(url: str, what: str) -> str:
     return url
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+# Below every OS's ephemeral range (macOS/Windows 49152+, Linux 32768+). A port the OS
+# hands out for bind(0) is free only until any process asks for one: a service that
+# opens its own listener on port 0 (the SwarmAI backend does) can take the port chosen
+# for the next service. A port from this range is never handed out that way.
+PORT_RANGE = (20000, 32000)
+
+
+def _free_port(taken: Iterable[int] = ()) -> int:
+    """A loopback port no one listens on, from ``PORT_RANGE``, not in *taken*."""
+    import random
+    taken = set(taken)
+    for _ in range(200):
+        port = random.randrange(*PORT_RANGE)
+        if port in taken or _answers(port):
+            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise SandboxError("port taken", f"no free port in {PORT_RANGE[0]}-{PORT_RANGE[1]}")
 
 
 def _answers(port: int) -> bool:
@@ -241,7 +291,7 @@ class Sandbox:
         if target.id in self.started:
             return
         for svc in target.services:
-            self.ports.setdefault(svc.id, _free_port())
+            self.ports.setdefault(svc.id, _free_port(self.ports.values()))
         for i, argv in enumerate(target.prepare):
             self._run(argv, target, "dependencies missing", f"prepare-{i}")
         for svc in target.services:

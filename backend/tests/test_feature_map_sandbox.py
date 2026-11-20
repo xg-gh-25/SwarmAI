@@ -129,7 +129,7 @@ def test_port_taken_is_refused(tmp_path, monkeypatch):
     held.bind(("127.0.0.1", 0))
     held.listen()
     port = held.getsockname()[1]
-    monkeypatch.setattr(sbmod, "_free_port", lambda: port)
+    monkeypatch.setattr(sbmod, "_free_port", lambda taken=(): port)
     try:
         root, fmap = _repo(tmp_path, f"""id: web
 kind: web
@@ -163,3 +163,45 @@ services:
         with pytest.raises(SandboxError) as err:
             sb.start(fmap, fmap.targets["web"])
         assert err.value.reason == "bad file" and sb.procs == []
+
+
+def test_package_caches_are_the_tools_own_folders_per_platform(tmp_path):
+    from core.feature_map.sandbox import cache_dirs
+    home = tmp_path / "h"
+    mac = cache_dirs(home, "darwin", {})
+    assert mac["UV_CACHE_DIR"] == str(home / "Library/Caches/uv")
+    assert mac["PIP_CACHE_DIR"] == str(home / "Library/Caches/pip")
+    assert mac["npm_config_cache"] == str(home / ".npm")
+    linux = cache_dirs(home, "linux", {"XDG_CACHE_HOME": "/x"})
+    assert linux["UV_CACHE_DIR"] == "/x/uv" and linux["PIP_CACHE_DIR"] == "/x/pip"
+    assert cache_dirs(home, "linux", {})["UV_CACHE_DIR"] == str(home / ".cache/uv")
+    win = cache_dirs(home, "win32", {"LOCALAPPDATA": str(tmp_path / "L")})
+    assert win["UV_CACHE_DIR"] == str(tmp_path / "L" / "uv" / "cache")
+    assert win["npm_config_cache"] == str(tmp_path / "L" / "npm-cache")
+    # a variable the person set wins
+    assert cache_dirs(home, "darwin", {"UV_CACHE_DIR": "/mine"})["UV_CACHE_DIR"] == "/mine"
+
+
+def test_ports_come_from_below_the_ephemeral_range_and_differ():
+    from core.feature_map.sandbox import PORT_RANGE, _free_port
+    low, high = PORT_RANGE
+    assert high <= 32768, "below Linux's ephemeral range, so no bind(0) can take it"
+    ports = []
+    for _ in range(30):
+        ports.append(_free_port(ports))
+    assert all(low <= p < high for p in ports) and len(set(ports)) == len(ports)
+    # a port someone listens on is never chosen
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", ports[0]))
+    busy.listen()
+    try:
+        import random
+        orig = random.randrange
+        seq = iter([ports[0], ports[1]])
+        random.randrange = lambda *_a: next(seq)
+        try:
+            assert _free_port() == ports[1]
+        finally:
+            random.randrange = orig
+    finally:
+        busy.close()
