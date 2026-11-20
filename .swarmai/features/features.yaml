@@ -58,3 +58,33 @@ features:
     title: The backend answers health checks
     target: app
     run: [curl, -sf, "http://127.0.0.1:{port.api}/health"]
+  - id: chat-send-stream-h4kw
+    title: Send a message and watch the reply stream in
+    reach: Type a message in a new chat tab and press Enter
+    expect: The reply appears in full, the input is free again, and the reply is still there after a reload
+    target: app
+    spec: specs/chat-send-stream-h4kw.spec.ts
+  - id: chat-tool-card-m2rp
+    title: A tool call shows as a step with its command, then the answer that uses it
+    reach: Ask for something the agent runs a command for
+    expect: A Worked group with 1 step; opened, it shows Bash and the command; the answer quotes the output
+    target: app
+    spec: specs/chat-tool-card-m2rp.spec.ts
+  - id: chat-tabs-apart-x7tn
+    title: Two tabs stream at the same time and keep their own replies
+    reach: Send in one tab, open a new tab while it streams, send there too
+    expect: Each tab shows only its own reply, when both have finished
+    target: app
+    spec: specs/chat-tabs-apart-x7tn.spec.ts
+  - id: chat-stop-p9ds
+    title: Stop a reply while it streams
+    reach: Press Stop while the reply streams
+    expect: Streaming ends at once, the turn says Stopped by you, nothing more is added to it, and the next message gets its answer
+    target: app
+    spec: specs/chat-stop-p9ds.spec.ts
+  - id: chat-model-error-b3qz
+    title: A request the model refuses shows one error and the chat goes on
+    reach: Send a message the model refuses
+    expect: The error is shown once with how to go on; no spinner stays; the next message gets its answer; after a reload the error is still shown, once
+    target: app
+    spec: specs/chat-model-error-b3qz.spec.ts

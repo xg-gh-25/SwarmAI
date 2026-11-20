@@ -1,0 +1,2 @@
+steps:
+  - {text: "beta ", repeat: 40, chunk: 5, delay_ms: 60}

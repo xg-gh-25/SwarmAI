@@ -1,0 +1,3 @@
+# a non-retriable refusal (a throttling error is retried behind "reconnecting")
+steps:
+  - error: {status: 400, type: ValidationException, message: "The scripted model refused this request."}

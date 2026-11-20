@@ -1,0 +1,2 @@
+steps:
+  - {text: "alpha ", repeat: 40, chunk: 6, delay_ms: 60}

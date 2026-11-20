@@ -1,0 +1,3 @@
+# long enough to press Stop while it streams
+steps:
+  - {text: "word ", repeat: 120, chunk: 5, delay_ms: 100}

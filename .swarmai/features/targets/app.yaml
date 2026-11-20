@@ -1,6 +1,7 @@
 # The SwarmAI app as a user meets it: a fresh backend (its own data folder in the
-# sandbox, no account, no scheduler, no channels) and the desktop UI built for a
-# browser, pointed at that backend.
+# sandbox, no account, no scheduler, no channels), the desktop UI built for a
+# browser and pointed at that backend, and a scripted stand-in for the model
+# (fixtures/model; design docs/design/2026-11-20-feature-map-fake-model.md).
 id: app
 kind: web
 root: desktop/
@@ -10,6 +11,12 @@ prepare:
   - [npx, vite, build]
   - [uv, sync, --directory, "{checkout}/backend", --frozen, --no-dev]
 services:
+  - id: model
+    argv: [uv, run, --directory, "{checkout}/backend", --frozen, --no-sync, python,
+           "{checkout}/.swarmai/features/fixtures/model/server.py", --port, "{port.model}",
+           --scripts, "{checkout}/.swarmai/features/fixtures/model/scripts",
+           --log, "{sandbox}/logs/model.jsonl"]
+    ready: "http://127.0.0.1:{port.model}/ping"
   - id: api
     # subprocess mode: no channel gateway, no scheduled jobs; NO_CLI_SWEEP: a throwaway
     # instance never sweeps the machine's claude processes (the new-user smoke test's settings)
@@ -25,9 +32,28 @@ env:
   SWARMAI_MODE: subprocess
   SWARMAI_NO_CLI_SWEEP: "1"
   DATABASE_TYPE: sqlite
-  SWARM_DATA_DIR: "{sandbox}/data"
+  SWARM_DATA_DIR: "{state_dir}/data"
   CORS_ORIGINS: '["http://127.0.0.1:{port.ui}"]'
   # read by the UI build and by specs that reset backend state
   VITE_API_URL: "http://127.0.0.1:{port.api}"
+  # the model: every Bedrock call of the CLI and of the backend goes to the stand-in
+  # (it is reached only in API-key mode, the `chat` state; elsewhere there is no key)
+  ANTHROPIC_BEDROCK_BASE_URL: "http://127.0.0.1:{port.model}"
+  AWS_ENDPOINT_URL_BEDROCK_RUNTIME: "http://127.0.0.1:{port.model}"
+  AWS_ENDPOINT_URL_BEDROCK: "http://127.0.0.1:{port.model}"
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+  DISABLE_TELEMETRY: "1"
+  NO_PROXY: "127.0.0.1,localhost"
+  no_proxy: "127.0.0.1,localhost"
 start_states:
   home: {setup: [[curl, -sf, -X, PUT, "http://127.0.0.1:{port.api}/api/system/onboarding-complete"]]}
+  # signed in with a (fake) Bedrock API key, so chat reaches the stand-in; the last step
+  # lets the backend's 10 s readiness sample see the key before a page loads
+  chat:
+    setup:
+      - [curl, -sf, -X, PUT, "http://127.0.0.1:{port.api}/api/system/onboarding-complete"]
+      - [curl, -sf, -X, POST, -H, "content-type: application/json", -d, '{"bearer_token": "fm-fake-token"}',
+         "http://127.0.0.1:{port.api}/api/system/bedrock-api-key"]
+      - [curl, -sf, -X, POST, -H, "content-type: application/json", -d, '{"method": "bedrock_api_key"}',
+         "http://127.0.0.1:{port.api}/api/system/auth-method"]
+      - [uv, run, --directory, "{checkout}/backend", --frozen, --no-sync, python, -c, "import time; time.sleep(11)"]
