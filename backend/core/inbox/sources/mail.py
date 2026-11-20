@@ -106,6 +106,7 @@ class MailRecord:
     cc: list[str] = field(default_factory=list)
     bcc: list[str] = field(default_factory=list)
     received_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None  # the sender's send time: the same on every copy of one mail
     body: str = ""
     headers: dict[str, str] = field(default_factory=dict)  # lower-cased names
     is_invite: bool = False
@@ -210,6 +211,7 @@ def _record(d: dict, conversation: str) -> MailRecord:
         cc=[a for _, a in parse_addresses(_get(d, "ccRecipients", "cc", "Cc", "CcRecipients"))],
         bcc=[a for _, a in parse_addresses(_get(d, "bccRecipients", "bcc", "Bcc", "BccRecipients"))],
         received_at=parse_time(_get(d, *_DATE_KEYS)),
+        sent_at=parse_time(_get(d, "sentDateTime", "dateTimeSent", "DateTimeSent")),
         body=_undo_latin1(_body_text(_get(d, "body", "Body", "bodyText", "textBody", "text", "content", "uniqueBody", "bodyPreview", "preview"))),
         headers=headers,
         is_invite=invite,
@@ -350,9 +352,19 @@ class _MailSource:
     @staticmethod
     def _dedup(records: list[MailRecord]) -> list[MailRecord]:
         out: dict[str, MailRecord] = {}
+        copies: set[tuple] = set()
         for rec in records:
-            if rec.message_id and rec.message_id not in out:
-                out[rec.message_id] = rec
+            if not rec.message_id or rec.message_id in out:
+                continue
+            # aws-outlook-mcp gives each copy of a mail its own item id and no Message-ID,
+            # so a mail the person sent to a list they are on (or to themselves) comes back
+            # twice: its sent copy and its received copy share sender, send time and subject.
+            copy = (rec.from_addr, rec.sent_at, rec.subject) if rec.from_addr and rec.sent_at else None
+            if copy is not None and copy in copies:
+                continue
+            if copy is not None:
+                copies.add(copy)
+            out[rec.message_id] = rec
         return sorted(out.values(), key=lambda r: r.received_at or datetime.min.replace(tzinfo=timezone.utc))
 
     def _reply_record(self, ref: ThreadRef, records: list[MailRecord], me: Identity) -> Optional[MailRecord]:

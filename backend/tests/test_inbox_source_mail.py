@@ -394,3 +394,17 @@ def test_only_a_body_whose_bytes_were_misread_is_decoded_again(body, expected):
     records = split_conversations({"conversationId": "C", "messages": [
         {"itemId": "I", "from": _addr("A", "a@corp.example"), "receivedDateTime": "2026-11-20T01:00:00Z", "body": body}]})
     assert records[0].body == expected
+
+
+async def test_the_sent_and_received_copies_of_one_mail_show_once():
+    def copy(item, received):
+        return {"itemId": item, "itemChangeKey": "CK-" + item, "subject": "To the list", "from": _addr("Me", ME),
+                "recipients": [_addr("List", "list@corp.example")], "dateTimeSent": "2026-11-20T03:00:00Z",
+                "recievedAt": received, "body": "Hello list"}
+    conv = {"conversationId": "CONV-L", "messages": [
+        copy("SENT-COPY", "2026-11-20T03:00:00Z"), copy("INBOX-COPY", "2026-11-20T03:00:01Z"),
+        {**copy("NEXT", "2026-11-20T04:00:01Z"), "dateTimeSent": "2026-11-20T04:00:00Z", "body": "Second mail"},
+    ]}
+    src = OutlookMcpSource(_cfg(), client=_outlook(email_read=lambda a: conv))
+    thread = await src.thread(ThreadRef("mail", {"conversation_id": "CONV-L"}))
+    assert [m.text for m in thread.messages] == ["Hello list", "Second mail"]
