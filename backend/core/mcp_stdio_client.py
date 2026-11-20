@@ -205,7 +205,9 @@ def parse_tool_result(result: Optional[dict]) -> Any:
 
     ``structuredContent`` wins when present. Otherwise the unwrapped text: parsed as JSON
     when the whole text is JSON, or when every text item is JSON (a list of them is
-    returned); else the text itself. ``None`` for an empty result.
+    returned), or when the text is a plain-text notice followed by one JSON document that
+    runs to its end (some servers put a content-safety notice before the data); else the
+    text itself. ``None`` for an empty result.
     """
     if not isinstance(result, dict):
         return None
@@ -226,9 +228,29 @@ def parse_tool_result(result: Optional[dict]) -> Any:
             try:
                 parsed.append(json.loads(item))
             except ValueError:
-                return joined
-        return parsed
-    return joined
+                break
+        else:
+            return parsed
+    trailing = _trailing_json(joined)
+    return joined if trailing is _NOT_FOUND else trailing
+
+
+_NOT_FOUND = object()
+
+
+def _trailing_json(text: str) -> Any:
+    """The JSON document that ends the text after a plain-text notice, or ``_NOT_FOUND``.
+    Only a document that runs to the end of the text counts (trailing whitespace aside), so
+    a brace inside the notice never passes for the data."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"[\[{]", text):
+        try:
+            value, end = decoder.raw_decode(text, match.start())
+        except ValueError:
+            continue
+        if not text[end:].strip():
+            return value
+    return _NOT_FOUND
 
 
 # ---------------------------------------------------------------------------

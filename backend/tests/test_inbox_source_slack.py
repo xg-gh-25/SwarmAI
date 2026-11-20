@@ -381,3 +381,17 @@ async def test_search_overflow_is_logged(caplog):
     with caplog.at_level("WARNING"):
         await src._search("<@U0ME>", NOW - 3600)
     assert "more than 200 results" in caplog.text  # "may have more than ..."
+
+
+def test_history_rows_with_an_iso_timestamp_keep_the_permalink_ts():
+    """slack-mcp's get_messages gives `timestamp` as an ISO time and no numeric `ts`; the
+    message's real Slack ts (which a thread reply must name) is in its permalink."""
+    from core.inbox.sources.slack import _slack_ts, _ts
+
+    row = {"timestamp": "2026-11-20T01:02:03.456Z", "permalink": "https://x.slack.com/archives/D1/p1763600523456789",
+           "user": {"id": "U2", "name": "ana"}, "text": "hi"}
+    assert _slack_ts(row) == "1763600523.456789"
+    assert _slack_ts({"ts": "1763600523.000100", "permalink": "https://x/p1111111111222222"}) == "1763600523.000100"
+    no_link = _slack_ts({"timestamp": "2026-11-20T01:02:03Z"})
+    assert no_link is not None and abs(float(no_link) - _ts("2026-11-20T01:02:03Z")) < 1e-6
+    assert _ts("2026-11-20T01:02:03Z") > 1.7e9 and _ts("nonsense") == 0.0

@@ -86,10 +86,44 @@ _CHANNEL_ID = re.compile(r"^[CDG][A-Z0-9]{6,}$")
 
 
 def _ts(value: Any) -> float:
+    """A Slack timestamp as seconds: the numeric ``"1732080000.123456"`` form, or an ISO
+    time (``get_messages`` of the slack-mcp family returns ``timestamp`` that way); 0 when
+    it is neither."""
     try:
         return float(value)
     except (TypeError, ValueError):
-        return 0.0
+        pass
+    if isinstance(value, str) and value:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
+    return 0.0
+
+
+_LINK_TS_RE = re.compile(r"/p(\d{10})(\d{6})(?![0-9])")
+
+
+def _slack_ts(raw: dict) -> Optional[str]:
+    """The message's own Slack ts (``seconds.micros``), which a thread reply must name:
+    the numeric ``ts`` when the answer has one, else the one in its permalink
+    (``…/p1732080000123456``), else its ISO ``timestamp`` turned into seconds (good for
+    order and the cursor, not for replying)."""
+    value = _first(raw, "ts", "messageTs", "message_ts")
+    if value is not None:
+        try:
+            float(value)
+            return str(value)
+        except (TypeError, ValueError):
+            pass
+    link = raw.get("permalink")
+    if isinstance(link, str):
+        found = _LINK_TS_RE.search(link)
+        if found:
+            return f"{found.group(1)}.{found.group(2)}"
+    seconds = _ts(_first(raw, "ts", "timestamp", "messageTs", "message_ts"))
+    return f"{seconds:.6f}" if seconds > 0 else None
 
 
 def _first(d: dict, *names: str) -> Any:
@@ -385,7 +419,7 @@ class _SlackSource:
         return values[0] if values else None
 
     def _to_message(self, raw: dict, channel_hint: Optional[str], *, is_dm: bool = False) -> Optional[Message]:
-        ts = _first(raw, "ts", "timestamp", "messageTs", "message_ts")
+        ts = _slack_ts(raw)
         channel = raw.get("channel")
         channel_name = ""
         if isinstance(channel, dict):
