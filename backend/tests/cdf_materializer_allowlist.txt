@@ -46,6 +46,8 @@ core/eval_service.py:EvalService._write_inflight_marker  # exempt: eval in-fligh
 core/eval_service.py:EvalService._write_partition  # exempt: golden set partition file
 core/eval_service.py:EvalService._write_run_result  # exempt: eval run result under EvalHistory/
 core/eval_service.py:EvalService.record_calibration  # exempt: eval calibration JSONL
+core/feature_map/ledger.py:append  # exempt: walk result ledger JSONL under app data, not a knowledge store
+core/feature_map/ledger.py:prune_evidence  # exempt: deletes old walk evidence folders under app data; the ledger lines stay
 core/ingestion/pipeline_v2.py:reinforce_or_reject  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_missing_sections  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_parked  # exempt: via store.connect_rw: ingestion.db, CDF's own store

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -357,6 +358,8 @@ def rule(project_dir: Path, repo: str) -> str:
         from core.repo_placement import placement
         kind = (placement(Path(project_dir)).get(repo) or {}).get("checkout")
     except Exception:  # noqa: BLE001 — no placement = a working checkout
+        logging.getLogger(__name__).debug("no placement for %s in %s; treated as a working checkout",
+                                          repo, project_dir, exc_info=True)
         kind = None
     return "brain" if kind == "mirror" else "repo"
 

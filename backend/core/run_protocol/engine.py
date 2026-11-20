@@ -2804,7 +2804,8 @@ class RunEngine:
                     if fm_files.location(project_dir, name, Path(root))[0] is None:
                         continue
                 except Exception:  # noqa: BLE001 — even where the folder is is unknown: not decided
-                    pass
+                    logging.getLogger(__name__).debug("run %s: feature folder of %s unknown",
+                                                      self.run_id, name, exc_info=True)
                 facts = {"repo": name, "blocking": blocking, "code_tree": tree, "rows": [],
                          "missing": [], "reached": [], "unplaced": [], "changed_expectations": [],
                          "error": f"the facts could not be computed: {type(exc).__name__}: {exc}"[:600],
