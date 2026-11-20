@@ -360,3 +360,37 @@ async def test_live_shape_pull_keeps_the_conversation_and_reads_recipients():
     assert m.received_at.isoformat() == "2026-11-20T01:00:00+08:00"  # when it arrived, not when it was sent
     thread = await src.thread(m.thread)
     assert thread.target is not None and len(thread.messages) == 1
+
+
+def _as_latin1(text: str, encoding: str) -> str:
+    """Text the way aws-outlook-mcp sometimes returns a body: its bytes read as Latin-1."""
+    return text.encode(encoding).decode("latin-1")
+
+
+async def test_a_body_read_as_latin1_is_repaired_and_the_sent_reply_is_found():
+    sent = "测试：邮件回复，可以忽略"
+    conv = _conversation()
+    conv["messages"].append(
+        {"itemId": "IT-4", "changeKey": "CK-4", "internetMessageId": "<m4@corp.example>", "subject": "RE: Budget",
+         "from": _addr("Me", ME), "toRecipients": [_addr("Priya", "priya@corp.example")],
+         "receivedDateTime": "2026-11-20T03:00:00Z",
+         "body": _as_latin1(f"{sent}\n\n发件人: Priya <priya@corp.example>\n\n发送时间: 2026年11月20日\n\nThanks!", "gbk")})
+    src = OutlookMcpSource(_cfg(), client=_outlook(email_read=lambda a: conv))
+    ref = ThreadRef("mail", {"conversation_id": "CONV-1"})
+    found = await src.find_sent(ref, datetime(2026, 11, 20, 2, 30, tzinfo=timezone.utc), sent)
+    assert found is not None and found.external_msg_id == "<m4@corp.example>"
+    thread = await src.thread(ref)
+    assert thread.messages[-1].text == sent
+
+
+@pytest.mark.parametrize("body, expected", [
+    (_as_latin1("王小刚 南京", "utf-8"), "王小刚 南京"),
+    (_as_latin1("携手一载，感恩相伴！", "gbk"), "携手一载，感恩相伴！"),
+    ("élève à Paris, café crème", "élève à Paris, café crème"),  # real Latin-1 text stays
+    ("a\xa0\xa0b\xa0\xa0c\xa0\xa0d", "a\xa0\xa0b\xa0\xa0c\xa0\xa0d"),  # no-break spaces only
+    ("真的中文 already", "真的中文 already"),
+])
+def test_only_a_body_whose_bytes_were_misread_is_decoded_again(body, expected):
+    records = split_conversations({"conversationId": "C", "messages": [
+        {"itemId": "I", "from": _addr("A", "a@corp.example"), "receivedDateTime": "2026-11-20T01:00:00Z", "body": body}]})
+    assert records[0].body == expected

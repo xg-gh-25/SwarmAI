@@ -133,6 +133,38 @@ def _body_text(value: Any) -> str:
     return text.strip()
 
 
+_LATIN1_HIGH = re.compile(r"[\x80-\xff]")
+_CJK = re.compile(r"[\u3400-\u9fff]")
+_CJK_TEXT = re.compile(r"[\u2000-\u206f\u3000-\u303f\u3400-\u9fff\uff00-\uffef]")
+
+
+def _undo_latin1(text: str) -> str:
+    """A body ``aws-outlook-mcp`` decoded as Latin-1 although its bytes were UTF-8 or GBK,
+    decoded again. Measured on real mail: some Chinese bodies come back as ``²âÊÔ``
+    (GBK ``测试``) or ``çŽ‹`` (UTF-8 ``王``) while the subject is right. Repaired only
+    when every character fits in one byte, some are above ASCII, and the bytes decode
+    strictly: as UTF-8, or as GB18030 into Chinese text and punctuation only (so a
+    Latin-1 body with accents is left alone). Anything else is returned unchanged."""
+    if not _LATIN1_HIGH.search(text.replace("\xa0", "")):
+        return text  # nothing above ASCII but no-break spaces, which HTML bodies are full of
+    try:
+        raw = text.encode("latin-1")
+    except UnicodeEncodeError:
+        return text  # already holds real characters above one byte
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        fixed = raw.decode("gb18030")
+    except UnicodeDecodeError:
+        return text
+    wide = [c for c in fixed if ord(c) > 0x7F]
+    if len(_CJK.findall(fixed)) >= 2 and all(_CJK_TEXT.match(c) for c in wide):
+        return fixed
+    return text
+
+
 _MESSAGE_ID_KEYS = ("internetMessageId", "InternetMessageId", "internet_message_id", "messageId", "message_id")
 _ITEM_ID_KEYS = ("itemId", "ItemId", "item_id", "id", "Id")
 _FROM_KEYS = ("from", "From", "sender", "Sender")
@@ -178,7 +210,7 @@ def _record(d: dict, conversation: str) -> MailRecord:
         cc=[a for _, a in parse_addresses(_get(d, "ccRecipients", "cc", "Cc", "CcRecipients"))],
         bcc=[a for _, a in parse_addresses(_get(d, "bccRecipients", "bcc", "Bcc", "BccRecipients"))],
         received_at=parse_time(_get(d, *_DATE_KEYS)),
-        body=_body_text(_get(d, "body", "Body", "bodyText", "textBody", "text", "content", "uniqueBody", "bodyPreview", "preview")),
+        body=_undo_latin1(_body_text(_get(d, "body", "Body", "bodyText", "textBody", "text", "content", "uniqueBody", "bodyPreview", "preview"))),
         headers=headers,
         is_invite=invite,
         item_id=item_id,
