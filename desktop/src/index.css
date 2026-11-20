@@ -27,6 +27,13 @@
   --color-zone-cognitive: #1f9d6b;
   --color-zone-work: #2f7596;
   --color-zone-system: #5f6577;
+  /* Inbox channel colours (design 2026-11-20-inbox.md §7): the channel pill, the
+     avatar of a channel row. One per channel; a new channel adds one. Each keeps text
+     contrast >= 4.5:1 on its own 13% tint over card, bg and hover. */
+  --color-channel-slack: #6d28d9;
+  --color-channel-mail: #0e6378;
+  --color-channel-github: #334155;
+  --color-channel-feed: #a3360b;
   /* Chart series (dataviz reference palette, validated: lightness, chroma, contrast). */
   --color-chart-1: #2a78d6;
   --color-chart-1-prev: #9ec5f4;
@@ -140,6 +147,10 @@
   --color-zone-cognitive: #5fc99a;
   --color-zone-work: #4a8fb0;
   --color-zone-system: #7c8194;
+  --color-channel-slack: #c4b5fd;
+  --color-channel-mail: #22d3ee;
+  --color-channel-github: #cbd5e1;
+  --color-channel-feed: #fb923c;
   --color-chart-1: #3987e5;
   --color-chart-1-prev: #2a4466;
   --color-brand: #f59e0b;

@@ -33,6 +33,7 @@ const HistoryContent = lazy(() => OVERLAY_CHUNK.history().then((m) => ({ default
 const ArtifactsContent = lazy(() => OVERLAY_CHUNK.artifacts().then((m) => ({ default: m.ArtifactsContent })));
 const ToDoContent = lazy(() => OVERLAY_CHUNK.todo().then((m) => ({ default: m.ToDoContent })));
 const NeedYouContent = lazy(() => OVERLAY_CHUNK['needs-you']().then((m) => ({ default: m.NeedYouContent })));
+const InboxContent = lazy(() => OVERLAY_CHUNK.inbox().then((m) => ({ default: m.InboxContent })));
 const CommunityContent = lazy(() => OVERLAY_CHUNK.community().then((m) => ({ default: m.CommunityContent })));
 const JobsRunsContent = lazy(() => OVERLAY_CHUNK.jobs().then((m) => ({ default: m.JobsRunsContent })));
 const CapabilitiesContent = lazy(() => OVERLAY_CHUNK.capabilities().then((m) => ({ default: m.CapabilitiesContent })));
@@ -194,6 +195,17 @@ registerOverlay({
       onDispatch={(msg, opts) => (dispatchPrompt ? dispatchPrompt(msg, opts) : false)}
       close={close}
     />
+  ),
+});
+
+// ── inbox (design docs/design/2026-11-20-inbox.md §7) — the person's messages from every
+// channel, triaged into lanes, with a draft to send. Work-zone card, first. NOT in
+// ALL_SHOW_EVENTS: an agent has no reason to open it for the person. dispatchPrompt
+// carries an item into chat as fenced external data (components/inbox/chatPrompt).
+registerOverlay({
+  id: 'inbox',
+  render: ({ close, dispatchPrompt }) => (
+    <InboxContent close={close} onDispatch={dispatchPrompt ?? (() => false)} />
   ),
 });
 

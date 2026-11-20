@@ -92,7 +92,7 @@ function FlowDiagram() {
         </marker>
       </defs>
 
-      {[[0, say('WHERE IT COMES FROM', '从哪来')], [244, say('INBOX', 'INBOX')], [430, say('ONE WORKER DECIDES EACH ITEM', '一个 worker 逐条判断')], [DX, say('WHERE IT LANDS', '落到哪里')]]
+      {[[0, say('WHERE IT COMES FROM', '从哪来')], [244, say('QUEUE', '待写入')], [430, say('ONE WORKER DECIDES EACH ITEM', '一个 worker 逐条判断')], [DX, say('WHERE IT LANDS', '落到哪里')]]
         .map(([x, label]) => <text key={String(x)} x={Number(x)} y={24} fill={MUTED} fontSize={11} fontWeight={600} letterSpacing={1.2}>{label}</text>)}
 
       {sources.map(([title, sub], i) => (

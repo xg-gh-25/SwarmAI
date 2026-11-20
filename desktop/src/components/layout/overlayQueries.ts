@@ -34,6 +34,7 @@ import { radarService } from '../../services/radar';
 import { brainsWithPinnedQuery } from '../../services/ddd';
 import { attentionService } from '../../services/attention';
 import { workspaceLocationsService } from '../../services/workspace';
+import { inboxService, type LaneName, type SendsFilter } from '../../services/inbox';
 
 /** A JSON GET whose body is the data (typed by the overlay that reads it). */
 const getJson = <T,>(url: string) => async (): Promise<T> => (await api.get<T>(url)).data;
@@ -197,6 +198,62 @@ export const overlayQuery = {
     staleTime: OVERLAY_STALE_MS,
     retry: false,
   }),
+  // Inbox (design 2026-11-20-inbox.md §7). Every key starts ['overlay', 'inbox'] so one
+  // invalidateOverlay(qc, 'inbox') after a write refreshes the counts (which the nav
+  // badge shares), the lists and the sends together. A failed read is not retried on its
+  // own: the overlay shows Retry, and a backend without the routes stays quiet.
+  inboxCounts: () => ({
+    queryKey: ['overlay', 'inbox', 'counts'] as const,
+    queryFn: () => inboxService.counts(),
+    staleTime: OVERLAY_STALE_MS,
+    retry: false,
+  }),
+  inboxItems: (lane: LaneName) => ({
+    queryKey: ['overlay', 'inbox', 'items', lane] as const,
+    queryFn: () => inboxService.items(lane),
+    staleTime: OVERLAY_STALE_MS,
+    retry: false,
+  }),
+  inboxSends: (filter: SendsFilter) => ({
+    queryKey: ['overlay', 'inbox', 'sends', filter] as const,
+    queryFn: () => inboxService.sends(filter),
+    staleTime: OVERLAY_STALE_MS,
+    retry: false,
+  }),
+  inboxTrends: () => ({
+    queryKey: ['overlay', 'inbox', 'trends'] as const,
+    queryFn: () => inboxService.trendSummary(),
+    staleTime: OVERLAY_STALE_MS,
+    retry: false,
+  }),
+  inboxSources: () => ({
+    queryKey: ['overlay', 'inbox', 'sources'] as const,
+    queryFn: () => inboxService.sources(),
+    staleTime: OVERLAY_STALE_MS,
+    retry: false,
+  }),
+  inboxFeeds: () => ({
+    queryKey: ['overlay', 'inbox', 'feeds'] as const,
+    queryFn: () => inboxService.listFeeds(),
+    staleTime: OVERLAY_STALE_MS,
+    retry: false,
+  }),
+  /** The reply target is resolved fresh from the source each time an item opens
+   *  (design §8): staleTime 0 refetches it on every mount. A cached answer may still
+   *  show for that moment, so the detail keeps Send off (and says it is checking) until
+   *  the fetch made since it opened has returned (ReplyLane `targetFresh`). */
+  inboxTarget: (id: string) => ({
+    queryKey: ['overlay', 'inbox', 'target', id] as const,
+    queryFn: () => inboxService.target(id),
+    staleTime: 0,
+    retry: false,
+  }),
+  inboxDraft: (id: string) => ({
+    queryKey: ['overlay', 'inbox', 'draft', id] as const,
+    queryFn: () => inboxService.draft(id),
+    staleTime: OVERLAY_STALE_MS,
+    retry: false,
+  }),
   needsYou: () => ({
     queryKey: ['overlay', 'needs-you'] as const,
     queryFn: () => attentionService.fetchAttention(),
@@ -224,6 +281,7 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   capabilities: () => [overlayQuery.capabilitiesApps()],
   community: () => [overlayQuery.community('feed')],
   'needs-you': () => [overlayQuery.needsYou()],
+  inbox: () => [overlayQuery.inboxCounts(), overlayQuery.inboxItems('reply'), overlayQuery.inboxItems('proposed')],
   // the list + the last-shown location's own summary (its tree loads on open)
   swarmws: () => [overlayQuery.workspaceLocations(), overlayQuery.workspaceSummary(lastWorkspaceLocation)],
 };

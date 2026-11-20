@@ -72,9 +72,10 @@ const DOMAIN_ORDER = [
   'nav-context',
   'nav-library',   // cognition zone: the bookshelf, above Brain Hub (XG 2026-08-02)
   'nav-brain-hub',
-  // Work order (XG 2026-10-23): ToDo, Pipeline, Pollinate, Workspace, Community.
+  // Work order: Inbox, then (XG 2026-10-23) ToDo, Pipeline, Pollinate, Workspace, Community.
   // NOTE: no 'nav-canvas' — Canvas is output-triggered (auto-surface / chat file-chip
   // / agent command), not a nav card (run_990b0a03).
+  'nav-inbox',     // Work: first, above ToDo (design 2026-11-20-inbox.md §7)
   'nav-todo',
   'nav-pipeline',
   'nav-pollinate',

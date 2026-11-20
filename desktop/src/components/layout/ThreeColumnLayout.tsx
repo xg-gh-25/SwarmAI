@@ -9,7 +9,7 @@ import { TerminalProvider, useTerminal, useTerminalHotkey } from '../../contexts
 import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
 import './overlaySurfaces'; // side-effect: registers fullscreen surfaces with the registry
 import { NAV, ZONE_TINT } from './navTable';
-import { prefetchNav } from './overlayQueries';
+import { prefetchNav, overlayQuery } from './overlayQueries';
 import type { OverlayId } from './overlayIds';
 import TerminalPanel from '../terminal/TerminalPanel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
@@ -205,6 +205,15 @@ function TopBar({ onOpenUsage }: { onOpenUsage?: () => void } = {}) {
   );
 }
 
+/** The Inbox nav badge: `reply` from the shared counts query (overlayQueries), so a
+ *  send or action in the overlay (which invalidates ['overlay', 'inbox']) updates it at
+ *  once; between those, a refetch each minute. The card shows no badge for 0 / none. */
+const INBOX_BADGE_POLL_MS = 60_000;
+function useInboxReplyCount(): number | undefined {
+  const { data } = useQuery({ ...overlayQuery.inboxCounts(), refetchInterval: INBOX_BADGE_POLL_MS });
+  return data?.reply;
+}
+
 /** Pure resolution core for the Signals nav click (exported for test).
  *  Given the /workspace/tree/expand children of Knowledge/Signals, return the
  *  path of the newest digest — names are YYYY-MM-DD-digest.md so the lexical max
@@ -236,6 +245,9 @@ function LeftSidebar() {
   const { panelOpen: terminalPanelOpen, togglePanel: toggleTerminal } = useTerminal();
   // Live Hive fleet status → a calm dot on the Hive nav card (signal-driven, silent at 0).
   const hiveStatusDot = useHiveStatusDot();
+  // The Inbox badge: open REPLY items. Polled once a minute (a light count read, off the
+  // chat path); a failed read (a backend without the route) shows no badge.
+  const inboxReplyCount = useInboxReplyCount();
   // Hive is desktop-ONLY (mirrors the old Settings hive tab's desktopOnly:true): a
   // deployed Hive-served frontend has isDesktop()===false and the backend _require_desktop()
   // blocks every hive op there — so rendering the card on a Hive would be a broken
@@ -361,12 +373,16 @@ function LeftSidebar() {
           <A10Card navId="brain-hub" onPrefetch={() => prefetch('brain-hub')} icon="hub" highlight isActive={newActiveOverlay === 'brain-hub'} onClick={() => activateNav('brain-hub')} data-testid="nav-brain-hub" />
         </div>
 
-        {/* WORK zone order (XG 2026-10-23): ToDo, Pipeline, Pollinate, Workspace,
-            Community. ToDo + Workspace keep `highlight` (resting-brighter). Reuses the existing highlight prop — NOT a 2nd
+        {/* WORK zone order: Inbox (design 2026-11-20-inbox.md §7: what comes in, then what
+            to do), ToDo, Pipeline, Pollinate, Workspace, Community (XG 2026-10-23; Community
+            leaves when the Inbox replaces it). ToDo + Workspace keep `highlight` (resting-brighter). Reuses the existing highlight prop — NOT a 2nd
             green panel: cognition's green zone stays the sole differentiated
             surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
         <A10Group label={t('ui.ThreeColumnLayout.zoneWork')} tint={ZONE_TINT.work}>
+          {/* Inbox — its badge is the one number the design allows: the items waiting on a
+              reply (GET /inbox/counts .reply, the same query the overlay's tabs read). */}
+          <A10Card navId="inbox" onPrefetch={() => prefetch('inbox')} icon="inbox" badge={inboxReplyCount} isActive={newActiveOverlay === 'inbox'} onClick={() => activateNav('inbox')} data-testid="nav-inbox" />
           <A10Card navId="todo" onPrefetch={() => prefetch('todo')} icon="todo" highlight isActive={newActiveOverlay === 'todo'} onClick={() => activateNav('todo')} data-testid="nav-todo" />
           {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
               OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
@@ -596,6 +612,14 @@ function NavSvgIcon({ name }: { name: string }) {
           <line x1="13.7" y1="13.6" x2="17.5" y2="16.4" />
         </svg>
       );
+    case 'inbox':
+      // Inbox — a tray with an incoming notch (messages that came in).
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M3 13l2.5-7.5A2 2 0 0 1 7.4 4h9.2a2 2 0 0 1 1.9 1.5L21 13" />
+          <path d="M3 13v5a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5h-5l-1.5 2.5h-5L8 13H3z" />
+        </svg>
+      );
     case 'todo':
       // ToDo — a checklist: a card with a check mark (queued work you own).
       return (
@@ -743,6 +767,9 @@ interface A10CardProps {
    *  for all cards). Currently: the Hive card, from a listInstances poll. Additive —
    *  every existing card omits it and is visually unchanged. */
   statusDot?: { color: string; pulse?: boolean; title?: string };
+  /** A live count on the right of the card (the Inbox: items waiting on a reply). Same
+   *  rule as statusDot: driven by a real query, never a literal; undefined = none. */
+  badge?: number;
   onClick?: () => void;
   /** Hover / focus: prefetch the overlay's data. */
   onPrefetch?: () => void;
@@ -752,7 +779,7 @@ interface A10CardProps {
 /** A10 domain row-card: [chip icon] label …… [Y/R flag]. Title never truncates;
  *  the attention flag is a corner badge (never eats the title). An optional live
  *  statusDot sits on the chip's top-right corner (signal-driven only). */
-function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, onPrefetch, 'data-testid': testId }: A10CardProps) {
+function A10Card({ navId, icon, flag, isActive, highlight, statusDot, badge, onClick, onPrefetch, 'data-testid': testId }: A10CardProps) {
   const { t } = useTranslation();
   const { navLabel: label, zone } = NAV[navId];
   const tint = ZONE_TINT[zone];
@@ -784,6 +811,16 @@ function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, o
         )}
       </span>
       <span className="flex-1 min-w-0 text-left text-small font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap overflow-hidden text-ellipsis">{label}</span>
+      {badge != null && badge > 0 && (
+        <span
+          data-testid={testId ? `${testId}-badge` : 'a10-badge'}
+          aria-label={t('ui.ThreeColumnLayout.badgeCount', { count: badge })}
+          className="shrink-0 min-w-[20px] h-[18px] px-1.5 rounded-full text-center text-meta font-semibold leading-[18px] tabular-nums"
+          style={{ background: 'var(--color-primary)', color: 'var(--color-on-accent)' }}
+        >
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
       {flag === 'y' && (
         <span className="a10-flag a10-flag--y" data-testid="flag-y" aria-label={t('ui.ThreeColumnLayout.needsAttention')}>Y</span>
       )}

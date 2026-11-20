@@ -58,7 +58,8 @@ const calls: string[] = [];
 const OBJECT_URLS = ['/ddd/brains', '/jobs/status', '/eval/health', '/eval/golden-set', '/eval/governance',
   '/eval/context-health', '/eval/brain', '/library/native', '/library/recent',
   '/library/mounts', '/attention', '/community/engagement', '/community/hot-topics', '/settings',
-  '/pollinate/assets', '/pipelines/analytics', '/todos/history'];
+  '/pollinate/assets', '/pipelines/analytics', '/todos/history',
+  '/inbox/counts', '/inbox/sends', '/inbox/trends'];
 function answer(url: string): unknown {
   if (url.startsWith('/ddd/brains')) return { brains: [], pinned: [] };
   return OBJECT_URLS.some((p) => url.startsWith(p)) ? {} : [];
@@ -88,6 +89,7 @@ const ITEMS: Item[] = [
   { id: 'context', nav: 'nav-context', label: 'C&M', zone: 'cognitive', fetches: ['/eval/context-health', '/eval/brain'] },
   { id: 'library', nav: 'nav-library', label: 'Library', zone: 'cognitive', fetches: ['/library'] },
   { id: 'brain-hub', nav: 'nav-brain-hub', label: 'Brain Hub', zone: 'cognitive', fetches: ['/ddd/brains'] },
+  { id: 'inbox', nav: 'nav-inbox', label: 'Inbox', zone: 'work', fetches: ['/inbox'] },
   { id: 'todo', nav: 'nav-todo', label: 'ToDo', zone: 'work', fetches: ['/todos'] },
   { id: 'pipeline', nav: 'nav-pipeline', label: 'Pipeline', zone: 'work', fetches: ['/pipelines'] },
   { id: 'pollinate', nav: 'nav-pollinate', label: 'Pollinate', zone: 'work', fetches: ['/pollinate'] },

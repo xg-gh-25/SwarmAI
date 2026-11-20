@@ -20,6 +20,7 @@ export const OVERLAY_CHUNK = {
   library: () => import('./LibraryOverlay'),
   'brain-hub': () => import('./BrainHub'),
   'new-brain': () => import('./NewBrainOverlay'),
+  inbox: () => import('./InboxOverlay'),
   todo: () => import('./ToDoOverlay'),
   pipeline: () => import('./PipelineOverlay'),
   pollinate: () => import('./PollinateOverlay'),

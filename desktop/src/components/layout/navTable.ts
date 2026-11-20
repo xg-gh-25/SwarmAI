@@ -62,7 +62,8 @@ export const NAV: Record<OverlayId, NavEntry> = {
   library: { zone: 'cognitive', navLabel: 'Library', subtitle: 'Bookshelf', mode: 'LIBRARY', width: 'xl' },
   'brain-hub': { zone: 'cognitive', navLabel: 'Brain Hub', subtitle: 'what each project knows, delivers and learns', mode: 'BRAIN', width: 'xl', titleGoesHome: true },
   'new-brain': { zone: 'cognitive', navLabel: 'New Brain', subtitle: 'Grow a new brain', mode: 'BRAIN', width: 'xl', parent: 'brain-hub' },
-  // Work zone
+  // Work zone (Inbox first: what comes in, then what to do)
+  inbox: { zone: 'work', navLabel: 'Inbox', mode: 'INBOX', width: 'xl' },
   todo: { zone: 'work', navLabel: 'ToDo', mode: 'TODO', width: 'xl' },
   // width 'm': a file tree fills ~45% of an 'xl' panel and leaves a void
   swarmws: { zone: 'work', navLabel: 'Workspace', subtitle: 'SwarmWS workspace explorer', mode: 'WORKSPACE', width: 'm' },
