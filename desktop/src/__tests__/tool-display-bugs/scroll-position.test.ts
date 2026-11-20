@@ -35,11 +35,17 @@ describe('Bug 3 Preservation — Existing per-tab state fields', () => {
       '../../hooks/useUnifiedTabState.ts',
     );
     const source = fs.readFileSync(filePath, 'utf-8');
-    const interfaceMatch = source.match(
-      /export interface UnifiedTab\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/s,
-    );
-    expect(interfaceMatch).not.toBeNull();
-    return interfaceMatch![1];
+    // The body up to the brace that closes the interface, counted by depth: a field typed
+    // as an inline object (`{ turnId?: string }`) closes a brace of its own, at any depth.
+    const start = source.search(/export interface UnifiedTab\s*\{/);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const open = source.indexOf('{', start);
+    let depth = 0;
+    for (let i = open; i < source.length; i++) {
+      if (source[i] === '{') depth++;
+      else if (source[i] === '}' && --depth === 0) return source.slice(open + 1, i);
+    }
+    throw new Error('UnifiedTab interface is not closed');
   }
 
   it('UnifiedTab interface includes messages field', async () => {
