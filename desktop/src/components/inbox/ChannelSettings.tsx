@@ -190,7 +190,7 @@ function SourceSettings({ source: s, notify, onRemoved }: { source: SourceOut; n
             {t('ui.InboxOverlay.channels.enabled')}
             <button type="button" role="switch" aria-checked={isOn(s)} disabled={busy} data-testid="inbox-source-enabled"
               onClick={() => void patch({ enabled: !isOn(s) })}
-              className={`rounded border px-2 py-0.5 text-meta ${isOn(s) ? 'border-[var(--color-border-strong)] text-[var(--color-text)]' : 'border-[var(--color-border)] text-[var(--color-text-faint)]'}`}>
+              className={`btn-sm border ${isOn(s) ? 'border-[var(--color-border-strong)] text-[var(--color-text)]' : 'border-[var(--color-border)] text-[var(--color-text-faint)]'}`}>
               {isOn(s) ? t('ui.InboxOverlay.channels.enabledOn') : t('ui.InboxOverlay.channels.enabledOff')}
             </button>
           </label>
