@@ -241,11 +241,11 @@ describe('ChatPage — the Hive tab', () => {
       await settle();
       expect(hiveTabs()).toHaveLength(0);
       const mark = calls.length;
-      await waitFor(() => expect(calls.slice(mark).some((c) => c.method === 'put' && c.url === '/settings/open-tabs')).toBe(true),
-        { timeout: 5000 });
-      const saved = [...calls].reverse().find((c) => c.method === 'put' && c.url === '/settings/open-tabs')!.data as
-        { tabs: { id: string; sessionId?: string }[] };
-      expect(saved.tabs.filter((t) => t.sessionId === 'S1')).toEqual([]);
+      // open_tabs.json is written as soon as the tabs change: once with the Hive tab, then without it
+      const puts = () => calls.filter((c) => c.method === 'put' && c.url === '/settings/open-tabs')
+        .map((c) => (c.data as { tabs: { id: string; sessionId?: string }[] }).tabs);
+      expect(puts().some((tabs) => tabs.some((t) => t.sessionId === 'S1'))).toBe(true);
+      await waitFor(() => expect(puts().at(-1)!.filter((t) => t.sessionId === 'S1')).toEqual([]), { timeout: 5000 });
       expect(calls.slice(mark).some((c) => !c.url.startsWith('/swarm-out/') && c.url.includes('S1'))).toBe(false);
     }, 30_000);
 

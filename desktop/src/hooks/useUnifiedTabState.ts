@@ -996,36 +996,27 @@ export function useUnifiedTabState(
     [bump],
   );
 
-  // ---- Filesystem persistence effect (debounced) ---------------------------
-  // Persists the serializable tab subset to ~/.swarm-ai/open_tabs.json
-  // via the backend API. Debounced to avoid excessive writes during rapid
-  // tab operations (streaming bumps the counter frequently).
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ---- Filesystem persistence effect ---------------------------------------
+  // Persists the serializable tab subset to ~/.swarm-ai/open_tabs.json via the
+  // backend API, as soon as it changes. Streaming bumps the render counter many
+  // times a second but never changes the persisted fields, so comparing the
+  // content keeps writes to real changes. There is no delay: a close followed
+  // by a quit or reload right after (a delay of 500 ms lost it) must stay closed.
+  const lastSavedRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Skip saving until file restore is complete (avoid overwriting
     // the persisted state with the temporary default tab)
     if (!fileRestoreDone.current) return;
-
-    // Debounce: wait 500ms after last change before writing
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      const map = tabMapRef.current;
-      const tabs: PersistedTab[] = [];
-      for (const tab of map.values()) {
-        tabs.push(toSerializable(tab));
-      }
-      const data: OpenTabsFileData = {
-        tabs,
-        activeTabId: activeTabIdRef.current,
-      };
-      tabPersistenceService.save(data);
-    }, 500);
-
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
-     
+    const tabs: PersistedTab[] = [];
+    for (const tab of tabMapRef.current.values()) {
+      tabs.push(toSerializable(tab));
+    }
+    const data: OpenTabsFileData = { tabs, activeTabId: activeTabIdRef.current };
+    const content = JSON.stringify(data);
+    if (content === lastSavedRef.current) return;
+    lastSavedRef.current = content;
+    tabPersistenceService.save(data);
   }, [renderCounter, activeTabId]);
 
   // ---- Return object ------------------------------------------------------
