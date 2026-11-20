@@ -271,3 +271,36 @@ def test_an_interrupted_playwright_run_takes_its_group_with_it(tmp_path):
         except ProcessLookupError:
             alive = False
     assert not alive, "the Playwright process outlived the interrupted replay"
+
+
+def test_base_record_error_names_the_kept_base_sandbox(tmp_path, app_data, monkeypatch, capsys):  # noqa: F811
+    """The base replay succeeded, then recording its results raised, with --keep: the kept
+    base sandbox is named as base_sandbox and left in place."""
+    root = make_repo(tmp_path / "r", specs={}, features=(
+        "schema: 1\nfeatures:\n  - {id: cmd-a1, title: Cmd, target: web, run: [\"true\"]}\n"))
+    monkeypatch.setattr(cli, "_run_facts", lambda run, r: {
+        "repo": "app", "project": "", "project_dir": "", "code_tree": "a" * 40,
+        "base": "HEAD", "changed": ["site/index.html"], "since": None})
+    head_sb, base_sb = tmp_path / "head-sandbox", tmp_path / "base-sandbox"
+    head_sb.mkdir()
+    base_sb.mkdir()
+    calls = []
+
+    def head_fails(fmap, r, sel, keep=False):
+        calls.append(r)
+        return ([{"feature": "cmd-a1", "walk": "Cmd", "project": "command", "result": "fail",
+                  "reason": "", "error": "", "duration_s": 0.1, "evidence": []}],
+                head_sb if len(calls) == 1 else base_sb)
+    real_record = cli._record
+
+    def record(*a, **kw):
+        if kw["trigger"] == "base":
+            raise OSError("ledger write broke")
+        return real_record(*a, **kw)
+    monkeypatch.setattr(cli, "replay", head_fails)
+    monkeypatch.setattr(cli, "_record", record)
+    code = cli.main(["replay", "--affected", "--run", "run_x", "--repo-root", str(root), "--keep"])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert len(calls) == 2 and code == 2 and "ledger write broke" in out["error"]
+    assert out["sandbox"] == str(head_sb)
+    assert out["base_sandbox"] == str(base_sb) and base_sb.is_dir()

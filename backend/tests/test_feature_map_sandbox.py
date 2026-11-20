@@ -205,3 +205,130 @@ def test_ports_come_from_below_the_ephemeral_range_and_differ():
             random.randrange = orig
     finally:
         busy.close()
+
+
+# records its argv, its environment and every path it is asked for; leaves a grandchild
+# holding a port in its group, and says which port in its dump
+STATE_SERVICE = r'''
+import http.server, json, os, socket, subprocess, sys
+port, dump = int(sys.argv[1]), sys.argv[2]
+s = socket.socket(); s.bind(("127.0.0.1", 0)); held = s.getsockname()[1]; s.close()
+subprocess.Popen([sys.executable, "-c",
+    "import socket,time;s=socket.socket();s.bind(('127.0.0.1',%d));s.listen();time.sleep(600)" % held])
+json.dump({"argv": sys.argv, "env": dict(os.environ), "pid": os.getpid(), "held": held},
+          open(dump, "w"))
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        open(dump + ".paths", "a").write(self.path + "\n")
+        self.send_response(200); self.end_headers()
+    def log_message(self, *_a):
+        pass
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+'''
+
+STATE_TARGET = f"""id: web
+kind: web
+services:
+  - id: ui
+    argv: [{sys.executable}, svc2.py, "{{port.ui}}", "{{state_dir}}/svc.json", "{{state_dir}}"]
+    ready: "http://127.0.0.1:{{port.ui}}/ready?d={{state_dir}}"
+env: {{DATA: "{{state_dir}}/data"}}
+start_states:
+  a:
+    fixture: fx.txt
+    to: "{{state_dir}}/fx.txt"
+    setup: [[{sys.executable}, -c, "import sys; open(sys.argv[1], 'w').write('set')", "{{state_dir}}/setup.txt"]]
+  b: {{}}
+"""
+
+
+def _state_repo(tmp_path: Path) -> tuple[Path, files.FeatureMap]:
+    root, _fmap = _repo(tmp_path, STATE_TARGET)
+    root.joinpath("svc2.py").write_text(STATE_SERVICE)
+    (root / ".swarmai/features/fx.txt").write_text("fixture")
+    return root, files.load_folder(root / ".swarmai/features")
+
+
+def test_state_dir_expands_in_argv_env_ready_and_setup(tmp_path):
+    root, fmap = _state_repo(tmp_path)
+    target = fmap.targets["web"]
+    with Sandbox(root) as sb:
+        sb.fresh_start(fmap, target, "a")
+        sb.setup(fmap, target, "a")
+        state = sb.dir / "state" / "a"
+        assert sb.expand("{state_dir}") == str(state)
+        seen = json.loads((state / "svc.json").read_text())
+        assert seen["argv"][2:] == [str(state / "svc.json"), str(state)], "service argv"
+        assert seen["env"]["DATA"] == f"{state}/data", "target env"
+        assert f"/ready?d={state}" in (state / "svc.json.paths").read_text().split(), "ready URL"
+        assert (state / "setup.txt").read_text() == "set", "setup command"
+        assert (state / "fx.txt").read_text() == "fixture", "fixture to"
+
+
+def test_enter_state_restarts_on_the_same_ports_and_kills_the_old_group(tmp_path):
+    root, fmap = _state_repo(tmp_path)
+    target = fmap.targets["web"]
+    with Sandbox(root) as sb:
+        sb.fresh_start(fmap, target, "a")
+        first = json.loads((sb.dir / "state/a/svc.json").read_text())
+        port = sb.ports["ui"]
+        assert _answers(first["held"])
+        sb.fresh_start(fmap, target, "b")
+        second = json.loads((sb.dir / "state/b/svc.json").read_text())
+        # a new process in its own group, on the same port; the old group is gone
+        assert second["pid"] != first["pid"] and sb.ports["ui"] == port
+        assert [p.pid for _sid, p in sb.procs] == [second["pid"]]
+        assert os.getpgid(second["pid"]) != os.getpgid(0)
+        deadline = time.monotonic() + 5
+        while _answers(first["held"]) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _answers(first["held"]), "the old service's group outlived the restart"
+        with pytest.raises(ProcessLookupError):
+            os.kill(first["pid"], 0)
+        # b's folder is its own and starts empty (only what b's service wrote itself)
+        assert sorted(p.name for p in (sb.dir / "state/b").iterdir()) == ["svc.json", "svc.json.paths"]
+        # a state run again starts from an empty folder too
+        (sb.dir / "state/a/leftover").write_text("x")
+        sb.fresh_start(fmap, target, "a")
+        assert not (sb.dir / "state/a/leftover").exists()
+
+
+def test_prepare_never_writes_into_a_start_states_folder(tmp_path):
+    """A target prepared after another target's state ran: its prepare sees
+    state/.prepare as {state_dir}, and the running state's folder is left as it was."""
+    root, _fmap = _state_repo(tmp_path)
+    (root / ".swarmai/features/targets/api.yaml").write_text(
+        f'id: api\nkind: command\nprepare: [[{sys.executable}, -c, '
+        f'"import sys; open(sys.argv[1], \'w\').write(\'p\')", "{{state_dir}}/prep.txt"]]\n')
+    fmap = files.load_folder(root / ".swarmai/features")
+    with Sandbox(root) as sb:
+        sb.fresh_start(fmap, fmap.targets["web"], "a")
+        sb.prepare(fmap, fmap.targets["api"])
+        assert (sb.dir / "state/.prepare/prep.txt").is_file()
+        assert not (sb.dir / "state/a/prep.txt").exists()
+        assert sb.state_dir == sb.dir / "state" / "a", "the running state's folder is restored"
+
+
+def test_a_state_name_that_is_not_a_folder_name_is_refused(tmp_path):
+    root, fmap = _state_repo(tmp_path)
+    # the folder never accepts such a name ...
+    (root / ".swarmai/features/targets/bad.yaml").write_text(
+        "id: bad\nkind: web\nstart_states:\n  ../x: {}\n")
+    with pytest.raises(files.FeatureMapError):
+        files.load_folder(root / ".swarmai/features")
+    (root / ".swarmai/features/targets/bad.yaml").unlink()
+    # ... and fresh_start, which empties the state's folder, refuses one that arrives
+    # another way, before it stops anything
+    target = fmap.targets["web"]
+    with Sandbox(root) as sb:
+        sb.fresh_start(fmap, target, "a")
+        outside = sb.dir / "x"
+        outside.mkdir()
+        (outside / "keep").write_text("k")
+        running = [p.pid for _sid, p in sb.procs]
+        for name in ("../x", str(outside), ".", "..", ".prepare", "a/b", ""):
+            with pytest.raises(SandboxError) as err:
+                sb.fresh_start(fmap, target, name)
+            assert err.value.reason == "bad file", name
+        assert (outside / "keep").is_file() and (sb.dir / "state/.prepare").is_dir()
+        assert [p.pid for _sid, p in sb.procs] == running, "nothing was stopped"

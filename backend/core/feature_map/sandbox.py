@@ -17,6 +17,13 @@ The repo's commands do not decide it:
   so cleanup kills the whole group and never the caller's (a capped helper that killed
   its own group once took the agent and the daemon with it); readiness counts only while
   the service's own process is alive;
+- each start state from fresh services (``fresh_start``): every running service is
+  stopped, the state gets an empty folder ``{state_dir}`` = ``<sandbox>/state/<state>``,
+  and the target and the targets it needs are started again on the ports chosen when
+  they were prepared (a prepare step may build a port into the app). Prepare runs once
+  per target (``prepare``). A target that keeps its data under ``{state_dir}`` starts
+  every state from a clean app; what it keeps elsewhere (``HOME``, the checkout) is
+  shared by the states;
 - removed after the run unless ``keep``.
 
 What it does not contain: the app's own server-side network calls and the repo's own
@@ -48,6 +55,8 @@ from typing import Iterable, Mapping
 from core.feature_map.files import FeatureMap, Target
 
 STEP_TIMEOUT_S = 1200          # a hang guard per prepare/setup command, never a budget
+PORT_CLOSE_S = 10              # how long a stopped service's port may take to close
+PREPARE_STATE = ".prepare"     # {state_dir} while preparing: no start state's name ('.')
 _POSIX_ALLOW = ("PATH", "LANG", "LC_ALL", "TERM", "TZ", "HTTPS_PROXY", "HTTP_PROXY",
                 "NO_PROXY", "https_proxy", "http_proxy", "no_proxy")
 _WIN_ALLOW = ("SystemRoot", "windir", "COMSPEC", "PATHEXT", "SystemDrive",
@@ -209,7 +218,8 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
 
 class Sandbox:
-    """``with Sandbox(root) as sb: sb.start(fmap, target); sb.setup(target, "home")``."""
+    """``with Sandbox(root) as sb: sb.fresh_start(fmap, target, "home");
+    sb.setup(fmap, target, "home")``."""
 
     def __init__(self, root: Path, *, keep: bool = False, real_home: Path | None = None,
                  folder_copy: Path | None = None):
@@ -221,7 +231,9 @@ class Sandbox:
         self.checkout: Path | None = None
         self.ports: dict[str, int] = {}
         self.procs: list[tuple[str, subprocess.Popen]] = []
-        self.started: set[str] = set()
+        self.prepared: set[str] = set()         # targets whose ports and prepare are done
+        self.running: set[str] = set()          # targets whose services are up
+        self.state_dir: Path | None = None      # the current start state's folder
         self.logs: dict[str, Path] = {}
 
     def __enter__(self) -> "Sandbox":
@@ -231,6 +243,8 @@ class Sandbox:
         self.checkout = self.dir / "checkout"
         _copy_checkout(self.root, self.checkout)
         (self.dir / "logs").mkdir()
+        self.state_dir = self.dir / "state" / PREPARE_STATE
+        self.state_dir.mkdir(parents=True)
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -243,9 +257,10 @@ class Sandbox:
         if self.dir and not self.keep:
             shutil.rmtree(self.dir, ignore_errors=True)
 
-    # placeholders: {port.<service>}, {sandbox}, {checkout}
+    # placeholders: {port.<service>}, {sandbox}, {checkout}, {state_dir}
     def expand(self, text: str) -> str:
-        out = text.replace("{sandbox}", str(self.dir)).replace("{checkout}", str(self.checkout))
+        out = (text.replace("{state_dir}", str(self.state_dir)).replace("{sandbox}", str(self.dir))
+               .replace("{checkout}", str(self.checkout)))
         for sid, port in self.ports.items():
             out = out.replace("{port." + sid + "}", str(port))
         return out
@@ -283,17 +298,35 @@ class Sandbox:
             raise SandboxError(reason, f"{' '.join(argv)[:200]} exited {proc.returncode}: "
                                + " | ".join(tail)[:600])
 
-    def start(self, fmap: FeatureMap, target: Target) -> None:
-        """Prepare and start *target* and every target it needs (needs first)."""
+    def prepare(self, fmap: FeatureMap, target: Target) -> None:
+        """Choose the ports of *target* and of every target it needs, and run their prepare
+        commands, once per target (needs first). The ports are kept for every later start."""
         for need in target.needs:
-            if need not in self.started:
-                self.start(fmap, fmap.targets[need])
-        if target.id in self.started:
+            if need not in self.prepared:
+                self.prepare(fmap, fmap.targets[need])
+        if target.id in self.prepared:
             return
         for svc in target.services:
             self.ports.setdefault(svc.id, _free_port(self.ports.values()))
-        for i, argv in enumerate(target.prepare):
-            self._run(argv, target, "dependencies missing", f"prepare-{i}")
+        # prepare runs before (or between) start states: {state_dir} is a folder none of
+        # them sees, also when a target is prepared after another one's states ran
+        current, self.state_dir = self.state_dir, self.dir / "state" / PREPARE_STATE
+        try:
+            for i, argv in enumerate(target.prepare):
+                self._run(argv, target, "dependencies missing", f"prepare-{i}")
+        finally:
+            self.state_dir = current
+        self.prepared.add(target.id)
+
+    def start(self, fmap: FeatureMap, target: Target) -> None:
+        """Start the services of *target* and of every target it needs (needs first),
+        preparing each one not prepared yet. A target already running is left as it is."""
+        for need in target.needs:
+            if need not in self.running:
+                self.start(fmap, fmap.targets[need])
+        if target.id in self.running:
+            return
+        self.prepare(fmap, target)
         for svc in target.services:
             port = self.ports[svc.id]
             ready = loopback_url(self.expand(svc.ready), f"{svc.id} ready")   # before it starts
@@ -314,7 +347,42 @@ class Sandbox:
                 out.close()
             self.procs.append((svc.id, proc))
             self._wait_ready(target, svc.id, ready, proc)
-        self.started.add(target.id)
+        self.running.add(target.id)
+
+    def stop(self) -> None:
+        """Stop every running service (each one's whole group), then wait until their
+        ports are closed, so the next start finds them free."""
+        ports = [self.ports[sid] for sid, _proc in self.procs if sid in self.ports]
+        for _sid, proc in reversed(self.procs):
+            _kill_group(proc)
+        self.procs.clear()
+        self.running.clear()
+        deadline = time.monotonic() + PORT_CLOSE_S
+        for port in ports:
+            while _answers(port) and time.monotonic() < deadline:
+                time.sleep(0.1)
+
+    def fresh_start(self, fmap: FeatureMap, target: Target, state: str) -> None:
+        """Begin start state *state* of *target* from fresh services: stop every running
+        service, give the state an empty folder (``{state_dir}``), then start *target* and
+        the targets it needs again. The state's own setup is ``setup``. A state name two
+        targets share names the same folder, emptied again for each."""
+        base = self.dir / "state"
+        folder = base / state
+        # the folder is emptied: it must be a direct child of state/ (a state name is an
+        # identifier, files._ident; this holds even if a name arrives another way)
+        if state == PREPARE_STATE or folder.name != state or folder.resolve().parent != base.resolve():
+            raise SandboxError("bad file", f"start state {state[:80]!r} is not a folder name")
+        self.stop()
+        try:
+            if folder.exists():
+                shutil.rmtree(folder)
+            folder.mkdir(parents=True)
+        except OSError as exc:
+            raise SandboxError("launch failed", f"the folder of start state {state} could not "
+                               f"be made empty: {exc}") from exc
+        self.state_dir = folder
+        self.start(fmap, target)
 
     def _wait_ready(self, target: Target, sid: str, url: str, proc: subprocess.Popen) -> None:
         deadline = time.monotonic() + target.ready_timeout_s
@@ -335,7 +403,8 @@ class Sandbox:
         raise SandboxError("not ready", f"{sid} did not answer {url} in {target.ready_timeout_s}s")
 
     def setup(self, fmap: FeatureMap, target: Target, state: str) -> None:
-        """Apply start state *state* of *target*: its fixture copied, its setup run."""
+        """Apply start state *state* of *target* (after ``fresh_start``): its fixture
+        copied, its setup run."""
         st = target.start_states.get(state)
         if st is None:
             raise SandboxError("bad file", f"target {target.id} has no start state {state}")

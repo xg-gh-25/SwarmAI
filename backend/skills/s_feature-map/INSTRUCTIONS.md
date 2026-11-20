@@ -60,7 +60,18 @@ start_states:
 ```
 
 Every command is an argv list, never a shell string. Placeholders: `{port.<service>}`,
-`{sandbox}`, `{checkout}`.
+`{sandbox}`, `{checkout}`, `{state_dir}` (the current start state's own folder,
+`<sandbox>/state/<state>`; it expands in service argv, `env`, `ready` URLs and setup).
+
+### Start states
+
+Each start state starts from fresh services: before it, the product stops every running
+service, gives the state an empty `{state_dir}`, starts the target and the targets it
+needs again (on the same ports), and then runs the state's `setup`. Keep the app's data
+under `{state_dir}` (`env: {DATA_DIR: "{state_dir}/data"}`), so no state sees what
+another state's setup changed; what the app keeps elsewhere (the sandbox `HOME`, the
+checkout copy) is shared by the states. `prepare` runs once per target. `default` runs
+first, then the other states by name; command walks run in `default`.
 
 ## Writing a spec
 
@@ -76,7 +87,8 @@ test('from home', { tag: '@start:home' }, async ({ page }) => {
 });
 ```
 
-- **Start state**: the tag `@start:<name>` (none = `default`).
+- **Start state**: the tag `@start:<name>` (none = `default`); the walk starts from that
+  state's fresh services (see Start states above), never from what an earlier state left.
 - **Stable handles**: `getByRole` + name where the label is product copy, `getByTestId`
   where it is not. Never a CSS path or an index.
 - **In-viewport rule**: every walk that opens a dialog, popover or menu asserts

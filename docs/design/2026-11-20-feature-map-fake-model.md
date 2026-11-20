@@ -4,7 +4,7 @@ date: 2026-11-20
 created: 2026-11-20
 updated: 2026-11-20
 project: SwarmAI
-status: r2 — after one premise review; not built. Owner direction 2026-11-20: "设计沙箱里的假模型端点".
+status: r2 — after one premise review; §4.2a (start states isolated) built 2026-11-20, the rest not built. Owner direction 2026-11-20: "设计沙箱里的假模型端点".
 related: docs/design/2026-11-18-feature-map.md; core/feature_map; core/claude_environment; core/bedrock_thinking_gateway; core/session_unit (pre-flight); .swarmai/features
 ---
 
@@ -48,10 +48,10 @@ testing prompts, the Tauri shell, real Bedrock behaviour (quotas, latency).
   bearer-token client honours `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` (checked: a local server
   received `/model/<id>/converse` with `Authorization: Bearer`). Pointing it at the
   stand-in also keeps those background calls from reaching real AWS with the fake key.
-- Start states share one sandbox and one set of services: `replay._web` runs them in name
-  order after `default` (`replay.py:182`) and `Sandbox.setup` only runs the state's setup
-  (`sandbox.py:337`). A state that changes the app's settings changes them for every state
-  after it (§4.2a).
+- Start states shared one sandbox and one set of services: `replay._web` ran them in name
+  order after `default` and `Sandbox.setup` only ran the state's setup, so a state that
+  changed the app's settings changed them for every state after it. Fixed: each start
+  state now starts from fresh services and its own `{state_dir}` (§4.2a, built).
 
 ## 3. Evidence (spike, 2026-11-20)
 
@@ -114,18 +114,34 @@ The model stand-in is a fixture of the SwarmAI repo, not a product capability:
 Nothing in the app changes. It reaches the stand-in through the same variables a real
 user's API-key setup uses; the only difference is the host.
 
-### 4.2a Start states are isolated (Feature Map engine change)
+### 4.2a Start states are isolated (Feature Map engine change) — built 2026-11-20
 
-Today a start state's setup changes the app for every state after it: `chat` (API-key mode)
-sorts before `home`, so the no-account banner walk would see a connected account and go
-red. The design v3 meant each walk to start from its state, not from whatever ran before.
+Before this change a start state's setup changed the app for every state after it: `chat`
+(API-key mode) sorts before `home`, so the no-account banner walk would see a connected
+account and go red. The design v3 meant each walk to start from its state, not from
+whatever ran before.
 
-Change, in `core/feature_map/replay.py` and `sandbox.py`: before each start state after the
-first, the engine stops the target's services, starts them again, and gives the state a
-fresh folder through a new placeholder `{state_dir}` (`<sandbox>/state/<state>`), then runs
-the state's setup. A target that keeps its data under `{state_dir}` (SwarmAI:
-`SWARM_DATA_DIR={state_dir}/data`) gets a clean app per state; prepare runs once. Cost: one
-service restart per extra state (SwarmAI's backend: about 10 s).
+Built, in `core/feature_map/replay.py` (`_target`) and `sandbox.py` (`prepare`,
+`fresh_start`, `stop`): a target's prepare runs once (ports chosen there and kept, since a
+prepare step can build a port into the app); then for each start state, `default` first
+and the others by name, the engine stops every running service of the sandbox (each one's
+whole process group, then waits for its port to close), recreates the state's folder
+`<sandbox>/state/<state>` empty as `{state_dir}`, starts the target and the targets it
+needs again, and runs the state's fixture copy and setup. The first state gets its own
+folder too; during prepare `{state_dir}` is `<sandbox>/state/.prepare`, which no state
+sees. `{state_dir}` expands in service argv, env, ready URLs, setup commands and a
+fixture's `to`. Command walks run in `default`, after its specs (they used to run after
+the last state). A start or setup that fails for a state reports that state's walks as
+not_run with its reason, and the next state starts again (a start can depend on the
+state). A state name two targets share names the same folder, emptied again for each.
+`fresh_start` refuses a state name that is not a direct child folder of `state/`. A target
+that keeps its data under `{state_dir}` (SwarmAI: `SWARM_DATA_DIR={state_dir}/data`, a
+change to `.swarmai/features/targets/app.yaml` made separately) gets a clean app per state;
+what an app keeps elsewhere (the sandbox `HOME`, the checkout copy) is still shared. Cost:
+one service start per state instead of one per target. Tests: `test_feature_map_replay.py::
+test_start_states_start_from_fresh_services` and `::test_a_state_whose_services_fail_to_start_is_not_run`,
+`test_feature_map_sandbox.py::test_state_dir_expands_in_argv_env_ready_and_setup` and
+`::test_enter_state_restarts_on_the_same_ports_and_kills_the_old_group`.
 
 | Option | Why not / why |
 |---|---|
@@ -229,8 +245,8 @@ stand-in's replies for the ids it probes).
 
 ## 7. Build order
 
-1. Engine: start states isolated (§4.2a), with its tests; the existing 10 SwarmAI features
-   verified green again.
+1. Engine: start states isolated (§4.2a), with its tests (built 2026-11-20); the existing
+   10 SwarmAI features verified green again.
 2. `server.py`: encoder, routes, script reader; unit tests (below).
 3. Target wiring and the `chat` state; walk 1 verified green.
 4. Walks 2-5, each verified green in both viewports.

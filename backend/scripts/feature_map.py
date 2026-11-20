@@ -215,8 +215,12 @@ def _base_replay(root: Path, base: str, fmap_rel: str | None, folder: Path, fail
             commit = _git(wt, "rev-parse", "HEAD")
             written = _record(brain, repo, bmap, results, root=wt, trigger="base", run=run,
                               code_tree=None, commit=commit, clean=True, sandbox=sbdir, keep=keep)
-        except BaseException:
-            if sbdir and not keep:
+        except BaseException as exc:
+            # remove it, or (keep) name it on the exception, as replay() does, so main()
+            # can report where the kept base sandbox is
+            if sbdir and keep:
+                exc.sandbox_dir = str(sbdir)
+            elif sbdir:
                 shutil.rmtree(sbdir, ignore_errors=True)
             raise
         # base lines carry the base folder's walk keys; the run's facts pair them with the

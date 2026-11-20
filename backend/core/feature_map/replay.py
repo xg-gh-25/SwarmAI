@@ -1,8 +1,10 @@
 """verify / replay: sandbox → Playwright (or commands) → per-walk results (design §6).
 
-For each selected feature's target the sandbox prepares and starts the target (and the
-targets it needs); then, per start state, the pinned Playwright runs the selected specs
-with a generated config — never the repo's own config — that sets:
+For each selected feature's target the sandbox prepares the target (and the targets it
+needs) once; then each start state begins from fresh services (``Sandbox.fresh_start``:
+every service stopped, an empty ``{state_dir}``, the services started again), its setup
+runs, and the pinned Playwright runs that state's specs with a generated config — never
+the repo's own config — that sets:
 
 - two viewport projects, ``regular`` 1440×900 and ``compact`` 1024×640, so a dialog or
   popover that only fits a large window fails ``toBeInViewport({ ratio: 1 })`` in
@@ -19,8 +21,9 @@ the pinned package, so a spec's ``import '@playwright/test'`` resolves the produ
 even when the repo has its own (Node takes the nearest ``node_modules``; the link
 realpaths to the same module instance the CLI runs).
 
-A spec's start state is its tag ``@start:<name>`` (none = ``default``). A command walk
-(``run:``) runs its argv in the sandbox; exit 0 = pass. Results:
+A spec's start state is its tag ``@start:<name>`` (none = ``default``); ``default`` runs
+first, then the others by name. A command walk (``run:``) runs its argv in the sandbox in
+the ``default`` state, after its specs; exit 0 = pass. Results:
 
     {"feature", "walk", "project", "result": pass|fail|flaky|not_run, "reason",
      "duration_s", "evidence": [paths], "error"}
@@ -165,69 +168,135 @@ def contained(paths: list[str], folder: Path) -> list[str]:
     return out
 
 
-def _web(fmap: FeatureMap, target, features: list[Feature], sel: Selection, sb: Sandbox,
-         rt: Runtime, folder_copy: Path) -> list[dict]:
-    by_spec = {f.spec: f for f in features if f.spec}
-    base_url = loopback_url(sb.expand(target.base_url or "http://127.0.0.1/"), "base_url")
-    files = sorted(by_spec)
+def _list_states(target, sb: Sandbox, rt: Runtime, folder_copy: Path, base_url: str,
+                 files: list[str]) -> dict[str, set[str]] | None:
+    """{start state: spec files with a test tagged for it}, from Playwright's own listing
+    (no service needs to run for it); None when Playwright could not list the specs."""
     listing = sb.dir / f"list-{target.id}.json"
     cfg = _config(sb, folder_copy, rt, base_url, target.locale, sb.dir / "out-list", listing)
     _pw(rt, sb, target, ["--config", str(cfg), "--list", *files], folder_copy)
     try:
         listed = _walk_specs(json.loads(listing.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
-        return _not_run(features, "bad file", "Playwright could not list the specs")
+        return None
     states: dict[str, set[str]] = {}
     for file, _title, tags, _t in listed:
         states.setdefault(_state_of(tags), set()).add(file)
+    return states
+
+
+def _run_state(target, state: str, spec_files: set[str], by_spec: dict[str, Feature],
+               sb: Sandbox, rt: Runtime, folder_copy: Path, base_url: str) -> tuple[list[dict], set[str]]:
+    """Run the tests of *spec_files* tagged for *state* on the running services: their
+    results, and the spec files the report holds a test of."""
+    report_path = sb.dir / f"report-{target.id}-{state}.json"
+    out_dir = sb.dir / f"out-{target.id}-{state}"
+    cfg = _config(sb, folder_copy, rt, base_url, target.locale, out_dir, report_path)
+    args = ["--config", str(cfg)]
+    # this state's tests only (by their @start tag)
+    if state != "default":
+        args += ["--grep", rf"@start:{re.escape(state)}\b"]
+    else:
+        args += ["--grep-invert", r"@start:(?!default\b)"]
+    started = time.monotonic()
+    _pw(rt, sb, target, [*args, *sorted(spec_files)], folder_copy)
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        hit = [by_spec[f] for f in sorted(spec_files) if f in by_spec]
+        return _not_run(hit, "launch failed", "Playwright wrote no report"), set(spec_files)
+    elapsed = time.monotonic() - started
+    results, seen = [], set()
+    for file, title, _tags, test in _walk_specs(report):
+        feature = by_spec.get(file)
+        if feature is None:
+            continue
+        seen.add(file)
+        runs = test.get("results") or []
+        last = runs[-1] if runs else {}
+        error = next(((r.get("error") or {}).get("message", "") for r in runs if r.get("error")), "")
+        evidence = contained([a["path"] for r in runs for a in r.get("attachments") or []
+                              if a.get("path") and a.get("name") in ("screenshot", "trace")],
+                             sb.dir)
+        status = test.get("status") or ""
+        results.append({
+            "feature": feature.id, "walk": title, "project": test.get("projectName") or "",
+            "result": _RESULT.get(status, "fail"),
+            "reason": "skipped by the spec" if status == "skipped" else "",
+            "error": re.sub(r"\x1b\[[0-9;]*m", "", error)[:1200],
+            "duration_s": round(sum((r.get("duration") or 0) for r in runs) / 1000, 2) or round(elapsed, 2),
+            "evidence": evidence, "retries": len(runs) - 1, "last_status": last.get("status")})
+    return results, seen
+
+
+def _target(fmap: FeatureMap, target, features: list[Feature], sb: Sandbox,
+            rt: Runtime | None, folder_copy: Path) -> list[dict]:
+    """Every selected walk of *target*: prepare once, then per start state (``default``
+    first) fresh services, the state's setup, its specs and, in ``default``, the command
+    walks. An environment failure is a not_run result, never raised."""
+    web = [f for f in features if f.spec]
+    commands = [f for f in features if f.run]
+    try:
+        sb.prepare(fmap, target)
+    except SandboxError as exc:
+        return _not_run(features, exc.reason, exc.detail)
     results: list[dict] = []
-    seen_specs = set()
-    for state in sorted(states, key=lambda s: (s != "default", s)):
+    by_spec = {f.spec: f for f in web}
+    states: dict[str, set[str]] = {}
+    base_url = ""
+    if web:
+        try:
+            base_url = loopback_url(sb.expand(target.base_url or "http://127.0.0.1/"), "base_url")
+            listed = _list_states(target, sb, rt, folder_copy, base_url, sorted(by_spec))
+        except SandboxError as exc:
+            results += _not_run(web, exc.reason, exc.detail)
+            web, by_spec = [], {}
+        else:
+            if listed is None:
+                results += _not_run(web, "bad file", "Playwright could not list the specs")
+                web, by_spec = [], {}
+            else:
+                states = listed
+    if commands:
+        states.setdefault("default", set())
+    order = sorted(states, key=lambda s: (s != "default", s))
+
+    def walks(state: str) -> list[Feature]:
+        return ([by_spec[f] for f in sorted(states[state]) if f in by_spec]
+                + (commands if state == "default" else []))
+
+    seen_specs: set[str] = set()
+    for state in order:
+        if state not in target.start_states:
+            results += _not_run(walks(state), "bad file", f"target {target.id} has no start state {state}")
+            seen_specs |= states[state]
+            continue
+        try:
+            sb.fresh_start(fmap, target, state)
+        except SandboxError as exc:
+            # a start can depend on the state ({state_dir} in argv, env, ready): only this
+            # state's walks are not run, and the next state starts again from scratch
+            results += _not_run(walks(state), exc.reason, exc.detail)
+            seen_specs |= states[state]
+            continue
         try:
             sb.setup(fmap, target, state)
         except SandboxError as exc:
-            hit = [by_spec[f] for f in sorted(states[state]) if f in by_spec]
-            results += _not_run(hit, exc.reason, exc.detail)
+            results += _not_run(walks(state), exc.reason, exc.detail)
             seen_specs |= states[state]
             continue
-        report_path = sb.dir / f"report-{target.id}-{state}.json"
-        out_dir = sb.dir / f"out-{target.id}-{state}"
-        cfg = _config(sb, folder_copy, rt, base_url, target.locale, out_dir, report_path)
-        args = ["--config", str(cfg)]
-        # this state's tests only (by their @start tag)
-        if state != "default":
-            args += ["--grep", rf"@start:{re.escape(state)}\b"]
-        else:
-            args += ["--grep-invert", r"@start:(?!default\b)"]
-        started = time.monotonic()
-        _pw(rt, sb, target, [*args, *sorted(states[state])], folder_copy)
-        try:
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            hit = [by_spec[f] for f in sorted(states[state]) if f in by_spec]
-            results += _not_run(hit, "launch failed", "Playwright wrote no report")
-            seen_specs |= states[state]
-            continue
-        elapsed = time.monotonic() - started
-        for file, title, _tags, test in _walk_specs(report):
-            feature = by_spec.get(file)
-            if feature is None:
-                continue
-            seen_specs.add(file)
-            runs = test.get("results") or []
-            last = runs[-1] if runs else {}
-            error = next(((r.get("error") or {}).get("message", "") for r in runs if r.get("error")), "")
-            evidence = contained([a["path"] for r in runs for a in r.get("attachments") or []
-                                  if a.get("path") and a.get("name") in ("screenshot", "trace")],
-                                 sb.dir)
-            status = test.get("status") or ""
-            results.append({
-                "feature": feature.id, "walk": title, "project": test.get("projectName") or "",
-                "result": _RESULT.get(status, "fail"),
-                "reason": "skipped by the spec" if status == "skipped" else "",
-                "error": re.sub(r"\x1b\[[0-9;]*m", "", error)[:1200],
-                "duration_s": round(sum((r.get("duration") or 0) for r in runs) / 1000, 2) or round(elapsed, 2),
-                "evidence": evidence, "retries": len(runs) - 1, "last_status": last.get("status")})
+        if states[state]:
+            try:
+                ran, seen = _run_state(target, state, states[state], by_spec, sb, rt,
+                                       folder_copy, base_url)
+            except SandboxError as exc:
+                ran, seen = _not_run([by_spec[f] for f in sorted(states[state]) if f in by_spec],
+                                     exc.reason, exc.detail), states[state]
+            results += ran
+            seen_specs |= seen
+        if state == "default":
+            for f in commands:
+                results.append(_command(target, f, sb))
     missing = [f for spec, f in by_spec.items() if spec not in seen_specs]
     results += _not_run(missing, "bad file", "the spec holds no test")
     return results
@@ -293,22 +362,7 @@ def replay(fmap: FeatureMap, root: Path, sel: Selection, *,
         for f in sel.features:
             by_target.setdefault(f.target, []).append(f)
         for tid in sorted(by_target):
-            target = fmap.targets[tid]
-            feats = by_target[tid]
-            try:
-                sb.start(fmap, target)
-            except SandboxError as exc:
-                results += _not_run(feats, exc.reason, exc.detail)
-                continue
-            web = [f for f in feats if f.spec]
-            if web:
-                try:
-                    results += _web(fmap, target, web, sel, sb, rt, folder_copy)
-                except SandboxError as exc:
-                    results += _not_run(web, exc.reason, exc.detail)
-            for f in feats:
-                if f.run:
-                    results.append(_command(target, f, sb))
+            results += _target(fmap, fmap.targets[tid], by_target[tid], sb, rt, folder_copy)
     except BaseException as exc:
         # nothing is returned, so no caller can remove it: stop its services, then remove
         # it, or (keep) name it on the exception so the caller can report where it is

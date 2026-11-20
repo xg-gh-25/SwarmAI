@@ -165,3 +165,129 @@ def test_exit_codes_flaky_only_and_not_run(tmp_path, app_data, runtime_env):  # 
     code, out = _cli(bad, "replay")
     assert code == 2 and {r["result"] for r in out["results"]} == {"not_run"}
     assert {r["reason"] for r in out["results"]} == {"dependencies missing"}
+
+
+# A page server whose in-memory value a start state's setup changes (POST /value), and
+# whose GET /state says that value, whether {state_dir}/marker exists, and its own pid.
+# Each start appends its pid to {sandbox}/pids.log. FAIL_IN_STATE: exit in that state.
+STATE_SVC = """\
+import http.server, json, os, sys
+port, state_dir, pids = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+if os.path.basename(state_dir) == os.environ.get("FAIL_IN_STATE"):
+    raise SystemExit(3)
+open(pids, "a").write(f"{os.getpid()}\\n")
+value = {"v": "initial"}
+
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/state":
+            body = json.dumps({"value": value["v"], "pid": os.getpid(),
+                               "marker": os.path.exists(os.path.join(state_dir, "marker"))}).encode()
+        else:
+            body = b"<!doctype html><h1 data-testid='title'>Hello</h1>"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        value["v"] = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, *_a):
+        pass
+
+
+http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+"""
+
+STATE_TARGET = """\
+id: web
+kind: web
+root: site/
+prepare:
+  - [python3, -c, "open('{sandbox}/prepare.log', 'a').write('x\\\\n')"]
+services:
+  - id: ui
+    argv: [python3, "{checkout}/svc.py", "{port.ui}", "{state_dir}", "{sandbox}/pids.log"]
+    ready: "http://127.0.0.1:{port.ui}/"
+base_url: "http://127.0.0.1:{port.ui}/"
+env: {FAIL_IN_STATE: "%s"}
+start_states:
+  a:
+    setup:
+      - [python3, -c, "open('{state_dir}/marker', 'w').write('1')"]
+      - [python3, -c, "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:{port.ui}/value', data=b'changed', method='POST'))"]
+  b: {}
+  c:
+    setup:
+      - [python3, -c, "open('{state_dir}/marker', 'w').write('1')"]
+"""
+
+
+def _state_spec(state: str, value: str, marker: bool) -> str:
+    return f"""\
+import {{ test, expect }} from '@playwright/test';
+test('sees state {state}', {{ tag: '@start:{state}' }}, async ({{ page }}) => {{
+  const s = await (await page.goto('/state'))!.json();
+  expect(s).toMatchObject({{ value: '{value}', marker: {str(marker).lower()} }});
+}});
+"""
+
+
+STATE_FEATURES = """\
+schema: 1
+features:
+  - {id: state-a1, title: State a, target: web, spec: specs/a.spec.ts}
+  - {id: state-b2, title: State b, target: web, spec: specs/b.spec.ts}
+  - {id: state-c4, title: State c, target: web, spec: specs/c.spec.ts}
+  - {id: cmd-c3, title: Command walk in default, target: web, run: [python3, -c, "import json, sys, urllib.request as u; s = json.load(u.urlopen('http://127.0.0.1:{port.ui}/state')); sys.exit(0 if s['value'] == 'initial' and not s['marker'] else 1)"]}
+"""
+
+
+def test_start_states_start_from_fresh_services(tmp_path, app_data, runtime_env):  # noqa: F811
+    """State a's setup writes a file under {state_dir} and changes the running service's
+    in-memory value: a walk of state b sees neither, a walk of state a sees both; the
+    command walk runs in state default, so neither a's nor the last state c's setup
+    reaches it; every state ran on a new process, and prepare ran once."""
+    root = make_repo(tmp_path / "r", target=STATE_TARGET % "", features=STATE_FEATURES,
+                     specs={"a.spec.ts": _state_spec("a", "changed", True),
+                            "b.spec.ts": _state_spec("b", "initial", False),
+                            "c.spec.ts": _state_spec("c", "initial", True)},
+                     extra={"svc.py": STATE_SVC})
+    fmap = files.load_folder(root / ".swarmai/features")
+    results, sb = replay(fmap, root, Selection(list(fmap.features)))
+    try:
+        by = {(r["feature"], r["project"]): r for r in results}
+        for project in ("regular", "compact"):
+            assert by[("state-a1", project)]["result"] == "pass", by[("state-a1", project)]
+            assert by[("state-b2", project)]["result"] == "pass", by[("state-b2", project)]
+            assert by[("state-c4", project)]["result"] == "pass", by[("state-c4", project)]
+        assert by[("cmd-c3", "command")]["result"] == "pass", by[("cmd-c3", "command")]
+        pids = (sb / "pids.log").read_text().split()
+        assert len(pids) == 4 and len(set(pids)) == 4, f"one fresh service per state: {pids}"
+        assert (sb / "prepare.log").read_text().split() == ["x"], "prepare runs once per target"
+        assert (sb / "state/a/marker").is_file() and not (sb / "state/b/marker").exists()
+        assert sorted(p.name for p in (sb / "state").iterdir()) == [".prepare", "a", "b", "c", "default"]
+    finally:
+        shutil.rmtree(sb, ignore_errors=True)
+
+
+def test_a_state_whose_services_fail_to_start_is_not_run(tmp_path, app_data, runtime_env):  # noqa: F811
+    """The services do not come up for state b: b's walks are not_run with the start's
+    reason; the states before and after it (a, c) start again and are judged."""
+    root = make_repo(tmp_path / "r", target=STATE_TARGET % "b", features=STATE_FEATURES,
+                     specs={"a.spec.ts": _state_spec("a", "changed", True),
+                            "b.spec.ts": _state_spec("b", "initial", False),
+                            "c.spec.ts": _state_spec("c", "initial", True)},
+                     extra={"svc.py": STATE_SVC})
+    fmap = files.load_folder(root / ".swarmai/features")
+    results, sb = replay(fmap, root, Selection(list(fmap.features)))
+    shutil.rmtree(sb, ignore_errors=True)
+    by = {r["feature"]: r for r in results}
+    assert by["state-a1"]["result"] == "pass" and by["cmd-c3"]["result"] == "pass", results
+    assert by["state-c4"]["result"] == "pass", by["state-c4"]
+    rows = [r for r in results if r["feature"] == "state-b2"]
+    assert rows and all(r["result"] == "not_run" and r["reason"] == "launch failed" for r in rows), rows
