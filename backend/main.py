@@ -310,6 +310,41 @@ def _other_live_backend(path: str = _BACKEND_JSON_DEFAULT) -> "int | None":
     return pid
 
 
+def live_other_owner(path: str = _BACKEND_JSON_DEFAULT) -> "tuple[int, int] | None":
+    """``(pid, port)`` of another backend that owns ``backend.json`` and is serving (its
+    PID alive and its port accepting connections), else None (no file, a corrupt one, this
+    process, a dead PID or a closed port). A backend started while one owns the data
+    directory (a probe, a dev backend, an accidental launch) checks this before starting
+    anything that may run only once per data directory."""
+    import json as _json
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        existing = _json.loads(p.read_text())
+        pid, port = existing.get("pid"), existing.get("port")
+    except (ValueError, OSError, AttributeError):
+        return None                       # corrupt file — safe to overwrite
+    if pid is None or pid == os.getpid() or port is None:
+        return None
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        pass                              # alive, owned by another user
+    except (OSError, ProcessLookupError):
+        return None                       # dead PID — safe to overwrite
+    return (int(pid), int(port)) if _is_port_listening("127.0.0.1", port) else None
+
+
+def channel_gateway_allowed(run_mode: str, path: str = _BACKEND_JSON_DEFAULT) -> "tuple[bool, tuple[int, int] | None]":
+    """Whether this backend runs the channel gateway, and the other backend that owns the
+    data directory when that is why not. Socket Mode allows one connection per app token,
+    and a channel acts in the person's name: only a daemon or a Hive, and only the one that
+    owns ``backend.json``."""
+    owner = live_other_owner(path)
+    return run_mode in ("daemon", "hive") and owner is None, owner
+
+
 def write_backend_json(
     port: int,
     mode: str,
@@ -348,36 +383,14 @@ def write_backend_json(
         flock_exclusive(lock_fd)  # blocking exclusive lock
         try:
             # Conflict check: don't overwrite if an active backend already owns this file
-            if p.exists():
-                try:
-                    existing = _json.loads(p.read_text())
-                    existing_pid = existing.get("pid")
-                    existing_port = existing.get("port")
-                    if (
-                        existing_pid is not None
-                        and existing_pid != os.getpid()
-                        and existing_port is not None
-                    ):
-                        # Check PID alive
-                        try:
-                            os.kill(existing_pid, 0)
-                        except PermissionError:
-                            pid_alive = True  # alive but owned by another user
-                        except (OSError, ProcessLookupError):
-                            pid_alive = False  # dead PID — safe to overwrite
-                        else:
-                            pid_alive = True
-                        if pid_alive:
-                            # PID alive — check if port is also listening
-                            if _is_port_listening("127.0.0.1", existing_port):
-                                logger.warning(
-                                    "backend.json conflict: PID %d alive and port %d listening "
-                                    "— skipping write (our PID=%d, port=%d)",
-                                    existing_pid, existing_port, os.getpid(), port,
-                                )
-                                return False
-                except (ValueError, OSError):
-                    pass  # corrupt file — safe to overwrite
+            owner = live_other_owner(path)
+            if owner is not None:
+                logger.warning(
+                    "backend.json conflict: PID %d alive and port %d listening "
+                    "— skipping write (our PID=%d, port=%d)",
+                    owner[0], owner[1], os.getpid(), port,
+                )
+                return False
 
             data = {
                 "pid": os.getpid(),
@@ -1146,13 +1159,19 @@ async def lifespan(app: FastAPI):
     # rapid reconnect churn (770+ "connection closed" events observed).
     phase_timings["gateway_ms"] = 0  # Updated by background task on completion
     _run_mode = _detect_run_mode()
-    _gateway_allowed = _run_mode in ("daemon", "hive")
+    # Only the backend that owns the data directory: a second daemon-mode backend (a probe,
+    # an accidental launch of the program with no argument) once opened a second Socket
+    # Mode connection beside the live daemon's, so a Slack message could reach both, and
+    # set the bot "away" when it stopped. The scheduler and the Inbox runner already ask
+    # the same question (backend.json ownership, below).
+    _gateway_allowed, _gateway_owner = channel_gateway_allowed(_run_mode)
 
     if not _gateway_allowed:
         channel_gateway._startup_state = "not_started"
         logger.info(
-            "Channel gateway skipped — mode=%s (only daemon/hive run channels)",
+            "Channel gateway skipped — mode=%s%s (only the daemon or Hive that owns the data dir runs channels)",
             _run_mode,
+            f", PID {_gateway_owner[0]} on port {_gateway_owner[1]} owns backend.json" if _gateway_owner else "",
         )
     else:
 

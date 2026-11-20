@@ -264,3 +264,30 @@ class TestSlackPresenceLifecycle:
 
         # Should not raise
         await adapter.set_presence("auto")
+
+
+class TestChannelGatewayOwner:
+    """Only the backend that owns the data directory runs the channel gateway: a second
+    daemon-mode backend (an accidental launch with no argument) once opened a second Slack
+    Socket Mode connection beside the live daemon's and set the bot away when it stopped."""
+
+    def _owned_by(self, tmp_path, pid):
+        p = tmp_path / "backend.json"
+        p.write_text(json.dumps({"pid": pid, "port": 18321, "mode": "daemon"}))
+        return str(p)
+
+    def test_a_second_daemon_skips_the_gateway_while_the_owner_serves(self, tmp_path):
+        from main import channel_gateway_allowed
+        path = self._owned_by(tmp_path, os.getppid())          # a live process that is not us
+        with patch("main._is_port_listening", return_value=True):
+            assert channel_gateway_allowed("daemon", path) == (False, (os.getppid(), 18321))
+        with patch("main._is_port_listening", return_value=False):   # owner not serving
+            assert channel_gateway_allowed("daemon", path) == (True, None)
+
+    def test_the_owner_itself_a_dead_owner_or_no_file_runs_it(self, tmp_path):
+        from main import channel_gateway_allowed
+        with patch("main._is_port_listening", return_value=True):
+            assert channel_gateway_allowed("daemon", self._owned_by(tmp_path, os.getpid()))[0]
+            assert channel_gateway_allowed("hive", self._owned_by(tmp_path, 2 ** 22 + 7))[0]   # no such PID
+            assert channel_gateway_allowed("daemon", str(tmp_path / "missing.json"))[0]
+            assert not channel_gateway_allowed("subprocess", str(tmp_path / "missing.json"))[0]
