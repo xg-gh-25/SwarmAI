@@ -97,9 +97,12 @@ rules keep the iteration converging instead of going round after round:
 - **Then tests verify, not reviewers.** Once the user accepts the design, the next step is
   failing tests against the real code. A mismatch found while writing them is fixed in the
   design in place, without another review round.
-- **A multi-step design ends with a verification plan, decided there, not mid-task:** who reads
-  what the change writes (that side designed before the writer lands), the final test set (the
-  invariants that must hold at the end), and which review each step gets (or none, and why).
+- **A multi-step design ends with a verification plan and an execution plan, decided there, not
+  mid-task:** who reads what the change writes (that side designed before the writer lands), the
+  final test set (the invariants that must hold at the end), which review each step gets (or none,
+  and why), and which part waits for which: parts that wait for nothing run at the same time (on
+  the person's Hives under R1, as children of one Swarm Run or as separate runs), and only a real
+  dependency puts one after another. Tell: a numbered step list with no "waits for".
   When the work is done, report it row by row: present or missing. This is what lets the work
   run to the end without stopping to ask (SOUL P10).
 Tell: I am adding a new state, flag or mode to answer a finding on a design that has already
