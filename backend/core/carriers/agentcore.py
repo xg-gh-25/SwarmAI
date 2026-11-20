@@ -275,19 +275,18 @@ def parse_runtime_arn(arn: Any) -> Optional[dict]:
 
 def _endpoint(url: Any, region: str) -> str:
     """The session endpoint URL, checked: https, a host under the region's AgentCore
-    domain (``*.bedrock-agentcore.<region>.amazonaws.com``: never a host an AWS customer
-    controls, since every request to it carries a signature and the run credential), no
-    credentials, port, query or fragment."""
+    session domain (``<id>.runtime.bedrock-agentcore.<region>.on.aws``, as InvokeAgentRuntime
+    returns it: never a host an AWS customer controls, since every request to it carries a
+    signature and the run credential), no credentials, port, query or fragment."""
     if not isinstance(url, str) or len(url) > 2048 or not REGION_RE.fullmatch(region or ""):
         raise AgentCoreError("the elastic Hive gave no session endpoint")
     p = urlsplit(url.strip())
     host = (p.hostname or "").lower()
     labels = host.split(".")
-    domain = f".bedrock-agentcore.{region}.amazonaws.com"
+    domain = f".runtime.bedrock-agentcore.{region}.on.aws"
     if p.scheme != "https" or p.username or p.password or p.port is not None or p.query or p.fragment \
             or not all(_HOST_LABEL_RE.fullmatch(x) for x in labels) \
-            or not (host.endswith(domain) or host.endswith(domain + ".cn")) \
-            or len(host) <= len(domain) + (3 if host.endswith(".cn") else 0):
+            or not host.endswith(domain) or len(labels) != len(domain.split(".")):
         raise AgentCoreError("the elastic Hive gave an unexpected session endpoint")
     return urlunsplit(("https", host, p.path.rstrip("/"), "", ""))
 
@@ -866,11 +865,29 @@ class AgentCoreLocation:
             why = answer.get("why") if isinstance(answer, dict) and isinstance(answer.get("why"), str) else None
             raise AgentCoreError(f"elastic Hive {self.name} refused the start"
                                  + (f" ({why[:40]})" if why else "") + "; the run was not started again")
+        try:
+            address = _endpoint(url, arn["region"])
+        except AgentCoreError:
+            # the session started: it is stopped here, or its microVM runs on, billed, to
+            # its idle timeout with nothing able to reach it
+            await asyncio.to_thread(self._stop_quietly, session, inst["runtime_arn"], arn["region"], sid)
+            raise
         return RunHandle(carrier=AGENTCORE, location_id=self.id, round=round, run_ref=sid,
-                         address=_endpoint(url, arn["region"]), auth_ref=f"run_cred:{dispatch_id}:{round}",
+                         address=address, auth_ref=f"run_cred:{dispatch_id}:{round}",
                          opened_at=opened_at,
                          extra={"bucket": bucket, "region": arn["region"], "runtime_arn": inst["runtime_arn"],
                                 "session_id": None})
+
+    @staticmethod
+    def _stop_quietly(session: Any, runtime_arn: str, region: str, sid: str) -> None:
+        """StopRuntimeSession for a session this Host started but cannot use. Blocking; a
+        failure is logged (the session then ends at its idle timeout)."""
+        try:
+            session.client(SERVICE, region_name=region, config=_boto_config(30)).stop_runtime_session(
+                runtimeSessionId=sid, agentRuntimeArn=runtime_arn)
+        except Exception as exc:  # noqa: BLE001 — the start's own error is the one raised
+            logger.warning("agentcore: stopping session %s failed (%s)", sid, _error_code(exc) or type(exc).__name__)
+        _mark_ended(sid, "released")
 
     def _invoke(self, session: Any, runtime_arn: str, region: str, sid: str, payload: dict,
                 timeout: float) -> tuple[Any, Optional[str]]:
@@ -957,6 +974,11 @@ class RunClient(httpx.AsyncClient):
             _sid, did, rnd = _parse_handle(self._handle)
             self._run_auth = _basic(await asyncio.to_thread(run_credential, did, rnd))
         request.headers[AUTH_HEADER] = self._run_auth
+        # the session endpoint hands a request with no Content-Length (an httpx GET) to the
+        # container in a form the backend's server refuses (uvicorn: 400 "Invalid HTTP request
+        # received", measured on a live runtime); a request with no body says so
+        if "content-length" not in request.headers and "transfer-encoding" not in request.headers:
+            request.headers["Content-Length"] = "0"
         session = await self._carrier._session(self._handle, "manage")
         self._frozen = await asyncio.to_thread(lambda: session.get_credentials().get_frozen_credentials())
         return await super().send(request, **kw)

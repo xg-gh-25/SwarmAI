@@ -332,6 +332,19 @@ worker 角色）。Host 调的还是同一套 Hive HTTP API，只是经 session 
 
 结论：8192 规格下，一个 SwarmAI 量级的 repo 从派发到能写代码、跑检查，冷启动约 1 分钟加准备工作区约 1 分钟；盘和内存都够。弹性 Hive 慢在每个 run 从零开始的这一两分钟，不在算力。
 
+**产品代码真机实测**（2026-11-20，main 上的实现，同一账户 us-east-1，不经 Host daemon；测完资源都已删除，共用的 Hive 桶只删了测试自己的 `bridge/` 前缀）：
+
+| 步骤 | 结果 |
+|---|---|
+| 镜像 | `hive/release.sh` + `build_image.sh` 打的包，推到一个 public ECR 测试 repo |
+| 开启 | provisioner 建角色、runtime（V2、8192、8080/8081），containerUri 为 `<repo>:2.5.5@sha256:…`，READY：AgentCore 接受并拉取 public ECR 的 digest 地址 |
+| 开一轮 | `open_run` 28 秒；平台在 `/invocations` 上带了会话 header（supervisor 必须有它才启动） |
+| 会话地址 | 实际是 `<id>.runtime.bedrock-agentcore.<region>.on.aws`，不是设计里假设的 amazonaws.com：carrier 原先的校验拒了它，已改 |
+| 没有 body 的请求 | 不带 `Content-Length` 的 GET 到了容器里被 uvicorn 回 400（"Invalid HTTP request received"）：RunClient 现在给无 body 的请求加 `Content-Length: 0` |
+| 对话一轮 | `POST /api/chat/stream` 37 秒，Bedrock 经执行角色调通，回复正确 |
+| 结束 | 一轮结束后立刻复盘；S3 里有 turn 和 closed 记录、usage.json、state.json=ended；Host 端 `outputs` 取回记录、`usage` 存了 2 行；之后客户端在发送前就拒绝 |
+| 关闭 | provisioner 删 runtime 和行 |
+
 
 ### 6.2 结果怎么活过 microVM（D3）
 

@@ -106,7 +106,7 @@ class FakeAgentCore:
     def invoke_agent_runtime(self, **kw):
         self.invokes.append(kw)
         rnd = int(kw["runtimeSessionId"].rsplit("-", 1)[1])
-        url = f"https://sess-{rnd}.runtime.bedrock-agentcore.us-east-1.amazonaws.com"
+        url = f"https://sess-{rnd}.runtime.bedrock-agentcore.us-east-1.on.aws"
         return {"response": io.BytesIO(b'{"started": true}'), "statusCode": 200,
                 "ResponseMetadata": {"HTTPHeaders": {ac.ENDPOINT_HEADER: url}}}
 
@@ -151,7 +151,7 @@ class World:
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         host, path, method = request.url.host, request.url.path, request.method
-        assert host.startswith("8081--sess-") and host.endswith(".bedrock-agentcore.us-east-1.amazonaws.com")
+        assert host.startswith("8081--sess-") and host.endswith(".bedrock-agentcore.us-east-1.on.aws")
         assert request.headers[ac.AUTH_HEADER].startswith("Basic ")         # the run credential
         assert request.headers["authorization"].startswith("AWS4-HMAC-SHA256 ")   # SigV4
         rnd = int(host.split(".")[0].rsplit("-", 1)[1])

@@ -85,13 +85,14 @@ class FakeAgentCore:
         self.invoke_error = None
         self.answer = {"started": True}
         self.stop_errors: list = []
+        self.url = None                        # the session endpoint to answer, when set
 
     def invoke_agent_runtime(self, **kw):
         self.invokes.append(kw)
         if self.invoke_error:
             raise _err(self.invoke_error, "InvokeAgentRuntime")
         rnd = int(kw["runtimeSessionId"].rsplit("-", 1)[1])
-        url = f"https://sess-{rnd}.runtime.bedrock-agentcore.us-east-1.amazonaws.com"
+        url = self.url or f"https://sess-{rnd}.runtime.bedrock-agentcore.us-east-1.on.aws"
         return {"response": io.BytesIO(json.dumps(self.answer).encode()), "statusCode": 200,
                 "ResponseMetadata": {"HTTPHeaders": {ac.ENDPOINT_HEADER: url}}}
 
@@ -350,7 +351,7 @@ async def test_requests_are_signed_and_carry_the_run_credential(world):
         r = await c.put("/api/hive/repos", params={"url": "https://github.com/a/b"}, content=b"bundle bytes")
     assert r.status_code == 200
     req = world.requests[0]
-    assert req.url.host == "8081--sess-1.runtime.bedrock-agentcore.us-east-1.amazonaws.com"
+    assert req.url.host == "8081--sess-1.runtime.bedrock-agentcore.us-east-1.on.aws"
     assert req.headers[ac.AUTH_HEADER] == "Basic " + base64.b64encode(
         f"{cred['user']}:{cred['password']}".encode()).decode()
     assert "x-amz-content-sha256" not in req.headers
@@ -382,7 +383,7 @@ async def test_open_run_starts_the_derived_session_with_the_run_credential(world
     assert kw["runtimeSessionId"] == h.run_ref == ac.session_id_for(DID, 1) and len(h.run_ref) >= 33
     assert kw["agentRuntimeArn"] == ARN
     assert (h.carrier, h.location_id, h.round) == (AGENTCORE, "ac1", 1)
-    assert h.address == "https://sess-1.runtime.bedrock-agentcore.us-east-1.amazonaws.com"
+    assert h.address == "https://sess-1.runtime.bedrock-agentcore.us-east-1.on.aws"
     # a start sent again for the same round carries the same credential
     await _open(world)
     assert json.loads(world.data.invokes[1]["payload"])["hive_password"] == cred["password"]
@@ -639,7 +640,7 @@ async def test_open_next_round_never_calls_the_old_session(world):
     assert heads == [returned]                                          # the new round starts at the returned commit
     assert h.extra["repos"] == [{"url": url, "ref": "main", "sha": returned, "name": "demo"}]
     hosts = {r.url.host for r in world.requests}
-    assert hosts == {"8081--sess-2.runtime.bedrock-agentcore.us-east-1.amazonaws.com"}   # never sess-1
+    assert hosts == {"8081--sess-2.runtime.bedrock-agentcore.us-east-1.on.aws"}   # never sess-1
     assert world.data.stops == []
 
 
@@ -683,13 +684,15 @@ def test_session_ids_and_port_urls():
     assert hive_records.SESSION_RE.fullmatch(a)
     with pytest.raises(ValueError):
         ac.session_id_for("not-a-dispatch", 1)
-    dom = "bedrock-agentcore.us-east-1.amazonaws.com"
-    assert ac.port_url(f"https://abc.x.{dom}/p/", "us-east-1") == f"https://8081--abc.x.{dom}/p"
+    dom = "runtime.bedrock-agentcore.us-east-1.on.aws"      # the form InvokeAgentRuntime returns
+    assert ac.port_url(f"https://abc.{dom}/p/", "us-east-1") == f"https://8081--abc.{dom}/p"
     assert ac.port_url(f"https://8080--abc.{dom}", "us-east-1") == f"https://8081--abc.{dom}"
     for bad in (f"http://abc.{dom}", f"https://u:p@abc.{dom}", f"https://abc.{dom}:444", f"https://{dom}",
                 "https://abc.evil.com", f"https://abc.{dom}.evil.com",
                 "https://ec2-1-2-3-4.compute-1.amazonaws.com", "https://abcd.execute-api.us-east-1.amazonaws.com",
-                "https://abcd.lambda-url.us-east-1.on.aws", "https://abc.bedrock-agentcore.us-west-2.amazonaws.com"):
+                "https://abcd.lambda-url.us-east-1.on.aws", f"https://abc.x.{dom}",
+                "https://abc.bedrock-agentcore.us-east-1.amazonaws.com",
+                "https://abc.runtime.bedrock-agentcore.us-west-2.on.aws"):
         with pytest.raises(ac.AgentCoreError):
             ac.port_url(bad, "us-east-1")
 
@@ -712,3 +715,22 @@ def test_migration_v21_adds_carrier_columns(tmp_path):
     with sqlite3.connect(db) as c:
         assert c.execute("SELECT carrier FROM hive_instances").fetchone() == ("ec2",)
         assert c.execute("PRAGMA user_version").fetchone()[0] == CURRENT_SCHEMA_VERSION
+
+
+async def test_a_started_session_with_an_unusable_endpoint_is_stopped(world):
+    # the start went through, so a microVM runs: refusing its endpoint must not leave it
+    # running, unreachable, until its idle timeout
+    world.data.url = "https://sess-1.bedrock-agentcore.us-east-1.amazonaws.com"
+    with pytest.raises(ac.AgentCoreError, match="unexpected session endpoint"):
+        await _open(world)
+    sid = world.data.invokes[0]["runtimeSessionId"]
+    assert [k["runtimeSessionId"] for k in world.data.stops] == [sid]
+
+
+async def test_a_request_with_no_body_says_content_length_0(world):
+    # measured on a live runtime: the session endpoint forwards a body-less request without
+    # Content-Length in a form uvicorn refuses (400 "Invalid HTTP request received")
+    h = await _open(world)
+    async with world.carrier.client(h, 5) as c:
+        await c.get("/health")
+    assert world.requests[-1].headers["content-length"] == "0"
