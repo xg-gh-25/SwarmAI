@@ -1010,9 +1010,12 @@ export default function ChatPage() {
         ...(!isTabStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
         pendingQuestion: null,
       });
+      // the unsent draft stays with its tab, as on every other switch
+      inputValueMapRef.current.set(currentTabId, inputValueRef.current);
     }
     const newTab = addTab(selectedAgentId);
     initTabState(newTab!.id, []);
+    setInputValue('');
     setMessages([]);
     setSessionId(undefined);
     setPendingQuestion(null);
@@ -1020,7 +1023,7 @@ export default function ChatPage() {
     setContextWarning(null);
     setLocalSending(false, newTab!.id); // New tab is not streaming
     setIsExpanded(false); // New tab always starts in compact mode
-  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setLocalSending, setContextWarning, maxTabsInfo.chatMax, systemToasts]);
+  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setLocalSending, setContextWarning, maxTabsInfo.chatMax, systemToasts, setInputValue]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
