@@ -4,7 +4,7 @@ date: 2026-11-20
 created: 2026-11-20
 updated: 2026-11-20
 project: SwarmAI
-status: 评审完成，D1–D9 全部已定（XG 2026-11-20）。合并了 2026-11-19 AgentCore 载体设计和 2026-11-20 派发层设计，两份各做过一次零上下文前提审查。下一步按 §12 落地，第 4 步 spike 的结论写回 §6.1 和 §14
+status: 评审完成，D1–D9 全部已定（XG 2026-11-20）；AgentCore spike 已做完（2026-11-20，结果在 §6.1）。下一步按 §12 第 1–3 步落地
 related: docs/design/2026-10-30-dispatch-center.md（派单中心）；Projects/SwarmAI/2-understanding/knowledge/designs/2026-10-27-swarm-out-hive-hld.md（Swarm Out v0）；Knowledge/Designs/2026-10-08-swarm-hive-mind-TECH-DESIGN.md（D1 载体、D2 记录先落共享层）；docs/design/2026-10-29-hive-run-record-and-worker-role.md（run record）；图：Knowledge/Designs/2026-11-20-agentcore-carrier-e2e.html
 ---
 
@@ -299,7 +299,24 @@ worker 角色）。Host 调的还是同一套 Hive HTTP API，只是经 session 
 | 限流 | 数据面合计 1,000 TPS；新建 session 25 TPS；session id 至少 33 个字符 | quotas |
 | 计费（V2 按量） | $0.1276/vCPU-小时，只算实际用掉的 CPU，等 I/O 不算；内存 $0.0169/GB-小时，算到 session 结束，空闲内存 120 秒后回收 | [pricing](https://aws.amazon.com/bedrock/agentcore/pricing/) |
 
-文档没写、要 spike 测的：本地盘多大、冷启动多久、Claude CLI 子进程在快照恢复的 microVM 里是否正常。
+**spike 实测**（2026-11-20，账户 533267412361，us-east-1；镜像 = Hive v2.5.5 发布包 + supervisor，压缩后 848 MB；测完已全部删除）：
+
+| 项 | 结果 | 对设计的影响 |
+|---|---|---|
+| runtime 创建到 READY | 约 6 分钟；更新版本到 READY 约 3.5 分钟 | 发版要先推镜像、更新 runtime，等 READY 后新的派发才用上新版本 |
+| 新 session 首次调用 | 17.1 秒 | 弹性 offer 的"多久能开始"= 这一段 + 后端启动 + 传 Brain 和 bundle |
+| Hive 后端在 microVM 里启动 | 36.5 秒（本机容器 1.6 秒；2 vCPU 加首次初始化工作区） | 同上；镜像里预先初始化工作区可以缩短 |
+| 规格 | 2 vCPU、8 GB（默认，未配 resource configuration） | 编译、测试重的 repo 要配大规格 |
+| 本地盘 | 共 9.8 GB，镜像占 3.4 GB，**可用约 5.9 GB**（EC2 是 50 GB） | 镜像越大，工作区越小；预装工具链要和这点一起权衡（Q3） |
+| 凭据 | 容器里没有 AWS 凭据环境变量，SDK 走 `iam-role` 通道 | Hive 侧照常用默认凭据链 |
+| 两层鉴权 | 签名但不带 `X-Swarm-Hive-Auth`：401（app 拒）；带凭据不签名：403（平台拒） | §6.3 的做法成立 |
+| 按 session 限定 S3 前缀 | 自己的 `bridge/<sid>/` 可写；别的 session 前缀、桶里其他路径 AccessDenied。Access Analyzer 把 `aws:AgentCoreRuntimeSourceSid` 报成未知 key，但 IAM 接受并执行 | §6.7 的 IAM 成立 |
+| 端到端 | 准备工单 1.1 秒；在公开 repo 上改一行、提交、封存 record，从准备到这一轮结束约 53 秒；bundle sha256 一致，本机 `git fetch` 得到 `Swarm <swarm@swarmai.dev>` 的提交 | 派发、run record、bundle 路径不用改 |
+| 运行中更新 runtime 版本 | 已在跑的 session 留在原来的 microVM 和旧版本上，不受影响 | 发版不会打断在跑的 run（Q4 已答） |
+| session 停掉后再请求 | 平台立刻用**新版本**新起一台空 microVM：只有 supervisor，没有后端和工作区，8081 返回 502 `PortNotReachable` | 证实 §6.5"结束后不再请求"和 §6.3"只启动一次"是必须的 |
+| 容器里跑容器 | 没有 docker；user namespace 可以建 | 用 rootless 容器跑 testcontainers 一类测试是否可行，没测 |
+| 费用 | CloudWatch 只有调用次数、时长、延迟，没有 CPU 和内存用量；这个 session 在 2 vCPU/8 GB 上活了约 13 分钟，估计不到 $0.05 | 实际数字要看 Cost Explorer（一天后） |
+
 
 ### 6.2 结果怎么活过 microVM（D3）
 
@@ -537,10 +554,10 @@ security 重点看 §6.3 的凭据传递和 §6.7 的 IAM。
 
 | # | 问题 | 怎么定 |
 |---|---|---|
-| Q1 | 弹性 offer 的"多久能开始"取多少 | spike 实测 |
+| Q1 | 弹性 offer 的"多久能开始"取多少 | spike：首次调用 17 秒 + 后端 37 秒 ≈ 1 分钟，再加传 Brain 和 bundle；比冷 EC2（≤270 秒）快，比在跑的 EC2 慢，D4 的顺序成立 |
 | Q2 | 镜像怎么分发：用户在自己账户构建推 ECR（需要 Docker/Finch 或 CodeBuild），还是产品发公共镜像、用户复制 | spike 后定 |
-| Q3 | microVM 本地盘多大，大 repo 的 clone 加构建放得下吗 | spike |
-| Q4 | 更新 runtime 版本时正在跑的 session 会怎样 | spike |
+| Q3 | 本地盘只有约 5.9 GB 可用：大 repo 加依赖和构建放不放得下，能不能通过 resource configuration 或别的方式加大 | 用一个大 repo（如 SwarmAI 自己）实测一次 |
+| Q4 | ~~更新 runtime 版本时正在跑的 session 会怎样~~ 已答：不受影响，留在原 microVM 和旧版本上 | spike |
 | Q5 | 第 3 层要不要受"最多同时启动几台"的约束 | 第 3 步上线后看实际启动次数；先不加 |
 | Q6 | EC2 也改成 record 写 S3，Host 只认一种取法 | AgentCore 落地后再定 |
 | Q7 | 工具层：Gateway 怎么接进 Hive 的 run，凭据和 Policy 怎么定 | 单独设计 |
