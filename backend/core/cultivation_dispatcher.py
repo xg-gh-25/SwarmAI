@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 class EventType(Enum):
     """All cultivation event types that can trigger channel execution."""
     GIT_COMMIT = "git_commit"
-    SIGNAL_DIGEST = "signal_digest"
     CODE_INTEL_INDEXED = "code_intel_indexed"
     SESSION_CLOSE = "session_close"
     PROPOSAL_DECIDED = "proposal_decided"

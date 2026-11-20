@@ -27,7 +27,7 @@ def _make_job(id: str, name: str = "", enabled: bool = True, category: str = "sy
     return Job(
         id=id,
         name=name or id,
-        type=JobType.SIGNAL_FETCH,
+        type=JobType.SCRIPT,
         schedule="0 8 * * *",
         enabled=enabled,
         category=category,

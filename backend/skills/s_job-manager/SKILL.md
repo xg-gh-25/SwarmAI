@@ -1,6 +1,6 @@
 ---
 name: job-manager
-description: "Create, list, edit, pause, resume and delete scheduled background jobs (agent tasks, scripts, signal feeds). TRIGGER: \"schedule\", \"every day\", \"every week\", \"recurring\", \"定时\". NOT FOR: one-off reminders."
+description: "Create, list, edit, pause, resume and delete scheduled background jobs (agent tasks, scripts, notifications). TRIGGER: \"schedule\", \"every day\", \"every week\", \"recurring\", \"定时\". NOT FOR: one-off reminders."
 input_type: text
 output_type: text
 tier: lazy

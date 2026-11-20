@@ -5,7 +5,7 @@ read that proposes cleanup findings; apply_action is the only mutation and it is
 reversible-first + confirm-gated for delete.
 
 Properties:
-  1. scan finds old raw-logs (>90d in DailyActivity/Signals/JobResults) → archivable, reversible
+  1. scan finds old raw-logs (>90d in DailyActivity/JobResults) → archivable, reversible
   2. scan finds empty/tiny files (<100B) → delete finding, NOT reversible (confirm-gated)
   3. scan flags oversized categories as informational (no action button)
   4. scan is clean when Knowledge/ is tidy
@@ -74,7 +74,7 @@ def _find(report: dict, kind: str) -> dict | None:
 # ── 1. old raw-logs ──────────────────────────────────────────────────────────
 def test_scan_finds_old_raw_logs(kdir: Path):
     _write(kdir / "DailyActivity" / "2026-01-01.md", age_days=OLD_LOG_DAYS + 5)
-    _write(kdir / "Signals" / "old-digest.md", age_days=OLD_LOG_DAYS + 5)
+    _write(kdir / "JobResults" / "old-run.md", age_days=OLD_LOG_DAYS + 5)
     _write(kdir / "DailyActivity" / "recent.md", age_days=1)  # NOT old
 
     report = scan_library_health(kdir)

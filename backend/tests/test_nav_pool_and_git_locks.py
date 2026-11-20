@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROUTERS = Path(__file__).resolve().parents[1] / "routers"
 
-NAV_ONLY = ("attention", "community_api", "jobs", "library_api", "eval", "ddd_brain",
+NAV_ONLY = ("attention", "jobs", "library_api", "eval", "ddd_brain",
             "todos", "pipelines", "pollinate", "hive")
 NAV_FUNCS_IN_SHARED = {"workspace_api": ("get_workspace_tree", "expand_tree_directory",
                                          "list_workspace_locations", "get_workspace_summary")}

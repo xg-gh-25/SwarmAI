@@ -24,7 +24,6 @@ export const OVERLAY_CHUNK = {
   todo: () => import('./ToDoOverlay'),
   pipeline: () => import('./PipelineOverlay'),
   pollinate: () => import('./PollinateOverlay'),
-  community: () => import('./CommunityOverlay'),
   jobs: () => import('./JobsRunsOverlay'),
   capabilities: () => import('./CapabilitiesOverlay'),
   hive: () => import('./HiveFleetOverlay'),

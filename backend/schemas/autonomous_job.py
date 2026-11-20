@@ -48,7 +48,7 @@ class AutonomousJobResponse(BaseModel):
         ..., description="Current execution status"
     )
     schedule: Optional[str] = Field(
-        None, description="Cron expression or dependency chain (e.g., '0 8,14,20 * * *' or 'after:signal-fetch')"
+        None, description="Cron expression or dependency chain (e.g., '0 8,14,20 * * *' or 'after:weekly-maintenance')"
     )
     last_run_at: Optional[str] = Field(
         None, description="ISO 8601 timestamp of last execution"

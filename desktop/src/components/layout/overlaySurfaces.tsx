@@ -34,7 +34,6 @@ const ArtifactsContent = lazy(() => OVERLAY_CHUNK.artifacts().then((m) => ({ def
 const ToDoContent = lazy(() => OVERLAY_CHUNK.todo().then((m) => ({ default: m.ToDoContent })));
 const NeedYouContent = lazy(() => OVERLAY_CHUNK['needs-you']().then((m) => ({ default: m.NeedYouContent })));
 const InboxContent = lazy(() => OVERLAY_CHUNK.inbox().then((m) => ({ default: m.InboxContent })));
-const CommunityContent = lazy(() => OVERLAY_CHUNK.community().then((m) => ({ default: m.CommunityContent })));
 const JobsRunsContent = lazy(() => OVERLAY_CHUNK.jobs().then((m) => ({ default: m.JobsRunsContent })));
 const CapabilitiesContent = lazy(() => OVERLAY_CHUNK.capabilities().then((m) => ({ default: m.CapabilitiesContent })));
 const PipelineContent = lazy(() => OVERLAY_CHUNK.pipeline().then((m) => ({ default: m.PipelineContent })));
@@ -207,14 +206,6 @@ registerOverlay({
   render: ({ close, dispatchPrompt }) => (
     <InboxContent close={close} onDispatch={dispatchPrompt ?? (() => false)} />
   ),
-});
-
-// ── community (run_5165013e) — inbound signals (Feed) + the watched feeds
-// (Sources). Work-zone card (spouts teal). width 'l' — a tabbed list surface (like todo),
-// wider than a single-column list but not the full dashboard 'xl'.
-registerOverlay({
-  id: 'community',
-  render: ({ close }) => <CommunityContent close={close} />,
 });
 
 registerOverlay({

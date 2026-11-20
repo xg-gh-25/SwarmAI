@@ -3,10 +3,9 @@ files (TT V2265734761, fix 3 — root-cause form).
 
 The RCE chain's write link is: PUT /api/workspace/{id}/write overwrites
 Services/swarm-jobs/user-jobs.yaml → the scheduler loads it → executor runs a
-script job (or a type=agent_task job's fallback_script) via
-subprocess.run(shell=True). Rather than reject a legitimate on-disk job TYPE at
-load (which breaks the 5+ real enabled user script jobs AND misses the
-fallback_script path), we close the ROOT cause: the HTTP write boundary refuses
+script job via subprocess.run(shell=True). Rather than reject a legitimate on-disk
+job TYPE at load (which breaks the real enabled user script jobs), we close the
+ROOT cause: the HTTP write boundary refuses
 to write the job-control files themselves. Legitimate user script jobs authored
 directly on disk keep working.
 

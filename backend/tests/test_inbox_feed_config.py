@@ -1,24 +1,20 @@
-"""Tests for community_data — the read-only data layer behind the Community overlay.
+"""The Inbox feed settings: config.yaml ``feeds:`` read by core.inbox.feeds.config and
+written by the /api/inbox/feeds handlers of routers/inbox.py (moved from the deleted
+Community page with the same behaviour).
 
-Phase-1 is READ-ONLY: three pure functions parse existing on-disk sources
-(config.yaml feeds and Knowledge/Signals+Reports files) into overlay-ready shapes.
-
-Methodology: tmp_path fixtures that mirror the REAL on-disk shapes verified live
-during PLAN (config.yaml feeds LACK managed_by) — so the tests encode reality, not an
-assumed schema. The functions take explicit paths (dependency injection) so no
-test touches the real workspace.
+Methodology: tmp config.yaml fixtures that mirror the real on-disk shapes (config.yaml
+feeds often lack managed_by); the handlers write through jobs.config_io.mutate_config,
+whose default CONFIG_FILE is monkeypatched, so no test touches the real workspace.
 """
 
 from __future__ import annotations
 
-import datetime
-import json
 from pathlib import Path
 
 import pytest
 import yaml
 
-from core.community_data import parse_sources, build_feed
+from core.inbox.feeds.config import parse_sources
 
 # ── Sources (config.yaml feeds) ──────────────────────────────────────────────
 
@@ -137,7 +133,7 @@ def test_parse_sources_no_member_type_has_null_kind(tmp_path: Path) -> None:
 
 def test_parse_sources_members_truncated_flag(tmp_path: Path) -> None:
     # A very long member list is capped in the payload with an honest truncated flag.
-    from core.community_data import _MEMBER_CAP
+    from core.inbox.feeds.config import MEMBER_CAP as _MEMBER_CAP
 
     urls = [f"https://x{i}.com/f" for i in range(_MEMBER_CAP + 5)]
     p = tmp_path / "c.yaml"
@@ -163,8 +159,8 @@ def test_parse_sources_empty_feeds(tmp_path: Path) -> None:
 
 
 def test_parse_sources_normalizes_managed_by_case(tmp_path: Path) -> None:
-    # A config typo "Self-Tune" must normalize to lowercase so it still matches
-    # self_tune's lowercase gate (managed_by=="self-tune") in Phase-2.
+    # A config value is lower-cased ("Self-Tune", a value older configs carry, reads
+    # as "self-tune") so the settings page shows one spelling.
     p = tmp_path / "c.yaml"
     p.write_text(
         "feeds:\n  - id: f1\n    name: F1\n    type: rss\n    managed_by: Self-Tune\n"
@@ -182,246 +178,13 @@ def test_parse_sources_skips_blank_id(tmp_path: Path) -> None:
     assert ids == ["good"]
 
 
-# ── Feed (recent signal digests + reports files) ─────────────────────────────
-
-
-@pytest.fixture
-def knowledge_dir(tmp_path: Path) -> Path:
-    k = tmp_path / "Knowledge"
-    (k / "Signals").mkdir(parents=True)
-    (k / "Reports").mkdir(parents=True)
-    (k / "Notes").mkdir(parents=True)
-    (k / "Signals" / "2026-08-07-digest.md").write_text("# digest\nsignals")
-    (k / "Signals" / "2026-08-06-weekly.md").write_text("# weekly")
-    (k / "Reports" / "2026-08-06-community-report.md").write_text("# report")
-    (k / "Notes" / "random.md").write_text("# not a signal/report")
-    return k
-
-
-def test_build_feed_only_signal_and_report_categories(knowledge_dir: Path) -> None:
-    # Feed tab is COMMUNITY-scoped: only Signals + Reports, never Notes/other.
-    items = build_feed(knowledge_dir)
-    cats = {it["category"] for it in items}
-    assert cats <= {"Signals", "Reports"}
-    assert "Notes" not in cats
-
-
-def test_build_feed_newest_first(knowledge_dir: Path) -> None:
-    items = build_feed(knowledge_dir)
-    assert len(items) == 3
-    mtimes = [it["mtime"] for it in items]
-    assert mtimes == sorted(mtimes, reverse=True)
-
-
-def test_build_feed_carries_path_and_category(knowledge_dir: Path) -> None:
-    items = build_feed(knowledge_dir)
-    for it in items:
-        assert it["path"].startswith("Knowledge/")
-        assert it["category"] in {"Signals", "Reports"}
-
-
-def test_build_feed_missing_knowledge(tmp_path: Path) -> None:
-    assert build_feed(tmp_path / "nope") == []
-
-
-def test_build_feed_reclassifies_weekly_in_signals_as_report(knowledge_dir: Path) -> None:
-    # The community weekly report is written into Knowledge/Signals/ as
-    # <date>-weekly.md (engine dual-writes). By folder it's a Signal, but it's a
-    # REPORT — the Inbound tab must route it to the report card, NOT the daily signal
-    # list. The knowledge_dir fixture has Signals/2026-08-06-weekly.md.
-    items = build_feed(knowledge_dir)
-    weekly = [it for it in items if it["name"] == "2026-08-06-weekly.md"]
-    assert len(weekly) == 1
-    assert weekly[0]["category"] == "Reports"  # reclassified by name, not folder
-    # the daily digest stays a Signal
-    digest = [it for it in items if it["name"] == "2026-08-07-digest.md"]
-    assert digest and digest[0]["category"] == "Signals"
-
-
-def test_build_feed_excludes_internal_governance_reports(tmp_path: Path) -> None:
-    # Gap A (A1): internal governance reports (ddd-weekly / pipeline-weekly /
-    # swarmai-monthly / validator-audit) must NOT appear in the community feed,
-    # while real community research reports ARE kept. Mirrors the real corpus.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    internal = [
-        "2026-07-27-ddd-weekly.md", "2026-06-swarmai-monthly.md",
-        "pipeline-weekly.md", "validator-check-usage-audit.md",
-    ]
-    community = [
-        "2026-07-12-mattpocock-skills-deep-research.md",
-        "2026-07-27-openworker-research.md",
-        "2026-07-17-Understand-Anything-research.md",
-    ]
-    for n in internal + community:
-        (k / "Reports" / n).write_text("# " + n)
-    names = {it["name"] for it in build_feed(k)}
-    for n in internal:
-        assert n not in names, f"internal report leaked into feed: {n}"
-    for n in community:
-        assert n in names, f"community report wrongly excluded: {n}"
-
-
-def test_build_feed_frontmatter_audience_exact_token_overrides(tmp_path: Path) -> None:
-    # Gap A (A2): `audience: internal` force-EXCLUDES an otherwise-community-named
-    # file; `audience: community` force-INCLUDES an otherwise-internal-named file.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    (k / "Reports" / "2026-08-01-cool-research.md").write_text(
-        "---\naudience: internal\n---\n# secret internal research"
-    )
-    (k / "Reports" / "2026-08-02-ddd-weekly.md").write_text(
-        "---\naudience: community\n---\n# actually a community digest"
-    )
-    names = {it["name"] for it in build_feed(k)}
-    assert "2026-08-01-cool-research.md" not in names  # audience:internal wins over community name
-    assert "2026-08-02-ddd-weekly.md" in names          # audience:community wins over internal name
-
-
-def test_build_feed_free_text_audience_is_ignored(tmp_path: Path) -> None:
-    # Gap A (A2, the Gate-1 correction): a FREE-TEXT audience value must NOT be
-    # treated as a classification signal — the gstack brief's audience literally
-    # contains "internally" but is a community report and MUST stay shown.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    (k / "Reports" / "2026-07-27-gstack-gbrain-research.md").write_text(
-        '---\naudience: "how does it work internally + what do we steal"\n---\n# gstack'
-    )
-    names = {it["name"] for it in build_feed(k)}
-    assert "2026-07-27-gstack-gbrain-research.md" in names  # free-text audience ignored → default SHOW
-
-
-def test_build_feed_signals_never_filtered(tmp_path: Path) -> None:
-    # Signals dir is pure community digests — never classified/excluded, even if a
-    # signal file's name happened to collide with an internal pattern.
-    k = tmp_path / "Knowledge"
-    (k / "Signals").mkdir(parents=True)
-    (k / "Signals" / "2026-08-07-ddd-weekly.md").write_text("# a signal digest")
-    names = {it["name"] for it in build_feed(k)}
-    assert "2026-08-07-ddd-weekly.md" in names  # Signals unfiltered
-
-
-def test_build_feed_surfaces_community_weekly_html(tmp_path: Path) -> None:
-    # gap1: the weekly report is dual-written to Knowledge/Reports/<date>-weekly.html
-    # (report.py). The Feed used to glob *.md ONLY, so the .html weekly never surfaced.
-    # A community weekly (stem "weekly") + the legacy "github-community-weekly-*" +
-    # "community_report.html" MUST now appear.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    (k / "Reports" / "2026-08-09-weekly.html").write_text("<!DOCTYPE html><html><body>weekly</body></html>")
-    (k / "Reports" / "2026-05-30-github-community-weekly-w22.html").write_text("<!DOCTYPE html><html></html>")
-    (k / "Reports" / "community_report.html").write_text("<!DOCTYPE html><html></html>")
-    names = {it["name"] for it in build_feed(k)}
-    assert "2026-08-09-weekly.html" in names, "community weekly .html must surface in Feed"
-    assert "2026-05-30-github-community-weekly-w22.html" in names
-    assert "community_report.html" in names
-
-
-def test_build_feed_html_fail_closed_excludes_non_community(tmp_path: Path) -> None:
-    # gap1 CRITICAL (Gate-1): HTML has NO frontmatter, so _report_audience can never
-    # classify it internal — a bare *.html glob would leak confidential CMHK customer
-    # reports + internal eval docs into the OUTWARD-facing Feed. HTML is fail-CLOSED:
-    # DEFAULT-EXCLUDE unless the stem matches the community-report allowlist.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    leak = [
-        "2026-07-19-cmhk-smb-deepdive.html",          # confidential customer financials
-        "2026-07-19-cmhk-strategic-ipmm-review.html",
-        "2026-05-18-bms-risk-intelligence.html",
-        "2026-07-28-swarmai-vs-rocky-eval-scorecard.html",  # internal eval
-        "2026-05-14-meshclaw-vs-swarmai-architecture.html",
-        "report_fixed.html", "_tmp-section-1.html",   # junk/temp
-    ]
-    for n in leak:
-        (k / "Reports" / n).write_text("<!DOCTYPE html><html><body>confidential</body></html>")
-    names = {it["name"] for it in build_feed(k)}
-    for n in leak:
-        assert n not in names, f"NON-community HTML leaked into outward Feed: {n}"
-
-
-def test_build_feed_html_audience_community_opt_in(tmp_path: Path) -> None:
-    # An HTML report with an explicit <meta name="audience" content="community"> in its
-    # head opts IN despite a non-community stem (the HTML analogue of the md frontmatter
-    # audience:community override).
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    (k / "Reports" / "2026-08-01-special-brief.html").write_text(
-        '<!DOCTYPE html><html><head><meta name="audience" content="community"></head><body>x</body></html>'
-    )
-    names = {it["name"] for it in build_feed(k)}
-    assert "2026-08-01-special-brief.html" in names
-
-
-def test_build_feed_md_default_show_unchanged(tmp_path: Path) -> None:
-    # Regression guard: the .md path keeps its DEFAULT-SHOW behavior (only HTML is
-    # fail-closed). A community-named .md report with no frontmatter still surfaces.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    (k / "Reports" / "2026-08-01-openworker-research.md").write_text("# community research")
-    names = {it["name"] for it in build_feed(k)}
-    assert "2026-08-01-openworker-research.md" in names
-
-
-def test_build_feed_html_prefix_leak_guard(tmp_path: Path) -> None:
-    # Gate-2 HIGH (run_03b5d04f): the stem allowlist must be EXACT for "weekly"/
-    # "community_report", NOT a prefix — else a future confidential
-    # <date>-weekly-cmhk-financials.html / community-cmhk-secret.html would leak.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    must_show = ["2026-08-09-weekly.html", "community_report.html",
-                 "2026-05-30-github-community-weekly-w22.html"]
-    must_hide = ["2026-08-09-weekly-cmhk-secret.html", "weekly-cmhk-financials.html",
-                 "community-cmhk-secret.html", "weekly-report-internal.html"]
-    for n in must_show + must_hide:
-        (k / "Reports" / n).write_text("<!DOCTYPE html><html></html>")
-    names = {it["name"] for it in build_feed(k)}
-    for n in must_show:
-        assert n in names, f"legit community weekly wrongly hidden: {n}"
-    for n in must_hide:
-        assert n not in names, f"prefix-leak: confidential-looking HTML surfaced: {n}"
-
-
-def test_build_feed_html_meta_audience_reversed_order(tmp_path: Path) -> None:
-    # Gate-2 LOW: <meta content="internal" name="audience"> (reversed attr order)
-    # must still force-EXCLUDE, even on a community-stem file.
-    k = tmp_path / "Knowledge"
-    (k / "Reports").mkdir(parents=True)
-    (k / "Reports" / "2026-08-09-weekly.html").write_text(
-        '<!DOCTYPE html><html><head><meta content="internal" name="audience"></head></html>'
-    )
-    names = {it["name"] for it in build_feed(k)}
-    assert "2026-08-09-weekly.html" not in names, "reversed-order audience:internal must exclude"
-
-
-def test_build_feed_drops_symlink_escaping_knowledge(tmp_path: Path) -> None:
-    # A symlink under Signals/ pointing OUTSIDE Knowledge/ must NOT be emitted
-    # (defense-in-depth vs the /workspace/file/resolve infoleak class).
-    import os
-
-    k = tmp_path / "Knowledge"
-    (k / "Signals").mkdir(parents=True)
-    (k / "Signals" / "real-digest.md").write_text("# real")
-    outside = tmp_path / "secret.md"
-    outside.write_text("# not for the feed")
-    try:
-        os.symlink(outside, k / "Signals" / "escape.md")
-    except OSError:
-        import pytest
-
-        pytest.skip("symlinks not supported on this platform")
-    items = build_feed(k)
-    names = {it["name"] for it in items}
-    assert "real-digest.md" in names
-    assert "escape.md" not in names  # escaping symlink dropped
-
-
 # ── Phase-2: Sources CRUD write endpoints ────────────────────────────────────
 
 
 import asyncio
 
 import jobs.config_io as config_io
-from routers.community_api import (
+from routers.inbox import (
     NewFeed, FeedPatch, add_feed, update_feed, delete_feed,
 )
 from fastapi import HTTPException
@@ -480,7 +243,7 @@ def test_add_feed_writes_managed_by_user(tmp_config: Path) -> None:
     _run(add_feed(NewFeed(id="new1", name="New", type="rss", tier="leaders")))
     data = yaml.safe_load(tmp_config.read_text())
     new = next(f for f in data["feeds"] if f["id"] == "new1")
-    assert new["managed_by"] == "user"  # protected from self_tune auto-disable
+    assert new["managed_by"] == "user"  # an edit made in the Inbox feed settings
     assert new["enabled"] is True
     assert new["tier"] == "leaders"
 
@@ -559,44 +322,6 @@ def test_add_feed_non_list_urls_does_not_crash(tmp_config: Path) -> None:
     assert any(f["id"] == "weird" for f in data["feeds"])
 
 
-# ── F6: github_community must set RawSignal.published (not the dropped published_at) ──
-# github_community.py:119 passed published_at=created_at → RawSignal has field
-# `published` (Pydantic extra=ignore dropped the kwarg) → every signal had
-# published=None, deprioritized in signal_digest's per-tier newest-first sort.
-
-def test_github_community_parse_created_valid_iso() -> None:
-    from datetime import datetime, timezone
-    from jobs.adapters.github_community import _parse_created
-    got = _parse_created("2024-01-15T10:30:00Z")
-    assert isinstance(got, datetime)
-    assert got == datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
-
-
-def test_github_community_parse_created_failsafe_none() -> None:
-    from jobs.adapters.github_community import _parse_created
-    assert _parse_created("") is None
-    assert _parse_created(None) is None
-    assert _parse_created("not-a-date") is None  # must not raise → scan never crashes
-
-
-def test_github_community_signal_carries_published(monkeypatch) -> None:
-    # E2E of the fix: a fake gh issue must produce a RawSignal whose `published`
-    # is the parsed datetime — proving the kwarg reaches the field (not dropped).
-    from datetime import datetime, timezone
-    import jobs.adapters.github_community as gc
-    from jobs.models import Feed
-
-    fake_issues = [{"title": "New agent framework released", "number": 7,
-                    "html_url": "https://github.com/o/r/issues/7", "comments": 3,
-                    "created_at": "2024-01-15T10:30:00Z"}]
-    monkeypatch.setattr(gc, "_run_gh", lambda args, timeout=20: json.dumps(fake_issues))
-    monkeypatch.setattr(gc, "_match_topics", lambda text: ["agent"])
-    feed = Feed(id="ghc", name="GHC", type="github-community", config={"repos": ["o/r"]})
-    signals = gc.fetch_github_community(feed)
-    assert signals, "expected at least one signal"
-    assert signals[0].published == datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
-
-
 def test_update_feed_404_missing(tmp_config: Path) -> None:
     with pytest.raises(HTTPException) as ei:
         _run(update_feed("ghost", FeedPatch(enabled=False)))
@@ -645,19 +370,6 @@ def test_config_io_write_if_skips_noop(tmp_path: Path) -> None:
     assert os.stat(cfg).st_mtime_ns == mtime_before  # file untouched
 
 
-def test_user_feed_survives_self_tune_prune(tmp_config: Path) -> None:
-    # A user-added feed round-trips a self_tune prune UNCHANGED (managed_by:user
-    # is never auto-disabled — the coexistence contract).
-    from jobs.self_tune import prune_unused_feeds
-
-    _run(add_feed(NewFeed(id="mine", name="Mine", type="rss", tier="engineering")))
-    config = yaml.safe_load(tmp_config.read_text())
-    # prune with zero usage for every feed → only self-tune-managed feeds disable
-    prune_unused_feeds(config, usage={}, min_days=0, dry_run=False)
-    mine = next(f for f in config["feeds"] if f["id"] == "mine")
-    assert mine["enabled"] is True  # user feed protected, not auto-disabled
-
-
 # ── Phase-3: MEMBER_KEY map (B5 — every FeedType mapped, no drift) ───────────
 
 
@@ -681,18 +393,16 @@ def test_member_key_edits_the_same_list_the_adapter_reads() -> None:
     type's documented config key. A wrong MEMBER_KEY (e.g. github-community=None) makes
     feed_members return [] for a feed that HAS members → RED.
 
-    `EDITABLE` = the config key each adapter actually reads members from (verified live:
-    github_community.py:83 & github_releases → config.repos; rss → config.urls;
+    `EDITABLE` = the config key each reader actually reads members from (github-releases
+    fetcher and the GitHub community engine → config.repos; rss → config.urls;
     hacker_news/weibo → config.keywords; eastmoney → config.concept_keywords).
     `NON_EDITABLE` = types with no flat-string member list (github-trending: only
     scalars; trending: platforms are {id,name} DICTS — editing as strings would corrupt
     the list + crash the adapter's .get()). NOTE: we do NOT construct a RawSignal here —
-    feed_members only needs the config dict. (The github_community published_at-vs-
-    published mismatch this once noted as latent is now FIXED — run_36d8ba1c; see
-    test_github_community_signal_carries_published.)
+    feed_members only needs the config dict.
     """
     from jobs.models import FeedType, MEMBER_KEY
-    from core.community_data import feed_members
+    from core.inbox.feeds.config import feed_members
 
     EDITABLE = {
         FeedType.RSS: "urls",
@@ -721,7 +431,7 @@ def test_member_key_edits_the_same_list_the_adapter_reads() -> None:
 
 
 def test_add_member_appends_and_stamps_user(tmp_config_members: Path) -> None:
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     _run(add_member("rssf", MemberBody(value="https://c.com/feed")))
     data = yaml.safe_load(tmp_config_members.read_text())
@@ -733,7 +443,7 @@ def test_add_member_appends_and_stamps_user(tmp_config_members: Path) -> None:
 def test_add_member_rejects_invalid_url_for_rss(tmp_config_members: Path) -> None:
     # #8 strict: an rss feed's members are urls — a non-URL value ("hello world") would
     # land in config.urls and silently fail at fetch time. Reject 422 up front.
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("rssf", MemberBody(value="hello world")))
@@ -741,7 +451,7 @@ def test_add_member_rejects_invalid_url_for_rss(tmp_config_members: Path) -> Non
 
 
 def test_add_member_accepts_valid_url_for_rss(tmp_config_members: Path) -> None:
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     _run(add_member("rssf", MemberBody(value="https://valid.com/feed.xml")))
     data = yaml.safe_load(tmp_config_members.read_text())
@@ -756,7 +466,7 @@ def test_add_member_rejects_invalid_repo_shape(tmp_config_members: Path, monkeyp
     data = yaml.safe_load(cfg.read_text())
     data["feeds"].append({"id": "ghr", "name": "GHR", "type": "github-releases", "enabled": True, "config": {"repos": ["a/b"]}})
     cfg.write_text(cio.CONFIG_HEADER + yaml.dump(data, sort_keys=False))
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("ghr", MemberBody(value="noslash")))
@@ -771,7 +481,7 @@ def test_add_member_accepts_valid_repo(tmp_config_members: Path) -> None:
     import jobs.config_io as cio
     data["feeds"].append({"id": "ghr2", "name": "GHR2", "type": "github-releases", "enabled": True, "config": {"repos": []}})
     tmp_config_members.write_text(cio.CONFIG_HEADER + yaml.dump(data, sort_keys=False))
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     _run(add_member("ghr2", MemberBody(value="owner/repo")))
     got = yaml.safe_load(tmp_config_members.read_text())
@@ -785,7 +495,7 @@ def test_add_member_keyword_is_free_text(tmp_config_members: Path) -> None:
     import jobs.config_io as cio
     data["feeds"].append({"id": "hnf", "name": "HN", "type": "hacker-news", "enabled": True, "config": {"keywords": []}})
     tmp_config_members.write_text(cio.CONFIG_HEADER + yaml.dump(data, sort_keys=False))
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     _run(add_member("hnf", MemberBody(value="context engineering")))  # spaces OK for keywords
     got = yaml.safe_load(tmp_config_members.read_text())
@@ -794,7 +504,7 @@ def test_add_member_keyword_is_free_text(tmp_config_members: Path) -> None:
 
 
 def test_add_member_rejects_empty(tmp_config_members: Path) -> None:
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("rssf", MemberBody(value="   ")))
@@ -802,7 +512,7 @@ def test_add_member_rejects_empty(tmp_config_members: Path) -> None:
 
 
 def test_add_member_rejects_duplicate(tmp_config_members: Path) -> None:
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("rssf", MemberBody(value="https://a.com/feed")))
@@ -811,7 +521,7 @@ def test_add_member_rejects_duplicate(tmp_config_members: Path) -> None:
 
 def test_add_member_rejects_no_member_type(tmp_config_members: Path) -> None:
     # github-trending has no editable string members → 422, never a silent crash.
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("gtf", MemberBody(value="anything")))
@@ -819,7 +529,7 @@ def test_add_member_rejects_no_member_type(tmp_config_members: Path) -> None:
 
 
 def test_add_member_missing_feed_404(tmp_config_members: Path) -> None:
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("ghost", MemberBody(value="x")))
@@ -827,7 +537,7 @@ def test_add_member_missing_feed_404(tmp_config_members: Path) -> None:
 
 
 def test_delete_member_removes(tmp_config_members: Path) -> None:
-    from routers.community_api import delete_member, MemberBody
+    from routers.inbox import delete_member, MemberBody
 
     res = _run(delete_member("rssf", MemberBody(value="https://a.com/feed")))
     assert res["removed"] is True
@@ -839,7 +549,7 @@ def test_delete_member_removes(tmp_config_members: Path) -> None:
 
 def test_delete_member_idempotent_missing(tmp_config_members: Path) -> None:
     # deleting an absent member is a 200 no-op (not 500) — safe double-click.
-    from routers.community_api import delete_member, MemberBody
+    from routers.inbox import delete_member, MemberBody
 
     res = _run(delete_member("rssf", MemberBody(value="https://not-there.com")))
     assert res["ok"] is True
@@ -848,7 +558,7 @@ def test_delete_member_idempotent_missing(tmp_config_members: Path) -> None:
 
 def test_add_member_slash_value_roundtrips(tmp_config_members: Path) -> None:
     # A member value with slashes (URL) round-trips (body param, not path param).
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     _run(add_member("rssf", MemberBody(value="https://x.com/a/b/c?d=e")))
     data = yaml.safe_load(tmp_config_members.read_text())
@@ -863,13 +573,14 @@ def test_delete_member_body_arrives_over_http(tmp_config_members: Path) -> None:
     # not silently no-op, since MemberBody is required). Guards the value-in-body contract.
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from routers.community_api import router
+    from routers.inbox import router
 
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
     resp = client.request(
-        "DELETE", "/api/community/feeds/rssf/members", json={"value": "https://a.com/feed"}
+        "DELETE", "/api/inbox/feeds/rssf/members", json={"value": "https://a.com/feed"},
+        headers={"X-Swarm-User-Action": "feeds"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -879,11 +590,11 @@ def test_delete_member_body_arrives_over_http(tmp_config_members: Path) -> None:
     assert "https://a.com/feed" not in f["config"]["urls"]
 
 
-def test_member_write_serializes_with_self_tune_lock(tmp_config_members: Path) -> None:
+def test_member_writes_serialize_on_the_config_lock(tmp_config_members: Path) -> None:
     # B3: concurrent member writes all persist (shared sidecar flock). This is the
     # mutation-target — disabling the flock makes concurrent adds clobber (RED).
     import threading
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     def _add(i: int) -> None:
         _run(add_member("rssf", MemberBody(value=f"https://feed{i}.com/f")))
@@ -899,57 +610,10 @@ def test_member_write_serializes_with_self_tune_lock(tmp_config_members: Path) -
         assert f"https://feed{i}.com/f" in f["config"]["urls"], f"member {i} clobbered — lock not serializing"
 
 
-# ── Router wiring (AC5 — endpoints reachable through the real ASGI app) ──────
-
-
-def test_router_handlers_return_real_shapes() -> None:
-    """Call the handlers directly (they resolve live workspace paths via jobs/paths
-    SSOT). Read-only — must return the documented shape and never raise, even if the
-    live data is empty on a given machine.
-
-    Uses a dedicated event loop that is fully restored afterward — `asyncio.run()`
-    tears the thread's loop down and leaves NO current loop, which poisons any
-    later test that calls the (deprecated) `asyncio.get_event_loop()` in the same
-    process (test_orchestrator_surface_wiring). Save→new→run→close→restore keeps
-    this test hermetic.
-    """
-    import asyncio
-
-    from routers.community_api import (
-        community_feed,
-        community_sources,
-    )
-    import routers.community_api as api
-    # Hot Topics / Outbound were GitHub_Community-only and are gone (P7)
-    assert not hasattr(api, "community_engagement") and not hasattr(api, "community_hot_topics")
-
-    try:
-        prev_loop = asyncio.get_event_loop()
-    except RuntimeError:
-        prev_loop = None
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        feed = loop.run_until_complete(community_feed())
-        assert "items" in feed and isinstance(feed["items"], list)
-        assert "truncated" in feed and isinstance(feed["truncated"], bool)  # honest-truncation flag
-
-        sources = loop.run_until_complete(community_sources())
-        assert "sources" in sources and isinstance(sources["sources"], list)
-        # every source (if any) carries managed_by — the coexistence field
-        for s in sources["sources"]:
-            assert "managed_by" in s
-
-    finally:
-        loop.close()
-        # restore whatever loop policy state was here before (never leave None)
-        asyncio.set_event_loop(prev_loop)
-
-
 # ── SSRF hygiene: _validate_member must reject private/link-local/metadata IPs (③) ──
 # The urls-branch of _validate_member previously accepted ANY http(s) URL with a
 # netloc — so http://169.254.169.254/ (AWS/GCP metadata) or http://10.0.0.1/ landed
-# in config.yaml `urls:`. The downstream RSS fetch (jobs.adapters.http_client) already
+# in config.yaml `urls:`. The downstream RSS fetch (core.http_client) already
 # egress-guards, so this is write-time hygiene / defense-in-depth. The check must use
 # urlparse().hostname (NOT .netloc) — .netloc keeps :port/[ipv6]/user@ and fails the
 # IP parse, letting http://169.254.169.254:8080/ SLIP THROUGH (Gate-1 finding).
@@ -964,7 +628,7 @@ def test_router_handlers_return_real_shapes() -> None:
     "http://[fd00::1]/feed",                        # private IPv6
 ])
 def test_add_member_rejects_ssrf_ip_url_for_rss(tmp_config_members: Path, bad_url: str) -> None:
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("rssf", MemberBody(value=bad_url)))
@@ -978,7 +642,7 @@ def test_add_member_rejects_ssrf_ip_url_for_rss(tmp_config_members: Path, bad_ur
 ])
 def test_add_member_accepts_public_url_for_rss(tmp_config_members: Path, ok_url: str) -> None:
     # The SSRF guard must NOT over-reach — public hosts + public IP literals still validate.
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
     _run(add_member("rssf", MemberBody(value=ok_url)))
     data = yaml.safe_load(tmp_config_members.read_text())
     f = next(x for x in data["feeds"] if x["id"] == "rssf")
@@ -987,9 +651,9 @@ def test_add_member_accepts_public_url_for_rss(tmp_config_members: Path, ok_url:
 
 def test_add_member_rejects_http_url_for_rss(tmp_config_members: Path) -> None:
     # http:// must be rejected at write time: the RSS egress guard is https-ONLY
-    # (jobs.adapters.http_client._validate_egress), so an http URL passes no fetch — it
+    # (core.http_client._validate_egress), so an http URL passes no fetch — it
     # would be a dead subscription silently failing forever. Align write-gate ↔ fetch.
-    from routers.community_api import add_member, MemberBody
+    from routers.inbox import add_member, MemberBody
 
     with pytest.raises(HTTPException) as ei:
         _run(add_member("rssf", MemberBody(value="http://blog.aws.amazon.com/rss")))

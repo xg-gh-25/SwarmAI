@@ -26,7 +26,6 @@ import { appsService } from '../../services/apps';
 import { expertsService } from '../../services/experts';
 import { mcpConfigService, type ConfigEntry } from '../../services/mcpConfig';
 import type { SkillHealthMap, ExpertsByDomain } from '../../types';
-import { communityService } from '../../services/community';
 import api from '../../services/api';
 import { chatService } from '../../services/chat';
 import { agentsService } from '../../services/agents';
@@ -42,12 +41,6 @@ const getJson = <T,>(url: string) => async (): Promise<T> => (await api.get<T>(u
 /** The workspace Artifacts reads (one workspace today). */
 export const ARTIFACTS_WORKSPACE = 'default';
 
-/** Community's parts (one query each). */
-export type CommunityPart = 'feed' | 'sources';
-const COMMUNITY_FETCH: Record<CommunityPart, () => Promise<unknown>> = {
-  feed: () => communityService.fetchFeed(),
-  sources: () => communityService.fetchSources(),
-};
 import type { OverlayId } from './overlayIds';
 import { loadOverlayChunk } from './overlayChunks';
 
@@ -140,17 +133,6 @@ export const overlayQuery = {
   capabilitiesExperts: () => ({
     queryKey: ['overlay', 'capabilities', 'experts'] as const,
     queryFn: (): Promise<ExpertsByDomain> => expertsService.list().catch(() => ({})),
-    staleTime: OVERLAY_STALE_MS,
-  }),
-  community: (part: CommunityPart) => ({
-    queryKey: ['overlay', 'community', part] as const,
-    // a null body is the service's error signal: make it, and a synchronous throw,
-    // a rejected query (an empty [] / zero object is a success)
-    queryFn: async () => {
-      const res = await COMMUNITY_FETCH[part]();
-      if (res === null) throw new Error(`community ${part} failed`);
-      return res;
-    },
     staleTime: OVERLAY_STALE_MS,
   }),
   // The five below keep the keys they already had (other code invalidates them).
@@ -279,7 +261,6 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   jobs: () => [overlayQuery.jobsRoster(), overlayQuery.jobsOverview()],
   hive: () => [overlayQuery.hiveAccounts(), overlayQuery.hiveInstances()],
   capabilities: () => [overlayQuery.capabilitiesApps()],
-  community: () => [overlayQuery.community('feed')],
   'needs-you': () => [overlayQuery.needsYou()],
   inbox: () => [overlayQuery.inboxCounts(), overlayQuery.inboxItems('reply'), overlayQuery.inboxItems('proposed')],
   // the list + the last-shown location's own summary (its tree loads on open)

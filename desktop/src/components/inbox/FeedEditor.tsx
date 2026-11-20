@@ -1,10 +1,8 @@
 /**
  * FeedEditor — the feeds the Inbox watches (信息流), on the channel settings page.
  *
- * A copy of the Watching tab of CommunityOverlay.tsx (design docs/design/2026-11-20-inbox.md
- * §7: "Community 的 Watching 页搬过来"), pointed at `/api/inbox/feeds`, which keeps the
- * shape of `/api/community/feeds`. Community keeps its own copy until it is removed; this
- * one is the Inbox's and changes on its own.
+ * The old Community page's Watching tab, moved here (design docs/design/2026-11-20-inbox.md
+ * §7 and §10; the Community page is deleted), pointed at `/api/inbox/feeds`.
  *
  * Add / toggle / tier / delete a feed, and edit a feed's members. Every write refetches
  * so the page shows what was persisted; a backend refusal shows its reason.
@@ -15,7 +13,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from '../layout/overlayQueries';
 import { inboxService } from '../../services/inbox';
 import { isApiError } from '../../services/api';
-import type { CommunitySource } from '../../services/community';
+import type { FeedSource } from '../../services/inbox';
 import { OverlayLoading, OverlayError, OverlayEmpty } from '../layout/OverlayState';
 
 function StateBanner({ loading, error, empty, emptyMsg, onRetry }: {
@@ -197,7 +195,7 @@ export function FeedEditor() {
 // Member editor — the individual urls/keywords/queries inside one feed. Reuses the
 // same busy/confirm/error discipline as the feed rows. Writes go through the shared
 // config lock (managed_by:user); refetch after each so the UI reflects persisted truth.
-function MemberEditor({ source, onChanged }: { source: CommunitySource; onChanged: () => void }) {
+function MemberEditor({ source, onChanged }: { source: FeedSource; onChanged: () => void }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null); // member value armed for delete

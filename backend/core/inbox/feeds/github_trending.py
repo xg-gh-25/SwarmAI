@@ -16,8 +16,8 @@ import re
 import time
 from datetime import datetime, timezone
 
-from .http_client import safe_client
-from ..models import Feed, RawSignal
+from core.http_client import safe_client
+from jobs.models import Feed, RawSignal
 
 logger = logging.getLogger(__name__)
 

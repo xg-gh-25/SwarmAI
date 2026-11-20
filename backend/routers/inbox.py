@@ -23,9 +23,9 @@ send, caller).
   offers ``own_messages_to(thread)``, their recent messages to the one person a reply to
   this thread reaches (the source returns none when a reply reaches anyone else: a channel
   thread, a Reply-To elsewhere); any message by someone else is dropped before drafting.
-- Feed configuration moved here from ``/api/community/feeds`` unchanged in behaviour: same
-  bodies, validation, status codes and the one write path ``jobs.config_io.mutate_config``.
-  The community routes stay until the Community page is deleted.
+- Feed configuration (``/api/inbox/feeds``, moved from the deleted Community page): its
+  bodies, validation and status codes are the old ones, every write goes through the one
+  write path ``jobs.config_io.mutate_config``, and every write needs X-Swarm-User-Action.
 - Blocking work (config.yaml reads and writes) runs on ``executors.run_nav``, the caller
   check on the Inbox pool (``store.run_blocking``); nothing blocks the event loop.
 """
@@ -436,7 +436,7 @@ async def refresh(user_action: Optional[str] = _UA) -> InboxCounts:
     return InboxCounts(**await store.counts())
 
 
-# ── feed configuration (moved from /api/community/feeds, unchanged in behaviour) ──
+# ── feed configuration (config.yaml ``feeds:``, read by core.inbox.feeds.config) ──
 
 def _config_path():
     from jobs.paths import CONFIG_FILE
@@ -445,9 +445,8 @@ def _config_path():
 
 @router.get("/feeds", response_model=FeedsOut)
 async def list_feeds() -> FeedsOut:
-    """Configured feeds (a view of config.yaml ``feeds:``), the shape of
-    ``GET /api/community/sources``."""
-    from core.community_data import parse_sources
+    """Configured feeds (a view of config.yaml ``feeds:``)."""
+    from core.inbox.feeds.config import parse_sources
     sources = await executors.run_nav(parse_sources, _config_path())
     return FeedsOut(count=len(sources), sources=[FeedOut(**s) for s in sources])
 
@@ -495,13 +494,9 @@ def _valid_tier(t: str) -> bool:
 
 
 def _member_key_for_type(feed_type: str) -> str | None:
-    """The config key holding this feed type's editable string members (jobs.models
-    MEMBER_KEY, keyed by the FeedType enum), or None."""
-    from jobs.models import FeedType, MEMBER_KEY
-    try:
-        return MEMBER_KEY.get(FeedType(feed_type))
-    except ValueError:
-        return None
+    """The config key holding this feed type's editable string members, or None."""
+    from core.inbox.feeds.config import member_key
+    return member_key(feed_type)
 
 
 def _validate_member(key: str, value: str) -> None:
@@ -513,7 +508,7 @@ def _validate_member(key: str, value: str) -> None:
         p = urlparse(value)
         if p.scheme != "https" or not p.netloc:
             raise _InvalidMember("must be an https:// URL")
-        from jobs.adapters.http_client import is_blocked_ip_literal
+        from core.http_client import is_blocked_ip_literal
         if is_blocked_ip_literal(p.hostname):
             raise _InvalidMember("must not be a private/link-local/metadata IP")
     elif key == "repos":
@@ -527,9 +522,10 @@ def _validate_member(key: str, value: str) -> None:
 
 
 @router.post("/feeds")
-async def add_feed(feed: NewFeed) -> dict:
+async def add_feed(feed: NewFeed, user_action: Optional[str] = _UA) -> dict:
     """Add a feed (managed_by:user). 422 on an empty id, an unknown type or tier, or an
     invalid url in config.urls; 409 on a duplicate id."""
+    _require_app(user_action)
     if not feed.id.strip():
         raise HTTPException(status_code=422, detail="Feed id cannot be empty")
     if not _valid_type(feed.type):
@@ -569,9 +565,10 @@ async def add_feed(feed: NewFeed) -> dict:
 
 
 @router.put("/feeds/{feed_id}")
-async def update_feed(feed_id: str, patch: FeedPatch) -> dict:
+async def update_feed(feed_id: str, patch: FeedPatch, user_action: Optional[str] = _UA) -> dict:
     """Toggle enabled and/or change tier. 404 if absent, 422 on an invalid tier; the edit
     stamps managed_by:user."""
+    _require_app(user_action)
     if patch.tier is not None and not _valid_tier(patch.tier):
         raise HTTPException(status_code=422, detail=f"Invalid tier '{patch.tier}'")
 
@@ -600,8 +597,9 @@ async def update_feed(feed_id: str, patch: FeedPatch) -> dict:
 
 
 @router.delete("/feeds/{feed_id}")
-async def delete_feed(feed_id: str) -> dict:
+async def delete_feed(feed_id: str, user_action: Optional[str] = _UA) -> dict:
     """Remove a feed. Idempotent: a missing id is a 200 with removed=false."""
+    _require_app(user_action)
     from jobs.config_io import mutate_config
 
     def _mutator(config: dict) -> bool:
@@ -617,9 +615,10 @@ async def delete_feed(feed_id: str) -> dict:
 
 
 @router.post("/feeds/{feed_id}/members")
-async def add_member(feed_id: str, body: MemberBody) -> dict:
+async def add_member(feed_id: str, body: MemberBody, user_action: Optional[str] = _UA) -> dict:
     """Add a string member to a feed. 422 empty / no editable members / invalid for its
     kind, 409 duplicate, 404 missing feed; stamps managed_by:user."""
+    _require_app(user_action)
     value = body.value.strip()
     if not value:
         raise HTTPException(status_code=422, detail="Member value cannot be empty")
@@ -672,8 +671,9 @@ async def add_member(feed_id: str, body: MemberBody) -> dict:
 
 
 @router.delete("/feeds/{feed_id}/members")
-async def delete_member(feed_id: str, body: MemberBody) -> dict:
+async def delete_member(feed_id: str, body: MemberBody, user_action: Optional[str] = _UA) -> dict:
     """Remove a string member. Idempotent: an absent member is a 200 with removed=false."""
+    _require_app(user_action)
     value = body.value.strip()
 
     from jobs.config_io import mutate_config

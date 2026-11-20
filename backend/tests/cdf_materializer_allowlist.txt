@@ -95,6 +95,7 @@ core/swarm_workspace_manager.py:ensure_project_metadata  # exempt: .project.json
 core/turn_changes.py:_tree  # exempt: temp git index copy
 core/worker_reset.py:set_aside  # exempt: a worker Hive's first start moves (os.replace, never deletes or rewrites) the cognition it wrote as a full SwarmAI into Hive/pre-worker/, and writes its .context/.worker-role marker
 hooks/auto_commit_hook.py:WorkspaceAutoCommitHook._cleanup_stale_git_lock  # exempt: stale .git/index.lock
+hooks/auto_commit_hook.py:WorkspaceAutoCommitHook._smart_commit  # exempt: via jobs.scheduler emit_event_atomic: scheduler state.json event queue
 hooks/context_health_hook.py:ContextHealthHook._check_cache_freshness  # exempt: L1 prompt cache
 hooks/context_health_hook.py:ContextHealthHook._check_git_health  # exempt: stale .git lock
 hooks/context_health_hook.py:ContextHealthHook._deep_check  # exempt: via check_adversarial_health: adversarial health state file; the deep check itself is read-only on governed files
@@ -104,8 +105,6 @@ hooks/context_health_hook.py:ContextHealthHook._run_session_canary  # exempt: .e
 hooks/context_health_hook.py:ContextHealthHook._write_daily_canary_state  # exempt: daily canary state JSON
 hooks/daily_activity_hook.py:DailyActivityExtractionHook._execute_locked  # exempt: crash checkpoint file
 hooks/daily_activity_hook.py:recover_crash_checkpoint  # exempt: crash checkpoint file
-jobs/config_io.py:_write_atomic  # exempt: job config.yaml
-jobs/config_io.py:mutate_config  # exempt: job config.yaml lock
 jobs/executor.py:_handle_agent_task  # exempt: temp MCP config file
 jobs/executor.py:_handle_maintenance  # exempt: job results JSONL trim
 jobs/executor.py:_purge_terminal_todos  # exempt: todo archive and todo dirs
@@ -117,17 +116,11 @@ jobs/handlers/brain_mistake_audit.py:run_brain_mistake_audit  # exempt: writes o
 jobs/handlers/ddd_weekly_report.py:run_ddd_weekly_report  # exempt: writes Knowledge/Reports/ (not a governed store)
 jobs/handlers/memory_health.py:_update_health_findings  # exempt: health_findings.json
 jobs/handlers/memory_health.py:_write_summary_to_daily  # exempt: DailyActivity summary line (working memory)
-jobs/handlers/signal_digest.py:_handle_rollup  # exempt: signal rollup markdown under Services/signals
-jobs/handlers/signal_digest.py:_write_l4_json  # exempt: Services/signals/signal_digest.json
-jobs/handlers/signal_digest.py:handle_signal_digest  # exempt: signal digest markdown under Services/signals
-jobs/scheduler.py:_state_lock  # exempt: scheduler state lock
-jobs/scheduler.py:main  # exempt: via install_scheduler: launchd/systemd unit
-jobs/scheduler.py:save_state  # exempt: scheduler state.json
-jobs/scheduler.py:toggle_job  # exempt: jobs.yaml / user-jobs.yaml
 main.py:_deferred_refresh_defaults  # exempt: via mcp_migration: MCP config
 main.py:_generate_permissions_json  # exempt: permissions.json in the app data dir
 main.py:_purge_corrupt_db  # exempt: a corrupt database file
 main.py:_reseed_from_seed  # exempt: database reseed
+main.py:_run_scheduler_safe  # exempt: via jobs.scheduler run_scheduler: scheduler state.json and job results
 main.py:lifespan  # exempt: via _migrate_legacy_state_dir: legacy state dir move
 main.py:read_backend_json  # exempt: backend.json (reads with a lock opened for write)
 main.py:remove_backend_json  # exempt: backend.json

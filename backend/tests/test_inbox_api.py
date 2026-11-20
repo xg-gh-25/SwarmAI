@@ -4,8 +4,9 @@
   route list, so a route dropped from the router turns this red).
 - Each read returns its model's shape; the draft is made on first read (once) and
   redraft adds one; later / dismiss / done move the item.
-- Feed configuration under /api/inbox/feeds behaves exactly as /api/community/feeds:
-  the same requests give the same status codes and the same config.yaml.
+- Feed configuration under /api/inbox/feeds keeps the status codes the Community page's
+  routes had (pinned below) and writes config.yaml; every feed write needs the
+  X-Swarm-User-Action header.
 - The draft's history holds the person's own messages only: the thread's and, when the
   source offers them, those to the same counterparty; another person's never.
 - The 403/409 of the sending routes are SendRefusalOut bodies.
@@ -259,48 +260,49 @@ _FEED_STEPS = [
 ]
 
 
-async def _apply(http, prefix: str) -> list[int]:
+# the status codes the deleted Community page's feed routes gave for _FEED_STEPS (the
+# member count after a successful member add is listed after its 200)
+_FEED_CODES = [200, 409, 422, 422, 200, 404, 422, 200, 1, 409, 422, 422, 200, 200, 200, 200]
+
+
+async def _apply(http, prefix: str, headers: dict | None = None) -> list[int]:
     codes = []
     for method, path, body in _FEED_STEPS:
         if method == "delete" and body is not None:
-            r = await http.request("DELETE", prefix + path, json=body)
+            r = await http.request("DELETE", prefix + path, json=body, headers=headers)
         elif body is None:
-            r = await getattr(http, method)(prefix + path)
+            r = await getattr(http, method)(prefix + path, headers=headers)
         else:
-            r = await getattr(http, method)(prefix + path, json=body)
+            r = await getattr(http, method)(prefix + path, json=body, headers=headers)
         codes.append(r.status_code)
         if path == "/feeds/ai/members" and method == "post" and r.status_code == 200:
-            listing = "/sources" if prefix.endswith("community") else "/feeds"
-            codes.append((await http.get(prefix + listing)).json()["count"])
+            codes.append((await http.get(prefix + "/feeds")).json()["count"])
     return codes
 
 
-async def test_feed_routes_behave_as_the_community_routes(env, tmp_path, monkeypatch):
-    import jobs.config_io
-    import jobs.paths
+async def test_feed_routes_keep_their_status_codes(env):
     fake, http, _made, inbox_cfg = env
-    inbox_codes = await _apply(http, "/api/inbox")
-    inbox_yaml = yaml.safe_load(inbox_cfg.read_text())
-    community_cfg = tmp_path / "community.yaml"
-    community_cfg.write_text("feeds: []\n")
-    monkeypatch.setattr(jobs.config_io, "CONFIG_FILE", community_cfg)
-    monkeypatch.setattr(jobs.paths, "CONFIG_FILE", community_cfg)
-    community_codes = await _apply(http, "/api/community")
-    assert inbox_codes == community_codes
-    assert inbox_codes[:4] == [200, 409, 422, 422]
-    assert inbox_yaml == yaml.safe_load(community_cfg.read_text())
+    assert await _apply(http, "/api/inbox", fx.UA) == _FEED_CODES
+    assert (yaml.safe_load(inbox_cfg.read_text()) or {}).get("feeds") == []
+
+
+async def test_feed_writes_need_the_user_action_header(env):
+    fake, http, _made, inbox_cfg = env
+    before = inbox_cfg.read_text()
+    assert set(await _apply(http, "/api/inbox")) == {403}
+    assert inbox_cfg.read_text() == before, "a refused write never touches config.yaml"
 
 
 async def test_feed_list_and_the_feed_source(env):
     from database import db
     fake, http, _made, cfg = env
-    assert (await http.post("/api/inbox/feeds",
+    assert (await http.post("/api/inbox/feeds", headers=fx.UA,
                             json={"id": "hn", "name": "HN", "type": "hacker-news"})).status_code == 200
     listed = (await http.get("/api/inbox/feeds")).json()
     assert listed["count"] == 1 and listed["sources"][0]["id"] == "hn"
     sources = {s["id"]: s for s in (await http.get("/api/inbox/sources")).json()}
     assert sources["feed"]["detail"] == "1 个 feed" and sources["feed"]["interval_s"] == 21600
-    await http.put("/api/inbox/feeds/hn", json={"enabled": False})
+    await http.put("/api/inbox/feeds/hn", json={"enabled": False}, headers=fx.UA)
     await http.get("/api/inbox/sources")
     assert (await db.inbox_get_source("feed"))["enabled"] == 0, "no enabled feed: the source is off"
 

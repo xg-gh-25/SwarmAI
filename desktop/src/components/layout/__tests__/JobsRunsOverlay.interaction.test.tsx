@@ -198,7 +198,7 @@ describe('JobsRunsOverlay interactions', () => {
   });
 
   it('AC6: system jobs hide pause/edit/delete (yaml-read-only)', async () => {
-    fn(jobsService.fetchRoster).mockResolvedValue([mkRoster({ id: 'signal-fetch', name: 'Signal Fetch', source: 'system', category: 'system' })]);
+    fn(jobsService.fetchRoster).mockResolvedValue([mkRoster({ id: 'weekly-maintenance', name: 'Weekly Maintenance', source: 'system', category: 'system' })]);
     renderQ(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');

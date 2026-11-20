@@ -23,17 +23,17 @@ class TestNoSourceCheckoutLookup:
         assert "SwarmAI-Workspace" not in src and "SWARMAI_SOURCE" not in src
 
 
-class TestFallbackCwdHandling:
-    """Fallback script cwd must never be None."""
+class TestScriptJobCwdHandling:
+    """A script job's cwd must never be None."""
 
-    def test_fallback_job_cwd_not_none(self):
-        """When fallback_script has no cwd, executor provides a valid default."""
+    def test_script_job_cwd_not_none(self):
+        """When a script job has cwd None, executor provides a valid default."""
         from jobs.executor import _handle_script
         from jobs.models import Job, JobSafety
 
-        fallback_job = Job(
-            id="test-fallback",
-            name="Test Fallback",
+        script_job = Job(
+            id="test-no-cwd",
+            name="Test No Cwd",
             type="script",
             schedule="0 0 * * *",
             enabled=True,
@@ -49,7 +49,7 @@ class TestFallbackCwdHandling:
         # Should not raise TypeError
         from jobs.models import SchedulerState
         state = SchedulerState(jobs={})
-        result = _handle_script(fallback_job, state)
+        result = _handle_script(script_job, state)
         # May fail for other reasons but should NOT crash with TypeError
         assert result.status in ("success", "failed")
         assert "TypeError" not in (result.error or "")

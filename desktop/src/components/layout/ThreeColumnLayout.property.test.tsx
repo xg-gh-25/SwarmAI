@@ -1095,7 +1095,6 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       { testId: 'nav-pipeline', label: 'Pipeline' },
       { testId: 'nav-pollinate', label: 'Pollinate' },
       { testId: 'nav-swarmws', label: 'Workspace' },  // Work order XG 2026-10-23
-      { testId: 'nav-community', label: 'Community' },  // Work: last (run_5165013e)
       { testId: 'nav-jobs', label: 'Jobs & Runs' },
       { testId: 'nav-capabilities', label: 'Apps & Capabilities' },  // System: after Jobs
       { testId: 'nav-hive', label: 'Hive' },

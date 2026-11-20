@@ -1,6 +1,6 @@
 """Tests for jobs/config_io — the single serialization authority for config.yaml.
 
-Both the /api/community/feeds write endpoints AND self_tune write through
+Every config.yaml writer (the /api/inbox/feeds endpoints, any CLI) goes through
 mutate_config(), so they serialize on ONE sidecar flock (R27) and never clobber
 each other. The write is atomic (tmp + os.replace) and preserves the header.
 
@@ -43,8 +43,8 @@ def test_mutate_config_preserves_header(tmp_path: Path) -> None:
     mutate_config(lambda c: None, config_path=cfg)
     text = cfg.read_text()
     # The header comment block survives the write (not lost, not doubled).
-    assert text.startswith("# Swarm Signal Pipeline")
-    assert text.count("# Swarm Signal Pipeline") == 1
+    assert text.startswith("# SwarmAI — Feed Configuration")
+    assert text.count("# SwarmAI — Feed Configuration") == 1
 
 
 def test_mutate_config_atomic_no_partial(tmp_path: Path) -> None:

@@ -265,7 +265,7 @@ def rows_from_cli_json(output: Mapping[str, Any], *, surface: str, run_key: Opti
 
 def surface_of(feature: Optional[str]) -> str:
     """A feature's surface: its prefix when that is one (``cdf.s2`` → cdf, ``eval.judge`` →
-    eval, ``job.signal_digest`` → job), else background."""
+    eval, ``job.memory_health`` → job), else background."""
     head = (feature or "").split(".", 1)[0]
     return head if head in SURFACES else "background"
 

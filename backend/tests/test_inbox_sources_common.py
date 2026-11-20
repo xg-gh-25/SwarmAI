@@ -25,7 +25,7 @@ from tests.inbox_source_fakes import FakeImap
 
 def test_builtin_registers_all_kinds():
     import core.inbox.sources.builtin as builtin
-    from jobs.handlers.signal_fetch import ADAPTER_MAP
+    from core.inbox.feeds import ADAPTER_MAP
 
     kinds = set(builtin.ensure_registered())
     assert {"slack", "mail", "github"} <= kinds

@@ -471,7 +471,7 @@ Your **workspace files** stay local — they never leave your machine. The only 
 
 In production mode, the **backend daemon** keeps running via macOS launchd. This means:
 - Slack bot stays responsive 24/7
-- Scheduled jobs continue running (signal digests, self-tune, etc.)
+- Scheduled jobs continue running (memory health, maintenance, etc.)
 - Memory and context are maintained
 
 When you reopen the app, it reconnects to the running daemon. To fully stop the backend: `launchctl bootout gui/$(id -u) com.swarmai.backend`.

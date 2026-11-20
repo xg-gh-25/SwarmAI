@@ -65,6 +65,7 @@ _WATCHED_EXTENSIONS = {
 # run_4de279ca lesson: a hand-copied second denylist drifts from the real boundary.
 # Only the SwarmWS-SPECIFIC machine dirs are listed here, since they mean nothing
 # outside this workspace.
+# ("Signals" is the archived history of the retired signal digest, under Archives/.)
 _SWARMWS_SKIP_SEGMENTS = {
     "DailyActivity", "JobResults", "Signals", "EvalHistory",
     ".artifacts", "Services",

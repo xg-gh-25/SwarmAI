@@ -109,11 +109,11 @@ def test_learner_persistence(tmp_path: Path):
     path = tmp_path / "learner.json"
     learner1 = EstimationLearner(path)
     for _ in range(6):
-        learner1.record("self-tune", predicted=200.0, actual=100.0)
+        learner1.record("memory-health", predicted=200.0, actual=100.0)
 
     # New learner from same file
     learner2 = EstimationLearner(path)
-    result = learner2.predict("self-tune", 200.0)
+    result = learner2.predict("memory-health", 200.0)
     assert result < 200.0, "Loaded learner should have adjusted factor"
 
 

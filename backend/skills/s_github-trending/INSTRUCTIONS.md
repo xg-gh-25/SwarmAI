@@ -49,18 +49,14 @@ Add 2-3 bullet observations about patterns:
 - Any repos relevant to current SwarmAI work?
 - Competitive signals?
 
-## Daily Job Integration
+## Inbox Trend Lane
 
-The adapter (`backend/jobs/adapters/github_trending.py`) runs automatically via
-the signal pipeline. Results flow:
+The fetcher (`backend/core/inbox/feeds/github_trending.py`) is one of the Inbox's feed
+sources. When the `github-trending` feed is enabled, the Inbox pulls it on its feed
+interval and its repos land in the Inbox **trend** lane, next to the other watched feeds;
+the Inbox's daily trend summary covers them too. Nothing is posted anywhere on its own.
 
-```
-github_trending adapter → signal_fetch → dedup → signal_digest → signal_digest.json
-  → Welcome Screen briefing (signals section)
-  → Slack channel (if configured)
-```
-
-Feed config in `Services/swarm-jobs/config.yaml`:
+Feed config in `Services/swarm-jobs/config.yaml` (also editable in the Inbox feed settings):
 ```yaml
 - id: github-trending
   name: GitHub Trending
@@ -72,4 +68,4 @@ Feed config in `Services/swarm-jobs/config.yaml`:
     top_n: 25
 ```
 
-No manual intervention needed — the daily signal pipeline handles everything.
+No manual intervention needed — the Inbox pulls the feed on its own.

@@ -103,7 +103,7 @@ class TestOrchestratorExists:
         # the load-bearing channels must remain.
         assert {"mechanical_refresh", "memory_refresh", "llm_refresh"}.isdisjoint(names)
         assert "ddd_staleness" in names
-        # the signal bridge never queued a unit (no SIGNAL_DIGEST emitter; 0 S6 signal rows)
+        # the signal bridge was removed (it never queued a unit)
         assert "signal_ddd_bridge" not in names
         # The TECH-drift channel wrote a file nothing read, for one project only.
         assert {"auto_apply_proposals", "entry_lifecycle", "code_intel_drift"}.isdisjoint(names)

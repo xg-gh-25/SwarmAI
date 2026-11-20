@@ -17,9 +17,9 @@
  * Secrets (a Slack user token, a mail password) are sent once in a request body and
  * never come back: no type below has a field that could hold one.
  *
- * Feed configuration (`/api/inbox/feeds`) moved here from `/api/community/feeds` in the
- * same shape (`FeedsOut`); `listFeeds` maps it to the `CommunitySource` shape the feed
- * editor reads.
+ * Feed configuration (`/api/inbox/feeds`, moved from the deleted Community page in the
+ * same shape, `FeedsOut`); `listFeeds` maps it to the `FeedSource` shape the feed editor
+ * reads.
  *
  * Every write carries `X-Swarm-User-Action` (USER_ACTION_HEADER).
  *
@@ -27,7 +27,26 @@
  * `parseSourceRefusal`, `channelKey`.
  */
 import api from './api';
-import type { CommunitySource } from './community';
+
+/** One configured feed, a view of config.yaml `feeds:` (camelCase of `FeedOut`). */
+export interface FeedSource {
+  id: string;
+  name: string;
+  type: string;
+  tier: string;
+  enabled: boolean;
+  /** "manual" (default when absent) | "user" (edited in the Inbox) | an older config's value. */
+  managedBy: string;
+  /** The feed's editable string members (urls/keywords/repos/…), capped. */
+  members: string[];
+  /** The true total member count (even when `members` is capped). */
+  memberCount: number;
+  /** true when `members` is a capped view of a longer list. */
+  membersTruncated: boolean;
+  /** The config key the members live under (e.g. "urls"), or null = no editable members. */
+  memberKind: string | null;
+  tags: string[];
+}
 
 export type LaneName = 'reply' | 'proposed' | 'aware' | 'trend';
 export type SendStatusName = 'reserved' | 'sent' | 'failed' | 'unknown';
@@ -390,8 +409,8 @@ export const inboxService = {
     return toCounts((await api.post('/inbox/refresh', undefined, ua('refresh'))).data);
   },
 
-  // ── feed configuration (moved from /api/community/feeds, same shapes) ──
-  async listFeeds(): Promise<CommunitySource[]> {
+  // ── feed configuration (config.yaml `feeds:`) ──
+  async listFeeds(): Promise<FeedSource[]> {
     const d = (await api.get('/inbox/feeds')).data as Partial<FeedsOut> | undefined;
     return list<Partial<FeedOut> & Pick<FeedOut, 'id' | 'name' | 'type' | 'tier' | 'enabled'>>(d?.sources).map((s) => ({
       id: s.id,

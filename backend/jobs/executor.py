@@ -5,8 +5,6 @@ Routes jobs to their handlers with error isolation.
 Each job runs in a try/except — one failure never affects another.
 
 Handlers:
-  signal_fetch    — httpx adapters (RSS, GitHub, HN)
-  signal_digest   — Bedrock Haiku relevance scoring
   agent_task      — Headless Claude CLI subprocess with MCP tools
   script          — Deterministic subprocess (no AI, no tokens)
   maintenance     — Prune caches, reset counters (lightweight, no LLM)
@@ -17,7 +15,6 @@ Handlers:
 
 from __future__ import annotations
 
-import html as _html_mod
 import json
 import logging
 import os
@@ -29,11 +26,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import (
-    Feed,
     Job,
     JobResult,
     JobState,
-    RawSignal,
     SchedulerDefaults,
     SchedulerState,
 )
@@ -151,8 +146,6 @@ def _monitor_result_status(
 def execute_job(
     job: Job,
     state: SchedulerState,
-    feeds: list[Feed],
-    user_context: str = "",
     defaults: SchedulerDefaults | None = None,
     known_job_ids: set[str] | None = None,
 ) -> JobResult:
@@ -162,8 +155,6 @@ def execute_job(
     Args:
         job: Job definition from jobs.yaml
         state: Mutable scheduler state
-        feeds: Feed configs (for signal_fetch jobs)
-        user_context: User context summary (for signal_digest jobs)
         defaults: Global scheduler defaults (for budget checks)
         known_job_ids: All valid job IDs (for maintenance orphan cleanup)
 
@@ -177,19 +168,7 @@ def execute_job(
         defaults = SchedulerDefaults()
 
     try:
-        if job.type == "signal_fetch":
-            from .handlers.signal_fetch import handle_signal_fetch
-            max_age = job.config.get("max_age_hours", 48)
-            result = handle_signal_fetch(feeds, state, max_age_hours=max_age)
-
-        elif job.type == "signal_digest":
-            from .handlers.signal_digest import handle_signal_digest
-            window_days = job.config.get("window_days")
-            result = handle_signal_digest(
-                state, user_context=user_context, window_days=window_days,
-            )
-
-        elif job.type == "agent_task":
+        if job.type == "agent_task":
             daily_err = _check_daily_agent_limit(state, defaults)
             # RAM admission gate (run_409392d4): defer the CLI spawn if system
             # memory can't safely host another subprocess, so job bursts don't
@@ -237,24 +216,6 @@ def execute_job(
                         retry_result = _handle_agent_task(job, state)
                         if retry_result.status != "failed":
                             result = retry_result
-
-        elif job.type == "self_tune":
-            from .self_tune import run_self_tune
-            tune_result = run_self_tune()
-            duration = (datetime.now(timezone.utc) - start).total_seconds()
-            # run_self_tune returns {changes: [...], ...} on success, {error: ...} on failure
-            is_success = "error" not in tune_result
-            changes = tune_result.get("changes", [])
-            summary = (
-                f"Config updated with {len(changes)} changes"
-                if is_success else tune_result.get("error", "Unknown error")
-            )
-            result = JobResult(
-                job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status="success" if is_success else "failed",
-                summary=summary,
-                duration_seconds=duration,
-            )
 
         elif job.type == "script":
             result = _handle_script(job, state)
@@ -522,36 +483,6 @@ def execute_job(
                 duration_seconds=0,
             )
 
-        # Auth-failure fallback: if an agent_task fails with auth_failed and
-        # the job defines a fallback_script, run it as a script job instead.
-        # This decouples jobs from MCP auth availability (e.g., channel-monitor
-        # can read channels via bot_token when slack-mcp Midway expires).
-        if (
-            result.status == "auth_failed"
-            and job.config.get("fallback_script")
-        ):
-            logger.info(
-                "Job '%s' auth failed — running fallback_script", job.id,
-            )
-            fallback_job = Job(
-                id=f"{job.id}-fallback",
-                name=f"{job.name} (fallback)",
-                type="script",
-                schedule=job.schedule,
-                enabled=True,
-                category=job.category,
-                config={
-                    "command": job.config["fallback_script"],
-                    "cwd": job.config.get("fallback_cwd"),
-                    "output_mode": job.config.get("output_mode", "report"),
-                },
-                safety=job.safety,
-            )
-            fallback_result = _handle_script(fallback_job, state)
-            if fallback_result.status == "success":
-                result = fallback_result
-                result.job_id = job.id  # keep original job_id
-
         _update_job_state(state, job.id, result)
 
         # Post-job notification (if configured via config.notify)
@@ -652,7 +583,7 @@ def _get_aws_credentials() -> dict[str, str]:
       1. boto3 → credential_process → ada → Isengard (needs VPN/DNS)
       2. Claude CLI → AWS SSO IdC tokens (local files, auto-refreshed)
 
-    We try to inject boto3 creds so the CLI uses the same chain as signal_digest.
+    We try to inject boto3 creds so the CLI uses the same chain as the backend's boto3 calls.
     If boto3 fails (VPN off, Isengard unreachable), the CLI still works via its
     own SSO IdC tokens. Best of both worlds — no single point of failure.
     """
@@ -801,7 +732,7 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
             error="auth_preflight_failed",
         )
 
-    # Credential resolution: try boto3 first (same chain as signal_digest),
+    # Credential resolution: try boto3 first (same chain as the backend's boto3 calls),
     # fall through to CLI's own SSO IdC auth if boto3 fails.
     # No hard-fail — at least one chain should work.
     aws_creds = _get_aws_credentials()
@@ -971,11 +902,6 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
                 status=status,
             )
 
-        # If signal mode, inject into raw_signals buffer
-        if job.config.get("output_as_signals", False) and result_text:
-            signals = _extract_signals_from_output(job, result_text)
-            state.raw_signals.extend(signals)
-
         # Record actual duration for EMA learner (improves future predictions)
         try:
             _get_learner().record(
@@ -1142,9 +1068,7 @@ def _output_tail(data: bytes | str | None, limit: int) -> str:
 def _handle_maintenance(
     job: Job, state: SchedulerState, known_job_ids: set[str] | None = None,
 ) -> JobResult:
-    """Maintenance job: prune old state, trim caches, clean orphans."""
-    from .dedup import trim_dedup_cache
-
+    """Maintenance job: prune old state, reset counters, clean orphans."""
     start = datetime.now(timezone.utc)
     actions = []
 
@@ -1155,18 +1079,6 @@ def _handle_maintenance(
             del state.jobs[jid]
         if orphaned:
             actions.append(f"Pruned orphaned state: {', '.join(orphaned)}")
-
-    # Trim dedup cache
-    before = len(state.dedup_cache)
-    state.dedup_cache = trim_dedup_cache(state.dedup_cache, max_size=300)
-    after = len(state.dedup_cache)
-    if before != after:
-        actions.append(f"Trimmed dedup cache: {before} → {after}")
-
-    # Clear stale raw signals (shouldn't happen, but safety)
-    if len(state.raw_signals) > 100:
-        state.raw_signals = state.raw_signals[-50:]
-        actions.append("Trimmed raw signal buffer to 50")
 
     # Reset the legacy monthly token counter on the 1st of the month (spend is the
     # usage ledger's, core/usage_report.month_spend)
@@ -1225,8 +1137,6 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
       channel: "slack" (only supported channel for now)
       message: text to send (static message)
       job_ref: optional job_id whose last result to include
-      source: "signal_digest" to auto-format from signal_digest.json
-      max_items: max items from signal_digest (default 10)
     """
     start = datetime.now(timezone.utc)
     channel = job.config.get("channel", "slack")
@@ -1253,13 +1163,6 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
             )
     except Exception:
         pass  # Non-blocking — CLI fallback doesn't need config
-
-    # Source: auto-format from data
-    source = job.config.get("source", "")
-    if source == "signal_digest" and not message:
-        message = _format_signal_digest_message(
-            max_items=job.config.get("max_items", 10),
-        )
 
     # If job_ref is set, include that job's last result
     job_ref = job.config.get("job_ref")
@@ -1290,123 +1193,6 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
             summary="Failed to send Slack DM", duration_seconds=duration,
             error="slack_send_failed",
         )
-
-
-def _format_signal_digest_message(max_items: int = 10) -> str:
-    """Format signal_digest.json into a flat, ranked, linked Slack message.
-
-    Denoising (feed exclusion / china-trending split / per-feed cap / 48h
-    freshness / final_score ranking) is delegated to
-    ``jobs.signal_selection.select_signals`` (the single denoising source) — this
-    formatter used to re-sort by the capped ``relevance_score`` with no
-    filters, so it flooded Slack with eastmoney-market + reference-commits junk.
-
-    Presentation is Slack-specific (option A: shared denoising, separate
-    display): a FLAT top-N ranked by ``final_score`` — no per-feed_id section
-    headers (the old unfriendly structure). English and Chinese signals are
-    split into two readable language groups; every selected signal renders
-    exactly once (no silent drops).
-    """
-    digest_path = SWARMWS / "Services" / "signals" / "signal_digest.json"
-    if not digest_path.exists():
-        return ""
-
-    try:
-        data = json.loads(digest_path.read_text())
-    except Exception:
-        return ""
-
-    items = data.get("items", [])
-    if not items:
-        return ""
-
-    from jobs.signal_selection import readable_source, select_signals
-
-    # Shared denoiser: filters + splits + caps + sorts by final_score. Take the
-    # top-N ranked signals (hot_news trending is intentionally NOT in the digest).
-    signals = select_signals(items)["signals"][:max_items]
-    if not signals:
-        return ""
-
-    esc = _escape_slack_mrkdwn
-    urgency_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-
-    def _render_line(item: dict) -> str:
-        emoji = urgency_emoji.get(item.get("urgency", "low"), "🟢")
-        # Coerce to str at the render boundary: signal_digest.json is external
-        # (RSS/HN/scraped), so title/summary/source could be non-string on a
-        # malformed item — degrade to text rather than crash the Slack job (O023).
-        raw_title = str(item.get("title", "Untitled"))
-        title = esc(raw_title)
-        url = str(item.get("url", ""))
-        feed_id = item.get("feed_id", "")
-        raw_source = str(item.get("source", ""))
-        # Shared label map (github/commit feeds → readable label) lives in
-        # signal_selection.readable_source — single source, no drift.
-        source = readable_source(feed_id, raw_source)
-        title_part = f"<{url}|{title}>" if url else title
-        suffix = f" — _{esc(source)}_" if source else ""
-        line = f"{emoji} {title_part}{suffix}"
-
-        # Summary: strip leading title echo, cap length, skip if redundant.
-        summary = str(item.get("summary", ""))
-        if summary:
-            summary = _html_mod.unescape(summary)
-            if summary.startswith(raw_title):
-                summary = summary[len(raw_title):].lstrip(" :—-–")
-            summary = summary.strip()
-            if summary:
-                summary = esc(summary)
-                if len(summary) > 100:
-                    summary = summary[:97] + "…"
-                line += f"\n   {summary}"
-        return line
-
-    # Split into language groups (order preserved within each; zh detected by the
-    # write-time lang field). Non-zh (incl. missing lang) falls into the main
-    # group — no item is dropped (count-in == count-out).
-    en_items = [s for s in signals if s.get("lang") != "zh"]
-    zh_items = [s for s in signals if s.get("lang") == "zh"]
-
-    total = data.get("signals_count", len(signals))
-    sections: list[str] = [f"📡 *Signal Digest* — top {len(signals)} of {total} signals"]
-
-    if en_items:
-        sections.append("\n".join([f"\n*🌐 Global*"] + [_render_line(it) for it in en_items]))
-    if zh_items:
-        sections.append("\n".join([f"\n*🌏 中文*"] + [_render_line(it) for it in zh_items]))
-
-    return "\n".join(sections)
-
-
-# Matches a domain-like `word.letter` token (cs.AI, arXiv.org, Latent.Space) that
-# Slack auto-links in bare text. Group 1 = the char before the dot, group 2 = the
-# letter after it, so the sub can splice a zero-width space between them. Requires
-# an ALPHA after the dot so numeric decimals ("3.5", "v1.2") are NOT matched.
-_DOMAIN_LIKE_RE = re.compile(r"(\w)\.([A-Za-z])")
-
-
-def _escape_slack_mrkdwn(text: str) -> str:
-    """Escape Slack mrkdwn special characters in user-generated text.
-
-    Prevents format injection from external content (RSS titles, HN posts).
-    Slack mrkdwn specials: * _ ~ ` < > that could break formatting or
-    inject links when embedded in bold/italic patterns.
-
-    Unescapes HTML entities first (RSS feeds store &#x27; etc.) to avoid
-    double-escaping like &amp;#x27;.
-    """
-    text = _html_mod.unescape(text)
-    # < and > are the only ones that create link injection; escape them first
-    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    # Neutralize Slack auto-linking of domain-like bare tokens (cs.AI, arXiv.org,
-    # Latent.Space): Slack turns `word.letter` into a hyperlink, which both emits
-    # a spurious http://_word link AND severs the surrounding _italic_ span. A
-    # zero-width space after the dot breaks the domain heuristic while leaving the
-    # visible text unchanged. Requires a LETTER after the dot (so decimals like
-    # "3.5" / "v1.2" are untouched — those aren't auto-link triggers).
-    text = _DOMAIN_LIKE_RE.sub("\\1.​\\2", text)
-    return text
 
 
 def _get_slack_dm_channel() -> str | None:
@@ -1703,7 +1489,7 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
     strips problematic vars.
 
     Credential strategy: if boto3 resolved credentials (ada → Isengard),
-    inject them so CLI uses the same chain as signal_digest. If boto3
+    inject them so CLI uses the same chain as the backend's boto3 calls. If boto3
     failed (VPN off), aws_creds is empty — CLI falls through to its own
     SSO IdC tokens. Either way, at least one auth path works.
     """
@@ -1987,45 +1773,6 @@ duration: {duration:.1f}s
             logger.warning("Job JSONL sidecar write failed (non-blocking): %s", exc)
 
     return md_path
-
-
-def _extract_signals_from_output(job: Job, result_text: str) -> list[RawSignal]:
-    """Extract RawSignal items from CLI output for signal pipeline.
-
-    Tries structured extraction first (JSON array with title/url/summary),
-    falls back to one mega-signal per job result.
-    """
-    # Try structured extraction (CLI prompt should include JSON array instructions)
-    try:
-        json_match = re.search(r'\[[\s\S]*\]', result_text)
-        if json_match:
-            items = json.loads(json_match.group())
-            if isinstance(items, list) and len(items) > 0 and "title" in items[0]:
-                return [
-                    RawSignal(
-                        feed_id=f"cli:{job.id}",
-                        title=item.get("title", f"{job.name} item"),
-                        url=item.get("url", ""),
-                        summary=item.get("summary", "")[:500],
-                        published=datetime.now(timezone.utc),
-                        source=f"swarm-job:{job.id}",
-                        tags=["cli-job"],
-                    )
-                    for item in items[:50]  # Cap at 50 signals per job
-                ]
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Fallback: one signal per job result
-    return [RawSignal(
-        feed_id=f"cli:{job.id}",
-        title=f"{job.name} result",
-        url="",
-        summary=result_text[:500],
-        published=datetime.now(timezone.utc),
-        source=f"swarm-job:{job.id}",
-        tags=["cli-job"],
-    )]
 
 
 _FAILURE_ALERT_THRESHOLD = 3  # alert after N consecutive failures

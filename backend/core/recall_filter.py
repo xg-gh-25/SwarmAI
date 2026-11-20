@@ -20,9 +20,11 @@ is applied between ``recall_all`` and rendering:
 4. Rank and age (design 2026-10-26 D1, measured on replayed traffic, where term
    coverage did NOT separate useful from noise hits): the library leg keeps its
    first ``LIBRARY_TOP`` relevant hits plus up to ``ARCHIVE_SLOTS`` MEMORY /
-   EVOLUTION archive hits with their own budget, and never fetched feeds
-   (``NO_INJECT_PREFIXES``); a past session or a DailyActivity day older than
+   EVOLUTION archive hits with their own budget; a past session or a DailyActivity day older than
    ``SESSION_FRESH_DAYS`` must match ``SESSION_STALE_MIN_TERMS`` query terms.
+5. Never fetched feeds or the briefs built from them: a hit of any domain whose path
+   has a ``DailyBriefs`` or ``Signals`` folder anywhere (``NO_INJECT_SEGMENTS``:
+   ``Signals/``, ``Archives/Signals/``, ``Notes/x/DailyBriefs/``) is dropped.
 
 Nothing is removed from any corpus; this only decides which hits of this
 query are worth the model's attention.
@@ -35,7 +37,8 @@ Public:
 - ``query_terms(query)``
 - ``filter_recall(result, prompt_text="", followup=False, caps=None, slots=None)`` -> BucketedRecall
 - ``in_prompt_text(text, prompt_norm)``
-- ``DOMAIN_CHAR_CAPS``, ``FOLLOWUP_CHAR_CAPS``, ``FOLLOWUP_SLOTS``, ``LIBRARY_TOP``, ``ARCHIVE_SLOTS``, ``NO_INJECT_PREFIXES``
+- ``is_no_inject(hit)``
+- ``DOMAIN_CHAR_CAPS``, ``FOLLOWUP_CHAR_CAPS``, ``FOLLOWUP_SLOTS``, ``LIBRARY_TOP``, ``ARCHIVE_SLOTS``, ``NO_INJECT_SEGMENTS``
 """
 
 from __future__ import annotations
@@ -43,6 +46,8 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Callable
+
+from core.recall_multi import FETCHED_CONTENT_SEGMENTS, has_fetched_content_segment
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +89,19 @@ LIBRARY_TOP = 3
 ARCHIVE_PREFIX = ".context/Archives/"
 ARCHIVE_SLOTS = 2
 # Fetched feeds and the briefs built from them: 0 useful in the sample. Still in
-# the index for explicit Library search; just never auto-injected.
-NO_INJECT_PREFIXES = ("Signals/", "Archives/Signals/", "DailyBriefs/")
+# the index for explicit Library search; just never auto-injected, wherever they sit
+# (Knowledge/Archives/Signals/, a nested Notes/x/DailyBriefs/): matched by folder name,
+# the same set (core.recall_multi) that fences an on-demand read of them as untrusted.
+NO_INJECT_SEGMENTS: frozenset[str] = FETCHED_CONTENT_SEGMENTS
+_HIT_PATH_KEYS = ("source", "source_file", "doc")
+
+
+def is_no_inject(hit: Any) -> bool:
+    """True when *hit*'s path (``source`` / ``source_file`` / ``doc``) has a
+    ``NO_INJECT_SEGMENTS`` folder anywhere in it (case-insensitive)."""
+    if not isinstance(hit, dict):
+        return False
+    return any(has_fetched_content_segment(str(hit.get(key) or "")) for key in _HIT_PATH_KEYS)
 # Past sessions: <=1 day useful 60%, <=7 days 44%, older 17% (noise 52%). An
 # older session must match at least SESSION_STALE_MIN_TERMS query terms.
 SESSION_FRESH_DAYS = 7
@@ -475,7 +491,8 @@ def filter_recall(result: Any, prompt_text: str = "", followup: bool = False,
             if hits:
                 out.hit_layers[domain] = "filtered"
             continue
-        hits = hits or []
+        raw_hits = hits or []
+        hits = [h for h in raw_hits if not is_no_inject(h)]
         kept: list[dict] = []
         if domain == "context_files":
             # One hit carries every matched section in `content`; gate per section.
@@ -497,7 +514,7 @@ def filter_recall(result: Any, prompt_text: str = "", followup: bool = False,
                 kept = [h for h in kept if _session_fresh_or_strong(h, terms)]
                 kept = kept[:slots["session"]] if "session" in slots else kept
         out.buckets[domain] = _budget(domain, kept, caps)
-        if hits and not out.buckets[domain]:
+        if raw_hits and not out.buckets[domain]:
             out.hit_layers[domain] = "filtered"
     return out
 
@@ -505,14 +522,13 @@ def filter_recall(result: Any, prompt_text: str = "", followup: bool = False,
 def _library_slots(hits: list[dict], top: int = LIBRARY_TOP,
                    archive_slots: int = ARCHIVE_SLOTS) -> list[dict]:
     """Rank slots for the library leg: the first ``top`` ordinary hits plus up
-    to ``archive_slots`` memory-archive hits, in their original order; fetched
-    feeds never. Applied after the relevance gate, so ranks are among relevant hits."""
+    to ``archive_slots`` memory-archive hits, in their original order (fetched feeds
+    were dropped before, ``is_no_inject``). Applied after the relevance gate, so ranks
+    are among relevant hits."""
     out: list[dict] = []
     ordinary = archive = 0
     for h in hits:
         src = str(h.get("source") or "")
-        if src.startswith(NO_INJECT_PREFIXES):
-            continue
         if src.startswith(ARCHIVE_PREFIX):
             if archive < archive_slots:
                 archive += 1
@@ -616,8 +632,8 @@ def _bind_prefix() -> str:
 
 
 def _external_prefix() -> str:
-    from core.recall_multi import EXTERNAL_SOURCE_PREFIXES
-    return EXTERNAL_SOURCE_PREFIXES[0]
+    from core.recall_multi import EXTERNAL_SOURCE_LABEL
+    return EXTERNAL_SOURCE_LABEL
 
 
 # the neutral label of a note naming several untrusted sources: still routed to the fence

@@ -214,10 +214,6 @@ function useInboxReplyCount(): number | undefined {
   return data?.reply;
 }
 
-/** Pure resolution core for the Signals nav click (exported for test).
- *  Given the /workspace/tree/expand children of Knowledge/Signals, return the
- *  path of the newest digest — names are YYYY-MM-DD-digest.md so the lexical max
- *  IS the chronological latest. *-weekly.md (same dir) is excluded. null if none. */
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
   const { t } = useTranslation();
@@ -374,8 +370,8 @@ function LeftSidebar() {
         </div>
 
         {/* WORK zone order: Inbox (design 2026-11-20-inbox.md §7: what comes in, then what
-            to do), ToDo, Pipeline, Pollinate, Workspace, Community (XG 2026-10-23; Community
-            leaves when the Inbox replaces it). ToDo + Workspace keep `highlight` (resting-brighter). Reuses the existing highlight prop — NOT a 2nd
+            to do), ToDo, Pipeline, Pollinate, Workspace (XG 2026-10-23; the Inbox replaced
+            the Community card). ToDo + Workspace keep `highlight` (resting-brighter). Reuses the existing highlight prop — NOT a 2nd
             green panel: cognition's green zone stays the sole differentiated
             surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
@@ -393,11 +389,6 @@ function LeftSidebar() {
           <A10Card navId="pipeline" onPrefetch={() => prefetch('pipeline')} icon="pipeline" isActive={newActiveOverlay === 'pipeline'} onClick={() => activateNav('pipeline')} data-testid="nav-pipeline" />
           <A10Card navId="pollinate" onPrefetch={() => prefetch('pollinate')} icon="hive" isActive={newActiveOverlay === 'pollinate'} onClick={() => activateNav('pollinate')} data-testid="nav-pollinate" />
           <A10Card navId="swarmws" onPrefetch={() => prefetch('swarmws')} icon="folder" highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => activateNav('swarmws')} data-testid="nav-swarmws" />
-          {/* Community — inbound signals + the feeds being watched. Moved to the Work zone as a resident
-              main entry (run_5165013e): it's an active daily surface, not a
-              low-attention System tool — and upgraded from the old soft signal-file
-              opener to a real OverlayHost surface. Last in Work. */}
-          <A10Card navId="community" onPrefetch={() => prefetch('community')} icon="public" isActive={newActiveOverlay === 'community'} onClick={() => activateNav('community')} data-testid="nav-community" />
         </A10Group>
 
         <A10Group label={t('ui.ThreeColumnLayout.zoneSystem')} tint={ZONE_TINT.system} dimCards>
@@ -406,7 +397,7 @@ function LeftSidebar() {
               System zone after Jobs & Runs (run_5165013e): it's the ability
               reference/config surface, grouped with the other low-frequency System
               tools; the Work zone is reserved for active produce/engage surfaces
-              (ToDo/Workspace/Pipeline/Pollinate/Community). Supersedes the earlier
+              (Inbox/ToDo/Workspace/Pipeline/Pollinate). Supersedes the earlier
               Work-zone placement (run_b5d98151). */}
           <A10Card navId="capabilities" onPrefetch={() => prefetch('capabilities')} icon="extension" isActive={newActiveOverlay === 'capabilities'} onClick={() => activateNav('capabilities')} data-testid="nav-capabilities" />
           {hiveEnabled && (
@@ -664,15 +655,6 @@ function NavSvgIcon({ name }: { name: string }) {
       return (
         <svg {...svgProps} aria-hidden="true">
           <path d="M6 4h5V3a2 2 0 0 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 0 1 0 4h-1v3a1 1 0 0 1-1 1h-3v1a2 2 0 0 1-4 0v-1H6a1 1 0 0 1-1-1v-3H4a2 2 0 0 1 0-4h1V5a1 1 0 0 1 1-1z" />
-        </svg>
-      );
-    case 'public':
-      // Community — globe (external GitHub domain).
-      return (
-        <svg {...svgProps} aria-hidden="true">
-          <circle cx="12" cy="12" r="9" />
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
         </svg>
       );
     case 'schedule':

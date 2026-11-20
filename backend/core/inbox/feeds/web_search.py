@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 
-from ..models import Feed, RawSignal
+from jobs.models import Feed, RawSignal
 
 logger = logging.getLogger(__name__)
 

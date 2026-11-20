@@ -67,7 +67,7 @@ describe('Inbox nav card', () => {
     const firstWork = ids.findIndex((id) => NAV[(id ?? '').replace(/^nav-/, '') as keyof typeof NAV]?.zone === 'work');
     expect(ids[firstWork]).toBe('nav-inbox');
     expect(ids[firstWork + 1]).toBe('nav-todo');
-    expect(ids).toContain('nav-community');
+    expect(ids).not.toContain('nav-community');  // the Inbox replaced the Community page
     expect(screen.getByTestId('nav-inbox')).toHaveTextContent('Inbox');
   });
 

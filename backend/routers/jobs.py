@@ -90,17 +90,15 @@ async def run_job(req: RunJobRequest):
     """Force-run a specific job immediately."""
     try:
         from jobs.scheduler import (
-            load_jobs, load_config, load_feeds, load_state,
-            save_state_reconciled, load_user_context, load_defaults,
+            load_jobs, load_config, load_state,
+            save_state_reconciled, load_defaults,
         )
         from jobs.executor import execute_job
 
         config = load_config()
-        feeds = load_feeds(config)
         defaults = load_defaults(config)
         jobs = load_jobs()
         state = load_state()
-        user_context = load_user_context()
 
         job = next((j for j in jobs if j.id == req.job_id), None)
         if not job:
@@ -118,7 +116,7 @@ async def run_job(req: RunJobRequest):
         all_job_ids = {j.id for j in jobs}
 
         def _run_and_save():
-            r = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+            r = execute_job(job, state, defaults, all_job_ids)
             # Reconciled save preserves events hooks emitted during the run.
             save_state_reconciled(state)
             return r
@@ -198,8 +196,6 @@ async def unified_status():
             "monthly_spend_usd": job_spend["cost_usd"] if job_spend else None,
             # some of the month's job rows have no price: the spend is at least that
             "monthly_spend_partial": bool(job_spend and job_spend["unpriced"]),
-            "buffered_signals": len(state.raw_signals),
-            "dedup_cache_size": len(state.dedup_cache),
         }
     except Exception as e:
         logger.error("Failed to load scheduled jobs status: %s", e)
@@ -303,8 +299,8 @@ async def job_runs(job_id: str):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # EXACT match only — no prefix/substring (kills channel-monitor vs
-            # channel-monitor-fallback collision) and no path is built from job_id.
+            # EXACT match only — no prefix/substring (a job id that is a prefix of
+            # another must not collect its records) and no path is built from job_id.
             if rec.get("job_id") == job_id:
                 matches.append(rec)
 

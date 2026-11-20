@@ -44,9 +44,9 @@ DEFAULT_CONFIG_PATH = str(_app_data_dir() / "notify-channels.yaml")
 # ── HTTP helper ───────────────────────────────────────────────────────
 
 def safe_post(url: str, **kwargs) -> Any:
-    """POST with proxy bypass and retry (reuses signal pipeline http client)."""
+    """POST with proxy bypass and retry (reuses the shared core.http_client client)."""
     try:
-        from jobs.adapters.http_client import safe_client
+        from core.http_client import safe_client
         with safe_client(timeout=15) as client:
             return client.post(url, **kwargs)
     except ImportError:

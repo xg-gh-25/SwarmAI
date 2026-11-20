@@ -8,7 +8,7 @@ import pytest
 from core.inbox.models import SourceCategory, ThreadRef
 from core.inbox.sources.base import SendFailed, SourceConfig
 from core.inbox.sources.feeds import FEED_SOURCE_CLASSES, create
-from jobs.handlers.signal_fetch import ADAPTER_MAP
+from core.inbox.feeds import ADAPTER_MAP
 from jobs.models import RawSignal
 
 NOW = datetime.now(timezone.utc)
@@ -119,3 +119,30 @@ async def test_one_broken_feed_does_not_stop_the_others():
     assert [m.url for m in result.messages] == ["https://blog.example/p1"]
     import json
     assert set(json.loads(result.cursor)) == {"blog"}
+
+
+def test_rss_item_with_an_overflowing_date_keeps_the_feed(monkeypatch):
+    """A third-party pubDate with an absurd year raises OverflowError in the date parser;
+    it costs that item its date, never the other items of the feed."""
+    from core.inbox.feeds import rss
+    from jobs.models import Feed
+    xml = (b"<rss><channel><title>T</title>"
+           b"<item><title>Bad</title><link>https://a.example/1</link>"
+           b"<pubDate>Mon, 01 Jan 99999999999999999999999 00:00:00 +0000</pubDate></item>"
+           b"<item><title>Good</title><link>https://a.example/2</link>"
+           b"<pubDate>Tue, 10 Jun 2025 04:00:00 GMT</pubDate></item>"
+           b"</channel></rss>")
+
+    class _Resp:
+        status_code = 200
+        content = xml
+        text = xml.decode()
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(rss, "safe_get", lambda *a, **k: _Resp())
+    assert rss._parse_date("Mon, 01 Jan 99999999999999999999999 00:00:00 +0000") is None
+    feed = Feed(id="f", name="F", type="rss", config={"urls": ["https://a.example/feed"]})
+    titles = [s.title for s in rss.fetch_rss(feed, max_age_hours=24 * 365 * 100)]
+    assert "Good" in titles

@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from .http_client import safe_get
-from ..models import Feed, RawSignal
+from core.http_client import safe_get
+from jobs.models import Feed, RawSignal
 
 logger = logging.getLogger(__name__)
 
@@ -159,16 +159,15 @@ def _parse_date(date_str: str | None) -> datetime | None:
     try:
         # RFC 2822 (RSS pubDate)
         return parsedate_to_datetime(date_str)
-    except Exception:
-        pass
+    except (TypeError, ValueError, IndexError, OverflowError):
+        pass  # not RFC 2822: try ISO 8601
     try:
         # ISO 8601 (Atom)
         from datetime import datetime as dt
         cleaned = date_str.replace("Z", "+00:00")
         return dt.fromisoformat(cleaned)
-    except Exception:
-        pass
-    return None
+    except (TypeError, ValueError, OverflowError):
+        return None  # an unparseable date: the item keeps no publication time
 
 
 def _clean_html(raw: str) -> str:

@@ -49,7 +49,6 @@ REQUIRED_KNOWLEDGE_SUBDIRS = [
     "Knowledge/Designs",
     "Knowledge/Learned",
     "Knowledge/Pollinate",
-    "Knowledge/Signals",
     "Knowledge/JobResults",
 ]
 
@@ -164,8 +163,8 @@ class TestWorkspaceFolderCreation:
                 | {"Projects/SwarmAI", "Projects/SwarmAI/.artifacts",
                    "Projects/SwarmAI/2-understanding"}
                 # Job system provisioned during folder creation (_provision_job_system):
-                # Services/swarm-jobs/ (+ logs/) and Services/signals/.
-                | {"Services/signals", "Services/swarm-jobs", "Services/swarm-jobs/logs"}
+                # Services/swarm-jobs/ (+ logs/).
+                | {"Services/swarm-jobs", "Services/swarm-jobs/logs"}
                 # .context/ created by create_folder_structure (context file store).
                 | {".context"}
             )

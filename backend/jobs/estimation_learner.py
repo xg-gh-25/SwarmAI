@@ -71,7 +71,7 @@ class CategoryModel:
 class EstimationLearner:
     """Multi-category learner with JSON file persistence.
 
-    Each job type (``morning-inbox``, ``self-tune``, etc.) gets its own
+    Each job type (``morning-inbox``, ``memory-health``, etc.) gets its own
     :class:`CategoryModel`.  State is saved after every :meth:`record`
     call to ``~/.swarm-ai/estimation_learner.json`` (configurable).
     """

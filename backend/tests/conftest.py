@@ -918,7 +918,7 @@ def _no_live_bound_repos_for_landings(monkeypatch):
 # abandoned: `from .paths import CONFIG_FILE` binds a SEPARATE frozen copy into every
 # importing module, so the leaky set is not "modules that call get_app_data_dir()" but
 # "every module that ever from-imported such a constant" — jobs.paths, jobs.scheduler,
-# jobs.self_tune, core.security_hooks, core.runtime_hooks, core.heartbeat, … An
+# core.security_hooks, core.runtime_hooks, core.heartbeat, … An
 # allowlist silently missed each new one (each miss = a desync or a production write),
 # so the sweep is prefix-scoped instead and made safe by the VALUE filter: it only ever
 # rewrites a Path that already lives under the production app-data root or under a test

@@ -21,7 +21,7 @@ from routers.system import (
 def _run(coro):
     # asyncio.run (fresh loop per call) — NOT get_event_loop().run_until_complete:
     # the latter raises "no current event loop" on Py3.12 once a prior test clears
-    # the thread-default loop (e.g. test_community_api._run's set_event_loop(None)).
+    # the thread-default loop (e.g. a test calling set_event_loop(None)).
     return asyncio.run(coro)
 
 

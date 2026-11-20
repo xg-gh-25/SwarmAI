@@ -51,7 +51,7 @@ describe('OverlayState is the only first-load error box', () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const BOX = 'border-dashed border-[color-mix(in_srgb,#d0524a_45%';
     const IDS = ['todo-load-error', 'pipeline-load-error', 'pollinate-load-error', 'library-tree-error',
-      'cm-needs-error', 'brainhub-error', 'artifacts-error', 'cap-error', 'community-load-error',
+      'cm-needs-error', 'brainhub-error', 'artifacts-error', 'cap-error',
       'jobs-load-error', 'hive-load-error', 'needyou-load-error'];
     const offenders: string[] = [];
     for (const name of readdirSync(dir)) {

@@ -24,9 +24,9 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ── SSRF egress guard (BSC-A2, run_cd11637a) ────────────────────────────────
-# The shared outbound-fetch chokepoint is reused by the signal-fetch adapters
-# (rss/github_trending/github_releases/weibo_trending/hacker_news/trending/
-# eastmoney_market). External feed content can drive fetches + redirects toward
+# The shared outbound-fetch chokepoint is used by the feed fetchers in
+# core/inbox/feeds/ (rss/github_trending/github_releases/weibo_trending/hacker_news/
+# trending/eastmoney_market). External feed content can drive fetches + redirects toward
 # internal/metadata endpoints. This guard validates the RESOLVED IP at connect
 # time (rebind-safe — see _ValidatingTransport) and rejects non-https schemes.
 #
@@ -66,7 +66,7 @@ def _classify_ip(ip_str: str) -> bool:
 
 
 def is_blocked_ip_literal(host: str | None) -> bool:
-    """PUBLIC SSRF helper for write-time member validation (community_api).
+    """PUBLIC SSRF helper for write-time feed-member validation (routers/inbox.py).
 
     True IFF `host` is an IP-LITERAL that must be blocked (private / loopback /
     link-local / reserved / metadata / CGNAT). A DNS HOSTNAME (not an IP literal)

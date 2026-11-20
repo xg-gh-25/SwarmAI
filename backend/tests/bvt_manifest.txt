@@ -85,7 +85,7 @@ test_inbox_sources_common.py  # Inbox sources: pull/thread/find_sent use only RE
 test_inbox_source_slack.py  # Inbox Slack source (slack-mcp mapping, Web API): identity, dedup, reply into the given thread, find_sent, expired auth
 test_inbox_source_mail.py  # Inbox mail source (aws-outlook-mcp mapping, IMAP/SMTP): conversation split, Reply-To/external flags, read-only pulls, replies
 test_inbox_source_github.py  # Inbox GitHub source: notification reasons, feed-only tokens, per-subject replies, find_sent, gh auth errors
-test_inbox_source_feeds.py  # Inbox feed sources: one kind per signal fetcher, read only, cursor by publication time
+test_inbox_source_feeds.py  # Inbox feed sources: one kind per feed fetcher (core/inbox/feeds), read only, cursor by publication time
 test_wide_scope.py  # the dev-box refusal of a test run wider than one change's tests (conftest)
 test_run_bvt_python.py  # run_bvt.sh runs the checkout's own venv python when it has one, else the python on PATH (CI)
 test_frontend_design_web_guidance.py  # s_frontend-design: pinned Modern Web Guidance verifies, searches, never runs npx
@@ -98,6 +98,9 @@ test_inbox_runner.py  # Inbox runner: daemon/subprocess only, dedup, own message
 test_inbox_send.py  # Inbox send path: target_sha 409, one reply per double click, unknown never resent, redaction 409, 403s
 test_inbox_caller.py  # Inbox caller check on real loopback sockets: backend and its children refused, unknown peer refused
 test_inbox_submit.py  # inbox submit: PROPOSED only after the thread check; --sent records without calling reply; CLI
-test_inbox_api.py  # /api/inbox: every contract route and model; draft on first read, own words only; refusal bodies; feed CRUD same as community
+test_inbox_api.py  # /api/inbox: every contract route and model; draft on first read, own words only; refusal bodies; feed CRUD keeps its status codes, writes need X-Swarm-User-Action
 test_inbox_connect.py  # Inbox sources: available list by real MCP tool lists and gh login, added only after whoami, secrets never returned or logged, delete removes items/drafts/sends
 test_inbox_attention.py  # Needs You: one blocking item per Inbox source whose sign-in expired
+test_inbox_feed_config.py  # Inbox feed settings: config.yaml feeds parsed whole, members per type, per-kind member validation incl. SSRF IP literals
+test_inbox_deletion_sweep.py  # what the Inbox replaced (fallback_script, signal chain, Community) has no reader left
+test_recall_no_inject_segments.py  # a DailyBriefs / Signals file anywhere is indexed but never auto-injected; Signals is fenced untrusted

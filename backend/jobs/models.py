@@ -2,7 +2,7 @@
 Swarm Job System — Data Models
 
 Core Pydantic models for the standalone job scheduler.
-Job, Feed, RawSignal, SignalDigest, JobResult, JobSafety.
+Job, Feed, RawSignal, JobResult, JobSafety, SchedulerState.
 
 Zero dependency on SwarmAI backend.
 """
@@ -19,8 +19,6 @@ from pydantic import BaseModel, Field
 # ── Enums ─────────────────────────────────────────────────────────────
 
 class JobType(str, Enum):
-    SIGNAL_FETCH = "signal_fetch"
-    SIGNAL_DIGEST = "signal_digest"
     AGENT_TASK = "agent_task"
     SCRIPT = "script"
     NOTIFY = "notify"
@@ -30,7 +28,6 @@ class JobType(str, Enum):
     SKILL_PROPOSER = "skill_proposer"
     DDD_WEEKLY_REPORT = "ddd_weekly_report"
     BRAIN_MISTAKE_AUDIT = "brain_mistake_audit"
-    SELF_TUNE = "self_tune"
     SESSION_HEALTH_PROBE = "session_health_probe"
     EVAL_SCHEDULED = "eval_scheduled"
     SESSION_QUALITY = "session_quality"
@@ -57,8 +54,8 @@ class FeedType(str, Enum):
 
 
 # Per-FeedType editable-member config key — the SINGLE SOURCE for "which config
-# key holds this feed's editable string members" (consumed by community_data.parse_sources
-# + the /community/feeds/{id}/members endpoints). A feed's members are the individual
+# key holds this feed's editable string members" (consumed by core.inbox.feeds.config.parse_sources
+# + the /api/inbox/feeds/{id}/members endpoints). A feed's members are the individual
 # subscriptions inside it: an RSS feed's urls, a Hacker-News feed's keywords, etc.
 # `None` = this feed type has no user-editable string-list members.
 # ⚠️ EVERY FeedType MUST have an entry (test_member_key_covers_every_feed_type enforces
@@ -67,14 +64,14 @@ MEMBER_KEY: dict["FeedType", str | None] = {
     FeedType.RSS: "urls",                     # pundit/lab blog feeds (Sam Altman, Karpathy, OpenAI…)
     FeedType.HACKER_NEWS: "keywords",         # topic keywords to watch on HN
     FeedType.GITHUB_RELEASES: "repos",        # watched repos (owner/name flat strings)
-    # github-community reads config.repos (github_community.py:83, SOURCE_REPOS = flat
-    # owner/name strings) — same shape as github-releases, so it IS string-editable.
-    # (It's the feed type behind the overlay's own Engagement tab — was wrongly None.)
+    # github-community: config.repos is a flat list of owner/name strings (the GitHub
+    # community engine's subscription list) — same shape as github-releases, so it IS
+    # string-editable.
     FeedType.GITHUB_COMMUNITY: "repos",
     # github-people watches individual GitHub users (R2 名人层). config.logins is a
     # flat list of login strings — the overlay member editor edits them like repos.
     # Read by monitor.load_people_from_feed; scanned via scan_people (gh search issues
-    # --author). NOT wired into the signal pipeline (it's the community engine's store).
+    # --author). It has no feed fetcher (it's the community engine's store).
     FeedType.GITHUB_PEOPLE: "logins",
     FeedType.WEIBO_TRENDING: "keywords",      # weibo topic keywords
     FeedType.EASTMONEY_MARKET: "concept_keywords",  # market concept keywords
@@ -92,34 +89,13 @@ MEMBER_KEY: dict["FeedType", str | None] = {
 
 
 class TierType(str, Enum):
-    """Signal source authority tier — controls weighting and auto-disable behavior."""
+    """Feed source authority tier, set per feed in config.yaml and shown in the Inbox feed settings."""
     FRONTIER = "frontier"       # Official labs (OpenAI, Anthropic, Google, etc.)
     LEADERS = "leaders"         # AI leaders & thinkers (Sam Altman, Karpathy, etc.)
     RESEARCH = "research"       # Academic/research (arXiv, research blogs)
     ENGINEERING = "engineering"  # Engineering blogs, frameworks (default)
     OPINION = "opinion"         # Thought leaders, commentary
     AGGREGATE = "aggregate"     # Newsletters, aggregators (second-hand signal)
-
-
-# Tier weight multipliers for relevance scoring
-TIER_WEIGHTS: dict[str, float] = {
-    TierType.FRONTIER: 2.0,
-    TierType.LEADERS: 1.5,
-    TierType.RESEARCH: 1.5,
-    TierType.ENGINEERING: 1.0,
-    TierType.OPINION: 1.0,
-    TierType.AGGREGATE: 0.8,
-}
-
-# Tier-specific auto-disable thresholds (days of zero usage before auto-disable)
-TIER_DISABLE_THRESHOLDS: dict[str, int | None] = {
-    TierType.FRONTIER: None,   # Never auto-disable
-    TierType.LEADERS: None,    # Never auto-disable
-    TierType.RESEARCH: 30,     # 30 days
-    TierType.ENGINEERING: 14,  # 14 days (default behavior)
-    TierType.OPINION: 14,
-    TierType.AGGREGATE: 14,
-}
 
 
 # ── Signal Models ─────────────────────────────────────────────────────
@@ -133,7 +109,7 @@ class RawSignal(BaseModel):
     published: datetime | None = None
     source: str = ""         # e.g. "Simon Willison's Weblog"
     tags: list[str] = []
-    score: float = 0.0       # relevance score (0-1), set by digester
+    score: float = 0.0       # the fetcher's own 0-1 ranking hint (stars, heat), when it has one
     tier: str = "engineering"  # inherited from feed's tier during fetch
 
 
@@ -145,8 +121,8 @@ class Feed(BaseModel):
     config: dict[str, Any] = {}
     tags: list[str] = []
     enabled: bool = True
-    # "user" = created/edited via the Community overlay (Phase-2); protected from
-    # self_tune auto-disable exactly like "manual" (prune only disables "self-tune").
+    # "user" = created/edited in the Inbox feed settings; "self-tune" is a value an
+    # older config.yaml may still carry (the feed auto-tuner is gone) and is kept as is.
     managed_by: Literal["manual", "self-tune", "user"] = "manual"
     tier: TierType = TierType.ENGINEERING
 
@@ -195,7 +171,6 @@ class JobResult(BaseModel):
     tokens_used: int = 0
     duration_seconds: float = 0.0
     error: str | None = None
-    signals_count: int = 0         # for signal jobs
 
 
 # ── State Models ──────────────────────────────────────────────────────
@@ -218,8 +193,6 @@ class JobState(BaseModel):
 class SchedulerState(BaseModel):
     """Full scheduler runtime state, persisted to state.json."""
     jobs: dict[str, JobState] = {}
-    raw_signals: list[RawSignal] = []  # buffer between fetch and digest
-    dedup_cache: list[str] = []        # recent URLs for dedup (7-day window)
     pending_events: list[dict[str, Any]] = []  # event queue for on:<event> jobs
     last_scheduler_run: datetime | None = None
     monthly_tokens_used: int = 0       # legacy, kept for backwards compat
@@ -236,19 +209,3 @@ class SchedulerDefaults(BaseModel):
     relevance_threshold: float = 0.3
     max_active_feeds: int = 15
     max_daily_agent_tasks: int = 20
-
-
-class UserContext(BaseModel):
-    """Auto-populated user context for relevance scoring."""
-    interests: list[str] = []
-    projects: list[str] = []
-    tech_stack: list[str] = []
-    recent_topics: list[str] = []
-
-
-class SchedulerConfig(BaseModel):
-    """Top-level config from config.yaml."""
-    version: int = 1
-    defaults: SchedulerDefaults = Field(default_factory=SchedulerDefaults)
-    user_context: UserContext = Field(default_factory=UserContext)
-    feeds: list[Feed] = []

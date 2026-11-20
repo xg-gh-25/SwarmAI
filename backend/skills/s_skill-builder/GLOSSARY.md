@@ -139,8 +139,8 @@ synonyms — they cause confusion across the skill ecosystem.
   finishes responding. Examples: `context_health_hook`, `evolution_maintenance_hook`.
   _Avoid:_ "listener", "handler" (handlers are in the job system).
 
-- **signal** — An external information item (RSS, GitHub trending, HN) ingested
-  by the signal pipeline into `signal_digest.json`.
+- **signal** — An external information item (RSS, GitHub trending, HN) a feed
+  fetcher returns; the Inbox shows it in its trend lane.
   _Avoid:_ "feed" (that's the source), "news" (too narrow).
 
 ---

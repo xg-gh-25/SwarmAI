@@ -69,7 +69,6 @@ export const NAV: Record<OverlayId, NavEntry> = {
   swarmws: { zone: 'work', navLabel: 'Workspace', subtitle: 'SwarmWS workspace explorer', mode: 'WORKSPACE', width: 'm' },
   pipeline: { zone: 'work', navLabel: 'Pipeline', mode: 'PIPELINE', width: 'xl' },
   pollinate: { zone: 'work', navLabel: 'Pollinate', mode: 'POLLINATE', width: 'xl' },
-  community: { zone: 'work', navLabel: 'Community', mode: 'COMMUNITY', width: 'xl' },
   // System zone
   jobs: { zone: 'system', navLabel: 'Jobs & Runs', mode: 'JOBS', width: 'xl' },
   capabilities: { zone: 'system', navLabel: 'Apps & Capabilities', subtitle: 'Products and abilities', mode: 'CAPABILITIES', width: 'xl' },

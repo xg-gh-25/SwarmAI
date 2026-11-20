@@ -59,7 +59,7 @@ FOLDER_STRUCTURE = ["Knowledge", "Projects", "Attachments", "Services"]
 KNOWLEDGE_SUBDIRS = [
     "Notes", "Reports", "Meetings", "Library", "Archives",
     "DailyActivity", "Handoffs", "Designs", "Learned", "Pollinate",
-    "Signals", "JobResults",
+    "JobResults",
 ]
 
 SYSTEM_MANAGED_FOLDERS = {
@@ -67,7 +67,7 @@ SYSTEM_MANAGED_FOLDERS = {
     "Knowledge/Notes", "Knowledge/Reports", "Knowledge/Meetings",
     "Knowledge/Library", "Knowledge/Archives", "Knowledge/DailyActivity",
     "Knowledge/Handoffs", "Knowledge/Designs", "Knowledge/Learned",
-    "Knowledge/Pollinate", "Knowledge/Signals", "Knowledge/JobResults",
+    "Knowledge/Pollinate", "Knowledge/JobResults",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -295,10 +295,9 @@ DDD_SIX_SECTION_NAMES: tuple[str, ...] = (
 # Default job system config (provisioned on first startup).
 # Feed definitions are user-customizable; system job definitions live in code.
 _DEFAULT_JOB_CONFIG = """\
-# Swarm Signal Pipeline — Feed Configuration
-# Feeds define what signals to fetch. Edit freely.
+# SwarmAI — Feed Configuration (read by the Inbox feed source)
+# Feeds define what the Inbox trend lane fetches. Edit here or in the Inbox feed settings.
 # System job definitions are managed by SwarmAI (not in this file).
-# Self-tune auto-adjusts user_context and HN keywords based on your usage.
 
 feeds:
   - id: ai-engineering
@@ -387,12 +386,6 @@ defaults:
   relevance_threshold: 0.3
   max_active_feeds: 20
   max_daily_agent_tasks: 50
-
-user_context:
-  interests: []
-  projects: []
-  tech_stack: []
-  recent_topics: []
 """
 
 
@@ -1112,7 +1105,7 @@ class SwarmWorkspaceManager:
 
 
 
-        # Provision job system default config (Services/swarm-jobs/ + signals/).
+        # Provision job system default config (Services/swarm-jobs/).
         # MUST run here too, not only in verify_integrity(): the fresh-create path
         # returns without calling verify_integrity, so omitting this left a
         # brand-new workspace WITHOUT its job system until a second startup —
@@ -2246,17 +2239,13 @@ class SwarmWorkspaceManager:
         """Ensure Services/swarm-jobs/ has required config files.
 
         Creates default config.yaml (feed definitions) and empty
-        user-jobs.yaml if they don't exist. State, logs, and signal
-        directories are also ensured. System job definitions live in
+        user-jobs.yaml if they don't exist. State and logs are also
+        ensured. System job definitions live in
         backend/jobs/system_jobs.py (code, not YAML).
         """
         jobs_dir = root / "Services" / "swarm-jobs"
         jobs_dir.mkdir(parents=True, exist_ok=True)
         (jobs_dir / "logs").mkdir(exist_ok=True)
-
-        # Ensure signals directory
-        signals_dir = root / "Services" / "signals"
-        signals_dir.mkdir(parents=True, exist_ok=True)
 
         # Default config.yaml (feed definitions) — only create if missing
         config_file = jobs_dir / "config.yaml"

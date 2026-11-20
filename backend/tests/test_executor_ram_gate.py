@@ -37,7 +37,7 @@ def test_agent_task_deferred_under_memory_pressure():
     with patch("core.resource_monitor.resource_monitor.spawn_budget",
                return_value=denied) as mock_budget, \
          patch("jobs.executor._handle_agent_task") as mock_handle:
-        result = execute_job(job, state, feeds=[], defaults=defaults)
+        result = execute_job(job, state, defaults=defaults)
 
     assert mock_budget.called, "spawn_budget gate was not consulted"
     assert not mock_handle.called, "CLI spawn ran despite memory pressure — gate failed"
@@ -57,7 +57,7 @@ def test_agent_task_proceeds_when_memory_ok():
     with patch("core.resource_monitor.resource_monitor.spawn_budget",
                return_value=ok), \
          patch("jobs.executor._handle_agent_task", return_value=sentinel) as mock_handle:
-        result = execute_job(job, state, feeds=[], defaults=defaults)
+        result = execute_job(job, state, defaults=defaults)
 
     assert mock_handle.called, "agent_task did not run despite healthy memory"
     assert result is sentinel
@@ -76,7 +76,7 @@ def test_ram_gate_never_raises_if_router_absent():
          patch("core.resource_monitor.resource_monitor.spawn_budget",
                return_value=ok) as mock_budget, \
          patch("jobs.executor._handle_agent_task", return_value=sentinel):
-        result = execute_job(job, state, feeds=[], defaults=defaults)
+        result = execute_job(job, state, defaults=defaults)
 
     # alive_count fell back to 0, gate still consulted, no crash
     assert mock_budget.called

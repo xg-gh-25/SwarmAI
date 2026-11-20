@@ -23,8 +23,8 @@ async def test_run_job_executes_off_event_loop(monkeypatch):
     from routers.jobs import RunJobRequest, run_job
 
     job = SimpleNamespace(id="j1", enabled=True, type="script")
-    for name, val in {"load_config": {}, "load_feeds": [], "load_defaults": {},
-                      "load_jobs": [job], "load_state": {}, "load_user_context": {}}.items():
+    for name, val in {"load_config": {}, "load_defaults": {},
+                      "load_jobs": [job], "load_state": {}}.items():
         monkeypatch.setattr(sch, name, lambda *a, _v=val, **k: _v)
     monkeypatch.setattr(sch, "save_state_reconciled", lambda *a, **k: None)
 

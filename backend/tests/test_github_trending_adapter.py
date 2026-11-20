@@ -92,7 +92,7 @@ def mock_trending_response():
     mock_resp.text = MOCK_TRENDING_HTML
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
+    with patch("core.inbox.feeds.github_trending.safe_client") as mock_client_ctx:
         mock_client = MagicMock()
         mock_client.get.return_value = mock_resp
         mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -107,7 +107,7 @@ class TestGitHubTrendingAdapterBasic:
 
     def test_fetch_returns_raw_signals(self, mock_trending_response):
         """Adapter returns list of RawSignal from GitHub Trending page."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
         signals = fetch_github_trending(feed)
@@ -118,7 +118,7 @@ class TestGitHubTrendingAdapterBasic:
 
     def test_signal_fields_correct(self, mock_trending_response):
         """Each signal has owner/name title, description, language, url, stars_today."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
         signals = fetch_github_trending(feed)
@@ -133,7 +133,7 @@ class TestGitHubTrendingAdapterBasic:
 
     def test_stars_today_in_score(self, mock_trending_response):
         """stars_today normalized to 0-1 (500+ = 1.0) for fair cross-feed scoring."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
         signals = fetch_github_trending(feed)
@@ -145,7 +145,7 @@ class TestGitHubTrendingAdapterBasic:
 
     def test_top_n_limits_results(self):
         """top_n config limits number of repos returned."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed(config={
             "spoken_language": "",
@@ -158,7 +158,7 @@ class TestGitHubTrendingAdapterBasic:
         mock_resp.text = MOCK_TRENDING_HTML  # 3 repos
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.github_trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -170,7 +170,7 @@ class TestGitHubTrendingAdapterBasic:
 
     def test_empty_description_handled(self, mock_trending_response):
         """Repo with no description doesn't crash."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
         signals = fetch_github_trending(feed)
@@ -192,8 +192,8 @@ class TestGitHubTrendingRegistration:
         assert FeedType.GITHUB_TRENDING == "github-trending"
 
     def test_adapter_map_has_github_trending(self):
-        """signal_fetch ADAPTER_MAP includes github_trending adapter."""
-        from jobs.handlers.signal_fetch import ADAPTER_MAP
+        """core.inbox.feeds ADAPTER_MAP includes github_trending adapter."""
+        from core.inbox.feeds import ADAPTER_MAP
 
         assert FeedType.GITHUB_TRENDING in ADAPTER_MAP
 
@@ -205,11 +205,11 @@ class TestGitHubTrendingEdgeCases:
 
     def test_http_error_returns_empty_list(self):
         """HTTP error → empty list, no crash."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
 
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.github_trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.side_effect = Exception("403 Forbidden")
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -221,7 +221,7 @@ class TestGitHubTrendingEdgeCases:
 
     def test_no_box_rows_returns_empty_list(self):
         """Page with no article.Box-row → empty list."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
 
@@ -230,7 +230,7 @@ class TestGitHubTrendingEdgeCases:
         mock_resp.text = "<html><body><div>No repos today</div></body></html>"
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.github_trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -242,7 +242,7 @@ class TestGitHubTrendingEdgeCases:
 
     def test_malformed_repo_link_skipped(self):
         """Article without a valid repo link is skipped."""
-        from jobs.adapters.github_trending import fetch_github_trending
+        from core.inbox.feeds.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
 
@@ -271,7 +271,7 @@ class TestGitHubTrendingEdgeCases:
         mock_resp.text = bad_html
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.github_trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)

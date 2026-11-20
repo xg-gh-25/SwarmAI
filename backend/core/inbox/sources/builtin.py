@@ -3,7 +3,7 @@
 Each source module registers its factories with ``core.inbox.sources.base.register_source``
 when it is imported; this module imports them all, so the runner and the send path need one
 import: ``import core.inbox.sources.builtin``. Kinds: ``slack``, ``mail``, ``github`` and
-``feed:<type>`` for every fetcher in ``jobs.handlers.signal_fetch.ADAPTER_MAP``.
+``feed:<type>`` for every fetcher in ``core.inbox.feeds.ADAPTER_MAP``.
 """
 from __future__ import annotations
 

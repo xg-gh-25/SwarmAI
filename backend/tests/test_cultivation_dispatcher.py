@@ -48,7 +48,7 @@ class TestCultivationEvent:
 
     def test_all_event_types_exist(self):
         expected = {
-            "git_commit", "signal_digest",
+            "git_commit",
             "code_intel_indexed", "session_close", "proposal_decided", "timer_30min",
         }
         actual = {e.value for e in EventType}
@@ -108,17 +108,18 @@ class TestEventDispatcher:
         assert dispatcher.queue.qsize() == 2
 
     @pytest.mark.asyncio
-    async def test_queue_overflow_drops_event(self, dispatcher):
-        # Fill queue to capacity (5)
-        for i in range(5):
+    async def test_queue_overflow_drops_event(self):
+        # Fill queue to capacity (4) with four distinct types (dedup is per type)
+        dispatcher = EventDispatcher(queue_size=4, dedup_window_seconds=2.0)
+        for i in range(4):
             event = CultivationEvent(
-                type=EventType(["git_commit", "proposal_decided", "signal_digest",
+                type=EventType(["git_commit", "proposal_decided",
                                 "code_intel_indexed", "session_close"][i]),
                 source="test", payload={}, priority=2,
             )
             await dispatcher.emit(event)
 
-        assert dispatcher.queue.qsize() == 5
+        assert dispatcher.queue.qsize() == 4
 
         # 6th event should be dropped
         overflow_event = CultivationEvent(
@@ -293,9 +294,9 @@ class TestOrchestratorSubscriptions:
         from pathlib import Path
         orch = DddCultivationOrchestrator()
         tasks = orch.get_tasks_for_event(
-            EventType.SIGNAL_DIGEST, root=Path("/tmp"), ws_path="/tmp"
+            EventType.SESSION_CLOSE, root=Path("/tmp"), ws_path="/tmp"
         )
-        # nothing subscribes to SIGNAL_DIGEST since the signal bridge was removed
+        # only channels subscribed to the event run: none listens to session close
         assert tasks == []
 
 
@@ -359,7 +360,7 @@ class TestSingletonDispatcher:
     async def test_emit_different_types_not_deduped(self):
         self._ensure_dispatcher_in_loop()
         await emit_cultivation_event(EventType.GIT_COMMIT, source="a")
-        result = await emit_cultivation_event(EventType.SIGNAL_DIGEST, source="b")
+        result = await emit_cultivation_event(EventType.CODE_INTEL_INDEXED, source="b")
         assert result is True
 
     @pytest.mark.asyncio
@@ -367,7 +368,7 @@ class TestSingletonDispatcher:
         self._ensure_dispatcher_in_loop()
         d = get_dispatcher()
         assert d.loop is None  # Not yet captured
-        await emit_cultivation_event(EventType.SIGNAL_DIGEST, source="test")
+        await emit_cultivation_event(EventType.CODE_INTEL_INDEXED, source="test")
         assert d.loop is not None  # Now captured
 
     @pytest.mark.asyncio

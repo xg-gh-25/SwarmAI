@@ -158,7 +158,7 @@ class TestFullRegistryCoverage:
         from core.skill_manager import skill_manager
 
         # asyncio.run (fresh loop) — get_event_loop() raises on Py3.12 when a prior
-        # test cleared the thread-default loop (test_community_api set_event_loop(None)).
+        # test cleared the thread-default loop (one that calls set_event_loop(None)).
         cache = asyncio.run(skill_manager.get_cache())
         assert len(cache) > 0, "expected a non-empty skill cache"
         for folder_name in cache:

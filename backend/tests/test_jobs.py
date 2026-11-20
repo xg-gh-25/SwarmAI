@@ -1,7 +1,7 @@
 """
 Tests for backend/jobs/ — the product-level job system.
 
-Covers: models, cron_utils, dedup, system_jobs, scheduler, self_tune, paths, API router.
+Covers: models, cron_utils, system_jobs, scheduler, paths, API router.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ class TestModels:
         from jobs.models import SchedulerState
         state = SchedulerState()
         assert state.jobs == {}
-        assert state.raw_signals == []
         assert state.monthly_spend_usd == 0.0
 
     def test_job_result_fields(self):
@@ -139,44 +138,12 @@ class TestCronUtils:
         assert _matches("8,14,20", 10, 0, 23) is False
 
 
-# ── Dedup ──────────────────────────────────────────────────────────────
-
-class TestDedup:
-    def test_exact_url_dedup(self):
-        from jobs.models import RawSignal
-        from jobs.dedup import dedup_signals
-        signals = [
-            RawSignal(feed_id="test", title="A", url="https://a.com"),
-            RawSignal(feed_id="test", title="B", url="https://b.com"),
-        ]
-        unique, seen = dedup_signals(signals, ["https://a.com"])
-        assert len(unique) == 1
-        assert unique[0].url == "https://b.com"
-
-    def test_title_similarity_dedup(self):
-        from jobs.models import RawSignal
-        from jobs.dedup import dedup_signals
-        signals = [
-            RawSignal(feed_id="test", title="Claude Code gets massive update", url="https://a.com"),
-            RawSignal(feed_id="test", title="Claude Code gets massive update!", url="https://b.com"),
-        ]
-        unique, seen = dedup_signals(signals, [])
-        assert len(unique) == 1  # Second is too similar
-
-    def test_trim_dedup_cache(self):
-        from jobs.dedup import trim_dedup_cache
-        urls = [f"https://example.com/{i}" for i in range(600)]
-        trimmed = trim_dedup_cache(urls, max_size=500)
-        assert len(trimmed) == 500
-        assert trimmed[0] == "https://example.com/100"  # Oldest dropped
-
-
 # ── System Jobs ────────────────────────────────────────────────────────
 
 class TestSystemJobs:
     def test_system_jobs_count(self):
         from jobs.system_jobs import SYSTEM_JOBS
-        assert len(SYSTEM_JOBS) >= 14  # 12 original + 2 event-driven code-intel + others
+        assert len(SYSTEM_JOBS) >= 14
 
     def test_system_job_ids_unique(self):
         from jobs.system_jobs import SYSTEM_JOBS
@@ -191,11 +158,6 @@ class TestSystemJobs:
     def test_system_jobs_all_system_category(self):
         from jobs.system_jobs import SYSTEM_JOBS
         assert all(j.category == "system" for j in SYSTEM_JOBS)
-
-    def test_signal_digest_depends_on_fetch(self):
-        from jobs.system_jobs import SYSTEM_JOBS
-        digest = next(j for j in SYSTEM_JOBS if j.id == "signal-digest")
-        assert digest.schedule == "after:signal-fetch"
 
     def test_skill_proposer_runs_independently(self):
         """skill-proposer has its own cron — decoupled from memory-health
@@ -327,9 +289,8 @@ class TestScheduler:
         from jobs.scheduler import load_jobs
         jobs = load_jobs()
         ids = {j.id for j in jobs}
-        assert "signal-fetch" in ids
-        assert "signal-digest" in ids
         assert "weekly-maintenance" in ids
+        assert "memory-health" in ids
 
     def test_is_job_due_disabled(self):
         from jobs.models import Job, SchedulerState
@@ -350,9 +311,9 @@ class TestScheduler:
         from jobs.scheduler import is_job_due
         dep_time = datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc)
         state = SchedulerState(
-            jobs={"signal-fetch": JobState(last_run=dep_time, last_status="success")}
+            jobs={"fetch": JobState(last_run=dep_time, last_status="success")}
         )
-        job = Job(id="signal-digest", name="Digest", type="signal_digest", schedule="after:signal-fetch")
+        job = Job(id="digest", name="Digest", type="script", schedule="after:fetch")
         assert is_job_due(job, state) is True
 
     def test_is_job_due_dependency_failed_still_runs(self):
@@ -362,9 +323,9 @@ class TestScheduler:
         from jobs.scheduler import is_job_due
         dep_time = datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc)
         state = SchedulerState(
-            jobs={"signal-fetch": JobState(last_run=dep_time, last_status="failed")}
+            jobs={"fetch": JobState(last_run=dep_time, last_status="failed")}
         )
-        job = Job(id="signal-digest", name="Digest", type="signal_digest", schedule="after:signal-fetch")
+        job = Job(id="digest", name="Digest", type="script", schedule="after:fetch")
         assert is_job_due(job, state) is True
 
     def test_is_job_due_dependency_skipped_does_not_run(self):
@@ -373,9 +334,9 @@ class TestScheduler:
         from jobs.scheduler import is_job_due
         dep_time = datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc)
         state = SchedulerState(
-            jobs={"signal-fetch": JobState(last_run=dep_time, last_status="skipped")}
+            jobs={"fetch": JobState(last_run=dep_time, last_status="skipped")}
         )
-        job = Job(id="signal-digest", name="Digest", type="signal_digest", schedule="after:signal-fetch")
+        job = Job(id="digest", name="Digest", type="script", schedule="after:fetch")
         assert is_job_due(job, state) is False
 
     def test_circuit_breaker(self):
@@ -397,117 +358,10 @@ class TestScheduler:
         assert check_circuit_breaker(job, state) is True
 
 
-# ── Self-Tune ──────────────────────────────────────────────────────────
-
-class TestSelfTune:
-    @pytest.fixture
-    def sample_config(self):
-        return {
-            "feeds": [
-                {"id": "ai-engineering", "enabled": True, "managed_by": "manual",
-                 "config": {"urls": ["https://example.com/feed"]}},
-                {"id": "hn-ai", "enabled": True, "managed_by": "manual",
-                 "config": {"keywords": ["Claude", "LLM agent"]}},
-                {"id": "auto-feed-1", "enabled": True, "managed_by": "self-tune",
-                 "config": {"queries": ["test query"]}},
-            ],
-            "defaults": {"max_active_feeds": 15},
-            "user_context": {},
-        }
-
-    def test_update_user_context(self, sample_config):
-        from jobs.self_tune import update_user_context
-        changes = update_user_context(
-            sample_config,
-            [{"name": "SwarmAI"}],
-            Counter({"claude": 10, "mcp": 5}),
-            ["claude", "bedrock"],
-            ["python", "react"],
-        )
-        assert len(changes) > 0
-        ctx = sample_config["user_context"]
-        assert "SwarmAI" in ctx["projects"]
-        assert "claude" in ctx["interests"]
-
-    def test_dry_run_no_mutation(self, sample_config):
-        from jobs.self_tune import update_user_context
-        changes = update_user_context(
-            sample_config, [{"name": "Test"}], Counter({"ai": 5}),
-            ["ai"], ["python"], dry_run=True,
-        )
-        assert len(changes) > 0
-        assert sample_config["user_context"] == {}
-
-    def test_prune_auto_managed(self, sample_config):
-        from jobs.self_tune import prune_unused_feeds
-        usage = {"ai-engineering": 5, "hn-ai": 2}
-        changes = prune_unused_feeds(sample_config, usage)
-        assert any("DISABLE" in c and "auto-feed-1" in c for c in changes)
-
-    def test_no_prune_manual_feeds(self, sample_config):
-        from jobs.self_tune import prune_unused_feeds
-        usage = {"hn-ai": 2}
-        changes = prune_unused_feeds(sample_config, usage)
-        ai_feed = next(f for f in sample_config["feeds"] if f["id"] == "ai-engineering")
-        assert ai_feed["enabled"] is True
-
-    def test_suggest_trending_keywords(self, sample_config):
-        from jobs.self_tune import suggest_new_feeds
-        topics = Counter({"bedrock": 50, "mcp tools": 30, "autonomous ai": 20})
-        changes = suggest_new_feeds(sample_config, topics)
-        assert any("ADD keyword" in c for c in changes)
-
-    def test_prune_skips_frontier_tier(self):
-        """Frontier tier feeds should never be auto-disabled."""
-        from jobs.self_tune import prune_unused_feeds
-        config = {
-            "feeds": [
-                {"id": "frontier-labs", "enabled": True, "managed_by": "self-tune",
-                 "tier": "frontier", "config": {}},
-            ],
-            "defaults": {"max_active_feeds": 15},
-        }
-        usage = {}  # zero usage
-        changes = prune_unused_feeds(config, usage)
-        # Feed should still be enabled
-        assert config["feeds"][0]["enabled"] is True
-        # Should report it's protected, not disabled
-        assert any("protected" in c for c in changes)
-        assert not any("DISABLE" in c for c in changes)
-
-    def test_prune_research_uses_30d_threshold(self):
-        """Research tier should report 30d threshold, not 14d."""
-        from jobs.self_tune import prune_unused_feeds
-        config = {
-            "feeds": [
-                {"id": "ai-research", "enabled": True, "managed_by": "self-tune",
-                 "tier": "research", "config": {}},
-            ],
-            "defaults": {"max_active_feeds": 15},
-        }
-        usage = {}  # zero usage
-        changes = prune_unused_feeds(config, usage)
-        assert any("30" in c for c in changes)
-
-    def test_prune_engineering_uses_14d_threshold(self):
-        """Engineering tier should use default 14d threshold."""
-        from jobs.self_tune import prune_unused_feeds
-        config = {
-            "feeds": [
-                {"id": "auto-eng", "enabled": True, "managed_by": "self-tune",
-                 "tier": "engineering", "config": {}},
-            ],
-            "defaults": {"max_active_feeds": 15},
-        }
-        usage = {}
-        changes = prune_unused_feeds(config, usage)
-        assert any("DISABLE" in c and "14" in c for c in changes)
-
-
 # ── Tier System ──────────────────────────────────────────────────────
 
 class TestTierSystem:
-    """Tests for the tier-based signal weighting system."""
+    """Tests for the per-feed tier field."""
 
     def test_tier_type_enum_values(self):
         from jobs.models import TierType
@@ -516,25 +370,6 @@ class TestTierSystem:
         assert TierType.ENGINEERING == "engineering"
         assert TierType.OPINION == "opinion"
         assert TierType.AGGREGATE == "aggregate"
-
-    def test_tier_weights_complete(self):
-        from jobs.models import TierType, TIER_WEIGHTS
-        for tier in TierType:
-            assert tier in TIER_WEIGHTS, f"Missing weight for tier {tier}"
-
-    def test_tier_weights_ordering(self):
-        from jobs.models import TIER_WEIGHTS
-        assert TIER_WEIGHTS["frontier"] > TIER_WEIGHTS["research"]
-        assert TIER_WEIGHTS["research"] > TIER_WEIGHTS["engineering"]
-        assert TIER_WEIGHTS["engineering"] >= TIER_WEIGHTS["aggregate"]
-
-    def test_tier_disable_thresholds_frontier_is_none(self):
-        from jobs.models import TIER_DISABLE_THRESHOLDS
-        assert TIER_DISABLE_THRESHOLDS["frontier"] is None
-
-    def test_tier_disable_thresholds_research_is_30(self):
-        from jobs.models import TIER_DISABLE_THRESHOLDS
-        assert TIER_DISABLE_THRESHOLDS["research"] == 30
 
     def test_feed_default_tier(self):
         from jobs.models import Feed, TierType
@@ -555,45 +390,6 @@ class TestTierSystem:
         from jobs.models import RawSignal
         sig = RawSignal(feed_id="test", title="Test", url="https://example.com", tier="frontier")
         assert sig.tier == "frontier"
-
-    def test_signal_fetch_stamps_tier(self):
-        """signal_fetch.handle_signal_fetch should stamp feed tier onto signals."""
-        from jobs.models import Feed, SchedulerState, RawSignal
-
-        # Create a frontier feed with a mock adapter result
-        feed = Feed(id="test-frontier", name="Test", type="rss", tier="frontier")
-        state = SchedulerState()
-
-        # Simulate what signal_fetch does: stamp tier on signals
-        signals = [
-            RawSignal(feed_id="test-frontier", title="Test Signal", url="https://example.com")
-        ]
-        for sig in signals:
-            sig.tier = feed.tier
-        assert signals[0].tier == "frontier"
-
-    def test_simple_scored_items_applies_tier_weight(self):
-        """_simple_scored_items should apply tier weights to relevance scores."""
-        from jobs.models import RawSignal
-        from jobs.handlers.signal_digest import _simple_scored_items
-
-        frontier_signal = RawSignal(
-            feed_id="labs", title="OpenAI Update", url="https://openai.com/1",
-            source="OpenAI Blog", tier="frontier", score=0.5,
-        )
-        eng_signal = RawSignal(
-            feed_id="eng", title="Blog Post", url="https://blog.com/1",
-            source="Some Blog", tier="engineering", score=0.5,
-        )
-
-        items = _simple_scored_items([frontier_signal, eng_signal])
-        assert len(items) == 2
-        # Frontier (0.5 * 2.0 = 1.0) should score higher than engineering (0.5 * 1.0 = 0.5)
-        assert items[0]["relevance_score"] > items[1]["relevance_score"]
-        assert items[0]["tier"] == "frontier"
-        assert items[1]["tier"] == "engineering"
-        assert items[0]["tier_weight"] == 2.0
-        assert items[1]["tier_weight"] == 1.0
 
     def test_config_yaml_has_tiers(self):
         """config.yaml should have tier field on every feed."""
@@ -641,12 +437,13 @@ class TestJobProvisioning:
         state_file = tmp_path / "Services" / "swarm-jobs" / "state.json"
         assert state_file.exists()
 
-    def test_provision_creates_signals_dir(self, tmp_path):
+    def test_provision_creates_no_signals_dir(self, tmp_path):
+        # the signal digest is gone (design 2026-11-20-inbox §10): nothing writes there
         from core.swarm_workspace_manager import SwarmWorkspaceManager
         mgr = SwarmWorkspaceManager()
         mgr._provision_job_system(tmp_path)
 
-        assert (tmp_path / "Services" / "signals").is_dir()
+        assert not (tmp_path / "Services" / "signals").exists()
 
     def test_provision_idempotent(self, tmp_path):
         from core.swarm_workspace_manager import SwarmWorkspaceManager
@@ -702,7 +499,7 @@ class TestJobsAPI:
         assert isinstance(data, list)
         assert len(data) >= 5  # At least system jobs
         ids = {j["id"] for j in data}
-        assert "signal-fetch" in ids
+        assert "weekly-maintenance" in ids
 
     def test_scheduler_status(self, client):
         response = client.get("/api/jobs/status")
@@ -721,7 +518,7 @@ class TestJobsAPI:
         assert response.status_code == 404
 
     def test_run_dry_run(self, client):
-        response = client.post("/api/jobs/run", json={"job_id": "signal-fetch", "dry_run": True})
+        response = client.post("/api/jobs/run", json={"job_id": "weekly-maintenance", "dry_run": True})
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "dry_run"

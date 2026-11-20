@@ -310,7 +310,9 @@ def derive_role(rel_path: str, repo: Optional[str]) -> Role:
     if _is_excluded_path(rel_path):
         return Role.OTHER
 
-    # Activity: automated per-day logs.
+    # Activity: automated per-day logs (DailyActivity; Signals / DailyBriefs are the
+    # archived history of the retired signal digest and morning brief, now under
+    # Knowledge/Archives/).
     if "DailyActivity" in parts or "Signals" in parts or "DailyBriefs" in parts:
         return Role.ACTIVITY
 

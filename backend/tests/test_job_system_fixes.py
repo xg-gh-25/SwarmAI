@@ -6,7 +6,7 @@ Covers:
   AC2: _write_job_result accepts actual status parameter
   AC3: Circuit breaker auto-resets after 24h cooldown
   AC3b: Exponential half-open retry (1h, 2h, 4h ... <=24h), re-trip, lockstep
-  AC4: signal-notify-slack disabled when config missing
+  AC4: a notify job skips gracefully when Slack is not configured
   AC5-7: Briefing endpoint perf (async, cache, tail-read)
 """
 
@@ -105,7 +105,7 @@ class TestCrashHandlerPersistence:
              patch("jobs.executor.JOB_RESULTS_JSONL", jsonl_path), \
              patch("jobs.handlers.ddd_refresh.run_ddd_refresh", side_effect=RuntimeError("boom")):
 
-            result = execute_job(job, state, feeds=[])
+            result = execute_job(job, state)
 
         assert result.status == "failed"
         # The crash should be persisted to JSONL. Since run_d383e9a0, a first
@@ -304,18 +304,10 @@ class TestCircuitBreakerBackoff:
         assert check_circuit_breaker(job, state) is True
 
 
-# ── AC4: signal-notify-slack disabled when config missing ───────────
+# ── AC4: a notify job skips gracefully when Slack is not configured ─
 
 class TestNotifyJobPreFlight:
-    """signal-notify-slack has pre-flight config check — skips gracefully."""
-
-    def test_signal_notify_slack_exists_and_enabled(self):
-        """The system job should exist and be enabled (pre-flight handles missing config)."""
-        from jobs.system_jobs import SYSTEM_JOBS
-
-        notify_job = next((j for j in SYSTEM_JOBS if j.id == "signal-notify-slack"), None)
-        assert notify_job is not None, "signal-notify-slack should exist"
-        assert notify_job.enabled is True, "signal-notify-slack should be enabled"
+    """A type=notify job has a pre-flight config check — skips gracefully."""
 
     def test_notify_handler_skips_when_slack_disabled(self, tmp_path):
         """Handler returns status=skipped when slack is not enabled in config."""
@@ -333,98 +325,6 @@ class TestNotifyJobPreFlight:
 
         assert result.status == "skipped"
         assert "not enabled" in result.summary
-
-
-# ── Auth-failure fallback mechanism ───────────────────────────────────
-
-class TestAuthFailureFallback:
-    """Verify fallback_script runs when agent_task fails with auth_failed."""
-
-    def test_fallback_runs_on_auth_failure(self):
-        """When agent_task returns auth_failed and fallback_script is set,
-        the fallback script is executed and its result replaces the original."""
-        from jobs.models import Job, JobResult, JobSafety, SchedulerState
-
-        state = SchedulerState(jobs={})
-
-        job = Job(
-            id="test-monitor",
-            name="Test Monitor",
-            type="agent_task",
-            schedule="0 * * * *",
-            enabled=True,
-            category="user",
-            config={
-                "prompt": "Test prompt",
-                "fallback_script": "echo 'fallback executed'",
-            },
-            safety=JobSafety(timeout_seconds=30),
-        )
-
-        # Mock _handle_agent_task to return auth_failed
-        with patch("jobs.executor._handle_agent_task") as mock_agent, \
-             patch("jobs.executor._handle_script") as mock_script, \
-             patch("jobs.executor._update_job_state"), \
-             patch("jobs.executor.send_post_job_notification"):
-            mock_agent.return_value = JobResult(
-                job_id="test-monitor",
-                timestamp=datetime.now(timezone.utc),
-                status="auth_failed",
-                summary="Slack MCP auth expired",
-                duration_seconds=5,
-            )
-            mock_script.return_value = JobResult(
-                job_id="test-monitor-fallback",
-                timestamp=datetime.now(timezone.utc),
-                status="success",
-                summary="Fallback: 30 messages fetched",
-                duration_seconds=2,
-            )
-
-            from jobs.executor import execute_job
-            result = execute_job(job, state, feeds=[])
-
-            # Fallback script should have been called
-            mock_script.assert_called_once()
-            # Result should be the successful fallback
-            assert result.status == "success"
-            assert result.job_id == "test-monitor"
-
-    def test_no_fallback_without_config(self):
-        """When fallback_script is not configured, auth_failed stays as-is."""
-        from jobs.models import Job, JobResult, JobSafety, SchedulerState
-
-        state = SchedulerState(jobs={})
-
-        job = Job(
-            id="test-monitor-no-fb",
-            name="Test Monitor",
-            type="agent_task",
-            schedule="0 * * * *",
-            enabled=True,
-            category="user",
-            config={"prompt": "Test prompt"},
-            safety=JobSafety(timeout_seconds=30),
-        )
-
-        with patch("jobs.executor._handle_agent_task") as mock_agent, \
-             patch("jobs.executor._handle_script") as mock_script, \
-             patch("jobs.executor._update_job_state"), \
-             patch("jobs.executor.send_post_job_notification"):
-            mock_agent.return_value = JobResult(
-                job_id="test-monitor-no-fb",
-                timestamp=datetime.now(timezone.utc),
-                status="auth_failed",
-                summary="Slack MCP auth expired",
-                duration_seconds=5,
-            )
-
-            from jobs.executor import execute_job
-            result = execute_job(job, state, feeds=[])
-
-            # No fallback — script handler should NOT be called
-            mock_script.assert_not_called()
-            assert result.status == "auth_failed"
 
 
 # ── run_14d01964: last_error persistence (🔔 diagnosability) ────────
@@ -728,7 +628,7 @@ class TestAgentTaskRetry:
                              status="success", summary="ok")
 
         with patch("jobs.executor._handle_agent_task", side_effect=fake_handle):
-            result = ex.execute_job(job, state, feeds=[])
+            result = ex.execute_job(job, state)
         assert calls["n"] == 2, "should have retried exactly once"
         assert result.status == "success"
 
@@ -749,7 +649,7 @@ class TestAgentTaskRetry:
                              status="failed", error="timeout", summary="Timeout after 480s")
 
         with patch("jobs.executor._handle_agent_task", side_effect=fake_handle):
-            result = ex.execute_job(job, state, feeds=[])
+            result = ex.execute_job(job, state)
         assert calls["n"] == 1, "non-retryable must NOT retry"
         assert result.status == "failed"
 
@@ -771,7 +671,7 @@ class TestAgentTaskRetry:
                              status="auth_failed", summary="auth pre-check failed")
 
         with patch("jobs.executor._handle_agent_task", side_effect=fake_handle):
-            result = ex.execute_job(job, state, feeds=[])
+            result = ex.execute_job(job, state)
         assert calls["n"] == 1, "auth_failed must NOT go through the timeout-retry path"
         assert result.status == "auth_failed"
 
@@ -801,7 +701,7 @@ class TestAgentTaskRetry:
 
         with patch("jobs.executor._handle_agent_task", side_effect=fake_handle), \
              patch("jobs.executor._check_spawn_ram_budget", side_effect=fake_ram):
-            result = ex.execute_job(job, state, feeds=[])
+            result = ex.execute_job(job, state)
         assert calls["n"] == 1, "retry must NOT spawn a second subprocess when the gate declines"
         assert result.status == "failed"
 

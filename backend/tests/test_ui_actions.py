@@ -44,6 +44,7 @@ def test_allowlist_excludes_destructive_and_dropped_commands():
     for banned in (
         "open-terminal-here", "inject-chat-input", "attach-file",
         "file-changed", "toast", "nav-activate", "show-library",
+        "show-community",  # the Community page is gone (the Inbox replaced it)
     ):
         assert banned not in UI_COMMAND_ALLOWLIST, f"{banned} must NOT be allowlisted"
 
@@ -53,7 +54,6 @@ def test_allowlist_covers_expected_nav_commands():
         "open-canvas", "back-to-chat",
         "show-swarmws", "show-brain-hub", "show-context", "show-pipeline",
         "show-pollinate", "show-history", "show-todo", "show-jobs",
-        "show-community",
     ):
         assert cmd in UI_COMMAND_ALLOWLIST, f"{cmd} should be allowlisted"
 

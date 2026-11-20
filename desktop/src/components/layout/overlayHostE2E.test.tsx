@@ -119,9 +119,6 @@ const SURFACES: Array<{ event: string; testid: string; label: string }> = [
   { event: 'swarm:show-swarmws', testid: 'swarmws-overlay', label: 'SwarmWS' },
   { event: 'swarm:show-brain-hub', testid: 'brain-hub-overlay', label: 'Brain Hub' },
   { event: 'swarm:show-new-brain', testid: 'new-brain-overlay', label: 'New Brain' },
-  // Community (run_5165013e) — fetches via api.get (mocked reject-safe above), so
-  // it mounts to its empty state; the ACT contract is "the event opens the surface".
-  { event: 'swarm:show-community', testid: 'community-overlay', label: 'Community' },
   // Artifacts (History's twin) — fetches recent artifacts via api.get (mocked
   // reject-safe above → mounts to its error/empty state); the ACT contract is that
   // the show-event opens the surface through the real registry.

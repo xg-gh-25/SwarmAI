@@ -364,17 +364,15 @@ Methodology Stack (DDD + SDD + TDD): DDD (4 project docs) provides autonomous ju
 Background automation via macOS launchd — runs independently of chat sessions. The scheduler evaluates due jobs every hour, routes them to type-specific handlers via the executor, and persists state across restarts. The service manager handles long-running sidecars (Slack bot) with auto-restart and health monitoring.
 
 ![Figure 9: Job System](job-system.svg)
-*Figure 9: Job System — launchd scheduler, executor routing, signal pipeline, and sidecar services*
+*Figure 9: Job System — launchd scheduler, executor routing, and sidecar services (the figure still shows the retired signal pipeline; the Inbox now pulls the feeds)*
 
 | Job Type | Handler | Examples | Token Cost |
 |----------|---------|----------|------------|
-| signal_fetch | httpx adapters (HN, RSS, GitHub) | 3x daily signal collection | Zero (no LLM) |
-| signal_digest | Sonnet 4.6 relevance scoring | Daily digest, weekly rollup | ~2K tokens/run |
-| agent | Headless Claude CLI + MCP | Morning inbox, custom tasks | Variable |
-| script | Subprocess (deterministic) | self-tune, feed calibration | Zero (no LLM) |
+| agent | Headless Claude CLI + MCP | Custom tasks | Variable |
+| script | Subprocess (deterministic) | Loops health, code-intel refresh | Zero (no LLM) |
 | maintenance | Prune + cleanup + L4 proposals | Weekly cache cleanup, DDD refresh, skill proposer | ~$0.25/week |
 
-System jobs (signal-fetch, signal-digest, self-tune, weekly-maintenance, weekly-rollup) are defined in code and read-only. User jobs live in `user-jobs.yaml` with full CRUD via job_manager.py.
+System jobs (weekly-maintenance, memory-health, loops-health, ...) are defined in code and read-only. Watched feeds (RSS, Hacker News, GitHub) are not jobs: the Inbox pulls them (`core/inbox/feeds`). User jobs live in `user-jobs.yaml` with full CRUD via job_manager.py.
 
 ### 7.3 Proactive Intelligence
 
@@ -422,7 +420,7 @@ A fundamental architectural shift (March 30, 2026): **Tauri now connects to a la
 ### Key Benefits
 
 - **Always-on Slack** — Slack bot stays connected when app is closed. No missed messages.
-- **Background jobs run 24/7** — Morning inbox, signal fetching, self-tune all execute on schedule without the desktop app.
+- **Background jobs run 24/7** — scheduled jobs and the Inbox's pulls execute on schedule without the desktop app.
 - **Instant app startup** — No cold-start delay; backend is already warm.
 - **Crash resilience** — launchd auto-restarts the daemon; desktop app reconnects seamlessly.
 

@@ -317,7 +317,7 @@ local_modules = ['main', 'config']
 for pkg in LOCAL_PACKAGES:
     # Add the package itself
     local_modules.append(pkg)
-    # Add all .py files in the package (including nested like jobs/adapters/*.py)
+    # Add all .py files in the package (including nested like core/inbox/feeds/*.py)
     for py_file in sorted(glob.glob(f'{pkg}/**/*.py', recursive=True)):
         # Normalize path separators (Windows glob returns backslashes)
         mod = py_file.replace(os.sep, '.').replace('/', '.').removesuffix('.py')

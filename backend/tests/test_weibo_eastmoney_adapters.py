@@ -15,12 +15,12 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from jobs.adapters.weibo_trending import (
+from core.inbox.feeds.weibo_trending import (
     fetch_weibo_trending,
     _fetch_hot_search,
     _parse_mblog,
 )
-from jobs.adapters.eastmoney_market import (
+from core.inbox.feeds.eastmoney_market import (
     fetch_eastmoney_market,
     _fetch_top_movers,
     _fetch_hot_concepts,
@@ -75,7 +75,7 @@ MOCK_WEIBO_HOT_RESPONSE = {
 }
 
 
-@patch("jobs.adapters.weibo_trending.safe_client")
+@patch("core.inbox.feeds.weibo_trending.safe_client")
 def test_weibo_hot_search_filters_by_keyword(mock_client, weibo_feed):
     """Only signals matching business keywords are returned."""
     mock_response = MagicMock()
@@ -99,7 +99,7 @@ def test_weibo_hot_search_filters_by_keyword(mock_client, weibo_feed):
     assert "吃瓜第一名" not in titles
 
 
-@patch("jobs.adapters.weibo_trending.safe_client")
+@patch("core.inbox.feeds.weibo_trending.safe_client")
 def test_weibo_hot_search_output_shape(mock_client, weibo_feed):
     """Each signal has correct RawSignal fields."""
     mock_response = MagicMock()
@@ -125,7 +125,7 @@ def test_weibo_hot_search_output_shape(mock_client, weibo_feed):
     assert "weibo" in sig.tags
 
 
-@patch("jobs.adapters.weibo_trending.safe_client")
+@patch("core.inbox.feeds.weibo_trending.safe_client")
 def test_weibo_graceful_failure_on_api_error(mock_client, weibo_feed):
     """Returns empty list on HTTP error, never raises."""
     mock_http = MagicMock()
@@ -192,7 +192,7 @@ MOCK_EASTMONEY_CONCEPTS_RESPONSE = {
 }
 
 
-@patch("jobs.adapters.eastmoney_market.safe_client")
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
 def test_eastmoney_top_movers_output_shape(mock_client):
     """Hot stocks include name, code, change_pct in title/summary."""
     mock_response = MagicMock()
@@ -220,7 +220,7 @@ def test_eastmoney_top_movers_output_shape(mock_client):
     assert sig.score == 1.0
 
 
-@patch("jobs.adapters.eastmoney_market.safe_client")
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
 def test_eastmoney_top_movers_score_calculation(mock_client):
     """Score normalizes: 10%+ = 1.0, 5% = 0.5."""
     mock_response = MagicMock()
@@ -242,7 +242,7 @@ def test_eastmoney_top_movers_score_calculation(mock_client):
     assert abs(signals[0].score - 0.5) < 0.01  # 5.0 / 10.0
 
 
-@patch("jobs.adapters.eastmoney_market.safe_client")
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
 def test_eastmoney_hot_concepts_filters_by_keyword(mock_client):
     """Only concept sectors matching keywords are returned."""
     mock_response = MagicMock()
@@ -267,7 +267,7 @@ def test_eastmoney_hot_concepts_filters_by_keyword(mock_client):
     assert not any("白酒概念" in t for t in titles)
 
 
-@patch("jobs.adapters.eastmoney_market.safe_client")
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
 def test_eastmoney_hot_concepts_output_shape(mock_client):
     """Concept signals have correct fields."""
     mock_response = MagicMock()
@@ -292,7 +292,7 @@ def test_eastmoney_hot_concepts_output_shape(mock_client):
     assert sig.score == 1.0
 
 
-@patch("jobs.adapters.eastmoney_market.safe_client")
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
 def test_eastmoney_graceful_failure_on_api_error(mock_client, eastmoney_feed):
     """Returns empty list on HTTP error, never raises."""
     mock_http = MagicMock()
@@ -304,7 +304,7 @@ def test_eastmoney_graceful_failure_on_api_error(mock_client, eastmoney_feed):
     assert signals == []
 
 
-@patch("jobs.adapters.eastmoney_market.safe_client")
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
 def test_eastmoney_empty_response(mock_client, eastmoney_feed):
     """Handles empty response gracefully."""
     mock_response = MagicMock()
@@ -320,7 +320,7 @@ def test_eastmoney_empty_response(mock_client, eastmoney_feed):
     assert signals == []
 
 
-@patch("jobs.adapters.eastmoney_market.safe_client")
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
 def test_eastmoney_skips_stocks_with_missing_fields(mock_client):
     """Stocks with empty name or code are skipped."""
     mock_response = MagicMock()
@@ -354,7 +354,7 @@ def test_feedtype_enum_has_new_types():
 
 def test_adapter_map_routes_new_types():
     """ADAPTER_MAP dispatches to the correct functions."""
-    from jobs.handlers.signal_fetch import ADAPTER_MAP
+    from core.inbox.feeds import ADAPTER_MAP
 
     assert FeedType.WEIBO_TRENDING in ADAPTER_MAP
     assert FeedType.EASTMONEY_MARKET in ADAPTER_MAP

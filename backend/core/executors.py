@@ -112,7 +112,7 @@ _POOL_SPECS: dict[str, int] = {
                       # required-approval count): fire-and-forget, one writer, never
                       # on the event loop and never ahead of a gate.
     "nav": 2,         # Left Nav overlay endpoints (Brain Hub, Need You, Pipeline, Library,
-                      # Community, Jobs, ToDo, Pollinate, Hive, C&M, the Workspace tree):
+                      # Inbox feeds, Jobs, ToDo, Pollinate, Hive, C&M, the Workspace tree):
                       # a slow overlay waits here, never ahead of chat or /health. Small
                       # on purpose: it also bounds how much nav Python competes for the GIL.
                       # Reads only: an action that runs for minutes goes to 'nav_action'.

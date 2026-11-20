@@ -2027,11 +2027,8 @@ app.include_router(canvas_changes_router, tags=["canvas"])  # prefix set in rout
 from routers.recall_metrics_api import router as recall_metrics_router
 app.include_router(recall_metrics_router, tags=["recall-metrics"])  # prefix set in router
 
-from routers.community_api import router as community_router
-app.include_router(community_router, tags=["community"])  # prefix set in router
-
-# Inbox (design 2026-11-20-inbox): /api/inbox, incl. the feed configuration moved from
-# /api/community/feeds (those routes stay until the Community page is deleted).
+# Inbox (design 2026-11-20-inbox): /api/inbox, incl. the feed configuration
+# (/api/inbox/feeds).
 from routers.inbox import router as inbox_router
 app.include_router(inbox_router, tags=["inbox"])  # prefix set in router
 

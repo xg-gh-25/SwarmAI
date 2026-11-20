@@ -10,7 +10,6 @@ Usage:
     python loops_health_check.py --json               # JSON for programmatic use
     python loops_health_check.py --auto-fix           # Fix safe issues
     python loops_health_check.py --output-dir DIR     # Write report to DIR
-    python loops_health_check.py --alert-threshold N  # RADAR_TODOS if score < N
 """
 
 import json
@@ -981,7 +980,6 @@ def main():
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--auto-fix", action="store_true", help="Auto-fix safe issues")
     parser.add_argument("--output-dir", type=str, help="Write report to directory")
-    parser.add_argument("--alert-threshold", type=int, default=70, help="RADAR_TODOS threshold")
     args = parser.parse_args()
 
     engine = SelfLoopsHealthEngine()
@@ -998,23 +996,6 @@ def main():
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"{date.today().isoformat()}-loops-health.md"
             out_path.write_text(md)
-
-    # RADAR_TODOS for job alerting
-    if engine.report.overall_score < args.alert_threshold:
-        critical = [f for f in engine.report.findings if f.status == "fail"]
-        todos = [{
-            "title": f"Self-Loops Health: {engine.report.overall_score}/100 — {len(critical)} critical",
-            "priority": "high" if engine.report.overall_score < 50 else "medium",
-            "description": f"Scores: {engine.report.scores}",
-            "context": {
-                "source": "loops-health-job",
-                "score": engine.report.overall_score,
-                "dimensions": engine.report.scores,
-                "critical_checks": [f.id for f in critical],
-                "next_step": "Run s_loops-health skill for interactive diagnosis",
-            },
-        }]
-        print(f"\n<!-- RADAR_TODOS\n{json.dumps(todos, indent=2)}\n-->")
 
 
 if __name__ == "__main__":

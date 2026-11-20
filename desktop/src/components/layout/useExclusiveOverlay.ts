@@ -37,7 +37,6 @@ export const ALL_SHOW_EVENTS = [
   'swarm:show-capabilities',
   'swarm:show-new-brain',
   'swarm:show-needs-you',
-  'swarm:show-community',
 ] as const;
 
 /**

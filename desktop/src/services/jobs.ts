@@ -41,7 +41,7 @@ export interface JobStatus {
   lastError: string | null;
   /**
    * Cron/interval schedule string (backend key ``schedule``), e.g. "0 2 * * 1-5"
-   * or "after:signal-fetch". Surfaced by the Jobs & Runs section so the user can
+   * or "after:weekly-maintenance". Surfaced by the Jobs & Runs section so the user can
    * see WHEN each job runs. Empty string when absent.
    */
   schedule: string;

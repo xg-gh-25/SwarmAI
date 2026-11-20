@@ -32,37 +32,6 @@ def _py(*args: str) -> str:
 
 # All times in UTC
 SYSTEM_JOBS: list[Job] = [
-    # --- Signal Pipeline ---
-    Job(
-        id="signal-fetch",
-        name="Fetch Signals",
-        type="signal_fetch",
-        schedule="0 6,9 * * 1-5",    # weekday 2x: ICT 14:00, 17:00 (UTC 6,9)
-        enabled=True,
-        category="system",
-        config={"max_age_hours": 48},
-    ),
-    Job(
-        id="signal-digest",
-        name="Digest Signals",
-        type="signal_digest",
-        schedule="after:signal-fetch",
-        enabled=True,
-        category="system",
-        config={},
-    ),
-
-    # --- Self-Tune ---
-    Job(
-        id="self-tune",
-        name="Self-Tune Feeds",
-        type="self_tune",
-        schedule="0 5 * * 1-5",        # weekday ICT 13:00 (UTC 5)
-        enabled=True,
-        category="system",
-        config={},
-    ),
-
     # --- Maintenance (lightweight: prune caches, trim state, reset counters) ---
     # Monday 11:00 ICT (03:00 UTC) — start of work week, user is at desk.
     # If laptop was closed, cron_utils catch-up (48h window) retriggers on next boot.
@@ -306,36 +275,6 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
-    # --- Signal Digest → Slack Notification ---
-    # Fires after each digest, reads signal_digest.json, sends top items as Slack DM.
-    # Requires ~/.swarm-ai/notify-channels.yaml with slack.enabled=true.
-    # Handler pre-flight skips gracefully (status="skipped") when config missing
-    # — won't trigger circuit breaker.
-    Job(
-        id="signal-notify-slack",
-        name="Signal Digest → Slack",
-        type="notify",
-        schedule="after:signal-digest",
-        enabled=True,
-        category="system",
-        config={
-            "channel": "slack",
-            "source": "signal_digest",  # read from signal_digest.json
-            "max_items": 10,
-        },
-    ),
-
-    # --- Weekly Rollup ---
-    Job(
-        id="weekly-rollup",
-        name="Weekly Signal Rollup",
-        type="signal_digest",
-        schedule="0 5 * * 1",          # Monday UTC 05:00 = ICT 13:00 — fresh weekly rollup
-        enabled=True,
-        category="system",
-        config={"window_days": 7},
-    ),
-
     # (Todo Resolution job removed run_50db230a — it auto-resolved/cancelled todos,
     # incl. user manual ones (git-keyword + staleness layers had no source filter).
     # The ToDo card is now a pure user-planning surface: the user owns their todos'
@@ -358,7 +297,7 @@ SYSTEM_JOBS: list[Job] = [
         config={
             "command": _py(
                 str(bundled_path("skills", "s_loops-health", "scripts", "loops_health_check.py")),
-                "--auto-fix", "--alert-threshold", "70",
+                "--auto-fix",
                 "--output-dir", str(get_swarmws() / "Knowledge" / "JobResults"),
             ),
         },

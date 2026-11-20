@@ -32,14 +32,13 @@ Routes:
   ``imap``; the value is never returned or logged)
 - ``POST /api/inbox/sources/{id}/retry``        -> ``SourceOut``
 - ``POST /api/inbox/refresh``                   -> ``InboxCounts`` (pull every due source now)
-- feed configuration moves here from ``/api/community/feeds`` unchanged in shape:
+- feed configuration (moved from the deleted Community page, same shapes):
   ``GET/POST /api/inbox/feeds``, ``PUT/DELETE /api/inbox/feeds/{id}``,
   ``POST/DELETE /api/inbox/feeds/{id}/members``. ``GET /api/inbox/feeds`` -> ``FeedsOut``.
 
-**Writes carry ``X-Swarm-User-Action``.** Every POST, PATCH and DELETE above is refused with
-403 without it (a web page cannot set that header), except the feed routes, which keep the
-exact behaviour of ``/api/community/feeds`` until the Community page is deleted (the desktop
-sends the header there too). The three routes that send or unlock a send, and the source
+**Writes carry ``X-Swarm-User-Action``.** Every POST, PUT, PATCH and DELETE above, the feed
+routes included, is refused with 403 without it (a web page cannot set that header). The
+three routes that send or unlock a send, and the source
 writes (add, change, remove, store a secret), also pass the caller check
 (``core/inbox/caller.py``).
 
@@ -201,7 +200,7 @@ class SendRefusalBody(BaseModel):
 
 
 class FeedOut(BaseModel):
-    """One feed of config.yaml ``feeds:``, the shape of ``GET /api/community/sources``."""
+    """One feed of config.yaml ``feeds:`` (``core.inbox.feeds.config.parse_sources``)."""
     id: str
     name: str
     type: str

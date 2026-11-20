@@ -26,11 +26,9 @@ LOG_DIR = JOBS_DATA_DIR / "logs"
 DB_PATH = APP_DATA_DIR / "data.db"
 CONTEXT_DIR = SWARMWS / ".context"
 DAILY_DIR = SWARMWS / "Knowledge" / "DailyActivity"
-SIGNALS_DIR = SWARMWS / "Knowledge" / "Signals"
 PROJECTS_DIR = SWARMWS / "Projects"
 JOB_RESULTS_DIR = SWARMWS / "Knowledge" / "JobResults"
 JOB_RESULTS_JSONL = JOB_RESULTS_DIR / ".job-results.jsonl"
-SIGNAL_DIGEST_FILE = SWARMWS / "Services" / "signals" / "signal_digest.json"
 
 # MCP config
 MCPS_DIR = SWARMWS / ".claude" / "mcps"
@@ -55,8 +53,8 @@ def is_protected_job_file(path) -> bool:
     Security (TT V2265734761 — Cataphract Critical, fix 3): the workspace write
     endpoints must NOT overwrite these files, because the scheduler turns them
     into shell execution — the RCE chain's write link (user-jobs.yaml → a
-    type=script job OR a type=agent_task job's ``config.fallback_script``, both
-    reaching ``subprocess.run(shell=True)``; config.yaml → feeds/defaults).
+    type=script job reaching ``subprocess.run(shell=True)``; config.yaml →
+    feeds/defaults).
 
     Compared against the SAME constants the scheduler reads (USER_JOBS_FILE /
     CONFIG_FILE / STATE_FILE) via ``.resolve()``, so a write is denied no matter

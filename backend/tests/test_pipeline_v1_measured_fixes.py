@@ -554,7 +554,7 @@ def test_one_test_path_rule_for_any_language():
     from core.doc_paths import is_test_path
     for path in ("backend/tests/test_x.py", "tests/a.py", "desktop/src/__tests__/x.test.ts",
                  "web/app.spec.js", "pkg/handler_test.go", "lib/thing_spec.rb",
-                 "jobs/adapters/test_http_client.py", "src/test/java/FooTest.java"):
+                 "pkg/adapters/test_http_client.py", "src/test/java/FooTest.java"):
         assert is_test_path(path), path
     for path in ("backend/core/mod.py", "desktop/src/App.tsx", "contest.py", "latest/x.py",
                  "", "attestation_test_helpers/x.py"):

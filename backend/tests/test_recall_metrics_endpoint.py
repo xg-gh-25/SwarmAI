@@ -24,8 +24,8 @@ def metrics_client(tmp_path, monkeypatch):
 
     db = SQLiteDatabase(str(tmp_path / "m.db"))
     # asyncio.run (fresh loop) — get_event_loop() raises "no current event loop" on
-    # Py3.12 once a prior test clears the thread-default loop (e.g. test_community_api
-    # _run's set_event_loop(None)). Each asyncio.run gets its own loop + its own
+    # Py3.12 once a prior test clears the thread-default loop (e.g. one that calls
+    # set_event_loop(None)). Each asyncio.run gets its own loop + its own
     # (db_path, loop_id)-keyed aiosqlite pool; the WAL db FILE is shared, so the
     # TestClient route (its own loop) reads what these writes committed. Verified.
     asyncio.run(db.initialize())

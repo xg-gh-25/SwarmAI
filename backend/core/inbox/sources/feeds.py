@@ -1,9 +1,9 @@
 """Feed sources (``kind="feed:<type>"``): the existing signal fetchers, read only.
 
 Design: ``docs/design/2026-11-20-inbox.md`` §2 and §4. Each fetcher of
-``jobs.handlers.signal_fetch.ADAPTER_MAP`` (RSS, Hacker News, GitHub releases and
+``core.inbox.feeds.ADAPTER_MAP`` (RSS, Hacker News, GitHub releases and
 trending, ...) becomes one source kind, ``feed:<FeedType value>``. The fetchers are called
-unchanged (the old signal pipeline still uses them), off the event loop.
+off the event loop.
 
 The feed's configuration stays in ``config.yaml`` (``feeds:``); a source names it with
 ``options["feed_id"]`` (read through ``jobs.config_io.read_config``) or carries it inline as
@@ -27,7 +27,7 @@ from typing import Any, ClassVar, Optional
 from core.inbox.models import Identity, Message, PullResult, SendReceipt, SourceCategory, Thread, ThreadRef
 from core.inbox.sources.base import SendFailed, SourceConfig, register_source
 from core.inbox.sources.common import SourceUnavailable, ToolGate, parse_time
-from jobs.handlers.signal_fetch import ADAPTER_MAP
+from core.inbox.feeds import ADAPTER_MAP
 from jobs.models import Feed, FeedType
 
 logger = logging.getLogger(__name__)

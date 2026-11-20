@@ -26,7 +26,7 @@ from .models import Feed, FeedType, Job, JobSafety, SchedulerDefaults, Scheduler
 from .executor import execute_job, _FAILURE_ALERT_THRESHOLD
 from .cron_utils import is_cron_due
 from .paths import (
-    STATE_FILE, CONFIG_FILE, USER_JOBS_FILE, SWARMWS,
+    STATE_FILE, CONFIG_FILE, USER_JOBS_FILE,
 )
 from .system_jobs import get_all_system_jobs, SYSTEM_JOB_IDS
 
@@ -60,6 +60,22 @@ def load_feeds(config: dict) -> list[Feed]:
         except Exception as e:
             logger.warning(f"Skipping invalid feed '{fd.get('id', '?')}': {e}")
     return feeds
+
+
+#: job config keys the executor no longer reads (design 2026-11-20-inbox §10): the
+#: auth-failure ``fallback_script`` (+ its ``fallback_cwd``) and ``output_as_signals``.
+RETIRED_CONFIG_KEYS = ("fallback_script", "fallback_cwd", "output_as_signals")
+
+
+def _warn_retired_config_keys(job_id: str, config: dict) -> None:
+    """Log one warning when a user job's config still carries a retired key; the job
+    loads unchanged otherwise (the key is ignored, never silently dropped)."""
+    found = [k for k in RETIRED_CONFIG_KEYS if isinstance(config, dict) and k in config]
+    if found:
+        logger.warning(
+            "Job '%s': config key(s) %s are no longer supported and are ignored",
+            job_id, ", ".join(found),
+        )
 
 
 #: the system jobs a worker Hive runs (core/app_role); an allowlist, so a new job is off there
@@ -99,6 +115,7 @@ def load_jobs() -> list[Job]:
                     continue
 
                 safety = JobSafety(**jd["safety"]) if "safety" in jd else JobSafety()
+                _warn_retired_config_keys(job_id, jd.get("config") or {})
 
                 all_jobs.append(Job(
                     id=job_id,
@@ -114,7 +131,23 @@ def load_jobs() -> list[Job]:
             except Exception as e:
                 logger.warning(f"Skipping invalid user job '{jd.get('id', '?')}': {e}")
 
+    _warn_missing_dependencies(all_jobs)
     return all_jobs
+
+
+def _warn_missing_dependencies(jobs: list[Job]) -> None:
+    """One warning per user job scheduled ``after:<id>`` of a job that is not loaded (a
+    removed system job such as the retired signal chain, or a typo): it would never run
+    again once its dependency's last run is pruned from state."""
+    ids = {j.id for j in jobs}
+    for job in jobs:
+        if job.category == "user" and job.schedule.startswith("after:"):
+            dep = job.schedule[len("after:"):].strip()
+            if dep not in ids:
+                logger.warning(
+                    "Job '%s' runs after '%s', which is not a known job: it will not run",
+                    job.id, dep,
+                )
 
 
 def load_state() -> SchedulerState:
@@ -247,70 +280,6 @@ def emit_event_atomic(event_name: str, data: dict | None = None) -> str:
 
     logger.info(f"Event emitted (atomic): {event_name} (id={event_id[:8]})")
     return event_id
-
-
-def load_user_context() -> str:
-    """Build user context for signal relevance scoring.
-
-    Combines three sources (priority order):
-    1. config.yaml ``user_context`` — curated interests/projects/tech_stack
-       from self_tune (highest signal, structured)
-    2. USER.md — user profile (role, work context, preferences)
-    3. MEMORY.md key decisions — recent focus areas (capped)
-
-    The result is what the LLM uses to decide "is this signal relevant to
-    this user?" — it must reflect actual interests, not internal metadata.
-    """
-    parts: list[str] = []
-
-    # 1. Structured interests from config.yaml (self_tune maintained)
-    try:
-        config_path = SWARMWS / "Services" / "swarm-jobs" / "config.yaml"
-        if config_path.exists():
-            import yaml
-            with open(config_path) as f:
-                config = yaml.safe_load(f) or {}
-            uc = config.get("user_context", {})
-            interests = uc.get("interests", [])
-            projects = uc.get("projects", [])
-            tech_stack = uc.get("tech_stack", [])
-            if interests or projects or tech_stack:
-                lines = ["## Interests & Focus"]
-                if interests:
-                    lines.append(f"Topics: {', '.join(interests)}")
-                if projects:
-                    lines.append(f"Active projects: {', '.join(projects)}")
-                if tech_stack:
-                    lines.append(f"Tech stack: {', '.join(tech_stack)}")
-                parts.append("\n".join(lines))
-    except Exception:
-        pass
-
-    # 2. USER.md — role, work context (first 800 chars = Bio + Work Context)
-    user_path = SWARMWS / ".context" / "USER.md"
-    if user_path.exists():
-        try:
-            content = user_path.read_text()[:800]
-            parts.append(f"## User Profile\n{content}")
-        except Exception:
-            pass
-
-    # 3. MEMORY.md — only the Decisions section (recent focus, signal-dense).
-    # Section is "Decisions" post-PRI01; the old "## Key Decisions" literal
-    # matched nothing so this context was silently empty (R3 drift fix).
-    mem_path = SWARMWS / ".context" / "MEMORY.md"
-    if mem_path.exists():
-        try:
-            content = mem_path.read_text()
-            kd_start = content.find("## Decisions")
-            if kd_start >= 0:
-                kd_end = content.find("\n## ", kd_start + 10)
-                kd_section = content[kd_start:kd_end if kd_end > 0 else kd_start + 1500]
-                parts.append(kd_section[:1000])
-        except Exception:
-            pass
-
-    return "\n\n".join(parts) if parts else ""
 
 
 _MAX_PENDING_EVENTS = 50  # Cap to prevent unbounded queue growth
@@ -521,13 +490,11 @@ def load_defaults(config: dict) -> SchedulerDefaults:
 def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
     """Main scheduler loop — evaluate and execute due jobs."""
     config = load_config()
-    feeds = load_feeds(config)
     defaults = load_defaults(config)
     jobs = load_jobs()
     state = load_state()
-    user_context = load_user_context()
 
-    logger.info(f"Scheduler starting: {len(feeds)} feeds, {len(jobs)} jobs")
+    logger.info(f"Scheduler starting: {len(jobs)} jobs")
 
     all_job_ids = {j.id for j in jobs}
 
@@ -542,7 +509,7 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
             sys.exit(1)
         logger.info(f"Force-running job: {job.id}")
         if not dry_run:
-            result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+            result = execute_job(job, state, defaults, all_job_ids)
             logger.info(f"Result: {result.status} — {result.summary}")
             # Reconciled save preserves any events hooks emitted during the
             # forced run (this path doesn't consume events).
@@ -593,13 +560,13 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
 
     results = []
     for job in due_jobs:
-        result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+        result = execute_job(job, state, defaults, all_job_ids)
         results.append(result)
         logger.info(f"  {job.id}: {result.status} — {result.summary}")
 
     # Phase 2: Re-evaluate dependency-based jobs against updated state.
-    # This ensures after:signal-fetch fires in the SAME cycle that
-    # signal-fetch ran — not deferred to the next hourly tick.
+    # This ensures an after:<job> job fires in the SAME cycle that its
+    # dependency ran — not deferred to the next hourly tick.
     due_deps: list[Job] = []
     for job in dep_based_jobs:
         if is_job_due(job, state) and check_circuit_breaker(job, state):
@@ -608,7 +575,7 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
     if due_deps:
         logger.info(f"{len(due_deps)} dependency jobs now due: {[j.id for j in due_deps]}")
         for job in due_deps:
-            result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+            result = execute_job(job, state, defaults, all_job_ids)
             results.append(result)
             logger.info(f"  {job.id}: {result.status} — {result.summary}")
 
@@ -626,7 +593,7 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
         if due_events:
             logger.info(f"{len(due_events)} event jobs triggered: {[j.id for j in due_events]}")
             for job in due_events:
-                result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+                result = execute_job(job, state, defaults, all_job_ids)
                 results.append(result)
                 logger.info(f"  {job.id}: {result.status} — {result.summary}")
                 # Only consume events on success — failed jobs should retry
@@ -685,8 +652,6 @@ def show_status() -> None:
     print(f"{'='*60}")
     print(f"Monthly job spend: {_job_spend_text()}")
     print(f"Monthly tokens used: {state.monthly_tokens_used} (legacy)")
-    print(f"Buffered signals: {len(state.raw_signals)}")
-    print(f"Dedup cache size: {len(state.dedup_cache)}")
     print()
 
     for job in jobs:

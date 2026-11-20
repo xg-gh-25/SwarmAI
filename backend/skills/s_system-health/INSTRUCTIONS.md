@@ -71,7 +71,7 @@ def classify(name, cmd):
     cl = cmd.lower()
     nl = name.lower()
     # Swarm Jobs: match the actual script paths, not "swarm" in system prompts
-    if "services/swarm-jobs" in cl or "/swarm-jobs/scheduler.py" in cl or "/swarm-jobs/self_tune.py" in cl: return "Swarm Jobs (Scheduler)"
+    if "services/swarm-jobs" in cl or "/swarm-jobs/scheduler.py" in cl: return "Swarm Jobs (Scheduler)"
     if "/swarm-jobs/job_manager" in cl: return "Swarm Jobs (Manager)"
     if "kiro" in cl or "kiro" in nl: return "Kiro IDE"
     if "SwarmAI" in cmd or "swarmai" in cl: return "SwarmAI (Tauri)"
@@ -283,9 +283,8 @@ Output a **single structured report** with 4 sections. Use this exact format:
 
 | Job | Status | Runs | Failures | Last Run |
 |-----|--------|------|----------|----------|
-| signal-fetch | ✅ success | 13 | 0 | 2026-03-23 20:07 |
-| signal-digest | ✅ success | 7 | 0 | 2026-03-23 21:07 |
-| self-tune | ✅ success | 2 | 0 | 2026-03-24 04:05 |
+| memory-health | ✅ success | 4 | 0 | 2026-03-23 05:30 |
+| skill-proposer | ✅ success | 4 | 0 | 2026-03-23 05:45 |
 | weekly-maintenance | ✅ success | 1 | 0 | 2026-03-22 06:17 |
 | morning-inbox | 🔴 disabled | 0 | 0 | never |
 

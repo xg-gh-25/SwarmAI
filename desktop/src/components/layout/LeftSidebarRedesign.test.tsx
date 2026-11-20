@@ -5,8 +5,8 @@
  *   1. CHAT HERO — a hero card at the top carrying the SwarmAI brand logo.
  *   2. HISTORY ROW — a History entry directly under the Chat hero.
  *   3. THREE GROUPS in order — Cognitive (Context/Memory/Brain Hub),
- *      Work (ToDo/Workspace/Pipeline/Pollinate — daily-common pair first, A4),
- *      System (Capabilities/OS Eval/Settings/Community), each with a
+ *      Work (Inbox/ToDo/Pipeline/Pollinate/Workspace),
+ *      System (Jobs/Capabilities/Hive/Usage/OS Eval/Settings), each with a
  *      titled+colored group label.
  *   4. DOMAIN CARDS top-to-bottom in that exact order.
  *   5. Y/R SIGNAL FLAGS — none rendered (hardcoded literals removed 2026-08-03;
@@ -72,7 +72,7 @@ const DOMAIN_ORDER = [
   'nav-context',
   'nav-library',   // cognition zone: the bookshelf, above Brain Hub (XG 2026-08-02)
   'nav-brain-hub',
-  // Work order: Inbox, then (XG 2026-10-23) ToDo, Pipeline, Pollinate, Workspace, Community.
+  // Work order: Inbox, then (XG 2026-10-23) ToDo, Pipeline, Pollinate, Workspace.
   // NOTE: no 'nav-canvas' — Canvas is output-triggered (auto-surface / chat file-chip
   // / agent command), not a nav card (run_990b0a03).
   'nav-inbox',     // Work: first, above ToDo (design 2026-11-20-inbox.md §7)
@@ -80,7 +80,6 @@ const DOMAIN_ORDER = [
   'nav-pipeline',
   'nav-pollinate',
   'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
-  'nav-community',  // Work: resident main entry, last in Work (run_5165013e)
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
   'nav-capabilities',  // System: ability reference, after Jobs (moved from Work, run_5165013e)
   'nav-hive',      // System: Hive Fleet (run_b450108e)
@@ -222,7 +221,7 @@ describe('LeftSidebar A10 — highlight tiers (run_edb48c31)', () => {
 
   it('keeps the other System cards NON-highlighted (dim stays the default there)', () => {
     renderSidebar();
-    // Community moved to Work (run_5165013e); Capabilities moved INTO System.
+    // Capabilities moved INTO System (run_5165013e).
     for (const id of ['nav-capabilities', 'nav-eval', 'nav-settings']) {
       expect(screen.getByTestId(id).className).not.toContain('a10-card--hilite');
     }

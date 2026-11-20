@@ -51,7 +51,6 @@ export const FILES = [
   'components/layout/ToDoOverlay.tsx',
   'components/layout/PipelineOverlay.tsx',
   'components/layout/PollinateOverlay.tsx',
-  'components/layout/CommunityOverlay.tsx',
   'components/layout/InboxOverlay.tsx',
   'components/inbox/parts.tsx',
   'components/inbox/ReplyLane.tsx',

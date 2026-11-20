@@ -3,7 +3,7 @@ Tests for Chinese Trending News adapter (newsnow API).
 
 Tests:
 - AC1: Adapter fetches from platforms and returns valid RawSignal list
-- AC2: Trending data integrates with signal_fetch handler
+- AC2: Trending data integrates with the feed fetchers' ADAPTER_MAP
 - AC6: FeedType.TRENDING registered in models and adapter map
 - Edge cases: API errors, empty items, invalid JSON, top_n limiting
 """
@@ -69,7 +69,7 @@ class TestTrendingAdapterBasic:
 
     def test_fetch_trending_returns_raw_signals(self):
         """Adapter returns list of RawSignal from newsnow API."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed()
 
@@ -78,7 +78,7 @@ class TestTrendingAdapterBasic:
         mock_resp.json.return_value = MOCK_NEWSNOW_RESPONSE
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -92,7 +92,7 @@ class TestTrendingAdapterBasic:
 
     def test_signal_has_correct_fields(self):
         """Each signal has feed_id, title, url, source (platform name)."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [{"id": "weibo", "name": "微博"}],
@@ -105,7 +105,7 @@ class TestTrendingAdapterBasic:
         mock_resp.json.return_value = MOCK_NEWSNOW_RESPONSE
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -122,7 +122,7 @@ class TestTrendingAdapterBasic:
 
     def test_fetches_all_configured_platforms(self):
         """Adapter makes one request per configured platform."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [
@@ -139,7 +139,7 @@ class TestTrendingAdapterBasic:
         mock_resp.json.return_value = MOCK_NEWSNOW_RESPONSE
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -153,7 +153,7 @@ class TestTrendingAdapterBasic:
 
     def test_top_n_limits_per_platform(self):
         """top_n config limits items taken per platform."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [{"id": "weibo", "name": "微博"}],
@@ -166,7 +166,7 @@ class TestTrendingAdapterBasic:
         mock_resp.json.return_value = MOCK_NEWSNOW_RESPONSE  # 3 items
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -178,7 +178,7 @@ class TestTrendingAdapterBasic:
 
     def test_rank_stored_in_summary(self):
         """Signal summary includes rank position for downstream analysis."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [{"id": "weibo", "name": "微博"}],
@@ -191,7 +191,7 @@ class TestTrendingAdapterBasic:
         mock_resp.json.return_value = MOCK_NEWSNOW_RESPONSE
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -215,8 +215,8 @@ class TestTrendingRegistration:
         assert FeedType.TRENDING == "trending"
 
     def test_adapter_map_has_trending(self):
-        """signal_fetch ADAPTER_MAP includes trending adapter."""
-        from jobs.handlers.signal_fetch import ADAPTER_MAP
+        """core.inbox.feeds ADAPTER_MAP includes trending adapter."""
+        from core.inbox.feeds import ADAPTER_MAP
 
         assert FeedType.TRENDING in ADAPTER_MAP
 
@@ -228,7 +228,7 @@ class TestTrendingEdgeCases:
 
     def test_api_error_skips_platform_continues(self):
         """If one platform fails, adapter continues with others."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [
@@ -244,7 +244,7 @@ class TestTrendingEdgeCases:
         good_resp.json.return_value = MOCK_NEWSNOW_RESPONSE
         good_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             # First call fails, second succeeds
             mock_client.get.side_effect = [Exception("API down"), good_resp]
@@ -258,7 +258,7 @@ class TestTrendingEdgeCases:
 
     def test_empty_items_returns_empty_list(self):
         """Empty items array → valid empty RawSignal list."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [{"id": "weibo", "name": "微博"}],
@@ -271,7 +271,7 @@ class TestTrendingEdgeCases:
         mock_resp.json.return_value = {"status": "success", "items": []}
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -283,7 +283,7 @@ class TestTrendingEdgeCases:
 
     def test_cache_status_accepted(self):
         """API returning status=cache is treated as valid data."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [{"id": "weibo", "name": "微博"}],
@@ -296,7 +296,7 @@ class TestTrendingEdgeCases:
         mock_resp.json.return_value = MOCK_CACHE_RESPONSE
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -309,7 +309,7 @@ class TestTrendingEdgeCases:
 
     def test_error_status_skips_platform(self):
         """API returning status=error → skip platform, no crash."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [{"id": "weibo", "name": "微博"}],
@@ -322,7 +322,7 @@ class TestTrendingEdgeCases:
         mock_resp.json.return_value = MOCK_ERROR_RESPONSE
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -334,7 +334,7 @@ class TestTrendingEdgeCases:
 
     def test_skips_items_with_empty_title(self):
         """Items with None/empty title are skipped."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [{"id": "weibo", "name": "微博"}],
@@ -354,7 +354,7 @@ class TestTrendingEdgeCases:
         }
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("jobs.adapters.trending.safe_client") as mock_client_ctx:
+        with patch("core.inbox.feeds.trending.safe_client") as mock_client_ctx:
             mock_client = MagicMock()
             mock_client.get.return_value = mock_resp
             mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -367,7 +367,7 @@ class TestTrendingEdgeCases:
 
     def test_no_platforms_configured(self):
         """Empty platforms list → empty result, no crash."""
-        from jobs.adapters.trending import fetch_trending
+        from core.inbox.feeds.trending import fetch_trending
 
         feed = _make_trending_feed(config={
             "platforms": [],
@@ -375,7 +375,7 @@ class TestTrendingEdgeCases:
             "request_interval_ms": 0,
         })
 
-        with patch("jobs.adapters.trending.safe_client"):
+        with patch("core.inbox.feeds.trending.safe_client"):
             signals = fetch_trending(feed)
 
         assert signals == []

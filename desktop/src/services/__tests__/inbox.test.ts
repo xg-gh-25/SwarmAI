@@ -186,7 +186,7 @@ describe('inbox client: tolerant reads', () => {
     });
   });
 
-  it('feeds are read from {sources} like Community and mapped to its shape', async () => {
+  it('feeds are read from {sources} and mapped to the FeedSource shape', async () => {
     respond.mockImplementation(() => ({ status: 200, data: { sources: [{ id: 'a', name: 'A', type: 'rss', tier: 't', enabled: true, managed_by: 'user', member_kind: 'urls', members: ['u'], member_count: 1 }] } }));
     expect(await inboxService.listFeeds()).toEqual([{ id: 'a', name: 'A', type: 'rss', tier: 't', enabled: true, managedBy: 'user', members: ['u'], memberCount: 1, membersTruncated: false, memberKind: 'urls', tags: [] }]);
   });

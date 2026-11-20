@@ -182,9 +182,9 @@ def _is_automated_job_output(rel_path: str) -> bool:
          it is not a turn's product).
 
     SwarmWS-tree only: called from ``_classify_kind`` on the SwarmWS-relative path
-    for the ``repo is None`` (non-bound-worktree) case. ``Knowledge/{DailyBriefs,
-    Signals}`` are also automated but still shown — whether they belong on the human
-    artifact surface is a separate decision (run_d25d72be REPORT § Known Gaps).
+    for the ``repo is None`` (non-bound-worktree) case. ``DailyBriefs`` / ``Signals``
+    are no longer written (the Inbox replaced the morning brief and the signal digest);
+    their history lives under ``Knowledge/Archives/``, which is not excluded here.
     """
     parts = [p for p in Path(rel_path).parts if p not in (".", "")]
     if not parts:

@@ -537,7 +537,7 @@ def test_previously_fixed_routers_stay_clean():
     #    note). It is clean for the FS family but not loop-block-free, so it does not
     #    belong in a "fully clean" guard.
     already_fixed = ["eval.py", "jobs.py", "memory.py",
-                     "pollinate.py", "tasks.py", "community_api.py"]
+                     "pollinate.py", "tasks.py"]
     dirty = []
     for name in already_fixed:
         path = ROUTERS_DIR / name

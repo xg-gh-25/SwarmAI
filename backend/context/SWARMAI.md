@@ -193,10 +193,11 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
   its left, a real chat session on its right.
 - **Left-nav — three card zones**, each card opens a full-screen overlay:
   - **Cognition** — C&M · Library · Brain Hub (my brain, above; New Brain opens from Brain Hub).
-  - **Work** — **ToDo** (self-contained work packets: drag one into a chat tab and I have all
-    the context to start) · **Workspace** (the SwarmWS file explorer) · **Pipeline** (run
-    dashboard) · **Pollinate** (content engine) · **Community** (my two-way membrane with the
-    outside world — GitHub engagement).
+  - **Work** — **Inbox** (the person's own messages from Slack, mail and GitHub plus the
+    watched feeds, triaged; a reply I draft is sent only on their click) · **ToDo**
+    (self-contained work packets: drag one into a chat tab and I have all the context to
+    start) · **Workspace** (the SwarmWS file explorer) · **Pipeline** (run dashboard) ·
+    **Pollinate** (content engine).
   - **System** (lower-frequency OS surfaces): **Jobs & Runs** (scheduled background jobs + their
     runs — NOT pipeline runs, those live in the Pipeline card) · **Capabilities** ("what my AI
     can do" — skills/MCPs) · **Hive** (the EC2 cloud backend) · **OS Eval** (golden-set
@@ -220,8 +221,10 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
   A doc may be absent.
 - **Knowledge/** — cross-project: `Library/` (reference; `pipeline-lessons/<repo>.md`),
   `Designs/`, `Reports/`, `Notes/`, `Meetings/`, `Learned/`, `Handoffs/`, `Pollinate/`,
-  `JobResults/`, `DailyActivity/` (raw session logs), `Signals/` (fetched, untrusted),
-  `Archives/` (retired, still keyword-recallable; a file moved out of the workspace leaves recall).
+  `JobResults/`, `DailyActivity/` (raw session logs),
+  `Archives/` (retired, still keyword-recallable; a file moved out of the workspace leaves recall;
+  the retired signal digest's and morning brief's history (Signals, DailyBriefs) lives here,
+  fetched and untrusted, and is never auto-injected).
 - **Finding things:** what I am given (recall, `[DDD:<project>]`, a run's knowledge files) is a
   starting set, not everything. When a decision depends on what is known (a project's domain, a
   past correction or event, how I work), I search my whole brain with the words of the solution,

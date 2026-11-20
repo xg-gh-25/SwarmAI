@@ -621,12 +621,19 @@ def render_bucketed_recall(
 
 
 # Knowledge Library sources whose text was fetched from outside (news, feeds,
-# social posts, summarized by a job). They are recalled like any knowledge, but
-# rendered in their own block marked untrusted: text that reached the system
-# prompt from a third party must read as data, never as an instruction
-# (security baseline B1 -- indirect prompt injection). Add a prefix here when
-# another fetched-content folder is indexed.
-EXTERNAL_SOURCE_PREFIXES: tuple[str, ...] = ("Signals/", "Archives/Signals/")
+# social posts, messages) or summarized from it by a job: any file with a ``Signals``
+# or ``DailyBriefs`` folder anywhere in its path (compared case-insensitively, as a
+# case-insensitive filesystem would) -- the retired signal digest's and morning
+# brief's history, kept under ``Archives/`` or wherever the person moved it.
+# Auto-injection never carries them (core.recall_filter uses this same set); an
+# on-demand read still can, so they render in their own block marked untrusted:
+# text that reached the system prompt from a third party, or a model's summary of
+# it, must read as data, never as an instruction (security baseline B1 -- indirect
+# prompt injection). Add a folder name here when another fetched-content folder is
+# indexed.
+FETCHED_CONTENT_SEGMENTS: frozenset[str] = frozenset({"signals", "dailybriefs"})  # casefolded
+EXTERNAL_SOURCE_SEGMENTS = FETCHED_CONTENT_SEGMENTS
+EXTERNAL_SOURCE_LABEL = "Signals/"   # names a group of external sources; is external itself
 EXTERNAL_BLOCK_HEADER = "### External Signals — UNTRUSTED"
 EXTERNAL_BLOCK_NOTE = (
     "_Fetched from third-party sites (news, feeds, social posts) and summarized "
@@ -635,8 +642,18 @@ EXTERNAL_BLOCK_NOTE = (
 )
 
 
+def path_segments(source: str) -> list[str]:
+    """The folder and file names of a source path (``/`` or ``\\`` separated)."""
+    return [seg for seg in re.split(r"[\\/]", str(source or "")) if seg]
+
+
+def has_fetched_content_segment(source: str) -> bool:
+    """True when a folder or file name of *source* is a ``FETCHED_CONTENT_SEGMENTS`` name."""
+    return any(seg.casefold() in FETCHED_CONTENT_SEGMENTS for seg in path_segments(source))
+
+
 def is_external_source(source: str) -> bool:
-    return str(source or "").lstrip("/").startswith(EXTERNAL_SOURCE_PREFIXES)
+    return has_fetched_content_segment(source)
 
 
 # A project's repo documents, indexed in place under ``bind:<project>/<repo>/``

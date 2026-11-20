@@ -179,7 +179,7 @@ class TestRegressionExistingSchedules:
         from jobs.scheduler import is_job_due
 
         job = Job(
-            id="signal-fetch", name="Fetch", type="signal_fetch",
+            id="fetch", name="Fetch", type="script",
             schedule="0 2,8,14 * * *", config={},
         )
         state = SchedulerState()
@@ -191,11 +191,11 @@ class TestRegressionExistingSchedules:
         from jobs.models import JobState
 
         job = Job(
-            id="signal-digest", name="Digest", type="signal_digest",
-            schedule="after:signal-fetch", config={},
+            id="digest", name="Digest", type="script",
+            schedule="after:fetch", config={},
         )
         state = SchedulerState()
-        state.jobs["signal-fetch"] = JobState(
+        state.jobs["fetch"] = JobState(
             last_run=datetime.now(timezone.utc),
             last_status="success",
         )
@@ -269,14 +269,14 @@ class TestSaveStateReconciled:
 
         sched.save_state(SchedulerState())
         scheduler_state = sched.load_state()
-        scheduler_state.jobs["signal-fetch"] = JobState(
+        scheduler_state.jobs["weekly-maintenance"] = JobState(
             last_run=datetime.now(timezone.utc), last_status="success", total_runs=5,
         )
         sched.save_state_reconciled(scheduler_state, consumed_event_ids=set())
 
         disk = sched.load_state()
-        assert disk.jobs["signal-fetch"].last_status == "success"
-        assert disk.jobs["signal-fetch"].total_runs == 5
+        assert disk.jobs["weekly-maintenance"].last_status == "success"
+        assert disk.jobs["weekly-maintenance"].total_runs == 5
 
     def test_reconciled_save_caps_pending_events(self, isolated_state):
         """Reconciled pending_events are capped to bound growth."""

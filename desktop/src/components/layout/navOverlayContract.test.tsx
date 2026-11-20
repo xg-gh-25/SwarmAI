@@ -57,7 +57,7 @@ vi.mock('../../services/pty', () => ({
 const calls: string[] = [];
 const OBJECT_URLS = ['/ddd/brains', '/jobs/status', '/eval/health', '/eval/golden-set', '/eval/governance',
   '/eval/context-health', '/eval/brain', '/library/native', '/library/recent',
-  '/library/mounts', '/attention', '/community/engagement', '/community/hot-topics', '/settings',
+  '/library/mounts', '/attention', '/settings',
   '/pollinate/assets', '/pipelines/analytics', '/todos/history',
   '/inbox/counts', '/inbox/sends', '/inbox/trends'];
 function answer(url: string): unknown {
@@ -94,7 +94,6 @@ const ITEMS: Item[] = [
   { id: 'pipeline', nav: 'nav-pipeline', label: 'Pipeline', zone: 'work', fetches: ['/pipelines'] },
   { id: 'pollinate', nav: 'nav-pollinate', label: 'Pollinate', zone: 'work', fetches: ['/pollinate'] },
   { id: 'swarmws', nav: 'nav-swarmws', label: 'Workspace', zone: 'work' },
-  { id: 'community', nav: 'nav-community', label: 'Community', zone: 'work', fetches: ['/community'] },
   { id: 'jobs', nav: 'nav-jobs', label: 'Jobs & Runs', zone: 'system', fetches: ['/jobs'] },
   { id: 'capabilities', nav: 'nav-capabilities', label: 'Apps & Capabilities', zone: 'system', fetches: ['/apps'] },
   { id: 'hive', nav: 'nav-hive', label: 'Hive', zone: 'system', fetches: ['/hive/accounts'] },

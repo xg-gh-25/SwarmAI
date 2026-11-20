@@ -13,7 +13,7 @@ curl -s http://localhost:PORT/api/jobs/ | "$SWARM_BACKEND_BIN" py -m json.tool
 
 # Force-run a specific job
 curl -s -X POST http://localhost:PORT/api/jobs/run \
-  -H "Content-Type: application/json" -d '{"job_id":"signal-fetch"}'
+  -H "Content-Type: application/json" -d '{"job_id":"weekly-maintenance"}'
 
 # Scheduler status overview
 curl -s http://localhost:PORT/api/jobs/status | "$SWARM_BACKEND_BIN" py -m json.tool
@@ -71,7 +71,7 @@ Returns array of all jobs (system + user) with status, last run, failure count.
 
 ### Show full details
 ```bash
-"$SWARM_BACKEND_BIN" py -m jobs.job_manager show signal-fetch
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager show weekly-maintenance
 ```
 
 ### Validate a cron expression
@@ -90,8 +90,6 @@ Returns array of all jobs (system + user) with status, last run, failure count.
 |------|-------------|------------|
 | `agent_task` | Headless Claude CLI with MCP tools | `prompt`, `safety.allowed_tools`, `safety.max_budget_usd` |
 | `script` | Run a shell command or Python script | `config.command` or `config.script` |
-| `signal_fetch` | Fetch from RSS/GitHub/HN feeds | System only (read-only) |
-| `signal_digest` | LLM-score fetched signals | System only (read-only) |
 | `maintenance` | Prune caches, clean state | System only (read-only) |
 
 ## Parsing User Intent
@@ -161,7 +159,9 @@ Examples for a user at UTC+8:
 ## Safety Rules
 
 - **Always confirm** before create/edit/delete — these are external actions
-- System jobs (`signal-fetch`, `signal-digest`, `weekly-maintenance`) are **read-only** from this skill
+- System jobs (`weekly-maintenance`, `memory-health`, `loops-health`, ...) are **read-only** from this skill
+- Watched feeds (RSS, Hacker News, GitHub releases/trending, ...) are not jobs: the Inbox pulls them
+  (its feed settings, or `feeds:` in `Services/swarm-jobs/config.yaml`)
 - Default budget for agent_task: `$5.00` per run (configurable)
 - Default timeout: `180s` (configurable)
 - Jobs are disabled by default if user says "set up" or "configure" (enable after testing)

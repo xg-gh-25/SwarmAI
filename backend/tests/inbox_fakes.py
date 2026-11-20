@@ -139,14 +139,11 @@ async def add_item(source_id: str = "s1", external_id: str = "e1", *, lane: str 
 
 
 def app():
-    """A FastAPI app with only the Inbox router (and the Community one, for the feed
-    parity test): no lifespan, no runner."""
+    """A FastAPI app with only the Inbox router: no lifespan, no runner."""
     from fastapi import FastAPI
-    from routers.community_api import router as community_router
     from routers.inbox import router as inbox_router
     application = FastAPI()
     application.include_router(inbox_router)
-    application.include_router(community_router)
     return application
 
 

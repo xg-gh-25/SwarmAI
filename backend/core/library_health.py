@@ -1,7 +1,7 @@
 """Library Health — heuristic scan of Knowledge/ for cleanup candidates.
 
 WHY (product): the Library Native store (`Knowledge/`) grows unbounded — raw
-logs (DailyActivity/Signals/JobResults) accumulate forever, empty files pile up.
+logs (DailyActivity/JobResults) accumulate forever, empty files pile up.
 Without a health view + a cleanup ENTRY POINT it rots into a graveyard (Principle
 1: the brain must not hoard dead weight). This module is the SCAN half; the job
 (handlers/library_health) runs it weekly, the API serves the report + executes
@@ -49,7 +49,7 @@ OVERSIZED_CATEGORY_BYTES = 30_000_000  # a category this large gets a "review" f
 
 # Raw-log categories: append-only machine output, safe to age out to Archives/.
 # (Curated knowledge — Notes/Designs/Learned/Reports — is NEVER auto-archived.)
-RAW_LOG_CATEGORIES = ("DailyActivity", "Signals", "JobResults")
+RAW_LOG_CATEGORIES = ("DailyActivity", "JobResults")
 ARCHIVE_DIR = "Archives"
 _SKIP = {"__pycache__", ".git", ".DS_Store", ARCHIVE_DIR}
 
@@ -113,7 +113,7 @@ def scan_library_health(knowledge_dir: Path, now: float | None = None) -> dict:
 
     old_cutoff = now - OLD_LOG_DAYS * 24 * 3600
 
-    # ── 1. Archivable old raw-logs (DailyActivity/Signals/JobResults >90d) ──
+    # ── 1. Archivable old raw-logs (DailyActivity/JobResults >90d) ──
     old_paths: list[str] = []
     old_bytes = 0
     for cat in RAW_LOG_CATEGORIES:
