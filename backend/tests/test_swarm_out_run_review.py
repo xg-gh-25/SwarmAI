@@ -365,6 +365,8 @@ def test_rerun_and_stop_refuse_a_closed_run_or_one_without_a_session(world, monk
     for call in (swarm_out.rerun(DID, "x"), swarm_out.stop_run(DID)):
         with pytest.raises(swarm_out.SwarmOutError, match="closed"):
             asyncio.run(call)
+    # an open run (not settled) that has no session on its Hive: refused for that reason
+    st._update(DID, lambda rec: rec.pop("settled", None))
     world["row"]["session_id"] = None
     for call in (swarm_out.rerun(DID, "x"), swarm_out.stop_run(DID)):
         with pytest.raises(swarm_out.SwarmOutError, match="no session"):
