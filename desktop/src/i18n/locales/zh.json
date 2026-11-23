@@ -2238,6 +2238,55 @@
       "buildShortCost": "补上 {{count}} 台（每台约 ${{usd}} / 月）",
       "later": "稍后",
       "addConfirmNoCost": "在账户 {{account}} 建 1 台 Hive"
+    },
+    "cost": {
+      "title": "花费",
+      "layer": {
+        "all": "含机器",
+        "model": "只看模型"
+      },
+      "cannot": "还比不出来",
+      "cannotWhy": "AgentCore 这段时间只有 {{count}} 个任务；同一类活两边各有 {{min}} 个通过的才比",
+      "even": "差不多",
+      "saves": "{{who}} 省 {{pct}}%",
+      "modelLower": "模型费 {{who}} 低 {{pct}}%",
+      "whatAll": "同一类活比，每个通过的任务（模型 + 机器）",
+      "whatModel": "同一类活比，每个通过的任务只算模型",
+      "compared": "比了 {{kinds}} 类活 · {{count}} 个通过的任务",
+      "factsAll": "总花费 {{total}} · 模型 {{model}} · 机器 {{machine}}（{{share}}%），其中 EC2 闲置 {{idle}}",
+      "factsModel": "模型花费 {{model}} · 输出 {{out}} token · 缓存命中 {{hit}}%",
+      "busy": "常驻 Hive 忙碌",
+      "busyHours": "开机约 {{on}} 小时，有任务的 {{active}} 小时",
+      "seg": {
+        "model": "模型",
+        "busy": "机器：在跑",
+        "idle": "机器：闲置（EC2）"
+      },
+      "col": {
+        "kind": "活的类型",
+        "where": "跑在",
+        "accepted": "通过",
+        "bar": "每个通过的任务",
+        "per": "$ / 个"
+      },
+      "noneAccepted": "没有通过",
+      "few": "样本不够",
+      "empty": "这段时间没有能算机器费的任务。",
+      "tok": {
+        "input": "输入",
+        "output": "输出",
+        "cache_read": "缓存读",
+        "cache_write": "缓存写",
+        "hit": "缓存命中"
+      },
+      "tokNote": "每格是每个通过的任务的平均值。token 数里大部分是缓存读，所以主数用 $；缓存命中两边应当接近，差得多说明一边在重来。",
+      "recordedSince": "EC2 开机记录从 {{at}} 开始。",
+      "noEc2Record": "还没有 EC2 开机记录。",
+      "noRecord": "后端还没有记录机器费。",
+      "leftOut_one": "{{count}} 个任务没有机器费记录，没算进来。",
+      "leftOut_other": "{{count}} 个任务没有机器费记录，没算进来。",
+      "estimate": "机器费是估算：EC2 = 开机小时 × 机型时价，按任务时长摊到任务上（闲置也摊进去）；AgentCore = 会话秒数 × 8 GB 内存单价 + 任务时长 × 2 vCPU 单价。S3 和流量不算。",
+      "modelNote": "只算模型：适合看某种跑法是否更容易重试、出错。机器费没算，这一层不用来判断哪边省钱。"
     }
   },
   "usage": {

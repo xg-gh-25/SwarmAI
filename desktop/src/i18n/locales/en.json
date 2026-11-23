@@ -2238,6 +2238,55 @@
       "buildShortCost": "Build {{count}} (about ${{usd}} a month each)",
       "later": "Later",
       "addConfirmNoCost": "Build 1 Hive in account {{account}}"
+    },
+    "cost": {
+      "title": "Cost",
+      "layer": {
+        "all": "With machine",
+        "model": "Model only"
+      },
+      "cannot": "Not comparable yet",
+      "cannotWhy": "AgentCore ran {{count}} tasks in this range; a kind of work is compared once both sides have {{min}} accepted tasks",
+      "even": "About even",
+      "saves": "{{who}} saves {{pct}}%",
+      "modelLower": "Model cost {{pct}}% lower on {{who}}",
+      "whatAll": "Same kind of work, per accepted task (model + machine)",
+      "whatModel": "Same kind of work, per accepted task, model only",
+      "compared": "{{kinds}} kinds · {{count}} accepted tasks",
+      "factsAll": "Total {{total}} · model {{model}} · machine {{machine}} ({{share}}%), of which EC2 idle {{idle}}",
+      "factsModel": "Model {{model}} · {{out}} output tokens · {{hit}}% cache hits",
+      "busy": "Resident Hives busy",
+      "busyHours": "about {{on}} hours on, {{active}} hours with a task",
+      "seg": {
+        "model": "Model",
+        "busy": "Machine: in use",
+        "idle": "Machine: idle (EC2)"
+      },
+      "col": {
+        "kind": "Kind of work",
+        "where": "Runs on",
+        "accepted": "Accepted",
+        "bar": "Per accepted task",
+        "per": "$ / task"
+      },
+      "noneAccepted": "None accepted",
+      "few": "Too few",
+      "empty": "No task in this range has a machine cost.",
+      "tok": {
+        "input": "Input",
+        "output": "Output",
+        "cache_read": "Cache read",
+        "cache_write": "Cache write",
+        "hit": "Cache hits"
+      },
+      "tokNote": "Each cell is the average per accepted task. Most tokens are cache reads, so dollars are the main number; cache hits should be close on both sides, a large gap means one side keeps starting over.",
+      "recordedSince": "EC2 on/off times are recorded from {{at}}.",
+      "noEc2Record": "No EC2 on/off times recorded yet.",
+      "noRecord": "The backend does not record machine cost yet.",
+      "leftOut_one": "{{count}} task has no machine cost record and is left out.",
+      "leftOut_other": "{{count}} tasks have no machine cost record and are left out.",
+      "estimate": "Machine cost is an estimate: EC2 = hours on × the instance's hourly price, shared among tasks by their active time (idle included); AgentCore = session seconds × the 8 GB memory price + active time × the 2 vCPU price. S3 and traffic are not counted.",
+      "modelNote": "Model only: shows whether one carrier retries or fails more. Machine cost is not included, so this layer does not tell which carrier is cheaper."
     }
   },
   "usage": {

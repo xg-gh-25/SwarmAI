@@ -2473,7 +2473,20 @@ async def _compute_runs() -> dict[str, Any]:
         refusals = await asyncio.to_thread(refusal_counts)
     except (OSError, UnicodeError):
         refusals = None
-    return {"runs": rows, "asks": asks, "answered": answered, "errors": errors, "refusals": refusals}
+    # what the machines cost, next to each run's model cost (core/machine_cost; the
+    # history's cost section): the EC2 Hives' on periods, each AgentCore run's estimate
+    from core import machine_cost
+
+    def _machines() -> dict[str, Any]:
+        machine_cost.attach(rows)
+        return machine_cost.machines(Path(_db_path()))
+    try:
+        machines = await asyncio.to_thread(_machines)
+    except Exception as e:                          # never breaks the list
+        logger.warning("swarm_out: machine cost failed (%s)", type(e).__name__)
+        machines = None
+    return {"runs": rows, "asks": asks, "answered": answered, "errors": errors, "refusals": refusals,
+            "machines": machines}
 
 
 # ── the person's commands on a run (design 2026-10-31-swarm-out-run-review §3.3) ──

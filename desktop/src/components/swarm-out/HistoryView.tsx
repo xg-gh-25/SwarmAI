@@ -8,6 +8,7 @@
  *    the range, next to the same length of time before it;
  *  - one bar split into accepted, discarded and stopped, the facts (runs, median time,
  *    spend), and the runs per day (per week past a month) in the same colours;
+ *  - the cost (./CostSection): model only or with machine, per kind of work and carrier;
  *  - the runs grouped by Brain, Project Agent or where they ran (a click filters the list);
  *  - every run, newest first, each the same row as the run view's "recently done", with
  *    its cost; a row opens the run's big card (RunOverlay; J / K walk the list).
@@ -20,8 +21,9 @@ import type { SwarmOutFleet } from '../../services/swarmOut';
 import { RunOverlay } from './RunOverlay';
 import { DoneRow } from './RunBoard';
 import { useRuns } from './live';
+import { CostSection } from './CostSection';
 import {
-  bars, DEFAULT_RANGE, groups, inRange, matches, previousRange, RANGES, RECORD_FILTERS, summarize, groupKey,
+  bars, DEFAULT_RANGE, groups, inRange, matches, previousRange, rangeStart, RANGES, RECORD_FILTERS, summarize, groupKey,
   type GroupDim, type Outcome, type Range, type RecordFilter, type Summary,
 } from './historyStats';
 import { TONE_VAR } from './tone';
@@ -240,6 +242,7 @@ export function HistoryView({ hidden, now, compact = false, fleet = null }: {
       ) : (
         <>
           <Verdict sum={sum} prev={prev} days={days} chart={chart} grown={grown} />
+          <CostSection runs={ranged} machines={data.machines} from={rangeStart(all, now, days)} to={now} grown={grown} compact={compact} />
           <Groups runs={ranged} fleet={fleet} dimKey={dimKey} setDim={setDim} selected={group} grown={groupsGrown} compact={compact}
             onSelect={(k) => { setGroup(k); setShown(PAGE); }} />
           <section className="mt-8" data-testid="history-records">

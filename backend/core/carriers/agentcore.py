@@ -416,6 +416,20 @@ def _marked_end(sid: str) -> Optional[str]:
     return why if why in _END_REASONS else "ended"
 
 
+def released_at(sid: str) -> Optional[float]:
+    """When this Host released the session (``release``: StopRuntimeSession), from its end
+    marker; None when it was not released here or the marker does not read. Read by
+    core/machine_cost: a released session stops billing then."""
+    try:
+        body = json.loads(_ended_path(sid).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(body, dict) or body.get("why") != "released":
+        return None
+    at = body.get("at")
+    return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None
+
+
 def _expired(handle: RunHandle) -> bool:
     return not isinstance(handle.opened_at, (int, float)) \
         or _now() - float(handle.opened_at) > MAX_RUN_S - END_MARGIN_S

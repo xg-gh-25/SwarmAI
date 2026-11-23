@@ -1503,6 +1503,12 @@ async def lifespan(app: FastAPI):
                     await _fleet.status(_hdb.db_path)   # what Need-You shows (cached)
                 except Exception:
                     logger.warning("hive fleet reconcile failed", exc_info=True)
+                try:
+                    # each EC2 Hive's on/off times, from EC2 (the history's machine cost)
+                    from core import machine_cost as _machine_cost
+                    await _machine_cost.record_power(_hdb.db_path)
+                except Exception:
+                    logger.warning("hive power record failed", exc_info=True)
                 await asyncio.sleep(600)
         # kept referenced: it runs the reconcile loop for the daemon's life (the loop only
         # holds weak references to tasks)

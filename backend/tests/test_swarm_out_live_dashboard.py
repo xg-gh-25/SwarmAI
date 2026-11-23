@@ -229,3 +229,23 @@ def test_a_slow_question_read_does_not_hold_up_the_poll(monkeypatch):
                                           (swarm_out.MAX_REPORTED_SESSIONS + 1, 0, False), ("3", 0, False), (-1, 0, False)])
 def test_a_reported_count_is_an_int_in_range(value, low, ok):
     assert (swarm_out._count(value, low) == value) is ok
+
+
+def test_the_runs_answer_survives_a_machine_cost_failure(monkeypatch):
+    """Machine cost (core/machine_cost) is read with the runs; when it fails, the runs
+    are still answered and ``machines`` is null."""
+    from core import machine_cost
+    rows = [{"dispatch_id": "d1", "hive_id": "h1", "hive": "w", "session_id": "s1", "title": "A"}]
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: list(rows))
+
+    async def statuses():
+        return {"h1": "stopped"}
+    monkeypatch.setattr(swarm_out, "_hive_statuses", statuses)
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(machine_cost, "machines", boom)
+    out = asyncio.run(swarm_out.list_runs())
+    assert [r["dispatch_id"] for r in out["runs"]] == ["d1"] and out["machines"] is None
+    monkeypatch.setattr(machine_cost, "machines", lambda *_a, **_k: {"ec2": [], "agentcore": {}, "estimate": True})
+    assert asyncio.run(swarm_out.list_runs())["machines"] == {"ec2": [], "agentcore": {}, "estimate": True}

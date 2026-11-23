@@ -77,7 +77,7 @@ function Row({ label, children, testId }: { label: string; children: React.React
   );
 }
 
-function Kind({ ac, children }: { ac?: boolean; children: React.ReactNode }) {
+export function Kind({ ac, children }: { ac?: boolean; children: React.ReactNode }) {
   return (
     <span className="px-1.5 rounded text-[10.5px] leading-[15px] font-semibold"
       style={ac ? { color: 'var(--color-zone-work)', background: 'color-mix(in srgb, var(--color-zone-work) 12%, transparent)' }

@@ -67,6 +67,10 @@ export interface SwarmOutRun {
    *  core/carriers/base.RunHandle): the execution surface it ran on. Absent or empty for
    *  a dispatch from before rounds were recorded. */
   rounds?: { carrier?: 'ec2' | 'agentcore' | null; round?: number }[] | null;
+  /** an AgentCore run's machine estimate: its session's billed seconds and dollars
+   *  (backend core/machine_cost.agentcore_cost); null when it cannot be told; absent on
+   *  an EC2 run (its Hive's hours are shared in the history view) */
+  machine?: { seconds: number; usd: number } | null;
   /** The person has something to do on it now (an open ask, a wait that is theirs);
    *  null: no live session answers for the run, the older rules apply. */
   needs_person?: boolean | null;
@@ -444,6 +448,27 @@ export interface SwarmOutRuns {
   /** tasks refused at intake, all time (dispatch-center §2.3); ``private``: of them,
    *  because they need a private network. null: unreadable; absent: older backend */
   refusals?: { total: number; private: number } | null;
+  /** what the machines cost (backend core/machine_cost): the EC2 Hives' on periods and
+   *  prices, AgentCore's size and prices. null: unreadable; absent: older backend */
+  machines?: SwarmOutMachines | null;
+}
+
+/** One EC2 Hive's record: its on periods ([start, end] ISO times) since ``recorded_since``,
+ *  read from EC2 every 10 minutes. ``hourly_usd`` null: no price for its instance type. */
+export interface SwarmOutEc2Power {
+  hive_id: string;
+  name: string | null;
+  instance_type: string | null;
+  hourly_usd: number | null;
+  recorded_since: string;
+  on: [string, string][];
+}
+
+export interface SwarmOutMachines {
+  ec2: SwarmOutEc2Power[];
+  agentcore: { vcpu: number; memory_gib: number; idle_timeout_s: number; usd_per_vcpu_hour: number; usd_per_gib_hour: number };
+  /** the prices are estimates */
+  estimate: boolean;
 }
 
 export interface SwarmOutHive {
