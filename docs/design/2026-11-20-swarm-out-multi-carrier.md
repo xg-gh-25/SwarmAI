@@ -451,9 +451,10 @@ session 发请求会新起一台空 microVM，这必须在结构上做不到，�
 ### 6.8 开通
 
 左侧导航 System 区的 Hive 页（overlay `hive`，`desktop/src/components/layout/overlayIds.ts:48`）加"弹性 Hive"：在用户自己的
-账户里建 ECR repo 并推镜像、建 execution role、`CreateAgentRuntime`（网络 PUBLIC，`allowedPorts` 8080 和 8081，V2 平台，`resourceConfigurations` 为 `minimumMemoryInMiB: 8192`：基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB，XG 2026-11-20 定；每次更新 runtime 都要带上同一个值，否则会退回默认规格）、
+账户里建 execution role、`CreateAgentRuntime`（网络 PUBLIC，`allowedPorts` 8080 和 8081，V2 平台，`resourceConfigurations` 为 `minimumMemoryInMiB: 8192`：基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB，XG 2026-11-20 定；每次更新 runtime 都要带上同一个值，否则会退回默认规格）、
 建或复用 S3 桶。一个账户一个 runtime。发版时更新镜像版本；不用 session storage，所以版本更新不丢已写进 S3 的结果。
 `hive_instances` 加 `carrier`、`runtime_arn` 两列；弹性 Hive 不计入 `MAX_HIVES`。
+镜像由发版推到产品的 public ECR repo `public.ecr.aws/q4o1o9d0/swarmai-hive`（`<版本号>` tag，release.yml 的 `agentcore-image` job），每个安装默认用它，runtime 按 digest 固定，用户不用构建也不用配置；配置键 `hive_agentcore_image` 只用来指向自己构建的镜像，可以经 Settings 写入。
 
 ## 7. 工具层：AgentCore Gateway 放在哪（D8）
 
@@ -583,7 +584,7 @@ security 重点看 §6.3 的凭据传递和 §6.7 的 IAM。
 | # | 问题 | 怎么定 |
 |---|---|---|
 | Q1 | 弹性 offer 的"多久能开始"取多少 | spike：首次调用 17 秒 + 后端 37 秒 ≈ 1 分钟，再加传 Brain 和 bundle；比冷 EC2（≤270 秒）快，比在跑的 EC2 慢，D4 的顺序成立 |
-| Q2 | 镜像怎么分发：用户在自己账户构建推 ECR（需要 Docker/Finch 或 CodeBuild），还是产品发公共镜像、用户复制 | spike 后定 |
+| Q2 | 镜像怎么分发：用户在自己账户构建推 ECR（需要 Docker/Finch 或 CodeBuild），还是产品发公共镜像、用户复制 | 已定：产品发公共镜像，用户直接拉，不用复制（§6.8） |
 | Q3 | ~~默认规格~~ 已定（XG 2026-11-20）：弹性 Hive 默认 `minimumMemoryInMiB: 8192`（基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB）。默认规格（2 vCPU/8 GB、盘约 10 GB，扣掉镜像后约 5.9 GB）对编码偏小。设了规格就按基线计到 session 结束（较低单价），超出基线的部分按秒另算；一个 runtime 只有一种规格（[文档](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html#runtime-v2-resource-configurations)）。已实测（§6.1 的 8192 表）：SwarmAI repo 全套装好只用 5.2 GB，冷启动加准备约 2 分钟 | 已定，已实测 |
 | Q4 | ~~更新 runtime 版本时正在跑的 session 会怎样~~ 已答：不受影响，留在原 microVM 和旧版本上 | spike |
 | Q5 | 第 3 层要不要受"最多同时启动几台"的约束 | 第 3 步上线后看实际启动次数；先不加 |

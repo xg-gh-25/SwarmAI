@@ -133,6 +133,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # A running Hive idle this many minutes is stopped by the Host, and the next dispatch
     # to it starts it again (core/hive_idle); 0 turns idle stopping off.
     "hive_idle_stop_minutes": 120,
+    # The elastic Hive image repository (no tag) when it is not the released one
+    # (hive/agentcore_provisioner.RELEASED_IMAGE): a build of one's own. Empty = released.
+    "hive_agentcore_image": "",
     "evolution": {
         "enabled": True,
         "max_retries": 3,

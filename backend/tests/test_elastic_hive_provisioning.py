@@ -285,7 +285,7 @@ def test_refused_without_a_usable_image_creates_nothing(world, image):
     with pytest.raises(ep.ElasticRefused) as e:
         asyncio.run(world.elastic.enable("acct1", REGION))
     if image is None:
-        assert "hive_agentcore_image" in str(e.value)
+        assert "settings could not be read" in str(e.value)
     assert world.calls == [] and world.sessions == [] and _rows(world.db) == []
 
 
@@ -492,11 +492,11 @@ def test_routes_refuse_without_image_and_report_the_reason(world):
     from routers import hive as hive_router
     world.image = None
     got = asyncio.run(hive_router.elastic_status())
-    assert got["can_enable"] is False and "hive_agentcore_image" in got["reason"] and got["hives"] == []
+    assert got["can_enable"] is False and "settings could not be read" in got["reason"] and got["hives"] == []
     assert got["size"] == {"vcpu_base": 2, "memory_gib_base": 8, "vcpu_peak": 8, "memory_gib_peak": 32, "disk_gib": 32}
     with pytest.raises(HTTPException) as e:
         asyncio.run(hive_router.elastic_enable(None))
-    assert e.value.status_code == 409 and "hive_agentcore_image" in e.value.detail
+    assert e.value.status_code == 409 and "settings could not be read" in e.value.detail
     assert _rows(world.db) == [] and world.calls == []
 
 
@@ -622,3 +622,34 @@ def test_the_image_is_pinned_by_the_digest_its_registry_serves(world):
         asyncio.run(world.elastic.update(row["id"], "2.5.6"))
     assert world.control.updates == []
     assert _rows(world.db)[0]["status"] == "failed"
+
+
+class _Config:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self, key, default=None):
+        return self.value if key == ep.IMAGE_SETTING else default
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_with_no_image_setting_the_released_image_is_used(monkeypatch, value):
+    # every install can turn the elastic Hive on: the release pushes the image to one public
+    # repository, so nobody has to find and type it before the Hive page lets them
+    from core import app_config_manager
+    monkeypatch.setattr(app_config_manager.AppConfigManager, "instance", lambda: _Config(value))
+    assert ep.configured_image() == ep.RELEASED_IMAGE == "public.ecr.aws/q4o1o9d0/swarmai-hive"
+
+
+def test_the_image_setting_overrides_the_released_image(monkeypatch):
+    from core import app_config_manager
+    monkeypatch.setattr(app_config_manager.AppConfigManager, "instance",
+                        lambda: _Config(" public.ecr.aws/someone/hive-dev "))
+    assert ep.configured_image() == "public.ecr.aws/someone/hive-dev"
+
+
+def test_the_image_setting_can_be_written_through_settings():
+    # a key outside DEFAULT_CONFIG is dropped by PUT /api/settings, and a hand edit of
+    # config.json is not read by a running daemon: the override needs the settings route
+    from routers.settings import WRITABLE_KEYS
+    assert ep.IMAGE_SETTING in WRITABLE_KEYS

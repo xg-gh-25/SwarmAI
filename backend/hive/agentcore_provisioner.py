@@ -35,9 +35,10 @@ included: an UpdateAgentRuntime without it falls back to the default size (2 vCP
 (it holds the runs' results and the EC2 Hives' packages) and so does the role (reused by the
 next enable).
 
-**Where the image comes from** (``image_location``): the config key ``hive_agentcore_image``,
-a repository without a tag. The release publishes the image to public ECR
-(``.github/workflows/release.yml`` ``agentcore-image``: ``<repo>:<version>``), and
+**Where the image comes from** (``image_location``): ``RELEASED_IMAGE``, the public ECR
+repository the release pushes to (``.github/workflows/release.yml`` ``agentcore-image``:
+``<repo>:<version>``, its ``AGENTCORE_IMAGE_REPO``), unless the config key
+``hive_agentcore_image`` names another repository (no tag) — a build of one's own. And
 CreateAgentRuntime's ``containerUri`` accepts ``public.ecr.aws/...`` as well as
 ``<account>.dkr.ecr.<region>.amazonaws.com/...`` (the ``RuntimeContainerUri`` pattern of the
 API model, botocore 1.44): a public image is used as it is, and the role gets no ECR
@@ -66,8 +67,11 @@ from core.carriers.base import AGENTCORE
 
 logger = logging.getLogger(__name__)
 
-#: the config key naming the elastic Hive image repository (no tag)
+#: the config key naming another elastic Hive image repository (no tag) than the released one
 IMAGE_SETTING = "hive_agentcore_image"
+#: where the release pushes the elastic Hive image, ``<repo>:<version>`` (release.yml
+#: ``AGENTCORE_IMAGE_REPO``): what every install uses unless IMAGE_SETTING names another
+RELEASED_IMAGE = "public.ecr.aws/q4o1o9d0/swarmai-hive"
 #: the runtime's name in the account (AgentRuntimeName: [a-zA-Z][a-zA-Z0-9_]{0,47})
 RUNTIME_NAME = "swarmai_elastic_hive"
 #: the hive_instances name of the elastic Hive (how a person or agent names it); another
@@ -132,19 +136,19 @@ def _host_version() -> str:
 
 
 def configured_image() -> Optional[str]:
-    """The ``hive_agentcore_image`` setting, or None when it is not set."""
+    """The image repository: the ``hive_agentcore_image`` setting when it names one, else
+    ``RELEASED_IMAGE``; None only when the config cannot be read."""
     try:
         from core.app_config_manager import AppConfigManager
         value = AppConfigManager.instance().get(IMAGE_SETTING, None)
     except Exception as exc:  # noqa: BLE001 — an unreadable config: no image
         logger.warning("elastic hive: reading %s failed (%s)", IMAGE_SETTING, type(exc).__name__)
         return None
-    return value.strip() if isinstance(value, str) and value.strip() else None
+    return value.strip() if isinstance(value, str) and value.strip() else RELEASED_IMAGE
 
 
-NO_IMAGE = (f"No elastic Hive image is configured. Set {IMAGE_SETTING} in SwarmAI's config.json to "
-            "the image repository the release publishes, without a tag (for example "
-            "public.ecr.aws/<alias>/swarmai-hive); SwarmAI adds this version's tag.")
+NO_IMAGE = ("SwarmAI's settings could not be read, so the elastic Hive image is not known: "
+            "see the daemon log.")
 
 
 def image_location(configured: Optional[str], account: str, region: str, version: str) -> tuple[str, Optional[str]]:
