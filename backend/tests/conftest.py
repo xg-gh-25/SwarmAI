@@ -248,6 +248,13 @@ try:
 except ImportError:
     _PSUTIL_AVAILABLE = False
 
+# The memory watchdog measures THIS process. Tests patch ``sys.platform``,
+# ``psutil.Process`` and the like (a simulated Windows process table), and the
+# watchdog's post-test check runs before their fixtures are undone, so both the
+# process handle and the ru_maxrss unit are fixed here, at import.
+_SELF_PROC = psutil.Process() if _PSUTIL_AVAILABLE else None
+_MAXRSS_IN_BYTES = _sys.platform == "darwin"   # macOS reports bytes, Linux KiB
+
 
 def _compute_safe_worker_count() -> int:
     """Compute xdist worker count based on available memory.
@@ -505,14 +512,14 @@ _PROACTIVE_GC_INTERVAL = 25
 
 def _get_rss() -> int:
     """Get current process RSS in bytes. psutil primary, resource fallback."""
-    if _PSUTIL_AVAILABLE:
+    if _SELF_PROC is not None:
         try:
-            return psutil.Process().memory_info().rss
+            return _SELF_PROC.memory_info().rss
         except Exception:
             pass
     try:
         maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        return maxrss if _sys.platform == "darwin" else maxrss * 1024
+        return maxrss if _MAXRSS_IN_BYTES else maxrss * 1024
     except Exception:
         return 0
 

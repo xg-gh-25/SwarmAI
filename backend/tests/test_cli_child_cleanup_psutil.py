@@ -8,6 +8,7 @@ running any command fails the test.
 from __future__ import annotations
 
 import signal
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -83,11 +84,32 @@ def test_descendant_tree_when_the_table_is_unreadable(fake_psutil, monkeypatch):
     assert sorted(tree) == [11, 12, 13] and tree.index(13) < tree.index(12)
 
 
-def test_kill_uses_a_signal_every_platform_has(monkeypatch):
-    sent = []
+def test_kill_on_windows_needs_no_posix_signal(monkeypatch):
+    """Windows has no SIGKILL: _kill_pids ends each pid through psutil, never os.kill."""
+    import psutil
+    killed, sent = [], []
+
+    class _P:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def kill(self):
+            killed.append(self.pid)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)
+    monkeypatch.setattr(psutil, "Process", _P)
     monkeypatch.setattr(su.os, "kill", lambda pid, sig: sent.append((pid, sig)))
-    monkeypatch.delattr(signal, "SIGKILL", raising=False)       # as on Windows
     with patch("core.kill_audit.record"):
         assert su._kill_pids([11, 12], "test") == 2
-    assert [pid for pid, _ in sent] == [11, 12]
-    assert all(sig == signal.SIGTERM for _, sig in sent)
+    assert killed == [11, 12]
+    assert sent == []
+
+
+def test_kill_on_posix_sends_sigkill(monkeypatch):
+    sent = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(su.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    with patch("core.kill_audit.record"):
+        assert su._kill_pids([11, 12], "test") == 2
+    assert sent == [(11, signal.SIGKILL), (12, signal.SIGKILL)]
