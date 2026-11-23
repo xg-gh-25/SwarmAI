@@ -81,9 +81,6 @@ async def adapter(slack_config, on_message):
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
-        # Close MCP bridge
-        if a._mcp_bridge:
-            await a._mcp_bridge.close()
     except RuntimeError:
         pass  # event loop closed — tasks will be GC'd
     # Join WS thread if alive

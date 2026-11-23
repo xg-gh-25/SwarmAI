@@ -1,8 +1,7 @@
 """A small async MCP client over stdio (JSON-RPC 2.0, one JSON object per line).
 
-Extracted from the Slack bot adapter's ``SlackMcpBridge`` so every part of the backend
-that calls a configured MCP server directly (the bot adapter's fallback, the Inbox
-sources) shares one transport. The agent's own MCP use goes through the Claude CLI, not
+The one transport for every part of the backend that calls a configured MCP server
+directly (the Inbox sources). The agent's own MCP use goes through the Claude CLI, not
 through this module.
 
 What it does:

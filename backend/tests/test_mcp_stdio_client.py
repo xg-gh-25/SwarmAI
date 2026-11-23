@@ -185,23 +185,6 @@ async def test_missing_command_is_unavailable(tmp_path):
         await c.call_tool("echo", {})
 
 
-async def test_slack_bridge_uses_the_client_and_keeps_its_none_contract(server_script, monkeypatch):
-    import channels.adapters.slack as slack_mod
-
-    monkeypatch.setattr(
-        slack_mod, "_find_slack_mcp_config",
-        lambda: {"command": sys.executable, "args": [str(server_script)], "env": {}},
-    )
-    bridge = slack_mod.SlackMcpBridge()
-    try:
-        assert isinstance(bridge, McpStdioClient)
-        assert (await bridge.call_tool("echo", {"x": 1}))["structuredContent"] == {"args": {"x": 1}}
-        assert (await bridge.call_tool("fail", {}))["isError"] is True  # result passed through as before
-        assert await bridge.call_tool("hang", {}, timeout=0.3) is None  # failures read as None
-    finally:
-        await bridge.close()
-
-
 async def test_a_timed_out_call_stops_only_its_own_server(make_client):
     """A server that ignores SIGTERM keeps the timed-out call's stop busy for seconds;
     calls made meanwhile start a new server, and stopping the old one must not take the

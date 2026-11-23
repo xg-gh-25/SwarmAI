@@ -9,9 +9,10 @@ switches to polling ``conversations.history()`` via the Slack Web API.
 After 3 consecutive WebSocket thread deaths the adapter activates polling
 mode and periodically re-attempts Socket Mode reconnection.
 
-**Outgoing messages:** Always via Web API; when that is blocked by corp
-proxy, falls back to the ``slack-mcp`` binary via stdio JSON-RPC 2.0
-(routes through Slack desktop's local IPC).
+**Outgoing messages:** Always via the Web API with the bot token. When it is
+unreachable or the token is refused, the message is not sent (a refused token is
+reported to the gateway). There is no other path: the person's own Slack MCP would
+post as the person, and the bot never speaks as them.
 
 Threading model: Socket Mode runs in a background thread; polling runs
 as an asyncio task on the main FastAPI event loop.  Both paths converge
@@ -20,7 +21,6 @@ on ``_normalize_event()`` → ``_on_message()`` for gateway delivery.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 import time
@@ -35,8 +35,7 @@ try:
 except ImportError:
     SLACK_BOLT_AVAILABLE = False
 
-from config import get_app_data_dir, get_swarmws
-from core.mcp_stdio_client import McpError, McpStdioClient, McpToolError
+from config import get_app_data_dir
 from channels.base import (
     ATTACH_TYPE_FILE,
     ATTACH_TYPE_IMAGE,
@@ -125,7 +124,7 @@ def _split_blocks_for_payload(
     return chunks or [[]]
 
 
-# Errors that indicate corp proxy / network blocking (trigger MCP fallback)
+# Errors that indicate corp proxy / network blocking (the Web API is unreachable)
 _PROXY_ERRORS = (ConnectionError, OSError, TimeoutError)
 
 # ---------------------------------------------------------------------------
@@ -190,76 +189,6 @@ def _is_auth_error(exc: Exception) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# MCP stdio bridge — fallback path for corp proxy environments
-# ---------------------------------------------------------------------------
-
-def _find_slack_mcp_config() -> Optional[dict]:
-    """Find the slack-mcp server config from mcp-dev.json.
-
-    Returns ``{"command": str, "args": list, "env": dict}`` or None.
-    Searches the SwarmWS mcp-dev.json for the slack-mcp entry.
-    """
-    # SwarmWS location (standard path)
-    mcp_dev = get_swarmws() / ".claude" / "mcps" / "mcp-dev.json"
-    if not mcp_dev.is_file():
-        return None
-
-    try:
-        entries = json.loads(mcp_dev.read_text(encoding="utf-8"))
-        if not isinstance(entries, list):
-            return None
-        for entry in entries:
-            eid = entry.get("id", "") or entry.get("name", "")
-            if "slack" in eid.lower() and entry.get("enabled", True):
-                config = entry.get("config", {})
-                cmd = config.get("command", "")
-                if cmd:
-                    return {
-                        "command": cmd,
-                        "args": config.get("args", []),
-                        "env": config.get("env", {}),
-                    }
-    except Exception:
-        logger.debug("Failed to read slack-mcp config from %s", mcp_dev, exc_info=True)
-    return None
-
-
-class SlackMcpBridge(McpStdioClient):
-    """The bot adapter's fallback path to the slack-mcp binary (stdio JSON-RPC 2.0).
-
-    The transport is ``core.mcp_stdio_client.McpStdioClient``: the server is spawned on
-    first use, initialized once and reused; every call has its own timeout. This class only
-    keeps the adapter's own contract: the server is found by ``_find_slack_mcp_config``,
-    and ``call_tool`` returns the JSON-RPC ``result`` dict or ``None`` on any failure (the
-    callers fall back further on ``None``).
-    """
-
-    def __init__(self) -> None:
-        config = _find_slack_mcp_config() or {}
-        super().__init__(
-            config.get("command", ""),
-            config.get("args", []),
-            config.get("env", {}),
-            name="slack-mcp",
-            client_name="swarm-slack-adapter",
-            call_timeout=15.0,
-            init_timeout=10.0,
-        )
-
-    async def call_tool(self, tool_name: str, arguments: dict, *, timeout: Optional[float] = None) -> Optional[dict]:
-        """Call an MCP tool and return the result, or ``None`` on any error."""
-        if not self.available:
-            return None
-        try:
-            return await self.call_tool_raw(tool_name, arguments, timeout=timeout)
-        except McpToolError as exc:
-            logger.warning("slack-mcp tool error: %s", exc)
-        except McpError as exc:
-            logger.warning("slack-mcp call failed: %s", exc)
-        return None
-
-
 class SlackChannelAdapter(ChannelAdapter):
     """Adapter for Slack using Socket Mode WebSocket.
 
@@ -284,8 +213,6 @@ class SlackChannelAdapter(ChannelAdapter):
         # LRU eviction: cap at 500 entries (G9).
         self._user_cache: dict[str, str] = dict(_KNOWN_USERS)
         self._user_cache_maxsize: int = 500
-        # MCP fallback bridge (lazy — spawned on first proxy error)
-        self._mcp_bridge: Optional[SlackMcpBridge] = None
         # Auth health tracking
         self._last_auth_check: float = 0.0
         # G1: Auth failure counting unified in gateway._auth_failure_counts.
@@ -436,11 +363,6 @@ class SlackChannelAdapter(ChannelAdapter):
         self._ws_thread = None
         self._loop = None
         self._poll_channels = {}
-
-        # Clean up MCP bridge subprocess
-        if self._mcp_bridge:
-            await self._mcp_bridge.close()
-            self._mcp_bridge = None
 
         logger.info("Slack adapter stopped for channel %s", self.channel_id)
 
@@ -1024,10 +946,7 @@ class SlackChannelAdapter(ChannelAdapter):
         external_chat_id: str,
         external_thread_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Post a placeholder message (fallback when native streaming unavailable).
-
-        Falls back to MCP when WebClient is blocked by corp proxy.
-        """
+        """Post a placeholder message (fallback when native streaming unavailable)."""
         if not self._slack_client:
             return None
         try:
@@ -1049,24 +968,13 @@ class SlackChannelAdapter(ChannelAdapter):
             )
             return result.get("ts")
         except _PROXY_ERRORS:
-            logger.warning(
-                "Slack WebClient blocked (proxy?) — falling back to MCP for typing indicator"
-            )
-            return await self._mcp_post_message(
-                external_chat_id,
-                ":bee: _Thinking..._",
-                external_thread_id,
-            )
+            logger.warning("Slack WebClient unreachable (proxy?) — typing indicator not sent")
+            return None
         except Exception as exc:
             if _is_auth_error(exc):
                 logger.error("Slack AUTH_ERROR in typing indicator: %s", exc)
                 await self._report_auth_failure(f"AUTH_ERROR: typing_indicator: {exc}")
-                # Try MCP fallback — different auth path
-                return await self._mcp_post_message(
-                    external_chat_id,
-                    ":bee: _Thinking..._",
-                    external_thread_id,
-                )
+                return None
             logger.exception("Error sending Slack typing indicator")
             return None
 
@@ -1081,7 +989,6 @@ class SlackChannelAdapter(ChannelAdapter):
         """Update message via chat.update (fallback path).
 
         All sync Slack SDK calls dispatched via ``run_in_executor``.
-        Falls back to MCP when WebClient is blocked by corp proxy.
         """
         if not self._slack_client:
             return
@@ -1137,15 +1044,11 @@ class SlackChannelAdapter(ChannelAdapter):
                     ],
                 ))
         except _PROXY_ERRORS:
-            logger.warning(
-                "Slack WebClient blocked (proxy?) — falling back to MCP for update_message"
-            )
-            await self._mcp_update_message(external_chat_id, message_id, text)
+            logger.warning("Slack WebClient unreachable (proxy?) — message update not sent")
         except Exception as exc:
             if _is_auth_error(exc):
                 logger.error("Slack AUTH_ERROR in update_message: %s", exc)
                 await self._report_auth_failure(f"AUTH_ERROR: update_message: {exc}")
-                await self._mcp_update_message(external_chat_id, message_id, text)
                 return
             logger.exception("Error updating Slack message")
 
@@ -1193,77 +1096,6 @@ class SlackChannelAdapter(ChannelAdapter):
             )
         except Exception:
             logger.debug("Failed to remove reaction %s from %s", emoji, message_ts)
-
-    # ------------------------------------------------------------------
-    # MCP fallback helpers (corp proxy bypass)
-    # ------------------------------------------------------------------
-
-    def _get_mcp_bridge(self) -> Optional[SlackMcpBridge]:
-        """Lazily create and return the MCP bridge singleton."""
-        if self._mcp_bridge is None:
-            bridge = SlackMcpBridge()
-            if bridge.available:
-                self._mcp_bridge = bridge
-                logger.info("Slack MCP fallback bridge available")
-            else:
-                logger.debug("Slack MCP fallback bridge not available (no slack-mcp config)")
-                return None
-        return self._mcp_bridge
-
-    async def _mcp_post_message(
-        self,
-        channel: str,
-        text: str,
-        thread_ts: Optional[str] = None,
-    ) -> Optional[str]:
-        """Send a message via slack-mcp MCP fallback.
-
-        Returns the message ``ts`` on success, None on failure.
-        """
-        bridge = self._get_mcp_bridge()
-        if not bridge:
-            return None
-
-        args: dict = {"channel_id": channel, "text": text}
-        if thread_ts:
-            args["thread_ts"] = thread_ts
-
-        result = await bridge.call_tool("post_message", args)
-        if result:
-            # MCP response: {"content": [{"type": "text", "text": "..."}]}
-            # Try to extract ts from the text content
-            content = result.get("content", [])
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    response_text = item.get("text", "")
-                    # slack-mcp may return JSON with ts, or just confirmation text
-                    try:
-                        parsed = json.loads(response_text)
-                        if isinstance(parsed, dict) and "ts" in parsed:
-                            return parsed["ts"]
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                    # If we got any content, the message was sent — return a synthetic ts
-                    if response_text:
-                        logger.info("MCP fallback sent message to %s (no ts in response)", channel)
-                        return "mcp-sent"
-        return None
-
-    async def _mcp_update_message(
-        self,
-        channel: str,
-        message_ts: str,
-        text: str,
-    ) -> bool:
-        """Update a message via slack-mcp MCP fallback."""
-        bridge = self._get_mcp_bridge()
-        if not bridge:
-            return False
-
-        args: dict = {"channel_id": channel, "message_ts": message_ts, "text": text}
-
-        result = await bridge.call_tool("edit_message", args)
-        return result is not None
 
     # ------------------------------------------------------------------
     # HTTP polling fallback — activates when Socket Mode is blocked
@@ -1702,9 +1534,6 @@ class SlackChannelAdapter(ChannelAdapter):
         Converts markdown-style text to Slack's ``mrkdwn`` format and
         wraps it in section blocks.  Long messages are automatically
         split across multiple Slack messages to stay within API limits.
-
-        Falls back to ``slack-mcp`` via stdio JSON-RPC when the Web API
-        is unreachable (corp proxy blocking direct HTTPS to slack.com).
         """
         if not self._slack_client:
             return None
@@ -1747,25 +1576,14 @@ class SlackChannelAdapter(ChannelAdapter):
 
             return first_ts
         except _PROXY_ERRORS:
-            logger.warning(
-                "Slack WebClient blocked (proxy?) — falling back to MCP for send_message"
-            )
-            return await self._mcp_post_message(
-                message.external_chat_id,
-                message.text,
-                message.external_thread_id,
-            )
+            logger.warning("Slack WebClient unreachable (proxy?) — message not sent")
+            return None
         except Exception as exc:
             if _is_auth_error(exc):
                 # G1: Report auth failure to gateway for unified circuit breaking.
                 logger.error("Slack AUTH_ERROR in send_message: %s", exc)
                 await self._report_auth_failure(f"AUTH_ERROR: send_message: {exc}")
-                # Try MCP fallback — different auth path
-                return await self._mcp_post_message(
-                    message.external_chat_id,
-                    message.text,
-                    message.external_thread_id,
-                )
+                return None
             logger.exception("Error sending Slack message")
             return None
 
