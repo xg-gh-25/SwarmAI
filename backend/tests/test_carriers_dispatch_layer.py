@@ -412,10 +412,33 @@ def test_timers_skip_a_carrier_without_the_duty(world, monkeypatch):
     assert asyncio.run(hive_idle.check_once()) == []
 
 
+def test_the_carrier_of_a_named_row_is_read_from_the_store(monkeypatch, tmp_path):
+    import sqlite3
+    db = tmp_path / "d.db"
+    with sqlite3.connect(db) as c:
+        c.execute("CREATE TABLE hive_instances (id TEXT, name TEXT, carrier TEXT)")
+        c.executemany("INSERT INTO hive_instances VALUES (?, ?, ?)",
+                      [("h1", "worker-1", None), ("e1", "elastic", "agentcore")])
+    monkeypatch.setattr(so, "_db_path", lambda: str(db))
+    assert asyncio.run(ec2._named_carrier("worker-1")) == "ec2"
+    assert asyncio.run(ec2._named_carrier("e1")) == "agentcore"
+    assert asyncio.run(ec2._named_carrier("nope")) is None
+    monkeypatch.setattr(so, "_db_path", lambda: str(tmp_path / "missing" / "d.db"))
+    assert asyncio.run(ec2._named_carrier("worker-1")) is None
+
+
 def test_the_offer_of_a_named_location_reads_no_store(monkeypatch):
     async def boom():
         raise AssertionError("a named Hive is not looked for among the Hives")
     monkeypatch.setattr(ec2, "_hive_rows", boom)
+
+    async def carrier_of(ref):
+        return {"worker-9": "ec2", "elastic": "agentcore"}.get(ref)
+    monkeypatch.setattr(ec2, "_named_carrier", carrier_of)
     [o] = asyncio.run(ec2.Ec2Carrier().offers(Needs(named="worker-9")))
     assert (o.carrier, o.location_id, o.name, o.tier, o.blocked) == (EC2, "worker-9", "worker-9", TIER_WARM, None)
     assert isinstance(o, Offer)
+    # a name no row holds is still offered (opening it says so) ...
+    assert len(asyncio.run(ec2.Ec2Carrier().offers(Needs(named="nope")))) == 1
+    # ... but Elastic Workers' name is not: its own carrier's offer is the one placed
+    assert asyncio.run(ec2.Ec2Carrier().offers(Needs(named="elastic"))) == []

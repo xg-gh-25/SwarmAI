@@ -206,6 +206,23 @@ async def _hive_rows() -> list[dict[str, Any]]:
                 for r in await cur.fetchall()]
 
 
+async def _named_carrier(ref: str) -> Optional[str]:
+    """The carrier of the one row with this id or name, or None when there is no such
+    row or the store cannot be read (opening the location then says what it is)."""
+    import aiosqlite
+    from core import swarm_out
+    try:
+        async with aiosqlite.connect(swarm_out._db_path()) as conn:
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            cur = await conn.execute(
+                "SELECT COALESCE(carrier, 'ec2') FROM hive_instances WHERE id = ? OR name = ?", (ref, ref))
+            rows = await cur.fetchall()
+    except Exception as exc:  # noqa: BLE001 — unreadable: offered as before, the open decides
+        logger.info("ec2: carrier of %s unreadable (%s)", ref[:40], type(exc).__name__)
+        return None
+    return str(rows[0][0]) if len(rows) == 1 else None
+
+
 def _in_flight(hive_id: str, name: str) -> int:
     """Dispatches to this Hive in progress here (``swarm_out.in_flight_at``: by its id, and
     by its name for one placed on a named Hive whose id is not read yet)."""
@@ -369,11 +386,14 @@ class Ec2Carrier:
         *needs* is placement's to apply (private reach, a named Hive, Brain locks). A named
         location is not looked for among the Hives: its one offer names it as given,
         unprobed, and opening it finds out what it is (``Ec2Location.open_run``), as a
-        dispatch to a named Hive always has."""
+        dispatch to a named Hive always has; only a name another carrier's row holds
+        (Elastic Workers) gets no offer here, so that carrier's offer is the one placed."""
         from core import hive_idle, swarm_out
         from hive import accounts
         if needs.named is not None:
             ref = str(needs.named)
+            if (await _named_carrier(ref)) not in (None, EC2):
+                return []
             return [Offer(EC2, ref, ref, TIER_WARM, in_flight=_in_flight(ref, ref),
                           reaches_private=self.reaches_private, brain_lock_scope=self.brain_lock_scope)]
         mode = await asyncio.to_thread(accounts.swarmai_account)
