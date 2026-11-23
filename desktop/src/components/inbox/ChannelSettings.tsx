@@ -33,7 +33,8 @@ const HEALTH_VAR: Record<SourceOut['health'], string> = {
   read_only: '--color-status-warning',
 };
 
-const INTERVALS = [900, 1800, 3600, 3 * 3600, 6 * 3600, 24 * 3600];
+// the backend accepts 300 s and up (schemas.inbox ge=300)
+const INTERVALS = [300, 900, 1800, 3600, 3 * 3600, 6 * 3600, 24 * 3600];
 const FEED_SOURCE_ID = 'feed';
 /** The secret each manual backend reads (sources/{slack,mail}.py SECRET_NAMES). */
 const SECRET_OF: Record<string, { name: string; labelKey: string }> = {

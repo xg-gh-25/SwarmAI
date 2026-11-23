@@ -164,6 +164,10 @@ describe('Inbox channel settings: a connected source', () => {
     await waitFor(() => expect(svc.updateSource).toHaveBeenCalledWith('slack-1', { enabled: false }));
     fireEvent.change(screen.getByTestId('inbox-source-interval'), { target: { value: '3600' } });
     await waitFor(() => expect(svc.updateSource).toHaveBeenCalledWith('slack-1', { interval_s: 3600 }));
+    // the shortest interval the backend accepts (300 s) is offered
+    expect(within(screen.getByTestId('inbox-source-interval')).getByRole('option', { name: /^5 min$/ })).toHaveValue('300');
+    fireEvent.change(screen.getByTestId('inbox-source-interval'), { target: { value: '300' } });
+    await waitFor(() => expect(svc.updateSource).toHaveBeenCalledWith('slack-1', { interval_s: 300 }));
     const list = screen.getByTestId('inbox-source-list-input');
     expect(list).toHaveValue('#ops');
     fireEvent.change(list, { target: { value: '#ops\n C0TEAM1 ,\n' } });
