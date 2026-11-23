@@ -8,7 +8,7 @@
  * a month are the bars weeks; (4) is the verdict next to the same length of time before;
  * (5) does a group row filter the records, and its ✕ undo it; (6) does a record open the
  * run's big card, J walking the list; (7) does a group by "where it ran" name EC2 or
- * AgentCore. The older pure helpers of ./live keep their own cases below.
+ * AgentCore.
  */
 process.env.TZ = 'Asia/Shanghai';
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -16,7 +16,6 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { HistoryView } from './HistoryView';
 import { bars, groups, inRange, matches, outcomeOf, previousRange, summarize, unattended } from './historyStats';
-import { breakdown, dimensionCounts, inWindow, matchesFilter, runType, spendText, tallyRuns } from './live';
 import i18n from '../../i18n';
 
 beforeAll(async () => { await i18n.changeLanguage('zh'); });
@@ -55,63 +54,6 @@ const RUNS: SwarmOutRun[] = [
   run('g', null, { state: 'running' }),
   run('h', result({ active_s: 6, tokens: { input: 1, output: 2, cache_read: null, cache_write: null } }), { sent_at: ago(24 * 20) }),
 ];
-
-describe('the numbers', () => {
-  it('(1) the outcomes add up to the runs; rates are over the known endings', () => {
-    const t = tallyRuns(inWindow(RUNS, NOW, 7));
-    expect(t.runs).toBe(7);
-    expect(Object.values(t.by).reduce((a, b) => a + b, 0)).toBe(t.runs);
-    expect(t.by).toEqual({ completed: 3, error: 1, stopped: 1, other: 1, running: 1 });
-    expect(t.known).toBe(5);
-  });
-
-  it('(2) done unattended means nobody stepped in', () => {
-    const t = tallyRuns(inWindow(RUNS, NOW, 7));
-    // a's question went unanswered: the run waited, nobody stepped in (design
-    // 2026-11-01-brain-eval-and-runs §3), so a, b and c are done unattended
-    expect(t.unattended).toBe(3);
-    expect(t.unattended).toBeLessThanOrEqual(t.by.completed);
-    expect([t.loops, t.unanswered]).toEqual([0, 1]);
-    expect(t.medianActive).toBe(60);                  // the ended runs only: 10, 26, 60, 84, 300
-  });
-
-  it('(3) a spend is "at least" whenever a cost or the tokens are missing', () => {
-    const all = tallyRuns(inWindow(RUNS, NOW, 7));
-    expect(spendText(all)).toBe('≥ 4K token · ≥ $6.70');   // e, f, g have no cost or tokens
-    expect(spendText(tallyRuns([RUNS[1], RUNS[2]]))).toBe('2K token · $2.00');
-    expect(spendText(tallyRuns([RUNS[1], RUNS[4]]))).toBe('≥ 1K token · ≥ $1.00');   // e ended with no cost recorded
-    expect(spendText(tallyRuns([RUNS[5]]))).toBe('— token · —');
-    expect(spendText(tallyRuns([RUNS[7]]))).toBe('— token · $1.00');   // a record from before the cache was counted
-  });
-
-  it('(4) one type per run, a pipeline before files', () => {
-    expect(RUNS.map((r) => runType(r).label)).toEqual(['pipeline · research', '只回答', '改代码', '没有产出', '写文件', '未知', '未知', '只回答']);
-  });
-
-  it('the breakdown and the five dimensions', () => {
-    const w = inWindow(RUNS, NOW, 7);
-    expect(breakdown(w, 'brain').map((g) => [g.label, g.tally.runs])).toEqual([['通用', 1], ['没走 Project Agent', 6]]);
-    expect(breakdown(w, 'hive').map((g) => [g.key, g.tally.runs])).toEqual([['explorer', 6], ['demo', 1]]);
-    expect(breakdown(w, 'type').at(-1)!.key).toBe('unknown');
-    expect(breakdown(w, 'brain')[0].tally.judge).toEqual({ PASS: 0, WARN: 1, BLOCK: 0 });
-    const dims = dimensionCounts(w)!;
-    expect(dims.find((d) => d.dim === 'Quality')!.counts.WARN).toBe(1);
-    expect(dims.find((d) => d.dim === 'Speed')!.counts.NA).toBe(1);
-    expect(dimensionCounts([RUNS[1]])).toBeNull();
-  });
-
-  it('the record filters', () => {
-    const w = inWindow(RUNS, NOW, 7);
-    const ids = (f: Parameters<typeof matchesFilter>[1]) => w.filter((r) => matchesFilter(r, f)).map((r) => r.title.slice(5));
-    expect([ids('error'), ids('stopped'), ids('human'), ids('unknown')]).toEqual([['e'], ['d'], [], ['f', 'g']]);
-  });
-
-  it('stepping in is an answer or a message; approving or refusing a command is not', () => {
-    const one = (h: Partial<SwarmOutResult['work']['human']>) => matchesFilter(run('x', result({}, human(h))), 'human');
-    expect([one({ approved: 2, denied: 1 }), one({ unanswered: 1 }), one({ answered_questions: 1 }), one({ said: 1 })])
-      .toEqual([false, false, true, true]);
-  });
-});
 
 // the view's runs: each with the stage the backend gives it
 const at = (d: number, h = 2) => new Date(NOW - d * 86400_000 - h * 3600_000).toISOString();

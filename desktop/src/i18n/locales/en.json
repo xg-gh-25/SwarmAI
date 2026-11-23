@@ -1303,123 +1303,17 @@
     },
     "loading": "Loading…",
     "runsUnreadable": "Can't read the dispatch log, retrying shortly",
-    "tbd": "TBD: {{missing}}",
-    "noRuns": "Nothing sent yet. Say what to do in the chat on the right, and Swarm will send it out.",
     "view": {
       "run": "Runs",
       "history": "History",
       "settings": "Settings"
     },
-    "header": {
-      "running_one": "{{count}} Hive running",
-      "running_other": "{{count}} Hives running",
-      "keepsGoing": ", keeps going with the Mac closed",
-      "noneRunning_one": "{{count}} Hive, not running",
-      "noneRunning_other": "{{count}} Hives, none running",
-      "noHive": "No Hive yet",
-      "autonomy": "30 days · {{finished}} finished · nobody stepped in {{unattended}} / {{known}} · {{avg}} times on average"
-    },
-    "daily": {
-      "day": "{{day}} · {{count}} sent",
-      "dayWith": "{{day}} · {{count}} sent: {{parts}}"
-    },
-    "bucket": {
-      "error": "Failed",
-      "stopped": "Stopped",
-      "completed": "Done",
-      "other": "Not known yet"
-    },
     "history": {
-      "empty": "No run sent in this window",
-      "window": {
-        "d7": "Last 7 days",
-        "d30": "Last 30 days",
-        "all": "All"
-      },
-      "verdict_one": "came back done with no one stepping in",
-      "verdict_other": "came back done with no one stepping in",
-      "verdictRest_one": " · {{count}} run: {{parts}}",
-      "verdictRest_other": " · {{count}} runs: {{parts}}",
-      "verdictPart": {
-        "completed": "{{count}} done",
-        "error": "{{count}} failed",
-        "stopped": "{{count}} stopped",
-        "other": "{{count}} ending not known",
-        "running": "{{count}} running"
-      },
-      "sum": {
-        "unattended": "done unattended (of {{known}} with a known ending, {{pct}}%)",
-        "unattendedNone": "done unattended (no run's ending is known yet)",
-        "human_one": "human loop",
-        "human_other": "human loops",
-        "unanswered_one": " ({{count}} question unanswered)",
-        "unanswered_other": " ({{count}} questions unanswered)",
-        "median": "median time",
-        "spend": "spend",
-        "judge_one": "Judge ({{count}} pipeline run)",
-        "judge_other": "Judge ({{count}} pipeline runs)",
-        "tokensMissing_one": "{{count}} run's tokens are not known",
-        "tokensMissing_other": "{{count}} runs' tokens are not known",
-        "costMissing_one": "{{count}} run's cost is not known or only partly",
-        "costMissing_other": "{{count}} runs' cost is not known or only partly"
-      },
-      "breakdown": {
-        "title": "Broken down",
-        "brain": "Brain",
-        "type": "Type",
-        "hive": "Hive",
-        "filterHint": "Click to show only these runs below"
-      },
-      "col": {
-        "runs": "runs",
-        "outcome": "outcome",
-        "unattended": "unattended",
-        "median": "median time",
-        "spend": "spend",
-        "lessons": "lessons back / written",
-        "lessonsTitle": "lessons the Hive returned / written into the Brain by this machine's judge",
-        "run": "run",
-        "agent": "Brain · Agent",
-        "type": "type",
-        "ended": "ended",
-        "time": "time",
-        "human": "human",
-        "sent": "sent"
-      },
-      "dimensions_one": "Five dimensions ({{count}} pipeline run):",
-      "dimensions_other": "Five dimensions ({{count}} pipeline runs):",
-      "outcome": {
-        "completed": "done",
-        "error": "failed",
-        "stopped": "stopped",
-        "other": "not known",
-        "running": "running"
-      },
-      "records": "Runs",
-      "filter": {
-        "all": "All",
-        "error": "Failed",
-        "stopped": "Stopped",
-        "human": "Needed a person",
-        "unknown": "Not known"
-      },
-      "noRecords": "No run matches",
-      "unanswered_one": "{{count}} unanswered",
-      "unanswered_other": "{{count}} unanswered",
-      "more_one": "Show {{count}} earlier",
-      "more_other": "Show {{count}} earlier",
       "refusals_one": "Refused at intake once · {{private}} of them needed a private network",
       "refusals_other": "Refused at intake {{count}} times · {{private}} of them needed a private network"
     },
-    "tbdParts": {
-      "occupancy": "Worker occupancy",
-      "occupancyMissing": "Each Hive's concurrency is not sampled over time",
-      "scheduled": "Scheduled",
-      "scheduledMissing": "No scheduled dispatches yet"
-    },
     "live": {
-      "submitFailed": "Couldn't submit, try again later",
-      "openLogin": "Login info"
+      "submitFailed": "Couldn't submit, try again later"
     },
     "ask": {
       "maybe": "Possibly: {{title}}",
@@ -1443,23 +1337,14 @@
       "highRisk": "high risk",
       "decisionTruncated": "This decision is too long to show in full here. It can't be answered here: read it on this Hive's own page and decide there."
     },
-    "kpi": {
-      "waiting": "Waiting for your answer",
-      "onHivePage": "+{{count}} to handle on that Hive's own page",
-      "free": "Hives ready to take a task",
-      "running": "Sent by me, running"
-    },
     "waiting": {
       "title": "Waiting for you",
-      "refresh": "Refresh",
       "none": "Nothing waiting for you",
       "unasked": "The Hive says these wait on someone, but the question has not reached here: handle them on that Hive's own page (its login is in Swarm Out settings)",
       "refused": "To handle on that Hive's own page (the answer was not delivered and can't be given here again; its login is in Swarm Out settings)",
       "settle": "Tasks waiting for you to accept or decide"
     },
     "fleet": {
-      "title": "Where tasks run",
-      "note": "Running = every session running on the Hive, its own included; the bar is its memory in use: at 90% with other work running, a new task queues",
       "failed": "Can't read the fleet, retrying shortly",
       "unreachable": "Unreachable",
       "full": "Memory tight · {{count}} running, a new task queues",
@@ -1469,7 +1354,6 @@
       "short_one": "{{count}} Hive short of what you asked for",
       "short_other": "{{count}} Hives short of what you asked for",
       "cannotBuild": "Hives cannot be created in this account yet",
-      "openSettings": "Open Swarm Out settings",
       "startsWhenNeeded": " · starts by itself when needed",
       "elastic": {
         "ready": "on standby · a new machine per task",
@@ -1522,10 +1406,6 @@
       "stopped": "Ended (sent in the last 24 h)",
       "stoppedEmpty": "Everything sent in the last 24 h is still running or waiting on you",
       "unknown": "State unknown"
-    },
-    "byBrain": {
-      "checks_one": "{{count}} check not seen or errored",
-      "checks_other": "{{count}} checks not seen or errored"
     },
     "guide": {
       "title": "Send tasks to your own AWS",
@@ -1718,8 +1598,6 @@
       "time": "Duration",
       "endedAt": "ended {{when}}",
       "human": "Stepped in",
-      "spendValue": "{{tokens}} token · {{cost}}",
-      "spendShort": "{{tokens}} · {{cost}}",
       "tokensLegacy": "Tokens not known: this record was kept before cache tokens were counted. Refresh the result to recount.",
       "tokensNotRecorded": "Tokens not recorded",
       "costNotRecorded": "Cost not recorded",
@@ -1755,15 +1633,6 @@
       "denyOnly": "This command is too long or hides characters: it can only be denied here.",
       "closed": "This run was discarded or expired: its session is closed.",
       "readOnly": "This run is accepted: its session is read-only."
-    },
-    "type": {
-      "unknown": "Not known",
-      "pipeline": "pipeline",
-      "pipelineProfile": "pipeline · {{profile}}",
-      "code": "Code",
-      "files": "Files",
-      "answer": "Answer only",
-      "none": "No output"
     },
     "local": {
       "chatTab": "Chat tab",
@@ -2222,11 +2091,6 @@
       "ok": "Got it"
     },
     "settings": {
-      "account": "AWS account",
-      "runsIn": "Tasks run in",
-      "accountLine": "account {{id}} · {{region}}",
-      "noAccount": "not connected",
-      "changeInSettings": "Change in Settings",
       "elasticLead": "Each task gets a fresh cloud machine that is gone when the task ends. No tasks, no cost.",
       "standby": "Standby",
       "on": "On",
@@ -2252,7 +2116,6 @@
       "resident": "Resident Hives",
       "residentLead": "Machines that stay, with your repository caches: they take work fastest. There can be none while Elastic Workers is on.",
       "autoUpdate": "updates by itself",
-      "login": "Login info",
       "restart": "Restart",
       "restartNote": "For a Hive that hangs: stops and starts it, ending what runs on it",
       "delete": "Delete",
@@ -2261,7 +2124,6 @@
       "addCost": "about ${{usd}} a month while it runs; created only after you confirm",
       "addConfirm": "Create 1 Hive, about ${{usd}}/month, in account {{account}}",
       "type": "Machine type",
-      "typeNote": "used for new Hives",
       "idle": "Stop when idle for",
       "idleNote": "a stopped Hive only costs its disk; a task starts it again (about 4 minutes)",
       "never": "never",
@@ -2269,19 +2131,12 @@
       "minutes_other": "{{count}} minutes",
       "region": "Region",
       "byItself": "What SwarmAI does by itself",
-      "onlyYou": "What only you do",
       "auto": {
         "dispatch": "chooses where each task runs and starts a stopped Hive",
         "idle": "stops a Hive that stays idle",
         "update": "keeps every Hive and Elastic Workers at this SwarmAI version: an idle Hive is updated, a stopped one before its next task",
         "restart": "when a Hive does not answer, the agent following the task diagnoses and restarts it, and says so",
         "elastic": "keeps Elastic Workers on standby and repairs it once when it fails"
-      },
-      "yours": {
-        "add": "add a Hive (it costs money) or delete one",
-        "login": "open a Hive’s login info",
-        "elastic": "turn Elastic Workers off",
-        "type": "change the machine type and the idle time"
       }
     },
     "board": {

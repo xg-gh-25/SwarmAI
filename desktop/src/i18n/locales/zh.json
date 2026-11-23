@@ -1303,123 +1303,17 @@
     },
     "loading": "正在读…",
     "runsUnreadable": "读不到派发记录，稍后自动重试",
-    "tbd": "TBD：{{missing}}",
-    "noRuns": "还没有派发过任务。在右边的对话里说要做什么，Swarm 会帮你派出去。",
     "view": {
       "run": "运行",
       "history": "历史",
       "settings": "设置"
     },
-    "header": {
-      "running_one": "{{count}} 台 Hive 在运行",
-      "running_other": "{{count}} 台 Hive 在运行",
-      "keepsGoing": "，合上 Mac 也会继续",
-      "noneRunning_one": "{{count}} 台 Hive，都没在运行",
-      "noneRunning_other": "{{count}} 台 Hive，都没在运行",
-      "noHive": "还没有 Hive",
-      "autonomy": "30 天 · 结束 {{finished}} 个 · 没人插手 {{unattended}} / {{known}} · 平均插手 {{avg}} 次"
-    },
-    "daily": {
-      "day": "{{day}} · 派出 {{count}} 个",
-      "dayWith": "{{day}} · 派出 {{count}} 个：{{parts}}"
-    },
-    "bucket": {
-      "error": "出错",
-      "stopped": "被停",
-      "completed": "做完",
-      "other": "还不知道"
-    },
     "history": {
-      "empty": "这段时间没有派出的 run",
-      "window": {
-        "d7": "近 7 天",
-        "d30": "近 30 天",
-        "all": "全部"
-      },
-      "verdict_one": "个无人值守做完",
-      "verdict_other": "个无人值守做完",
-      "verdictRest_one": " · 共 {{count}} 个 run：{{parts}}",
-      "verdictRest_other": " · 共 {{count}} 个 run：{{parts}}",
-      "verdictPart": {
-        "completed": "{{count}} 个做完",
-        "error": "{{count}} 个失败",
-        "stopped": "{{count}} 个停下",
-        "other": "{{count}} 个结束情况未知",
-        "running": "{{count}} 个在跑"
-      },
-      "sum": {
-        "unattended": "无人值守做完（已知结局 {{known}} 个，{{pct}}%）",
-        "unattendedNone": "无人值守做完（还没有已知结局的 run）",
-        "human_one": "次要人",
-        "human_other": "次要人",
-        "unanswered_one": "（{{count}} 个问题没人答）",
-        "unanswered_other": "（{{count}} 个问题没人答）",
-        "median": "中位时长",
-        "spend": "消耗",
-        "judge_one": "Judge（{{count}} 个 pipeline run）",
-        "judge_other": "Judge（{{count}} 个 pipeline run）",
-        "tokensMissing_one": "{{count}} 个 run 的 token 不知道",
-        "tokensMissing_other": "{{count}} 个 run 的 token 不知道",
-        "costMissing_one": "{{count}} 个 run 的花费没有或不全",
-        "costMissing_other": "{{count}} 个 run 的花费没有或不全"
-      },
-      "breakdown": {
-        "title": "拆开看",
-        "brain": "Brain",
-        "type": "类型",
-        "hive": "Hive",
-        "filterHint": "点一下，下面只看这一组"
-      },
-      "col": {
-        "runs": "runs",
-        "outcome": "结局",
-        "unattended": "无人值守",
-        "median": "中位时长",
-        "spend": "消耗",
-        "lessons": "教训 带回/写入",
-        "lessonsTitle": "Hive 交回的教训 / 本机判官写进 Brain 的",
-        "run": "run",
-        "agent": "Brain · Agent",
-        "type": "类型",
-        "ended": "结局",
-        "time": "时长",
-        "human": "人工",
-        "sent": "派出"
-      },
-      "dimensions_one": "五维（{{count}} 个 pipeline run）：",
-      "dimensions_other": "五维（{{count}} 个 pipeline run）：",
-      "outcome": {
-        "completed": "做完",
-        "error": "失败",
-        "stopped": "停下",
-        "other": "未知",
-        "running": "在跑"
-      },
-      "records": "记录",
-      "filter": {
-        "all": "全部",
-        "error": "失败",
-        "stopped": "停下",
-        "human": "要人",
-        "unknown": "未知"
-      },
-      "noRecords": "没有符合的 run",
-      "unanswered_one": "{{count}} 没答",
-      "unanswered_other": "{{count}} 没答",
-      "more_one": "显示更早的 {{count}} 条",
-      "more_other": "显示更早的 {{count}} 条",
       "refusals_one": "拒收 {{count}} 次 · 其中需要私有网络的 {{private}} 次",
       "refusals_other": "拒收 {{count}} 次 · 其中需要私有网络的 {{private}} 次"
     },
-    "tbdParts": {
-      "occupancy": "工蜂占用",
-      "occupancyMissing": "没有按时间采样每台 Hive 的并发",
-      "scheduled": "已安排",
-      "scheduledMissing": "还没有定时派发"
-    },
     "live": {
-      "submitFailed": "没能提交，稍后再试",
-      "openLogin": "登录信息"
+      "submitFailed": "没能提交，稍后再试"
     },
     "ask": {
       "maybe": "可能属于：{{title}}",
@@ -1443,23 +1337,14 @@
       "highRisk": "高风险",
       "decisionTruncated": "这个决定的内容太长，这里没有完整显示，不能在这里回答：去这台 Hive 自己的页面看全文再决定。"
     },
-    "kpi": {
-      "waiting": "等你回答",
-      "onHivePage": "+{{count}} 个要到那台 Hive 自己的网页上处理",
-      "free": "可以马上派的 Hive",
-      "running": "我派出的，在跑"
-    },
     "waiting": {
       "title": "等你",
-      "refresh": "刷新",
       "none": "没有在等你的事",
       "unasked": "Hive 说这些在等人，但问题还没传到这里：到那台 Hive 自己的网页上处理（登录信息在 Swarm Out 设置）",
       "refused": "要到那台 Hive 自己的网页上处理（回答没有送达，这里不能再回答；登录信息在 Swarm Out 设置）",
       "settle": "等你验收或决定的单子"
     },
     "fleet": {
-      "title": "在哪里跑",
-      "note": "在跑 = Hive 上所有在跑的会话，包括它自己的；条 = 内存占用，到 90% 且还有别的在跑时新任务排队",
       "failed": "读不到机群，稍后自动重试",
       "unreachable": "连不上",
       "full": "内存吃紧 · {{count}} 个在跑，新任务会排队",
@@ -1469,7 +1354,6 @@
       "short_one": "比你要的少 {{count}} 台 Hive",
       "short_other": "比你要的少 {{count}} 台 Hive",
       "cannotBuild": "这个账号还不能建 Hive",
-      "openSettings": "打开 Swarm Out 设置",
       "startsWhenNeeded": " · 要用时自动启动",
       "elastic": {
         "ready": "待命 · 每个任务一台新机器",
@@ -1522,10 +1406,6 @@
       "stopped": "结束了（24 小时内派出的）",
       "stoppedEmpty": "24 小时内派出的都还在跑，或在等你",
       "unknown": "状态未知"
-    },
-    "byBrain": {
-      "checks_one": "{{count}} 个校验没看到或报错",
-      "checks_other": "{{count}} 个校验没看到或报错"
     },
     "guide": {
       "title": "把任务派到你自己的 AWS 上跑",
@@ -1718,8 +1598,6 @@
       "time": "用时",
       "endedAt": "{{when}} 结束",
       "human": "插手",
-      "spendValue": "{{tokens}} token · {{cost}}",
-      "spendShort": "{{tokens}} · {{cost}}",
       "tokensLegacy": "Token 总数不知道：这条记录是在计入缓存 token 之前存的，刷新结果后重算。",
       "tokensNotRecorded": "Token 没有记录",
       "costNotRecorded": "花费没有记录",
@@ -1755,15 +1633,6 @@
       "denyOnly": "这条命令太长或含有隐藏字符，这里只能拒绝。",
       "closed": "这一单已丢弃或已过期，会话打不开。",
       "readOnly": "这一单已通过，会话只读。"
-    },
-    "type": {
-      "unknown": "未知",
-      "pipeline": "pipeline",
-      "pipelineProfile": "pipeline · {{profile}}",
-      "code": "改代码",
-      "files": "写文件",
-      "answer": "只回答",
-      "none": "没有产出"
     },
     "local": {
       "chatTab": "聊天标签页",
@@ -2222,11 +2091,6 @@
       "ok": "知道了"
     },
     "settings": {
-      "account": "AWS 账户",
-      "runsIn": "任务跑在",
-      "accountLine": "账户 {{id}} · {{region}}",
-      "noAccount": "还没连接",
-      "changeInSettings": "在 Settings 里换",
       "elasticLead": "每个任务开一台新的云上机器，做完就销毁。没有任务时不花钱。",
       "standby": "待命",
       "on": "开",
@@ -2252,7 +2116,6 @@
       "resident": "常驻 Hive",
       "residentLead": "一直留着的云上机器，有你的仓库缓存，接活最快。Elastic Workers 开着时可以一台都没有。",
       "autoUpdate": "自动更新",
-      "login": "登录信息",
       "restart": "重启",
       "restartNote": "Hive 卡住时用：先停再启动，会结束上面正在跑的任务",
       "delete": "删除",
@@ -2261,7 +2124,6 @@
       "addCost": "开着时约 ${{usd}} / 月，确认后才建",
       "addConfirm": "在账户 {{account}} 建 1 台 Hive，约 ${{usd}}/月",
       "type": "机型",
-      "typeNote": "新建的 Hive 用这个",
       "idle": "闲置多久自动停",
       "idleNote": "停着只收盘的钱；派任务时自动启动，约 4 分钟",
       "never": "不自动停",
@@ -2269,19 +2131,12 @@
       "minutes_other": "{{count}} 分钟",
       "region": "区域",
       "byItself": "SwarmAI 自己会做的",
-      "onlyYou": "只有你做的",
       "auto": {
         "dispatch": "派任务时选在哪跑，停着的 Hive 自动启动",
         "idle": "Hive 闲置到时间自动停",
         "update": "版本跟着这台 SwarmAI 走：空闲的 Hive 自动更新，停着的下次启动先更新；Elastic Workers 同样",
         "restart": "Hive 没响应时，跟着任务的 agent 先诊断再重启，并在对话里说一声",
         "elastic": "Elastic Workers 保持待命，出错时修复一次"
-      },
-      "yours": {
-        "add": "加一台 Hive（要花钱）、删除一台",
-        "login": "看某台 Hive 的登录信息",
-        "elastic": "关掉 Elastic Workers",
-        "type": "改机型、闲置时间"
       }
     },
     "board": {

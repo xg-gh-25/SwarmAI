@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import type { SwarmOutResult, SwarmOutRun } from '../../../services/swarmOut';
-import { ENDINGS, endedLabel, gateLine, outcomeBucket } from '../live';
+import { ENDINGS, endedLabel, gateLine } from '../live';
 import { endedTone } from '../tone';
 import i18n from '../../../i18n';
 import en from '../../../i18n/locales/en.json';
@@ -32,7 +32,6 @@ const run = (res: SwarmOutResult): SwarmOutRun => ({
 describe('daemon_stopped', () => {
   it('daemon_stopped is a known ending', () => {
     expect(ENDINGS).toContain('daemon_stopped');
-    expect(outcomeBucket(run(result()))).toBe('stopped');
     expect(endedTone(result())).toBe('attention');
     // final, unlike no_record: no "provisional", no "how it ended is not known"
     expect(endedLabel(result())).toEqual({ text: 'The Hive stopped while this turn ran', tone: 'attention' });

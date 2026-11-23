@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { SwarmOutResult, SwarmOutRun } from '../../services/swarmOut';
-import { breakdown, brainLabel, checksLine, executionLine, gateLine, inWindow, lessonsLine } from './live';
+import { brainLabel, checksLine, executionLine, gateLine, lessonsLine } from './live';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -80,19 +80,6 @@ describe('the Brain of a run', () => {
     const pa = { brain: 'Lib', mode: 'm', profile: 'bugfix', delivery: 'bundle' };
     expect(gateLine(res({ project_agent: pa, gate_refusals: null }))).toBe('Brain gate：这台 Hive 不记录拦截次数');
     expect(gateLine(res({ project_agent: pa, gate_refusals: {} }))).toBeNull();
-  });
-
-  it('groups the week by Brain, runs without a Project Agent last', () => {
-    const rows = breakdown(inWindow([
-      run('1', 'Lib', res({ checks: [{ id: 't', status: 'not_seen' }] })),
-      run('2', 'Lib', res({ ended: 'error' })),
-      run('3', 'General', res()),
-      run('4', null, res()),
-      run('5', 'Lib', res(), 200),                     // older than 7 days
-      run('6', 'Lib', res({ provisional: true, checks: [{ id: 't', status: 'not_seen' }] })),   // still going
-    ], NOW, 7), 'brain');
-    expect(rows.map((r) => [r.label, r.agent ?? null, r.tally.runs, r.tally.by.completed, r.tally.by.error, r.tally.checksMissed])).toEqual([
-      ['Lib', 'code-change · bugfix', 3, 2, 1, 1], ['通用', 'Runner Agent', 1, 1, 0, 0], ['没走 Project Agent', null, 1, 1, 0, 0]]);
   });
 });
 

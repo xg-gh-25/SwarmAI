@@ -9,7 +9,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { RunCard } from './LiveDispatches';
 import { OpenSessionContext } from './openSession';
-import { agentFacts, dailyByOutcome, endedLabel, modelLabel, outcomeBucket, runJudge, runStats, tokenCount, tokenStats, workLines } from './live';
+import { agentFacts, endedLabel, modelLabel, runJudge, runStats, tokenCount, tokenStats, workLines } from './live';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -186,22 +186,6 @@ describe('what a run did, for every kind of run', () => {
     // a run from before the dispatch record carried it: the result's own record
     expect(agentFacts({ ...base, result: result({ project_agent: { brain: 'Lib', mode: 'ask', profile: null, delivery: null } }) }))
       .toMatchObject({ brain: 'Lib', agent: 'ask' });
-  });
-});
-
-describe('the history by outcome', () => {
-  const r = (id: string, h: number, res: SwarmOutResult | null): SwarmOutRun => ({
-    dispatch_id: id, hive_id: 'h1', hive: 'explorer', session_id: `s-${id}`, title: id, origin: 'swarm-out',
-    sent_at: ago(h), state: 'stopped', state_reason: 'idle', result: res,
-  });
-  it('a day counts each outcome; provisional and unread runs are "not known yet"', () => {
-    const runs = [r('a', 1, result()), r('b', 1, result({ ended: 'error' })), r('c', 1, result({ ended: 'stopped' })),
-      r('d', 1, result({ ended: 'paused', provisional: true })), r('e', 1, null), r('f', 30, result())];
-    const days = dailyByOutcome(runs, NOW);
-    expect(days).toHaveLength(14);
-    expect(days[13]).toMatchObject({ count: 5, by: { completed: 1, error: 1, stopped: 1, other: 2 } });
-    expect(days[12].count).toBe(1);
-    expect(outcomeBucket(r('g', 1, result({ ended: 'gave_up' })))).toBe('error');
   });
 });
 

@@ -16,7 +16,6 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
-import { capacity, dailySent, panelNumbers } from './live';
 import { sections } from './runReview';
 import { activityOf, waitingUnasked } from './useSwarmOutActivity';
 import i18n from '../../i18n';
@@ -74,35 +73,12 @@ beforeEach(() => {
   mockAccount.mockRejectedValue(new Error('no account page here'));
 });
 
-describe('the panel numbers', () => {
-  it('ready Hives: over the running Hives that answered, a saturated one is not ready, however many stream', () => {
-    expect(capacity(FLEET)).toEqual({ free: 1, total: 2 });
-    expect(capacity({ running: 1, hives: [hive('x', { streaming: 12, saturated: false })] })).toEqual({ free: 1, total: 1 });
-    expect(capacity({ running: 1, hives: [hive('x', { reachable: false })] })).toBeNull();
-  });
-
-  it('waiting and running are the tab badge\'s counts; a refused ask is apart', () => {
-    const n = panelNumbers(RUNS, FLEET);
-    expect({ waiting: n.waiting, running: n.running }).toEqual(activityOf(RUNS));
-    expect(n.waiting).toBe(1);          // b; the refused ask z is not waiting here
-    expect(n.onHivePage).toBe(1);
-    expect(n.running).toBe(1);
-    expect(sections(RUNS.runs, RUNS.asks, NOW).done.map((r) => r.dispatch_id).sort()).toEqual(['c', 'e', 'f']);   // d: 30 h ago
-  });
-
+describe('the run sections and the tab badge', () => {
   it('a run waiting with no question mirrored counts as waiting and is listed; a refused one is not', () => {
     const d: SwarmOutRuns = { runs: [run('w1', 'waiting'), run('w2', 'waiting')], asks: [ask('w2', true)], errors: [] };
     expect(waitingUnasked(d).map((r) => r.dispatch_id)).toEqual(['w1']);
     expect(activityOf(d).waiting).toBe(1);
     expect(sections(d.runs, d.asks, NOW).you.map((r) => r.dispatch_id).sort()).toEqual(['w1', 'w2']);   // both rows wait on you
-  });
-
-  it('a run in an unknown state is in no number; shown within 24 h, or when its session was never named', () => {
-    const g = sections([run('u1', 'unknown'), run('u2', 'unknown', { sent_at: ago(40) }),
-      run('u3', 'unknown', { sent_at: ago(40), session_id: null, session_unknown: true })], [], NOW);
-    expect(g.done.map((r) => r.dispatch_id).sort()).toEqual(['u1', 'u3']);
-    const n = panelNumbers({ runs: [run('u1', 'unknown')], asks: [], errors: [] }, null);
-    expect([n.running, n.waiting]).toEqual([0, 0]);
   });
 
   it('a run with no stage (an older dispatch) is grouped by its state alone, as the badge counts it', () => {
@@ -115,15 +91,6 @@ describe('the panel numbers', () => {
     const unk = run('u', 'unknown', { state_reason: 'hive_updating' });
     expect(sections([unk], [], NOW).running).toHaveLength(0);
     expect(activityOf({ runs: [unk], asks: [], errors: [] })).toEqual({ running: 0, waiting: 0 });
-  });
-
-  it('runs per local day, a run just after local midnight on that day', () => {
-    const justAfterMidnight = new Date(2026, 9, 28, 0, 30).toISOString();
-    const lateYesterday = new Date(2026, 9, 27, 23, 30).toISOString();
-    const days = dailySent([run('a', 'stopped', { sent_at: justAfterMidnight }), run('b', 'stopped', { sent_at: lateYesterday })], NOW);
-    expect(days).toHaveLength(14);
-    expect(days[13]).toEqual({ label: '10/28', count: 1 });
-    expect(days[12]).toEqual({ label: '10/27', count: 1 });
   });
 });
 

@@ -6,9 +6,8 @@
  * Hive with the load a running one reports). Each keeps its last answer on a failed
  * poll (an unreachable daemon is not "nothing"), and says whether the last poll failed.
  *
- * The numbers are pure functions of those answers, and the counts of waiting and
- * running use the tab badge's own rule (activityOf): the two can differ only for the
- * moment between their polls, never by rule.
+ * The labels and facts below are pure functions of those answers; the history's
+ * numbers are ./historyStats.
  *
  * Every label here comes from the locale files (swarmOut.* in i18n/locales), read at
  * call time through the app's i18n instance, so a panel rendered after a language
@@ -18,8 +17,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import i18n from '../../i18n';
 import { swarmOutService, type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
-import { judgeState } from './judge';
-import { activityOf } from './useSwarmOutActivity';
 import { endedTone, type Tone } from './tone';
 
 export const LIVE_POLL_MS = 30_000;
@@ -57,51 +54,6 @@ const fetchFleet = () => swarmOutService.fleet();
 
 export const useRuns = (hidden: boolean): Polled<SwarmOutRuns> => usePoll(fetchRuns, hidden);
 export const useFleet = (hidden: boolean): Polled<SwarmOutFleet> => usePoll(fetchFleet, hidden);
-
-/** How many of the running Hives that answered would start a task now, of how many.
- *  A Hive has no fixed number of slots: it queues a new task only while its memory is
- *  under critical pressure (saturated). null when no running Hive answered (unknown,
- *  not zero). */
-export function capacity(fleet: SwarmOutFleet | null): { free: number; total: number } | null {
-  const up = (fleet?.hives ?? []).filter((h) => h.status === 'running' && h.reachable);
-  if (up.length === 0) return null;
-  return { free: up.filter((h) => !h.saturated).length, total: up.length };
-}
-
-const sentAt = (r: SwarmOutRun): number => Date.parse(r.sent_at);
-
-/** The numbers at the top of the run view: what waits on the person (and, apart, what
- *  must be settled on the Hive's own page), the free slots, what is running. */
-export function panelNumbers(data: SwarmOutRuns | null, fleet: SwarmOutFleet | null) {
-  const act = data ? activityOf(data) : null;
-  return {
-    waiting: act?.waiting ?? null,
-    onHivePage: data ? data.asks.filter((a) => a.refused).length : null,
-    capacity: capacity(fleet),
-    running: act?.running ?? null,
-  };
-}
-
-/** Runs sent per local calendar day over the last `days` days, oldest first. */
-export function dailySent(runs: SwarmOutRun[], now: number, days = 14): { label: string; count: number }[] {
-  const dayStart = (t: number) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
-  const buckets: { label: string; start: number; count: number }[] = [];
-  const today = new Date(dayStart(now));
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - i);
-    buckets.push({ label: `${d.getMonth() + 1}/${d.getDate()}`, start: d.getTime(), count: 0 });
-  }
-  const byStart = new Map(buckets.map((b) => [b.start, b]));
-  for (const r of runs) {
-    const t = sentAt(r);
-    if (!Number.isNaN(t)) {
-      const b = byStart.get(dayStart(t));
-      if (b) b.count += 1;
-    }
-  }
-  return buckets.map(({ label, count }) => ({ label, count }));
-}
 
 /** The Brain a run went under, as the cards name it. */
 export function brainLabel(r: SwarmOutRun): string {
@@ -372,21 +324,6 @@ export function interventionsOf(res: SwarmOutResult): number | null {
  *  (interventionsOf), the total cost (the CLI's own, per-turn increases) and, when
  *  any failed, the failed steps. The tokens are a row of their own (tokenStats). A value
  *  not known is "—" with the reason on hover, never a zero. */
-/** The header's one autonomy line over the last *days* days (design
- *  2026-11-01-brain-eval-and-runs §3, §5): how many runs finished, how many of those
- *  nobody stepped into (``interventionsOf`` = 0), and how often a person stepped in on
- *  average. A run whose record predates counting what the person said is not known and
- *  is left out (``known``), never counted as 0. */
-export function autonomyLine(runs: SwarmOutRun[], now: number, days = 30):
-  { finished: number; known: number; unattended: number; avg: number | null } {
-  const finished = inWindow(runs, now, days).filter((r) => r.result && r.state !== 'running' && !r.result.provisional);
-  const known = finished.filter((r) => r.result!.work.human.said != null);
-  const total = known.reduce((s, r) => s + (interventionsOf(r.result!) ?? 0), 0);
-  return { finished: finished.length, known: known.length,
-    unattended: known.filter((r) => interventionsOf(r.result!) === 0).length,
-    avg: known.length ? total / known.length : null };
-}
-
 export function runStats(res: SwarmOutResult): RunStat[] {
   const h = res.work.human;
   const loops = interventionsOf(res);
@@ -474,204 +411,12 @@ export function resultErrorLabel(e: string | null | undefined): string {
   return e.startsWith('http_') ? i18n.t('swarmOut.resultError.http', { code: e.slice(5) }) : e;
 }
 
-export type OutcomeBucket = 'completed' | 'error' | 'stopped' | 'other';
-
-/** The history bucket of a run: done, failed, stopped, or not known (no result yet,
- *  provisional, no record). */
-export function outcomeBucket(r: SwarmOutRun): OutcomeBucket {
-  const res = r.result;
-  if (!res) return 'other';   // paused / no_record (the provisional endings) fall to 'other' below
-  if (res.ended === 'completed' || res.ended === 'turn_limit') return 'completed';
-  if (res.ended === 'error' || res.ended === 'crashed' || res.ended === 'gave_up') return 'error';
-  if (res.ended === 'stopped' || res.ended === 'superseded' || res.ended === 'restarted'
-    || res.ended === 'daemon_stopped') return 'stopped';
-  return 'other';
-}
-
-/** Runs sent per local calendar day over the last `days` days, oldest first, each
- *  day split by outcome (the same days as dailySent). */
-export function dailyByOutcome(runs: SwarmOutRun[], now: number, days = 14):
-{ label: string; count: number; by: Record<OutcomeBucket, number> }[] {
-  const days_ = dailySent([], now, days).map((d) => ({ ...d, by: { completed: 0, error: 0, stopped: 0, other: 0 } }));
-  const dayOf = (t: number) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()}`; };
-  const first = new Date(now);
-  first.setHours(0, 0, 0, 0);
-  first.setDate(first.getDate() - (days - 1));
-  const byLabel = new Map(days_.map((d) => [d.label, d]));
-  for (const r of runs) {
-    const t = Date.parse(r.sent_at);
-    if (Number.isNaN(t) || t < first.getTime() || t > now) continue;
-    const d = byLabel.get(dayOf(t));
-    if (!d) continue;
-    d.count += 1;
-    d.by[outcomeBucket(r)] += 1;
-  }
-  return days_;
-}
-
-// ── the history view (docs/design/2026-10-29-swarm-out-history.md) ─────────────
-
 /** The runs sent in the last `days` local calendar days (today included, the same days
- *  as the daily bars), or every run when `days` is null. */
+ *  as the history's bars), or every run when `days` is null. */
 export function inWindow(runs: SwarmOutRun[], now: number, days: number | null): SwarmOutRun[] {
   if (days == null) return runs;
   const first = new Date(now);
   first.setHours(0, 0, 0, 0);
   first.setDate(first.getDate() - (days - 1));
-  return runs.filter((r) => { const t = sentAt(r); return !Number.isNaN(t) && t >= first.getTime() && t <= now; });
+  return runs.filter((r) => { const t = Date.parse(r.sent_at); return !Number.isNaN(t) && t >= first.getTime() && t <= now; });
 }
-
-/** How a run is counted in the history: running (not in any rate), or how it ended. */
-export type HistoryOutcome = OutcomeBucket | 'running';
-export const historyOutcome = (r: SwarmOutRun): HistoryOutcome => (r.state === 'running' ? 'running' : outcomeBucket(r));
-
-/** How often a person stepped into a run, as the card counts it (interventionsOf). */
-const loopsOf = interventionsOf;
-
-/** A run's one type, by precedence: a pipeline run (with its profile), then code, files,
- *  an answer only, nothing produced; a run with no result yet is not known. */
-export function runType(r: SwarmOutRun): { key: string; label: string } {
-  const res = r.result;
-  if (!res) return { key: 'unknown', label: i18n.t('swarmOut.type.unknown') };
-  if (res.pipeline || res.kinds.includes('pipeline')) {
-    const profile = res.pipeline?.profile ?? null;
-    return { key: `pipeline:${profile ?? ''}`, label: profile ? i18n.t('swarmOut.type.pipelineProfile', { profile }) : i18n.t('swarmOut.type.pipeline') };
-  }
-  for (const k of ['code', 'files', 'answer'] as const) if (res.kinds.includes(k)) return { key: k, label: i18n.t(`swarmOut.type.${k}`) };
-  return { key: 'none', label: i18n.t('swarmOut.type.none') };
-}
-
-export interface RunTally {
-  runs: number;
-  by: Record<HistoryOutcome, number>;
-  /** runs whose ending is known (done, failed, stopped): the denominator of every rate */
-  known: number;
-  /** done with no human loop at all */
-  unattended: number;
-  loops: number;
-  unanswered: number;
-  /** the median of the ended runs' active seconds, null when none is recorded */
-  medianActive: number | null;
-  cost: number;
-  /** runs whose cost is not in `cost`, or only partly (then the sum is "at least") */
-  costMissing: number;
-  tokens: number;
-  tokensMissing: number;
-  /** runs whose tokens are in `tokens` only as a lower bound (`tokens_partial`) */
-  tokensPartial: number;
-  /** pipeline runs by their Autonomy Judge state */
-  judge: { PASS: number; WARN: number; BLOCK: number };
-  lessonsReturned: number;
-  lessonsWritten: number;
-  /** checks not seen or errored (anything but ran) */
-  checksMissed: number;
-}
-
-/** The numbers of a set of runs: what the history's summary line and each row of the
- *  breakdown table show. Nothing is guessed: a run without a result is not known, its
- *  cost and tokens are counted as missing, never as zero. */
-export function tallyRuns(runs: SwarmOutRun[]): RunTally {
-  const t: RunTally = { runs: runs.length, by: { completed: 0, error: 0, stopped: 0, other: 0, running: 0 }, known: 0,
-    unattended: 0, loops: 0, unanswered: 0, medianActive: null, cost: 0, costMissing: 0, tokens: 0, tokensMissing: 0, tokensPartial: 0,
-    judge: { PASS: 0, WARN: 0, BLOCK: 0 }, lessonsReturned: 0, lessonsWritten: 0, checksMissed: 0 };
-  const active: number[] = [];
-  for (const r of runs) {
-    const o = historyOutcome(r);
-    t.by[o] += 1;
-    if (o === 'completed' || o === 'error' || o === 'stopped') t.known += 1;
-    const res = r.result;
-    if (!res) { t.costMissing += 1; t.tokensMissing += 1; continue; }
-    const loops = loopsOf(res);
-    if (o === 'completed' && loops === 0) t.unattended += 1;
-    t.loops += loops ?? 0;     // a record that cannot tell adds nothing (and is not unattended)
-    t.unanswered += res.work.human.unanswered;
-    if (o !== 'running' && res.active_s != null) active.push(res.active_s);
-    if (res.cost_usd == null) t.costMissing += 1;
-    else { t.cost += res.cost_usd; if (res.cost_partial) t.costMissing += 1; }
-    const tok = tokenTotal(res);
-    if (tok == null) t.tokensMissing += 1;
-    else { t.tokens += tok; if (res.tokens_partial) t.tokensPartial += 1; }
-    const j = runJudge(res);
-    if (j) t.judge[judgeState(j.verdicts).state] += 1;
-    t.lessonsReturned += res.lessons?.returned ?? 0;
-    t.lessonsWritten += res.lessons?.written ?? 0;
-    if (!res.provisional && o !== 'running') t.checksMissed += (res.checks ?? []).filter((c) => checkStatus(c.status) !== 'ran').length;
-  }
-  if (active.length) {
-    active.sort((a, b) => a - b);
-    const m = Math.floor(active.length / 2);
-    t.medianActive = active.length % 2 ? active[m] : Math.round((active[m - 1] + active[m]) / 2);
-  }
-  return t;
-}
-
-export type BreakdownDim = 'brain' | 'type' | 'hive';
-
-/** The key and label of a run's group along one dimension. A run with no Project Agent
- *  is its own Brain group, "no Project Agent". */
-export function groupOf(r: SwarmOutRun, dim: BreakdownDim): { key: string; label: string } {
-  if (dim === 'hive') return { key: r.hive, label: r.hive };
-  if (dim === 'type') return runType(r);
-  const f = agentFacts(r);
-  const brain = r.project_agent?.brain ?? r.result?.project_agent?.brain ?? '';
-  return brain ? { key: brain, label: f.brain } : { key: '', label: f.agent };
-}
-
-export interface BreakdownRow { key: string; label: string; agent?: string; tally: RunTally }
-
-/** The runs split along one dimension, the biggest group first; the runs without a
- *  Project Agent (by Brain) and the ones not known yet (by type) last. */
-export function breakdown(runs: SwarmOutRun[], dim: BreakdownDim): BreakdownRow[] {
-  const by = new Map<string, { label: string; agent?: string; runs: SwarmOutRun[] }>();
-  for (const r of runs) {
-    const g = groupOf(r, dim);
-    const cur = by.get(g.key) ?? { label: g.label, agent: dim === 'brain' && g.key ? agentFacts(r).agent : undefined, runs: [] };
-    cur.runs.push(r);
-    by.set(g.key, cur);
-  }
-  const last = (k: string) => (dim === 'brain' && k === '') || (dim === 'type' && k === 'unknown') ? 1 : 0;
-  return [...by].map(([key, g]) => ({ key, label: g.label, agent: g.agent, tally: tallyRuns(g.runs) }))
-    .sort((a, b) => last(a.key) - last(b.key) || b.tally.runs - a.tally.runs || a.label.localeCompare(b.label));
-}
-
-/** For each of the five audit dimensions, how many pipeline runs got each verdict. */
-export function dimensionCounts(runs: SwarmOutRun[]): { dim: string; counts: Record<Verdict, number> }[] | null {
-  const judges = runs.map((r) => (r.result ? runJudge(r.result) : null)).filter((j): j is RunJudge => !!j);
-  if (judges.length === 0) return null;
-  return DIMENSIONS.map((dim, i) => {
-    const counts: Record<Verdict, number> = { PASS: 0, WARN: 0, BLOCK: 0, NA: 0, PENDING: 0 };
-    for (const j of judges) counts[j.verdicts[i]] += 1;
-    return { dim, counts };
-  });
-}
-
-/** The history's records filter by how a run went: failed, stopped, needed a person,
- *  not known (running ones are under "not known" too: their ending is not known yet). */
-export type RecordFilter = 'all' | 'error' | 'stopped' | 'human' | 'unknown';
-export function matchesFilter(r: SwarmOutRun, f: RecordFilter): boolean {
-  if (f === 'all') return true;
-  const o = historyOutcome(r);
-  if (f === 'error') return o === 'error';
-  if (f === 'stopped') return o === 'stopped';
-  if (f === 'unknown') return o === 'other' || o === 'running';
-  return !!r.result && (loopsOf(r.result) ?? 0) > 0;
-}
-
-/** A spend as the cards write it: "4.8M token · $3.70", "≥" on what is only partly
- *  known, "—" for what is not known at all. */
-export function spendText(t: Pick<RunTally, 'runs' | 'cost' | 'costMissing' | 'tokens' | 'tokensMissing'> & { tokensPartial?: number }, short = false): string {
-  const all = (missing: number) => missing >= t.runs;
-  const tokens = all(t.tokensMissing) ? '—' : `${t.tokensMissing || t.tokensPartial ? '≥ ' : ''}${tokenCount(t.tokens)}`;
-  const cost = all(t.costMissing) ? '—' : `${t.costMissing ? '≥ ' : ''}$${t.cost.toFixed(2)}`;
-  return i18n.t(short ? 'swarmOut.stats.spendShort' : 'swarmOut.stats.spendValue', { tokens, cost });
-}
-
-/** One run's spend as a tally of one, for spendText. */
-export function runSpend(res: SwarmOutResult | null | undefined): Pick<RunTally, 'runs' | 'cost' | 'costMissing' | 'tokens' | 'tokensMissing' | 'tokensPartial'> {
-  const tok = res ? tokenTotal(res) : null;
-  return { runs: 1, cost: res?.cost_usd ?? 0, costMissing: !res || res.cost_usd == null || res.cost_partial ? 1 : 0,
-    tokens: tok ?? 0, tokensMissing: tok == null ? 1 : 0, tokensPartial: tok != null && res?.tokens_partial ? 1 : 0 };
-}
-
-/** A duration in the cards' words ("55 秒", "5 分钟"). */
-export const durationText = (s: number | null): string => (s == null ? '—' : minutes(s));
