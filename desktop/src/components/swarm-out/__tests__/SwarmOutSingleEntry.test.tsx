@@ -7,7 +7,8 @@
  *    execution surface, no button on any row, and stopped Hives never replace the view.
  * 2. without an AWS account the panel shows one card whose button opens Settings.
  * 3. the settings view: the account line, the Elastic Workers switch (and the account
- *    choice with several accounts: saved at once on standby, shown again, fixed once it runs), each Hive with login info and delete, "add one" naming
+ *    choice with several accounts: saved at once on standby, shown again, fixed once it runs), each Hive with login info and delete
+ *    (a broken one with its reason and retry), "add one" naming
  *    the cost before anything is created, what blocks building one.
  * 4. no Hive nav card and no hive overlay remain.
  * 5. an upgrading user sees the note once.
@@ -20,7 +21,7 @@ import zh from '../../../i18n/locales/zh.json';
 
 const mocks = {
   runs: vi.fn(), fleet: vi.fn(), get: vi.fn(), elastic: vi.fn(), standby: vi.fn(), setFleet: vi.fn(),
-  instances: vi.fn(), accounts: vi.fn(), del: vi.fn(), cfg: vi.fn(), updateCfg: vi.fn(),
+  instances: vi.fn(), accounts: vi.fn(), del: vi.fn(), cfg: vi.fn(), updateCfg: vi.fn(), retry: vi.fn(),
 };
 vi.mock('../../../services/swarmOut', () => ({
   swarmOutService: { runs: (...a: unknown[]) => mocks.runs(...a), fleet: (...a: unknown[]) => mocks.fleet(...a), answer: vi.fn(), hives: vi.fn() },
@@ -37,7 +38,7 @@ vi.mock('../../../services/hive', async (orig) => ({
   ...(await orig<typeof import('../../../services/hive')>()),
   hiveService: {
     listInstances: (...a: unknown[]) => mocks.instances(...a), listAccounts: (...a: unknown[]) => mocks.accounts(...a),
-    deleteInstance: (...a: unknown[]) => mocks.del(...a), stopInstance: vi.fn(), startInstance: vi.fn(), getCredentials: vi.fn(),
+    deleteInstance: (...a: unknown[]) => mocks.del(...a), retryInstance: (...a: unknown[]) => mocks.retry(...a), stopInstance: vi.fn(), startInstance: vi.fn(), getCredentials: vi.fn(),
   },
 }));
 vi.mock('../../../services/settings', () => ({
@@ -181,6 +182,18 @@ describe('Swarm Out as the only place for Hives', () => {
     render(<SwarmOutSettings />);
     expect(await screen.findByTestId('so-elastic-account-fixed')).toHaveTextContent('label-a2');
     expect(screen.queryByTestId('so-elastic-account')).toBeNull();
+  });
+
+  it('the settings view: a broken Hive says why and can be retried after a confirm', async () => {
+    mocks.instances.mockResolvedValue([{ ...INSTANCE, status: 'error', errorMessage: 'Failed to become healthy after start' }]);
+    mocks.retry.mockResolvedValue(undefined);
+    render(<SwarmOutSettings />);
+    const row = await screen.findByTestId('so-hive-row');
+    expect(within(row).getByTestId('so-hive-error')).toHaveTextContent('Failed to become healthy after start');
+    fireEvent.click(within(row).getByTestId('so-hive-retry'));
+    expect(mocks.retry).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId('so-hive-retry-go'));
+    await waitFor(() => expect(mocks.retry).toHaveBeenCalledWith('h1', true));
   });
 
   it('the settings view: what blocks building a Hive is shown', async () => {

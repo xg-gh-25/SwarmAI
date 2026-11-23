@@ -12,7 +12,8 @@
  *     the person's), and in the old multi-account mode the account it uses (chosen while
  *     there is none yet, saved at once on standby; the account it runs in once there is
  *     one); size, cost, version and its state as one line each;
- *  ③ resident Hives (EC2): one row per Hive (version, state, login info, restart, delete),
+ *  ③ resident Hives (EC2): one row per Hive (version, state, login info, restart, delete;
+ *     a broken one shows why and offers retry, which rebuilds it after a confirm),
  *     "+ add one" naming the monthly cost before anything is created (and, when the account
  *     cannot build one, what is missing: the permission template, a default VPC to create),
  *     the instance type for new Hives, the idle stop time (hive_idle_stop_minutes), the region;
@@ -26,7 +27,7 @@ import { awsAccountService, problemOf, type AwsAccountView, type ElasticStatus }
 import { hiveService, hiveAccountView, type HiveAccount, type HiveInstance } from '../../services/hive';
 import { settingsService } from '../../services/settings';
 import { OPEN_SETTINGS_EVENT } from '../common/settingsEvents';
-import { AuthDisplay, DeployHiveDialog } from '../settings/hiveComponents';
+import { AuthDisplay, DeployHiveDialog, retryPrompt } from '../settings/hiveComponents';
 import { CapabilityLine } from '../awsAccount/HiveFleet';
 import { hiveStatusLabel } from './live';
 
@@ -66,7 +67,7 @@ export function SwarmOutSettings() {
   const [idle, setIdle] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState<{ id: string; what: 'login' | 'delete' } | null>(null);
+  const [open, setOpen] = useState<{ id: string; what: 'login' | 'delete' | 'retry' } | null>(null);
   const [adding, setAdding] = useState(false);
   const [deployLegacy, setDeployLegacy] = useState(false);
   const [chosen, setChosen] = useState('');
@@ -190,9 +191,25 @@ export function SwarmOutSettings() {
                   title={t('swarmOut.settings.restartNote')}
                   onClick={() => void act(async () => { await hiveService.stopInstance(h.id); await hiveService.startInstance(h.id); })}>
                   {t('swarmOut.settings.restart')}</button>
+                {h.status === 'error' && (
+                  <button type="button" className={link} disabled={busy} data-testid="so-hive-retry"
+                    onClick={() => setOpen({ id: h.id, what: 'retry' })}>{t('common.button.retry')}</button>
+                )}
                 <button type="button" className="text-[var(--color-error)] hover:underline disabled:opacity-50" disabled={busy}
                   data-testid="so-hive-delete" onClick={() => setOpen({ id: h.id, what: 'delete' })}>{t('swarmOut.settings.delete')}</button>
               </div>
+              {/* why it is broken, so the person can choose retry (rebuild) or delete */}
+              {h.status === 'error' && h.errorMessage && (
+                <div className="mt-1 text-[12px] text-[var(--color-error)] break-words" data-testid="so-hive-error">{h.errorMessage}</div>
+              )}
+              {open?.id === h.id && open.what === 'retry' && (
+                <div className="mt-2 flex flex-wrap items-center gap-3" data-testid="so-hive-retry-confirm">
+                  <span className="text-[var(--color-text-secondary)] whitespace-pre-line">{retryPrompt(h)}</span>
+                  <button type="button" className="btn-md btn-primary disabled:opacity-50" disabled={busy} data-testid="so-hive-retry-go"
+                    onClick={() => void act(() => hiveService.retryInstance(h.id, !!h.ec2InstanceId))}>{t('common.button.retry')}</button>
+                  <button type="button" className={link} onClick={() => setOpen(null)}>{t('awsConnect.cancel')}</button>
+                </div>
+              )}
               {open?.id === h.id && open.what === 'login' && <div className="mt-2"><AuthDisplay instance={h} /></div>}
               {open?.id === h.id && open.what === 'delete' && (
                 <div className="mt-2 flex flex-wrap items-center gap-3" data-testid="so-hive-delete-confirm">
