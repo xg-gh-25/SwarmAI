@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from core.awake_clock import awake_time  # liveness durations exclude sleep
 import uuid
@@ -31,6 +30,7 @@ from . import pipeline_stage_events as _pse
 from . import swarm_out_card as _swarm_out_card
 from . import turn_products as _turn_products
 from .compaction_guard import EscalationLevel
+from .process_compat import probe_pid
 from .cli_stream_reader import SteerRead, TurnAbandoned
 from .session_healing import get_process_rss_mb
 from .stream_rate import StreamRateMeter
@@ -3049,7 +3049,7 @@ class StreamingOrchestrator:
                     # _sdk_session_id is preserved for --resume on respawn.
                     if self._parent.pid:
                         try:
-                            os.kill(self._parent.pid, 0)  # signal 0 = liveness check
+                            probe_pid(self._parent.pid)  # liveness check
                         except (ProcessLookupError, OSError):
                             # Process is dead — clear refs
                             self._parent._client = None

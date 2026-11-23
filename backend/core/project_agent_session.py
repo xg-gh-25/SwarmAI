@@ -34,7 +34,6 @@ import json
 import logging
 import os
 import re
-import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -45,6 +44,7 @@ import yaml
 from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, RESERVED_ACTIONS, _list_of_dicts, _mode_view,
                                 gates_snapshot, general_brain_dir, normalize, revision, validate)
 from core.project_agent_rules import MAX_RULE_CHARS, MAX_RULES
+from core.process_compat import kill_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +348,7 @@ def _run_one(name: str, body: bytes, payload: bytes) -> Optional[str]:
                     proc.wait(timeout=GATE_TIMEOUT_S)
                 except subprocess.TimeoutExpired:
                     try:
-                        os.killpg(proc.pid, signal.SIGKILL)
+                        kill_process_group(proc.pid)    # the tree on Windows
                     except (ProcessLookupError, PermissionError):
                         pass
                     try:

@@ -354,8 +354,10 @@ class TestExpectedKillLogFilter:
 
     def test_force_kill_notes_the_kill_before_signalling(self):
         src = (REPO / "backend" / "core" / "session_unit.py").read_text()
-        body = src[src.index("async def _force_kill(self)"):]
-        assert body.index("_note_intentional_kill()") < body.index("os.killpg(pgid, signal.SIGKILL)")
+        body = src[src.index("async def _force_kill("):]
+        noted = body.index("_note_intentional_kill()")
+        assert noted < body.index("os.killpg(pgid, signal.SIGKILL)")
+        assert noted < body.index("_kill_tree_psutil, pid")      # the Windows kill
 
 
 class TestThrowawayInstancesSkipSweep:

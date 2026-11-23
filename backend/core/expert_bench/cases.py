@@ -27,7 +27,6 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -35,6 +34,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
 from core.review_order import role
+from core.process_compat import kill_process_group
 
 DEFAULT_GREP = r"\bfix|修复|\bbug"
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", re.M)
@@ -175,7 +175,10 @@ def _run(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
         out, _ = p.communicate(timeout=timeout)
         return p.returncode, out.decode("utf-8", "replace")[-2000:]
     except subprocess.TimeoutExpired:   # a hang guard: a test run that never ends
-        os.killpg(p.pid, signal.SIGKILL)  # its whole group: workers and servers it started
+        try:    # its whole group: workers and servers it started (the tree on Windows)
+            kill_process_group(p.pid)
+        except (ProcessLookupError, PermissionError):
+            pass
         p.communicate()
         return -9, "timed out"
 

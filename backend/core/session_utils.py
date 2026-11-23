@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 from config import settings
 
+from .process_compat import is_windows
+
 
 # ---------------------------------------------------------------------------
 # Failure classification — structured failure types for retry intelligence
@@ -954,9 +956,10 @@ def _build_error_event(
 def read_owner_pid(pid: int) -> int | None:
     """Read SWARMAI_OWNER_PID from a process's environment.
 
-    Uses ``ps eww -o command= -p <pid>`` on macOS to get the full
-    command line with environment variables.  Falls back to
-    ``/proc/<pid>/environ`` on Linux.
+    Reads it through psutil first (every platform). When psutil cannot read it,
+    falls back to ``ps eww -o command= -p <pid>`` on macOS and to
+    ``/proc/<pid>/environ`` on Linux; Windows has neither, so there the answer is
+    None (unreadable: the callers never kill on it).
 
     Returns the owner PID as int, or None if not found.
 
@@ -979,6 +982,8 @@ def read_owner_pid(pid: int) -> int | None:
     except Exception as exc:  # noqa: BLE001 — psutil.AccessDenied / NoSuchProcess / ZombieProcess
         if type(exc).__name__ in ("NoSuchProcess", "ZombieProcess"):
             return None
+    if is_windows():
+        return None     # psutil is the only reader there: no ps, no /proc
     if platform.system() == "Darwin":
         try:
             result = subprocess.run(

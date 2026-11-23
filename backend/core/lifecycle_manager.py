@@ -24,7 +24,6 @@ import functools
 import json
 import logging
 import os
-import signal
 import subprocess
 import time
 from core.awake_clock import awake_time  # liveness durations exclude sleep
@@ -37,6 +36,7 @@ from .session_unit import (
     rss_executor as _rss_executor,
 )
 from core.project_registry import DEFAULT_PROJECT_NAME
+from core.process_compat import find_pids_by_cmdline, is_windows, kill_pid, probe_pid
 
 if TYPE_CHECKING:
     from .session_router import SessionRouter
@@ -187,7 +187,8 @@ class LifecycleManager:
         self._tracked_child_pids.discard(pid)
 
     async def _kill_tracked_pids(self) -> None:
-        """SIGKILL all tracked child PIDs at shutdown. Best-effort."""
+        """Kill all tracked child PIDs at shutdown (SIGKILL; TerminateProcess on
+        Windows). Best-effort."""
         if not self._tracked_child_pids:
             return
         killed = 0
@@ -195,7 +196,7 @@ class LifecycleManager:
         kill_audit.record(list(self._tracked_child_pids), "shutdown tracked child")
         for pid in list(self._tracked_child_pids):
             try:
-                os.kill(pid, signal.SIGKILL)
+                kill_pid(pid)
                 killed += 1
                 logger.info("lifecycle_manager.kill_tracked pid=%d", pid)
             except (ProcessLookupError, PermissionError):
@@ -1918,6 +1919,10 @@ class LifecycleManager:
                 # parent is dead (reparented to launchd).
                 try:
                     import psutil  # no fork (a `ps` per pid ran the reaper past 30s)
+                    if is_windows():
+                        # Windows never reparents: an orphan's parent is gone (parent()
+                        # also checks the parent's create time against a reused pid)
+                        return psutil.Process(pid).parent() is None
                     return psutil.Process(pid).ppid() == 1  # Reparented to launchd = orphan
                 except Exception as exc:  # noqa: BLE001 — gone / denied: not an orphan (fail safe)
                     logger.debug("orphan check for pid %s: %s", pid, exc)
@@ -1925,7 +1930,7 @@ class LifecycleManager:
 
             # Owner is a different PID — check if that backend is still alive
             try:
-                os.kill(owner_pid, 0)  # Signal 0 = existence check
+                probe_pid(owner_pid)  # existence check (os.kill(pid, 0) on POSIX)
                 return False  # Owner is alive → legitimate child
             except ProcessLookupError:
                 return True  # Owner is dead → orphan from previous instance
@@ -1960,6 +1965,9 @@ class LifecycleManager:
     ) -> int:
         """Find and kill processes matching *pattern* via ``pgrep -f``.
 
+        Windows has no ``pgrep``: there the command lines are matched through psutil
+        (``process_compat.find_pids_by_cmdline``), and the kill is TerminateProcess.
+
         Args:
             pattern: Regex passed to ``pgrep -f``.
             label: Human-readable name for log messages.
@@ -1974,27 +1982,29 @@ class LifecycleManager:
             Number of processes killed.
         """
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            _subprocess_executor,
-            functools.partial(
-                subprocess.run,
-                ["pgrep", "-f", pattern],
-                capture_output=True, text=True, timeout=5,
-            ),
-        )
-        if result.returncode != 0:
-            return 0
+        if is_windows():
+            pids = await loop.run_in_executor(
+                _subprocess_executor, find_pids_by_cmdline, pattern)
+        else:
+            result = await loop.run_in_executor(
+                _subprocess_executor,
+                functools.partial(
+                    subprocess.run,
+                    ["pgrep", "-f", pattern],
+                    capture_output=True, text=True, timeout=5,
+                ),
+            )
+            if result.returncode != 0:
+                return 0
+            pids = []
+            for line in result.stdout.strip().split("\n"):
+                try:
+                    pids.append(int(line.strip()))
+                except ValueError:
+                    continue
 
         killed = 0
-        for line in result.stdout.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                pid = int(line)
-            except ValueError:
-                continue
-
+        for pid in pids:
             if pid == os.getpid() or pid in known_pids:
                 continue
 
@@ -2006,7 +2016,7 @@ class LifecycleManager:
             try:
                 from core import kill_audit
                 kill_audit.record([pid], f"reap {label}")
-                os.kill(pid, signal.SIGKILL)
+                kill_pid(pid)
                 killed += 1
                 logger.info("lifecycle_manager.reap_%s pid=%d", label, pid)
             except (ProcessLookupError, PermissionError):

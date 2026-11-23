@@ -29,6 +29,8 @@ import signal
 import subprocess
 from typing import Optional, TYPE_CHECKING
 
+from .process_compat import find_pids_by_cmdline, is_windows, probe_pid
+
 if TYPE_CHECKING:
     from .session_router import SessionRouter
     from .prompt_builder import PromptBuilder
@@ -188,9 +190,14 @@ def kill_all_claude_processes() -> int:
     COE 2026-03-15: At startup, leftover processes from a crashed previous
     instance are guaranteed stale.  Kill them all.
 
+    Windows has no ``pgrep``: there the command lines are matched through psutil
+    (``process_compat.find_pids_by_cmdline``, backslash paths read as ``/``) and each
+    leftover's tree is killed with ``session_unit._kill_tree_psutil``.
+
     Returns the number of processes killed.
     """
-    if platform.system() not in ("Darwin", "Linux"):
+    windows = is_windows()
+    if not windows and platform.system() not in ("Darwin", "Linux"):
         return 0
 
     killed = 0
@@ -201,14 +208,16 @@ def kill_all_claude_processes() -> int:
         # (SWARMAI_OWNER_PID set but owner PID is dead).  Processes owned
         # by the CURRENT instance (shouldn't exist at startup) are skipped.
         # Processes without a readable tag are skipped (not provably ours).
-        result = subprocess.run(
-            ["pgrep", "-f", "claude_agent_sdk/_bundled/claude"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return 0
-
-        pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+        if windows:
+            pids = find_pids_by_cmdline("claude_agent_sdk/_bundled/claude")
+        else:
+            result = subprocess.run(
+                ["pgrep", "-f", "claude_agent_sdk/_bundled/claude"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return 0
+            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
         for pid in pids:
             if pid == my_pid:
                 continue
@@ -222,7 +231,7 @@ def kill_all_claude_processes() -> int:
                 if owner_pid is not None:
                     # Has ownership tag — check if owner is alive
                     try:
-                        os.kill(owner_pid, 0)
+                        probe_pid(owner_pid)  # os.kill(pid, 0) on POSIX
                         continue  # Owner is alive — not an orphan
                     except ProcessLookupError:
                         pass  # Owner dead — proceed to kill
@@ -239,12 +248,26 @@ def kill_all_claude_processes() -> int:
                     # untagged leftover predates it.
                     continue
 
-                from core.session_unit import _snapshot_descendant_tree, _kill_pids
-                tree = _snapshot_descendant_tree(pid)
-                tree_killed = _kill_pids(tree, "startup leftover (descendant)")
                 from core import kill_audit
-                kill_audit.record([pid], f"startup leftover (owner {owner_pid} dead)")
-                os.kill(pid, signal.SIGKILL)
+                if windows:
+                    from core.session_unit import _kill_tree_psutil
+                    kill_audit.record([pid], f"startup leftover (owner {owner_pid} dead)")
+                    _tree, tree_killed, cli_killed = _kill_tree_psutil(
+                        pid, "startup leftover")
+                    if not cli_killed:      # gone before its kill, or not ours to kill
+                        if tree_killed:
+                            logger.info(
+                                "Startup: leftover SwarmAI claude pid=%d not killed "
+                                "(+%d descendants killed, owner=%s)",
+                                pid, tree_killed, owner_pid,
+                            )
+                        continue
+                else:
+                    from core.session_unit import _snapshot_descendant_tree, _kill_pids
+                    tree = _snapshot_descendant_tree(pid)
+                    tree_killed = _kill_pids(tree, "startup leftover (descendant)")
+                    kill_audit.record([pid], f"startup leftover (owner {owner_pid} dead)")
+                    os.kill(pid, signal.SIGKILL)
                 killed += 1
                 logger.info(
                     "Startup: killed leftover SwarmAI claude pid=%d "

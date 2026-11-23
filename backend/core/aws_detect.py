@@ -26,12 +26,12 @@ import configparser
 import json
 import os
 import re
-import signal
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
 from core import aws_account
+from core.process_compat import kill_process_group
 
 _HANG_GUARD_S = 45  # one check that never answers is killed (not a business timeout)
 JOB_ENV = "SWARM_AWS_DETECT_JOB"
@@ -190,7 +190,7 @@ def verify(row: dict, *, user_asked: bool) -> dict:
 
 def _kill(proc: subprocess.Popen) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        kill_process_group(proc.pid)    # its own group; the tree on Windows
     except (OSError, ProcessLookupError):
         pass
     try:

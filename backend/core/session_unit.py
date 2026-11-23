@@ -48,6 +48,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
+from .process_compat import is_windows, kill_pid, probe_pid
 from .retry_manager import RetryManager
 from .turn_notice import turn_notice_event
 from .streaming_orchestrator import StreamingOrchestrator
@@ -445,20 +446,44 @@ def _mcp_failure_hints(failed_servers: list[dict], missing: set[str]) -> set[str
 
 
 def _kill_pids(pids: list[int], reason: str = "tree") -> int:
-    """SIGKILL a list of PIDs (recorded in core/kill_audit first). Returns count
+    """Kill a list of PIDs outright (SIGKILL; TerminateProcess on Windows, through
+    process_compat.kill_pid), recorded in core/kill_audit first. Returns count
     successfully killed."""
     from core import kill_audit
     kill_audit.record(pids, reason)
-    # Windows has no SIGKILL; there os.kill with SIGTERM ends the process outright
-    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
     killed = 0
     for pid in pids:
         try:
-            os.kill(pid, kill_signal)
+            kill_pid(pid)
             killed += 1
         except (ProcessLookupError, PermissionError):
             pass
     return killed
+
+
+def _kill_tree_psutil(pid: int, reason: str) -> tuple[int, int, bool]:
+    """Windows kill of the CLI *pid* and its whole descendant tree, through psutil.
+
+    Windows has no process groups to signal, so the tree is snapshotted first (the
+    CLI's ``psutil.Process`` and every descendant), then each descendant still running
+    is killed, deepest first, and the CLI last. psutil compares each process's creation
+    time, so a pid reused meanwhile is never killed. Returns (descendants in the
+    snapshot, descendants killed, whether the CLI itself was killed). Blocking: run it
+    on ``_subprocess_executor``."""
+    import psutil
+    try:
+        root = psutil.Process(pid)
+    except psutil.Error as exc:
+        logger.debug("session_unit: pid %s gone before its tree kill: %s", pid, exc)
+        return 0, 0, False
+    tree = _snapshot_descendant_procs(pid)
+    killed = _kill_surviving(list(reversed(tree)), f"{reason} (descendant)")
+    try:
+        root.kill()
+    except psutil.Error as exc:     # exited meanwhile, or not ours to kill
+        logger.debug("session_unit: kill of pid %s failed: %s", pid, exc)
+        return len(tree), killed, False
+    return len(tree), killed, True
 
 
 # Graceful close of an idle CLI before the kill (non-hung teardowns only). Told to stop
@@ -1249,7 +1274,8 @@ class SessionUnit:
         self._resume_wedged_strikes: int = 0
 
         # ── PID Watchdog (out-of-band subprocess death detection) ──
-        # Polls os.kill(pid, 0) while STREAMING/WAITING_INPUT.
+        # Polls probe_pid (os.kill(pid, 0) on POSIX, psutil on Windows) while
+        # STREAMING/WAITING_INPUT.
         # Detects external kills (jetsam, OOM) that pipe can't detect.
         self._pid_watchdog_task: Optional[asyncio.Task] = None
         self._PID_WATCHDOG_INTERVAL: float = 5.0  # seconds between polls
@@ -1973,7 +1999,7 @@ class SessionUnit:
         """Start background task that polls subprocess liveness.
 
         Only starts if a PID is available (subprocess spawned).
-        The watchdog polls os.kill(pid, 0) every _PID_WATCHDOG_INTERVAL
+        The watchdog polls probe_pid(pid) every _PID_WATCHDOG_INTERVAL
         seconds. If the process is gone (ProcessLookupError), it
         transitions the session to DEAD — enabling auto-recovery.
 
@@ -2002,7 +2028,7 @@ class SessionUnit:
         """Poll subprocess PID until death or cancellation.
 
         Two detection mechanisms:
-        1. Process existence: os.kill(pid, 0) — detects external kills
+        1. Process existence: probe_pid(pid) — detects external kills
            (jetsam, OOM, manual SIGKILL).
         2. Output liveness: _last_event_time staleness — detects API hangs
            where the subprocess is alive but blocked on network I/O (the
@@ -2021,7 +2047,7 @@ class SessionUnit:
 
                 # ── Check 1: Process existence ────────────────────────
                 try:
-                    os.kill(pid, 0)
+                    probe_pid(pid)
                     # Process is alive — continue to liveness check
                 except PermissionError:
                     # Process exists but we can't signal it — treat as alive
@@ -5475,7 +5501,7 @@ class SessionUnit:
             return self.state == SessionState.COLD
 
         try:
-            os.kill(pid, 0)  # Signal 0 = existence check
+            probe_pid(pid)  # existence check (os.kill(pid, 0) on POSIX)
 
             # Collect per-process metrics (non-blocking, best-effort)
             try:
@@ -5554,9 +5580,13 @@ class SessionUnit:
         try:
             # read before the exit: the CLI's own process group (when it is not ours),
             # swept after the exit like the SIGKILL path does, so a process the agent
-            # detached from the tree (reparented to init) still dies with the session
-            pgid = os.getpgid(pid)
-            group = pgid if pgid != os.getpgid(os.getpid()) else None
+            # detached from the tree (reparented to init) still dies with the session.
+            # Windows has no process groups (nor os.getpgid): there the descendant
+            # snapshot below is the whole sweep.
+            group = None
+            if not is_windows():
+                pgid = os.getpgid(pid)
+                group = pgid if pgid != os.getpgid(os.getpid()) else None
             children = await loop.run_in_executor(
                 _subprocess_executor, _snapshot_descendant_procs, pid)
             await asyncio.wait_for(transport.end_input(), timeout=_GRACEFUL_END_INPUT_CAP_S)
@@ -5598,6 +5628,10 @@ class SessionUnit:
         grandchild orphans (e.g. MCP servers spawned by Claude CLI).
         Falls back to plain os.kill if pgid lookup fails.
 
+        Windows has no process groups, ``os.getpgid``, ``os.killpg`` or SIGKILL: there
+        the CLI's descendant tree is snapshotted with psutil and killed, the CLI last
+        (``_kill_tree_psutil``).
+
         SAFETY: Only uses killpg if the child's pgid differs from our
         own — otherwise we'd kill the entire backend + Tauri app.
         The Claude SDK subprocess inherits the parent's pgid unless
@@ -5612,12 +5646,26 @@ class SessionUnit:
         """
         pid = self.pid
         exited = bool(pid and graceful and await self._close_cli_gracefully(pid))
-        if pid and not exited:
+        kill_now = bool(pid and not exited)
+        if kill_now:
             # Before the kill: the SDK reader logs its "exit code -9" ERROR
             # within milliseconds of the signal (see _ExpectedKillLogFilter).
             _note_intentional_kill()
             from core import kill_audit
             kill_audit.record([pid], f"session {self.session_id}")
+        if kill_now and is_windows():
+            # snapshot the tree, then kill it (psutil; the CLI last)
+            loop = asyncio.get_running_loop()
+            tree_size, tree_killed, cli_killed = await loop.run_in_executor(
+                _subprocess_executor, _kill_tree_psutil, pid,
+                f"session {self.session_id}",
+            )
+            logger.info(
+                "session_unit.force_kill_tree session_id=%s pid=%d "
+                "tree_size=%d tree_killed=%d cli_killed=%s (windows)",
+                self.session_id, pid, tree_size, tree_killed, cli_killed,
+            )
+        elif kill_now:
             try:
                 pgid = os.getpgid(pid)
                 my_pgid = os.getpgid(os.getpid())
@@ -5722,7 +5770,7 @@ class SessionUnit:
         interval = 0.05  # start at 50ms, double each poll
         while asyncio.get_event_loop().time() < deadline:
             try:
-                os.kill(pid, 0)  # 0-signal = existence check
+                probe_pid(pid)  # existence check (os.kill(pid, 0) on POSIX)
             except ProcessLookupError:
                 return  # process fully reaped — safe to proceed
             except PermissionError:
