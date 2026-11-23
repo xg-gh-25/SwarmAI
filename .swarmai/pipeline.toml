@@ -6,9 +6,14 @@ author = "swarm"
 trailer = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
 
 [worktree]
+# Each listed dir becomes a real dir in the worktree whose entries link to the main
+# checkout's (core/run_worktree.link_entries): an npm ci there installs into the worktree
+# and leaves the main checkout's node_modules alone. An npm install <pkg> there can still
+# change a linked @scope/ or .bin/ folder of the main checkout: add packages in the main
+# checkout.
 # backend/.venv: the dev shim (backend/bin/python-backend) and the tests need the backend's
-# interpreter. The link is shared, so installing packages inside a worktree changes the main
-# checkout's venv: install in the main checkout.
+# interpreter. A pip install inside a worktree still writes into the linked lib/ and so
+# changes the main checkout's venv: install in the main checkout.
 link = ["desktop/node_modules", "backend/.venv"]
 
 [hive_return]

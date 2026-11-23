@@ -185,10 +185,8 @@ def remove(path: str) -> dict:
     base = _branch_of_main(main)
     if _git(main, "merge-base", "--is-ancestor", branch, base).returncode != 0:
         raise Refused(f"{branch} is not merged into {base}; land it first (nothing removed)")
-    for rel in rw.dep_links(main):          # our symlinks, so the worktree reads clean
-        link = wt / rel
-        if link.is_symlink():
-            link.unlink()
+    for rel in rw.dep_links(main):          # our links, so the worktree reads clean
+        rw.unlink_entries(wt / rel, main / rel)
     p = _git(main, "worktree", "remove", str(wt))
     if p.returncode != 0:
         raise Refused((p.stderr or p.stdout).strip()[:500])

@@ -73,7 +73,9 @@ def extract(engine: Any, repo: str) -> dict[str, Any]:
                 known = json.loads(marker.read_text(encoding="utf-8"))
             except ValueError:
                 known = {}
-            if known.get("base") == base:
+            # a base made before its links were entry links holds one link to main's
+            # directory, which a reinstall would empty: made again
+            if known.get("base") == base and known.get("entry_links"):
                 return {"path": str(target), "base": base, "repo": repo,
                         "links": list(known.get("links") or []), "reused": True}
         staging = Path(tempfile.mkdtemp(prefix=f".{repo}-", dir=run_root))
@@ -89,7 +91,7 @@ def extract(engine: Any, repo: str) -> dict[str, Any]:
             shutil.rmtree(staging, ignore_errors=True)
             raise BaseTreeError("tar failed: "
                                 + untar.stderr.decode("utf-8", "replace").strip()[:300])
-        from core.run_worktree import dep_links
+        from core.run_worktree import dep_links, link_entries
         links = []
         inside = os.path.realpath(staging) + os.sep
         for rel in dep_links(main):
@@ -97,10 +99,10 @@ def extract(engine: Any, repo: str) -> dict[str, Any]:
             if not src.is_dir() or not dst.parent.is_dir() or os.path.lexists(dst) \
                     or not os.path.realpath(dst.parent).startswith(inside.rstrip(os.sep)):
                 continue
-            os.symlink(str(src), str(dst))
-            links.append(rel)
+            if link_entries(src, dst):   # entry links: a reinstall here never empties main's
+                links.append(rel)
         (staging / ".swarmai-base").write_text(
-            json.dumps({"base": base, "links": links}), encoding="utf-8")
+            json.dumps({"base": base, "links": links, "entry_links": True}), encoding="utf-8")
         old = None
         if target.exists():                # an older base of this run (main moved)
             old = run_root / f".old-{repo}-{os.getpid()}"

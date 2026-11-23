@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -540,7 +541,9 @@ def test_create_pins_main_and_links_dependency_dirs(env):
     wt = rw.wt_path(RUN, "swarmai")
     assert e["main"] == str(env["main"])
     assert e["dep_links"] == ["desktop/node_modules"]
-    assert os.path.islink(wt / "desktop" / "node_modules")
+    nm = wt / "desktop" / "node_modules"
+    assert nm.is_dir() and not nm.is_symlink()                    # a real dir of entry links
+    assert os.path.realpath(nm / "pkg") == os.path.realpath(env["main"] / "desktop" / "node_modules" / "pkg")
     assert not os.path.lexists(wt / "node_modules")     # never shared: installs would hit main
     assert not os.path.lexists(wt / ".venv")
     assert rw.untracked_new_files(wt, RUN) == []
@@ -688,7 +691,7 @@ def test_release_unintegrated_with_dependency_link_snapshots(env):
     (main / "desktop" / "node_modules" / "dep" / "index.js").write_text("x\n")
     e = rw.create(RUN, "swarmai", main)
     wt = rw.wt_path(RUN, "swarmai")
-    assert (wt / "desktop" / "node_modules").is_symlink()
+    assert (wt / "desktop" / "node_modules" / "dep").is_symlink()
     (wt / "a.py").write_text("a = 'wip'\n")
     res = rw.release(RUN, {"worktrees": [e]}, {"swarmai": main}, "cancelled")
     assert res[0]["ok"], res
@@ -821,3 +824,83 @@ def test_land_writes_the_landing_stamp(env, monkeypatch):
     assert msg == (f"swarm-land run/{RUN} session={asi.session_key(sid)} turn={turn} "
                    f"onto={onto}: Fast-forward"), msg
     assert _g(main, "rev-parse", "HEAD") == res["sha"]
+
+
+
+def _reinstall(d: Path) -> None:
+    """What ``npm ci`` does first: empty the node_modules it finds, through links."""
+    for name in os.listdir(d):
+        p = os.path.join(d, name)
+        if os.path.islink(p) or os.path.isfile(p):
+            os.unlink(p)
+        else:
+            shutil.rmtree(p)
+
+
+def test_a_reinstall_in_a_run_worktree_never_empties_the_main_checkout(env):
+    """npm ci in a worktree emptied the main checkout's desktop/node_modules (shared by
+    every worktree) when the worktree held one link to that directory."""
+    main = env["main"]
+    (main / ".swarmai").mkdir()
+    (main / ".swarmai" / "pipeline.toml").write_text('[worktree]\nlink = ["desktop/node_modules"]\n')
+    (main / "desktop").mkdir()
+    (main / "desktop" / "package.json").write_text("{}\n")
+    _g(main, "add", "-A")
+    _g(main, "commit", "-q", "-m", "desktop")
+    nm = main / "desktop" / "node_modules"
+    (nm / "dep").mkdir(parents=True)
+    (nm / "dep" / "index.js").write_text("x\n")
+    (nm / ".package-lock.json").write_text("main\n")
+    e = rw.create(RUN, "swarmai", main)
+    wt_nm = rw.wt_path(RUN, "swarmai") / "desktop" / "node_modules"
+    assert (wt_nm / "dep" / "index.js").read_text() == "x\n"      # visible through the link
+    assert not (wt_nm / ".package-lock.json").is_symlink()        # a top-level file is a copy
+    (wt_nm / ".package-lock.json").write_text("worktree\n")
+    _reinstall(wt_nm)
+    (wt_nm / "dep").mkdir()
+    (wt_nm / "dep" / "index.js").write_text("installed in the worktree\n")
+    assert (nm / "dep" / "index.js").read_text() == "x\n"
+    assert (nm / ".package-lock.json").read_text() == "main\n"
+    res = rw.release(RUN, {"worktrees": [e]}, {"swarmai": main}, "cancelled")
+    assert res[0]["ok"], res
+    assert (nm / "dep" / "index.js").read_text() == "x\n"
+
+
+def test_unlink_entries_removes_only_links(tmp_path):
+    outside = tmp_path / "main_nm"
+    (outside / "pkg").mkdir(parents=True)
+    (outside / "pkg" / "f").write_text("keep\n")
+    old = tmp_path / "old"
+    os.symlink(outside, old)                                      # the old single link
+    rw.unlink_entries(old, outside)
+    assert not os.path.lexists(old) and (outside / "pkg" / "f").exists()
+    new = tmp_path / "new"
+    assert rw.link_entries(outside, new)
+    (new / "installed").mkdir()                                   # an install in the worktree
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.symlink(elsewhere, new / "tracked-link")                   # not a link into main's dir
+    rw.unlink_entries(new, outside)
+    assert not os.path.lexists(new / "pkg") and (new / "installed").is_dir()
+    assert (new / "tracked-link").is_symlink()
+    assert (outside / "pkg" / "f").read_text() == "keep\n"
+    empty = tmp_path / "empty"
+    assert rw.link_entries(outside, empty)
+    rw.unlink_entries(empty, outside)
+    assert not os.path.lexists(empty)
+
+
+def test_link_entries_that_fails_leaves_nothing(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    (src / "pkg").mkdir(parents=True)
+    (src / ".package-lock.json").write_text("x\n")
+    real_symlink = os.symlink
+
+    def fail(*a, **k):
+        raise OSError("no links here")
+    monkeypatch.setattr(rw.os, "symlink", fail)
+    dst = tmp_path / "dst"
+    assert rw.link_entries(src, dst) is False
+    assert not os.path.lexists(dst)
+    monkeypatch.setattr(rw.os, "symlink", real_symlink)
+    assert (src / "pkg").is_dir() and (src / ".package-lock.json").exists()

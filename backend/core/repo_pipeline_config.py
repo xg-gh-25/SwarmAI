@@ -12,7 +12,7 @@ author = "repo"      # repo (default): the repo's own git user | swarm: Swarm <s
 trailer = ""         # one line added to every landing commit message, e.g. a Co-Authored-By
 
 [worktree]
-link = []            # repo-relative dirs of the main checkout symlinked into a run worktree
+link = []            # repo-relative dirs of the main checkout mirrored into a run worktree as entry links
 
 [hive_return]
 protected = []       # globs: changes a Hive run made there are marked for the reviewer

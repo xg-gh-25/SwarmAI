@@ -48,8 +48,16 @@ _IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge",
 # worktree holds tracked files only): each repo declares its own in
 # ``.swarmai/pipeline.toml`` ``[worktree] link`` (core/repo_pipeline_config.py; none by
 # default). Each link is excluded from git (info/exclude: a symlink does not match a
-# ``node_modules/`` gitignore line). Linking an environment an install or sync would
-# write through (a .venv) is the repo's own choice and risk.
+# ``node_modules/`` gitignore line). The worktree gets a real directory whose entries
+# link to the main checkout's (``link_entries``), never one link to the whole directory:
+# a full reinstall in the worktree (``npm ci``, ``python -m venv --clear``) empties the
+# directory it finds, and through a directory link that was the main checkout's own,
+# which every other worktree shares. Through entry links it removes only links and
+# installs into the worktree. An install that changes a linked entry in place still
+# writes into the main checkout: ``npm install <pkg>`` into a linked ``@scope/`` or
+# ``.bin/`` folder, ``pip install`` into a linked ``lib/``. Linking such an environment is
+# the repo's own choice and risk. The mirror is taken when the worktree is made: a
+# dependency added to the main checkout later is missing from it until it is reinstalled.
 
 
 def dep_links(repo: "str | Path", rev: str = "HEAD") -> "tuple[str, ...]":
@@ -431,19 +439,76 @@ def _ignored(wt: Path, rel: str) -> bool:
     return git(wt, "check-ignore", "-q", "--no-index", "--", rel).returncode == 0
 
 
+def link_entries(src: Path, dst: Path) -> bool:
+    """Make *dst* a new directory mirroring *src* one level deep: each folder or link in
+    it becomes a link to *src*'s entry, each regular file a copy (a tool that rewrites a
+    top-level file, like npm's ``.package-lock.json``, then writes the worktree's own).
+    The mirror is taken now: what is added to *src* later does not appear in *dst*.
+    Returns False, with nothing left at *dst*, when it cannot be made."""
+    try:
+        os.mkdir(dst)
+    except OSError:
+        return False
+    made: list[str] = []
+    try:
+        with os.scandir(src) as entries:
+            for entry in entries:
+                target = os.path.join(dst, entry.name)
+                if entry.is_file(follow_symlinks=False):
+                    shutil.copy2(entry.path, target, follow_symlinks=False)
+                else:
+                    os.symlink(entry.path, target)
+                made.append(target)
+        return True
+    except OSError:
+        for target in made:          # only what this call made: links and copies
+            try:
+                os.unlink(target)
+            except OSError:
+                pass
+        try:
+            os.rmdir(dst)
+        except OSError:
+            pass
+        return False
+
+
+def unlink_entries(path: "str | Path", src: "str | Path") -> None:
+    """Remove the dependency link to *src* (the main checkout's directory) from a
+    worktree without ever following a link: the old single link to *src*, or the links of
+    ``link_entries`` that point into *src*. Anything else stays (an install in the
+    worktree, a tracked file), for ``git worktree remove``; the directory goes when
+    nothing is left in it (a copied top-level file is left, and removed with the rest of
+    the ignored files)."""
+    path, src = str(path), os.path.realpath(str(src))
+    if os.path.islink(path):
+        if os.path.realpath(path) == src:
+            os.unlink(path)
+        return
+    if not os.path.isdir(path):
+        return
+    with os.scandir(path) as entries:
+        links = [e.path for e in entries if e.is_symlink()
+                 and os.path.dirname(os.path.realpath(e.path)) == src]
+    for link in links:
+        os.unlink(link)
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass  # an install or a copied file is still there
+
+
 def _link_dependencies(main: Path, wt: Path) -> "list[str]":
-    """Symlink each dir *main* declares (``dep_links``) into *wt* when the worktree lacks
-    it (so it is not tracked) → the repo-relative paths linked."""
+    """Mirror each dir *main* declares (``dep_links``) into *wt* (``link_entries``) when
+    the worktree lacks it (so it is not tracked) → the repo-relative paths linked."""
     linked = []
     for rel in dep_links(main):
         src, dst = main / rel, wt / rel
         if not src.is_dir() or not dst.parent.is_dir() or os.path.lexists(dst):
             continue
-        try:
-            os.symlink(str(src), str(dst))
+        if link_entries(src, dst):
             linked.append(rel)
-        except OSError:
-            pass  # tests/builds then fail visibly; never fall back silently to main
+        # else: tests/builds then fail visibly; never fall back silently to main
     return linked
 
 
@@ -1304,9 +1369,7 @@ def _remove(run_id: str, entry: dict, main: Path, merged: bool,
             *, keep_branch: bool = False) -> None:
     path = _safe_to_touch(run_id, entry["repo_name"], main)
     for rel in (*dep_links(path), *entry.get("dep_links", ())):  # they point INTO main: drop them first
-        link = path / rel
-        if os.path.islink(link):
-            os.unlink(link)
+        unlink_entries(path / rel, main / rel)
     if path.exists():
         p = git(main, "worktree", "remove", "--force", str(path), timeout=120)
         if p.returncode != 0:
