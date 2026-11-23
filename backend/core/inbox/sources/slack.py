@@ -226,6 +226,11 @@ class _SlackSource:
     async def _list_dms(self) -> list[tuple[str, Optional[float]]]:
         raise NotImplementedError
 
+    async def _dm_peer(self, channel: str) -> Optional[tuple[str, str]]:
+        """The other member of DM ``channel`` as ``(user id, name)`` (the name may be
+        empty), or ``None`` when the backend does not list it."""
+        return None
+
     async def _history_page(
         self, channel: str, oldest: float, latest: Optional[str], limit: int, *, with_replies: bool = False
     ) -> list[dict]:
@@ -435,11 +440,23 @@ class _SlackSource:
         others = [m.author_name for m in messages if not me.is_me(m.author_id) and m.author_name]
         channel_name = next((m.extra.get("channel_name") for m in messages if m.extra.get("channel_name")), "")
         if channel.startswith("D"):
-            label = f"私信 · {others[-1] if others else channel}"
+            who = others[-1] if others else await self._dm_peer_label(channel, me)
+            label = f"私信 · {who}"
         else:
             label = f"#{channel_name or channel} 的 thread"
         recipient = f"{channel}:{thread_ts}" if thread_ts else channel
         return ReplyTarget(label=label, recipients=(recipient,))
+
+    async def _dm_peer_label(self, channel: str, me: Identity) -> str:
+        """Who a DM whose messages are all the person's own goes to: 自己 for the person's
+        own DM, else the member the backend lists, else the channel id."""
+        peer = await self._dm_peer(channel)
+        if peer is None:
+            return channel
+        user_id, name = peer
+        if user_id and me.is_me(user_id):
+            return "自己"
+        return name or user_id or channel
 
     def _thread_of(self, raw: dict) -> Optional[tuple[str, str]]:
         channel = raw.get("channel")
@@ -632,6 +649,23 @@ class SlackMcpSource(_SlackSource):
             out.append((str(channel), _latest_of(item)))
         return out
 
+    async def _dm_peer(self, channel: str) -> Optional[tuple[str, str]]:
+        data = await self._call("list_dms", {"limit": max(1, min(self._max_dms, 500))})
+        items = data if isinstance(data, list) else next(
+            (data.get(k) for k in ("dms", "conversations", "channels", "items", "results") if isinstance(data, dict) and isinstance(data.get(k), list)),
+            [],
+        )
+        for item in items or ():
+            if not isinstance(item, dict):
+                continue
+            cid = _first(item, "id", "channel", "channelId", "channel_id")
+            if isinstance(cid, dict):
+                cid = cid.get("id")
+            if str(cid or "") == channel:
+                return (str(_first(item, "userId", "user", "user_id") or ""),
+                        str(_first(item, "name", "userName", "user_name", "realName", "real_name") or ""))
+        return None
+
     async def _history_page(
         self, channel: str, oldest: float, latest: Optional[str], limit: int, *, with_replies: bool = False
     ) -> list[dict]:
@@ -817,6 +851,10 @@ class SlackWebSource(_SlackSource):
         # conversations.list does not say when a DM last had a message (its ``updated`` is
         # a metadata change), so every DM's activity is "unknown": read in rotation.
         return [(str(c["id"]), None) for c in await self._paged_list("im,mpim") if c.get("id")]
+
+    async def _dm_peer(self, channel: str) -> Optional[tuple[str, str]]:
+        found = next((c for c in await self._paged_list("im") if str(c.get("id") or "") == channel), None)
+        return None if found is None else (str(found.get("user") or ""), "")
 
     async def _history_page(
         self, channel: str, oldest: float, latest: Optional[str], limit: int, *, with_replies: bool = False

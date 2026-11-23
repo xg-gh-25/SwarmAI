@@ -494,3 +494,35 @@ def test_an_app_users_name_comes_from_slack_mcps_realname():
     m = src._to_message({"ts": ts(10), "text": "Signal Digest", "user": {
         "id": "U0APP", "name": "", "realName": "Swarm", "isBot": True}}, "D0APP", is_dm=True)
     assert m.author_name == "Swarm" and m.author_id == "U0APP" and m.is_bot
+
+
+async def test_a_dm_of_only_my_messages_names_its_member():
+    """The person's own DM reads 私信 · 自己; a DM where only the person wrote names the
+    member the backend lists, never the channel id."""
+    dms = {"dms": [{"channelId": "D0SELF", "userId": ME, "name": "me.person"},
+                   {"channelId": "D0DAN", "userId": "U0DAN", "name": "Dan"}]}
+    mine = lambda a: {"messages": [{"ts": ts(60), "user": ME, "text": "note to self"}]}  # noqa: E731
+    src = SlackMcpSource(_config(), client=FakeMcp(_mcp_handlers(list_dms=dms, get_messages=mine)))
+    assert (await src.thread(ThreadRef("slack", {"channel": "D0SELF"}))).target.label == "私信 · 自己"
+    assert (await src.thread(ThreadRef("slack", {"channel": "D0DAN"}))).target.label == "私信 · Dan"
+    unknown = await src.thread(ThreadRef("slack", {"channel": "D0GONE"}))
+    assert unknown.target.label == "私信 · D0GONE"
+
+
+async def test_web_dm_of_only_my_messages_names_its_member():
+    def api(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", 1)[-1]
+        data = {
+            "auth.test": {"ok": True, "user_id": ME, "user": "me.person"},
+            "conversations.list": {"ok": True, "channels": [{"id": "D0SELF", "is_im": True, "user": ME}],
+                                   "response_metadata": {"next_cursor": ""}},
+            "conversations.history": {"ok": True, "messages": [{"ts": ts(60), "user": ME, "text": "note"}]},
+        }.get(method, {"ok": False, "error": "unknown_method"})
+        return httpx.Response(200, json=data)
+
+    src = SlackWebSource(SourceConfig(id="w", kind="slack", backend="slack-web"),
+                         transport=httpx.MockTransport(api), token_reader=lambda: "xoxp-1")  # pragma: allowlist secret
+    try:
+        assert (await src.thread(ThreadRef("slack", {"channel": "D0SELF"}))).target.label == "私信 · 自己"
+    finally:
+        await src.close()
