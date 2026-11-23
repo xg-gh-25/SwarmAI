@@ -71,6 +71,24 @@ def test_each_source_of_a_private_need_refuses_and_a_public_task_passes(ws, monk
     assert ts.private_needs(b.parent / "nope", "m", {"repos": [], "skills": []}, "see code.amazon.com", "") == []
 
 
+def test_an_exception_names_public_hosts_inside_a_private_domain(ws, monkeypatch):
+    pats = ["*.amazon.com", "!aws.amazon.com", "!*.aws.amazon.com"]
+    assert ts._private_host("w.amazon.com", pats) == "*.amazon.com"
+    assert ts._private_host("aws.amazon.com", pats) is None
+    assert ts._private_host("docs.aws.amazon.com", pats) is None
+    # the exception wins whatever the order, and alone it makes nothing private
+    assert ts._private_host("aws.amazon.com", list(reversed(pats))) is None
+    assert ts._private_host("aws.amazon.com", ["!aws.amazon.com"]) is None
+    assert ts._private_host("aws.amazon.com", ["*.amazon.com", "!"]) == "*.amazon.com"
+    # in a task: the public page is taken, the internal one is still refused
+    monkeypatch.setattr(ts, "private_hosts", lambda: pats)
+    assert _private(_build(ws, "General", "summarise https://aws.amazon.com/about-aws/whats-new/x",
+                           "a summary", returns="answer")) == []
+    refused = _private(_build(ws, "General", "summarise https://aws.amazon.com/x and https://w.amazon.com/y",
+                              "a summary", returns="answer"))
+    assert refused and "w.amazon.com" in refused[0] and "aws.amazon.com (" not in refused[0]
+
+
 def test_a_refusal_is_recorded_on_its_own_before_anything_is_sent(ws, monkeypatch, tmp_path):
     from core.project_agent import revision
     monkeypatch.setattr(so, "_state_dir", lambda: tmp_path)

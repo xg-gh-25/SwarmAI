@@ -128,7 +128,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "steer_busy_send": True,
     # Swarm Out intake (design 2026-10-30-dispatch-center §2.2): host patterns (fnmatch,
     # e.g. "*.corp.example.com") a Hive cannot reach. A task that needs one is refused
-    # before anything is sent. The user's own list; the product ships none.
+    # before anything is sent; a pattern starting with "!" names public hosts inside such
+    # a domain ("!*.aws.amazon.com") and wins. The user's own list; the product ships none.
     "swarm_out_private_hosts": [],
     # A running Hive idle this many minutes is stopped by the Host, and the next dispatch
     # to it starts it again (core/hive_idle); 0 turns idle stopping off.

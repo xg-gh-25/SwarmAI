@@ -136,14 +136,23 @@ def private_hosts() -> list[str]:
 _IP_RE = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
 
 
-def _private_host(host: str, patterns: list[str]) -> Optional[str]:
-    """The first pattern that covers *host*: an fnmatch pattern (``*.corp.example``, an
-    IP range like ``10.*``), or a bare name, which covers itself and its subdomains."""
+def _covers(h: str, p: str) -> bool:
+    """Whether pattern *p* covers host *h*: an fnmatch pattern (``*.corp.example``, an IP
+    range like ``10.*``), or a bare name, which covers itself and its subdomains."""
     import fnmatch
+    bare = p.lstrip("*.")
+    return fnmatch.fnmatchcase(h, p) or h == bare or ("*" not in p and h.endswith("." + bare))
+
+
+def _private_host(host: str, patterns: list[str]) -> Optional[str]:
+    """The first pattern that covers *host*, unless an exception covers it: a pattern
+    starting with ``!`` (``!*.aws.amazon.com``) names public hosts inside a private
+    domain, and wins whatever order the list has."""
     h = host.lower().rstrip(".")
+    if any(_covers(h, p[1:]) for p in patterns if p.startswith("!") and len(p) > 1):
+        return None
     for p in patterns:
-        bare = p.lstrip("*.")
-        if fnmatch.fnmatchcase(h, p) or h == bare or ("*" not in p and h.endswith("." + bare)):
+        if not p.startswith("!") and _covers(h, p):
             return p
     return None
 
