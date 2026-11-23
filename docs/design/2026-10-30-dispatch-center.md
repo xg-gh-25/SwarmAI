@@ -102,11 +102,11 @@ status: implementing (r3: 教训按 CDF D13 改，不再有人收)
 | 来源 | 判断 |
 |---|---|
 | 这一单**用到的仓库**：mode 的 `repos`；没写 `repos` 时，用 Brain 绑定的全部仓库 | `bindings.yaml` 里 `kind: internal`，或者 clone 地址的主机在私有主机名单里 |
-| 任务原文和验收句子里的地址 | URL 或主机名在私有主机名单里，例如 code.amazon.com、w.amazon.com |
 | mode 用到的 skill | SKILL.md 的 frontmatter 写了 `network: private`。这是产品新增的通用字段，和已有的 `platform: desktop` 同一种用法 |
 | 本机 agent 写进 spec 的 `needs_private` 理由 | agent 读出了表里抓不到的内部依赖（比如"要查 Sentral"），可以加一条拒收理由，但**不能去掉**表里已经命中的拒收 |
 
-- **私有主机名单**是用户自己的设置，写在 Swarm Out 设置的 `private_hosts` 里，产品只提供这个机制。这台机器上首次的默认值是 `*.amazon.com`、`*.a2z.com`、`*.amazon.dev`。
+- **任务原文里的地址不按名字判断**（2026-11-23 起）：名字说明不了 Hive 能不能打开它，`*.amazon.com` 下面既有公开的 AWS 官网，也有内部站点。按名字拦会误拦能跑的任务；放过一个打不开的地址，只是 Hive 在结果里说明哪里没打开。本机 agent 知道任务要用内部资源时，用 `needs_private` 写明理由。
+- **私有主机名单**是用户自己的设置，写在 Swarm Out 设置的 `private_hosts` 里，只用来判断仓库的 clone 主机，产品只提供这个机制。这台机器上首次的默认值是 `*.amazon.com`、`*.a2z.com`、`*.amazon.dev`。
 - **执行机能不能上私有网络：** 现在所有 Hive 都上不了，结论写死。以后有了能上私有网络的执行机，复用 `hive_instances.hive_type` 这一列来区分，到时候一起设计它的传输方式。
 
 ### 2.3 拒收卡片和拒收记录

@@ -2,9 +2,9 @@
 docs/design/2026-10-30-dispatch-center.md §2, invariant 1).
 
 Questions: (1) does each source of "needs a private network" refuse the spec — an
-internal repository, a clone host in the user's private hosts, a private host named in
-the task, a skill with ``network: private``, the agent's own reason — and does a task on
-public repositories pass; (2) is a refusal recorded in ``refusals.jsonl`` and never in
+internal repository, a clone host in the user's private hosts, a skill with
+``network: private``, the agent's own reason — and does a task on public repositories
+pass, also when it names an address (an address is not judged by its name); (2) is a refusal recorded in ``refusals.jsonl`` and never in
 the dispatch log, before a Hive is chosen or the Brain synced, answered 422 with
 ``refused``; (3) does the CLI pass the refusal on and the card show it with the task, so
 it can be done here; (4) does ``/runs`` count refusals.
@@ -39,17 +39,18 @@ def test_each_source_of_a_private_need_refuses_and_a_public_task_passes(ws, monk
     # the agent's reason adds a refusal
     r = _build(ws, "Lib", "fix the signer", "tests pass", needs_private="it reads the corp ticket system")
     assert "the agent says: it reads the corp ticket system" in _private(r)[0]
-    # a private host named in the task (under no Brain too)
+    # an address in the task is not judged by its name: the Hive tries it (a name does not
+    # say whether a Hive can open it), and the agent's reason is the way to say it cannot
     r = _build(ws, "General", "summarise https://wiki.corp.example/Page", "a summary", returns="answer")
-    assert "wiki.corp.example" in _private(r)[0]
+    assert _private(r) == []
     # a skill of the mode that needs a private network
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\nnetwork: private\n---\nx\n")
     assert "skill s_lib-release" in _private(_build(ws, "Lib", "release it", "released"))[0]
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\n---\nx\n")
-    # a bare pattern covers its subdomains; an IP in the task; a body line is not frontmatter
+    # neither a host nor an IP named in the task refuses it; a body line is not frontmatter
     monkeypatch.setattr(ts, "private_hosts", lambda: ["corp.example", "10.*"])
-    assert _private(_build(ws, "Lib", "see https://git.corp.example/x", "ok"))
-    assert "10.1.2.3" in _private(_build(ws, "Lib", "call http://10.1.2.3/api", "ok"))[0]
+    assert _private(_build(ws, "Lib", "see https://git.corp.example/x", "ok")) == []
+    assert _private(_build(ws, "Lib", "call http://10.1.2.3/api", "ok")) == []
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text(
         "---\nname: s_lib-release\n---\nx\n```\nnetwork: private\n```\n")
     assert _private(_build(ws, "Lib", "release it", "released")) == []
@@ -61,9 +62,13 @@ def test_each_source_of_a_private_need_refuses_and_a_public_task_passes(ws, monk
     (b / "bindings.yaml").write_text((b / "bindings.yaml").read_text() + INTERNAL.split("bindings:\n", 1)[1])
     assert "svc is an internal repository" in _private(_build(ws, "Lib", "fix", "ok"))[0]
     (b / "bindings.yaml").write_text((b / "bindings.yaml").read_text().split("  - repo: svc")[0])
-    # a repository cloned from a private host, and an internal one
+    # a repository cloned from a private host (a bare pattern covers its subdomains), and an
+    # internal one
     (b / "bindings.yaml").write_text((b / "bindings.yaml").read_text().replace("github.com", "git.corp.example"))
     assert "cloned from git.corp.example" in _private(_build(ws, "Lib", "fix", "ok"))[0]
+    monkeypatch.setattr(ts, "private_hosts", lambda: ["corp.example"])
+    assert "cloned from git.corp.example" in _private(_build(ws, "Lib", "fix", "ok"))[0]
+    monkeypatch.setattr(ts, "private_hosts", lambda: ["*.corp.example"])
     (b / "bindings.yaml").write_text(INTERNAL)
     assert "svc is an internal repository" in ts.private_needs(b, "code-change", {"repos": [], "skills": []}, "x", "y")
     # the product ships no private host: nothing named in a task is private by default

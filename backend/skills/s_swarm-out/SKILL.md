@@ -152,8 +152,8 @@ numbered text options ("reply with a number"). Only this question.
    only what was asked (a placeholder like "the person's request is answered" is fine
    for this check; never invent a criterion). When two modes fit, run it for each.
    `refusals` not empty for every mode that fits (for example: the Brain binds an
-   internal repository, the task names a private host, a skill needs a private
-   network): run `dispatch` once with the same arguments plus `--title`, `--revision`
+   internal repository or one cloned from a private host, a skill needs a private
+   network, or you passed `--needs-private`): run `dispatch` once with the same arguments plus `--title`, `--revision`
    and `--brief`, which records the refusal and shows the refusal card, and stop; tell
    the person it can be done on this machine in a chat tab. Refused for one mode only:
    take the mode that can run, and say after dispatching that the other cannot run on a

@@ -117,13 +117,9 @@ def parse_execution(text: Any) -> dict[str, Any]:
                     f"{', '.join(PROFILE_STAGES)} (got {t[:40]!r})")
 
 
-_HOST_RE = re.compile(r"(?<![\w.@-])(?:[a-z][a-z0-9+.-]*://)?(?:[^\s/@]+@)?"
-                      r"((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})(?![\w-])", re.I)
-
-
 def private_hosts() -> list[str]:
-    """The user's private host patterns (``swarm_out_private_hosts``); [] when unset or
-    unreadable."""
+    """The user's private host patterns (``swarm_out_private_hosts``), matched against the
+    host a bound repository is cloned from; [] when unset or unreadable."""
     try:
         from core.app_config_manager import AppConfigManager
         v = AppConfigManager.instance().get("swarm_out_private_hosts", [])
@@ -131,9 +127,6 @@ def private_hosts() -> list[str]:
         logger.debug("task_spec: private host patterns unreadable: %s", e)
         return []
     return [p.strip().lower() for p in v if isinstance(p, str) and p.strip()] if isinstance(v, list) else []
-
-
-_IP_RE = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
 
 
 def _private_host(host: str, patterns: list[str]) -> Optional[str]:
@@ -156,11 +149,15 @@ def _clone_host(url: str) -> Optional[str]:
 def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance: str,
                   agent_reason: str = "") -> list[str]:
     """Why this task needs a private network a Hive cannot reach (design
-    2026-10-30-dispatch-center §2.2), from what it uses: its repositories (every one the
-    Brain binds, whatever the mode: the Hive is sent all of them, ``_brain_repos``) bound
-    ``kind: internal`` or cloned from a private host; a private host named in the task or the acceptance; a skill of the mode with
-    ``network: private``; and the reason the agent gave (it adds a reason, it never
-    removes one). Deterministic but for that last one."""
+    2026-10-30-dispatch-center §2.2), from facts that decide it: its repositories (every
+    one the Brain binds, whatever the mode: the Hive is sent all of them, ``_brain_repos``)
+    bound ``kind: internal`` or cloned from a private host (the Hive cannot get the code);
+    a skill of the mode with ``network: private``; and the reason the agent gave when it
+    knows the task needs an internal resource (it adds a reason, it never removes one).
+    An address named in the task is not judged by its name: a name does not say whether
+    a Hive can open it (``*.amazon.com`` holds both the public AWS site and internal
+    sites), so the Hive tries it and says in its result what it could not reach.
+    Deterministic but for the agent's reason."""
     from core.project_agent import skill_network
     patterns = private_hosts()
     out: list[str] = []
@@ -176,13 +173,6 @@ def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance
         hit = _private_host(host, patterns) if host else None
         if hit:
             out.append(f"{name} is cloned from {host} (a private host: {hit})")
-    seen: set[str] = set()
-    for m in [*_HOST_RE.finditer(f"{task}\n{acceptance}"), *_IP_RE.finditer(f"{task}\n{acceptance}")]:
-        host = m.group(1).lower()
-        hit = _private_host(host, patterns)
-        if hit and host not in seen:
-            seen.add(host)
-            out.append(f"the task names {host} (a private host: {hit})")
     from core.ddd_skill_registry import scan_domain_skill_dirs
     try:
         dirs = {p.name: p for p in scan_domain_skill_dirs(d)}
