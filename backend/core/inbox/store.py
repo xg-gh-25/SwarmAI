@@ -366,41 +366,20 @@ class SendInFlight(Exception):
 
 
 async def delete_source_rows(source_id: str) -> Optional[dict]:
-    """Remove a source with its items, drafts, sends and feedback, in one write. Returns the
-    counts removed, ``None`` when there is no such source; raises ``SendInFlight`` while one
-    of its sends is reserved."""
+    """Remove a source with its items, drafts, sends and feedback, in one write
+    (``db.inbox_delete_source``). Returns the counts removed, ``None`` when there is no
+    such source; raises ``SendInFlight`` while one of its sends is reserved."""
     from database import db
-    from database.sqlite import _get_pool
-    async with _get_pool(str(db.db_path)).borrow(readonly=False) as conn:
-        if await (await conn.execute("SELECT 1 FROM inbox_sources WHERE id = ?",
-                                     (source_id,))).fetchone() is None:
-            return None
-        if await (await conn.execute(
-                "SELECT 1 FROM inbox_sends WHERE source_id = ? AND status = 'reserved' LIMIT 1",
-                (source_id,))).fetchone() is not None:
-            raise SendInFlight(source_id)
-        items = "SELECT id FROM inbox_items WHERE source_id = ?"
-        drafts = (await conn.execute(f"DELETE FROM inbox_drafts WHERE item_id IN ({items})",
-                                     (source_id,))).rowcount
-        sends = (await conn.execute(
-            f"DELETE FROM inbox_sends WHERE source_id = ? OR item_id IN ({items})",
-            (source_id, source_id))).rowcount
-        await conn.execute(f"DELETE FROM inbox_feedback WHERE source_id = ? OR item_id IN ({items})",
-                           (source_id, source_id))
-        removed_items = (await conn.execute("DELETE FROM inbox_items WHERE source_id = ?",
-                                            (source_id,))).rowcount
-        await conn.execute("DELETE FROM inbox_sources WHERE id = ?", (source_id,))
-        await conn.commit()
-    return {"items": removed_items, "drafts": drafts, "sends": sends}
+    removed = await db.inbox_delete_source(source_id)
+    if removed is not None and removed.get("in_flight"):
+        raise SendInFlight(source_id)
+    return removed
 
 
 async def purge_send(send_id: str) -> None:
     """Remove one send row (a reservation made for a source removed meanwhile)."""
     from database import db
-    from database.sqlite import _get_pool
-    async with _get_pool(str(db.db_path)).borrow(readonly=False) as conn:
-        await conn.execute("DELETE FROM inbox_sends WHERE id = ?", (send_id,))
-        await conn.commit()
+    await db.inbox_delete_send(send_id)
 
 
 async def counts() -> dict:

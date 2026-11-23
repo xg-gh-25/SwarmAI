@@ -140,3 +140,28 @@ def test_inbox_code_writes_no_file_and_feeds_no_index():
                                         ("feed:rss", "信息流"), ("teams", "teams")])
 def test_channel_label(kind, label):
     assert store.channel_label(kind) == label
+
+
+def test_inbox_code_reaches_the_database_only_through_its_methods():
+    """Inbox SQL lives in database/sqlite.py (db.inbox_*): no Inbox module borrows the
+    database's raw connection pool to run its own statements."""
+    for path in sorted((BACKEND / "core" / "inbox").rglob("*.py")) + [BACKEND / "routers" / "inbox.py"]:
+        text = path.read_text(encoding="utf-8")
+        assert "_get_pool" not in text, f"{path.relative_to(BACKEND)} borrows the database pool"
+
+
+async def test_delete_source_removes_its_rows_and_waits_for_a_send():
+    from database import db
+    await fx.clear()
+    await fx.add_source()
+    item = (await db.inbox_insert_items([store.message_to_item_row("s1", fx.msg("e1"), Lane.REPLY, None)]))["e1"][0]
+    assert await store.delete_source_rows("nope") is None
+    reserved = _send(item, "x", "reserved")
+    assert await db.inbox_insert_send(reserved)
+    with pytest.raises(store.SendInFlight):
+        await store.delete_source_rows("s1")
+    assert await db.inbox_get_source("s1") is not None, "a send in flight keeps the source"
+    await store.purge_send(reserved["id"])
+    assert await db.inbox_get_send(reserved["id"]) is None
+    assert await store.delete_source_rows("s1") == {"items": 1, "drafts": 0, "sends": 0}
+    assert await db.inbox_get_source("s1") is None and await db.inbox_get_item(item) is None

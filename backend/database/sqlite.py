@@ -4684,6 +4684,34 @@ class SQLiteDatabase(BaseDatabase):
     async def inbox_update_source(self, source_id: str, now: str, **fields: Any) -> bool:
         return await self._inbox_update("inbox_sources", self._INBOX_SOURCE_SET, source_id, now, fields)
 
+    async def inbox_delete_source(self, source_id: str) -> Optional[dict]:
+        """Remove a source with its items, drafts, sends and feedback, in one write.
+
+        Returns the counts removed (``items``, ``drafts``, ``sends``), ``None`` when there is
+        no such source, and ``{"in_flight": True}`` without removing anything while one of
+        its sends is reserved (being sent now)."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            if await (await conn.execute("SELECT 1 FROM inbox_sources WHERE id = ?",
+                                         (source_id,))).fetchone() is None:
+                return None
+            if await (await conn.execute(
+                    "SELECT 1 FROM inbox_sends WHERE source_id = ? AND status = 'reserved' LIMIT 1",
+                    (source_id,))).fetchone() is not None:
+                return {"in_flight": True}
+            items = "SELECT id FROM inbox_items WHERE source_id = ?"
+            drafts = (await conn.execute(f"DELETE FROM inbox_drafts WHERE item_id IN ({items})",
+                                         (source_id,))).rowcount
+            sends = (await conn.execute(
+                f"DELETE FROM inbox_sends WHERE source_id = ? OR item_id IN ({items})",
+                (source_id, source_id))).rowcount
+            await conn.execute(f"DELETE FROM inbox_feedback WHERE source_id = ? OR item_id IN ({items})",
+                               (source_id, source_id))
+            removed_items = (await conn.execute("DELETE FROM inbox_items WHERE source_id = ?",
+                                                (source_id,))).rowcount
+            await conn.execute("DELETE FROM inbox_sources WHERE id = ?", (source_id,))
+            await conn.commit()
+        return {"items": removed_items, "drafts": drafts, "sends": sends}
+
     # items
     async def inbox_insert_items(self, rows: list[dict]) -> dict[str, tuple[str, bool]]:
         """Insert items unless their (source_id, external_id) exists, in one transaction.
@@ -4911,6 +4939,12 @@ class SQLiteDatabase(BaseDatabase):
                 "SELECT COUNT(*), SUM(CASE WHEN origin LIKE 'auto%' THEN 1 ELSE 0 END) "
                 "FROM inbox_sends WHERE status = 'sent' AND created_at >= ?", (since,))).fetchone()
         return {"need_you": int(need[0]), "sent": int(sent[0] or 0), "auto": int(sent[1] or 0)}
+
+    async def inbox_delete_send(self, send_id: str) -> None:
+        """Remove one send row (a reservation made for a source removed meanwhile)."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            await conn.execute("DELETE FROM inbox_sends WHERE id = ?", (send_id,))
+            await conn.commit()
 
     async def inbox_reserved_to_unknown(self, now: str) -> int:
         """A send left reserved by a process that stopped may have gone out: unknown."""
