@@ -855,11 +855,11 @@ export function RunOverlay({ runs, asks, answered = [], order, walk = 'waiting',
   // src-tauri/src/lib.rs); the card starts 16px below it, and its height is a share of the
   // scrim's own box (100%), not of the viewport height, so the whole card stays in view.
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4 pb-4 pt-11" style={{ background: 'color-mix(in srgb, #000 55%, transparent)' }}
+    <div className="run-card-scrim fixed inset-0 z-[60] flex items-center justify-center px-4 pb-4 pt-11"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !keeps) onClose(); }} data-testid="swarm-out-review-overlay">
       <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={r.title} onClickCapture={markClick}
-        className="flex flex-col w-[1240px] max-w-full h-[min(880px,100%)] rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl overflow-hidden text-[13px] outline-none">
-        <div className="flex flex-wrap items-start gap-x-3 gap-y-2 px-6 pt-[18px] pb-4 border-b border-[var(--color-border)] min-w-0">
+        className="flex flex-col w-[1240px] max-w-full h-[min(880px,100%)] run-card overflow-hidden text-[13px] outline-none">
+        <div className="run-card-head flex flex-wrap items-start gap-x-3 gap-y-2 px-6 pt-[18px] pb-4 border-b border-[var(--color-border)] min-w-0">
           <div className="min-w-0 flex-1 basis-[280px]">
             <div className="flex items-center gap-3 min-w-0">
               <div className="text-[17px] leading-[1.3] font-semibold truncate text-[var(--color-text)]" title={r.title}>{r.title}</div>

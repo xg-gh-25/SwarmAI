@@ -118,6 +118,10 @@
   --nav-key-drop: rgba(30, 40, 60, 0.08);
   /* Chat sheet (.app-sheet): 1px ring + soft shadow lifting it off the chrome. */
   --shadow-sheet: 0 0 0 1px color-mix(in srgb, var(--color-border) 75%, transparent), 0 4px 18px rgba(30, 40, 60, 0.10);
+  /* Run card (Swarm Out run, pipeline run): a modal that must read as a separate layer
+     above the page. Light: a dark hairline ring + a soft two-step drop. */
+  --shadow-run-card: 0 0 0 1px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.08), 0 24px 64px rgba(15, 23, 42, 0.30);
+  --color-run-card-scrim: rgba(15, 23, 42, 0.45);
   /* The sheet's fill; also the colour of the active Nav key that joins it. */
   --color-sheet: #f8fafc;
 
@@ -232,6 +236,11 @@
      and a short inner shade along its top edge. A drop shadow would fall on a
      lighter base and not show. */
   --shadow-sheet: 0 0 0 1px #2a313d, inset 0 1px 3px rgba(0, 0, 0, 0.5);
+  /* Dark: a drop shadow is black on near-black and does not show, so the card's edge
+     is a light rim (brighter than --color-border) plus a 1px top highlight; the scrim
+     is darker than light mode's so the page behind falls back. */
+  --shadow-run-card: 0 0 0 1px #4a5366, inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 28px 90px rgba(0, 0, 0, 0.75);
+  --color-run-card-scrim: rgba(0, 0, 0, 0.62);
   --color-sheet: #111318;
 
   /* Hidden / dotfile / generated file dimming — dark theme */
@@ -2035,4 +2044,23 @@ body {
   .so-live::after, .so-flow::after, .so-node-here::after, .so-card--you, .so-enter, .so-fresh, .so-pop, .so-bump,
   .so-view-in, .so-caret { animation: none; }
   .so-card, .so-card--click:hover, .so-grow, .so-width, .so-expand, .so-switch, .so-switch::after, .so-card .so-hover { transition: none; transform: none; }
+}
+
+/* Run card overlay (RunOverlay, PipelineRunCard). Three layers: the page behind is
+   dimmed and blurred (scrim), the card's edge is --shadow-run-card, and inside it the
+   header and the right rail share the chrome tone as a frame around the content,
+   which keeps --color-bg. */
+.run-card-scrim {
+  background: var(--color-run-card-scrim);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+.run-card {
+  border-radius: 14px;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-run-card);
+}
+.run-card-head {
+  background: var(--color-bg-chrome);
+  border-bottom-color: color-mix(in srgb, var(--color-text) 14%, transparent);
 }

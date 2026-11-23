@@ -148,12 +148,12 @@ export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onRe
   // src-tauri/src/lib.rs); the card starts 16px below it, and its height is a share of the
   // scrim's own box (100%), not of the viewport height, so the whole card stays in view.
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center px-4 pb-4 pt-11" style={{ background: 'color-mix(in srgb, black 55%, transparent)' }}
+    <div className="run-card-scrim fixed inset-0 z-[60] flex items-center justify-center px-4 pb-4 pt-11"
       onMouseDown={(e) => { if (e.target === e.currentTarget && mode === 'list') onClose(); }} data-testid="pipeline-card-overlay">
       <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} onClickCapture={markClick}
-        className="flex flex-col w-[1240px] max-w-full h-[min(880px,100%)] rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl overflow-hidden text-body outline-none"
+        className="flex flex-col w-[1240px] max-w-full h-[min(880px,100%)] run-card overflow-hidden text-body outline-none"
         data-testid="pipeline-card">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-[var(--color-border)] min-w-0">
+        <div className="run-card-head flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-[var(--color-border)] min-w-0">
           <div className="min-w-0 flex-1 basis-[280px]">
             <div className="text-title font-semibold truncate" title={title}>{title}</div>
             <div className={`text-small truncate ${muted}`}>
