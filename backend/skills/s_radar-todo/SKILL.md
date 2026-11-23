@@ -180,12 +180,13 @@ Validation warns on missing fields (logged, tagged `_missing_fields`) but **neve
 | Field | Required | Purpose |
 |-------|----------|---------|
 | `next_step` | **YES** | Concrete first action. Not vague — an actual step the agent executes. |
-| `created_by` | Recommended | Who created: `job:morning-inbox`, `agent:session_abc`, `user:manual` |
+| `created_by` | Recommended | Who created: `agent:session_abc`, `user:manual` |
 
 ### Email todos (source_type=`email`)
 
-Created by scheduled jobs (morning-inbox). Job agents output structured
-`<!-- RADAR_TODOS [...] -->` JSON blocks with email context.
+Created by the agent when an email turns into work that will not be done this turn
+(the person's messages are triaged in the Inbox; a ToDo is the deferred work, with its
+email context).
 
 | Field | Required | Example |
 |-------|----------|---------|
@@ -352,8 +353,6 @@ Active todos (pending, overdue, in_discussion) are **NEVER purged** regardless o
   writes from agent. Single-writer serialization is automatic.
 - **Drag-to-chat**: When user drags a todo into chat, frontend sends the todo ID.
   Agent calls `get <id>` to load the full work packet, then executes.
-- **Job producer protocol**: Job agents output `<!-- RADAR_TODOS [...] -->` JSON
-  blocks with source-specific context. Falls back to legacy regex for old agents.
 
 ## Verification
 

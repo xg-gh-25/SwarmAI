@@ -50,8 +50,7 @@ DELETED: dict[str, set[str]] = {
     r"show-community": {"backend/tests/test_ui_actions.py"},             # banned-list entry
     r"nav-community": {"desktop/src/components/layout/InboxNav.test.tsx"},  # absence assert
     r"/api/community": {"desktop/src/services/__tests__/urlContract.test.ts"},  # a lint sample string
-    r"RADAR_TODOS": {"backend/skills/s_radar-todo/SKILL.md",             # the ToDo skill's own protocol
-                     "backend/tests/test_todo_context_and_purge.py"},
+    r"RADAR_TODOS": set(),
     r"\bsignal-fetch\b|\bsignal-digest\b|\bweekly-rollup\b|\bsignal-notify-slack\b":
         {"backend/tests/test_job_retired_config_keys.py"},
     r"Services/signals|\"Services\" / \"signals\"": {"backend/tests/test_jobs.py",  # absence assert

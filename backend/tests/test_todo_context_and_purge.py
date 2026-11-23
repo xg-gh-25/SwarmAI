@@ -3,9 +3,8 @@
 Pipeline run_1b8e8cde — ToDo System Redesign.
 Tests cover:
   1. validate_linked_context() enforcement per source_type
-  2. Structured RADAR_TODOS JSON parser in executor
-  3. Lifecycle purge: archive + hard delete terminal todos
-  4. Overdue auto-cancel escalation
+  2. Lifecycle purge: archive + hard delete terminal todos
+  3. Overdue auto-cancel escalation
 """
 import json
 import sqlite3
