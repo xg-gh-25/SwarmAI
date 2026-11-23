@@ -2,7 +2,7 @@
 title: Feature Map — a Brain knows what its product does, and can prove each feature still works
 date: 2026-11-18
 created: 2026-11-18
-updated: 2026-11-19
+updated: 2026-11-23
 project: SwarmAI
 status: v3 — layered (own the knowledge and the loop, rent the execution) and scoped (the core loop now, the rest on measured triggers); supersedes v2.1. Owner direction 2026-11-19: "按这个分层改设计文档；先做核心闭环，walk 用 Playwright spec 格式".
 related: core/code_intel; core/brain_bootstrap; skills s_browser-agent, s_qa, s_autonomous-pipeline (TEST); core/run_protocol (validation reports, checks); core/attention_authority; jobs; hive
@@ -122,7 +122,10 @@ features:
 
 `reach` and `expect` are the knowledge a person or a later agent reads to understand what
 the spec checks; they are also what the `cognition find` leg will search (§10). The file is
-read with a strict schema (unknown keys refused, the key named).
+read with a strict schema (unknown keys refused, the key named). Schema 2 adds an optional
+`owns` per feature: the repo-relative prefixes only that feature depends on, used to
+narrow replay (§5, and `2026-11-23-feature-map-replay-conditions.md` §3.3); it is not part
+of the walk's content hash.
 
 ### 4.2 Specs — standard Playwright
 
@@ -184,6 +187,7 @@ id: web
 kind: web                         # web (Playwright specs) | command (command walks only)
 root: desktop/                    # changes under here reach this target (§5)
 paths: [shared/ui/]               # optional, more paths that reach it
+ignore: ["desktop/**/__tests__/**"]   # optional (schema 2), globs that are no change to it
 needs: [api]                      # targets started first
 prepare:                          # run to completion, in order, in the sandbox copy
   - [npm, ci]
@@ -222,6 +226,14 @@ files:
 - a changed path under no target is **unplaced** and listed; it reaches every target whose
   root is the repo root, and the answer says so instead of "none";
 - a change to the feature folder itself reaches the features whose files changed.
+
+Schema 2 adds two optional declarations that narrow this, each falling back to the rule
+above when it does not apply (`2026-11-23-feature-map-replay-conditions.md` §3): a path
+matching a target's `ignore` does not reach it and is listed as ignored; within a reached
+target, a path some feature `owns` selects only its owners (plus the features that own
+nothing), a path no feature owns selects them all, a target reached through `needs` selects
+them all, and a prefix missing from the checkout is listed as stale and treated as not
+declared.
 
 ## 6. Replay
 
@@ -394,7 +406,10 @@ the feature folder (an `expect` call, a `reach`/`expect` field added, removed or
 never reported by the agent — so the person sees where the run changed what "working"
 means.
 
-**Native work.** `s_qa`'s visual step becomes `feature_map affected` + replay; the agent's
+**Native work.** After a `git commit` outside a pipeline run, an inject-only notice names
+the features the session's commits reached since the last replay in that repo and the
+command to replay them (`2026-11-23-feature-map-replay-conditions.md` §4); it never blocks.
+`s_qa`'s visual step becomes `feature_map affected` + replay; the agent's
 reply reports the results and the screenshots open in Canvas. A failing walk that is the
 intended result of the change is updated in the same commit, and the commit message lists
 the changed expectations.

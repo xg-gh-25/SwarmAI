@@ -316,3 +316,12 @@ def test_base_record_error_names_the_kept_base_sandbox(tmp_path, app_data, monke
     assert len(calls) == 2 and code == 2 and "ledger write broke" in out["error"]
     assert out["sandbox"] == str(head_sb)
     assert out["base_sandbox"] == str(base_sb) and base_sb.is_dir()
+
+
+def test_a_bad_command_line_exits_2_with_its_usage(capsys):
+    # the CLI shares its parser with the commit notice; a refusal stays argparse's exit 2
+    import pytest
+    from scripts import feature_map
+    with pytest.raises(SystemExit) as e:
+        feature_map.main(["frobnicate"])
+    assert e.value.code == 2 and "usage: feature_map" in capsys.readouterr().err

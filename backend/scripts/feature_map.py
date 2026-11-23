@@ -29,7 +29,6 @@ when they exist, start this CLI detached and read the ledger).
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shutil
@@ -234,18 +233,8 @@ def _base_replay(root: Path, base: str, fmap_rel: str | None, folder: Path, fail
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="feature_map", description=__doc__.split("\n\n")[0])
-    ap.add_argument("command", choices=["where", "verify", "replay", "affected", "status"])
-    ap.add_argument("features", nargs="*")
-    ap.add_argument("--repo-root", default=".")
-    ap.add_argument("--project")
-    ap.add_argument("--repo")
-    ap.add_argument("--base")
-    ap.add_argument("--run")
-    ap.add_argument("--affected", action="store_true")
-    ap.add_argument("--keep", action="store_true")
-    ap.add_argument("--keep-out-of-repo", action="store_true")
-    args = ap.parse_args(argv)
+    from core.feature_map.cli import parser
+    args = parser(__doc__.split("\n\n")[0]).parse_args(argv)
 
     def _stop(signum, _frame):           # a capped caller's signal: clean up our children
         raise KeyboardInterrupt(f"signal {signum}")
@@ -330,7 +319,8 @@ def main(argv: list[str] | None = None) -> int:
             if not base:
                 base = _git(root, "merge-base", "HEAD", "origin/HEAD") if _has_ref(root, "origin/HEAD") else "HEAD"
             changed = reach.changed_paths(root, base)
-        aff = reach.affected(fmap, changed, folder_rel=folder_rel, folder_changes=folder_changes)
+        aff = reach.affected(fmap, changed, root=root, folder_rel=folder_rel,
+                             folder_changes=folder_changes)
         out.update(base=base, affected=aff)
         if args.command == "affected":
             print(json.dumps(out, ensure_ascii=False))

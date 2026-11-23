@@ -38,7 +38,7 @@ def test_unknown_key_names_file_and_key(tmp_path):
          "features.yaml", "features[0].colour", "unknown key"),
         (FEATURES.replace("    title: Home opens\n", ""), TARGET,
          "features.yaml", "features[0].title", "required key missing"),
-        (FEATURES.replace("schema: 1", "schema: 2"), TARGET, "features.yaml", "schema", "newer"),
+        (FEATURES.replace("schema: 1", "schema: 3"), TARGET, "features.yaml", "schema", "newer"),
         (FEATURES, TARGET + "prepare: ['npm ci']\n", "targets/web.yaml", "prepare[0]",
          "never a shell string"),
         (FEATURES, TARGET + "speed: fast\n", "targets/web.yaml", "speed", "unknown key"),

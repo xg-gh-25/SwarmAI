@@ -47,6 +47,9 @@ GATE_CLASS = {
     "persist_skill_tracker": ADVISORY, "persist_skill_tracker_reset": ADVISORY,
     "repo_guidance": ADVISORY, "repo_guidance_pre": ADVISORY, "shared_checkout": ADVISORY,
     "shared_checkout_pre": ADVISORY, "enforcement_injector": ADVISORY,
+    # names the features a native commit reaches; never refuses, never replays
+    "feature_map_notice_pre": ADVISORY, "feature_map_notice": ADVISORY,
+    "feature_map_notice_failure": ADVISORY,
     # holds a turn's stop once for an answer in the user's language; refuses no call
     "reply_language_check": ADVISORY, "doc_rewrite_check": ADVISORY,
     "doc_rewrite_snapshot": OBSERVE,

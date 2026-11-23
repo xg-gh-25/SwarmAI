@@ -112,9 +112,12 @@ def facts(*, project_dir: Path | None, project: str, repo: str, root: Path, base
         payload["error_blocks"] = bool(brain_changes) or bool(folder_rel) and any(
             p == folder_rel or p.startswith(folder_rel + "/") for p in changed)
         return payload
-    aff = reach.affected(fmap, changed, folder_rel=folder_rel, folder_changes=brain_changes)
+    aff = reach.affected(fmap, changed, root=root, folder_rel=folder_rel,
+                         folder_changes=brain_changes)
     payload["reached"] = list(aff["features"])
     payload["unplaced"] = list(aff["unplaced"])[:50]
+    payload["ignored"] = list(aff["ignored"])[:50]
+    payload["stale"] = list(aff["stale"])[:50]
     rows = ledger.read(project, repo)
     mine = [r for r in rows if r.get("run") == run_id]
     for fid in aff["features"]:
@@ -203,6 +206,13 @@ def report_lines(facts_list: Sequence[Mapping[str, Any]]) -> list[str]:
         if p.get("unplaced"):
             lines.append("- changed paths under no target: "
                          + ", ".join(_text(u, 200) for u in p["unplaced"][:10]))
+        if p.get("ignored"):
+            lines.append("- changed paths the targets ignore: "
+                         + ", ".join(_text(u, 200) for u in p["ignored"][:10]))
+        if p.get("stale"):
+            lines.append("- owned paths missing from the checkout (treated as not declared): "
+                         + ", ".join(f"{_text(x.get('feature'), 80)}: {_text(x.get('path'), 200)}"
+                                     for x in p["stale"][:10]))
         if p.get("changed_expectations"):
             lines.append("- expected results changed by this run:")
             lines += [f"  - {_lead(c['file'], 200)}: {_text(c['change'], 2)} {_text(c['line'], 240)}"

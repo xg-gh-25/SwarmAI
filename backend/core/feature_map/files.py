@@ -4,7 +4,11 @@ A feature folder holds ``features.yaml`` (the feature knowledge), ``targets/<id>
 (how to start each runnable part of the product), ``specs/*.spec.ts`` (standard
 Playwright tests) and ``fixtures/`` (stub bodies, start-state data). Files are read
 with a strict schema: an unknown key, a missing key or a newer schema major is refused,
-naming the file and the key (``FeatureMapError``). Nothing in a feature file is ever
+naming the file and the key (``FeatureMapError``). Schema 2 adds two optional, narrowing
+declarations (design 2026-11-23-feature-map-replay-conditions §3): a target's ``ignore``
+(repo-relative globs that do not count as a change to it) and a feature's ``owns``
+(repo-relative prefixes it alone depends on); a schema-1 folder that uses them is
+refused with "needs schema: 2". Nothing in a feature file is ever
 run as a command except the argv lists of a target, and those only by the sandbox.
 
 Where the folder lives (design §4.4) is decided once per binding and recorded on it in
@@ -35,7 +39,8 @@ from typing import Any, Mapping
 
 import yaml
 
-SCHEMA_MAJOR = 1
+SCHEMA_MAJOR = 2
+_SCHEMA_2_KEYS = ("ignore", "owns")   # what schema 2 adds
 REPO_FOLDER = ".swarmai/features"
 BRAIN_FOLDER = ".artifacts/feature-map"
 TARGET_KINDS = ("web", "command")
@@ -60,6 +65,7 @@ class Feature:
     spec: str | None = None              # folder-relative spec path (web walks)
     run: tuple[str, ...] | None = None   # argv of a command walk
     notes: tuple[str, ...] = ()
+    owns: tuple[str, ...] = ()           # repo-relative prefixes only this feature depends on
     raw: Mapping[str, Any] = field(default_factory=dict, compare=False)
 
 
@@ -92,6 +98,7 @@ class Target:
     teardown: tuple[tuple[str, ...], ...] = ()
     locale: str = "en-US"
     ready_timeout_s: int = 120
+    ignore: tuple[str, ...] = ()         # repo-relative globs that are no change to it
 
 
 @dataclass(frozen=True)
@@ -181,10 +188,36 @@ def _schema(value: Any, file: str) -> None:
                               f"({SCHEMA_MAJOR}); update SwarmAI")
 
 
-def _parse_target(obj: Any, file: str) -> Target:
+def _schema_2(d: Mapping[str, Any], schema: int, file: str, where: str) -> None:
+    """A schema-2 key in a schema-1 folder: refused with what it needs, so an older
+    reader's "newer schema" message and this one tell the same story."""
+    if schema >= 2:
+        return
+    for key in _SCHEMA_2_KEYS:
+        if key in d:
+            raise FeatureMapError(file, f"{where}.{key}" if where else key,
+                                  "needs schema: 2 in features.yaml")
+
+
+_MAX_GLOBS, _MAX_GLOB_LEN = 50, 200
+
+
+def _globs(value: Any, file: str) -> tuple[str, ...]:
+    """A target's ``ignore``: repo-relative globs, bounded in number and length."""
+    out = tuple(_rel(g, file, "ignore") for g in _strs(value, file, "ignore"))
+    if len(out) > _MAX_GLOBS:
+        raise FeatureMapError(file, "ignore", f"at most {_MAX_GLOBS} patterns")
+    for g in out:
+        if len(g) > _MAX_GLOB_LEN:
+            raise FeatureMapError(file, "ignore", f"a pattern is longer than {_MAX_GLOB_LEN} characters")
+    return out
+
+
+def _parse_target(obj: Any, file: str, schema: int = SCHEMA_MAJOR) -> Target:
     d = _keys(obj, file, "", {"id", "kind"},
               {"root", "paths", "needs", "prepare", "services", "base_url", "env",
-               "start_states", "teardown", "locale", "ready_timeout_s"})
+               "start_states", "teardown", "locale", "ready_timeout_s", "ignore"})
+    _schema_2(d, schema, file, "")
     tid = _ident(d["id"], file, "id")
     kind = _str(d["kind"], file, "kind")
     if kind not in TARGET_KINDS:
@@ -229,13 +262,16 @@ def _parse_target(obj: Any, file: str) -> Target:
         env=dict(env), start_states=states,
         teardown=_argvs(d.get("teardown"), file, "teardown"),
         locale=_str(d.get("locale", "en-US"), file, "locale"),
-        ready_timeout_s=timeout)
+        ready_timeout_s=timeout,
+        ignore=_globs(d.get("ignore"), file))
 
 
-def _parse_feature(obj: Any, file: str, i: int, folder: Path) -> Feature:
+def _parse_feature(obj: Any, file: str, i: int, folder: Path,
+                   schema: int = SCHEMA_MAJOR) -> Feature:
     where = f"features[{i}]"
     d = _keys(obj, file, where, {"id", "title", "target"},
-              {"reach", "expect", "spec", "run", "notes"})
+              {"reach", "expect", "spec", "run", "notes", "owns"})
+    _schema_2(d, schema, file, where)
     has_spec, has_run = d.get("spec") is not None, d.get("run") is not None
     if has_spec == has_run:
         raise FeatureMapError(file, f"{where}.spec", "give exactly one of spec or run")
@@ -253,6 +289,8 @@ def _parse_feature(obj: Any, file: str, i: int, folder: Path) -> Feature:
         spec=spec,
         run=_argv(d["run"], file, f"{where}.run") if has_run else None,
         notes=_strs(d.get("notes"), file, f"{where}.notes"),
+        owns=tuple(_rel(o, file, f"{where}.owns")
+                   for o in _strs(d.get("owns"), file, f"{where}.owns")),
         raw=dict(d))
 
 
@@ -270,13 +308,13 @@ def load_folder(folder: Path) -> FeatureMap:
     tdir = folder / "targets"
     for tpath in sorted(tdir.glob("*.yaml")) if tdir.is_dir() else ():
         rel = tpath.relative_to(folder).as_posix()
-        target = _parse_target(_read_yaml(tpath, folder), rel)
+        target = _parse_target(_read_yaml(tpath, folder), rel, doc["schema"])
         if target.id != tpath.stem:
             raise FeatureMapError(rel, "id", f"must equal the file name ({tpath.stem})")
         targets[target.id] = target
     features, seen = [], set()
     for i, obj in enumerate(doc["features"]):
-        f = _parse_feature(obj, "features.yaml", i, folder)
+        f = _parse_feature(obj, "features.yaml", i, folder, doc["schema"])
         if f.id in seen:
             raise FeatureMapError("features.yaml", f"features[{i}].id", f"duplicate id {f.id}")
         if f.target not in targets:
@@ -326,8 +364,10 @@ def _local_imports(folder: Path, spec: Path) -> list[Path]:
 def content_hash(fmap: FeatureMap, feature: Feature) -> str:
     """The walk's identity in the ledger: its feature entry, its spec file and the files
     the spec imports from the folder. Editing any of them starts the walk's history over
-    (design §7)."""
-    h = hashlib.sha256(json.dumps(feature.raw, sort_keys=True, ensure_ascii=False).encode())
+    (design §7). ``owns`` is left out: it decides when a walk is selected, not what the
+    walk does, so tuning it keeps the walk's history and quarantine."""
+    entry = {k: v for k, v in feature.raw.items() if k != "owns"}
+    h = hashlib.sha256(json.dumps(entry, sort_keys=True, ensure_ascii=False).encode())
     if feature.spec:
         spec = fmap.folder / feature.spec
         try:

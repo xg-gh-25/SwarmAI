@@ -727,6 +727,20 @@ async def build_hooks(
             "shared_checkout_pre", matcher="Write|Edit|MultiEdit|NotebookEdit",
         )
 
+    # ── Feature Map commit notice (design 2026-11-23-feature-map-replay-conditions §4) ──
+    # Inject-only, never a deny, never a replay: PreToolUse snapshots HEAD of the repos a
+    # Bash command that may commit works in; PostToolUse, when it was a `git commit` that
+    # moved HEAD, names the features the session's commits reached since the last replay
+    # there and the command that replays them (core/feature_map/notice.py); the same
+    # handler on PostToolUseFailure covers `git commit … && false`.
+    if session_context is not None:
+        from core.feature_map.notice import create_commit_notice_hooks
+        notice_pre, notice_post = create_commit_notice_hooks(session_context)
+        registry.register("PreToolUse", notice_pre, "feature_map_notice_pre", matcher="Bash")
+        registry.register("PostToolUse", notice_post, "feature_map_notice", matcher="Bash")
+        registry.register("PostToolUseFailure", notice_post.for_event("PostToolUseFailure"),
+                          "feature_map_notice_failure", matcher="Bash")
+
     # ── PostToolUse: batch-independent-calls nudge (all tools) ──
     # Inject-only, never a deny: after a round of tool results, one sentence asks the
     # model to request every independent item in one response (Anthropic's documented

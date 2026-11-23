@@ -15,3 +15,14 @@ def test_skill_texts_carry_the_standard():
     qa = (SKILLS / "s_qa" / "INSTRUCTIONS.md").read_text(encoding="utf-8")
     assert "scripts.feature_map affected" in qa and "scripts.feature_map replay --affected" in qa
     assert "Take screenshots of each affected page" not in qa, "the eyeball-only step is gone"
+
+
+def test_the_skill_states_how_to_write_ignore_and_owns():
+    # R7.1: the writing standard for the two narrowing declarations and their fallbacks
+    fm = (SKILLS / "s_feature-map" / "INSTRUCTIONS.md").read_text(encoding="utf-8")
+    flat = " ".join(fm.split())
+    for must in ("schema: 2", "**`ignore`** names files the target does not build or serve",
+                 "**`owns`** names what is this feature's alone", "Never shared code",
+                 "a path no feature owns replays every feature of the target",
+                 "treated as not declared", "When in doubt, leave a path unowned"):
+        assert must in flat, must

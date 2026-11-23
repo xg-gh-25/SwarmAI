@@ -59,6 +59,40 @@ start_states:
   home: {setup: [[curl, -sf, -X, PUT, "http://127.0.0.1:{port.api}/api/system/onboarding-complete"]]}
 ```
 
+### Which changes replay which walks: `ignore` and `owns` (schema 2)
+
+By default a change under a target's `root` or `paths` replays every feature of the
+target. Two optional declarations narrow that; both need `schema: 2` in `features.yaml`.
+
+```yaml
+# targets/web.yaml
+ignore: ["desktop/**/__tests__/**", "desktop/**/*.test.ts"]   # globs, repo-relative
+# features.yaml
+  - id: pipeline-overlay-k3f9
+    owns: [desktop/src/pages/pipeline/]     # repo-relative prefixes
+```
+
+- **`ignore`** names files the target does not build or serve: this repo's test files
+  and test folders, and docs the app never reads. Never a pattern that can match shipped
+  code or product text (a `**/*.md` in a repo that ships Markdown as content). A matched
+  path is not a change to the target and is listed as ignored in every answer. `**` is
+  any number of folders (at least one at the end: `app/tests/**` is what is inside
+  `app/tests`), `*` stays inside one name; a pattern with neither is a prefix.
+- **`owns`** names what is this feature's alone: its page, its route, its handler. Never
+  shared code (the app shell, the API client, a component another feature also renders).
+  A path some feature owns replays only its owners; a path no feature owns replays every
+  feature of the target; a feature that owns nothing is always replayed. A prefix that no
+  longer exists is listed as stale and treated as not declared, so moved code replays
+  more, never less. `owns` is not part of a walk's identity: changing it keeps the walk's
+  history.
+
+The risk you accept: a feature that depends on a file another feature owns is not
+replayed when only that file changes. When in doubt, leave a path unowned.
+
+After a `git commit` outside a pipeline run, a line in your context names the features
+the session's commits reached since the last replay in that repo, with the command to
+replay them: run it once before you report the work done.
+
 Every command is an argv list, never a shell string. Placeholders: `{port.<service>}`,
 `{sandbox}`, `{checkout}`, `{state_dir}` (the current start state's own folder,
 `<sandbox>/state/<state>`; it expands in service argv, `env`, `ready` URLs and setup).

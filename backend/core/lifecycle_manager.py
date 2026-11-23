@@ -1208,6 +1208,11 @@ class LifecycleManager:
         except Exception as exc:
             logger.debug("_release_session_state repo-guidance cleanup failed: %s", exc)
         try:
+            from .feature_map import notice as feature_map_notice
+            feature_map_notice.forget(session_id)
+        except Exception as exc:
+            logger.debug("_release_session_state feature-map notice cleanup failed: %s", exc)
+        try:
             from . import session_events
             session_events.hub().drop_session(session_id)
         except Exception as exc:

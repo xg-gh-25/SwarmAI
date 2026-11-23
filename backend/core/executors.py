@@ -49,6 +49,9 @@ another, and MUST never touch the default pool the event loop schedules on):
                 its finish diffs / on-demand diffs; kept off 'subprocess' so they
                 never delay its fail-open safety gates, and apart from each other
                 so a start is never queued behind a finish
+  feature_map_notice — core/feature_map/notice's commit snapshot and reach (two git
+                calls, ~75 ms); off 'gate' and 'subprocess' so it neither queues a
+                per-call gate nor waits behind auto-commit
 """
 
 from __future__ import annotations
@@ -84,6 +87,10 @@ _POOL_SPECS: dict[str, int] = {
                       # never sit behind a slow writer: on 'subprocess' (3 threads,
                       # shared with auto-commit's 4×10s git and context_health) the
                       # worktree gate timed out and failed open 324 times in a week.
+    "feature_map_notice": 2,  # core/feature_map/notice: a commit's HEAD snapshot and
+                      # reach (two git calls, ~75 ms); its own pool so it neither queues
+                      # a per-call gate nor waits behind auto-commit on 'subprocess';
+                      # 2 so one slow repo does not hold every session's notice.
     "maintenance": 1, # post-session context_health refresh/deep check (~16s, and
                       # uncancellable once its timeout fires): alone, so it can
                       # neither hold a 'subprocess' worker nor queue another hook.
