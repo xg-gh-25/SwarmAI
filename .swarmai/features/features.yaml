@@ -91,8 +91,8 @@ features:
       - desktop/src/components/layout/dddOverview.ts
     spec: specs/brain-hub-bvcc.spec.ts
   - id: capabilities-view-6qa4
-    title: Apps & Capabilities lists the built-in apps
-    reach: Click Apps & Capabilities in the left nav
+    title: Capabilities lists the built-in apps
+    reach: Click Capabilities in the left nav
     expect: The Apps view lists app cards, with Skills, Experts and Connections views to switch to
     target: app
     owns:

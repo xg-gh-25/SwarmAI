@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test('lists the apps, and the other views can be chosen', { tag: '@start:home' }, async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('nav-capabilities').click();
-  const panel = page.getByRole('dialog', { name: 'Apps & Capabilities' });
+  const panel = page.getByRole('dialog', { name: 'Capabilities' });
   await expect(panel).toBeVisible();
   await expect(panel).toBeInViewport({ ratio: 1 });
   await expect(panel.getByTestId('cap-apps-view')).toBeVisible();

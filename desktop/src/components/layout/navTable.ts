@@ -71,7 +71,7 @@ export const NAV: Record<OverlayId, NavEntry> = {
   pollinate: { zone: 'work', navLabel: 'Pollinate', mode: 'POLLINATE', width: 'xl' },
   // System zone
   jobs: { zone: 'system', navLabel: 'Jobs & Runs', mode: 'JOBS', width: 'xl' },
-  capabilities: { zone: 'system', navLabel: 'Apps & Capabilities', subtitle: 'Products and abilities', mode: 'CAPABILITIES', width: 'xl' },
+  capabilities: { zone: 'system', navLabel: 'Capabilities', subtitle: 'Products and abilities', mode: 'CAPABILITIES', width: 'xl' },
   usage: { zone: 'system', navLabel: 'Usage', subtitle: 'Where the platform\'s model spend goes', mode: 'USAGE', width: 'xl' },
   eval: { zone: 'system', navLabel: 'OS Eval', mode: 'EVAL', width: 'xl' },
   settings: { zone: 'system', navLabel: 'Settings', mode: 'SETTINGS', width: 'xl' },
