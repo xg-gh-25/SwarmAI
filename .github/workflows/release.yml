@@ -24,6 +24,14 @@ on:
         description: 'Version to release (e.g., 1.0.0)'
         required: true
         type: string
+      # A dry run builds and verifies every target on fresh runners (the clean-machine
+      # install, G1/G2) without publishing: no draft release, no tag, no elastic Hive image.
+      # Run it before tagging a release that changes the installer or the build.
+      dry_run:
+        description: 'Build and verify only; publish nothing'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -262,7 +270,7 @@ jobs:
     # AGENTCORE_PUSH_ROLE_ARN secret is not set; publish does not wait for it, so it never
     # holds back the release.
     needs: [prepare, build-hive]
-    if: needs.prepare.outputs.agentcore == 'true'
+    if: needs.prepare.outputs.agentcore == 'true' && !inputs.dry_run
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     permissions:
@@ -346,7 +354,10 @@ jobs:
 
   publish:
     # Only when every target built and passed G1/G2: one release, nothing partial (§7 r14).
+    # The `if` adds no status function, so the implicit success() of every need still holds;
+    # it only skips publishing on a dry run (inputs is empty on a tag push).
     needs: [prepare, build, verify, build-hive]
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for the latest.json generator script)

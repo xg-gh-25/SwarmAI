@@ -49,7 +49,10 @@ def test_every_installer_is_verified_and_publish_needs_all_of_it():
     assert "scripts/verify_installer.sh" in "\n".join(s.get("run", "") for s in verify["steps"])
     pub = jobs["publish"]
     assert set(pub["needs"]) >= {"build", "verify"}
-    assert "if" not in pub   # no always(): a failed target or verification blocks the release
+    # no always()/failure()/cancelled(): a failed target or verification blocks the release;
+    # the only condition is the dry run, which skips publishing
+    assert pub.get("if") == "${{ !inputs.dry_run }}"
+    assert not any(f in pub["if"] for f in ("always()", "failure()", "cancelled()"))
     assert "gen-latest-json.sh" in "\n".join(s.get("run", "") for s in pub["steps"])
 
 
@@ -115,3 +118,14 @@ def test_windows_runtime_root_matches_rust(monkeypatch, tmp_path):
     monkeypatch.setattr(rp.sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert rp.runtime_root() == tmp_path / "SwarmAI" / "runtime"
+
+
+def test_a_dry_run_builds_and_verifies_but_publishes_nothing():
+    wf = _wf()
+    inputs = wf[True]["workflow_dispatch"]["inputs"]   # yaml reads the `on` key as True
+    assert inputs["dry_run"]["type"] == "boolean" and inputs["dry_run"]["default"] is False
+    jobs = wf["jobs"]
+    for job in ("prepare", "build", "build-hive", "verify"):
+        assert "dry_run" not in str(jobs[job].get("if", "")), job
+    assert "!inputs.dry_run" in jobs["publish"]["if"]
+    assert "!inputs.dry_run" in jobs["agentcore-image"]["if"]

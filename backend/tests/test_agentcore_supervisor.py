@@ -458,7 +458,7 @@ def test_release_job_is_skipped_without_its_settings_and_never_holds_the_release
     jobs = wf["jobs"]
     job = jobs["agentcore-image"]
     assert set(job["needs"]) >= {"prepare", "build-hive"}
-    assert job["if"] == "needs.prepare.outputs.agentcore == 'true'"
+    assert job["if"] == "needs.prepare.outputs.agentcore == 'true' && !inputs.dry_run"
     assert job["runs-on"] == "ubuntu-24.04-arm"
     assert job["permissions"]["id-token"] == "write"
     assert "agentcore-image" not in jobs["publish"]["needs"]
