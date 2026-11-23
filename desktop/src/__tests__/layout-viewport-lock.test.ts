@@ -96,7 +96,11 @@ describe('Layout viewport lock — ERROR behavior (must NOT happen)', () => {
       const src = readFileSync(resolve(PROJECT_ROOT, file), 'utf-8');
       // the window's title bar overlays its top 28px (TitleBarStyle::Overlay): the scrim
       // keeps the card 44px down, and the card's height is a share of the scrim, not of 100vh
-      expect(src).toMatch(/className="fixed inset-0 z-\[60\][^"]*\bpt-11\b[^"]*"/);
+      // the scrim is the one element that carries all four classes; other classes (such as
+      // run-card-scrim) may sit anywhere in its class string
+      const classLists = [...src.matchAll(/className="([^"]*)"/g)].map((m) => m[1].split(/\s+/));
+      const scrim = ['fixed', 'inset-0', 'z-[60]', 'pt-11'];
+      expect(classLists.some((cls) => scrim.every((c) => cls.includes(c)))).toBe(true);
       expect(src).toMatch(/h-\[min\(880px,100%\)\]/);
       expect(src).not.toMatch(/100vh/);
     });
