@@ -142,11 +142,10 @@ const panel = () => screen.getByTestId('swarm-out-dashboard');
 describe('in English, nothing on the panel is Chinese', () => {
   it('the run view, and a run’s big card on every tab and box', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    await screen.findAllByTestId('swarm-out-row');
-    await screen.findAllByTestId('swarm-out-fleet-hive');
-    fireEvent.click(screen.getByTestId('swarm-out-section-done'));      // every row on screen
+    await screen.findAllByTestId('so-run-card');
+    await screen.findAllByTestId('so-fleet-pill');
     expect(cjkIn(panel().outerHTML)).toEqual([]);
-    const rich = screen.getAllByTestId('swarm-out-row').find((c) => c.textContent?.includes('task rich'))!;
+    const rich = screen.getAllByTestId('so-run-card').find((c) => c.textContent?.includes('task rich'))!;
     fireEvent.click(rich);
     const overlay = await screen.findByTestId('swarm-out-review-overlay');
     await within(overlay).findByTestId('swarm-out-review-report');
@@ -167,9 +166,9 @@ describe('in English, nothing on the panel is Chinese', () => {
 
   it('the history view', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    await screen.findAllByTestId('swarm-out-row');
+    await screen.findAllByTestId('so-run-card');
     fireEvent.click(screen.getByRole('button', { name: 'History' }));
-    await screen.findAllByTestId('history-run');
+    await screen.findAllByTestId('so-done-row');
     expect(cjkIn(panel().outerHTML)).toEqual([]);
   });
 
@@ -203,13 +202,14 @@ describe('in English, nothing on the panel is Chinese', () => {
 describe('a language switch reaches a panel already on screen', () => {
   it('English, then Chinese', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    await screen.findAllByTestId('swarm-out-row');
+    await screen.findAllByTestId('so-run-card');
     expect(screen.getByRole('button', { name: 'Runs' })).toBeTruthy();
     await act(async () => { await i18n.changeLanguage('zh'); });
     try {
       expect(screen.getByRole('button', { name: '运行' })).toBeTruthy();
-      expect(screen.getByTestId('swarm-out-fleet').textContent).toContain('在哪里跑');
-      expect(screen.getByTestId('swarm-out-section-you').textContent).toContain('等你');
+      expect(screen.getByTestId('so-fleet').getAttribute('aria-label')).toBe('在哪里跑');
+      expect(screen.getByTestId('so-running').textContent).toContain('在跑');
+      expect(screen.getByTestId('so-you-count').textContent).toContain('等你');
     } finally {
       await act(async () => { await i18n.changeLanguage('en'); });
     }
@@ -224,32 +224,21 @@ describe('status colours follow ./tone', () => {
     expect(FLEET.hives.map(hiveTone)).toEqual(['ok', 'attention', 'error', 'unknown', 'error']);
   });
 
-  it('rows, slots and the numbers are coloured by that tone', async () => {
+  it('cards and places are coloured by that tone', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    const rows = await screen.findAllByTestId('swarm-out-row');
-    const dot = (t: string) => (rows.find((c) => c.textContent?.includes(t))!.querySelector('[data-tone]') as HTMLElement).dataset.tone;
-    expect(dot('task rich')).toBe('attention');          // awaiting acceptance: it waits on you
-    expect(dot('task halted')).toBe('error');            // stopped
-    expect(dot('task waits')).toBe('attention');         // needs your answer
-    expect(dot('task running')).toBe('busy');
-
-    await screen.findAllByTestId('swarm-out-fleet-hive');
-    const explorer = screen.getAllByTestId('swarm-out-fleet-hive').find((h) => h.textContent?.includes('explorer'))!;
-    const demo = screen.getAllByTestId('swarm-out-fleet-hive').find((h) => h.textContent?.includes('demo'))!;
-    const fill = (h: HTMLElement) => (within(h).getByTestId('swarm-out-memory').firstElementChild as HTMLElement);
-    expect(within(explorer).getByTestId('swarm-out-memory').dataset.percent).toBe('60');
-    expect(fill(explorer).style.width).toBe('60%');
-    expect(fill(explorer).style.background).toBe('var(--color-status-success)');
-    expect(fill(demo).style.background).toBe('var(--color-status-warning)');
-    // explorer takes a task now, demo is saturated: room left, so the number is green
-    expect(screen.getByTestId('kpi-free').dataset.tone).toBe('ok');
-    expect(screen.getByTestId('kpi-waiting').dataset.tone).toBe('attention');
+    const cards = await screen.findAllByTestId('so-run-card');
+    const card = (t: string) => cards.find((c) => c.textContent?.includes(t))!;
+    // awaiting acceptance, stopped with something to decide, a question: each waits on you
+    for (const t of ['task rich', 'task halted', 'task waits']) expect(within(card(t)).getByTestId('so-you-pill')).toBeTruthy();
+    expect(card('task running').getAttribute('data-kind')).toBe('run');
+    expect(within(card('task running')).queryByTestId('so-you-pill')).toBeNull();
+    const pills = await screen.findAllByTestId('so-fleet-pill');
+    expect(pills.map((p) => p.dataset.tone)).toEqual(FLEET.hives.map(hiveTone));
   });
 
-  it('every Hive full: the free number is amber', async () => {
+  it('every Hive full: its place is amber', async () => {
     vi.mocked(swarmOutService.fleet).mockResolvedValue({ running: 1, hives: [hive('demo', { streaming: 4, saturated: true, memory_percent: 93 })] });
     render(<SwarmOutDashboard now={NOW} />);
-    await screen.findAllByTestId('swarm-out-fleet-hive');
-    expect(screen.getByTestId('kpi-free').dataset.tone).toBe('attention');
+    expect((await screen.findAllByTestId('so-fleet-pill')).map((p) => p.dataset.tone)).toEqual(['attention']);
   });
 });

@@ -1,5 +1,5 @@
 /**
- * LiveDispatches — the live part of the Swarm Out dashboard.
+ * RunBoard — the run view of the Swarm Out dashboard: the questions of no listed run.
  *
  * Questions: are a Hive's open questions shown with their answer controls (the chat's
  * own card, SwarmOutWaitCard); does an approval send exactly approve/deny; does a
@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { LiveDispatches } from './LiveDispatches';
+import { RunBoard as LiveDispatches } from './RunBoard';
 import { swarmOutService } from '../../services/swarmOut';
 import i18n from '../../i18n';
 
@@ -74,10 +74,10 @@ describe('LiveDispatches', () => {
     });
     // the Hive says the run waits but no question reached this Host: it is still listed
     render(<LiveDispatches now={Date.parse('2026-10-27T03:00:00Z')} />);
-    const row = (await screen.findAllByTestId('swarm-out-row'))[0];
-    expect(row.textContent).toContain('Fix login');
-    expect(row.getAttribute('data-stage')).toBe('needs_answer');
-    expect(screen.getByTestId('swarm-out-waiting-unasked').textContent).toContain('Fix login');   // the Hive page's
+    const card = (await screen.findAllByTestId('so-run-card'))[0];
+    expect(card.textContent).toContain('Fix login');
+    expect(card.getAttribute('data-kind')).toBe('you');                 // marked on its own card
+    expect(screen.getByTestId('so-on-hive-page')).toBeTruthy();         // answered on the Hive's page
   });
 
   it('names the tool and the dispatch, and refuses to offer approve for a cut-off command (fixing spec B)', async () => {
@@ -151,8 +151,8 @@ describe('LiveDispatches', () => {
       asks: [{ ...approval, dispatch_title: null, possible_dispatch_title: 'Timed out' }], errors: [] });
     render(<LiveDispatches now={Date.parse('2026-10-27T03:00:00Z')} />);
     expect((await screen.findByTestId('swarm-out-ask-source')).textContent).toBe('可能属于：Timed out');
-    // an older dispatch, never named: kept in view (recently done is open)
-    expect(screen.getAllByTestId('swarm-out-row').map((r) => r.getAttribute('data-id'))).toEqual(['d9']);
+    // an older dispatch, never named: kept in view among the runs
+    expect(screen.getAllByTestId('so-run-card').map((r) => r.getAttribute('data-id'))).toEqual(['d9']);
   });
 
   it('a pipeline decision is answered with one of its options, nothing typed', async () => {

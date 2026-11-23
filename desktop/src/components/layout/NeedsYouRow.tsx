@@ -22,15 +22,16 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AttentionEntry } from '../../services/attention';
 import { getOverlayCtxBridge } from './overlayRegistry';
-import { OPEN_SETTINGS_EVENT } from '../common/settingsEvents';
+import { OPEN_SETTINGS_EVENT, openSwarmOutSettings } from '../common/settingsEvents';
 
 /** True for an item that opens the Swarm Out tab instead of filling the chat. */
 export function opensSwarmOut(it: AttentionEntry): boolean {
   return it.dispatch?.context?.kind === 'swarm_out';
 }
 
-/** The settings tab an item opens instead of filling the chat (the SwarmAI account's
- *  sign-in and Hive count: the person acts on the page), else null. */
+/** The App's settings tab an item opens instead of filling the chat (the SwarmAI
+ *  account's sign-in: the person acts on the page), else null. The Hive count opens the
+ *  Swarm Out tab's settings instead (``opensSwarmOut``, ``view`` settings). */
 export function opensSettingsTab(it: AttentionEntry): string | null {
   const ctx = it.dispatch?.context;
   return ctx?.kind === 'aws_account' && typeof ctx.settings_tab === 'string' ? ctx.settings_tab : null;
@@ -60,7 +61,11 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
   // a Swarm Out item opens the Swarm Out tab; where that tab cannot be reached (no
   // chat page published it) it is an ordinary prompt
   const settingsTab = opensSettingsTab(item);
-  const showOut = opensSwarmOut(item) ? getOverlayCtxBridge().showSwarmOut : undefined;
+  // an item about Hives opens the Swarm Out tab on its settings view, where they are set up
+  // (only while a chat page can show that tab: else it is an ordinary prompt too)
+  const bridgeShow = getOverlayCtxBridge().showSwarmOut;
+  const showOut = !opensSwarmOut(item) || !bridgeShow ? undefined
+    : item.dispatch?.context?.view === 'settings' ? openSwarmOutSettings : bridgeShow;
   const show = settingsTab
     ? () => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: settingsTab } }))
     : showOut;

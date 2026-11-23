@@ -1,20 +1,21 @@
 /**
- * The Swarm Out history view (design docs/design/2026-10-29-swarm-out-history.md §8).
+ * The Swarm Out history view (design Knowledge/Mockups/2026-11-23-swarm-out-dashboard-
+ * redesign-v6.html, the History view) and its numbers (./historyStats).
  *
- * Questions, one per invariant of the design: (1) do the outcomes add up to the runs,
- * with every rate over the runs whose ending is known, written out; (2) is a run done
- * unattended only when no person stepped in at all; (3) is a spend "at least" whenever
- * a run's cost or tokens are missing; (4) does a run get exactly one type, a pipeline
- * before files; (5) does a clicked table row filter the records, the outcome chips on
- * top of it, and its ✕ undo it; (6) does a record open into the run card itself;
- * (7) are the stale TBDs gone (and the run view's by-Brain list); (8) does the window
- * change the bars and the numbers.
+ * Questions, one per invariant: (1) is a run "accepted with no one stepping in" only when
+ * it was accepted and nobody stepped in, a discarded one never; (2) does one time range,
+ * 7 days by default, drive every number (verdict, split, bars, groups, records); (3) past
+ * a month are the bars weeks; (4) is the verdict next to the same length of time before;
+ * (5) does a group row filter the records, and its ✕ undo it; (6) does a record open the
+ * run's big card, J walking the list; (7) does a group by "where it ran" name EC2 or
+ * AgentCore. The older pure helpers of ./live keep their own cases below.
  */
 process.env.TZ = 'Asia/Shanghai';
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { HistoryView } from './HistoryView';
+import { bars, groups, inRange, matches, outcomeOf, previousRange, summarize, unattended } from './historyStats';
 import { breakdown, dimensionCounts, inWindow, matchesFilter, runType, spendText, tallyRuns } from './live';
 import i18n from '../../i18n';
 
@@ -112,75 +113,116 @@ describe('the numbers', () => {
   });
 });
 
+// the view's runs: each with the stage the backend gives it
+const at = (d: number, h = 2) => new Date(NOW - d * 86400_000 - h * 3600_000).toISOString();
+const V: SwarmOutRun[] = [
+  run('va', result({ active_s: 600, cost_usd: 2 }), { stage: 'accepted', sent_at: at(0), project_agent: GENERAL }),
+  run('vb', result({ active_s: 1200, cost_usd: 4 }), { stage: 'accepted', sent_at: at(1), person_decisions: 2 }),
+  run('vc', result({ active_s: 300, cost_usd: 1 }), { stage: 'closed', why: 'discarded', sent_at: at(2) }),
+  run('vd', result({ ended: 'stopped', active_s: 60 }), { stage: 'stopped', sent_at: at(3) }),
+  run('ve', null, { stage: 'running', state: 'running', sent_at: at(0, 1) }),
+  run('vf', result({ active_s: 900 }), { stage: 'accepted', sent_at: at(10), rounds: [{ carrier: 'agentcore' }], hive: 'elastic' }),
+  run('vg', result({ active_s: 900 }), { stage: 'accepted', sent_at: at(12) }),
+  run('vh', result({ active_s: 900 }), { stage: 'accepted', sent_at: at(70) }),
+];
+
+describe('the numbers (historyStats)', () => {
+  it('(1) accepted with no one stepping in: a discarded or stepped-into run never counts', () => {
+    expect(V.map(outcomeOf)).toEqual(['ok', 'ok', 'off', 'warn', 'open', 'ok', 'ok', 'ok']);
+    expect(V.map(unattended)).toEqual([true, false, false, false, false, true, true, true]);
+    const s = summarize(V.slice(0, 5));
+    expect([s.n, s.unattended, s.by]).toEqual([5, 1, { ok: 2, off: 1, warn: 1, open: 1 }]);
+    expect(s.medianMin).toBe(8);              // the ended runs only: 1, 5, 10, 20 minutes (7.5)
+    expect([s.cost, s.costMissing]).toEqual([8, 1]);    // vd recorded no cost; ve has no result
+  });
+
+  it('(3) a range past a month is drawn by week, the last week ending today', () => {
+    expect(bars(V, NOW, 7).bars).toHaveLength(7);
+    expect(bars(V, NOW, 7).weekly).toBe(false);
+    const w = bars(V, NOW, 90);
+    expect([w.weekly, w.bars.length]).toEqual([true, 13]);
+    expect(w.bars.reduce((n, b) => n + b.by.ok + b.by.off + b.by.warn + b.by.open, 0)).toBe(8);
+  });
+
+  it('(2) "all" counts the runs the bars count: a start that cannot be read or lies ahead is left out', () => {
+    const odd = [...V, run('vx', null, { sent_at: 'not a time' }), run('vy', null, { sent_at: new Date(NOW + 3600_000).toISOString() })];
+    expect(inRange(odd, NOW, null).map((r) => r.title)).toEqual(V.map((r) => r.title));
+  });
+
+  it('(4) the time before is the same length, just before the range', () => {
+    expect(previousRange(V, NOW, 7).map((r) => r.title)).toEqual(['task vf', 'task vg']);
+    expect(previousRange(V, NOW, null)).toEqual([]);
+  });
+
+  it('(7) grouped by where it ran: EC2 or AgentCore and the name', () => {
+    expect(groups(V, 'where', null).map((g) => [g.key, g.sum.n])).toEqual([['EC2 · explorer', 7], ['AgentCore · Elastic Workers', 1]]);
+    expect(V.filter((r) => matches(r, 'human')).map((r) => r.title)).toEqual(['task vb']);
+    expect(V.filter((r) => matches(r, 'off')).map((r) => r.title)).toEqual(['task vc']);
+  });
+});
+
 describe('the view', () => {
   beforeEach(() => {
-    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: RUNS, asks: [], errors: [] });
-    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUNS[0].dispatch_id, record: { result: { ...RUNS[0].result!, report: 'the reply' },
+    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: V, asks: [], errors: [] });
+    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: V[0].dispatch_id, record: { result: { ...V[0].result!, report: 'the reply' },
       fetch_error: null, checked_at: ago(0), fetched_at: ago(0) } });
   });
 
-  it('the verdict names its denominator; one number stands out', async () => {
+  it('(2) 7 days by default; the range drives the verdict, the split, the bars, the groups and the records', async () => {
     render(<HistoryView hidden={false} now={NOW} />);
     const v = await screen.findByTestId('history-verdict');
-    expect(v.textContent).toBe('3 个无人值守做完 · 共 7 个 run：3 个做完、1 个失败、1 个停下、1 个结束情况未知、1 个在跑');
-    expect(screen.getByTestId('history-sum-unattended').textContent).toBe('3/5无人值守做完（已知结局 5 个，60%）');
+    expect(v.getAttribute('data-value')).toBe('1');
+    expect(v.textContent).toContain('/ 5');
+    expect(screen.getByTestId('history-window').querySelector('[aria-pressed="true"]')!.textContent).toBe('7 天');
+    expect(screen.getByTestId('history-range-text').textContent).toContain('5 个任务');
+    expect(screen.getByTestId('history-count-off').textContent).toContain('1');
+    expect(screen.getAllByTestId('history-bar')).toHaveLength(7);
+    expect(screen.getAllByTestId('so-done-row')).toHaveLength(5);
+    expect(screen.getAllByTestId('history-group').map((g) => g.dataset.group)).toEqual(['无', '通用']);
+    fireEvent.click(within(screen.getByTestId('history-window')).getByText('30 天'));
+    expect(screen.getByTestId('history-verdict').getAttribute('data-value')).toBe('3');
+    expect(screen.getByTestId('history-verdict').textContent).toContain('/ 7');
+    expect(screen.getAllByTestId('history-bar')).toHaveLength(30);
+    expect(screen.getAllByTestId('so-done-row')).toHaveLength(7);
+    fireEvent.click(within(screen.getByTestId('history-window')).getByText('90 天'));
+    expect(screen.getByTestId('history-bars').dataset.weekly).toBe('true');
+    expect(screen.getAllByTestId('so-done-row')).toHaveLength(8);
+  });
+
+  it('(4) the verdict sits next to the same length of time before it', async () => {
+    render(<HistoryView hidden={false} now={NOW} />);
+    expect((await screen.findByTestId('history-prev')).textContent).toBe('前 7 天 2 / 2');
   });
 
   it('counts the tasks refused at intake, and how many needed a private network', async () => {
-    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: RUNS, asks: [], errors: [], refusals: { total: 4, private: 3 } });
+    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: V, asks: [], errors: [], refusals: { total: 4, private: 3 } });
     render(<HistoryView hidden={false} now={NOW} />);
     expect((await screen.findByTestId('history-refusals')).textContent).toBe('拒收 4 次 · 其中需要私有网络的 3 次');
   });
 
-  it('(5) a table row filters the records, the chips on top; its ✕ undoes it', async () => {
+  it('(5) a group row filters the records, the filters on top; its ✕ undoes it', async () => {
     render(<HistoryView hidden={false} now={NOW} />);
     await screen.findByTestId('history-verdict');
-    expect(screen.getAllByTestId('history-run')).toHaveLength(7);
-    const noPa = screen.getAllByTestId('history-group').find((g) => g.dataset.group === '')!;
-    fireEvent.click(noPa);
-    expect(screen.getAllByTestId('history-run')).toHaveLength(6);
-    expect(screen.getByTestId('history-group-chip').textContent).toBe('Brain: 没走 Project Agent ✕');
-    fireEvent.click(screen.getAllByTestId('history-filter').find((c) => c.dataset.filter === 'unknown')!);
-    expect(screen.getAllByTestId('history-run').map((r) => r.textContent?.match(/task (\w)/)?.[1])).toEqual(['f', 'g']);
+    fireEvent.click(screen.getAllByTestId('history-group').find((g) => g.dataset.group === '通用')!);
+    expect(screen.getAllByTestId('so-done-row')).toHaveLength(1);
+    expect(screen.getByTestId('history-group-chip').textContent).toBe('通用 ✕');
     fireEvent.click(screen.getByTestId('history-group-chip'));
-    expect(screen.queryByTestId('history-group-chip')).toBeNull();
-    fireEvent.click(screen.getAllByTestId('history-filter').find((c) => c.dataset.filter === 'all')!);
-    expect(screen.getAllByTestId('history-run')).toHaveLength(7);
+    fireEvent.click(screen.getAllByTestId('history-filter').find((c) => c.dataset.filter === 'human')!);
+    expect(screen.getAllByTestId('so-done-row').map((r) => r.dataset.title)).toEqual(['task vb']);
+    expect(screen.getByTestId('history-record-count').textContent).toBe('1');
   });
 
-  it('(6) a record opens the run\'s big card, the same card the run view opens; J / K walk the records', async () => {
+  it('(6) a record opens the run\'s big card; J walks the records', async () => {
     render(<HistoryView hidden={false} now={NOW} />);
     await screen.findByTestId('history-verdict');
-    const rows = screen.getAllByTestId('history-run');
-    const row = rows.find((r) => r.textContent?.includes('task a'))!;
-    fireEvent.click(within(row).getByRole('button', { name: /task a/ }));
+    const rows = screen.getAllByTestId('so-done-row');
+    fireEvent.click(rows[0]);
     const overlay = await screen.findByTestId('swarm-out-review-overlay');
-    expect(within(row).queryByTestId('swarm-out-run')).toBeNull();   // no inline card any more
     expect((await within(overlay).findByTestId('swarm-out-review-report')).textContent).toContain('the reply');
-    expect(within(overlay).getByTestId('swarm-out-review-position').textContent).toBe(`记录 ${rows.indexOf(row) + 1} / ${rows.length}`);
+    expect(within(overlay).getByTestId('swarm-out-review-position').textContent).toBe(`记录 1 / ${rows.length}`);
     fireEvent.keyDown(window, { key: 'j' });
-    const next = rows[rows.indexOf(row) + 1];
-    const title = within(overlay).getByRole('dialog').getAttribute('aria-label')!;
-    expect(title).not.toContain('task a');
-    expect(next.textContent).toContain(title);
+    expect(within(overlay).getByRole('dialog').getAttribute('aria-label')).toContain(rows[1].dataset.title!);
     fireEvent.click(within(overlay).getByTestId('swarm-out-review-close'));
     expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();
-  });
-
-  it('(7) no stale TBD: only occupancy has no source', async () => {
-    render(<HistoryView hidden={false} now={NOW} />);
-    await screen.findByTestId('history-verdict');
-    expect(screen.getAllByTestId(/^swarm-out-tbd/).map((e) => e.dataset.testid)).toEqual(['swarm-out-tbd-occupancy']);
-    expect(document.body.textContent).not.toMatch(/派发记录里没有|跨 run 的汇总还没做|不带任务类型/);
-  });
-
-  it('(8) the window changes the bars and the numbers', async () => {
-    render(<HistoryView hidden={false} now={NOW} />);
-    await screen.findByTestId('history-verdict');
-    expect(screen.getAllByTestId('swarm-out-day')).toHaveLength(7);
-    fireEvent.click(within(screen.getByTestId('history-window')).getByText('近 30 天'));
-    expect(screen.getAllByTestId('swarm-out-day')).toHaveLength(30);
-    expect(screen.getByTestId('history-verdict').textContent).toContain('共 8 个 run');
-    expect(screen.getAllByTestId('history-run')).toHaveLength(8);
   });
 });

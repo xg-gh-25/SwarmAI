@@ -5,7 +5,9 @@ Questions answered:
 1. a sign-in that expired or reaches another account is one BLOCKING item that opens
    Settings → SwarmAI Account; a connected account adds nothing.
 2. fewer Hives than asked for is one REVIEW item until the person says "later"
-   (``dismissed``); ready adds nothing; a Hive (cloud instance) adds nothing.
+   (``dismissed``) that opens the Swarm Out tab's settings, where Hives are set up (the
+   App's account page no longer shows them); ready adds nothing; a Hive (cloud instance)
+   adds nothing.
 3. the item comes from the last status the page or the reconcile loop computed (no
    database read in the attention thread), and that status names the price per type.
 """
@@ -50,6 +52,8 @@ def test_hives_short_is_one_review_item_until_later(state, monkeypatch):
     monkeypatch.setattr(fleet, "_last_status", {"state": "short", "short": 2, "dismissed": False})
     (item,) = _items()
     assert item.tier == aa_.TIER_REVIEW and "2 Hives short" in item.title
+    assert item.dispatch["context"] == {"kind": "swarm_out", "view": "settings"}
+    assert "Swarm Out" in item.dispatch["message"] and "Swarm AWS Account" not in item.dispatch["message"]
     monkeypatch.setattr(fleet, "_last_status", {"state": "short", "short": 2, "dismissed": True})
     assert _items() == []
     monkeypatch.setattr(fleet, "_last_status", {"state": "cannot_build", "short": 1, "dismissed": False,

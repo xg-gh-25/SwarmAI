@@ -133,7 +133,8 @@ def session_for(row: dict, region: str, purpose: str = "manage"):
     if mode is not None and purpose not in OTHER_ACCOUNT_PURPOSES:
         raise OtherAccountError(
             f"This Hive is in another AWS account ({row.get('account_id')}): it can only be "
-            "stopped or deleted. Verify the account in Settings > Hive if it is in fact the "
+            "stopped or deleted. Verify the account in Swarm Out → Settings (Hives in other "
+            "accounts) if it is in fact the "
             "SwarmAI account.")
     session = _legacy_session(row, region)
     if mode is not None:

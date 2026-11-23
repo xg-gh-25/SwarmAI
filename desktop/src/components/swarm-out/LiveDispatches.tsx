@@ -1,49 +1,24 @@
 /**
- * LiveDispatches — the run view of the Swarm Out panel, on real data only
- * (design docs/design/2026-10-28-swarm-out-live-dashboard.md).
- *
- * It answers two things, in this order: where the work stands (one compact card on
- * top: the questions waiting, the free slots and the runs running as three numbers, and
- * each Hive's memory under them), and the runs I sent, one row each, what waits on me
- * first (RunList; a row opens the run's big card, RunOverlay, where every command is;
- * design docs/design/2026-10-31-swarm-out-run-review.md). A question whose session is
- * none of the listed runs is answered here, above the list; one the Hive refused, or
- * one that never reached here, is handled on the Hive's page. What has no data source
- * yet says TBD and which source is missing; nothing on this view is a sample. What went
- * on in the past (the runs by Brain, type, Hive) is the history view's (HistoryView).
- *
- * RunCard (a Brain's Runs tab's card) shows what a run's Hive recorded (design
- * docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what it did, its
- * numbers. Its "Open card" opens the run's big card (RunOverlay), the one place a run's
- * details (what came back, the reply, autonomy, process, cost, lessons) and commands are:
- * the Run view, the history and a Brain page all open that same card. A run that waits
- * on the person says so. Every card names its Brain and Project Agent as two labelled
- * fields, and its facts (ended, duration, tokens, cost, human loops, failed steps) as a
- * row of cells. A pipeline run's Autonomy Judge tag sits next to how it ended (its
- * verdicts come with /runs). A run whose Hive session this Host knows has an explicit
- * Open button (the title opens it too).
+ * The Swarm Out run card's shared parts (design docs/design/2026-10-28-swarm-out-run-results.md):
+ * ``Dot`` (a status dot in a tone), ``Stats`` (a run's facts as cells, read by the run's
+ * big card, RunOverlay), ``RunTitle`` (a title that opens the run's Hive session) and
+ * ``RunCard`` (a run's summary card: how it ended, what it did, its numbers; its "Open
+ * card" opens RunOverlay). The Swarm Out run view itself is RunBoard.
  *
  * Status colours follow ./tone (green done or free, blue running, amber needs you or
  * did not finish, red failed, grey unknown): only the dot and the status word are
- * coloured. Labels come from the locale files (swarmOut.*); everything a Hive wrote
- * (question text, command, reason, the reply, paths) is data, never translated; all of
- * it but the reply is shown as plain text. Polls /api/swarm-out/runs every 30 s while shown;
- * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
+ * coloured. Labels come from the locale files (swarmOut.*); everything a Hive wrote is
+ * data, never translated, and shown as plain text.
  */
-import { useEffect, useState } from 'react';
-import { awsAccountService, type FleetStatus } from '../../services/awsAccount';
-import { openSwarmOutSettings } from '../common/settingsEvents';
+import { useState } from 'react';
 import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
-import { type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun } from '../../services/swarmOut';
-import { SwarmOutWaitCard } from './SwarmOutWaitCard';
+import { type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
-import { agentFacts, autonomyLine, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
-import { RunList } from './RunList';
+import { agentFacts, checksIncomplete, checksLine, endedLabel, executionLine, gateLine, lessonsLine, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, when, workLines, type RunStat } from './live';
 import { RunOverlay } from './RunOverlay';
 import { actionsOf, stageLabel, stageOf } from './runReview';
-import { waitingUnasked } from './useSwarmOutActivity';
-import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
+import { dotStyle, runTone, TONE_VAR, type Tone } from './tone';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const muted = 'text-[var(--color-text-muted)]';
@@ -58,113 +33,6 @@ export function Dot({ tone, className = '' }: { tone: Tone; className?: string }
 /** A card border tinted for a tone that should stand out (attention, error); others keep the plain border. */
 const cardTint = (tone: Tone): React.CSSProperties | undefined =>
   tone === 'error' || tone === 'attention' ? { borderColor: `color-mix(in srgb, ${TONE_VAR[tone]} 45%, var(--color-border))` } : undefined;
-
-/** A part with no data source yet: its title and what is missing, demoted. */
-export function Tbd({ title, missing, testId }: { title: string; missing: string; testId?: string }) {
-  const { t } = useTranslation();
-  return (
-    <section className="mt-5" data-testid={testId ?? 'swarm-out-tbd'}>
-      <h3 className={`m-0 text-[13px] font-semibold ${muted}`}>{title}</h3>
-      <div className="mt-1 text-[12px] text-[var(--color-text-dim)]">{t('swarmOut.tbd', { missing })}</div>
-    </section>
-  );
-}
-
-/** One headline number inline (value, then its label); its tone colours the value
- *  (none = neutral: a zero or unknown). */
-function Num({ value, label, tone, testId }: { value: React.ReactNode; label: string; tone?: Tone; testId: string }) {
-  return (
-    <div className="flex items-baseline gap-1.5 min-w-0" data-testid={testId} data-tone={tone}>
-      <span className="text-[18px] font-semibold leading-none tabular-nums" style={tone ? { color: TONE_VAR[tone] } : undefined}>{value}</span>
-      <span className={`text-[12px] ${muted}`}>{label}</span>
-    </div>
-  );
-}
-
-/** The top card: the three numbers in its header, each Hive's memory under them (a
- *  Hive queues a new task only when its memory is under critical pressure). What the
- *  count and the bar mean is explained on hover (the title and every status). */
-/** The SwarmAI account's Hive count, when it is short of what the person asked for
- *  (design 2026-10-31-swarmai-aws-account §7.3): one line and a button to the account
- *  page, where the count is raised with its cost named. Silent when ready or unknown. */
-function useHiveShortfall(): FleetStatus | null {
-  const [st, setSt] = useState<FleetStatus | null>(null);
-  useEffect(() => {
-    let stop = false;
-    awsAccountService.get().then((v) => { if (!stop) setSt(v.hive ?? null); }).catch(() => { /* unknown: say nothing */ });
-    return () => { stop = true; };
-  }, []);
-  return st && (st.state === 'short' || st.state === 'cannot_build') ? st : null;
-}
-
-function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed?: boolean; numbers: React.ReactNode }) {
-  const { t } = useTranslation();
-  const hives = fleet?.hives ?? [];
-  const note = t('swarmOut.fleet.note');
-  const short = useHiveShortfall();
-  return (
-    <section className={card} data-testid="swarm-out-fleet">
-      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1.5 px-4 pt-3 pb-2">
-        <h3 className="m-0 text-[13px] font-semibold" title={note}>{t('swarmOut.fleet.title')}</h3>
-        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5 min-w-0" data-testid="kpi-grid">{numbers}</div>
-      </div>
-      {failed && <div className={`px-4 text-[12px] ${muted}`} data-testid="swarm-out-fleet-failed">{t('swarmOut.fleet.failed')}</div>}
-      {short && (
-        <div className="px-4 pb-2 text-[12px] flex items-center gap-3" data-testid="swarm-out-fleet-short">
-          <span style={{ color: TONE_VAR.attention }}>
-            {short.state === 'cannot_build' ? t('swarmOut.fleet.cannotBuild') : t('swarmOut.fleet.short', { count: short.short ?? 0 })}
-          </span>
-          <button type="button" className="underline" onClick={openSwarmOutSettings}>
-            {t('swarmOut.fleet.openSettings')}
-          </button>
-        </div>
-      )}
-      {fleet === null ? (!failed && <div className={`px-4 pb-3 text-[12px] ${muted}`}>{t('swarmOut.loading')}</div>) : (
-        <div className="grid grid-cols-[minmax(80px,220px)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-x-3 gap-y-2 px-4 pt-2.5 pb-3 border-t border-[var(--color-border)]">
-          {hives.map((h) => {
-            const elastic = h.carrier === 'agentcore';
-            const up = h.status === 'running' && !!h.reachable;
-            const count = { count: h.streaming ?? 0 };
-            const status = elastic ? t(`swarmOut.fleet.elastic.${h.status}`, { defaultValue: h.status })
-              : h.status !== 'running' ? `${hiveStatusLabel(h.status)}${h.status === 'stopped' ? t('swarmOut.fleet.startsWhenNeeded') : ''}`
-              : !h.reachable ? t('swarmOut.fleet.unreachable')
-              // an older Hive reports no memory: its saturated still means a full stream cap
-              : h.saturated ? t(h.memory_percent == null ? 'swarmOut.fleet.busy' : 'swarmOut.fleet.full', count)
-              : t('swarmOut.fleet.used', count);
-            const tone: Tone = elastic ? (h.status === 'ready' ? 'ok' : h.status === 'failed' ? 'error' : 'attention') : hiveTone(h);
-            const mem = up && h.memory_percent != null ? Math.min(100, Math.max(0, h.memory_percent)) : null;
-            const memTone: Tone = h.saturated ? 'attention' : 'ok';
-            return (
-              <div key={h.name} className="contents" data-testid="swarm-out-fleet-hive" data-tone={tone}>
-                <div className="font-medium min-w-0 flex items-start gap-2" title={h.name}>
-                  <Dot tone={tone} className="mt-[6px]" />
-                  <div className="min-w-0">
-                    <div className="truncate">{elastic ? 'Elastic Workers' : h.name}</div>
-                    {/* the execution surface, on every row: a Hive is an EC2 machine; Elastic Workers runs on AgentCore Runtime */}
-                    <div className={`text-[11.5px] font-normal truncate ${muted}`} data-testid="swarm-out-fleet-kind">
-                      {[elastic ? 'AgentCore Runtime' : 'Hive · EC2', h.version].filter(Boolean).join(' · ')}</div>
-                  </div>
-                </div>
-                {/* the Hive's memory in use: green while a new task starts at once, amber
-                    once it is under critical pressure (a new task queues) */}
-                <div className="min-w-0 h-[12px] rounded-[3px] border overflow-hidden" data-testid="swarm-out-memory"
-                  data-percent={mem ?? undefined}
-                  title={mem != null ? t('swarmOut.fleet.memory', { percent: Math.round(mem) }) : undefined}
-                  style={{ opacity: mem != null ? 1 : 0.4, borderColor: `color-mix(in srgb, ${TONE_VAR[memTone]} 55%, transparent)`,
-                    background: `color-mix(in srgb, ${TONE_VAR[memTone]} 10%, transparent)` }}>
-                  {mem != null && <div className="h-full" style={{ width: `${mem}%`, background: TONE_VAR[memTone] }} />}
-                </div>
-                <div className={`text-[12px] text-right truncate min-w-0 ${tone === 'error' || tone === 'attention' ? '' : muted}`}
-                  style={tone === 'error' || tone === 'attention' ? { color: TONE_VAR[tone] } : undefined}
-                  title={`${status} · ${note}`} data-testid="swarm-out-fleet-status">{status}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
 
 /** The card's facts as cells (label over value), wrapping to as many columns as fit; a
  *  strong cell (the total cost, the billed tokens) reads a size up. */
@@ -321,79 +189,6 @@ export function RunCard({ r, onReload, onLeave }: {
       </div>}
       {open && <RunOverlay runs={[r]} asks={[]} order={[]} id={r.dispatch_id} now={Date.now()}
         onSelect={() => {}} onClose={() => setOpen(false)} onFileOpened={onLeave} onReload={onReload ?? (() => {})} />}
-    </div>
-  );
-}
-
-/** Where a Hive's login is (the Hive's own page answers what could not reach here). */
-function OpenLogin() {
-  const { t } = useTranslation();
-  return <button type="button" className={`ml-2 ${btn}`} onClick={openSwarmOutSettings} data-testid="swarm-out-open-hive-admin">{t('swarmOut.live.openLogin')}</button>;
-}
-
-export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = false, now, compact = false }: {
-  hidden?: boolean; fleet?: SwarmOutFleet | null; fleetFailed?: boolean; now?: number; compact?: boolean;
-}) {
-  const { t } = useTranslation();
-  const { data, failed, reload } = useRuns(hidden);
-  const at = now ?? Date.now();
-  const runs = data?.runs ?? [];
-  const asks = data?.asks ?? [];
-  const answered = data?.answered ?? [];
-  // a wait of a listed run is answered on that run's card; the rest here (one answered
-  // here stays as its one line while its answer is within the longest wait)
-  const listed = new Set(runs.filter((r) => r.session_id).map((r) => `${r.hive_id}/${r.session_id}`));
-  const mine = (a: SwarmOutAsk) => listed.has(`${a.hive_id}/${a.session_id}`);
-  const loose = [...asks.filter((a) => !a.refused && !mine(a)), ...answered.filter((a) => !mine(a))];
-  const refused = asks.filter((a) => a.refused && !mine(a));
-  const sourceOf = (a: SwarmOutAsk) => (
-    <>{a.hive} · <span data-testid="swarm-out-ask-source">{a.dispatch_title
-      ?? (a.possible_dispatch_title ? t('swarmOut.ask.maybe', { title: a.possible_dispatch_title }) : t('swarmOut.ask.otherSession'))}</span>{a.asked_at ? ` · ${when(a.asked_at)}` : ''}</>
-  );
-  const unasked = data ? waitingUnasked(data) : [];
-  const n = panelNumbers(data, fleet);
-  const noRuns = !!data && runs.length === 0;
-  const dash = '—';
-  const auto = autonomyLine(runs, at);
-  return (
-    <div data-testid="swarm-out-live">
-      {data && auto.finished > 0 && (
-        <div className={`text-[12px] mb-2 ${muted}`} data-testid="swarm-out-autonomy-line">
-          {t('swarmOut.header.autonomy', { finished: auto.finished, unattended: auto.unattended, known: auto.known,
-            avg: auto.avg == null ? '—' : auto.avg.toFixed(1) })}
-        </div>
-      )}
-      {failed && <div className={`text-[12px] mb-2 ${muted}`}>{t('swarmOut.runsUnreadable')}</div>}
-      {(data?.errors ?? []).map((e) => <div key={e} className="text-[12px] mb-1" style={{ color: TONE_VAR.attention }}>{errorLabel(e)}</div>)}
-      <Fleet fleet={fleet} failed={fleetFailed} numbers={<>
-        <Num testId="kpi-waiting" label={t('swarmOut.kpi.waiting')} tone={n.waiting || n.onHivePage ? 'attention' : undefined}
-             value={<>{n.waiting ?? dash}{n.onHivePage ? <span className="text-[12.5px] font-medium ml-2" data-testid="kpi-on-hive-page">{t('swarmOut.kpi.onHivePage', { count: n.onHivePage })}</span> : null}</>} />
-        {/* free slots: green while there is room, amber when every running Hive is full */}
-        <Num testId="kpi-free" label={t('swarmOut.kpi.free')} tone={n.capacity ? (n.capacity.free > 0 ? 'ok' : 'attention') : undefined}
-             value={n.capacity ? <>{n.capacity.free}<span className={`text-[12.5px] font-medium ml-1 ${muted}`}>/ {n.capacity.total}</span></> : dash} />
-        <Num testId="kpi-running" label={t('swarmOut.kpi.running')} tone={n.running ? 'busy' : undefined} value={n.running ?? dash} />
-        <button type="button" className={`ml-auto ${btn}`} onClick={reload} data-testid="swarm-out-refresh">{t('swarmOut.waiting.refresh')}</button>
-      </>} />
-
-      {loose.length > 0 && (
-        <section className="mt-4 flex flex-col gap-2" data-testid="swarm-out-waiting">
-          {loose.map((a) => <SwarmOutWaitCard key={`${a.hive_id}/${a.request_id}`} wait={a} onAnswered={reload} source={sourceOf(a)} />)}
-        </section>
-      )}
-      {(unasked.length > 0 || refused.length > 0) && (
-        <section className="mt-4" data-testid="swarm-out-on-hive-page">
-          <div className={`text-[12px] mb-1.5 ${muted}`}>{t(refused.length ? 'swarmOut.waiting.refused' : 'swarmOut.waiting.unasked')}<OpenLogin /></div>
-          <div className="flex flex-col gap-2">
-            {refused.map((a) => <SwarmOutWaitCard key={`${a.hive_id}/${a.request_id}`} wait={a} onAnswered={reload} source={sourceOf(a)} />)}
-            {unasked.map((r) => <div key={r.dispatch_id} className={`text-[12.5px] ${muted}`} data-testid="swarm-out-waiting-unasked">{r.title} · {r.hive}</div>)}
-          </div>
-        </section>
-      )}
-
-      {noRuns ? (
-        <div className={`mt-5 text-[12px] ${muted}`}>{t('swarmOut.noRuns')}</div>
-      ) : <RunList runs={runs} asks={asks} answered={answered} now={at} onReload={reload} compact={compact} />}
-      <Tbd title={t('swarmOut.tbdParts.scheduled')} missing={t('swarmOut.tbdParts.scheduledMissing')} />
     </div>
   );
 }

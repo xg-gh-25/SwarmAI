@@ -1097,8 +1097,10 @@ def _collect_aws_account() -> list[AttentionItem]:
     that expired or reaches another account is BLOCKING (chat, Hive and storage stop);
     fewer Hives than the person asked for is one REVIEW item until they say "later"
     (``hive_fleet.dismissed``), never more than once at a time. Reads the record and the
-    last Hive status the account page or the reconcile loop computed; a click opens
-    Settings → Swarm AWS Account (``context.kind`` aws_account). Read-only; fail-soft."""
+    last Hive status the account page or the reconcile loop computed. A click on the
+    sign-in items opens Settings → Swarm AWS Account (``context.kind`` aws_account), on
+    the Hive item the Swarm Out tab's settings (``context.kind`` swarm_out, ``view``
+    settings). Read-only; fail-soft."""
     items: list[AttentionItem] = []
     try:
         from core import aws_account
@@ -1125,12 +1127,14 @@ def _collect_aws_account() -> list[AttentionItem]:
                      if st["state"] == "short" else "Hives cannot be created in this account")
             detail = (str((st.get("capability") or {}).get("detail") or "")
                       if st["state"] == "cannot_build" else
-                      "Create them on the Swarm AWS Account page, or choose Later.")
+                      "Create them in Swarm Out → Settings, or choose Later.")
+            # Hives are set up in the Swarm Out tab's settings (the App's account page no
+            # longer shows them): the row opens that view
             items.append(AttentionItem(
                 id="aws_account:hive", source="aws_account", tier=TIER_REVIEW, brain=None,
                 title=title, summary=acct, detail=_one_line(detail, 400),
-                dispatch={"message": _prompt("Open Settings → Swarm AWS Account: " + title.lower() + "."),
-                          "context": ctx}))
+                dispatch={"message": _prompt("Open Swarm Out → Settings: " + title.lower() + "."),
+                          "context": {"kind": "swarm_out", "view": "settings"}}))
     except Exception as exc:
         logger.warning("attention: aws_account source failed: %s", exc)
     return items

@@ -3,13 +3,15 @@
  * mock Knowledge/Mockups/2026-11-23-swarm-out-single-entry.html v3).
  *
  * Questions answered:
- * 1. the run view only reads: one row per Hive and Elastic Workers, each naming its
- *    execution surface, no button on any row, and stopped Hives never replace the view.
- * 2. without an AWS account the panel shows one card whose button opens Settings.
- * 3. the settings view: the account line, the Elastic Workers switch (and the account
- *    choice with several accounts: saved at once on standby, shown again, fixed once it runs), each Hive with login info and delete
- *    (a broken one with its reason and retry), "add one" naming
- *    the cost before anything is created, what blocks building one.
+ * 1. the header names every place a task can run (one pill per Hive and Elastic Workers,
+ *    each EC2 or AgentCore), and stopped Hives never replace the run view.
+ * 2. without an AWS account the panel shows one card that connects the account right
+ *    there: nothing opens the App's Settings.
+ * 3. the settings view: the account with its Account ID and Region, the Elastic Workers
+ *    switch (and the account choice with several accounts: saved at once on standby, shown
+ *    again, fixed once it runs), each Hive with login info and delete (a broken one open by
+ *    itself, with its reason and retry), "add one" naming the cost before anything is
+ *    created, what blocks building one.
  * 4. no Hive nav card and no hive overlay remain.
  * 5. an upgrading user sees the note once.
  * 6. no locale says Elastic Hive or points to a Hive page.
@@ -43,6 +45,12 @@ vi.mock('../../../services/hive', async (orig) => ({
 }));
 vi.mock('../../../services/settings', () => ({
   settingsService: { getAPIConfiguration: (...a: unknown[]) => mocks.cfg(...a), updateAPIConfiguration: (...a: unknown[]) => mocks.updateCfg(...a) },
+}));
+const desktop = { on: false };
+vi.mock('../../../services/tauri', () => ({ isDesktop: () => desktop.on }));
+vi.mock('../../awsAccount/ConnectAccount', () => ({
+  default: ({ onConnected }: { onConnected: (v: unknown) => void }) => (
+    <button type="button" data-testid="connect-account-flow" onClick={() => onConnected({ state: 'connected', account: { account_id: '111122223333' } })} />),
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string, o?: Record<string, unknown>) => (o ? `${k}|${Object.values(o).join(',')}` : k) }),
@@ -86,25 +94,22 @@ beforeEach(() => {
   mocks.standby.mockResolvedValue({ standby: false });
   mocks.setFleet.mockResolvedValue(ACCOUNT());
   window.localStorage.setItem(NOTE_SEEN_KEY, '1');
+  desktop.on = false;
 });
 
 describe('Swarm Out as the only place for Hives', () => {
-  it('the run view only reads', async () => {
+  it('the header names every place a task can run', async () => {
     render(<SwarmOutDashboard />);
-    const rows = await screen.findAllByTestId('swarm-out-fleet-hive');
-    expect(rows).toHaveLength(2);
-    expect(within(rows[0]).getByTestId('swarm-out-fleet-kind')).toHaveTextContent('Hive · EC2');
-    expect(within(rows[1]).getByTestId('swarm-out-fleet-kind')).toHaveTextContent('AgentCore Runtime');
-    expect(rows[1]).toHaveTextContent('Elastic Workers');
-    // no button on any row (a row is a "contents" wrapper: its cells hold no control)
-    for (const r of rows) expect(within(r).queryAllByRole('button')).toHaveLength(0);
+    const pills = await screen.findAllByTestId('so-fleet-pill');
+    expect(pills.map((p) => p.getAttribute('data-carrier'))).toEqual(['ec2', 'agentcore']);
+    expect(pills[1]).toHaveTextContent('Elastic Workers');
     // every Hive stopped: the run view stays, and nothing asks the person to start one
-    expect(screen.getByTestId('swarm-out-live')).toBeInTheDocument();
+    expect(screen.getByTestId('so-run-board')).toBeInTheDocument();
     expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
-    expect(rows[0]).toHaveTextContent('swarmOut.fleet.startsWhenNeeded');
+    expect(pills[0].getAttribute('title')).toContain('swarmOut.fleet.startsWhenNeeded');
   });
 
-  it('no account: one card to Settings', async () => {
+  it('no account: one card that connects it right there, never the App\'s Settings', async () => {
     mocks.get.mockResolvedValue(ACCOUNT({ state: 'unconnected', account: null, hive: null }));
     const seen: unknown[] = [];
     const on = (e: Event) => seen.push((e as CustomEvent).detail);
@@ -112,15 +117,25 @@ describe('Swarm Out as the only place for Hives', () => {
     render(<SwarmOutDashboard />);
     fireEvent.click(await screen.findByTestId('swarm-out-connect-account'));
     window.removeEventListener('swarm:open-settings', on);
-    expect(seen).toEqual([{ tab: 'aws-account' }]);
-    expect(screen.queryByTestId('swarm-out-live')).toBeNull();
+    expect(seen).toEqual([]);
+    expect(screen.getByTestId('connect-account-flow')).toBeInTheDocument();
+    expect(screen.queryByTestId('so-run-board')).toBeNull();
   });
 
   it('the settings view', async () => {
+    const seen: unknown[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('swarm:open-settings', on);
     render(<SwarmOutSettings />);
-    expect(await screen.findByTestId('so-set-account')).toHaveTextContent('533267412361');
-    expect(screen.getByTestId('so-set-elastic-kind')).toHaveTextContent('AgentCore Runtime');
-    expect(screen.getByTestId('so-set-hives-kind')).toHaveTextContent('EC2');
+    expect(await screen.findByTestId('so-account-id-value')).toHaveTextContent('5332 6741 2361');
+    expect(screen.getByTestId('so-account-region')).toHaveTextContent('us-east-1');
+    expect(screen.getByTestId('so-set-elastic')).toHaveTextContent('swarmOut.board.elastic');
+    expect(screen.getByTestId('so-set-hives')).toHaveTextContent('swarmOut.board.ec2');
+    // changing the account opens the sign-in flow here, not the App's Settings
+    fireEvent.click(screen.getByTestId('so-account-change'));
+    expect(screen.getByTestId('connect-account-flow')).toBeInTheDocument();
+    window.removeEventListener('swarm:open-settings', on);
+    expect(seen).toEqual([]);
     // the Elastic Workers switch is the person's route
     const sw = await screen.findByTestId('so-elastic-switch');
     await waitFor(() => expect(sw).toBeChecked());
@@ -128,6 +143,8 @@ describe('Swarm Out as the only place for Hives', () => {
     await waitFor(() => expect(mocks.standby).toHaveBeenCalledWith(false, undefined));
     // each Hive: login info and delete (the delete asks first)
     const row = await screen.findByTestId('so-hive-row');
+    expect(within(row).queryByTestId('so-hive-login')).toBeNull();     // closed until opened
+    fireEvent.click(within(row).getByTestId('so-hive-toggle'));
     expect(within(row).getByTestId('so-hive-login')).toBeInTheDocument();
     fireEvent.click(within(row).getByTestId('so-hive-delete'));
     mocks.del.mockResolvedValue(undefined);
@@ -189,6 +206,7 @@ describe('Swarm Out as the only place for Hives', () => {
     mocks.retry.mockResolvedValue(undefined);
     render(<SwarmOutSettings />);
     const row = await screen.findByTestId('so-hive-row');
+    // open by itself: why it is broken is the first thing to read
     expect(within(row).getByTestId('so-hive-error')).toHaveTextContent('Failed to become healthy after start');
     fireEvent.click(within(row).getByTestId('so-hive-retry'));
     expect(mocks.retry).not.toHaveBeenCalled();
@@ -196,11 +214,78 @@ describe('Swarm Out as the only place for Hives', () => {
     await waitFor(() => expect(mocks.retry).toHaveBeenCalledWith('h1', true));
   });
 
+  it('the settings view: Hives short of what was asked: build them or later; "add one" never asks for fewer', async () => {
+    mocks.get.mockResolvedValue(ACCOUNT({ hive: { state: 'short', desired: 3, counted: 1, short: 2, instance_type: 'm7g.xlarge',
+      region: 'us-east-1', prices: { 'm7g.xlarge': 119 }, dismissed: false } }));
+    render(<SwarmOutSettings />);
+    const line = await screen.findByTestId('so-hive-short');
+    expect(screen.queryByTestId('so-hive-add')).toBeNull();          // the shortage is the one way to add here
+    fireEvent.click(within(line).getByTestId('so-hive-short-build'));
+    await waitFor(() => expect(mocks.setFleet).toHaveBeenCalledWith({ desired_count: 3 }));
+    fireEvent.click(await screen.findByTestId('so-hive-short-later'));
+    await waitFor(() => expect(mocks.setFleet).toHaveBeenCalledWith({ dismissed: true }));
+  });
+
+  it('the settings view: "add one" asks for one more than both what is there and what was asked', async () => {
+    // three asked for, one built (this account could not build the rest): one more is four, never two
+    mocks.get.mockResolvedValue(ACCOUNT({ hive: { state: 'cannot_build', desired: 3, counted: 1, short: 2, instance_type: 'm7g.xlarge',
+      region: 'us-east-1', prices: { 'm7g.xlarge': 119 }, capability: { status: 'missing', detail: 'x' } } }));
+    render(<SwarmOutSettings />);
+    fireEvent.click(await screen.findByTestId('so-hive-add'));
+    fireEvent.click(screen.getByTestId('so-hive-add-go'));
+    await waitFor(() => expect(mocks.setFleet).toHaveBeenCalledWith({ desired_count: 4 }));
+  });
+
+  it('the settings view: no "none" before the Hives are read, and an unreadable list says so', async () => {
+    let fail: (e: Error) => void = () => {};
+    mocks.instances.mockReturnValue(new Promise((_, rej) => { fail = rej; }));
+    render(<SwarmOutSettings />);
+    expect((await screen.findByTestId('so-hives-none')).textContent).toBe('swarmOut.loading');
+    fail(new Error('down'));
+    await waitFor(() => expect(screen.getByTestId('so-hives-none').textContent).toBe('swarmOut.setup.hivesUnreadable'));
+  });
+
+  it('the settings view: an account connected here reaches the panel', async () => {
+    mocks.get.mockResolvedValue(ACCOUNT({ state: 'unconnected', account: null, hive: null }));
+    const onConnected = vi.fn();
+    render(<SwarmOutSettings onConnected={onConnected} />);
+    fireEvent.click(await screen.findByTestId('so-account-change'));
+    fireEvent.click(screen.getByTestId('connect-account-flow'));
+    expect(onConnected).toHaveBeenCalledWith(expect.objectContaining({ state: 'connected' }));
+  });
+
   it('the settings view: what blocks building a Hive is shown', async () => {
     mocks.get.mockResolvedValue(ACCOUNT({ hive: { state: 'cannot_build', desired: 1, counted: 0, short: 1, prices: { 'm7g.xlarge': 119 },
       capability: { status: 'missing', no_default_vpc: true, region: 'eu-west-1', detail: 'no default VPC in eu-west-1' } } }));
     render(<SwarmOutSettings />);
     expect(await screen.findByTestId('so-hive-cannot')).toBeInTheDocument();
+  });
+
+  it('Hives in other accounts are here (moved from the App\'s account page): only accounts that still hold Hives', async () => {
+    desktop.on = true;
+    const acc = (id: string, role: string, hiveCount: number) => ({ id, accountId: id, label: `label-${id}`, authMethod: 'access_keys',
+      defaultRegion: 'us-east-1', createdAt: 't', verifiedAt: 't', role, hiveCount });
+    mocks.accounts.mockResolvedValue([acc('swarmai', 'swarmai', 2), acc('old', 'other', 1), acc('empty', 'other', 0)]);
+    render(<SwarmOutSettings />);
+    const box = await screen.findByTestId('so-set-other-accounts');
+    expect(box).toHaveTextContent('label-old');
+    expect(box).not.toHaveTextContent('label-swarmai');
+    expect(box).not.toHaveTextContent('label-empty');
+    expect(box).toHaveTextContent('settings.awsAccount.otherHives');
+    expect(within(box).queryByText('settings.awsAccount.addHiveAccount')).toBeNull();
+  });
+
+  it('without a SwarmAI account, the legacy Hive accounts are here too, with Add', async () => {
+    desktop.on = true;
+    mocks.get.mockResolvedValue(ACCOUNT({ state: 'unconnected', account: null, hive: null }));
+    mocks.accounts.mockResolvedValue([{ id: 'mine', accountId: 'mine', label: 'label-mine', authMethod: 'access_keys',
+      defaultRegion: 'us-east-1', createdAt: 't', verifiedAt: 't', role: 'own', hiveCount: 0 }]);
+    render(<SwarmOutSettings />);
+    const box = await screen.findByTestId('so-set-other-accounts');
+    expect(box).toHaveTextContent('label-mine');
+    expect(box).toHaveTextContent('settings.awsAccount.hiveAccounts');
+    fireEvent.click(within(box).getByText('settings.awsAccount.addHiveAccount'));
+    expect(screen.getByRole('dialog')).toHaveTextContent('ui.hiveComponents.addAccountTitle');
   });
 
   it('no hive nav card or overlay', () => {
@@ -216,7 +301,7 @@ describe('Swarm Out as the only place for Hives', () => {
     expect(screen.queryByTestId('swarm-out-single-entry-note')).toBeNull();
     first.unmount();
     render(<SwarmOutDashboard />);
-    await screen.findAllByTestId('swarm-out-fleet-hive');
+    await screen.findAllByTestId('so-fleet-pill');
     expect(screen.queryByTestId('swarm-out-single-entry-note')).toBeNull();
   });
 
@@ -224,7 +309,7 @@ describe('Swarm Out as the only place for Hives', () => {
     window.localStorage.removeItem(NOTE_SEEN_KEY);
     mocks.fleet.mockResolvedValue({ running: 0, hives: [] });
     render(<SwarmOutDashboard />);
-    await screen.findByTestId('swarm-out-live');
+    await screen.findByTestId('so-run-board');
     expect(screen.queryByTestId('swarm-out-single-entry-note')).toBeNull();
   });
 

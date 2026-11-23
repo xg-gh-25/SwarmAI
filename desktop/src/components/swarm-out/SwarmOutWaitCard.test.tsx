@@ -100,7 +100,7 @@ describe('SwarmOutWaitCard', () => {
   });
 
   it('the run view has no answer controls of its own', () => {
-    const src = readFileSync(resolve(__dirname, 'LiveDispatches.tsx'), 'utf8');
+    const src = readFileSync(resolve(__dirname, 'RunBoard.tsx'), 'utf8');
     expect(src).not.toMatch(/function AskCard/);
     expect(src).toMatch(/SwarmOutWaitCard/);
   });

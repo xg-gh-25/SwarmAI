@@ -1531,7 +1531,7 @@
       "title": "把任务派到你自己的 AWS 上跑",
       "why": "从这里派出的任务跑在你的 AWS 账户里，合上 Mac 也会继续；要你拍板的事会出现在这里。连上账户后，SwarmAI 会自己准备好 Elastic Workers，不用你建机器。",
       "connect": "连接 AWS 账户",
-      "once": "打开 Settings › SwarmAI 账户。模型也用这个账户，只需要连一次。"
+      "once": "就在这里登录。模型也用这个账户，只需要连一次。"
     },
     "return": {
       "landed": "已落到 {{into}}（{{head}}）。接下来按这个仓库自己的规则 build、测试。",
@@ -2283,6 +2283,106 @@
         "elastic": "关掉 Elastic Workers",
         "type": "改机型、闲置时间"
       }
+    },
+    "board": {
+      "running": "在跑",
+      "recent": "最近完成",
+      "recentWindow": "过去 72 小时",
+      "waiting": "{{count}} 个等你",
+      "emptyRunning": "没有在跑的任务。在右边说要做什么，Swarm 会派出去。",
+      "emptyRecent": "过去 72 小时没有做完的任务。",
+      "agentHolds": "agent 处理中",
+      "agentAt": "agent 在处理",
+      "waitsYou": "等你",
+      "openCard": "打开卡片",
+      "openSession": "打开会话",
+      "fleetTitle": "在哪里跑",
+      "fleetSettings": "打开 Swarm Out 设置",
+      "elastic": "AgentCore",
+      "ec2": "EC2",
+      "stationHere": "当前",
+      "stationPassed": "已过",
+      "stationAhead": "未到"
+    },
+    "hist": {
+      "range": "时间范围",
+      "r7": "7 天",
+      "r30": "30 天",
+      "r60": "60 天",
+      "r90": "90 天",
+      "all": "全部",
+      "rangeText": "{{from}} – {{to}} · {{count}} 个任务",
+      "verdict": "通过验收，没有人插手",
+      "prev": "前 {{days}} 天 {{un}} / {{n}}",
+      "prevNone": "前一段时间没有任务",
+      "ok": "通过",
+      "off": "丢弃",
+      "warn": "停止",
+      "open": "进行中",
+      "facts": "{{count}} 个任务 · 中位 {{min}} · 花费 {{cost}}",
+      "perDay": "每根柱子 = 一天",
+      "perWeek": "每根柱子 = 一周",
+      "dayTip": "{{day}} · {{count}} 个",
+      "groups": "按什么看",
+      "dim": {
+        "brain": "Brain",
+        "agent": "Project Agent",
+        "where": "运行在"
+      },
+      "col": {
+        "name": "名字",
+        "runs": "任务",
+        "result": "结果",
+        "unattended": "通过且没人插手",
+        "median": "中位",
+        "cost": "花费"
+      },
+      "records": "所有任务",
+      "filter": {
+        "all": "全部",
+        "human": "有人插手",
+        "off": "丢弃",
+        "warn": "已停止"
+      },
+      "more": "再显示 {{count}} 个",
+      "none": "这个筛选下没有任务。",
+      "empty": "这段时间没有派出任务。"
+    },
+    "setup": {
+      "account": "AWS 账户",
+      "accountId": "Account ID",
+      "region": "Region",
+      "regionNote": "新 Hive 和 Elastic Workers 都建在这里",
+      "copy": "复制",
+      "copied": "已复制",
+      "change": "换账户",
+      "connect": "连接账户",
+      "cancel": "取消",
+      "changeWarn": "换了以后，模型调用（Bedrock）也会用新账户；现有 Hive 留在旧账户，会列在下面「别的账户里的 Hive」。",
+      "state": {
+        "connected": "已连接",
+        "needs_login": "需要重新登录",
+        "unverified": "还没验证",
+        "account_mismatch": "账户不一致",
+        "unconnected": "还没连接"
+      },
+      "canDo": "这个账户能做",
+      "capHive": "建 Hive（EC2）",
+      "capElastic": "Elastic Workers（AgentCore）",
+      "elasticOff": "未开启",
+      "rules": "新 Hive 和闲置",
+      "rulesLead": "只影响以后新建的 Hive 和闲置停机",
+      "regionSame": "和账户主区域一致",
+      "noHives": "还没有常驻 Hive。Elastic Workers 开着时可以一台都没有。",
+      "retryConfirm": "确认重试",
+      "unreadable": "读不到账户，稍后自动重试",
+      "hivesUnreadable": "读不到常驻 Hive 列表，稍后再打开这里",
+      "dismiss": "知道了",
+      "chooseFirst": "先在下面选 Elastic Workers 用哪个账户",
+      "buildShort": "补上 {{count}} 台",
+      "buildShortCost": "补上 {{count}} 台（每台约 ${{usd}} / 月）",
+      "later": "稍后",
+      "addConfirmNoCost": "在账户 {{account}} 建 1 台 Hive"
     }
   },
   "usage": {
@@ -3163,7 +3263,7 @@
     "lead": "派出去的任务跑在你自己的 AWS 账户里，这台电脑关着也会继续。",
     "loading": "加载中…",
     "loadFailed": "账号信息加载失败。",
-    "connectFirst": "Hive 需要 AWS 账号。在 设置 → SwarmAI 账号 连上后，在那里创建。",
+    "connectFirst": "Hive 需要 AWS 账号。连上后，在 Swarm Out → 设置 里创建。",
     "count": "数量",
     "type": "规格",
     "month": "月",
@@ -3983,9 +4083,7 @@
       "noMatchingConversations": "没有匹配的对话",
       "resultCount_one": "{{count}} 条结果",
       "resultCount_other": "{{count}} 条结果",
-      "noMatchingSessions": "没有匹配的会话",
-      "colJudge": "评审",
-      "naCount": "不适用 {{n}}"
+      "noMatchingSessions": "没有匹配的会话"
     },
     "LibraryHealth": {
       "unavailable": "健康检查不可用",

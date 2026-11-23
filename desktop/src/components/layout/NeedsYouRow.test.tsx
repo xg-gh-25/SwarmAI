@@ -38,6 +38,35 @@ describe('NeedsYouRow', () => {
     expect(onFill).toHaveBeenCalledWith('Open Swarm Out: 2 swarm out runs to accept or decide.');
   });
 
+  it('a Hive item opens the Swarm Out tab on its settings view (where Hives are set up), never the App\'s Settings', () => {
+    const show = vi.fn();
+    setOverlayCtxBridge({ showSwarmOut: show });
+    const opened: string[] = [];
+    const on = (e: Event) => opened.push(e.type);
+    window.addEventListener('swarm:open-swarm-out-settings', on);
+    window.addEventListener('swarm:open-settings', on);
+    try {
+      const onFill = vi.fn();
+      render(<NeedsYouRow onFill={onFill} onSend={vi.fn()} item={item({ id: 'aws_account:hive', source: 'aws_account',
+        dispatch: { message: 'Open Swarm Out → Settings: 2 hives short.', context: { kind: 'swarm_out', view: 'settings' } } })} />);
+      fireEvent.click(screen.getByTestId('needs-you-row-fill'));
+      expect(opened).toEqual(['swarm:open-swarm-out-settings']);
+      expect(show).not.toHaveBeenCalled();
+      expect(onFill).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('swarm:open-swarm-out-settings', on);
+      window.removeEventListener('swarm:open-settings', on);
+    }
+  });
+
+  it('a Hive item where the Swarm Out tab cannot be reached is an ordinary prompt', () => {
+    const onFill = vi.fn();
+    render(<NeedsYouRow onFill={onFill} onSend={vi.fn()} item={item({ id: 'aws_account:hive', source: 'aws_account',
+      dispatch: { message: 'Open Swarm Out → Settings: 2 hives short.', context: { kind: 'swarm_out', view: 'settings' } } })} />);
+    fireEvent.click(screen.getByTestId('needs-you-row-fill'));
+    expect(onFill).toHaveBeenCalledWith('Open Swarm Out → Settings: 2 hives short.');
+  });
+
   it('a SwarmAI account item opens its settings page and fills nothing', () => {
     const opened: unknown[] = [];
     const listen = (e: Event) => opened.push((e as CustomEvent).detail);

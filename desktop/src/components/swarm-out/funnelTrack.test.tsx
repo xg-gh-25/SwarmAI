@@ -109,18 +109,29 @@ describe('the dispatch track', () => {
   });
 });
 
-describe('the Hives above the list', () => {
-  it('a Hive is a row with name, version, memory and load, no fixed slot count', async () => {
-    const { LiveDispatches } = await import('./LiveDispatches');
-    render(<LiveDispatches fleet={{ running: 1, hives: [{ name: 'explorer', status: 'running', region: null, version: '2.3.0-hive8',
-      instance_type: 'm7g.2xlarge', reachable: true, streaming: 2, saturated: false, memory_percent: 58 }] }} now={NOW} />);
-    const hive = screen.getAllByTestId('swarm-out-fleet-hive');
-    expect(hive).toHaveLength(1);
-    const fleet = screen.getByTestId('swarm-out-fleet');
-    expect(fleet.textContent).toContain('explorer');
-    expect(fleet.textContent).toContain('2.3.0-hive8');
-    expect(screen.getByTestId('swarm-out-memory').getAttribute('data-percent')).toBe('58');
-    expect(screen.getByTestId('swarm-out-fleet-status').textContent).toMatch(/2/);
-    expect(fleet.textContent).not.toMatch(/\d+ of \d+ slots/);
+describe('where tasks can run, in the header', () => {
+  it('one pill per place: its name, EC2 or AgentCore, its load on hover, no slot count; a click opens the settings', async () => {
+    const { FleetPills } = await import('./FleetPills');
+    const opened = vi.fn();
+    window.addEventListener('swarm:open-swarm-out-settings', opened);
+    render(<FleetPills hidden failed={false} fleet={{ running: 1, hives: [
+      { name: 'explorer', status: 'running', region: null, version: '2.3.0-hive8', instance_type: 'm7g.2xlarge',
+        reachable: true, streaming: 2, saturated: false, memory_percent: 58, carrier: 'ec2' },
+      { name: 'demo', status: 'running', region: null, version: '2.3.0', instance_type: 'm7g.xlarge',
+        reachable: false, streaming: null, saturated: null, memory_percent: null, carrier: 'ec2' },
+      { name: 'elastic', status: 'ready', region: null, version: '2.3.0', instance_type: 'agentcore',
+        reachable: null, streaming: null, saturated: null, memory_percent: null, carrier: 'agentcore' },
+    ] }} />);
+    const pills = screen.getAllByTestId('so-fleet-pill');
+    expect(pills.map((p) => [p.getAttribute('data-carrier'), p.getAttribute('data-tone')]))
+      .toEqual([['ec2', 'ok'], ['ec2', 'error'], ['agentcore', 'ok']]);
+    expect(pills[0].textContent).toContain('explorer');
+    expect(pills[0].getAttribute('title')).toMatch(/2/);
+    expect(pills[0].getAttribute('title')).toMatch(/58%/);
+    expect(pills[2].textContent).toContain('Elastic Workers');
+    expect(screen.getByTestId('so-fleet').textContent).not.toMatch(/\d+ of \d+ slots/);
+    fireEvent.click(pills[1]);
+    expect(opened).toHaveBeenCalledTimes(1);
+    window.removeEventListener('swarm:open-swarm-out-settings', opened);
   });
 });

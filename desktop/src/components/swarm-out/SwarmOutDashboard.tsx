@@ -3,19 +3,21 @@
  *
  * The right side is the real chat column ChatPage renders for every tab; this panel
  * is the one place for where tasks run (it replaced the left-nav Hive page; design
- * docs/design/2026-11-20-swarm-out-multi-carrier.md §6.8, mock
- * Knowledge/Mockups/2026-11-23-swarm-out-single-entry.html v3). Three views:
- *  - Runs (LiveDispatches): where tasks run (one read-only row per Hive and Elastic
- *    Workers, each naming its execution surface), the questions waiting, the runs.
- *  - History (HistoryView): how much came back done unattended, the runs by Brain, type
- *    or Hive, the five audit dimensions, and every run, each opening into its card.
- *  - Settings (SwarmOutSettings): the few things only the person decides.
+ * docs/design/2026-11-20-swarm-out-multi-carrier.md §6.8; visual design mock
+ * Knowledge/Mockups/2026-11-23-swarm-out-dashboard-redesign-v6.html). The header names
+ * where tasks can run (FleetPills, one pill per place). Three views:
+ *  - Run (RunBoard): what is running, a run that needs the person marked on its own card,
+ *    and what finished in the last 72 hours.
+ *  - History (HistoryView): one time range for every number: how much was accepted with
+ *    no one stepping in, the runs by Brain, Project Agent or where they ran, every run.
+ *  - Settings (SwarmOutSettings): everything about where tasks run, the AWS account
+ *    included; nothing here sends the person to the App's Settings.
  * OPEN_SWARM_OUT_SETTINGS (any link to the Hives) opens the settings view; ChatPage
  * switches to this tab. An upgrading user who has a Hive sees one note, once, saying the
  * Hive page moved here and what Elastic Workers is.
  *
  * The fleet (/api/swarm-out/fleet) is polled here while the panel is shown: it gives the
- * header's Hive count. The setup guide (HiveGuide) replaces the run view only while the AWS
+ * header's pills and each run's place. The setup guide (HiveGuide) replaces the run view only while the AWS
  * account is not connected: a stopped Hive never stops the run view. Responsive: the panel measures its own width (it shares the
  * row with the chat column and the Canvas); below COMPACT_BELOW px type steps down.
  * Labels come from the locale files (swarmOut.*); status colours from ./tone.
@@ -27,10 +29,10 @@ import { HistoryView } from './HistoryView';
 import { SwarmOutSettings } from './SwarmOutSettings';
 import { awsAccountService } from '../../services/awsAccount';
 import { OPEN_SWARM_OUT_SETTINGS } from '../common/settingsEvents';
-import { LiveDispatches } from './LiveDispatches';
 import { OpenSessionContext, PanelHiddenContext } from './openSession';
 import { useFleet } from './live';
-import { TONE_VAR } from './tone';
+import { FleetPills } from './FleetPills';
+import { RunBoard } from './RunBoard';
 
 /** Below this panel width (CSS px) the dashboard uses its compact layout. */
 export const COMPACT_BELOW = 820;
@@ -60,7 +62,7 @@ function noteSeen(): boolean {
 
 /** Whether the AWS account is connected (null until known): without it there is nowhere
  *  to send a task, and the panel shows only the setup guide. */
-function useAccountConnected(hidden: boolean): boolean | null {
+function useAccountConnected(hidden: boolean): [boolean | null, (v: boolean) => void] {
   const [connected, setConnected] = useState<boolean | null>(null);
   useEffect(() => {
     if (hidden) return undefined;
@@ -69,7 +71,7 @@ function useAccountConnected(hidden: boolean): boolean | null {
       .catch(() => { if (!stop) setConnected(null); });
     return () => { stop = true; };
   }, [hidden]);
-  return connected;
+  return [connected, setConnected];
 }
 
 export function SwarmOutDashboard({ hidden = false, onOpenSession, now }: {
@@ -81,7 +83,7 @@ export function SwarmOutDashboard({ hidden = false, onOpenSession, now }: {
   const { t } = useTranslation();
   const [view, setView] = useState<'run' | 'history' | 'settings'>('run');
   const [showNote, setShowNote] = useState(() => !noteSeen());
-  const connected = useAccountConnected(hidden);
+  const [connected, setConnected] = useAccountConnected(hidden);
   useEffect(() => {
     const go = () => setView('settings');
     window.addEventListener(OPEN_SWARM_OUT_SETTINGS, go);
@@ -102,7 +104,7 @@ export function SwarmOutDashboard({ hidden = false, onOpenSession, now }: {
       type="button"
       onClick={() => setView(v)}
       aria-pressed={view === v}
-      className={`px-3 py-[3px] rounded-md text-[12.5px] ${view === v ? 'bg-[var(--color-card)] text-[var(--color-text)] font-medium shadow-sm' : muted}`}
+      className={`px-3 py-[3px] rounded-md text-small transition-colors ${view === v ? 'bg-[var(--color-card)] text-[var(--color-text)] font-semibold shadow-sm' : `${muted} hover:text-[var(--color-text)]`}`}
     >{label}</button>
   );
   return (
@@ -110,30 +112,27 @@ export function SwarmOutDashboard({ hidden = false, onOpenSession, now }: {
     <PanelHiddenContext.Provider value={hidden}>
     <div
       ref={rootRef}
-      className={`min-w-0 flex flex-col min-h-0 bg-[var(--color-bg)] ${compact ? 'text-[12.5px]' : 'text-[13px]'}`}
+      className="min-w-0 flex flex-col min-h-0 bg-[var(--color-bg)] text-body"
       style={{ flex: '1 1 0', display: hidden ? 'none' : undefined }}
       data-testid="swarm-out-dashboard"
       data-compact={compact || undefined}
     >
-      <div className={`flex items-center gap-3 ${padX} ${compact ? 'pt-3' : 'pt-4'} flex-shrink-0 min-w-0`}>
-        <h2 className={`m-0 ${compact ? 'text-[15px]' : 'text-[17px]'} font-semibold whitespace-nowrap`}>{t('ui.SwarmOutDashboard.title')}</h2>
+      <div className={`flex ${compact ? 'flex-wrap' : ''} items-center gap-x-3.5 gap-y-2 ${padX} ${compact ? 'py-3' : 'py-3.5'} flex-shrink-0 min-w-0 border-b border-[var(--color-border)]`}>
+        <h2 className="m-0 text-title font-semibold whitespace-nowrap">{t('ui.SwarmOutDashboard.title')}</h2>
         <div className="inline-flex rounded-lg p-[2px] bg-[var(--color-bg-chrome)] flex-shrink-0">{seg('run', t('swarmOut.view.run'))}{seg('history', t('swarmOut.view.history'))}{seg('settings', t('swarmOut.view.settings'))}</div>
-        {fleet !== null && (
-          <span className={`ml-auto text-[12px] truncate min-w-0 ${muted}`} data-testid="swarm-out-hive-count">
-            {fleet.running > 0
-              ? <><span style={{ color: TONE_VAR.ok }}>{t('swarmOut.header.running', { count: fleet.running })}</span>{t('swarmOut.header.keepsGoing')}</>
-              : fleet.hives.length > 0 ? t('swarmOut.header.noneRunning', { count: fleet.hives.length }) : t('swarmOut.header.noHive')}
-          </span>
-        )}
+        <div className={`${compact ? 'w-full' : 'ml-auto'} min-w-0 flex ${compact ? 'justify-start' : 'justify-end'}`}>
+          <FleetPills fleet={fleet} failed={fleetFailed} hidden={hidden} />
+        </div>
       </div>
-      <div className={`flex-1 overflow-y-auto overflow-x-hidden ${padX} ${compact ? 'pt-3 pb-5' : 'pt-4 pb-6'}`}>
-        {view === 'settings' ? <SwarmOutSettings />
+      <div key={view} className={`so-view-in flex-1 overflow-y-auto overflow-x-hidden ${padX} ${compact ? 'pt-4 pb-6' : 'pt-5 pb-8'}`}
+        data-testid="swarm-out-view" data-view={view}>
+        {view === 'settings' ? <SwarmOutSettings fleet={fleet} onConnected={(v) => setConnected(v.state !== 'unconnected')} />
           : view === 'run'
           ? (connected === false
-            ? <HiveGuide />
+            ? <HiveGuide onConnected={(v) => setConnected(v.state !== 'unconnected')} />
             : <>
               {showNote && (fleet?.hives.length ?? 0) > 0 && (
-                <div className="flex items-start gap-3 mb-4 px-3.5 py-3 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)] text-[12.5px] text-[var(--color-text-secondary)]"
+                <div className="flex items-start gap-3 mb-5 px-3.5 py-3 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)] text-small text-[var(--color-text-secondary)]"
                   style={{ borderLeft: '3px solid var(--color-primary)' }} data-testid="swarm-out-single-entry-note">
                   <div className="flex-1 min-w-0">
                     <div><b className="text-[var(--color-text)]">{t('swarmOut.note.moved')}</b>{t('swarmOut.note.movedDetail')}</div>
@@ -143,9 +142,9 @@ export function SwarmOutDashboard({ hidden = false, onOpenSession, now }: {
                     data-testid="swarm-out-single-entry-note-ok">{t('swarmOut.note.ok')}</button>
                 </div>
               )}
-              <LiveDispatches hidden={hidden} fleet={fleet} fleetFailed={fleetFailed} now={at} compact={compact} />
+              <RunBoard hidden={hidden} fleet={fleet} now={at} compact={compact} />
             </>)
-          : <HistoryView hidden={hidden} now={at} compact={compact} />}
+          : <HistoryView hidden={hidden} now={at} compact={compact} fleet={fleet} />}
       </div>
     </div>
     </PanelHiddenContext.Provider>

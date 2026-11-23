@@ -63,6 +63,10 @@ export interface SwarmOutRun {
   /** How many decisions the person made on the run (their commands, answers, what they
    *  said in its Hive tab); null for a record kept before the funnel. */
   person_decisions?: number | null;
+  /** Each round of the run, in order (the dispatch row's ``rounds``, backend
+   *  core/carriers/base.RunHandle): the execution surface it ran on. Absent or empty for
+   *  a dispatch from before rounds were recorded. */
+  rounds?: { carrier?: 'ec2' | 'agentcore' | null; round?: number }[] | null;
   /** The person has something to do on it now (an open ask, a wait that is theirs);
    *  null: no live session answers for the run, the older rules apply. */
   needs_person?: boolean | null;

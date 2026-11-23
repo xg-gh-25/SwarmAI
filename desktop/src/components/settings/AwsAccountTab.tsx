@@ -7,30 +7,26 @@
  *     `remediation.action`: type the sign-in command into the SwarmAI terminal, run the
  *     in-app sign-in, or change the account);
  *   ② the main region (Bedrock, cloud storage, voice, new Hives; writes `aws_region`);
- *   ③ what can be used (only the gaps, with the permission template);
- *   ④ one line pointing to Swarm Out › settings, where Hives and Elastic Workers are set up
- *     (it replaced the Hive count row: one place for where tasks run);
- *   ⑤ Hive accounts (desktop only): with a SwarmAI account, the Hives left in other
- *     accounts; without one, the legacy Hive accounts exactly as the old Hive Accounts
- *     tab showed them (AccountCard verify / delete, Add account);
- *   ⑥ Details: identity, why the state is what it is, verify, check, template.
+ *   ③ what can be used (only the gaps, with the permission template): Bedrock, cloud
+ *     storage and voice. Hives are not on this page: whether the account can build them,
+ *     the Hives in other accounts and everything else about where tasks run are in the
+ *     Swarm Out tab's settings (design Knowledge/Mockups/2026-11-23-swarm-out-dashboard-
+ *     redesign-v6.html);
+ *   ④ Details: identity, why the state is what it is, verify, check, template.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { awsAccountService, type AwsAccountView, type Capability } from '../../services/awsAccount';
 import { settingsService } from '../../services/settings';
-import { hiveService, hiveAccountView, type HiveAccount } from '../../services/hive';
 import { isDesktop } from '../../services/tauri';
 import { copyToClipboard } from '../../utils/clipboard';
 import ConnectAccount, { type ConnectStart } from '../awsAccount/ConnectAccount';
 import { CopyTemplate } from '../awsAccount/HiveFleet';
-import { openSwarmOutSettings } from '../common/settingsEvents';
 import { regionOptions } from '../awsAccount/regions';
 import { Dropdown } from '../common';
 import { markTerminalRun, runInTerminal, takeSignInRequest, terminalRunRecently } from '../common/settingsEvents';
-import { AccountCard, AddAccountDialog } from './hiveComponents';
 
-const CAPS = ['bedrock', 'hive', 'storage', 'voice'] as const;
+const CAPS = ['bedrock', 'storage', 'voice'] as const;
 
 const STATE_DOT: Record<AwsAccountView['state'], string> = {
   connected: 'bg-green-500',
@@ -267,7 +263,7 @@ export default function AwsAccountTab() {
               {gaps.map((c) => <GapRow key={c} name={t(`settings.awsAccount.cap.${c}`)} cap={caps[c]} />)}
             </ul>
           )}
-          {gaps.some((c) => (c === 'hive' || c === 'storage') && caps?.[c]?.status === 'missing') && (
+          {gaps.some((c) => c === 'storage' && caps?.[c]?.status === 'missing') && (
             <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
               {t('settings.awsAccount.giveTemplate')} <CopyTemplate />
             </p>
@@ -279,20 +275,6 @@ export default function AwsAccountTab() {
           )}
         </section>
       )}
-
-      {acct && (
-        <section data-testid="hive-fleet-moved">
-          <h3 className="text-sm font-medium text-[var(--color-text)]">{t('hiveFleet.section')}</h3>
-          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-            {t('hiveFleet.movedToSwarmOut')}{' '}
-            <button type="button" className="underline" data-testid="hive-fleet-open-swarm-out" onClick={openSwarmOutSettings}>
-              {t('hiveFleet.openSwarmOutSettings')}
-            </button>
-          </p>
-        </section>
-      )}
-
-      {isDesktop() && <HiveAccountsSection />}
 
       <details className="text-sm">
         <summary className="cursor-pointer text-[var(--color-text-secondary)]">{t('settings.awsAccount.details')}</summary>
@@ -313,7 +295,7 @@ export default function AwsAccountTab() {
             <button type="button" disabled={busy !== null} onClick={() => run('check')} className={smallBtn}>
               {busy === 'check' ? '…' : t('settings.awsAccount.check')}
             </button>
-            {!gaps.some((c) => c === 'hive' || c === 'storage') && (
+            {!gaps.some((c) => c === 'storage') && (
               <span className="self-center text-xs text-[var(--color-text-secondary)]">{t('settings.awsAccount.giveTemplate')} <CopyTemplate /></span>
             )}
           </div>
@@ -331,47 +313,5 @@ function GapRow({ name, cap }: { name: string; cap: Capability }) {
       <span className="text-[var(--color-warning)]"> · {t(`settings.awsAccount.capStatus.${cap.status}`)}</span>
       {cap.detail && <span className="block text-[var(--color-text-muted)] break-words">{cap.detail}</span>}
     </li>
-  );
-}
-
-/** ⑤ The Hive accounts (the former Hive Accounts tab, same building blocks as the Hive
- *  nav card): with a SwarmAI account only the other accounts that still hold Hives;
- *  without one, the legacy accounts Hives deploy into, and Add account. */
-function HiveAccountsSection() {
-  const { t } = useTranslation();
-  const [accounts, setAccounts] = useState<HiveAccount[] | null>(null);
-  const [adding, setAdding] = useState(false);
-  const refresh = useCallback(async () => {
-    try { setAccounts(await hiveService.listAccounts()); } catch { setAccounts([]); }
-  }, []);
-  useEffect(() => { void refresh(); }, [refresh]);
-  if (!accounts) return null;
-  const v = hiveAccountView(accounts);
-  const others = v.swarmai ? v.shown.filter((a) => a.role !== 'swarmai') : v.shown;
-  if (others.length === 0 && !v.canAdd) return null;
-  return (
-    <section data-testid="aws-account-hive-accounts">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[var(--color-text)]">
-          {v.swarmai ? t('settings.awsAccount.otherHives') : t('settings.awsAccount.hiveAccounts')}
-        </h3>
-        {v.canAdd && (
-          <button type="button" onClick={() => setAdding(true)} className="btn-md btn-secondary">
-            {t('settings.awsAccount.addHiveAccount')}
-          </button>
-        )}
-      </div>
-      {others.length === 0 ? (
-        <p className="mt-2 text-sm text-[var(--color-text-muted)]">{t('settings.awsAccount.noHiveAccounts')}</p>
-      ) : (
-        <div className="mt-2 space-y-2">
-          {others.map((a) => <AccountCard key={a.id} account={a} onDelete={() => void refresh()} />)}
-        </div>
-      )}
-      {adding && (
-        <AddAccountDialog onClose={() => setAdding(false)}
-          onSaved={() => { setAdding(false); void refresh(); }} />
-      )}
-    </section>
   );
 }

@@ -108,16 +108,16 @@ describe('AwsAccountTab', () => {
     expect(screen.queryByTestId('aws-account-terminal')).toBeNull();
   });
 
-  it('lists only the capabilities that are not ready', async () => {
+  it('lists only the capabilities that are not ready; Hives are not this page\'s', async () => {
     mockGet.mockResolvedValue(view({
       capabilities: { bedrock: ok, hive: { status: 'missing', detail: 'ec2:DescribeInstances (AccessDenied)' },
-                      storage: ok, voice: { status: 'not_applicable' } },
+                      storage: { status: 'missing', detail: 's3:PutObject (AccessDenied)' }, voice: { status: 'not_applicable' } },
     }));
     render(<AwsAccountTab />);
     const gaps = await screen.findByTestId('aws-account-gaps');
     expect(gaps.querySelectorAll('li')).toHaveLength(1);
-    expect(gaps).toHaveTextContent('settings.awsAccount.cap.hive');
-    expect(gaps).toHaveTextContent('ec2:DescribeInstances');
+    expect(gaps).toHaveTextContent('settings.awsAccount.cap.storage');
+    expect(gaps).not.toHaveTextContent('settings.awsAccount.cap.hive');      // Swarm Out's settings say it
   });
 
   it('tells an ADA user with an expired Midway to run mwinit', async () => {
@@ -188,7 +188,7 @@ describe('AwsAccountTab', () => {
     expect(screen.queryByTestId('aws-account-sign-in')).toBeNull();
   });
 
-  it('a missing Hive permission offers the template to copy', async () => {
+  it('the permission template stays one copy away', async () => {
     mockGet.mockResolvedValue(view({ capabilities: { bedrock: ok, storage: ok, voice: ok,
       hive: { status: 'missing', detail: 'missing ec2:RunInstances', missing: ['ec2:RunInstances'] } } }));
     mockTemplate.mockResolvedValue({ policy: {} });
@@ -199,17 +199,17 @@ describe('AwsAccountTab', () => {
     await waitFor(() => expect(write).toHaveBeenCalledWith(JSON.stringify({ policy: {} }, null, 2)));
   });
 
-  it('settings links to swarm out: the Hive count row is one line to Swarm Out settings', async () => {
+  it('no Hive on this page: no count, no pointer, no Hive accounts (all in Swarm Out\'s settings)', async () => {
+    desktop.on = true;
     mockGet.mockResolvedValue(view({ hive: fleet() }));
-    const seen: string[] = [];
-    const on = (e: Event) => seen.push(e.type);
-    window.addEventListener('swarm:open-swarm-out-settings', on);
+    mockListAccounts.mockResolvedValue([{ id: 'old', role: 'other', hiveCount: 1 }]);
     render(<AwsAccountTab />);
-    fireEvent.click(await screen.findByTestId('hive-fleet-open-swarm-out'));
-    window.removeEventListener('swarm:open-swarm-out-settings', on);
-    expect(seen).toEqual(['swarm:open-swarm-out-settings']);
+    await screen.findByTestId('aws-account-tab');
+    expect(screen.queryByTestId('hive-fleet-moved')).toBeNull();
     expect(screen.queryByTestId('hive-plus')).toBeNull();
     expect(screen.queryByTestId('hive-list')).toBeNull();
+    expect(screen.queryByTestId('aws-account-hive-accounts')).toBeNull();
+    expect(mockListAccounts).not.toHaveBeenCalled();
   });
 
   it('chat on a key can be moved back to the account once Bedrock works', async () => {
@@ -264,29 +264,6 @@ describe('AwsAccountTab — the merged page (design 2026-11-01-settings-account-
   });
 
   const acc = (id: string, role: string, hiveCount: number) => ({ id, role, hiveCount }) as never;
-
-  it('with a SwarmAI account, only other accounts that still hold Hives are listed, no add', async () => {
-    desktop.on = true;
-    mockGet.mockResolvedValue(view());
-    mockListAccounts.mockResolvedValue([acc('swarmai', 'swarmai', 2), acc('old', 'other', 1), acc('empty', 'other', 0)]);
-    render(<AwsAccountTab />);
-    expect(await screen.findByTestId('hive-account-old')).toBeInTheDocument();
-    expect(screen.queryByTestId('hive-account-swarmai')).toBeNull();
-    expect(screen.queryByTestId('hive-account-empty')).toBeNull();
-    expect(screen.getByTestId('aws-account-hive-accounts')).toHaveTextContent('settings.awsAccount.otherHives');
-    expect(screen.queryByText('settings.awsAccount.addHiveAccount')).toBeNull();
-  });
-
-  it('without one, the legacy Hive accounts stay exactly as the old tab had them, with Add', async () => {
-    desktop.on = true;
-    mockGet.mockResolvedValue(view({ state: 'unconnected', account: null, capabilities: null }));
-    mockListAccounts.mockResolvedValue([acc('mine', 'own', 0)]);
-    render(<AwsAccountTab />);
-    expect(await screen.findByTestId('hive-account-mine')).toBeInTheDocument();
-    expect(screen.getByTestId('aws-account-hive-accounts')).toHaveTextContent('settings.awsAccount.hiveAccounts');
-    fireEvent.click(screen.getByText('settings.awsAccount.addHiveAccount'));
-    expect(screen.getByTestId('add-hive-account')).toBeInTheDocument();
-  });
 });
 
 describe('AwsAccountTab — after the review', () => {

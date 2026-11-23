@@ -1531,7 +1531,7 @@
       "title": "Send tasks to your own AWS",
       "why": "Tasks sent from here run in your AWS account and keep going when this Mac is closed; what needs your call shows up here. Once the account is connected, SwarmAI prepares Elastic Workers by itself: no machine to build.",
       "connect": "Connect an AWS account",
-      "once": "Opens Settings › SwarmAI account. The model uses the same account; you connect it once."
+      "once": "Sign in right here. The model uses the same account; you connect it once."
     },
     "return": {
       "landed": "Landed on {{into}} ({{head}}). Next, build and test it the way this repository does.",
@@ -2283,6 +2283,106 @@
         "elastic": "turn Elastic Workers off",
         "type": "change the machine type and the idle time"
       }
+    },
+    "board": {
+      "running": "Running",
+      "recent": "Recently done",
+      "recentWindow": "Last 72 hours",
+      "waiting": "{{count}} waiting for you",
+      "emptyRunning": "Nothing is running. Say what to do in the chat on the right and Swarm sends it out.",
+      "emptyRecent": "Nothing finished in the last 72 hours.",
+      "agentHolds": "Agent on it",
+      "agentAt": "agent on it",
+      "waitsYou": "Waiting for you",
+      "openCard": "Open card",
+      "openSession": "Open session",
+      "fleetTitle": "Where tasks run",
+      "fleetSettings": "Open Swarm Out settings",
+      "elastic": "AgentCore",
+      "ec2": "EC2",
+      "stationHere": "current",
+      "stationPassed": "done",
+      "stationAhead": "ahead"
+    },
+    "hist": {
+      "range": "Time range",
+      "r7": "7 days",
+      "r30": "30 days",
+      "r60": "60 days",
+      "r90": "90 days",
+      "all": "All",
+      "rangeText": "{{from}} – {{to}} · {{count}} tasks",
+      "verdict": "accepted with no one stepping in",
+      "prev": "previous {{days}} days {{un}} / {{n}}",
+      "prevNone": "no tasks before this",
+      "ok": "Accepted",
+      "off": "Discarded",
+      "warn": "Stopped",
+      "open": "In progress",
+      "facts": "{{count}} tasks · median {{min}} · spend {{cost}}",
+      "perDay": "one bar = one day",
+      "perWeek": "one bar = one week",
+      "dayTip": "{{day}} · {{count}}",
+      "groups": "Group by",
+      "dim": {
+        "brain": "Brain",
+        "agent": "Project Agent",
+        "where": "Runs on"
+      },
+      "col": {
+        "name": "Name",
+        "runs": "Tasks",
+        "result": "Result",
+        "unattended": "Accepted, no one stepped in",
+        "median": "Median",
+        "cost": "Spend"
+      },
+      "records": "All tasks",
+      "filter": {
+        "all": "All",
+        "human": "Someone stepped in",
+        "off": "Discarded",
+        "warn": "Stopped"
+      },
+      "more": "Show {{count}} more",
+      "none": "No task matches this filter.",
+      "empty": "No task was sent in this time."
+    },
+    "setup": {
+      "account": "AWS account",
+      "accountId": "Account ID",
+      "region": "Region",
+      "regionNote": "New Hives and Elastic Workers are built here",
+      "copy": "Copy",
+      "copied": "Copied",
+      "change": "Change account",
+      "connect": "Connect account",
+      "cancel": "Cancel",
+      "changeWarn": "After the change, model calls (Bedrock) use the new account too; existing Hives stay in the old one and are listed under “Hives in other accounts”.",
+      "state": {
+        "connected": "Connected",
+        "needs_login": "Needs sign-in",
+        "unverified": "Not verified yet",
+        "account_mismatch": "Account mismatch",
+        "unconnected": "Not connected"
+      },
+      "canDo": "This account can",
+      "capHive": "Build Hives (EC2)",
+      "capElastic": "Elastic Workers (AgentCore)",
+      "elasticOff": "Off",
+      "rules": "New Hives and idle time",
+      "rulesLead": "Applies to Hives built from now on and to idle stop",
+      "regionSame": "the account's main region",
+      "noHives": "No resident Hive yet. With Elastic Workers on you need none.",
+      "retryConfirm": "Confirm retry",
+      "unreadable": "Could not read the account; trying again shortly",
+      "hivesUnreadable": "Could not read the resident Hives; open this view again shortly",
+      "dismiss": "Dismiss",
+      "chooseFirst": "Choose the account for Elastic Workers below first",
+      "buildShort": "Build {{count}}",
+      "buildShortCost": "Build {{count}} (about ${{usd}} a month each)",
+      "later": "Later",
+      "addConfirmNoCost": "Build 1 Hive in account {{account}}"
     }
   },
   "usage": {
@@ -3163,7 +3263,7 @@
     "lead": "Tasks you send run in your AWS account, and keep going while this computer is off.",
     "loading": "Loading…",
     "loadFailed": "Could not load the account.",
-    "connectFirst": "Hives need the AWS account. Connect it in Settings → SwarmAI Account, then create them there.",
+    "connectFirst": "Hives need the AWS account. Connect it, then create them in Swarm Out → Settings.",
     "count": "How many",
     "type": "Size",
     "month": "month",
@@ -3983,9 +4083,7 @@
       "noMatchingConversations": "No matching conversations",
       "resultCount_one": "{{count}} result",
       "resultCount_other": "{{count}} results",
-      "noMatchingSessions": "No matching sessions",
-      "colJudge": "Judge",
-      "naCount": "N/A {{n}}"
+      "noMatchingSessions": "No matching sessions"
     },
     "LibraryHealth": {
       "unavailable": "health check unavailable",
