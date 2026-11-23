@@ -44,9 +44,7 @@ vi.mock('../../services/pty', () => ({
 }));
 
 function renderSidebar() {
-  // QueryClientProvider: LeftSidebar polls Hive fleet status via useQuery
-  // (useHiveStatusDot, run_b450108e). isDesktop() is false in jsdom so the query is
-  // disabled (never fires), but the hook still calls useQuery → needs a client in scope.
+  // QueryClientProvider: the layout reads token usage and inbox counts via useQuery.
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -82,7 +80,6 @@ const DOMAIN_ORDER = [
   'nav-swarmws',  // labelled "Workspace" (de-jargoned; testid keeps nav-swarmws)
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
   'nav-capabilities',  // System: ability reference, after Jobs (moved from Work, run_5165013e)
-  'nav-hive',      // System: Hive Fleet (run_b450108e)
   'nav-usage',     // System: the usage view (design 2026-10-29-usage-accounting §11c)
   'nav-eval',
   'nav-settings',

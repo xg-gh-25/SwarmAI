@@ -13,6 +13,7 @@
  * $0. The pipeline row is a split of chat spend, shown apart and never added in.
  */
 import { useState } from 'react';
+import { openSwarmOutSettings } from '../common/settingsEvents';
 import { useTranslation } from 'react-i18next';
 import { chatService } from '../../services/chat';
 import { useOverlay } from '../../contexts/OverlayContext';
@@ -263,7 +264,7 @@ function Top({ r, close, resumeSession }: { r: UsageReport } & UsageViewProps) {
       return () => { close?.(); document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path } })); };
     }
     if (which === 'jobs') return () => openOverlay('jobs');
-    if (which === 'hive') return () => openOverlay('hive');
+    if (which === 'hive') return () => { close?.(); openSwarmOutSettings(); };
     return null;
   };
   const label = (g: UsageGroup) => g.title || (which === 'hive' ? g.machine : null) || g.key || t('usage.none');

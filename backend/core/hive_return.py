@@ -238,7 +238,7 @@ async def _download(row: dict, b: dict, dest: Path) -> None:
     handle = registry.handle_of(row)
     car = registry.carrier(handle.carrier)
     if getattr(car, "run_scoped", False):
-        # a round that is a machine of its own (the elastic Hive) hands its bundles over
+        # a round that is a machine of its own (Elastic Workers) hands its bundles over
         # in its record only: its session is never asked (it may have ended)
         raise ReturnError("the run's record here does not hold this bundle yet; refresh the result, "
                           "then take the commits back")

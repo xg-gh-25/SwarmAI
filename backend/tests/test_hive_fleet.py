@@ -7,7 +7,7 @@ Questions answered:
    than 8 already only lowering is possible.
 2. status: ready / short / over / cannot_build, and an unset count is max(1, counted):
    an upgrader with no Hive sees "1 short", nothing is created for them.
-3. the last Hive can only be replaced; a replacement counts as one Hive, the old one is
+3. without Elastic Workers on standby the last Hive can only be replaced; a replacement counts as one Hive, the old one is
    deleted once the new one runs, and kept when the new one fails.
 4. reconcile: an instance EC2 no longer has stops counting (nothing created to make up
    for it); a failed lookup changes nothing.
@@ -166,9 +166,12 @@ async def test_status_and_the_upgrade_default(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_the_last_hive_is_replaced_never_deleted(client, _no_real_deploys, monkeypatch):
+    # without Elastic Workers on standby (with it, the last one may go: test_swarm_out_single_entry)
+    from hive import agentcore_provisioner as ep
+    monkeypatch.setattr(ep, "standby_on", lambda: False)
     (only,) = await _seed(1)
     r = await client.delete(f"/api/hive/instances/{only}")
-    assert r.status_code == 409 and "replace" in r.json()["detail"]
+    assert r.status_code == 409 and "nothing would be left" in r.json()["detail"]
     r = await client.post(f"/api/hive/instances/{only}/replace")
     assert r.status_code == 200
     new = r.json()["new"]

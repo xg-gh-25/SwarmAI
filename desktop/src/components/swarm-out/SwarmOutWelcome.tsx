@@ -16,6 +16,7 @@
  * loads no locale module itself: TabView imports it).
  */
 import { useEffect, useState } from 'react';
+import { openSwarmOutSettings } from '../common/settingsEvents';
 import { useTranslation } from 'react-i18next';
 import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
 import { swarmOutService, type SwarmOutFleet } from '../../services/swarmOut';
@@ -36,10 +37,16 @@ function useFleetWhileShown(hidden: boolean): SwarmOutFleet | null {
   return fleet;
 }
 
-/** Whether a task can go out now: some Hive runs and answers. Null until known. */
+/** Hive statuses that take a task now or by being started (a dispatch starts a stopped
+ *  one), and Elastic Workers statuses that take one (ready, or updating back to ready). */
+const EC2_TAKES = new Set(['running', 'stopped', 'stopping', 'starting', 'updating']);
+const ELASTIC_TAKES = new Set(['ready', 'upgrading']);
+
+/** Whether there is anywhere to send a task: a Hive that runs or can be started, or
+ *  Elastic Workers that is ready. Nothing waits on the person to start a machine. */
 export function canDispatch(fleet: SwarmOutFleet | null): boolean | null {
   if (!fleet) return null;
-  return fleet.hives.some((h) => h.status === 'running' && h.reachable !== false);
+  return fleet.hives.some((h) => (h.carrier === 'agentcore' ? ELASTIC_TAKES : EC2_TAKES).has(h.status));
 }
 
 function Starter({ icon, text, hint, strong, testId }: {
@@ -61,11 +68,10 @@ function Starter({ icon, text, hint, strong, testId }: {
   );
 }
 
-export function SwarmOutWelcome({ hidden = false, onOpenHive }: { hidden?: boolean; onOpenHive?: () => void }) {
+export function SwarmOutWelcome({ hidden = false }: { hidden?: boolean }) {
   const { t } = useTranslation();
   const fleet = useFleetWhileShown(hidden);
   const can = canDispatch(fleet);
-  const stopped = (fleet?.hives ?? []).filter((h) => h.status === 'stopped').length;
   const steps = [t('swarmOut.welcome.step1'), t('swarmOut.welcome.step2'), t('swarmOut.welcome.step3'), t('swarmOut.welcome.step4')];
   return (
     <div className="flex flex-col h-full chat-scroll-gutter" data-testid="swarm-out-welcome">
@@ -83,16 +89,12 @@ export function SwarmOutWelcome({ hidden = false, onOpenHive }: { hidden?: boole
                 background: 'color-mix(in srgb, var(--color-status-warning) 8%, transparent)' }}>
               <div className="flex-1 min-w-0">
                 <div className="text-[13.5px] font-medium text-[var(--color-text)]">{t('swarmOut.welcome.noHive')}</div>
-                <div className="text-[12px] text-[var(--color-text-muted)]">
-                  {stopped > 0 ? t('swarmOut.welcome.noHiveStopped', { count: stopped }) : t('swarmOut.welcome.noHiveNone')}
-                </div>
+                <div className="text-[12px] text-[var(--color-text-muted)]">{t('swarmOut.welcome.noHiveNone')}</div>
               </div>
-              {onOpenHive && (
-                <button type="button" onClick={onOpenHive} data-testid="swarm-out-welcome-open-hive"
-                  className="btn-md bg-[var(--color-text)] text-[var(--color-bg)] font-semibold">
-                  {t('swarmOut.welcome.openHive')}
-                </button>
-              )}
+              <button type="button" onClick={openSwarmOutSettings} data-testid="swarm-out-welcome-open-hive"
+                className="btn-md bg-[var(--color-text)] text-[var(--color-bg)] font-semibold">
+                {t('swarmOut.welcome.openSettings')}
+              </button>
             </div>
           ) : (
             <Starter icon="north_east" text={t('swarmOut.welcome.dispatch')} hint={t('swarmOut.welcome.dispatchHint')}

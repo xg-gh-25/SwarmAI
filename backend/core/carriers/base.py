@@ -9,7 +9,7 @@ Four concepts:
   ``brain_lock_scope`` (placement filter for the Swarm Run Brain-version lock).
 - **Location**: a place a carrier can open a run: one Hive for ``ec2``, the account's runtime
   for ``agentcore``. Machine-level operations (probe, Brain sync, idle stop, usage sync,
-  diagnostics, the Hive page) go through it.
+  diagnostics, Swarm Out › settings) go through it.
 - **RunHandle**: the address of one round of one run. It is created by
   ``Location.open_run`` and kept in the dispatch row's ``rounds``; every per-run operation
   resolves it from there. It carries no credential (``auth_ref`` only names where one is).
@@ -32,7 +32,7 @@ KINDS = (EC2, AGENTCORE)
 
 #: offer tiers, in placement order (design §4.4 step 2)
 TIER_WARM = 1        # a running EC2 Hive with room: starts now, already paid for
-TIER_ELASTIC = 2     # the elastic Hive (AgentCore): cold start plus transfer
+TIER_ELASTIC = 2     # Elastic Workers (AgentCore): cold start plus transfer
 TIER_COLD = 3        # a stopped EC2 Hive: up to START_TIMEOUT_S to start, then runs to idle stop
 
 #: placement reasons the run card words (core/swarm_out_card, the desktop card)

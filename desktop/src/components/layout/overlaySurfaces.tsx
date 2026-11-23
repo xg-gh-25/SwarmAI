@@ -39,7 +39,6 @@ const CapabilitiesContent = lazy(() => OVERLAY_CHUNK.capabilities().then((m) => 
 const PipelineContent = lazy(() => OVERLAY_CHUNK.pipeline().then((m) => ({ default: m.PipelineContent })));
 const PollinateContent = lazy(() => OVERLAY_CHUNK.pollinate().then((m) => ({ default: m.PollinateContent })));
 const UsageContent = lazy(() => OVERLAY_CHUNK.usage().then((m) => ({ default: m.UsageContent })));
-const HiveFleetContent = lazy(() => OVERLAY_CHUNK.hive().then((m) => ({ default: m.HiveFleetContent })));
 const BrainHub = lazy(() => OVERLAY_CHUNK['brain-hub']().then((m) => ({ default: m.BrainHub })));
 const SettingsPage = lazy(() => OVERLAY_CHUNK.settings());
 const EvalOverlay = lazy(() => OVERLAY_CHUNK.eval());
@@ -262,21 +261,6 @@ registerOverlay({
   id: 'eval',
   render: ({ close, dispatchPrompt, resumeSession }) => (
     <EvalOverlay close={close} dispatchPrompt={dispatchPrompt} resumeSession={resumeSession} />
-  ),
-});
-
-// ── hive (Fleet) — nav-card-only, NOT in ALL_SHOW_EVENTS ──────────────────────────────
-// Elevates Hive from a buried Settings tab to a first-class SYSTEM-zone workbench
-// (run_b450108e). The fleet of remote AI clones (deploy the Agent OS to your own AWS).
-// Deliberately NOT agent-openable (controls AWS credentials + live cloud infra) — same
-// security boundary as settings/eval/library. Mutates via hiveService directly, so the
-// content takes only `close` (no dispatchPrompt bridge — Gate-1 D5).
-registerOverlay({
-  id: 'hive',
-  render: ({ close }) => (
-    <div className="flex-1 overflow-hidden" data-testid="hive-overlay-wrap">
-      <HiveFleetContent close={close} />
-    </div>
   ),
 });
 

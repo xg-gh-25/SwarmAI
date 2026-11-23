@@ -895,6 +895,9 @@ def test_an_agent_round_retries_a_repair_and_never_passes_the_turn_off(world, mo
     with pytest.raises(HTTPException) as e:
         asyncio.run(so_router.elastic_standby_round())
     assert e.value.status_code == 409
+    # off means none is left: a round turns off the one still there, then does nothing
+    assert asyncio.run(ep.run_standby_round(world.db)).startswith("turned off")
+    assert _rows(world.db) == []
     assert asyncio.run(ep.run_standby_round(world.db)) == "off"
 
 

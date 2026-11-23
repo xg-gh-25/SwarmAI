@@ -2,18 +2,15 @@
  * How many Hives the SwarmAI account runs (design
  * docs/design/2026-10-31-swarmai-aws-account.md §6.1 ⑤, §6.4, §6.5, §7.3).
  *
- * - `HiveSetupStep` — wizard step ⑤: count 1–8 (default 1), type, region; the button
+ * - `HiveSetupStep` — wizard step ⑤ "where tasks run": Elastic Workers (AgentCore Runtime,
+ *   on by default; switched off it is recorded with PUT /hive/elastic/standby before the
+ *   wizard goes on, and a failure keeps the step with the reason) and resident
+ *   Hives (EC2): count 1–8 (default 1), type, region; the button
  *   names what it does ("Create 1 Hive, about $119/month, in account …"); creating is
  *   started, never waited for; when the "can it create" check fails for the chosen
  *   region the step says what is missing and the wizard goes on.
- * - `HiveFleetSection` — the settings row: the count with − / +, the Hive status
- *   (ready / short / over / cannot build), and the one-time question an upgrader with
- *   no Hive gets ("Create 1 Hive?" / Later). Raising the count creates the difference
- *   only after the person confirms the line that names the cost; lowering creates and
- *   deletes nothing.
- *
- * - `ElasticHiveSection` — the Hive page's elastic Hive (design
- *   docs/design/2026-11-20-swarm-out-multi-carrier.md §6.8): on / off, its status and size.
+ * The rest of the Hive setup lives in the Swarm Out tab's settings view
+ * (swarm-out/SwarmOutSettings: Hives, Elastic Workers), the one place for where tasks run.
  *
  * The backend decides how many are created (exactly the difference, under the fleet
  * lock); this page only names the consequence.
@@ -22,7 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { copyToClipboard } from '../../utils/clipboard';
 import {
-  awsAccountService, problemOf, type AwsAccountView, type Capability, type ElasticStatus, type FleetStatus,
+  awsAccountService, problemOf, type AwsAccountView, type Capability, type FleetStatus,
 } from '../../services/awsAccount';
 
 const MAX = 8;
@@ -86,7 +83,7 @@ function DefaultVpcButton({ region, onView }: { region: string; onView: (v: AwsA
   );
 }
 
-function CapabilityLine({ cap, checking, onView }: {
+export function CapabilityLine({ cap, checking, onView }: {
   cap: Capability | null | undefined; checking: boolean; onView?: (v: AwsAccountView) => void;
 }) {
   const { t } = useTranslation();
@@ -126,6 +123,7 @@ export function HiveSetupStep({ onDone, onBack }: { onDone: () => void; onBack?:
   const [checkingRegion, setCheckingRegion] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [elastic, setElastic] = useState(true);
   const asked = useRef<Set<string>>(new Set());   // each region is checked once unasked
   const regionRef = useRef(region);
   regionRef.current = region;
@@ -190,11 +188,22 @@ export function HiveSetupStep({ onDone, onBack }: { onDone: () => void; onBack?:
   const checking = checkingRegion === region;
   const cannot = add > 0 && cap?.status === 'missing' && cap.region === region;
   const types = Object.keys(h.prices ?? { [DEFAULT_TYPE]: 0 });
+  // Elastic Workers switched off here is recorded before the wizard goes on (on is the
+  // default); when that fails the step says so and stays, or the Host would turn it on
+  const finish = async () => {
+    if (!elastic) {
+      try { await awsAccountService.setElasticStandby(false); } catch (e) {
+        setError(t('hiveFleet.elasticOffFailed', { why: problemOf(e).message }));
+        return;
+      }
+    }
+    onDone();
+  };
   const submit = async () => {
     setBusy(true); setError(null);
     try {
       await awsAccountService.setFleet({ desired_count: count, instance_type: type, region });
-      onDone();
+      await finish();
     } catch (e) {
       setError(problemOf(e).message);
     } finally {
@@ -206,6 +215,17 @@ export function HiveSetupStep({ onDone, onBack }: { onDone: () => void; onBack?:
     <div data-testid="hive-step">
       <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('hiveFleet.title')}</h2>
       <p className="text-[var(--color-text-muted)] mb-6">{t('hiveFleet.lead')}</p>
+      <div className="mb-5 max-w-xl rounded-lg border border-[var(--color-border)] px-4 py-3 flex items-start gap-4" data-testid="hive-step-elastic">
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-sm text-[var(--color-text)]">Elastic Workers <span className="ml-2 font-mono text-xs font-normal text-[var(--color-text-muted)]">AgentCore Runtime</span></div>
+          <div className="mt-0.5 text-xs text-[var(--color-text-secondary)]">{t('hiveFleet.elasticChoice')}</div>
+        </div>
+        <label className="flex items-center gap-2 text-sm whitespace-nowrap cursor-pointer">
+          <input type="checkbox" role="switch" checked={elastic} onChange={(e) => setElastic(e.target.checked)} data-testid="hive-step-elastic-switch" />
+          {elastic ? t('swarmOut.settings.on') : t('swarmOut.settings.off')}
+        </label>
+      </div>
+      <div className="mb-2 font-semibold text-sm text-[var(--color-text)]">{t('swarmOut.settings.resident')} <span className="ml-2 font-mono text-xs font-normal text-[var(--color-text-muted)]">EC2</span></div>
       {h.counted > 0 && (
         <p className="mb-4 text-sm text-[var(--color-text)]" data-testid="hive-existing">{t('hiveFleet.existing', { count: h.counted })}</p>
       )}
@@ -241,7 +261,7 @@ export function HiveSetupStep({ onDone, onBack }: { onDone: () => void; onBack?:
             onClick={onBack} data-testid="hive-back">{t('awsConnect.back')}</button>
         )}
         {cannot || noRoom ? (
-          <button type="button" className="btn-lg btn-primary" onClick={onDone} data-testid="hive-go">
+          <button type="button" className="btn-lg btn-primary" onClick={() => void finish()} data-testid="hive-go">
             {noRoom ? t('hiveFleet.continueWithout') : t('hiveFleet.createLater')}
           </button>
         ) : (
@@ -251,7 +271,7 @@ export function HiveSetupStep({ onDone, onBack }: { onDone: () => void; onBack?:
               {busy ? t('hiveFleet.creating') : add > 0 ? createLabel(t, add, price(h, type), acct) : t('hiveFleet.continue')}
             </button>
             <button type="button" className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-              onClick={onDone} data-testid="hive-skip">{t('hiveFleet.skip')}</button>
+              onClick={() => void finish()} data-testid="hive-skip">{t('hiveFleet.skip')}</button>
           </>
         )}
       </div>
@@ -279,237 +299,3 @@ function Stepper({ value, min, max, onChange, disabled, plusDisabled }: {
 
 // ── the settings row ─────────────────────────────────────────────────────────
 
-export function HiveFleetSection({ view, onView }: { view: AwsAccountView; onView: (v: AwsAccountView) => void }) {
-  const { t } = useTranslation();
-  const h = view.hive;
-  const [pending, setPending] = useState<number | null>(null);   // a raise waiting for the person's OK
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (!h || h.state === 'unavailable') return null;
-  const desired = h.desired ?? Math.max(1, h.counted);
-  const type = h.instance_type ?? DEFAULT_TYPE;
-  const acct = view.account?.account_id ?? '';
-  const room = Math.max(0, MAX - (h.counted_all ?? h.counted));
-  const elsewhere = (h.counted_all ?? h.counted) - h.counted;
-  const plusMax = Math.min(MAX, Math.max(desired, h.counted + room));
-
-  const apply = async (body: Parameters<typeof awsAccountService.setFleet>[0]) => {
-    setBusy(true); setError(null);
-    try {
-      onView(await awsAccountService.setFleet(body));
-      setPending(null);
-    } catch (e) {
-      setError(problemOf(e).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const ask = (n: number) => {
-    const add = Math.max(0, n - h.counted);
-    if (add === 0) void apply({ desired_count: n });   // creates nothing: no question
-    else setPending(n);
-  };
-  const confirmAdd = pending !== null ? Math.max(0, pending - h.counted) : 0;
-  // an upgrader with no Hive: asked once, here and in Need-You, until they say Later
-  const upgradeAsk = h.state === 'short' && h.counted === 0 && !h.dismissed;
-
-  return (
-    <section data-testid="hive-fleet">
-      <div className="flex items-center justify-between gap-4">
-        <h3 className="text-sm font-medium text-[var(--color-text)]">{t('hiveFleet.section')}</h3>
-        <Stepper value={pending ?? desired} min={1} max={plusMax}
-          onChange={ask} disabled={busy || pending !== null} plusDisabled={h.state === 'cannot_build'} />
-      </div>
-      <p className="mt-1 text-sm text-[var(--color-text-secondary)]" data-testid="hive-summary">
-        {t('hiveFleet.summary', { counted: h.counted, desired, max: MAX })}
-        {h.monthly_usd ? ` · ${t('hiveFleet.monthly', { usd: h.monthly_usd })}` : ''}
-      </p>
-      {plusMax < MAX && elsewhere > 0 && (
-        <p className="mt-1 text-xs text-[var(--color-text-muted)]" data-testid="hive-limit">{t('hiveFleet.maxElsewhere', { max: MAX, n: elsewhere })}</p>
-      )}
-      {upgradeAsk ? (
-        <div className="mt-3 p-3 rounded-md border border-[var(--color-border)]" data-testid="hive-upgrade-ask">
-          <p className="text-sm text-[var(--color-text)]">{t('hiveFleet.noHiveYet')}</p>
-          <div className="mt-2 flex gap-3">
-            <button type="button" className="btn-md btn-primary disabled:opacity-50" disabled={busy}
-              onClick={() => void apply({ desired_count: 1 })} data-testid="hive-upgrade-create">
-              {busy ? t('hiveFleet.creating') : createLabel(t, 1, price(h, type), acct)}
-            </button>
-            <button type="button" className={smallBtn} disabled={busy}
-              onClick={() => void apply({ dismissed: true })} data-testid="hive-upgrade-later">{t('hiveFleet.later')}</button>
-          </div>
-        </div>
-      ) : h.state === 'short' ? (
-        <div className="mt-2 flex items-center gap-3 text-sm" data-testid="hive-short">
-          <span className="text-[var(--color-warning)]">{t('hiveFleet.short', { n: h.short })}</span>
-          <button type="button" className={smallBtn} disabled={busy} onClick={() => setPending(desired)}>{t('hiveFleet.createMissing')}</button>
-        </div>
-      ) : h.state === 'cannot_build' ? (
-        <div className="mt-2" data-testid="hive-cannot"><CapabilityLine cap={h.capability} checking={false} onView={onView} /></div>
-      ) : h.state === 'over' ? (
-        <p className="mt-2 text-sm text-[var(--color-text-secondary)]" data-testid="hive-over">{t('hiveFleet.over', { n: h.over })}</p>
-      ) : null}
-      {pending !== null && confirmAdd > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-3" data-testid="hive-confirm">
-          <button type="button" className="btn-md btn-primary disabled:opacity-50" disabled={busy}
-            onClick={() => void apply({ desired_count: pending })} data-testid="hive-confirm-go">
-            {busy ? t('hiveFleet.creating') : createLabel(t, confirmAdd, price(h, type), acct)}
-          </button>
-          <button type="button" className={smallBtn} disabled={busy} onClick={() => setPending(null)}>{t('awsConnect.cancel')}</button>
-        </div>
-      )}
-      {error && <p className="mt-2 text-sm text-[var(--color-error)]" data-testid="hive-error">{error}</p>}
-      {(h.hives ?? []).length > 0 && (
-        <ul className="mt-3 space-y-1 text-sm" data-testid="hive-list">
-          {(h.hives ?? []).map((x) => (
-            <li key={x.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-4 text-[var(--color-text-secondary)]">
-              <span className="truncate text-[var(--color-text)]">{x.name}</span>
-              <span className="font-mono text-xs">{x.instance_type}</span>
-              <span className="font-mono text-xs">{x.region}</span>
-              <span>{t(`hiveFleet.status.${x.status}`, { defaultValue: x.status })}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="mt-2 text-xs text-[var(--color-text-muted)]">{t('hiveFleet.lastOnlyReplace')}</p>
-    </section>
-  );
-}
-
-// ── the elastic Hive (design 2026-11-20-swarm-out-multi-carrier §6.8) ─────────
-
-const ELASTIC_TRANSIENT = ['enabling', 'upgrading', 'disabling'];
-
-/** The elastic Hive on the Hive page: one AgentCore Runtime in the account, a fresh
- *  microVM per run. On standby (the default) SwarmAI turns it on and keeps it at its own
- *  version by itself, so with none yet the page says it is being prepared (and why not,
- *  when it cannot be); the turn-on button shows only after the person turned it off. On: its status,
- *  its size and one button to turn it off (and to update its image when it is not this
- *  SwarmAI's version: only then does it take runs). Polls only while it is changing. */
-export function ElasticHiveSection() {
-  const { t } = useTranslation();
-  const [state, setState] = useState<ElasticStatus | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [confirmOff, setConfirmOff] = useState<string | null>(null);   // the id waiting for the person's OK
-
-  const load = async () => {
-    try {
-      setState(await awsAccountService.elasticStatus());
-      setFailed(false);
-    } catch {
-      setFailed(true);
-    }
-  };
-  useEffect(() => { void load(); }, []);
-  const changing = (state?.hives ?? []).some((h) => ELASTIC_TRANSIENT.includes(h.status));
-  // on standby with none yet: SwarmAI turns it on within a few minutes. Not when the
-  // standby cannot (no account to choose, refused, no image for this version): then the
-  // reason is what the page says.
-  const blocked = (last: string | null | undefined) =>
-    !!last && ['no target', 'refused', 'no image', 'failed'].some((p) => last.startsWith(p));
-  const preparing = state?.standby === true && state.hives.length === 0
-    && state.can_enable && !blocked(state.standby_last);
-  // on standby with none yet, look again even when the last round was blocked: its
-  // reason may be gone by the next round (an image published, an account added)
-  const waiting = state?.standby === true && state.hives.length === 0;
-  useEffect(() => {
-    if (!changing && !waiting) return undefined;
-    const timer = setInterval(() => { void load(); }, changing ? 5000 : 30000);
-    return () => clearInterval(timer);
-  }, [changing, waiting]);
-
-  const act = async (run: () => Promise<unknown>) => {
-    setBusy(true); setError(null);
-    try {
-      await run();
-      setConfirmOff(null);
-    } catch (e) {
-      setError(problemOf(e).message);
-    } finally {
-      setBusy(false);
-      void load();
-    }
-  };
-
-  const size = state?.size;
-  const sizeLine = size ? t('hiveFleet.elastic.size', {
-    vcpu: size.vcpu_peak, mem: size.memory_gib_peak, disk: size.disk_gib,
-  }) : null;
-
-  return (
-    <section className="rounded-md border border-[var(--color-border)] p-3" data-testid="elastic-hive">
-      <h3 className="text-sm font-medium text-[var(--color-text)]">{t('hiveFleet.elastic.title')}</h3>
-      {!state ? (
-        <p className="mt-1 text-sm text-[var(--color-text-muted)]" data-testid="elastic-loading">
-          {failed ? t('hiveFleet.elastic.loadFailed') : t('hiveFleet.loading')}
-        </p>
-      ) : state.hives.length === 0 ? (
-        <div data-testid="elastic-off">
-          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{t('hiveFleet.elastic.lead')}</p>
-          {sizeLine && <p className="mt-1 text-xs text-[var(--color-text-muted)]">{sizeLine}</p>}
-          {state.standby === true ? (preparing ? (
-            <p className="mt-2 text-sm text-[var(--color-text)]" data-testid="elastic-preparing">
-              {t('hiveFleet.elastic.preparing')}
-            </p>
-          ) : blocked(state.standby_last) && (
-            <p className="mt-2 text-xs text-[var(--color-warning)] break-words" data-testid="elastic-standby-last">
-              {t('hiveFleet.elastic.lastCheck', { did: state.standby_last })}
-            </p>
-          )) : (
-            <button type="button" className="mt-2 btn-md btn-primary disabled:opacity-50" data-testid="elastic-enable"
-              disabled={busy || !state.can_enable} onClick={() => void act(() => awsAccountService.enableElastic())}>
-              {busy ? t('hiveFleet.elastic.turningOn') : t('hiveFleet.elastic.turnOn')}
-            </button>
-          )}
-          {!state.can_enable && state.reason && (
-            <p className="mt-1 text-xs text-[var(--color-warning)] break-words" data-testid="elastic-reason">{state.reason}</p>
-          )}
-        </div>
-      ) : (
-        <ul className="mt-1 space-y-2">
-          {state.hives.map((h) => (
-            <li key={h.id} className="text-sm" data-testid="elastic-on">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <span className="text-[var(--color-text)]" data-testid="elastic-status">
-                  {t(`hiveFleet.elastic.status.${h.status}`, { defaultValue: h.status })}
-                </span>
-                <span className="font-mono text-xs text-[var(--color-text-secondary)]">{h.region}</span>
-                {sizeLine && <span className="text-xs text-[var(--color-text-muted)]" data-testid="elastic-size">{sizeLine}</span>}
-              </div>
-              {h.status === 'failed' && h.error_message && (
-                <p className="mt-1 text-xs text-[var(--color-error)] break-words" data-testid="elastic-error-message">{h.error_message}</p>
-              )}
-              {(h.status === 'ready' || h.status === 'failed') && h.runtime_status !== null
-                && h.runtime_status !== 'NOT_FOUND' && !h.up_to_date && !h.working && (
-                <p className="mt-1 text-xs text-[var(--color-warning)]" data-testid="elastic-outdated">
-                  {t('hiveFleet.elastic.outdated', { image: h.image_version ?? '?', version: state.host_version })}{' '}
-                  <button type="button" className="underline" disabled={busy} data-testid="elastic-update"
-                    onClick={() => void act(() => awsAccountService.updateElastic(h.id))}>{t('hiveFleet.elastic.update')}</button>
-                </p>
-              )}
-              {/* a change a quit SwarmAI left (nothing here is working on it) can be turned off */}
-              {!h.working && (confirmOff === h.id ? (
-                <div className="mt-2 flex flex-wrap items-center gap-3" data-testid="elastic-confirm-off">
-                  <span className="text-xs text-[var(--color-text-secondary)]">
-                    {h.open_runs > 0 ? t('hiveFleet.elastic.offRuns', { count: h.open_runs }) : t('hiveFleet.elastic.offNote')}
-                  </span>
-                  <button type="button" className="btn-md btn-primary disabled:opacity-50" disabled={busy}
-                    data-testid="elastic-disable-go" onClick={() => void act(() => awsAccountService.disableElastic(h.id))}>
-                    {t('hiveFleet.elastic.turnOff')}
-                  </button>
-                  <button type="button" className={smallBtn} disabled={busy} onClick={() => setConfirmOff(null)}>{t('awsConnect.cancel')}</button>
-                </div>
-              ) : (
-                <button type="button" className={`mt-2 ${smallBtn}`} disabled={busy} data-testid="elastic-disable"
-                  onClick={() => setConfirmOff(h.id)}>{t('hiveFleet.elastic.turnOff')}</button>
-              ))}
-            </li>
-          ))}
-        </ul>
-      )}
-      {error && <p className="mt-2 text-sm text-[var(--color-error)] break-words" data-testid="elastic-error">{error}</p>}
-    </section>
-  );
-}

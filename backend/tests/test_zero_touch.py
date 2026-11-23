@@ -465,7 +465,7 @@ def test_skill_matches_the_code():
     for needed in ("card", "answer", "start-hive", "update-hive", "restart-hive", "elastic-standby"):
         assert needed in commands
     # the agent is told how the elastic Hive's standby reads and when the person's off wins
-    assert "elastic_standby.did" in skill and "turned the elastic Hive off" in skill
+    assert "elastic_standby.did" in skill and "turned Elastic Workers off" in skill
     assert "waits" not in sub.choices
     # nothing in the flow hands a wait to the person: no escalation, no person's card
     assert "escalate" not in commands and "AskUserQuestion with the card" not in skill

@@ -1646,9 +1646,9 @@ async def lifespan(app: FastAPI):
         from core.hive_idle import run_loop as _hive_idle_loop
         _hive_idle_task = asyncio.create_task(_hive_idle_loop(), name="hive-idle-stop")
 
-    # ── The elastic Hive on standby (host only) ──
+    # ── Elastic Workers on standby (host only) ──
     # Turned on, kept at this version and repaired by the Host itself unless the person
-    # turned it off on the Hive page (hive/agentcore_provisioner.reconcile).
+    # turned it off in Swarm Out › settings (hive/agentcore_provisioner.reconcile).
     _elastic_standby_task: asyncio.Task | None = None
     if backend_mode != "hive" and _bjson_written:
         from database import db as _standby_db

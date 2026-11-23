@@ -719,7 +719,7 @@ async def _fetch(row: dict) -> dict:
         handle = registry.handle_of(row)
         car = registry.carrier(handle.carrier)
         if getattr(car, "run_scoped", False):
-            # a round that is a machine of its own (the elastic Hive): its record, checks
+            # a round that is a machine of its own (Elastic Workers): its record, checks
             # and usage are read from where it wrote them (S3), never from the session,
             # which may have ended (a request to it would boot an empty microVM)
             return await _keep(await _from_round(row, rec, prev, car, handle))

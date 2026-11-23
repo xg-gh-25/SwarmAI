@@ -3,8 +3,8 @@
  * SwarmOutNewSession, pages/chat/swarmOutFresh).
  *
  * Questions: does a starter put its sentence into the input without sending it; with
- * no running Hive, is the dispatch starter replaced by one notice that opens the Hive
- * card; is "new session" hidden on an empty session, impossible (with the reason)
+ * no Hive at all (stopped ones still take a task), is the dispatch starter replaced by
+ * one notice that opens Swarm Out settings; is "new session" hidden on an empty session, impossible (with the reason)
  * while replying or while a question waits, highlighted when the session is long; does
  * pressing it change the session only when nothing is in flight, keep the old one
  * reachable, and clear the context reading.
@@ -17,6 +17,7 @@ import { SwarmOutNewSession, newSessionBlock } from './SwarmOutNewSession';
 import { noticeLongSession, startSwarmOutFresh } from '../../pages/chat/swarmOutFresh';
 import { tabNoticeStore } from '../../stores/tabNoticeStore';
 import { INJECT_CHAT_INPUT } from '../../pages/chat/injectChatInput';
+import { OPEN_SWARM_OUT_SETTINGS } from '../common/settingsEvents';
 import { swarmOutService, type SwarmOutFleet } from '../../services/swarmOut';
 
 beforeAll(async () => { await i18n.changeLanguage('zh'); });
@@ -45,22 +46,35 @@ describe('SwarmOutWelcome', () => {
       { text: '最近的 run 结果怎么样，有没有要我处理的', focus: true, append: true }]);
   });
 
-  it('with no running Hive, one notice replaces the dispatch starter and opens the Hive card', async () => {
+  it('stopped Hives still take a task (a dispatch starts one); with no Hive at all one notice opens Swarm Out settings', async () => {
     fleet.mockResolvedValue({ running: 0, hives: [hive('stopped'), hive('stopped')] } as SwarmOutFleet);
-    const open = vi.fn();
-    render(<SwarmOutWelcome onOpenHive={open} />);
+    const first = render(<SwarmOutWelcome />);
+    expect(await screen.findByTestId('swarm-out-start-dispatch')).toBeTruthy();
+    expect(screen.queryByTestId('swarm-out-welcome-nohive')).toBeNull();
+    first.unmount();
+    fleet.mockResolvedValue({ running: 0, hives: [] } as SwarmOutFleet);
+    const opened: unknown[] = [];
+    const on = () => opened.push(1);
+    window.addEventListener(OPEN_SWARM_OUT_SETTINGS, on);
+    render(<SwarmOutWelcome />);
     const notice = await screen.findByTestId('swarm-out-welcome-nohive');
-    expect(notice.textContent).toContain('你有 2 台已停止的 Hive');
+    expect(notice.textContent).toContain('还没有能跑任务的地方');
     expect(screen.queryByTestId('swarm-out-start-dispatch')).toBeNull();
     expect(screen.getByTestId('swarm-out-start-results')).toBeTruthy();       // needs no Hive
     fireEvent.click(screen.getByTestId('swarm-out-welcome-open-hive'));
-    expect(open).toHaveBeenCalled();
+    window.removeEventListener(OPEN_SWARM_OUT_SETTINGS, on);
+    expect(opened).toHaveLength(1);
   });
 
-  it('canDispatch: unknown until read; a running Hive that does not answer does not count', () => {
+  it('canDispatch: unknown until read; a Hive that runs or can be started counts, and Elastic Workers that is ready', () => {
     expect(canDispatch(null)).toBeNull();
-    expect(canDispatch({ running: 1, hives: [hive('running', false)] } as SwarmOutFleet)).toBe(false);
-    expect(canDispatch({ running: 1, hives: [hive('running', true)] } as SwarmOutFleet)).toBe(true);
+    expect(canDispatch({ running: 0, hives: [] } as unknown as SwarmOutFleet)).toBe(false);
+    expect(canDispatch({ running: 0, hives: [hive('error'), hive('deleting')] } as SwarmOutFleet)).toBe(false);
+    expect(canDispatch({ running: 0, hives: [hive('stopped')] } as SwarmOutFleet)).toBe(true);
+    expect(canDispatch({ running: 0, hives: [{ ...hive('ready'), name: 'elastic', carrier: 'agentcore' }] } as SwarmOutFleet)).toBe(true);
+    // nothing takes a task: a deleted Hive, a failed or disabling Elastic Workers
+    expect(canDispatch({ running: 0, hives: [hive('deleted'), { ...hive('failed'), carrier: 'agentcore' },
+      { ...hive('disabling'), carrier: 'agentcore' }] } as SwarmOutFleet)).toBe(false);
   });
 });
 

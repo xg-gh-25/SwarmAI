@@ -1,24 +1,18 @@
 /**
  * hiveComponents — the shared Hive UI building blocks, extracted from HiveTab.tsx
- * (run_b450108e, R4/R27) so BOTH surfaces consume ONE source:
- *   • HiveFleetOverlay (layout/) — the first-class SYSTEM-zone Fleet workbench
+ * (run_b450108e, R4/R27) so every surface consumes ONE source:
+ *   • Swarm Out › settings (swarm-out/SwarmOutSettings) — login info, the legacy deploy dialog
  *   • Settings → Swarm AWS Account — the Hives left in other accounts (AccountCard)
  *
  * Extraction is behavior-preserving: every export below is moved verbatim from the
  * former HiveTab.tsx (deploy progress, instance card, auth display, account card,
  * dialogs, status maps, error helper). No logic change — only the module home moved.
  *
- * Dialog note (Gate-1 D1 — VERIFIED against OverlayHost.tsx, mechanism corrected):
- * AddAccountDialog + DeployHiveDialog keep their `fixed inset-0 z-50` centered-modal
- * shape. The OverlayHost panel carries a non-`none` transform at rest (`translate-x-0
- * scale-100`, OverlayHost.tsx:182), and per CSS spec a `transform` establishes a
- * containing block for `position:fixed` descendants. So inside the Fleet overlay these
- * dialogs pin to the PANEL, not the viewport — the modal centers over the Fleet panel
- * and its `bg-black/50` scrim is scoped to the panel (it does NOT darken the leftNav).
- * That is the desired result: a self-contained modal within the workbench, no portal,
- * no z-index fight (the dialog is a content child, so its z-50 stacks above sibling
- * content within the same panel context). In the Settings tab (no transformed ancestor)
- * the SAME dialog pins to the viewport as before — behavior there is unchanged.
+ * Dialog note: AddAccountDialog + DeployHiveDialog are `fixed inset-0 z-50` centered
+ * modals. Per CSS spec a `transform` on an ancestor makes it the containing block for
+ * `position:fixed`, so inside a transformed panel (an OverlayHost overlay) the dialog
+ * centers over that panel; with no transformed ancestor (the Settings tab, the Swarm Out
+ * tab) it pins to the viewport.
  */
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';

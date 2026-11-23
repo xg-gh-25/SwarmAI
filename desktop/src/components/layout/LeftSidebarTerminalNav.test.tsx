@@ -37,9 +37,7 @@ vi.mock('../../services/pty', () => ({
 }));
 
 function renderSidebar() {
-  // QueryClientProvider: LeftSidebar polls Hive fleet status via useQuery
-  // (useHiveStatusDot, run_b450108e); disabled in jsdom (isDesktop()=false) but the
-  // hook still needs a client in scope.
+  // QueryClientProvider: the layout reads token usage and inbox counts via useQuery.
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>

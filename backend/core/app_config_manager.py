@@ -133,14 +133,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # A running Hive idle this many minutes is stopped by the Host, and the next dispatch
     # to it starts it again (core/hive_idle); 0 turns idle stopping off.
     "hive_idle_stop_minutes": 120,
-    # The elastic Hive image repository (no tag) when it is not the released one
+    # Elastic Workers image repository (no tag) when it is not the released one
     # (hive/agentcore_provisioner.RELEASED_IMAGE): a build of one's own, set in config.json
     # by hand (PUT /api/settings refuses it: routers/settings._ELASTIC_HIVE_KEYS). Empty = released.
     "hive_agentcore_image": "",
-    # The elastic Hive is kept on standby by the Host (hive/agentcore_provisioner.reconcile);
-    # False once the person turned it off on the Hive page, True again when they turn it on
+    # Elastic Workers is kept on standby by the Host (hive/agentcore_provisioner.reconcile);
+    # False once the person turned it off in Swarm Out › settings, True again when they turn it on
     # (only those routes write it: routers/settings._ELASTIC_HIVE_KEYS).
     "hive_elastic_standby": True,
+    # The account row Elastic Workers uses when several AWS accounts are connected in the
+    # old mode; only the person's PUT /api/hive/elastic/standby writes it. Empty = none chosen.
+    "hive_elastic_account": "",
     "evolution": {
         "enabled": True,
         "max_retries": 3,

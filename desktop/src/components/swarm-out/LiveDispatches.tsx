@@ -32,7 +32,7 @@
  */
 import { useEffect, useState } from 'react';
 import { awsAccountService, type FleetStatus } from '../../services/awsAccount';
-import { OPEN_SETTINGS_EVENT } from '../common/settingsEvents';
+import { openSwarmOutSettings } from '../common/settingsEvents';
 import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
 import { type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun } from '../../services/swarmOut';
@@ -114,23 +114,24 @@ function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed
           <span style={{ color: TONE_VAR.attention }}>
             {short.state === 'cannot_build' ? t('swarmOut.fleet.cannotBuild') : t('swarmOut.fleet.short', { count: short.short ?? 0 })}
           </span>
-          <button type="button" className="underline"
-            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: 'aws-account' } }))}>
-            {t('swarmOut.fleet.openAccount')}
+          <button type="button" className="underline" onClick={openSwarmOutSettings}>
+            {t('swarmOut.fleet.openSettings')}
           </button>
         </div>
       )}
       {fleet === null ? (!failed && <div className={`px-4 pb-3 text-[12px] ${muted}`}>{t('swarmOut.loading')}</div>) : (
         <div className="grid grid-cols-[minmax(80px,220px)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-x-3 gap-y-2 px-4 pt-2.5 pb-3 border-t border-[var(--color-border)]">
           {hives.map((h) => {
+            const elastic = h.carrier === 'agentcore';
             const up = h.status === 'running' && !!h.reachable;
             const count = { count: h.streaming ?? 0 };
-            const status = h.status !== 'running' ? hiveStatusLabel(h.status)
+            const status = elastic ? t(`swarmOut.fleet.elastic.${h.status}`, { defaultValue: h.status })
+              : h.status !== 'running' ? `${hiveStatusLabel(h.status)}${h.status === 'stopped' ? t('swarmOut.fleet.startsWhenNeeded') : ''}`
               : !h.reachable ? t('swarmOut.fleet.unreachable')
               // an older Hive reports no memory: its saturated still means a full stream cap
               : h.saturated ? t(h.memory_percent == null ? 'swarmOut.fleet.busy' : 'swarmOut.fleet.full', count)
               : t('swarmOut.fleet.used', count);
-            const tone = hiveTone(h);
+            const tone: Tone = elastic ? (h.status === 'ready' ? 'ok' : h.status === 'failed' ? 'error' : 'attention') : hiveTone(h);
             const mem = up && h.memory_percent != null ? Math.min(100, Math.max(0, h.memory_percent)) : null;
             const memTone: Tone = h.saturated ? 'attention' : 'ok';
             return (
@@ -138,8 +139,10 @@ function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed
                 <div className="font-medium min-w-0 flex items-start gap-2" title={h.name}>
                   <Dot tone={tone} className="mt-[6px]" />
                   <div className="min-w-0">
-                    <div className="truncate">{h.name}</div>
-                    <div className={`text-[11.5px] font-normal truncate ${muted}`}>{[h.version, h.instance_type].filter(Boolean).join(' · ')}</div>
+                    <div className="truncate">{elastic ? 'Elastic Workers' : h.name}</div>
+                    {/* the execution surface, on every row: a Hive is an EC2 machine; Elastic Workers runs on AgentCore Runtime */}
+                    <div className={`text-[11.5px] font-normal truncate ${muted}`} data-testid="swarm-out-fleet-kind">
+                      {[elastic ? 'AgentCore Runtime' : 'Hive · EC2', h.version].filter(Boolean).join(' · ')}</div>
                   </div>
                 </div>
                 {/* the Hive's memory in use: green while a new task starts at once, amber
@@ -322,13 +325,14 @@ export function RunCard({ r, onReload, onLeave }: {
   );
 }
 
-function OpenHive({ onOpenHive }: { onOpenHive?: () => void }) {
+/** Where a Hive's login is (the Hive's own page answers what could not reach here). */
+function OpenLogin() {
   const { t } = useTranslation();
-  return onOpenHive ? <button type="button" className={`ml-2 ${btn}`} onClick={onOpenHive} data-testid="swarm-out-open-hive-admin">{t('swarmOut.live.openHiveAdmin')}</button> : null;
+  return <button type="button" className={`ml-2 ${btn}`} onClick={openSwarmOutSettings} data-testid="swarm-out-open-hive-admin">{t('swarmOut.live.openLogin')}</button>;
 }
 
-export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = false, onOpenHive, now, compact = false }: {
-  hidden?: boolean; fleet?: SwarmOutFleet | null; fleetFailed?: boolean; onOpenHive?: () => void; now?: number; compact?: boolean;
+export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = false, now, compact = false }: {
+  hidden?: boolean; fleet?: SwarmOutFleet | null; fleetFailed?: boolean; now?: number; compact?: boolean;
 }) {
   const { t } = useTranslation();
   const { data, failed, reload } = useRuns(hidden);
@@ -378,7 +382,7 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
       )}
       {(unasked.length > 0 || refused.length > 0) && (
         <section className="mt-4" data-testid="swarm-out-on-hive-page">
-          <div className={`text-[12px] mb-1.5 ${muted}`}>{t(refused.length ? 'swarmOut.waiting.refused' : 'swarmOut.waiting.unasked')}<OpenHive onOpenHive={onOpenHive} /></div>
+          <div className={`text-[12px] mb-1.5 ${muted}`}>{t(refused.length ? 'swarmOut.waiting.refused' : 'swarmOut.waiting.unasked')}<OpenLogin /></div>
           <div className="flex flex-col gap-2">
             {refused.map((a) => <SwarmOutWaitCard key={`${a.hive_id}/${a.request_id}`} wait={a} onAnswered={reload} source={sourceOf(a)} />)}
             {unasked.map((r) => <div key={r.dispatch_id} className={`text-[12.5px] ${muted}`} data-testid="swarm-out-waiting-unasked">{r.title} · {r.hive}</div>)}

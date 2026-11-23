@@ -8,7 +8,8 @@
  *     in-app sign-in, or change the account);
  *   ② the main region (Bedrock, cloud storage, voice, new Hives; writes `aws_region`);
  *   ③ what can be used (only the gaps, with the permission template);
- *   ④ how many Hives (HiveFleetSection: − / +, the cost named first, one row per Hive);
+ *   ④ one line pointing to Swarm Out › settings, where Hives and Elastic Workers are set up
+ *     (it replaced the Hive count row: one place for where tasks run);
  *   ⑤ Hive accounts (desktop only): with a SwarmAI account, the Hives left in other
  *     accounts; without one, the legacy Hive accounts exactly as the old Hive Accounts
  *     tab showed them (AccountCard verify / delete, Add account);
@@ -22,7 +23,8 @@ import { hiveService, hiveAccountView, type HiveAccount } from '../../services/h
 import { isDesktop } from '../../services/tauri';
 import { copyToClipboard } from '../../utils/clipboard';
 import ConnectAccount, { type ConnectStart } from '../awsAccount/ConnectAccount';
-import { CopyTemplate, HiveFleetSection } from '../awsAccount/HiveFleet';
+import { CopyTemplate } from '../awsAccount/HiveFleet';
+import { openSwarmOutSettings } from '../common/settingsEvents';
 import { regionOptions } from '../awsAccount/regions';
 import { Dropdown } from '../common';
 import { markTerminalRun, runInTerminal, takeSignInRequest, terminalRunRecently } from '../common/settingsEvents';
@@ -278,7 +280,17 @@ export default function AwsAccountTab() {
         </section>
       )}
 
-      {acct && <HiveFleetSection view={view} onView={setView} />}
+      {acct && (
+        <section data-testid="hive-fleet-moved">
+          <h3 className="text-sm font-medium text-[var(--color-text)]">{t('hiveFleet.section')}</h3>
+          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+            {t('hiveFleet.movedToSwarmOut')}{' '}
+            <button type="button" className="underline" data-testid="hive-fleet-open-swarm-out" onClick={openSwarmOutSettings}>
+              {t('hiveFleet.openSwarmOutSettings')}
+            </button>
+          </p>
+        </section>
+      )}
 
       {isDesktop() && <HiveAccountsSection />}
 

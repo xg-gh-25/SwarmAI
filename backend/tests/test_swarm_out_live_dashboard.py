@@ -111,11 +111,15 @@ def fleet_env(monkeypatch, tmp_path):
     db = tmp_path / "data.db"
     c = sqlite3.connect(db)
     c.execute("CREATE TABLE hive_instances (id TEXT, name TEXT, status TEXT, version TEXT, region TEXT, "
-              "instance_type TEXT, cloudfront_domain TEXT, auth_password TEXT)")
+              "instance_type TEXT, cloudfront_domain TEXT, auth_password TEXT, carrier TEXT DEFAULT 'ec2')")
     for hid, status in (("ok", "running"), ("down", "running"), ("bad", "running"),
                         ("over", "running"), ("off", "stopped")):
-        c.execute("INSERT INTO hive_instances VALUES (?,?,?,?,?,?,?,?)",
-                  (hid, f"w-{hid}", status, "2.3.0-hive2", "us-east-1", "m7g.xlarge", f"{hid}.cloudfront.net", "pw"))
+        c.execute("INSERT INTO hive_instances VALUES (?,?,?,?,?,?,?,?,?)",
+                  (hid, f"w-{hid}", status, "2.3.0-hive2", "us-east-1", "m7g.xlarge", f"{hid}.cloudfront.net", "pw",
+                   "ec2"))
+    # Elastic Workers: an AgentCore row, never probed as an EC2 Hive
+    c.execute("INSERT INTO hive_instances VALUES (?,?,?,?,?,?,?,?,?)",
+              ("e1", "elastic", "ready", "2.5.5", "us-east-1", None, None, None, "agentcore"))
     c.commit()
     c.close()
     monkeypatch.setattr(swarm_out, "_db_path", lambda: str(db))
@@ -148,6 +152,9 @@ def test_fleet_lists_every_hive_with_validated_load(fleet_env):
     assert by["w-over"]["streaming"] == 6 and by["w-over"]["saturated"] is True
     assert by["w-over"]["memory_percent"] == 93.0
     assert by["w-off"]["reachable"] is None and by["w-off"]["status"] == "stopped"
+    # each row names its executor, so the run view can say "Hive · EC2" or "AgentCore Runtime"
+    assert by["elastic"]["carrier"] == "agentcore" and by["elastic"]["reachable"] is None
+    assert {by[n]["carrier"] for n in by if n != "elastic"} == {"ec2"}
 
 
 def test_fleet_says_open_runs_are_unknown_when_the_dispatch_log_cannot_be_read(fleet_env, monkeypatch):

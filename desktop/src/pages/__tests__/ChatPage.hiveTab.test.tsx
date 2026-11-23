@@ -7,7 +7,8 @@
  * dropped, still one tab) and the same run select it (R2.2); is a switch refused while
  * the Hive tab holds a draft (R2.3); does a relay 404 close the tab (R2.4); does
  * closing it drop the relay and release nothing local (R3.1); does a saved Hive tab
- * come back with its relay and proxy reads (R3.2).
+ * come back with its relay and proxy reads (R3.2); does a link to Swarm Out settings
+ * switch to the Swarm Out tab on its settings view.
  *
  * Method: the real ChatPage under the real providers; every api call answered by one
  * adapter keyed on the URL, which records each call.
@@ -21,6 +22,7 @@ class NoES { close() {} addEventListener() {} removeEventListener() {} }
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
 import api from '../../services/api';
+import { openSwarmOutSettings } from '../../components/common/settingsEvents';
 
 type Call = { method: string; url: string; data?: unknown };
 const calls: Call[] = [];
@@ -209,6 +211,16 @@ describe('ChatPage — the Hive tab', () => {
     await act(async () => { fireEvent.click(runButton('First run')); });
     await settle();
     expect(screen.queryByTestId('hive-tab-read-only')).toBeNull();      // an open run takes messages
+  }, 30_000);
+
+  it('a link to Swarm Out settings (from Settings or Usage) switches to the Swarm Out tab on its settings view', async () => {
+    mount();
+    await waitFor(() => expect(screen.getByTestId('swarm-out-icon')).toBeTruthy(), { timeout: 5000 });
+    expect(screen.queryByTestId('swarm-out-settings')).toBeNull();
+    await act(async () => { openSwarmOutSettings(); });
+    await settle();
+    expect(screen.getByTestId('swarm-out-dashboard').style.display).not.toBe('none');
+    expect(screen.getByTestId('swarm-out-settings')).toBeTruthy();
   }, 30_000);
 
   it('closing the Hive tab drops the relay, releases nothing local and goes back to Swarm Out', async () => {

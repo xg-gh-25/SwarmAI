@@ -103,6 +103,8 @@ export interface ElasticStatus {
   standby: boolean;
   /** what the standby's last round did or why it could not turn it on; null before one ran */
   standby_last: string | null;
+  /** with several accounts (the old mode): the one the person chose for it, or null */
+  chosen_account?: string | null;
   size: { vcpu_base: number; memory_gib_base: number; vcpu_peak: number; memory_gib_peak: number; disk_gib: number };
   hives: ElasticHive[];
 }
@@ -235,7 +237,7 @@ export const awsAccountService = {
   async setFleet(body: { desired_count?: number; instance_type?: string; region?: string; dismissed?: boolean }): Promise<AwsAccountView> {
     return (await api.put<AwsAccountView>('/aws-account/hive-fleet', body, USER_ACTION)).data;
   },
-  // ── the elastic Hive (backend routers/hive.py /elastic) ──
+  // ── Elastic Workers (backend routers/hive.py /elastic) ──
   async elasticStatus(): Promise<ElasticStatus> {
     return (await api.get<ElasticStatus>('/hive/elastic')).data;
   },
@@ -247,6 +249,13 @@ export const awsAccountService = {
   async updateElastic(id: string): Promise<{ id: string; status: string; version: string }> {
     return (await api.post<{ id: string; status: string; version: string }>(
       `/hive/elastic/${encodeURIComponent(id)}/update`, null, USER_ACTION)).data;
+  },
+  /** the person's Elastic Workers switch (Swarm Out › settings, the first-run step): on keeps
+   *  it on standby (with the account chosen in the old multi-account mode) and starts a round
+   *  now; off records it before anything else and turns off a runtime that exists */
+  async setElasticStandby(on: boolean, accountRef?: string): Promise<{ standby: boolean }> {
+    return (await api.put<{ standby: boolean }>('/hive/elastic/standby',
+      accountRef ? { on, account_ref: accountRef } : { on }, USER_ACTION)).data;
   },
   async disableElastic(id: string): Promise<{ id: string; status: string }> {
     return (await api.delete<{ id: string; status: string }>(`/hive/elastic/${encodeURIComponent(id)}`, USER_ACTION)).data;

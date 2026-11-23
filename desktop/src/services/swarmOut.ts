@@ -461,6 +461,8 @@ export interface SwarmOutFleetHive extends SwarmOutHive {
   saturated: boolean | null;
   /** the Hive's memory in use, 0-100; null when unknown (or an older Hive) */
   memory_percent: number | null;
+  /** the execution surface: 'ec2' (a Hive) or 'agentcore' (Elastic Workers) */
+  carrier?: 'ec2' | 'agentcore';
 }
 
 export interface SwarmOutFleet {

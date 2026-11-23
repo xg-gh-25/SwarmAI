@@ -4,6 +4,7 @@
  * a Need-You row or a settings page can open them without importing each other.
  *
  * - OPEN_SETTINGS_EVENT `{tab?}`: open Settings on that tab.
+ * - OPEN_SWARM_OUT_SETTINGS: open the Swarm Out tab on its settings view (Hives, Elastic Workers).
  * - FIX_SIGN_IN_EVENT: a chat error card's "fix the sign-in" button. The chat's sign-in
  *   line (CredentialBanner) takes it: it re-verifies, shows itself and runs its one action,
  *   so the card and the line never disagree about what to do.
@@ -14,6 +15,13 @@
  *   account page's Midway wait: `mwinit -f`); never built from input here.
  */
 export const OPEN_SETTINGS_EVENT = 'swarm:open-settings';
+/** Open the Swarm Out tab on its settings view: the one place for Hives and Elastic Workers
+ *  (it replaced the left-nav Hive page; ChatPage switches to the tab, the dashboard to the view). */
+export const OPEN_SWARM_OUT_SETTINGS = 'swarm:open-swarm-out-settings';
+
+export function openSwarmOutSettings(): void {
+  window.dispatchEvent(new CustomEvent(OPEN_SWARM_OUT_SETTINGS));
+}
 export const TERMINAL_RUN_EVENT = 'swarm:terminal-run';
 export const FIX_SIGN_IN_EVENT = 'swarm:fix-sign-in';
 

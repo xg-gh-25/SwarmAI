@@ -206,7 +206,7 @@ def _parser() -> argparse.ArgumentParser:
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
     sub.add_parser("runs")
     sub.add_parser("hives")
-    sub.add_parser("elastic-standby", help="run one round of the elastic Hive's standby now "
+    sub.add_parser("elastic-standby", help="run one round of Elastic Workers' standby now "
                    "(turn it on, update or repair it); refused when the person turned it off")
     u = sub.add_parser("update-hive", help="update a Hive to a release (default: this Host's own version)")
     u.add_argument("--hive", required=True, help="the Hive's name")
@@ -398,7 +398,7 @@ def _update_hive(args) -> int:
             print(json.dumps({"ok": False, "hive": args.hive, "status": "running",
                               "version": (now or {}).get("version"),
                               "detail": ("the update ended with the Hive running but without what this "
-                                         f"Host needs to dispatch to it (asked for {version}); the Hive page in the left navigation "
+                                         f"Host needs to dispatch to it (asked for {version}); Swarm Out › settings "
                                          "shows why. When no package of that version is published, a source "
                                          f"checkout uploads one with `./hive/release.sh {version}`; then update again")}))
             return 1
@@ -453,8 +453,8 @@ def _restart_hive(args) -> int:
             return 0
         if st in ("error", None):
             print(json.dumps({"ok": False, "hive": args.hive, "status": st, "detail": (
-                "the restart did not end with the Hive running; the Hive page in the left "
-                "navigation shows why")}))
+                "the restart did not end with the Hive running; Swarm Out › settings "
+                "shows why")}))
             return 1
     print(json.dumps({"ok": False, "hive": args.hive, "status": _status_of(args.hive), "detail": (
         "still restarting (the daemon carries on); read `hives` again in a few minutes")}))

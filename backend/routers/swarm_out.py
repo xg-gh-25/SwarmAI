@@ -314,16 +314,16 @@ async def hives() -> dict[str, Any]:
 
 @router.post("/elastic/standby", status_code=202)
 async def elastic_standby_round() -> dict[str, Any]:
-    """Run one round of the elastic Hive's standby now (hive/agentcore_provisioner
+    """Run one round of Elastic Workers' standby now (hive/agentcore_provisioner
     .run_standby_round): turn it on, update or repair it, in the background. Refused while
-    the person has turned it off; only their turn-on on the Hive page sets it again."""
+    the person has turned it off; only their turn-on in Swarm Out › settings sets it again."""
     _require_desktop()
     import asyncio
     from database import db
     from hive import agentcore_provisioner as elastic
     if not elastic.standby_on():
         raise HTTPException(status_code=409, detail=(
-            "The person turned the elastic Hive off: only they turn it on again (the Hive page)."))
+            "The person turned Elastic Workers off: only they turn it on again (Swarm Out › settings)."))
     task = asyncio.create_task(elastic.run_standby_round(db.db_path), name="hive-elastic-standby-now")
     _STANDBY_ROUNDS.add(task)
     task.add_done_callback(_STANDBY_ROUNDS.discard)

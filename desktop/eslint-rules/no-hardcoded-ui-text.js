@@ -36,6 +36,8 @@ export const EXCEPTIONS = [
   { text: 'SwarmWS', reason: 'product name (the workspace)' },
   { text: 'Swarm', reason: "the assistant's name" },
   { text: 'Hive', reason: 'product name (the cloud instance)' },
+  { text: 'Elastic Workers', reason: 'product name (the per-task machines), the same in every locale' },
+  { text: 'AgentCore Runtime', reason: 'AWS product name (where Elastic Workers runs)' },
   { text: 'Slack', reason: 'product name' },
   { text: 'GitHub', reason: 'product name' },
   { text: 'Git Bash', reason: 'product name' },

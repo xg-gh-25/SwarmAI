@@ -1,4 +1,4 @@
-"""The elastic Hive: the account's AgentCore Runtime (design
+"""Elastic Workers: the account's AgentCore Runtime (design
 docs/design/2026-11-20-swarm-out-multi-carrier.md §6.8, requirements R6.1-R6.3).
 
 One runtime per account. Turning it on (``ElasticHive.enable``) makes, in the account and
@@ -15,7 +15,7 @@ region the Host manages:
   ``resourceConfigurations`` ``minimumMemoryInMiB: 8192``: 2 vCPU / 8 GB baseline, 8 vCPU /
   32 GB peak, 32 GB disk), its image the configured repository at this Host's version
   (``image_location``). A runtime of that name already in the account that SwarmAI made
-  (tagged ``swarmai:managed``: an elastic Hive whose row was lost) is updated to the same
+  (tagged ``swarmai:managed``: an Elastic Workers runtime whose row was lost) is updated to the same
   spec instead of created twice; one SwarmAI did not make is refused, as is a role of the
   role's name that SwarmAI did not make for this or that carries other policies.
 
@@ -67,14 +67,14 @@ from core.carriers.base import AGENTCORE
 
 logger = logging.getLogger(__name__)
 
-#: the config key naming another elastic Hive image repository (no tag) than the released one
+#: the config key naming another Elastic Workers image repository (no tag) than the released one
 IMAGE_SETTING = "hive_agentcore_image"
-#: where the release pushes the elastic Hive image, ``<repo>:<version>`` (release.yml
+#: where the release pushes Elastic Workers image, ``<repo>:<version>`` (release.yml
 #: ``AGENTCORE_IMAGE_REPO``): what every install uses unless IMAGE_SETTING names another
 RELEASED_IMAGE = "public.ecr.aws/q4o1o9d0/swarmai-hive"
 #: the runtime's name in the account (AgentRuntimeName: [a-zA-Z][a-zA-Z0-9_]{0,47})
 RUNTIME_NAME = "swarmai_elastic_hive"
-#: the hive_instances name of the elastic Hive (how a person or agent names it); another
+#: the hive_instances name of Elastic Workers (how a person or agent names it); another
 #: account's (legacy mode, several accounts) is ``elastic-<account id>``
 ELASTIC_NAME = "elastic"
 ROLE_PREFIX = "SwarmAI-ElasticHive-"
@@ -115,11 +115,11 @@ _WORKING: set[str] = set()
 
 
 class ElasticRefused(Exception):
-    """The elastic Hive cannot be turned on, updated or off now; nothing was changed."""
+    """Elastic Workers cannot be turned on, updated or off now; nothing was changed."""
 
 
 class ElasticTargetError(Exception):
-    """No account the elastic Hive can be turned on in (``status`` is the HTTP status the
+    """No account Elastic Workers can be turned on in (``status`` is the HTTP status the
     routes answer with, the message is safe to show)."""
 
     def __init__(self, status: int, detail: str):
@@ -127,10 +127,10 @@ class ElasticTargetError(Exception):
         self.status = status
 
 
-#: the config key: False once the person turned the elastic Hive off (the Hive page), so
+#: the config key: False once the person turned Elastic Workers off (Swarm Out › settings), so
 #: the Host's standby never turns it on again; True (or missing) keeps it on standby
 STANDBY_SETTING = "hive_elastic_standby"
-#: how often the Host looks at the standby elastic Hive (run_standby_loop)
+#: how often the Host looks at the standby Elastic Workers (run_standby_loop)
 STANDBY_EVERY_S = 300
 #: ("repair:<account row id>", Host version) tried in this process: a repair that fails
 #: again is not tried until a restart or another version (a failed update leaves the row
@@ -144,13 +144,13 @@ _ROUND_LOCK = asyncio.Lock()
 
 
 def standby_on() -> bool:
-    """Whether the elastic Hive is kept on standby: True unless the setting is False (the
+    """Whether Elastic Workers is kept on standby: True unless the setting is False (the
     person turned it off). An unreadable config counts as off: nothing is created."""
     try:
         from core.app_config_manager import AppConfigManager
         return AppConfigManager.instance().get(STANDBY_SETTING, True) is not False
     except Exception as exc:  # noqa: BLE001 — unreadable: create nothing
-        logger.warning("elastic hive: reading %s failed (%s)", STANDBY_SETTING, type(exc).__name__)
+        logger.warning("elastic workers: reading %s failed (%s)", STANDBY_SETTING, type(exc).__name__)
         return False
 
 
@@ -158,6 +158,26 @@ def set_standby(on: bool) -> None:
     """Record the person's turn-on (True) or turn-off (False) for the standby."""
     from core.app_config_manager import AppConfigManager
     AppConfigManager.instance().update({STANDBY_SETTING: bool(on)})
+
+
+#: the config key naming the account row Elastic Workers uses when several accounts are
+#: connected in the old mode (written only by PUT /api/hive/elastic/standby: the person's)
+ACCOUNT_SETTING = "hive_elastic_account"
+
+
+def chosen_account() -> Optional[str]:
+    """The account row the person chose for Elastic Workers, or None."""
+    try:
+        from core.app_config_manager import AppConfigManager
+        value = AppConfigManager.instance().get(ACCOUNT_SETTING, None)
+    except Exception:  # noqa: BLE001 — unreadable: no choice
+        return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def set_chosen_account(account_ref: str) -> None:
+    from core.app_config_manager import AppConfigManager
+    AppConfigManager.instance().update({ACCOUNT_SETTING: account_ref})
 
 
 def _image_published(account: str, region: str, version: str) -> bool:
@@ -195,12 +215,12 @@ def configured_image() -> Optional[str]:
         from core.app_config_manager import AppConfigManager
         value = AppConfigManager.instance().get(IMAGE_SETTING, None)
     except Exception as exc:  # noqa: BLE001 — an unreadable config: no image
-        logger.warning("elastic hive: reading %s failed (%s)", IMAGE_SETTING, type(exc).__name__)
+        logger.warning("elastic workers: reading %s failed (%s)", IMAGE_SETTING, type(exc).__name__)
         return None
     return value.strip() if isinstance(value, str) and value.strip() else RELEASED_IMAGE
 
 
-NO_IMAGE = ("SwarmAI's settings could not be read, so the elastic Hive image is not known: "
+NO_IMAGE = ("SwarmAI's settings could not be read, so Elastic Workers image is not known: "
             "see the daemon log.")
 
 
@@ -227,11 +247,11 @@ def image_location(configured: Optional[str], account: str, region: str, version
         return f"{ref}:{version}", None
     m = _PRIVATE_RE.fullmatch(ref)
     if m is None or not ac.IMAGE_REPO_RE.fullmatch(m.group(4)):
-        raise ElasticRefused(f"The elastic Hive image must be on public ECR or in this account's ECR "
+        raise ElasticRefused(f"Elastic Workers image must be on public ECR or in this account's ECR "
                              f"({ref[:120]!r} is neither).")
     if m.group(1) != account or m.group(2) != region:
         raise ElasticRefused(f"The image repository is in account {m.group(1)}, region {m.group(2)}: the "
-                             f"elastic Hive pulls only from public ECR or from account {account} in {region}.")
+                             f"Elastic Workers pulls only from public ECR or from account {account} in {region}.")
     return f"{ref}:{version}", m.group(4)
 
 
@@ -263,7 +283,7 @@ def _public_manifest_digest(path: str, tag: str) -> Optional[str]:
 def pinned_uri(uri: str, repo: Optional[str], session: Any, region: str) -> str:
     """*uri* (``<repository>:<version>``, from ``image_location``) with the digest the
     registry serves for it now: the runtime is made or updated on that content, so a tag
-    pushed again later never changes what an elastic Hive runs. Raises ElasticRefused when
+    pushed again later never changes what an Elastic Workers runtime runs. Raises ElasticRefused when
     the registry does not name one (no such tag, or it did not answer)."""
     ref, _, tag = uri.rpartition(":")
     try:
@@ -298,7 +318,7 @@ def runtime_spec(container_uri: str, role_arn: str) -> dict[str, Any]:
 
 
 def trust_policy(account: str, region: str) -> dict[str, Any]:
-    """Only AgentCore, for this account's elastic Hive runtime in this region (runtime ids
+    """Only AgentCore, for this account's Elastic Workers runtime in this region (runtime ids
     start with their name), may assume the role."""
     return {
         "Version": "2012-10-17",
@@ -340,7 +360,7 @@ def _check_sdk() -> None:
     if missing:
         import botocore
         raise ElasticRefused(f"This SwarmAI's AWS SDK (botocore {botocore.__version__}) does not know the "
-                             f"elastic Hive's {', '.join(missing)}; without them the runtime would get the "
+                             f"Elastic Workers' {', '.join(missing)}; without them the runtime would get the "
                              "default size. Update SwarmAI.")
 
 
@@ -359,22 +379,22 @@ ROLE_TAG = "swarmai:elastic-hive"
 
 
 def _check_adopted_role(iam, name: str, region: str) -> None:
-    """A role of the elastic Hive's name that already exists is adopted only when SwarmAI
-    made it for this (its two tags) and nothing but the elastic Hive's own policy is on
+    """A role of Elastic Workers' name that already exists is adopted only when SwarmAI
+    made it for this (its two tags) and nothing but Elastic Workers' own policy is on
     it: a role someone else made, or one with more permissions attached, would give the
     runtime those permissions (or have its trust rewritten). Raises ElasticRefused."""
     from hive.provisioner import MANAGED_TAG
     role = iam.get_role(RoleName=name).get("Role") or {}
     tags = {t.get("Key"): t.get("Value") for t in role.get("Tags") or []}
     if tags.get(MANAGED_TAG["Key"]) != MANAGED_TAG["Value"] or tags.get(ROLE_TAG) != region:
-        raise ElasticRefused(f"An IAM role named {name} exists that SwarmAI did not make for the elastic "
-                             "Hive: delete or rename it, then turn the elastic Hive on again.")
+        raise ElasticRefused(f"An IAM role named {name} exists that SwarmAI did not make for Elastic "
+                             "Workers: delete or rename it, then turn Elastic Workers on again.")
     attached = iam.list_attached_role_policies(RoleName=name).get("AttachedPolicies") or []
     inline = [p for p in iam.list_role_policies(RoleName=name).get("PolicyNames") or [] if p != ROLE_POLICY_NAME]
     if attached or inline:
         extra = [str(p.get("PolicyName")) for p in attached] + inline
         raise ElasticRefused(f"The IAM role {name} has other policies on it ({', '.join(extra)[:200]}): remove "
-                             "them, then try again. The elastic Hive's role carries only its own policy.")
+                             "them, then try again. Elastic Workers' role carries only its own policy.")
 
 
 def _ensure_role(session, account: str, region: str, bucket: str, repo: Optional[str]) -> tuple[str, bool]:
@@ -389,7 +409,7 @@ def _ensure_role(session, account: str, region: str, bucket: str, repo: Optional
     try:
         kwargs: dict[str, Any] = {"PermissionsBoundary": boundary} if boundary else {}
         iam.create_role(RoleName=name, AssumeRolePolicyDocument=trust,
-                        Description=f"SwarmAI elastic Hive (AgentCore Runtime) in {region}",
+                        Description=f"SwarmAI Elastic Workers (AgentCore Runtime) in {region}",
                         Tags=[MANAGED_TAG, {"Key": ROLE_TAG, "Value": region}], **kwargs)
         created = True
     except Exception as exc:  # noqa: BLE001 — classified
@@ -464,7 +484,7 @@ def _wait_status(ctl, runtime_id: str, wait_s: float, want: str = "READY") -> di
             raise RuntimeError(f"AgentCore says {status}: {str(rt.get('failureReason') or 'no reason given')[:300]}")
         if time.monotonic() >= deadline:
             raise RuntimeError(f"The runtime is still {status} after {int(wait_s // 60)} minutes; "
-                               "its state is shown again on the Hive page.")
+                               "its state is shown again in Swarm Out › settings.")
         time.sleep(POLL_S)
 
 
@@ -481,10 +501,10 @@ def _wait_gone(ctl, runtime_id: str, wait_s: float) -> None:
     raise RuntimeError(f"The runtime is still being deleted after {int(wait_s // 60)} minutes.")
 
 
-# ── the elastic Hive ─────────────────────────────────────────────────────────────
+# ── Elastic Workers ─────────────────────────────────────────────────────────────
 
 class ElasticHive:
-    """Turn the account's elastic Hive on, update its image, turn it off, read its state."""
+    """Turn the account's Elastic Workers on, update its image, turn it off, read its state."""
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
@@ -513,7 +533,7 @@ class ElasticHive:
         finally:
             await conn.close()
         if row is None:
-            raise LookupError("no elastic Hive with this id")
+            raise LookupError("no Elastic Workers with this id")
         return dict(row)
 
     async def _account(self, account_ref: str) -> dict:
@@ -530,7 +550,7 @@ class ElasticHive:
     async def _set(self, location_id: str, **fields: Any) -> None:
         allowed = {"status", "error_message", "runtime_arn", "s3_bucket", "iam_role_name", "version"}
         if set(fields) - allowed:
-            raise ValueError(f"not an elastic Hive column: {sorted(set(fields) - allowed)}")
+            raise ValueError(f"not an Elastic Workers runtime column: {sorted(set(fields) - allowed)}")
         conn = await self._conn()
         try:
             sets = ", ".join(f"{k} = ?" for k in fields)
@@ -546,7 +566,7 @@ class ElasticHive:
         row = await self._row(location_id)
         status = row.get("status")
         if status not in from_ and not (status in TRANSIENT and location_id not in _WORKING):
-            raise ElasticRefused(f"The elastic Hive is {status}: try again when that has finished.")
+            raise ElasticRefused(f"Elastic Workers is {status}: try again when that has finished.")
         conn = await self._conn()
         try:
             cur = await conn.execute("UPDATE hive_instances SET status = ?, error_message = NULL, updated_at = ? "
@@ -554,7 +574,7 @@ class ElasticHive:
                                      (to, _now(), location_id, AGENTCORE, status))
             await conn.commit()
             if cur.rowcount != 1:
-                raise ElasticRefused("The elastic Hive changed state: refresh and try again.")
+                raise ElasticRefused("Elastic Workers changed state: refresh and try again.")
         finally:
             await conn.close()
         _WORKING.add(location_id)
@@ -584,8 +604,8 @@ class ElasticHive:
                 cur = await conn.execute("SELECT name FROM hive_instances WHERE carrier = ? AND account_ref = ?",
                                          (AGENTCORE, account_ref))
                 if await cur.fetchone():
-                    raise ElasticRefused("This account's elastic Hive is already on.")
-                # the first elastic Hive is "elastic"; another account's is named after it
+                    raise ElasticRefused("This account's Elastic Workers is already on.")
+                # the first Elastic Workers is "elastic"; another account's is named after it
                 cur = await conn.execute("SELECT 1 FROM hive_instances WHERE name = ?", (ELASTIC_NAME,))
                 if await cur.fetchone():
                     row["name"] = f"{ELASTIC_NAME}-{acct.get('account_id')}"
@@ -628,10 +648,10 @@ class ElasticHive:
             await self._set(location_id, runtime_arn=arn)
             await asyncio.to_thread(_wait_status, ctl, runtime_id, CREATE_WAIT_S)
             await self._set(location_id, status=READY, error_message=None)
-            logger.info("elastic hive: %s is ready (%s)", arn, uri)
+            logger.info("elastic workers: %s is ready (%s)", arn, uri)
             return await self._row(location_id)
         except Exception as exc:  # noqa: BLE001 — the row says why
-            logger.warning("elastic hive: turning on failed: %s", exc)
+            logger.warning("elastic workers: turning on failed: %s", exc)
             await self._set(location_id, status=FAILED, error_message=str(exc)[:300])
             raise
         finally:
@@ -639,14 +659,14 @@ class ElasticHive:
 
     async def _create_or_reuse(self, ctl, spec: dict, role_created: bool, account: str,
                                region: str, location_id: str) -> tuple[str, str]:
-        """Create the runtime, or update one of the same name SwarmAI made (an elastic Hive
+        """Create the runtime, or update one of the same name SwarmAI made (an Elastic Workers runtime
         whose row was lost); one of that name SwarmAI did not make is refused."""
         found = await asyncio.to_thread(_find_runtime, ctl, account, region)
         if found and not _ours(found):
             raise ElasticRefused(f"An AgentCore runtime named {RUNTIME_NAME} exists in this account and region "
                                  "that SwarmAI did not make: delete or rename it, then try again.")
         if found:
-            logger.info("elastic hive: taking over the account's runtime %s", found["agentRuntimeId"])
+            logger.info("elastic workers: taking over the account's runtime %s", found["agentRuntimeId"])
             await asyncio.to_thread(lambda: ctl.tag_resource(
                 resourceArn=_runtime_arn(account, region, found["agentRuntimeId"]), tags={ROW_TAG: location_id}))
         tries = ROLE_RETRIES if role_created else 1
@@ -657,18 +677,18 @@ class ElasticHive:
                         agentRuntimeId=found["agentRuntimeId"], **spec))
                 else:
                     r = await asyncio.to_thread(lambda: ctl.create_agent_runtime(
-                        agentRuntimeName=RUNTIME_NAME, description="SwarmAI elastic Hive",
+                        agentRuntimeName=RUNTIME_NAME, description="SwarmAI Elastic Workers",
                         tags={MANAGED_RUNTIME_TAG[0]: MANAGED_RUNTIME_TAG[1], ROW_TAG: location_id}, **spec))
                 return _checked_arn(r.get("agentRuntimeArn"), account, region), str(r["agentRuntimeId"])
             except Exception as exc:  # noqa: BLE001 — classified
                 if attempt + 1 >= tries or not _role_not_ready(exc):
                     raise
-                logger.info("elastic hive: the new role is not assumable yet; again in %ss", ROLE_RETRY_S)
+                logger.info("elastic workers: the new role is not assumable yet; again in %ss", ROLE_RETRY_S)
                 await _sleep(ROLE_RETRY_S)
         raise AssertionError("unreachable")
 
     async def enable(self, account_ref: str, region: str) -> dict:
-        """Turn the account's elastic Hive on and wait until it is READY."""
+        """Turn the account's Elastic Workers on and wait until it is READY."""
         row = await self.claim(account_ref, region)
         return await self.provision(row["id"])
 
@@ -679,10 +699,10 @@ class ElasticHive:
         version = (version or _host_version()).removeprefix("v")
         row = await self._row(location_id)
         if not row.get("runtime_arn"):
-            raise ElasticRefused("The elastic Hive has no runtime yet: turn it off and on again.")
+            raise ElasticRefused("Elastic Workers has no runtime yet: turn it off and on again.")
         arn = ac.parse_runtime_arn(row["runtime_arn"])
         if arn is None:
-            raise ElasticRefused("The elastic Hive's runtime ARN is not readable.")
+            raise ElasticRefused("Elastic Workers' runtime ARN is not readable.")
         image_location(configured_image(), arn["account"], arn["region"], version)
         await asyncio.to_thread(_check_sdk)
         return await self._claim(location_id, UPGRADING, (READY, FAILED)), version
@@ -700,7 +720,7 @@ class ElasticHive:
             uri = await asyncio.to_thread(pinned_uri, uri, repo, session, arn["region"])
             bucket = row.get("s3_bucket") or ""
             if not ac.BUCKET_RE.fullmatch(bucket):
-                raise RuntimeError("The elastic Hive has no bridge bucket recorded: turn it off and on again.")
+                raise RuntimeError("Elastic Workers has no bridge bucket recorded: turn it off and on again.")
             role_arn, _ = await asyncio.to_thread(_ensure_role, session, arn["account"], arn["region"], bucket, repo)
             ctl = await asyncio.to_thread(_control, session, arn["region"])
             spec = runtime_spec(uri, role_arn)
@@ -709,7 +729,7 @@ class ElasticHive:
             await self._set(location_id, status=READY, version=version, error_message=None)
             return await self._row(location_id)
         except Exception as exc:  # noqa: BLE001 — the row says why
-            logger.warning("elastic hive: update failed: %s", exc)
+            logger.warning("elastic workers: update failed: %s", exc)
             await self._set(location_id, status=FAILED, error_message=f"Update to {version} failed: {exc}"[:300])
             raise
         finally:
@@ -758,9 +778,9 @@ class ElasticHive:
                 await conn.commit()
             finally:
                 await conn.close()
-            logger.info("elastic hive: turned off (%s)", row.get("runtime_arn") or runtime_id)
+            logger.info("elastic workers: turned off (%s)", row.get("runtime_arn") or runtime_id)
         except Exception as exc:  # noqa: BLE001 — the row says why
-            logger.warning("elastic hive: turning off failed: %s", exc)
+            logger.warning("elastic workers: turning off failed: %s", exc)
             await self._set(location_id, status=FAILED, error_message=f"Turning off failed: {exc}"[:300])
             raise
         finally:
@@ -774,13 +794,13 @@ class ElasticHive:
     # ── standby ──
 
     async def target(self, account_ref: Optional[str], region: Optional[str]) -> tuple[str, Optional[str], str]:
-        """(account row id, its AWS account id, region) the elastic Hive is turned on in,
+        """(account row id, its AWS account id, region) Elastic Workers is turned on in,
         chosen as create_instance chooses an account; ElasticTargetError when there is none."""
         from hive import accounts as hive_accounts
         mode = hive_accounts.swarmai_account()
         if mode is not None:
             if account_ref not in (None, hive_accounts.SWARMAI_ROW_ID):
-                raise ElasticTargetError(409, "The elastic Hive is turned on in the SwarmAI account.")
+                raise ElasticTargetError(409, "Elastic Workers is turned on in the SwarmAI account.")
             await hive_accounts.ensure_swarmai_row(self.db_path)
             account_ref = hive_accounts.SWARMAI_ROW_ID
         elif account_ref == hive_accounts.SWARMAI_ROW_ID:
@@ -794,9 +814,11 @@ class ElasticHive:
                 ids = [r["id"] for r in await cur.fetchall()]
                 if not ids:
                     raise ElasticTargetError(409, "Add an AWS account first.")
-                if len(ids) > 1:
-                    raise ElasticTargetError(422, "Choose the AWS account for the elastic Hive.")
-                account_ref = ids[0]
+                chosen = chosen_account()
+                if len(ids) > 1 and chosen not in ids:
+                    raise ElasticTargetError(422, "Choose the AWS account for Elastic Workers "
+                                                  "in Swarm Out › settings.")
+                account_ref = chosen if len(ids) > 1 else ids[0]
             cur = await conn.execute("SELECT account_id, auth_method, default_region FROM hive_accounts WHERE id = ?",
                                      (account_ref,))
             acct = await cur.fetchone()
@@ -814,19 +836,21 @@ class ElasticHive:
         return True
 
     async def reconcile(self, retry: bool = False) -> str:
-        """Keep the elastic Hive on standby (design 2026-11-20-swarm-out-multi-carrier
-        §6.8): update every elastic Hive there is to this Host's version and repair a
+        """Keep Elastic Workers on standby (design 2026-11-20-swarm-out-multi-carrier
+        §6.8): update every Elastic Workers there is to this Host's version and repair a
         failed one once per process and version (*retry*: once more, an agent's round);
-        turn one on when there is none. Nothing while the person has turned it off (read
-        again before every change: a round waits minutes on AWS), while a change is in
-        progress, or while this version has no published image. One round at a time.
+        turn one on when there is none. While the person has turned it off (read again
+        before every change: a round waits minutes on AWS) it turns off one that is still
+        there: a turn-on or update that was running when the person said off ends ready,
+        and only this round turns it off then. Nothing while a change is in progress, or
+        while this version has no published image. One round at a time.
         Returns what it did, for the log, the agent and the tests."""
         async with _ROUND_LOCK:
             return await self._round(retry)
 
     async def _round(self, retry: bool) -> str:
         if not standby_on():
-            return "off"
+            return await self._off()
         version = _host_version()
         rows = []
         for r in await self.rows():
@@ -838,7 +862,7 @@ class ElasticHive:
         if any(r["id"] in _WORKING or r.get("status") in TRANSIENT for r in rows):
             return "busy"
         if not rows:
-            # one elastic Hive is the standby: only when there is none anywhere
+            # one Elastic Workers is the standby: only when there is none anywhere
             try:
                 account_ref, account, region = await self.target(None, None)
             except ElasticTargetError as exc:
@@ -865,8 +889,32 @@ class ElasticHive:
             did.append(await self._keep(row, version, retry))
         return "; ".join(did)
 
+    async def _off(self) -> str:
+        """Standby is off: turn off each Elastic Workers still there that nothing is
+        changing (one being changed is turned off by a later round, once it ends). A row
+        left changing with no task holding it (SwarmAI quit meanwhile) is first settled
+        from the runtime's live state, as a standby round does, so it is turned off too."""
+        did = []
+        for row in await self.rows():
+            if row["id"] in _WORKING:
+                continue
+            if row.get("status") in TRANSIENT:
+                row = await self._settle(row, await self._live(row))
+                if row is None:
+                    continue
+            if row.get("status") not in (READY, FAILED):
+                continue
+            try:
+                await self.claim_disable(row["id"])
+            except Exception as exc:  # noqa: BLE001 — changed meanwhile: the next round
+                logger.info("elastic workers off: %s not claimed (%s)", row["id"][:8], type(exc).__name__)
+                continue
+            await self.run_disable(row["id"])
+            did.append(row["id"][:8])
+        return f"turned off {', '.join(did)}" if did else "off"
+
     async def _keep(self, row: dict, version: str, retry: bool) -> str:
-        """One elastic Hive kept at *version*, or repaired once."""
+        """One Elastic Workers kept at *version*, or repaired once."""
         if row.get("status") == READY and (row.get("version") or "").removeprefix("v") == version:
             return "ready"
         arn = ac.parse_runtime_arn(row.get("runtime_arn"))
@@ -902,7 +950,7 @@ class ElasticHive:
     # ── state ──
 
     async def refusal(self, account: Any, region: Any) -> Optional[str]:
-        """Why the elastic Hive cannot be turned on in *account* / *region*, or None: no
+        """Why Elastic Workers cannot be turned on in *account* / *region*, or None: no
         image configured, an image this account cannot pull, an SDK that cannot carry the
         size. No AWS call (the account id is checked against STS before anything is made)."""
         if not ac.ACCOUNT_RE.fullmatch(str(account or "")):
@@ -917,8 +965,8 @@ class ElasticHive:
         return None
 
     async def status(self, target: Optional[tuple[Any, Any]] = None) -> dict[str, Any]:
-        """What the Hive page shows: whether it can be turned on in *target* (account id,
-        region) and why not, and each elastic Hive with its runtime's live state. A
+        """What Swarm Out › settings shows: whether it can be turned on in *target* (account id,
+        region) and why not, and each Elastic Workers with its runtime's live state. A
         transient status no task here holds is settled from that live state."""
         host = _host_version()
         reason = await self.refusal(*target) if target else (None if configured_image() else NO_IMAGE)
@@ -959,7 +1007,7 @@ class ElasticHive:
         elif rs in ("CREATE_FAILED", "UPDATE_FAILED"):
             to, why = FAILED, live.get("failure_reason")
         elif rs == "NOT_FOUND":
-            to, why = FAILED, "The runtime is no longer in AWS: turn the elastic Hive off and on again."
+            to, why = FAILED, "The runtime is no longer in AWS: turn Elastic Workers off and on again."
         elif status == ENABLING and not row.get("runtime_arn"):
             to, why = FAILED, "Turning on was interrupted (SwarmAI stopped): turn it off, then on again."
         elif status == DISABLING and (rs == "READY" or not row.get("runtime_arn")):
@@ -990,7 +1038,7 @@ class ElasticHive:
             code = ac._error_code(exc)
             if code in ac.NOT_FOUND_CODES:
                 return {"runtime_status": "NOT_FOUND"}
-            logger.info("elastic hive: runtime state not read (%s)", code or type(exc).__name__)
+            logger.info("elastic workers: runtime state not read (%s)", code or type(exc).__name__)
             return {}
         uri = ((rt.get("agentRuntimeArtifact") or {}).get("containerConfiguration") or {}).get("containerUri")
         return {"runtime_status": rt.get("status"), "image_version": ac._image_tag(uri),
@@ -999,7 +1047,7 @@ class ElasticHive:
 
 async def run_standby_round(db_path: Path) -> str:
     """One standby round now, a failed repair tried once more: the agent's way to turn the
-    elastic Hive on or repair it without waiting for the loop (POST
+    Elastic Workers on or repair it without waiting for the loop (POST
     /api/swarm-out/elastic/standby). Nothing while the person has turned it off."""
     try:
         did = await ElasticHive(db_path).reconcile(retry=True)
@@ -1018,10 +1066,10 @@ async def run_standby_loop(db_path: Path) -> None:
             did = await elastic.reconcile()
             LAST_STANDBY.update(at=_now(), did=did)
             if did not in ("ready", "off", "busy"):
-                logger.info("elastic hive standby: %s", did)
+                logger.info("elastic workers standby: %s", did)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — the row says why; tried again next round
             LAST_STANDBY.update(at=_now(), did=f"failed: {type(exc).__name__}")
-            logger.warning("elastic hive standby: the round failed (%s)", type(exc).__name__)
+            logger.warning("elastic workers standby: the round failed (%s)", type(exc).__name__)
         await _sleep(STANDBY_EVERY_S)

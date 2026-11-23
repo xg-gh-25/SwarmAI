@@ -26,7 +26,6 @@ export const OVERLAY_CHUNK = {
   pollinate: () => import('./PollinateOverlay'),
   jobs: () => import('./JobsRunsOverlay'),
   capabilities: () => import('./CapabilitiesOverlay'),
-  hive: () => import('./HiveFleetOverlay'),
   usage: () => import('./UsageOverlay'),
   eval: () => import('../../pages/eval/EvalOverlay'),
   settings: () => import('../../pages/SettingsPage'),

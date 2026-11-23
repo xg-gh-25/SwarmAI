@@ -133,7 +133,8 @@ async def instance_up(hive_ref: str, deadline: Any, held: frozenset = frozenset(
     refused for that, one of an account this Host may not run tasks on is refused
     (``refuse_unmanaged``), and one in *held* (ids: another Swarm Run holds this Brain
     there) is refused before it is started. A Hive found running again (an idle stop's
-    claim given back meanwhile) is taken as it is. Any other status is refused as before.
+    claim given back meanwhile) is taken as it is, after a wake of it under way ends (it may
+    update the Hive). Any other status is refused as before.
     ``swarm_out._instance_up``."""
     from core import hive_idle, swarm_out
     try:
@@ -154,6 +155,11 @@ async def instance_up(hive_ref: str, deadline: Any, held: frozenset = frozenset(
                 raise swarm_out._held_refusal(str(row.get("name"))) from None
             await swarm_out._ensure_running(row, deadline)
             inst = await swarm_out._instance(hive_ref)
+    if hive_idle.wake_pending(str(inst.get("id"))):
+        # a wake started for another dispatch: it may update the Hive now that it runs,
+        # so this dispatch waits for it instead of sending under the update
+        await swarm_out._ensure_running(inst, deadline)
+        inst = await swarm_out._instance(hive_ref)
     await refuse_unmanaged(inst.get("name"), inst.get("_account"))
     return inst
 
@@ -212,7 +218,7 @@ def _in_flight(hive_id: str, name: str) -> int:
 class Ec2Location:
     """One Hive (``hive_instances.id``; a name is taken too: every lookup is by id or
     name). Its machine-level operations: the probe, its record for the Hive's own APIs
-    (Brain sync, the S3 bridge, the Hive page), its sessions, a client, opening a run."""
+    (Brain sync, the S3 bridge, Swarm Out › settings), its sessions, a client, opening a run."""
     carrier = EC2
 
     def __init__(self, hive_id: str, name: Optional[str] = None):

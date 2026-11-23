@@ -81,6 +81,7 @@ import { swarmOutService } from '../services/swarmOut';
 import { isRemoteId, startRelay, stopRelay } from '../services/remoteSession';
 import { RemoteContentContext } from './chat/remoteContentContext';
 import { SwarmOutDashboard } from '../components/swarm-out/SwarmOutDashboard';
+import { OPEN_SWARM_OUT_SETTINGS } from '../components/common/settingsEvents';
 import { useSwarmOutChatWidth, chatColumnStyle } from '../components/swarm-out/SwarmOutChatResize';
 import { SwarmOutNewSession, newSessionBlock } from '../components/swarm-out/SwarmOutNewSession';
 import { noticeLongSession, startSwarmOutFresh as startSwarmOutFreshImpl } from './chat/swarmOutFresh';
@@ -518,7 +519,7 @@ export default function ChatPage() {
   //     permanently null, which silently blanked BOTH the agent's SENSE payload
   //     (uiContext active_overlay) AND the AlertsPill/tab-switch BACK_TO_CHAT guard
   //     below. useOverlay() is the live source (ChatPage renders inside OverlayProvider).
-  const { activeOverlay, setAgentId: setOverlayAgentId, openOverlay } = useOverlay();
+  const { activeOverlay, setAgentId: setOverlayAgentId } = useOverlay();
   // Ref mirror for synchronous reads in handleTabSelect's overlay-close guard (avoids
   // dep-array churn on that hot path — same pattern as isExpandedRef).
   const activeOverlayRef = useRef(activeOverlay);
@@ -1933,7 +1934,13 @@ export default function ChatPage() {
   const agentName = selectedAgent?.name;
   // ── Swarm Out: a new session only when the person asks (its welcome / new-session
   // design ③④). Nothing else changes this tab's session: not a tab switch, not a timer.
-  const openHiveCard = useCallback(() => openOverlay('hive'), [openOverlay]);
+  // Hives live in the Swarm Out tab's settings view (the left-nav Hive page is gone):
+  // a link anywhere to it switches to the tab (the dashboard opens the view)
+  useEffect(() => {
+    const go = () => { void handleTabSelect(SWARM_OUT_TAB_ID); };
+    window.addEventListener(OPEN_SWARM_OUT_SETTINGS, go);
+    return () => window.removeEventListener(OPEN_SWARM_OUT_SETTINGS, go);
+  }, [handleTabSelect]);
   const handleResumeSessionRef = useRef(handleResumeSession);
   handleResumeSessionRef.current = handleResumeSession;
   const swarmOutActive = activeTabId === SWARM_OUT_TAB_ID;
@@ -2852,7 +2859,7 @@ export default function ChatPage() {
             session. The dashboard must stay the column's previous sibling: the drag
             ceiling measures it there. */}
         {/* Kept mounted (hidden on other tabs) so its view choice survives a tab switch. */}
-        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID} onOpenHive={() => openOverlay('hive')}
+        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID}
           onOpenSession={openHiveSession} />
 
         {/* Main Chat Area.
@@ -2955,7 +2962,6 @@ export default function ChatPage() {
                     onContinue={handleContinue}
                     onStopBackground={stableStopBackground}
                     onRetryQueueTimeout={handleRetryQueueTimeout}
-                    onOpenHive={openHiveCard}
                   />
                   </RemoteContentContext.Provider>
                 );

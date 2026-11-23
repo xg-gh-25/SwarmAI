@@ -61,7 +61,6 @@ export const FILES = [
   'components/inbox/FeedEditor.tsx',
   'components/layout/JobsRunsOverlay.tsx',
   'components/layout/CapabilitiesOverlay.tsx',
-  'components/layout/HiveFleetOverlay.tsx',
   'pages/eval/EvalOverlay.tsx',
   'pages/eval/OverviewTab.tsx',
   'pages/eval/CasesTab.tsx',

@@ -1,7 +1,7 @@
 /**
  * Swarm Out panel on real data (design docs/design/2026-10-28-swarm-out-live-dashboard.md).
  *
- * Questions: with no running Hive, does the setup guide replace the run view (and the
+ * Questions: without an AWS account, does the setup guide replace the run view (and the
  * header count only real Hives, from the fleet); are the four numbers the panel's
  * rules over /runs and /fleet (and the waiting / running ones the tab badge's own);
  * does each run sit in the group of its state; does the fleet say what each Hive
@@ -28,7 +28,10 @@ vi.mock('../../services/swarmOut', () => ({
   swarmOutService: { runs: vi.fn(), fleet: vi.fn(), answer: vi.fn(), hives: vi.fn() },
 }));
 const mockAccount = vi.fn();
-vi.mock('../../services/awsAccount', () => ({ awsAccountService: { get: (...a: unknown[]) => mockAccount(...a) } }));
+vi.mock('../../services/awsAccount', () => ({
+  awsAccountService: { get: (...a: unknown[]) => mockAccount(...a), elasticStatus: () => new Promise(() => {}) },
+  problemOf: (e: unknown) => ({ kind: 'error', message: String(e) }),
+}));
 
 const NOW = new Date(2026, 9, 28, 12, 0).getTime();   // local time
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -128,7 +131,7 @@ describe('the run view', () => {
     expect((await screen.findByTestId('kpi-free')).textContent).toContain('1/ 2');
     const tiles = screen.getByTestId('kpi-grid').children;
     expect(tiles[0].getAttribute('data-testid')).toBe('kpi-waiting');
-    expect(screen.getByTestId('kpi-waiting').textContent).toMatch(/^1\+1 个要去 Hive 页面处理/);
+    expect(screen.getByTestId('kpi-waiting').textContent).toMatch(/^1\+1 个要到那台 Hive 自己的网页上处理/);
     expect(screen.getByTestId('kpi-running').textContent).toContain('1');
     // b's question is answered on b's card (its row waits on you); the refused one is the Hive page's
     expect(screen.queryByTestId('swarm-out-waiting')).toBeNull();
@@ -162,22 +165,22 @@ describe('the run view', () => {
   it('says what each Hive reports', async () => {
     render(<SwarmOutDashboard now={NOW} />);
     const rows = await screen.findAllByTestId('swarm-out-fleet-status');
-    expect(rows.map((r) => r.textContent)).toEqual(['1 个在跑', '内存吃紧 · 4 个在跑，新任务会排队', '连不上', '已关机']);
+    expect(rows.map((r) => r.textContent)).toEqual(['1 个在跑', '内存吃紧 · 4 个在跑，新任务会排队', '连不上', '已关机 · 要用时自动启动']);
   });
 
-  it('Hives short of what the person asked for: one line and the way to the account page', async () => {
-    mockAccount.mockResolvedValue({ hive: { state: 'short', short: 2, desired: 3, counted: 1 } });
-    const opened: unknown[] = [];
-    const listen = (e: Event) => opened.push((e as CustomEvent).detail);
-    window.addEventListener('swarm:open-settings', listen);
+  it('Hives short of what the person asked for: one line and the way to Swarm Out settings', async () => {
+    mockAccount.mockResolvedValue({ state: 'connected', hive: { state: 'short', short: 2, desired: 3, counted: 1 } });
+    const opened: string[] = [];
+    const listen = (e: Event) => opened.push(e.type);
+    window.addEventListener('swarm:open-swarm-out-settings', listen);
     try {
       render(<SwarmOutDashboard now={NOW} />);
       const line = await screen.findByTestId('swarm-out-fleet-short');
       expect(line.textContent).toContain('少 2 台');
       fireEvent.click(within(line).getByRole('button'));
-      expect(opened).toEqual([{ tab: 'aws-account' }]);
+      expect(opened).toEqual(['swarm:open-swarm-out-settings']);
     } finally {
-      window.removeEventListener('swarm:open-settings', listen);
+      window.removeEventListener('swarm:open-swarm-out-settings', listen);
     }
   });
 
@@ -242,24 +245,21 @@ describe('SwarmOutDashboard and the Hives it can dispatch to', () => {
     vi.mocked(swarmOutService.fleet).mockResolvedValue({ hives, running: hives.filter((h) => h.status === 'running').length });
   };
 
-  it('with no Hive: the guide replaces the run view and its button opens Hive', async () => {
+  it('without an AWS account: the guide replaces the run view and its button opens Settings', async () => {
     fleetIs([]);
-    const onOpenHive = vi.fn();
-    render(<SwarmOutDashboard onOpenHive={onOpenHive} now={NOW} />);
-    const guide = await screen.findByTestId('swarm-out-hive-guide');
-    expect(guide.getAttribute('data-case')).toBe('no-hive');
-    expect(screen.queryByTestId('swarm-out-live')).toBeNull();
-    expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('还没有 Hive');
-    fireEvent.click(screen.getByTestId('swarm-out-open-hive'));
-    expect(onOpenHive).toHaveBeenCalledTimes(1);
-  });
-
-  it('with Hives but none running: names them and says to start one', async () => {
-    fleetIs([hive('w1', { status: 'stopped', reachable: null })]);
+    mockAccount.mockResolvedValue({ state: 'unconnected', account: null, hive: null });
     render(<SwarmOutDashboard now={NOW} />);
     const guide = await screen.findByTestId('swarm-out-hive-guide');
-    expect(guide.getAttribute('data-case')).toBe('none-running');
-    expect(guide.textContent).toContain('w1（已关机）');   // the status in the panel's words
+    expect(guide.getAttribute('data-case')).toBe('no-account');
+    expect(screen.queryByTestId('swarm-out-live')).toBeNull();
+    expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('还没有 Hive');
+  });
+
+  it('with Hives but none running: the run view stays (a dispatch starts one)', async () => {
+    fleetIs([hive('w1', { status: 'stopped', reachable: null })]);
+    render(<SwarmOutDashboard now={NOW} />);
+    expect(await screen.findByTestId('swarm-out-live')).toBeTruthy();
+    expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
     expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('1 台 Hive，都没在运行');
   });
 

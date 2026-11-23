@@ -305,11 +305,12 @@ class _Dispatching:
 
 async def _ensure_running(row: dict[str, Any], deadline: _Deadline) -> bool:
     """Bring a stopped (or stopping) Hive up before a dispatch to it, as the step
-    ``starting Hive <name>`` (core/hive_idle.wake). True when it had to; False for a Hive
-    in any other status (``_instance`` says why it cannot take a task). The start goes on
-    when the step runs out of time; the dispatch then fails and sent nothing."""
+    ``starting Hive <name>`` (core/hive_idle.wake), or wait for a wake under way (it may
+    still update the Hive). True when it had to; False for a Hive in any other status
+    (``_instance`` says why it cannot take a task). The start goes on when the step runs
+    out of time; the dispatch then fails and sent nothing."""
     from core import hive_idle
-    if row.get("status") not in hive_idle.WAKES_FROM:
+    if row.get("status") not in hive_idle.WAKES_FROM and not hive_idle.wake_pending(str(row.get("id"))):
         return False
     try:
         await _within(deadline, f"starting Hive {row['name']}", START_TIMEOUT_S,
@@ -385,7 +386,7 @@ async def hives() -> dict[str, Any]:
         # the id is the row's key, not a secret: an agent updates a Hive by it (hive.update)
         rows = [{"id": r[0], "name": r[1], "status": r[2], "region": r[3], "carrier": r[4] or "ec2"}
                 for r in await cur.fetchall()]
-    # the elastic Hive's standby (hive/agentcore_provisioner.reconcile): whether the Host
+    # Elastic Workers' standby (hive/agentcore_provisioner.reconcile): whether the Host
     # keeps it on, and what its last round did or why not (e.g. no image for this version)
     from hive import agentcore_provisioner as elastic
     standby = {"on": elastic.standby_on(), **elastic.LAST_STANDBY}
@@ -1199,7 +1200,7 @@ async def _dispatch_spec_on(deadline: "_Deadline", ws: Path, lead: Any, handle: 
     when it was stopped, checked able to take the task): sync the Brain, ship the
     repositories, dispatch, every step through the round's connection (its carrier's
     ``connect``, reached with ``registry.client_for``). On a carrier whose round is a
-    machine of its own (``run_scoped``: the elastic Hive), a failure (a cancel too) before
+    machine of its own (``run_scoped``: Elastic Workers), a failure (a cancel too) before
     the row is written releases the round (StopRuntimeSession), so no microVM is left
     running; once a row names it (the run's, or one saying the task may be running there:
     ``deadline.recorded``) it is kept, as a Hive keeps its work order."""
@@ -2282,7 +2283,7 @@ def _keep_found(dispatch_id: str, session_id: Optional[str]) -> None:
 
 async def _round_order_state(row: dict[str, Any]) -> Optional[dict[str, Any]]:
     """``_order_state`` asked of the run's own round (a round that is a machine of its
-    own: the elastic Hive's session, through its carrier; an ended round is asked
+    own: Elastic Workers' session, through its carrier; an ended round is asked
     nothing and gives None)."""
     from core.carriers import registry
     try:
@@ -2301,7 +2302,7 @@ async def _round_order_state(row: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 def _run_scoped(row: dict[str, Any]) -> Optional[tuple[RunHandle, Any]]:
     """(current handle, carrier) of a row whose round is a machine of its own (its
-    carrier's ``run_scoped``: the elastic Hive), else None (a Hive's round, or one of a
+    carrier's ``run_scoped``: Elastic Workers), else None (a Hive's round, or one of a
     carrier this Host has not)."""
     from core.carriers import registry
     try:
@@ -2370,7 +2371,7 @@ async def _compute_runs() -> dict[str, Any]:
         status_of = {r["hive_id"]: None for r in rows}
     else:                                           # a log Hive the store no longer has is gone
         status_of = {**{r["hive_id"]: "gone" for r in rows}, **statuses}
-    # a round that is a machine of its own (the elastic Hive) is read from its carrier,
+    # a round that is a machine of its own (Elastic Workers) is read from its carrier,
     # each round alone: its location is never asked as a Hive, and while the location is
     # known here its runs are on a running machine for every reader of ``status_of``
     scoped = {id(r): got for r in rows if (got := _run_scoped(r)) is not None}
@@ -2541,7 +2542,7 @@ async def rerun(dispatch_id: str, text: str, origin: Optional[str] = None) -> di
     """Send the person's correction into the run's own session as a new message: the
     Hive runs a new turn in the same workspace, and the verdict on the last result is
     void once that turn ends (it is bound to its ``ended_at``). On a carrier whose round
-    ends with its session (the elastic Hive, design D7: ``next_round``), a correction
+    ends with its session (Elastic Workers, design D7: ``next_round``), a correction
     after that end goes to a new round instead (``_rerun_on_new_round``), and nothing is
     sent to the ended one. ``origin="host"``: the correction is the dispatching agent's,
     and the Hive records it so (swarm-run §5.10)."""
@@ -2561,7 +2562,7 @@ async def rerun(dispatch_id: str, text: str, origin: Optional[str] = None) -> di
     handle = registry.handle_of(row)
     car = registry.carrier(handle.carrier)
     # the round the correction goes to: this one, or (a carrier whose run ended with its
-    # round: the elastic Hive, D7) a new one the carrier opens, kept as the run's next
+    # round: Elastic Workers, D7) a new one the carrier opens, kept as the run's next
     # round once it took the correction. Whether it ended is the carrier's to read; an
     # ended round is never sent anything (core/carriers/base.Carrier.next_round)
     reopen = getattr(car, "next_round", None)
@@ -2667,7 +2668,7 @@ def _round_message(row: dict[str, Any], kept: dict[str, Any], text: str, round_n
 async def _rerun_on_new_round(row: dict[str, Any], dispatch_id: str, target: RunHandle, text: str,
                               kept: dict[str, Any], origin: Optional[str],
                               took: dict[str, bool]) -> dict[str, Any]:
-    """Send a correction into a new round its carrier opened (an elastic Hive's run whose
+    """Send a correction into a new round its carrier opened (an Elastic Workers' run whose
     session ended, design D7): a fresh machine, so it gets the Brain (the dispatch's
     frozen one for a Swarm Run's child, else this machine's), a work order at the
     repositories' starts the carrier names (``target.extra["repos"]``: the last round's
@@ -2916,7 +2917,10 @@ async def refresh_result(dispatch_id: str) -> dict[str, Any]:
 
 
 FLEET_KEYS = ("name", "status", "version", "region", "instance_type",
-              "reachable", "streaming", "saturated", "memory_percent", "capable", "open_runs")
+              "reachable", "streaming", "saturated", "memory_percent", "capable", "open_runs",
+              # the execution surface: "ec2" (a Hive) or "agentcore" (Elastic Workers),
+              # named on each row of the Swarm Out panel
+              "carrier")
 
 
 def _count(v: Any, low: int) -> Optional[int]:
@@ -2945,8 +2949,8 @@ async def fleet() -> dict[str, Any]:
     async with aiosqlite.connect(_db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
         cur = await conn.execute(
-            "SELECT id, name, status, version, region, instance_type FROM hive_instances ORDER BY name")
-        found = [dict(zip(("id", "name", "status", "version", "region", "instance_type"), r))
+            "SELECT id, name, status, version, region, instance_type, carrier FROM hive_instances ORDER BY name")
+        found = [dict(zip(("id", "name", "status", "version", "region", "instance_type", "carrier"), r))
                  for r in await cur.fetchall()]
     running = [h for h in found if h["status"] == "running"]
     # each running Hive is probed through its location, by the carrier whose locations
@@ -2960,6 +2964,7 @@ async def fleet() -> dict[str, Any]:
     out = []
     for h in found:
         row = {k: h.get(k) for k in ("name", "status", "version", "region", "instance_type")}
+        row["carrier"] = h.get("carrier") or "ec2"
         # None when the dispatch log cannot be read: update-hive then refuses (unknown)
         row["open_runs"] = None if held is None else held.get(str(h.get("name")), 0)
         if h["status"] == "running":

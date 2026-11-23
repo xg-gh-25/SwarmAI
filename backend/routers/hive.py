@@ -115,13 +115,13 @@ def _now() -> str:
 
 
 def _is_elastic(row: dict) -> bool:
-    """The elastic Hive's row (``carrier='agentcore'``): its own routes (/elastic) act on it,
+    """Elastic Workers' row (``carrier='agentcore'``): its own routes (/elastic) act on it,
     never the EC2 ones."""
     from core.carriers.base import AGENTCORE
     return row.get("carrier") == AGENTCORE
 
 
-ELASTIC_NOT_EC2 = "This is the elastic Hive: turn it off in its own section of the Hive page."
+ELASTIC_NOT_EC2 = "This is Elastic Workers: turn it off in Swarm Out › settings."
 
 
 # ── Models ──────────────────────────────────────────────────────────
@@ -501,7 +501,7 @@ async def list_instances():
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances ORDER BY created_at DESC")
         rows = [dict(r) for r in await cursor.fetchall()]
-    # the elastic Hive is not an EC2 Hive: it has its own section (GET /elastic)
+    # Elastic Workers is not an EC2 Hive: it has its own section (GET /elastic)
     return [HiveInstanceResponse(**r) for r in rows if not _is_elastic(r)]
 
 
@@ -668,7 +668,7 @@ async def restart_instance(instance_id: str):
     if probe is None:
         raise HTTPException(status_code=409, detail=(
             f"Hive {name} did not answer its status check, so whether a session is streaming "
-            "on it is unknown: the person restarts it from the Hive page"))
+            "on it is unknown: the person restarts it in Swarm Out › settings"))
     if probe["streaming"] > 0:
         raise HTTPException(status_code=409, detail=(
             f"Hive {name} has {probe['streaming']} session(s) streaming: a restart would cut them off"))
@@ -736,8 +736,9 @@ async def update_instance(instance_id: str, body: Optional[HiveInstanceUpdate] =
 
 @router.delete("/instances/{instance_id}")
 async def delete_instance(instance_id: str):
-    """Delete a Hive and clean up all AWS resources. The SwarmAI account's last Hive is
-    replaced, never deleted (design §7.3: at least one)."""
+    """Delete a Hive and clean up all AWS resources; one fewer is then wanted (the desired
+    count goes down by the Hives that stopped counting with it). Without Elastic Workers on standby the SwarmAI account's last
+    Hive is refused (design §7.3: somewhere must be left to run tasks)."""
     _require_desktop()
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
@@ -747,10 +748,12 @@ async def delete_instance(instance_id: str):
     if _is_elastic(dict(found)):
         raise HTTPException(status_code=409, detail=ELASTIC_NOT_EC2)
     from hive import fleet
-    if hive_accounts.swarmai_account() is not None and await fleet.is_last(db.db_path, instance_id):
+    if (hive_accounts.swarmai_account() is not None and fleet.min_desired() > 0
+            and await fleet.is_last(db.db_path, instance_id)):
         raise HTTPException(status_code=409, detail=(
-            "This is your last Hive: replace it instead (a new one is built first, then "
-            "this one is deleted), or stop it to stop paying for the instance."))
+            "This is your last Hive and Elastic Workers is off, so nothing would be left to "
+            "run tasks: turn Elastic Workers on in Swarm Out › settings first, or stop this "
+            "Hive to stop paying for the instance."))
 
     provisioner = _get_provisioner()
     try:
@@ -761,10 +764,9 @@ async def delete_instance(instance_id: str):
     except Exception as e:
         logger.warning("Cleanup had errors (continuing with DB delete): %s", e)
 
-    # Always delete DB record even if AWS cleanup had partial failures
-    async with _conn() as c:
-        await c.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
-        await c.commit()
+    # Always delete DB record even if AWS cleanup had partial failures; one fewer is then
+    # wanted (fleet.delete_and_lower: by the Hives that stopped counting with it)
+    await fleet.delete_and_lower(db.db_path, instance_id, dict(found).get("account_ref"))
     return {"deleted": True}
 
 
@@ -1003,11 +1005,11 @@ async def instance_sync_brain(instance_id: str, brain: str) -> dict:
         raise HTTPException(status_code=502, detail=f"the Hive did not answer ({type(exc).__name__})") from None
 
 
-# ── The elastic Hive (design 2026-11-20-swarm-out-multi-carrier §6.8) ─────────────
+# ── Elastic Workers (design 2026-11-20-swarm-out-multi-carrier §6.8) ─────────────
 #
 # One AgentCore Runtime per account (hive/agentcore_provisioner). Turning it on, updating
 # its image and turning it off are claimed here (the answer says at once whether it can be
-# done) and run in the background; the Hive page reads GET /elastic until the row settles.
+# done) and run in the background; Swarm Out › settings reads GET /elastic until the row settles.
 
 _elastic: Optional["ElasticHive"] = None
 
@@ -1028,7 +1030,7 @@ class ElasticEnable(BaseModel):
 
 
 async def _elastic_target(account_ref: Optional[str], region: Optional[str]) -> tuple[str, Optional[str], str]:
-    """(account row id, its AWS account id, region) the elastic Hive is turned on in
+    """(account row id, its AWS account id, region) Elastic Workers is turned on in
     (hive/agentcore_provisioner.ElasticHive.target); HTTPException when there is none."""
     from hive.agentcore_provisioner import ElasticTargetError
     try:
@@ -1042,13 +1044,13 @@ def _elastic_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ElasticRefused):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, LookupError):
-        return HTTPException(status_code=404, detail="Elastic Hive not found")
+        return HTTPException(status_code=404, detail="Elastic Workers not found")
     raise exc
 
 
 @router.get("/elastic")
 async def elastic_status():
-    """Whether the elastic Hive can be turned on here (and why not), and each one there is
+    """Whether Elastic Workers can be turned on here (and why not), and each one there is
     with its runtime's live state (hive/agentcore_provisioner.ElasticHive.status)."""
     from hive.agentcore_provisioner import standby_on
     elastic = _get_elastic()
@@ -1064,6 +1066,9 @@ async def elastic_status():
     # person turned it off here
     from hive.agentcore_provisioner import LAST_STANDBY
     out["standby"] = standby_on()
+    # the account the person chose for it with several accounts (None: none chosen)
+    from hive.agentcore_provisioner import chosen_account
+    out["chosen_account"] = chosen_account()
     # what the standby's last round did or why it could not turn it on (None before one ran)
     out["standby_last"] = LAST_STANDBY.get("did")
     return out
@@ -1071,7 +1076,7 @@ async def elastic_status():
 
 @router.post("/elastic", status_code=202)
 async def elastic_enable(body: Optional[ElasticEnable] = None):
-    """Turn the elastic Hive on: refused (409) with the reason when there is no usable
+    """Turn Elastic Workers on: refused (409) with the reason when there is no usable
     image or it is already on, before anything is created; otherwise the row is written
     ('enabling') and the bucket, role and runtime are made in the background."""
     _require_desktop()
@@ -1088,9 +1093,48 @@ async def elastic_enable(body: Optional[ElasticEnable] = None):
     return {"id": row["id"], "status": row["status"]}
 
 
+class ElasticStandby(BaseModel):
+    on: bool
+    # several accounts in the old mode: the one Elastic Workers uses (kept for the standby)
+    account_ref: Optional[str] = None
+
+
+@router.put("/elastic/standby", status_code=202)
+async def elastic_standby(body: ElasticStandby):
+    """The person's Elastic Workers switch (Swarm Out › settings, the first-run step). On:
+    standby is kept on (and the chosen account recorded) and one standby round starts now.
+    Off: standby is turned off before anything else, then a runtime there is turned off;
+    with none yet, nothing else happens (a new user can say off before one exists). One
+    being changed now (turning on, updating) is turned off by the next standby round, once
+    that change ends (ElasticHive.reconcile); it is named in ``after_change``."""
+    _require_desktop()
+    from hive import agentcore_provisioner as ep
+    elastic = _get_elastic()
+    if body.on:
+        if body.account_ref is not None:
+            await _elastic_target(body.account_ref, None)   # an account that exists, or 4xx
+            ep.set_chosen_account(body.account_ref)
+        ep.set_standby(True)
+        _keep(asyncio.create_task(ep.run_standby_round(db.db_path), name="hive-elastic-standby-on"))
+        return {"standby": True}
+    ep.set_standby(False)
+    turning_off, after_change = [], []
+    for row in await elastic.rows():
+        try:
+            await elastic.claim_disable(row["id"])
+        except Exception as exc:  # noqa: BLE001 — changing now: the next standby round turns it off
+            logger.info("elastic standby off: %s is changing (%s); turned off once that ends",
+                        row["id"][:8], type(exc).__name__)
+            after_change.append(row["id"])
+            continue
+        _keep(asyncio.create_task(elastic.run_disable(row["id"]), name=f"hive-elastic-off-{row['id'][:8]}"))
+        turning_off.append(row["id"])
+    return {"standby": False, "turning_off": turning_off, "after_change": after_change}
+
+
 @router.post("/elastic/{location_id}/update", status_code=202)
 async def elastic_update(location_id: str, body: Optional[HiveInstanceUpdate] = None):
-    """Update the elastic Hive's image to a release (default: this SwarmAI's version),
+    """Update Elastic Workers' image to a release (default: this SwarmAI's version),
     with its size every time; runs in the background, the row ends 'ready' or 'failed'."""
     _require_desktop()
     elastic = _get_elastic()
@@ -1104,7 +1148,7 @@ async def elastic_update(location_id: str, body: Optional[HiveInstanceUpdate] = 
 
 @router.delete("/elastic/{location_id}", status_code=202)
 async def elastic_disable(location_id: str):
-    """Turn the elastic Hive off: its runtime and its row are deleted in the background
+    """Turn Elastic Workers off: its runtime and its row are deleted in the background
     (runs on it end); the bucket and the execution role stay. Standby is turned off first,
     so the Host does not turn it on again (only the person's turn-on does)."""
     _require_desktop()

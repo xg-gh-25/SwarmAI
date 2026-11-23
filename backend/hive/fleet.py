@@ -1,7 +1,8 @@
 """How many Hives: the desired count, the Hive status and keeping the table true to EC2
 (design 2026-10-31-swarmai-aws-account §7.1, §7.3).
 
-- ``hive_fleet`` in config.json (only these routes write it): ``desired_count`` 1..8,
+- ``hive_fleet`` in config.json (only these routes write it): ``desired_count`` 1..8
+  (0..8 while Elastic Workers is on standby: ``min_desired``; a delete lowers it by one),
   ``instance_type`` and ``region`` for new Hives, ``replacing`` (new id -> old id).
   Missing on an install that never set it: desired = max(1, Hives that count) — an
   upgrader with no Hive sees "1 short" and one button; nothing is created for them.
@@ -17,8 +18,8 @@
   console) is marked so it no longer counts; nothing is created to replace it (that
   costs money, and the deletion may have been on purpose). A lookup that fails counts as
   present. A replacement that is running retires the Hive it replaces.
-- ``replace``: a new Hive first, then the old one is deleted (the last one can only be
-  replaced, never deleted).
+- ``replace``: a new Hive first, then the old one is deleted (without Elastic Workers on
+  standby the last one can only be replaced, never deleted).
 """
 from __future__ import annotations
 
@@ -90,14 +91,23 @@ async def _connect(db_path: Path):
     return conn
 
 
-async def _counted_in_swarmai(conn) -> int:
-    """Hives in the SwarmAI account that count; a replacement pair counts as one."""
+async def _counted_ids(conn) -> set:
+    """The ids of the SwarmAI account's Hives that count (``ha.COUNTED_SQL``)."""
     cur = await conn.execute(
         f"SELECT id FROM hive_instances WHERE account_ref = ? AND {ha.COUNTED_SQL}",
         (ha.SWARMAI_ROW_ID,))
-    ids = {r[0] for r in await cur.fetchall()}
+    return {r[0] for r in await cur.fetchall()}
+
+
+def _count(ids: set) -> int:
+    """How many Hives *ids* are; a replacement pair counts as one."""
     pairs = sum(1 for new, old in _replacing().items() if new in ids and old in ids)
     return len(ids) - pairs
+
+
+async def _counted_in_swarmai(conn) -> int:
+    """Hives in the SwarmAI account that count; a replacement pair counts as one."""
+    return _count(await _counted_ids(conn))
 
 
 async def _free_name(conn) -> str:
@@ -199,8 +209,9 @@ async def set_desired(db_path: Path, desired: int, *, start_deploy,
     fleet lock and re-reads the config inside it (a replacement written meanwhile stays)."""
     if ha.swarmai_account() is None:
         raise ValueError("connect the SwarmAI account first")
-    if not isinstance(desired, int) or not 1 <= desired <= ha.MAX_HIVES:
-        raise ValueError(f"between 1 and {ha.MAX_HIVES} Hives")
+    low = min_desired()
+    if not isinstance(desired, int) or not low <= desired <= ha.MAX_HIVES:
+        raise ValueError(f"between {low} and {ha.MAX_HIVES} Hives")
     changes = _checked_defaults(**(defaults or {}))
     new_ids: list = []
     async with ha.fleet_lock:
@@ -238,6 +249,54 @@ async def set_defaults(*, instance_type: Optional[str] = None, region: Optional[
         fleet = {**get_config(), **changes}
         _save_config(fleet)
     return fleet
+
+
+def min_desired() -> int:
+    """The fewest resident Hives the SwarmAI account may have: 0 while Elastic Workers is
+    on standby (it is then somewhere to run tasks), else 1 (design 2026-11-20-swarm-out-
+    multi-carrier §6.8; the at-least-one rule of design §7.3 holds without it)."""
+    from hive.agentcore_provisioner import standby_on
+    return 0 if standby_on() else 1
+
+
+async def delete_and_lower(db_path: Path, instance_id: str,
+                           account_ref: Optional[str]) -> Optional[int]:
+    """Delete a Hive's row; for one of the SwarmAI account, one fewer is then wanted: the
+    desired count goes down by the Hives that stopped counting with this delete (never
+    below ``min_desired``), so the account is not reported short and nobody is asked to
+    create one again. The row's own effect is worked out from one read of the counted
+    Hives (with it and without it), under the fleet lock just before its delete, so each
+    delete counts only itself, whatever else changes rows meanwhile: a row that never counted (a failed
+    create, one gone outside SwarmAI), or one half of a replacement pair while the other
+    half counts, changes nothing; a Hive still wanted but not built stays wanted; deletes
+    at the same time lower it exactly as far as the Hives that went. Returns the new count,
+    or None when it did not change."""
+    if account_ref != ha.SWARMAI_ROW_ID or ha.swarmai_account() is None:
+        conn = await _connect(db_path)
+        try:
+            await conn.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
+            await conn.commit()
+        finally:
+            await conn.close()
+        return None
+    async with ha.fleet_lock:
+        conn = await _connect(db_path)
+        try:
+            ids = await _counted_ids(conn)
+            went = _count(ids) - _count(ids - {instance_id})
+            await conn.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
+            await conn.commit()
+        finally:
+            await conn.close()
+        fleet = get_config()
+        desired = fleet.get("desired_count")
+        if went <= 0 or not isinstance(desired, int):
+            return None
+        fleet["desired_count"] = max(min_desired(), desired - went)
+        _save_config(fleet)
+        logger.info("hive fleet: %s deleted, desired count %s -> %s", instance_id[:8], desired,
+                    fleet["desired_count"])
+        return fleet["desired_count"]
 
 
 async def is_last(db_path: Path, instance_id: str) -> bool:

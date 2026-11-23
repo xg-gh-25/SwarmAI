@@ -141,7 +141,7 @@ const panel = () => screen.getByTestId('swarm-out-dashboard');
 
 describe('in English, nothing on the panel is Chinese', () => {
   it('the run view, and a run’s big card on every tab and box', async () => {
-    render(<SwarmOutDashboard now={NOW} onOpenHive={() => {}} />);
+    render(<SwarmOutDashboard now={NOW} />);
     await screen.findAllByTestId('swarm-out-row');
     await screen.findAllByTestId('swarm-out-fleet-hive');
     fireEvent.click(screen.getByTestId('swarm-out-section-done'));      // every row on screen
@@ -173,11 +173,9 @@ describe('in English, nothing on the panel is Chinese', () => {
     expect(cjkIn(panel().outerHTML)).toEqual([]);
   });
 
-  it('the setup guide, with no Hive and with none running', () => {
-    const { container, rerender } = render(<HiveGuide hives={[]} onOpenHive={() => {}} />);
-    expect(cjkIn(container.innerHTML)).toEqual([]);
-    rerender(<HiveGuide hives={[{ name: 'w1', status: 'stopped', region: null }]} onOpenHive={() => {}} />);
-    expect(container.textContent).toContain('w1 (Off)');
+  it('the setup guide (no AWS account yet)', () => {
+    const { container } = render(<HiveGuide />);
+    expect(container.textContent).toContain('Connect an AWS account');
     expect(cjkIn(container.innerHTML)).toEqual([]);
   });
 
@@ -210,7 +208,7 @@ describe('a language switch reaches a panel already on screen', () => {
     await act(async () => { await i18n.changeLanguage('zh'); });
     try {
       expect(screen.getByRole('button', { name: '运行' })).toBeTruthy();
-      expect(screen.getByTestId('swarm-out-fleet').textContent).toContain('机群');
+      expect(screen.getByTestId('swarm-out-fleet').textContent).toContain('在哪里跑');
       expect(screen.getByTestId('swarm-out-section-you').textContent).toContain('等你');
     } finally {
       await act(async () => { await i18n.changeLanguage('en'); });

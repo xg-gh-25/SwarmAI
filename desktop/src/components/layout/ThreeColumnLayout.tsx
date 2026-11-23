@@ -29,8 +29,6 @@ import { openExternal } from '../../utils/openExternal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import api from '../../services/api';
-import { isDesktop } from '../../services/tauri';
-import { hiveService, TRANSITIONAL_STATUSES } from '../../services/hive';
 
 
 // Left sidebar width constant
@@ -43,58 +41,7 @@ const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
 // Minimum width for main chat panel to ensure usability
 const MIN_MAIN_CHAT_PANEL_WIDTH = 300;
 
-export type HiveStatusDot = { color: string; pulse?: boolean; title?: string };
 
-/**
- * Pure decision for the Hive nav-card status dot — a CALM, signal-driven indicator
- * (never a static literal; the 2026-08-03 Y/R alarm-fatigue removal is the standing
- * lesson). Exported for direct testing (no render needed). Priority error > provisioning
- * > running; returns `undefined` (NO dot) for 0 instances or an all-stopped fleet.
- */
-export function deriveHiveStatusDot(instances: { status: string }[] | undefined): HiveStatusDot | undefined {
-  if (!instances || instances.length === 0) return undefined;
-  if (instances.some((i) => i.status === 'error')) {
-    return { color: 'var(--color-status-error)', title: 'A Hive needs attention (error)' };
-  }
-  if (instances.some((i) => TRANSITIONAL_STATUSES.includes(i.status))) {
-    const updating = instances.some((i) => i.status === 'updating');
-    return { color: 'var(--color-primary)', pulse: true, title: updating ? 'A Hive is updating' : 'A Hive is provisioning' };
-  }
-  if (instances.some((i) => i.status === 'running')) {
-    const n = instances.filter((i) => i.status === 'running').length;
-    return { color: 'var(--color-status-success)', title: `${n} Hive${n > 1 ? 's' : ''} running` };
-  }
-  return undefined;  // all stopped → silent
-}
-
-/**
- * Live status dot for the Hive nav card. Cost discipline (Gate-1 D2): desktop-only +
- * polls every 30s at rest, escalating to 5s ONLY while an instance is transitional. On
- * a fresh workspace listInstances() returns [] (cheap local-DB read) → no dot.
- */
-function useHiveStatusDot(): HiveStatusDot | undefined {
-  const desktop = isDesktop();
-  const { data: instances } = useQuery({
-    queryKey: ['hive', 'nav-status'],
-    queryFn: () => hiveService.listInstances(),
-    enabled: desktop,
-    staleTime: 30_000,
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      if (!Array.isArray(data)) return 30_000;              // pre-first-fetch
-      if (data.some((i) => TRANSITIONAL_STATUSES.includes(i.status))) return 5_000;  // deploy in flight
-      // No fleet at all (the common case for a desktop user who never uses Hive) →
-      // relax to 2min so we don't hammer a localhost read every 30s forever for a dot
-      // that will never show (adversarial MED: 0-account poll waste). A newly-deployed
-      // Hive still surfaces — the deploy happens in the overlay's own live poll, and
-      // react-query refetch-on-focus re-checks the nav dot on the next window focus.
-      if (data.length === 0) return 120_000;
-      return 30_000;                                        // has fleet → watch for state changes
-    },
-    retry: false,
-  });
-  return deriveHiveStatusDot(instances);
-}
 
 interface ThreeColumnLayoutProps {
   children: ReactNode;
@@ -239,17 +186,9 @@ function LeftSidebar() {
   // so it reads the real panelOpen (for the active indicator) and shares the SAME
   // togglePanel as the BottomBar button + ⌘` hotkey (all three entries stay synced).
   const { panelOpen: terminalPanelOpen, togglePanel: toggleTerminal } = useTerminal();
-  // Live Hive fleet status → a calm dot on the Hive nav card (signal-driven, silent at 0).
-  const hiveStatusDot = useHiveStatusDot();
   // The Inbox badge: open REPLY items. Polled once a minute (a light count read, off the
   // chat path); a failed read (a backend without the route) shows no badge.
   const inboxReplyCount = useInboxReplyCount();
-  // Hive is desktop-ONLY (mirrors the old Settings hive tab's desktopOnly:true): a
-  // deployed Hive-served frontend has isDesktop()===false and the backend _require_desktop()
-  // blocks every hive op there — so rendering the card on a Hive would be a broken
-  // affordance (clickable card, all actions 403). Gate the card, not just the poll
-  // (meta-review HIGH, run_b450108e).
-  const hiveEnabled = isDesktop();
   // Nav edge fades (index.css .a10-nav[data-fade-*]): written straight on the element
   // from the scroll position, never through React state, so scrolling the Nav
   // re-renders nothing.
@@ -400,9 +339,7 @@ function LeftSidebar() {
               (Inbox/ToDo/Workspace/Pipeline/Pollinate). Supersedes the earlier
               Work-zone placement (run_b5d98151). */}
           <A10Card navId="capabilities" onPrefetch={() => prefetch('capabilities')} icon="extension" isActive={newActiveOverlay === 'capabilities'} onClick={() => activateNav('capabilities')} data-testid="nav-capabilities" />
-          {hiveEnabled && (
-            <A10Card navId="hive" onPrefetch={() => prefetch('hive')} icon="cloud" statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => activateNav('hive')} data-testid="nav-hive" />
-          )}
+          {/* No Hive card: Hives and Elastic Workers live in the Swarm Out tab (its settings view). */}
           <A10Card navId="usage" onPrefetch={() => prefetch('usage')} icon="usage" isActive={newActiveOverlay === 'usage'} onClick={() => activateNav('usage')} data-testid="nav-usage" />
           <A10Card navId="eval" onPrefetch={() => prefetch('eval')} icon="heartbeat" isActive={newActiveOverlay === 'eval'} onClick={() => activateNav('eval')} data-testid="nav-eval" />
           <A10Card navId="settings" onPrefetch={() => prefetch('settings')} icon="gear" isActive={newActiveOverlay === 'settings'} onClick={() => activateNav('settings', () => setSettingsTab(undefined))} data-testid="nav-settings" />

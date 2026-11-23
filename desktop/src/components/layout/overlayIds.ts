@@ -45,7 +45,6 @@ export const OVERLAY_IDS = [
   'capabilities',
   'needs-you',
   // SYSTEM region
-  'hive',
   'usage',
   'settings',
   'eval',

@@ -1307,7 +1307,8 @@
     "noRuns": "Nothing sent yet. Say what to do in the chat on the right, and Swarm will send it out.",
     "view": {
       "run": "Runs",
-      "history": "History"
+      "history": "History",
+      "settings": "Settings"
     },
     "header": {
       "running_one": "{{count}} Hive running",
@@ -1418,7 +1419,7 @@
     },
     "live": {
       "submitFailed": "Couldn't submit, try again later",
-      "openHiveAdmin": "Open Hive admin"
+      "openLogin": "Login info"
     },
     "ask": {
       "maybe": "Possibly: {{title}}",
@@ -1444,7 +1445,7 @@
     },
     "kpi": {
       "waiting": "Waiting for your answer",
-      "onHivePage": "+{{count}} to handle on the Hive's page",
+      "onHivePage": "+{{count}} to handle on that Hive's own page",
       "free": "Hives ready to take a task",
       "running": "Sent by me, running"
     },
@@ -1452,12 +1453,12 @@
       "title": "Waiting for you",
       "refresh": "Refresh",
       "none": "Nothing waiting for you",
-      "unasked": "The Hive says these wait on someone, but the question has not reached here: handle them on the Hive's page",
-      "refused": "To handle on the Hive's page (the answer was not delivered and can't be given here again)",
+      "unasked": "The Hive says these wait on someone, but the question has not reached here: handle them on that Hive's own page (its login is in Swarm Out settings)",
+      "refused": "To handle on that Hive's own page (the answer was not delivered and can't be given here again; its login is in Swarm Out settings)",
       "settle": "Tasks waiting for you to accept or decide"
     },
     "fleet": {
-      "title": "Fleet",
+      "title": "Where tasks run",
       "note": "Running = every session running on the Hive, its own included; the bar is its memory in use: at 90% with other work running, a new task queues",
       "failed": "Can't read the fleet, retrying shortly",
       "unreachable": "Unreachable",
@@ -1468,7 +1469,15 @@
       "short_one": "{{count}} Hive short of what you asked for",
       "short_other": "{{count}} Hives short of what you asked for",
       "cannotBuild": "Hives cannot be created in this account yet",
-      "openAccount": "Open the account page"
+      "openSettings": "Open Swarm Out settings",
+      "startsWhenNeeded": " · starts by itself when needed",
+      "elastic": {
+        "ready": "on standby · a new machine per task",
+        "enabling": "getting ready (about 6 minutes)",
+        "upgrading": "updating to this SwarmAI version",
+        "disabling": "turning off",
+        "failed": "error: SwarmAI repairs it once"
+      }
     },
     "detail": {
       "failed": "Can't read the details, try again later",
@@ -1519,15 +1528,10 @@
       "checks_other": "{{count}} checks not seen or errored"
     },
     "guide": {
-      "openHive": "Open Hive",
-      "noneRunning": "No Hive is running",
-      "hiveWithStatus": "{{name}} ({{status}})",
-      "startOne": "{{list}}. Start one in Hive to send tasks.",
-      "noHive": "No Hive yet, so tasks can't be sent",
-      "whatIsHive": "A Hive is a SwarmAI deployed in your own AWS account. Tasks sent to a Hive keep running with the Mac closed; questions that need your call show up here.",
-      "step1": "Open Hive, click Add Account under Accounts and add your AWS account.",
-      "step2": "Click Deploy Hive under Fleet and wait until it shows running (usually a few minutes).",
-      "step3": "Come back here and say what to do in the chat on the right; Swarm sends it out and follows it to the end."
+      "title": "Send tasks to your own AWS",
+      "why": "Tasks sent from here run in your AWS account and keep going when this Mac is closed; what needs your call shows up here. Once the account is connected, SwarmAI prepares Elastic Workers by itself: no machine to build.",
+      "connect": "Connect an AWS account",
+      "once": "Opens Settings › SwarmAI account. The model uses the same account; you connect it once."
     },
     "return": {
       "landed": "Landed on {{into}} ({{head}}). Next, build and test it the way this repository does.",
@@ -1791,10 +1795,9 @@
       "step2": "You confirm before it goes",
       "step3": "It runs on the Hive",
       "step4": "The report and commits come back here",
-      "noHive": "No Hive is running, so nothing can be sent",
-      "noHiveStopped": "You have {{count}} stopped Hive(s): start one to send tasks.",
-      "noHiveNone": "No Hive yet: create one to send tasks.",
-      "openHive": "Open Hive"
+      "noHive": "Nowhere to send tasks yet",
+      "noHiveNone": "Add a Hive or turn Elastic Workers on in Swarm Out settings.",
+      "openSettings": "Open settings"
     },
     "fresh": {
       "button": "New session",
@@ -2210,6 +2213,76 @@
       "judge": "JUDGE",
       "swarmRun_one": "Swarm Run · {{count}} work package",
       "swarmRun_other": "Swarm Run · {{count}} work packages"
+    },
+    "note": {
+      "moved": "The Hive card of the left navigation moved here. ",
+      "movedDetail": "Where tasks run is shown under Runs; the few things you decide (add, delete, login info, Elastic Workers) are under Settings.",
+      "elastic": "New: Elastic Workers (AgentCore Runtime). ",
+      "elasticDetail": "When your Hives are busy or stopped, a task starts on a fresh machine here instead of waiting. It costs nothing without tasks; SwarmAI set it up in your account. Turn it off under Settings if you do not want it.",
+      "ok": "Got it"
+    },
+    "settings": {
+      "account": "AWS account",
+      "runsIn": "Tasks run in",
+      "accountLine": "account {{id}} · {{region}}",
+      "noAccount": "not connected",
+      "changeInSettings": "Change in Settings",
+      "elasticLead": "Each task gets a fresh cloud machine that is gone when the task ends. No tasks, no cost.",
+      "standby": "Standby",
+      "on": "On",
+      "off": "Off",
+      "standbyNote": "SwarmAI turns it on, keeps it at its version and repairs it. Turned off, it stays off.",
+      "elasticAccount": "Account",
+      "chooseAccount": "Choose the account for Elastic Workers",
+      "eachMachine": "Each machine",
+      "size": "{{vcpu}} vCPU / {{mem}} GB memory at peak, {{disk}} GB disk · ready in about 1 minute",
+      "cost": "Cost",
+      "elasticCost": "by use only · from about $0.30 an hour, billed by the CPU and memory used",
+      "version": "Version",
+      "followsVersion": "follows this SwarmAI by itself",
+      "state": "Now",
+      "preparing": "getting ready (about 6 minutes)",
+      "elasticStatus": {
+        "ready": "on standby",
+        "enabling": "getting ready (about 6 minutes)",
+        "upgrading": "updating",
+        "disabling": "turning off",
+        "failed": "error"
+      },
+      "resident": "Resident Hives",
+      "residentLead": "Machines that stay, with your repository caches: they take work fastest. There can be none while Elastic Workers is on.",
+      "autoUpdate": "updates by itself",
+      "login": "Login info",
+      "restart": "Restart",
+      "restartNote": "For a Hive that hangs: stops and starts it, ending what runs on it",
+      "delete": "Delete",
+      "deleteNote": "Delete {{name}}? Its machine and disks are removed; one fewer Hive is wanted.",
+      "addOne": "Add one",
+      "addCost": "about ${{usd}} a month while it runs; created only after you confirm",
+      "addConfirm": "Create 1 Hive, about ${{usd}}/month, in account {{account}}",
+      "type": "Machine type",
+      "typeNote": "used for new Hives",
+      "idle": "Stop when idle for",
+      "idleNote": "a stopped Hive only costs its disk; a task starts it again (about 4 minutes)",
+      "never": "never",
+      "minutes_one": "{{count}} minute",
+      "minutes_other": "{{count}} minutes",
+      "region": "Region",
+      "byItself": "What SwarmAI does by itself",
+      "onlyYou": "What only you do",
+      "auto": {
+        "dispatch": "chooses where each task runs and starts a stopped Hive",
+        "idle": "stops a Hive that stays idle",
+        "update": "keeps every Hive and Elastic Workers at this SwarmAI version: an idle Hive is updated, a stopped one before its next task",
+        "restart": "when a Hive does not answer, the agent following the task diagnoses and restarts it, and says so",
+        "elastic": "keeps Elastic Workers on standby and repairs it once when it fails"
+      },
+      "yours": {
+        "add": "add a Hive (it costs money) or delete one",
+        "login": "open a Hive’s login info",
+        "elastic": "turn Elastic Workers off",
+        "type": "change the machine type and the idle time"
+      }
     }
   },
   "usage": {
@@ -3086,8 +3159,8 @@
     "connectedNoticeOpen": "Open"
   },
   "hiveFleet": {
-    "title": "Hive",
-    "lead": "A Hive is a cloud machine that runs work for you while this computer is off. It is created in your AWS account.",
+    "title": "Where tasks run",
+    "lead": "Tasks you send run in your AWS account, and keep going while this computer is off.",
     "loading": "Loading…",
     "loadFailed": "Could not load the account.",
     "connectFirst": "Hives need the AWS account. Connect it in Settings → SwarmAI Account, then create them there.",
@@ -3119,7 +3192,7 @@
     "later": "Later",
     "short": "{{n}} short",
     "createMissing": "Create them",
-    "over": "{{n}} more than you asked for. Delete the ones you do not need on the Hive page.",
+    "over": "{{n}} more than you asked for. Delete the ones you do not need in Swarm Out settings.",
     "lastOnlyReplace": "The last Hive cannot be deleted, only replaced (a new one is built first).",
     "createNoPrice_one": "Create {{count}} Hive in account {{account}} (price not known)",
     "createNoPrice_other": "Create {{count}} Hives in account {{account}} (price not known)",
@@ -3132,29 +3205,6 @@
     "existing_one": "This account already has {{count}} Hive.",
     "existing_other": "This account already has {{count}} Hives.",
     "createDefaultVpc": "Create a default VPC in {{region}}",
-    "elastic": {
-      "title": "Elastic Hive",
-      "lead": "Each task runs on its own fresh cloud machine in your AWS account (AgentCore Runtime), which is gone when the task ends. You pay only while a task runs.",
-      "size": "{{vcpu}} vCPU / {{mem}} GB at peak, {{disk}} GB disk",
-      "turnOn": "Turn on the elastic Hive",
-      "turningOn": "Turning on…",
-      "preparing": "On standby: SwarmAI turns it on by itself within a few minutes and keeps it at its own version. You do not need to do anything.",
-      "lastCheck": "Last check: {{did}}",
-      "turnOff": "Turn off",
-      "offNote": "Turning it off deletes its runtime; results kept in your S3 bucket stay.",
-      "offRuns_one": "{{count}} task still runs on it and will stop.",
-      "offRuns_other": "{{count}} tasks still run on it and will stop.",
-      "outdated": "Its image is {{image}}; this SwarmAI is {{version}}. It takes tasks again once updated.",
-      "update": "Update",
-      "loadFailed": "Could not read the elastic Hive.",
-      "status": {
-        "enabling": "turning on (about 6 minutes)",
-        "ready": "on standby",
-        "upgrading": "updating",
-        "disabling": "turning off",
-        "failed": "error"
-      }
-    },
     "status": {
       "pending": "waiting to build",
       "provisioning": "being built",
@@ -3165,7 +3215,11 @@
       "updating": "updating",
       "deleting": "being deleted",
       "error": "error"
-    }
+    },
+    "elasticChoice": "A fresh machine (8 vCPU / 32 GB) per task, ready in about 1 minute, gone when it ends. Billed by use only.",
+    "elasticOffFailed": "Elastic Workers could not be turned off: {{why}}. Try again, or leave it on.",
+    "movedToSwarmOut": "Hives and Elastic Workers are set up in the Swarm Out tab.",
+    "openSwarmOutSettings": "Open Swarm Out settings"
   },
   "onboarding": {
     "step": {
@@ -4697,29 +4751,6 @@
     "FileViewer": {
       "noFileOpen": "No file open",
       "versionsNote": "The Hive's change, read only: before and after (nothing here is a file on this machine)"
-    },
-    "HiveFleetOverlay": {
-      "addAccountFirst": "Add an AWS account first (Accounts tab) to deploy a Hive",
-      "limitReached": "At most {{max}} Hives: delete one to deploy another",
-      "tabFleet": "Fleet",
-      "tabAccounts": "Accounts",
-      "deployHive": "Deploy Hive",
-      "deployNew": "Deploy a new Hive",
-      "deployDisabled": "Deploy Hive — disabled: {{reason}}",
-      "addAccount": "Add Account",
-      "overviewTotal": "total",
-      "overviewRunning": "running",
-      "overviewProvisioning": "provisioning",
-      "overviewStopped": "stopped",
-      "overviewError": "error",
-      "myHives": "My Hives",
-      "sharedHives": "Shared Hives",
-      "hiveInstances": "Hive Instances",
-      "noAccounts": "No AWS accounts yet — add one to deploy your first Hive.",
-      "addAnother": "+ Add another AWS account",
-      "guideLead": "Your fleet of remote AI clones.",
-      "guideBeforeDeploy": "Each Hive deploys the whole Agent OS to your own AWS — 100% data sovereignty, a 24/7 stand-in you can share with a teammate. Add an AWS account, then",
-      "guideAfterDeploy": "; deploys run in the background (this panel polls while provisioning)."
     },
     "PipelineOverlay": {
       "window": "Showing runs from the last 30 days",

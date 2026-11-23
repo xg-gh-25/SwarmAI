@@ -20,7 +20,6 @@ import { todosService } from '../../services/todos';
 import { pollinateService } from '../../services/pollinate';
 import { pipelinesService } from '../../services/pipelines';
 import { jobsService } from '../../services/jobs';
-import { hiveService } from '../../services/hive';
 import { skillsService } from '../../services/skills';
 import { appsService } from '../../services/apps';
 import { expertsService } from '../../services/experts';
@@ -95,16 +94,6 @@ export const overlayQuery = {
   jobsOverview: () => ({
     queryKey: ['overlay', 'jobs', 'overview'] as const,
     queryFn: () => jobsService.fetchOverview(),
-    staleTime: OVERLAY_STALE_MS,
-  }),
-  hiveAccounts: () => ({
-    queryKey: ['overlay', 'hive', 'accounts'] as const,
-    queryFn: () => hiveService.listAccounts(),
-    staleTime: OVERLAY_STALE_MS,
-  }),
-  hiveInstances: () => ({
-    queryKey: ['overlay', 'hive', 'instances'] as const,
-    queryFn: () => hiveService.listInstances(),
     staleTime: OVERLAY_STALE_MS,
   }),
   capabilitiesApps: () => ({
@@ -259,7 +248,6 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   pollinate: () => [overlayQuery.pollinate()],
   pipeline: () => [overlayQuery.pipelineAnalytics('30d'), overlayQuery.pipelineRunning()],
   jobs: () => [overlayQuery.jobsRoster(), overlayQuery.jobsOverview()],
-  hive: () => [overlayQuery.hiveAccounts(), overlayQuery.hiveInstances()],
   capabilities: () => [overlayQuery.capabilitiesApps()],
   'needs-you': () => [overlayQuery.needsYou()],
   inbox: () => [overlayQuery.inboxCounts(), overlayQuery.inboxItems('reply'), overlayQuery.inboxItems('proposed')],

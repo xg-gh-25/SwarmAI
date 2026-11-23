@@ -166,7 +166,7 @@ class RunEnded(AgentCoreError):
     ``released``."""
 
     def __init__(self, why: str):
-        super().__init__(f"this run's elastic Hive session has ended ({why}); nothing was sent")
+        super().__init__(f"this run's Elastic Workers session has ended ({why}); nothing was sent")
         self.why = why
 
 
@@ -279,7 +279,7 @@ def _endpoint(url: Any, region: str) -> str:
     returns it: never a host an AWS customer controls, since every request to it carries a
     signature and the run credential), no credentials, port, query or fragment."""
     if not isinstance(url, str) or len(url) > 2048 or not REGION_RE.fullmatch(region or ""):
-        raise AgentCoreError("the elastic Hive gave no session endpoint")
+        raise AgentCoreError("Elastic Workers gave no session endpoint")
     p = urlsplit(url.strip())
     host = (p.hostname or "").lower()
     labels = host.split(".")
@@ -287,7 +287,7 @@ def _endpoint(url: Any, region: str) -> str:
     if p.scheme != "https" or p.username or p.password or p.port is not None or p.query or p.fragment \
             or not all(_HOST_LABEL_RE.fullmatch(x) for x in labels) \
             or not host.endswith(domain) or len(labels) != len(domain.split(".")):
-        raise AgentCoreError("the elastic Hive gave an unexpected session endpoint")
+        raise AgentCoreError("Elastic Workers gave an unexpected session endpoint")
     return urlunsplit(("https", host, p.path.rstrip("/"), "", ""))
 
 
@@ -301,7 +301,7 @@ def port_url(endpoint: str, region: str, port: int = BACKEND_PORT) -> str:
 
 def _image_tag(uri: Any) -> Optional[str]:
     """The tag of a container image URI (``...:<tag>``, also ``...:<tag>@<digest>`` as the
-    elastic Hive's runtime is made: hive/agentcore_provisioner.pinned_uri), None for a bare
+    Elastic Workers' runtime is made: hive/agentcore_provisioner.pinned_uri), None for a bare
     digest or no tag."""
     if not isinstance(uri, str):
         return None
@@ -788,11 +788,11 @@ class AgentCoreLocation:
         """(row, account row, parsed ARN), read now; AgentCoreError when unusable."""
         rows = await _location_rows(self.id)
         if len(rows) != 1:
-            raise AgentCoreError("no elastic Hive with this id")
+            raise AgentCoreError("no Elastic Workers with this id")
         inst, acct = rows[0]
         arn = parse_runtime_arn(inst.get("runtime_arn"))
         if acct is None or arn is None or not BUCKET_RE.fullmatch(inst.get("s3_bucket") or ""):
-            raise AgentCoreError(f"elastic Hive {inst.get('name')} has no account, runtime or bucket")
+            raise AgentCoreError(f"Elastic Workers {inst.get('name')} has no account, runtime or bucket")
         self.name = str(inst.get("name") or self.id)
         self._row = (inst, acct)
         return inst, acct, arn
@@ -863,7 +863,7 @@ class AgentCoreLocation:
                                               sid, payload, min(left, START_TIMEOUT_S))
         if not isinstance(answer, dict) or answer.get("started") is not True:
             why = answer.get("why") if isinstance(answer, dict) and isinstance(answer.get("why"), str) else None
-            raise AgentCoreError(f"elastic Hive {self.name} refused the start"
+            raise AgentCoreError(f"Elastic Workers {self.name} refused the start"
                                  + (f" ({why[:40]})" if why else "") + "; the run was not started again")
         try:
             address = _endpoint(url, arn["region"])
@@ -903,7 +903,7 @@ class AgentCoreLocation:
             if code in UNAVAILABLE_CODES:
                 raise LocationUnavailable(
                     f"{self.name}: {'at_quota' if code == 'ServiceQuotaExceededException' else 'throttled'}") from None
-            raise AgentCoreError(f"elastic Hive {self.name} did not start the session "
+            raise AgentCoreError(f"Elastic Workers {self.name} did not start the session "
                                  f"({code or type(exc).__name__})") from None
         url = r.get("sessionEndpointUrl")
         if not url:
@@ -964,7 +964,7 @@ class RunClient(httpx.AsyncClient):
         if not isinstance(follow, bool):                # httpx's "use the client's default"
             follow = self.follow_redirects
         if follow:
-            raise AgentCoreError("a client of an elastic Hive run follows no redirect")
+            raise AgentCoreError("a client of an Elastic Workers runtime run follows no redirect")
         if request.url.scheme != "https" or request.url.host != self._host:
             raise AgentCoreError("this client sends only to its run's session")
         why = await self._carrier.ended(self._handle)
@@ -987,7 +987,7 @@ class RunClient(httpx.AsyncClient):
 # ── the carrier ──────────────────────────────────────────────────────────────────
 
 class AgentCoreCarrier:
-    """The elastic Hive: one AgentCore Runtime session per run round."""
+    """Elastic Workers: one AgentCore Runtime session per run round."""
 
     kind = AGENTCORE
     reaches_private = False          # no internal network or credentials reach the microVM
@@ -1040,7 +1040,7 @@ class AgentCoreCarrier:
         if got is None or time.monotonic() - got[0] > SESSION_CACHE_S:
             rows = await _location_rows(handle.location_id)
             if len(rows) != 1 or rows[0][1] is None:
-                raise AgentCoreError("the run's elastic Hive is no longer known here")
+                raise AgentCoreError("the run's Elastic Workers is no longer known here")
             # resolved again after SESSION_CACHE_S: an account that changed (another
             # account now, disconnected) is noticed (hive/accounts.session_for)
             got = (time.monotonic(), await asyncio.to_thread(_session_for, rows[0][1], _region_of(handle), purpose))
@@ -1107,7 +1107,7 @@ class AgentCoreCarrier:
         except AgentCoreError:
             raise
         except Exception as exc:  # noqa: BLE001 — no answer from S3 is no proof the round is open
-            raise AgentCoreError(f"the elastic Hive's state could not be read ({type(exc).__name__})") from None
+            raise AgentCoreError(f"Elastic Workers' state could not be read ({type(exc).__name__})") from None
         if why:
             raise RunEnded(why)
         name = self._names.get(handle.location_id)
@@ -1232,7 +1232,7 @@ class AgentCoreCarrier:
                 client.stop_runtime_session(runtimeSessionId=sid, agentRuntimeArn=arn)
             except Exception as exc:  # noqa: BLE001 — classified below
                 if _error_code(exc) not in NOT_FOUND_CODES:
-                    raise AgentCoreError(f"the elastic Hive session was not stopped "
+                    raise AgentCoreError(f"Elastic Workers session was not stopped "
                                          f"({_error_code(exc) or type(exc).__name__})") from None
         await asyncio.to_thread(stop)
 
@@ -1258,7 +1258,7 @@ class AgentCoreCarrier:
         except AgentCoreError:
             raise
         except Exception as exc:  # noqa: BLE001 — no answer is no proof either way: nothing is sent
-            raise AgentCoreError(f"the elastic Hive's state could not be read ({type(exc).__name__}); "
+            raise AgentCoreError(f"Elastic Workers' state could not be read ({type(exc).__name__}); "
                                  "nothing was sent") from None
         if not why:
             return handle
@@ -1279,7 +1279,7 @@ class AgentCoreCarrier:
             raise AgentCoreError(f"the correction is longer than {swarm_out.MAX_TASK_CHARS} characters")
         prev = current_handle(row)
         if prev.carrier != AGENTCORE:
-            raise AgentCoreError("the run's last round is not on the elastic Hive")
+            raise AgentCoreError("the run's last round is not on Elastic Workers")
         _parse_handle(prev)
         if not await self.ended(prev):
             raise AgentCoreError("the run's session is still open: send the correction into it")
@@ -1334,14 +1334,14 @@ class AgentCoreCarrier:
                 resp = await client.put("/api/hive/repos", params={"url": s["url"], "branch": s["ref"], "sha": s["sha"]},
                                         content=data, headers={"Content-Type": "application/octet-stream"})
         except httpx.HTTPError as e:
-            raise AgentCoreError(f"the elastic Hive did not take {s.get('name') or s['url']} ({type(e).__name__})") from None
+            raise AgentCoreError(f"Elastic Workers did not take {s.get('name') or s['url']} ({type(e).__name__})") from None
         try:
             body = resp.json()
         except ValueError:
             body = None
         if resp.status_code != 200 or not (isinstance(body, dict) and body.get("bundle") == hive_repo_inbox.bundle_rel(s["sha"])
                                            and body.get("bytes") == size):
-            raise AgentCoreError(f"the elastic Hive did not keep {s.get('name') or s['url']} ({resp.status_code})")
+            raise AgentCoreError(f"Elastic Workers did not keep {s.get('name') or s['url']} ({resp.status_code})")
 
 
 def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:

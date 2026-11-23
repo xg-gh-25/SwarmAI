@@ -8,6 +8,8 @@
  *    button only moves on (nothing is created) and the template is offered.
  * 3. Hives already in the account: "already N", nothing more is created by default.
  * 4. no account (chat only, or Hive unavailable): the step says so and moves on.
+ * 5. where tasks run: Elastic Workers (AgentCore Runtime) on by default next to 1 Hive
+ *    (EC2); switched off, the step records it before going on.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -17,11 +19,13 @@ import type { AwsAccountView, FleetStatus } from '../../../services/awsAccount';
 const mockGet = vi.fn();
 const mockCheck = vi.fn();
 const mockSetFleet = vi.fn();
+const mockStandby = vi.fn();
 vi.mock('../../../services/awsAccount', () => ({
   awsAccountService: {
     get: (...a: unknown[]) => mockGet(...a),
     check: (...a: unknown[]) => mockCheck(...a),
     setFleet: (...a: unknown[]) => mockSetFleet(...a),
+    setElasticStandby: (...a: unknown[]) => mockStandby(...a),
     permissionTemplate: vi.fn(),
   },
   problemOf: (e: unknown) => ({ kind: 'error', message: String(e) }),
@@ -49,7 +53,7 @@ function view(hive: FleetStatus | null, hiveCap: Record<string, unknown> = { sta
   };
 }
 
-beforeEach(() => { for (const m of [mockGet, mockCheck, mockSetFleet]) m.mockReset(); });
+beforeEach(() => { for (const m of [mockGet, mockCheck, mockSetFleet, mockStandby]) m.mockReset(); });
 
 describe('HiveSetupStep', () => {
   it('defaults to 1 and names what the button does', async () => {
@@ -168,5 +172,36 @@ describe('HiveSetupStep', () => {
     await waitFor(() => expect(mockCheck).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByTestId('hive-cap')).toHaveTextContent('hiveFleet.canCreate'));
   });
-});
 
+  it('onboarding: when recording "off" fails, the step says so and stays', async () => {
+    mockGet.mockResolvedValue(view(fleet()));
+    mockStandby.mockRejectedValue(new Error('backend down'));
+    const onDone = vi.fn();
+    render(<HiveSetupStep onDone={onDone} />);
+    fireEvent.click(await screen.findByTestId('hive-step-elastic-switch'));
+    fireEvent.click(screen.getByTestId('hive-skip'));
+    await waitFor(() => expect(screen.getByTestId('hive-error')).toHaveTextContent('hiveFleet.elasticOffFailed'));
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('onboarding: elastic workers on, one hive', async () => {
+    mockGet.mockResolvedValue(view(fleet()));
+    mockSetFleet.mockResolvedValue(view(fleet({ state: 'ready', counted: 1 })));
+    mockStandby.mockResolvedValue({ standby: false });
+    const onDone = vi.fn();
+    render(<HiveSetupStep onDone={onDone} />);
+    const sw = await screen.findByTestId('hive-step-elastic-switch');
+    expect(sw).toBeChecked();
+    expect(screen.getByTestId('hive-step-elastic')).toHaveTextContent('AgentCore Runtime');
+    expect(screen.getByTestId('hive-count')).toHaveTextContent('1');
+    // left on: nothing is recorded (on is the default)
+    fireEvent.click(screen.getByTestId('hive-skip'));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(mockStandby).not.toHaveBeenCalled();
+    // switched off: recorded before the wizard goes on
+    fireEvent.click(sw);
+    fireEvent.click(screen.getByTestId('hive-go'));
+    await waitFor(() => expect(mockStandby).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
+  });
+});

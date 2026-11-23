@@ -1097,7 +1097,6 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       { testId: 'nav-swarmws', label: 'Workspace' },  // Work order XG 2026-10-23
       { testId: 'nav-jobs', label: 'Jobs & Runs' },
       { testId: 'nav-capabilities', label: 'Apps & Capabilities' },  // System: after Jobs
-      { testId: 'nav-hive', label: 'Hive' },
       { testId: 'nav-usage', label: 'Usage' },          // System: the usage view (usage ledger 7b)
       { testId: 'nav-eval', label: 'OS Eval' },
       { testId: 'nav-settings', label: 'Settings' },

@@ -96,7 +96,6 @@ const ITEMS: Item[] = [
   { id: 'swarmws', nav: 'nav-swarmws', label: 'Workspace', zone: 'work' },
   { id: 'jobs', nav: 'nav-jobs', label: 'Jobs & Runs', zone: 'system', fetches: ['/jobs'] },
   { id: 'capabilities', nav: 'nav-capabilities', label: 'Apps & Capabilities', zone: 'system', fetches: ['/apps'] },
-  { id: 'hive', nav: 'nav-hive', label: 'Hive', zone: 'system', fetches: ['/hive/accounts'] },
   // Settings / OS Eval fetching is out of scope (design §7): no refetch/prefetch checks.
   { id: 'eval', nav: 'nav-eval', label: 'OS Eval', zone: 'system' },
   { id: 'settings', nav: 'nav-settings', label: 'Settings', zone: 'system' },

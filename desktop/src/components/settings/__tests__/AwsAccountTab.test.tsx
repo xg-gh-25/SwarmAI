@@ -6,8 +6,7 @@
  * account say to run mwinit; do the two actions call the backend and show its answer;
  * does an unconnected install offer only "connect"; do "change account" and "sign in
  * again" open the connect steps in place; do the gaps offer the permission template;
- * does the Hive row name the cost before a raise creates anything, lower without a
- * question, and ask an upgrader with no Hive once (create / later)?
+ * is the Hive row one line to Swarm Out › settings (where Hives are set up now)?
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
@@ -157,7 +156,7 @@ describe('AwsAccountTab', () => {
     expect(screen.queryByText('settings.awsAccount.check')).toBeNull();
     expect(screen.queryByTestId('aws-account-region')).toBeNull();
     expect(screen.getByTestId('aws-account-change')).toHaveTextContent('settings.awsAccount.connect');
-    expect(screen.queryByTestId('hive-fleet')).toBeNull();
+    expect(screen.queryByTestId('hive-fleet-moved')).toBeNull();
   });
 
   it('change account opens the connect steps in place; their answer replaces the page', async () => {
@@ -200,36 +199,17 @@ describe('AwsAccountTab', () => {
     await waitFor(() => expect(write).toHaveBeenCalledWith(JSON.stringify({ policy: {} }, null, 2)));
   });
 
-  it('raising the Hive count names the cost first; only the confirm creates', async () => {
+  it('settings links to swarm out: the Hive count row is one line to Swarm Out settings', async () => {
     mockGet.mockResolvedValue(view({ hive: fleet() }));
-    mockSetFleet.mockResolvedValue(view({ hive: fleet({ desired: 3, counted: 3 }) }));
+    const seen: string[] = [];
+    const on = (e: Event) => seen.push(e.type);
+    window.addEventListener('swarm:open-swarm-out-settings', on);
     render(<AwsAccountTab />);
-    fireEvent.click(await screen.findByTestId('hive-plus'));
-    expect(mockSetFleet).not.toHaveBeenCalled();
-    expect(screen.getByTestId('hive-confirm')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('hive-confirm-go'));
-    await waitFor(() => expect(mockSetFleet).toHaveBeenCalledWith({ desired_count: 3 }));
-  });
-
-  it('lowering the count creates nothing and asks nothing; it stops at 1', async () => {
-    mockGet.mockResolvedValue(view({ hive: fleet() }));
-    mockSetFleet.mockResolvedValue(view({ hive: fleet({ desired: 1, state: 'over', over: 1 }) }));
-    render(<AwsAccountTab />);
-    fireEvent.click(await screen.findByTestId('hive-minus'));
-    await waitFor(() => expect(mockSetFleet).toHaveBeenCalledWith({ desired_count: 1 }));
-    expect(await screen.findByTestId('hive-over')).toBeInTheDocument();
-    expect(screen.getByTestId('hive-minus')).toBeDisabled();
-  });
-
-  it('an upgrader with no Hive is asked once: create 1, or later', async () => {
-    mockGet.mockResolvedValue(view({ hive: fleet({ state: 'short', desired: 1, counted: 0, counted_all: 0, short: 1, monthly_usd: 0 }) }));
-    mockSetFleet.mockResolvedValue(view({ hive: fleet({ state: 'short', desired: 1, counted: 0, short: 1, dismissed: true }) }));
-    render(<AwsAccountTab />);
-    expect(await screen.findByTestId('hive-upgrade-ask')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('hive-upgrade-later'));
-    await waitFor(() => expect(mockSetFleet).toHaveBeenCalledWith({ dismissed: true }));
-    expect(screen.queryByTestId('hive-upgrade-ask')).toBeNull();
-    expect(screen.getByTestId('hive-short')).toBeInTheDocument();     // the page still shows it
+    fireEvent.click(await screen.findByTestId('hive-fleet-open-swarm-out'));
+    window.removeEventListener('swarm:open-swarm-out-settings', on);
+    expect(seen).toEqual(['swarm:open-swarm-out-settings']);
+    expect(screen.queryByTestId('hive-plus')).toBeNull();
+    expect(screen.queryByTestId('hive-list')).toBeNull();
   });
 
   it('chat on a key can be moved back to the account once Bedrock works', async () => {
@@ -248,29 +228,6 @@ describe('AwsAccountTab', () => {
     expect(await screen.findByTestId('aws-account-state')).toBeInTheDocument();
   });
 
-  it('an account that cannot build Hives offers no + ; a raise shows the asked count while confirming', async () => {
-    mockGet.mockResolvedValue(view({ hive: fleet({ state: 'cannot_build', desired: 2, counted: 1, short: 1,
-      capability: { status: 'missing', missing: ['ec2:RunInstances'] } }) }));
-    const { unmount } = render(<AwsAccountTab />);
-    expect(await screen.findByTestId('hive-plus')).toBeDisabled();
-    unmount();
-    mockGet.mockResolvedValue(view({ hive: fleet() }));
-    render(<AwsAccountTab />);
-    fireEvent.click(await screen.findByTestId('hive-plus'));
-    expect(screen.getByTestId('hive-count')).toHaveTextContent('3');
-  });
-
-  it('lists each Hive, and a missing default VPC can be created in its region', async () => {
-    mockGet.mockResolvedValue(view({ hive: fleet({ state: 'cannot_build', desired: 2, counted: 1, short: 1,
-      hives: [{ id: 'h1', name: 'hive-a', instance_type: 'm7g.xlarge', region: 'eu-west-1', status: 'running', created_at: 't' }],
-      capability: { status: 'missing', no_default_vpc: true, region: 'eu-west-1', detail: 'no default VPC in eu-west-1' } }) }));
-    mockCreateVpc.mockResolvedValue(view({ hive: fleet() }));
-    render(<AwsAccountTab />);
-    expect(await screen.findByTestId('hive-list')).toHaveTextContent('hive-a');
-    fireEvent.click(screen.getByTestId('create-default-vpc'));
-    await waitFor(() => expect(mockCreateVpc).toHaveBeenCalledWith('eu-west-1'));
-    await waitFor(() => expect(screen.queryByTestId('hive-cannot')).toBeNull());
-  });
 });
 
 
