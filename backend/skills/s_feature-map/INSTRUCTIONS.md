@@ -86,6 +86,11 @@ ignore: ["desktop/**/__tests__/**", "desktop/**/*.test.ts"]   # globs, repo-rela
   more, never less. `owns` is not part of a walk's identity: changing it keeps the walk's
   history.
 
+Several features may own the same path (all of them are replayed). Code no walk
+exercises can be owned by the walk that proves the part still starts: back-end code that
+only runs at start-up by a health walk, a view no walk opens by the walk that loads the
+UI. A change there then replays that one walk instead of all of them.
+
 The risk you accept: a feature that depends on a file another feature owns is not
 replayed when only that file changes. When in doubt, leave a path unowned.
 

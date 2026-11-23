@@ -6,6 +6,14 @@ id: app
 kind: web
 root: desktop/
 paths: [backend/]
+# not built or served by this target: tests, and the Tauri shell (prepare builds the
+# web UI only)
+ignore:
+  - "backend/tests/**"
+  - "desktop/**/__tests__/**"
+  - "desktop/**/*.test.ts"
+  - "desktop/**/*.test.tsx"
+  - "desktop/src-tauri/**"
 prepare:
   - [npm, ci, --no-audit, --no-fund]
   - [npx, vite, build]

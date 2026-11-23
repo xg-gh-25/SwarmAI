@@ -1,96 +1,292 @@
-schema: 1
+# owns (schema 2): which changes replay which walk. A path no feature owns replays all of
+# them (the app shell, chat page, i18n, services, packages, most of backend/core). Two
+# groups own code no walk exercises past start-up: api-health-q56c owns backend parts
+# that only load at start-up (Inbox, Hive and Swarm Out, eval, job handlers, CLI
+# scripts), and no-account-banner-6atk, the walk that loads the UI, owns the overlays no
+# walk opens (each a lazy chunk). The chat walks co-own the turn path's gates, recall
+# and prompt sources (run_protocol, ingestion, feature_map, skills, context).
+schema: 2
 features:
   - id: first-run-setup-q8rx
     title: A fresh install opens the setup wizard, and Configure later reaches the chat
     reach: Start SwarmAI for the first time
     expect: The Setup Wizard asks to connect an AWS account (ADA or AWS SSO); Configure later opens the chat
     target: app
+    owns:
+      - backend/hive/
+      - backend/routers/aws_account.py
+      - backend/routers/settings.py
+      - desktop/src/components/awsAccount/
+      - desktop/src/components/settings/
+      - desktop/src/pages/OnboardingPage.tsx
+      - desktop/src/pages/SettingsPage.tsx
     spec: specs/first-run-setup-q8rx.spec.ts
   - id: pipeline-view-vmna
     title: Open the Pipeline view from the left nav
     reach: Click Pipeline in the left nav
     expect: The Pipeline panel opens inside the window and Close dismisses it
     target: app
+    owns:
+      - backend/core/feature_map/
+      - backend/core/run_protocol/
+      - backend/routers/pipelines.py
+      - desktop/src/components/layout/PipelineEval.tsx
+      - desktop/src/components/layout/PipelineLine.tsx
+      - desktop/src/components/layout/PipelineOverlay.tsx
+      - desktop/src/components/layout/PipelineRunCard.tsx
+      - desktop/src/components/layout/pipelineRows.ts
     spec: specs/pipeline-view-vmna.spec.ts
   - id: todo-view-55s5
     title: Open ToDo from the left nav
     reach: Click ToDo in the left nav
     expect: The ToDo panel opens inside the window and Close dismisses it
     target: app
+    owns:
+      - backend/routers/todos.py
+      - desktop/src/components/layout/ToDoOverlay.tsx
+      - desktop/src/components/layout/todoTable.ts
+      - desktop/src/components/layout/todoWorkPacket.ts
     spec: specs/todo-view-55s5.spec.ts
   - id: jobs-view-k98s
     title: Open Jobs & Runs from the left nav
     reach: Click Jobs & Runs in the left nav
     expect: The Jobs & Runs panel opens inside the window and Close dismisses it
     target: app
+    owns:
+      - backend/jobs/handlers/
+      - backend/routers/autonomous_jobs.py
+      - backend/routers/jobs.py
+      - desktop/src/components/layout/JobsRunsOverlay.tsx
     spec: specs/jobs-view-k98s.spec.ts
   - id: settings-view-ze9a
     title: Open Settings and close it with Escape
     reach: Click Settings in the left nav
     expect: Settings opens inside the window with its sections; Escape closes it
     target: app
+    owns:
+      - backend/hive/
+      - backend/routers/aws_account.py
+      - backend/routers/settings.py
+      - desktop/src/components/settings/
+      - desktop/src/pages/SettingsPage.tsx
     spec: specs/settings-view-ze9a.spec.ts
   - id: brain-hub-bvcc
     title: Brain Hub shows the two built-in Brains
     reach: Click Brain Hub in the left nav
     expect: The SwarmAI Brain and the General Brain are shown, with New Brain
     target: app
+    owns:
+      - backend/core/ingestion/
+      - backend/routers/ddd_brain.py
+      - desktop/src/components/layout/BackToHubButton.tsx
+      - desktop/src/components/layout/BrainHub.tsx
+      - desktop/src/components/layout/BrainHubHome.tsx
+      - desktop/src/components/layout/BrainLearnedView.tsx
+      - desktop/src/components/layout/BrainMap.tsx
+      - desktop/src/components/layout/BrainMapView.tsx
+      - desktop/src/components/layout/DddCard.tsx
+      - desktop/src/components/layout/GeneralBrainView.tsx
+      - desktop/src/components/layout/brainMapModel.ts
+      - desktop/src/components/layout/dddLayers.ts
+      - desktop/src/components/layout/dddOverview.ts
     spec: specs/brain-hub-bvcc.spec.ts
   - id: capabilities-view-6qa4
     title: Apps & Capabilities lists the built-in apps
     reach: Click Apps & Capabilities in the left nav
     expect: The Apps view lists app cards, with Skills, Experts and Connections views to switch to
     target: app
+    owns:
+      - backend/core/ingestion/
+      - backend/routers/apps.py
+      - backend/routers/experts.py
+      - backend/routers/mcp.py
+      - backend/routers/plugins.py
+      - backend/routers/skills.py
+      - backend/skills/
+      - desktop/src/components/layout/CapabilitiesOverlay.tsx
+      - desktop/src/pages/SkillsPage.tsx
     spec: specs/capabilities-view-6qa4.spec.ts
   - id: chat-tab-draft-nfu9
     title: Each chat tab keeps its own unsent draft
     reach: Type in the chat input, then click New Session, then switch back
     expect: The new tab starts empty; the first tab still holds what was typed
     target: app
+    owns:
+      - backend/context/
+      - backend/core/feature_map/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/skills/
     spec: specs/chat-tab-draft-nfu9.spec.ts
   - id: no-account-banner-6atk
     title: With no AWS account, the banner leads to Settings
     reach: Open SwarmAI with no account connected
     expect: A banner says no AWS account is connected; Open settings opens Settings
     target: app
+    owns:
+      - backend/hive/
+      - backend/routers/aws_account.py
+      - backend/routers/settings.py
+      - desktop/src/components/common/CredentialBanner.tsx
+      - desktop/src/components/layout/ArtifactsOverlay.tsx
+      - desktop/src/components/layout/CMBrainOverlay.tsx
+      - desktop/src/components/layout/CdfDashboard.tsx
+      - desktop/src/components/layout/CdfFlowDetails.tsx
+      - desktop/src/components/layout/CdfGuideline.tsx
+      - desktop/src/components/layout/CdfHealth.tsx
+      - desktop/src/components/layout/CdfUnitFeed.tsx
+      - desktop/src/components/layout/CognitionLevel.tsx
+      - desktop/src/components/layout/CognitiveDistillationFlow.tsx
+      - desktop/src/components/layout/HistoryOverlay.tsx
+      - desktop/src/components/layout/InboxOverlay.tsx
+      - desktop/src/components/layout/LibraryHealth.tsx
+      - desktop/src/components/layout/LibraryOverlay.tsx
+      - desktop/src/components/layout/LibraryTree.tsx
+      - desktop/src/components/layout/NeedYouOverlay.tsx
+      - desktop/src/components/layout/NeedsYouRow.tsx
+      - desktop/src/components/layout/NewBrainOverlay.tsx
+      - desktop/src/components/layout/PollinateOverlay.tsx
+      - desktop/src/components/layout/UsageOverlay.tsx
+      - desktop/src/components/layout/cdfText.ts
+      - desktop/src/components/layout/cognitionLevelText.ts
+      - desktop/src/components/settings/
+      - desktop/src/pages/SettingsPage.tsx
+      - desktop/src/pages/eval/
     spec: specs/no-account-banner-6atk.spec.ts
   - id: api-health-q56c
     title: The backend answers health checks
     target: app
+    owns:
+      - backend/core/carriers/
+      - backend/core/expert_bench/
+      - backend/core/feature_map/
+      - backend/core/hive_agentcore.py
+      - backend/core/hive_boot.py
+      - backend/core/hive_bundle.py
+      - backend/core/hive_diagnostics.py
+      - backend/core/hive_files.py
+      - backend/core/hive_idle.py
+      - backend/core/hive_lessons.py
+      - backend/core/hive_records.py
+      - backend/core/hive_repo_inbox.py
+      - backend/core/hive_return.py
+      - backend/core/hive_workspace.py
+      - backend/core/inbox/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/core/swarm_out.py
+      - backend/core/swarm_out_actor.py
+      - backend/core/swarm_out_bridge.py
+      - backend/core/swarm_out_card.py
+      - backend/core/swarm_out_decisions.py
+      - backend/core/swarm_out_follow.py
+      - backend/core/swarm_out_live.py
+      - backend/core/swarm_out_model.py
+      - backend/core/swarm_out_ops.py
+      - backend/core/swarm_out_record.py
+      - backend/core/swarm_out_relay.py
+      - backend/core/swarm_out_remote.py
+      - backend/core/swarm_out_results.py
+      - backend/core/swarm_out_settle.py
+      - backend/core/swarm_out_wait_card.py
+      - backend/core/swarm_out_wake.py
+      - backend/core/swarm_run.py
+      - backend/core/swarm_run_card.py
+      - backend/core/swarm_run_conductor.py
+      - backend/hive/
+      - backend/jobs/handlers/
+      - backend/routers/attention.py
+      - backend/routers/aws_account.py
+      - backend/routers/code_intel.py
+      - backend/routers/cognition_health.py
+      - backend/routers/dev.py
+      - backend/routers/escalations.py
+      - backend/routers/eval.py
+      - backend/routers/hive.py
+      - backend/routers/hive_brains.py
+      - backend/routers/inbox.py
+      - backend/routers/ingestion.py
+      - backend/routers/ingestion_redact.py
+      - backend/routers/ingestion_wake.py
+      - backend/routers/library_api.py
+      - backend/routers/pollinate.py
+      - backend/routers/recall_metrics_api.py
+      - backend/routers/swarm_out.py
+      - backend/routers/swarm_out_remote.py
+      - backend/routers/usage.py
+      - backend/scripts/
+      - backend/skills/
+      - backend/templates/eval/
     run: [curl, -sf, "http://127.0.0.1:{port.api}/health"]
   - id: chat-send-stream-h4kw
     title: Send a message and watch the reply stream in
     reach: Type a message in a new chat tab and press Enter
     expect: The reply appears in full, the input is free again, and the reply is still there after a reload
     target: app
+    owns:
+      - backend/context/
+      - backend/core/feature_map/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/skills/
     spec: specs/chat-send-stream-h4kw.spec.ts
   - id: chat-tool-card-m2rp
     title: A tool call shows as a step with its command, then the answer that uses it
     reach: Ask for something the agent runs a command for
     expect: A Worked group with 1 step; opened, it shows Bash and the command; the answer quotes the output
     target: app
+    owns:
+      - backend/context/
+      - backend/core/feature_map/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/skills/
     spec: specs/chat-tool-card-m2rp.spec.ts
   - id: chat-tabs-apart-x7tn
     title: Two tabs stream at the same time and keep their own replies
     reach: Send in one tab, open a new tab while it streams, send there too
     expect: The second tab finishes while the first still streams; each tab shows only its own reply
     target: app
+    owns:
+      - backend/context/
+      - backend/core/feature_map/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/skills/
     spec: specs/chat-tabs-apart-x7tn.spec.ts
   - id: chat-stop-p9ds
     title: Stop a reply while it streams
     reach: Press Stop while the reply streams
     expect: Streaming ends at once, the turn says Stopped by you, nothing more is added to it, and the next message gets its answer
     target: app
+    owns:
+      - backend/context/
+      - backend/core/feature_map/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/skills/
     spec: specs/chat-stop-p9ds.spec.ts
   - id: chat-model-error-b3qz
     title: A request the model refuses shows one error and the chat goes on
     reach: Send a message the model refuses
     expect: The error is shown once with how to go on; no spinner stays; the next message gets its answer; after a reload the same error card is shown, once, with how to go on
     target: app
+    owns:
+      - backend/context/
+      - backend/core/feature_map/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/skills/
     spec: specs/chat-model-error-b3qz.spec.ts
   - id: chat-thinking-t5wq
     title: A reply that thinks first shows its thought and the chat goes on
     reach: Send a message the model thinks about before it answers
     expect: The thought is shown with the answer; the next message, which sends the thought back, gets its answer
     target: app
+    owns:
+      - backend/context/
+      - backend/core/feature_map/
+      - backend/core/ingestion/
+      - backend/core/run_protocol/
+      - backend/skills/
     spec: specs/chat-thinking-t5wq.spec.ts
