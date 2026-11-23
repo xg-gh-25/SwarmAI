@@ -433,6 +433,79 @@ class TestProvisionerSG:
             base.assert_awaited_once()  # SSM base lookup used
             assert mock_ec2.run_instances.call_args[1]["ImageId"] == "ami-base"
 
+    @pytest.mark.asyncio
+    async def test_launch_ec2_uses_the_bpa_subnet(self):
+        """Under VPC Block Public Access the instance goes into the subnet
+        hive/bpa_subnet.ensure_hive_subnet returns, resolved under the region lock and
+        before run_instances; with None (no BPA) no SubnetId is passed."""
+        from hive import bpa_subnet
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        mock_ec2.run_instances.return_value = {"Instances": [{"InstanceId": "i-new"}]}
+        seen = []
+
+        def ensure(ec2, region, instance_type):
+            assert bpa_subnet.region_lock(region).locked()
+            assert not mock_ec2.run_instances.called
+            seen.append((region, instance_type))
+            return subnet
+
+        for subnet in ("subnet-hive", None):
+            mock_ec2.run_instances.reset_mock()
+            with patch.object(bpa_subnet, "ensure_hive_subnet", side_effect=ensure):
+                await p._launch_ec2(mock_session, "test", "arn:profile", "sg-1", "#!/bin/bash",
+                                    "m7g.xlarge", "us-east-1", "2.0.1", custom_ami_id="ami-12345678")
+            kw = mock_ec2.run_instances.call_args[1]
+            if subnet:
+                # the interface asks for the public IP; the subnet gives none by itself
+                assert kw["NetworkInterfaces"] == [{"DeviceIndex": 0, "SubnetId": subnet,
+                                                    "Groups": ["sg-1"],
+                                                    "AssociatePublicIpAddress": True}]
+                assert "SecurityGroupIds" not in kw and "SubnetId" not in kw
+            else:
+                assert kw["SecurityGroupIds"] == ["sg-1"] and "NetworkInterfaces" not in kw
+        assert seen == [("us-east-1", "m7g.xlarge")] * 2
+        assert not bpa_subnet.region_lock("us-east-1").locked()
+
+    @pytest.mark.asyncio
+    async def test_launch_ec2_stops_before_run_instances_on_bpa_error(self):
+        from hive import bpa_subnet
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        with patch.object(bpa_subnet, "ensure_hive_subnet",
+                          side_effect=bpa_subnet.BpaError("blocked")):
+            with pytest.raises(bpa_subnet.BpaError):
+                await p._launch_ec2(mock_session, "test", "arn:profile", "sg-1", "#!/bin/bash",
+                                    "m7g.xlarge", "us-east-1", "2.0.1", custom_ami_id="ami-12345678")
+        mock_ec2.run_instances.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_releases_unused_hive_subnets(self):
+        """A Hive's cleanup (and a failed deploy's, which may have created the subnet
+        without an instance) releases unused Hive subnets after the security group."""
+        from hive import bpa_subnet
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        for resources in ({"ec2_instance": "i-1", "security_group": "sg-1"}, {"iam_role": "r"}):
+            with patch.object(bpa_subnet, "release_unused_hive_subnets",
+                              side_effect=lambda ec2, region: mock_ec2.release(region)) as rel:
+                await p._cleanup_resources(mock_session, "us-east-1", resources)
+            rel.assert_called_once_with(mock_ec2, "us-east-1")
+        names = [c[0] for c in mock_ec2.method_calls]
+        assert names.index("delete_security_group") < names.index("release")
+
 
 class TestProvisionerHealthCheck:
     """Tests for health polling via EC2 tags."""
@@ -1614,6 +1687,22 @@ class TestDeployFailureCleanup:
              patch("hive.user_data.render_user_data", return_value="#!/bin/bash\necho ok"):
             await p.deploy("inst-deploy")
         p._cleanup_resources.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deploy_stops_before_anything_when_bpa_forbids_exclusions(self):
+        """VPC Block Public Access blocking with exclusions not allowed: the deploy ends
+        in error before S3, IAM or anything else is created."""
+        from hive import bpa_subnet
+        p, mock_conn = self._make_deploy_provisioner()
+        state = {"mode": "block-ingress", "blocking": True, "exclusions_allowed": False}
+        with patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
+             patch.object(bpa_subnet, "bpa_state", return_value=state):
+            await p.deploy("inst-deploy")
+        p._ensure_s3_bucket.assert_not_called()
+        p._create_iam_role.assert_not_called()
+        p._launch_ec2.assert_not_called()
+        msgs = [c.kwargs.get("error_message") or "" for c in p._update_instance.call_args_list]
+        assert any("does not allow exclusions" in m for m in msgs)
 
     @pytest.mark.asyncio
     async def test_deploy_fail_at_iam_cleans_nothing(self):

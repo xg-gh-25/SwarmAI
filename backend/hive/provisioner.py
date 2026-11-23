@@ -1,7 +1,9 @@
 """Hive AWS resource provisioner.
 
 Creates, manages, and cleans up all AWS resources for a Hive instance:
-IAM Role, Instance Profile, Security Group, EC2, Elastic IP, CloudFront.
+IAM Role, Instance Profile, Security Group, EC2, Elastic IP, CloudFront, and, in a region
+where VPC Block Public Access is on, the SwarmAI Hive subnet and its exclusion
+(hive/bpa_subnet.py).
 
 All boto3 calls are sync — wrapped in asyncio.to_thread() for async compat.
 Each step updates the local SQLite DB so status is visible in the UI.
@@ -33,6 +35,7 @@ from typing import Any, Optional
 import aiosqlite
 import httpx
 
+from hive import bpa_subnet
 from hive import bucket_name as _bucket_name
 
 logger = logging.getLogger(__name__)
@@ -984,55 +987,71 @@ class HiveProvisioner:
 
         def _launch():
             ec2 = session.client("ec2", region_name=region)
-            resp = ec2.run_instances(
-                ImageId=ami_id,
-                InstanceType=instance_type,
-                MinCount=1,
-                MaxCount=1,
-                IamInstanceProfile={"Arn": instance_profile_arn},
-                SecurityGroupIds=[sg_id],
-                UserData=user_data,
-                BlockDeviceMappings=[
-                    {
-                        "DeviceName": "/dev/xvda",
-                        "Ebs": {
-                            "VolumeSize": 50,
-                            "VolumeType": "gp3",
-                            "DeleteOnTermination": True,
-                        },
-                    }
-                ],
-                TagSpecifications=[
-                    {
-                        "ResourceType": "instance",
-                        "Tags": [
-                            {"Key": "Name", "Value": f"SwarmAI-Hive-{name}"},
-                            {"Key": "HiveName", "Value": name},
-                            {"Key": "HiveStatus", "Value": "provisioning"},
-                            {"Key": "HiveVersion", "Value": version},
-                            MANAGED_TAG,
-                        ],
-                    },
-                    {"ResourceType": "volume", "Tags": [{"Key": "HiveName", "Value": name},
-                                                        MANAGED_TAG]},
-                    # the template allows RunInstances only when every created resource
-                    # is tagged (core/aws_permissions RunTaggedInstances)
-                    {"ResourceType": "network-interface", "Tags": [{"Key": "HiveName", "Value": name},
-                                                                   MANAGED_TAG]},
-                ],
-                MetadataOptions={
-                    "HttpTokens": "required",  # IMDSv2 only
-                    "HttpEndpoint": "enabled",
-                },
-            )
+            # Under VPC Block Public Access the Hive goes into the SwarmAI Hive subnet, the
+            # only one excluded (hive/bpa_subnet.py); without BPA, the default subnet as
+            # before. The lock keeps a cleanup from deleting that subnet before the launch.
+            with bpa_subnet.region_lock(region):
+                subnet_id = bpa_subnet.ensure_hive_subnet(ec2, region, instance_type)
+                placement = bpa_subnet.launch_placement(subnet_id, sg_id)
+                resp = self._run_instances(ec2, ami_id, instance_type, instance_profile_arn,
+                                           user_data, name, version, placement)
             instance_id = resp["Instances"][0]["InstanceId"]
-            logger.info("Launched EC2: %s (type=%s, ami=%s)", instance_id, instance_type, ami_id)
+            logger.info("Launched EC2: %s (type=%s, ami=%s, subnet=%s)", instance_id,
+                        instance_type, ami_id, subnet_id or "default")
 
             # Wait until running
             ec2.get_waiter("instance_running").wait(InstanceIds=[instance_id])
             return instance_id
 
         return await asyncio.to_thread(_launch)
+
+    @staticmethod
+    def _run_instances(ec2, ami_id: str, instance_type: str, instance_profile_arn: str,
+                       user_data: str, name: str, version: str, placement: dict) -> dict:
+        """One run_instances call: the Hive's image, profile, disk and tags, placed by
+        *placement* (bpa_subnet.launch_placement: its security group, and under VPC Block
+        Public Access its network interface in the Hive subnet)."""
+        return ec2.run_instances(
+            **placement,
+            ImageId=ami_id,
+            InstanceType=instance_type,
+            MinCount=1,
+            MaxCount=1,
+            IamInstanceProfile={"Arn": instance_profile_arn},
+            UserData=user_data,
+            BlockDeviceMappings=[
+                {
+                    "DeviceName": "/dev/xvda",
+                    "Ebs": {
+                        "VolumeSize": 50,
+                        "VolumeType": "gp3",
+                        "DeleteOnTermination": True,
+                    },
+                }
+            ],
+            TagSpecifications=[
+                {
+                    "ResourceType": "instance",
+                    "Tags": [
+                        {"Key": "Name", "Value": f"SwarmAI-Hive-{name}"},
+                        {"Key": "HiveName", "Value": name},
+                        {"Key": "HiveStatus", "Value": "provisioning"},
+                        {"Key": "HiveVersion", "Value": version},
+                        MANAGED_TAG,
+                    ],
+                },
+                {"ResourceType": "volume", "Tags": [{"Key": "HiveName", "Value": name},
+                                                    MANAGED_TAG]},
+                # the template allows RunInstances only when every created resource
+                # is tagged (core/aws_permissions RunTaggedInstances)
+                {"ResourceType": "network-interface", "Tags": [{"Key": "HiveName", "Value": name},
+                                                               MANAGED_TAG]},
+            ],
+            MetadataOptions={
+                "HttpTokens": "required",  # IMDSv2 only
+                "HttpEndpoint": "enabled",
+            },
+        )
 
     # ── Elastic IP ─────────────────────────────────────────────────
 
@@ -1310,6 +1329,14 @@ class HiveProvisioner:
 
             session = await self._session(account, region, "manage")
             aws_account_id = account.get("account_id", "")
+
+            # Step 0: a region whose VPC Block Public Access forbids exclusions can never
+            # be reached through CloudFront: stop before anything is created
+            # (the subnet itself is prepared at the launch, hive/bpa_subnet.py)
+            bpa = await asyncio.to_thread(
+                bpa_subnet.bpa_state, session.client("ec2", region_name=region))
+            if bpa and bpa["blocking"] and not bpa["exclusions_allowed"]:
+                raise bpa_subnet.BpaError(bpa_subnet.blocked_message(region))
 
             # Step 1: S3
             bucket = await self._ensure_s3_bucket(session, region, aws_account_id)
@@ -2561,6 +2588,12 @@ fi
                     logger.info("Deleted SG: %s", sg_id)
                 except Exception as e:
                     logger.warning("Failed to delete SG %s: %s", sg_id, e)
+
+            # 4b. The Hive subnet and its BPA exclusion, once no Hive uses them
+            # (hive/bpa_subnet.py; never raises)
+            # (also after a deploy that failed before EC2: its subnet may already exist)
+            with bpa_subnet.region_lock(region):
+                bpa_subnet.release_unused_hive_subnets(ec2, region)
 
             # 5. Delete IAM (instance profile first, then role)
             profile_name = resources.get("instance_profile")

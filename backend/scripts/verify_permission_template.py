@@ -30,7 +30,34 @@ def cases(acct: str) -> list:
     boundary = f"arn:aws:iam::{acct}:policy/{ap.BOUNDARY_NAME}"
     instance = f"arn:aws:ec2:us-east-1:{acct}:instance/i-0123456789abcdef0"
     managed_rt = {f"ec2:ResourceTag/{ap.MANAGED_TAG}": "true"}
+    subnet = f"arn:aws:ec2:us-east-1:{acct}:subnet/subnet-0123456789abcdef0"
+    vpc = f"arn:aws:ec2:us-east-1:{acct}:vpc/vpc-0123456789abcdef0"
+    exclusion = f"arn:aws:ec2:us-east-1:{acct}:vpc-block-public-access-exclusion/vpcbpa-exclude-0123"
     return [
+        # the Hive subnet under VPC Block Public Access (hive/bpa_subnet.py)
+        ("create a tagged Hive subnet", "policy", "ec2:CreateSubnet", subnet,
+         {f"aws:RequestTag/{ap.MANAGED_TAG}": "true"}, True),
+        ("tag while creating a subnet", "policy", "ec2:CreateTags", subnet,
+         {"ec2:CreateAction": "CreateSubnet"}, True),
+        ("exclude a SwarmAI subnet from BPA", "policy", "ec2:CreateVpcBlockPublicAccessExclusion",
+         subnet, managed_rt, True),
+        ("create a tagged BPA exclusion", "policy", "ec2:CreateVpcBlockPublicAccessExclusion",
+         exclusion, {f"aws:RequestTag/{ap.MANAGED_TAG}": "true"}, True),
+        ("delete a SwarmAI BPA exclusion", "policy", "ec2:DeleteVpcBlockPublicAccessExclusion",
+         exclusion, managed_rt, True),
+        ("delete a SwarmAI subnet", "policy", "ec2:DeleteSubnet", subnet, managed_rt, True),
+        ("create an untagged subnet", "policy", "ec2:CreateSubnet", subnet, {}, False),
+        ("exclude a subnet that is not SwarmAI's", "policy",
+         "ec2:CreateVpcBlockPublicAccessExclusion", subnet, {}, False),
+        ("exclude a whole VPC from BPA", "policy", "ec2:CreateVpcBlockPublicAccessExclusion",
+         vpc, {}, False),
+        ("delete a subnet that is not SwarmAI's", "policy", "ec2:DeleteSubnet", subnet, {}, False),
+        ("change a subnet's attributes", "policy", "ec2:ModifySubnetAttribute", subnet,
+         managed_rt, False),
+        # accepted (template notes): IAM cannot name the default VPC
+        ("create a tagged subnet in a non-default VPC", "policy", "ec2:CreateSubnet",
+         f"arn:aws:ec2:us-east-1:{acct}:vpc/vpc-0fedcba9876543210", {}, True),
+        ("turn BPA off", "policy", "ec2:ModifyVpcBlockPublicAccessOptions", "*", {}, False),
         # what SwarmAI does
         ("create a Hive role with the boundary", "policy", "iam:CreateRole", role,
          {"iam:PermissionsBoundary": boundary}, True),

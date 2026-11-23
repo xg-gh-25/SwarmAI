@@ -22,12 +22,15 @@ import pytest
 from core import aws_permissions as ap
 
 PROVISIONER = Path(__file__).resolve().parents[1] / "hive" / "provisioner.py"
+#: every module whose AWS calls a Hive deploy makes with the SwarmAI identity
+DEPLOY_MODULES = (PROVISIONER, PROVISIONER.with_name("bpa_subnet.py"))
 _SERVICE = {"cf": "cloudfront"}
 
 
 def test_every_provisioner_call_is_in_the_action_list():
-    src = PROVISIONER.read_text()
+    src = "\n".join(m.read_text() for m in DEPLOY_MODULES)
     calls = set(re.findall(r"\b(ec2|iam|s3|ssm|cf)\.([a-z_]+)\(", src)) - {("ec2", "get_waiter")}
+    assert ("ec2", "create_vpc_block_public_access_exclusion") in calls
     assert calls, "found no AWS calls: the pattern no longer matches the provisioner"
     missing = sorted(ap.action_for_method(_SERVICE.get(svc, svc), m) for svc, m in calls
                      if ap.action_for_method(_SERVICE.get(svc, svc), m) not in ap.all_actions())
@@ -95,6 +98,9 @@ class FakeSess:
         outer = self
 
         class C:
+            def describe_vpc_block_public_access_options(self):
+                return {"VpcBlockPublicAccessOptions": {"InternetGatewayBlockMode": "off"}}
+
             def describe_vpcs(self, **kw):
                 return {"Vpcs": [{"VpcId": "vpc-1"}] if outer.vpc else []}
 
@@ -263,3 +269,87 @@ def test_a_hive_tags_only_its_own_resources_and_never_as_managed():
     assert st["Action"] == ["ec2:CreateTags"]
     assert st["Condition"]["StringEquals"] == {"ec2:ResourceTag/HiveName": "${aws:PrincipalTag/HiveName}"}
     assert st["Condition"]["ForAllValues:StringNotEqualsIgnoreCase"] == {"aws:TagKeys": [ap.MANAGED_TAG]}
+
+
+def test_subnet_and_exclusion_actions_only_on_managed_resources():
+    """The Hive subnet's actions (hive/bpa_subnet.py): a subnet is created only tagged,
+    changed or deleted only when SwarmAI's, excluded from BPA only when SwarmAI's (a VPC
+    never), and BPA itself cannot be turned off. Real IAM evaluates the same cases in
+    scripts/verify_permission_template.py."""
+    managed = {"StringEquals": {"ec2:ResourceTag/swarmai:managed": "true"}}
+    tagged = {"StringEquals": {"aws:RequestTag/swarmai:managed": "true"}}
+    create = _with("ec2:CreateSubnet")
+    assert {json.dumps(st["Resource"]): st.get("Condition") for st in create} == {
+        json.dumps(["arn:aws:ec2:*:*:subnet/*"]): tagged, json.dumps(["arn:aws:ec2:*:*:vpc/*"]): None}
+    for action in ("ec2:DeleteSubnet", "ec2:DeleteVpcBlockPublicAccessExclusion"):
+        st, = _with(action)
+        assert st["Condition"] == managed, action
+    excl = {json.dumps(st["Resource"]): st["Condition"]
+            for st in _with("ec2:CreateVpcBlockPublicAccessExclusion")}
+    assert excl == {json.dumps(["arn:aws:ec2:*:*:subnet/*"]): managed,
+                    json.dumps(["arn:aws:ec2:*:*:vpc-block-public-access-exclusion/*"]): tagged}
+    tag, = _with("ec2:CreateTags")
+    assert {"CreateSubnet", "CreateVpcBlockPublicAccessExclusion"} <= set(
+        tag["Condition"]["StringEquals"]["ec2:CreateAction"])
+    assert not _with("ec2:ModifyVpcBlockPublicAccessOptions")
+    assert not _with("ec2:ModifySubnetAttribute")
+
+
+class BpaSess(FakeSess):
+    def __init__(self, *, mode="block-ingress", allowed="allowed", **kw):
+        super().__init__(**kw)
+        self.mode, self.allowed = mode, allowed
+
+    def client(self, name, region_name=None):
+        c = super().client(name, region_name)
+        outer = self
+        c.describe_vpc_block_public_access_options = lambda: {"VpcBlockPublicAccessOptions": {
+            "InternetGatewayBlockMode": outer.mode, "ExclusionsAllowed": outer.allowed}}
+        return c
+
+
+def test_bpa_without_exclusions_cannot_build():
+    hive, storage = ap.run_hive_checks(BpaSess(allowed="not-allowed"), "us-west-2",
+                                       "123456789012", ARN)
+    assert hive["status"] == "missing" and hive["bpa_blocked"] is True
+    assert "VPC Block Public Access" in hive["detail"] and "us-west-2" in hive["detail"]
+    assert storage["status"] == "ok"
+
+
+def test_bpa_with_exclusions_checks_the_subnet_actions():
+    sess = BpaSess(denied=["ec2:CreateVpcBlockPublicAccessExclusion"])
+    hive, _ = ap.run_hive_checks(sess, "us-east-1", "123456789012", ARN)
+    assert hive["status"] == "missing"
+    assert hive["missing"] == ["ec2:CreateVpcBlockPublicAccessExclusion"]
+    # each create on each resource type it acts on (subnet, vpc, exclusion), and its tags
+    pairs = {(a, s["ResourceArns"][0].split(":")[-1].split("/")[0])
+             for s in sess.simulated for a in s["ActionNames"] if a.startswith("ec2:")}
+    assert {("ec2:CreateSubnet", "subnet"), ("ec2:CreateSubnet", "vpc"),
+            ("ec2:CreateVpcBlockPublicAccessExclusion", "subnet"),
+            ("ec2:CreateVpcBlockPublicAccessExclusion", "vpc-block-public-access-exclusion"),
+            ("ec2:CreateTags", "subnet"),
+            ("ec2:CreateTags", "vpc-block-public-access-exclusion")} <= pairs
+    # BPA off: no subnet action is simulated, the verdict is unchanged
+    sess = BpaSess(mode="off")
+    hive, _ = ap.run_hive_checks(sess, "us-east-1", "123456789012", ARN)
+    assert hive["status"] == "ok"
+    assert "ec2:CreateSubnet" not in [a for s in sess.simulated for a in s["ActionNames"]]
+
+
+def test_bpa_that_cannot_be_read_is_never_ok():
+    """An identity on the older template cannot read BPA: the verdict says it could not
+    confirm (it may be on), never "ok" and never "missing" (without BPA it builds)."""
+    sess = FakeSess()
+    real = sess.client
+
+    def client(name, region_name=None):
+        c = real(name, region_name)
+
+        def refused():
+            raise _Err("UnauthorizedOperation")
+        c.describe_vpc_block_public_access_options = refused
+        return c
+    sess.client = client
+    hive, _ = ap.run_hive_checks(sess, "us-east-1", "123456789012", ARN)
+    assert hive["status"] == "unknown"
+    assert "ec2:DescribeVpcBlockPublicAccessOptions (UnauthorizedOperation)" in hive["detail"]

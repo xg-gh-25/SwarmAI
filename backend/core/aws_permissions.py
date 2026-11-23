@@ -14,7 +14,8 @@ The same list makes:
   ``CreateSecurityGroup`` with ``DryRun=True`` (nothing is created), the IAM, S3 and
   CloudFront create actions through ``iam:SimulatePrincipalPolicy`` (a simulation that is
   itself refused reads "could not confirm", never "ok"), and the default VPC of the
-  region.
+  region, and VPC Block Public Access: blocking without exclusions allowed cannot build;
+  blocking with exclusions allowed also simulates the Hive subnet's create actions.
 
 A test pins that every API the provisioner calls is in the list.
 """
@@ -52,7 +53,14 @@ ACTIONS: dict[str, list[str]] = {
                  "ec2:TerminateInstances", "ec2:DeleteSecurityGroup", "ec2:CreateSnapshot",
                  "ec2:DescribeInstances", "ec2:DescribeVpcs", "ec2:DescribeSecurityGroups",
                  "ec2:DescribeManagedPrefixLists", "ec2:DescribeImages", "ec2:DescribeSnapshots",
-                 "ec2:DescribeVolumes", "ec2:DescribeAddresses"],
+                 "ec2:DescribeVolumes", "ec2:DescribeAddresses",
+                 # the Hive subnet under VPC Block Public Access (hive/bpa_subnet.py)
+                 "ec2:DescribeVpcBlockPublicAccessOptions",
+                 "ec2:DescribeVpcBlockPublicAccessExclusions", "ec2:DescribeSubnets",
+                 "ec2:DescribeNetworkInterfaces", "ec2:DescribeInstanceTypeOfferings",
+                 "ec2:CreateSubnet", "ec2:DeleteSubnet",
+                 "ec2:CreateVpcBlockPublicAccessExclusion",
+                 "ec2:DeleteVpcBlockPublicAccessExclusion"],
     "hive_iam": ["iam:CreateRole", "iam:GetRole", "iam:DeleteRole", "iam:TagRole",
                  "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy",
                  "iam:DetachRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
@@ -145,13 +153,27 @@ def template(account_id: Optional[str] = None) -> dict:
          "Condition": tagged},
         {"Sid": "GroupsInVpc", "Effect": "Allow", "Action": ["ec2:CreateSecurityGroup"],
          "Resource": ["arn:aws:ec2:*:*:vpc/*"]},
+        # the Hive subnet under VPC Block Public Access (hive/bpa_subnet.py): created
+        # tagged, and only a SwarmAI subnet can be excluded (a VPC never)
+        {"Sid": "CreateTaggedHiveSubnet", "Effect": "Allow", "Action": ["ec2:CreateSubnet"],
+         "Resource": ["arn:aws:ec2:*:*:subnet/*"], "Condition": tagged},
+        {"Sid": "HiveSubnetInVpc", "Effect": "Allow", "Action": ["ec2:CreateSubnet"],
+         "Resource": ["arn:aws:ec2:*:*:vpc/*"]},
+        {"Sid": "ExcludeOnlyHiveSubnets", "Effect": "Allow",
+         "Action": ["ec2:CreateVpcBlockPublicAccessExclusion"],
+         "Resource": ["arn:aws:ec2:*:*:subnet/*"], "Condition": managed},
+        {"Sid": "CreateTaggedExclusions", "Effect": "Allow",
+         "Action": ["ec2:CreateVpcBlockPublicAccessExclusion"],
+         "Resource": ["arn:aws:ec2:*:*:vpc-block-public-access-exclusion/*"], "Condition": tagged},
         {"Sid": "TagOnlyWhileCreating", "Effect": "Allow", "Action": ["ec2:CreateTags"],
          "Resource": "*", "Condition": {"StringEquals": {"ec2:CreateAction": [
-             "RunInstances", "CreateSecurityGroup", "AllocateAddress", "CreateSnapshot"]}}},
+             "RunInstances", "CreateSecurityGroup", "AllocateAddress", "CreateSnapshot",
+             "CreateSubnet", "CreateVpcBlockPublicAccessExclusion"]}}},
         {"Sid": "ManageTaggedOnly", "Effect": "Allow", "Resource": "*", "Condition": managed,
          "Action": ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances",
                     "ec2:AuthorizeSecurityGroupIngress", "ec2:DeleteSecurityGroup",
-                    "ec2:AssociateAddress", "ec2:ReleaseAddress", "ec2:CreateSnapshot"]},
+                    "ec2:AssociateAddress", "ec2:ReleaseAddress", "ec2:CreateSnapshot",
+                    "ec2:DeleteSubnet", "ec2:DeleteVpcBlockPublicAccessExclusion"]},
         {"Sid": "SsmOnTaggedInstances", "Effect": "Allow", "Action": ["ssm:SendCommand"],
          "Resource": ["arn:aws:ec2:*:*:instance/*"],
          "Condition": {"StringEquals": {f"ssm:resourceTag/{MANAGED_TAG}": "true"}}},
@@ -195,6 +217,9 @@ def template(account_id: Optional[str] = None) -> dict:
             "created with it as its permissions boundary.",
             "CloudFront distributions cannot be scoped by resource in IAM.",
             "iam:UpdateAssumeRolePolicy is deliberately absent.",
+            "IAM cannot name the default VPC: a swarmai:managed subnet and its VPC Block Public "
+            "Access exclusion can be created in any VPC of the account (SwarmAI uses only the "
+            "default VPC's); turning BPA off or excluding a whole VPC is not allowed.",
         ],
     }
 
@@ -291,6 +316,17 @@ def run_hive_checks(sess: Any, region: str, account_id: str, caller_arn: str) ->
     except Exception as exc:  # noqa: BLE001
         (missing if _code(exc) in _DENIED else unknown).append(f"ec2:DescribeVpcs ({_code(exc)})")
     no_vpc = vpc_id is None and not missing and not unknown
+    # VPC Block Public Access (hive/bpa_subnet.py): blocking with exclusions not allowed
+    # means CloudFront can never reach a Hive here; blocking with exclusions allowed needs
+    # the Hive subnet's create actions. Unreadable or off: nothing to add.
+    from hive import bpa_subnet
+    bpa, bpa_problem = bpa_subnet.read_bpa(ec2)
+    if bpa_problem:
+        # not "ok": BPA may be on and the Hive unreachable; not "missing" either: an account
+        # without BPA builds as before (the deploy launches into the default subnet)
+        unknown.append(f"ec2:DescribeVpcBlockPublicAccessOptions ({bpa_problem})")
+    bpa_blocked = bool(bpa and bpa["blocking"] and not bpa["exclusions_allowed"])
+    bpa_subnet_needed = bool(bpa and bpa["blocking"] and bpa["exclusions_allowed"])
     tags = [{"Key": MANAGED_TAG, "Value": "true"}]
     try:
         ami = sess.client("ssm", region_name=region).get_parameter(Name=AL2023_ARM64)["Parameter"]["Value"]
@@ -333,16 +369,40 @@ def run_hive_checks(sess: Any, region: str, account_id: str, caller_arn: str) ->
     missing += denied
     if problem:
         unknown.append(f"CloudFront: {problem}")
+    if bpa_subnet_needed:
+        arn = f"arn:aws:ec2:{region}:{account_id}"
+        def ctx(key: str, value: str) -> dict:
+            return {"ContextKeyName": key, "ContextKeyValues": [value], "ContextKeyType": "string"}
+        managed_rt = ctx(f"ec2:ResourceTag/{MANAGED_TAG}", "true")
+        # each create of the Hive subnet's launch, on each resource type it acts on, with
+        # the values its call carries (hive/bpa_subnet.py)
+        for actions, res, context in (
+                (["ec2:CreateSubnet"], f"{arn}:subnet/*", _context(account_id)),
+                (["ec2:CreateSubnet"], f"{arn}:vpc/*", []),
+                (["ec2:CreateVpcBlockPublicAccessExclusion"], f"{arn}:subnet/*", [managed_rt]),
+                (["ec2:CreateVpcBlockPublicAccessExclusion"],
+                 f"{arn}:vpc-block-public-access-exclusion/*", _context(account_id)),
+                (["ec2:CreateTags"], f"{arn}:subnet/*", [ctx("ec2:CreateAction", "CreateSubnet")]),
+                (["ec2:CreateTags"], f"{arn}:vpc-block-public-access-exclusion/*",
+                 [ctx("ec2:CreateAction", "CreateVpcBlockPublicAccessExclusion")])):
+            denied, problem = _simulate(sess, principal, actions, [res], context or None)
+            missing += denied
+            if problem:
+                unknown.append(f"VPC Block Public Access subnet: {problem}")
+                break
     # the bucket a new deployment creates (hive/bucket_name.py)
     bucket = f"arn:aws:s3:::{bucket_name.canonical(account_id, region)}"
     s_denied, s_problem = _simulate(sess, principal, ["s3:CreateBucket", "s3:PutObject",
                                                       "s3:GetObject", "s3:ListBucket"],
                                     [bucket, bucket + "/*"])
-    if missing or no_vpc:
+    if missing or no_vpc or bpa_blocked:
         detail = "; ".join(([f"no default VPC in {region}"] if no_vpc else []) +
+                           ([bpa_subnet.blocked_message(region)] if bpa_blocked else []) +
                            ([f"missing {', '.join(sorted(set(missing)))}"] if missing else []))
         hive = {"status": "missing", "detail": detail, "missing": sorted(set(missing)),
                 "no_default_vpc": no_vpc}
+        if bpa_blocked:
+            hive["bpa_blocked"] = True
     elif unknown:
         hive = {"status": "unknown", "detail": "could not confirm: " + "; ".join(unknown)}
     else:
