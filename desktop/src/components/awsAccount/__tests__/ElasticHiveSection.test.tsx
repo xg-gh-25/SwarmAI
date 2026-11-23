@@ -8,6 +8,8 @@
  * 3. on: its status and size (8 vCPU / 32 GB peak, 32 GB disk) and Turn off, which asks
  *    first (naming the runs that stop) and then turns it off.
  * 4. on with an image behind this SwarmAI: Update is offered and sent.
+ * 5. on standby with none yet: no turn-on button, a preparing message, and why the last
+ *    standby round could not turn it on; turned off by the person: the button again.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -40,7 +42,8 @@ function hive(over: Partial<ElasticHive> = {}): ElasticHive {
            open_runs: 0, working: false, ...over };
 }
 function status(over: Partial<ElasticStatus> = {}): ElasticStatus {
-  return { host_version: '2.5.5', can_enable: true, reason: null, size: SIZE, hives: [], ...over };
+  return { host_version: '2.5.5', can_enable: true, reason: null, size: SIZE, hives: [],
+           standby: false, standby_last: null, ...over };
 }
 
 beforeEach(() => { for (const m of [mockStatus, mockEnable, mockUpdate, mockDisable]) m.mockReset(); });
@@ -102,5 +105,43 @@ describe('ElasticHiveSection', () => {
       hives: [hive({ status: 'failed', up_to_date: false, error_message: 'Update to 2.5.6 failed' })] }));
     render(<ElasticHiveSection />);
     expect(await screen.findByTestId('elastic-update')).toBeInTheDocument();
+  });
+
+  it('standby: preparing with no turn-on button, and the button once the person turned it off', async () => {
+    mockStatus.mockResolvedValue(status({ standby: true, standby_last: null }));
+    const first = render(<ElasticHiveSection />);
+    expect(await screen.findByTestId('elastic-preparing')).toBeInTheDocument();
+    expect(screen.queryByTestId('elastic-enable')).toBeNull();
+    first.unmount();
+    // a standby that cannot turn it on promises nothing: it says why
+    mockStatus.mockResolvedValue(status({ standby: true, standby_last: 'no image for 2.5.5' }));
+    const second = render(<ElasticHiveSection />);
+    expect((await screen.findByTestId('elastic-standby-last')).textContent).toContain('no image for 2.5.5');
+    expect(screen.queryByTestId('elastic-preparing')).toBeNull();
+    expect(screen.queryByTestId('elastic-enable')).toBeNull();
+    second.unmount();
+    mockStatus.mockResolvedValue(status({ standby: true, can_enable: false, reason: 'Add an AWS account first.' }));
+    const third = render(<ElasticHiveSection />);
+    expect(await screen.findByTestId('elastic-reason')).toBeInTheDocument();
+    expect(screen.queryByTestId('elastic-preparing')).toBeNull();
+    third.unmount();
+    mockStatus.mockResolvedValue(status({ standby: false }));
+    render(<ElasticHiveSection />);
+    expect(await screen.findByTestId('elastic-enable')).not.toBeDisabled();
+    expect(screen.queryByTestId('elastic-preparing')).toBeNull();
+  });
+
+  it('standby: keeps looking while blocked, so a reason that went away is not shown for good', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockStatus.mockResolvedValue(status({ standby: true, standby_last: 'no image for 2.5.5' }));
+      render(<ElasticHiveSection />);
+      await screen.findByTestId('elastic-standby-last');
+      const calls = mockStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(mockStatus.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

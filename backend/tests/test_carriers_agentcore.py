@@ -361,8 +361,13 @@ async def test_requests_are_signed_and_carry_the_run_credential(world):
     # the signature is the one botocore computes over the method, URL and host with the
     # empty payload (what the platform checks when no content hash header is sent)
     again = AWSRequest(method="PUT", url=str(req.url), headers={"host": req.url.host}, data=b"")
-    again.context["timestamp"] = req.headers["x-amz-date"]
-    SigV4Auth(Credentials(*CREDS), "bedrock-agentcore", "us-east-1").add_auth(again)
+    # add_auth takes its own clock, not context["timestamp"]: sign at the request's own
+    # time, or the two signatures differ whenever a second passes between them
+    from unittest import mock
+    from datetime import datetime
+    signed_at = datetime.strptime(req.headers["x-amz-date"], "%Y%m%dT%H%M%SZ")
+    with mock.patch("botocore.auth.get_current_datetime", return_value=signed_at):
+        SigV4Auth(Credentials(*CREDS), "bedrock-agentcore", "us-east-1").add_auth(again)
     assert again.headers["Authorization"] == auth
     assert req.headers["accept-encoding"] == "identity"
 

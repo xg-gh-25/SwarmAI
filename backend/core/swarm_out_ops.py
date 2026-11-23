@@ -69,6 +69,9 @@ _POC = (PERSON, OWNER, CONDUCTOR)
 _STATIC: "tuple[Op, ...]" = (
     # ── dispatch (routers/swarm_out.py) ──
     _op("hive.list", "GET", f"{_SO}/hives", _PO, "read"),
+    # one round of the elastic Hive's standby now (turn on, update, repair): never past the
+    # person's turn-off, which only their turn-on on the Hive page undoes
+    _op("hive.elastic.standby_round", "POST", f"{_SO}/elastic/standby", _PO, "off_machine"),
     _op("hive.fleet", "GET", f"{_SO}/fleet", _PO, "read"),
     _op("run.list", "GET", f"{_SO}/runs", _PO, "read"),
     _op("run.result", "GET", f"{_SO}/runs/{{dispatch_id}}/result", _PO, "read"),
@@ -162,7 +165,9 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.brain.sync", "POST", f"{_HV}/instances/{{instance_id}}/brains/{{brain}}/sync", _P,
         "off_machine"),
     # the elastic Hive (hive/agentcore_provisioner; design 2026-11-20-swarm-out-multi-carrier
-    # §6.8): the same callers as a Hive's list, create, update and delete
+    # §6.8): the same callers as a Hive's list, create, update and delete. The Host keeps it
+    # on standby by itself; an agent reads it in hive.list (core/swarm_out.hives: its row and
+    # the standby's last result), since this path is also the person's turn-on
     _op("hive.elastic.status", "GET", f"{_HV}/elastic", _P, "read"),
     _op("hive.elastic.enable", "POST", f"{_HV}/elastic", _P, "off_machine"),
     _op("hive.elastic.update", "POST", f"{_HV}/elastic/{{location_id}}/update", _PO, "change"),

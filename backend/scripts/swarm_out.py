@@ -206,6 +206,8 @@ def _parser() -> argparse.ArgumentParser:
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
     sub.add_parser("runs")
     sub.add_parser("hives")
+    sub.add_parser("elastic-standby", help="run one round of the elastic Hive's standby now "
+                   "(turn it on, update or repair it); refused when the person turned it off")
     u = sub.add_parser("update-hive", help="update a Hive to a release (default: this Host's own version)")
     u.add_argument("--hive", required=True, help="the Hive's name")
     u.add_argument("--version", help="a release version, e.g. 2.3.0 (default: the version this Host runs, "
@@ -534,6 +536,8 @@ def main(argv: list[str] | None = None) -> int:
                      timeout=DISPATCH_TIMEOUT_S)
     if args.cmd == "hives":
         return _call("GET", "/hives")
+    if args.cmd == "elastic-standby":
+        return _call("POST", "/elastic/standby")
     return _call("GET", "/runs")
 
 

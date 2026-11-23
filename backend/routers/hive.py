@@ -1028,34 +1028,13 @@ class ElasticEnable(BaseModel):
 
 
 async def _elastic_target(account_ref: Optional[str], region: Optional[str]) -> tuple[str, Optional[str], str]:
-    """(account row id, its AWS account id, region) the elastic Hive is turned on in,
-    chosen as create_instance chooses an account; HTTPException when there is none."""
-    mode = hive_accounts.swarmai_account()
-    if mode is not None:
-        if account_ref not in (None, hive_accounts.SWARMAI_ROW_ID):
-            raise HTTPException(status_code=409, detail="The elastic Hive is turned on in the SwarmAI account.")
-        await hive_accounts.ensure_swarmai_row(db.db_path)
-        account_ref = hive_accounts.SWARMAI_ROW_ID
-    elif account_ref == hive_accounts.SWARMAI_ROW_ID:
-        raise HTTPException(status_code=409, detail=(
-            "The SwarmAI account is not connected: connect it in Settings > SwarmAI account."))
-    async with _conn() as c:
-        if account_ref is None:
-            cursor = await c.execute("SELECT id FROM hive_accounts WHERE auth_method NOT IN (?, ?, ?)",
-                                     (hive_accounts.MERGED_METHOD, hive_accounts.RECORD_METHOD,
-                                      hive_accounts.SWARMAI_METHOD))
-            ids = [r["id"] for r in await cursor.fetchall()]
-            if not ids:
-                raise HTTPException(status_code=409, detail="Add an AWS account first.")
-            if len(ids) > 1:
-                raise HTTPException(status_code=422, detail="Choose the AWS account for the elastic Hive.")
-            account_ref = ids[0]
-        cursor = await c.execute("SELECT account_id, auth_method, default_region FROM hive_accounts WHERE id = ?",
-                                 (account_ref,))
-        acct = await cursor.fetchone()
-    if not acct or acct["auth_method"] in (hive_accounts.MERGED_METHOD, hive_accounts.RECORD_METHOD):
-        raise HTTPException(status_code=404, detail="Account not found")
-    return account_ref, acct["account_id"], region or (mode or {}).get("region") or acct["default_region"] or "us-east-1"
+    """(account row id, its AWS account id, region) the elastic Hive is turned on in
+    (hive/agentcore_provisioner.ElasticHive.target); HTTPException when there is none."""
+    from hive.agentcore_provisioner import ElasticTargetError
+    try:
+        return await _get_elastic().target(account_ref, region)
+    except ElasticTargetError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
 
 
 def _elastic_error(exc: Exception) -> HTTPException:
@@ -1071,6 +1050,7 @@ def _elastic_error(exc: Exception) -> HTTPException:
 async def elastic_status():
     """Whether the elastic Hive can be turned on here (and why not), and each one there is
     with its runtime's live state (hive/agentcore_provisioner.ElasticHive.status)."""
+    from hive.agentcore_provisioner import standby_on
     elastic = _get_elastic()
     try:
         _, account_id, region = await _elastic_target(None, None)
@@ -1078,8 +1058,15 @@ async def elastic_status():
         out = await elastic.status()
         if not out["hives"]:
             out.update(can_enable=False, reason=str(exc.detail))
-        return out
-    return await elastic.status((account_id, region))
+    else:
+        out = await elastic.status((account_id, region))
+    # on standby the Host turns it on by itself (ElasticHive.reconcile); False once the
+    # person turned it off here
+    from hive.agentcore_provisioner import LAST_STANDBY
+    out["standby"] = standby_on()
+    # what the standby's last round did or why it could not turn it on (None before one ran)
+    out["standby_last"] = LAST_STANDBY.get("did")
+    return out
 
 
 @router.post("/elastic", status_code=202)
@@ -1088,9 +1075,11 @@ async def elastic_enable(body: Optional[ElasticEnable] = None):
     image or it is already on, before anything is created; otherwise the row is written
     ('enabling') and the bucket, role and runtime are made in the background."""
     _require_desktop()
+    from hive.agentcore_provisioner import set_standby
     body = body or ElasticEnable()
     account_ref, _, region = await _elastic_target(body.account_ref, body.region)
     elastic = _get_elastic()
+    set_standby(True)   # the person turned it on: standby keeps it on from now
     try:
         row = await elastic.claim(account_ref, region)
     except Exception as exc:  # noqa: BLE001 — mapped, or raised again
@@ -1116,9 +1105,12 @@ async def elastic_update(location_id: str, body: Optional[HiveInstanceUpdate] = 
 @router.delete("/elastic/{location_id}", status_code=202)
 async def elastic_disable(location_id: str):
     """Turn the elastic Hive off: its runtime and its row are deleted in the background
-    (runs on it end); the bucket and the execution role stay."""
+    (runs on it end); the bucket and the execution role stay. Standby is turned off first,
+    so the Host does not turn it on again (only the person's turn-on does)."""
     _require_desktop()
+    from hive.agentcore_provisioner import set_standby
     elastic = _get_elastic()
+    set_standby(False)
     try:
         await elastic.claim_disable(location_id)
     except Exception as exc:  # noqa: BLE001 — mapped, or raised again

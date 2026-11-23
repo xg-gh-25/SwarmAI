@@ -98,6 +98,11 @@ export interface ElasticStatus {
   /** whether it can be turned on here; `reason` says why not (no image configured, ...) */
   can_enable: boolean;
   reason: string | null;
+  /** kept on standby: SwarmAI turns it on and keeps it updated by itself; false once the
+   *  person turned it off here (only their turn-on sets it again) */
+  standby: boolean;
+  /** what the standby's last round did or why it could not turn it on; null before one ran */
+  standby_last: string | null;
   size: { vcpu_base: number; memory_gib_base: number; vcpu_peak: number; memory_gib_peak: number; disk_gib: number };
   hives: ElasticHive[];
 }

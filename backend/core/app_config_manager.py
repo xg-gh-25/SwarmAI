@@ -134,8 +134,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # to it starts it again (core/hive_idle); 0 turns idle stopping off.
     "hive_idle_stop_minutes": 120,
     # The elastic Hive image repository (no tag) when it is not the released one
-    # (hive/agentcore_provisioner.RELEASED_IMAGE): a build of one's own. Empty = released.
+    # (hive/agentcore_provisioner.RELEASED_IMAGE): a build of one's own, set in config.json
+    # by hand (PUT /api/settings refuses it: routers/settings._ELASTIC_HIVE_KEYS). Empty = released.
     "hive_agentcore_image": "",
+    # The elastic Hive is kept on standby by the Host (hive/agentcore_provisioner.reconcile);
+    # False once the person turned it off on the Hive page, True again when they turn it on
+    # (only those routes write it: routers/settings._ELASTIC_HIVE_KEYS).
+    "hive_elastic_standby": True,
     "evolution": {
         "enabled": True,
         "max_retries": 3,

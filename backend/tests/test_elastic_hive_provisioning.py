@@ -175,6 +175,19 @@ class FakeEcr:
         return {"imageDetails": [{"imageDigest": DIGEST, "imageTags": [tag]}]}
 
 
+class _FakeConfig:
+    """The config the routes and the standby read and write (never the real config.json)."""
+
+    def __init__(self, store: dict):
+        self.store = store
+
+    def get(self, key, default=None):
+        return self.store.get(key, default)
+
+    def update(self, updates):
+        self.store.update(updates)
+
+
 class World:
     def __init__(self):
         self.calls: list[tuple] = []
@@ -200,8 +213,8 @@ def world(tmp_path, monkeypatch):
     db = tmp_path / "data.db"
     _make_db(db)
     with sqlite3.connect(db) as c:
-        c.execute("INSERT INTO hive_accounts (id, account_id, label, auth_method, created_at, default_region) "
-                  "VALUES ('acct1', ?, '', 'access_keys', 't', ?)", (ACCOUNT, REGION))
+        c.execute("INSERT INTO hive_accounts (id, account_id, label, auth_method, created_at, default_region, "
+                  "verified_at) VALUES ('acct1', ?, '', 'access_keys', 't', ?, 't')", (ACCOUNT, REGION))
     w.db = db
     monkeypatch.setattr(database.db, "db_path", db)
     monkeypatch.setattr(swarm_out, "_read_log", lambda: [])
@@ -215,6 +228,10 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(ep, "_public_manifest_digest",
                         lambda path, tag: None if tag in w.missing_tags else DIGEST)
     w.image = PUBLIC_IMAGE
+    from core import app_config_manager
+    w.config = {}
+    monkeypatch.setattr(app_config_manager.AppConfigManager, "instance", lambda: _FakeConfig(w.config))
+    ep._STANDBY_TRIED.clear()
 
     def session_for(acct, region, purpose):
         w.sessions.append((acct["id"], region, purpose))
@@ -648,8 +665,269 @@ def test_the_image_setting_overrides_the_released_image(monkeypatch):
     assert ep.configured_image() == "public.ecr.aws/someone/hive-dev"
 
 
-def test_the_image_setting_can_be_written_through_settings():
-    # a key outside DEFAULT_CONFIG is dropped by PUT /api/settings, and a hand edit of
-    # config.json is not read by a running daemon: the override needs the settings route
+def test_the_elastic_hive_settings_cannot_be_written_through_settings():
+    # through PUT /api/settings an agent could undo the person's turn-off or choose the
+    # image the standby deploys: only the person's Hive page routes (and config.json by
+    # hand) write them
     from routers.settings import WRITABLE_KEYS
-    assert ep.IMAGE_SETTING in WRITABLE_KEYS
+    assert ep.IMAGE_SETTING not in WRITABLE_KEYS and ep.STANDBY_SETTING not in WRITABLE_KEYS
+
+
+# ── standby (the Host keeps the elastic Hive on by itself) ─────────────────────
+
+def _aws_writes(world):
+    return len(world.control.creates) + len(world.control.updates) + len(world.control.deletes)
+
+
+def test_standby_turns_the_elastic_hive_on(world):
+    assert asyncio.run(world.elastic.reconcile()) == "enabled"
+    (row,) = _rows(world.db)
+    assert row["status"] == "ready" and row["carrier"] == "agentcore" and row["version"] == "2.5.5"
+    assert len(world.control.creates) == 1
+    # a second round finds it ready and does nothing
+    assert asyncio.run(world.elastic.reconcile()) == "ready"
+    assert len(world.control.creates) == 1 and world.control.updates == []
+
+
+def test_standby_creates_nothing_without_a_published_image(world):
+    world.missing_tags.add("2.5.5")     # a Host built from code no release published
+    assert asyncio.run(world.elastic.reconcile()) == "no image for 2.5.5"
+    assert _rows(world.db) == [] and _aws_writes(world) == 0 and world.calls == []
+
+
+def test_standby_creates_nothing_without_one_account_or_with_a_refusal(world):
+    with sqlite3.connect(world.db) as c:
+        c.execute("INSERT INTO hive_accounts (id, account_id, label, auth_method, created_at, default_region) "
+                  "VALUES ('acct2', '222222222222', '', 'access_keys', 't', ?)", (REGION,))
+    assert asyncio.run(world.elastic.reconcile()).startswith("no target: Choose the AWS account")
+    with sqlite3.connect(world.db) as c:
+        c.execute("DELETE FROM hive_accounts")
+    assert asyncio.run(world.elastic.reconcile()).startswith("no target: Add an AWS account")
+    with sqlite3.connect(world.db) as c:
+        c.execute("INSERT INTO hive_accounts (id, account_id, label, auth_method, created_at, default_region) "
+                  "VALUES ('acct1', ?, '', 'access_keys', 't', ?)", (ACCOUNT, REGION))
+    # an access-key account its verify never succeeded for is not used
+    assert asyncio.run(world.elastic.reconcile()) == "no target: the AWS account is not verified yet"
+    with sqlite3.connect(world.db) as c:
+        c.execute("UPDATE hive_accounts SET verified_at = 't'")
+    world.image = "docker.io/library/ubuntu"
+    assert asyncio.run(world.elastic.reconcile()).startswith("refused: ")
+    assert _rows(world.db) == [] and _aws_writes(world) == 0 and world.calls == []
+
+
+def test_a_person_turn_off_keeps_standby_off(world):
+    from routers import hive as hive_router
+    asyncio.run(world.elastic.reconcile())
+    (row,) = _rows(world.db)
+    seen = {}
+    real_claim = world.elastic.claim_disable
+
+    async def claim_disable(location_id):
+        seen["standby_at_claim"] = world.config.get(ep.STANDBY_SETTING)
+        return await real_claim(location_id)
+    world.elastic.claim_disable = claim_disable
+    hive_router._elastic = world.elastic
+
+    async def go():
+        await hive_router.elastic_disable(row["id"])
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if not ep._WORKING:
+                break
+    asyncio.run(go())
+    assert seen["standby_at_claim"] is False and _rows(world.db) == []
+    creates = len(world.control.creates)
+    assert asyncio.run(world.elastic.reconcile()) == "off"
+    assert _rows(world.db) == [] and len(world.control.creates) == creates
+
+
+def test_a_person_turn_on_sets_standby(world):
+    from routers import hive as hive_router
+    world.config[ep.STANDBY_SETTING] = False
+
+    async def go():
+        await hive_router.elastic_enable(None)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if not ep._WORKING:
+                break
+    asyncio.run(go())
+    assert world.config[ep.STANDBY_SETTING] is True
+    assert ep.standby_on() is True
+
+
+def test_standby_is_on_when_the_setting_is_missing(world):
+    assert ep.STANDBY_SETTING not in world.config and ep.standby_on() is True
+    from core.app_config_manager import DEFAULT_CONFIG
+    assert DEFAULT_CONFIG[ep.STANDBY_SETTING] is True
+    world.config[ep.STANDBY_SETTING] = False
+    assert ep.standby_on() is False
+
+
+def test_standby_updates_to_the_host_version(world, monkeypatch):
+    asyncio.run(world.elastic.reconcile())
+    monkeypatch.setattr(ep, "_host_version", lambda: "2.5.6")
+    assert asyncio.run(world.elastic.reconcile()) == "updated"
+    (row,) = _rows(world.db)
+    assert row["status"] == "ready" and row["version"] == "2.5.6"
+    _assert_size(world.control.updates[0], f"{PUBLIC_IMAGE}:2.5.6@{DIGEST}")
+
+
+def test_standby_leaves_an_up_to_date_hive_alone(world):
+    asyncio.run(world.elastic.reconcile())
+    calls = list(world.calls)
+    assert asyncio.run(world.elastic.reconcile()) == "ready"
+    assert world.calls == calls and len(world.control.creates) == 1 and world.control.updates == []
+
+
+def test_standby_repairs_a_failed_runtime_once(world):
+    asyncio.run(world.elastic.reconcile())
+    (row,) = _rows(world.db)
+    _force(world.db, row["id"], status="failed", error_message="the update broke")
+    assert asyncio.run(world.elastic.reconcile()) == "repaired"
+    (row,) = _rows(world.db)
+    assert row["status"] == "ready" and len(world.control.updates) == 1
+    # failed again: not tried again in this process for this version
+    _force(world.db, row["id"], status="failed", error_message="broke again")
+    assert asyncio.run(world.elastic.reconcile()) == "repair tried"
+    assert len(world.control.updates) == 1 and _rows(world.db)[0]["status"] == "failed"
+
+
+def test_standby_turns_on_again_after_a_failed_turn_on_once(world):
+    world.control.create_errors = [_err("ServiceQuotaExceededException", "too many runtimes")]
+    with pytest.raises(ClientError):
+        asyncio.run(world.elastic.reconcile())
+    (row,) = _rows(world.db)
+    assert row["status"] == "failed" and row["runtime_arn"] is None
+    assert asyncio.run(world.elastic.reconcile()) == "enabled again"
+    (new,) = _rows(world.db)
+    assert new["id"] != row["id"] and new["status"] == "ready" and len(world.control.creates) == 2
+    _force(world.db, new["id"], status="failed", runtime_arn=None)
+    assert asyncio.run(world.elastic.reconcile()) == "repair tried"
+
+
+def test_the_standby_loop_runs_at_once_and_survives_a_failure(world, monkeypatch):
+    rounds = []
+
+    async def reconcile(self):
+        rounds.append(len(rounds))
+        if len(rounds) == 1:
+            raise RuntimeError("AWS was not reachable")
+        return "ready"
+    sleeps = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+    monkeypatch.setattr(ep.ElasticHive, "reconcile", reconcile)
+    monkeypatch.setattr(ep, "_sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(ep.run_standby_loop(world.db))
+    # the first round ran before any wait, failed, and the next round still ran
+    assert rounds == [0, 1] and sleeps == [ep.STANDBY_EVERY_S, ep.STANDBY_EVERY_S]
+
+
+def test_status_reports_standby(world):
+    from routers import hive as hive_router
+    assert asyncio.run(hive_router.elastic_status())["standby"] is True
+    world.config[ep.STANDBY_SETTING] = False
+    assert asyncio.run(hive_router.elastic_status())["standby"] is False
+
+
+
+def test_the_agent_reads_the_elastic_hive_and_its_standby_in_its_hive_list(world, monkeypatch):
+    from core import swarm_out
+    monkeypatch.setattr(swarm_out, "_db_path", lambda: world.db)
+    monkeypatch.setitem(ep.LAST_STANDBY, "did", "no image for 2.5.5")
+    got = asyncio.run(swarm_out.hives())
+    assert got["hives"] == [] and got["elastic_standby"]["on"] is True
+    assert got["elastic_standby"]["did"] == "no image for 2.5.5"
+    asyncio.run(world.elastic.reconcile())
+    (h,) = asyncio.run(swarm_out.hives())["hives"]
+    assert h["carrier"] == "agentcore" and h["status"] == "ready" and h["name"] == "elastic"
+
+
+
+def test_standby_keeps_every_elastic_hive_whatever_the_account_count(world, monkeypatch):
+    # a second AWS account makes the turn-on target ambiguous; the Hive already on in the
+    # first one is still updated, and no second one is turned on
+    asyncio.run(world.elastic.reconcile())
+    with sqlite3.connect(world.db) as c:
+        c.execute("INSERT INTO hive_accounts (id, account_id, label, auth_method, created_at, default_region) "
+                  "VALUES ('acct2', '222222222222', '', 'access_keys', 't', ?)", (REGION,))
+    monkeypatch.setattr(ep, "_host_version", lambda: "2.5.6")
+    assert asyncio.run(world.elastic.reconcile()) == "updated"
+    (row,) = _rows(world.db)
+    assert row["version"] == "2.5.6" and len(world.control.creates) == 1
+
+
+def test_a_turn_off_during_a_round_stops_the_round(world):
+    # the round removes a failed row with no runtime, and the person turns it off meanwhile:
+    # it must not turn a new one on
+    world.control.create_errors = [_err("ServiceQuotaExceededException", "too many runtimes")]
+    with pytest.raises(ClientError):
+        asyncio.run(world.elastic.reconcile())
+    real_disable = world.elastic.disable
+
+    async def disable(location_id):
+        world.config[ep.STANDBY_SETTING] = False      # the person's click, mid-round
+        await real_disable(location_id)
+    world.elastic.disable = disable
+    assert asyncio.run(world.elastic.reconcile()) == "off"
+    assert _rows(world.db) == [] and len(world.control.creates) == 1
+
+
+def test_an_agent_round_retries_a_repair_and_never_passes_the_turn_off(world, monkeypatch):
+    from routers import swarm_out as so_router
+    asyncio.run(world.elastic.reconcile())
+    (row,) = _rows(world.db)
+    _force(world.db, row["id"], status="failed")
+    assert asyncio.run(world.elastic.reconcile()) == "repaired"
+    _force(world.db, row["id"], status="failed")
+    assert asyncio.run(world.elastic.reconcile()) == "repair tried"
+    # the agent's round tries once more
+    assert asyncio.run(ep.run_standby_round(world.db)) == "repaired"
+    assert ep.LAST_STANDBY["did"] == "repaired" and len(world.control.updates) == 2
+    # and is refused once the person turned it off
+    world.config[ep.STANDBY_SETTING] = False
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(so_router.elastic_standby_round())
+    assert e.value.status_code == 409
+    assert asyncio.run(ep.run_standby_round(world.db)) == "off"
+
+
+
+def test_a_turn_off_while_the_image_is_checked_stops_the_turn_on_and_the_update(world, monkeypatch):
+    # the round waits on the registry before it changes anything; the person's click then
+    # wins, both for turning one on and for updating one
+    real = ep._image_published
+
+    def published_then_off(*a):
+        world.config[ep.STANDBY_SETTING] = False
+        return real(*a)
+    monkeypatch.setattr(ep, "_image_published", published_then_off)
+    assert asyncio.run(world.elastic.reconcile()) == "off"
+    assert _rows(world.db) == [] and world.control.creates == []
+    monkeypatch.setattr(ep, "_image_published", real)
+    world.config[ep.STANDBY_SETTING] = True
+    asyncio.run(world.elastic.reconcile())
+    monkeypatch.setattr(ep, "_host_version", lambda: "2.5.6")
+    monkeypatch.setattr(ep, "_image_published", published_then_off)
+    assert asyncio.run(world.elastic.reconcile()) == "off"
+    assert world.control.updates == [] and _rows(world.db)[0]["version"] == "2.5.5"
+
+
+
+def test_standby_turns_it_on_in_the_swarmai_account(world, monkeypatch):
+    # the main product mode: the SwarmAI account's row is never marked verified (core/
+    # aws_account verifies that account), and the standby must still turn the Hive on
+    from hive import accounts as hive_accounts
+    monkeypatch.setattr(hive_accounts, "swarmai_account", lambda: {"account_id": ACCOUNT, "region": REGION})
+    assert asyncio.run(world.elastic.reconcile()) == "enabled"
+    (row,) = _rows(world.db)
+    assert row["account_ref"] == hive_accounts.SWARMAI_ROW_ID and row["status"] == "ready"
+    with sqlite3.connect(world.db) as c:
+        assert c.execute("SELECT verified_at FROM hive_accounts WHERE id = ?",
+                         (hive_accounts.SWARMAI_ROW_ID,)).fetchone()[0] is None

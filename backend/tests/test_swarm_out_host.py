@@ -362,19 +362,24 @@ def test_hives_lists_names_and_status_without_addresses_or_credentials(monkeypat
     db = tmp_path / "d.db"
     with sqlite3.connect(db) as c:
         c.execute("CREATE TABLE hive_instances (id, name, status, region, cloudfront_domain,"
-                  " auth_user, auth_password, account_ref, s3_bucket)")
-        c.execute("INSERT INTO hive_instances VALUES (?,?,?,?,?,?,?,?,?)",
+                  " auth_user, auth_password, account_ref, s3_bucket, carrier)")
+        c.execute("INSERT INTO hive_instances VALUES (?,?,?,?,?,?,?,?,?,'ec2')",
                   tuple(INST[k] for k in ("id", "name", "status", "region", "cloudfront_domain",
                                           "auth_user", "auth_password", "account_ref", "s3_bucket")))
         c.execute("INSERT INTO hive_instances VALUES ('h2','alpha','stopped','us-west-2',"
-                  "'x.cloudfront.net','u','p2','a1','b')")
+                  "'x.cloudfront.net','u','p2','a1','b',NULL)")
     monkeypatch.setattr(swarm_out, "_db_path", lambda: str(db))
+    from hive import agentcore_provisioner as elastic
+    monkeypatch.setattr(elastic, "standby_on", lambda: True)
+    monkeypatch.setattr(elastic, "LAST_STANDBY", {"at": None, "did": None})
     out = asyncio.run(swarm_out.hives())
-    # the id is the row's key, which an agent updates a Hive by (agent-owns-its-runs P4)
-    assert out == {"hives": [{"id": "h2", "name": "alpha", "status": "stopped", "region": "us-west-2"},
+    # the id is the row's key, which an agent updates a Hive by (agent-owns-its-runs P4); a
+    # row from before the carrier column was filled is an EC2 Hive
+    assert out == {"hives": [{"id": "h2", "name": "alpha", "status": "stopped", "region": "us-west-2",
+                              "carrier": "ec2"},
                              {"id": INST["id"], "name": "worker-1", "status": "running",
-                              "region": "us-east-1"}],
-                   "running": 1}
+                              "region": "us-east-1", "carrier": "ec2"}],
+                   "running": 1, "elastic_standby": {"on": True, "at": None, "did": None}}
     text = json.dumps(out)
     assert "s3cret-pass" not in text and "cloudfront" not in text
 

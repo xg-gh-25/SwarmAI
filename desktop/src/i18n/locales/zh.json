@@ -3138,6 +3138,8 @@
       "size": "峰值 {{vcpu}} vCPU / {{mem}} GB，盘 {{disk}} GB",
       "turnOn": "开启弹性 Hive",
       "turningOn": "开启中…",
+      "preparing": "待命：SwarmAI 会在几分钟内自己开启它，并随版本自动更新，你不用做任何事。",
+      "lastCheck": "上次检查：{{did}}",
       "turnOff": "关闭",
       "offNote": "关闭会删除它的 runtime；S3 桶里的结果保留。",
       "offRuns_one": "上面还有 {{count}} 个任务在运行，会被停止。",
@@ -3147,7 +3149,7 @@
       "loadFailed": "读不到弹性 Hive 的状态。",
       "status": {
         "enabling": "开启中（约 6 分钟）",
-        "ready": "已开启",
+        "ready": "待命",
         "upgrading": "更新中",
         "disabling": "关闭中",
         "failed": "出错"

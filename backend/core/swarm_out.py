@@ -381,10 +381,16 @@ async def hives() -> dict[str, Any]:
     async with aiosqlite.connect(_db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
         cur = await conn.execute(
-            "SELECT id, name, status, region FROM hive_instances ORDER BY name")
+            "SELECT id, name, status, region, carrier FROM hive_instances ORDER BY name")
         # the id is the row's key, not a secret: an agent updates a Hive by it (hive.update)
-        rows = [{"id": r[0], "name": r[1], "status": r[2], "region": r[3]} for r in await cur.fetchall()]
-    return {"hives": rows, "running": sum(1 for r in rows if r["status"] == "running")}
+        rows = [{"id": r[0], "name": r[1], "status": r[2], "region": r[3], "carrier": r[4] or "ec2"}
+                for r in await cur.fetchall()]
+    # the elastic Hive's standby (hive/agentcore_provisioner.reconcile): whether the Host
+    # keeps it on, and what its last round did or why not (e.g. no image for this version)
+    from hive import agentcore_provisioner as elastic
+    standby = {"on": elastic.standby_on(), **elastic.LAST_STANDBY}
+    return {"hives": rows, "running": sum(1 for r in rows if r["status"] == "running"),
+            "elastic_standby": standby}
 
 
 async def _hive_statuses() -> dict[str, str]:

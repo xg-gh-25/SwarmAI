@@ -41,6 +41,7 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out update-hive --hive <name> [--version <v>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out start-hive --hive <name>
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out restart-hive --hive <name>
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out elastic-standby
 ```
 
 The commands on a run are refused when they are not yours: a run another session
@@ -83,7 +84,8 @@ before asking** (step 4): a task a Hive cannot do is refused at once, not after 
 | you cannot write a checkable acceptance from what was said | ask what done looks like |
 | which Hive | do not ask: leave out `--hive` (the daemon picks the least busy running Hive whose version can take the task) unless the person named one |
 | no Hive can take it: "no running Hive has this version yet" | do not ask: `update-hive` one (it refuses a Hive that holds open runs, and waits until the Hive runs again), then dispatch |
-| no Hive is running | do not ask: `start-hive` a stopped one, wait until `hives` says `running`, then dispatch |
+| no Hive is running | do not ask: dispatch anyway. Placement takes the elastic Hive (`carrier` `agentcore`, status `ready` in `hives`) or starts a stopped Hive itself; only when it refuses, `start-hive` one, wait until `hives` says `running`, then dispatch |
+| the elastic Hive is missing or `failed` while `hives.elastic_standby.on` is true | do not ask: the Host keeps it on standby by itself (every few minutes); to have it now, or to try a failed repair once more, run `elastic-standby`, then read `hives` (`elastic_standby.did` says what the round did or why it could not, e.g. no image for this version). It is refused when the person turned the elastic Hive off (`on` false): only they turn it on again, on the Hive page |
 | a Hive needs a restart (a change that takes effect at its next boot, a Hive that misbehaves with nothing running on it) | do not ask: `restart-hive` it, with a Bash timeout of 600000 ms. The daemon stops and starts it (a few minutes) and refuses one that is not running, holds open runs of this Host, has a session streaming or does not answer its status check; say in one line that you restarted it and why. If the command ends before the Hive runs again, the daemon carries on: read `hives` |
 | how it runs (`--execution`), what comes back (`--returns`), title, brief | do not ask: step 3's tables; you write title and brief. Unsure between two: take the lighter and say why in `--why` |
 | uncommitted files (`dirty` > 0) | do not ask: the card says they were not sent |

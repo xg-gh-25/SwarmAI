@@ -85,7 +85,10 @@ _AGENT_IRREVERSIBLE = {"task.dispatch", "run.accept", "run.return_land",
                        "run.discard",
                        # the dispatching agent's own answer to a wait it answers for (design
                        # 2026-10-31-hive-approvals): the Hive takes it only for those classes
-                       "ask.answer_host", "hive.start"}
+                       "ask.answer_host", "hive.start",
+                       # a standby round of the elastic Hive (turn on, update, repair): the
+                       # Host's own standby, which never passes the person's turn-off
+                       "hive.elastic.standby_round"}
 
 
 def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
@@ -109,7 +112,8 @@ def test_only_restart_widens_the_agents_hive_rights():
     # keeping a Hive up to date (an EC2 Hive's update, the elastic Hive's image update)
     hive_agent = {op.name for op in swarm_out_ops.ops()
                   if op.name.startswith("hive.") and OWNER in op.callers and op.weight != "read"}
-    assert hive_agent == {"hive.restart", "hive.start", "hive.update", "hive.elastic.update"}, hive_agent
+    assert hive_agent == {"hive.restart", "hive.start", "hive.update", "hive.elastic.update",
+                          "hive.elastic.standby_round"}, hive_agent
     by_name = {op.name: op for op in swarm_out_ops.ops()}
     for name in ("hive.elastic.enable", "hive.elastic.disable"):          # costs money / deletes
         assert by_name[name].callers == {PERSON}, name
@@ -270,7 +274,7 @@ _CLI_ARGS = {
     "dispatch": ["--task", "x", "--brain", "B", "--acceptance", "a", "--execution", "native",
                  "--returns", "answer", "--title", "t", "--revision", "r"],
     "runs": [],
-    "hives": [],
+    "hives": [], "elastic-standby": [],
     "update-hive": ["--hive", "h1"],
     "read": ["so_0123456789ab"],
     "diagnose": ["so_0123456789ab"],
@@ -494,3 +498,22 @@ def test_a_refusal_says_how_to_write_text_that_names_a_route():
 def test_a_heredoc_the_shell_may_end_elsewhere_is_not_a_plain_write(cmd):
     from core.run_owner_gate import _only_writes_a_file
     assert not _only_writes_a_file(cmd), cmd
+
+
+def test_the_agent_may_read_the_elastic_hive_state():
+    """The Host keeps the elastic Hive on standby by itself; the dispatching agent reads it
+    in the Hive list it already reads (hive.list: core/swarm_out.hives). GET /api/hive/elastic
+    shares its path with the person's turn-on, and the gate matches paths, not methods, so
+    it stays the person's with turning on and off (no agent overrides the turn-off)."""
+    by_name = {op.name: op for op in swarm_out_ops.ops()}
+    assert OWNER in by_name["hive.list"].callers
+    for name in ("hive.elastic.status", "hive.elastic.enable", "hive.elastic.disable"):
+        assert by_name[name].callers == {PERSON}, name
+    assert _user_only_deny("curl -s http://127.0.0.1:18321/api/swarm-out/hives") is None
+    assert _user_only_deny("curl -s -X POST http://127.0.0.1:18321/api/hive/elastic") is not None
+    # the agent runs a standby round itself (turn on, update, repair), never past the turn-off
+    assert by_name["hive.elastic.standby_round"].callers == {PERSON, OWNER}
+    assert _user_only_deny("curl -s -X POST http://127.0.0.1:18321/api/swarm-out/elastic/standby") is None
+    # nor through the settings route
+    from routers.settings import WRITABLE_KEYS
+    assert "hive_elastic_standby" not in WRITABLE_KEYS

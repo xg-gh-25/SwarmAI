@@ -3138,6 +3138,8 @@
       "size": "{{vcpu}} vCPU / {{mem}} GB at peak, {{disk}} GB disk",
       "turnOn": "Turn on the elastic Hive",
       "turningOn": "Turning on…",
+      "preparing": "On standby: SwarmAI turns it on by itself within a few minutes and keeps it at its own version. You do not need to do anything.",
+      "lastCheck": "Last check: {{did}}",
       "turnOff": "Turn off",
       "offNote": "Turning it off deletes its runtime; results kept in your S3 bucket stay.",
       "offRuns_one": "{{count}} task still runs on it and will stop.",
@@ -3147,7 +3149,7 @@
       "loadFailed": "Could not read the elastic Hive.",
       "status": {
         "enabling": "turning on (about 6 minutes)",
-        "ready": "on",
+        "ready": "on standby",
         "upgrading": "updating",
         "disabling": "turning off",
         "failed": "error"

@@ -38,9 +38,15 @@ router = APIRouter()
 # routes write those (design 2026-10-31-swarmai-aws-account §5.1).
 from core.aws_account import PROTECTED_CONFIG_KEYS as _AWS_ACCOUNT_KEYS  # noqa: E402
 
+#: written only by the person's own routes: whether the elastic Hive is kept on standby
+#: (the Hive page's turn-on and turn-off) and its image (config.json by hand). Through this
+#: route an agent could undo the person's turn-off or choose the image the standby deploys.
+_ELASTIC_HIVE_KEYS = frozenset({"hive_elastic_standby", "hive_agentcore_image"})
+
+
 def writable_keys(defaults: "dict") -> "frozenset[str]":
     """The keys ``PUT /api/settings`` accepts for a given DEFAULT_CONFIG."""
-    return frozenset(defaults.keys()) - SECRET_KEYS - _AWS_ACCOUNT_KEYS
+    return frozenset(defaults.keys()) - SECRET_KEYS - _AWS_ACCOUNT_KEYS - _ELASTIC_HIVE_KEYS
 
 
 WRITABLE_KEYS: frozenset[str] = writable_keys(DEFAULT_CONFIG)

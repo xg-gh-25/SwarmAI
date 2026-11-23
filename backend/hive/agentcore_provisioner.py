@@ -118,6 +118,59 @@ class ElasticRefused(Exception):
     """The elastic Hive cannot be turned on, updated or off now; nothing was changed."""
 
 
+class ElasticTargetError(Exception):
+    """No account the elastic Hive can be turned on in (``status`` is the HTTP status the
+    routes answer with, the message is safe to show)."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+
+
+#: the config key: False once the person turned the elastic Hive off (the Hive page), so
+#: the Host's standby never turns it on again; True (or missing) keeps it on standby
+STANDBY_SETTING = "hive_elastic_standby"
+#: how often the Host looks at the standby elastic Hive (run_standby_loop)
+STANDBY_EVERY_S = 300
+#: ("repair:<account row id>", Host version) tried in this process: a repair that fails
+#: again is not tried until a restart or another version (a failed update leaves the row
+#: failed, so it is repaired once too)
+_STANDBY_TRIED: set[tuple[str, str]] = set()
+#: the standby's last round in this process: when, and what it did or why not (shown to
+#: the agent in core/swarm_out.hives)
+LAST_STANDBY: dict[str, Optional[str]] = {"at": None, "did": None}
+#: one standby round at a time (the loop's and an agent's: run_standby_round)
+_ROUND_LOCK = asyncio.Lock()
+
+
+def standby_on() -> bool:
+    """Whether the elastic Hive is kept on standby: True unless the setting is False (the
+    person turned it off). An unreadable config counts as off: nothing is created."""
+    try:
+        from core.app_config_manager import AppConfigManager
+        return AppConfigManager.instance().get(STANDBY_SETTING, True) is not False
+    except Exception as exc:  # noqa: BLE001 — unreadable: create nothing
+        logger.warning("elastic hive: reading %s failed (%s)", STANDBY_SETTING, type(exc).__name__)
+        return False
+
+
+def set_standby(on: bool) -> None:
+    """Record the person's turn-on (True) or turn-off (False) for the standby."""
+    from core.app_config_manager import AppConfigManager
+    AppConfigManager.instance().update({STANDBY_SETTING: bool(on)})
+
+
+def _image_published(account: str, region: str, version: str) -> bool:
+    """Whether the image of *version* can be pulled: a public repository's tag resolves to
+    a digest; a private one is left to the provision's own pin. Raises ElasticRefused
+    for an image this account cannot use."""
+    uri, repo = image_location(configured_image(), account, region, version)
+    if repo is not None:
+        return True
+    path = uri[len(PUBLIC_REGISTRY) + 1:].rsplit(":", 1)[0]
+    return _public_manifest_digest(path, version) is not None
+
+
 def _sleep(seconds: float):
     return asyncio.sleep(seconds)
 
@@ -718,6 +771,134 @@ class ElasticHive:
         await self.claim_disable(location_id)
         await self.run_disable(location_id)
 
+    # ── standby ──
+
+    async def target(self, account_ref: Optional[str], region: Optional[str]) -> tuple[str, Optional[str], str]:
+        """(account row id, its AWS account id, region) the elastic Hive is turned on in,
+        chosen as create_instance chooses an account; ElasticTargetError when there is none."""
+        from hive import accounts as hive_accounts
+        mode = hive_accounts.swarmai_account()
+        if mode is not None:
+            if account_ref not in (None, hive_accounts.SWARMAI_ROW_ID):
+                raise ElasticTargetError(409, "The elastic Hive is turned on in the SwarmAI account.")
+            await hive_accounts.ensure_swarmai_row(self.db_path)
+            account_ref = hive_accounts.SWARMAI_ROW_ID
+        elif account_ref == hive_accounts.SWARMAI_ROW_ID:
+            raise ElasticTargetError(409, "The SwarmAI account is not connected: connect it in Settings > SwarmAI account.")
+        conn = await self._conn()
+        try:
+            if account_ref is None:
+                cur = await conn.execute("SELECT id FROM hive_accounts WHERE auth_method NOT IN (?, ?, ?)",
+                                         (hive_accounts.MERGED_METHOD, hive_accounts.RECORD_METHOD,
+                                          hive_accounts.SWARMAI_METHOD))
+                ids = [r["id"] for r in await cur.fetchall()]
+                if not ids:
+                    raise ElasticTargetError(409, "Add an AWS account first.")
+                if len(ids) > 1:
+                    raise ElasticTargetError(422, "Choose the AWS account for the elastic Hive.")
+                account_ref = ids[0]
+            cur = await conn.execute("SELECT account_id, auth_method, default_region FROM hive_accounts WHERE id = ?",
+                                     (account_ref,))
+            acct = await cur.fetchone()
+        finally:
+            await conn.close()
+        if not acct or acct["auth_method"] in (hive_accounts.MERGED_METHOD, hive_accounts.RECORD_METHOD):
+            raise ElasticTargetError(404, "Account not found")
+        return account_ref, acct["account_id"], region or (mode or {}).get("region") or acct["default_region"] or "us-east-1"
+
+    def _try_once(self, key: str, version: str) -> bool:
+        """True the first time *key* is repaired for *version* in this process."""
+        if (key, version) in _STANDBY_TRIED:
+            return False
+        _STANDBY_TRIED.add((key, version))
+        return True
+
+    async def reconcile(self, retry: bool = False) -> str:
+        """Keep the elastic Hive on standby (design 2026-11-20-swarm-out-multi-carrier
+        §6.8): update every elastic Hive there is to this Host's version and repair a
+        failed one once per process and version (*retry*: once more, an agent's round);
+        turn one on when there is none. Nothing while the person has turned it off (read
+        again before every change: a round waits minutes on AWS), while a change is in
+        progress, or while this version has no published image. One round at a time.
+        Returns what it did, for the log, the agent and the tests."""
+        async with _ROUND_LOCK:
+            return await self._round(retry)
+
+    async def _round(self, retry: bool) -> str:
+        if not standby_on():
+            return "off"
+        version = _host_version()
+        rows = []
+        for r in await self.rows():
+            if r.get("status") in TRANSIENT and r["id"] not in _WORKING:
+                r = await self._settle(r, await self._live(r))   # what a quit SwarmAI left
+                if r is None:
+                    continue
+            rows.append(r)
+        if any(r["id"] in _WORKING or r.get("status") in TRANSIENT for r in rows):
+            return "busy"
+        if not rows:
+            # one elastic Hive is the standby: only when there is none anywhere
+            try:
+                account_ref, account, region = await self.target(None, None)
+            except ElasticTargetError as exc:
+                return f"no target: {exc}"
+            # an account added with access keys counts once its credentials answered STS
+            # in a verify (routers/hive.verify_account writes verified_at then, even when a
+            # later permission check fails); the SwarmAI account is verified by
+            # core/aws_account and its row never has verified_at
+            acct = await self._account(account_ref)
+            from hive import accounts as hive_accounts
+            if acct.get("auth_method") != hive_accounts.SWARMAI_METHOD and not acct.get("verified_at"):
+                return "no target: the AWS account is not verified yet"
+            reason = await self.refusal(account, region)
+            if reason:
+                return f"refused: {reason}"
+            if not await asyncio.to_thread(_image_published, str(account), str(region), version):
+                return f"no image for {version}"
+            if not standby_on():
+                return "off"
+            await self.enable(account_ref, region)
+            return "enabled"
+        did = []
+        for row in rows:
+            did.append(await self._keep(row, version, retry))
+        return "; ".join(did)
+
+    async def _keep(self, row: dict, version: str, retry: bool) -> str:
+        """One elastic Hive kept at *version*, or repaired once."""
+        if row.get("status") == READY and (row.get("version") or "").removeprefix("v") == version:
+            return "ready"
+        arn = ac.parse_runtime_arn(row.get("runtime_arn"))
+        account = arn["account"] if arn else None
+        region = arn["region"] if arn else row.get("region")
+        if row.get("status") == READY:
+            if not await asyncio.to_thread(_image_published, str(account), str(region), version):
+                return f"no image for {version}"
+            if not standby_on():
+                return "off"
+            await self.update(row["id"], version)
+            return "updated"
+        if row.get("status") != FAILED:
+            return f"left {row.get('status')}"
+        # by account, not row: turning on again makes a new row, which must not count as
+        # never tried
+        key = f"repair:{row['account_ref']}"
+        if retry:
+            _STANDBY_TRIED.discard((key, version))
+        if not self._try_once(key, version):
+            return "repair tried"
+        if not standby_on():
+            return "off"
+        if arn is not None:
+            await self.update(row["id"], version)
+            return "repaired"
+        await self.disable(row["id"])
+        if not standby_on():        # turned off while the failed row was being removed
+            return "off"
+        await self.enable(row["account_ref"], row["region"])
+        return "enabled again"
+
     # ── state ──
 
     async def refusal(self, account: Any, region: Any) -> Optional[str]:
@@ -814,3 +995,33 @@ class ElasticHive:
         uri = ((rt.get("agentRuntimeArtifact") or {}).get("containerConfiguration") or {}).get("containerUri")
         return {"runtime_status": rt.get("status"), "image_version": ac._image_tag(uri),
                 "failure_reason": str(rt.get("failureReason") or "")[:300] or None}
+
+
+async def run_standby_round(db_path: Path) -> str:
+    """One standby round now, a failed repair tried once more: the agent's way to turn the
+    elastic Hive on or repair it without waiting for the loop (POST
+    /api/swarm-out/elastic/standby). Nothing while the person has turned it off."""
+    try:
+        did = await ElasticHive(db_path).reconcile(retry=True)
+    except Exception as exc:  # noqa: BLE001 — the row says why
+        did = f"failed: {type(exc).__name__}"
+    LAST_STANDBY.update(at=_now(), did=did)
+    return did
+
+
+async def run_standby_loop(db_path: Path) -> None:
+    """``ElasticHive.reconcile`` at once and then every STANDBY_EVERY_S (main.py, the
+    desktop Host only). Never raises: a failed round is logged and the next one runs."""
+    elastic = ElasticHive(db_path)
+    while True:
+        try:
+            did = await elastic.reconcile()
+            LAST_STANDBY.update(at=_now(), did=did)
+            if did not in ("ready", "off", "busy"):
+                logger.info("elastic hive standby: %s", did)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the row says why; tried again next round
+            LAST_STANDBY.update(at=_now(), did=f"failed: {type(exc).__name__}")
+            logger.warning("elastic hive standby: the round failed (%s)", type(exc).__name__)
+        await _sleep(STANDBY_EVERY_S)

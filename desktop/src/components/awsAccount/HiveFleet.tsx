@@ -381,7 +381,9 @@ export function HiveFleetSection({ view, onView }: { view: AwsAccountView; onVie
 const ELASTIC_TRANSIENT = ['enabling', 'upgrading', 'disabling'];
 
 /** The elastic Hive on the Hive page: one AgentCore Runtime in the account, a fresh
- *  microVM per run. Off: one button to turn it on, or why it cannot be. On: its status,
+ *  microVM per run. On standby (the default) SwarmAI turns it on and keeps it at its own
+ *  version by itself, so with none yet the page says it is being prepared (and why not,
+ *  when it cannot be); the turn-on button shows only after the person turned it off. On: its status,
  *  its size and one button to turn it off (and to update its image when it is not this
  *  SwarmAI's version: only then does it take runs). Polls only while it is changing. */
 export function ElasticHiveSection() {
@@ -402,11 +404,21 @@ export function ElasticHiveSection() {
   };
   useEffect(() => { void load(); }, []);
   const changing = (state?.hives ?? []).some((h) => ELASTIC_TRANSIENT.includes(h.status));
+  // on standby with none yet: SwarmAI turns it on within a few minutes. Not when the
+  // standby cannot (no account to choose, refused, no image for this version): then the
+  // reason is what the page says.
+  const blocked = (last: string | null | undefined) =>
+    !!last && ['no target', 'refused', 'no image', 'failed'].some((p) => last.startsWith(p));
+  const preparing = state?.standby === true && state.hives.length === 0
+    && state.can_enable && !blocked(state.standby_last);
+  // on standby with none yet, look again even when the last round was blocked: its
+  // reason may be gone by the next round (an image published, an account added)
+  const waiting = state?.standby === true && state.hives.length === 0;
   useEffect(() => {
-    if (!changing) return undefined;
-    const timer = setInterval(() => { void load(); }, 5000);
+    if (!changing && !waiting) return undefined;
+    const timer = setInterval(() => { void load(); }, changing ? 5000 : 30000);
     return () => clearInterval(timer);
-  }, [changing]);
+  }, [changing, waiting]);
 
   const act = async (run: () => Promise<unknown>) => {
     setBusy(true); setError(null);
@@ -437,10 +449,20 @@ export function ElasticHiveSection() {
         <div data-testid="elastic-off">
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{t('hiveFleet.elastic.lead')}</p>
           {sizeLine && <p className="mt-1 text-xs text-[var(--color-text-muted)]">{sizeLine}</p>}
-          <button type="button" className="mt-2 btn-md btn-primary disabled:opacity-50" data-testid="elastic-enable"
-            disabled={busy || !state.can_enable} onClick={() => void act(() => awsAccountService.enableElastic())}>
-            {busy ? t('hiveFleet.elastic.turningOn') : t('hiveFleet.elastic.turnOn')}
-          </button>
+          {state.standby === true ? (preparing ? (
+            <p className="mt-2 text-sm text-[var(--color-text)]" data-testid="elastic-preparing">
+              {t('hiveFleet.elastic.preparing')}
+            </p>
+          ) : blocked(state.standby_last) && (
+            <p className="mt-2 text-xs text-[var(--color-warning)] break-words" data-testid="elastic-standby-last">
+              {t('hiveFleet.elastic.lastCheck', { did: state.standby_last })}
+            </p>
+          )) : (
+            <button type="button" className="mt-2 btn-md btn-primary disabled:opacity-50" data-testid="elastic-enable"
+              disabled={busy || !state.can_enable} onClick={() => void act(() => awsAccountService.enableElastic())}>
+              {busy ? t('hiveFleet.elastic.turningOn') : t('hiveFleet.elastic.turnOn')}
+            </button>
+          )}
           {!state.can_enable && state.reason && (
             <p className="mt-1 text-xs text-[var(--color-warning)] break-words" data-testid="elastic-reason">{state.reason}</p>
           )}

@@ -454,7 +454,8 @@ session 发请求会新起一台空 microVM，这必须在结构上做不到，�
 账户里建 execution role、`CreateAgentRuntime`（网络 PUBLIC，`allowedPorts` 8080 和 8081，V2 平台，`resourceConfigurations` 为 `minimumMemoryInMiB: 8192`：基线 2 vCPU/8 GB、峰值 8 vCPU/32 GB、盘 32 GB，XG 2026-11-20 定；每次更新 runtime 都要带上同一个值，否则会退回默认规格）、
 建或复用 S3 桶。一个账户一个 runtime。发版时更新镜像版本；不用 session storage，所以版本更新不丢已写进 S3 的结果。
 `hive_instances` 加 `carrier`、`runtime_arn` 两列；弹性 Hive 不计入 `MAX_HIVES`。
-镜像由发版推到产品的 public ECR repo `public.ecr.aws/q4o1o9d0/swarmai-hive`（`<版本号>` tag，release.yml 的 `agentcore-image` job），每个安装默认用它，runtime 按 digest 固定，用户不用构建也不用配置；配置键 `hive_agentcore_image` 只用来指向自己构建的镜像，可以经 Settings 写入。
+镜像由发版推到产品的 public ECR repo `public.ecr.aws/q4o1o9d0/swarmai-hive`（`<版本号>` tag，release.yml 的 `agentcore-image` job），每个安装默认用它，runtime 按 digest 固定，用户不用构建也不用配置；配置键 `hive_agentcore_image` 只用来指向自己构建的镜像，在 config.json 里手写，改完重启生效；Settings 接口不接受它，免得 agent 换掉待命要部署的镜像。
+弹性 Hive 默认待命（XG 2026-11-23：「应该default 都是待命状态 你自己操控 而不是交个人 pending 人」）：Host 每 5 分钟和启动时跑一次 `ElasticHive.reconcile()`。一台弹性 Hive 都没有、只有一个 Hive 账户、本版本镜像已发布时，它自己开启；已有的每台（不论几个账户）版本和 Host 不一致时自己更新；出错的，每次启动、每个版本各修一次。每次要动 AWS 之前都重新读一次待命设置，人在一轮中途点关闭也算数。没有 session 的 runtime 不计费，花钱的决定仍然是派发本身。人在 Hive 页关掉时写 `hive_elastic_standby: false`，之后待命不再自动开启，只有人再点开启才恢复；这个键 Settings 接口不接受。agent 从 `swarm_out hives` 读弹性 Hive 的行和待命上一次的结果，用 `swarm_out elastic-standby` 立刻跑一轮（开启、更新、修复，出错的修复可以再试一次），人关掉时这条命令被拒；`GET /api/hive/elastic` 和人的开启是同一路径，守卫只按路径判断，所以它仍然只给人。
 
 ## 7. 工具层：AgentCore Gateway 放在哪（D8）
 

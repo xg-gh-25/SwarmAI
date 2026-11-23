@@ -1646,6 +1646,16 @@ async def lifespan(app: FastAPI):
         from core.hive_idle import run_loop as _hive_idle_loop
         _hive_idle_task = asyncio.create_task(_hive_idle_loop(), name="hive-idle-stop")
 
+    # ── The elastic Hive on standby (host only) ──
+    # Turned on, kept at this version and repaired by the Host itself unless the person
+    # turned it off on the Hive page (hive/agentcore_provisioner.reconcile).
+    _elastic_standby_task: asyncio.Task | None = None
+    if backend_mode != "hive" and _bjson_written:
+        from database import db as _standby_db
+        from hive.agentcore_provisioner import run_standby_loop as _elastic_standby_loop
+        _elastic_standby_task = asyncio.create_task(_elastic_standby_loop(Path(_standby_db.db_path)),
+                                                    name="hive-elastic-standby")
+
     # ── Read-only content origin for "Open in browser" (desktop launchers only) ──
     # docs/design/2026-10-31-swarm-out-ops-registry.md §5.5; core/content_origin.py.
     _content_origin_on = os.environ.get("SWARMAI_MODE") in ("daemon", "subprocess")
@@ -1827,6 +1837,8 @@ async def lifespan(app: FastAPI):
         _swarm_out_refresh_task.cancel()
     if _hive_idle_task and not _hive_idle_task.done():
         _hive_idle_task.cancel()
+    if _elastic_standby_task and not _elastic_standby_task.done():
+        _elastic_standby_task.cancel()
     if _content_origin_on:
         from core import content_origin as _content_origin
         await _content_origin.stop()
