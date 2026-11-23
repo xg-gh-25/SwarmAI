@@ -423,12 +423,14 @@ trigger is read from the ledger and the correction records, not from a feeling.
 | Part | What it adds | Trigger |
 |---|---|---|
 | **Features tab** in Brain Hub (`BrainHub.tsx:84-92` `TABS` made computed) | One page: what fails, since when, with screenshots; Replay, Fix, Retire | A repo has 15+ features, or the person asks to see the map |
-| **Needs You collector** (`core/attention_authority.collect()`) | A walk that turns red outside the agent's work becomes a review item | Nightly replay exists |
-| **Nightly replay** (one system job in `backend/jobs/system_jobs.py`, detached worktree at the remote default branch) | Regressions from someone else's commit or a dependency bump | The ledger shows a walk turning red at a commit the agent did not make, twice in a month |
 | **Hive replay** — built (§6.3): AL2023 arm64 browser libraries and fonts by first boot and every update (`hive/replay-host.sh`); the replay user with the metadata service rejected; a Chromium launch in `hive/smoke_package.sh` | Swarm Out runs bring the same evidence back | Built: Swarm Out runs on repos with a Feature Map reported `not_run: runtime unavailable` |
 | **Suggested features** in New Brain P2 and *Suggest features* | The map is not empty on day one for a new repo | The core is in use on 2+ repos and writing the first features by hand proves slow |
 | **`cognition find` features leg** (`core/cognition.py:70-83`) | "the Pipeline view does not open" finds the feature to replay | A bug report was reproduced by hand although its feature existed |
 | **Model-driven checks** (Playwright planner/healer, a model judging screenshots of new features) | Evidence for features not yet walked; repair proposals | Never as a gate; as evidence only, once the core's replay is steady |
+
+Not built, by the person's decision (2026-11-23): a nightly replay and a Needs You item
+for a red walk. Replay runs when code changes, and a red walk is the changing agent's
+to fix in its own work; the person is not asked.
 
 Outcome measure for the whole feature (Tenet T3), from the first day of the core: the
 user-visible regressions a walk caught before the person reported them, against those the
