@@ -24,12 +24,19 @@ and its ``runtime_arn`` (one per account, §6.8). A run round is one runtime ses
   microVM, so the client refuses, before anything is sent, once the round has ended:
   ``client()`` itself raises on what this machine knows (the round's age past
   ``MAX_RUN_S`` less ``END_MARGIN_S``, counted from before the start call; an end it
-  recorded), and every ``send`` first reads S3 (a ``closed`` entry in the records
-  manifest, ``state.json`` = ``ended`` or ``replaced``) off the event loop, every time.
-  It follows no redirect and signs no request for another host. One end it cannot see: a
-  session the platform stopped on its idle timeout without writing ``closed`` or
-  ``state.json`` (a crashed supervisor); until the lifetime passes, a request to it boots
-  an empty microVM, which answers 502 (the platform has no session-status call to ask).
+  recorded), and every ``send`` first reads S3 off the event loop, every time
+  (``_ended_in_s3``: ``state.json`` = ``ended``, ``replaced``, ``expired`` or a final
+  ``crashed``; a ``closed`` entry in the records manifest; a heartbeat gone stale).
+  It follows no redirect and signs no request for another host.
+- **When a round ended** (``ended``, ``state``): an end recorded here, then S3, and only
+  when S3 shows no end, the round's age (design §6.5: the Host judges by S3). A busy
+  backend rewrites ``heartbeat.json`` every few minutes and an idle one is stopped by the
+  platform after ``IDLE_TIMEOUT_S``, so a heartbeat older than its cadence +
+  ``IDLE_TIMEOUT_S`` + ``END_MARGIN_S`` means the session is most likely gone
+  (``heartbeat_lost``): the round reads as stopped and its results are read from S3 at
+  once, but that end is not recorded and does not bound ``writes_end_at`` (S3 writes that
+  fail for a while look the same). A round without one (an image older than the
+  heartbeat) is judged as before. An end by age is recorded once ``writes_end_at`` passed.
 - **Results** (``outputs``, ``state``, ``usage``): read from the run's S3 prefix only,
   never from the session. ``outputs`` keeps the record in exactly the place and shape
   ``core.hive_records.pull`` keeps (same checks, same local paths, same readers after it).
@@ -60,7 +67,12 @@ Hive side, read here):
   after its file;
 - ``records/<name>``: the entry's bytes, ``name`` = ``hive_records._name(seq, kind, key)``
   (recomputed here, never read from the entry);
-- ``state.json``: ``{"state": "running" | "waiting" | "ended" | "replaced"}``;
+- ``state.json``: ``{"state": "running" | "waiting" | "ended" | "replaced"}`` from the
+  backend, ``{"state": "crashed", "exit", "log_tail", "at", "restarting"}`` or
+  ``{"state": "expired", "at"}`` from the supervisor (hive/agentcore/supervisor.py: its
+  backend died and was rescued, then started again or not; sealed before the lifetime);
+- ``heartbeat.json``: ``{"at", "every"}``, rewritten while the backend is busy
+  (core/hive_agentcore);
 - ``checks.json``: ``{"at", "orders": [{"work_id", "checks": [...]}, ...]}``, one entry per
   work order with a check record, each what ``GET /api/hive/work/<id>/checks`` serves
   (core/hive_agentcore ``_checks_body``); the dispatch's checks are its order's (the
@@ -74,6 +86,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -117,6 +130,13 @@ SESSION_CACHE_S = 900.0
 #: the round counts as ended this long before the platform's lifetime ends (clock skew,
 #: the start call's own time)
 END_MARGIN_S = 300
+#: the runtime's idleRuntimeSessionTimeout (hive/agentcore_provisioner uses this one): an
+#: idle backend's session ends this long after its last work
+IDLE_TIMEOUT_S = 900
+#: a busy backend's heartbeat cadence when its heartbeat.json does not name one in range
+#: (core/hive_agentcore.HEARTBEAT_S)
+HEARTBEAT_S = 180
+HEARTBEAT_MAX_S = 900
 START_TIMEOUT_S = 120.0
 MIN_START_S = 5.0
 SHIP_TIMEOUT_S = 600.0
@@ -162,10 +182,21 @@ _MANIFEST_KEY_RE = re.compile(r"/records/manifest/(\d{6})\.json$")
 #: the round's state.json word -> (run state, reason) (the words core/swarm_out.run_state uses)
 #: the elastic row's statuses while it changes (hive/agentcore_provisioner.TRANSIENT)
 CHANGING_ROW_STATUSES = ("enabling", "upgrading", "disabling")
-_STATES = {"running": ("running", "streaming"), "waiting": ("waiting", "waiting_input")}
+_STATES = {"running": ("running", "streaming"), "waiting": ("waiting", "waiting_input"),
+           # its backend died, was rescued and is starting again (supervisor)
+           "crashed": ("unknown", "starting")}
 #: an end reason -> the run state's reason
 _END_REASONS = {"closed": "closed", "ended": "idle", "carrier_expired": "carrier_expired",
-                "carrier_replaced": "carrier_replaced", "released": "released"}
+                "carrier_replaced": "carrier_replaced", "released": "released",
+                "expired_sealed": "carrier_expired", "crashed": "idle", "heartbeat_lost": "idle"}
+#: ends after which the round writes nothing more: the supervisor stopped its backend,
+#: sealed, and wrote its last word. Their time here bounds ``writes_end_at``. A stale
+#: heartbeat is not one of them: it travels the same S3 path as the results, so S3 writes
+#: failing for a while (the session alive, its results still to come) look the same
+NO_MORE_WRITES = frozenset({"expired_sealed", "crashed"})
+#: ends read from S3 that are observations of now, never recorded for good (a heartbeat
+#: that comes back makes the round open again)
+UNRECORDED_ENDS = frozenset({"heartbeat_lost"})
 
 
 class _NoRunCredential(logging.Filter):
@@ -466,15 +497,30 @@ def _expired(handle: RunHandle) -> bool:
         or _now() - float(handle.opened_at) > MAX_RUN_S - END_MARGIN_S
 
 
+def _no_more_writes_at(sid: Any) -> Optional[float]:
+    """When this machine recorded an end after which the round writes nothing more
+    (``NO_MORE_WRITES``), or None."""
+    try:
+        body = json.loads(_ended_path(str(sid or "")).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(body, dict) or body.get("why") not in NO_MORE_WRITES or not _finite(body.get("at")):
+        return None
+    return float(body["at"])
+
+
 def writes_end_at(handle: RunHandle) -> Optional[float]:
     """When the round can have written nothing more to its S3 prefix: its microVM lives
     at most MAX_RUN_S from the session's start, which is no later than START_TIMEOUT_S
-    after ``opened_at``, and the clocks may differ by END_MARGIN_S (``WRITE_GRACE_S``).
-    None for a handle without a start time."""
+    after ``opened_at``, and the clocks may differ by END_MARGIN_S (``WRITE_GRACE_S``);
+    sooner when S3 said so (``NO_MORE_WRITES``, recorded with the time it was read). None
+    for a handle without a start time."""
     at = handle.opened_at if isinstance(handle, RunHandle) else None
     if not isinstance(at, (int, float)) or isinstance(at, bool):
         return None
-    return float(at) + MAX_RUN_S + WRITE_GRACE_S
+    end = float(at) + MAX_RUN_S + WRITE_GRACE_S
+    sooner = _no_more_writes_at(handle.run_ref)
+    return min(end, sooner) if sooner is not None else end
 
 
 def _ended_here(handle: RunHandle) -> Optional[str]:
@@ -546,17 +592,46 @@ def _get_json(s3: Any, bucket: str, key: str, cap: int) -> Any:
 _manifest_seen: dict[str, str] = {}
 
 
+def _finite(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _alive_at(s3: Any, bucket: str, sid: str, st: Any) -> Optional[tuple[float, float]]:
+    """(the round's newest sign of life, its heartbeat cadence) from ``heartbeat.json`` and
+    a ``crashed`` state.json's ``at``; None when the round gives neither (an image older
+    than the heartbeat: no staleness is judged). Worker text: anything else is no sign."""
+    try:
+        hb = _get_json(s3, bucket, f"bridge/{sid}/heartbeat.json", SMALL_OBJECT_MAX)
+    except ValueError:
+        hb = None
+    times: list[float] = []
+    every = float(HEARTBEAT_S)
+    if isinstance(hb, dict) and _finite(hb.get("at")):
+        times.append(float(hb["at"]))
+        if _finite(hb.get("every")) and 0 < hb["every"] <= HEARTBEAT_MAX_S:
+            every = float(hb["every"])
+    if isinstance(st, dict) and st.get("state") == "crashed" and _finite(st.get("at")):
+        times.append(float(st["at"]))
+    return (max(times), every) if times else None
+
+
 def _ended_in_s3(s3: Any, bucket: str, sid: str) -> Optional[str]:
-    """``carrier_replaced`` / ``ended`` when the round's state.json says so, ``closed``
-    when its records manifest holds a closed entry, else None. Reads state.json and the
-    manifest objects not read before; raises when S3 does not answer (no answer is no
-    proof the round is open)."""
+    """Why the round's S3 prefix says it ended, else None: ``carrier_replaced`` / ``ended``
+    / ``expired_sealed`` / ``crashed`` (final) from state.json, ``closed`` when its records
+    manifest holds a closed entry, ``heartbeat_lost`` when its newest sign of life is older
+    than its cadence + IDLE_TIMEOUT_S + END_MARGIN_S. Reads state.json, the manifest
+    objects not read before and the heartbeat; raises when S3 does not answer (no answer
+    is no proof the round is open)."""
     st = _get_json(s3, bucket, f"bridge/{sid}/state.json", SMALL_OBJECT_MAX)
     word = st.get("state") if isinstance(st, dict) else None
     if word == "replaced":
         return "carrier_replaced"
     if word == "ended":
         return "ended"
+    if word == "expired":
+        return "expired_sealed"
+    if word == "crashed" and st.get("restarting") is False:
+        return "crashed"
     prefix = f"bridge/{sid}/records/manifest/"
     after = _manifest_seen.get(sid, prefix)
     for _ in range(LIST_PAGES_MAX):
@@ -573,8 +648,13 @@ def _ended_in_s3(s3: Any, bucket: str, sid: str) -> Optional[str]:
             after = key
             _manifest_seen[sid] = key
         if not page.get("IsTruncated") or not keys:
-            return None
-    raise AgentCoreError("the round's record manifest is too long to read in one check")
+            break
+    else:
+        raise AgentCoreError("the round's record manifest is too long to read in one check")
+    alive = _alive_at(s3, bucket, sid, st)
+    if alive is not None and _now() - alive[0] > alive[1] + IDLE_TIMEOUT_S + END_MARGIN_S:
+        return "heartbeat_lost"
+    return None
 
 
 def _manifest_page(s3: Any, bucket: str, sid: str, after: int, limit: int) -> tuple[list[Any], bool]:
@@ -1183,20 +1263,36 @@ class AgentCoreCarrier:
         return await self._s3(handle, purpose), _bucket_of(handle), sid
 
     async def ended(self, handle: RunHandle) -> Optional[str]:
-        """Why the round has ended, or None: what this machine knows, then S3, read on
-        every call (an end found is recorded here for good). Sends nothing to the session;
-        raises when S3 does not answer."""
+        """Why the round has ended, or None: an end recorded here, then S3 (read on every
+        call; an end found is recorded here for good), and only when S3 shows none the
+        round's age (``carrier_expired``): a round past its lifetime whose result is in S3
+        ended the way S3 says. Sends nothing to the session; raises when S3 does not answer
+        and the round is not past its lifetime."""
         sid, _did, _rnd = _parse_handle(handle)
-        why = await asyncio.to_thread(_ended_here, handle)
+        why = await asyncio.to_thread(_marked_end, sid)
         if why:
             return why
-        s3 = await self._s3(handle)
-        # read before every request to the round: its own pool, never the default one
-        from core import executors
-        why = await executors.run_in("elastic_s3", _ended_in_s3, s3, _bucket_of(handle), sid)
+        try:
+            s3 = await self._s3(handle)
+            # read before every request to the round: its own pool, never the default one
+            from core import executors
+            why = await executors.run_in("elastic_s3", _ended_in_s3, s3, _bucket_of(handle), sid)
+        except Exception:
+            if _expired(handle):         # whatever S3 holds, nothing runs past the lifetime
+                return "carrier_expired"
+            raise
         if why:
-            await asyncio.to_thread(_mark_ended, sid, why)
-        return why
+            if why not in UNRECORDED_ENDS:
+                await asyncio.to_thread(_mark_ended, sid, why)
+            return why
+        if not _expired(handle):
+            return None
+        # past the lifetime and no end in S3: recorded once nothing can be written any more
+        # (until then a closed entry may still arrive and say how it ended)
+        opened = float(handle.opened_at) if _finite(handle.opened_at) else None
+        if opened is None or _now() > opened + MAX_RUN_S + WRITE_GRACE_S:
+            await asyncio.to_thread(_mark_ended, sid, "carrier_expired")
+        return "carrier_expired"
 
     async def connect(self, handle: RunHandle) -> dict[str, Any]:
         """What the post-open steps and the per-run readers reach the round through
@@ -1275,16 +1371,15 @@ class AgentCoreCarrier:
         return {**rec, "check_records": checks}
 
     async def state(self, handle: RunHandle) -> tuple[str, str]:
-        """(state, reason) of the round, from S3 and its age: stopped ``closed`` /
-        ``carrier_expired`` / ``carrier_replaced``; else the round's state.json."""
+        """(state, reason) of the round, from S3, then its age (``ended``): stopped
+        ``closed`` / ``idle`` / ``carrier_expired`` / ``carrier_replaced``; else the
+        round's state.json."""
         sid, _did, _rnd = _parse_handle(handle)
         try:
             why = await self.ended(handle)
         except Exception as exc:  # noqa: BLE001 — S3 unreadable: say so, nothing settles on it
             logger.info("agentcore: state of %s not read (%s)", sid, type(exc).__name__)
             return "unknown", "hive_silent"
-        if why == "carrier_expired":
-            await asyncio.to_thread(_mark_ended, sid, why)
         if why:
             return "stopped", _END_REASONS.get(why, "idle")
         try:
@@ -1593,9 +1688,11 @@ def _read_logs(session: Any, region: str, runtime_id: str, terms: list[str],
 
 def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:
     """Where each of the dispatch's repositories starts in the next round: the commit at
-    ``refs/hive/<dispatch>/<key>`` in its checkout when the previous round's commits were
-    taken back (core/hive_return), else the dispatch's own start (``{url, ref, sha}``;
-    no checkout: nothing to ship, the remote has it). Blocking."""
+    ``refs/hive/<dispatch>/<key>`` in its checkout, imported there now when the round's
+    newest bundle of it is named by no turn record (``hive_return.import_unrecorded``: a
+    turn its backend's death or the lifetime cut off), else when the previous round's
+    commits were taken back (core/hive_return), else the dispatch's own start (``{url, ref,
+    sha}``; no checkout: nothing to ship, the remote has it). Blocking."""
     from core import hive_return, repo_ship
     states: dict[str, dict] = {}
     try:
@@ -1612,6 +1709,15 @@ def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:
     out = []
     for r in row.get("repos") or []:
         if not isinstance(r, dict) or not isinstance(r.get("url"), str):
+            continue
+        try:
+            got = hive_return.import_unrecorded(dispatch_id, row, r)
+        except hive_return.ReturnError as e:
+            raise AgentCoreError(f"{r.get('name') or r['url']}: the last round's newest commits could not "
+                                 f"be taken back ({e}); nothing was sent") from None
+        if got is not None:
+            out.append({"url": r["url"], "ref": got["branch"].removeprefix("refs/heads/"), "sha": got["tip"],
+                        "checkout": got["repo"], "name": r.get("name"), "from": got["ref"]})
             continue
         st = states.get(r["url"])
         ref = f"refs/hive/{dispatch_id}/{st.get('key')}" if st else None
@@ -1632,7 +1738,7 @@ def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:
 
 #: what a round may write under its own prefix (design §6.7); answer/ is the Host's
 SESSION_WRITES = ("started", "state.json", "checks.json", "usage.json", "decisions.json",
-                  "ask/*", "closed/*", "records/*")
+                  "heartbeat.json", "ask/*", "closed/*", "records/*")
 
 
 def execution_role_policy(account: str, region: str, bucket: str, image_repo: Optional[str]) -> dict:

@@ -29,6 +29,14 @@ branch). Those globs only widen what is marked: no setting removes a person-only
 file says so). The repository's globs land with the rest; the landed commit names every
 protected file.
 
+``import_unrecorded(dispatch_id, row, declared)``: for a re-run on Elastic Workers
+(core/carriers/agentcore ``_returned_starts``): when the newest bundle of a declared
+repository in the run's kept record is named by no turn outcome (its turn was cut off
+before its record was sealed), fetch it into ``refs/hive/<dispatch>/<key>`` with the same
+checks ``prepare`` makes (the bytes against the record's sha256 and size, verify, one
+ref, prerequisites in the main branch, fsck), so the next round starts from it. Nothing
+is shown or landed from it: the person reviews what the next round returns.
+
 ``land(dispatch_id, key, tip, allow_git_exec)``: only for the tip prepared and shown;
 merges the reviewed change (``base..tip``; for a later turn of the same run, what came
 after the tip that landed) onto the run's branch from objects only (no working tree, no
@@ -494,6 +502,51 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
         _save(dispatch_id, b["key"], state)
         return state
     return await asyncio.to_thread(_work)
+
+
+def import_unrecorded(dispatch_id: str, row: dict, declared: dict) -> Optional[dict[str, Any]]:
+    """The newest kept bundle of *declared* that no turn outcome names, fetched into
+    ``refs/hive/<dispatch>/<key>`` of the Brain's checkout: ``{repo, branch, ref, tip,
+    seq}``; None when the repository has no bundle in the kept record or the newest one is
+    named by the newest outcome with repos (``prepare`` takes that one). ReturnError when
+    a check refuses it. Blocking."""
+    from core import hive_bundle, hive_records
+    url, rdir = declared.get("url"), declared.get("dir")
+    if not isinstance(url, str) or not isinstance(rdir, str) or not rdir:
+        return None
+    k = hive_bundle.key(rdir)
+    try:
+        d = hive_records.local_dir(dispatch_id)
+        es = hive_records.local_entries(dispatch_id)
+    except ValueError:
+        return None
+    mine = [e for e in es if e.get("kind") == "bundle" and e.get("key") == k and type(e.get("seq")) is int]
+    if not mine:
+        return None
+    newest = mine[-1]
+    named = hive_records._referenced(d, es)
+    if named is not None and newest["seq"] in named[1]:
+        return None
+    agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
+    if not isinstance(agent.get("brain"), str):
+        raise ReturnError("the run names no Brain to take its commits back into")
+    if not isinstance(newest.get("sha256"), str) or type(newest.get("size")) is not int:
+        raise ReturnError("the run's record names its newest bundle without its size and sha256")
+    repo = _checkout(agent["brain"], url)
+    dest = _state_dir(dispatch_id) / f"{k}.unrecorded.bundle"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    b = {"seq": newest["seq"], "key": k, "sha256": newest["sha256"], "size": newest["size"]}
+    local_ref = f"refs/hive/{dispatch_id}/{k}"
+    try:
+        if not _from_record(dispatch_id, b, dest):
+            raise ReturnError("the run's record here does not hold its newest bundle whole")
+        branch = _target_branch(repo, declared.get("ref"))
+        tip, _base = _verify_and_fetch(repo, branch, dest, local_ref, _lead_refs(repo, row))
+    finally:
+        dest.unlink(missing_ok=True)
+    logger.info("hive_return: %s's newest bundle of %s (seq %d) had no turn record; imported at %s",
+                dispatch_id, k, newest["seq"], local_ref)
+    return {"repo": str(repo), "branch": branch, "ref": local_ref, "tip": tip, "seq": newest["seq"]}
 
 
 #: a Swarm Run child's start snapshot (``refs/swarm/snapshots/<run>/b<n>-<repo>``,

@@ -395,7 +395,10 @@ sequenceDiagram
 - **checks 和用量**：不是 record 条目（checks 每跑一次检查就重写，用量是流水），写成 `bridge/<sid>/checks.json` 和
   `usage.json`，每次整体重写。用量去重键改成 `hive:{dispatch_id}:{rid}`：每台 microVM 的用量表都从 1 开始编号，按
   今天的 `hive_id` 游标（`usage_hive_sync.py:100`、`:163`），第二个 run 起会被当成重复丢掉。
-- **state.json**：在跑、在等、结束时重写（running / waiting / ended / replaced）。
+- **state.json**：在跑、在等、结束时重写（running / waiting / ended / replaced）。supervisor 另写两种：后端中途死掉、
+  救援之后写 `crashed`（`exit`、`log_tail`、`at`、`restarting`：是否再起一次后端）；临近 8 小时上限、封存之后写 `expired`。
+- **heartbeat.json**：后端忙的时候每 `HEARTBEAT_S`（180 秒）重写一次 `{"at", "every"}`（`core/hive_agentcore`）；写不进去只记日志，
+  不算忙。
 - **Host 侧**：`hive_records.pull` 对 AgentCore 从 S3 读，经过同样的校验，存成同样的本地副本，后面的 `hive_return`、
   `hive_files`、settle 不改。
 - **写 S3 失败**：重试，算忙。
@@ -415,13 +418,30 @@ sequenceDiagram
 `hive_records.py:570-600`），而 microVM 空闲 15 分钟就停。AgentCore 模式下 turn 结束、没有等待和后台工作时，立刻请求复盘；
 修正在新的 microVM 上做（§6.6），所以 turn 结束就是这个 session 的结束。
 
-**结束的三种方式，Host 都只看 S3 判断：**
+**后端中途死掉**（OOM、崩溃）：supervisor 看着后端进程（`watch_once`）。后端自己退出时，先在后端 venv 里跑一次救援
+（`python -m core.hive_rescue`，此时没有后端在跑）：把已写下、还没上传的 record 条目写到 S3，用 EC2 开机清理同一段代码
+（`core/hive_boot.close_open_turns`）给断掉的 turn 写 `daemon_stopped`、把声明的 repo 当前分支头的提交打成 bundle 封存，
+再把这些条目写到 S3；然后写 `state.json` 为 `crashed`，再起一次后端（每个 session 只一次）。再死一次、或者重启后一直不健康，
+同样救援，`crashed` 写成 `restarting: false`，不再起。救援期间 `/ping` 算忙。离上限还有 `PRE_LIMIT_MARGIN_S`（20 分钟）时，
+后端若忙，supervisor 停掉它、同样救援、写 `expired`；空闲就不动（没有打开的 turn），之后再忙起来也照此封存。
+
+**结束的方式，Host 都先看 S3，S3 没说结束才看年龄**（`AgentCoreCarrier.ended`）：
 
 | 情况 | Host 看到的 | run 状态 |
 |---|---|---|
 | 正常结束 | `records/` 里有 `closed` | stopped |
-| 到 8 小时上限 | 没有 `closed`，离 `started` 超过 `maxLifetime` | stopped，"载体到期" |
+| 复盘之后空闲 | `state.json` 为 `ended` | stopped |
+| 后端死了、救援后不再起 | `state.json` 为 `crashed`，`restarting: false` | stopped |
+| 临近上限已封存 | `state.json` 为 `expired` | stopped，"载体到期" |
+| 没了心跳 | `heartbeat.json`（或 `crashed` 的 `at`）比 `every` + 空闲超时（900 秒）+ 时钟余量（300 秒）还旧 | stopped |
+| 到 8 小时上限 | S3 里以上都没有，离 `started` 超过 `maxLifetime` | stopped，"载体到期" |
 | microVM 被换掉又收到请求 | `state.json` 为 `replaced` | stopped，"载体被替换" |
+
+没有 `heartbeat.json` 的 round（比这个改动旧的镜像）不按心跳判断，照旧。心跳过期时 Host 立刻读 S3、run 显示停了，但不把它
+记成定论：心跳和结果走同一条 S3 路，S3 写入失败一阵子看起来一样，心跳回来 round 就算还开着；"结果不会再来"仍按寿命上限判断。
+`expired` 和不再重启的 `crashed` 是 supervisor 停掉后端、封存之后写的最后一句，之后 round 不会再写任何东西：Host 记下读到的
+时间，`writes_end_at` 取它和寿命上限里早的那个，结果没来的 run 几分钟内就能判定"结果不会再来"，不用等 8 小时。按年龄判定的
+结束，过了 `writes_end_at` 才记下（之前 S3 里仍可能来一条 `closed`）。
 
 结束后 Host 调一次 `StopRuntimeSession`（已没了也算成功）。**结束后句柄的 `client()` 一律抛错，不发任何请求**：对已停的
 session 发请求会新起一台空 microVM，这必须在结构上做不到，而不是靠每个调用方记得。
@@ -436,6 +456,8 @@ session 发请求会新起一台空 microVM，这必须在结构上做不到，�
     用 `repo_ship.pack(..., pinned=True)` 打包（`backend/core/repo_ship.py:160-166` 支持给定任意提交）；
   - 消息是原任务、上一轮的结果报告和这次的修正；Brain 和 Project Agent 用这个派发当初的版本。
   - 上一轮没提交的文件带不过去，面板上这一轮会写明。
+  - 上一轮最新的 bundle 若没有 turn 记录引用（turn 被中断，记录没封上），也按 `hive_return.prepare` 的同样检查导入
+    `refs/hive/<dispatch>/<key>`（`hive_return.import_unrecorded`），下一轮从它开始。
 
 到 8 小时上限或被替换的 run 也可以这样接着跑，或者丢掉重派。
 
@@ -510,7 +532,9 @@ sequenceDiagram
 | 对位置写过东西后失败（打包、bundle、模型、工单、开 session） | 报错，不换；可能已派出时照今天显示"可能已派出" |
 | 启动停着的 Hive 超时 | 报错，不换；它在后台继续启动，空闲 120 分钟后自动停 |
 | 全部候选都不行 | 拒收，拒收记录和错误里有每个候选的原因 |
-| AgentCore run 跑过 8 小时 | microVM 终止，已写进 S3 的还在；"载体到期"，可接着跑（§6.6）或丢掉重派 |
+| AgentCore run 跑过 8 小时 | 上限前 20 分钟 supervisor 封存打开的 turn 和提交（§6.5）；microVM 终止，已写进 S3 的还在；"载体到期"，可接着跑（§6.6）或丢掉重派 |
+| AgentCore 后端中途死掉 | supervisor 上传、封存 turn 和提交、写 `crashed`、再起一次后端（§6.5） |
+| AgentCore microVM 整个没了 | 心跳停了，空闲超时 + 余量之后 Host 读 S3、显示停了；"结果不会再来"仍等寿命上限 |
 | AgentCore microVM 被平台换掉 | 在跑的 turn 没了；`replaced`，同上 |
 | Host 合盖几天 | EC2：同今天。AgentCore：结果在 S3，microVM 在 `closed` 后 15 分钟内就停了 |
 | 写 S3 失败 | 算忙，一直重试；到 8 小时还没写完，那部分结果丢失；每次失败记日志 |

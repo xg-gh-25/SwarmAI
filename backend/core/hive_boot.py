@@ -45,7 +45,12 @@ its gate refusals are marked partial unless the turn only sat on its question. A
 that session is skipped with a warning. It never reruns anything; a rerun stays the
 dispatcher's call.
 
-Public: ``STARTED_AT``, ``close_open_turns``.
+An AgentCore Hive's supervisor runs the same close in a process of its own after its
+backend died (core/hive_rescue), before it starts the backend again: ``SealRouter`` is
+the router there, the three seal steps of ``SessionRouter`` and nothing else (no session
+runs in that process).
+
+Public: ``STARTED_AT``, ``close_open_turns``, ``SealRouter``.
 """
 from __future__ import annotations
 
@@ -58,6 +63,26 @@ logger = logging.getLogger(__name__)
 
 #: when this process started, in the messages table's clock (naive local time)
 STARTED_AT = datetime.now()
+
+
+class SealRouter:
+    """What ``close_open_turns`` uses of the session router, for a process that runs no
+    session (core/hive_rescue): ``SessionRouter``'s own repository facts (the commits
+    bundled), turn seal and outcome write, unchanged."""
+
+    def __init__(self) -> None:
+        from core.session_router import SessionRouter
+        self._cls = SessionRouter
+        self._units: dict = {}
+        self.TASK_REPO_FACTS_TIMEOUT_S = SessionRouter.TASK_REPO_FACTS_TIMEOUT_S
+        self.TASK_REPO_BUNDLES_TIMEOUT_S = SessionRouter.TASK_REPO_BUNDLES_TIMEOUT_S
+        self._persist_assistant_blocks = SessionRouter._persist_assistant_blocks
+
+    async def _task_repo_facts(self, session_id: Optional[str]) -> Optional[list]:
+        return await self._cls._task_repo_facts(self, session_id)
+
+    async def _seal_turn_record(self, session_id: str, until: str) -> None:
+        await self._cls._seal_turn_record(self, session_id, until)
 
 
 def _blocks(row: dict) -> list[dict]:

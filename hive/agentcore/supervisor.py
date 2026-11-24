@@ -28,12 +28,26 @@ Why it is shaped this way:
 * **The password never leaves memory as text**: it reaches the hashing subprocess on stdin
   (not argv, which ``ps`` shows), the backend gets only the bcrypt hash, and nothing here
   logs a request body.
+* **A backend that dies keeps what it produced** (``watch_once``, on a thread of its own
+  once the backend is healthy). When the backend exits on its own, its process group is
+  killed and reaped (``_reap``: what it started, the agent CLI or git, may outlive it), then
+  the rescue runs (``rescue``: ``python -m core.hive_rescue`` in the backend venv, with the
+  backend's environment, nothing of the backend running): it uploads every record entry written but not in S3,
+  closes and seals the open turn with each declared repository's commits bundled (the EC2
+  boot cleanup, core/hive_boot), and uploads those entries. Then ``state.json`` becomes
+  ``{"state": "crashed", "exit", "log_tail", "at", "restarting", "rescue"}`` and the
+  backend is started again, once (``MAX_RESTARTS``); a second death, or a restart that
+  never becomes healthy, is rescued the same way and written with ``restarting: false``.
+  ``PRE_LIMIT_MARGIN_S`` before the platform's lifetime (``MAX_LIFETIME_S`` from the
+  start), a busy backend is stopped, rescued and ``state.json`` becomes ``expired``; an
+  idle one has nothing open and is left alone. While a rescue runs, /ping is busy.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -54,6 +68,22 @@ BACKEND_LOG = f"{LOG_DIR}/backend.log"
 HEALTH_WAIT_S = 170.0
 BCRYPT_COST = 14  # what hive_auth expects (backend/middleware/hive_auth.py)
 HELPER_TIMEOUT_S = 60.0
+#: the runtime's maxLifetime (hive/agentcore_provisioner.MAX_LIFETIME_S): the platform ends
+#: the session this long after it started
+MAX_LIFETIME_S = 28800
+#: hang guard of one rescue: stopping the backend plus this must fit in PRE_LIMIT_MARGIN_S
+RESCUE_TIMEOUT_S = 900.0
+#: how long a stopped backend gets to exit before it is killed
+STOP_WAIT_S = 30.0
+#: the pre-limit seal runs this long before the lifetime ends (from this start's own time,
+#: which is after the platform's: the session exists before its first invocation)
+PRE_LIMIT_MARGIN_S = 1200
+#: how often the watcher looks at the backend
+WATCH_S = 5.0
+#: restarts after an unexpected exit, per session
+MAX_RESTARTS = 1
+#: the backend log's tail kept in state.json (the Host reads at most 64 KiB of it)
+LOG_TAIL_MAX = 8000
 
 # S3 bucket names; a session id becomes one S3 key segment, so it may not hold a "/".
 _BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -108,6 +138,13 @@ STATE: dict = {
     "changed": int(time.time()),
     "auth": None,        # Basic credential for the backend's own API (memory only)
     "report": None,      # the answer of the start that claimed this session
+    "env": None,         # the backend's environment (the password's hash, never the password)
+    "bridge": None,      # (bucket, sid) of this session's bridge prefix
+    "started_at": None,  # when this start began (time.time())
+    "restarts": 0,       # backends started again after an unexpected exit
+    "rescuing": False,   # a rescue (or the pre-limit seal) is running
+    "stopping": False,   # the supervisor itself stops the backend: its exit is no crash
+    "expired": False,    # the pre-limit seal ran
 }
 LOCK = threading.Lock()
 
@@ -188,7 +225,7 @@ def _running() -> bool:
 
 
 def busy() -> bool:
-    if STATE["starting"]:
+    if STATE["starting"] or STATE["rescuing"]:
         return True
     if not _running():
         return False
@@ -296,12 +333,11 @@ def start(body: dict, platform_sid: str | None = None) -> dict:
             return {"started": False, "why": "replaced", "state_written": written}
         STATE["marked"] = True
         STATE["auth"] = "Basic " + b64encode(f"{user}:{password}".encode()).decode()
+        STATE["env"] = backend_env(sid, bucket, user, pass_hash)
+        STATE["bridge"] = (bucket, sid)
+        STATE["started_at"] = t0
         try:
-            os.makedirs(LOG_DIR, exist_ok=True)
-            with open(BACKEND_LOG, "ab") as log:
-                proc = subprocess.Popen(backend_command(), cwd=BACKEND_DIR,
-                                        env=backend_env(sid, bucket, user, pass_hash),
-                                        stdout=log, stderr=subprocess.STDOUT)
+            proc = _launch(STATE["env"])
         except OSError as e:
             STATE["report"] = {"started": False, "why": f"the backend could not be launched: {type(e).__name__}"}
             return STATE["report"]
@@ -319,10 +355,194 @@ def start(body: dict, platform_sid: str | None = None) -> dict:
             report.update(why="the backend did not become healthy", backend_exit=proc.poll(),
                           log_tail=_log_tail())
         STATE["report"] = report
+        if ready is not None:
+            start_watch()
         return report
     finally:
         with LOCK:
             STATE["starting"] = False
+
+
+def _launch(env: dict):
+    """Start the backend in a process group of its own (its output appended to
+    BACKEND_LOG), so it and everything it started can be stopped together; raises OSError."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with open(BACKEND_LOG, "ab") as log:
+        return subprocess.Popen(backend_command(), cwd=BACKEND_DIR, env=env,
+                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def _signal_group(proc, sig) -> None:
+    """Send *sig* to the backend's process group (the backend and what it started: the
+    agent CLI, git). A group with no process left, or a process without a pid, is done."""
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int) or pid <= 1:
+        return
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _reap(proc) -> None:
+    """Before a rescue: nothing the dead backend started may still write (an OOM kill
+    takes the backend alone, its children live on). The group is killed and the backend
+    waited for."""
+    _signal_group(proc, signal.SIGKILL)
+    if proc is not None:
+        try:
+            proc.wait(timeout=STOP_WAIT_S)
+        except subprocess.TimeoutExpired:
+            print("supervisor: the backend did not exit after SIGKILL", flush=True)
+
+
+def _stop(proc) -> None:
+    """Stop a backend this supervisor decided to stop (never counted as a crash): the
+    group gets SIGTERM, then SIGKILL after STOP_WAIT_S, and is reaped before this returns."""
+    STATE["stopping"] = True
+    if proc is None:
+        return
+    if proc.poll() is None:
+        _signal_group(proc, signal.SIGTERM)
+        proc.terminate()
+        try:
+            proc.wait(timeout=STOP_WAIT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    _reap(proc)
+
+
+def rescue() -> dict:
+    """Upload what the dead backend wrote, seal its open turn with its commits and upload
+    that (``python -m core.hive_rescue`` in the backend venv; no backend may run). Its
+    JSON answer, or ``{"ok": false, "why"}``. Never raises."""
+    env = STATE["env"]
+    if env is None:
+        return {"ok": False, "why": "no backend was started"}
+    try:
+        r = subprocess.run([VENV_PYTHON, "-m", "core.hive_rescue"], cwd=BACKEND_DIR, env=env,
+                           capture_output=True, timeout=RESCUE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"supervisor: the rescue did not run to its end ({type(e).__name__})", flush=True)
+        return {"ok": False, "why": type(e).__name__}
+    try:                          # its own log lines, next to the backend's
+        with open(BACKEND_LOG, "ab") as log:
+            log.write(r.stderr or b"")
+    except OSError:
+        pass
+    lines = (r.stdout or b"").decode(errors="replace").strip().splitlines()
+    try:
+        got = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        got = None
+    if not isinstance(got, dict):
+        got = {"ok": False, "why": f"exit {r.returncode}"}
+    print(f"supervisor: rescue exit {r.returncode}: {json.dumps(got)[:300]}", flush=True)
+    return got
+
+
+def _write_state(obj: dict) -> bool:
+    bucket, sid = STATE["bridge"]
+    try:
+        s3_put(bucket, f"bridge/{sid}/state.json", obj, if_absent=False)
+        return True
+    except HelperError as e:
+        print(f"supervisor: state.json {obj.get('state')} not written ({e})", flush=True)
+        return False
+
+
+def _crashed(code, restart: bool = True) -> bool:
+    """The backend exited on its own: rescue, write crashed, start it again once (never
+    past the pre-limit time). True when a restarted backend is running (still watched)."""
+    with LOCK:
+        STATE["rescuing"] = True
+    try:
+        _reap(STATE["proc"])
+        tail = _log_tail()[-LOG_TAIL_MAX:]
+        got = rescue()
+        again = restart and STATE["restarts"] < MAX_RESTARTS
+        _write_state({"state": "crashed", "exit": code, "log_tail": tail, "at": int(time.time()),
+                      "restarting": again, "rescue": got})
+        if not again:
+            return False
+        STATE["restarts"] += 1
+        print(f"supervisor: the backend exited ({code}); starting it again", flush=True)
+        try:
+            proc = _launch(STATE["env"])
+        except OSError as e:
+            print(f"supervisor: the backend could not be started again ({type(e).__name__})", flush=True)
+            proc = None
+        STATE["proc"] = proc if proc is not None else STATE["proc"]
+        if proc is not None and _wait_healthy(proc, time.time()) is not None:
+            return True
+        # never healthy: stopped, rescued again, and nothing more is started
+        _stop(proc)
+        got = rescue()
+        _write_state({"state": "crashed", "exit": proc.poll() if proc is not None else None,
+                      "log_tail": _log_tail()[-LOG_TAIL_MAX:], "at": int(time.time()),
+                      "restarting": False, "rescue": got})
+        return False
+    finally:
+        with LOCK:
+            STATE["rescuing"] = False
+
+
+def _seal_at_limit() -> bool:
+    """Past the pre-limit time: stop a busy backend, rescue, write expired. True once there
+    is nothing left to watch; False while the backend is idle (nothing open: looked at
+    again, a correction may still start a turn before the Host stops sending)."""
+    if not busy():
+        return False
+    STATE["expired"] = True
+    with LOCK:
+        STATE["rescuing"] = True
+    try:
+        print("supervisor: the session nears its lifetime; sealing what is open", flush=True)
+        _stop(STATE["proc"])
+        got = rescue()
+        _write_state({"state": "expired", "at": int(time.time()), "rescue": got})
+    finally:
+        with LOCK:
+            STATE["rescuing"] = False
+    return True
+
+
+def watch_once() -> bool:
+    """One look at the backend: a rescue (and, before the pre-limit time, one restart) when
+    it exited on its own; past the pre-limit time, the seal once it is busy. False once
+    there is nothing left to watch."""
+    if STATE["expired"]:
+        return False
+    proc = STATE["proc"]
+    if proc is None:
+        return False
+    t0 = STATE["started_at"]
+    past = t0 is not None and time.time() >= t0 + MAX_LIFETIME_S - PRE_LIMIT_MARGIN_S
+    code = proc.poll()
+    if code is not None:
+        if STATE["stopping"]:
+            return False
+        return _crashed(code, restart=not past)
+    if past:
+        return not _seal_at_limit()
+    return True
+
+
+_WAKE = threading.Event()         # never set: the watcher's wait between looks
+
+
+def _watch() -> None:
+    while True:
+        _WAKE.wait(WATCH_S)
+        try:
+            if not watch_once():
+                return
+        except Exception as e:  # noqa: BLE001 - the watcher must not die of one bad look
+            print(f"supervisor: watching the backend failed ({type(e).__name__})", flush=True)
+
+
+def start_watch() -> None:
+    threading.Thread(target=_watch, name="backend-watch", daemon=True).start()
 
 
 class Handler(BaseHTTPRequestHandler):

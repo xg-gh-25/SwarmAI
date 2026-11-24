@@ -22,6 +22,11 @@ What the mode changes, and where:
   appends (a microVM runs one dispatched session). Where the export stopped is a cursor
   kept on disk (``_export_path``), so a write that failed, or one lost to a backend
   restart, is simply the next one ``sync_pass`` tries; until then it counts as busy.
+- ``bridge/<sid>/heartbeat.json`` (``{"at", "every"}``), rewritten by ``sync_pass`` every
+  ``HEARTBEAT_S`` while the backend is busy: the Host takes a round whose heartbeat is older
+  than ``every`` + the runtime's idle timeout + its clock margin as ended
+  (core/carriers/agentcore ``_ended_in_s3``). A heartbeat not written (a role that does not
+  allow it yet) is logged and tried at the next due pass; it never counts as busy.
 - Whole objects ``bridge/<sid>/state.json``, ``checks.json`` and ``usage.json``, rewritten
   by ``sync_pass`` (each bridge pass) when what they hold changed. ``checks.json`` is
   ``{"at", "orders": [<GET /api/hive/work/{id}/checks body>, ...]}``; ``usage.json`` is
@@ -66,6 +71,8 @@ SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{32,255}")
 BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 REGION_RE = re.compile(r"[a-z]{2}(-[a-z]+)+-\d")
 USAGE_PAGE = 2000
+#: how often a busy backend rewrites heartbeat.json (core/carriers/agentcore reads it)
+HEARTBEAT_S = 180
 
 #: busy reasons, in the order they are reported
 REASONS = ("streaming", "background_work", "waiting_input", "review_job", "s3_pending")
@@ -348,6 +355,13 @@ def _export(workspace: Path, session_id: Optional[str]) -> int:
         return written
 
 
+def export_now(workspace: Optional[Path] = None) -> int:
+    """Write every record entry not yet in S3, in this thread (core/hive_rescue: no
+    backend runs, so no export lane is busy). How many were written; raises on S3."""
+    with hold():
+        return _export(Path(workspace or _workspace()), None)
+
+
 def export_pending(workspace: Optional[Path] = None) -> bool:
     """A record entry is sealed but not in S3 yet, or a record write is in progress."""
     if _holds > 0:
@@ -375,6 +389,8 @@ def _record_closed(workspace: Path) -> bool:
 
 #: what each object held when it was last written (a fingerprint, not the body)
 _written: dict[str, Any] = {"state.json": None, "checks.json": (), "usage.json": (0, 0)}
+#: when heartbeat.json was last written (time.time(); 0: never)
+_beat: dict[str, float] = {"at": 0.0}
 
 
 def _orders(workspace: Path) -> list[str]:
@@ -555,11 +571,33 @@ async def busy(router: Any = None, pm: Any = None, workspace: Optional[Path] = N
     return {"busy": bool(reasons), "reasons": reasons}
 
 
+def _heartbeat(live: dict[str, Any], workspace: Path, sid: str) -> None:
+    """Rewrite heartbeat.json when it is due and the backend is busy. A failed write is
+    logged and never counts as busy (the next due pass tries again)."""
+    now = time.time()
+    if now - _beat["at"] < HEARTBEAT_S:
+        return
+    try:
+        busy_now = any(live.get(k) for k in ("streaming", "background_work", "waiting_input", "sealing")) \
+            or _review_open() or export_pending(workspace)
+    except Exception as exc:  # noqa: BLE001 — unknown: busy (as the busy check counts it)
+        logger.warning("hive_agentcore: busy check for the heartbeat failed (%s)", type(exc).__name__)
+        busy_now = True
+    if not busy_now:
+        return
+    try:
+        _put(prefix(sid) + "heartbeat.json", json.dumps({"at": now, "every": HEARTBEAT_S}).encode())
+        _beat["at"] = now
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hive_agentcore: writing heartbeat.json failed (%s)", type(exc).__name__)
+
+
 def _sync(live: dict[str, Any], workspace: Path) -> None:
     """Retry the record export, then write each object whose content changed."""
     ident = identity()
     if ident is None:
         return
+    _heartbeat(live, workspace, ident[0])     # first: a long export never delays it
     try:
         with hold():
             _export(workspace, None)
@@ -597,3 +635,4 @@ def _reset_for_tests() -> None:
     _holds = 0
     _warned_other.clear()
     _written.update({"state.json": None, "checks.json": (), "usage.json": (0, 0)})
+    _beat["at"] = 0.0

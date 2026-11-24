@@ -930,7 +930,8 @@ async def _from_round(row: dict, rec: dict, prev: dict, car: Any, handle: Any) -
 def _note_round_end(rec: dict, car: Any, handle: Any, started: float, pulled: dict) -> None:
     """Keep ``round_end`` (``{round, run_ref, checked_at}``) when this read shows that the
     round's result will never come: the read started after the round could write nothing
-    more (the carrier's ``writes_end_at``: its machine is past its lifetime), read every
+    more (the carrier's ``writes_end_at``: its machine is past its lifetime, or its store
+    said it wrote its last: a seal before the lifetime, a backend not restarted), read every
     entry the round listed (``drained``, no error), and the kept result is still not
     final. Kept once, for that round: nothing written later can exist, and a result that
     did come is read first by every reader (core/swarm_out_settle ``result_lost``)."""
