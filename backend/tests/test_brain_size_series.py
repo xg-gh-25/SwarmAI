@@ -126,3 +126,77 @@ def test_hook_append_noops_without_measurement(tmp_path: Path):
     hook._token_measurement = None  # not measured
     hook._append_brain_size_snapshot(root, ctx)  # must not crash
     assert read_series(root / SERIES_RELPATH) == []
+
+
+# ── The trend's figure is the prompt (render_section), with a marked break ──
+
+
+def test_deep_check_snapshot_records_the_prompt_figure(tmp_path: Path):
+    """The newest point is the deep check's prompt figure, not the disk sum: a
+    TIMELINE large on disk adds only its month summary to ``prompt_tokens``; the
+    disk sizes ride along as ``disk_per_file``; the row is stamped as prompt-measured."""
+    from datetime import date, timedelta
+    from hooks.context_health_hook import ContextHealthHook
+    from core.brain_size_series import SERIES_RELPATH, is_prompt_measured, read_series
+    from core.context_directory_loader import ContextDirectoryLoader
+
+    root = tmp_path
+    ctx = root / ".context"
+    ctx.mkdir(parents=True)
+    (ctx / "SWARMAI.md").write_text("core identity " * 200, encoding="utf-8")
+    (ctx / "MEMORY.md").write_text("## Principles\n" + "memory note " * 300, encoding="utf-8")
+    (ctx / "EVOLUTION.md").write_text("## Corrections Captured\n" + "evo " * 100, encoding="utf-8")
+    month = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    events = "\n\n".join(
+        f"### {month}-{(i % 27) + 1:02d} event {i}\n- what: {'long event body ' * 20}\n"
+        f"<!-- cand:e{i} | event_key:k{i} | source:S2 | event_kind:event -->"
+        for i in range(400))
+    (ctx / "TIMELINE.md").write_text(
+        f"# Timeline\n\n## {month}\n### {month}-28 month summary\n- what: the month\n"
+        f"<!-- cand:s | event_key:ks | source:S0 | event_kind:month_summary -->\n\n{events}\n",
+        encoding="utf-8")
+
+    hook = ContextHealthHook()
+    hook._check_token_budget(ctx)
+    hook._append_brain_size_snapshot(root, ctx)
+
+    row = read_series(root / SERIES_RELPATH)[-1]
+    est = ContextDirectoryLoader.estimate_tokens
+    disk_sum = sum(est(p.read_text(encoding="utf-8")) for p in ctx.glob("*.md"))
+    assert is_prompt_measured(row)
+    assert row["prompt_tokens"] == hook._token_measurement["total_tokens"]
+    assert row["prompt_tokens"] < disk_sum / 5        # TIMELINE's events are not in it
+    assert row["per_file"]["TIMELINE.md"] < 200
+    assert row["disk_per_file"]["TIMELINE.md"] == est((ctx / "TIMELINE.md").read_text(encoding="utf-8"))
+
+
+def _serve_trend(monkeypatch, root: Path, source: str = "memory") -> dict:
+    import asyncio
+    from core.initialization_manager import initialization_manager
+    from routers.eval import get_brain_trend
+
+    monkeypatch.setattr(initialization_manager, "get_cached_workspace_path", lambda: str(root))
+    return asyncio.run(get_brain_trend(source=source))
+
+
+def test_trend_marks_the_break_at_older_disk_sum_rows(tmp_path: Path, monkeypatch):
+    """Rows written before the prompt was measured hold a disk sum: the endpoint
+    serves their prompt_tokens as None (never converted or invented) and the newest
+    point's prompt_tokens is the prompt figure. The EVOLUTION.md size trend stays on
+    disk sizes across the break (older per_file, newer disk_per_file)."""
+    from core.brain_size_series import SERIES_RELPATH
+
+    series = tmp_path / SERIES_RELPATH
+    series.parent.mkdir(parents=True)
+    series.write_text(
+        '{"date":"2026-11-20","prompt_tokens":139000,"memory_bytes":10,'
+        '"per_file":{"EVOLUTION.md":3000}}\n', encoding="utf-8")
+    append_snapshot(series, date_str="2026-11-21", prompt_tokens=71000, memory_bytes=11,
+                    per_file={"EVOLUTION.md": 3010}, disk_per_file={"EVOLUTION.md": 3020})
+
+    pts = _serve_trend(monkeypatch, tmp_path)["points"]
+    assert [p["prompt_tokens"] for p in pts] == [None, 71000]
+    assert [p["memory_bytes"] for p in pts] == [10, 11]
+
+    evo = _serve_trend(monkeypatch, tmp_path, "evolution")["points"]
+    assert [p["memory_bytes"] for p in evo] == [3000, 3020]

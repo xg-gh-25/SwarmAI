@@ -398,6 +398,36 @@ describe('CMBrainOverlay — overview rail growth-trend + Needs-you filter (DoD4
     expect(await screen.findByTestId('cm-rail-trend-svg')).toBeInTheDocument();
   });
 
+  it('plots only prompt-measured points: older disk-sum points (prompt_tokens null) are a break, not data', async () => {
+    mockHealth({}, { trendPoints: [
+      { date: '2026-11-19', prompt_tokens: null, memory_bytes: 47000 },
+      { date: '2026-11-20', prompt_tokens: null, memory_bytes: 47500 },
+      { date: '2026-11-21', prompt_tokens: 71000, memory_bytes: 48000 },
+    ] });
+    renderOverlay();
+    openOverlay();
+    const rail = await screen.findByTestId('cm-overview-rail');
+    // one prompt point after the break: still collecting, since the first prompt point
+    await waitFor(() => expect(rail.textContent).toMatch(/collecting since 2026-11-21/i));
+    expect(screen.queryByTestId('cm-rail-trend-svg')).toBeNull();
+  });
+
+  it('draws the line from the prompt-measured points once there are two after the break', async () => {
+    mockHealth({}, { trendPoints: [
+      { date: '2026-11-20', prompt_tokens: null, memory_bytes: 47500 },
+      { date: '2026-11-21', prompt_tokens: 71000, memory_bytes: 48000 },
+      { date: '2026-11-22', prompt_tokens: 72000, memory_bytes: 48100 },
+    ] });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-overview-rail');
+    const svg = await screen.findByTestId('cm-rail-trend-svg');
+    // two points → one M and one L, no NaN from the null point
+    const d = svg.querySelector('path')?.getAttribute('d') ?? '';
+    expect(d).not.toMatch(/NaN/);
+    expect(d.match(/[ML]/g)).toEqual(['M', 'L']);
+  });
+
   it('clicking a Needs-you button filters the main area to that list + back returns + rail active', async () => {
     mockHealth({}, { governancePending: 2 });
     renderOverlay();

@@ -512,17 +512,25 @@ def _build_learning_dashboard(root) -> dict:
 async def get_brain_trend(source: str = "memory"):
     """Daily size-snapshot series for the C&M overlay trend charts (Run C: source=).
 
-    Returns {date, prompt_tokens, memory_bytes} points. The ``memory_bytes`` field is
-    the size the trend chart plots: for ``source=memory`` it's the whole-memory total
-    (as before, back-compat); for ``source=evolution`` it's the per-file EVOLUTION.md
-    byte size — which the daily snapshot ALREADY tracks under per_file["EVOLUTION.md"]
-    (Gate-1 BLOCK#5: no new tracking, no fabrication — real data). Kept under the same
-    ``memory_bytes`` key so the frontend TrendChart component is source-agnostic. NO
-    backfill: <2 points → frontend shows "collecting since launch" (R30 — never fabricates).
+    Returns {date, prompt_tokens, memory_bytes} points.
+
+    ``prompt_tokens`` (the rail's 30-day token line) is what the context files put in
+    the prompt, or ``None`` on a row recorded before the series measured the prompt:
+    those rows hold a disk sum, so the line starts where prompt measuring began (a
+    marked break: nothing is backfilled or converted).
+
+    ``memory_bytes`` is the size the Memory/Evolution trend chart plots, a file on
+    disk: for ``source=memory`` MEMORY.md's bytes; for ``source=evolution``
+    EVOLUTION.md's size in tokens from the snapshot's per-file disk sizes (Gate-1
+    BLOCK#5: no new tracking, no fabrication). Kept under the same ``memory_bytes``
+    key so the frontend TrendChart component is source-agnostic. NO backfill: <2
+    points → frontend shows "collecting since launch" (R30 — never fabricates).
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
-    from core.brain_size_series import read_series, SERIES_RELPATH
+    from core.brain_size_series import (
+        SERIES_RELPATH, is_prompt_measured, read_series, row_disk_per_file,
+    )
 
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
@@ -535,17 +543,18 @@ async def get_brain_trend(source: str = "memory"):
     points = []
     for r in rows:
         if is_evo:
-            # Real EVOLUTION.md size from the already-recorded per_file snapshot.
+            # EVOLUTION.md's disk size from the recorded per-file disk sizes.
             # SKIP a legacy point that predates per_file (Gate-2 MED-1) — charting a
             # missing value as 0 would draw a false crash-to-zero dip. Omitting it is
             # honest: the trend simply starts when per_file tracking began.
-            pf = r.get("per_file")
+            pf = row_disk_per_file(r)
             if not pf or "EVOLUTION.md" not in pf:
                 continue
             size = pf["EVOLUTION.md"]
         else:
             size = r.get("memory_bytes", 0)
-        points.append({"date": r.get("date"), "prompt_tokens": r.get("prompt_tokens", 0),
+        prompt = r.get("prompt_tokens", 0) if is_prompt_measured(r) else None
+        points.append({"date": r.get("date"), "prompt_tokens": prompt,
                        "memory_bytes": size})
     return {
         "points": points,

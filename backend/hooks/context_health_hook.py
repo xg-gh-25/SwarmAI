@@ -40,8 +40,9 @@ logger = logging.getLogger(__name__)
 # NOTE: the former module-level `_is_cjk_like` CJK detector was REMOVED in
 # run_3f25a73a. It re-implemented CJK detection with a range that DIVERGED from
 # ContextDirectoryLoader._CJK_RE (it had Hangul but not Kana; the loader had Kana
-# but not Hangul — Gate-1 finding C). _check_token_budget now calls the canonical
-# estimate_tokens, which owns the single unified CJK range. Do NOT reintroduce a
+# but not Hangul — Gate-1 finding C). _check_token_budget now measures through
+# core.context_brain, which calls the canonical estimate_tokens, the owner of the
+# single unified CJK range. Do NOT reintroduce a
 # second detector here — it WILL drift.
 
 
@@ -183,7 +184,7 @@ class ContextHealthHook:
         # Track last refresh git rev to skip no-op refreshes.
         # Dirty flag: set by _light_refresh when cultivation writes to DDD docs.
         # (The old PROJECTS.md in-prompt index refresh was removed 2026-08-14.)
-        # Token budget measurement (populated by _check_token_budget in deep check)
+        # Prompt-token measurement (populated by _check_token_budget in deep check)
         self._token_measurement: dict = {}
 
     async def execute(self, context: HookContext) -> None:
@@ -888,7 +889,7 @@ class ContextHealthHook:
         if context_dir.is_dir():
             findings += self._check_token_budget(context_dir)
             # 11a. Daily size-snapshot for the C&M brain trend charts (run_d0ba3f69).
-            #      Uses the numbers _check_token_budget just populated into
+            #      Uses the prompt figures _check_token_budget just populated into
             #      self._token_measurement. UPSERT-by-date (idempotent — this
             #      deep-check can re-run same-day across restarts). Net-new series,
             #      no backfill (XG: count from launch date forward).
@@ -1328,7 +1329,9 @@ class ContextHealthHook:
 
     # ── Context Token Budget Measurement ─────────────────────────────
 
-    # The truncatable context files that compose the system prompt (assembly order).
+    # The context files _check_self_report_drift scans for a stated size of their own
+    # (a file's claim about itself is compared with the file on disk). The budget
+    # check does not use this list: it measures every assembled file's prompt form.
     # PROJECTS.md removed 2026-08-14 (in-prompt index deleted).
     _CONTEXT_FILES = (
         "SOUL.md", "AGENT.md", "USER.md", "STEERING.md", "TOOLS.md",
@@ -1348,36 +1351,38 @@ class ContextHealthHook:
     _EMERGENCY_THRESHOLD = _CDL_EFFECTIVE_1M_BUDGET + _CDL_EMERGENCY_MARGIN
 
     def _check_token_budget(self, context_dir: Path) -> list[str]:
-        """Measure total token consumption across all 9 context files.
+        """Measure what the context files put in the owner's prompt; warn when it
+        is over the assembly budget.
 
-        Uses the CANONICAL ``ContextDirectoryLoader.estimate_tokens`` (the SAME
-        estimator the prompt assembly uses) — NOT a local re-implementation.
-        Before run_3f25a73a this method had its own ``cjk*1.5 + ascii/3.5``
-        formula that diverged ~2.2x from the canonical on CJK (Gate-1 finding);
-        adopting the canonical kills the divergence and means this number equals
-        what actually enters the prompt. Emits WARNING/EMERGENCY (observability,
-        not a gate — see threshold note above). Persists to
-        self._token_measurement.
+        Each file is measured on its prompt form, ``ContextDirectoryLoader.
+        render_section`` through ``section_text`` (the text assembly joins and its
+        budget check counts), by ``core.context_brain.build_context_token_block``,
+        the same block the C&M overlay shows, so this report and the overlay cannot
+        disagree. A file that is large only on disk does not raise the warning:
+        TIMELINE.md puts only its month summaries in the prompt, however many events
+        it holds. The canonical ``estimate_tokens`` does the counting (run_3f25a73a
+        removed a local formula that diverged ~2.2x on CJK). Emits
+        WARNING/EMERGENCY (observability, not a gate — see the threshold note
+        above).
+
+        Stores ``self._token_measurement``: ``total_tokens`` and ``per_file`` are
+        the prompt figures (what ``over_budget`` and the trend's ``prompt_tokens``
+        use); ``disk_per_file`` is each whole file on disk, kept for the
+        EVOLUTION.md size trend.
         """
-        from core.context_directory_loader import ContextDirectoryLoader
+        from core.context_brain import build_context_token_block
 
         findings: list[str] = []
-        total_tokens = 0
-        file_tokens: dict[str, int] = {}
+        block = build_context_token_block(context_dir)
+        file_tokens = {row["name"]: int(row["tokens"]) for row in block["per_file"]}
+        disk_tokens = {row["name"]: int(row["disk_tokens"]) for row in block["per_file"]}
+        total_tokens = int(block["total_tokens"])
 
-        for fname in self._CONTEXT_FILES:
-            path = context_dir / fname
-            if not path.exists():
-                continue
-            content = path.read_text(encoding="utf-8")
-            tokens = ContextDirectoryLoader.estimate_tokens(content)
-            file_tokens[fname] = tokens
-            total_tokens += tokens
-
-        # Store measurement for external consumers (optimizer job)
+        # Read by _append_brain_size_snapshot (the C&M trend series).
         self._token_measurement = {
             "total_tokens": total_tokens,
             "per_file": file_tokens,
+            "disk_per_file": disk_tokens,
             "warning_threshold": self._WARNING_THRESHOLD,
             "emergency_threshold": self._EMERGENCY_THRESHOLD,
             "over_budget": total_tokens > self._WARNING_THRESHOLD,
@@ -1388,16 +1393,17 @@ class ContextHealthHook:
             top3 = ", ".join(f"{f}({t})" for f, t in sorted_files[:3])
             findings.append(
                 f"[context/budget] EMERGENCY: {total_tokens}/{self._EMERGENCY_THRESHOLD} "
-                f"tokens (real calibrated estimate). Top: {top3}. Write-side trim "
-                f"(decay/archive) needed — assembly does NOT truncate."
+                f"tokens in the prompt (real calibrated estimate). Top: {top3}. Write-side "
+                f"consolidation needed — assembly does NOT truncate."
             )
         elif total_tokens > self._WARNING_THRESHOLD:
             sorted_files = sorted(file_tokens.items(), key=lambda x: -x[1])
             top3 = ", ".join(f"{f}({t})" for f, t in sorted_files[:3])
             findings.append(
                 f"[context/budget] WARNING: {total_tokens}/{self._WARNING_THRESHOLD} "
-                f"tokens (real calibrated estimate). Top: {top3}. Over assembly budget — "
-                f"plan write-side trim (assembly injects full, does not truncate)."
+                f"tokens in the prompt (real calibrated estimate). Top: {top3}. Over "
+                f"assembly budget — plan write-side consolidation (assembly injects "
+                f"full, does not truncate)."
             )
 
         return findings
@@ -1406,8 +1412,10 @@ class ContextHealthHook:
         """Append today's C&M brain size snapshot to the trend series (run_d0ba3f69).
 
         Reuses the numbers ``_check_token_budget`` just populated into
-        ``self._token_measurement`` (prompt tokens + per-file), plus MEMORY.md's
-        on-disk byte size. UPSERT-by-date via ``brain_size_series.append_snapshot``
+        ``self._token_measurement`` (the prompt total and per-file prompt tokens,
+        plus per-file disk tokens), and MEMORY.md's on-disk byte size. The row is
+        stamped as prompt-measured; older rows hold disk sums (see
+        ``core.brain_size_series``). UPSERT-by-date via ``brain_size_series.append_snapshot``
         (idempotent — safe to re-run same-day across daemon restarts). Net-new
         series, NO backfill: the chart shows "collecting since launch" until it has
         enough points. Observability write — the caller wraps this in try/except so
@@ -1428,6 +1436,7 @@ class ContextHealthHook:
             prompt_tokens=int(measurement.get("total_tokens", 0)),
             memory_bytes=int(memory_bytes),
             per_file=dict(measurement.get("per_file", {})),
+            disk_per_file=dict(measurement.get("disk_per_file", {})),
         )
 
     # Matches EXPLICIT self-size claims only: a size SUBJECT label ("Context

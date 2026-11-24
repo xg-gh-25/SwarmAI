@@ -6,7 +6,9 @@ Tests the two new capabilities:
 
 run_3f25a73a: _check_token_budget now delegates to the CANONICAL
 ContextDirectoryLoader.estimate_tokens (calibrated CJK 1.1 tok/char,
-Latin 2.2 tok/word). The old local `cjk*1.5 + ascii/3.5` formula and the
+Latin 2.2 tok/word). It measures each file's prompt form
+(ContextDirectoryLoader.render_section, through core.context_brain's token
+block), not the file on disk. The old local `cjk*1.5 + ascii/3.5` formula and the
 75K/85K thresholds were calibrated against an empirically-wrong coefficient;
 these tests were updated to the calibrated estimator + observability
 thresholds (WARNING 91K = assembly budget, EMERGENCY 130K).
@@ -89,8 +91,9 @@ class TestTokenBudgetMeasurement:
         assert "EMERGENCY" in findings[0]
 
     def test_matches_canonical_estimator(self, tmp_path):
-        """_check_token_budget must equal ContextDirectoryLoader.estimate_tokens
-        (Gate-1: no second formula — health delegates to the canonical)."""
+        """_check_token_budget must equal ContextDirectoryLoader.estimate_tokens of
+        the file's prompt form (Gate-1: no second formula — health delegates to the
+        canonical, on render_section's text)."""
         from hooks.context_health_hook import ContextHealthHook
         from core.context_directory_loader import ContextDirectoryLoader
 
@@ -100,13 +103,16 @@ class TestTokenBudgetMeasurement:
         hook._check_token_budget(ctx)
         assert (
             hook._token_measurement["per_file"]["MEMORY.md"]
+            == _prompt_tokens(ctx, "MEMORY.md")
+        )
+        assert (
+            hook._token_measurement["disk_per_file"]["MEMORY.md"]
             == ContextDirectoryLoader.estimate_tokens(content)
         )
 
     def test_cjk_aware_token_counting(self, tmp_path):
         """CJK counted via canonical (1.1 tok/char): 1000 中 ≈ 1100 tokens."""
         from hooks.context_health_hook import ContextHealthHook
-        from core.context_directory_loader import ContextDirectoryLoader
 
         hook = ContextHealthHook()
         content = "中" * 1000 + " " + "word " * 100
@@ -114,20 +120,22 @@ class TestTokenBudgetMeasurement:
         hook._check_token_budget(ctx)
         # equals canonical by construction; sanity: CJK dominates ~1100
         assert hook._token_measurement["per_file"]["MEMORY.md"] == \
-            ContextDirectoryLoader.estimate_tokens(content)
+            _prompt_tokens(ctx, "MEMORY.md")
         assert hook._token_measurement["per_file"]["MEMORY.md"] > 1000
 
     def test_no_local_cjk_formula_remains(self):
-        """The divergent local cjk*1.5 formula must be GONE (grep-style guard)."""
+        """The divergent local cjk*1.5 formula must be GONE, and the check must
+        measure through the overlay's block (render_section), not a copy of it."""
         import inspect
         from hooks.context_health_hook import ContextHealthHook
         src = inspect.getsource(ContextHealthHook._check_token_budget)
         assert "cjk_chars * 1.5" not in src
         assert "_is_cjk_like" not in src
-        assert "estimate_tokens" in src
+        assert "build_context_token_block" in src
+        assert "read_text" not in src
 
     def test_ignores_non_context_files(self, tmp_path):
-        """Files not in the 9 context file list are ignored."""
+        """Files that are not assembled context files are ignored."""
         from hooks.context_health_hook import ContextHealthHook
 
         hook = ContextHealthHook()
@@ -139,6 +147,107 @@ class TestTokenBudgetMeasurement:
         findings = hook._check_token_budget(ctx)
         # Only SOUL.md counted (~30 words ≈ 66 tokens)
         assert hook._token_measurement["total_tokens"] < 100
+
+
+def _prompt_tokens(ctx: Path, filename: str) -> int:
+    """What *filename* puts in the assembled prompt, in tokens (its section)."""
+    from core.context_directory_loader import CONTEXT_FILES, ContextDirectoryLoader
+
+    spec = next(s for s in CONTEXT_FILES if s.filename == filename)
+    body = ContextDirectoryLoader(ctx).render_section(spec)
+    return ContextDirectoryLoader.estimate_tokens(
+        ContextDirectoryLoader.section_text(spec.section_name, body)) if body else 0
+
+
+def _write_big_timeline(ctx: Path, events: int) -> None:
+    """A TIMELINE.md in the CDF writer's block format: ONE month summary for the
+    previous month (what select_timeline injects) and *events* events (which it
+    does not)."""
+    from datetime import date, timedelta
+
+    month = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    summary = (f"### {month}-28 month summary\n- what: the month in short\n"
+               "- outcome: summarised\n<!-- cand:summary-1 | event_key:ks | source:S0 | "
+               "event_kind:month_summary -->")
+    blocks = [
+        f"### {month}-{(i % 27) + 1:02d} event number {i}\n"
+        f"- what: {'a long event body with many words ' * 12}\n- outcome: done\n"
+        f"<!-- cand:event-{i} | event_key:k{i} | source:S2 | event_kind:event -->"
+        for i in range(events)
+    ]
+    (ctx / "TIMELINE.md").write_text(
+        f"# Timeline\n\n## {month}\n{summary}\n\n" + "\n\n".join(blocks) + "\n",
+        encoding="utf-8",
+    )
+
+
+class TestBudgetMeasuresThePrompt:
+    """The deep check counts what each file puts in the prompt (render_section),
+    the same figure the C&M overlay shows — not each file's size on disk."""
+
+    def _ctx(self, tmp_path: Path) -> Path:
+        ctx = tmp_path / ".context"
+        ctx.mkdir()
+        (ctx / "SWARMAI.md").write_text("core identity " * 200, encoding="utf-8")
+        (ctx / "SOUL.md").write_text("principle words " * 200, encoding="utf-8")
+        (ctx / "MEMORY.md").write_text("## Principles\n" + "memory note " * 300,
+                                       encoding="utf-8")
+        return ctx
+
+    def test_big_timeline_total_is_the_assembled_prompt_and_no_warning(self, tmp_path):
+        """A TIMELINE of many events and one month summary, over the warning line
+        on disk: the total is about the assembled prompt and nothing warns."""
+        from hooks.context_health_hook import ContextHealthHook
+        from core.context_directory_loader import ContextDirectoryLoader
+
+        ctx = self._ctx(tmp_path)
+        _write_big_timeline(ctx, events=2500)
+        hook = ContextHealthHook()
+        findings = hook._check_token_budget(ctx)
+        m = hook._token_measurement
+
+        est = ContextDirectoryLoader.estimate_tokens
+        assert est((ctx / "TIMELINE.md").read_text(encoding="utf-8")) > hook._WARNING_THRESHOLD
+        assembled = ContextDirectoryLoader(ctx)._assemble_from_sources(token_budget=10**9)
+        # equal up to the "\n\n" separators between sections
+        assert abs(m["total_tokens"] - est(assembled)) <= 2 * len(m["per_file"]), (
+            m["total_tokens"], est(assembled))
+        assert m["per_file"]["TIMELINE.md"] < 200
+        assert m["disk_per_file"]["TIMELINE.md"] > hook._WARNING_THRESHOLD
+        assert findings == []
+        assert m["over_budget"] is False
+
+    def test_disk_only_size_in_a_file_raises_no_warning(self, tmp_path):
+        """A file whose bulk is a metadata comment (stripped from the prompt) is over
+        the line on disk only: no WARNING/EMERGENCY."""
+        from hooks.context_health_hook import ContextHealthHook
+
+        ctx = self._ctx(tmp_path)
+        (ctx / "KNOWLEDGE.md").write_text(
+            "## Notes\n- one index line\n<!-- " + "generated metadata " * 90_000 + "-->\n",
+            encoding="utf-8")
+        hook = ContextHealthHook()
+        findings = hook._check_token_budget(ctx)
+        assert hook._token_measurement["disk_per_file"]["KNOWLEDGE.md"] > hook._EMERGENCY_THRESHOLD
+        assert findings == []
+        assert hook._token_measurement["over_budget"] is False
+
+    def test_large_memory_still_warns(self, tmp_path):
+        """MEMORY.md is injected whole: a large one is over the line in the prompt
+        and still raises the WARNING, naming MEMORY.md."""
+        from hooks.context_health_hook import ContextHealthHook
+
+        ctx = self._ctx(tmp_path)
+        _write_big_timeline(ctx, events=50)
+        (ctx / "MEMORY.md").write_text("## Principles\n" + "memoryword " * 68_000,
+                                       encoding="utf-8")
+        hook = ContextHealthHook()
+        findings = hook._check_token_budget(ctx)
+        m = hook._token_measurement
+        assert hook._WARNING_THRESHOLD < m["total_tokens"] < hook._EMERGENCY_THRESHOLD
+        assert len(findings) == 1 and "WARNING" in findings[0]
+        assert "MEMORY.md" in findings[0]
+        assert m["over_budget"] is True
 
 
 class TestSelfReportDrift:

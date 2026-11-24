@@ -1001,9 +1001,10 @@ class ContextDirectoryLoader:
         given), the selectors (MEMORY / EVOLUTION through
         ``memory_injection.select_context_file``, TIMELINE through
         ``memory_injection.select_timeline``), comment and title cleaning, and the
-        MEMORY index strip. ``_assemble_from_sources`` assembles from it, and the
-        C&M overlay (``core.context_brain``) measures it, so what the overlay counts
-        is what the prompt carries.
+        MEMORY index strip. ``_assemble_from_sources`` assembles from it, and
+        ``core.context_brain`` measures it for the C&M overlay and for the
+        context-health deep check (its budget warning and the 30-day token trend),
+        so what they count is what the prompt carries.
         """
         filepath = self.context_dir / spec.filename
         try:

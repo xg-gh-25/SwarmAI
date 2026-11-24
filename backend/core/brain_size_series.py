@@ -14,8 +14,21 @@ series can never accumulate >1 row for a calendar day (which would double-count 
 trend). Durability lives in the file, not in caller memory.
 
 Row shape (one JSON object per line):
-    {"date": "YYYY-MM-DD", "prompt_tokens": int, "memory_bytes": int,
-     "per_file": {filename: tokens, ...}}
+    {"date": "YYYY-MM-DD", "measure": "prompt", "prompt_tokens": int,
+     "memory_bytes": int, "per_file": {filename: tokens, ...},
+     "disk_per_file": {filename: tokens, ...}}
+
+``prompt_tokens`` and ``per_file`` are what each context file puts in the prompt
+(``ContextDirectoryLoader.render_section``, measured by the deep check through
+``core.context_brain.build_context_token_block``); ``disk_per_file`` is each whole
+file on disk (the EVOLUTION.md size trend reads it); ``memory_bytes`` is MEMORY.md's
+size on disk in bytes.
+
+**The break in the series.** Rows written before ``measure`` existed carry no
+``measure`` key: their ``prompt_tokens`` and ``per_file`` are disk sums of eight of
+the context files, not the prompt. They are kept as written (no rewrite, no invented
+prompt values); a reader tells them apart with ``is_prompt_measured`` and treats
+their ``per_file`` as disk sizes.
 
 Fail-open: a corrupt line is skipped by the reader (observability, not a gate).
 """
@@ -25,11 +38,30 @@ import json
 from pathlib import Path
 from typing import Any
 
-__all__ = ["append_snapshot", "read_series", "SERIES_RELPATH"]
+__all__ = ["append_snapshot", "read_series", "is_prompt_measured", "row_disk_per_file",
+           "PROMPT_MEASURE", "SERIES_RELPATH"]
 
 # Canonical location under the workspace (git-tracked so the series survives; the
 # daily snapshot is small — one short JSON line per day).
 SERIES_RELPATH = "Knowledge/.brain-size-series.jsonl"
+
+# The ``measure`` stamp of a row whose token figures are the prompt form. Rows
+# without it predate the change and hold disk sums (see the module docstring).
+PROMPT_MEASURE = "prompt"
+
+
+def is_prompt_measured(row: dict[str, Any]) -> bool:
+    """True when *row*'s ``prompt_tokens`` / ``per_file`` are what the prompt carries
+    (False for an older row, whose figures are disk sums)."""
+    return row.get("measure") == PROMPT_MEASURE
+
+
+def row_disk_per_file(row: dict[str, Any]) -> dict[str, int] | None:
+    """Each file's size on disk in tokens for *row*, or None when the row has none:
+    ``disk_per_file`` on a prompt-measured row, ``per_file`` on an older one (which
+    was measured on disk)."""
+    pf = row.get("disk_per_file") if is_prompt_measured(row) else row.get("per_file")
+    return pf if isinstance(pf, dict) else None
 
 
 def read_series(series_path: Path) -> list[dict[str, Any]]:
@@ -65,8 +97,12 @@ def append_snapshot(
     prompt_tokens: int,
     memory_bytes: int,
     per_file: dict[str, int],
+    disk_per_file: dict[str, int] | None = None,
 ) -> None:
     """UPSERT one daily snapshot keyed by ``date_str`` (last-write-wins).
+
+    *prompt_tokens* and *per_file* are the prompt figures; *disk_per_file* the
+    whole files on disk. The row is stamped ``measure: "prompt"``.
 
     If a row for ``date_str`` already exists it is REPLACED in place (no duplicate
     row); otherwise the new row is appended. Rows stay in ascending date order.
@@ -75,9 +111,11 @@ def append_snapshot(
     """
     row = {
         "date": date_str,
+        "measure": PROMPT_MEASURE,
         "prompt_tokens": int(prompt_tokens),
         "memory_bytes": int(memory_bytes),
         "per_file": {str(k): int(v) for k, v in (per_file or {}).items()},
+        "disk_per_file": {str(k): int(v) for k, v in (disk_per_file or {}).items()},
     }
 
     existing = read_series(series_path)

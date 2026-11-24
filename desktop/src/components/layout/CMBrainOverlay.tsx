@@ -255,7 +255,7 @@ export function CMBrainContent() {
             {block?.over_budget && <BudgetAlert block={block} />}
           </div>
 
-          {/* 30-day token growth — from the daily snapshot series (collecting until >=2 pts) */}
+          {/* 30-day token growth — the prompt-measured points of the daily snapshot series (collecting until >=2 pts) */}
           <div>
             <SectionLabel>{t('ui.CMBrainOverlay.tokenGrowth30d')}</SectionLabel>
             <div className="mt-1.5">
@@ -385,15 +385,19 @@ function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; faile
   );
 }
 
-// The rail's compact growth-trend — prompt_tokens over time. R30: <2 points →
-// explicit "collecting" text, never a fabricated line.
+// The rail's compact growth-trend — what the context files put in the prompt, over
+// time. A point recorded before the series measured the prompt has prompt_tokens null
+// (its figure was a disk sum): the line starts where prompt measuring began, and until
+// it has 2 such points it says "collecting since" that date. R30: never a fabricated line.
 function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
   const { t } = useTranslation();
-  const pts = trend?.points ?? [];
+  const pts = (trend?.points ?? []).filter(
+    (p): p is TrendPoint & { prompt_tokens: number } => typeof p.prompt_tokens === 'number',
+  );
   if (pts.length < 2) {
     return (
       <div className="text-meta text-[var(--color-text-faint)]">
-        {t('ui.CMBrainOverlay.collectingSince', { since: trend?.launch_date ?? t('ui.CMBrainOverlay.launch') })}
+        {t('ui.CMBrainOverlay.collectingSince', { since: pts[0]?.date ?? t('ui.CMBrainOverlay.launch') })}
       </div>
     );
   }
@@ -715,7 +719,8 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
 interface GraphNode { type: string; count: number; }
 interface DrillEntry { title: string; meta: string; }
 interface BrainGraph { nodes: GraphNode[]; drill: Record<string, DrillEntry[]>; total: number; }
-interface TrendPoint { date: string; prompt_tokens: number; memory_bytes: number; }
+// prompt_tokens: what the prompt carries; null on a point recorded as a disk sum.
+interface TrendPoint { date: string; prompt_tokens: number | null; memory_bytes: number; }
 interface BrainTrend { points: TrendPoint[]; count: number; launch_date: string | null; }
 
 // 7-type tint (aligns to the ontology; stable across renders). Evolution kinds get
@@ -1058,7 +1063,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
 
 // Trend line chart from the daily size-snapshot series. R30: NEVER fabricates a
 // baseline — <2 real points shows an explicit "collecting since launch" state.
-function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'memory_bytes' | 'prompt_tokens' }) {
+function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'memory_bytes' }) {
   const { t } = useTranslation();
   const pts = trend?.points ?? [];
   if (pts.length < 2) {
