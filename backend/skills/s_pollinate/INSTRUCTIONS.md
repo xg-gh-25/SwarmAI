@@ -83,7 +83,7 @@ and extract answers from natural language. The goal is clarity, not interrogatio
 
 **Q2: AUDIENCE** — "谁需要看到这个？"
   Canonical values: `leadership`, `customer`, `team`, `developer_community`, `social_followers`
-  (User may say "给 Rob 看" → leadership. "发到社区" → developer_community.)
+  (User may say "给老板看" → leadership. "发到社区" → developer_community.)
 
 **Q3: OUTCOME** — "他们看完后你希望发生什么？"
   Canonical values: `awareness`, `alignment`, `action`, `data_decision`, `education`
@@ -203,7 +203,7 @@ without going through DISCOVER — e.g., legacy "make content about X" pattern):
 
 Parse from discovery.json + user's message:
 - **Topic:** the thesis/message from discovery
-- **Domain:** which knowledge area (AIDLC, AI Architecture, Industry Insights, etc.)
+- **Domain:** which knowledge area (e.g. Methodology, AI Architecture, Industry Insights)
 - **Confirmed Tracks:** from discovery.json `confirmed_tracks` array
 - **Platforms:** inferred from tracks (poster → XHS/朋友圈, video → B站/YouTube, deck → N/A)
 

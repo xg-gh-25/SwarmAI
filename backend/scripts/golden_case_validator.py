@@ -136,9 +136,15 @@ def gate_teeth(case: dict, grandfathered: bool = False) -> tuple[bool, list[str]
                        "(a command that proves the case goes RED on broken input)"]
     return True, []
 
-# Privacy: sensitive words OR instance-structure references. Word-only is
-# insufficient (Gate-1 #5: 145 cases ref instance paths w/o a sensitive word).
-_SENSITIVE = re.compile(r"gawan|amazon\.com|cmhk|password|secret|aws_access|api_key", re.I)
+# Privacy: secret-shaped words OR instance-structure references. Word-only is
+# insufficient (many cases reference instance paths without a sensitive word).
+# Only generic secret patterns live here: a word list naming one person, company or
+# customer would reject every other user's cases and ship that person's data. A
+# case's instance-specific content is caught by _INSTANCE below.
+_SENSITIVE = re.compile(
+    r"password|passwd|secret|aws_access|api[_-]?key|private[_-]?key|(?-i:AKIA[0-9A-Z]{16})",
+    re.I,
+)
 _INSTANCE = re.compile(
     r"\.context/|(STEERING|AGENT|SOUL|MEMORY|EVOLUTION|USER|PRODUCT|TECH|IMPROVEMENT|PROJECT)"
     r"\.(md|R\d|P\d|PIT\d|DEC\d|PRI\d)|"
@@ -372,7 +378,8 @@ def privacy_scan(case: dict) -> tuple[bool, list[str]]:
     blob = json.dumps(case, ensure_ascii=False)
     hits = []
     if _SENSITIVE.search(blob):
-        hits.append("privacy: contains sensitive word (gawan/amazon.com/cmhk/secret…)")
+        hits.append("privacy: contains a secret-like word (password / secret / api_key / "
+                    "access key …)")
     if _INSTANCE.search(blob):
         hits.append("privacy: references instance structure (.context/ / DDD doc / Projects/*) "
                     "— this case is instance-specific, keep it private")

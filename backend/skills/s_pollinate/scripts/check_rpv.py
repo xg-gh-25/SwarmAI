@@ -5,8 +5,8 @@ Auto-checks 6 of 12 RP-V patterns from data files. The remaining 6 require
 human judgment and must be explicitly listed by the agent.
 
 Usage:
-    python check_rpv.py content/aidlc-one-sentence-to-pr/
-    python check_rpv.py content/aidlc-one-sentence-to-pr/ --json
+    python check_rpv.py content/<topic>/
+    python check_rpv.py content/<topic>/ --json
 """
 import argparse
 import json

@@ -516,8 +516,9 @@ echo "  Note: Animations are not preserved (it's a static export)."
 echo -e "${BOLD}════════════════════════════════════════${NC}"
 echo ""
 
-# Open the PDF automatically
-if command -v open &>/dev/null; then
+# Open the PDF automatically. `open` is the macOS opener only: on Debian/Ubuntu
+# `open` is openvt (start a program on a new virtual terminal), so gate it on uname.
+if [ "$(uname -s)" = "Darwin" ] && command -v open &>/dev/null; then
     open "$OUTPUT_PDF"
 elif command -v xdg-open &>/dev/null; then
     xdg-open "$OUTPUT_PDF"

@@ -5,9 +5,13 @@ Scans the deliver/ directory and produces a markdown table of all
 publish-ready assets with file paths, platforms, formats, and status.
 
 Usage:
-    python publish_dashboard.py content/pollinate-v2-launch/
-    python publish_dashboard.py content/pollinate-v2-launch/ --open
-    python publish_dashboard.py content/pollinate-v2-launch/ --html
+    python publish_dashboard.py content/<topic>/
+    python publish_dashboard.py content/<topic>/ --open
+    python publish_dashboard.py content/<topic>/ --html
+    python publish_dashboard.py content/<topic>/ --lang zh   # Chinese dashboard
+
+The dashboard text is English by default; ``--lang zh`` renders it in Chinese.
+Platform publish kits are parsed in either language.
 """
 import argparse
 import json
@@ -18,30 +22,116 @@ import sys
 import webbrowser
 
 
+LANGS = ("en", "zh")
+
 CHANNEL_LABELS = {
-    "xiaohongshu": "📕 小红书",
-    "bilibili": "📺 B站",
-    "youtube": "▶️ YouTube",
-    "douyin": "🎵 抖音",
-    "weixin_video": "💬 视频号",
-    "gongzhonghao": "📝 公众号",
-    "github": "🐙 GitHub",
-    "zhihu": "📘 知乎",
+    "en": {
+        "xiaohongshu": "📕 Xiaohongshu",
+        "bilibili": "📺 Bilibili",
+        "youtube": "▶️ YouTube",
+        "douyin": "🎵 Douyin",
+        "weixin_video": "💬 WeChat Channels",
+        "gongzhonghao": "📝 WeChat Official Account",
+        "github": "🐙 GitHub",
+        "zhihu": "📘 Zhihu",
+    },
+    "zh": {
+        "xiaohongshu": "📕 小红书",
+        "bilibili": "📺 B站",
+        "youtube": "▶️ YouTube",
+        "douyin": "🎵 抖音",
+        "weixin_video": "💬 视频号",
+        "gongzhonghao": "📝 公众号",
+        "github": "🐙 GitHub",
+        "zhihu": "📘 知乎",
+    },
 }
 
-FORMAT_LABELS = {
-    ".png": "图片",
-    ".jpg": "图片",
-    ".mp4": "视频",
-    ".wav": "音频",
-    ".md": "文档",
-    ".txt": "文案",
-    ".html": "网页",
-    ".json": "数据",
+# File extension -> format kind (language-neutral; the label comes from STRINGS).
+FORMAT_KINDS = {
+    ".png": "image",
+    ".jpg": "image",
+    ".mp4": "video",
+    ".wav": "audio",
+    ".md": "doc",
+    ".txt": "copy",
+    ".html": "web",
+    ".json": "data",
+}
+
+STRINGS = {
+    "en": {
+        "fmt.image": "Image", "fmt.video": "Video", "fmt.audio": "Audio", "fmt.doc": "Document",
+        "fmt.copy": "Copy", "fmt.web": "Web page", "fmt.data": "Data",
+        "role.poster": "Poster", "role.caption": "Post caption", "role.dynamic": "Feed post copy",
+        "role.narrative_full": "Article (full)", "role.narrative": "Article summary",
+        "role.readme": "README section", "role.qr": "QR code", "role.video": "Video",
+        "role.subtitles": "Subtitles",
+        "md.table": "| Channel | Content | Format | Size | File |",
+        "md.actions": "## 📌 How to publish",
+        "md.files": "## 📁 File locations",
+        "md.no_main": "1. (no main image)",
+        "xhs.1": "1. AirDrop `{file}` to your phone", "xhs.2": "2. Copy the caption → paste it into Xiaohongshu",
+        "bili.1": "1. Upload `{file}` to a Bilibili feed post", "bili.2": "2. Paste the feed post copy",
+        "gzh.1": "1. Open the Official Account console → new article", "gzh.2": "2. Import `{file}`",
+        "gh.1": "1. Copy the content of `{file}` into README.md", "gh.2": "2. Commit + push",
+        "publish": "3. Publish", "other": "1. Upload the content to {label}",
+        "html.lang": "en", "html.no_cover": "No cover image", "html.video": "🎬 Video preview",
+        "html.cover": "🖼️ Cover", "html.title": "📝 Title", "html.body": "📝 Body", "html.tags": "🏷️ Tags",
+        "html.publish_xhs": "🚀 Publish to Xiaohongshu",
+    },
+    "zh": {
+        "fmt.image": "图片", "fmt.video": "视频", "fmt.audio": "音频", "fmt.doc": "文档",
+        "fmt.copy": "文案", "fmt.web": "网页", "fmt.data": "数据",
+        "role.poster": "海报", "role.caption": "发布文案", "role.dynamic": "动态文案",
+        "role.narrative_full": "长文 (完整版)", "role.narrative": "长文摘要",
+        "role.readme": "README section", "role.qr": "QR码", "role.video": "视频",
+        "role.subtitles": "字幕",
+        "md.table": "| 渠道 | 内容 | 格式 | 大小 | 文件 |",
+        "md.actions": "## 📌 发布操作",
+        "md.files": "## 📁 文件位置",
+        "md.no_main": "1. (无主图)",
+        "xhs.1": "1. AirDrop `{file}` 到手机", "xhs.2": "2. 复制文案 → 粘贴到小红书",
+        "bili.1": "1. 上传 `{file}` 到 B站动态", "bili.2": "2. 粘贴动态文案",
+        "gzh.1": "1. 打开公众号后台 → 新建图文", "gzh.2": "2. 导入 `{file}`",
+        "gh.1": "1. 复制 `{file}` 内容到 README.md", "gh.2": "2. Commit + push",
+        "publish": "3. 发布", "other": "1. 上传内容到 {label}",
+        "html.lang": "zh-CN", "html.no_cover": "无封面图", "html.video": "🎬 视频预览",
+        "html.cover": "🖼️ 封面", "html.title": "📝 标题", "html.body": "📝 正文", "html.tags": "🏷️ 标签",
+        "html.publish_xhs": "🚀 发布到小红书",
+    },
 }
 
 
-def scan_deliver(content_dir: str) -> list:
+def _t(lang: str) -> dict:
+    """The dashboard strings for ``lang`` (English for an unknown language)."""
+    return STRINGS.get(lang, STRINGS["en"])
+
+
+def _role(fname: str):
+    """What a deliver/ file is, from its name (language-neutral)."""
+    if "poster" in fname:
+        return "poster"
+    if "caption" in fname:
+        return "caption"
+    if "dynamic" in fname:
+        return "dynamic"
+    if "narrative" in fname and "full" in fname:
+        return "narrative_full"
+    if "narrative" in fname:
+        return "narrative"
+    if "readme" in fname:
+        return "readme"
+    if "qr" in fname:
+        return "qr"
+    if fname.endswith(".mp4"):
+        return "video"
+    if fname.endswith(".srt"):
+        return "subtitles"
+    return None
+
+
+def scan_deliver(content_dir: str, lang: str = "en") -> list:
     """Scan deliver/ directory for publish-ready assets."""
     deliver_dir = os.path.join(content_dir, "deliver")
     if not os.path.isdir(deliver_dir):
@@ -56,7 +146,8 @@ def scan_deliver(content_dir: str) -> list:
         if not os.path.isdir(channel_dir):
             continue
 
-        channel_label = CHANNEL_LABELS.get(channel, channel)
+        t = _t(lang)
+        channel_label = CHANNEL_LABELS.get(lang, CHANNEL_LABELS["en"]).get(channel, channel)
 
         for fname in sorted(os.listdir(channel_dir)):
             fpath = os.path.join(channel_dir, fname)
@@ -64,30 +155,20 @@ def scan_deliver(content_dir: str) -> list:
                 continue
 
             ext = os.path.splitext(fname)[1].lower()
-            fmt = FORMAT_LABELS.get(ext, ext)
+            kind = FORMAT_KINDS.get(ext)
+            fmt = t[f"fmt.{kind}"] if kind else ext
             size = os.path.getsize(fpath)
             size_str = f"{size / 1024:.0f}KB" if size < 1024 * 1024 else f"{size / (1024*1024):.1f}MB"
 
             # Determine content description from filename
-            desc = fname
-            if "poster" in fname:
-                desc = "海报 " + ("3:4" if "3x4" in fname else "16:9" if "16x9" in fname else "")
-            elif "caption" in fname:
-                desc = "发布文案"
-            elif "dynamic" in fname:
-                desc = "动态文案"
-            elif "narrative" in fname and "full" in fname:
-                desc = "长文 (完整版)"
-            elif "narrative" in fname:
-                desc = "长文摘要"
-            elif "readme" in fname:
-                desc = "README section"
-            elif "qr" in fname:
-                desc = "QR码 " + ("小红书" if "xhs" in fname else "GitHub" if "github" in fname else "")
-            elif fname.endswith(".mp4"):
-                desc = "视频"
-            elif fname.endswith(".srt"):
-                desc = "字幕"
+            role = _role(fname)
+            desc = t[f"role.{role}"] if role else fname
+            if role == "poster":
+                desc += " " + ("3:4" if "3x4" in fname else "16:9" if "16x9" in fname else "")
+            elif role == "qr":
+                target = ("xiaohongshu" if "xhs" in fname else "github" if "github" in fname else "")
+                if target:
+                    desc += " " + CHANNEL_LABELS.get(lang, CHANNEL_LABELS["en"])[target].split(" ", 1)[1]
 
             assets.append({
                 "channel": channel,
@@ -95,6 +176,8 @@ def scan_deliver(content_dir: str) -> list:
                 "file": fname,
                 "path": fpath,
                 "format": fmt,
+                "kind": kind,
+                "role": role,
                 "size": size_str,
                 "description": desc,
             })
@@ -111,8 +194,10 @@ def load_strategy(content_dir: str) -> dict:
     return {}
 
 
-def generate_markdown(content_dir: str, assets: list, strategy: dict) -> str:
+def generate_markdown(content_dir: str, assets: list, strategy: dict, lang: str = "en") -> str:
     """Generate markdown publish dashboard."""
+    t = _t(lang)
+    labels = CHANNEL_LABELS.get(lang, CHANNEL_LABELS["en"])
     lines = []
     topic = strategy.get("message", os.path.basename(content_dir))
 
@@ -132,7 +217,7 @@ def generate_markdown(content_dir: str, assets: list, strategy: dict) -> str:
         channels[ch].append(a)
 
     # Table
-    lines.append(f"| 渠道 | 内容 | 格式 | 大小 | 文件 |")
+    lines.append(t["md.table"])
     lines.append(f"|------|------|------|------|------|")
 
     for ch in channels:
@@ -142,44 +227,44 @@ def generate_markdown(content_dir: str, assets: list, strategy: dict) -> str:
 
     # Action items
     lines.append(f"")
-    lines.append(f"## 📌 发布操作")
+    lines.append(t["md.actions"])
     lines.append(f"")
 
     for ch_key, ch_assets in channels.items():
-        label = CHANNEL_LABELS.get(ch_key, ch_key)
+        label = labels.get(ch_key, ch_key)
         lines.append(f"### {label}")
 
         # Find the main content (poster/video first, not QR) + caption
         main_asset = None
         caption = None
         for a in ch_assets:
-            if a["format"] in ("图片", "视频") and "QR" not in a["description"]:
+            if a.get("kind") in ("image", "video") and a.get("role") != "qr":
                 main_asset = a
-            if "文案" in a["description"]:
+            if a.get("role") in ("caption", "dynamic"):
                 caption = a
 
         if ch_key == "xiaohongshu":
-            lines.append(f"1. AirDrop `{main_asset['file']}` 到手机" if main_asset else "1. (无主图)")
-            lines.append(f"2. 复制文案 → 粘贴到小红书")
-            lines.append(f"3. 发布")
+            lines.append(t["xhs.1"].format(file=main_asset["file"]) if main_asset else t["md.no_main"])
+            lines.append(t["xhs.2"])
+            lines.append(t["publish"])
         elif ch_key == "bilibili":
-            lines.append(f"1. 上传 `{main_asset['file']}` 到 B站动态" if main_asset else "1. (无主图)")
-            lines.append(f"2. 粘贴动态文案")
-            lines.append(f"3. 发布")
+            lines.append(t["bili.1"].format(file=main_asset["file"]) if main_asset else t["md.no_main"])
+            lines.append(t["bili.2"])
+            lines.append(t["publish"])
         elif ch_key == "gongzhonghao":
-            lines.append(f"1. 打开公众号后台 → 新建图文")
-            lines.append(f"2. 导入 `{ch_assets[0]['file']}`")
-            lines.append(f"3. 发布")
+            lines.append(t["gzh.1"])
+            lines.append(t["gzh.2"].format(file=ch_assets[0]["file"]))
+            lines.append(t["publish"])
         elif ch_key == "github":
-            lines.append(f"1. 复制 `{ch_assets[0]['file']}` 内容到 README.md")
-            lines.append(f"2. Commit + push")
+            lines.append(t["gh.1"].format(file=ch_assets[0]["file"]))
+            lines.append(t["gh.2"])
         else:
-            lines.append(f"1. 上传内容到 {label}")
+            lines.append(t["other"].format(label=label))
 
         lines.append(f"")
 
     # File locations
-    lines.append(f"## 📁 文件位置")
+    lines.append(t["md.files"])
     lines.append(f"```")
     lines.append(f"{os.path.join(content_dir, 'deliver')}/")
     for ch in channels:
@@ -191,9 +276,10 @@ def generate_markdown(content_dir: str, assets: list, strategy: dict) -> str:
     return "\n".join(lines)
 
 
-def generate_html(content_dir: str, assets: list, strategy: dict) -> str:
+def generate_html(content_dir: str, assets: list, strategy: dict, lang: str = "en") -> str:
     """Generate Pollinate Studio HTML — interactive review + publish page."""
     import base64
+    t = _t(lang)
 
     topic = strategy.get("message", os.path.basename(content_dir))
     abs_dir = os.path.abspath(content_dir)
@@ -216,7 +302,7 @@ def generate_html(content_dir: str, assets: list, strategy: dict) -> str:
             # Format C: "### 标题\n...", "### 正文\n...", "## Tags\n..."
             title_m = (re.search(r"##+ (?:标题|Title)[^\n]*\n(.+?)(?=\n##|\Z)", kit_text, re.DOTALL)
                        or re.search(r"(?:标题|Title)\n(.+?)(?=\n##|\n###|\Z)", kit_text, re.DOTALL))
-            body_m = (re.search(r"##+ 正文\n(.+?)(?=\n##+ (?:标签|Tags)|\Z)", kit_text, re.DOTALL)
+            body_m = (re.search(r"##+ (?:正文|Body)\n(.+?)(?=\n##+ (?:标签|Tags)|\Z)", kit_text, re.DOTALL)
                       or re.search(r"正文\n(.+?)(?=\n##+ (?:标签|Tags|发布)|\Z)", kit_text, re.DOTALL))
             tags_m = (re.search(r"##+ (?:标签|Tags)\n(.+?)(?=\n##|\Z)", kit_text, re.DOTALL)
                       or re.search(r"(#\w+(?:\s+#\w+)+)", kit_text))
@@ -229,7 +315,7 @@ def generate_html(content_dir: str, assets: list, strategy: dict) -> str:
             break
 
     # Find poster image — search broadly across common paths and names
-    poster_html = '<div class="placeholder">无封面图</div>'
+    poster_html = f'<div class="placeholder">{t["html.no_cover"]}</div>'
     poster_path = ""
     # Also search deliver/{channel}/ for copied posters
     poster_candidates = [
@@ -270,7 +356,7 @@ def generate_html(content_dir: str, assets: list, strategy: dict) -> str:
             video_path = os.path.abspath(p)
             video_html = f'''
             <div class="section">
-              <h2>🎬 视频预览</h2>
+              <h2>{t["html.video"]}</h2>
               <video controls width="320" style="border-radius:12px; max-height:568px;">
                 <source src="file://{video_path}" type="video/mp4">
               </video>
@@ -291,7 +377,7 @@ def generate_html(content_dir: str, assets: list, strategy: dict) -> str:
     body_plain = publish_kit["body"].replace("**", "")
 
     return f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="UTF-8">
+<html lang="{t['html.lang']}"><head><meta charset="UTF-8">
 <title>🐝 Pollinate Studio — {topic}</title>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
@@ -329,7 +415,7 @@ textarea {{ width: 100%; background: #12122a; color: #e0e0e0; border: 1px solid 
   <!-- Left: Poster Preview -->
   <div>
     <div class="section">
-      <h2>🖼️ 封面</h2>
+      <h2>{t['html.cover']}</h2>
       {poster_html}
       <div style="margin-top:8px;">
         <button class="btn btn-outline" onclick="openInFinder('{os.path.abspath(poster_path) if poster_path else ''}')">📂 Open File</button>
@@ -341,28 +427,28 @@ textarea {{ width: 100%; background: #12122a; color: #e0e0e0; border: 1px solid 
   <!-- Right: Text + Publish -->
   <div>
     <div class="section">
-      <h2>📝 标题</h2>
+      <h2>{t['html.title']}</h2>
       <textarea id="title" rows="2">{publish_kit['title']}</textarea>
       <button class="btn" onclick="copyField('title')">📋 Copy Title</button>
       <span class="copy-ok" id="title-ok">✅ Copied</span>
     </div>
 
     <div class="section">
-      <h2>📝 正文</h2>
+      <h2>{t['html.body']}</h2>
       <textarea id="body" rows="12">{body_plain}</textarea>
       <button class="btn" onclick="copyField('body')">📋 Copy Body</button>
       <span class="copy-ok" id="body-ok">✅ Copied</span>
     </div>
 
     <div class="section">
-      <h2>🏷️ 标签</h2>
+      <h2>{t['html.tags']}</h2>
       <div class="tags" id="tag-display"></div>
       <button class="btn" onclick="copyTags()" style="margin-top:12px;">📋 Copy All Tags</button>
       <span class="copy-ok" id="tags-ok">✅ Copied</span>
     </div>
 
     <div class="section">
-      <h2>🚀 发布到小红书</h2>
+      <h2>{t['html.publish_xhs']}</h2>
       <div>
         <span class="status status-ready">Ready to Publish</span>
       </div>
@@ -424,6 +510,8 @@ def main():
     parser.add_argument("--open", action="store_true", help="Open deliver/ folder in Finder")
     parser.add_argument("--html", action="store_true", help="Generate HTML dashboard and open in browser")
     parser.add_argument("--output", help="Save dashboard to file (default: print to stdout)")
+    parser.add_argument("--lang", choices=LANGS, default="en",
+                        help="Dashboard language (default: en)")
     args = parser.parse_args()
 
     content_dir = args.content_dir.rstrip("/")
@@ -431,7 +519,7 @@ def main():
         print(f"Error: {content_dir} not found", file=sys.stderr)
         sys.exit(1)
 
-    assets = scan_deliver(content_dir)
+    assets = scan_deliver(content_dir, args.lang)
     strategy = load_strategy(content_dir)
 
     if not assets:
@@ -439,14 +527,14 @@ def main():
         sys.exit(1)
 
     if args.html:
-        html = generate_html(content_dir, assets, strategy)
+        html = generate_html(content_dir, assets, strategy, args.lang)
         html_path = os.path.join(content_dir, "publish_dashboard.html")
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"Dashboard: {html_path}")
         webbrowser.open(f"file://{os.path.abspath(html_path)}")
     else:
-        md = generate_markdown(content_dir, assets, strategy)
+        md = generate_markdown(content_dir, assets, strategy, args.lang)
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:
                 f.write(md)

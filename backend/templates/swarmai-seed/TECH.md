@@ -9,7 +9,9 @@
 ## Architecture
 
 Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeScript),
-and a Python FastAPI backend running as a launchd daemon (24/7). The backend spawns
+and a Python FastAPI backend. How the backend runs depends on the platform: on macOS
+an always-on daemon under launchd; on Windows and Linux a child process of the app,
+which stops when the app quits; on a Hive a systemd service. The backend spawns
 Claude Agent SDK subprocesses for AI capabilities via AWS Bedrock.
 
 ```

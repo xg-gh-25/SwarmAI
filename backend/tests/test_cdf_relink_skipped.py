@@ -102,7 +102,7 @@ def test_the_backup_check_holds_while_the_store_is_written(tmp_path):
     """The daemon writes while a one-time script backs up: the copy is checked against the
     snapshot it was taken from, not against the live table (that compare never held)."""
     import threading
-    from scripts.cdf_move_misrouted import _backup
+    from scripts.cdf_relink_skipped import _backup
     db = tmp_path / "live.db"
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA journal_mode=WAL")

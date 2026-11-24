@@ -179,9 +179,37 @@ def test_gate_eligible_evaluators_mirror_eval_runner():
 
 
 # ── privacy scan (the ship-boundary gate for PROMOTE) ──
-def test_privacy_rejects_sensitive_word():
-    ok, errs = privacy_scan(_ok_case(title="report for gawan@amazon.com"))
+@pytest.mark.parametrize("text", [
+    "the admin password is hunter2",
+    "set API_KEY before running",
+    "rotate the api-key",
+    "aws_access_key_id in the env",
+    "client secret leaked",
+    "key " + "AKIA" + "ABCDEFGHIJKLMNOP" + " in a log",  # split: not a secret in this file
+])
+def test_privacy_rejects_secret_like_word(text):
+    ok, errs = privacy_scan(_ok_case(title=text))
     assert not ok and "privacy" in " ".join(errs).lower()
+
+
+@pytest.mark.parametrize("text", [
+    "report for someone@amazon.com",   # a company domain is not a secret
+    "the CMHK account review",          # a customer name is not product-wide sensitive
+    "notes by gawan",                    # nor is a person's name
+])
+def test_privacy_has_no_person_or_company_words(text):
+    # The product scan carries no one user's or company's words: such a list would
+    # reject every other user's cases and ship that one person's data.
+    ok, errs = privacy_scan(_ok_case(title=text))
+    assert ok, errs
+
+
+def test_privacy_message_names_no_one():
+    ok, errs = privacy_scan(_ok_case(title="password"))
+    msg = " ".join(errs).lower()
+    assert not ok
+    for word in ("gawan", "amazon", "cmhk"):
+        assert word not in msg
 
 def test_privacy_rejects_instance_path():
     # references .context/ — instance structure leak even without a sensitive word

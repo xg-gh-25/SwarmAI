@@ -621,8 +621,8 @@ class TestMidSessionContentCheckpoint:
         assert not (ws / "Knowledge" / "DailyActivity").exists()
 
     @pytest.mark.asyncio
-    async def test_checkpoint_json_includes_git_commits(self, tmp_path, session_context):
-        """Checkpoint JSON includes git_commits field."""
+    async def test_checkpoint_json_has_no_git_commits(self, tmp_path, session_context):
+        """No reader takes commits from the checkpoint, so it lists none."""
         from core.runtime_hooks import create_session_checkpoint
 
         checkpoint_path = str(tmp_path / "checkpoint.json")
@@ -637,8 +637,8 @@ class TestMidSessionContentCheckpoint:
             await hook({}, None, MagicMock())
 
         data = json.loads(Path(checkpoint_path).read_text())
-        assert "git_commits" in data
-        assert isinstance(data["git_commits"], list)
+        assert "git_commits" not in data
+        assert data["files_touched"] == ["/x.py"]
 
     @pytest.mark.asyncio
     async def test_no_write_when_no_new_content(self, tmp_path, session_context):
@@ -1566,7 +1566,8 @@ class TestCheckpointJson:
         hook = create_session_checkpoint(session_context, checkpoint_path=str(tmp_path / "c.json"),
                                          interval=1, workspace_dir=str(ws))
         await hook({}, None, MagicMock())
-        assert json.loads((tmp_path / "c.json").read_text())["git_commits"] == []
+        data = json.loads((tmp_path / "c.json").read_text())
+        assert "git_commits" not in data and "chore" not in json.dumps(data)
 
 
 class TestV1StableCompletion:
@@ -1735,34 +1736,44 @@ class TestIsTestCommand:
         await hook({"tool_name": "Bash", "tool_input": {"command": command}}, "tu_1", MagicMock())
         assert bool(session_context.get("_ran_tests")) is expected
 
-    @pytest.mark.asyncio
-    async def test_session_summary_counts_any_runner(self, tmp_path, session_context):
-        from core.observation_ring import ObservationRing
-        from core.runtime_hooks import create_session_checkpoint
-
-        ring = ObservationRing()
-        runs = [("cargo test", None), ("npm test", "failed"), ("go test ./...", None), ("ls", None)]
-        for i, (cmd, err) in enumerate(runs):
-            ring.record_pre(f"t{i}", "Bash", {"command": cmd})
-            ring.record_post(f"t{i}", err)
-        session_context["_observations"] = ring
-        cp_path = tmp_path / "cp.json"
-        hook = create_session_checkpoint(session_context, checkpoint_path=str(cp_path), interval=1)
-        await hook({"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"}, "tu_x", MagicMock())
-        summary = json.loads(cp_path.read_text())["session_summary"]
-        assert summary["test_runs"] == 3
-        assert summary["test_pass_rate"] == round(2 / 3, 2)
 
 
 @pytest.mark.asyncio
-async def test_session_summary_counts_a_test_run_that_has_a_description(tmp_path, session_context):
-    """Agent Bash calls nearly always carry a description; the count reads the command."""
+async def test_session_checkpoint_holds_only_what_its_reader_uses(tmp_path, session_context):
+    """The crash-resume note (context_injector) reads tool_count and files_touched; the
+    checkpoint carries no unread observation summary, observation list or commit list."""
     from core.observation_ring import ObservationRing
-    from core.runtime_hooks import _observation_ran_tests
+    from core.runtime_hooks import create_session_checkpoint
+    from core.context_injector import _merge_crash_checkpoint
+
     ring = ObservationRing()
-    ring.record_pre("t1", "Bash", {"command": "cargo test", "description": "Run the tests"})
-    ring.record_post("t1", None)
-    ring.record_pre("t2", "Bash", {"command": "ls", "description": "Run pytest later"})
-    ring.record_post("t2", None)
-    obs = list(ring._ring)
-    assert [_observation_ran_tests(o) for o in obs] == [True, False]
+    for i, (cmd, err) in enumerate([("cargo test", None), ("npm test", "failed"), ("ls", None)]):
+        ring.record_pre(f"t{i}", "Bash", {"command": cmd})
+        ring.record_post(f"t{i}", err)
+    session_context["_observations"] = ring
+    session_context["_files_touched"] = {"a.py", "b.py"}
+    cp_path = tmp_path / "cp.json"
+    hook = create_session_checkpoint(session_context, checkpoint_path=str(cp_path), interval=1)
+    await hook({"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"}, "tu_x", MagicMock())
+    data = json.loads(cp_path.read_text())
+    assert set(data) == {"session_id", "ts", "tool_count", "files_touched"}
+    assert data["files_touched"] == ["a.py", "b.py"]
+    note = _merge_crash_checkpoint(cp_path)
+    assert note and "1 tool calls" in note and "a.py" in note
+
+
+@pytest.mark.asyncio
+async def test_session_checkpoint_still_drops_stale_pending_observations(tmp_path, session_context):
+    """The checkpoint cadence is where the ring's stale pre-tool entries are dropped."""
+    import time as _time
+    from core.observation_ring import ObservationRing
+    from core.runtime_hooks import create_session_checkpoint
+
+    ring = ObservationRing()
+    ring.record_pre("never_posted", "Bash", {"command": "sleep 999"})
+    ring._pending["never_posted"].ts = _time.monotonic() - 301
+    session_context["_observations"] = ring
+    hook = create_session_checkpoint(session_context, checkpoint_path=str(tmp_path / "cp.json"),
+                                     interval=1)
+    await hook({"tool_name": "Bash", "tool_input": {}}, "tu_y", MagicMock())
+    assert "never_posted" not in ring._pending

@@ -19,8 +19,8 @@ For each unresolved ``relation_skipped`` event:
 - an end that is no longer on disk, or a refusal for a cycle: nothing to record.
 
 Every handled event is marked resolved, and one ``relations_repaired`` event records what
-was done with each. Dry run by default; ``--apply`` first copies ``ingestion.db`` (checked
-backup, as ``cdf_move_misrouted``) and refuses to continue if the copy fails. It runs only
+was done with each. Dry run by default; ``--apply`` first copies ``ingestion.db`` (a SQLite
+backup checked to open and to hold every row) and refuses to continue if the copy fails. It runs only
 on a store already at this code's schema (the daemon migrated it).
 """
 from __future__ import annotations
@@ -32,6 +32,34 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _backup(db: Path) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest = db.with_name(f"{db.name}.pre-relink-skipped-{stamp}.bak")
+    # one read transaction for the copy and the counts: the daemon keeps writing, and a
+    # count read after the copy compared a snapshot with a live table (never equal while
+    # the worker runs). The copy must hold every row of the snapshot it was taken from.
+    src = sqlite3.connect(f"file:{db}?mode=ro", uri=True, isolation_level=None)
+    try:
+        src.execute("BEGIN")
+        tables = [name for (name,) in src.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        counts = {table: src.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in tables}
+        copy = sqlite3.connect(dest)
+        src.backup(copy)
+        copy.close()
+        src.execute("COMMIT")
+        check = sqlite3.connect(f"file:{dest}?mode=ro", uri=True)
+        try:
+            assert check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            for table in tables:
+                assert check.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == counts[table], table
+        finally:
+            check.close()
+    finally:
+        src.close()
+    return dest
 
 
 def _real_anchor(anchor: str, workspace: Path) -> str | None:
@@ -78,7 +106,6 @@ def plan(conn: sqlite3.Connection, workspace: Path) -> list[dict]:
 def run(workspace: Path, *, apply: bool) -> dict:
     from core.ingestion.api_v2 import SCHEMA_V2_VERSION
     from core.ingestion.store import connect_ro, connect_rw, ingestion_db_path
-    from scripts.cdf_move_misrouted import _backup
     from contextlib import closing
     with closing(connect_ro()) as probe:
         version = probe.execute("PRAGMA user_version").fetchone()[0]

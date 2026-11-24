@@ -34,7 +34,7 @@
 
 | Platform | Count | Format | Example |
 |----------|-------|--------|---------|
-| B站 | 10 | Plain words | AI, 人工智能, AIDLC |
+| B站 | 10 | Plain words | AI, 人工智能, 大模型 |
 | YouTube | 15 | Plain + #hashtags | #AI #AgentArchitecture |
 | 小红书 | 5-10 | `#tag#` (DOUBLE hash) | #AI实践# #技术分享# |
 | 抖音 | 3-8 | `#tag` (SINGLE hash) | #AI #人工智能 |

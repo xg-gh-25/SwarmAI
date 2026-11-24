@@ -290,13 +290,6 @@ def is_test_command(command: str, _depth: int = 0) -> bool:
         return False
 
 
-def _observation_ran_tests(obs: Any) -> bool:
-    """An ObservationRing entry for a Bash call that ran tests, judged on the command
-    it ran (``Observation.command``), never on its intent: the intent is the tool's
-    description whenever one was given, and a description is prose."""
-    return obs.tool_name == "Bash" and is_test_command(getattr(obs, "command", "") or "")
-
-
 # ---------------------------------------------------------------------------
 # PostToolUse: file tracker — records Read/Edit/Write file paths
 # ---------------------------------------------------------------------------
@@ -407,10 +400,11 @@ def create_session_checkpoint(
     summarizes them (design 2026-10-31-daily-activity-useful D11). ``workspace_dir``
     is accepted for callers' compatibility and unused.
 
-    No git activity: the workspace's own commits are the auto-commit hook's
-    snapshots, not work, and the post-session summary records the real commits
+    The JSON holds what its one reader (``context_injector``'s crash-resume note)
+    uses: ``tool_count`` and ``files_touched``, with ``session_id`` and ``ts`` naming
+    the checkpoint. No git activity: the workspace's own commits are the auto-commit
+    hook's snapshots, not work, and the post-session summary records the real commits
     from the source repos (DailyActivityExtractionHook._capture_git_activity).
-    ``git_commits`` stays in the JSON as ``[]`` for readers of its shape.
     """
     path = checkpoint_path or _DEFAULT_CHECKPOINT_PATH
     ctx = session_context or {}
@@ -432,44 +426,21 @@ def create_session_checkpoint(
         session_id = ctx.get("sdk_session_id", "unknown")
         files = sorted(ctx.get("_files_touched", set()))
 
-        git_commits: list[str] = []  # see the docstring: workspace commits are not work
-
-        # 1. Write checkpoint JSON (crash recovery)
-        # Enrich with observation data if available
-        recent_observations = []
-        session_summary = {}
+        # The checkpoint's cadence is also when the observation ring drops pre-tool
+        # entries whose post never came (a tool that crashed or was cancelled).
         ring = ctx.get("_observations")
         if ring is not None:
             try:
-                recent_observations = ring.snapshot(last_n=10)
-                # Compute simple summary stats
-                all_obs = ring.all_completed()
-                if all_obs:
-                    from collections import Counter
-                    tool_counts = Counter(o.tool_name for o in all_obs)
-                    dominant = tool_counts.most_common(1)[0] if tool_counts else ("", 0)
-                    test_obs = [o for o in all_obs if _observation_ran_tests(o)]
-                    test_runs = len(test_obs)
-                    test_passes = sum(1 for o in test_obs if o.result_status == "success")
-                    session_summary = {
-                        "dominant_tool": dominant[0],
-                        "dominant_count": dominant[1],
-                        "test_runs": test_runs,
-                        "test_pass_rate": round(test_passes / test_runs, 2) if test_runs > 0 else None,
-                    }
                 ring.pending_cleanup()
             except Exception:
                 logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
-                pass  # Observation enrichment is best-effort
 
+        # Write checkpoint JSON (crash recovery)
         checkpoint = {
             "session_id": session_id,
             "ts": time.time(),
             "tool_count": count,
             "files_touched": files[:20],  # Cap for JSON size
-            "git_commits": git_commits,
-            "recent_observations": recent_observations,
-            "session_summary": session_summary,
         }
 
         # OFF-LOOP (run_a1f4c2d8): SDK hook callbacks are awaited ON the event loop

@@ -33,9 +33,9 @@ title:
   max_chars: 80
   formula: "number + topic + hook"
   examples:
-    - "5分钟搞懂：为什么AI记忆比模型更重要"
-    - "AIDLC三阶段进化论：AI不是工具，是同事"
-    - "170亿参数的表演模型：LPM技术深度拆解"
+    - "5分钟搞懂：<主题>为什么比你想的更重要"
+    - "<方法>三阶段进化论：从工具到同事"
+    - "<数字>亿参数的<模型>：技术深度拆解"
 
 description:
   min_chars: 100

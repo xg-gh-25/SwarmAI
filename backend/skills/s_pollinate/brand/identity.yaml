@@ -72,7 +72,7 @@ audio:
 # The primary color (#FF6B35 by default) is ALWAYS present in hero text and CTA.
 # When a domain theme is active, primary_override replaces the accent color only.
 domain_themes:
-  aidlc:
+  methodology:
     theme: "light"
     primary_override: "#FF6B35"  # the default primary
     visual_note: "Flow diagrams, clear structure, methodology feel"

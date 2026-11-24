@@ -25,28 +25,28 @@ from typing import Any
 # ─── Canonical Values ─────────────────────────────────────────────────────────
 
 AUDIENCES = {
-    "leadership": {"label": "领导 (Rob/Bo)", "signals": ["领导", "rob", "bo", "leadership", "管理层", "boss"]},
-    "customer": {"label": "客户/合作伙伴", "signals": ["客户", "customer", "partner", "合作伙伴", "client"]},
-    "team": {"label": "团队内部", "signals": ["团队", "team", "内部", "internal", "同事"]},
-    "developer_community": {"label": "开发者社区", "signals": ["社区", "community", "开发者", "developer", "github", "掘金"]},
-    "social_followers": {"label": "社交媒体粉丝", "signals": ["粉丝", "followers", "社交", "social", "小红书", "朋友圈", "twitter"]},
+    "leadership": {"label": "Leadership", "signals": ["领导", "老板", "leadership", "管理层", "boss", "executive"]},
+    "customer": {"label": "Customers / partners", "signals": ["客户", "customer", "partner", "合作伙伴", "client"]},
+    "team": {"label": "Internal team", "signals": ["团队", "team", "内部", "internal", "同事"]},
+    "developer_community": {"label": "Developer community", "signals": ["社区", "community", "开发者", "developer", "github", "掘金"]},
+    "social_followers": {"label": "Social media followers", "signals": ["粉丝", "followers", "社交", "social", "小红书", "朋友圈", "twitter"]},
 }
 
 OUTCOMES = {
-    "awareness": {"label": "知道这件事存在", "signals": ["知道", "awareness", "了解", "传播", "spread"]},
-    "alignment": {"label": "同意一个方向", "signals": ["同意", "alignment", "对齐", "approve", "方向", "决策"]},
-    "action": {"label": "采取具体行动", "signals": ["行动", "action", "做", "try", "注册", "购买", "回复"]},
-    "data_decision": {"label": "基于数据做决策", "signals": ["数据", "data", "决策", "分析", "metrics", "报告"]},
-    "education": {"label": "深度理解一个概念", "signals": ["理解", "education", "学习", "learn", "深度", "教程"]},
+    "awareness": {"label": "Know it exists", "signals": ["知道", "awareness", "了解", "传播", "spread"]},
+    "alignment": {"label": "Agree on a direction", "signals": ["同意", "alignment", "对齐", "approve", "方向", "决策"]},
+    "action": {"label": "Take a concrete action", "signals": ["行动", "action", "做", "try", "注册", "购买", "回复"]},
+    "data_decision": {"label": "Decide from data", "signals": ["数据", "data", "决策", "分析", "metrics", "报告"]},
+    "education": {"label": "Understand a concept in depth", "signals": ["理解", "education", "学习", "learn", "深度", "教程"]},
 }
 
 CONTEXTS = {
-    "meeting": {"label": "会议/演讲", "signals": ["会议", "meeting", "演讲", "present", "讲", "talk", "conference"]},
-    "email": {"label": "邮件/异步阅读", "signals": ["邮件", "email", "异步", "async", "发给", "send"]},
-    "social_media": {"label": "刷社交媒体", "signals": ["社交", "social", "小红书", "朋友圈", "twitter", "linkedin", "抖音"]},
-    "search_learn": {"label": "主动搜索/学习", "signals": ["搜索", "search", "学习", "learn", "掘金", "blog", "youtube", "b站"]},
-    "commute": {"label": "通勤/健身", "signals": ["通勤", "commute", "健身", "路上", "开车", "podcast", "播客"]},
-    "analysis": {"label": "分析/对比", "signals": ["分析", "analysis", "对比", "compare", "评估", "benchmark"]},
+    "meeting": {"label": "Meeting / talk", "signals": ["会议", "meeting", "演讲", "present", "讲", "talk", "conference"]},
+    "email": {"label": "Email / async reading", "signals": ["邮件", "email", "异步", "async", "发给", "send"]},
+    "social_media": {"label": "Scrolling social media", "signals": ["社交", "social", "小红书", "朋友圈", "twitter", "linkedin", "抖音"]},
+    "search_learn": {"label": "Searching / learning", "signals": ["搜索", "search", "学习", "learn", "掘金", "blog", "youtube", "b站"]},
+    "commute": {"label": "Commute / workout", "signals": ["通勤", "commute", "健身", "路上", "开车", "podcast", "播客"]},
+    "analysis": {"label": "Analysis / comparison", "signals": ["分析", "analysis", "对比", "compare", "评估", "benchmark"]},
 }
 
 # ─── Mapping Rules (Audience × Outcome × Context → Tracks) ───────────────────

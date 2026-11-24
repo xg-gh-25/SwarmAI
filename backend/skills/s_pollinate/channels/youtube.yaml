@@ -33,8 +33,8 @@ title:
   max_chars: 100  # C3: platform allows 100; 70 still recommended for mobile display
   formula: "SEO-optimized"
   examples:
-    - "Why AI Memory Matters More Than the Model"
-    - "AIDLC: The 3-Phase Evolution of AI Teams"
+    - "Why <Topic> Matters More Than You Think"
+    - "<Method>: The 3-Phase Evolution of <Audience>"
 
 description:
   min_chars: 100

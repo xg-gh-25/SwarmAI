@@ -6,20 +6,20 @@ generates per-short asset directories ready for Remotion rendering.
 
 Usage:
     # Auto combo (merge sections to 60-90s shorts)
-    python generate_shorts.py content/aidlc-one-sentence-to-pr/ --strategy combo
+    python generate_shorts.py content/<topic>/ --strategy combo
 
     # Manual section selection
-    python generate_shorts.py content/aidlc-one-sentence-to-pr/ --sections crash_story,evolution
+    python generate_shorts.py content/<topic>/ --sections crash_story,evolution
 
     # Highlight mode (hero, climax, outro)
-    python generate_shorts.py content/aidlc-one-sentence-to-pr/ --strategy highlight
+    python generate_shorts.py content/<topic>/ --strategy highlight
 
     # With BGM mixing
-    python generate_shorts.py content/aidlc-one-sentence-to-pr/ --sections crash_story,evolution \
+    python generate_shorts.py content/<topic>/ --sections crash_story,evolution \
         --bgm bgm_peppy.mp3 --bgm-volume 0.03
 
     # Generate + render
-    python generate_shorts.py content/aidlc-one-sentence-to-pr/ --strategy combo --render
+    python generate_shorts.py content/<topic>/ --strategy combo --render
 
 Outputs per short (in content/{name}/shorts/{short_id}/):
     short_audio.wav     — cut audio segment
@@ -508,7 +508,7 @@ def build_parser():
         epilog="Strategies: combo (default, 60-90s merges), single (per-section), "
                "highlight (auto-pick climax). Use --sections for manual selection.",
     )
-    parser.add_argument("content_dir", help="Content directory (e.g. content/aidlc-one-sentence-to-pr/)")
+    parser.add_argument("content_dir", help="Content directory (e.g. content/<topic>/)")
     parser.add_argument("--strategy", "-s", default="combo",
                        choices=["combo", "single", "highlight"],
                        help="Section selection strategy (default: combo)")

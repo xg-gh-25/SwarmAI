@@ -130,9 +130,7 @@ routers/workspace_api.py:create_file._create  # exempt: non-governed paths only:
 routers/workspace_api.py:delete_folder._delete  # exempt: non-governed paths only; a dir with governed descendants is refused by forbid_dir_op
 routers/workspace_api.py:put_workspace_file._write  # exempt: non-governed paths only; governed files go through apply_user_edit before this
 routers/workspace_api.py:rename_item._rename  # exempt: non-governed paths only; governed trees go through move_tree
-scripts/cdf_move_misrouted.py:run  # exempt: one-time CDF repair; backs up and moves governed entries through the CDF writer
 scripts/cdf_relink_skipped.py:run  # exempt: one-time CDF repair; records relations through the CDF writer
-scripts/memory_relocate.py:run  # exempt: one-time CDF repair; moves MEMORY/EVOLUTION entries through governed_edit after writing the destination
 scripts/clean_daily_activity.py:main  # exempt: DailyActivity cleanup tool (working memory)
 scripts/da_resummarize.py:backup  # exempt: copies DailyActivity (working memory) into ~/.swarm-ai/backups
 scripts/da_resummarize.py:rebuild_day  # exempt: one-time DailyActivity history repair (working memory)
@@ -181,7 +179,6 @@ core/ddd_format.py:_append_moved  # exempt: writes the Brain's deep reference (2
 core/ingestion/pipeline_v2.py:_resolved  # exempt: reads the CDF store's root trust (lineage_external opens it); writes no governed file
 core/memory_injection.py:recorded_selection  # exempt: reads the latest injection selection from the CDF store (standing.connect, read-only here); writes no governed file
 scripts/brain_cleanup.py:_backup  # exempt: writes a tar.gz backup under <data dir>/backups before any cleanup; not a governed file
-scripts/cdf_move_misrouted.py:run  # exempt: one-time move; files written through governed_edit, records updated in one transaction
 core/attention_authority.py:_collect_template_drift  # exempt: names EVOLUTION.md only in a proposal message; via context_template_drift.pending_drifts it reads the drift state (its shared reader can move a corrupt state file aside), writes no context file
 core/brain_versions.py:_remove_at  # exempt: removes a kept Brain version or its staging dir under Hive/brains/<brain>/, never the live Brain (marker only in the module docstring)
 core/brain_versions.py:keep  # exempt: copies a Brain's files into the version cache Hive/brains/<brain>/versions/<id>/; the live Brain is only read (marker only in the module docstring)

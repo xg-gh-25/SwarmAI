@@ -61,6 +61,7 @@ test_tool_summary_fixture.py
 test_tscc_security_scan.py
 test_lint_problem_values.py   # scripts/lint_problem_values.py: banned shapes, pinned scope, clean tree
 test_p7_no_swarmai_special.py  # P7 closed-world scan: one `git ls-files`, no fs writes (closing guards K1)
+test_context_files_strip_test.py  # shipped context files pass the strip test; the release checklist keeps its strip-test review (repo files only, no workspace)
 test_lint_doc_frontmatter.py  # D3: --diff mode on throwaway git repos in tmp_path, no workspace (closing guards)
 test_precommit_bvt_manifest.py  # the manifest check itself: throwaway git repos in tmp_path, no workspace
 test_precommit_uv_lock.py  # the lock check itself: throwaway git repos with a dependency-free project, no network

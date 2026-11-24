@@ -43,7 +43,7 @@ Three-pass LLM analysis of podcast.txt:
 - For each ambiguous character, determine correct pronunciation from context
 
 **Pass 2: English term review** -- hyphenated names, initialisms
-- Example: "GPT-SoVITS" -> split handling, "AIDLC" -> letter-by-letter
+- Example: "GPT-SoVITS" -> split handling, "LLM" -> letter-by-letter
 - Tag all English terms that TTS engines may mispronounce
 
 **Pass 3: Brand names** -- words with expected Chinese pronunciation
