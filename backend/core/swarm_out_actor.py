@@ -29,7 +29,9 @@ agent the routes refuse what is the person's to decide:
   tip is there, discarding loses nothing), a file not placed in the Brain, lessons not
   in, the run running, waiting or its Hive not answering, or its result not final
   (``discard_blocker``). A run whose Hive never started its session (``not_started``)
-  has nothing to lose.
+  has nothing to lose, and neither has one whose result can no longer come (its settle's
+  ``result_lost``: an Elastic Workers round read whole after its machine could write
+  nothing more, core/swarm_out_settle): what came back is here, nothing else can.
 
 The agent lands commits that change the repository's own protected paths once it has
 reviewed them (design 2026-11-02-hive-run-decision-record §2: the funnel lands on this
@@ -336,14 +338,14 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
         return ("the run is still running or waiting, or its Hive is not answering: stop it first, "
                 "or wait (`swarm_out diagnose` says why its Hive does not answer)")
     res = row.get("result")
-    if not _final(res if isinstance(res, dict) else None):
+    settle = row.get("settle") if isinstance(row.get("settle"), dict) else {}
+    if not _final(res if isinstance(res, dict) else None) and not settle.get("result_lost"):
         return "its final result is not here yet"
     funnel = row.get("funnel") if isinstance(row.get("funnel"), dict) else {}
     if isinstance(funnel.get("ask"), dict) and funnel["ask"].get("state") == "revert":
         return ("the person asked for a revert: undo what landed and report it with "
                 "`swarm_out reverted`; when it cannot match exactly, say so in the session "
                 "(the run stays open until its records expire)")
-    settle = row.get("settle") if isinstance(row.get("settle"), dict) else {}
     why_not = list(settle.get("why_not") or [])
     if "code" in why_not and commits_here(str(row.get("dispatch_id") or ""), res):
         why_not.remove("code")       # every returned tip is in refs/hive here: nothing is lost

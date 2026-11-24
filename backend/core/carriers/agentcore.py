@@ -33,6 +33,15 @@ and its ``runtime_arn`` (one per account, §6.8). A run round is one runtime ses
   never from the session. ``outputs`` keeps the record in exactly the place and shape
   ``core.hive_records.pull`` keeps (same checks, same local paths, same readers after it).
 - **End** (``release``): ``StopRuntimeSession``; a session already gone counts as done.
+- **When nothing more can come** (``writes_end_at``): a round's microVM exists at most the
+  platform's lifetime from its start, so its S3 prefix holds everything it will ever hold
+  once that time passed (plus the start call and clock skew). A pull that started after
+  it and read the whole manifest (``outputs``' ``drained``) is the proof the Host needs that
+  a result missing then never comes (core/swarm_out_results ``round_end``).
+- **Machine logs** (``log_events``, the ``diagnostics`` duty): the runtime writes to
+  CloudWatch Logs under ``/aws/bedrock-agentcore/runtimes/<runtime id>-<endpoint>``
+  (the execution role's ``Logs`` statement); the round's lines are read there through the
+  location's account session (core/hive_diagnostics shapes them).
 - **Correction** (``next_round``, the carrier interface ``core.swarm_out.rerun`` calls,
   D7): while the round's session is open the correction goes into it (the same handle);
   after it ended, a new session as the next round (``open_next_round``), its repositories
@@ -73,8 +82,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from core.carriers.base import (AGENTCORE, TIER_ELASTIC, LocationUnavailable, Needs, Offer,
-                                RunHandle, current_handle, rounds_of)
+from core.carriers.base import (AGENTCORE, DIAGNOSTICS, TIER_ELASTIC, LocationUnavailable, Needs,
+                                Offer, RunHandle, current_handle, rounds_of)
 from core.swarm_out import SwarmOutError
 
 logger = logging.getLogger(__name__)
@@ -115,6 +124,24 @@ CHECKS_MAX = 1024 * 1024
 USAGE_MAX = 16 * 1024 * 1024
 START_ANSWER_MAX = 64 * 1024
 LIST_PAGES_MAX = 50                   # manifest list pages read in one end check
+#: how long after the platform's lifetime a round may still have written: its session
+#: starts during the start call (at most START_TIMEOUT_S after ``opened_at``, which is taken
+#: before it), and this machine's clock may differ from the platform's by END_MARGIN_S
+WRITE_GRACE_S = START_TIMEOUT_S + END_MARGIN_S
+#: where the runtime's CloudWatch log groups are (the execution role's ``Logs`` statement)
+LOG_GROUP_ROOT = "/aws/bedrock-agentcore/runtimes/"
+LOG_PAGES_MAX = 10                    # pages of one CloudWatch listing
+LOG_GROUPS_MAX = 5                    # log groups of one runtime read (one per endpoint)
+LOG_STREAMS_MAX = 5                   # streams named by the session read whole
+LOG_EVENTS_MAX = 2000                 # events kept from one read (the newest)
+LOG_TIMEOUT_S = 20.0
+#: a round's window is read from its end backwards (its end says why it stopped), and one
+#: read stops after LOG_CALLS_MAX calls or LOG_READ_BUDGET_S, whichever comes first: it
+#: holds a worker thread of the default pool, which the chat path waits on too
+LOG_CALLS_MAX = 60
+LOG_READ_BUDGET_S = 60.0
+#: the shortest piece of the window narrowed to while looking for one a page holds
+LOG_MIN_PIECE_MS = 1000
 
 RUNTIME_ARN_RE = re.compile(
     r"^arn:(aws[a-z-]*):bedrock-agentcore:([a-z]{2}(?:-[a-z]+)+-\d):(\d{12}):runtime/([A-Za-z0-9][A-Za-z0-9_-]{0,99})$")
@@ -435,6 +462,17 @@ def _expired(handle: RunHandle) -> bool:
         or _now() - float(handle.opened_at) > MAX_RUN_S - END_MARGIN_S
 
 
+def writes_end_at(handle: RunHandle) -> Optional[float]:
+    """When the round can have written nothing more to its S3 prefix: its microVM lives
+    at most MAX_RUN_S from the session's start, which is no later than START_TIMEOUT_S
+    after ``opened_at``, and the clocks may differ by END_MARGIN_S (``WRITE_GRACE_S``).
+    None for a handle without a start time."""
+    at = handle.opened_at if isinstance(handle, RunHandle) else None
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return None
+    return float(at) + MAX_RUN_S + WRITE_GRACE_S
+
+
 def _ended_here(handle: RunHandle) -> Optional[str]:
     """Why the round has ended, from what this machine knows alone (no I/O but a small
     file): past the lifetime, or an end recorded here."""
@@ -640,7 +678,8 @@ def _pull_s3_locked(row: dict, dispatch_id: str, round: int, s3: Any, bucket: st
     d = _record_dir_for_round(dispatch_id, round)
     if d is None:
         return {**hr._UNSUPPORTED, "supported": True, "error": "older_round"}
-    out: dict[str, Any] = {"supported": True, "error": None}
+    out: dict[str, Any] = {"supported": True, "error": None, "drained": False}
+    more = True
     try:
         for _ in range(hr.PULL_PAGES):
             kept = hr.local_entries(dispatch_id) if (d / hr.MANIFEST).exists() else []
@@ -692,11 +731,14 @@ def _pull_s3_locked(row: dict, dispatch_id: str, round: int, s3: Any, bucket: st
             hr._prune_bundles(d)
             place_pending(row, d)
             note_not_sealed(d)
+        # every entry the round listed is read here: what is not here was not in S3 now
+        out["drained"] = out["error"] is None and not more
     except Exception as exc:  # noqa: BLE001 — S3 slow or unreadable: keep what is kept, retry next check
         logger.warning("agentcore: pulling %s from S3 failed (%s)", dispatch_id, type(exc).__name__)
         if not ((d / hr.MANIFEST).exists() and hr.local_entries(dispatch_id)):
             return dict(hr._UNSUPPORTED)
         out["error"] = "hive_silent"
+        out["drained"] = False
     return {**out, **hr.state(dispatch_id)}
 
 
@@ -1004,9 +1046,11 @@ class AgentCoreCarrier:
     brain_lock_scope = "run"         # every round has its own microVM and Brain copy
     #: every round is a machine of its own (core/carriers/base.Carrier): its state and
     #: results are read here from S3, and a dispatch that fails after open_run releases it.
-    #: No ``duties``: no idle stop (a microVM ends itself), no Brains kept between runs,
-    #: no SSM diagnostics, usage read with each result (``usage``), not by a timer.
+    #: One duty: a round's machine logs are read from CloudWatch (``log_events``). No idle
+    #: stop (a microVM ends itself), no Brains kept between runs, usage read with each
+    #: result (``usage``), not by a timer.
     run_scoped = True
+    duties = frozenset({DIAGNOSTICS})
 
     def __init__(self, transport: Optional[httpx.AsyncBaseTransport] = None) -> None:
         self._names: dict[str, str] = {}
@@ -1041,6 +1085,29 @@ class AgentCoreCarrier:
 
     def location(self, location_id: str) -> AgentCoreLocation:
         return AgentCoreLocation(location_id, self._names.get(location_id))
+
+    def writes_end_at(self, handle: RunHandle) -> Optional[float]:
+        """When the round can have written nothing more (module ``writes_end_at``)."""
+        return writes_end_at(handle)
+
+    async def log_events(self, handle: RunHandle, since: float, until: float,
+                         terms: list[str]) -> dict[str, Any]:
+        """The round's CloudWatch log events between *since* and *until* (epoch seconds):
+        every event of the runtime's log groups that names one of *terms* (the round's
+        session ids), and every event of a stream whose name carries one. ``{"groups",
+        "events": [{"at", "stream", "message"}] oldest first, "total", "truncated"}``; no
+        groups when the runtime has none. Read through the location's account session
+        (``read``); AgentCoreError when CloudWatch refuses or fails. Sends nothing to the
+        session."""
+        arn = parse_runtime_arn((handle.extra or {}).get("runtime_arn"))
+        if arn is None:
+            raise AgentCoreError("the run's handle names no runtime")
+        clean = [t for t in terms if isinstance(t, str) and _LOG_TERM_RE.fullmatch(t)]
+        if not clean:
+            raise ValueError("no session id this read can use")
+        session = await self._session(handle, "read")
+        return await asyncio.to_thread(_read_logs, session, _region_of(handle), arn["runtime_id"], clean,
+                                       int(since * 1000), int(until * 1000))
 
     async def _session(self, handle: RunHandle, purpose: str) -> Any:
         """The boto3 session of the handle's location for ``purpose`` (cached)."""
@@ -1351,6 +1418,145 @@ class AgentCoreCarrier:
         if resp.status_code != 200 or not (isinstance(body, dict) and body.get("bundle") == hive_repo_inbox.bundle_rel(s["sha"])
                                            and body.get("bytes") == size):
             raise AgentCoreError(f"Elastic Workers did not keep {s.get('name') or s['url']} ({resp.status_code})")
+
+
+#: a session id put into a CloudWatch filter pattern (inside quotes): letters, digits,
+#: ``_`` and ``-`` only, so it can never close the quote or add a term
+_LOG_TERM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,79}$")
+
+
+def _read_logs(session: Any, region: str, runtime_id: str, terms: list[str],
+               start_ms: int, end_ms: int) -> dict[str, Any]:
+    """``AgentCoreCarrier.log_events``, blocking. Per log group there are two reads (the
+    events naming a term; a stream named by the session, read whole), each given its share
+    of the calls left, so one busy group never takes the others' reads; calls left after
+    that go to the reads that were cut. Each read goes from the window's end backwards
+    (``newest``): CloudWatch pages a time range oldest first, so a range whose events do
+    not fit in one page is narrowed to its newer half until one does, taken whole, and the
+    end moved back to its start, the next range twice as wide as that piece; the round's
+    last lines are therefore read first in every group. The read stops at LOG_CALLS_MAX calls
+    or LOG_READ_BUDGET_S (``truncated``, as when a read did not reach the window's start,
+    or held LOG_EVENTS_MAX events first). The newest LOG_EVENTS_MAX events are kept."""
+    deadline = time.monotonic() + LOG_READ_BUDGET_S
+    calls = 0
+    truncated = False
+    seen: dict[tuple, dict] = {}
+
+    def spend() -> bool:
+        """One more call may be made (counted here)."""
+        nonlocal calls, truncated
+        if calls >= LOG_CALLS_MAX or time.monotonic() >= deadline:
+            truncated = True
+            return False
+        calls += 1
+        return True
+
+    try:
+        logs = session.client("logs", region_name=region, config=_boto_config(LOG_TIMEOUT_S))
+
+        def page_of(base: dict, lo: int, hi: int, token: Optional[str] = None) -> Optional[str]:
+            """One filter page of [lo, hi] kept in ``seen``; its next token."""
+            kw = {**base, "startTime": lo, "endTime": hi, **({"nextToken": token} if token else {})}
+            page = logs.filter_log_events(**kw)
+            for e in page.get("events") or []:
+                msg, at = e.get("message"), e.get("timestamp")
+                if not isinstance(msg, str) or not isinstance(at, int):
+                    continue
+                stream = str(e.get("logStreamName") or "")
+                seen.setdefault((stream, at, e.get("eventId") or msg),
+                                {"at": at, "stream": stream, "message": msg.rstrip("\n"), "read": id(base)})
+            got = page.get("nextToken")
+            return got if isinstance(got, str) and got else None
+
+        def newest(base: dict, st: dict, share: int) -> bool:
+            """Read one read's window from its end backwards within *share* calls, from where
+            it stopped (``st``: ``hi``, the end still to read; ``width``, the next range's
+            width: twice the last piece one page held). True when it reached the start."""
+            nonlocal truncated
+            used = 0
+
+            def go() -> bool:
+                nonlocal used
+                if used >= share or not spend():
+                    return False
+                used += 1
+                return True
+            while st["hi"] > start_ms:
+                hi = st["hi"]
+                # events already held from the window's end back to ``hi``
+                if sum(1 for e in seen.values() if e["read"] == id(base) and e["at"] >= hi) >= LOG_EVENTS_MAX:
+                    st["full"] = truncated = True
+                    return False
+                lo = max(start_ms, hi - st["width"]) if st.get("width") else start_ms
+                if not go():
+                    return False
+                token = page_of(base, lo, hi)
+                while token and hi - lo > LOG_MIN_PIECE_MS:      # narrow to the newer half
+                    if not go():
+                        # a later pass goes on with the next, narrower piece (this one's
+                        # first page is held)
+                        st["width"] = max((hi - lo) // 2, LOG_MIN_PIECE_MS)
+                        return False
+                    lo = (lo + hi) // 2
+                    token = page_of(base, lo, hi)
+                while token:                                     # a piece too short to narrow
+                    if not go():
+                        st["width"] = hi - lo
+                        return False
+                    token = page_of(base, lo, hi, token)
+                # [lo, hi] is read whole: the next range, as wide again twice over, ends before it
+                st["width"] = 2 * max(hi - lo, LOG_MIN_PIECE_MS)
+                st["hi"] = lo - 1 if lo > start_ms else start_ms
+            return True
+
+        prefix = f"{LOG_GROUP_ROOT}{runtime_id}-"
+        groups: list[str] = []
+        kw: dict[str, Any] = {"logGroupNamePrefix": prefix}
+        for _ in range(LOG_PAGES_MAX):
+            if not spend():
+                break
+            page = logs.describe_log_groups(**kw)
+            groups += [g["logGroupName"] for g in page.get("logGroups") or []
+                       if isinstance(g.get("logGroupName"), str) and g["logGroupName"].startswith(prefix)]
+            if not page.get("nextToken"):
+                break
+            kw["nextToken"] = page["nextToken"]
+        groups = sorted(set(groups))[:LOG_GROUPS_MAX]
+        pattern = " ".join(f'?"{t}"' for t in terms)
+        reads: list[dict[str, Any]] = []
+        for g in groups:
+            reads.append({"logGroupName": g, "filterPattern": pattern})
+            if not spend():
+                break
+            page = logs.describe_log_streams(logGroupName=g, orderBy="LastEventTime", descending=True, limit=50)
+            named = [x["logStreamName"] for x in page.get("logStreams") or []
+                     if isinstance(x.get("logStreamName"), str) and any(t in x["logStreamName"] for t in terms)]
+            if named:
+                reads.append({"logGroupName": g, "logStreamNames": named[:LOG_STREAMS_MAX]})
+        states = [{"hi": end_ms} for _ in reads]
+        # each read gets its share of the calls left (a read that needs fewer leaves them to
+        # the next); then the calls still left go to the reads that were cut, in turn
+        cut = list(range(len(reads)))
+        for _ in range(2):
+            todo, cut = cut, []
+            for n, i in enumerate(todo):
+                if calls >= LOG_CALLS_MAX:
+                    cut.append(i)
+                    continue
+                if not newest(reads[i], states[i], max(1, (LOG_CALLS_MAX - calls) // (len(todo) - n))) \
+                        and not states[i].get("full"):
+                    cut.append(i)
+            if not cut or calls >= LOG_CALLS_MAX or time.monotonic() >= deadline:
+                break
+        if cut:
+            truncated = True
+    except Exception as exc:  # noqa: BLE001 — classified for the caller
+        raise AgentCoreError(f"CloudWatch Logs did not answer ({_error_code(exc) or type(exc).__name__})") from None
+    events = sorted(({k: v for k, v in e.items() if k != "read"} for e in seen.values()),
+                    key=lambda e: (e["at"], e["stream"]))
+    total = len(events)
+    return {"groups": groups, "events": events[-LOG_EVENTS_MAX:], "total": total,
+            "truncated": truncated or total > LOG_EVENTS_MAX}
 
 
 def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:

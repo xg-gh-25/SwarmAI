@@ -708,7 +708,7 @@ async def _fetch(row: dict) -> dict:
            "summary_version": prev.get("summary_version"), "lessons": prev.get("lessons"),
            "records": prev.get("records"), "no_record_since": prev.get("no_record_since"),
            "no_record_of": prev.get("no_record_of"), "resent_at": prev.get("resent_at"),
-           "check_records": prev.get("check_records")}
+           "check_records": prev.get("check_records"), "round_end": prev.get("round_end")}
     if not isinstance(sid, str) or not swarm_out.KEY_RE.fullmatch(sid):
         rec["fetch_error"] = "no session"
         return rec
@@ -797,6 +797,9 @@ async def _from_round(row: dict, rec: dict, prev: dict, car: Any, handle: Any) -
     if not DISPATCH_ID_RE.fullmatch(did):
         rec["fetch_error"] = "no session"
         return rec
+    # taken before the read: only a read that started once the round could write nothing
+    # more can show that a result missing then never comes (``_note_round_end``)
+    started = time.time()
     pulled = await asyncio.wait_for(car.outputs(handle, did, row), PULL_TIMEOUT_S)
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
     if agent.get("checks_by_id") is True and isinstance(pulled.get("check_records"), list):
@@ -813,7 +816,46 @@ async def _from_round(row: dict, rec: dict, prev: dict, car: Any, handle: Any) -
     # False: the record does not hold the whole turn yet; the previous result stays and
     # the next check reads it again
     await _from_records(row, rec, prev, pulled)
+    _note_round_end(rec, car, handle, started, pulled)
     return rec
+
+
+def _note_round_end(rec: dict, car: Any, handle: Any, started: float, pulled: dict) -> None:
+    """Keep ``round_end`` (``{round, run_ref, checked_at}``) when this read shows that the
+    round's result will never come: the read started after the round could write nothing
+    more (the carrier's ``writes_end_at``: its machine is past its lifetime), read every
+    entry the round listed (``drained``, no error), and the kept result is still not
+    final. Kept once, for that round: nothing written later can exist, and a result that
+    did come is read first by every reader (core/swarm_out_settle ``result_lost``)."""
+    writes_end_at = getattr(car, "writes_end_at", None)
+    end = writes_end_at(handle) if writes_end_at is not None else None
+    if end is None or started < end or not pulled.get("supported") or pulled.get("error") \
+            or pulled.get("drained") is not True:
+        return
+    res = rec.get("result") if isinstance(rec.get("result"), dict) else None
+    if isinstance(res, dict) and res.get("ended") in ENDED and res.get("provisional") is not True:
+        return
+    mark = rec.get("round_end") if isinstance(rec.get("round_end"), dict) else None
+    if mark and mark.get("round") == handle.round and mark.get("run_ref") == handle.run_ref:
+        return
+    rec["round_end"] = {"round": handle.round, "run_ref": handle.run_ref, "checked_at": rec["checked_at"]}
+
+
+def round_end_of(row: dict, kept: Optional[dict]) -> Optional[dict]:
+    """The kept record's ``round_end`` (``_note_round_end``) when it is of the row's
+    current round (its number and session), else None: an earlier round's mark says
+    nothing of the round that runs now."""
+    mark = (kept or {}).get("round_end") if isinstance(kept, dict) else None
+    if not isinstance(mark, dict):
+        return None
+    from core.carriers.base import current_handle
+    try:
+        cur = current_handle(row)
+    except (TypeError, ValueError):
+        return None
+    if mark.get("round") != cur.round or not mark.get("run_ref") or mark.get("run_ref") != cur.run_ref:
+        return None
+    return mark
 
 
 #: lines of a check record taken from a Hive (a task has at most a few dozen checks,
@@ -1019,8 +1061,9 @@ CLOSED_RECHECK_S = 600
 def check_due(row: dict, hive_status: Optional[str], kept: Optional[dict]) -> bool:
     """A stopped run on a running Hive is checked on every poll, and once when it has
     never been checked. A run whose Hive keeps records (core/hive_records) until its
-    record is ``closed`` (then every ``CLOSED_RECHECK_S``), and never after 14 days
-    without a new entry. Without records, while it is recent (``RECENT_S`` from sending)."""
+    record is ``closed`` or its current round's result can no longer come
+    (``round_end_of``; then every ``CLOSED_RECHECK_S``), and never after 14 days without
+    a new entry. Without records, while it is recent (``RECENT_S`` from sending)."""
     if hive_status != "running" or not row.get("session_id"):
         return False
     # a round that is a machine of its own ends closed, at its carrier's lifetime or
@@ -1035,7 +1078,9 @@ def check_due(row: dict, hive_status: Optional[str], kept: Optional[dict]) -> bo
         from core import hive_records
         if hive_records.backstop_passed(recs.get("last_at") or row.get("sent_at")):
             return False
-        if recs.get("closed"):
+        if recs.get("closed") or round_end_of(row, kept):
+            # a round whose result can no longer come (``round_end``) is asked again only
+            # as rarely as a closed record: a late result would still be taken then
             age = _age_s(kept.get("checked_at"))
             return age is None or age > CLOSED_RECHECK_S
         return True

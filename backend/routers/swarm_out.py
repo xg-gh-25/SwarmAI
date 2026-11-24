@@ -618,9 +618,10 @@ async def run_result(dispatch_id: str) -> dict[str, Any]:
 
 @router.get("/runs/{dispatch_id}/diagnostics")
 async def run_diagnostics(dispatch_id: str) -> dict[str, Any]:
-    """Why the run's Hive session stopped, read from its Hive with a fixed read-only
-    script over SSM (core/hive_diagnostics): kernel OOM kills, the service's stops, its
-    memory, the session's error lines, and a deterministic list of findings."""
+    """Why the run's Hive session stopped (core/hive_diagnostics): on an EC2 Hive, read
+    from it with a fixed read-only script over SSM (kernel OOM kills, the service's stops,
+    its memory, the session's error lines); on Elastic Workers, the round's CloudWatch Logs
+    lines. Both with a deterministic list of findings."""
     _require_desktop()
     from core import hive_diagnostics
 

@@ -29,6 +29,14 @@ it on every records poll). ``findings`` is a deterministic list built from them,
 model: ``oom_kill``, ``service_stopped`` (one per stop), ``session_error``, or
 ``none_seen``. A repeat within ``CACHE_S`` returns the kept answer without SSM.
 
+An Elastic Workers (AgentCore) round has no machine to send a command to: its runtime
+writes to CloudWatch Logs, so ``read`` asks the round's carrier for that session's log events
+(core/carriers/agentcore ``log_events``, through the location's account session) in the
+round's window (its start to the end of its lifetime, or now), and gives them as one
+``session`` section in the same shape, its ``findings`` from the same rules
+(``session_error`` with the last lines, or ``none_seen``). A runtime with no log group, or
+CloudWatch refusing the read, answers ``not_reachable`` with the reason.
+
 Public: ``read``, ``script``, ``findings``, ``parse``, ``SESSION_ID_RE``.
 """
 from __future__ import annotations
@@ -239,6 +247,83 @@ async def _target(dispatch_id: str) -> dict[str, Any]:
             "since": since, "until": until}
 
 
+async def _carrier_reader(dispatch_id: str) -> Optional[tuple[dict, Any, Any]]:
+    """(row, current round, carrier) when the run's current round is on a carrier that
+    reads its own machine logs (the diagnostics duty and ``log_events``: Elastic Workers),
+    else None (the SSM read, ``_target``, decides)."""
+    from core import swarm_out
+    from core.carriers import registry
+    from core.carriers.base import DIAGNOSTICS, current_handle
+    row = await asyncio.to_thread(swarm_out._log_row_of, dispatch_id)
+    handle = current_handle(row)
+    try:
+        car = registry.carrier(handle.carrier)
+    except KeyError:
+        return None
+    if DIAGNOSTICS in getattr(car, "duties", ()) and getattr(car, "log_events", None) is not None:
+        return row, handle, car
+    return None
+
+
+#: the session section's byte budget for a carrier's log lines (as the SSM script's)
+CARRIER_BUDGET = dict(BUDGETS)["session"]
+
+
+async def _read_carrier(dispatch_id: str, row: dict, handle: Any, car: Any) -> dict[str, Any]:
+    """Why an Elastic Workers round stopped, from its CloudWatch log lines: those naming
+    the round's runtime session or its chat session, in the round's window."""
+    sid = handle.run_ref
+    if not isinstance(sid, str) or not SESSION_ID_RE.fullmatch(sid):
+        raise ValueError("not a session id this read can use")
+    terms = [sid] + [x for x in (handle.session,) if isinstance(x, str) and SESSION_ID_RE.fullmatch(x)
+                     and x != sid]
+    now = time.time()
+    opened = handle.opened_at if isinstance(handle.opened_at, (int, float)) else None
+    since = (opened if opened is not None else (_parse(row.get("sent_at")) or datetime.now(timezone.utc)
+                                                 - timedelta(hours=1)).timestamp()) - PAD.total_seconds()
+    end_at = getattr(car, "writes_end_at", None)
+    last = end_at(handle) if end_at is not None else None
+    until = min(now, last) if last is not None else now
+    if until <= since:
+        until = now
+    try:
+        got = await car.log_events(handle, since, until, terms)
+    except ValueError:
+        raise                                    # a session id the read cannot use: nothing sent
+    except Exception as e:  # noqa: BLE001 — the carrier's message says why (safe to show)
+        return {"dispatch_id": dispatch_id, "reachable": False,
+                "reason": f"logs_failed: {str(e)[:200] or type(e).__name__} (the SwarmAI account's identity "
+                          "reads them with logs:DescribeLogGroups, logs:DescribeLogStreams and "
+                          "logs:FilterLogEvents)"}
+    if not got.get("groups"):
+        return {"dispatch_id": dispatch_id, "reachable": False,
+                "reason": "no_log_group: the Elastic Workers runtime has no CloudWatch log group "
+                          "(/aws/bedrock-agentcore/runtimes/...) to read"}
+    lines = [f"{datetime.fromtimestamp(e['at'] / 1000, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')} "
+             f"{' '.join(str(e.get('message') or '').split())}" for e in got.get("events") or []]
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines):                 # the newest whole lines within the budget
+        used += len(line.encode("utf-8")) + 1
+        if used > CARRIER_BUDGET:
+            break
+        kept.append(line)
+    kept.reverse()
+    total = max(int(got.get("total") or 0), len(lines))
+    sections = {"session": {"lines": kept, "total": total, "omitted": max(0, total - len(kept))}}
+    win = {"since": datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "until": datetime.fromtimestamp(until, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    # every line read is the round's own: errors are counted over all of them, not only
+    # the kept ones (the EC2 script's session section is cut on the Hive the same way)
+    errors = [x for x in lines if _ERROR_RE.search(x)]
+    found = [{"kind": "session_error", "count": len(errors), "last": errors[-5:]}] if errors else [{"kind": "none_seen"}]
+    return {"dispatch_id": dispatch_id, "reachable": True, "hive": row.get("hive"), "carrier": handle.carrier,
+            "session_id": sid, "window": win, "state": [], "sections": sections, "findings": found,
+            "log_groups": list(got.get("groups") or []),
+            # the read stopped at its budget before the window's start: older lines were not read
+            "truncated": bool(got.get("truncated")), "hive_written": True, "cached": False}
+
+
 def _parse(v: Any) -> Optional[datetime]:
     if not isinstance(v, str) or not v:
         return None
@@ -309,6 +394,12 @@ async def read(dispatch_id: str) -> dict[str, Any]:
 
 async def _read(dispatch_id: str) -> dict[str, Any]:
     try:
+        own = await _carrier_reader(dispatch_id)
+        if own is not None:
+            out = await _read_carrier(dispatch_id, *own)
+            if out.get("reachable"):
+                _cache[dispatch_id] = (time.monotonic(), out)
+            return out
         t = await _target(dispatch_id)
         text = script(t["session_id"], t["since"], t["until"])
         output = await asyncio.to_thread(_ssm_run, t["session"], t["region"], t["ec2_id"], text)

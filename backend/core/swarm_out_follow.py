@@ -130,6 +130,9 @@ def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             "actions": [{"key": a.get("key"), "variant": a.get("variant")}
                         for a in (row.get("actions") or []) if isinstance(a, dict)],
             "why_not": (row.get("settle") or {}).get("why_not") if isinstance(row.get("settle"), dict) else None,
+            # what happened, in words, when the stage alone does not say it (a run whose
+            # result can no longer come: core/swarm_out_settle.lost_note)
+            **({"note": row["note"]} if isinstance(row.get("note"), str) and row["note"] else {}),
             "waits": waits}
 
 

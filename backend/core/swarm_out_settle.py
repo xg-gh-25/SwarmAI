@@ -42,6 +42,14 @@ settles:
 - its session is known to be stopped: never while it runs, and never while its Hive does
   not answer (``state`` unknown), unless a person discarded it.
 
+A stopped round whose result can no longer come (``result_lost``: an Elastic Workers round
+past its lifetime whose store was read whole after it could write nothing more, with no
+final result: core/swarm_out_results ``round_end``) is ``stopped`` / ``no_result``, its
+lessons count as in (none can follow), and its ``/runs`` row and the dispatching agent's
+run summary (core/swarm_out_follow) carry a ``note`` saying what came back (``lost_note``;
+the desktop panel shows the stage and the ``no_result`` why text, not the note): the
+dispatching agent may discard it (core/swarm_out_actor), as nothing can arrive any more.
+
 Settling tells the Hive to remove the task's workspace (``Hive/work/<id>/`` and
 ``Outputs/<id>/``), so code and files must have left it first: commits the Hive could
 not seal into a bundle (``unsealed``), a repository not yet landed, and a file not
@@ -488,7 +496,8 @@ def interrupted(row: dict, res: Optional[dict], kept: Optional[dict]) -> bool:
 
 
 def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
-    """``{"stage", "actions", "why", "verdict", "code", "settles", "why_not", "settled"}``
+    """``{"stage", "actions", "why", "verdict", "code", "settles", "why_not", "settled",
+    "result_lost", "note"}``
     for one row with its public ``result`` attached; ``kept`` is the run's kept record
     (core/swarm_out_results.load: its ``records`` and its whole ``result``), or None.
 
@@ -550,8 +559,12 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
             verdict = "pass"                               # a newer turn voids it
     lessons = (res or {}).get("lessons")
     unqueued = isinstance(lessons, dict) and (lessons.get("pending") or 0) > 0
-    # nothing more is pulled: the Hive is stopped or gone, or the records backstop passed
-    pulled_out = gone or row.get("state_reason") == "hive_stopped" or (
+    # the round's result can no longer come: its store was read whole after its machine
+    # could write nothing more (``result_lost``); nothing else will be pulled for it
+    lost = result_lost(row, kept)
+    # nothing more is pulled: the Hive is stopped or gone, the round's machine can write
+    # nothing more, or the records backstop passed
+    pulled_out = gone or bool(lost) or row.get("state_reason") == "hive_stopped" or (
         recs is not None and recs.get("closed") is not True
         and hive_records.backstop_passed(recs.get("last_at") or row.get("sent_at")))
     closed = recs.get("closed") if recs else None           # None: this run keeps no record
@@ -566,6 +579,7 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     stopped_without_result = res is None and row.get("state") == "stopped" and (
         row.get("result_status") == "not_applicable"
         or (row.get("result_status") == "failed" and row.get("result_error") in NO_RESULT_ERRORS))
+
     # the session can still take a message: named, its Hive here, not lost
     alive = bool(row.get("session_id")) and not gone and not stopped_without_result
 
@@ -587,7 +601,7 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         stage = "needs_answer"
     elif not row.get("session_id"):
         stage, why = "stopped", "no_session"
-    elif stopped_without_result:
+    elif stopped_without_result or lost:
         stage, why = "stopped", "no_result"
     elif interrupted(row, res, kept):
         stage, why = "stopped", "no_record"                # cut off: re-run it
@@ -633,7 +647,8 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
            # pipeline runs and removes what background work may still be writing
            "settles": not why_not and (state == "stopped" or (abandoned and state != "running")
                                        or (run_end and state == "waiting")),
-           "why_not": why_not, "settled": settled}
+           "why_not": why_not, "settled": settled,
+           "result_lost": lost, "note": lost_note(row, lost) if lost else None}
     if child:
         # the lead run's commands on its child (core/swarm_out_actor reads these for it):
         # take it (accept, variant child), correct it (rerun), stop, discard
@@ -642,6 +657,76 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
                                                        "result_final": _final(res)})
     out["person_decisions"] = swarm_out_record.person_decisions(rec, bool(row.get("dispatched_from")))
     return out
+
+
+def result_lost(row: dict, kept: Optional[dict]) -> Optional[dict]:
+    """``{"why", "checked_at"}`` when the run's stopped current round will never bring a
+    final result: the kept record's ``round_end`` is of that round (its number and
+    session; core/swarm_out_results.round_end_of) and the result is not final. None
+    otherwise: a result that did come, a later round, or a run not stopped."""
+    from core import swarm_out_results
+    res = row.get("result") if isinstance(row.get("result"), dict) else None
+    if row.get("state") != "stopped" or _final(res):
+        return None
+    mark = swarm_out_results.round_end_of(row, kept)
+    if not mark:
+        return None
+    return {"why": str(row.get("state_reason") or "ended")[:40], "checked_at": mark.get("checked_at")}
+
+
+#: files a card names by path before it only counts the rest
+NOTE_FILES = 8
+_END_WORDS = {"carrier_expired": "reached the Elastic Workers session limit",
+              "carrier_replaced": "was replaced", "closed": "closed", "released": "was released",
+              "idle": "ended"}
+
+
+#: a returned path is the worker's text: shown on one line, quoted, cut to this length
+NOTE_PATH_MAX = 120
+
+
+def _shown(path: str, cap: int = NOTE_PATH_MAX) -> str:
+    """A path as a card names it: control and format characters dropped, whitespace
+    collapsed (a path with a newline never starts a line of its own), in backticks
+    (none inside), at most *cap* characters."""
+    import unicodedata
+    clean = "".join(c for c in path if unicodedata.category(c)[0] != "C" or c in " \t\n")
+    clean = " ".join(clean.split()).replace("`", "'")
+    return "`" + (clean[:cap - 1] + "…" if len(clean) > cap else clean) + "`"
+
+
+def lost_note(row: dict, lost: dict) -> str:
+    """The ``note`` of a run whose result can no longer come (its ``/runs`` row and the
+    agent's run summary; the desktop panel shows only the stage and why): how its session
+    ended, that nothing more can arrive, and what did come back (the files placed in the
+    Brain, files that came back but could not be placed, commit bundles with no result to
+    land them by). Blocking (small file reads)."""
+    from core import hive_files, hive_records
+    did = str(row.get("dispatch_id") or "")
+    how = _END_WORDS.get(lost.get("why") or "", f"ended ({lost.get('why')})")
+    placed = [p for p in hive_files.placed(did) if isinstance(p, dict)]
+    here = sorted({p["local"] for p in placed if isinstance(p.get("local"), str) and p["local"]})
+    unplaced = sum(1 for p in placed if not p.get("local"))
+    try:
+        bundles = sum(1 for e in hive_records.local_entries(did) if e.get("kind") == "bundle")
+    except (OSError, ValueError):
+        bundles = 0
+    parts = []
+    if here:
+        named = ", ".join(_shown(x) for x in here[:NOTE_FILES]) \
+            + (f" and {len(here) - NOTE_FILES} more" if len(here) > NOTE_FILES else "")
+        parts.append(f"{len(here)} file{'s' if len(here) != 1 else ''} placed in the Brain ({named})")
+    if unplaced:
+        parts.append(f"{unplaced} file{'s' if unplaced != 1 else ''} that could not be placed")
+    if bundles:
+        one = bundles == 1
+        parts.append(f"{bundles} commit bundle{'' if one else 's'} with no result naming "
+                     f"{'its' if one else 'their'} repository, so not landed (kept on this host with "
+                     f"the run's records, {_shown(str(hive_records.local_dir(did)), 200)}, until they expire)")
+    came = "; ".join(parts) if parts else "nothing"
+    return (f"The worker's session {how} before its final result came back. Its result store was "
+            f"read after the session could write nothing more, so nothing more will arrive. "
+            f"What came back: {came}. Discard it, or re-run it to finish the work.")
 
 
 def _iso(v: Any) -> Optional[datetime]:
@@ -738,7 +823,9 @@ def annotate(rows: list[dict], can_tell: bool = True) -> list[dict]:
                 r["stage"], r["actions"], r["why"] = d["stage"], d["actions"], d["why"]
                 if "lead_actions" in d:
                     r["lead_actions"] = d["lead_actions"]
-                r["settle"] = {"code": d["code"], "why_not": d["why_not"], "settled": None}
+                r["settle"] = {"code": d["code"], "why_not": d["why_not"], "settled": None,
+                               "result_lost": d["result_lost"]}
+                r["note"] = d["note"]
                 r["funnel"], r["person_decisions"] = d["funnel"], d["person_decisions"]
                 r["cleanup_soon"] = idle is not None and idle >= hive_records.RETENTION_DAYS - REMIND_DAYS
                 continue
