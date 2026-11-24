@@ -1030,19 +1030,17 @@ async def install_daemon():
 
 @router.post("/uninstall-cleanup")
 async def uninstall_cleanup():
-    """Remove launchd scheduler plist and clean up background processes.
-
-    Call this before deleting the app to stop the hourly scheduler.
-    Safe to call multiple times — idempotent.  Also stops managed
-    subsidiary services.
+    """Clean up before the app is deleted: the legacy macOS scheduler plist (if any),
+    the managed subsidiary services and the port file. Each step records what it did
+    (the scheduler step: removed / not_installed / not_applicable off macOS; the port
+    file: removed / already gone). Safe to call multiple times — idempotent.
     """
     results: dict[str, str] = {}
 
-    # 1. Unload and remove launchd plist
+    # 1. The legacy launchd scheduler plist (macOS only; the scheduler runs in-process)
     try:
         from jobs.install_scheduler import uninstall as uninstall_scheduler
-        uninstall_scheduler()
-        results["scheduler_plist"] = "removed"
+        results["scheduler_plist"] = uninstall_scheduler()
     except Exception as e:
         logger.error("Failed to remove scheduler plist: %s", e)
         results["scheduler_plist"] = f"error: {e}"
@@ -1058,11 +1056,19 @@ async def uninstall_cleanup():
 
     # 3. Remove port file — unlink is blocking FS I/O, off the loop (run_6ea3cb12).
     port_file = PORT_FILE
+
+    def _remove_port_file() -> str:
+        try:
+            port_file.unlink()
+            return "removed"
+        except FileNotFoundError:
+            return "already gone"
+
     try:
-        await asyncio.to_thread(port_file.unlink, missing_ok=True)
-        results["port_file"] = "removed"
-    except Exception:
-        results["port_file"] = "already gone"
+        results["port_file"] = await asyncio.to_thread(_remove_port_file)
+    except Exception as e:
+        logger.error("Failed to remove port file: %s", e)
+        results["port_file"] = "error"
 
     logger.info("Uninstall cleanup completed: %s", results)
     return {"status": "cleaned", "details": results}

@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,8 +42,8 @@ from .paths import SWARMWS, JOB_RESULTS_DIR, JOB_RESULTS_JSONL, DB_PATH, ESTIMAT
 # ── Job model resolution ─────────────────────────────────────────────
 # The implementation lives in the SIDE-EFFECT-FREE leaf module
 # `jobs.model_resolve` (see its docstring for the 400-Input-too-long history and
-# why it is not a function in this file: importing THIS module runs a `zsh -lic`
-# subprocess and replaces os.environ["PATH"], which must not be dragged into a
+# why it is not a function in this file: importing THIS module runs a login-shell
+# subprocess and rewrites os.environ["PATH"], which must not be dragged into a
 # handler's import path). Re-exported under the original private name so the two
 # call sites below read unchanged.
 from .model_resolve import resolve_job_model as _resolve_job_model  # noqa: F401
@@ -50,23 +51,87 @@ from .cli_result import cli_api_error, cli_too_old_message, parse_cli_version
 
 
 # ── Module-level PATH fix ────────────────────────────────────────────
-# GUI apps (Tauri) don't inherit login shell PATH.  credential_process
-# tools (ada/toolbox), mise shims, and npm globals are invisible.
-# Resolve once at import time so ALL functions (pre-flight boto3 check,
-# CLI subprocess, script jobs) see the full PATH.
-def _fix_path_from_login_shell() -> None:
-    """Merge login shell PATH into os.environ so child processes and
-    credential_process (ada) work regardless of how we were launched."""
+# GUI apps (Tauri) and launchd/systemd daemons don't inherit the login shell's PATH:
+# credential_process tools, mise shims and npm globals are invisible. Resolve once at
+# import time so ALL functions (pre-flight boto3 check, CLI subprocess, script jobs)
+# see the person's PATH. The probe runs the person's OWN shell (never a hard-coded
+# one: a bash user's PATH is not zsh's), is skipped on Windows (no login shell to ask),
+# and a probe that fails in any way leaves PATH exactly as it was.
+
+# Printed in front of the probed value, so banners an interactive login shell prints
+# (motd, rc-file echoes) are never taken for it.
+_LOGIN_SHELL_MARK = "__SWARMAI_LOGIN_SHELL__="
+
+
+def _account_login_shell() -> str | None:
+    """The account's login shell from the password database (Unix), or None."""
+    try:
+        import pwd  # Unix-only
+        return pwd.getpwuid(os.getuid()).pw_shell or None
+    except (ImportError, KeyError, AttributeError, OSError):
+        return None
+
+
+def _login_shells() -> list[str]:
+    """The shells to ask, in order: ``$SHELL``, the account's login shell, /bin/bash,
+    /bin/sh, each once and only when it is an executable file. Empty on Windows (no
+    login shell to ask) or when none exists (the probe then runs nothing)."""
+    if sys.platform == "win32":
+        return []
+    shells: list[str] = []
+    for shell in (os.environ.get("SHELL"), _account_login_shell(), "/bin/bash", "/bin/sh"):
+        if (shell and shell not in shells and os.path.isabs(shell)
+                and os.path.isfile(shell) and os.access(shell, os.X_OK)):
+            shells.append(shell)
+    return shells
+
+
+def _ask_login_shell(shell: str, expr: str) -> str | None:
+    """*expr* as *shell*, run as an interactive login shell, expands it; None when it
+    fails, exits non-zero or prints no marked value."""
     try:
         result = subprocess.run(
-            ["zsh", "-lic", "echo $PATH"],
-            capture_output=True, text=True, timeout=10,
+            [shell, "-lic", f'echo "{_LOGIN_SHELL_MARK}"{expr}'],
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
         )
-        shell_path = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-        if shell_path:
-            os.environ["PATH"] = shell_path
-    except Exception:
-        pass  # Fall through — keep inherited PATH
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        logger.debug("login shell probe (%s) failed: %s", shell, exc)
+        return None
+    if result.returncode != 0:
+        logger.debug("login shell probe (%s) exited %s", shell, result.returncode)
+        return None
+    for line in reversed((result.stdout or "").splitlines()):
+        at = line.find(_LOGIN_SHELL_MARK)  # a startup file may print without a newline
+        if at >= 0:
+            return line[at + len(_LOGIN_SHELL_MARK):].strip() or None
+    return None
+
+
+def _login_shell_value(expr: str) -> str | None:
+    """*expr* (shell syntax, double-quoted) as the person's interactive login shell
+    expands it: the first shell of ``_login_shells`` that answers (a shell that cannot
+    run ``-lic``, csh for one, hands over to the next). None when none answers.
+    ``"$PATH"`` quoted prints colon-joined in bash, zsh, sh and fish."""
+    for shell in _login_shells():
+        value = _ask_login_shell(shell, expr)
+        if value:
+            return value
+    return None
+
+
+def _fix_path_from_login_shell() -> None:
+    """Merge the login shell's PATH into os.environ: its entries first, then the
+    inherited entries it lacks (a daemon-set entry such as the backend's venv is kept).
+    Nothing changes when the probe fails or there is no shell to ask."""
+    shell_path = _login_shell_value('"$PATH"')
+    if not shell_path:
+        return
+    login = [p for p in shell_path.split(os.pathsep) if p]
+    if not any(os.path.isabs(p) for p in login):
+        return  # not a PATH
+    merged = list(dict.fromkeys(
+        login + [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]))
+    os.environ["PATH"] = os.pathsep.join(merged)
 
 _fix_path_from_login_shell()
 
@@ -541,6 +606,10 @@ def _check_claude_auth(claude_path: str) -> str | None:
         from core import aws_account
         # the region the job itself runs in (_build_cli_env): the main region
         env.setdefault("AWS_REGION", aws_account.region())
+        # the same credentials the job itself gets (_build_cli_env)
+        key = _bedrock_api_key()
+        if key:
+            env["AWS_BEARER_TOKEN_BEDROCK"] = key
 
         result = subprocess.run(
             [claude_path, "auth", "status"],
@@ -571,9 +640,10 @@ def _check_claude_auth(claude_path: str) -> str | None:
 def _get_aws_credentials() -> dict[str, str]:
     """Try to get temporary AWS credentials via boto3 (credential_process → ada).
 
-    With a SwarmAI AWS account (core/aws_account) this returns nothing: the CLI gets the
-    pinned account through awsCredentialExport instead. The rest of this docstring is
-    the path without one.
+    With chat on a saved Bedrock API key this returns nothing (the run signs with the
+    key). With a SwarmAI AWS account (core/aws_account) it returns nothing either: the CLI
+    gets the pinned account through awsCredentialExport instead. The rest of this
+    docstring is the path without one.
 
     Returns a dict of env vars (AWS_ACCESS_KEY_ID, etc.) if boto3 resolves.
     Returns empty dict if boto3 fails — caller falls through to CLI's own auth
@@ -587,6 +657,8 @@ def _get_aws_credentials() -> dict[str, str]:
     If boto3 fails (VPN off, Isengard unreachable), the CLI still works via its
     own SSO IdC tokens. Best of both worlds — no single point of failure.
     """
+    if _bedrock_api_key():
+        return {}  # the run signs with the saved Bedrock API key (_build_cli_env)
     from core import aws_account
     if aws_account.cli_settings(bedrock=True):
         # The CLI gets the pinned SwarmAI account through awsCredentialExport
@@ -625,25 +697,17 @@ def _resolve_claude_cli() -> str | None:
     """Find the claude CLI binary, checking login shell PATH.
 
     GUI apps (Tauri) don't inherit shell PATH, so shutil.which() may
-    miss binaries installed via npm/mise/nvm.  Fall back to login shell
-    discovery, same pattern as backend/core/claude_environment.py.
+    miss binaries installed via npm/mise/nvm.  Fall back to asking the
+    person's own login shell (none on Windows).
     """
     path = shutil.which("claude")
     if path:
         return path
 
-    # Login shell PATH discovery (macOS: zsh -lic)
-    try:
-        result = subprocess.run(
-            ["zsh", "-lic", "which claude"],
-            capture_output=True, text=True, timeout=10,
-        )
-        resolved = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-        if resolved and os.path.isfile(resolved):
-            return resolved
-    except Exception:
-        pass
-
+    # Ask the person's own login shell (_login_shell_value)
+    resolved = _login_shell_value('"$(command -v claude)"')
+    if resolved and os.path.isfile(resolved):
+        return resolved
     return None
 
 
@@ -1481,17 +1545,26 @@ def _check_daily_agent_limit(state: SchedulerState, defaults: SchedulerDefaults)
     return None
 
 
+def _bedrock_api_key() -> str | None:
+    """The saved Bedrock API key when chat runs on one (``get_chat_via() ==
+    "bedrock_key"``), else None: the same reader jobs/bedrock.py's clients use."""
+    from .bedrock import chat_api_key
+    return chat_api_key()
+
+
 def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
     """Build clean environment for Claude CLI subprocess.
 
     PATH is already fixed at module level (_fix_path_from_login_shell).
-    This adds Bedrock config, injects pre-resolved AWS credentials, and
-    strips problematic vars.
+    This adds Bedrock config, the credentials, and strips problematic vars.
 
-    Credential strategy: if boto3 resolved credentials (ada → Isengard),
-    inject them so CLI uses the same chain as the backend's boto3 calls. If boto3
-    failed (VPN off), aws_creds is empty — CLI falls through to its own
-    SSO IdC tokens. Either way, at least one auth path works.
+    Credential strategy: chat on a Bedrock API key → the saved key as
+    ``AWS_BEARER_TOKEN_BEDROCK``, read from the config every time (os.environ holds it
+    only after a chat spawn or the model-access warmer ran, so a job right after a daemon
+    restart would have none), and *aws_creds* is not injected. Otherwise: if boto3
+    resolved credentials, inject them so the CLI uses the same chain as the backend's
+    boto3 calls; if boto3 failed, aws_creds is empty and the CLI falls through to its own
+    chain. The key goes into this dict only, never into os.environ.
     """
     env = os.environ.copy()
 
@@ -1504,10 +1577,14 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
     env.setdefault("AWS_REGION", _region)
     env.setdefault("AWS_DEFAULT_REGION", _region)
 
-    # Without a SwarmAI account: inject pre-resolved AWS credentials from boto3
-    # (ada → Isengard), overriding the chain the CLI would resolve on its own. With one,
-    # aws_creds is empty and the CLI uses awsCredentialExport (_aws_settings_args).
-    if aws_creds:
+    # Chat on a Bedrock API key: the job signs with that key, never with the machine's
+    # sigv4 credentials. Otherwise, without a SwarmAI account: inject pre-resolved AWS
+    # credentials from boto3, overriding the chain the CLI would resolve on its own. With
+    # one, aws_creds is empty and the CLI uses awsCredentialExport (_aws_settings_args).
+    bedrock_key = _bedrock_api_key()
+    if bedrock_key:
+        env["AWS_BEARER_TOKEN_BEDROCK"] = bedrock_key
+    elif aws_creds:
         env.update(aws_creds)
         # Remove credential_process config — we already resolved credentials.
         # Prevents the CLI from trying its own (potentially different) resolution.
@@ -1542,11 +1619,20 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
     return env
 
 
-def _aws_settings_args() -> "list[str]":
-    """``--settings`` for a headless CLI run: awsCredentialExport on the pinned SwarmAI
-    account (core/aws_account), or nothing when there is none."""
+def _aws_settings() -> dict:
+    """The settings of a headless CLI run: awsCredentialExport on the pinned SwarmAI
+    account (core/aws_account), or nothing when there is none, and nothing when chat
+    runs on a saved Bedrock API key: the run then signs with that key
+    (``_build_cli_env``), as chat does (``cli_settings`` leaves the export out for it)."""
+    if _bedrock_api_key():
+        return {}
     from core import aws_account
-    settings = aws_account.cli_settings(bedrock=True)  # a job always runs on Bedrock
+    return aws_account.cli_settings(bedrock=True)  # a job always runs on Bedrock
+
+
+def _aws_settings_args() -> "list[str]":
+    """``--settings`` for a headless CLI run (``_aws_settings``), or nothing."""
+    settings = _aws_settings()
     return ["--settings", json.dumps(settings)] if settings else []
 
 

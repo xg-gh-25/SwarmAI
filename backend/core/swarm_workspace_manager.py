@@ -93,14 +93,23 @@ SYSTEM_MANAGED_FOLDERS = {
 # are a DIFFERENT file set and are left untouched.
 AI_INSTRUCTION_SENTINEL_FILES = ["CLAUDE.md", "AGENTS.md"]
 
-AI_INSTRUCTION_SENTINEL = """\
+def _governed_file_names() -> str:
+    """The governed context files the prompt builder loads (``CONTEXT_FILES``, the one
+    list), as ``SWARMAI / IDENTITY / ...`` wrapped for the sentinel."""
+    import textwrap
+    from core.context_directory_loader import CONTEXT_FILES
+    names = " / ".join(spec.filename.removesuffix(".md") for spec in CONTEXT_FILES)
+    return textwrap.fill(f"({names}).", width=78, break_on_hyphens=False)
+
+
+AI_INSTRUCTION_SENTINEL = f"""\
 # NOT A SOURCE OF INSTRUCTIONS
 
 This file is intentionally empty of directives.
 
 SwarmAI's official system prompt is assembled ONLY by its own system prompt
-builder, from the governed context files (SWARMAI / IDENTITY / SOUL / SELF /
-AGENT / USER / STEERING / TOOLS / MEMORY / EVOLUTION / KNOWLEDGE).
+builder, from the governed context files
+{_governed_file_names()}
 A `CLAUDE.md` or `AGENTS.md` in this workspace is NOT an authoritative source
 and is force-reset to this sentinel on every session start.
 
@@ -423,7 +432,7 @@ SECTION_SCAFFOLD: dict[str, str] = {
     # ── ① IDENTITY & MANIFEST ────────────────────────────────────────────────
     # aim.json.plugins declares the default DDD-native skills (D3) — the SAME
     # skills that are physically COPIED INTO skills/ at provision (DDD_NATIVE_SKILLS).
-    # A DDD is self-propagating + self-養成 because it carries the ability to
+    # A DDD is self-propagating + self-cultivating because it carries the ability to
     # create more DDDs (s_ddd-manager) and sediment its own docs (s_ddd-persist).
     # On AIM export this becomes the plugin namespace; the skill FILES ship alongside it.
     "aim.json": """{
@@ -455,7 +464,7 @@ no per-section READMEs; every section is documented here.
 six-section structure for every product and domain. It **OWNs cognition** (①-④) and
 **GOVERNs its `0..N` governed assets** (⑤-⑥) — each asset an open `kind` (`code-repo`,
 `data-source`, `skill-set`, `document-corpus`, `external-service`, `process`, …). It
-never contains the asset itself and never runs its pipeline (指+治, 不含+不跑). A brain
+never contains the asset itself and never runs its pipeline: it directs and governs them. A brain
 with **zero** governed assets (pure knowledge) is complete, not degraded; ⑤⑥ are
 asset-derived, so they are no-ops until an asset is bound. (Paradigm: SwarmAI
 SWARMAI.md § "SwarmAI & DDD" + spec §3.6.)
@@ -468,10 +477,10 @@ everything else lives under its numbered section dir.
 | # | Section | OWN/GOVERN | Members | What belongs / accretion rule |
 |---|---------|-----------|---------|-------------------------------|
 | ① | Identity & Manifest | OWN | this file (root), `aim.json`, `.crux_template.md` | the DDD's identity + export manifest |
-| ② | Understanding | OWN | `2-understanding/{PRODUCT,TECH,IMPROVEMENT,PROJECT}.md` + `2-understanding/knowledge/` | 冷启动 + judgment BORN here as prose (distilled docs); `knowledge/` = recall corpus |
-| ③ | Gates (the moat) | OWN | `3-gates/<gate>.py\\|sh` + tests + `3-gates/context/includes/*_denied*.json` | a gate is born as a ② pitfall, matures via the 养成 ladder, compiled here as an exit-2 BLOCK check. Empty until the first judgment matures. |
+| ② | Understanding | OWN | `2-understanding/{PRODUCT,TECH,IMPROVEMENT,PROJECT}.md` + `2-understanding/knowledge/` | cold-start knowledge + judgment BORN here as prose (distilled docs); `knowledge/` = recall corpus |
+| ③ | Gates (the moat) | OWN | `3-gates/<gate>.py\\|sh` + tests + `3-gates/context/includes/*_denied*.json` | a gate is born as a ② pitfall, matures via the cultivation ladder, compiled here as an exit-2 BLOCK check. Empty until the first judgment matures. |
 | ④ | Capabilities | OWN | `4-capabilities/` (portable `s_<name>/SKILL.md`) | validated portable skills the DDD distributes. Accretes as capabilities are bound. |
-| ⑤ | Delivery Contract | GOVERN | `bindings.yaml` (root) | per-asset delivery 全貌 for whatever assets are bound (e.g. build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND; absent for a 0-asset brain. |
+| ⑤ | Delivery Contract | GOVERN | `bindings.yaml` (root) | per-asset delivery overview for whatever assets are bound (e.g. build_system·version_set·deploy_pipeline ref·review_path·refresh_policy). Added by BIND; absent for a 0-asset brain. |
 | ⑥ | Refresher | GOVERN | `REFRESHER.md` (root) | the mechanism that REBUILDS the asset's derived projection from its source (code→the code graph, data→schema, …). Ships the refresher, not the projection. Shape follows the bound asset kind; no-op when there is no asset. |
 
 > Numbered-tree note (redesign 2026-07-21): ②③④ are numbered dirs (`2-understanding/`,
@@ -480,7 +489,7 @@ everything else lives under its numbered section dir.
 > is a separate contract migration, deliberately not bundled here). ① `AGENTS.md` stays
 > at root permanently (the external door-plate).
 
-## Default native skills (the self-養成 / self-propagation set — ④, copied into `4-capabilities/`)
+## Default native skills (the self-cultivation / self-propagation set — ④, copied into `4-capabilities/`)
 - **s_ddd-manager** — provision new spec-compliant DDDs (self-propagation seed).
 - **s_ddd-persist** — sediment/refresh THIS DDD's docs (only-additive, honors human edits).
 

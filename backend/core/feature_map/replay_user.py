@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import json
 import os
-import pwd
 import shutil
 import socket
 import subprocess
@@ -48,6 +47,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+try:
+    import pwd  # Unix-only: absent on Windows, where no replay user is ever used
+except ImportError:
+    pwd = None  # type: ignore[assignment]
 
 REPLAY_USER = "swarm-replay"
 METADATA = (("169.254.169.254", 80), ("fd00:ec2::254", 80))
@@ -77,6 +81,8 @@ def imds_answers(timeout_s: float = 0.5) -> bool:
 
 
 def _user_exists() -> bool:
+    if pwd is None:  # Windows
+        return False
     try:
         pwd.getpwnam(REPLAY_USER)
         return True

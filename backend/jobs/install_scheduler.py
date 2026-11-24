@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from .paths import JOBS_DATA_DIR, LOG_DIR
@@ -95,8 +96,12 @@ def install():
     print("No external plist needed.")
 
 
-def uninstall():
-    """Remove the consolidated scheduler plist."""
+def uninstall() -> str:
+    """Remove the consolidated scheduler plist and say what happened: ``removed``,
+    ``not_installed``, or ``not_applicable`` off macOS, where there never was one
+    (launchd) and launchctl is not run."""
+    if sys.platform != "darwin":
+        return "not_applicable"
     subprocess.run(
         ["launchctl", "bootout", f"gui/{_uid()}/{NEW_LABEL}"],
         capture_output=True,
@@ -105,8 +110,9 @@ def uninstall():
     if dest.exists():
         dest.unlink()
         print(f"Removed: {NEW_LABEL}")
-    else:
-        print(f"Not installed: {dest}")
+        return "removed"
+    print(f"Not installed: {dest}")
+    return "not_installed"
 
 
 def status():

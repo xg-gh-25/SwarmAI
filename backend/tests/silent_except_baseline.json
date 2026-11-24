@@ -35,5 +35,5 @@
   "routers/eval.py": 2,
   "routers/memory.py": 1,
   "routers/plugins.py": 2,
-  "routers/system.py": 5
+  "routers/system.py": 4
 }

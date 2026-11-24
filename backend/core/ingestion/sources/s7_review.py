@@ -721,9 +721,8 @@ def review_options(resume: str | None, cwd: str, schema: dict, *, fork: bool, mo
     import json as _json
 
     from claude_agent_sdk import ClaudeAgentOptions
-    from core import aws_account
-    from jobs.executor import _build_cli_env, _get_aws_credentials, _resolve_claude_cli
-    aws = aws_account.cli_settings(bedrock=True)  # _build_cli_env runs it on Bedrock
+    from jobs.executor import _aws_settings, _build_cli_env, _get_aws_credentials, _resolve_claude_cli
+    aws = _aws_settings()  # the same credentials as a job: the account's, or the API key
     return ClaudeAgentOptions(
         resume=resume, fork_session=bool(resume) and fork, tools=[], cwd=cwd, max_turns=3,
         model=model, output_format={"type": "json_schema", "schema": schema},
