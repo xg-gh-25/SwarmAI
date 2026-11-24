@@ -1,11 +1,16 @@
 """Library Health — heuristic scan of Knowledge/ for cleanup candidates.
 
-WHY (product): the Library Native store (`Knowledge/`) grows unbounded — raw
-logs (DailyActivity/JobResults) accumulate forever, empty files pile up.
-Without a health view + a cleanup ENTRY POINT it rots into a graveyard (Principle
-1: the brain must not hoard dead weight). This module is the SCAN half; the job
-(handlers/library_health) runs it weekly, the API serves the report + executes
-the actions.
+WHY (product): the Library Native store (`Knowledge/`) grows unbounded — job
+logs (JobResults) accumulate forever, empty files pile up.
+Left alone it rots into a graveyard (Principle 1: the brain must not hoard dead
+weight). This module scans; the weekly job (handlers/library_health) runs
+`auto_archive`, which moves the JobResults logs older than 90 days into
+Archives/JobResults/ by itself (a move, so reversible) and records what it moved
+in the report; the API serves the report and still executes an action on an
+explicit call. DailyActivity is not this module's: context_health's retention
+pass already moves its day files to Archives/ (flat, by the date in the name) and
+expires them after 365 days, and core.coe_threads reads its `.jsonl` sidecars in
+place.
 
 DESIGN PRINCIPLES:
 - **Heuristic, not LLM** — pure filesystem stat reads: zero token cost, sub-second,
@@ -16,15 +21,20 @@ DESIGN PRINCIPLES:
   size an action ("archive 60 old logs"), and are recomputed live each scan —
   never stored as a standalone metric.
 - **Reversible-first (STEERING #2)** — `archive` MOVES files to Archives/ (fully
-  recoverable); `delete` is the only destructive action and is CONFIRM-GATED at
-  the API layer (never auto-executed by the scan or the job).
+  recoverable), which is why the weekly job may do it unasked; `delete` is the only
+  destructive action and is CONFIRM-GATED at the API layer (never auto-executed by
+  the scan or the job).
+- **Infrastructure is not clutter** — `*.lock` flock sidecars (utils.file_lock.md_lock
+  keeps one beside every markdown file it guards) are never "empty files" and never
+  archived; nor is a dotfile (`JobResults/.job-results.jsonl` is the live run index).
 - **Scoped to Knowledge/** — every path is validated to live under Knowledge/
   before any action (no traversal, no touching the rest of the workspace).
 
 The scan is READ-ONLY: it proposes, it never mutates. Mutation lives in
-`apply_action` and only runs on an explicit API call.
+`apply_action` (an explicit API call) and `auto_archive` (the weekly job, archive
+only).
 
-@exports scan_library_health, apply_action, ActionKind
+@exports scan_library_health, apply_action, auto_archive, write_report_atomic, ActionKind
 """
 
 from __future__ import annotations
@@ -45,15 +55,32 @@ REPORT_FILENAME = ".library-health.json"
 # ── Heuristic thresholds (disaster-recovery floors, not judgment — P6) ──
 OLD_LOG_DAYS = 90                     # raw-log age past which it's archivable
 TINY_FILE_BYTES = 100                 # a file this small is effectively empty
-OVERSIZED_CATEGORY_BYTES = 30_000_000  # a category this large gets a "review" flag
 
 # Raw-log categories: append-only machine output, safe to age out to Archives/.
-# (Curated knowledge — Notes/Designs/Learned/Reports — is NEVER auto-archived.)
-RAW_LOG_CATEGORIES = ("DailyActivity", "JobResults")
+# (Curated knowledge — Notes/Designs/Learned/Reports — is NEVER auto-archived.
+# DailyActivity's retention belongs to context_health, see the module docstring.)
+RAW_LOG_CATEGORIES = ("JobResults",)
 ARCHIVE_DIR = "Archives"
 _SKIP = {"__pycache__", ".git", ".DS_Store", ARCHIVE_DIR}
 
-ActionKind = Literal["archive_old_logs", "delete_empty", "oversized_category"]
+ActionKind = Literal["archive_old_logs", "delete_empty"]
+
+
+def _is_lock(p: Path | str) -> bool:
+    """A flock sidecar (`<file>.md.lock`, utils.file_lock.md_lock): infrastructure."""
+    return str(p).endswith(".lock")
+
+
+def _archivable(rel: str, mtime: float, now: float) -> bool:
+    """The one rule the scan and the action share: a Knowledge-relative raw log under
+    a raw-log category, older than OLD_LOG_DAYS, not a lock sidecar and with no
+    dot-named part (a live index such as `JobResults/.job-results.jsonl`)."""
+    parts = Path(rel).parts
+    if len(parts) < 2 or parts[0] not in RAW_LOG_CATEGORIES or _is_lock(rel):
+        return False
+    if any(part.startswith(".") for part in parts):
+        return False
+    return mtime < now - OLD_LOG_DAYS * 24 * 3600
 
 
 @dataclass
@@ -111,9 +138,7 @@ def scan_library_health(knowledge_dir: Path, now: float | None = None) -> dict:
     if not knowledge_dir.is_dir():
         return {"generated_at": now, "root": "Knowledge/", "findings": [], "clean": True}
 
-    old_cutoff = now - OLD_LOG_DAYS * 24 * 3600
-
-    # ── 1. Archivable old raw-logs (DailyActivity/JobResults >90d) ──
+    # ── 1. Archivable old raw-logs (JobResults >90d) ──
     old_paths: list[str] = []
     old_bytes = 0
     for cat in RAW_LOG_CATEGORIES:
@@ -121,9 +146,9 @@ def scan_library_health(knowledge_dir: Path, now: float | None = None) -> dict:
         if not cdir.is_dir():
             continue
         for p in cdir.rglob("*"):
-            if not p.is_file() or p.name.startswith("."):
+            if not p.is_file():
                 continue
-            if _safe_mtime(p) < old_cutoff:
+            if _archivable(_rel(p, knowledge_dir), _safe_mtime(p), now):
                 old_paths.append(_rel(p, knowledge_dir))
                 old_bytes += _safe_size(p)
     if old_paths:
@@ -144,7 +169,7 @@ def scan_library_health(knowledge_dir: Path, now: float | None = None) -> dict:
     tiny_paths: list[str] = []
     tiny_bytes = 0
     for p in knowledge_dir.rglob("*"):
-        if not p.is_file() or p.name.startswith("."):
+        if not p.is_file() or p.name.startswith(".") or _is_lock(p):
             continue
         if _in_skip(p, knowledge_dir):
             continue
@@ -163,22 +188,6 @@ def scan_library_health(knowledge_dir: Path, now: float | None = None) -> dict:
             count=len(tiny_paths), total_bytes=tiny_bytes, paths=sorted(tiny_paths),
         ))
 
-    # ── 3. Oversized categories (informational flag — no auto-action) ──
-    for sub in sorted(knowledge_dir.iterdir()):
-        if not sub.is_dir() or sub.name in _SKIP:
-            continue
-        cat_bytes = sum(_safe_size(p) for p in sub.rglob("*") if p.is_file())
-        if cat_bytes >= OVERSIZED_CATEGORY_BYTES:
-            findings.append(HealthFinding(
-                kind="oversized_category",
-                title=f"{sub.name} is large ({_fmt_bytes(cat_bytes)})",
-                detail=f"{sub.name}/ is the biggest weight in the store — review "
-                       f"whether older entries can be trimmed or archived.",
-                action_label="",
-                actionable=False, reversible=False,
-                count=1, total_bytes=cat_bytes, paths=[sub.name],
-            ))
-
     return {
         "generated_at": now,
         "root": "Knowledge/",
@@ -188,26 +197,26 @@ def scan_library_health(knowledge_dir: Path, now: float | None = None) -> dict:
 
 
 def apply_action(knowledge_dir: Path, kind: ActionKind, paths: list[str],
-                 confirm: bool = False) -> dict:
+                 confirm: bool = False, now: float | None = None) -> dict:
     """Execute a cleanup action on the given Knowledge-relative paths.
 
     - archive_old_logs → MOVE each file into Archives/<original-category-path>
       (reversible; the folder structure under Archives/ mirrors the source).
+      Only an old raw log (`_archivable`, the scan's own rule) is moved; a
+      collision never overwrites an existing archived file.
     - delete_empty → DELETE each file, but ONLY if `confirm=True` (destructive).
-    - oversized_category → no-op (informational only).
 
     Every path is re-validated: it must resolve UNDER knowledge_dir (no traversal)
     and still exist (the report may be stale — a file already moved is skipped, not
-    an error). Returns {status, applied, skipped, errors}.
+    an error). Returns {status, applied, skipped, errors, bytes}.
     """
-    if kind == "oversized_category":
-        return {"status": "noop", "applied": 0, "skipped": 0, "errors": []}
     if kind == "delete_empty" and not confirm:
         return {"status": "confirm_required", "applied": 0, "skipped": len(paths), "errors": []}
 
     kroot = knowledge_dir.resolve()
     applied = 0
     skipped = 0
+    moved_bytes = 0
     errors: list[str] = []
 
     for rel in paths:
@@ -226,9 +235,15 @@ def apply_action(knowledge_dir: Path, kind: ActionKind, paths: list[str],
 
         try:
             if kind == "archive_old_logs":
-                errors.append(
-                    f"{rel}: governed archive move is unavailable; use an individual editor move"
-                )
+                rel_target = target.relative_to(kroot).as_posix()
+                if not _archivable(rel_target, _safe_mtime(target), time.time() if now is None else now):
+                    errors.append(f"{rel}: not an old raw log ({', '.join(RAW_LOG_CATEGORIES)}, "
+                                  f"older than {OLD_LOG_DAYS} days)")
+                    continue
+                size = _safe_size(target)
+                _archive_move(target, kroot / ARCHIVE_DIR / rel_target)
+                applied += 1
+                moved_bytes += size
             elif kind == "delete_empty":
                 from core.ingestion.api import apply_user_edit, revision_of
                 apply_user_edit(
@@ -240,8 +255,44 @@ def apply_action(knowledge_dir: Path, kind: ActionKind, paths: list[str],
 
     return {
         "status": "success" if not errors else "partial",
-        "applied": applied, "skipped": skipped, "errors": errors,
+        "applied": applied, "skipped": skipped, "errors": errors, "bytes": moved_bytes,
     }
+
+
+def _archive_move(src: Path, dest: Path) -> Path:
+    """Move one raw log (JobResults: a log, not a governed corpus file, so not a CDF
+    materializer write) to `dest` under Archives/, mirroring its folder.
+    Never overwrites: a taken name gets the first free `.N` suffix (the exists check
+    and the move are not atomic; the weekly job and a person's action racing on one
+    name is accepted). Returns where it went."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    stem, suffix, n = dest.stem, dest.suffix, 1
+    while dest.exists():
+        dest = dest.with_name(f"{stem}.{n}{suffix}")
+        n += 1
+    os.replace(src, dest)
+    return dest
+
+
+def auto_archive(knowledge_dir: Path, now: float | None = None) -> dict:
+    """The weekly job's pass: scan, move every raw log older than OLD_LOG_DAYS into
+    Archives/ (reversible), then rescan. The report carries what was moved as
+    `auto_archived` = {at, count, bytes, errors} (count 0 when nothing was old)."""
+    now = now if now is not None else time.time()
+    first = scan_library_health(knowledge_dir, now=now)
+    old = next((f for f in first["findings"] if f["kind"] == "archive_old_logs"), None)
+    result = {"applied": 0, "bytes": 0, "errors": []}
+    if old is not None:
+        result = apply_action(knowledge_dir, "archive_old_logs", old["paths"], now=now)
+        if result["errors"]:
+            logger.warning("library health: %d archive move(s) failed, first: %s",
+                           len(result["errors"]), "; ".join(result["errors"][:3]))
+    report = scan_library_health(knowledge_dir, now=now) if result["applied"] else first
+    report["auto_archived"] = {
+        "at": now, "count": result["applied"], "bytes": result.get("bytes", 0),
+        "errors": len(result["errors"]),
+    }
+    return report
 
 
 def write_report_atomic(knowledge_dir: Path, report: dict) -> None:
@@ -271,11 +322,3 @@ def _in_skip(p: Path, knowledge_dir: Path) -> bool:
     """True if p is under a skipped top-level dir (Archives/, __pycache__, ...)."""
     parts = p.relative_to(knowledge_dir).parts
     return bool(parts) and parts[0] in _SKIP
-
-
-def _fmt_bytes(n: int) -> str:
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1000:
-        return f"{n / 1000:.0f}K"
-    return f"{n}B"

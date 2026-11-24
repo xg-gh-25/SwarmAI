@@ -55,6 +55,7 @@ core/ingestion/pipeline_v2.py:requeue_units  # exempt: via store.connect_rw: ing
 core/ingestion/usage.py:record_usage  # exempt: via store.connect_rw: ingestion.db unit_usage
 core/knowledge_graph.py:_locked_read_modify_write  # exempt: .knowledge-graph.yaml (derived relation graph) lock
 core/knowledge_graph.py:save_graph  # exempt: .knowledge-graph.yaml (derived relation graph)
+core/library_health.py:_archive_move  # exempt: moves raw logs (DailyActivity/JobResults, not governed corpus files) into Knowledge/Archives/
 core/library_health.py:write_report_atomic  # exempt: Knowledge/.library-health.json report
 core/memory_injection.py:select_context_file  # writes only injection_selection in ingestion.db; source MEMORY/EVOLUTION files are read-only
 core/product_registry.py:ProductRegistry._atomic_write_json  # exempt: product registry JSON

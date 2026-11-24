@@ -1,347 +1,415 @@
 /**
- * LibraryOverlay — the agent's bookshelf (Native store + Mount points).
+ * LibraryOverlay — the agent's bookshelf: `Knowledge/` (ours) + mounted folders (theirs,
+ * indexed in place, never copied). Design: Knowledge/Mockups/2026-11-24-cm-library-redesign.html
+ * (the "Library" panel).
  *
- * The cognition-zone "Library" nav card opens this fullscreen overlay. Purpose
- * (XG, 2026-08-02): a single view + entry point over everything the agent can
- * recall — `Knowledge/` (ours, "Native") + mounted external dirs (theirs). A mount
- * is a pointer; its content is indexed in place (code → symbol graph, docs → text
- * chunked into the shared Knowledge FTS5 at mount time), never copied.
+ * One search box on top, shared by the three tabs: a query runs the recall path
+ * (GET /library/search) and its hits replace the tab body until it is cleared.
+ * - Recent: one number (files changed this week) against last week; a bar split by who
+ *   wrote them (Swarm's distillation / chats / scheduled jobs) whose legend filters the
+ *   list; the list by local day, three days open, the rest behind "earlier"; a CDF row
+ *   says how many units CDF wrote into it this week. Under it, one muted line when the
+ *   weekly library-health job archived old logs by itself this week.
+ * - Browse: the live Knowledge/ tree (LibraryTree), then the mounted folders with
+ *   "Add folder". Nothing here is amber: no state of a mount is a decision this
+ *   overlay offers (there is no unmount action), so a gone path is a muted line too.
+ * - How it works: the four steps (written → stored → indexed → recalled) with live numbers.
  *
- * Run 5 (overlay-first) scope: the 3-tab shell (Browse / Recent / Guide) + a
- * persistent left-rail of vitals, over the EXISTING Native store. The Mounted
- * section renders a real (empty) state with a "+ Add Folder" affordance — NOT a
- * placeholder void (NavCard+Overlay standard §4). Mount registration/indexing is
- * wired by later cycles.
+ * Data is backend-primary (R30): GET /library/recent (who wrote a file comes from CDF's
+ * write journal, backend core/library_recent), /native, /mounts, /health (the job's
+ * `auto_archived` record). Opened through the OverlayHost registry (overlaySurfaces).
  *
- * Data is backend-primary: Browse/Recent CONSUME GET /library/native +
- * /recent + /mounts via the shared axios instance whose baseURL already supplies
- * the /api prefix (live filesystem reads; the frontend invents no counts, R30).
- * Opens on the `swarm:show-library` window event via useExclusiveOverlay
- * (single-overlay mux + back-to-chat). Mirrors CMBrainOverlay's shell so the two
- * cognition cards feel like one system.
- *
- * The UI pattern references Quick's "My computer / Local folders" (XG ref): a
- * first-class "+ Add Folder" button + per-mount row (path + kind badge + settings
- * + delete + enable-toggle + expand) — those row controls activate when the mount
- * cycle ships; Run 5 shows the empty state + the Add-Folder entry point.
- *
- * @exports LibraryOverlay
+ * @exports LibraryContent
  */
-import { Tabs } from '../overlay';
-import { useState } from 'react';
-import { useTranslation, Trans } from 'react-i18next';
+import { useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Tabs } from '../overlay';
 import { overlayQuery } from './overlayQueries';
 import api from '../../services/api';
 import { LibraryTree } from './LibraryTree';
-import { LibraryHealth } from './LibraryHealth';
-import { OverlayError } from './OverlayState';
+import { OverlayError, OverlayLoading } from './OverlayState';
+import { Big, CARD, Compare, DIM, MUTED, ZoneLabel, useGrown } from './needYouParts';
+import { groupByDay, pad, readableName, sourceCounts, sourceOf, type RecentItem, type RecentSource } from './libraryRecent';
 
 // ── Types (mirror the backend library_api payloads, snake_case as served) ──
 interface NativeCategory { name: string; file_count: number; total_bytes: number; }
 interface NativeStore { source: string; root: string; category_count: number; categories: NativeCategory[]; }
-interface RecentItem { path: string; category: string; mtime: number; size: number; source: 'session' | 'you' | 'job'; }
-interface RecentFeed { window_days: number; count: number; items: RecentItem[]; }
+interface RecentFeed {
+  window_days: number; count: number; items: RecentItem[];
+  this_week?: number; last_week?: number; by_source?: Partial<Record<RecentSource, number>>;
+}
 interface MountRow {
   id: string; path: string; kind: 'code' | 'docs' | 'url';
-  // last_synced is a SQLite datetime('now') TEXT stamp (or null until first index),
-  // as served by GET /mounts — NOT an epoch number. Its presence is the
-  // recall-reachability signal the honesty badge reads (run_139d7652).
-  index_ref?: string | null; last_synced?: string | null; health: 'fresh' | 'stale' | 'missing'; enabled: boolean;
+  // a SQLite datetime('now') UTC stamp, null until first indexed: its presence means
+  // recall can reach the mount (run_139d7652)
+  last_synced?: string | null; health: 'fresh' | 'stale' | 'missing'; enabled: boolean;
 }
 interface MountsList { count: number; mounts: MountRow[]; registry_ready: boolean; }
+interface HealthReport { auto_archived?: { at: number; count: number; bytes?: number } }
+interface SearchHit { domain: string; title: string; source: string; content?: string; mount_id?: string | null; }
+interface SearchResult { query: string; count: number; hits: SearchHit[]; error?: string; }
 
-type TabKey = 'browse' | 'recent' | 'guide';
+type TabKey = 'recent' | 'browse' | 'how';
 
-const SOURCE_META: Record<RecentItem['source'], { icon: string; labelKey: string }> = {
-  session: { icon: 'smart_toy', labelKey: 'ui.LibraryOverlay.sourceSession' },
-  you: { icon: 'person', labelKey: 'ui.LibraryOverlay.sourceYou' },
-  job: { icon: 'schedule', labelKey: 'ui.LibraryOverlay.sourceJob' },
+const SOURCES: RecentSource[] = ['cdf', 'chat', 'job'];
+const SOURCE_COLOR: Record<RecentSource, string> = {
+  cdf: 'var(--line-judge)',
+  chat: 'var(--color-zone-cognitive)',
+  job: 'var(--color-zone-work)',
 };
+const OK = 'var(--color-status-success)';
+const SHOWN_DAYS = 3;
+const WEEK_MS = 7 * 24 * 3600 * 1000;
+const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]';
+const PANEL_ID = 'library-tab-panel';
+// after "Add folder" answers that a code mount is indexing in the background, the
+// mounts list is re-read this often until it is indexed, for at most MOUNT_WATCH_MS
+const MOUNT_POLL_MS = 3000;
+const MOUNT_WATCH_MS = 10 * 60 * 1000;
 
-const HEALTH_TINT: Record<MountRow['health'], string> = {
-  fresh: 'var(--color-status-success)', stale: 'var(--color-status-warning)', missing: 'var(--color-status-error)',
-};
-
-function fmtBytes(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(0)}K`;
-  return `${n}B`;
+/** How often to re-read the mounts: while a watch is on and a code mount still has no
+ *  index, every MOUNT_POLL_MS; otherwise not (false). */
+function mountPollMs(data: MountsList | undefined, watchUntil: number, now: number): number | false {
+  if (now >= watchUntil || !data) return false;
+  const waiting = data.mounts.some((m) => m.kind === 'code' && m.enabled && !m.last_synced && m.health !== 'missing');
+  return waiting ? MOUNT_POLL_MS : false;
 }
 
-function fmtWhen(mtime: number): string {
-  const diff = Date.now() / 1000 - mtime;
-  if (diff < 3600) return `${Math.max(1, Math.round(diff / 60))}m ago`;
-  if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
-  return `${Math.round(diff / 86400)}d ago`;
+const openFile = (path: string) => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path } }));
+
+function fmtBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
+  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
+  return `${n} B`;
 }
 
 /**
- * LibraryContent — the Library bookshelf surface content (M3: migrated to the
- * OverlayHost registry). Host owns the Modal chrome + mount lifecycle (mounts this
- * only while activeOverlay === 'library'), so no open/close self-management; queries
- * are enabled: true because the component only exists while the surface is open.
+ * LibraryContent — the Library surface content. The OverlayHost owns the chrome and
+ * mounts this only while the surface is open.
  */
 export function LibraryContent() {
   const { t } = useTranslation();
-  // Default to Recent: it's the higher-frequency surface (what changed lately),
-  // so it opens first (run_b4120a78).
   const [tab, setTab] = useState<TabKey>('recent');
-
-  // Native store stats (rail totals + Browse tab badge). The Browse body itself is
-  // now a live file tree (LibraryTree) off /workspace/tree — it owns its own
-  // loading/error state, so this query no longer drives the browse panel.
-  const { data: native } = useQuery(overlayQuery.libraryNative<NativeStore>());
-  const {
-    data: recent, isLoading: recentLoading, isError: recentError, refetch: refetchRecent,
-  } = useQuery(overlayQuery.libraryRecent<RecentFeed>());
-  const { data: mounts } = useQuery(overlayQuery.libraryMounts<MountsList>());
-
-  const nativeFileTotal = (native?.categories ?? []).reduce((s, c) => s + c.file_count, 0);
-  const nativeByteTotal = (native?.categories ?? []).reduce((s, c) => s + c.total_bytes, 0);
-  const mountCount = mounts?.count ?? 0;
-
-  return (
-      <div className="flex h-full min-h-0" data-testid="library-overlay">
-        {/* ── Left rail (fixed 240px): real vitals only — what's in here + Add
-            Folder + self-quieting Health. No telemetry, no essay (moved to Guide).
-            Whitespace over dividers (design-judgment Check 3/4). ── */}
-        <aside
-          className="w-[240px] shrink-0 flex flex-col gap-5 border-r border-[var(--color-border)] p-4 overflow-y-auto"
-          data-testid="library-rail"
-        >
-          {/* One quiet vitals line — what the library holds. Not a headline grid;
-              a single scannable fact (Native items + Mounted count). */}
-          <div className="flex flex-col gap-1 text-small text-[var(--color-text-muted)]">
-            <div className="flex items-center gap-1.5">
-              <span aria-hidden className="material-symbols-outlined icon-sm">menu_book</span>
-              <span className="text-[var(--color-text)]">{native ? nativeFileTotal : '—'}</span>
-              <span className="text-[var(--color-text-faint)]">
-                {t('ui.LibraryOverlay.itemsInKnowledge')}{native ? ` · ${fmtBytes(nativeByteTotal)}` : ''}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span aria-hidden className="material-symbols-outlined icon-sm">link</span>
-              <span className="text-[var(--color-text)]">{mountCount}</span>
-              <span className="text-[var(--color-text-faint)]">
-                {t('ui.LibraryOverlay.mountedFolders', { count: mountCount })}
-              </span>
-            </div>
-          </div>
-
-          {/* Primary entry point — add an external folder. */}
-          <AddFolderButton />
-
-          {/* Health: self-quieting — renders nothing on a clean store, a one-line
-              healthy note otherwise, or actionable cleanup items when it has them. */}
-          <LibraryHealth />
-        </aside>
-
-        {/* ── Main area: tabs + panel ── */}
-        <div className="flex-1 min-w-0 flex flex-col">
-          <div className="border-b border-[var(--color-border)] px-4 py-2.5">
-            {/* Recent first — the surface used most. */}
-            <Tabs label={t('ui.LibraryOverlay.tabsLabel')} value={tab} onChange={setTab} items={[
-              { key: 'recent', label: t('ui.LibraryOverlay.tabRecent'), testid: 'library-tab-recent', count: recent?.count },
-              { key: 'browse', label: t('ui.LibraryOverlay.tabBrowse'), testid: 'library-tab-browse', count: native?.category_count },
-              { key: 'guide', label: t('ui.LibraryOverlay.tabGuide'), testid: 'library-tab-guide' },
-            ]} />
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto p-4">
-            {tab === 'browse' && <BrowseTab mounts={mounts} />}
-            {tab === 'recent' && (
-              <RecentTab
-                recent={recent} loading={recentLoading} error={recentError}
-                onRetry={() => { void refetchRecent(); }}
-              />
-            )}
-            {tab === 'guide' && <GuideTab />}
-          </div>
-        </div>
-      </div>
-  );
-}
-
-interface SearchHit { domain: string; title: string; source: string; content?: string; mount_id?: string | null; }
-interface SearchResult { query: string; count: number; hits: SearchHit[]; }
-
-// A fetch-error surface with a Retry (refetch). Distinct from pending/empty so a
-// failed backend call is never rendered as a permanent "Loading…" spinner.
-function FetchError({ testid, retryTestid, message, onRetry }: { testid: string; retryTestid: string; message: string; onRetry: () => void }) {
-  return (
-    <OverlayError
-      testid={testid}
-      retryTestid={retryTestid}
-      message={message}
-      onRetry={onRetry}
-    />
-  );
-}
-
-// ── Browse: a live Knowledge/ file tree (Native) + Mounted sources (blue) ──
-// The tree (LibraryTree) is the browse body — expand to any file, click to open
-// it in Canvas. Search still runs the recall path. Mounted stays visually distinct.
-function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
-  const { t } = useTranslation();
-  const mountRows = mounts?.mounts ?? [];
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
 
-  // Search runs the SAME recall path the Guide tab describes (library+codeintel).
-  const { data: search, isFetching } = useQuery<SearchResult>({
-    queryKey: ['library-search', submitted],
-    queryFn: async () => (await api.get<SearchResult>(`/library/search?q=${encodeURIComponent(submitted)}`)).data,
-    enabled: submitted.trim().length > 0,
-    staleTime: 30_000,
+  const { data: native } = useQuery(overlayQuery.libraryNative<NativeStore>());
+  const recentQ = useQuery(overlayQuery.libraryRecent<RecentFeed>());
+  const [watchUntil, setWatchUntil] = useState(0);
+  const mountsQ = useQuery({
+    ...overlayQuery.libraryMounts<MountsList>(),
+    refetchInterval: (q) => mountPollMs(q.state.data, watchUntil, Date.now()),
   });
+  const mounts = mountsQ.data;
+  const { data: health } = useQuery(overlayQuery.libraryHealth<HealthReport>());
+
+  const fileTotal = (native?.categories ?? []).reduce((s, c) => s + c.file_count, 0);
+  const byteTotal = (native?.categories ?? []).reduce((s, c) => s + c.total_bytes, 0);
+  const counts = useMemo(() => sourceCounts(recentQ.data), [recentQ.data]);
+  const searching = submitted.trim().length > 0;
+  const clear = () => { setQuery(''); setSubmitted(''); };
 
   return (
-    <div data-testid="library-panel-browse" className="flex flex-col gap-5 h-full min-h-0">
-      {/* Search box — searching Library = seeing what recall would retrieve. */}
-      <form
-        onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }}
-        className="flex items-center gap-2 max-w-4xl shrink-0"
-      >
-        <input
-          data-testid="library-search-input"
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('ui.LibraryOverlay.searchPlaceholder')}
-          className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
-        />
-        {submitted && (
-          <button type="button" data-testid="library-search-clear"
-            onClick={() => { setQuery(''); setSubmitted(''); }}
-            className="text-small text-[var(--color-text-muted)] hover:text-[var(--color-text)]">{t('ui.LibraryOverlay.clearSearch')}</button>
+    <div className="flex h-full min-h-0 flex-col p-5" data-testid="library-overlay">
+      <div className="mb-4">
+        <Tabs label={t('ui.LibraryOverlay.tabsLabel')} controls={PANEL_ID} value={tab} onChange={(k) => { clear(); setTab(k); }} items={[
+          { key: 'recent', label: t('ui.LibraryOverlay.tabRecent'), testid: 'library-tab-recent' },
+          { key: 'browse', label: t('ui.LibraryOverlay.tabBrowse'), testid: 'library-tab-browse' },
+          { key: 'how', label: t('ui.LibraryOverlay.tabHow'), testid: 'library-tab-how' },
+        ]} />
+      </div>
+
+      <form onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }}
+        className={`${CARD} flex shrink-0 items-center gap-2.5 px-3.5 py-2.5`}>
+        <span aria-hidden className={`material-symbols-outlined icon-sm ${DIM}`}>search</span>
+        <input data-testid="library-search-input" type="text" value={query} onChange={(e) => setQuery(e.target.value)}
+          // Escape clears a query first; the overlay's own Escape (which closes it)
+          // skips an event a field already handled
+          onKeyDown={(e) => { if (e.key === 'Escape' && (query || submitted)) { e.preventDefault(); clear(); } }}
+          aria-label={t('ui.LibraryOverlay.searchPlaceholder')} placeholder={t('ui.LibraryOverlay.searchPlaceholder')}
+          className="min-w-0 flex-1 border-0 bg-transparent text-body text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]" />
+        {searching ? (
+          <button type="button" data-testid="library-search-clear" onClick={clear}
+            className={`text-small ${MUTED} hover:text-[var(--color-text)]`}>{t('ui.LibraryOverlay.clearSearch')}</button>
+        ) : native && mounts && (
+          <span className={`whitespace-nowrap text-meta tabular-nums ${DIM}`} data-testid="library-search-hint">
+            {t('ui.LibraryOverlay.searchHint', { files: t('ui.LibraryOverlay.filesN', { count: fileTotal, n: fileTotal.toLocaleString() }), count: mounts.count })}
+          </span>
         )}
       </form>
 
-      {submitted.trim() ? (
-        <section data-testid="library-search-results">
-          <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-            {isFetching ? t('ui.LibraryOverlay.searching') : t('ui.LibraryOverlay.recallHits', { n: search?.count ?? 0, query: submitted })}
-          </div>
-          {(search?.hits ?? []).length === 0 && !isFetching ? (
-            <div className="py-6 text-center text-body text-[var(--color-text-faint)]">
-              {t('ui.LibraryOverlay.noRecallHits')}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {(search?.hits ?? []).map((h, i) => (
-                <button
-                  // Composite key: recall can return multiple distinct chunks of the
-                  // SAME file (identical h.source), so source alone collides. The
-                  // list is replaced wholesale per query (never reordered), so the
-                  // index disambiguates safely. (Gate-2 correctness, run_b4120a78.)
-                  key={`${h.source || 'hit'}#${i}`}
-                  data-testid="library-search-hit"
-                  onClick={() => h.source && document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: h.source } }))}
-                  className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
-                >
-                  <span className="shrink-0 rounded px-1.5 py-[1px] text-meta tabular-nums"
-                    style={{ background: h.domain === 'codeintel' ? 'color-mix(in srgb,var(--color-primary) 16%,transparent)' : 'color-mix(in srgb,var(--color-status-success) 16%,transparent)',
-                             color: h.domain === 'codeintel' ? 'var(--color-primary)' : 'var(--color-status-success)' }}>
-                    {h.domain === 'codeintel' ? t('ui.LibraryOverlay.kindCode') : t('ui.LibraryOverlay.kindDocs')}{h.mount_id ? t('ui.LibraryOverlay.mountSuffix') : ''}
-                  </span>
-                  <span className="flex-1 min-w-0 truncate text-body text-[var(--color-text)]">{h.title || h.source}</span>
-                  <span className="shrink-0 text-meta text-[var(--color-text-faint)] font-mono truncate max-w-[280px]">{h.source}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {/* Recall latency lives in the unified RecallDashboard in the left rail (all
-              contexts, incl. library_overlay) — no separate inline panel here, to avoid
-              rendering the same library_overlay p50/p95 twice (meta-review cross-fix). */}
-        </section>
-      ) : (
-      <>
-      {/* NATIVE — cognition green. Live Knowledge/ tree: expand to any file, click to open in Canvas. */}
-      <section data-testid="library-native-section" className="flex flex-col min-h-0 flex-1">
-        <div className="mb-2 flex items-center gap-2 text-meta uppercase tracking-wider shrink-0" style={{ color: 'var(--color-status-success)' }}>
-          <span aria-hidden className="material-symbols-outlined icon-sm">menu_book</span> {t('ui.LibraryOverlay.nativeHeading')}
-        </div>
-        <LibraryTree />
-      </section>
+      <div id={PANEL_ID} role="tabpanel" className="mt-6 min-h-0 flex-1 overflow-y-auto">
+        {searching ? <SearchResults query={submitted} />
+          : tab === 'recent' ? (
+            <RecentTab recent={recentQ.data} counts={counts} loading={recentQ.isPending} error={recentQ.isError}
+              onRetry={() => { void recentQ.refetch(); }} archived={health?.auto_archived} />
+          ) : tab === 'browse' ? (
+            <BrowseTab native={native} mounts={mounts} mountsError={mountsQ.isError} onRetryMounts={() => { void mountsQ.refetch(); }}
+              onIndexing={() => setWatchUntil(Date.now() + MOUNT_WATCH_MS)} />
+          ) : <HowTab recent={recentQ.data} counts={counts} fileTotal={native ? fileTotal : null} byteTotal={byteTotal} mountCount={mounts?.count ?? null} />}
+      </div>
+    </div>
+  );
+}
 
-      {/* MOUNTED — cooler tint + link icon; empty-state is compact, not a void (§4) */}
-      <section data-testid="library-mounted-section" className="shrink-0">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-meta uppercase tracking-wider" style={{ color: 'var(--color-primary)' }}>
-            <span aria-hidden className="material-symbols-outlined icon-sm">link</span> {t('ui.LibraryOverlay.mountedHeading')}
-          </div>
-          <AddFolderButton />
+// ── Search: the recall path, run by hand ──
+function SearchResults({ query }: { query: string }) {
+  const { t } = useTranslation();
+  const { data, isFetching, isError, refetch } = useQuery<SearchResult>({
+    queryKey: ['library-search', query],
+    queryFn: async () => (await api.get<SearchResult>(`/library/search?q=${encodeURIComponent(query)}`)).data,
+    staleTime: 30_000,
+  });
+  const hits = data?.hits ?? [];
+  // the backend degrades a failed recall to {hits: [], error}: that is a failure, not "no hits"
+  const failed = !isFetching && (isError || !!data?.error);
+  return (
+    <section data-testid="library-search-results">
+      <ZoneLabel>{isFetching ? t('ui.LibraryOverlay.searching') : failed ? query : t('ui.LibraryOverlay.recallHits', { count: data?.count ?? 0, query })}</ZoneLabel>
+      {failed ? (
+        <OverlayError testid="library-search-error" retryTestid="library-search-retry" message={t('ui.LibraryOverlay.searchFailed')} onRetry={() => { void refetch(); }} />
+      ) : hits.length === 0 && !isFetching ? (
+        <p className={`text-body ${MUTED}`}>{t('ui.LibraryOverlay.noRecallHits')}</p>
+      ) : (
+        <div className="-mx-2.5 flex flex-col">
+          {hits.map((h, i) => (
+            // recall can return several chunks of one file: the index keeps keys unique
+            <button key={`${h.source || 'hit'}#${i}`} type="button" data-testid="library-search-hit"
+              onClick={() => h.source && openFile(h.source)}
+              className={`grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--color-hover)] ${FOCUS}`}>
+              <span className="min-w-0 truncate text-body">
+                <span className="mr-2 rounded bg-[var(--color-bg-chrome)] px-1.5 text-meta text-[var(--color-text-secondary)]">
+                  {h.domain === 'codeintel' ? t('ui.LibraryOverlay.kindCode') : t('ui.LibraryOverlay.kindDocs')}{h.mount_id ? t('ui.LibraryOverlay.mountSuffix') : ''}
+                </span>
+                {h.title || h.source}
+              </span>
+              <span className={`max-w-[280px] truncate font-mono text-meta ${DIM}`}>{h.source}</span>
+            </button>
+          ))}
         </div>
-        {mountRows.length === 0 ? (
-          <div
-            data-testid="library-mounted-empty"
-            className="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-primary)_35%,var(--color-border))] px-4 py-3 text-meta text-[var(--color-text-muted)]"
-          >
-            <Trans i18nKey="ui.LibraryOverlay.mountedEmpty" components={{ b: <b /> }} />
-          </div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {mountRows.map((m) => (
-              <MountRowView key={m.id} m={m} />
+      )}
+    </section>
+  );
+}
+
+// ── Recent: this week against last, by who wrote it, by day ──
+function RecentTab({ recent, counts, loading, error, onRetry, archived }: {
+  recent: RecentFeed | undefined; counts: Record<RecentSource, number>; loading: boolean; error: boolean;
+  onRetry: () => void; archived: HealthReport['auto_archived'];
+}) {
+  const { t } = useTranslation();
+  const [picked, setPicked] = useState<RecentSource | null>(null);
+  const [allDays, setAllDays] = useState(false);
+  // a source whose count fell to 0 on a refetch has no chip left to undo it with: drop
+  // the filter for good, so it does not come back by itself when the source returns
+  if (picked && !(counts[picked] > 0)) setPicked(null);
+  const items = useMemo(() => (recent?.items ?? []).map((it) => ({ ...it, source: sourceOf(it.source) })), [recent]);
+  const groups = useMemo(() => groupByDay(items.filter((it) => !picked || it.source === picked),
+    { today: t('ui.LibraryOverlay.today'), yesterday: t('ui.LibraryOverlay.yesterday') }), [items, picked, t]);
+
+  if (error) {
+    return <OverlayError testid="library-recent-error" retryTestid="library-recent-retry" message={t('ui.LibraryOverlay.recentFailed')} onRetry={onRetry} />;
+  }
+  if (loading || !recent) return <OverlayLoading />;
+
+  const total = recent.this_week ?? recent.count;
+  const pick = (s: RecentSource) => setPicked(picked === s ? null : s);
+  const capped = recent.count > recent.items.length;
+  const shown = allDays ? groups : groups.slice(0, SHOWN_DAYS);
+  const rest = groups.slice(SHOWN_DAYS);
+  const archivedNow = archived && archived.count > 0 && Date.now() - archived.at * 1000 < WEEK_MS ? archived.count : 0;
+  const archivedLine = archivedNow > 0 && (
+    <p className={`mt-3.5 flex items-center gap-2 text-small ${DIM}`} data-testid="library-auto-archived">
+      <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: SOURCE_COLOR.cdf }} />
+      {t('ui.LibraryOverlay.autoArchived', { count: archivedNow })}
+    </p>
+  );
+
+  return (
+    <div data-testid="library-panel-recent" className="flex flex-col gap-9">
+      {total === 0 ? (
+        <div>
+          <p className={`text-body ${MUTED}`}>{t('ui.LibraryOverlay.nothingNew')}</p>
+          {archivedLine}
+        </div>
+      ) : (
+        <>
+          <section>
+            <Big testid="library-recent-big" value={total.toLocaleString()} unit={t('ui.LibraryOverlay.filesUnit')} what={t('ui.LibraryOverlay.changedThisWeek')}
+              compare={recent.last_week != null ? <Compare testid="library-recent-last-week" was={t('ui.LibraryOverlay.lastWeek', { n: recent.last_week.toLocaleString() })} /> : undefined} />
+            <SourceSplit counts={counts} picked={picked} onPick={pick} />
+          </section>
+          <section data-testid="library-recent-days">
+            {groups.length === 0 && <p className={`text-body ${MUTED}`} data-testid="library-recent-none">{t('ui.LibraryOverlay.noneListed')}</p>}
+            {shown.map((g, gi) => (
+              <div key={g.key} data-testid={`library-day-${g.key}`}>
+                <div className={`mb-1 flex items-baseline gap-2.5 ${gi ? 'mt-[18px]' : ''}`}>
+                  <span className="text-body font-semibold">{g.label}</span>
+                  <span className={`ml-auto text-small tabular-nums ${MUTED}`}>{t('ui.LibraryOverlay.dayCount', { count: g.items.length })}</span>
+                </div>
+                <div className="-mx-2.5 flex flex-col divide-y divide-[var(--color-border)]">
+                  {g.items.map((it) => <RecentRow key={it.path} it={it} />)}
+                </div>
+              </div>
             ))}
-          </div>
-        )}
-      </section>
-      </>
+            {!allDays && rest.length > 0 && (
+              <button type="button" data-testid="library-recent-more" onClick={() => setAllDays(true)}
+                className={`mt-2 cursor-pointer text-small text-[var(--color-primary)] hover:underline ${FOCUS}`}>
+                {t('ui.LibraryOverlay.earlier', { count: rest.length, files: t('ui.LibraryOverlay.filesN', { count: rest.reduce((s, g) => s + g.items.length, 0), n: rest.reduce((s, g) => s + g.items.length, 0) }) })}
+              </button>
+            )}
+            {capped && (allDays || rest.length === 0) && (
+              <p className={`mt-3.5 text-small ${DIM}`} data-testid="library-recent-capped">
+                {t('ui.LibraryOverlay.capped', { shown: recent.items.length, total: recent.count.toLocaleString() })}
+              </p>
+            )}
+            {archivedLine}
+          </section>
+        </>
       )}
     </div>
   );
 }
 
-// A mounted-folder row: path + kind badge + HONEST index state. The index-state
-// signal (run_139d7652) is the load-bearing honesty fix — a mount is only reachable
-// by recall once it has been INDEXED (last_synced set: code → graph built; docs →
-// text chunked into the shared Knowledge FTS5 at mount time, run_3f837bdd). Until
-// then the UI must NOT imply searchability. We read `last_synced` (served by GET
-// /mounts) — inventing no data (R30).
-function MountRowView({ m }: { m: MountRow }) {
+function SourceSplit({ counts, picked, onPick }: {
+  counts: Record<RecentSource, number>; picked: RecentSource | null; onPick: (s: RecentSource) => void;
+}) {
   const { t } = useTranslation();
-  const indexed = !!m.last_synced;
+  const present = SOURCES.filter((s) => counts[s] > 0);
+  const sum = present.reduce((a, s) => a + counts[s], 0) || 1;
+  const grown = useGrown(present.map((s) => `${s}${counts[s]}`).join(','));
   return (
-    <div
-      data-testid={`library-mount-${m.id}`}
-      data-kind={m.kind}
-      data-indexed={indexed ? 'true' : 'false'}
-      className="flex items-center gap-3 rounded-md px-3 py-2 max-w-2xl hover:bg-[var(--color-hover)]"
-    >
-      <span className="w-1.5 h-4 shrink-0 rounded-full" style={{ background: HEALTH_TINT[m.health] }} aria-hidden title={m.health} />
-      <div className="flex-1 min-w-0">
-        <div className="truncate text-body text-[var(--color-text)]">{m.path.split('/').pop()}</div>
-        <div className="truncate text-meta text-[var(--color-text-faint)] font-mono">{m.path}</div>
-        {/* Honest recall-reachability line — never let a registered-but-unindexed
-            mount read as searchable. docs kind needs its cards written in chat. */}
-        {indexed ? (
-          <div data-testid={`library-mount-indexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-meta" style={{ color: 'var(--color-status-success)' }}>
-            <span aria-hidden>✓</span> {t('ui.LibraryOverlay.mountIndexed')}
-          </div>
-        ) : (
-          <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-meta" style={{ color: 'var(--color-status-warning)' }}>
-            <span aria-hidden className="material-symbols-outlined icon-xs">warning</span>
-            {m.kind === 'docs'
-              ? t('ui.LibraryOverlay.mountDocsEmpty')
-              : t('ui.LibraryOverlay.mountNotIndexed')}
-          </div>
-        )}
+    <>
+      <div className="mt-4 flex h-2.5 gap-0.5 overflow-hidden rounded-[5px] bg-[var(--color-hover)]" data-testid="library-source-split">
+        {present.map((s) => (
+          <button key={s} type="button" tabIndex={-1} aria-hidden onClick={() => onPick(s)} data-testid={`library-split-${s}`}
+            className="h-full cursor-pointer transition-[width,opacity] duration-700 ease-out hover:brightness-110 motion-reduce:transition-none"
+            style={{ width: grown ? `${(counts[s] / sum) * 100}%` : 0, background: SOURCE_COLOR[s], opacity: !picked || picked === s ? 1 : 0.25 }} />
+        ))}
       </div>
-      <span className="shrink-0 rounded px-1.5 py-[1px] text-meta tabular-nums self-start" style={{ background: 'color-mix(in srgb, var(--color-primary) 16%, transparent)', color: 'var(--color-primary)' }}>{m.kind}</span>
-      <span className="shrink-0 text-meta tabular-nums text-[var(--color-text-faint)] self-start">{t('ui.LibraryOverlay.localBadge')}</span>
+      <div className="mt-3 flex flex-wrap gap-x-2 gap-y-1.5">
+        {present.map((s) => (
+          <button key={s} type="button" aria-pressed={picked === s} onClick={() => onPick(s)} data-testid={`library-source-chip-${s}`}
+            className={`btn-sm btn-secondary inline-flex cursor-pointer items-center gap-1.5 rounded-full transition-[opacity,color,border-color] ${FOCUS} ${
+              picked === s ? 'border-[var(--color-text-secondary)] text-[var(--color-text)]'
+                : `text-[var(--color-text-muted)] hover:text-[var(--color-text)] ${picked ? 'opacity-45 hover:opacity-80' : ''}`}`}>
+            <span aria-hidden className="h-2 w-2 rounded-sm" style={{ background: SOURCE_COLOR[s] }} />
+            {t(`ui.LibraryOverlay.source.${s}`)}
+            <b className="font-semibold tabular-nums text-[var(--color-text)]">{counts[s]}</b>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function RecentRow({ it }: { it: RecentItem }) {
+  const { t } = useTranslation();
+  const d = new Date(it.mtime * 1000);
+  const folder = it.category === '(root)' ? 'Knowledge' : it.category;
+  const units = it.source === 'cdf' ? it.cdf_units ?? 0 : 0;
+  return (
+    <button type="button" data-testid="library-recent-item" data-source={it.source} onClick={() => openFile(it.path)} title={it.path}
+      className={`grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 rounded-lg px-2.5 py-2 text-left hover:bg-[var(--color-hover)] ${FOCUS}`}>
+      <span className="min-w-0 truncate text-body">
+        <span aria-hidden className="mr-2.5 inline-block h-[7px] w-[7px] rounded-full align-[1px]" style={{ background: SOURCE_COLOR[it.source] }} />
+        {folder} · {readableName(it.path)}
+      </span>
+      <span className={`flex items-baseline gap-3.5 whitespace-nowrap text-small tabular-nums ${MUTED}`}>
+        {units > 0 && <b className="font-semibold" style={{ color: SOURCE_COLOR.cdf }} data-testid="library-recent-units">{t('ui.LibraryOverlay.units', { count: units })}</b>}
+        <span>{pad(d.getHours())}:{pad(d.getMinutes())}</span>
+      </span>
+    </button>
+  );
+}
+
+// ── Browse: the live Knowledge/ tree, then the mounted folders ──
+function BrowseTab({ native, mounts, mountsError, onRetryMounts, onIndexing }: {
+  native: NativeStore | undefined; mounts: MountsList | undefined; mountsError: boolean; onRetryMounts: () => void;
+  onIndexing: () => void;
+}) {
+  const { t } = useTranslation();
+  const rows = mounts?.mounts ?? [];
+  return (
+    <div data-testid="library-panel-browse" className="flex h-full min-h-0 flex-col gap-9">
+      <section data-testid="library-native-section" className="flex min-h-[240px] flex-1 flex-col">
+        <ZoneLabel right={native ? <span className={DIM}>{t('ui.LibraryOverlay.dirCount', { count: native.category_count })}</span> : undefined}>
+          {t('ui.LibraryOverlay.nativeHeading')}
+        </ZoneLabel>
+        <LibraryTree />
+      </section>
+      <section data-testid="library-mounted-section" className="shrink-0">
+        <ZoneLabel right={<AddFolderButton onIndexing={onIndexing} />}>{t('ui.LibraryOverlay.mountedHeading')}</ZoneLabel>
+        {mountsError ? (
+          <OverlayError compact testid="library-mounts-error" retryTestid="library-mounts-retry" message={t('ui.LibraryOverlay.mountsFailed')} onRetry={onRetryMounts} />
+        ) : !mounts ? (
+          <OverlayLoading testid="library-mounts-loading" />
+        ) : rows.length === 0 ? (
+          <p data-testid="library-mounted-empty" className={`text-body ${MUTED}`}>{t('ui.LibraryOverlay.mountedEmpty')}</p>
+        ) : (
+          <div className="flex flex-col gap-2">{rows.map((m) => <MountRowView key={m.id} m={m} />)}</div>
+        )}
+      </section>
     </div>
   );
 }
 
-// "+ Add Folder" — native folder picker (Tauri dialog plugin) → POST
-// /library/mounts (axios baseURL adds /api), which judges kind + registers + indexes (code inline,
-// docs handed to chat). On success the mounts list refreshes so the new row shows.
-function AddFolderButton() {
+/** A SQLite `datetime('now')` UTC stamp as a Date (null when absent or unreadable). */
+function sqliteUtc(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const d = new Date(`${s.replace(' ', 'T')}${/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? '' : 'Z'}`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// A mount: name, path, kind · index state, last sync. All muted: a stale index is a
+// date (the agent reads the live source on a hit, so stale only lowers the hit
+// chance), and a gone path offers no decision here (there is no unmount action).
+function MountRowView({ m }: { m: MountRow }) {
+  const { t } = useTranslation();
+  const indexed = !!m.last_synced;
+  const missing = m.health === 'missing';
+  const synced = sqliteUtc(m.last_synced);
+  const kind = t(m.kind === 'code' ? 'ui.LibraryOverlay.kindCode' : m.kind === 'url' ? 'ui.LibraryOverlay.kindUrl' : 'ui.LibraryOverlay.kindDocs');
+  let name = m.path.split('/').filter(Boolean).pop() ?? m.path;
+  if (m.kind === 'url') { try { name = new URL(m.path).hostname || name; } catch { /* not a URL: keep the last segment */ } }
+  const state = missing ? t('ui.LibraryOverlay.mountMissing')
+    : indexed ? t('ui.LibraryOverlay.mountIndexed')
+    : m.kind === 'docs' ? t('ui.LibraryOverlay.mountDocsEmpty') : t('ui.LibraryOverlay.mountNotIndexed');
+  let sync: string | null = null;
+  if (synced) {
+    const days = Math.floor((Date.now() - synced.getTime()) / 86_400_000);
+    sync = m.health === 'stale'
+      ? (days < 1 ? t('ui.LibraryOverlay.syncedToday') : t('ui.LibraryOverlay.syncedAgo', { count: days }))
+      : t('ui.LibraryOverlay.syncedOn', { date: `${pad(synced.getMonth() + 1)}-${pad(synced.getDate())}` });
+  }
+  return (
+    <div data-testid={`library-mount-${m.id}`} data-kind={m.kind} data-indexed={indexed ? 'true' : 'false'} data-health={m.health}
+      className={`${CARD} flex items-center gap-3 px-3.5 py-3`}>
+      <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full"
+        style={{ background: !missing && indexed && m.health === 'fresh' ? OK : 'var(--color-text-dim)' }} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-body font-semibold">{name}</div>
+        <div className={`truncate font-mono text-meta ${DIM}`}>{m.path}</div>
+      </div>
+      <div className={`shrink-0 text-right text-small ${MUTED}`}>
+        <div data-testid={`library-mount-state-${m.id}`}>{kind} · {state}</div>
+        {sync && <div className={DIM} data-testid={`library-mount-sync-${m.id}`}>{sync}</div>}
+      </div>
+    </div>
+  );
+}
+
+// "+ Add folder": native folder picker (Tauri dialog plugin) → POST /library/mounts
+// (axios baseURL adds /api), which judges the kind, registers and indexes it. A large
+// code folder is indexed in the background (status 'indexing'): `onIndexing` starts
+// the mounts re-read, so its row turns "indexed" when the index lands.
+function AddFolderButton({ onIndexing }: { onIndexing: () => void }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
+  const toast = (message: string) => document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message } }));
   const onClick = async () => {
     setBusy(true);
     try {
@@ -349,195 +417,86 @@ function AddFolderButton() {
       const picked = await openDialog({ directory: true, multiple: false, title: t('ui.LibraryOverlay.mountDialogTitle') });
       if (typeof picked === 'string') {
         try {
-          const res = await api.post<{ kind: string; status?: string; symbols?: number; next?: string }>(
+          const res = await api.post<{ kind: string; status?: string; symbols?: number; chunks?: number }>(
             `/library/mounts?path=${encodeURIComponent(picked)}`,
           );
           const d = res.data;
-          // Honesty (run_139d7652): a code mount with zero parseable source is
-          // status 'indexed_empty' — the graph is empty, recall reaches nothing.
-          // Don't repeat the badge's old lie ("recall now reaches it") in the toast.
-          const codeEmpty = d.kind === 'code' && (d.status === 'indexed_empty' || (d.symbols ?? 0) === 0);
-          const msg = d.kind === 'code'
-            ? (d.status === 'indexing'
-                ? 'Mounted (code) — indexing it in the background; recall reaches it when the badge says indexed.'
-                : codeEmpty
-                ? `Mounted (code) — but no parseable source found; recall can’t reach it yet.`
-                : `Mounted (code) — indexed ${d.symbols ?? 0} symbols; recall now reaches it.`)
-            : `Mounted (docs). ${d.next ?? 'Ask chat to brief the folder into cards.'}`;
-          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: msg } }));
-          qc.invalidateQueries({ queryKey: ['library-mounts'] });
+          if (d.kind === 'code' && d.status === 'indexing') onIndexing();
+          // a mount with nothing parseable is not reachable by recall: the toast says so
+          toast(d.kind === 'code'
+            ? (d.status === 'indexing' ? t('ui.LibraryOverlay.mountedCodeIndexing')
+              : (d.symbols ?? 0) === 0 ? t('ui.LibraryOverlay.mountedCodeEmpty')
+              : t('ui.LibraryOverlay.mountedCode', { count: d.symbols ?? 0 }))
+            : (d.chunks ?? 0) > 0 ? t('ui.LibraryOverlay.mountedDocs', { count: d.chunks ?? 0 })
+            : t('ui.LibraryOverlay.mountedDocsEmpty'));
+          void qc.invalidateQueries({ queryKey: ['library-mounts'] });
         } catch (err: unknown) {
           const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: detail || t('ui.LibraryOverlay.mountFailed') } }));
+          toast(detail || t('ui.LibraryOverlay.mountFailed'));
         }
       }
     } catch {
-      // dialog unavailable (non-Tauri/dev) — fall back to chat guidance.
-      document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t('ui.LibraryOverlay.mountViaChat') } }));
+      // no dialog (non-Tauri / dev): say how to mount from chat
+      toast(t('ui.LibraryOverlay.mountViaChat'));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <button
-      data-testid="library-add-folder"
-      onClick={onClick}
-      disabled={busy}
-      className="btn-sm btn-primary disabled:opacity-60"
-    >
-      <span className="material-symbols-outlined icon-xs">add</span> {t('ui.LibraryOverlay.addFolder')}
+    <button type="button" data-testid="library-add-folder" onClick={onClick} disabled={busy} className="btn-sm btn-primary disabled:opacity-60">
+      <span aria-hidden className="material-symbols-outlined icon-xs">add</span> {t('ui.LibraryOverlay.addFolder')}
     </button>
   );
 }
 
-// ── Recent: last-7-days add/edit feed (no fabricated review queue) ──
-function RecentTab({
-  recent, loading, error, onRetry,
-}: {
-  recent: RecentFeed | undefined; loading: boolean; error: boolean; onRetry: () => void;
+// ── How it works: written → stored → indexed → recalled, with live numbers ──
+function HowTab({ recent, counts: by, fileTotal, byteTotal, mountCount }: {
+  recent: RecentFeed | undefined; counts: Record<RecentSource, number>; fileTotal: number | null; byteTotal: number;
+  mountCount: number | null;
 }) {
   const { t } = useTranslation();
-  const items = recent?.items ?? [];
-  // Client-side substring filter over the already-loaded last-7-days feed (path or
-  // category, case-insensitive) — instant, no backend call (run_b4120a78). The
-  // filter is applied ONLY in the list branch; the empty-WEEK guard below keys off
-  // the RAW `items.length` so a zero-match filter never renders the "nothing new"
-  // lie (Gate-1 adopted: empty-filter ≠ empty-week).
-  const [query, setQuery] = useState('');
-  const q = query.trim().toLowerCase();
-  const filtered = q
-    ? items.filter((it) => it.path.toLowerCase().includes(q) || it.category.toLowerCase().includes(q))
-    : items;
+  const unit = t('ui.LibraryOverlay.filesUnit');
   return (
-    <div data-testid="library-panel-recent" className="flex flex-col gap-3 max-w-3xl">
-      <div className="text-body text-[var(--color-text-muted)]">
-        {t('ui.LibraryOverlay.recentIntro', { days: recent?.window_days ?? 7 })}
+    <section data-testid="library-panel-how">
+      <ZoneLabel>{t('ui.LibraryOverlay.how.title')}</ZoneLabel>
+      <div data-testid="library-how-flow"
+        className="mt-1.5 flex flex-col gap-3 md:grid md:grid-cols-[minmax(0,1fr)_22px_minmax(0,1fr)_22px_minmax(0,1fr)_22px_minmax(0,1fr)] md:gap-1">
+        <Node testid="library-how-written" k={t('ui.LibraryOverlay.how.written', { days: recent?.window_days ?? 7 })} live
+          v={recent ? <>{(recent.this_week ?? recent.count).toLocaleString()}{unit && <Unit>{unit}</Unit>}</> : '—'}
+          s={[t('ui.LibraryOverlay.how.writtenCdf', { n: by.cdf }), t('ui.LibraryOverlay.how.writtenRest', { chat: by.chat, job: by.job })]} />
+        <Arrow />
+        <Node testid="library-how-stored" k={t('ui.LibraryOverlay.how.stored')}
+          v={fileTotal != null ? <>{fileTotal.toLocaleString()}{unit && <Unit>{unit}</Unit>}</> : '—'}
+          s={[t('ui.LibraryOverlay.how.storedSize', { size: fmtBytes(byteTotal) }),
+            mountCount == null ? '—' : mountCount > 0 ? t('ui.LibraryOverlay.how.storedMounts', { count: mountCount }) : t('ui.LibraryOverlay.how.storedNoMounts')]} />
+        <Arrow />
+        <Node testid="library-how-indexed" k={t('ui.LibraryOverlay.how.indexed')} v={t('ui.LibraryOverlay.how.indexedV')}
+          s={[t('ui.LibraryOverlay.how.indexedS1'), t('ui.LibraryOverlay.how.indexedS2')]} />
+        <Arrow />
+        <Node testid="library-how-recalled" k={t('ui.LibraryOverlay.how.recalled')} v={t('ui.LibraryOverlay.how.recalledV')}
+          s={[t('ui.LibraryOverlay.how.recalledS1'), t('ui.LibraryOverlay.how.recalledS2')]} />
       </div>
-      {/* Search box — filters the loaded feed locally; only shown when there IS a feed. */}
-      {!error && !loading && items.length > 0 && (
-        <input
-          data-testid="library-recent-search"
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('ui.LibraryOverlay.recentFilterPlaceholder')}
-          className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
-        />
-      )}
-      {error ? (
-        <FetchError
-          testid="library-recent-error"
-          retryTestid="library-recent-retry"
-          message="Couldn't load the recent feed."
-          onRetry={onRetry}
-        />
-      ) : loading ? (
-        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">{t('ui.LibraryOverlay.loading')}</div>
-      ) : items.length === 0 ? (
-        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">{t('ui.LibraryOverlay.nothingNew')}</div>
-      ) : filtered.length === 0 ? (
-        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">{t('ui.LibraryOverlay.noMatches', { query })}</div>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {filtered.map((it) => {
-            const meta = SOURCE_META[it.source];
-            return (
-              <button
-                key={it.path}
-                data-testid="library-recent-item"
-                onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: it.path } }))}
-                className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
-              >
-                <span className="shrink-0 material-symbols-outlined icon-sm text-[var(--color-text-muted)]" title={t(meta.labelKey)}>{meta.icon}</span>
-                <span className="flex-1 min-w-0 truncate text-body text-[var(--color-text)]">{it.path.replace('Knowledge/', '')}</span>
-                <span className="shrink-0 text-meta text-[var(--color-text-faint)]">{it.category}</span>
-                <span className="w-16 shrink-0 text-right tabular-nums text-meta text-[var(--color-text-faint)]">{fmtWhen(it.mtime)}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    </section>
   );
 }
 
-// ── Guide: how recall USES this + how to manage. TRUE mechanism only (R30 / DoD6):
-// verified against session_router._maybe_inject_recall + recall_multi (2026-08-02) —
-// once-per-session latch, keyword/FTS5/BM25, NO vector leg (allow_embed=False),
-// [RECALLED] tag. Describing a vector/hybrid leg here would be a stale-teaching bug.
-const RECALL_STEPS: Array<{ icon: string; titleKey: string; descKey: string }> = [
-  { icon: 'schedule', titleKey: 'ui.LibraryOverlay.stepWhen', descKey: 'ui.LibraryOverlay.stepWhenDesc' },
-  { icon: 'search', titleKey: 'ui.LibraryOverlay.stepHow', descKey: 'ui.LibraryOverlay.stepHowDesc' },
-  { icon: 'download', titleKey: 'ui.LibraryOverlay.stepLands', descKey: 'ui.LibraryOverlay.stepLandsDesc' },
-  { icon: 'link', titleKey: 'ui.LibraryOverlay.stepMountHit', descKey: 'ui.LibraryOverlay.stepMountHitDesc' },
-  { icon: 'water_drop', titleKey: 'ui.LibraryOverlay.stepIndexing', descKey: 'ui.LibraryOverlay.stepIndexingDesc' },
-];
-const MANAGE_ROWS: Array<{ want: string; say: string; result: string }> = [
-  { want: 'Add a note/fact', say: 'remember: <X>', result: 'routed by s_persist to the right home' },
-  { want: 'Ingest a URL/article', say: 'learn this <url>', result: 's_learn-content card (source + briefing)' },
-  { want: 'Mount a folder', say: '+ Add Folder  ·  or "mount <path>"', result: 'agent judges kind → indexes in place (no copy)' },
-  { want: 'Organize', say: 'organize my notes by topic', result: 'agent re-files / de-dupes' },
-  { want: 'Ask what\'s known', say: 'what did I learn about X', result: 'recall + synthesize' },
-];
+const Unit = ({ children }: { children: ReactNode }) => <span className={`ml-0.5 text-small ${MUTED}`}>{children}</span>;
 
-function GuideTab() {
-  const { t } = useTranslation();
+function Node({ k, v, s, live, testid }: { k: string; v: ReactNode; s: string[]; live?: boolean; testid: string }) {
   return (
-    <div data-testid="library-panel-guide" className="flex flex-col gap-6 max-w-4xl">
-      {/* What the Library IS — the index-not-warehouse framing (folded here from the
-          rail so there's ONE explainer, not two — run_139d7652). */}
-      <section data-testid="library-guide-what">
-        <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-          {t('ui.LibraryOverlay.guideWhatTitle')}
-        </div>
-        <div className="text-body text-[var(--color-text-muted)] leading-relaxed">
-          <Trans
-            i18nKey="ui.LibraryOverlay.guideWhatBody"
-            components={{ b: <b />, code: <code className="font-mono text-small" /> }}
-          />
-        </div>
-      </section>
-
-      {/* How recall uses this */}
-      <section>
-        <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-          {t('ui.LibraryOverlay.guideRecallTitle')}
-        </div>
-        <div className="text-body text-[var(--color-text-muted)] mb-3">
-          {t('ui.LibraryOverlay.guideRecallBody')}
-        </div>
-        <div data-testid="library-recall-steps" className="flex flex-col gap-1.5">
-          {RECALL_STEPS.map((s) => (
-            <div key={s.titleKey} className="flex items-start gap-3 rounded-md border border-[var(--color-border)] px-3 py-2">
-              <span className="shrink-0 material-symbols-outlined icon-md text-[var(--color-text-muted)] mt-0.5">{s.icon}</span>
-              <div className="min-w-0">
-                <span className="text-small font-semibold text-[var(--color-text)]">{t(s.titleKey)}</span>
-                <span className="ml-2 text-meta text-[var(--color-text-muted)]">{t(s.descKey)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* How to manage */}
-      <section>
-        <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-          {t('ui.LibraryOverlay.guideManageTitle')}
-        </div>
-        <div className="flex flex-col gap-1">
-          {MANAGE_ROWS.map((r) => (
-            <div key={r.want} className="grid grid-cols-[1fr_1.2fr_1.4fr] items-center gap-3 rounded-md px-3 py-1.5 text-small">
-              <span className="text-[var(--color-text)]">{r.want}</span>
-              <code className="font-mono text-meta text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-[1px] truncate">{r.say}</code>
-              <span className="text-meta text-[var(--color-text-faint)]">{r.result}</span>
-            </div>
-          ))}
-        </div>
-        <div className="mt-2 text-meta text-[var(--color-text-faint)]">
-          {t('ui.LibraryOverlay.guideManageFooter')}
-        </div>
-      </section>
+    <div data-testid={testid} className={`${CARD} px-3.5 pb-3 pt-3.5`}>
+      <div className={`text-meta font-semibold tracking-[0.06em] ${MUTED}`}>{k}</div>
+      <div className="mt-1.5 text-display font-semibold leading-7 tabular-nums" style={live ? { color: SOURCE_COLOR.cdf } : undefined}>{v}</div>
+      {s.map((line) => <div key={line} className="mt-0.5 text-small text-[var(--color-text-secondary)]">{line}</div>)}
     </div>
   );
 }
 
+function Arrow() {
+  return (
+    <div aria-hidden className="hidden items-center md:flex">
+      <span className="h-0.5 flex-1 bg-[var(--color-border)]" />
+      <span className="h-0 w-0 border-y-[5px] border-l-[6px] border-y-transparent border-l-[var(--color-text-dim)]" />
+    </div>
+  );
+}

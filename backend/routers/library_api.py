@@ -11,7 +11,7 @@ Design: Knowledge/Designs/2026-08-02-library-mount-points-design.md
 
 Endpoints (Run 5):
     GET /api/library/native  — Knowledge/ top-level categories + live file counts
-    GET /api/library/recent  — last-7-days add/edit feed across Knowledge/
+    GET /api/library/recent  — what changed in Knowledge/ this week, and who wrote it
     GET /api/library/mounts  — registered mount points (empty until the mount runs)
 """
 
@@ -94,47 +94,19 @@ async def native_categories() -> dict:
 
 @router.get("/recent")
 async def recent_feed(days: int = Query(default=7, ge=1, le=30)) -> dict:
-    """Last-N-days add/edit feed across `Knowledge/` (default 7).
+    """What changed in `Knowledge/` in the last N days (default 7), and who wrote it.
 
-    Each item: {path, category, mtime, size, source}. `source` is a coarse tag
-    derived from the containing category (session backflow lands in Notes;
-    job output in JobResults) — NOT a fabricated review-queue signal (the design
-    explicitly rejects a fake "Pending review"). Sorted newest-first, capped.
+    Each item: {path, category, mtime, size, source, cdf_units}; `source` is `cdf`
+    (CDF's write journal has a done unit write to the path in the window), `job`
+    (JobResults / DailyActivity / Archives) or `chat`. Lock sidecars, machine twins,
+    sqlite files and the mounts' own index dir are not content and are left out (see
+    core.library_recent). `this_week` / `last_week` / `by_source` are counted before
+    the item cap. Newest first.
     """
+    from core.library_recent import scan_recent
     kdir = _knowledge_dir()
-    cutoff = time.time() - days * 24 * 3600
-
-    # rglob over the whole Knowledge/ tree — one worker thread for the WHOLE walk
-    # (run_b2d3ece0), not per-item to_thread inside the loop.
-    def _scan() -> list[dict]:
-        items: list[dict] = []
-        for p in kdir.rglob("*"):
-            if not p.is_file() or p.name.startswith("."):
-                continue
-            try:
-                mtime = p.stat().st_mtime
-            except OSError:
-                continue
-            if mtime < cutoff:
-                continue
-            rel = p.relative_to(kdir)
-            category = rel.parts[0] if len(rel.parts) > 1 else "(root)"
-            items.append({
-                "path": f"Knowledge/{rel.as_posix()}",
-                "category": category,
-                "mtime": mtime,
-                "size": _safe_size(p),
-                "source": _source_tag(category),
-            })
-        items.sort(key=lambda it: it["mtime"], reverse=True)
-        return items
-
-    items = await executors.run_nav(_scan)
-    return {
-        "window_days": days,
-        "count": len(items),
-        "items": items[:200],  # cap the feed; not a silent truncation of value
-    }
+    # the whole walk + the read-only journal query in one worker thread (run_b2d3ece0)
+    return await executors.run_nav(scan_recent, kdir, days)
 
 
 @router.get("/mounts")
@@ -405,12 +377,12 @@ from core.library_health import REPORT_FILENAME as _HEALTH_REPORT  # single sour
 
 @router.get("/health")
 async def library_health() -> dict:
-    """Library health report — cleanup candidates for the Native store.
+    """Library health report — cleanup candidates for the Native store, and what the
+    weekly `library-health` job archived by itself (`auto_archived`).
 
-    Serves the weekly `library-health` job's cached report
-    (`Knowledge/.library-health.json`). If the report is missing (job hasn't run
-    yet), scan LIVE on demand so the overlay is never blank. Read-only: proposes
-    cleanup, never mutates (actions run via POST /health/action on user click)."""
+    Serves the job's cached report (`Knowledge/.library-health.json`). If the report
+    is missing (job hasn't run yet), scan LIVE on demand so a reader is never blank.
+    Read-only (actions run via POST /health/action on an explicit call)."""
     kdir = _knowledge_dir()
     report_path = kdir / _HEALTH_REPORT
 
@@ -439,29 +411,41 @@ async def library_health_action(
 
     - archive_old_logs → MOVE files to Archives/ (reversible; one-click).
     - delete_empty → DELETE files, ONLY when confirm=True (destructive → the
-      frontend must send confirm after a user OK). Without confirm →
+      caller must send confirm after a user OK). Without confirm →
       {status: 'confirm_required'} and nothing is touched.
-    - oversized_category → no-op (informational).
 
     Every path is re-validated to live under Knowledge/ (traversal guard) and to
     still exist (a stale report skips already-moved files). After applying, the
-    report is refreshed so the overlay reflects the new state immediately."""
+    report is refreshed so the overlay reflects the new state immediately (keeping
+    the job's `auto_archived` record)."""
     from core.library_health import apply_action, scan_library_health, write_report_atomic
-    valid_kinds = {"archive_old_logs", "delete_empty", "oversized_category"}
+    valid_kinds = {"archive_old_logs", "delete_empty"}
     if kind not in valid_kinds:
         raise HTTPException(status_code=400, detail=f"unknown action kind: {kind}")
     kdir = _knowledge_dir()
-    result = apply_action(kdir, kind, paths, confirm=confirm)  # type: ignore[arg-type]
-    # Refresh the cached report so the next GET (and other open overlays) are
-    # current. Atomic (same helper as the job) — a concurrent GET never sees a torn file.
-    if result.get("status") in ("success", "partial"):
-        try:
-            fresh = scan_library_health(kdir)
-            write_report_atomic(kdir, fresh)
-            result["report"] = fresh
-        except OSError as exc:
-            logger.warning("library health report refresh failed: %s", exc)
-    return result
+
+    # the moves / deletes and the rescan touch many files: one worker thread on the
+    # action pool, never the event loop (run_a1f4c2d8)
+    def _act() -> dict:
+        result = apply_action(kdir, kind, paths, confirm=confirm)  # type: ignore[arg-type]
+        # Refresh the cached report so the next GET (and other open overlays) are
+        # current. Atomic (same helper as the job) — a concurrent GET never sees a torn file.
+        if result.get("status") in ("success", "partial"):
+            try:
+                fresh = scan_library_health(kdir)
+                try:
+                    prev = json.loads((kdir / _HEALTH_REPORT).read_text(encoding="utf-8"))
+                    if isinstance(prev, dict) and "auto_archived" in prev:
+                        fresh["auto_archived"] = prev["auto_archived"]
+                except (OSError, ValueError):
+                    pass
+                write_report_atomic(kdir, fresh)
+                result["report"] = fresh
+            except OSError as exc:
+                logger.warning("library health report refresh failed: %s", exc)
+        return result
+
+    return await executors.run_nav_action(_act)
 
 
 def _safe_size(p: Path) -> int:
@@ -469,13 +453,3 @@ def _safe_size(p: Path) -> int:
         return p.stat().st_size
     except OSError:
         return 0
-
-
-def _source_tag(category: str) -> str:
-    """Coarse provenance tag from the category (no fabricated review state)."""
-    c = category.lower()
-    if c in ("notes",):
-        return "session"
-    if c in ("jobresults", "signals", "dailybriefs", "dailyactivity"):
-        return "job"
-    return "you"

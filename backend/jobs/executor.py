@@ -417,12 +417,14 @@ def execute_job(
             health_result = run_library_health()
             duration = (datetime.now(timezone.utc) - start).total_seconds()
             h_status = health_result.get("status", "unknown")
+            archived = health_result.get("archived", 0)
             summary = (
                 health_result.get("error")
                 if h_status == "error"
-                else (f"Knowledge/ healthy — nothing to clean"
-                      if health_result.get("clean")
-                      else f"{health_result.get('findings', 0)} cleanup finding(s)")
+                else ((f"archived {archived} old log(s); " if archived else "")
+                      + ("Knowledge/ healthy — nothing to clean"
+                         if health_result.get("clean")
+                         else f"{health_result.get('findings', 0)} cleanup finding(s)"))
             )
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),

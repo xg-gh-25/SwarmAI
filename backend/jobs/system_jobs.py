@@ -161,13 +161,13 @@ SYSTEM_JOBS: list[Job] = [
     ),
 
     # --- Library Health (keep the Native store from rotting into a graveyard) ---
-    # Weekly heuristic scan of Knowledge/ for cleanup candidates (old raw-logs,
-    # empty files, oversized categories) → writes .library-health.json for the
-    # overlay's health section + one-click actions. No LLM, zero token, read-only
-    # (the job never mutates knowledge; actions run on explicit user click).
+    # Weekly: moves the JobResults logs older than 90 days into
+    # Archives/ by itself (reversible) and writes .library-health.json with what it
+    # moved (the Library overlay's Recent tab says so). No LLM, zero token; it never
+    # deletes (delete stays a confirm-gated API action).
     Job(
         id="library-health",
-        name="Library Health — scan Knowledge/ for cleanup candidates",
+        name="Library Health — archive old raw logs in Knowledge/",
         type="library_health",
         schedule="0 7 * * 1",           # Monday UTC 07:00 = ICT 15:00 (weekly, weekday)
         enabled=True,

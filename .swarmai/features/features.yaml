@@ -139,9 +139,9 @@ features:
       - desktop/src/components/layout/CognitiveDistillationFlow.tsx
       - desktop/src/components/layout/HistoryOverlay.tsx
       - desktop/src/components/layout/InboxOverlay.tsx
-      - desktop/src/components/layout/LibraryHealth.tsx
       - desktop/src/components/layout/LibraryOverlay.tsx
       - desktop/src/components/layout/LibraryTree.tsx
+      - desktop/src/components/layout/libraryRecent.ts
       - desktop/src/components/layout/NeedYouOverlay.tsx
       - desktop/src/components/layout/NeedsYouRow.tsx
       - desktop/src/components/layout/NewBrainOverlay.tsx

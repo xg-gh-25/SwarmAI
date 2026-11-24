@@ -39,7 +39,6 @@ export const FILES = [
   'components/layout/NeedsYouRow.tsx',
   'components/layout/CMBrainOverlay.tsx',
   'components/layout/LibraryOverlay.tsx',
-  'components/layout/LibraryHealth.tsx',
   'components/layout/LibraryTree.tsx',
   'components/layout/BrainHub.tsx',
   'components/layout/BrainMap.tsx',

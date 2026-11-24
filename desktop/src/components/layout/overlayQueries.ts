@@ -145,6 +145,7 @@ export const overlayQuery = {
   libraryNative: <T,>() => ({ queryKey: ['library-native'] as const, queryFn: getJson<T>('/library/native'), staleTime: OVERLAY_STALE_MS }),
   libraryRecent: <T,>() => ({ queryKey: ['library-recent'] as const, queryFn: getJson<T>('/library/recent'), staleTime: OVERLAY_STALE_MS }),
   libraryMounts: <T,>() => ({ queryKey: ['library-mounts'] as const, queryFn: getJson<T>('/library/mounts'), staleTime: OVERLAY_STALE_MS }),
+  libraryHealth: <T,>() => ({ queryKey: ['library-health'] as const, queryFn: getJson<T>('/library/health'), staleTime: OVERLAY_STALE_MS }),
   /** Need You's queue (GET /attention). ONE cache for the overlay, the Welcome
    *  card and the AlertsPill (useAttentionQueue adds a 30s refetchInterval). */
   // Workspace: each location has its own keys (design workspace-working-location.md §4).
