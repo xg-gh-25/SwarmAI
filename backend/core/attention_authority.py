@@ -152,6 +152,9 @@ class AttentionItem:
     summary: str = ""    # plain, one line: which thing this is
     handler: str = HANDLER_PERSON  # who it waits on; set by collect() from handler_of
     since: Optional[str] = None    # ISO time it started waiting, when the source knows it
+    # Swarm's own automatic run on an agent item (core.attention_auto): state
+    # running|done|failed|interrupted, at, note, session_id. None: no run yet.
+    auto: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1397,6 +1400,13 @@ def collect(
 
     for it in items:
         it.handler = handler_of(it)
+    # Swarm's automatic runs: shown on their items, and an item whose run did not work
+    # goes back to the person with what was tried (core.attention_auto, read-only).
+    try:
+        from core.attention_auto import apply_records
+        apply_records(items)
+    except Exception as exc:  # noqa: BLE001 — fail-soft like every source
+        logger.warning("attention: automatic-run records not applied: %s", exc)
     # Order: what waits on the person first, then BLOCKING before REVIEW (design §5
     # main axis), stable within each.
     items.sort(key=lambda it: (0 if it.handler == HANDLER_PERSON else 1,

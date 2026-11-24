@@ -230,7 +230,7 @@ def test_item_to_dict_shape(patched_sources):
     assert "items" in d and "counts" in d
     it = d["items"][0]
     assert set(it.keys()) == {"id", "source", "tier", "brain", "title", "summary", "detail", "dispatch",
-                             "handler", "since"}
+                             "handler", "since", "auto"}
 
 
 def test_circuit_breaker_threshold_is_three():

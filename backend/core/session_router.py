@@ -3131,7 +3131,7 @@ class SessionRouter:
             logger.warning("session_router.desktop_prewarm_failed: %s", exc)
 
     async def _try_adopt_desktop_pool(
-        self, session_id: str, agent_id: str, model: str,
+        self, session_id: str, agent_id: str, model: str, *, unattended: bool = False,
     ) -> bool:
         """Adopt a pooled unit for a real desktop session if a fresh, non-stale,
         bucket-matching IDLE unit exists. Returns True on adopt (unit now in
@@ -3143,6 +3143,11 @@ class SessionRouter:
         adopt_prewarmed_unit which also takes the lock — see note).
         """
         if not self._desktop_prewarm_enabled():
+            return False
+        # An unattended automatic run (core.attention_auto) needs its own scoped CLI
+        # process (Bash allowlist hook, denied tools, no UI tool); a pooled baseline one
+        # was built from the normal config and has none of them.
+        if unattended:
             return False
         # ── AC1 (CRITICAL) history guard: a session that ALREADY HAS history must
         # NEVER adopt a baseline prewarm subprocess. An adopted unit is IDLE with
@@ -5034,7 +5039,9 @@ class SessionRouter:
             try:
                 from .agent_defaults import resolve_default_model
                 _model = (agent_config or {}).get("model") or resolve_default_model() or ""
-                await self._try_adopt_desktop_pool(session_id, agent_id, _model)
+                await self._try_adopt_desktop_pool(
+                    session_id, agent_id, _model,
+                    unattended=bool((agent_config or {}).get("unattended")))
             except Exception as exc:  # noqa: BLE001 — adopt is best-effort, never fatal
                 logger.warning("session_router.desktop_adopt_intercept_failed: %s", exc)
 

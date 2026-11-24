@@ -2433,6 +2433,11 @@
     "system": "System",
     "hand": "Hand to Swarm",
     "handAll": "Hand all to Swarm",
+    "auto": {
+      "running": "Swarm is on it",
+      "done": "Done",
+      "session": "Open its session"
+    },
     "handle": "Handle in chat",
     "handAllPrompt_one": "Handle this yourself, then tell me in two plain lines what you did:\n\n{{items}}",
     "handAllPrompt_other": "Handle these {{count}} yourself, one after another, then tell me in a few plain lines what you did for each:\n\n{{items}}",

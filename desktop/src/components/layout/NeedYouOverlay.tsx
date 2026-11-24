@@ -9,7 +9,10 @@
  *     once what it needs of the person, then how long it has waited; the card holds the
  *     reason and its actions. Nothing for the person → one calm line.
  *   - Swarm handles it: what Swarm can carry to done itself (a failing job, a fresh
- *     result, a stuck CDF), one row each with "Hand to Swarm", and one button for all.
+ *     result, a stuck CDF). The backend starts each one by itself (core/attention_auto):
+ *     a row with a run shows its state (on it / done) and a link to its session; a row
+ *     with none yet keeps "Hand to Swarm", and one button hands all of those. A run that
+ *     did not work comes back as a For-you card saying what was tried.
  *   - Under them, Swarm's cognition level (CognitionLevel).
  * The tab's count is the person's count, the same number as the left-nav badge.
  *
@@ -33,6 +36,8 @@ import { CognitionLevel } from './CognitionLevel';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError } from './OverlayState';
 import { itemOpener, needsYouPrompt } from './NeedsYouRow';
+import { getOverlayCtxBridge } from './overlayRegistry';
+import { chatService } from '../../services/chat';
 import { CARD, MUTED, ZoneLabel, agoText } from './needYouParts';
 import type { DispatchPrompt } from './overlayRegistry';
 
@@ -121,13 +126,24 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
 
   const onFill = useCallback((prompt: string) => { if (onDispatch(prompt, { autoSend: false })) close(); }, [onDispatch, close]);
   const onSend = useCallback((prompt: string) => { if (onDispatch(prompt, { autoSend: true })) close(); }, [onDispatch, close]);
+  // an automatic run's session, resumed in a chat tab (the same path as History)
+  const onOpenSession = useCallback((sessionId: string) => {
+    void (async () => {
+      try {
+        const session = await chatService.getSession(sessionId);
+        if (session && getOverlayCtxBridge().resumeSession?.(session)) close();
+      } catch { /* a deleted session: the link does nothing */ }
+    })();
+  }, [close]);
 
   // anything not explicitly Swarm's waits on the person (the client's own default)
   const mine = items.filter((i) => i.handler !== 'agent');
   const swarm = items.filter((i) => i.handler === 'agent');
+  // what Swarm has not started on yet: only those are handed over by hand
+  const waiting = swarm.filter((i) => !i.auto);
   const handAll = () => onSend(t('needYou.handAllPrompt', {
-    count: swarm.length,
-    items: swarm.map((it, i) => `${i + 1}. ${needsYouPrompt(it)}`).join('\n\n'),
+    count: waiting.length,
+    items: waiting.map((it, i) => `${i + 1}. ${needsYouPrompt(it)}`).join('\n\n'),
   }));
 
   return (
@@ -155,7 +171,7 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
             <>
               <ZoneLabel count={mine.length}>{t('needYou.mine')}</ZoneLabel>
               <div className="flex flex-col gap-2.5">
-                {mine.map((it) => <PersonCard key={it.id} it={it} onFill={onFill} onSend={onSend} onOpened={close} />)}
+                {mine.map((it) => <PersonCard key={it.id} it={it} onFill={onFill} onSend={onSend} onOpened={close} onOpenSession={onOpenSession} />)}
               </div>
             </>
           )}
@@ -164,12 +180,12 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
 
       {swarm.length > 0 && (
         <section data-testid="needs-you-swarm">
-          <ZoneLabel count={swarm.length} right={(
+          <ZoneLabel count={swarm.length} right={waiting.length > 0 ? (
             <button type="button" className="btn-sm btn-secondary" style={{ color: 'var(--color-zone-cognitive)' }}
               onClick={handAll} data-testid="needs-you-hand-all">{t('needYou.handAll')}</button>
-          )}>{t('needYou.swarm')}</ZoneLabel>
+          ) : undefined}>{t('needYou.swarm')}</ZoneLabel>
           <div className="flex flex-col divide-y divide-[var(--color-border)]">
-            {swarm.map((it) => <SwarmRow key={it.id} it={it} onSend={onSend} />)}
+            {swarm.map((it) => <SwarmRow key={it.id} it={it} onSend={onSend} onOpenSession={onOpenSession} />)}
           </div>
         </section>
       )}
@@ -189,8 +205,9 @@ function Meta({ it }: { it: AttentionEntry }) {
   );
 }
 
-function PersonCard({ it, onFill, onSend, onOpened }: {
+function PersonCard({ it, onFill, onSend, onOpened, onOpenSession }: {
   it: AttentionEntry; onFill: (p: string) => void; onSend: (p: string) => void; onOpened: () => void;
+  onOpenSession: (sessionId: string) => void;
 }) {
   const { t } = useTranslation();
   const opener = itemOpener(it);
@@ -225,14 +242,22 @@ function PersonCard({ it, onFill, onSend, onOpened }: {
               <button type="button" className="btn-sm btn-ghost" data-testid="needs-you-fill" onClick={() => onFill(prompt)}>{t('needYou.fillHint')}</button>
             </>
           )}
+          {/* Swarm already tried it: what it did is in its session */}
+          {it.auto?.sessionId && (
+            <button type="button" className="btn-sm btn-ghost" data-testid="needs-you-auto-session"
+              onClick={() => onOpenSession(it.auto!.sessionId!)}>{t('needYou.auto.session')}</button>
+          )}
         </div>
       </div>
     </article>
   );
 }
 
-function SwarmRow({ it, onSend }: { it: AttentionEntry; onSend: (p: string) => void }) {
+function SwarmRow({ it, onSend, onOpenSession }: {
+  it: AttentionEntry; onSend: (p: string) => void; onOpenSession: (sessionId: string) => void;
+}) {
   const { t } = useTranslation();
+  const auto = it.auto && (it.auto.state === 'running' || it.auto.state === 'done') ? it.auto : null;
   const thing = thingOf(it);
   // the other of title and summary, then the detail when it says something new
   const second = thing === it.title ? (it.summary !== it.title ? it.summary : '') : it.title;
@@ -249,9 +274,28 @@ function SwarmRow({ it, onSend }: { it: AttentionEntry; onSend: (p: string) => v
         <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3"><Meta it={it} />
           {detail && <span className={`min-w-0 truncate text-small ${MUTED}`}>{detail}</span>}</div>
       </div>
-      <button type="button" className="btn-sm btn-secondary" style={{ color: 'var(--color-zone-cognitive)' }}
-        aria-label={t('needYou.sendNowLabel', { title: thing })}
-        onClick={() => onSend(needsYouPrompt(it))} data-testid="needs-you-hand">{t('needYou.hand')}</button>
+      {auto ? (
+        <span className="flex items-center gap-2.5" data-testid="needs-you-auto" data-state={auto.state}>
+          <span className="inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-meta font-semibold"
+            style={auto.state === 'running'
+              ? { color: 'var(--color-zone-cognitive)', background: 'color-mix(in srgb, var(--color-zone-cognitive) 13%, transparent)' }
+              : { color: 'var(--color-status-success)', background: 'color-mix(in srgb, var(--color-status-success) 12%, transparent)' }}>
+            {auto.state === 'running' && (
+              <span aria-hidden className="so-live mr-1.5 inline-block h-1.5 w-1.5 rounded-full" style={{ background: 'var(--color-zone-cognitive)' }} />
+            )}
+            {auto.state === 'running' ? t('needYou.auto.running') : `✓ ${t('needYou.auto.done')}`}
+            {agoText(t, auto.at) && <span className="font-normal"> · {agoText(t, auto.at)}</span>}
+          </span>
+          {auto.sessionId && (
+            <button type="button" className="btn-sm btn-ghost" data-testid="needs-you-auto-session"
+              onClick={() => onOpenSession(auto.sessionId!)}>{t('needYou.auto.session')}</button>
+          )}
+        </span>
+      ) : (
+        <button type="button" className="btn-sm btn-secondary" style={{ color: 'var(--color-zone-cognitive)' }}
+          aria-label={t('needYou.sendNowLabel', { title: thing })}
+          onClick={() => onSend(needsYouPrompt(it))} data-testid="needs-you-hand">{t('needYou.hand')}</button>
+      )}
     </div>
   );
 }

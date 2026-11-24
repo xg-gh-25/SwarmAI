@@ -37,6 +37,8 @@ vi.mock('../../services/attention', async (orig) => ({
 }));
 
 import { NeedYouContent } from './NeedYouOverlay';
+import { setOverlayCtxBridge } from './overlayRegistry';
+import { chatService } from '../../services/chat';
 import { prefetchNav } from './overlayQueries';
 
 const ITEM = {
@@ -155,6 +157,48 @@ describe('NeedYouOverlay — for you, and what Swarm handles itself', () => {
     expect(screen.queryByTestId('needs-you-card')).toBeNull();
     expect(screen.queryByTestId('need-you-tab-count')).toBeNull();
     expect(screen.getByTestId('needs-you-swarm-row')).toHaveTextContent('Evening scan');
+  });
+
+  it('a row Swarm started on shows its state and session instead of Hand to Swarm; "all" hands only the rest', async () => {
+    const getSession = vi.spyOn(chatService, 'getSession').mockResolvedValue({ id: 'sess-1' } as never);
+    const resumeSession = vi.fn(() => true);
+    setOverlayCtxBridge({ resumeSession });
+    const running = { ...AGENT, auto: { state: 'running', at: new Date(Date.now() - 5 * 60_000).toISOString(), note: '', sessionId: 'sess-1' } };
+    const done = { ...AGENT2, auto: { state: 'done', at: new Date().toISOString(), note: 'learned 2', sessionId: null } };
+    const fresh = { ...AGENT, id: 'g3', summary: 'Night scan', dispatch: { message: 'fix the night job', context: { kind: 'job' } }, auto: null };
+    fetchAttention.mockResolvedValue({ items: [running, done, fresh], counts: { blocking: 2, review: 1, person: 0, agent: 3 } });
+    const onDispatch = vi.fn((_p: string, _o: { autoSend: boolean }) => true);
+    const close = vi.fn();
+    render(<NeedYouContent onDispatch={onDispatch} close={close} />, { wrapper: wrap(freshQc()) });
+    const states = await screen.findAllByTestId('needs-you-auto');
+    expect(states.map((s) => s.getAttribute('data-state'))).toEqual(['running', 'done']);
+    expect(states[0]).toHaveTextContent(en.needYou.auto.running);
+    expect(states[0]).toHaveTextContent('5');
+    expect(states[1]).toHaveTextContent(en.needYou.auto.done);
+    expect(screen.getAllByTestId('needs-you-hand')).toHaveLength(1);  // only the row with no run
+    fireEvent.click(screen.getByTestId('needs-you-hand-all'));
+    const [msg] = onDispatch.mock.calls[onDispatch.mock.calls.length - 1];
+    expect(msg).toContain('fix the night job');
+    expect(msg).not.toMatch(/fix the job/);
+    expect(msg).not.toContain('learn the digest');
+    // its session opens in a chat tab, then the overlay closes
+    fireEvent.click(screen.getByTestId('needs-you-auto-session'));
+    await waitFor(() => expect(resumeSession).toHaveBeenCalledWith({ id: 'sess-1' }));
+    expect(getSession).toHaveBeenCalledWith('sess-1');
+    expect(close).toHaveBeenCalled();
+    setOverlayCtxBridge({});
+    getSession.mockRestore();
+  });
+
+  it('a run that did not work is the person’s card, with what Swarm tried and its session', async () => {
+    const failed = { ...AGENT, handler: 'person', detail: 'Swarm tried this itself and it did not work: the token expired',
+      auto: { state: 'failed', at: new Date().toISOString(), note: 'the token expired', sessionId: 'sess-2' } };
+    fetchAttention.mockResolvedValue({ items: [failed], counts: { blocking: 1, review: 0, person: 1, agent: 0 } });
+    render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap(freshQc()) });
+    const card = await screen.findByTestId('needs-you-card');
+    expect(card).toHaveTextContent('the token expired');
+    expect(screen.getByTestId('needs-you-auto-session')).toHaveTextContent(en.needYou.auto.session);
+    expect(screen.queryByTestId('needs-you-swarm')).toBeNull();
   });
 
   it('a summary that only repeats the detail gives way to the title', async () => {

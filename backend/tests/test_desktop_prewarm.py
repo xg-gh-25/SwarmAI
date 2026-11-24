@@ -181,6 +181,27 @@ def test_try_adopt_desktop_pool_matches_bucket(flag_on):
     assert router._units["real-1"]._adopted_prewarm_fresh is True
 
 
+def test_an_unattended_run_never_adopts_a_pooled_process(flag_on):
+    """An automatic Needs You run needs its own scoped CLI process (core.attention_auto):
+    a matching pooled baseline one is left in the pool."""
+    import asyncio
+    router = _router()
+    unit = _idle_prewarm_unit()
+    prewarm_id = unit.session_id
+    router._units[prewarm_id] = unit
+    key = ("desktop", "agent-default", "claude-opus-4-8")
+    router._desktop_prewarm_pool[key] = prewarm_id
+    router._desktop_prewarm_meta[prewarm_id] = {
+        "ctx_hash": router._desktop_ctx_hash(),
+        "spawned_monotonic": router._now_monotonic(),
+    }
+    ok = asyncio.run(router._try_adopt_desktop_pool(
+        "auto-1", "agent-default", "claude-opus-4-8", unattended=True))
+    assert ok is False
+    assert router._desktop_prewarm_pool.get(key) == prewarm_id
+    assert "auto-1" not in router._units
+
+
 def test_try_adopt_desktop_pool_rejects_wrong_model(flag_on):
     """Bucket mismatch (wrong model) → no adopt (falls through to cold). A
     wrong-model adopt = wrong persona/tools (Gate-1 M2)."""

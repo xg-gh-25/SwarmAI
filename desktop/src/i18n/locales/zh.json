@@ -2433,6 +2433,11 @@
     "system": "系统",
     "hand": "交给 Swarm",
     "handAll": "全部交给 Swarm",
+    "auto": {
+      "running": "Swarm 正在处理",
+      "done": "已处理",
+      "session": "打开它的会话"
+    },
     "handle": "在对话里处理",
     "handAllPrompt_one": "你自己处理这件事，做完用两句话告诉我做了什么：\n\n{{items}}",
     "handAllPrompt_other": "你自己依次处理这 {{count}} 件事，做完每件用一两句话告诉我做了什么：\n\n{{items}}",

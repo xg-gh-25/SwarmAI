@@ -34,6 +34,32 @@ export interface AttentionEntry {
   handler: 'person' | 'agent';
   /** When it started waiting (ISO), when the source knows it. */
   since: string | null;
+  /** Swarm's own automatic run on the item (backend core/attention_auto), else null. A
+   *  run that did not work comes back as the person's item, with its note in `detail`. */
+  auto: AttentionAuto | null;
+}
+
+export interface AttentionAuto {
+  state: 'running' | 'done' | 'failed' | 'interrupted';
+  /** When the state last changed (ISO). */
+  at: string | null;
+  note: string;
+  /** The session the run used, when it had one (a digest has none). */
+  sessionId: string | null;
+}
+
+const AUTO_STATES = new Set<AttentionAuto['state']>(['running', 'done', 'failed', 'interrupted']);
+
+function normalizeAuto(raw: unknown): AttentionAuto | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const a = raw as { state?: unknown; at?: unknown; note?: unknown; session_id?: unknown };
+  if (typeof a.state !== 'string' || !AUTO_STATES.has(a.state as AttentionAuto['state'])) return null;
+  return {
+    state: a.state as AttentionAuto['state'],
+    at: typeof a.at === 'string' && a.at ? a.at : null,
+    note: typeof a.note === 'string' ? a.note : '',
+    sessionId: typeof a.session_id === 'string' && a.session_id ? a.session_id : null,
+  };
 }
 
 export interface AttentionResult {
@@ -55,6 +81,7 @@ interface RawAttention {
     dispatch?: { message: string; context?: Record<string, unknown> };
     handler?: string;
     since?: string | null;
+    auto?: unknown;
   }>;
   counts?: { blocking?: number; review?: number; person?: number; agent?: number };
 }
@@ -72,6 +99,7 @@ function normalize(raw: RawAttention): AttentionResult {
     // anything but an explicit "agent" waits on the person (an older backend sends none)
     handler: it.handler === 'agent' ? 'agent' : 'person',
     since: typeof it.since === 'string' && it.since ? it.since : null,
+    auto: normalizeAuto(it.auto),
   }));
   return {
     items,

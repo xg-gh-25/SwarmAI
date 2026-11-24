@@ -380,6 +380,20 @@ async def build_hooks(
             "pre_tool_logger",
         )
 
+    # ── PreToolUse: unattended Bash allowlist (only sessions nobody watches) ──
+    # An automatic Needs You run (core.attention_auto) marks its agent config
+    # ``unattended``: Bash may then run only a short list of backend commands, since
+    # Bash is the one channel left that could send data off the machine; the changes
+    # it may make are bound to the item's own scope (unattended_scope). First in the
+    # Bash chain so no later hook can rewrite a command it let through. Fails closed;
+    # no attended session registers it, so no person is ever blocked by it.
+    if agent_config.get("unattended"):
+        from core.unattended_gate import create_unattended_bash_gate
+        registry.register(
+            "PreToolUse", create_unattended_bash_gate(agent_config.get("unattended_scope")),
+            "unattended_bash_gate", matcher="Bash",
+        )
+
     # ── PreToolUse: background-command guard (Bash-scoped) ──
     # Default-deny backgrounding (run_in_background / trailing &/nohup/setsid)
     # except a narrow long-lived-service allowlist. Closes the background

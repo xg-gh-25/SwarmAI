@@ -1654,6 +1654,15 @@ async def lifespan(app: FastAPI):
         from core.hive_idle import run_loop as _hive_idle_loop
         _hive_idle_task = asyncio.create_task(_hive_idle_loop(), name="hive-idle-stop")
 
+    # ── Needs You items Swarm handles itself, started without a click (owner machine
+    # only; run_pass also checks app_role.is_worker) — core/attention_auto ──
+    _attention_auto_task: asyncio.Task | None = None
+    if backend_mode != "hive":
+        from core.attention_auto import run_loop as _attention_auto_loop
+        from jobs.paths import SWARMWS as _attention_ws
+        _attention_auto_task = asyncio.create_task(
+            _attention_auto_loop(_attention_ws), name="attention-auto")
+
     # ── Elastic Workers on standby (host only) ──
     # Turned on, kept at this version and repaired by the Host itself unless the person
     # turned it off in Swarm Out › settings (hive/agentcore_provisioner.reconcile).
@@ -1847,6 +1856,14 @@ async def lifespan(app: FastAPI):
             _swarm_out_refresh_task.cancel()
         if _hive_idle_task and not _hive_idle_task.done():
             _hive_idle_task.cancel()
+        if _attention_auto_task and not _attention_auto_task.done():
+            _attention_auto_task.cancel()
+        try:
+            from core import attention_auto as _attention_auto
+            if _attention_auto._current is not None and not _attention_auto._current.done():
+                _attention_auto._current.cancel()  # its record becomes 'interrupted'
+        except Exception:
+            logger.debug("attention_auto shutdown skipped", exc_info=True)
         if _elastic_standby_task and not _elastic_standby_task.done():
             _elastic_standby_task.cancel()
         if _content_origin_on:

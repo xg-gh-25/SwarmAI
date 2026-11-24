@@ -715,6 +715,12 @@ def _aws_account_cli_settings(config: Any) -> dict:
         logger.warning("aws_account cli_settings failed; the CLI uses its own chain", exc_info=True)
         return {}
 
+def offers_ui_tool(agent_config: dict, channel_context: Optional[dict]) -> bool:
+    """Whether a session gets the in-process UI tool (``ui_action``): the owner's
+    desktop sessions only, never a channel session or an unattended automatic run."""
+    return not channel_context and not (agent_config or {}).get("unattended")
+
+
 class PromptBuilder:
     """System prompt and SDK option construction.
 
@@ -898,6 +904,7 @@ class PromptBuilder:
         - ``enable_bash_tool=False``  → deny ``Bash``
         - ``enable_file_tools=False`` → deny ``Read/Write/Edit/Glob/Grep``
         - ``enable_web_tools=False``  → deny ``WebFetch/WebSearch``
+        - ``extra_disallowed_tools``  → denied as given (unattended runs)
 
         Default (each flag ``True`` or absent) contributes nothing → ``[]``.
         Note: for the DEFAULT/system agent every flag is ``True``
@@ -913,6 +920,8 @@ class PromptBuilder:
             disallowed.extend(self._FILE_TOOLS)
         if not agent_config.get("enable_web_tools", True):
             disallowed.extend(self._WEB_TOOLS)
+        # A caller's own extra deny list (an unattended automatic run, core.attention_auto).
+        disallowed.extend(str(t) for t in agent_config.get("extra_disallowed_tools") or ())
         return disallowed
 
     # ------------------------------------------------------------------
@@ -2556,8 +2565,9 @@ class PromptBuilder:
         # 4b. UI-action (ACT) channel — the in-process tool that lets the agent
         # navigate its OWN UI (proprioception Run 2). Always-on for the owner's
         # desktop session; the fail-closed allowlist in ui_actions.py is the guard.
-        # Skipped for channel sessions (no desktop UI to drive).
-        if not channel_context:
+        # Skipped for channel sessions (no desktop UI to drive) and for unattended
+        # automatic runs (core.attention_auto: nobody is at the screen it would move).
+        if offers_ui_tool(agent_config, channel_context):
             try:
                 from .ui_actions import get_ui_mcp_server, UI_MCP_SERVER_NAME
 

@@ -34,4 +34,20 @@ describe('attentionService.fetchAttention', () => {
     expect(r.counts.person).toBe(2);
     expect(r.counts.agent).toBe(1);
   });
+
+  it("an automatic run's record reads as auto; a missing or unknown one is null", async () => {
+    apiGet.mockResolvedValueOnce({ data: { items: [
+      { ...raw('agent'), id: 'a', auto: { state: 'running', at: '2026-11-24T02:00:00+00:00', note: '', session_id: 's1' } },
+      { ...raw('agent'), id: 'b', auto: { state: 'done', at: null, note: 'ok', session_id: null } },
+      { ...raw('agent'), id: 'c', auto: { state: 'sleeping' } },
+      { ...raw('agent'), id: 'd' },
+    ] } });
+    const r = await attentionService.fetchAttention();
+    expect(r.items.map((i) => i.auto)).toEqual([
+      { state: 'running', at: '2026-11-24T02:00:00+00:00', note: '', sessionId: 's1' },
+      { state: 'done', at: null, note: 'ok', sessionId: null },
+      null,
+      null,
+    ]);
+  });
 });
