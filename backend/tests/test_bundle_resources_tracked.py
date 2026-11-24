@@ -5,6 +5,10 @@ A glob such as "../resources/*" also picks up files a developer has locally but 
 from a CI build. tauri.conf.json therefore lists every tracked file by name. The release
 overlay tauri.bundle.conf.json is merged into it key by key (`tauri build --config`, JSON
 merge patch), so a glob left in either file would still be bundled.
+
+The backend package follows the same rule: build-backend.sh stages the backend into its build
+directory with backend/scripts/shipped_skills.py (git-tracked plus untracked-but-not-ignored),
+so the spec's module glob and its context/ and templates/ entries only see shipped files.
 """
 import json
 import subprocess
@@ -125,3 +129,14 @@ def test_install_manifest_lists_only_mapped_resources(tmp_path):
     (stage / "python-backend" / "python-backend").write_text("exe")
     paths = {f["path"] for f in mod.build(stage, res, "1.0", "aarch64-apple-darwin")["files"]}
     assert {p for p in paths if not p.startswith("python-backend/")} == {"a.json", "daemon/b.sh"}
+
+
+def test_backend_build_stages_only_shipped_files():
+    """The PyInstaller spec packages whole directories of the build directory (the local
+    module glob, context/, templates/): that directory is a copy, not a git work tree, so the
+    copy itself must apply the shipped-files rule, before the spec is written."""
+    build = (ROOT / "desktop" / "scripts" / "build-backend.sh").read_text()
+    assert 'cp -r "$BACKEND_DIR"' not in build, "the whole backend dir is copied, ignored files too"
+    copy_at = build.find('scripts/shipped_skills.py" "$BACKEND_DIR" --copy-to "$BUILD_DIR"')
+    assert copy_at >= 0, "build-backend.sh must stage the backend with shipped_skills.py --copy-to"
+    assert copy_at < build.find("cat > backend.spec"), "the copy must come before the spec runs"

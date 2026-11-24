@@ -69,8 +69,8 @@ fn resolve_path_from_login_shell() -> Option<String> {
 
     let timeout = Duration::from_secs(3);
 
-    // Detect user's default shell; fall back to zsh (macOS default since Catalina).
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    // The user's shell ($SHELL, else zsh on macOS / bash on Linux, then sh).
+    let shell = terminal::user_shell();
 
     // `-l` = login (sources profile files where PATH is set).
     // `-c` = execute command.  No `-i` to avoid interactive overhead.
@@ -265,6 +265,10 @@ struct BackendState {
     port: u16,
     running: bool,
     pid: Option<u32>,
+    /// The backend child this app spawned (Windows/Linux subprocess mode), kept so
+    /// shutdown can see whether it has exited (`try_wait`) and reap it; `None` in
+    /// daemon mode and before the child is healthy.
+    child: Option<std::process::Child>,
     /// Set to `true` when shutdown is intentional (stop_backend, window close, app exit).
     intentional_shutdown: bool,
     /// macOS: true (launchd daemon, survives app close).
@@ -278,6 +282,7 @@ impl Default for BackendState {
             port: DAEMON_PORT,
             running: false,
             pid: None,
+            child: None,
             intentional_shutdown: false,
             // macOS uses launchd daemon; Windows uses subprocess
             #[cfg(target_os = "macos")]
@@ -444,11 +449,115 @@ pub struct BackendStatus {
 // The health watchdog (spawn_daemon_health_watchdog) monitors backend liveness
 // and emits frontend events on death/recovery.
 
+/// Upper bound on the wait for an owned backend child to exit after the shutdown
+/// request returns, before its process tree is killed.
+const CHILD_EXIT_CEILING: std::time::Duration = std::time::Duration::from_secs(3);
+/// How often that wait looks at the child.
+const CHILD_EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Call `exited` every `poll` until it says true or `ceiling` has passed; true when
+/// it exited in time. The first look happens at once, so an already-exited child
+/// costs no wait.
+fn wait_for_exit(
+    mut exited: impl FnMut() -> bool,
+    ceiling: std::time::Duration,
+    poll: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + ceiling;
+    loop {
+        if exited() {
+            return true;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(poll.min(deadline - now));
+    }
+}
+
+/// Whether `child` has exited. An error from `try_wait` counts as still running:
+/// skipping the kill on a status we could not read would leak the backend.
+fn child_has_exited(child: &mut std::process::Child) -> bool {
+    matches!(child.try_wait(), Ok(Some(_)))
+}
+
+/// Record `pid` as the owned backend just spawned. The `Child` of an earlier
+/// backend (one the watchdog found dead and is replacing) is taken out and reaped,
+/// so `child` never names a different process than `pid`: until the new child is
+/// healthy and stored, shutdown has only `pid` and kills that.
+fn adopt_spawned_pid(backend: &mut BackendState, pid: u32) {
+    backend.pid = Some(pid);
+    if let Some(old) = backend.child.take() {
+        reap_in_background(old);
+    }
+}
+
+/// Reap a child that has exited or was just killed, on a blocking thread (bounded
+/// by [`CHILD_EXIT_CEILING`]), so it does not linger as a zombie on Unix.
+fn reap_in_background(mut child: std::process::Child) {
+    tauri::async_runtime::spawn_blocking(move || {
+        wait_for_exit(|| child_has_exited(&mut child), CHILD_EXIT_CEILING, CHILD_EXIT_POLL);
+    });
+}
+
+/// Stop a backend this app spawned (Windows/Linux): ask it to shut down, wait for
+/// the child to exit (up to [`CHILD_EXIT_CEILING`]) and kill its process tree only
+/// if it is still running. The shutdown request itself blocks until the backend has
+/// disconnected its sessions (bounded by `SHUTDOWN_GRACE_SECONDS`); the backend's
+/// /shutdown does not exit the process today, so in normal use the wait runs to the
+/// ceiling and the kill ends it, and the early return pays off for a backend that
+/// exits by itself. `child` is used only when it is the process `pid` names
+/// (a mismatched handle is treated as absent); without one there is nothing to
+/// poll: wait the ceiling, then kill `pid` (no wait when there is no `pid`).
+fn stop_owned_backend(
+    port: u16,
+    pid: Option<u32>,
+    child: Option<std::process::Child>,
+    context: &str,
+) {
+    send_shutdown_request(port);
+    let child = match child {
+        Some(c) if pid.map_or(true, |p| p == c.id()) => Some(c),
+        Some(stray) => {
+            reap_in_background(stray);
+            None
+        }
+        None => None,
+    };
+    match child {
+        Some(mut child) => {
+            let pid = child.id();
+            if wait_for_exit(|| child_has_exited(&mut child), CHILD_EXIT_CEILING, CHILD_EXIT_POLL) {
+                println!("[{}] Backend (PID {}) exited on its own", context, pid);
+            } else {
+                println!("[{}] Backend (PID {}) still running after {:?} — killing", context, pid, CHILD_EXIT_CEILING);
+                kill_process_tree(pid);
+                // Reap it (bounded: a kill that did not land must not hang app exit).
+                wait_for_exit(|| child_has_exited(&mut child), CHILD_EXIT_CEILING, CHILD_EXIT_POLL);
+            }
+            // claude.exe children outlive their parent on Windows and keep its PID
+            // as ParentProcessId; the unreaped handle above kept that PID unreused.
+            #[cfg(target_os = "windows")]
+            kill_claude_child_processes(pid);
+        }
+        None => {
+            if let Some(pid) = pid {
+                std::thread::sleep(CHILD_EXIT_CEILING);
+                kill_process_tree(pid);
+                #[cfg(target_os = "windows")]
+                kill_claude_child_processes(pid);
+            }
+        }
+    }
+}
+
 /// Gracefully shut down the backend and then force-kill as safety net.
 ///
 /// Platform behavior:
 /// - macOS (daemon mode): do NOT kill — daemon survives app close.
-/// - Windows (subprocess mode): send /shutdown → wait → force-kill process tree.
+/// - Windows/Linux (subprocess mode): [`stop_owned_backend`] — /shutdown, wait
+///   for the child to exit, force-kill the process tree only if it has not.
 ///
 /// Double-fire safe: if `backend.running` is already false (set by a
 /// previous handler in the same close sequence), skips the kill.
@@ -457,6 +566,7 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
         let mut backend = state.lock().await;
         let port = backend.port;
         let pid = backend.pid;
+        let child = backend.child.take();
         let is_daemon = backend.is_daemon_mode;
         let was_running = backend.running;
 
@@ -479,19 +589,7 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
         }
 
         println!("[{}] Subprocess mode — shutting down backend on port {}", context, port);
-
-        // Step 1: Graceful HTTP shutdown (gives backend time to disconnect sessions)
-        send_shutdown_request(port);
-
-        // Step 2: Wait briefly for graceful exit
-        std::thread::sleep(std::time::Duration::from_secs(3));
-
-        // Step 3: Force kill process tree as safety net
-        if let Some(pid) = pid {
-            kill_process_tree(pid);
-            #[cfg(target_os = "windows")]
-            kill_claude_child_processes(pid);
-        }
+        stop_owned_backend(port, pid, child, context);
     });
 }
 
@@ -2083,7 +2181,7 @@ async fn spawn_subprocess(app: &tauri::AppHandle, state: &SharedBackendState) ->
     // Update state
     {
         let mut backend = state.lock().await;
-        backend.pid = Some(child_pid);
+        adopt_spawned_pid(&mut backend, child_pid);
         backend.is_daemon_mode = false;
         backend.intentional_shutdown = false;
     }
@@ -2104,10 +2202,12 @@ async fn spawn_subprocess(app: &tauri::AppHandle, state: &SharedBackendState) ->
         if backend.intentional_shutdown {
             drop(backend);
             kill_process_tree(child_pid);
+            reap_in_background(child);
             return Err("Backend came up but app is shutting down — killed".to_string());
         }
         backend.port = DAEMON_PORT;
         backend.running = true;
+        backend.child = Some(child);
         return Ok(child_pid);
     }
 
@@ -2118,6 +2218,7 @@ async fn spawn_subprocess(app: &tauri::AppHandle, state: &SharedBackendState) ->
     };
     if exited.is_none() {
         kill_process_tree(child_pid);
+        reap_in_background(child);
     }
     {
         let mut backend = state.lock().await;
@@ -2655,18 +2756,19 @@ async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(),
     let port = backend.port;
     let pid = backend.pid;
 
+    let child = backend.child.take();
+
     backend.intentional_shutdown = true;
     backend.running = false;
     backend.pid = None;
     drop(backend);
 
     if !is_daemon {
-        // Subprocess mode: graceful shutdown then kill
-        send_shutdown_request(port);
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        if let Some(pid) = pid {
-            kill_process_tree(pid);
-        }
+        // Subprocess mode: graceful shutdown, then kill only if still running.
+        // Blocking work (curl, the exit poll), so off the async runtime's workers.
+        tauri::async_runtime::spawn_blocking(move || stop_owned_backend(port, pid, child, "stop_backend"))
+            .await
+            .map_err(|e| format!("stop_backend: {}", e))?;
     }
     Ok(())
 }
@@ -2791,7 +2893,7 @@ async fn check_nodejs_version() -> Result<String, String> {
     // On Unix systems, try using user's shell as fallback (for nvm, volta, etc.)
     #[cfg(not(target_os = "windows"))]
     {
-        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let shell = terminal::user_shell();
 
         let output = std::process::Command::new(&shell)
             .arg("-l")  // Login shell to source profile
@@ -2869,7 +2971,7 @@ async fn check_python_version() -> Result<String, String> {
     #[cfg(not(target_os = "windows"))]
     {
         let home = env::var("HOME").unwrap_or_default();
-        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let shell = terminal::user_shell();
 
         let output = std::process::Command::new(&shell)
             .arg("-l")  // Login shell to source profile
@@ -3094,6 +3196,112 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+// Owned-backend shutdown (Windows/Linux): wait for the child's own exit, bounded by
+// CHILD_EXIT_CEILING, and kill only a child that is still running.
+#[cfg(test)]
+mod shutdown_tests {
+    use super::{wait_for_exit, CHILD_EXIT_CEILING};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn an_exited_child_costs_no_wait() {
+        let t = Instant::now();
+        assert!(wait_for_exit(|| true, Duration::from_secs(3), Duration::from_millis(50)));
+        assert!(t.elapsed() < Duration::from_millis(40), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn returns_as_soon_as_the_child_exits() {
+        let mut looks = 0;
+        let t = Instant::now();
+        let exited = wait_for_exit(
+            || { looks += 1; looks >= 3 },
+            Duration::from_secs(3),
+            Duration::from_millis(20),
+        );
+        assert!(exited);
+        assert_eq!(looks, 3);
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn gives_up_at_the_ceiling() {
+        let t = Instant::now();
+        assert!(!wait_for_exit(|| false, Duration::from_millis(150), Duration::from_millis(40)));
+        let took = t.elapsed();
+        assert!(took >= Duration::from_millis(150) && took < Duration::from_millis(600), "{:?}", took);
+    }
+
+    /// A closed local port: the shutdown request fails at once, as it does
+    /// when the backend has already gone.
+    #[cfg(target_os = "linux")]
+    fn closed_port() -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_quick_exit_is_not_held_for_the_full_ceiling() {
+        let child = std::process::Command::new("sh").args(["-c", "sleep 0.2"]).spawn().unwrap();
+        let t = Instant::now();
+        super::stop_owned_backend(closed_port(), None, Some(child), "test");
+        let took = t.elapsed();
+        assert!(took < Duration::from_millis(2000), "waited {:?} for a child that exits in 0.2s", took);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_still_running_at_the_ceiling_is_killed() {
+        let child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id();
+        let t = Instant::now();
+        super::stop_owned_backend(closed_port(), None, Some(child), "test");
+        let took = t.elapsed();
+        assert!(took >= CHILD_EXIT_CEILING && took < CHILD_EXIT_CEILING + Duration::from_secs(3), "{:?}", took);
+        // Killed and reaped: the pid no longer names a process (no zombie either).
+        assert!(!std::path::Path::new(&format!("/proc/{}", pid)).exists(), "PID {} still present", pid);
+    }
+
+    /// A watchdog respawn: the earlier backend's `Child` (dead) is still stored when
+    /// the new pid is recorded. It must leave, or shutdown would poll the dead one
+    /// and never kill the new backend.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_spawn_drops_the_previous_child_handle() {
+        let mut old = std::process::Command::new("true").spawn().unwrap();
+        assert!(wait_for_exit(|| super::child_has_exited(&mut old), Duration::from_secs(3), Duration::from_millis(10)));
+        let mut backend = super::BackendState::default();
+        backend.pid = Some(old.id());
+        backend.child = Some(old);
+        super::adopt_spawned_pid(&mut backend, 4_000_000);
+        assert_eq!(backend.pid, Some(4_000_000));
+        assert!(backend.child.is_none());
+    }
+
+    /// A stale handle that is not the process `pid` names is not polled: the
+    /// process `pid` names is still killed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_mismatched_child_handle_does_not_spare_the_live_pid() {
+        let mut stale = std::process::Command::new("true").spawn().unwrap();
+        assert!(wait_for_exit(|| super::child_has_exited(&mut stale), Duration::from_secs(3), Duration::from_millis(10)));
+        let mut live = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        super::stop_owned_backend(closed_port(), Some(live.id()), Some(stale), "test");
+        assert!(wait_for_exit(|| super::child_has_exited(&mut live), Duration::from_secs(3), Duration::from_millis(10)),
+            "the backend pid names was left running");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_running_child_has_not_exited_and_a_finished_one_has() {
+        let mut running = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        assert!(!super::child_has_exited(&mut running));
+        running.kill().unwrap();
+        assert!(wait_for_exit(|| super::child_has_exited(&mut running), Duration::from_secs(3), Duration::from_millis(10)));
+    }
 }
 
 // ── Tests: adaptive cold-start probe decision logic ─────────────────────────

@@ -78,8 +78,18 @@ if [ -f "$SCRIPT_DIR/sync-guardian-assets.sh" ]; then
     bash "$SCRIPT_DIR/sync-guardian-assets.sh"
 fi
 
-# Copy backend code to build directory
-cp -r "$BACKEND_DIR"/* "$BUILD_DIR/"
+# Copy the backend files the repo ships into the build directory: git-tracked plus
+# untracked-but-not-ignored, node_modules/__pycache__ skipped (backend/scripts/shipped_skills.py,
+# the rule hive/release.sh applies to the Hive package). The build directory is a plain copy,
+# not a git work tree, so whatever lands here is packaged: copying the whole directory put a
+# checkout's gitignored files (local modules, context/ and templates/ files, skills) into a
+# local build's installer while a CI build left them out.
+HOST_PYTHON=""
+for _py in python3 python; do
+    if command -v "$_py" >/dev/null 2>&1 && "$_py" -c '' >/dev/null 2>&1; then HOST_PYTHON="$_py"; break; fi
+done
+[ -n "$HOST_PYTHON" ] || { echo "Error: python3 (or python) is needed to list the backend files the repo ships"; exit 1; }
+"$HOST_PYTHON" "$BACKEND_DIR/scripts/shipped_skills.py" "$BACKEND_DIR" --copy-to "$BUILD_DIR"
 
 # Copy resource files needed by PyInstaller into the build directory
 cp "$PROJECT_ROOT/resources/mcp-catalog.json" "$BUILD_DIR/mcp-catalog.json"
@@ -257,7 +267,8 @@ for _m in SKILL_PY_DEPS:  # e.g. python-pptx's default template, markitdown's re
 # We only list botocore Python modules above (not collect_submodules) to save ~3GB build RAM,
 # but the data/ directory with service JSON is needed at runtime for any boto3.client() call.
 datas += collect_data_files('botocore')
-# Include built-in context files and skills for agent workspace initialization
+# Include built-in context files and skills for agent workspace initialization. Like every
+# directory here, context/ and templates/ hold only shipped files (the copy above).
 datas += [('context', 'context')]
 # Include the skills the repo ships: git-tracked or untracked-but-not-ignored files, so a
 # checkout's gitignored local skills stay out of the installer (scripts/shipped_skills.py).
@@ -304,8 +315,10 @@ datas += [('VERSION', '.')]
 
 # Auto-discover local modules from filesystem instead of hardcoding.
 # This eliminates the class of bugs where new .py files are added to the
-# codebase but never registered in the build script (see: sqlite_vec incident
-# 2026-04-15 where 18 modules were missing for 5 days).
+# codebase but never registered in the build script (a module added to the
+# codebase but missing from a hand-kept list stayed out of the package for days).
+# The glob runs in the build directory, which holds only the files the repo ships
+# (copied with shipped_skills.py above), so a gitignored local module is not found.
 import glob
 
 LOCAL_PACKAGES = [

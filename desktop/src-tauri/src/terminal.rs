@@ -96,8 +96,7 @@ fn terminal_home(windows: bool, var: impl Fn(&str) -> Option<String>) -> Option<
 }
 
 /// The shell a new terminal starts when the frontend names none: on macOS/Linux
-/// the user's `$SHELL` if it names an existing file, else `/bin/bash`, else
-/// `/bin/sh`; on Windows `powershell.exe`.
+/// [`user_shell`]; on Windows `powershell.exe`.
 #[tauri::command]
 pub fn default_shell() -> String {
     #[cfg(windows)]
@@ -106,23 +105,44 @@ pub fn default_shell() -> String {
     }
     #[cfg(not(windows))]
     {
-        pick_unix_shell(std::env::var("SHELL").ok(), |p| std::path::Path::new(p).is_file())
+        user_shell()
     }
 }
 
-/// `$SHELL` when it names an existing file, else the first existing of
-/// `/bin/bash`, `/bin/sh` (`/bin/sh` if neither is found). `exists` is injected
-/// for tests.
+/// Shells tried in order when `$SHELL` is unset or names no file. macOS starts
+/// with zsh (its default login shell, where a Mac user's PATH setup lives);
+/// Linux and the other Unixes start with bash, which they ship (zsh often not).
+#[cfg(target_os = "macos")]
+const UNIX_FALLBACK_SHELLS: &[&str] = &["/bin/zsh", "/bin/bash", "/bin/sh"];
+#[cfg(not(target_os = "macos"))]
+const UNIX_FALLBACK_SHELLS: &[&str] = &["/bin/bash", "/bin/sh"];
+
+/// The user's shell on macOS/Linux: `$SHELL` if it names an existing file, else
+/// the first existing [`UNIX_FALLBACK_SHELLS`] entry. The one place the desktop
+/// shell decides this: the integrated terminal and the login-shell probes in
+/// lib.rs (PATH capture, node/python version checks) all call it.
 #[cfg_attr(windows, allow(dead_code))]
-fn pick_unix_shell(shell: Option<String>, exists: impl Fn(&str) -> bool) -> String {
+pub(crate) fn user_shell() -> String {
+    pick_unix_shell(
+        std::env::var("SHELL").ok(),
+        UNIX_FALLBACK_SHELLS,
+        |p| std::path::Path::new(p).is_file(),
+    )
+}
+
+/// `$SHELL` when it names an existing file, else the first existing of
+/// `fallbacks` (`/bin/sh` if none is found). `exists` is injected for tests.
+#[cfg_attr(windows, allow(dead_code))]
+fn pick_unix_shell(shell: Option<String>, fallbacks: &[&str], exists: impl Fn(&str) -> bool) -> String {
     if let Some(s) = shell {
         if !s.trim().is_empty() && exists(&s) {
             return s;
         }
     }
-    ["/bin/bash", "/bin/sh"]
-        .into_iter()
+    fallbacks
+        .iter()
         .find(|c| exists(c))
+        .copied()
         .unwrap_or("/bin/sh")
         .to_string()
 }
@@ -417,7 +437,7 @@ pub async fn reap_all_ptys(state: &TerminalState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_unix_shell, resolve_default_cwd, terminal_home};
+    use super::{pick_unix_shell, resolve_default_cwd, terminal_home, UNIX_FALLBACK_SHELLS};
 
     fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
@@ -444,15 +464,46 @@ mod tests {
 
     #[test]
     fn shell_is_existing_dollar_shell_else_bash_else_sh() {
+        let linux: &[&str] = &["/bin/bash", "/bin/sh"];
         let all = |_: &str| true;
-        assert_eq!(pick_unix_shell(Some("/usr/bin/fish".into()), all), "/usr/bin/fish");
+        assert_eq!(pick_unix_shell(Some("/usr/bin/fish".into()), linux, all), "/usr/bin/fish");
         let only_bash = |p: &str| p == "/bin/bash";
-        assert_eq!(pick_unix_shell(Some("/opt/gone/zsh".into()), only_bash), "/bin/bash");
-        assert_eq!(pick_unix_shell(None, only_bash), "/bin/bash");
-        assert_eq!(pick_unix_shell(Some("  ".into()), all), "/bin/bash");
+        assert_eq!(pick_unix_shell(Some("/opt/gone/zsh".into()), linux, only_bash), "/bin/bash");
+        assert_eq!(pick_unix_shell(None, linux, only_bash), "/bin/bash");
+        assert_eq!(pick_unix_shell(Some("  ".into()), linux, all), "/bin/bash");
         let only_sh = |p: &str| p == "/bin/sh";
-        assert_eq!(pick_unix_shell(Some("/bin/zsh".into()), only_sh), "/bin/sh");
-        assert_eq!(pick_unix_shell(None, |_: &str| false), "/bin/sh");
+        assert_eq!(pick_unix_shell(Some("/bin/zsh".into()), linux, only_sh), "/bin/sh");
+        assert_eq!(pick_unix_shell(None, linux, |_: &str| false), "/bin/sh");
+    }
+
+    #[test]
+    fn macos_fallback_prefers_zsh_then_bash() {
+        let mac: &[&str] = &["/bin/zsh", "/bin/bash", "/bin/sh"];
+        assert_eq!(pick_unix_shell(None, mac, |_: &str| true), "/bin/zsh");
+        assert_eq!(pick_unix_shell(None, mac, |p: &str| p != "/bin/zsh"), "/bin/bash");
+        assert_eq!(pick_unix_shell(None, &[], |_: &str| false), "/bin/sh");
+    }
+
+    /// A Linux machine without $SHELL (a systemd/desktop launch, a container) has
+    /// no /bin/zsh as a rule: the fallback starts with bash, never zsh.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_macos_fallback_starts_with_bash() {
+        assert_eq!(UNIX_FALLBACK_SHELLS, &["/bin/bash", "/bin/sh"]);
+        assert_eq!(pick_unix_shell(None, UNIX_FALLBACK_SHELLS, |_: &str| true), "/bin/bash");
+    }
+
+    /// lib.rs's login-shell probes (PATH capture, node and python version checks)
+    /// take the shell from [`super::user_shell`], not from their own `$SHELL`
+    /// read with a hard-coded zsh default (wrong on Linux, where zsh is rarely
+    /// installed and the probe then silently fails).
+    #[test]
+    fn lib_reads_the_shell_only_through_user_shell() {
+        let lib = include_str!("lib.rs");
+        let needle = ["env::var(", "\"SHELL\")"].concat();
+        assert_eq!(lib.matches(needle.as_str()).count(), 0, "lib.rs reads $SHELL itself");
+        assert!(!lib.contains(&["\"/bin/", "zsh\""].concat()), "lib.rs hard-codes a zsh path");
+        assert!(lib.matches("terminal::user_shell()").count() >= 3);
     }
 
     /// A real PTY: the child's exit reaches the pump as EOF after all its output

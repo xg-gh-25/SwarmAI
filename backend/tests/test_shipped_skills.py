@@ -5,7 +5,9 @@ docs/design/2026-10-25-skill-listing-recall-and-cleanup.md, S2).
   skill, node_modules, __pycache__ and a tracked file deleted from the working tree do not;
 - outside a git work tree every file ships (minus node_modules / __pycache__);
 - bundled_imports() reads python-deps only from shipped skills;
-- the PyInstaller spec takes its skill files from shipped_files(), not a directory walk.
+- the PyInstaller spec takes its skill files from shipped_files(), not a directory walk;
+- copy_shipped() (how build-backend.sh stages the whole backend) copies exactly the shipped
+  files, so a gitignored local module, context file or template stays out of the package.
 """
 import subprocess
 import sys
@@ -16,7 +18,7 @@ import pytest
 BACKEND = Path(__file__).resolve().parents[1]
 REPO = BACKEND.parent
 sys.path.insert(0, str(BACKEND))
-from scripts.shipped_skills import shipped_files, shipped_skill_names  # noqa: E402
+from scripts.shipped_skills import copy_shipped, shipped_files, shipped_skill_names  # noqa: E402
 from scripts.skill_python_deps import bundled_imports  # noqa: E402
 
 
@@ -94,7 +96,77 @@ def test_git_failure_raises_instead_of_walking(repo: Path, monkeypatch):
         shipped_files(repo)
 
 
+def test_git_refusing_the_checkout_raises_instead_of_walking(repo: Path, monkeypatch):
+    """git's "dubious ownership" refusal (a checkout owned by another user) is not a tarball."""
+    real = subprocess.run
+
+    def fake(cmd, *a, **kw):
+        if "rev-parse" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: detected dubious ownership "
+                                               "in repository at '/src'\n")
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr("scripts.shipped_skills.subprocess.run", fake)
+    with pytest.raises(RuntimeError, match="dubious ownership"):
+        shipped_files(repo)
+
+
+def test_missing_git_inside_a_checkout_raises(repo: Path, monkeypatch):
+    def no_git(cmd, *a, **kw):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr("scripts.shipped_skills.subprocess.run", no_git)
+    with pytest.raises(RuntimeError, match="git is not installed"):
+        shipped_files(repo)
+
+
 def test_the_build_takes_skill_files_from_shipped_files():
     spec = (REPO / "desktop" / "scripts" / "build-backend.sh").read_text()
     assert "from shipped_skills import shipped_files" in spec
     assert "walk('skills')" not in spec
+
+
+@pytest.fixture
+def backend_repo(tmp_path: Path) -> Path:
+    """A backend tree with a gitignored local module, context file and template, as a
+    developer's checkout has (the rules are in the repo's own .gitignore)."""
+    _git(tmp_path, "init", "-q")
+    be = tmp_path / "backend"
+    for rel in ("main.py", "core/__init__.py", "core/engine.py", "context/SOUL.md",
+                "templates/ddd/PRODUCT.md", "skills/s_a/SKILL.md"):
+        _write(be / rel)
+    _write(tmp_path / ".gitignore", "\n".join([
+        "backend/core/local_*.py", "backend/context/*.private.md",
+        "backend/templates/ddd-internal/", "__pycache__/", ""]))
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    for rel in ("core/local_tool.py", "context/USER.private.md",
+                "templates/ddd-internal/PRODUCT.md", "core/__pycache__/engine.cpython-312.pyc"):
+        _write(be / rel)  # gitignored
+    _write(be / "core" / "new_mod.py")  # untracked, not ignored: a local build still ships it
+    return be
+
+
+SHIPPED_BACKEND = {"main.py", "core/__init__.py", "core/engine.py", "core/new_mod.py",
+                   "context/SOUL.md", "templates/ddd/PRODUCT.md", "skills/s_a/SKILL.md"}
+
+
+def _files_under(root: Path) -> set[str]:
+    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+
+
+def test_copy_shipped_leaves_ignored_modules_context_and_templates_out(backend_repo, tmp_path):
+    dest = tmp_path / "build"
+    assert set(copy_shipped(backend_repo, dest)) == SHIPPED_BACKEND
+    assert _files_under(dest) == SHIPPED_BACKEND
+
+
+def test_copy_cli_is_what_the_build_runs(backend_repo, tmp_path):
+    """build-backend.sh runs `shipped_skills.py "$BACKEND_DIR" --copy-to "$BUILD_DIR"`."""
+    dest = tmp_path / "build"
+    dest.mkdir()  # mktemp -d made it
+    out = subprocess.run([sys.executable, str(BACKEND / "scripts" / "shipped_skills.py"),
+                          str(backend_repo), "--copy-to", str(dest)],
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert _files_under(dest) == SHIPPED_BACKEND
