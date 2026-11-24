@@ -130,6 +130,8 @@ routers/workspace_api.py:create_file._create  # exempt: non-governed paths only:
 routers/workspace_api.py:delete_folder._delete  # exempt: non-governed paths only; a dir with governed descendants is refused by forbid_dir_op
 routers/workspace_api.py:put_workspace_file._write  # exempt: non-governed paths only; governed files go through apply_user_edit before this
 routers/workspace_api.py:rename_item._rename  # exempt: non-governed paths only; governed trees go through move_tree
+scripts/cdf_backfill_user_words_timeline.py:run  # exempt: one-time CDF repair; writes through the CDF writer, governed_edit.withdraw and apply_user_edit after a verified backup
+scripts/cdf_backfill_user_words_timeline.py:take_backups  # exempt: copies the files it will touch into <data dir>/backups before any write (SHA-256 compared)
 scripts/cdf_relink_skipped.py:run  # exempt: one-time CDF repair; records relations through the CDF writer
 scripts/clean_daily_activity.py:main  # exempt: DailyActivity cleanup tool (working memory)
 scripts/da_resummarize.py:backup  # exempt: copies DailyActivity (working memory) into ~/.swarm-ai/backups

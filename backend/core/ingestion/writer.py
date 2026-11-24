@@ -218,12 +218,13 @@ def _ensure_link_file(content: str, target: Path) -> str:
 
 
 def _timeline_section(group: Mapping[str, Any]) -> str:
-    """The TIMELINE section an event goes under: its month, or "Not injected" when it
-    cites external content (the plan's anchor names the same section). No event is
-    injected; the month summaries are, and the summary lane reads only the month
-    sections, so an event citing external content stays out of the injected summary by
-    being placed here."""
-    if group.get("cited_external"):
+    """The TIMELINE section an event goes under: its month, or "Not injected" when its
+    destination is not injectable (pipeline_v2: its cited evidence holds explicitly
+    third-party content, or content whose origin cannot be told; the plan's anchor names
+    the same section). No event is injected; the month summaries are, and the summary
+    lane reads only the month sections, so such an event stays out of the injected
+    summary by being placed here. A decision without the flag is placed by its basis."""
+    if not group.get("timeline_injectable", not group.get("cited_external")):
         return "Not injected"
     return str(group.get("when") or _now().date().isoformat())[:7]
 
@@ -420,6 +421,10 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     today = _now().date().isoformat()
 
     if kind == "event" or store == "TIMELINE":
+        # in TIMELINE the mark goes with "Not injected": an event of the month's own work
+        # that cites tool output carries none (its external basis is recorded in
+        # unit_basis, which the baseline registers it with)
+        marked = _timeline_section(group) == "Not injected"
         event_key = str(group.get("event_key") or
                         _decision_value(decision, "version_vector", {}).get("event_key", ""))
         # each field on its own line: a line break inside one would start a heading,
@@ -569,7 +574,8 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     non_injected_timeline = store == "TIMELINE" and not bool(
         _model_value(destination, "injectable", True))
     # what the entry rests on (pipeline_v2.unit_basis): only "external" is marked in the
-    # file; the baseline registers the entry with this trust (cdf-fixing-spec C1). A
+    # file (in TIMELINE only under "Not injected", where the destination's injectable
+    # places it); the baseline registers the entry with this trust (cdf-fixing-spec C1). A
     # decision judged before the basis was recorded is external by its marks, else
     # inferred: without a recorded basis it is never the user's (I4).
     basis = str(vector.get("basis") or "")
@@ -578,6 +584,8 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
                       or non_injected_timeline or vector.get("inferred"))
         basis = "external" if legacy else "inferred"
     group["cited_external"] = basis == "external"
+    if store == "TIMELINE":
+        group["timeline_injectable"] = not non_injected_timeline
     section = str(_model_value(destination, "section", "") or "")
     content = original.decode("utf-8") if original else ""
     archive_path: Path | None = None       # an add archives nothing (v1's replace is retired)

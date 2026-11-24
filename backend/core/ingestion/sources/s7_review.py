@@ -986,6 +986,10 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     owned = [r for r in input_rows if not str(r.get("ref") or "").startswith(s2_session._S2_REF)]
     user_events = s2_session._user_events_by_message(owned)
     chunks = s2_session.windows(rows, "id", limit=WINDOW_CHARS, overlap=WINDOW_OVERLAP)
+    # the tool calls of the whole session: the windows hold no tool_use block, and each
+    # tool result is recorded with the call it answers (third-party or not)
+    from core.session_inputs import tool_calls
+    calls = tool_calls(transcript)
     schema = review_schema()
     from core.project_registry import list_project_names
     projects = list_project_names()
@@ -999,7 +1003,7 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     for number, window in enumerate(chunks, 1):
         window_rows = [r for r in window if "part_of" not in r] or window
         # one registration of the window serves the record, the evidence check and the read set
-        roots = s2_session.window_roots(session_id, window)
+        roots = s2_session.window_roots(session_id, window, calls)
         lead, lead_reply = _exchange_before(transcript, window[0])
         index, anchors, read = evidence(session_id, window_rows, input_rows,
                                         tuple(dict.fromkeys(e for ids in roots for e in ids)),

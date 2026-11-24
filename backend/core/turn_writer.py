@@ -75,6 +75,9 @@ class TurnWriter:
         self._row_key = row_key
         self._label = label
         self._held: list[dict] = []   # step results waiting for the next assistant row
+        # the turn's tool calls not yet answered, {tool_use id: (name, display object)}:
+        # each result is recorded with its call (third-party or not), and they go with the turn
+        self._tool_calls: dict[str, tuple[str, Any]] = {}
         self._fresh_segment = False   # a steer's segment with no assistant row yet
         self._closed = False
         self._outcome_recorded = False   # record_outcome writes one block per turn
@@ -114,6 +117,7 @@ class TurnWriter:
                 out = await self._router._persist_stream_event(
                     self._session_id, event, self._held, label=self._label,
                     client_id=self._row_key, files=files, changes=changes,
+                    tool_calls=self._tool_calls,
                 ) or []
                 if event.get("type") == "tool_result" and self._held:
                     # durable now, not with the next row: a process killed between

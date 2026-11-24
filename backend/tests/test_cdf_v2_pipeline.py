@@ -49,7 +49,12 @@ def _widget(tmp_path: Path) -> None:
     (und / "IMPROVEMENT.md").write_text("# I\n\n## What to Watch For\n", encoding="utf-8")
 
 
-def test_the_users_words_reach_memory_and_a_unit_without_them_the_general_brain(tmp_path, words):
+def test_the_users_words_reach_memory_and_a_unit_without_them_the_general_brain(tmp_path, words,
+                                                                                 monkeypatch):
+    from core.ingestion import user_check
+    verdict = {"holds": True}
+    monkeypatch.setattr(user_check, "grounds",
+                        lambda claim, texts: user_check.Verdict(verdict["holds"], "stub"))
     context = tmp_path / ".context"
     context.mkdir()
     (context / "MEMORY.md").write_text("# Memory\n\n## Guidelines\n", encoding="utf-8")
@@ -57,8 +62,12 @@ def test_the_users_words_reach_memory_and_a_unit_without_them_the_general_brain(
     assert trusted.decision == "write" and trusted.destination.store == "MEMORY"
     unsaid = run_unit_v2(row(cognition(user_quote=None)), tmp_path)
     assert (unsaid.destination.store, unsaid.destination.rerouted_from) == ("COMMON_DDD", "MEMORY")
+    # the person's verified words with user_check confirming get in whatever else is cited
     external = run_unit_v2(row(cognition(), tainted=True), tmp_path)
-    assert external.destination.store == "COMMON_DDD" and external.version_vector["basis"] == "external"
+    assert external.destination.store == "MEMORY" and external.version_vector["basis"] == "user"
+    verdict["holds"] = False
+    refused = run_unit_v2(row(cognition(), tainted=True), tmp_path)
+    assert refused.destination.store == "COMMON_DDD" and refused.version_vector["basis"] == "external"
 
 
 def test_a_project_without_a_ddd_goes_to_the_general_brain(tmp_path, words):

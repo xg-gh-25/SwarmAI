@@ -2770,7 +2770,7 @@ class SessionRouter:
     async def _persist_stream_event(
         self, session_id: str, event: dict, pending: list[dict],
         *, label: str = "", client_id: str | None = None, files: dict | None = None,
-        changes: object | None = None,
+        changes: object | None = None, tool_calls: dict | None = None,
     ) -> list[dict]:
         """Persist what one streamed event contributes to the turn's rows; return
         events to deliver BEFORE this one.
@@ -2780,7 +2780,11 @@ class SessionRouter:
           after its tool_use and the row count does not double. The cleaned
           blocks are written back into ``event['content']`` (stream == DB, bug 2d).
         - ``tool_result``: compacted into ``pending`` (status + outcome only), so
-          a reloaded turn shows what each step returned and which failed.
+          a reloaded turn shows what each step returned and which failed; recorded in
+          the provenance ledger with the call it answers (its name and display object,
+          remembered in ``tool_calls`` — the turn's, kept by its TurnWriter — from the
+          ``assistant`` event that streamed the ``tool_use``), so the ledger says whether
+          it is explicitly third-party content.
         - ``file_changed`` of a product kind: remembered in ``files``; every
           ``file_changed``, and every Edit/Write tool path, is noted in
           ``changes`` (core/turn_changes).
@@ -2803,6 +2807,7 @@ class SessionRouter:
             if files is not None:
                 self._note_deliverable(files, event)
             return []
+        calls = tool_calls if tool_calls is not None else {}
         if etype == "tool_result" and event.get("content"):
             try:
                 import json as _json
@@ -2811,11 +2816,14 @@ class SessionRouter:
                 for _block in event["content"]:
                     _ref = _block.get("tool_use_id") if isinstance(_block, dict) else None
                     from functools import partial as _partial
+                    # the call this result answers (name, display object), when this turn
+                    # streamed it: the ledger then says whether the result is explicitly
+                    # third-party (decided off the loop, in record_tool_result)
                     await _executors.run_in(
                         "io", _partial(
                             record_session_input, session_id, "tool_result",
                             "external", _json.dumps(_block, ensure_ascii=False, default=str),
-                            ref=_ref,
+                            ref=_ref, tool=calls.pop(str(_ref), None) if _ref else None,
                         ),
                     )
             except Exception:
@@ -2823,6 +2831,12 @@ class SessionRouter:
             pending.extend(self._compact_tool_results(event["content"]))
             return []
         if etype == "assistant" and event.get("content"):
+            for blk in event["content"]:
+                if isinstance(blk, dict) and blk.get("type") == "tool_use" and blk.get("id"):
+                    display = blk.get("display")
+                    calls[str(blk["id"])] = (
+                        str(blk.get("name") or ""),
+                        display.get("object") if isinstance(display, dict) else None)
             if changes is not None:
                 # Edit/Write paths: a dot-directory file has no file_changed.
                 for blk in event["content"]:

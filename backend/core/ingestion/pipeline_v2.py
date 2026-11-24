@@ -8,13 +8,21 @@ producing agent's declaration; this module only checks facts and routes:
 - where it goes: the unit's own declaration (contracts_v2.route_unit), a project that
   does not exist going to the General Brain (route_general);
 - what it rests on (§2): the user's words (a ``user_quote`` found verbatim in a cited user
-  message), a cited measurement, or external content in its own evidence
-  (``cited_external``). The every-turn files take only what this admits (``_admitted``);
-  anything else is recalled on demand (``_home``): about the agent or the world, from the
-  General Brain, read in every project; otherwise from the project's DDD, or the General
-  Brain. For the user's own files
-  (STEERING / USER / TOOLS) the quote must also say what the unit claims: the one model
-  call here, ``user_check``, shown only the user's messages and the claim;
+  message, whatever else the unit cites), a cited measurement, or external content in its
+  own evidence (``cited_external``). The every-turn files take only what this admits
+  (``_admitted``); anything else is recalled on demand (``_home``): about the agent or the
+  world, from the General Brain, read in every project; otherwise from the project's DDD,
+  or the General Brain. A unit bound for an every-turn file on the user's words also
+  passes the one model call here, ``user_check``, shown only the user's messages and the
+  claim (STEERING / USER / TOOLS: the words state it; MEMORY / EVOLUTION: the claim comes
+  from them). A unit that also cites external content (a review's tool output) is admitted
+  only when that check confirms: external content reaches an every-turn file through the
+  person's verbatim words and the isolated check, never on the agent's own say-so;
+- where an event goes in TIMELINE: under its month, unless its cited evidence holds
+  explicitly third-party content or content whose origin cannot be told
+  (``provenance.lineage_third_party``), which goes under "Not injected": the month
+  summaries, the only part of TIMELINE the prompt carries, are drawn from the month
+  sections;
 - its declared relations (relations_v2.resolve: id and first line name one entry) and
   overrides (overrides.check);
 - an exact restatement of a withdrawn entry, an event already recorded (by its key, or
@@ -117,21 +125,32 @@ class Facts:
     measured: bool          # it cites a measurement and nothing external
     cited_external: bool    # its own evidence lineage holds external content
     read_external: bool     # its extractor read external content
+    confirmed: bool = False  # user_check found the person's words carry the claim
+
+    @property
+    def words_hold(self) -> bool:
+        """The unit rests on the person's words: a verified quote, and, when it also
+        cites external content, the isolated user_check's confirmation."""
+        return self.user_words and (self.confirmed or not self.cited_external)
 
     @property
     def basis(self) -> str:
         """The trust an entry written from the unit is registered with (K3)."""
+        if self.words_hold:
+            return "user"
         if self.cited_external:
             return "external"
-        if self.user_words:
-            return "user"
         return "measured" if self.measured else "inferred"
 
 
 def _facts(unit: SourceUnit, row: Any, resolved: Any) -> Facts:
+    """The facts of *unit*'s evidence. A ``user_quote`` found verbatim in a cited user
+    message is the user's words whatever else the unit cites: a session review cites the
+    tool output of the work beside the person's correction. What that admits is
+    ``_admitted``'s, after user_check (``confirmed``)."""
     cited = bool(getattr(resolved, "cited_external", True))
     quote = getattr(unit, "user_quote", None)
-    words = bool(quote) and not cited and _quote_found(quote, _user_texts(unit, row))
+    words = bool(quote) and _quote_found(quote, _user_texts(unit, row))
     return Facts(user_words=words,
                  measured=not cited and getattr(resolved, "strength", "") == "measured",
                  cited_external=cited,
@@ -140,13 +159,14 @@ def _facts(unit: SourceUnit, row: Any, resolved: Any) -> Facts:
 
 def _admitted(store: str, facts: Facts) -> bool:
     """§2 K1 / K2: may a unit resting on *facts* go into *store*? The user's own files
-    take only the user's words; MEMORY and EVOLUTION the user's words or a measurement;
-    neither anything citing external content. Every other store takes it (its basis is
-    recorded)."""
+    take only the user's words; MEMORY and EVOLUTION the user's words or a measurement.
+    A unit citing external content gets in on the user's words only when user_check
+    confirmed them (``Facts.words_hold``), never on a measurement. Every other store takes
+    it (its basis is recorded)."""
     if store in USER_CONTEXT_STORES:
-        return facts.user_words
+        return facts.words_hold
     if store in AGENT_SELF_STORES:
-        return facts.user_words or facts.measured
+        return facts.words_hold or facts.measured
     return True
 
 
@@ -778,11 +798,14 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         # need the words to state it; MEMORY and EVOLUTION need the claim to come from
         # them (an agent's lesson may generalise the correction). Not so: not the user's
         # words, so the unit goes where its other facts admit it (a measurement), else
-        # to the project's DDD like any other.
+        # to the project's DDD like any other. A unit that also cites external content
+        # (tool output read in the session) is admitted on the user's words only when
+        # this check confirms them (Facts.words_hold).
         from . import user_check as _check
         ask = _check.says if destination.store in USER_CONTEXT_STORES else _check.grounds
         verdict = ask(_check.claim_of(unit), _user_texts(unit, row))
         user_check = {"holds": verdict.holds, "reason": verdict.reason, "version": _check.CHECK_VERSION}
+        facts = replace(facts, confirmed=verdict.holds)
         if not verdict.holds:
             facts = replace(facts, user_words=False)
     declared_destination = destination
@@ -790,9 +813,16 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         destination = _home(unit, destination, corpus_project, subject,
                             cited_external=facts.cited_external)
     if destination.store == "TIMELINE":
-        # an event citing external content is kept out of the injected month summary
-        # (writer: "Not injected")
-        destination = destination.model_copy(update={"injectable": not facts.cited_external})
+        # an event whose cited evidence holds explicitly third-party content, or content
+        # whose origin cannot be told, is kept out of the injected month summary (writer:
+        # "Not injected"); the session's own tool output is no reason to (it is external
+        # trust, and the month summary is drawn from the month's own work)
+        # (every third-party root is external trust: an event citing nothing external
+        # cites nothing third-party, and is not looked up)
+        from .provenance import lineage_third_party
+        third_party = (lineage_third_party(resolved.lineage_root_ids)
+                       if facts.cited_external else False)
+        destination = destination.model_copy(update={"injectable": third_party is False})
     done = dict(vectors=vectors, card0=card0, destination=destination)
     if destination.store == "STEERING" and facts.user_words:
         # a rule the person gave for one Brain has one home, that Brain's rules

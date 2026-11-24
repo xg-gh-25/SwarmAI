@@ -5,13 +5,15 @@ Questions:
 - the destination is a pure function of the declaration; a project that does not exist
   goes to the General Brain (D7), a project unit without topic by its type;
 - §2 K1/K2: the user's own files take only a ``user_quote`` found verbatim in a cited user
-  message; MEMORY / EVOLUTION that or a measurement; nothing citing external content.
+  message; MEMORY / EVOLUTION that or a measurement; a unit citing external content only
+  on the user's words that user_check confirmed.
   What is not admitted goes to the session project's DDD, or the General Brain, marked
   with the store it was declared for;
 - K3: the basis recorded for the entry follows the facts (user / measured / inferred /
   external);
-- an event is read every turn unless it cites external content, and is refused when its
-  key is already recorded (D15);
+- an event goes under its month unless its cited evidence holds explicitly third-party
+  content (or content of unknown origin), and is refused when its key is already
+  recorded (D15);
 - D1: ``same`` / ``adds`` / ``repeats`` stand only when id and first line name one entry;
   ``same`` reinforces, ``adds`` links, ``repeats`` is recorded; a wrong one is ignored;
 - no model call: run_unit_v2 takes no judge (D1).
@@ -177,10 +179,19 @@ def test_the_quote_is_verbatim_up_to_spacing_and_quote_marks(tmp_path, monkeypat
     assert run_unit_v2(_row(other, session_project="Widget"), ws).destination.store == "DDD"
 
 
-def test_citing_external_content_keeps_even_the_users_words_out(tmp_path, user_words):
+def test_citing_external_content_admits_the_users_words_only_when_user_check_confirms(
+        tmp_path, user_words, monkeypatch):
+    """A unit that also cites external content (tool output beside the person's message)
+    reaches the user's files on the verified quote only with user_check's confirmation;
+    refused, it stays in the project's DDD with an external basis."""
     unit = _cog(scope="user", user_kind="preference")
-    decision = run_unit_v2(_row(unit, cited_external=True, session_project="Widget"), _ws(tmp_path))
-    assert decision.destination.store == "DDD" and decision.version_vector["basis"] == "external"
+    ws = _ws(tmp_path)
+    decision = run_unit_v2(_row(unit, cited_external=True, session_project="Widget"), ws)
+    assert decision.destination.store == "STEERING" and decision.version_vector["basis"] == "user"
+    from core.ingestion import user_check
+    monkeypatch.setattr(user_check, "says", lambda claim, texts: user_check.Verdict(False, "no"))
+    refused = run_unit_v2(_row(unit, cited_external=True, session_project="Widget"), ws)
+    assert refused.destination.store == "DDD" and refused.version_vector["basis"] == "external"
 
 
 def test_reading_external_content_does_not_keep_the_users_words_out(tmp_path, user_words):
@@ -217,10 +228,12 @@ def _event(**over):
     return value
 
 
-def test_an_event_is_read_every_turn_unless_it_cites_external_content(tmp_path, user_words):
+def test_an_event_goes_under_its_month_unless_its_external_evidence_is_third_party_or_unknown(
+        tmp_path, user_words):
     ws = _ws(tmp_path)
     (ws / ".context" / "TIMELINE.md").write_text("# Timeline\n", encoding="utf-8")
     assert run_unit_v2(_row(_event()), ws).destination.injectable is True
+    # root-1 is in no store: its origin cannot be told, so the event is kept out
     assert run_unit_v2(_row(_event(), cited_external=True), ws).destination.injectable is False
 
 

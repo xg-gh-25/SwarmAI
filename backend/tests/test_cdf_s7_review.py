@@ -436,9 +436,16 @@ def test_a_lesson_from_the_agents_own_work_is_kept_out_of_every_turn_files(cdf_e
     assert stores and not {"MEMORY", "EVOLUTION"} & set(stores), stores
 
 
-def test_a_unit_citing_the_person_and_a_tool_result_is_external(cdf_env, tmp_path, monkeypatch, model) -> None:
-    """Citing a tool result beside the person's message makes the unit external, even with
-    a real quote: it never reaches a file read every turn."""
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_a_unit_citing_the_person_and_a_tool_result_needs_user_check(cdf_env, tmp_path, monkeypatch, model,
+                                                                     confirmed) -> None:
+    """Citing a tool result beside the person's message makes the unit external: its real
+    quote takes it into a file read every turn only when user_check, shown the person's
+    messages and the claim (never the tool output), confirms it."""
+    from core.ingestion import user_check
+    shown: list[list[str]] = []
+    monkeypatch.setattr(user_check, "grounds", lambda claim, texts, **_: shown.append(list(texts))
+                        or user_check.Verdict(confirmed, "stub"))
     sdk = _cli_transcript(tmp_path, monkeypatch)
     (asked,) = _record_person_message(cdf_env, "m1", "以后 deploy 前都先跑 smoke test")[:1]
     asyncio.run(cdf_env["db"].messages.put({"id": "t1", "session_id": SESSION, "role": "assistant",
@@ -454,7 +461,11 @@ def test_a_unit_citing_the_person_and_a_tool_result_is_external(cdf_env, tmp_pat
                                    runner=Runner([unit], {"relations": [{"unit": 1, "relation": "new"}]}))
     assert out["units"] == 1
     stores = [json.loads(r["destination"])["store"] for r in _drain(cdf_env) if r.get("state") == "written"]
-    assert stores and not {"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"} & set(stores), stores
+    if confirmed:
+        assert stores == ["EVOLUTION"], stores
+    else:
+        assert stores and not {"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"} & set(stores), stores
+    assert shown and all("INJECTED" not in t for texts in shown for t in texts)
 
 
 def test_the_lead_of_a_fragment_window_is_the_message_before_its_item() -> None:

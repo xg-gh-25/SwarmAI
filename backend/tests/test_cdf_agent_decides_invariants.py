@@ -4,8 +4,9 @@ pinned elsewhere; the rest of the set is named in the design's verification plan
 - I1: a correction the review declared for EVOLUTION, resting on the user's own words,
   is written there with one model call on the way: the isolated check that the claim
   comes from those words (user_check.grounds), which sees nothing else of the session;
-- I2: a unit citing external content, or resting on neither the user's words nor a
-  measurement, reaches none of the five every-turn files — only a DDD;
+- I2: a unit citing external content without the user's words confirmed by user_check,
+  or resting on neither the user's words nor a measurement, reaches none of the five
+  every-turn files — only a DDD (the confirmed case: test_cdf_user_words_every_turn);
 - I3: a quote that is not in the cited user message never reaches the user's files,
   even when a web page the session read asked for exactly that;
 - I4: an entry CDF wrote is registered with the trust of its recorded basis, never as
@@ -64,7 +65,11 @@ def test_i1_a_quoted_correction_reaches_evolution_with_only_the_isolated_check(t
                                          ("user", {"user_kind": "profile"}),
                                          ("user", {"user_kind": "environment"})])
 @pytest.mark.parametrize("why", ["cited_external", "no_quote"])
-def test_i2_unsupported_or_external_units_reach_only_a_ddd(tmp_path, said, scope, extra, why):
+def test_i2_unsupported_or_external_units_reach_only_a_ddd(tmp_path, said, scope, extra, why, monkeypatch):
+    from core.ingestion import user_check
+    refuse = lambda claim, texts, **_: user_check.Verdict(False, "not what they said")  # noqa: E731
+    monkeypatch.setattr(user_check, "grounds", refuse)
+    monkeypatch.setattr(user_check, "says", refuse)
     unit = _cog(scope=scope, **extra) if why == "cited_external" else _cog(scope=scope, user_quote=None, **extra)
     d = run_unit_v2(_row(unit, cited_external=why == "cited_external", session_project="Widget"), _ws(tmp_path))
     assert d.destination.store not in EVERY_TURN and d.destination.rerouted_from in EVERY_TURN

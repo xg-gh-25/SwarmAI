@@ -279,6 +279,81 @@ def lineage_external(root_ids) -> bool:
         conn.close()
 
 
+# the one tool_text root a pipeline run registers for its own repo and tool context
+# (core/run_protocol/provenance._context_root: "<run id>:repo/tool context")
+_RUN_CONTEXT = ":repo/tool context"
+# the root kinds that are the person's or the work's own: the person's words and answers,
+# a measurement, an entry of the corpus, a run's finding or validation, a commit, a metric
+# window, the dispatching agent's answer, a document the agent wrote (its trust and
+# parents are its sources'). Any other kind not named third-party below cannot be told.
+_OWN_ROOT_KINDS = frozenset({"user_message", "human_answer", "host_answer", "measured_field",
+                             "corpus_unit", "run_finding", "run_validation", "commit",
+                             "metric_window", "agent_document"})
+
+
+def lineage_third_party(root_ids, *, conn: sqlite3.Connection | None = None) -> bool | None:
+    """Whether a unit's evidence lineage (*root_ids*, already closed over parents) holds
+    explicitly third-party content: a web document, a channel peer's message (external
+    trust; the channel owner's is the user's), a Hive lesson
+    document (``agent_document`` under ``contracts_v2.HIVE_REF_PREFIX``), or a session
+    input the ledger says is third-party (``session_inputs.input_origins``: a web fetch or
+    search, an MCP tool, a Read under Attachments/ or Downloads/, an attached file). True
+    when one is; False when every root is known and none is; None when the origin of a
+    root cannot be told (an unknown root, a root kind not known to be own work such as an
+    outside file revision, an unreadable store, a legacy tool result whose tool call is
+    not in its transcript). A tool's trust (external) is not the question:
+    every tool result is external, and most are the session's own work. *conn*: an open
+    ingestion store connection to read instead of opening a read-only one."""
+    ids = [str(r) for r in dict.fromkeys(root_ids or ())]
+    if not ids:
+        return False
+    owned = conn is None
+    try:
+        if owned:
+            from .store import connect_ro      # it only reads
+            conn = connect_ro()
+    except (OSError, sqlite3.Error):
+        return None
+    try:
+        marks = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT root_kind, locator, trust FROM evidence_roots WHERE root_id IN ({marks})",
+            ids).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        if owned:
+            conn.close()
+    unknown = len(rows) != len(ids)      # a third-party root still answers True
+    events: list[str] = []
+    for kind, locator, trust in rows:
+        locator = str(locator)
+        if kind == "web_document":
+            return True
+        if kind == "channel_message" and trust == "external":
+            return True                  # a peer's; the channel owner's words are the user's
+        if kind == "agent_document" and locator.startswith(contracts_v2.HIVE_REF_PREFIX):
+            return True
+        if kind == "tool_text":
+            if locator.startswith("run_") and locator.endswith(_RUN_CONTEXT):
+                continue                 # a pipeline run's own repo and tool work
+            # registered by session_inputs._record_one as "<session id>:<event id>"
+            at = locator.find(":input:")
+            if at < 0:
+                unknown = True
+            else:
+                events.append(locator[at + 1:])
+        elif kind not in _OWN_ROOT_KINDS and kind != "channel_message":
+            unknown = True
+    origins: dict[str, bool | None] = {}
+    if events:
+        from core.session_inputs import input_origins
+        origins = input_origins(events)
+    if any(origins.get(e) is True for e in events):
+        return True
+    return None if unknown or any(origins.get(e) is None for e in events) else False
+
+
 def resolve_evidence(anchors: list[str], *, session_id: str | None, run_id: str | None,
                      read_root_ids: tuple[str, ...] = ()) -> ResolvedEvidence:
     """Resolve owned anchors, close their lineage, and derive strength and taint."""

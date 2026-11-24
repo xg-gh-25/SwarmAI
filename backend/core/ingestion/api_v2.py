@@ -136,7 +136,9 @@ class ResolvedEvidence:
     unknown (fail-closed). It guards the user's own files and the measured entrance,
     where which input shaped a unit is not knowable (anti selective-citation).
     *cited_external*: the unit's own evidence, through its parents, includes external
-    content. It decides the ``taint: external`` mark, TIMELINE placement and overrides."""
+    content. It decides the ``taint: external`` mark and overrides; TIMELINE placement is
+    decided by whether that content is explicitly third-party
+    (``provenance.lineage_third_party``)."""
 
     root_ids: tuple[str, ...]
     lineage_root_ids: tuple[str, ...]          # transitive closure through parent_root_ids

@@ -68,8 +68,13 @@ def test_user_context_needs_the_users_own_words(ws, monkeypatch):
     _words(monkeypatch, "Keep it short: two sentences, please.")
     ok = run_unit_v2(_row(_unit()), ws)
     assert ok.decision == "write" and ok.destination.store == "STEERING"
+    # citing external content too: in on the person's words only with user_check's yes
     external = run_unit_v2(_row(_unit(), source="S7", tainted=True), ws)
-    assert external.destination.store == "COMMON_DDD"
+    assert external.destination.store == "STEERING" and external.version_vector["basis"] == "user"
+    from core.ingestion import user_check
+    monkeypatch.setattr(user_check, "says", lambda claim, texts: user_check.Verdict(False, "no"))
+    refused = run_unit_v2(_row(_unit(), source="S7", tainted=True), ws)
+    assert refused.destination.store == "COMMON_DDD" and refused.version_vector["basis"] == "external"
     unquoted = run_unit_v2(_row(_unit(user_quote="always push to main")), ws)
     assert unquoted.destination.store == "COMMON_DDD"
     _words(monkeypatch)

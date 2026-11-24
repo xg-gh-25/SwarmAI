@@ -110,7 +110,8 @@ def _blocks(message: dict[str, Any]) -> list[tuple[str, Any]]:
     return [("text", content)]
 
 
-def window_roots(session_id: str, chunk: list[dict[str, Any]]) -> list[tuple[str, ...]]:
+def window_roots(session_id: str, chunk: list[dict[str, Any]],
+                 tool_calls: dict[str, tuple[str, Any]] | None = None) -> list[tuple[str, ...]]:
     """Register what this window shows the extractor that the send path did not.
 
     Returns, per chunk item, the event ids registered for it (empty for user rows,
@@ -120,37 +121,51 @@ def window_roots(session_id: str, chunk: list[dict[str, Any]]) -> list[tuple[str
     agent's own text, thinking and tool calls are ``agent``. User text was registered
     when it was sent. The same (ref, content) is reused, not registered twice. Design
     §12 r16.13: without this the main pass read only user roots and came out untainted.
+    *tool_calls*: ``session_inputs.tool_calls`` of the session's transcript (a window
+    the review reads holds no tool_use block); each tool result is recorded with the
+    call it answers, so the ledger says whether it is explicitly third-party. Without
+    it, the window's own tool_use blocks are used.
     """
     import hashlib
     from core import session_inputs
-    plan: list[tuple[int, str, str, Any]] = []  # (item index, kind, ref, content)
+    calls = tool_calls if tool_calls is not None else session_inputs.tool_calls(chunk)
+    # (item index, kind, ref, content, the call a tool result answers)
+    plan: list[tuple[int, str, str, Any, Any]] = []
     for position, item in enumerate(chunk):
         if "json_fragment" in item:
             if item.get("role") != "user":
                 plan.append((position, "tool_result",
                              f"{_S2_REF}{item.get('part_of')}#part{item['part']}",
-                             item["json_fragment"]))
+                             item["json_fragment"], None))
             continue
         role = item.get("role")
         if role not in ("assistant", "tool"):
             continue  # user rows are registered at send; system rows by their own path
+        # the blocks _blocks reads, in its order (dicts only)
+        raw_blocks = ([b for b in item["content"] if isinstance(b, dict)]
+                      if isinstance(item.get("content"), list) else [])
         for index, (block_type, content) in enumerate(_blocks(item)):
             if content in (None, "", []):
                 continue
             kind = "tool_result" if (block_type == "tool_result" or role == "tool") else "agent_message"
-            plan.append((position, kind, f"{_S2_REF}{item.get('id')}#{index}:{block_type}", content))
+            block = raw_blocks[index] if index < len(raw_blocks) else None
+            call = (calls.get(str(block.get("tool_use_id") or ""))
+                    if kind == "tool_result" and isinstance(block, dict) else None)
+            plan.append((position, kind, f"{_S2_REF}{item.get('id')}#{index}:{block_type}", content,
+                         call))
     per_item: list[list[str]] = [[] for _ in chunk]
     if not plan:
         return [()] * len(chunk)
     with sqlite3.connect(str(session_inputs._db_path()), timeout=5.0) as conn:
-        for position, kind, ref, content in plan:
+        for position, kind, ref, content, call in plan:
             raw = content if isinstance(content, str) else session_inputs._canonical(content)
             digest = hashlib.sha256(raw.encode("utf-8", errors="surrogatepass")).hexdigest()
             found = _existing_input(conn, session_id, ref, digest)
             if found:
                 per_item[position] += found
             elif kind == "tool_result":
-                per_item[position] += session_inputs.record_tool_result(session_id, content, ref=ref)
+                per_item[position] += session_inputs.record_tool_result(session_id, content, ref=ref,
+                                                                       tool=call)
             else:
                 per_item[position].append(session_inputs.record_session_input(
                     session_id, kind, "agent", raw, ref=ref))
