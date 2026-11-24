@@ -1057,3 +1057,51 @@ def test_a_merge_built_on_a_rewritten_base_is_refused(world, monkeypatch):
     _hive_bundle(world)
     with pytest.raises(hive_return.ReturnError, match="include a merge"):
         asyncio.run(hive_return.prepare(DID, URL))
+
+
+def _host_has_hive_commits(r, w) -> None:
+    git(w["hive"], "bundle", "create", "-q", str(w["tmp"] / "x.bundle"), f"{r['old']}..main")
+    git(w["host"], "fetch", "-q", str(w["tmp"] / "x.bundle"), "main:refs/tmp/hive")
+
+
+def test_a_named_base_the_commits_do_not_build_on_is_refused_not_replayed(world, monkeypatch):
+    """The bundle's header is the Hive's: when it names an old commit while the commits
+    really build on today's main, the branch's own commits are not pulled into the replay."""
+    from core import hive_return
+    r = _rewritten(world)
+    host = world["host"]
+    git(host, "checkout", "-q", "-b", "forged")
+    forged = _commit(host, "src/f.py", "f = 1\n", "built on today's main")
+    git(host, "checkout", "-q", "main")
+    before = git(host, "rev-parse", "main")
+    with pytest.raises(hive_return.ReturnError, match=f"do not build on {r['old'][:12]}"):
+        hive_return._replay(host, "refs/heads/main", "refs/tmp/hive", forged, {r["old"]: r["new"]})
+    assert git(host, "rev-parse", "main") == before
+
+
+def test_a_named_base_whose_chain_reaches_the_branch_is_refused(world, monkeypatch):
+    """Commits that build on the named base one after another, but one of them is already
+    on the branch: refused, so no commit of the branch is replayed again."""
+    from core import hive_return
+    r = _rewritten(world)
+    host = world["host"]
+    git(host, "checkout", "-q", "-b", "side", r["old"])
+    on_branch = _commit(host, "src/s.py", "s = 1\n", "a side commit")
+    git(host, "checkout", "-q", "main")
+    git(host, "merge", "-q", "--no-edit", "--no-ff", "-X", "ours", on_branch)
+    with pytest.raises(hive_return.ReturnError, match="already in main"):
+        hive_return._replay(host, "refs/heads/main", "refs/tmp/hive", on_branch, {r["old"]: r["new"]})
+
+
+def test_a_replay_longer_than_the_limit_is_refused(world, monkeypatch):
+    from core import hive_return
+    r = _rewritten(world)
+    _commit(world["hive"], "src/c.py", "c = 1\n", "second")
+    _host_has_hive_commits(r, world)
+    tip = git(world["hive"], "rev-parse", "main")
+    monkeypatch.setattr(hive_return, "MAX_REPLAY_COMMITS", 1)
+    with pytest.raises(hive_return.ReturnError, match="are 2 commits, more than the 1 replayed here"):
+        hive_return._replay(world["host"], "refs/heads/main", "refs/tmp/hive", tip, {r["old"]: r["new"]})
+    monkeypatch.setattr(hive_return, "MAX_REPLAY_COMMITS", 2)
+    out, done = hive_return._replay(world["host"], "refs/heads/main", "refs/tmp/hive", tip, {r["old"]: r["new"]})
+    assert len(done) == 2

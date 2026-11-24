@@ -457,6 +457,10 @@ def _hive_ref(local_ref: str) -> str:
 #: the most paths where the two bases differ that the review lists (the count is whole)
 MAX_DIFFERS_SHOWN = 50
 
+#: the most commits replayed onto a rewritten base (each is a few git calls; more is
+#: taken over by hand)
+MAX_REPLAY_COMMITS = 200
+
 
 def _take_replayed(repo: Path, branch: str, local_ref: str, hive_tip: str,
                    mapped: dict[str, str]) -> tuple[str, dict[str, str], dict[str, Any]]:
@@ -483,9 +487,12 @@ def _replay(repo: Path, branch: str, hive_ref: str, tip: str, mapped: dict[str, 
     author, committer, dates and message, so the same bundle replays to the same commits
     every time (a later turn's ancestry check holds). Returns (replayed tip, {Hive commit:
     replayed commit}). Refused when the commits include a merge or build on more than one
-    rewritten commit (more than one base to place), or one of them conflicts (the
-    message names the files); *hive_ref* (the Hive's own commits) is named for the
-    takeover by hand."""
+    rewritten commit (more than one base to place), are more than
+    ``MAX_REPLAY_COMMITS``, do not build on the named prerequisite one after another or
+    include a commit already on *branch* (the prerequisite is the Hive's word: a named old
+    commit must not pull the branch's own commits into the replay), or one of them
+    conflicts (the message names the files); *hive_ref* (the Hive's own commits) is named
+    for the takeover by hand."""
     short = branch.replace("refs/heads/", "")
     merges = _out(repo, "rev-list", "--count", "--min-parents=2", tip, *(f"^{p}" for p in mapped))
     if merges != "0":
@@ -496,6 +503,24 @@ def _replay(repo: Path, branch: str, hive_ref: str, tip: str, mapped: dict[str, 
                           f"here; take the change over by hand from {hive_ref}")
     (old, new), = mapped.items()
     chain = _out(repo, "rev-list", "--reverse", "--topo-order", tip, f"^{old}").split()
+    if len(chain) > MAX_REPLAY_COMMITS:
+        raise ReturnError(f"the commits build on a commit {short} rewrote and are {len(chain)} commits, more "
+                          f"than the {MAX_REPLAY_COMMITS} replayed here; take the change over by hand "
+                          f"from {hive_ref}")
+    # The prerequisite comes from the bundle's header, which the Hive writes: the commits
+    # must really build on it, one after another, and none of them may already be on the
+    # branch. Otherwise a named old commit would pull the branch's own commits into the
+    # replay (re-applying them onto the equivalent, under their own authors).
+    own = _out(repo, "rev-list", "--count", tip, f"^{old}", f"^{branch}")
+    prev = old
+    for c in chain:
+        if _out(repo, "rev-parse", "--verify", f"{c}^1") != prev:
+            raise ReturnError(f"the commits do not build on {old[:12]}, the commit the bundle names as their "
+                              f"base; take the change over by hand from {hive_ref}")
+        prev = c
+    if own != str(len(chain)):
+        raise ReturnError(f"some of the commits on {old[:12]} are already in {short}; take the change over "
+                          f"by hand from {hive_ref}")
     cur, done = new, {}
     for c in chain:
         parent = _out(repo, "rev-parse", "--verify", f"{c}^1")
