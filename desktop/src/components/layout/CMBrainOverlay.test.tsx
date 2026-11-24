@@ -1,964 +1,449 @@
 /**
- * Tests for CMBrainOverlay — the C&M Global Brain overlay (Run 1).
+ * Tests for CMBrainOverlay — the Context & Memory overlay (design Knowledge/Mockups/
+ * 2026-11-24-cm-library-redesign.html): four tabs 上下文 · 记忆 · 知识 · 工作原理.
  *
- * Run-1 scope: opens on swarm:show-context, renders a 3-tab shell (Context /
- * Memory / Guideline) with ONLY the Context tab implemented (Memory + Guideline
- * are labeled placeholders), plus a fixed overview rail (live total tokens +
- * composition, Needs-you counts). The Context tab renders the assembled
- * context-file stack from the /eval/context-health token_block payload: each row's
- * `tokens` is what the file puts in the prompt (the main number), `disk_tokens` the
- * file on disk (secondary, shown only where it differs).
- *
- * The backend fetch is mocked at the api boundary (services/api). We assert the
- * overlay CONSUMES the payload (rows, ownership, lock, %) — not that it invents
- * numbers (the whole point of the backend-primary design).
+ * The backend is mocked at the api boundary (services/api); the tests assert the overlay
+ * CONSUMES the payloads (files, entries, recall counts) and invents no numbers.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, cleanup, waitFor, within } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor, within, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// Mock the api client BEFORE importing the component.
-vi.mock('../../services/api', () => ({
-  default: { get: vi.fn(), post: vi.fn() },
-}));
+vi.mock('../../services/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/api')>();
+  return { ...actual, default: { get: vi.fn(), post: vi.fn() } };
+});
 import api from '../../services/api';
 import { CMBrainContent } from './CMBrainOverlay';
 
-const TOKEN_BLOCK = {
-  total_tokens: 100000,
-  budget: 91000,
-  warning_threshold: 91000,
-  emergency_threshold: 130000,
-  over_budget: true,
-  per_file: [
-    { name: 'SWARMAI.md', tokens: 2000, pct: 2.0, owner: 'system', priority: 0, locked: true, health: 'fresh' },
-    { name: 'USER.md', tokens: 3000, pct: 3.0, owner: 'user', priority: 4, locked: false, health: 'idle' },
-    { name: 'MEMORY.md', tokens: 48000, pct: 48.0, owner: 'agent', priority: 7, locked: false, health: 'oversized' },
-    { name: 'KNOWLEDGE.md', tokens: 47000, pct: 47.0, owner: 'auto', priority: 9, locked: false, health: 'growing' },
-  ],
-};
+const get = api.get as ReturnType<typeof vi.fn>;
+const post = api.post as ReturnType<typeof vi.fn>;
 
-// Real-shaped governance (Approve) proposals — GC rows: gc_id / proposed_rule / checked.
-const GOV_PROPS = [
-  { id: 'GC14', gc_id: 'GC14', occurrence_count: 3, proposed_rule: 'Any runtime/deploy-state claim must cite a same-turn observation.', checked: 'checked against: R16b — new because it names the same-turn rule' },
-  { id: 'GC15', gc_id: 'GC15', occurrence_count: 3, proposed_rule: 'Block commit when a self-authored test patches the symbol-under-change.', checked: 'checked against: R28 — new because it names the patch' },
+// per_file in priority order, as /eval/context-health/lite serves it
+const PER_FILE = [
+  { name: 'SWARMAI.md', tokens: 6287, disk_tokens: 6459, pct: 8.7, owner: 'system', priority: 0, locked: true, health: 'fresh', health_counts: null },
+  { name: 'IDENTITY.md', tokens: 358, disk_tokens: 481, pct: 0.5, owner: 'system', priority: 1, locked: true, health: 'idle', health_counts: null },
+  { name: 'SELF.md', tokens: 4991, disk_tokens: 5440, pct: 6.9, owner: 'system', priority: 2, locked: true, health: 'fresh', health_counts: null },
+  { name: 'SOUL.md', tokens: 6404, disk_tokens: 6483, pct: 8.9, owner: 'system', priority: 2, locked: true, health: 'fresh', health_counts: null },
+  { name: 'AGENT.md', tokens: 15488, disk_tokens: 15761, pct: 21.5, owner: 'system', priority: 3, locked: false, health: 'fresh', health_counts: null },
+  { name: 'USER.md', tokens: 1133, disk_tokens: 1139, pct: 1.6, owner: 'user', priority: 4, locked: false, health: 'idle', health_counts: null },
+  { name: 'STEERING.md', tokens: 5015, disk_tokens: 5052, pct: 7.0, owner: 'user', priority: 5, locked: false, health: 'fresh', health_counts: null },
+  { name: 'TOOLS.md', tokens: 7470, disk_tokens: 7501, pct: 10.4, owner: 'user', priority: 6, locked: false, health: 'fresh', health_counts: null },
+  { name: 'MEMORY.md', tokens: 15269, disk_tokens: 15999, pct: 21.2, owner: 'agent', priority: 7, locked: false, health: 'fresh', health_counts: { entries: 63, duplicate: 0 } },
+  { name: 'EVOLUTION.md', tokens: 8190, disk_tokens: 8337, pct: 11.4, owner: 'agent', priority: 8, locked: false, health: 'fresh', health_counts: { entries: 18, duplicate: 0 } },
+  { name: 'TIMELINE.md', tokens: 587, disk_tokens: 71064, pct: 0.8, owner: 'user', priority: 10, locked: false, health: 'fresh', health_counts: null },
+];
+const TOTAL = PER_FILE.reduce((n, f) => n + f.tokens, 0); // 71192
+const BLOCK = { total_tokens: TOTAL, disk_tokens: 144415, budget: 133000, warning_threshold: 133000,
+  emergency_threshold: 172000, over_budget: false, per_file: PER_FILE };
+const NORTH_STAR = { at: '2026-11-24T08:43:06+00:00', measures: { cdf: { every_turn: { MEMORY: [15269, 15018], EVOLUTION: [8190, 7673] } } } };
+
+const GOV = [
+  { id: 'GC14', gc_id: 'GC14', occurrence_count: 3, proposed_rule: 'Give a concurrent plan before dispatching', checked: 'checked against: R16b' },
 ];
 
-// lite endpoint shape: exactly { token_block, governance_pending_count, north_star }
-function mockHealth(overrides: Record<string, unknown> = {}, opts: { governancePending?: number; trendPoints?: unknown[] } = {}) {
-  const govN = opts.governancePending ?? 0;
-  const lite = {
-    token_block: TOKEN_BLOCK,
-    governance_pending_count: govN,
-    ...overrides,
-  };
-  const points = opts.trendPoints ?? [];
-  (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-    if (url.includes('context-health/lite')) {
-      return Promise.resolve({ data: lite });
-    }
+const today = new Date();
+const iso = (daysAgo: number) => new Date(today.getTime() - daysAgo * 86400_000).toISOString().slice(0, 10);
+const MEM_ENTRIES = [
+  { title: 'Newest guideline', meta: '', type: 'guideline', date: iso(2) },
+  { title: 'A pitfall one', meta: '', type: 'pitfall', date: iso(20) },
+  { title: 'A pitfall two', meta: '', type: 'pitfall', date: iso(21) },
+  { title: 'A pitfall three', meta: '', type: 'pitfall', date: iso(22) },
+  { title: 'A principle', meta: '', type: 'principle', date: iso(30) },
+  { title: 'A pitfall four', meta: '', type: 'pitfall', date: iso(40) },
+  { title: 'A pitfall five', meta: '', type: 'pitfall', date: iso(50) },
+  { title: 'Oldest pitfall', meta: '', type: 'pitfall', date: iso(60) },
+];
+const MEM_GRAPH = { nodes: [{ type: 'principle', count: 1 }, { type: 'guideline', count: 1 }, { type: 'pitfall', count: 6 }],
+  entries: MEM_ENTRIES, total: 8, drill: {} };
+const EVO_GRAPH = {
+  nodes: [{ type: 'correction', count: 2 }, { type: 'competence', count: 1 }],
+  entries: [
+    { title: 'C103 | x', meta: '', type: 'correction', date: iso(0), id: 'C103', label: 'Next-step proposals stay one-by-one' },
+    { title: 'K007 | x', meta: '', type: 'competence', date: iso(22), id: 'K007', label: 'Knowledge quality comes from extraction' },
+    { title: 'C098 | x', meta: '', type: 'correction', date: iso(22), id: 'C098', label: 'Whoever dispatched judges' },
+  ],
+  total: 3, drill: {},
+};
+const KNOWLEDGE = {
+  window_days: 7,
+  contexts: {
+    session_prompt: { runs: 102, hits: 90, prev_runs: 65, prev_hits: 59 },
+    session_followup: { runs: 247, hits: 213, prev_runs: 158, prev_hits: 135 },
+    session_ddd: { runs: 77, hits: 52, prev_runs: 38, prev_hits: 30 },
+  },
+  stores: { projects: { brains: 9, entries: 5727 }, general: { files: 104 }, sessions: 289, archives: { files: 13, entries: 902 } },
+};
+const LANDED = {
+  window: '7d', since: '', total: 1921, series: [], previous: null,
+  totals: { new: 0, adds: 0, reinforced: 0, not_kept: 0, waiting: 0 }, groups: {}, reasons: {}, sources: {},
+  steps: { captured: 1921, basic_dropped: 0, place_dropped: 0, moved: 0, reinforced: 0, known: 0, withdrawn: 0, older: 0, written: 1828 },
+  landed: [
+    { store: 'DDD', project: 'SwarmAI', path: 'a', written: 1617, reinforced: 0 },
+    { store: 'MEMORY', project: null, path: 'b', written: 4, reinforced: 0 },
+    { store: 'EVOLUTION', project: null, path: 'c', written: 2, reinforced: 0 },
+  ],
+  moved: [], attention: [], store_bytes: 0, oldest_at: null,
+};
+
+interface Opts { lite?: Record<string, unknown>; gov?: unknown[]; memHits?: unknown[]; govPromise?: Promise<unknown> }
+function mockAll(opts: Opts = {}) {
+  const lite = { token_block: BLOCK, governance_pending_count: (opts.gov ?? []).length, north_star: NORTH_STAR, ...opts.lite };
+  get.mockImplementation((url: string) => {
+    if (url.includes('context-health/lite')) return Promise.resolve({ data: lite });
     if (url.includes('governance/pending')) {
-      return Promise.resolve({ data: { proposals: GOV_PROPS.slice(0, govN), total: govN } });
+      const data = { proposals: opts.gov ?? [], total: (opts.gov ?? []).length };
+      return opts.govPromise ? opts.govPromise.then(() => ({ data })) : Promise.resolve({ data });
     }
-    if (url.includes('brain-trend')) {
-      return Promise.resolve({ data: { points, count: points.length, launch_date: (points[0] as { date?: string } | undefined)?.date ?? null } });
-    }
-    if (url.includes('brain-graph')) {
-      return Promise.resolve({ data: { nodes: [], drill: {}, total: 0 } });
-    }
+    if (url.includes('brain-graph')) return Promise.resolve({ data: url.includes('evolution') ? EVO_GRAPH : MEM_GRAPH });
     if (url.includes('archive-list')) {
-      return Promise.resolve({ data: { files: [], total_files: 0, source: url.includes('evolution') ? 'evolution' : 'memory' } });
+      return Promise.resolve({ data: url.includes('evolution')
+        ? { files: [{ name: 'EVOLUTION-archive-2026-11.md', entry_count: 100 }], total_files: 1 }
+        : { files: [{ name: 'MEMORY-archive-2026-10.md', entry_count: 700 }, { name: 'MEMORY-archive-2026-09.md', entry_count: 102 }], total_files: 2 } });
     }
     if (url.includes('archive-search')) {
-      return Promise.resolve({ data: { results: [], q: '', source: url.includes('evolution') ? 'evolution' : 'memory' } });
+      return Promise.resolve({ data: { results: url.includes('source=memory') ? (opts.memHits ?? []) : [] } });
     }
-    return Promise.resolve({ data: lite }); // fallback
+    if (url.includes('/recall/knowledge')) return Promise.resolve({ data: KNOWLEDGE });
+    if (url.includes('/ingestion/landed')) return Promise.resolve({ data: LANDED });
+    return Promise.reject(new Error(`unmocked ${url}`));
   });
-  (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
+  post.mockResolvedValue({ data: { status: 'ok' } });
 }
 
-// M3: CMBrainOverlay → CMBrainContent (OverlayHost registry). The content component
-// ALWAYS renders (the host owns open/close + mount lifecycle), so tests render it
-// directly; `openOverlay()` is a no-op kept so the content-assertion tests read
-// unchanged. The former "does not render until event" test moved to OverlayHost.test.
-function renderOverlay() {
+function renderOverlay(onOpenOverlay?: (id: 'library' | 'brain-hub') => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <CMBrainContent />
-    </QueryClientProvider>,
-  );
+  return render(<QueryClientProvider client={qc}><CMBrainContent onOpenOverlay={onOpenOverlay} /></QueryClientProvider>);
+}
+function openTab(id: string) { act(() => { screen.getByTestId(`cm-tab-${id}`).click(); }); }
+function captureOpenFile() {
+  const seen: string[] = [];
+  const h = (e: Event) => seen.push((e as CustomEvent).detail.path);
+  document.addEventListener('swarm:open-file', h);
+  return { seen, stop: () => document.removeEventListener('swarm:open-file', h) };
 }
 
-beforeEach(() => {
-  mockHealth();
-});
-afterEach(() => {
-  cleanup();
-  vi.clearAllMocks();
-});
+beforeEach(() => mockAll());
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-function openOverlay() { /* no-op: CMBrainContent renders immediately (host-owned open) */ }
-
-describe('CMBrainContent — tabs + content', () => {
-  it('renders the Context tab active by default', async () => {
+describe('shell', () => {
+  it('has four tabs and no left rail; Context is open first', async () => {
     renderOverlay();
-    openOverlay();
-    expect(await screen.findByTestId('cm-brain-overlay')).toBeInTheDocument();
-    // three tabs present
-    expect(screen.getByTestId('cm-tab-context')).toBeInTheDocument();
-    expect(screen.getByTestId('cm-tab-memory')).toBeInTheDocument();
-    expect(screen.getByTestId('cm-tab-guideline')).toBeInTheDocument();
-    // context panel is the active one
+    for (const id of ['context', 'memory', 'knowledge', 'how']) expect(screen.getByTestId(`cm-tab-${id}`)).toBeInTheDocument();
+    expect(screen.queryByTestId('cm-tab-evolution')).toBeNull();
+    expect(screen.queryByTestId('cm-tab-guideline')).toBeNull();
+    expect(screen.queryByTestId('cm-overview-rail')).toBeNull();
     expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
   });
 
-});
-
-describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
-  const GRAPH = {
-    nodes: [
-      { type: 'principle', count: 10 },
-      { type: 'correction', count: 5 },
-      { type: 'decision', count: 7 },
-      { type: 'guideline', count: 101 },
-      { type: 'pitfall', count: 69 },
-      { type: 'process', count: 1 },
-      { type: 'model', count: 4 },
-    ],
-    drill: {
-      guideline: [{ title: 'G-latest', meta: '2026-08-02' }],
-      principle: [], correction: [], decision: [], pitfall: [], process: [], model: [],
-    },
-    total: 197,
-  };
-
-  function mockGraph() {
-    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.includes('brain-graph')) return Promise.resolve({ data: GRAPH });
-      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      if (url.includes('archive-list')) return Promise.resolve({ data: { files: [], total_files: 0, source: url.includes('evolution') ? 'evolution' : 'memory' } });
-      if (url.includes('archive-search')) return Promise.resolve({ data: { results: [], q: '', source: url.includes('evolution') ? 'evolution' : 'memory' } });
-      // lite (default)
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
-    });
-  }
-
-  async function openMemory() {
-    mockGraph();
+  it('first paint reads the lite endpoint only (no governance list, no heavy context-health)', async () => {
     renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-memory').click(); });
-    return screen.findByTestId('cm-panel-memory');
-  }
-
-  it('renders 7 graph nodes from the backend endpoint (backend-primary)', async () => {
-    await openMemory();
-    const nodes = await screen.findAllByTestId(/^cm-graph-node-/);
-    expect(nodes).toHaveLength(7);
-    // node count is served, not invented
-    expect(screen.getByTestId('cm-graph-node-guideline').textContent).toMatch(/101/);
-  });
-
-  it('clicking a node drills the latest entries of that type', async () => {
-    await openMemory();
-    const node = await screen.findByTestId('cm-graph-node-guideline'); // wait for the query
-    act(() => { node.click(); });
-    const drill = await screen.findByTestId('cm-drill-list');
-    expect(drill.textContent).toMatch(/G-latest/);
-  });
-
-  it('renders a by-type distribution bar per type', async () => {
-    await openMemory();
-    const bars = await screen.findAllByTestId(/^cm-bar-/);
-    expect(bars).toHaveLength(7);
-  });
-
-  it('shows a "collecting since launch" placeholder when the size-trend has <2 points', async () => {
-    const panel = await openMemory();
-    // trend endpoint returned 0 points → NEVER a fabricated line, an explicit placeholder
-    expect(panel.textContent).toMatch(/collecting/i);
-  });
-
-  it('renders an empty-but-valid graph when all node counts are zero', async () => {
-    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.includes('brain-graph')) return Promise.resolve({ data: {
-        nodes: [
-          { type: 'principle', count: 0 },
-          { type: 'correction', count: 0 },
-          { type: 'decision', count: 0 },
-          { type: 'guideline', count: 0 },
-          { type: 'pitfall', count: 0 },
-          { type: 'process', count: 0 },
-          { type: 'model', count: 0 },
-        ], drill: {}, total: 0 } });
-      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
-    });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-memory').click(); });
-    const panel = await screen.findByTestId('cm-panel-memory');
-    expect(panel).toBeInTheDocument();
-    expect((await screen.findAllByTestId(/^cm-graph-node-/))).toHaveLength(7);
-  });
-});
-
-describe('CMBrainOverlay — Guideline tab (static teaching content, DoD3)', () => {
-  async function openGuideline() {
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-guideline').click(); });
-    return screen.findByTestId('cm-panel-guideline');
-  }
-
-  it('renders the 5 lifecycle cards in order (Assemble→Recall→Judge→Sediment→Revise)', async () => {
-    await openGuideline();
-    const flow = screen.getByTestId('cm-guideline-lifecycle');
-    const stages = within(flow).getAllByTestId(/^cm-lc-/);
-    expect(stages.map((s) => s.getAttribute('data-testid'))).toEqual([
-      'cm-lc-assemble', 'cm-lc-recall', 'cm-lc-judge', 'cm-lc-sediment', 'cm-lc-revise',
-    ]);
-  });
-
-  it('renders Automatic vs Manual as two columns with tagged items', async () => {
-    await openGuideline();
-    expect(screen.getByTestId('cm-guideline-automatic')).toBeInTheDocument();
-    expect(screen.getByTestId('cm-guideline-manual')).toBeInTheDocument();
-    // automatic column names real mechanisms (Recall/review/Override) — not counts
-    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/Recall/);
-    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/After-session review/);
-    // entries in a main file no longer decay: no decay/dormant mechanism is taught
-    expect(screen.getByTestId('cm-guideline-automatic').textContent).not.toMatch(/Decay|dormant/);
-    // manual column names user-steered surfaces (STEERING/USER/skill)
-    expect(screen.getByTestId('cm-guideline-manual').textContent).toMatch(/STEERING|USER|[Ss]kill/);
-  });
-
-  it('names what each mechanism DOES, never a raw source identifier', async () => {
-    const panel = await openGuideline();
-    const txt = panel.textContent ?? '';
-    expect(txt).not.toMatch(/context_health|memory_edit_guard|ddd_cultivation|knowledge_backflow|correction_capture|high_signal_capture/);
-    expect(txt).not.toMatch(/s_persist|s_memory-distill|s_self-evolution|s_project-manager|s_golden-case/);
-  });
-
-  it('teaches only mechanisms that exist: nothing decays, nothing is cut by size', async () => {
-    const panel = await openGuideline();
-    const txt = panel.textContent ?? '';
-    // retired: the size-valve, injection-time truncation, entry decay, the old
-    // cultivation path, the "confident-only" rule
-    expect(txt).not.toMatch(/[Dd]ecay|dormant|truncat|cut from|size cap|Cultivation|confident-only|cold layer/);
-    // the machinery is told once (the old "under the hood" list repeated it)
-    expect(screen.queryByTestId('cm-guideline-chips')).toBeNull();
-  });
-
-  it('R30: bakes NO drifty numeric counts into the static content', async () => {
-    const panel = await openGuideline();
-    // Static teaching content must describe MECHANISMS, not counts. Guard against a
-    // baked "214 entries" / "86 skills" style number sneaking in (R30 no-drift).
-    // Allow structural digits inside testids/hex; check only visible text tokens.
-    const visible = panel.textContent ?? '';
-    // no standalone integer >=3 digits (e.g. 214, 108) that would be a drifty count
-    expect(visible).not.toMatch(/\b\d{3,}\b/);
-  });
-});
-
-describe('CMBrainOverlay — Context tab consumes the token block', () => {
-  it('renders one row per per_file entry, driven by the payload (not hardcoded)', async () => {
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    await waitFor(() => {
-      expect(screen.getByTestId('cm-file-row-SWARMAI.md')).toBeInTheDocument();
-    });
-    expect(screen.getByTestId('cm-file-row-MEMORY.md')).toBeInTheDocument();
-    expect(screen.getByTestId('cm-file-row-KNOWLEDGE.md')).toBeInTheDocument();
-    // exactly 4 rows — driven by the 4-entry payload
-    expect(screen.getAllByTestId(/^cm-file-row-/)).toHaveLength(4);
-  });
-
-  it('row is width-capped and the filename keeps its truncation bound (no dead-space void)', async () => {
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    const row = await screen.findByTestId('cm-file-row-SWARMAI.md');
-    // §4 group+cap: the row content is bounded (max-w-*), so metadata sits next to
-    // the name instead of a screen away on a wide window.
-    expect(row.className).toMatch(/max-w-/);
-    // run_5f040023: the row is now a fixed-column GRID (AC4 alignment) with the
-    // name in the `1fr` column, so `min-w-0 truncate` (NOT flex-1) is the
-    // truncation bound — the grid `1fr` provides the flex the old flex-1 did.
-    // run_2816ab1c: the name cell is now a flex-col wrapper (name + optional
-    // health-counts line); `min-w-0` moved to the wrapper, `truncate` stays on the
-    // inner name span. The truncation contract is unchanged — just re-nested.
-    expect(row.className).toContain('grid');
-    // The inner name span carries `truncate`; its wrapper (grid 1fr cell) carries
-    // `min-w-0`. Select the inner one explicitly (the wrapper also contains the text).
-    const nameSpan = Array.from(row.querySelectorAll('span')).find(
-      (s) => s.textContent?.startsWith('SWARMAI.md') && s.className.includes('truncate'),
-    ) as HTMLElement;
-    expect(nameSpan).toBeTruthy();
-    expect(nameSpan.className).toContain('truncate');
-    expect((nameSpan.parentElement as HTMLElement).className).toContain('min-w-0');
-  });
-
-  it('shows ownership + lock from the payload', async () => {
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    const swarmaiRow = await screen.findByTestId('cm-file-row-SWARMAI.md');
-    // locked P0 system file shows a lock affordance
-    expect(swarmaiRow.querySelector('[data-testid="cm-lock"]')).not.toBeNull();
-    expect(swarmaiRow.getAttribute('data-owner')).toBe('system');
-    const memRow = screen.getByTestId('cm-file-row-MEMORY.md');
-    expect(memRow.getAttribute('data-owner')).toBe('agent');
-    expect(memRow.querySelector('[data-testid="cm-lock"]')).toBeNull(); // not locked
-  });
-
-  it('renders the per-file Health tag from the payload (DoD5, backend-derived)', async () => {
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    const memRow = await screen.findByTestId('cm-file-row-MEMORY.md');
-    const memTag = memRow.querySelector('[data-testid="cm-health"]');
-    expect(memTag).not.toBeNull();
-    expect(memTag!.textContent).toBe('oversized'); // from payload, not invented
-    const userRow = screen.getByTestId('cm-file-row-USER.md');
-    expect(userRow.querySelector('[data-testid="cm-health"]')!.textContent).toBe('idle');
-    const swRow = screen.getByTestId('cm-file-row-SWARMAI.md');
-    expect(swRow.querySelector('[data-testid="cm-health"]')!.textContent).toBe('fresh');
-  });
-
-  it('knowledge-health counts show only exact duplicates, and only when non-zero', async () => {
-    mockHealth({ token_block: { ...TOKEN_BLOCK, per_file: [
-      { ...TOKEN_BLOCK.per_file[2], health_counts: { entries: 40, duplicate: 2 } },
-      { ...TOKEN_BLOCK.per_file[3], health_counts: { entries: 12, duplicate: 0 } },
-    ] } });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    const counts = await screen.findByTestId('cm-health-counts-MEMORY.md');
-    expect(counts.textContent).toBe('2 dup');
-    expect(screen.queryByTestId('cm-health-counts-KNOWLEDGE.md')).toBeNull();
-  });
-
-  it('shows the legend: numbers are what each file puts in the prompt, nothing is cut', async () => {
-    renderOverlay();
-    openOverlay();
-    const panel = await screen.findByTestId('cm-panel-context');
-    // the read path cuts nothing (R23): no truncation contract is taught, and the
-    // legend no longer claims disk size == prompt load (TIMELINE is selected)
-    expect(panel.textContent).toMatch(/what the file puts in the prompt/i);
-    expect(panel.textContent).not.toMatch(/disk size = prompt load|injected in full/i);
-    expect(panel.textContent).not.toMatch(/truncat|cut from/i);
-    expect(panel.textContent).toMatch(/fresh.*idle.*growing.*oversized|Health/i);
-  });
-
-  it('overview rail shows the live total tokens from the payload', async () => {
-    renderOverlay();
-    openOverlay();
-    const rail = await screen.findByTestId('cm-overview-rail');
-    // 100000 tokens → rendered as a compact "100K" (or contains the number).
-    // Wait for the async query to resolve into the rail.
-    await waitFor(() => expect(rail.textContent).toMatch(/100[,.]?0?K?/));
-  });
-
-  it('Needs-you holds only Approve, wired to the governance count (DoD4)', async () => {
-    mockHealth({}, { governancePending: 2 }); // 2 governance proposals awaiting decision
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    // Approve reads the governance count (real wiring, not hardcoded 0)
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    // knowledge needs no queue (CDF judges and writes it): no Review button
-    expect(screen.queryByTestId('cm-needs-review')).toBeNull();
-  });
-});
-
-describe('CMBrainOverlay — overview rail growth-trend + Needs-you filter (DoD4)', () => {
-  it('shows a "collecting since launch" growth-trend placeholder when <2 points', async () => {
-    mockHealth({}, { trendPoints: [] });
-    renderOverlay();
-    openOverlay();
-    const rail = await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(rail.textContent).toMatch(/collecting/i));
-  });
-
-  it('draws the growth-trend line when >=2 points exist (never fabricated)', async () => {
-    mockHealth({}, { trendPoints: [
-      { date: '2026-08-01', prompt_tokens: 90000, memory_bytes: 47000 },
-      { date: '2026-08-02', prompt_tokens: 91000, memory_bytes: 48000 },
-    ] });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    // a real 2-point series → an SVG trend path in the rail
-    expect(await screen.findByTestId('cm-rail-trend-svg')).toBeInTheDocument();
-  });
-
-  it('plots only prompt-measured points: older disk-sum points (prompt_tokens null) are a break, not data', async () => {
-    mockHealth({}, { trendPoints: [
-      { date: '2026-11-19', prompt_tokens: null, memory_bytes: 47000 },
-      { date: '2026-11-20', prompt_tokens: null, memory_bytes: 47500 },
-      { date: '2026-11-21', prompt_tokens: 71000, memory_bytes: 48000 },
-    ] });
-    renderOverlay();
-    openOverlay();
-    const rail = await screen.findByTestId('cm-overview-rail');
-    // one prompt point after the break: still collecting, since the first prompt point
-    await waitFor(() => expect(rail.textContent).toMatch(/collecting since 2026-11-21/i));
-    expect(screen.queryByTestId('cm-rail-trend-svg')).toBeNull();
-  });
-
-  it('draws the line from the prompt-measured points once there are two after the break', async () => {
-    mockHealth({}, { trendPoints: [
-      { date: '2026-11-20', prompt_tokens: null, memory_bytes: 47500 },
-      { date: '2026-11-21', prompt_tokens: 71000, memory_bytes: 48000 },
-      { date: '2026-11-22', prompt_tokens: 72000, memory_bytes: 48100 },
-    ] });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    const svg = await screen.findByTestId('cm-rail-trend-svg');
-    // two points → one M and one L, no NaN from the null point
-    const d = svg.querySelector('path')?.getAttribute('d') ?? '';
-    expect(d).not.toMatch(/NaN/);
-    expect(d.match(/[ML]/g)).toEqual(['M', 'L']);
-  });
-
-  it('clicking a Needs-you button filters the main area to that list + back returns + rail active', async () => {
-    mockHealth({}, { governancePending: 2 });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    // click Approve → main area swaps to the filtered list
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    const list = await screen.findByTestId('cm-needs-list');
-    expect(list).toBeInTheDocument();
-    expect(screen.queryByTestId('cm-panel-context')).toBeNull(); // tab content hidden
-    // AC6: the rail Approve button shows an ACTIVE state while its list is open
-    expect(screen.getByTestId('cm-needs-approve').getAttribute('data-active')).toBe('true');
-    // AC6: an explicit Back header (breadcrumb) exists, labeled with the return target
-    const back = await screen.findByTestId('cm-needs-back');
-    expect(back.textContent).toMatch(/back/i);
-    // back returns to the Context tab + clears rail active
-    act(() => { back.click(); });
-    expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
-    expect(screen.queryByTestId('cm-needs-list')).toBeNull();
-    expect(screen.getByTestId('cm-needs-approve').getAttribute('data-active')).toBe('false');
-  });
-});
-
-describe('CMBrainOverlay — AC1 lite endpoint wiring', () => {
-  it('first paint queries /eval/context-health/lite, never the heavy /eval/context-health', async () => {
-    mockHealth();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    await waitFor(() => expect(screen.getByTestId('cm-file-row-SWARMAI.md')).toBeInTheDocument());
-    const urls = (api.get as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    const urls = get.mock.calls.map((c) => c[0] as string);
     expect(urls.some((u) => u.includes('/eval/context-health/lite'))).toBe(true);
-    // the heavy endpoint (exact, without /lite) must NOT be fetched on first paint
     expect(urls.some((u) => /\/eval\/context-health(?!\/lite)/.test(u))).toBe(false);
-  });
-
-  it('Approve count comes from lite governance_pending_count (no first-paint governance/pending fetch)', async () => {
-    mockHealth({}, { governancePending: 2 });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    // the governance LIST is lazy — not fetched until Approve is opened
-    const urls = (api.get as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
     expect(urls.some((u) => u.includes('governance/pending'))).toBe(false);
   });
 });
 
-describe('CMBrainOverlay — AC2 rows open in Canvas', () => {
-  it('clicking a file row dispatches swarm:open-file for that .context file', async () => {
-    mockHealth();
-    const seen: Array<{ path?: string }> = [];
-    const handler = (e: Event) => seen.push((e as CustomEvent).detail);
-    document.addEventListener('swarm:open-file', handler);
-    try {
-      renderOverlay();
-      openOverlay();
-      await screen.findByTestId('cm-panel-context');
-      const row = await screen.findByTestId('cm-file-row-MEMORY.md');
-      act(() => { row.click(); });
-      expect(seen.some((d) => d.path === '.context/MEMORY.md')).toBe(true);
-    } finally {
-      document.removeEventListener('swarm:open-file', handler);
-    }
-  });
-
-  it('LOCKED files are ALSO openable (read-only is server-driven, not a dead lock)', async () => {
-    mockHealth();
-    const seen: Array<{ path?: string }> = [];
-    const handler = (e: Event) => seen.push((e as CustomEvent).detail);
-    document.addEventListener('swarm:open-file', handler);
-    try {
-      renderOverlay();
-      openOverlay();
-      await screen.findByTestId('cm-panel-context');
-      const locked = await screen.findByTestId('cm-file-row-SWARMAI.md');
-      act(() => { locked.click(); });
-      expect(seen.some((d) => d.path === '.context/SWARMAI.md')).toBe(true);
-    } finally {
-      document.removeEventListener('swarm:open-file', handler);
-    }
-  });
-});
-
-describe('CMBrainOverlay — AC3/4/5 governance cards + actions', () => {
-  it('Approve cards render governance fields + Defer POSTs the governance route', async () => {
-    mockHealth({}, { governancePending: 2 });
+describe('上下文 — the load', () => {
+  it('one number against the budget, a bar split by owner, a legend with each group total', async () => {
     renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    await screen.findByTestId('cm-needs-list');
-    // the governance LIST is lazy (fetched only when Approve opens) — wait for the card
-    const card = await screen.findByTestId('cm-proposal-GC14');
-    const list = screen.getByTestId('cm-needs-list');
-    expect(list.textContent).toMatch(/GC14/);
-    expect(list.textContent).toMatch(/same-turn observation/);
-    // governance card has a Defer action
-    act(() => { (card.querySelector('[data-testid="cm-card-defer"]') as HTMLElement).click(); });
-    await waitFor(() => {
-      const calls = (api.post as ReturnType<typeof vi.fn>).mock.calls;
-      const gov = calls.find((c) => (c[0] as string).includes('/eval/governance/decision'));
-      expect(gov).toBeTruthy();
-      expect((gov![1] as { proposal_id: string; decision: string }).decision).toBe('defer');
-      expect((gov![1] as { proposal_id: string }).proposal_id).toBe('GC14');
-    });
+    expect((await screen.findByTestId('cm-load-big-value')).textContent).toBe('71K');
+    expect(screen.getByTestId('cm-load-budget').textContent).toContain('54% of the 133K budget');
+    expect(screen.getAllByTestId(/^cm-budget-seg-/).map((s) => s.dataset.testid)).toEqual([
+      'cm-budget-seg-system', 'cm-budget-seg-user', 'cm-budget-seg-agent']);
+    const legend = screen.getByTestId('cm-load-legend').textContent ?? '';
+    expect(legend).toContain('Built in33.5K');
+    expect(legend).toContain('Yours14.2K');
+    expect(legend).toContain('Swarm learned23.5K');
   });
-});
 
-describe('CMBrainOverlay — a refused decision says why', () => {
-  it('shows the backend reason on the card and keeps its buttons', async () => {
-    mockHealth({}, { governancePending: 2 });
-    (api.post as ReturnType<typeof vi.fn>).mockRejectedValue({
-      response: { status: 400, data: { detail: 'GC14 holds a phrase the memory guard blocks; edit the row' } } });
+  it('no amber card when nothing waits on the person and the load is under budget', async () => {
     renderOverlay();
-    openOverlay();
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    const card = await screen.findByTestId('cm-proposal-GC14');
-    act(() => { (card.querySelector('[data-testid="cm-card-accept"]') as HTMLElement).click(); });
-    const refused = await screen.findByTestId('cm-card-refused');
-    expect(refused.textContent).toContain('memory guard blocks');
-    expect(card.querySelector('[data-testid="cm-card-accept"]')).toBeTruthy();
-  });
-});
-
-describe('CMBrainOverlay — Gate-2: lazy Approve list shows loading, not a false empty', () => {
-  it('shows a loading state (never "nothing to approve") while the governance list is in flight', async () => {
-    // governance/pending resolves on a deferred promise so we can observe the in-flight state
-    let resolveGov: (v: unknown) => void = () => {};
-    const govPromise = new Promise((r) => { resolveGov = r; });
-    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 2 } });
-      if (url.includes('governance/pending')) return govPromise.then(() => ({ data: { proposals: GOV_PROPS, total: 2 } }));
-      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 2 } });
-    });
-    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    // while in flight: a loading indicator, NOT the false "nothing to approve"
-    const loading = await screen.findByTestId('cm-needs-loading');
-    expect(loading).toBeInTheDocument();
-    expect(screen.getByTestId('cm-needs-list').textContent).not.toMatch(/nothing/i);
-    // resolve → cards appear
-    await act(async () => { resolveGov(null); });
-    await screen.findByTestId('cm-proposal-GC14');
-  });
-});
-
-describe('CMBrainOverlay — AC7 honest over-budget alert', () => {
-  it('shows over-by amount + names the top oversized files + an open action', async () => {
-    mockHealth(); // TOKEN_BLOCK is over_budget (100K vs 91K), MEMORY.md oversized 48K
-    renderOverlay();
-    openOverlay();
-    const rail = await screen.findByTestId('cm-overview-rail');
-    const alert = await screen.findByTestId('cm-budget-alert');
-    // over-by amount (100K-91K = 9K) surfaced, not just "over budget"
-    expect(alert.textContent).toMatch(/9[,.]?0?K|9000/);
-    // names the biggest offender file
-    expect(alert.textContent).toMatch(/MEMORY\.md/);
-    void rail;
-  });
-
-  it('slims Context rows — no redundant percent column alongside the token count', async () => {
-    mockHealth();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    const row = await screen.findByTestId('cm-file-row-MEMORY.md');
-    // AC7: the redundant composition-% cell is dropped (token count is the one fact)
-    expect(row.querySelector('[data-testid="cm-file-pct"]')).toBeNull();
-  });
-});
-
-describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion + pct tint', () => {
-  // AC1: the opened queue carries an intent-bearing heading + a one-line explainer
-  // that states WHAT it governs and WHAT its conf means.
-  it('Approve (governance) list shows an intent-bearing heading + an admission explainer', async () => {
-    mockHealth({}, { governancePending: 2 });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    await screen.findByTestId('cm-needs-list');
-    const explainer = await screen.findByTestId('cm-needs-explainer');
-    // governs rules/gates …
-    expect(explainer.textContent).toMatch(/rule|gate|govern/i);
-    // … and says what admits a proposal: 3× evidence, checked against existing rules
-    expect(explainer.textContent).toMatch(/3× evidence/);
-    expect(explainer.textContent).toMatch(/checked against/i);
-  });
-
-  // A GC proposal shows its id and what it was checked against (the why).
-  it('Approve card shows the GC id and the Checked text', async () => {
-    mockHealth({}, { governancePending: 2 });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    const card = await screen.findByTestId('cm-proposal-GC14');
-    expect(card.querySelector('[data-testid="cm-gc-id"]')!.textContent).toBe('GC14');
-    expect(card.textContent).toMatch(/checked against: R16b/);
-  });
-
-  // AC4 (run_5f040023, user override of the prior subtle-tint): explicit visible
-  // SHARE bar + % number per file. The user asked for "占比数字或条形" — both.
-  it('renders an explicit pct SHARE bar + percent number per file', async () => {
-    mockHealth();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    const row = await screen.findByTestId('cm-file-row-MEMORY.md');
-    // visible bar whose width encodes pct (48%) — sourced from payload, not invented
-    const bar = row.querySelector('[data-testid="cm-pct-bar"]') as HTMLElement;
-    expect(bar).not.toBeNull();
-    expect(bar.style.width).toMatch(/48/);
-    // explicit % number is shown (the user asked for the number, not just a cue)
-    const num = row.querySelector('[data-testid="cm-pct-num"]') as HTMLElement;
-    expect(num).not.toBeNull();
-    expect(num.textContent).toContain('48');
-  });
-
-  // The old ✂ selective cue and the rail's "actually injected (selective)" line stay
-  // gone: the injected size is now the row's main number itself (and the disk size
-  // its secondary line, see "injected tokens, disk secondary" below).
-  it('shows NO selective cue and NO injected-estimate line (full-injection architecture)', async () => {
-    mockHealth();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    // No ✂ selective cue on any row (MEMORY was the selective one under the old arch).
-    const memRow = await screen.findByTestId('cm-file-row-MEMORY.md');
-    expect(memRow.querySelector('[data-testid="cm-selective"]')).toBeNull();
-    // No "actually injected (selective)" rail line — the headline IS the injected load.
-    expect(screen.queryByTestId('cm-injected')).toBeNull();
-  });
-});
-
-describe('CMBrainOverlay — Evolution tab + file-list ArchivePanel (Run C)', () => {
-  const MEM_FILES = [
-    { name: 'MEMORY-archive-2026-07.md', bytes: 264000, period: '2026-07', entry_count: 42 },
-    { name: 'MEMORY-archive-2026-03.md', bytes: 768, period: '2026-03', entry_count: 2 },
-  ];
-  const EVO_FILES = [
-    { name: 'EVOLUTION-archive-2026-08.md', bytes: 26471, period: '2026-08', entry_count: 7 },
-    { name: 'EVOLUTION-archive.md', bytes: 42808, period: 'legacy', entry_count: 12 },
-  ];
-  // Evolution graph in OUR priority order (backend returns pre-ordered).
-  const EVO_GRAPH = {
-    nodes: [
-      { type: 'class', count: 4 },
-      { type: 'correction', count: 3 },
-      { type: 'meta-correction', count: 1 },
-      { type: 'root-cause', count: 0 },
-      { type: 'data-point', count: 2 },
-      { type: 'directive', count: 1 },
-      { type: 'failed-evolution', count: 0 },
-      { type: 'entry', count: 0 },
-    ],
-    drill: { class: [{ title: 'CLASS A: Confidence Skip', meta: '' }],
-      correction: [], 'meta-correction': [], 'root-cause': [], 'data-point': [], directive: [], 'failed-evolution': [], entry: [] },
-    total: 11,
-  };
-
-  // Mock that answers archive (file list) + graph/trend per-source + query.
-  function mockArchive(opts: { evoFiles?: unknown[]; memFiles?: unknown[]; evoHits?: unknown[]; evoGraph?: unknown } = {}) {
-    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      const isEvo = url.includes('evolution');
-      if (url.includes('archive-list')) {
-        const files = isEvo ? (opts.evoFiles ?? EVO_FILES) : (opts.memFiles ?? MEM_FILES);
-        return Promise.resolve({ data: { files, total_files: (files as unknown[]).length, source: isEvo ? 'evolution' : 'memory' } });
-      }
-      if (url.includes('archive-search')) {
-        return Promise.resolve({ data: { results: isEvo ? (opts.evoHits ?? []) : [], q: 'x', source: isEvo ? 'evolution' : 'memory' } });
-      }
-      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      if (url.includes('brain-graph')) return Promise.resolve({ data: isEvo ? (opts.evoGraph ?? EVO_GRAPH) : { nodes: [], drill: {}, total: 0 } });
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
-    });
-    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
-  }
-
-  async function openEvolution() {
-    mockArchive();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
-    return screen.findByTestId('cm-panel-evolution');
-  }
-
-  it('adds an Evolution tab that MIRRORS Memory: graph + bars + drill + archive', async () => {
-    await openEvolution();
-    expect(screen.getByTestId('cm-tab-evolution')).toBeInTheDocument();
-    // graph nodes (mirror of MemoryTab's graph), by-kind bars, and the archive panel
-    expect((await screen.findAllByTestId(/^cm-graph-node-/)).length).toBe(8);
-    expect(screen.getByTestId('cm-bar-class')).toBeInTheDocument();
-    expect(await screen.findByTestId('cm-archive-evolution')).toBeInTheDocument();
-  });
-
-  it('evolution graph nodes render in OUR priority order (class first), backend-served', async () => {
-    await openEvolution();
-    const nodes = await screen.findAllByTestId(/^cm-graph-node-/);
-    const order = nodes.map((n) => n.getAttribute('data-testid'));
-    expect(order[0]).toBe('cm-graph-node-class');       // highest priority first
-    expect(order[1]).toBe('cm-graph-node-correction');
-    // count is served, not invented
-    expect(screen.getByTestId('cm-graph-node-class').textContent).toMatch(/4/);
-  });
-
-  it('clicking an evolution node drills its latest entries', async () => {
-    await openEvolution();
-    const node = await screen.findByTestId('cm-graph-node-class');
-    act(() => { node.click(); });
-    const drill = await screen.findByTestId('cm-drill-list');
-    expect(drill.textContent).toMatch(/CLASS A: Confidence Skip/);
-  });
-
-  it('Archived is a FILE list (name·period·count·size, click opens the shard), NOT a content dump', async () => {
-    await openEvolution();
-    const list = await screen.findByTestId('cm-archive-list-evolution');
-    // file rows, not entry content
-    const rows = within(list).getAllByTestId('cm-archive-file-evolution');
-    expect(rows.length).toBe(2);
-    expect(list.textContent).toMatch(/EVOLUTION-archive-2026-08\.md/);
-    expect(list.textContent).toMatch(/2026-08/);        // period
-    expect(list.textContent).toMatch(/7 entries/);      // entry count
-    expect(list.textContent).toMatch(/legacy/);         // undated shard → 'legacy'
-    // clicking a file row opens that shard in Canvas
-    const seen: Array<{ path?: string }> = [];
-    const handler = (e: Event) => seen.push((e as CustomEvent).detail);
-    document.addEventListener('swarm:open-file', handler);
-    try {
-      act(() => { rows[0].click(); });
-      expect(seen.some((d) => d.path === '.context/EVOLUTION-archive-2026-08.md')).toBe(true);
-    } finally {
-      document.removeEventListener('swarm:open-file', handler);
-    }
-  });
-
-  it('Memory tab archive is ALSO a file list (source=memory)', async () => {
-    mockArchive();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-memory').click(); });
-    await screen.findByTestId('cm-panel-memory');
-    const list = await screen.findByTestId('cm-archive-list-memory');
-    expect(within(list).getAllByTestId('cm-archive-file-memory').length).toBe(2);
-    expect(list.textContent).toMatch(/MEMORY-archive-2026-07\.md/);
-    expect(list.textContent).toMatch(/42 entries/);
-  });
-
-  it('typing a query swaps the file list for recall results, clearing restores the file list', async () => {
-    mockArchive({ evoHits: [{ title: 'CLASS A skip', snippet: 'confidence → skip process…', source_file: '.context/Archives/EVOLUTION-archive-2026-08.md', shard: 'EVOLUTION-archive-2026-08.md' }] });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
-    await screen.findByTestId('cm-panel-evolution');
-    const input = await screen.findByTestId('cm-archive-search-input-evolution') as HTMLInputElement;
-    const { fireEvent } = await import('@testing-library/react');
-    await act(async () => { fireEvent.change(input, { target: { value: 'skip' } }); });
-    const results = await screen.findByTestId('cm-archive-results-evolution');
-    expect(results.textContent).toMatch(/CLASS A skip/);
-    // clearing returns to the FILE list (teeth: not a stuck "Loading…" — list cached on mount)
-    act(() => { screen.getByTestId('cm-archive-search-clear-evolution').click(); });
-    const backToList = await screen.findByTestId('cm-archive-list-evolution');
-    expect(backToList.textContent).toMatch(/EVOLUTION-archive/);
-    expect(screen.queryByTestId('cm-archive-loading-evolution')).toBeNull();
-    expect(screen.queryByTestId('cm-archive-results-evolution')).toBeNull();
-  });
-
-  it('shows an empty-but-valid archive state when no shards exist', async () => {
-    mockArchive({ evoFiles: [] });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
-    await screen.findByTestId('cm-panel-evolution');
-    expect(await screen.findByTestId('cm-archive-empty-evolution')).toBeInTheDocument();
-  });
-});
-
-describe('CMBrainOverlay — degradation', () => {
-  it('renders without crashing when token_block is null (backend swallow)', async () => {
-    mockHealth({ token_block: null });
-    renderOverlay();
-    openOverlay();
-    // overlay still opens; context panel shows an empty-but-valid state
-    expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
-    expect(screen.queryAllByTestId(/^cm-file-row-/)).toHaveLength(0);
-  });
-});
-
-describe('CMBrainOverlay — north star in the rail', () => {
-  const NS = {
-    at: '2026-11-01T06:05:34+00:00',
-    measures: {
-      cognition: { week: '2026-W44', sessions: 134, corrected_rate: 0.69, window_weeks: 4, before_rate: 0.52,
-                   margin: 11, low: 0.06, high: 0.28, direction: 'worse', repeat_rate: 0.13, corrections: 139 },
-      cdf: { useful_rate: 0.83, target: 0.9, below_target: ['GENERAL'], checks_total: 10, checks_failing: ['C3'] },
-    },
-  };
-
-  it('shows the share of corrected sessions against the weeks before, repeats and useful knowledge', async () => {
-    mockHealth({ north_star: NS });
-    renderOverlay();
-    const rail = await screen.findByTestId('cm-north-star');
-    await waitFor(() => expect(within(rail).getByTestId('cm-ns-corrected').textContent).toContain('69%'));
-    expect(within(rail).getByTestId('cm-ns-corrected').textContent).toContain('4 weeks to 2026-W44 · 134 sessions');
-    expect(within(rail).getByTestId('cm-ns-direction').textContent).toMatch(/worse · 52% the 4 weeks before/);
-    expect(within(rail).getByTestId('cm-ns-repeats').textContent).toMatch(/13%.*139 corrections/);
-    expect(within(rail).getByTestId('cm-ns-cdf').textContent).toMatch(/83%.*target 90%/);
-  });
-
-  it('words a move inside the interval as no visible change, in the prompt headline\'s words', async () => {
-    mockHealth({ north_star: { ...NS, measures: { ...NS.measures, cognition: {
-      ...NS.measures.cognition, direction: 'same', margin: 11, low: -0.05, high: 0.17 } } } });
-    renderOverlay();
-    const rail = await screen.findByTestId('cm-north-star');
-    await waitFor(() => expect(within(rail).getByTestId('cm-ns-direction').textContent)
-      .toMatch(/no visible change \(±11 points\) · 52% the 4 weeks before/));
-  });
-
-  it('a snapshot from before the shared trend shows no direction rather than a band of its own', async () => {
-    const { before_rate: _b, margin: _m, window_weeks: _w, ...old } = NS.measures.cognition;
-    mockHealth({ north_star: { ...NS, measures: { ...NS.measures, cognition: { ...old, earlier_mean: 0.52 } } } });
-    renderOverlay();
-    const rail = await screen.findByTestId('cm-north-star');
-    await waitFor(() => expect(within(rail).getByTestId('cm-ns-corrected').textContent).toContain('69%'));
-    expect(within(rail).queryByTestId('cm-ns-direction')).toBeNull();
-  });
-
-  it('says it is not measured yet instead of showing 0', async () => {
-    mockHealth({ north_star: null });
-    renderOverlay();
-    const rail = await screen.findByTestId('cm-north-star');
-    await waitFor(() => expect(within(rail).getByTestId('cm-north-star-empty').textContent).toMatch(/not measured yet/));
-    expect(rail.textContent).not.toMatch(/0%/);
-  });
-});
-
-describe('CMBrainOverlay — Memory / Evolution say how they work today', () => {
-  it('Memory: injected whole, no fixed budget; Evolution: nothing moved out by size', async () => {
-    renderOverlay();
-    await screen.findByTestId('cm-brain-overlay');
-    act(() => { screen.getByTestId('cm-tab-memory').click(); });
-    const mem = await screen.findByTestId('cm-panel-memory');
-    expect(mem.textContent).toMatch(/injected whole/);
-    expect(mem.textContent).not.toMatch(/fixed budget|confident-only|size-valve/);
-    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
-    const evo = await screen.findByTestId('cm-panel-evolution');
-    expect(evo.textContent).toMatch(/nothing is moved out by size/);
-    expect(evo.textContent).not.toMatch(/size cap|bias tag/);
-  });
-});
-
-describe('CMBrainOverlay — injected tokens, disk secondary', () => {
-  // The person's case: TIMELINE.md is 67K on disk but injects only its month
-  // summaries (~0.5K); MEMORY.md goes in whole (disk == injected at the shown K).
-  const SELECTED_BLOCK = {
-    total_tokens: 71000,
-    disk_tokens: 139000,
-    budget: 133000,
-    warning_threshold: 133000,
-    emergency_threshold: 172000,
-    over_budget: false,
-    per_file: [
-      { name: 'SWARMAI.md', tokens: 2000, disk_tokens: 2010, pct: 2.8, owner: 'system', priority: 0, locked: true, health: 'fresh' },
-      { name: 'MEMORY.md', tokens: 68500, disk_tokens: 68510, pct: 96.5, owner: 'agent', priority: 7, locked: false, health: 'fresh' },
-      { name: 'TIMELINE.md', tokens: 500, disk_tokens: 67000, pct: 0.7, owner: 'user', priority: 10, locked: false, health: 'fresh' },
-    ],
-  };
-
-  it('a row shows the injected tokens as the main number and the disk size as secondary', async () => {
-    mockHealth({ token_block: SELECTED_BLOCK });
-    renderOverlay();
-    const row = await screen.findByTestId('cm-file-row-TIMELINE.md');
-    expect(within(row).getByTestId('cm-file-tokens').textContent).toBe('500');
-    expect(within(row).getByTestId('cm-file-disk').textContent).toBe('67K on disk');
-    // the share bar is the injected share the backend computed
-    expect((row.querySelector('[data-testid="cm-pct-bar"]') as HTMLElement).style.width).toMatch(/2%|0\.7/);
-  });
-
-  it('a file injected whole shows no disk line', async () => {
-    mockHealth({ token_block: SELECTED_BLOCK });
-    renderOverlay();
-    const row = await screen.findByTestId('cm-file-row-MEMORY.md');
-    expect(within(row).getByTestId('cm-file-tokens').textContent).toBe('69K');
-    expect(within(row).queryByTestId('cm-file-disk')).toBeNull();
-  });
-
-  it('the rail total is the injected load, with the disk total as secondary', async () => {
-    mockHealth({ token_block: SELECTED_BLOCK });
-    renderOverlay();
-    const rail = await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(rail.textContent).toContain('71K'));
-    expect(within(rail).getByTestId('cm-total-disk').textContent).toBe('139K on disk');
-  });
-
-  it('the banner does not fire when only the disk size is over the warning line', async () => {
-    mockHealth({ token_block: SELECTED_BLOCK });
-    renderOverlay();
-    const rail = await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(within(rail).getByTestId('cm-total-disk')).toBeInTheDocument());
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(screen.queryByTestId('cm-cards')).toBeNull();
     expect(screen.queryByTestId('cm-budget-alert')).toBeNull();
   });
 
-  it('the banner names only files whose injected size carries the load', async () => {
-    mockHealth({ token_block: {
-      ...SELECTED_BLOCK,
-      total_tokens: 140000,
-      over_budget: true,
-      per_file: [
-        // no growing/oversized tag, so the alert falls back to the biggest files: a
-        // file that injects nothing is never one of them, however big on disk
-        { name: 'MEMORY.md', tokens: 140000, disk_tokens: 140000, pct: 100, owner: 'agent', priority: 7, locked: false, health: 'fresh' },
-        { name: 'TIMELINE.md', tokens: 0, disk_tokens: 90000, pct: 0, owner: 'user', priority: 10, locked: false, health: 'fresh' },
-      ],
-    } });
+  it('a load error says so with Retry, never a zero', async () => {
+    get.mockRejectedValue(new Error('down'));
     renderOverlay();
-    const alert = await screen.findByTestId('cm-budget-alert');
-    expect(alert.textContent).toMatch(/MEMORY\.md/);
-    expect(alert.textContent).not.toMatch(/TIMELINE\.md/);
+    expect((await screen.findByTestId('cm-needs-error')).textContent).toMatch(/nothing to do/);
+    expect(screen.queryByTestId('cm-load-big')).toBeNull();
+  });
+});
+
+describe('上下文 — the files grouped by owner', () => {
+  it('groups agent · user · system, each with its total; the agent group with its 7-days-ago total', async () => {
+    renderOverlay();
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    const groups = screen.getAllByTestId(/^cm-group-(agent|user|system|auto)$/).map((g) => g.dataset.testid);
+    expect(groups).toEqual(['cm-group-agent', 'cm-group-user', 'cm-group-system']);
+    expect(screen.getByTestId('cm-group-total-agent').textContent).toBe('23.5K · 7 days ago 22.7K');
+    expect(screen.getByTestId('cm-group-total-user').textContent).toBe('14.2K');
+  });
+
+  it('rows are sorted by tokens within a group, rendered from per_file (no hardcoded list)', async () => {
+    renderOverlay();
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    const user = within(screen.getByTestId('cm-group-user')).getAllByTestId(/^cm-file-row-/).map((r) => r.dataset.testid);
+    expect(user).toEqual(['cm-file-row-TOOLS.md', 'cm-file-row-STEERING.md', 'cm-file-row-USER.md', 'cm-file-row-TIMELINE.md']);
+    expect(screen.getAllByTestId(/^cm-file-row-/)).toHaveLength(PER_FILE.length);
+    expect(screen.queryByTestId('cm-file-row-KNOWLEDGE.md')).toBeNull();
+  });
+
+  it('a row shows its role, tokens, its 7-day change, the file size only when 10x, a lock when locked', async () => {
+    renderOverlay();
+    const mem = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(within(mem).getByTestId('cm-file-role').textContent).toBe('63 entries · principles, decisions, lessons');
+    expect(within(mem).getByTestId('cm-file-tokens').textContent).toBe('15.3K');
+    expect(within(mem).getByTestId('cm-file-delta').textContent).toBe('+0.3K');
+    expect(within(mem).queryByTestId('cm-file-disk')).toBeNull();
+    const tl = screen.getByTestId('cm-file-row-TIMELINE.md');
+    expect(within(tl).getByTestId('cm-file-disk').textContent).toBe('file 71K');
+    expect(within(tl).queryByTestId('cm-file-delta')).toBeNull();
+    expect(within(screen.getByTestId('cm-file-row-SWARMAI.md')).getByTestId('cm-lock')).toBeInTheDocument();
+    expect(within(screen.getByTestId('cm-file-row-AGENT.md')).queryByTestId('cm-lock')).toBeNull();
+    // dropped: priority column, share bar + %, health badges
+    expect(mem.textContent).not.toMatch(/P7|21\.2%|fresh/);
+  });
+
+  it('an unknown file has no role label; another owner is its own group', async () => {
+    mockAll({ lite: { token_block: { ...BLOCK, per_file: [...PER_FILE,
+      { name: 'EXTRA.md', tokens: 900, disk_tokens: 900, pct: 1, owner: 'auto', priority: 11, locked: false, health_counts: null }] } } });
+    renderOverlay();
+    const row = await screen.findByTestId('cm-file-row-EXTRA.md');
+    expect(within(row).queryByTestId('cm-file-role')).toBeNull();
+    expect(within(screen.getByTestId('cm-group-auto')).getAllByTestId(/^cm-file-row-/)).toHaveLength(1);
+  });
+
+  it('repeated entries show only when there are some', async () => {
+    mockAll({ lite: { token_block: { ...BLOCK, per_file: PER_FILE.map((f) => (f.name === 'MEMORY.md'
+      ? { ...f, health_counts: { entries: 63, duplicate: 2 } } : f)) } } });
+    renderOverlay();
+    expect((await screen.findByTestId('cm-health-counts-MEMORY.md')).textContent).toBe('2 repeated');
+    expect(screen.queryByTestId('cm-health-counts-EVOLUTION.md')).toBeNull();
+  });
+
+  it('the whole row opens the file, locked ones too', async () => {
+    renderOverlay();
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    const cap = captureOpenFile();
+    try {
+      act(() => { screen.getByTestId('cm-file-row-MEMORY.md').click(); });
+      act(() => { screen.getByTestId('cm-file-row-SWARMAI.md').click(); });
+    } finally { cap.stop(); }
+    expect(cap.seen).toEqual(['.context/MEMORY.md', '.context/SWARMAI.md']);
+  });
+
+  it('without the north star readings no 7-day numbers are shown', async () => {
+    mockAll({ lite: { north_star: null } });
+    renderOverlay();
+    const mem = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(within(mem).queryByTestId('cm-file-delta')).toBeNull();
+    expect(screen.getByTestId('cm-group-total-agent').textContent).toBe('23.5K');
+  });
+});
+
+describe('上下文 — amber cards', () => {
+  it('a governance card appears only when one is pending, fetched lazily, with its decisions', async () => {
+    mockAll({ gov: GOV });
+    renderOverlay();
+    const card = await screen.findByTestId('cm-proposal-GC14');
+    expect(card.textContent).toContain('A new rule: Give a concurrent plan before dispatching');
+    expect(card.textContent).toContain('needs your approval');
+    expect(card.textContent).toContain('checked against: R16b · seen 3×');
+    act(() => { within(card).getByTestId('cm-card-defer').click(); });
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/eval/governance/decision', { proposal_id: 'GC14', decision: 'defer' }));
+  });
+
+  it('a refused decision shows the backend reason and keeps its buttons', async () => {
+    mockAll({ gov: GOV });
+    post.mockRejectedValue({ response: { status: 400, data: { detail: 'GC14 holds a phrase the memory guard blocks' } } });
+    renderOverlay();
+    const card = await screen.findByTestId('cm-proposal-GC14');
+    act(() => { within(card).getByTestId('cm-card-accept').click(); });
+    expect((await screen.findByTestId('cm-card-refused')).textContent).toContain('memory guard blocks');
+    expect(within(card).getByTestId('cm-card-accept')).toBeInTheDocument();
+  });
+
+  it('over the budget: an amber card naming the biggest injected files, each one click open', async () => {
+    mockAll({ lite: { token_block: { ...BLOCK, budget: 60000, over_budget: true } } });
+    renderOverlay();
+    const card = await screen.findByTestId('cm-budget-alert');
+    expect(card.textContent).toContain('Over the budget by 11.2K');
+    expect(within(card).getByTestId('cm-budget-open-AGENT.md')).toBeInTheDocument();
+    expect(within(card).getByTestId('cm-budget-open-MEMORY.md')).toBeInTheDocument();
+    expect(within(card).queryByTestId('cm-budget-open-TIMELINE.md')).toBeNull();
+  });
+});
+
+describe('记忆', () => {
+  async function openMemory() {
+    renderOverlay();
+    openTab('memory');
+    return screen.findByTestId('cm-panel-memory');
+  }
+
+  it('MEMORY: count, size against 7 days ago, a type bar, the newest six first, then all', async () => {
+    await openMemory();
+    const zone = await screen.findByTestId('cm-zone-memory');
+    expect((await within(zone).findByTestId('cm-memory-big-value')).textContent).toBe('8entries');
+    expect(within(zone).getByTestId('cm-memory-size').textContent).toBe('15.3K tokens · 7 days ago 15.0K');
+    const rows = within(zone).getAllByTestId('cm-entry-memory');
+    expect(rows).toHaveLength(6);
+    expect(rows[0].textContent).toContain('Newest guideline');
+    expect(rows[5].textContent).toContain('A pitfall four');
+    act(() => { within(zone).getByTestId('cm-more-memory').click(); });
+    expect(within(zone).getAllByTestId('cm-entry-memory')).toHaveLength(8);
+  });
+
+  it('a type chip filters the list to that type; clicking it again clears', async () => {
+    await openMemory();
+    const zone = await screen.findByTestId('cm-zone-memory');
+    const chip = await within(zone).findByTestId('cm-chip-memory-principle');
+    act(() => { chip.click(); });
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(within(zone).getAllByTestId('cm-entry-memory').map((r) => r.textContent)).toEqual([expect.stringContaining('A principle')]);
+    act(() => { chip.click(); });
+    expect(within(zone).getAllByTestId('cm-entry-memory')).toHaveLength(6);
+  });
+
+  it('EVOLUTION: corrections and competences, newest first, ids shown, +n this week', async () => {
+    await openMemory();
+    const zone = await screen.findByTestId('cm-zone-evolution');
+    expect((await within(zone).findByTestId('cm-evolution-big-value')).textContent).toBe('3entries');
+    expect(within(zone).getByTestId('cm-evolution-fresh').textContent).toBe('+1 this week');
+    expect(within(zone).getByTestId('cm-chip-evolution-competence').textContent).toContain('competence');
+    const rows = within(zone).getAllByTestId('cm-entry-evolution');
+    expect(rows[0].textContent).toContain('C103 · Next-step proposals stay one-by-one');
+    // MEMORY shows no weekly chip
+    expect(screen.queryByTestId('cm-memory-fresh')).toBeNull();
+  });
+
+  it('an entry opens its file', async () => {
+    await openMemory();
+    const zone = await screen.findByTestId('cm-zone-evolution');
+    const row = (await within(zone).findAllByTestId('cm-entry-evolution'))[0];
+    const cap = captureOpenFile();
+    try { act(() => { row.click(); }); } finally { cap.stop(); }
+    expect(cap.seen).toEqual(['.context/EVOLUTION.md']);
+  });
+
+  it('the search box says how much archive it covers; a query searches both files and both archives', async () => {
+    mockAll({ memHits: [{ title: 'Old pitfall in an archive', snippet: 'body', source_file: '.context/Archives/MEMORY-archive-2026-10.md', shard: 'MEMORY-archive-2026-10.md' }] });
+    await openMemory();
+    expect((await screen.findByTestId('cm-memory-search-hint')).textContent).toBe('incl. 3 archives · 902 entries');
+    await screen.findAllByTestId('cm-entry-memory');
+    await act(async () => { fireEvent.change(screen.getByTestId('cm-memory-search'), { target: { value: 'pitfall' } }); });
+    // results replace the two zones
+    expect(screen.queryByTestId('cm-zone-memory')).toBeNull();
+    expect((await screen.findAllByTestId('cm-hit-main')).length).toBe(6);
+    const arch = await screen.findByTestId('cm-hit-archive', undefined, { timeout: 2000 });
+    expect(arch.textContent).toContain('Old pitfall in an archive');
+    const urls = get.mock.calls.map((c) => c[0] as string);
+    expect(urls.some((u) => u.includes('archive-search?source=memory&q=pitfall'))).toBe(true);
+    expect(urls.some((u) => u.includes('archive-search?source=evolution&q=pitfall'))).toBe(true);
+    const cap = captureOpenFile();
+    try { act(() => { arch.click(); }); } finally { cap.stop(); }
+    expect(cap.seen).toEqual(['.context/MEMORY-archive-2026-10.md']);
+    act(() => { screen.getByTestId('cm-memory-search-clear').click(); });
+    expect(await screen.findByTestId('cm-zone-memory')).toBeInTheDocument();
+  });
+
+  it('no match says so', async () => {
+    await openMemory();
+    await screen.findAllByTestId('cm-entry-memory');
+    await act(async () => { fireEvent.change(screen.getByTestId('cm-memory-search'), { target: { value: 'zzqx' } }); });
+    expect((await screen.findByTestId('cm-search-empty', undefined, { timeout: 2000 })).textContent).toContain('zzqx');
+  });
+
+  it('dropped: the bubble graph, the by-type bars, the size trend, the archive file list', async () => {
+    const panel = await openMemory();
+    await screen.findAllByTestId('cm-entry-memory');
+    expect(screen.queryAllByTestId(/^cm-graph-node-|^cm-bar-|^cm-trend|^cm-archive-list-/)).toHaveLength(0);
+    expect(panel.textContent).not.toMatch(/How it works:|collecting since/i);
+  });
+});
+
+describe('知识', () => {
+  it('the first-recall hit rate against last week, the three recalls, the stores with their links', async () => {
+    const onOpen = vi.fn();
+    renderOverlay(onOpen);
+    openTab('knowledge');
+    expect((await screen.findByTestId('cm-recall-big-value')).textContent).toBe('88%');
+    expect(screen.getByTestId('cm-recall-compare').textContent).toBe('90 / 102 this week · last week 91%');
+    expect(screen.getByTestId('cm-leg-value-session_prompt').textContent).toBe('90 / 102');
+    expect(screen.getByTestId('cm-leg-value-session_followup').textContent).toBe('213 / 247');
+    expect(screen.getByTestId('cm-leg-value-session_ddd').textContent).toBe('52 / 77');
+    expect(screen.getByTestId('cm-store-projects').textContent).toContain('Project Brains · 9');
+    expect(screen.getByTestId('cm-store-projects').textContent).toContain('5727 entries');
+    expect(screen.getByTestId('cm-store-general').textContent).toContain('104 files');
+    expect(screen.getByTestId('cm-store-sessions').textContent).toContain('289 sessions');
+    expect(screen.getByTestId('cm-store-archives').textContent).toContain('13 files · 902 entries');
+    act(() => { screen.getByTestId('cm-store-projects').click(); });
+    act(() => { screen.getByTestId('cm-store-general').click(); });
+    expect(onOpen.mock.calls).toEqual([['brain-hub'], ['library']]);
+    act(() => { screen.getByTestId('cm-store-archives').click(); });
+    expect(await screen.findByTestId('cm-panel-memory')).toBeInTheDocument();
+  });
+
+  it('a store that could not be read shows a dash, not 0; no recall yet is said in words', async () => {
+    get.mockImplementation((url: string) => url.includes('/recall/knowledge')
+      ? Promise.resolve({ data: { ...KNOWLEDGE, contexts: {}, stores: { ...KNOWLEDGE.stores, sessions: null } } })
+      : Promise.resolve({ data: { token_block: BLOCK, governance_pending_count: 0 } }));
+    renderOverlay();
+    openTab('knowledge');
+    expect(await screen.findByTestId('cm-recall-none')).toBeInTheDocument();
+    expect(screen.getByTestId('cm-store-sessions').textContent).toContain('—');
+    expect(screen.getByTestId('cm-store-sessions').textContent).not.toMatch(/\b0\b/);
+  });
+});
+
+describe('工作原理', () => {
+  it('five layers in order; ① lists the files in per_file priority order with live size', async () => {
+    renderOverlay();
+    openTab('how');
+    await screen.findByTestId('cm-panel-how');
+    const layers = within(screen.getByTestId('cm-how-layers')).getAllByTestId(/^cm-layer-/).map((l) => l.dataset.testid);
+    expect(layers).toEqual(['cm-layer-1', 'cm-layer-2', 'cm-layer-3', 'cm-layer-4', 'cm-layer-5']);
+    const order = await screen.findByTestId('cm-how-order');
+    expect(order.textContent).toBe('In order: SWARMAI → IDENTITY → SELF · SOUL → AGENT → USER → STEERING → TOOLS → MEMORY → EVOLUTION → TIMELINE');
+    expect(screen.getByTestId('cm-layer-1').textContent).toContain('71K / 133K');
+    expect(screen.getByTestId('cm-layer-1').textContent).toContain('TIMELINE only its summaries');
+  });
+
+  it('the order follows per_file, not a fixed list', async () => {
+    mockAll({ lite: { token_block: { ...BLOCK, per_file: [PER_FILE[8], PER_FILE[0]].map((f, i) => ({ ...f, priority: i })) } } });
+    renderOverlay();
+    openTab('how');
+    expect((await screen.findByTestId('cm-how-order')).textContent).toBe('In order: MEMORY → SWARMAI');
+  });
+
+  it('live numbers: recalls brought back this week, CDF writes and every-turn writes', async () => {
+    renderOverlay();
+    openTab('how');
+    expect((await screen.findByTestId('cm-how-recalled')).textContent).toBe('355 brought back this week');
+    await waitFor(() => expect(screen.getByTestId('cm-how-loop').textContent).toContain('1,828 entries into 3 files'));
+    expect(screen.getByTestId('cm-how-loop').textContent).toContain('+6 this week');
+  });
+
+  it('without the CDF numbers the loop line says what happens, with no numbers', async () => {
+    get.mockImplementation((url: string) => (url.includes('/ingestion/landed') ? Promise.reject(new Error('x'))
+      : url.includes('/recall/knowledge') ? Promise.resolve({ data: KNOWLEDGE })
+        : Promise.resolve({ data: { token_block: BLOCK, governance_pending_count: 0 } })));
+    renderOverlay();
+    openTab('how');
+    const loop = await screen.findByTestId('cm-how-loop');
+    await waitFor(() => expect(get.mock.calls.some((c) => String(c[0]).includes('/ingestion/landed'))).toBe(true));
+    expect(loop.textContent).not.toMatch(/\d/);
+  });
+
+  it('dropped: the lifecycle boxes and the automatic / manual columns', async () => {
+    renderOverlay();
+    openTab('how');
+    await screen.findByTestId('cm-panel-how');
+    expect(screen.queryAllByTestId(/^cm-lc-|^cm-guideline-/)).toHaveLength(0);
   });
 });

@@ -142,7 +142,6 @@ export const overlayQuery = {
     queryFn: getJson<T>('/eval/context-health/lite'),
     staleTime: OVERLAY_STALE_MS,
   }),
-  contextTrend: <T,>() => ({ queryKey: ['cm-brain-trend'] as const, queryFn: getJson<T>('/eval/brain-trend'), staleTime: OVERLAY_STALE_MS }),
   libraryNative: <T,>() => ({ queryKey: ['library-native'] as const, queryFn: getJson<T>('/library/native'), staleTime: OVERLAY_STALE_MS }),
   libraryRecent: <T,>() => ({ queryKey: ['library-recent'] as const, queryFn: getJson<T>('/library/recent'), staleTime: OVERLAY_STALE_MS }),
   libraryMounts: <T,>() => ({ queryKey: ['library-mounts'] as const, queryFn: getJson<T>('/library/mounts'), staleTime: OVERLAY_STALE_MS }),
@@ -241,7 +240,7 @@ export interface PrefetchCtx { agentId?: string | null }
 export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOptions[]>> = {
   history: ({ agentId }) => (agentId ? [overlayQuery.historySessions(agentId), overlayQuery.agents()] : []),
   artifacts: () => [overlayQuery.artifactsProducts()],
-  context: () => [overlayQuery.contextLite(), overlayQuery.contextTrend()],
+  context: () => [overlayQuery.contextLite()],
   library: () => [overlayQuery.libraryNative(), overlayQuery.libraryRecent(), overlayQuery.libraryMounts()],
   'brain-hub': () => [brainsWithPinnedQuery()],
   todo: () => [overlayQuery.todo(TODO_DEFAULT_DAYS)],

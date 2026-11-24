@@ -108,8 +108,14 @@ registerOverlay({
 // (self-contained, fetches its own data) registered as content; host owns chrome.
 registerOverlay({
   id: 'context',
-  render: () => <CMBrainContent />,
+  render: () => <CMBrainSurface />,
 });
+
+/** C&M inside the overlay provider: its 知识 tab links switch to Brain Hub or the Library. */
+function CMBrainSurface() {
+  const { openOverlay } = useOverlay();
+  return <CMBrainContent onOpenOverlay={openOverlay} />;
+}
 
 // ── library (bookshelf) ───────────────────────────────────────────────────────────────
 registerOverlay({

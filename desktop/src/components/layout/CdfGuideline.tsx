@@ -18,7 +18,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ingestionService, type LandedOverview } from '../../services/ingestion';
 import { ZoneLabel } from './needYouParts';
-import { fmt } from './cdfText';
+import { fmt, placeTotals } from './cdfText';
 
 type Say = (en: string, zh: string) => string;
 
@@ -37,14 +37,6 @@ const KEPT = 'var(--color-status-success)';
 const MOVE = 'var(--color-zone-cognitive)';
 
 const SOURCES = ['S1', 'S7', 'S2', 'S4', 'S3', 'S6'] as const;
-const EVERY_TURN = new Set(['MEMORY', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'TIMELINE']);
-const GENERAL = new Set(['COMMON_DDD', 'KNOWLEDGE']);
-
-function placeTotals(data: LandedOverview | undefined): [number, number, number] | null {
-  if (!data) return null;
-  const sum = (keep: (store: string) => boolean) => data.landed.filter((r) => keep(r.store)).reduce((n, r) => n + r.written, 0);
-  return [sum((s) => EVERY_TURN.has(s)), sum((s) => s === 'DDD'), sum((s) => GENERAL.has(s))];
-}
 
 function FlowDiagram({ data }: { data?: LandedOverview }) {
   const say = useSay();
