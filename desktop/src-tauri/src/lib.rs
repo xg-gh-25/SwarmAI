@@ -302,7 +302,9 @@ const SHUTDOWN_GRACE_SECONDS: u64 = 10;
 // Daemon auto-restart is handled by launchd KeepAlive — no Tauri-side restart logic.
 
 // Send graceful shutdown request to backend via HTTP
-// This allows the backend to properly terminate Claude CLI child processes before being killed
+// This allows the backend to properly terminate Claude CLI child processes before being killed.
+// Both variants send X-Swarm-User-Action: the backend refuses /shutdown without it, so a
+// web page (which cannot send that header cross-site) cannot stop the backend.
 #[cfg(target_os = "windows")]
 fn send_shutdown_request(port: u16) -> bool {
     // Use PowerShell to send HTTP POST request (Windows built-in, no dependencies needed)
@@ -311,7 +313,7 @@ fn send_shutdown_request(port: u16) -> bool {
             "-NoProfile",
             "-Command",
             &format!(
-                "try {{ Invoke-WebRequest -Uri 'http://127.0.0.1:{}/shutdown' -Method POST -TimeoutSec {} }} catch {{}}",
+                "try {{ Invoke-WebRequest -Uri 'http://127.0.0.1:{}/shutdown' -Method POST -Headers @{{'X-Swarm-User-Action'='shutdown'}} -TimeoutSec {} }} catch {{}}",
                 port, SHUTDOWN_GRACE_SECONDS
             ),
         ])
@@ -345,6 +347,7 @@ fn send_shutdown_request(port: u16) -> bool {
             "-s",                                          // Silent mode
             "-X", "POST",                                  // POST request
             "-m", &timeout,                                // Timeout = SHUTDOWN_GRACE_SECONDS
+            "-H", "X-Swarm-User-Action: shutdown",         // the backend refuses /shutdown without it
             &format!("http://127.0.0.1:{}/shutdown", port),
         ])
         .output();
@@ -504,10 +507,11 @@ fn reap_in_background(mut child: std::process::Child) {
 /// Stop a backend this app spawned (Windows/Linux): ask it to shut down, wait for
 /// the child to exit (up to [`CHILD_EXIT_CEILING`]) and kill its process tree only
 /// if it is still running. The shutdown request itself blocks until the backend has
-/// disconnected its sessions (bounded by `SHUTDOWN_GRACE_SECONDS`); the backend's
-/// /shutdown does not exit the process today, so in normal use the wait runs to the
-/// ceiling and the kill ends it, and the early return pays off for a backend that
-/// exits by itself. `child` is used only when it is the process `pid` names
+/// disconnected its sessions (bounded by `SHUTDOWN_GRACE_SECONDS`). After answering,
+/// a subprocess-mode backend tears down, kills its own children and exits by itself
+/// within this ceiling in the normal case (backend/main.py `_exit_after_shutdown`),
+/// so the wait returns early and the kill is the backstop for one that does not.
+/// `child` is used only when it is the process `pid` names
 /// (a mismatched handle is treated as absent); without one there is nothing to
 /// poll: wait the ceiling, then kill `pid` (no wait when there is no `pid`).
 fn stop_owned_backend(

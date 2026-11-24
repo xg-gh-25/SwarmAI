@@ -1,7 +1,8 @@
 """FastAPI application entry point."""
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
 from contextlib import asynccontextmanager
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -1777,111 +1778,122 @@ async def lifespan(app: FastAPI):
 
         _warmer_start_task = asyncio.create_task(_start_model_access_warmer())
 
+    # The shutdown steps, run at most once (_run_teardown_once): by this lifespan's
+    # exit, or first by the exit that follows /shutdown in subprocess mode.
+    async def _lifespan_teardown() -> None:
+        global _startup_complete
+        _startup_complete = False
+        logger.info("Shutting down...")
+        if _ingestion_owner_task is not None and not _ingestion_owner_task.done():
+            _ingestion_owner_task.cancel()
+        if _ingestion["handle"] is not None:
+            try:
+                await asyncio.to_thread(_ingestion["handle"].stop_and_join)
+                logger.info("CDF ingestion owner worker stopped")
+            except Exception:
+                logger.exception("CDF ingestion worker did not stop cleanly")
+        if _readiness_task and not _readiness_task.done():
+            _readiness_task.cancel()
+            try:
+                await _readiness_task
+            except asyncio.CancelledError:
+                pass
+        # Recall-metrics: cancel the flush loop, then drain the current window ONCE so a
+        # CLEAN stop persists it (only a hard crash should lose ≤5min of samples).
+        if _recall_metrics_task and not _recall_metrics_task.done():
+            _recall_metrics_task.cancel()
+            try:
+                await _recall_metrics_task
+            except asyncio.CancelledError:
+                pass
+        try:
+            from core.recall_metrics import flush_once as _recall_flush_once
+            await _recall_flush_once()
+        except Exception:  # noqa: BLE001 — best-effort shutdown flush, never block teardown
+            logger.debug("recall metrics shutdown flush skipped", exc_info=True)
+        # Stop the liveness heartbeat (run_5b0d6ec3): cancel the loop-tick task +
+        # stop the independent writer thread (removes the heartbeat file so a
+        # restart doesn't read a stale one from this process).
+        if _loop_tick_task and not _loop_tick_task.done():
+            _loop_tick_task.cancel()
+            try:
+                await _loop_tick_task
+            except asyncio.CancelledError:
+                pass
+        try:
+            from core import heartbeat
+            heartbeat.stop_heartbeat()
+        except Exception:
+            logger.debug("heartbeat stop on shutdown skipped", exc_info=True)
+        # Drain the SQLite connection pool (run_7e8a2030) — join aiosqlite worker
+        # threads so shutdown is clean and no connection leaks.
+        try:
+            from database.sqlite import close_all_pools
+            await close_all_pools()
+            logger.info("SQLite connection pools closed")
+        except Exception:
+            logger.debug("pool close on shutdown skipped", exc_info=True)
+        # Stop Canvas Layer-2 workspace surface watcher
+        try:
+            if _workspace_surface_watcher is not None:
+                await _workspace_surface_watcher.stop()
+                logger.info("Workspace surface watcher stopped")
+        except Exception:
+            logger.debug("Workspace surface watcher shutdown skipped", exc_info=True)
+        if _swarm_out_bridge_task and not _swarm_out_bridge_task.done():
+            _swarm_out_bridge_task.cancel()
+        if _swarm_out_refresh_task and not _swarm_out_refresh_task.done():
+            _swarm_out_refresh_task.cancel()
+        if _hive_idle_task and not _hive_idle_task.done():
+            _hive_idle_task.cancel()
+        if _elastic_standby_task and not _elastic_standby_task.done():
+            _elastic_standby_task.cancel()
+        if _content_origin_on:
+            from core import content_origin as _content_origin
+            await _content_origin.stop()
+        if backend_mode != "hive":
+            from core.swarm_out import cancel_refresh as _swarm_out_cancel_refresh
+            _swarm_out_cancel_refresh()
+        if _inbox_runner_on:
+            await _inbox_runner.stop()
+        if _scheduler_task and not _scheduler_task.done():
+            _scheduler_task.cancel()
+            try:
+                await _scheduler_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("In-process scheduler stopped")
+        try:
+            from core import swarm_out_relay
+            await swarm_out_relay.manager().stop_all()
+        except Exception as exc:  # noqa: BLE001 — shutdown goes on
+            logger.debug("swarm_out_relay stop failed: %s", exc)
+        # still the owner only while backend.json names no other live backend: after a
+        # restart overlap the new owner's backend.port must survive this shutdown
+        await _svc_mgr.stop_all(still_owner=_other_live_backend() is None)
+        logger.info("Managed services stopped")
+        await channel_gateway.shutdown()
+        logger.info("Channel gateway stopped")
+        await session_registry.stop_lifecycle()
+        logger.info("LifecycleManager stopped")
+        # no model-access warm-up may start a CLI while the sessions are torn down
+        if _warmer_start_task is not None and not _warmer_start_task.done():
+            _warmer_start_task.cancel()
+        from core import model_access_warmer
+        model_access_warmer.stop()
+        await session_registry.disconnect_all()
+        logger.info("All sessions disconnected")
+        remove_backend_json(startup_mode=backend_mode)
+        logger.info("backend.json removed (mode=%s)", backend_mode)
+
+
+    _register_teardown(_lifespan_teardown)
     yield
     # Shutdown
-    _startup_complete = False
-    logger.info("Shutting down...")
-    if _ingestion_owner_task is not None and not _ingestion_owner_task.done():
-        _ingestion_owner_task.cancel()
-    if _ingestion["handle"] is not None:
-        try:
-            await asyncio.to_thread(_ingestion["handle"].stop_and_join)
-            logger.info("CDF ingestion owner worker stopped")
-        except Exception:
-            logger.exception("CDF ingestion worker did not stop cleanly")
-    if _readiness_task and not _readiness_task.done():
-        _readiness_task.cancel()
-        try:
-            await _readiness_task
-        except asyncio.CancelledError:
-            pass
-    # Recall-metrics: cancel the flush loop, then drain the current window ONCE so a
-    # CLEAN stop persists it (only a hard crash should lose ≤5min of samples).
-    if _recall_metrics_task and not _recall_metrics_task.done():
-        _recall_metrics_task.cancel()
-        try:
-            await _recall_metrics_task
-        except asyncio.CancelledError:
-            pass
     try:
-        from core.recall_metrics import flush_once as _recall_flush_once
-        await _recall_flush_once()
-    except Exception:  # noqa: BLE001 — best-effort shutdown flush, never block teardown
-        logger.debug("recall metrics shutdown flush skipped", exc_info=True)
-    # Stop the liveness heartbeat (run_5b0d6ec3): cancel the loop-tick task +
-    # stop the independent writer thread (removes the heartbeat file so a
-    # restart doesn't read a stale one from this process).
-    if _loop_tick_task and not _loop_tick_task.done():
-        _loop_tick_task.cancel()
-        try:
-            await _loop_tick_task
-        except asyncio.CancelledError:
-            pass
-    try:
-        from core import heartbeat
-        heartbeat.stop_heartbeat()
-    except Exception:
-        logger.debug("heartbeat stop on shutdown skipped", exc_info=True)
-    # Drain the SQLite connection pool (run_7e8a2030) — join aiosqlite worker
-    # threads so shutdown is clean and no connection leaks.
-    try:
-        from database.sqlite import close_all_pools
-        await close_all_pools()
-        logger.info("SQLite connection pools closed")
-    except Exception:
-        logger.debug("pool close on shutdown skipped", exc_info=True)
-    # Stop Canvas Layer-2 workspace surface watcher
-    try:
-        if _workspace_surface_watcher is not None:
-            await _workspace_surface_watcher.stop()
-            logger.info("Workspace surface watcher stopped")
-    except Exception:
-        logger.debug("Workspace surface watcher shutdown skipped", exc_info=True)
-    if _swarm_out_bridge_task and not _swarm_out_bridge_task.done():
-        _swarm_out_bridge_task.cancel()
-    if _swarm_out_refresh_task and not _swarm_out_refresh_task.done():
-        _swarm_out_refresh_task.cancel()
-    if _hive_idle_task and not _hive_idle_task.done():
-        _hive_idle_task.cancel()
-    if _elastic_standby_task and not _elastic_standby_task.done():
-        _elastic_standby_task.cancel()
-    if _content_origin_on:
-        from core import content_origin as _content_origin
-        await _content_origin.stop()
-    if backend_mode != "hive":
-        from core.swarm_out import cancel_refresh as _swarm_out_cancel_refresh
-        _swarm_out_cancel_refresh()
-    if _inbox_runner_on:
-        await _inbox_runner.stop()
-    if _scheduler_task and not _scheduler_task.done():
-        _scheduler_task.cancel()
-        try:
-            await _scheduler_task
-        except asyncio.CancelledError:
-            pass
-        logger.info("In-process scheduler stopped")
-    try:
-        from core import swarm_out_relay
-        await swarm_out_relay.manager().stop_all()
-    except Exception as exc:  # noqa: BLE001 — shutdown goes on
-        logger.debug("swarm_out_relay stop failed: %s", exc)
-    # still the owner only while backend.json names no other live backend: after a
-    # restart overlap the new owner's backend.port must survive this shutdown
-    await _svc_mgr.stop_all(still_owner=_other_live_backend() is None)
-    logger.info("Managed services stopped")
-    await channel_gateway.shutdown()
-    logger.info("Channel gateway stopped")
-    await session_registry.stop_lifecycle()
-    logger.info("LifecycleManager stopped")
-    # no model-access warm-up may start a CLI while the sessions are torn down
-    if _warmer_start_task is not None and not _warmer_start_task.done():
-        _warmer_start_task.cancel()
-    from core import model_access_warmer
-    model_access_warmer.stop()
-    await session_registry.disconnect_all()
-    logger.info("All sessions disconnected")
-    remove_backend_json(startup_mode=backend_mode)
-    logger.info("backend.json removed (mode=%s)", backend_mode)
+        await _run_teardown_once()
+    finally:
+        _register_teardown(None)   # the next lifespan in this process registers its own
 
 
 # Create FastAPI application
@@ -2292,13 +2304,134 @@ async def get_system_mode():
     }
 
 
+# The current lifespan's shutdown steps (registered before it yields) and the one
+# task that runs them: whichever asks first starts it, a later caller awaits the same
+# task, so no step runs twice. Each lifespan registers afresh (tests run several in
+# one process), which also forgets the previous lifespan's finished task.
+_teardown_holder: dict = {"fn": None, "task": None}
+
+
+def _register_teardown(fn) -> None:
+    """Make *fn* the teardown of the lifespan now running (None: no lifespan)."""
+    _teardown_holder["fn"] = fn
+    _teardown_holder["task"] = None
+
+
+async def _run_teardown_once() -> None:
+    """Run the current lifespan's shutdown steps, at most once per lifespan."""
+    task = _teardown_holder["task"]
+    if task is None:
+        fn = _teardown_holder["fn"]
+        if fn is None:      # the lifespan never started: nothing to tear down
+            return
+        task = _teardown_holder["task"] = asyncio.ensure_future(fn())
+    await task
+
+
+# Subprocess mode (the desktop app's child on Windows/Linux): after /shutdown has
+# answered, the backend tears down, kills its own children and exits by itself. The
+# app waits at most 3 s (CHILD_EXIT_CEILING in desktop/src-tauri/src/lib.rs) for that
+# exit before it kills the process tree, so the teardown gets 2 s and the child sweep
+# waits at most 0.5 s more.
+_CHILD_EXIT_TEARDOWN_BUDGET_S = 2.0
+_CHILD_SWEEP_WAIT_S = 0.5
+_child_exit_task: "asyncio.Task | None" = None
+
+
+def _kill_descendants(pid: int) -> int:
+    """Kill every live descendant of *pid*, deepest first, and wait briefly for them
+    to go. psutil checks each one's creation time, so a reused pid is never killed.
+    Returns how many were killed."""
+    from core.session_unit import _kill_surviving, _snapshot_descendant_procs
+    procs = _snapshot_descendant_procs(pid)
+    if not procs:
+        return 0
+    killed = _kill_surviving(list(reversed(procs)), "backend exit after /shutdown")
+    try:
+        import psutil
+        psutil.wait_procs(procs, timeout=_CHILD_SWEEP_WAIT_S)
+    except Exception:  # noqa: BLE001 — the SIGKILLs are sent; waiting is best-effort
+        logger.debug("wait for killed children skipped", exc_info=True)
+    return killed
+
+
+async def _kill_own_children() -> None:
+    """Kill the LifecycleManager's tracked PIDs, then every remaining descendant of
+    this process (Claude CLI trees, MCP servers, managed services): an exit that
+    leaves them would orphan them on Linux."""
+    lm = session_registry.lifecycle_manager
+    if lm is not None:
+        try:
+            await lm._kill_tracked_pids()
+        except Exception:  # noqa: BLE001 — the descendant sweep below still runs
+            logger.warning("kill of tracked child PIDs failed", exc_info=True)
+    killed = _kill_descendants(os.getpid())
+    if killed:
+        logger.info("Killed %d remaining child process(es) before exit", killed)
+
+
+def _exit_process(code: int = 0) -> None:
+    """Flush the logs and end the process at once. A normal interpreter exit would
+    join leftover non-daemon threads (a cancelled teardown's worker thread) and could
+    outlast the app's ceiling. The teardown has run by now, or was cut off at its
+    budget; the children were killed either way. os._exit skips atexit, so the log
+    queue's listener is drained and stopped here."""
+    try:
+        _log_listener.stop()
+        logging.shutdown()
+        sys.stdout.flush()
+        sys.stderr.flush()
+    finally:
+        os._exit(code)
+
+
+async def _exit_after_shutdown() -> None:
+    """The exit that follows /shutdown in subprocess mode: the lifespan's teardown
+    (bounded), then the kill of this process's children, then the exit."""
+    t0 = time.monotonic()
+    try:
+        await asyncio.wait_for(_run_teardown_once(), timeout=_CHILD_EXIT_TEARDOWN_BUDGET_S)
+    except asyncio.TimeoutError:
+        logger.warning("Teardown did not finish in %.1fs; cancelled, exiting anyway",
+                       _CHILD_EXIT_TEARDOWN_BUDGET_S)
+    except Exception:  # noqa: BLE001 — the children are still killed and the process exits
+        logger.exception("Teardown failed; exiting anyway")
+    teardown_s = time.monotonic() - t0
+    try:
+        await _kill_own_children()
+    except Exception:  # noqa: BLE001 — exit regardless; the app's tree kill is the backstop
+        logger.exception("Kill of child processes failed")
+    logger.info("Exiting after /shutdown (teardown %.2fs, total %.2fs)",
+                teardown_s, time.monotonic() - t0)
+    _exit_process(0)
+
+
+async def _schedule_child_exit() -> None:
+    """Start the exit task once (the /shutdown response's background task, so it runs
+    only after the response has been sent). A second /shutdown starts no second one.
+    Async on purpose: Starlette runs a sync background task in its thread pool, where
+    there is no event loop to start the task on."""
+    global _child_exit_task
+    if _child_exit_task is not None:
+        return
+    _child_exit_task = asyncio.get_running_loop().create_task(_exit_after_shutdown())
+
+
 @app.post("/shutdown")
-async def shutdown():
+async def shutdown(
+    user_action: "str | None" = Header(default=None, alias="X-Swarm-User-Action"),
+):
     """Graceful shutdown endpoint - disconnects all Claude SDK clients.
 
     Blocked in daemon and hive modes — these run 24/7 background services
-    (Slack channels, scheduled jobs) that must survive app window close.
-    Allowed in dev and subprocess modes (no persistent background services).
+    (Slack channels, scheduled jobs) that must survive app window close; there a
+    supervisor (launchd, systemd) owns the process.
+    Allowed in dev and subprocess modes (no persistent background services). In
+    subprocess mode (the desktop app's child) the process then tears down, kills its
+    children and exits by itself, after the response (``_exit_after_shutdown``).
+    In those two modes the request must carry ``X-Swarm-User-Action`` (the desktop app
+    sends it): the header is not CORS-safelisted, so a web page cannot send it
+    without a preflight the backend refuses, and cannot stop the backend.
     """
     mode = _detect_run_mode()
     if mode in ("daemon", "hive"):
@@ -2306,6 +2439,12 @@ async def shutdown():
         return JSONResponse(
             status_code=403,
             content={"status": "forbidden", "reason": f"shutdown disabled in {mode} mode"},
+        )
+    if not user_action:
+        logger.warning("Shutdown endpoint refused: no X-Swarm-User-Action header")
+        return JSONResponse(
+            status_code=403,
+            content={"status": "forbidden", "reason": "X-Swarm-User-Action required"},
         )
     logger.info("Shutdown endpoint called - disconnecting all clients")
     t0 = time.monotonic()
@@ -2317,6 +2456,11 @@ async def shutdown():
         logger.warning("disconnect_all timed out after 8s — proceeding with shutdown")
     elapsed = time.monotonic() - t0
     logger.info("Shutdown endpoint completed in %.2fs", elapsed)
+    if mode == "subprocess":
+        return JSONResponse(
+            content={"status": "shutting_down"},
+            background=BackgroundTask(_schedule_child_exit),
+        )
     return {"status": "shutting_down"}
 
 
