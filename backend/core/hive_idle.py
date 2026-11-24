@@ -179,13 +179,17 @@ def _lessons_by_hive() -> Optional[dict[str, int]]:
 
 
 async def _running_hives() -> list[dict[str, Any]]:
+    """The running EC2 Hives: only they are stopped or updated here through the EC2
+    provisioner (another carrier's row also says ``running``, core/carriers/ec2.ec2_only)."""
     import aiosqlite
     from core import swarm_out
+    from core.carriers.ec2 import ec2_only
     async with aiosqlite.connect(swarm_out._db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
+        only = await ec2_only(conn)
         cur = await conn.execute(
             "SELECT id, name, updated_at, version, idle_stop_minutes FROM hive_instances "
-            "WHERE status = 'running'")
+            f"WHERE status = 'running' AND {only}")
         return [{"id": r[0], "name": r[1], "updated_at": r[2], "version": r[3],
                  "idle_stop_minutes": r[4]}
                 for r in await cur.fetchall()]
@@ -323,16 +327,33 @@ async def _follow_host(prov, hive: dict[str, Any]) -> bool:
     return True
 
 
+async def _follow_other_carriers() -> list[str]:
+    """Every carrier that updates its own idle locations (``follow_host``: an SSH machine,
+    design docs/design/2026-11-24-swarm-out-ssh-machine.md §5.4) gets its look. Names of the
+    locations whose update it started. A carrier that fails is logged and the others go on."""
+    from core.carriers import registry
+    from core.carriers.base import FOLLOW_HOST
+    started: list[str] = []
+    for car in registry.with_duty(FOLLOW_HOST):
+        try:
+            started.extend(await car.follow_host())
+        except Exception as e:  # noqa: BLE001 — tried again next round
+            logger.warning("hive_idle: the %s carrier's update check failed (%s)", car.kind, type(e).__name__)
+    return started
+
+
 async def check_once(now: Optional[float] = None) -> list[str]:
     """One look at every running Hive: update each idle one behind the Host's version,
     stop each other one idle for its idle time (its own, else the default; never one set
     always on). Returns the names of the Hives whose stop
     it started. Both are duties of the EC2 carrier (its Hives are EC2 instances this Host
-    manages); without that carrier nothing is looked at (design
-    2026-11-20-swarm-out-multi-carrier §4.5)."""
+    manages); without that carrier nothing more is looked at (design
+    2026-11-20-swarm-out-multi-carrier §4.5). First, a carrier that updates its own
+    locations (``follow_host``) gets its look (``_follow_other_carriers``)."""
     from core import swarm_out
     from core.carriers import registry
     from core.carriers.base import EC2, IDLE_STOP
+    await _follow_other_carriers()
     default_s = idle_after_s()             # None: no stop by default, the Hives still follow the Host
     if EC2 not in {c.kind for c in registry.with_duty(IDLE_STOP)}:
         return []

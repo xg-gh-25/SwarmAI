@@ -4,7 +4,8 @@
  *
  * Two layers over the runs of the history's time range:
  *  - ``model``: each run's own model cost (``result.cost_usd``) and tokens;
- *  - ``all``: model plus machine. An AgentCore run's machine cost is its own estimate
+ *  - ``all``: model plus machine. An SSH machine's run has no machine cost (the person's
+ *    own machine). An AgentCore run's machine cost is its own estimate
  *    (``run.machine``, backend core/machine_cost). An EC2 Hive bills by the hour while it
  *    is on, busy or idle: its on hours inside the range and inside its record
  *    (``machines.ec2[].on`` since ``recorded_since``) are priced at its hourly price and
@@ -25,7 +26,10 @@ import { runWhere, type Carrier } from './where';
 
 export type CostLayer = 'all' | 'model';
 export const MIN_ACCEPTED = 5;
+/** the carriers the verdict compares (both bill for machines) */
 export const CARRIERS: readonly Carrier[] = ['ec2', 'agentcore'];
+/** every carrier a row can show: an SSH machine is the person's own, with no machine cost */
+export const SHOWN_CARRIERS: readonly Carrier[] = ['ec2', 'agentcore', 'ssh'];
 
 export interface Tokens { input: number; output: number; cache_read: number; cache_write: number }
 
@@ -98,6 +102,11 @@ export function costStats(runs: SwarmOutRun[], machines: SwarmOutMachines | null
   const onHive = new Map<string, SwarmOutRun[]>();
   for (const r of runs) {
     const carrier = runWhere(r, null).carrier;
+    if (carrier === 'ssh') {
+      // the person's own machine: SwarmAI pays nothing for it, only the model
+      machine.set(r, { busy: 0, idle: 0 });
+      continue;
+    }
     if (carrier === 'agentcore') {
       if (r.machine && typeof r.machine.usd === 'number') machine.set(r, { busy: r.machine.usd, idle: 0 });
       else leftOut += 1;
@@ -156,7 +165,7 @@ export function costStats(runs: SwarmOutRun[], machines: SwarmOutMachines | null
     const m = machine.get(r);
     if (layer === 'all' && m) { side.busy += m.busy; side.idle += m.idle; busyAll += m.busy; }
   }
-  const total = (k: KindRow) => CARRIERS.reduce((s, c) => s + (k.sides[c] ? k.sides[c]!.model + k.sides[c]!.busy + k.sides[c]!.idle : 0), 0);
+  const total = (k: KindRow) => SHOWN_CARRIERS.reduce((s, c) => s + (k.sides[c] ? k.sides[c]!.model + k.sides[c]!.busy + k.sides[c]!.idle : 0), 0);
   const starts = ec2.map((h) => Date.parse(h.recorded_since)).filter((t) => !Number.isNaN(t));
   return {
     kinds: [...kinds.values()].sort((a, b) => total(b) - total(a)),

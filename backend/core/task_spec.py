@@ -47,8 +47,6 @@ MAX_WHY_CHARS = 300
 #: what comes back (design 2026-10-30-run-spec §2.1 ``returns``): only ``commits`` makes
 #: the repositories writable on the Hive; the others get read-only worktrees
 RETURNS = ("answer", "document", "commits")
-#: the start of the refusal of a task that needs a private network (the card, the record)
-PRIVATE_REFUSAL = "it needs a private network no Hive can reach: "
 _DESKTOP_PLATFORMS = frozenset({"desktop", "macos"})
 
 
@@ -148,8 +146,9 @@ def _clone_host(url: str) -> Optional[str]:
 
 def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance: str,
                   agent_reason: str = "") -> list[str]:
-    """Why this task needs a private network a Hive cannot reach (design
-    2026-10-30-dispatch-center §2.2), from facts that decide it: its repositories (every
+    """Why this task needs a private network (design 2026-10-30-dispatch-center §2.2), which
+    only some locations reach (an SSH machine; placement keeps the task to those, design
+    2026-11-24-swarm-out-ssh-machine §4.4), from facts that decide it: its repositories (every
     one the Brain binds, whatever the mode: the Hive is sent all of them, ``_brain_repos``)
     bound ``kind: internal`` or cloned from a private host (the Hive cannot get the code);
     a skill of the mode with ``network: private``; and the reason the agent gave when it
@@ -375,10 +374,10 @@ def admit(spec: dict[str, Any]) -> list[str]:
     if not spec["revision"]:
         out.append("the Project Agent has no revision (its file is missing or a link)")
     if spec["placement"] == "hive":
-        if spec.get("private"):
-            # no Hive reaches a private network (dispatch-center §2.2): refused before a
-            # question is asked or anything is sent
-            out.append(PRIVATE_REFUSAL + "; ".join(spec["private"][:4]))
+        # a task that needs a private network is not refused here: placement puts it only
+        # on a location that reaches one (an SSH machine) and refuses it, as private, when
+        # none can take it (core/swarm_out._placement_refused; design
+        # docs/design/2026-11-24-swarm-out-ssh-machine.md §4.4)
         for r in spec["repos"]:
             if not str(r["url"]).startswith(("https://", "git@", "ssh://")):
                 out.append(f"{r['name']} has no remote a Hive can clone ({r['url']!r})")

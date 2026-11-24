@@ -117,10 +117,11 @@ def _dispatches() -> dict[tuple[str, str], str]:
 
 async def _pull(hive_id: str, after: int, dispatches: dict) -> tuple[list[dict], int, bool]:
     """The rows of one Hive after ``after`` (up to ``PAGES_PER_PASS`` pages): (rows, last
-    id read, whether the Hive serves usage). The Hive is an EC2 location."""
+    id read, whether the Hive serves usage). The Hive is the location its row's carrier
+    names (``registry.location_of``: an EC2 Hive or an SSH machine)."""
     from core.carriers import registry
-    from core.carriers.base import EC2
-    loc = registry.carrier(EC2).location(hive_id)
+    from core.carriers.base import USAGE_SYNC
+    loc = await registry.location_of(hive_id, USAGE_SYNC)
     inst = await loc.hive()
     name = _text(inst.get("name")) or hive_id
     rows: list[dict] = []

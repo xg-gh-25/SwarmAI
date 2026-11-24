@@ -178,6 +178,18 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.elastic.disable", "DELETE", f"{_HV}/elastic/{{location_id}}", _P, "irreversible"),
     # the person's Elastic Workers switch and account choice (Swarm Out › settings)
     _op("hive.elastic.standby", "PUT", f"{_HV}/elastic/standby", _P, "off_machine"),
+    # SSH machines (hive/ssh_provisioner; design 2026-11-24-swarm-out-ssh-machine §5.3):
+    # adding one installs software on the person's machine and creates a role in the
+    # account, and its settings decide what runs with the person's identity there, so these
+    # are the person's, as Elastic Workers' are. An agent reads the machines in hive.list
+    # (core/swarm_out.hives lists every row with its carrier); a machine follows the Host's
+    # version by itself (core/carriers/ssh.follow_host), so an agent needs no update route
+    _op("hive.ssh.list", "GET", f"{_HV}/ssh", _P, "read"),
+    _op("hive.ssh.add", "POST", f"{_HV}/ssh", _P, "off_machine"),
+    _op("hive.ssh.retry", "POST", f"{_HV}/ssh/{{machine_id}}/retry", _P, "off_machine"),
+    _op("hive.ssh.update", "POST", f"{_HV}/ssh/{{machine_id}}/update", _P, "change"),
+    _op("hive.ssh.options", "PATCH", f"{_HV}/ssh/{{machine_id}}", _P, "change"),
+    _op("hive.ssh.remove", "DELETE", f"{_HV}/ssh/{{machine_id}}", _P, "irreversible"),
     # ── the SwarmAI AWS account (routers/aws_account.py; design
     # 2026-10-31-swarmai-aws-account §7.7): reads for the person and the agent; signing
     # in, connecting, keys and creating Hives for the person only; the credentials route

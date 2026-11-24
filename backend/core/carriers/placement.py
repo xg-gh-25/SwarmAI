@@ -77,7 +77,12 @@ def place(needs: Needs, offers: list[Offer]) -> Placement:
 
     if needs.named is None:
         warm = [o for o in usable if o.tier == TIER_WARM]
-        running = [o for o in offers if o.tier == TIER_WARM]
+        # D5 compares a stopped Hive with the running ones of its own carrier: another
+        # carrier's warm location that is blocked (an SSH machine whose certificate expired)
+        # says nothing about whether starting a stopped EC2 Hive helps (design
+        # docs/design/2026-11-24-swarm-out-ssh-machine.md §4.4)
+        cold_kinds = {o.carrier for o in usable if o.tier == TIER_COLD}
+        running = [o for o in offers if o.tier == TIER_WARM and o.carrier in cold_kinds]
         blocked_running = [o.blocked for o in running if o.blocked]
         if warm:
             cold_why: Optional[str] = NOT_NEEDED

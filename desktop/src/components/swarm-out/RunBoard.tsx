@@ -32,7 +32,7 @@ import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { TONE_VAR } from './tone';
 import { CHIP_COLOR, DISPATCH_STATIONS, dispatchTrack, type ChipKind } from './track';
 import { waitingUnasked } from './useSwarmOutActivity';
-import { minutesText, runMinutes, runWhere, stamp } from './where';
+import { carrierLabelKey, minutesText, runMinutes, runWhere, stamp } from './where';
 import { outcomeOf, personSteps } from './historyStats';
 
 const muted = 'text-[var(--color-text-muted)]';
@@ -79,7 +79,7 @@ function SectionHead({ title, count, right }: { title: string; count: number; ri
   );
 }
 
-/** "EC2" or "AgentCore" and the Hive's name. */
+/** "EC2", "AgentCore" or "SSH" and the Hive's name. */
 export function WhereTag({ r, fleet }: { r: SwarmOutRun; fleet: SwarmOutFleet | null }) {
   const { t } = useTranslation();
   const w = runWhere(r, fleet);
@@ -90,7 +90,7 @@ export function WhereTag({ r, fleet }: { r: SwarmOutRun; fleet: SwarmOutFleet | 
         style={ac
           ? { color: 'var(--color-zone-work)', background: 'color-mix(in srgb, var(--color-zone-work) 12%, transparent)', boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--color-zone-work) 30%, transparent)' }
           : { color: 'var(--color-text-secondary)', background: 'var(--color-bg-chrome)', boxShadow: 'inset 0 0 0 1px var(--color-border)' }}>
-        {ac ? t('swarmOut.board.elastic') : t('swarmOut.board.ec2')}
+        {t(carrierLabelKey(w.carrier))}
       </span>
       <span className="truncate text-[var(--color-text-secondary)]">{w.name}</span>
     </span>

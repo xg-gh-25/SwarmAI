@@ -4,7 +4,8 @@ and placements (design docs/design/2026-11-20-swarm-out-multi-carrier.md §4).
 Four concepts:
 
 - **Carrier**: one kind of executor (``ec2``: the person's Hive EC2 instances; ``agentcore``:
-  one AgentCore Runtime microVM per run). Its three capability fields each have a reader:
+  one AgentCore Runtime microVM per run; ``ssh``: a machine of the person's own, reached over
+  an SSH tunnel). Its three capability fields each have a reader:
   ``reaches_private`` (placement filter), ``max_run_s`` (the run state's "carrier expired"),
   ``brain_lock_scope`` (placement filter for the Swarm Run Brain-version lock).
 - **Location**: a place a carrier can open a run: one Hive for ``ec2``, the account's runtime
@@ -28,7 +29,10 @@ from typing import Any, Optional, Protocol, runtime_checkable
 
 EC2 = "ec2"
 AGENTCORE = "agentcore"
-KINDS = (EC2, AGENTCORE)
+#: a machine of the person's own, reached over an SSH tunnel (core/carriers/ssh; design
+#: docs/design/2026-11-24-swarm-out-ssh-machine.md)
+SSH = "ssh"
+KINDS = (EC2, AGENTCORE, SSH)
 
 #: offer tiers, in placement order (design §4.4 step 2)
 TIER_WARM = 1        # a running EC2 Hive with room: starts now, already paid for
@@ -48,7 +52,11 @@ IDLE_STOP = "idle_stop"        # an idle location is stopped (core/hive_idle)
 USAGE_SYNC = "usage_sync"      # usage is pulled per location (core/usage_hive_sync)
 BRAIN_SYNC = "brain_sync"      # a location keeps Brains between runs (core/brain_sync_host)
 DIAGNOSTICS = "diagnostics"    # a run's machine logs can be read (core/hive_diagnostics)
-DUTIES = (FLEET, IDLE_STOP, USAGE_SYNC, BRAIN_SYNC, DIAGNOSTICS)
+#: an idle location behind the Host's version is updated by its own carrier
+#: (``async follow_host() -> list[str]``, called by core/hive_idle). The EC2 carrier keeps
+#: doing this under ``idle_stop``, as before; only another carrier lists this duty.
+FOLLOW_HOST = "follow_host"
+DUTIES = (FLEET, IDLE_STOP, USAGE_SYNC, BRAIN_SYNC, DIAGNOSTICS, FOLLOW_HOST)
 
 
 class LocationUnavailable(Exception):

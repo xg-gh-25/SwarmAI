@@ -395,8 +395,9 @@ def test_a_dispatch_goes_to_the_opened_round_not_to_a_name(world):
 
 def test_timers_skip_a_carrier_without_the_duty(world, monkeypatch):
     from core import hive_idle, usage_hive_sync
-    from core.carriers.base import IDLE_STOP, USAGE_SYNC
-    assert [c.kind for c in registry.with_duty(USAGE_SYNC)] == [EC2]
+    from core.carriers.base import IDLE_STOP, SSH, USAGE_SYNC
+    # usage is pulled from each machine that keeps sessions: an EC2 Hive, an SSH machine
+    assert [c.kind for c in registry.with_duty(USAGE_SYNC)] == [EC2, SSH]
     monkeypatch.setitem(registry._MAKERS, "fake", lambda: _Reopening(world))
     monkeypatch.delitem(registry._made, "fake", raising=False)
     assert [c.kind for c in registry.with_duty(IDLE_STOP)] == [EC2]     # the fake has no duties

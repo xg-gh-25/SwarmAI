@@ -15,11 +15,11 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SwarmOutMachines, SwarmOutRun } from '../../services/swarmOut';
 import {
-  CARRIERS, comparable, costStats, MIN_ACCEPTED, perAccepted, verdict,
+  comparable, costStats, MIN_ACCEPTED, perAccepted, SHOWN_CARRIERS, verdict,
   type CostLayer, type KindRow, type Tokens,
 } from './costStats';
 import { Kind } from './SwarmOutSettings';
-import { stamp, type Carrier } from './where';
+import { carrierLabelKey, stamp, type Carrier } from './where';
 
 const muted = 'text-[var(--color-text-muted)]';
 const dim = 'text-[var(--color-text-dim)]';
@@ -45,11 +45,11 @@ export function CostSection({ runs, machines, from, to, grown, compact }: {
   const v = verdict(view);
   const acRuns = runs.filter((r) => (r.rounds ?? []).some((x) => x?.carrier === 'agentcore')).length;
   let max = 0;
-  for (const k of view.kinds) for (const c of CARRIERS) {
+  for (const k of view.kinds) for (const c of SHOWN_CARRIERS) {
     const p = perAccepted(k.sides[c]);
     if (p && (k.sides[c]!.accepted >= MIN_ACCEPTED)) max = Math.max(max, p.total);
   }
-  if (!max) for (const k of view.kinds) for (const c of CARRIERS) max = Math.max(max, perAccepted(k.sides[c])?.total ?? 0);
+  if (!max) for (const k of view.kinds) for (const c of SHOWN_CARRIERS) max = Math.max(max, perAccepted(k.sides[c])?.total ?? 0);
   const machine = view.busy + view.idle;
   const total = view.model + machine;
   const cols = compact ? 'grid-cols-[minmax(0,96px)_74px_minmax(0,1fr)_60px_12px]' : 'grid-cols-[minmax(0,150px)_86px_54px_minmax(0,1fr)_64px_12px]';
@@ -65,12 +65,12 @@ export function CostSection({ runs, machines, from, to, grown, compact }: {
     const p = perAccepted(s);
     const few = s.accepted < MIN_ACCEPTED;
     // the cheaper side of a kind both can be compared on, with machine
-    const other = perAccepted(row.sides[c === 'ec2' ? 'agentcore' : 'ec2']);
+    const other = c === 'ssh' ? null : perAccepted(row.sides[c === 'ec2' ? 'agentcore' : 'ec2']);
     const low = layer === 'all' && comparable(row) && !!p && !!other && p.total < other.total;
     return (
       <div className={`grid ${cols} gap-x-3 items-center px-2 py-[7px] text-body`} data-testid="cost-side" data-carrier={c} data-kind={kind}>
         <span className="truncate font-semibold" title={kind}>{first ? kind : ''}</span>
-        <span><Kind ac={c === 'agentcore'}>{t(c === 'agentcore' ? 'swarmOut.board.elastic' : 'swarmOut.board.ec2')}</Kind></span>
+        <span><Kind ac={c === 'agentcore'}>{t(carrierLabelKey(c))}</Kind></span>
         {!compact && <span className={`text-right tabular-nums ${muted}`}>{s.accepted} / {s.n}</span>}
         <span className="flex h-2.5 rounded-sm overflow-hidden" style={{ opacity: few ? 0.3 : 1 }} aria-hidden>
           {p && <>
@@ -139,7 +139,7 @@ export function CostSection({ runs, machines, from, to, grown, compact }: {
       </div>
       {view.kinds.length === 0 && <div className={`px-2 py-2 text-body ${muted}`}>{t('swarmOut.cost.empty')}</div>}
       {view.kinds.map((k, i) => {
-        const has = CARRIERS.filter((c) => k.sides[c]);
+        const has = SHOWN_CARRIERS.filter((c) => k.sides[c]);
         const isOpen = open.has(k.kind);
         return (
           <div key={k.kind} className={`-mx-2 ${i ? 'border-t border-[var(--color-border)]' : ''}`} data-testid="cost-kind" data-kind={k.kind}>
@@ -156,7 +156,7 @@ export function CostSection({ runs, machines, from, to, grown, compact }: {
                   const s = k.sides[c]!;
                   const d = Math.max(1, s.accepted);
                   return [
-                    <span key={`${c}-k`}><Kind ac={c === 'agentcore'}>{t(c === 'agentcore' ? 'swarmOut.board.elastic' : 'swarmOut.board.ec2')}</Kind></span>,
+                    <span key={`${c}-k`}><Kind ac={c === 'agentcore'}>{t(carrierLabelKey(c))}</Kind></span>,
                     ...(['input', 'output', 'cache_read', 'cache_write'] as const).map((f) => <span key={`${c}-${f}`} className="text-right">{tok(s.tokens[f] / d)}</span>),
                     <span key={`${c}-h`} className="text-right">{Math.round(hit(s.tokens) * 100)}%</span>,
                   ];

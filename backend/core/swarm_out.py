@@ -109,9 +109,11 @@ def _record_refusal(brain: str, title: str, reasons: list[str], private: bool,
     """One refusal (its own file: a dispatch-log row without a session means "may have
     been sent", and the dispatch log's readers expect a Hive): at intake, or (*placement*,
     ``Placement.record()``) when no location could take the task, with every candidate's
-    reason (design 2026-11-20-swarm-out-multi-carrier §4.4). Only an intake refusal is
-    counted (``refusal_counts``: the history's "refused at intake" line); a placement one
-    is kept with ``kind: placement``."""
+    reason (design 2026-11-20-swarm-out-multi-carrier §4.4). An intake refusal is counted
+    (``refusal_counts``: the history's "refused" line), and so is a placement one of a task
+    that needs a private network, which intake refused before a location could reach one
+    (design 2026-11-24-swarm-out-ssh-machine §4.4); any placement one is kept with
+    ``kind: placement``."""
     row = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "brain": brain,
            "title": " ".join((title or "").split())[:MAX_TITLE_CHARS], "private": private,
            "reasons": [str(r)[:300] for r in reasons[:6]]}
@@ -120,7 +122,7 @@ def _record_refusal(brain: str, title: str, reasons: list[str], private: bool,
     d = _state_dir()
     with open(d / "refusals.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    if placement is not None:
+    if placement is not None and not private:
         return
     # the running counts the history reads (the log itself is never read back whole)
     n = refusal_counts()
@@ -437,6 +439,19 @@ def _ec2(hive_ref: str):
     return registry.carrier(EC2).location(str(hive_ref))
 
 
+async def _machine(hive_ref: str):
+    """The location of the machine with this id or name: an SSH machine's through its
+    carrier (``registry.location_of``), else an EC2 Hive's. For the per-machine reads
+    that work on any machine that keeps sessions (its questions, its session states, a
+    named dispatch). Any other row goes through ``_ec2`` as before (an Elastic Workers row
+    keeps no sessions of its own: the EC2 lookup refuses it, as it always has)."""
+    from core.carriers import registry
+    from core.carriers.base import SSH
+    if await registry.carrier_kind_of(str(hive_ref)) == SSH:
+        return await registry.location_of(str(hive_ref))
+    return _ec2(hive_ref)
+
+
 def _validate_instance(inst: dict[str, Any], acct: Optional[dict[str, Any]]) -> dict[str, Any]:
     """Refuse a Hive whose stored address, name or bucket is not the expected shape:
     every outbound URL and S3 key is built from these fields."""
@@ -482,6 +497,13 @@ def _auth(inst: dict[str, Any]) -> dict[str, str]:
 
 
 def _base(inst: dict[str, Any]) -> str:
+    """The Hive's base URL: its CloudFront domain, or ``_base_url`` when the machine's
+    location put one in the record it built (core/carriers/ssh: the local end of its SSH
+    tunnel). ``_base_url`` is never a column: a record read from the store has none, so no
+    stored value can change where a request goes."""
+    base = inst.get("_base_url")
+    if isinstance(base, str) and base:
+        return base
     return f"https://{inst['cloudfront_domain']}"
 
 
@@ -688,7 +710,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
     opened = deadline.opened
     with nullcontext() if opened is not None else _Dispatching(hive_ref):
         inst = await registry.carrier(opened.carrier).connect(opened) if opened is not None \
-            else await _ec2(hive_ref).up(deadline)
+            else await (await _machine(hive_ref)).up(deadline)
         name = inst["name"]
         async with registry.client_for(inst) as client:
             r = await _within(deadline, f"checking Hive {name}", HTTP_TIMEOUT_S,
@@ -777,13 +799,22 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
 def _first_round(opened: Optional[RunHandle], inst: dict[str, Any], session_id: str) -> RunHandle:
     """The dispatch's first round with its chat session (``RunHandle.with_session``: an
     elastic round keeps its runtime session in ``run_ref``): the one placement opened, or
-    (a ``dispatch`` on its own) the EC2 round of the Hive it went to."""
-    from core.carriers.base import EC2
+    (a ``dispatch`` on its own) the round of the machine it went to (``_machine_round``)."""
     if opened is not None:
         return opened.with_session(session_id)
-    return RunHandle(carrier=EC2, location_id=str(inst["id"]), round=1, run_ref=session_id,
-                     address=inst.get("cloudfront_domain"), auth_ref=f"hive_instances:{inst['id']}",
-                     opened_at=time.time())
+    return _machine_round(inst, session_id)
+
+
+def _machine_round(inst: dict[str, Any], session_id: Optional[str]) -> RunHandle:
+    """Round 1 on the machine *inst* names, of the carrier its record says (``carrier``:
+    an EC2 Hive's row, or an SSH machine's, whose location builds its record from the row;
+    a record without it is an EC2 Hive's). Its address is the CloudFront domain for an EC2
+    Hive; an SSH machine's is found by its carrier at each use, so none is kept."""
+    from core.carriers.base import EC2
+    kind = str(inst.get("carrier") or EC2)
+    return RunHandle(carrier=kind, location_id=str(inst["id"]), round=1, run_ref=session_id,
+                     address=inst.get("cloudfront_domain") if kind == EC2 else None,
+                     auth_ref=f"hive_instances:{inst['id']}", opened_at=time.time())
 
 
 def _timed(extra: Optional[dict], deadline: _Deadline) -> dict:
@@ -798,10 +829,15 @@ def _record_maybe_sent(extra: Optional[dict], inst: dict[str, Any], title: str, 
     """The dispatch's row without a session. Written in place (one short line), so a
     cancelled dispatch still leaves it. A round whose carrier named the run itself
     (*opened* with a ``run_ref``: an elastic round) is kept with it, so the run stays
-    addressable; a Hive's round is the one its row names, as before."""
+    addressable, and so is any round not on an EC2 Hive (an SSH machine's: a row without
+    rounds is read as an EC2 Hive's, ``base.handle_from_legacy_row``); an EC2 Hive's round
+    is the one its row names, as before."""
+    from core.carriers.base import EC2
     row = {**(extra or {}), **_log_row(inst, None, title, origin, declared, agent, dispatch_id)}
-    if opened is not None and opened.run_ref is not None:
+    if opened is not None and (opened.run_ref is not None or opened.carrier != EC2):
         row["rounds"] = [opened.to_row()]
+    elif opened is None and str(inst.get("carrier") or EC2) != EC2:
+        row["rounds"] = [_machine_round(inst, None).to_row()]
     _append(json.dumps(row, ensure_ascii=False) + "\n")
 
 
@@ -1123,13 +1159,20 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
                                        brain, title, origin, brief, dispatched_from, wp, dispatch_id)
 
 
+#: what one carrier's offers may take (design docs/design/2026-11-24-swarm-out-ssh-machine.md
+#: §4.3): less than the dispatch's whole "choosing a Hive" budget (4 x PROBE_TIMEOUT_S), so
+#: one slow carrier (an SSH machine that does not answer) loses only its own offers
+OFFERS_TIMEOUT_S = 3 * PROBE_TIMEOUT_S
+
+
 async def _offers(needs: Needs) -> tuple[list[Any], list[str]]:
     """Every carrier's offers for the task, and what could not be read (a carrier whose
-    offers failed offers nothing; the refusal names it when nothing else can take the
-    task)."""
+    offers failed, or took more than OFFERS_TIMEOUT_S, offers nothing; the refusal names it
+    when nothing else can take the task)."""
     from core.carriers import registry
     cars = registry.carriers()
-    got = await asyncio.gather(*(c.offers(needs) for c in cars), return_exceptions=True)
+    got = await asyncio.gather(*(asyncio.wait_for(c.offers(needs), OFFERS_TIMEOUT_S) for c in cars),
+                               return_exceptions=True)
     offers: list[Any] = []
     unread: list[str] = []
     for c, g in zip(cars, got):
@@ -1198,6 +1241,12 @@ async def _placement_refused(brain: str, title: str, placement: Any, message: st
         await asyncio.to_thread(_record_refusal, brain, title, reasons, private, placement.record())
     except OSError as exc:                          # the record is not the refusal
         logger.warning("swarm_out: refusal not recorded (%s)", type(exc).__name__)
+    if private:
+        # a task that needs a private network and no location that reaches it can take it
+        # now: refused as it was at intake before (the 422 ``private``, the "do it here" card,
+        # the history's count; design docs/design/2026-11-24-swarm-out-ssh-machine.md §4.4)
+        return SwarmOutRefused(f"{brain}'s task needs a private network and no Hive that reaches it "
+                               f"can take it now ({'; '.join(reasons)}); nothing was sent", True)
     return SwarmOutError(f"no Hive can take {brain}'s task now ({'; '.join(reasons)}); nothing was sent")
 
 
@@ -2011,11 +2060,12 @@ async def _round_waits(r: dict[str, Any], h: RunHandle, car: Any) -> tuple[list[
 
 async def _read_hive(hive_id: str) -> tuple[list[dict[str, Any]], Optional[dict[str, dict[str, Any]]], list[str]]:
     """One running Hive's open questions and session states, and what went wrong. The
-    Hive is an EC2 location (the bridge is per Hive: ``bridge/<hive>/``)."""
+    Hive is a machine of its own (an EC2 Hive or an SSH machine, ``_machine``; the bridge
+    is per machine: ``bridge/<hive>/``)."""
     errors: list[str] = []
     asks: list[dict[str, Any]] = []
     try:
-        inst = await _ec2(hive_id).hive()
+        inst = await (await _machine(hive_id)).hive()
     except SwarmOutError as e:
         return [], None, [str(e)]
     except Exception as e:                          # store unreadable: show it, keep the list
@@ -2211,11 +2261,19 @@ FIND_SESSION_AFTER_S = 2 * SESSION_ID_WAIT_S
 async def _order_state(hive_id: str, work_id: str) -> Optional[dict[str, Any]]:
     """The Hive's answer about the work order of a dispatch whose session was never named
     (GET /api/hive/work/{id}), or None when it did not answer properly (an older Hive has
-    no such route). Such a dispatch's row has no rounds (they are written with the
-    session): its round is the one its Hive names (``rounds_of``)."""
+    no such route). Its round is the one its dispatch row names (an SSH machine's round is
+    written with the row, ``_record_maybe_sent``), else the one its Hive names
+    (``rounds_of``)."""
     from core.carriers import registry
     try:
-        async with registry.client_for(registry.handle_of({"hive_id": hive_id}), PROBE_TIMEOUT_S) as client:
+        try:
+            row = await asyncio.to_thread(_log_row_of, work_id)
+        except Exception:  # noqa: BLE001 — no such row: the Hive's own round
+            row = {}
+        if row.get("hive_id") != hive_id or not isinstance(row.get("rounds"), list):
+            row = {"hive_id": hive_id}
+        handle = registry.handle_of(row)
+        async with registry.client_for(handle, PROBE_TIMEOUT_S) as client:
             r = await client.get(f"/api/hive/work/{work_id}")
         d = r.json() if r.status_code == 200 else None
     except Exception as e:                          # unreachable, timed out, not JSON
@@ -2940,9 +2998,12 @@ async def refresh_result(dispatch_id: str) -> dict[str, Any]:
 
 FLEET_KEYS = ("name", "status", "version", "region", "instance_type",
               "reachable", "streaming", "saturated", "memory_percent", "capable", "open_runs",
-              # the execution surface: "ec2" (a Hive) or "agentcore" (Elastic Workers),
-              # named on each row of the Swarm Out panel
-              "carrier")
+              # the execution surface: "ec2" (a Hive), "agentcore" (Elastic Workers) or
+              # "ssh" (a machine of the person's own), named on each row of the Swarm Out panel
+              "carrier",
+              # an SSH machine's latest SSH certificate end (Unix seconds), None otherwise or
+              # when it has none (core/carriers/ssh; the panel says "certificate expired")
+              "cert_valid_until")
 
 
 def _count(v: Any, low: int) -> Optional[int]:
@@ -2959,8 +3020,13 @@ def _percent(v: Any) -> Optional[float]:
 
 async def _admission(hive_id: str) -> Optional[dict[str, Any]]:
     """A running Hive's admission state, validated, or None when it did not answer
-    properly within PROBE_TIMEOUT_S (its EC2 location's ``admission``)."""
-    return await _ec2(hive_id).admission()
+    properly within PROBE_TIMEOUT_S (its location's ``admission``: an EC2 Hive's or an SSH
+    machine's, ``_machine``)."""
+    try:
+        loc = await _machine(hive_id)
+    except SwarmOutError:
+        return None
+    return await loc.admission()
 
 
 async def fleet() -> dict[str, Any]:
@@ -2978,8 +3044,9 @@ async def fleet() -> dict[str, Any]:
     # each running Hive is probed through its location, by the carrier whose locations
     # are probed for the fleet (design 2026-11-20-swarm-out-multi-carrier §4.5)
     from core.carriers import registry
-    from core.carriers.base import EC2, FLEET
-    probed = running if EC2 in {c.kind for c in registry.with_duty(FLEET)} else []
+    from core.carriers.base import FLEET
+    fleet_kinds = {c.kind for c in registry.with_duty(FLEET)}
+    probed = [h for h in running if (h.get("carrier") or "ec2") in fleet_kinds]
     probes = dict(zip([h["id"] for h in probed],
                       await asyncio.gather(*(_admission(h["id"]) for h in probed))))
     held = await asyncio.to_thread(open_runs_by_hive, True)
@@ -2993,10 +3060,11 @@ async def fleet() -> dict[str, Any]:
             p = probes.get(h["id"])
             row.update({"reachable": p is not None, "streaming": p and p["streaming"],
                         "saturated": p and p["saturated"], "memory_percent": p and p["memory_percent"],
-                        "capable": p["capable"] if p else None})
+                        "capable": p["capable"] if p else None,
+                        "cert_valid_until": p.get("cert_valid_until") if p else None})
         else:
             row.update({"reachable": None, "streaming": None, "saturated": None, "memory_percent": None,
-                        "capable": None})
+                        "capable": None, "cert_valid_until": None})
         out.append({k: row[k] for k in FLEET_KEYS})
     return {"hives": out, "running": len(running)}
 
@@ -3147,7 +3215,7 @@ async def _wait_bridge(hive_ref: str, session_id: str) -> tuple[Any, dict[str, A
         h, car = got
         s3, bucket, name = await car.bridge(h, "manage")
         return s3, {"s3_bucket": bucket}, name
-    inst = await _ec2(hive_ref).hive()
+    inst = await (await _machine(hive_ref)).hive()
     s3 = await asyncio.to_thread(_s3, inst)
     return s3, inst, inst["name"]
 

@@ -249,14 +249,16 @@ def _row(local: dict[str, Any], remote: Optional[dict[str, Any]], supported: boo
 
 async def hive_of(hive_ref: str) -> dict[str, Any]:
     """The record of a Hive that keeps Brains between runs, through its location: Brains
-    are kept per machine on the EC2 carrier (its ``brain_sync`` duty; an elastic run gets
-    its Brain with each dispatch). SwarmOutError when it is not running or not usable."""
+    are kept per machine by a carrier with the ``brain_sync`` duty (an EC2 Hive, an SSH
+    machine; an elastic run gets its Brain with each dispatch), found by the carrier the
+    Hive's row names (``registry.location_of``). SwarmOutError when it is not running or not
+    usable, or its carrier keeps no Brains."""
     from core.carriers import registry
-    from core.carriers.base import BRAIN_SYNC, EC2
+    from core.carriers.base import BRAIN_SYNC
     from core.swarm_out import SwarmOutError
-    if EC2 not in {c.kind for c in registry.with_duty(BRAIN_SYNC)}:
+    if not registry.with_duty(BRAIN_SYNC):
         raise SwarmOutError("no Hive here keeps Brains between runs")
-    return await registry.carrier(EC2).location(hive_ref).hive()
+    return await (await registry.location_of(hive_ref, BRAIN_SYNC)).hive()
 
 
 async def status(hive_ref: str) -> dict[str, Any]:

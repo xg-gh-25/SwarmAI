@@ -13,7 +13,7 @@ import type { SwarmOutFleet, SwarmOutFleetHive } from '../../services/swarmOut';
 import { openSwarmOutSettings } from '../common/settingsEvents';
 import { hiveStatusLabel } from './live';
 import { hiveTone, TONE_VAR, type Tone } from './tone';
-import { ELASTIC_NAME } from './where';
+import { carrierLabelKey, ELASTIC_NAME } from './where';
 
 /** The account's Hive count, when it is short of what the person asked for. */
 function useShortfall(hidden: boolean): FleetStatus | null {
@@ -31,6 +31,11 @@ function placeOf(h: SwarmOutFleetHive, t: (k: string, o?: Record<string, unknown
   if (h.carrier === 'agentcore') {
     return { tone: h.status === 'ready' ? 'ok' : h.status === 'failed' ? 'error' : 'attention',
       tip: t(`swarmOut.fleet.elastic.${h.status}`, { defaultValue: h.status }) };
+  }
+  // an SSH machine whose SSH certificate ended takes no new task: the person renews it there
+  if (h.carrier === 'ssh' && h.status === 'running' && typeof h.cert_valid_until === 'number'
+      && h.cert_valid_until * 1000 <= Date.now()) {
+    return { tone: 'error', tip: t('swarmOut.ssh.certExpired') };
   }
   const count = { count: h.streaming ?? 0 };
   const tip = h.status !== 'running' ? `${hiveStatusLabel(h.status)}${h.status === 'stopped' ? t('swarmOut.fleet.startsWhenNeeded') : ''}`
@@ -55,10 +60,10 @@ export function FleetPills({ fleet, failed, hidden }: { fleet: SwarmOutFleet | n
             className="inline-flex items-center gap-1.5 max-w-[220px] pl-2 pr-2.5 py-[3px] rounded-full text-meta whitespace-nowrap"
             style={bad ? { color: TONE_VAR[p.tone], background: `color-mix(in srgb, ${TONE_VAR[p.tone]} 10%, transparent)` }
               : { color: 'var(--color-text-secondary)', background: 'var(--color-bg-chrome)' }}
-            data-testid="so-fleet-pill" data-tone={p.tone} data-carrier={elastic ? 'agentcore' : 'ec2'}>
+            data-testid="so-fleet-pill" data-tone={p.tone} data-carrier={h.carrier ?? 'ec2'}>
             <span aria-hidden className="w-[7px] h-[7px] rounded-full flex-none" style={{ background: TONE_VAR[p.tone] }} />
             <span className="truncate">{elastic ? ELASTIC_NAME : h.name}</span>
-            <span className="opacity-60">{elastic ? t('swarmOut.board.elastic') : t('swarmOut.board.ec2')}</span>
+            <span className="opacity-60">{t(carrierLabelKey(h.carrier))}</span>
             <span className="sr-only">{p.tip}</span>
           </button></span>
         );

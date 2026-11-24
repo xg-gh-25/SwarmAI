@@ -298,4 +298,58 @@ export const hiveService = {
   async retryInstance(id: string, confirmDataLoss = false): Promise<void> {
     await api.post(`/hive/instances/${id}/retry`, confirmDataLoss ? { confirm_data_loss: true } : undefined);
   },
+
+  // ── SSH machines (backend routers/hive.py /ssh; design 2026-11-24-swarm-out-ssh-machine §8) ──
+  async listSsh(): Promise<SshMachine[]> {
+    const { data } = await api.get('/hive/ssh');
+    return Array.isArray(data?.machines) ? data.machines : [];
+  },
+  async addSsh(body: SshMachineAdd): Promise<void> {
+    await api.post('/hive/ssh', body);
+  },
+  async retrySsh(id: string): Promise<void> {
+    await api.post(`/hive/ssh/${id}/retry`);
+  },
+  async setSshOptions(id: string, body: { general_tasks?: boolean; reaches_private?: boolean; cert_renew_hint?: string }): Promise<void> {
+    await api.patch(`/hive/ssh/${id}`, body);
+  },
+  async removeSsh(id: string): Promise<{ left: string[]; data_kept: string }> {
+    const { data } = await api.delete(`/hive/ssh/${id}`);
+    return { left: Array.isArray(data?.left) ? data.left : [], data_kept: String(data?.data_kept ?? '') };
+  },
 };
+
+/** An SSH machine as GET /hive/ssh shows it (never its Hive password). */
+export interface SshMachine {
+  id: string;
+  name: string;
+  status: string;
+  version: string | null;
+  /** the machine's description from its install ("x86_64 · 4 vCPU · 15 GB") */
+  instance_type: string | null;
+  error_message: string | null;
+  config: {
+    ssh_host: string | null;
+    source_profile: string | null;
+    reaches_private: boolean | null;
+    general_tasks: boolean | null;
+    mounts: string[] | null;
+    cert_renew_hint: string | null;
+  };
+  /** null while it is not running; false: its tunnel or its Hive did not answer */
+  reachable: boolean | null;
+  /** its latest SSH certificate's end (Unix seconds), null when it has none */
+  cert_valid_until: number | null;
+  /** ssh's last line when its tunnel could not be built */
+  tunnel_error: string;
+}
+
+export interface SshMachineAdd {
+  ssh_host: string;
+  source_profile: string;
+  name?: string;
+  mounts?: string[];
+  cert_renew_hint?: string;
+  reaches_private?: boolean;
+  general_tasks?: boolean;
+}

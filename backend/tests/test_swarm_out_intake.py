@@ -1,7 +1,8 @@
 """Intake: a task a Hive cannot do is refused before anything is asked or sent (design
-docs/design/2026-10-30-dispatch-center.md §2, invariant 1).
+docs/design/2026-10-30-dispatch-center.md §2, invariant 1; a private network since
+2026-11-24-swarm-out-ssh-machine §4.4: placement, not admission, refuses it).
 
-Questions: (1) does each source of "needs a private network" refuse the spec — an
+Questions: (1) does each source of "needs a private network" mark the spec — an
 internal repository, a clone host in the user's private hosts, a skill with
 ``network: private``, the agent's own reason — and does a task on public repositories
 pass, also when it names an address (an address is not judged by its name); (2) is a refusal recorded in ``refusals.jsonl`` and never in
@@ -29,7 +30,11 @@ bindings:
 
 
 def _private(r):
-    return [x for x in ts.admit(r) if x.startswith(ts.PRIVATE_REFUSAL)]
+    """The spec's reasons for needing a private network (``private_needs``). Admission no
+    longer refuses for them (placement keeps the task to a location that reaches one, design
+    2026-11-24-swarm-out-ssh-machine §4.4): ``admit`` names none of them."""
+    assert not any("private network" in x for x in ts.admit(r))
+    return ["; ".join(r["private"])] if r["private"] else []
 
 
 def test_each_source_of_a_private_need_refuses_and_a_public_task_passes(ws, monkeypatch):

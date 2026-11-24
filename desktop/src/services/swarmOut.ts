@@ -66,7 +66,7 @@ export interface SwarmOutRun {
   /** Each round of the run, in order (the dispatch row's ``rounds``, backend
    *  core/carriers/base.RunHandle): the execution surface it ran on. Absent or empty for
    *  a dispatch from before rounds were recorded. */
-  rounds?: { carrier?: 'ec2' | 'agentcore' | null; round?: number }[] | null;
+  rounds?: { carrier?: 'ec2' | 'agentcore' | 'ssh' | null; round?: number }[] | null;
   /** an AgentCore run's machine estimate: its session's billed seconds and dollars
    *  (backend core/machine_cost.agentcore_cost); null when it cannot be told; absent on
    *  an EC2 run (its Hive's hours are shared in the history view) */
@@ -490,8 +490,12 @@ export interface SwarmOutFleetHive extends SwarmOutHive {
   saturated: boolean | null;
   /** the Hive's memory in use, 0-100; null when unknown (or an older Hive) */
   memory_percent: number | null;
-  /** the execution surface: 'ec2' (a Hive) or 'agentcore' (Elastic Workers) */
-  carrier?: 'ec2' | 'agentcore';
+  /** the execution surface: 'ec2' (a Hive), 'agentcore' (Elastic Workers) or 'ssh' (a
+   *  machine of the person's own, backend core/carriers/ssh) */
+  carrier?: 'ec2' | 'agentcore' | 'ssh';
+  /** an SSH machine's latest SSH certificate end (Unix seconds); null otherwise or when it
+   *  has none */
+  cert_valid_until?: number | null;
 }
 
 export interface SwarmOutFleet {

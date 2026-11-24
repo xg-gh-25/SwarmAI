@@ -193,15 +193,48 @@ def _manageable(acct: dict[str, Any], mode: Optional[dict]) -> bool:
         accounts.SWARMAI_METHOD, "own")
 
 
+async def ec2_only(conn: Any, column: str = "carrier") -> str:
+    """The SQL condition that keeps only EC2 rows of ``hive_instances`` (*column*: the
+    carrier column as the query names it, e.g. ``i.carrier``), for every query that acts on
+    Hives as EC2 instances: another carrier's row (Elastic Workers, an SSH machine) also says
+    ``running`` and must never be offered, probed, stopped or updated as an EC2 Hive (design
+    docs/design/2026-11-24-swarm-out-ssh-machine.md §6). ``1 = 1`` for a store from before
+    the column (migration v21): every row there is an EC2 Hive."""
+    cur = await conn.execute("PRAGMA table_info(hive_instances)")
+    if "carrier" not in {r[1] for r in await cur.fetchall()}:
+        return "1 = 1"
+    return f"COALESCE({column}, 'ec2') = 'ec2'"
+
+
+async def _other_carrier_ids() -> set[str]:
+    """The ids of every ``hive_instances`` row that is not an EC2 Hive (empty when the store
+    has no such column or cannot be read: the rows there are EC2 Hives, as before)."""
+    import aiosqlite
+    from core import swarm_out
+    try:
+        async with aiosqlite.connect(swarm_out._db_path()) as conn:
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            only = await ec2_only(conn)
+            if only == "1 = 1":
+                return set()
+            cur = await conn.execute(f"SELECT id FROM hive_instances WHERE NOT ({only})")
+            return {str(r[0]) for r in await cur.fetchall()}
+    except Exception as exc:  # noqa: BLE001 — no table: no other carrier's row
+        logger.info("carriers.ec2: other carriers' rows unreadable (%s)", type(exc).__name__)
+        return set()
+
+
 async def _hive_rows() -> list[dict[str, Any]]:
-    """Every Hive with its account's role fields, by name."""
+    """Every EC2 Hive with its account's role fields, by name (``ec2_only``)."""
     import aiosqlite
     from core import swarm_out
     async with aiosqlite.connect(swarm_out._db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
+        only = await ec2_only(conn, "i.carrier")
         cur = await conn.execute(
             "SELECT i.id, i.name, i.status, i.version, a.auth_method, a.account_id "
-            "FROM hive_instances i LEFT JOIN hive_accounts a ON a.id = i.account_ref ORDER BY i.name")
+            "FROM hive_instances i LEFT JOIN hive_accounts a ON a.id = i.account_ref "
+            f"WHERE {only} ORDER BY i.name")
         return [dict(zip(("id", "name", "status", "version", "auth_method", "account_id"), r))
                 for r in await cur.fetchall()]
 
@@ -437,10 +470,12 @@ class Ec2Carrier:
         return await self.location(_ec2_handle(handle)).hive()
 
     async def running(self) -> list[Ec2Location]:
-        """The running Hives, by id: the locations a timer of this carrier visits."""
+        """The running EC2 Hives, by id: the locations a timer of this carrier visits, never
+        another carrier's row (``_other_carrier_ids``)."""
         from core import swarm_out
         statuses = await swarm_out._hive_statuses()
-        return [Ec2Location(h) for h, st in sorted(statuses.items()) if st == "running"]
+        others = await _other_carrier_ids()
+        return [Ec2Location(h) for h, st in sorted(statuses.items()) if st == "running" and h not in others]
 
     async def outputs(self, handle: RunHandle, dispatch_id: str) -> dict[str, Any]:
         """The run's kept result after one check on its Hive (``swarm_out_results.fetch``,

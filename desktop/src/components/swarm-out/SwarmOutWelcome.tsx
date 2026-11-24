@@ -41,12 +41,14 @@ function useFleetWhileShown(hidden: boolean): SwarmOutFleet | null {
  *  one), and Elastic Workers statuses that take one (ready, or updating back to ready). */
 const EC2_TAKES = new Set(['running', 'stopped', 'stopping', 'starting', 'updating']);
 const ELASTIC_TAKES = new Set(['ready', 'upgrading']);
+/** an SSH machine takes a task while it runs (the Host never starts or stops it) */
+const SSH_TAKES = new Set(['running', 'updating']);
 
 /** Whether there is anywhere to send a task: a Hive that runs or can be started, or
  *  Elastic Workers that is ready. Nothing waits on the person to start a machine. */
 export function canDispatch(fleet: SwarmOutFleet | null): boolean | null {
   if (!fleet) return null;
-  return fleet.hives.some((h) => (h.carrier === 'agentcore' ? ELASTIC_TAKES : EC2_TAKES).has(h.status));
+  return fleet.hives.some((h) => (h.carrier === 'agentcore' ? ELASTIC_TAKES : h.carrier === 'ssh' ? SSH_TAKES : EC2_TAKES).has(h.status));
 }
 
 function Starter({ icon, text, hint, strong, testId }: {

@@ -2,8 +2,8 @@
  * Where a dispatched run ran, and its time facts, as every Swarm Out row writes them
  * (design: Knowledge/Mockups/2026-11-23-swarm-out-dashboard-redesign-v6.html).
  *
- *  - ``runWhere``: the execution surface (a Hive on EC2, or Elastic Workers on AgentCore
- *    Runtime) and the name shown next to it. The run's own last round says it; a dispatch
+ *  - ``runWhere``: the execution surface (a Hive on EC2, Elastic Workers on AgentCore
+ *    Runtime, or an SSH machine of the person's own) and the name shown next to it. The run's own last round says it; a dispatch
  *    from before rounds were recorded falls back to its Hive's carrier in the fleet, then
  *    to the Elastic Workers location's name, then to EC2 (every older Hive is an EC2 one).
  *  - ``stamp``: a start time as MM/DD HH:mm, local time.
@@ -14,7 +14,11 @@
  */
 import type { SwarmOutFleet, SwarmOutRun } from '../../services/swarmOut';
 
-export type Carrier = 'ec2' | 'agentcore';
+export type Carrier = 'ec2' | 'agentcore' | 'ssh';
+
+/** The i18n key of a carrier's short label ("EC2", "AgentCore", "SSH"). */
+export const carrierLabelKey = (c: Carrier | null | undefined): string =>
+  c === 'agentcore' ? 'swarmOut.board.elastic' : c === 'ssh' ? 'swarmOut.board.ssh' : 'swarmOut.board.ec2';
 
 /** The name the backend gives an Elastic Workers location that has none of its own
  *  (core/carriers/agentcore). */

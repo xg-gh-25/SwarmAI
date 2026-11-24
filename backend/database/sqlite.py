@@ -2118,7 +2118,8 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 20 — Inbox: inbox_sources / items / drafts / sends / feedback / trend_summaries (2026-11-20)
 # 21 — hive_instances.carrier + runtime_arn: the AgentCore carrier (2026-11-20)
 # 22 — hive_instances.idle_stop_minutes: each EC2 Hive's own idle stop (2026-11-24)
-CURRENT_SCHEMA_VERSION = 22
+# 23 — hive_instances.carrier_config: the SSH-machine carrier's per-machine settings (2026-11-24)
+CURRENT_SCHEMA_VERSION = 23
 
 #: Inbox tables (v20, core/inbox/store.py, design docs/design/2026-11-20-inbox.md §5). The
 #: person's own messages: never in a backup (core/backup_manager.L2_TABLES lists what is),
@@ -3779,6 +3780,30 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.rollback()
                 raise
             logger.info("Migration v22: hive_instances.idle_stop_minutes")
+
+        if current_version < 23 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 22:
+            # Version 23: hive_instances.carrier_config (design
+            # docs/design/2026-11-24-swarm-out-ssh-machine.md §4.2): the JSON settings of a
+            # ``carrier = 'ssh'`` row (its SSH host, ports, AWS source profile, mounts, whether
+            # it takes tasks that need no private network). Read only by core/carriers/ssh and
+            # hive/ssh_provisioner. Additive only: the column added when missing, no row touched.
+            # idle_stop_minutes too when missing: a store an earlier build of this change
+            # stamped 22 (its v22 was carrier_config) never ran the idle stop's v22.
+            await conn.execute("BEGIN")
+            try:
+                cols = {r[1] for r in await (await conn.execute(
+                    "PRAGMA table_info(hive_instances)")).fetchall()}
+                if cols and "carrier_config" not in cols:   # no table: nothing to add to
+                    await conn.execute("ALTER TABLE hive_instances ADD COLUMN carrier_config TEXT")
+                if cols and "idle_stop_minutes" not in cols:
+                    await conn.execute("ALTER TABLE hive_instances ADD COLUMN idle_stop_minutes INTEGER")
+                await conn.execute("PRAGMA user_version = 23")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v23: hive_instances.carrier_config")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.

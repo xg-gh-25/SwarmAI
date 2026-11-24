@@ -143,7 +143,7 @@ export function groupKey(r: SwarmOutRun, dim: GroupDim, fleet: SwarmOutFleet | n
   if (dim === 'brain') return f.brain;
   if (dim === 'agent') return f.none ? f.agent : `${f.brain} · ${f.agent}`;
   const w = runWhere(r, fleet);
-  return `${w.carrier === 'agentcore' ? 'AgentCore' : 'EC2'} · ${w.name}`;
+  return `${w.carrier === 'agentcore' ? 'AgentCore' : w.carrier === 'ssh' ? 'SSH' : 'EC2'} · ${w.name}`;
 }
 
 export interface Group { key: string; sum: Summary }

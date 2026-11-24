@@ -200,9 +200,10 @@ async def test_the_route_refuses_rows_that_are_not_ec2(client, monkeypatch):
     r = await client.put(f"/api/hive/instances/{ssh}/idle-stop", json={"minutes": 0})
     assert r.status_code == 409 and r.json()["detail"] == hive_router.NOT_IDLE_STOPPED
     assert await _own(elastic) is None and await _own(ssh) == 60
-    # a machine the Host never stops: no selector, never stopped, its stored value ignored
-    assert await _listed(client, ssh) == {"idle_stop_minutes": None, "idle_stop_effective": 0.0,
-                                          "idle_stop_settable": False}
+    # a machine the Host never stops is not an EC2 Hive: the instance list leaves it out
+    # (SSH machines have their own section, GET /api/hive/ssh), so it shows no selector
+    listed = await client.get("/api/hive/instances")
+    assert ssh not in {x["id"] for x in listed.json()}
     r = await client.put("/api/hive/instances/no-such-hive/idle-stop", json={"minutes": 0})
     assert r.status_code == 404
     # the EC2 carrier without the idle_stop duty: nothing to set there either

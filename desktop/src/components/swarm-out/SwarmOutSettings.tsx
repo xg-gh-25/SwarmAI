@@ -15,6 +15,8 @@
  *  ② Elastic Workers (AgentCore Runtime): the standby switch (PUT /hive/elastic/standby,
  *    the person's), in the old multi-account mode the account it uses, its state, size,
  *    cost and version;
+ *  ②b SSH machines: machines of the person's own reached over SSH, each with a Hive the Host
+ *    installed in a container (SshMachinesSection; design 2026-11-24-swarm-out-ssh-machine §8);
  *  ③ resident Hives (EC2): one row per Hive (its state, from its record and, for a running
  *    one, whether the fleet poll could reach it, and its idle stop in a few words); a row
  *    opens to why it is broken, its own idle stop (PUT /hive/instances/{id}/idle-stop:
@@ -33,7 +35,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { awsAccountService, problemOf, type AwsAccountView, type ElasticStatus } from '../../services/awsAccount';
-import { hiveService, hiveAccountView, type HiveAccount, type HiveInstance } from '../../services/hive';
+import { hiveService, hiveAccountView, type HiveAccount, type HiveInstance, type SshMachine } from '../../services/hive';
 import { settingsService } from '../../services/settings';
 import type { SwarmOutFleet } from '../../services/swarmOut';
 import { isDesktop } from '../../services/tauri';
@@ -191,6 +193,179 @@ function residentTone(h: HiveInstance, fleet: SwarmOutFleet | null): { tone: Ton
   return { tone: f?.saturated ? 'attention' : 'ok', word: hiveStatusLabel(h.status) };
 }
 
+/** An SSH machine's tone and state word (design 2026-11-24-swarm-out-ssh-machine §8). */
+export function sshTone(m: SshMachine, now: number, t: (k: string, o?: Record<string, unknown>) => string): { tone: Tone; word: string } {
+  if (m.status === 'error' || m.status === 'failed') return { tone: 'error', word: hiveStatusLabel(m.status) };
+  if (m.status !== 'running') return { tone: CHANGING.includes(m.status) ? 'attention' : 'unknown', word: hiveStatusLabel(m.status) };
+  if (typeof m.cert_valid_until === 'number' && m.cert_valid_until * 1000 <= now) return { tone: 'error', word: t('swarmOut.ssh.certExpired') };
+  if (m.reachable === false) return { tone: 'error', word: t('swarmOut.fleet.unreachable') };
+  return { tone: m.reachable ? 'ok' : 'unknown', word: hiveStatusLabel(m.status) };
+}
+
+/** "13:33", or "11/25 13:33" when not today, local time. */
+const clock = (s: number) => {
+  const d = new Date(s * 1000);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+};
+
+/** ③ SSH machines: machines of the person's own, reached over SSH (a Cloud Desktop), each
+ *  running a Hive in a container that the Host installed. A row says whether it takes tasks
+ *  now and, when not, the one thing to do (renew its certificate, look at ssh's error); it
+ *  opens to its host, Brains, the "tasks that need no private network" switch, retry and
+ *  delete. "+ add" asks for the SSH host and the AWS profile on the machine, and says that
+ *  tasks there run with the person's identity. */
+export function SshMachinesSection({ onError }: { onError: (message: string | null) => void }) {
+  const { t } = useTranslation();
+  const [machines, setMachines] = useState<SshMachine[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ host: '', profile: '', mounts: '', hint: '', reachesPrivate: true });
+  const [now, setNow] = useState(() => Date.now());
+
+  const load = useCallback(async () => {
+    try { setMachines(await hiveService.listSsh()); setFailed(false); } catch { setFailed(true); }
+    setNow(Date.now());
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const changing = (machines ?? []).some((m) => CHANGING.includes(m.status) || (m.status === 'running' && m.reachable === false));
+  useEffect(() => {
+    if (!changing) return undefined;
+    const timer = setInterval(() => { void load(); }, 10000);
+    return () => clearInterval(timer);
+  }, [changing, load]);
+
+  const act = async (run: () => Promise<unknown>) => {
+    setBusy(true); onError(null);
+    try { await run(); setConfirm(null); } catch (e) { onError(problemOf(e).message); }
+    finally { setBusy(false); void load(); }
+  };
+  const toggle = (id: string) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const add = () => act(async () => {
+    await hiveService.addSsh({
+      ssh_host: form.host.trim(), source_profile: form.profile.trim(),
+      mounts: form.mounts.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
+      cert_renew_hint: form.hint.trim(), reaches_private: form.reachesPrivate,
+    });
+    setAdding(false);
+    setForm({ host: '', profile: '', mounts: '', hint: '', reachesPrivate: true });
+  });
+  const input = 'w-full border border-[var(--color-border)] rounded-md px-2 py-1 bg-[var(--color-card)] text-body';
+  const list = machines ?? [];
+
+  return (
+    <section className={card} data-testid="so-set-ssh">
+      <Head mark="SSH" markStyle={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-chrome)' }}
+        title={t('swarmOut.ssh.title')} kind={<Kind>{t('swarmOut.board.ssh')}</Kind>} lead={t('swarmOut.ssh.lead')} />
+      {list.length === 0 && (
+        <div className={`px-[18px] py-3 border-t border-[var(--color-border)] text-body ${muted}`} data-testid="so-ssh-none">
+          {machines === null ? (failed ? t('swarmOut.ssh.unreadable') : t('swarmOut.loading')) : t('swarmOut.ssh.none')}
+        </div>
+      )}
+      {list.map((m) => {
+        const st = sshTone(m, now, t);
+        const isOpen = open.has(m.id) || confirm === m.id;
+        const expired = typeof m.cert_valid_until === 'number' && m.cert_valid_until * 1000 <= now;
+        return (
+          <div key={m.id} className="border-t border-[var(--color-border)]" data-testid="so-ssh-row" data-tone={st.tone}>
+            <div className="flex items-center gap-3 px-[18px] py-3 cursor-pointer hover:bg-[var(--color-hover)] transition-colors" onClick={() => toggle(m.id)}>
+              <button type="button" aria-expanded={isOpen} aria-label={m.name} className={`w-3 text-small ${dim} transition-transform ${isOpen ? 'rotate-90' : ''}`}
+                onClick={(ev) => { ev.stopPropagation(); toggle(m.id); }}>›</button>
+              <Dot tone={st.tone} />
+              <div className="flex-1 min-w-0">
+                <div className="text-body font-semibold truncate">{m.name}</div>
+                <div className={`text-small ${muted} truncate`}>{[m.instance_type !== 'ssh' ? m.instance_type : null, m.version, m.config.ssh_host].filter(Boolean).join(' · ')}</div>
+              </div>
+              <span className="text-small whitespace-nowrap" style={st.tone === 'error' || st.tone === 'attention' ? { color: TONE_VAR[st.tone] } : undefined}
+                data-testid="so-ssh-state">{st.word}</span>
+            </div>
+            {/* the one thing to do, without opening the row */}
+            {expired && (
+              <div className="pl-[44px] pr-[18px] pb-2.5 -mt-1 text-small" style={{ color: TONE_VAR.error }} data-testid="so-ssh-renew">
+                {m.config.cert_renew_hint ? t('swarmOut.ssh.renewWith', { hint: m.config.cert_renew_hint }) : t('swarmOut.ssh.renew')}
+              </div>
+            )}
+            {isOpen && (
+              <div className="pl-[44px] pr-[18px] pb-3.5 pt-0.5 text-small flex flex-col gap-2" data-testid="so-ssh-detail">
+                {(m.status === 'error' && m.error_message) && (
+                  <div className="px-2.5 py-2 rounded-md break-words" style={{ color: TONE_VAR.error, background: `color-mix(in srgb, ${TONE_VAR.error} 7%, transparent)` }}
+                    data-testid="so-ssh-error">{m.error_message}</div>
+                )}
+                {m.status === 'running' && m.reachable === false && m.tunnel_error && (
+                  <div className="break-words" style={{ color: TONE_VAR.error }} data-testid="so-ssh-tunnel">{m.tunnel_error}</div>
+                )}
+                {m.status === 'running' && m.error_message && (
+                  <div className={`break-words ${muted}`}>{m.error_message}</div>
+                )}
+                {typeof m.cert_valid_until === 'number' && !expired && (
+                  <div className={muted} data-testid="so-ssh-cert">{t('swarmOut.ssh.certUntil', { time: clock(m.cert_valid_until) })}</div>
+                )}
+                <label className="inline-flex items-center gap-2 text-[var(--color-text-secondary)]">
+                  <input type="checkbox" checked={m.config.general_tasks !== false} disabled={busy} data-testid="so-ssh-general"
+                    onChange={(ev) => void act(() => hiveService.setSshOptions(m.id, { general_tasks: ev.target.checked }))} />
+                  {t('swarmOut.ssh.generalTasks')}
+                </label>
+                {m.status === 'running' && <div className="min-w-0" data-testid="so-ssh-brains"><HiveBrains instanceId={m.id} /></div>}
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  {m.status === 'error' && (
+                    <button type="button" className="btn-sm border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50" disabled={busy}
+                      data-testid="so-ssh-retry" onClick={() => void act(() => hiveService.retrySsh(m.id))}>{t('common.button.retry')}</button>
+                  )}
+                  <button type="button" className="btn-sm border disabled:opacity-50" disabled={busy} data-testid="so-ssh-delete"
+                    style={{ color: TONE_VAR.error, borderColor: `color-mix(in srgb, ${TONE_VAR.error} 35%, var(--color-border))` }}
+                    onClick={() => setConfirm(m.id)}>{t('swarmOut.settings.delete')}</button>
+                  {confirm === m.id && (
+                    <span className="inline-flex flex-wrap items-center gap-3" data-testid="so-ssh-delete-confirm">
+                      <span className="text-[var(--color-text-secondary)]">{t('swarmOut.ssh.deleteNote', { name: m.name })}</span>
+                      <button type="button" className="btn-sm btn-primary disabled:opacity-50" disabled={busy} data-testid="so-ssh-delete-go"
+                        onClick={() => void act(() => hiveService.removeSsh(m.id))}>{t('swarmOut.settings.delete')}</button>
+                      <button type="button" className={link} onClick={() => setConfirm(null)}>{t('swarmOut.setup.cancel')}</button>
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div className="px-[18px] py-3 border-t border-[var(--color-border)] text-body">
+        {!adding ? (
+          <button type="button" className={`font-semibold ${link}`} disabled={busy} data-testid="so-ssh-add" onClick={() => setAdding(true)}>
+            + {t('swarmOut.ssh.add')}</button>
+        ) : (
+          <div className="flex flex-col gap-2.5 max-w-[520px]" data-testid="so-ssh-form">
+            <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.host')}</span>
+              <input className={input} value={form.host} placeholder={t('swarmOut.ssh.hostPlaceholder')} data-testid="so-ssh-host"
+                onChange={(ev) => setForm({ ...form, host: ev.target.value })} /></label>
+            <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.profile')}</span>
+              <input className={input} value={form.profile} data-testid="so-ssh-profile" onChange={(ev) => setForm({ ...form, profile: ev.target.value })} />
+              <span className={`text-small ${dim}`}>{t('swarmOut.ssh.profileHint')}</span></label>
+            <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.mounts')}</span>
+              <input className={input} value={form.mounts} placeholder={t('swarmOut.ssh.mountsPlaceholder')} data-testid="so-ssh-mounts"
+                onChange={(ev) => setForm({ ...form, mounts: ev.target.value })} />
+              <span className={`text-small ${dim}`}>{t('swarmOut.ssh.mountsHint')}</span></label>
+            <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.certHint')}</span>
+              <input className={input} value={form.hint} placeholder={t('swarmOut.ssh.certHintPlaceholder')} data-testid="so-ssh-hint"
+                onChange={(ev) => setForm({ ...form, hint: ev.target.value })} /></label>
+            <label className="inline-flex items-center gap-2 text-[var(--color-text-secondary)]">
+              <input type="checkbox" checked={form.reachesPrivate} onChange={(ev) => setForm({ ...form, reachesPrivate: ev.target.checked })} />
+              {t('swarmOut.ssh.reachesPrivate')}</label>
+            <p className="text-small" style={{ color: TONE_VAR.attention }} data-testid="so-ssh-identity">{t('swarmOut.ssh.identityNote')}</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" className="btn-sm btn-primary disabled:opacity-50" data-testid="so-ssh-add-go"
+                disabled={busy || !form.host.trim() || !form.profile.trim()} onClick={() => void add()}>{t('swarmOut.ssh.addConfirm')}</button>
+              <button type="button" className={link} onClick={() => setAdding(false)}>{t('swarmOut.setup.cancel')}</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function SwarmOutSettings({ fleet = null, onConnected }: {
   fleet?: SwarmOutFleet | null;
   /** the account was connected or changed here (the panel's run view follows it) */
@@ -325,6 +500,8 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
           {(e?.image_version ?? elastic?.host_version ?? '—')}<span className={muted}> · {t('swarmOut.settings.followsVersion')}</span>
         </Row>
       </section>
+
+      <SshMachinesSection onError={setError} />
 
       <section className={card} data-testid="so-set-hives">
         <Head mark="EC2" markStyle={{ color: 'var(--color-text-secondary)', background: 'var(--color-bg-chrome)' }}

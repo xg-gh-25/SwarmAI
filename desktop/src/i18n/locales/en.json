@@ -1308,8 +1308,8 @@
       "settings": "Settings"
     },
     "history": {
-      "refusals_one": "Refused at intake once · {{private}} of them needed a private network",
-      "refusals_other": "Refused at intake {{count}} times · {{private}} of them needed a private network"
+      "refusals_one": "Refused once · {{private}} of them needed a private network no Hive could take",
+      "refusals_other": "Refused {{count}} times · {{private}} of them needed a private network no Hive could take"
     },
     "live": {
       "submitFailed": "Couldn't submit, try again later"
@@ -2143,6 +2143,31 @@
         "elastic": "keeps Elastic Workers on standby and repairs it once when it fails"
       }
     },
+    "ssh": {
+      "title": "SSH machines",
+      "lead": "A machine of your own you reach over SSH (a cloud desktop, a dev box): tasks run there with your tools, your network and your identity.",
+      "none": "None yet.",
+      "unreadable": "The SSH machines could not be read.",
+      "add": "Add an SSH machine",
+      "host": "SSH host",
+      "hostPlaceholder": "devbox.example.com",
+      "profile": "AWS profile on the machine",
+      "profileHint": "It must reach this SwarmAI account; the machine's Hive gets its own narrow role from it.",
+      "mounts": "Extra folders the tasks need (optional)",
+      "mountsPlaceholder": "/opt/tools:ro /work",
+      "mountsHint": "Absolute paths, separated by spaces; add :ro for read-only. Your home folder is always there.",
+      "certHint": "How you renew the machine's SSH certificate (optional)",
+      "certHintPlaceholder": "the command you run on the machine",
+      "reachesPrivate": "This machine reaches my private network and internal tools",
+      "identityNote": "Tasks on this machine run as you: with your SSH keys, credentials and network. SwarmAI installs a Hive there in a container and updates it by itself.",
+      "addConfirm": "Add and install",
+      "generalTasks": "Also take tasks that need no private network",
+      "certExpired": "certificate expired",
+      "certUntil": "SSH certificate valid until {{time}}",
+      "renew": "Its SSH certificate expired: renew it on the machine to send it tasks again.",
+      "renewWith": "Its SSH certificate expired: on the machine, run {{hint}}",
+      "deleteNote": "Remove {{name}}? The Hive is taken off the machine; its data stays there."
+    },
     "board": {
       "running": "Running",
       "recent": "Recently done",
@@ -2159,6 +2184,7 @@
       "fleetSettings": "Open Swarm Out settings",
       "elastic": "AgentCore",
       "ec2": "EC2",
+      "ssh": "SSH",
       "stationHere": "current",
       "stationPassed": "done",
       "stationAhead": "ahead"

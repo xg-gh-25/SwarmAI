@@ -2143,6 +2143,31 @@
         "elastic": "Elastic Workers 保持待命，出错时修复一次"
       }
     },
+    "ssh": {
+      "title": "SSH 机器",
+      "lead": "你自己的、能 SSH 上去的机器（云桌面、开发机）：任务在那里用你的工具、你的网络和你的身份运行。",
+      "none": "还没有。",
+      "unreadable": "读不到 SSH 机器。",
+      "add": "添加一台 SSH 机器",
+      "host": "SSH 主机",
+      "hostPlaceholder": "devbox.example.com",
+      "profile": "机器上的 AWS profile",
+      "profileHint": "它要能访问这个 SwarmAI 账户；机器上的 Hive 会用它换取一个自己专用的窄角色。",
+      "mounts": "任务还需要的目录（可选）",
+      "mountsPlaceholder": "/opt/tools:ro /work",
+      "mountsHint": "绝对路径，用空格分开；只读的加 :ro。你的家目录总会挂进去。",
+      "certHint": "怎么刷新这台机器的 SSH 证书（可选）",
+      "certHintPlaceholder": "你在机器上运行的命令",
+      "reachesPrivate": "这台机器能访问我的内网和内部工具",
+      "identityNote": "这台机器上的任务以你的身份运行：用你的 SSH 密钥、凭据和网络。SwarmAI 会在那里用容器装一个 Hive，并自动更新它。",
+      "addConfirm": "添加并安装",
+      "generalTasks": "也接不需要内网的任务",
+      "certExpired": "证书已过期",
+      "certUntil": "SSH 证书有效期到 {{time}}",
+      "renew": "它的 SSH 证书已过期：在机器上刷新后，才会再派任务给它。",
+      "renewWith": "它的 SSH 证书已过期：在机器上运行 {{hint}}",
+      "deleteNote": "移除 {{name}}？会把 Hive 从机器上卸掉，它的数据留在机器上。"
+    },
     "board": {
       "running": "在跑",
       "recent": "最近完成",
@@ -2159,6 +2184,7 @@
       "fleetSettings": "打开 Swarm Out 设置",
       "elastic": "AgentCore",
       "ec2": "EC2",
+      "ssh": "SSH",
       "stationHere": "当前",
       "stationPassed": "已过",
       "stationAhead": "未到"

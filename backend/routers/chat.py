@@ -976,7 +976,18 @@ async def get_admission_state_endpoint():
         # them by id (scripts/task_checks), recording each exit code; a Host sends them as
         # data, and reads their statuses from that record, only when this is set
         "task_checks": True,
+        **(await _ssh_machine_state()),
     }
+
+
+async def _ssh_machine_state() -> dict:
+    """On an SSH machine's Hive only (core/hive_ssh_mode): the end of its latest SSH
+    certificate, which the Host reads before it sends a task (design
+    2026-11-24-swarm-out-ssh-machine §5.2). Nothing elsewhere."""
+    from core import hive_ssh_mode
+    if not hive_ssh_mode.active():
+        return {}
+    return {"ssh_cert_valid_until": await asyncio.to_thread(hive_ssh_mode.cert_valid_until)}
 
 
 from core.session_state import session_state_entry, bg_snapshot as _bg_snapshot  # noqa: E402,F401

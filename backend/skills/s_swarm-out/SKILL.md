@@ -63,8 +63,8 @@ take it (AGENT R1). With a running Hive (`hives`), a task leans to a Hive when i
 long (a full or bugfix pipeline run, a long investigation), has several independent
 parts to run at once, or arrives while this machine is busy or the person is leaving.
 It stays local when it is an interactive back-and-forth or a small change, needs
-internal or private resources (the checks of step 4 refuse those anyway), or is verified
-on this machine's own data, build or daemon. Leaning to a Hive: propose it in one line
+internal or private resources and no SSH machine reaches them (`spec` says so in
+`private_reach`), or is verified on this machine's own data, build or daemon. Leaning to a Hive: propose it in one line
 with the reason, as a next step the person can accept, and dispatch only once they
 accept (dispatch sends the work off this machine). No Hive: run it here, and propose
 a Hive once when the work is long, never per task.
@@ -93,7 +93,7 @@ before asking** (step 4): a task a Hive cannot do is refused at once, not after 
 | uncommitted files (`dirty` > 0) | do not ask: the card says they were not sent |
 | `spec` refuses because of the Project Agent (it has problems, or a command has no source in the repository) | do not ask: fix the definition (`project-agent.yaml`, or the skill or command it names), run `spec` again, and tell the person in one line what you changed |
 | `spec` refuses for any other reason | do not ask: run `dispatch` once with the same arguments. It refuses with the same reasons, records the refusal and shows a refusal card (what to do instead is on it); then stop |
-| the task needs something a Hive cannot reach that the checks do not see (an internal service or site, a corporate-only tool) | do not ask: pass `--needs-private "<what, in one sentence>"`; it refuses the task (it can add a refusal, never remove one) |
+| the task needs something a Hive cannot reach that the checks do not see (an internal service or site, a corporate-only tool) | do not ask: pass `--needs-private "<what, in one sentence>"`; the task then goes only to a machine that reaches a private network (an SSH machine), and is refused when none can take it (it can add a reason, never remove one) |
 
 On the desktop ask with AskUserQuestion; in a channel session ask the same question as
 numbered text options ("reply with a number"). Only this question.
@@ -153,11 +153,16 @@ numbered text options ("reply with a number"). Only this question.
    and acceptance choices: with the mode you would pick and an acceptance that says
    only what was asked (a placeholder like "the person's request is answered" is fine
    for this check; never invent a criterion). When two modes fit, run it for each.
-   `refusals` not empty for every mode that fits (for example: the Brain binds an
-   internal repository or one cloned from a private host, a skill needs a private
-   network, or you passed `--needs-private`): run `dispatch` once with the same arguments plus `--title`, `--revision`
+   `refusals` not empty for every mode that fits (for example: the Project Agent has
+   problems, a repository has no remote a Hive can clone): run `dispatch` once with the
+   same arguments plus `--title`, `--revision`
    and `--brief`, which records the refusal and shows the refusal card, and stop; tell
-   the person it can be done on this machine in a chat tab. Refused for one mode only:
+   the person it can be done on this machine in a chat tab. A task that needs a private
+   network (`spec.private` not empty: an internal repository, one cloned from a private
+   host, a skill with `network: private`, or `--needs-private`) is not refused by `spec`:
+   with `private_reach` false no SSH machine reaches one, so treat it as refused; with it
+   true, `dispatch` places it on such a machine, and refuses it (the same card) only when
+   none can take it now (for example its SSH certificate expired). Refused for one mode only:
    take the mode that can run, and say after dispatching that the other cannot run on a
    Hive. Otherwise ask what the table says to ask, run `spec` again if an answer changed
    it, then run

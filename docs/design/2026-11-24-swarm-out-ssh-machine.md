@@ -14,7 +14,7 @@ related: docs/design/2026-11-20-swarm-out-multi-carrier.md（派发层、执行�
 
 Swarm Out 现在有两种执行面：EC2 Hive 和 AgentCore 弹性 Hive。两种都拿不到内部权限，所以需要内部 repo、内部工具或内网的任务，
 在准入时就被拒绝（`core/task_spec.py:378-381`）。本设计加第三种执行面 **`ssh`**：一台人自己的、能 SSH 上去的机器，Host 通过
-SSH 隧道把它当一台常驻 Hive 来用。第一个实例是 XG 的内部 Cloud Desktop（`dev-dsk-<alias>-1a`），它本来就有 Midway、toolbox、
+SSH 隧道把它当一台常驻 Hive 来用。第一个实例是 XG 的内部 Cloud Desktop，它本来就有 Midway、toolbox、
 brazil 和内网。
 
 这台机器上跑的是**同一个 Hive 包**，装进一个 AL2023 镜像（由 AgentCore 已有的 Dockerfile 派生），机器自己的系统可以是老的。
@@ -106,7 +106,7 @@ Host 调的还是同一套 Hive HTTP API，区别是：地址是 Host 本机的�
 `error`，和 EC2 同一套词，面板的状态显示照用）、`version`、`account_ref`（Host 的 SwarmAI 账户）、`region`、`s3_bucket`
 （账户的 bridge 桶，和 EC2 Hive 同一个）、`auth_user` / `auth_password`（同 EC2：Host 存口令，机器上只有 bcrypt 哈希）、
 `instance_type`（写机器的描述，如 `x86_64 · 4 vCPU · 15 GB`，不留默认的 `m7g.xlarge`，`sqlite.py:3075`）、
-`iam_role_name`（D4 的窄角色）。新加一列 `carrier_config`（JSON，迁移 v22，只加列）：
+`iam_role_name`（D4 的窄角色）。新加一列 `carrier_config`（JSON，迁移 v23，只加列）：
 
 ```json
 {"ssh_host": "dev-dsk-<alias>-1a-0123abcd.us-west-2.amazon.com",
@@ -204,17 +204,19 @@ Host 里到达 run 的路径有两条，SSH 执行面两条都要接：
 基础镜像按 digest 固定，多架构（x86_64 和 arm64）。**Hive 包在镜像里**（`/opt/swarmai`，属 root，运行用户不可写）：
 run 和 Hive 同一个 uid，包要是放在可写的 `$HOME` 下，run 就能改 Hive 自己的门禁代码，而且改动会活过重启
 （EC2 上 Hive 以单独的用户 `swarm` 运行，`swarmai-hive.service:12`，就是为了这个）。容器里没有 docker socket，run 改不了镜像。
+这只管容器里面：`$HOME` 可写，run 能在里面留下之后在容器外运行的代码（人下次登录、或 Host 经 ssh 执行命令时读的 shell 启动文件），以人的身份运行，而人能用 docker，于是也能改容器。这不是本设计能堵上的口子，它就是 §7 的"任务以人的身份跑"；哪些任务到这台机器上来由 `general_tasks` 定。
 
 运行：
 
 ```
 docker run -d --name swarmai-hive --restart unless-stopped --network host \
-  -u <uid>:<gid> -v $HOME:$HOME <配置里的 mounts> --env-file ~/.swarmai-hive/hive.env \
+  -u <uid>:<gid> -v $HOME:$HOME <配置里的 mounts> --env-file <临时目录里的环境文件> \
   swarmai-hive-ssh:<Hive 版本> bash /opt/swarmai/hive/swarmai-hive.sh
 ```
 
 - `--restart unless-stopped`：机器重启后容器自己起来，不依赖 Host。
 - 挂进整个 `$HOME`：任务要用人的 SSH 证书、工具、内部凭据，这是这种执行面存在的意义（§7）。
+- 环境文件不放在 `$HOME` 里：`$HOME` 可写、run 和 Hive 同一个 uid，放在那里的文件 run 能改（往里加 `PYTHONPATH` 或换密码哈希都能活过重启）。启动和更新的脚本从 stdin 收 Host 这次送来的环境，写进 `/tmp` 下一个私有临时目录，`docker run` 读完就删；docker 把环境存在容器自己的配置里，重启不需要这个文件。挂载不许露出 `/tmp`、docker socket 或它们上面的目录。配置里的挂载写成 `path:ro` 时按 `-v path:path:ro` 挂。
 - Hive 的数据放在 `SWARM_DATA_DIR=~/.swarmai-hive/data`（`config.py:47-62` 的覆盖），不碰人可能有的 `~/.swarm-ai`。
 - `--network host`：Hive 只绑 127.0.0.1，隧道才能到；代价见 §7 最后一条。
 
@@ -240,7 +242,7 @@ Swarm Out › 设置里加一台（§8），Host 在后台做，`status` 走 `pr
 3. **镜像**：Host 送构建上下文（Dockerfile + 从账户桶取到并按 `checksums.txt` 校验过的 Hive 包），机器上 `docker build`。
 4. **凭据**：写 `~/.aws/config` 里的一个新 profile `swarmai-hive-<name>`（`role_arn` = 窄角色，`source_profile` = 人填的那个），
    只新增、不改别的 profile；在容器里用它调 `sts get-caller-identity`，**ARN 必须是这个窄角色**，不是就失败并说明。
-5. **环境文件** `~/.swarmai-hive/hive.env`（`600`）：`SWARMAI_MODE=hive`、`SWARMAI_CARRIER=ssh`、`SWARMAI_HIVE_NAME`、
+5. **环境**（只在启动脚本运行期间存在，见 §5.1）：`SWARMAI_MODE=hive`、`SWARMAI_CARRIER=ssh`、`SWARMAI_HIVE_NAME`、
    `SWARMAI_HIVE_BUCKET`、`AWS_REGION`、`AWS_PROFILE=swarmai-hive-<name>`、`SWARM_DATA_DIR`、`SWARMAI_PORT`、`HIVE_USER`、
    `HIVE_PASS_HASH`。经 ssh 的 stdin 送，不进命令行参数，不进日志；Host 只送 bcrypt 哈希。
 6. **启动并等 `/health`**（经隧道，最多 60 秒）。
@@ -297,7 +299,7 @@ Swarm Out › 设置里加一台（§8），Host 在后台做，`status` 走 `pr
 
 **新加的**：`core/carriers/ssh.py`、`ssh_tunnel.py`；`registry._MAKERS` 加 `ssh`（`registry.py:25`）；`swarm_out._base` 认
 `_base_url`；`_offers` 按执行面分别计时；`hive/ssh_provisioner.py`（§5.3、§5.4）；`routers/hive.py` 的 `/ssh` 一组接口（加、更新、
-重试、删除、开关 `general_tasks`）；迁移 v22。
+重试、删除、开关 `general_tasks`）；迁移 v23。
 
 ## 7. 安全
 
@@ -374,7 +376,7 @@ Swarm Out › 设置今天有三块：账户、Elastic Workers、常驻 Hive（`
 
 | 步 | 内容 | 等 |
 |---|---|---|
-| S1 | 迁移 v22；`hive_instances` 的全部语句逐条分类，只管 EC2 的加检查（§6 第一张表）；`registry.location_of` 和第二张表的七处；round 和句柄的三处。EC2 和 AgentCore 行为不变 | 不等 |
+| S1 | 迁移 v23；`hive_instances` 的全部语句逐条分类，只管 EC2 的加检查（§6 第一张表）；`registry.location_of` 和第二张表的七处；round 和句柄的三处。EC2 和 AgentCore 行为不变 | 不等 |
 | S2 | Hive 包里的两处（§5.2）；派生镜像；`hive/ssh_provisioner.py` 的安装、更新、移除，含窄角色 | 不等（和 S1 同时） |
 | S3 | `ssh_tunnel.py`、`ssh.py`（offers、位置、client、记录）、`_base_url`、`_offers` 按执行面计时、`follow_host` | S1 |
 | S4 | 准入和调度的三处变化（§4.4），含 `SwarmOutRefused(private)`、技能文本 | S1 |

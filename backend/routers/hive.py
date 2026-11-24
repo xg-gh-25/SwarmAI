@@ -18,7 +18,7 @@ from typing import Optional
 import aiosqlite
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from database import db
 from hive import accounts as hive_accounts
@@ -161,6 +161,28 @@ def _with_idle_stop(rows: list[dict]) -> list[dict]:
         out.append({**r, "idle_stop_minutes": own, "idle_stop_settable": settable,
                     "idle_stop_effective": 0.0 if idle_s is None else idle_s / 60.0})
     return out
+
+
+SSH_NOT_EC2 = "This is an SSH machine, not an EC2 Hive: manage it under SSH machines in Swarm Out › settings."
+
+
+def _is_ec2(row: dict) -> bool:
+    """An EC2 Hive's row: the only kind the ``/instances/{id}`` routes act on (design
+    docs/design/2026-11-24-swarm-out-ssh-machine.md §6). A row from before the ``carrier``
+    column is one."""
+    return (row.get("carrier") or "ec2") == "ec2"
+
+
+async def _refuse_not_ec2(instance_id: str) -> None:
+    """409 for a row of another carrier, before any EC2 provisioner call: a retry would
+    otherwise build a whole EC2 Hive for an SSH machine's row, a stop or update would send
+    EC2 and SSM calls for it. No such row: left to the route's own 404."""
+    async with _conn() as c:
+        cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+    if row is None or _is_ec2(dict(row)):
+        return
+    raise HTTPException(status_code=409, detail=ELASTIC_NOT_EC2 if _is_elastic(dict(row)) else SSH_NOT_EC2)
 
 
 # ── Models ──────────────────────────────────────────────────────────
@@ -567,8 +589,9 @@ async def list_instances():
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances ORDER BY created_at DESC")
         rows = [dict(r) for r in await cursor.fetchall()]
-    # Elastic Workers is not an EC2 Hive: it has its own section (GET /elastic)
-    return [HiveInstanceResponse(**r) for r in _with_idle_stop([r for r in rows if not _is_elastic(r)])]
+    # Elastic Workers and SSH machines are not EC2 Hives: each has its own section
+    # (GET /elastic, GET /ssh)
+    return [HiveInstanceResponse(**r) for r in _with_idle_stop([r for r in rows if _is_ec2(r)])]
 
 
 @router.post("/instances", response_model=HiveInstanceResponse, status_code=201)
@@ -689,6 +712,7 @@ async def set_idle_stop(instance_id: str, body: HiveIdleStop):
 async def stop_instance(instance_id: str):
     """Stop a running Hive (EC2 stop_instances)."""
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     # U3: No redundant status check — provisioner's atomic gate is the single source of truth.
     # Avoids TOCTOU and inconsistent error responses (400 vs 409).
     async with _conn() as c:
@@ -712,6 +736,7 @@ async def stop_instance(instance_id: str):
 async def start_instance(instance_id: str):
     """Start a stopped Hive (EC2 start_instances + wait healthy)."""
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     # U3: No redundant status check — provisioner's atomic gate is the single source of truth.
     async with _conn() as c:
         cursor = await c.execute("SELECT id FROM hive_instances WHERE id = ?", (instance_id,))
@@ -740,6 +765,7 @@ async def restart_instance(instance_id: str):
     stopping) and the stop and the start run in the background, as an update does: the
     Hive ends 'running', or 'error' with why."""
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     async with _conn() as c:
         cursor = await c.execute("SELECT name, status FROM hive_instances WHERE id = ?", (instance_id,))
         row = await cursor.fetchone()
@@ -800,6 +826,7 @@ async def update_instance(instance_id: str, body: Optional[HiveInstanceUpdate] =
     Claims the Hive (running → updating) and returns; the update runs in the background
     and ends 'running', with the new version or with error_message saying why not."""
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     async with _conn() as c:
         cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
         row = await cursor.fetchone()
@@ -833,6 +860,7 @@ async def delete_instance(instance_id: str):
     count goes down by the Hives that stopped counting with it). Without Elastic Workers on standby the SwarmAI account's last
     Hive is refused (design §7.3: somewhere must be left to run tasks)."""
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
         found = await cursor.fetchone()
@@ -867,6 +895,7 @@ async def delete_instance(instance_id: str):
 async def replace_instance(instance_id: str):
     """Build a new Hive like this one; when it runs, this one is deleted."""
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
         found = await cursor.fetchone()
@@ -885,6 +914,7 @@ async def replace_instance(instance_id: str):
 async def reset_password(instance_id: str):
     """Reset Hive auth password via SSM. Returns new credentials."""
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     async with _conn() as c:
         cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
         row = await cursor.fetchone()
@@ -931,6 +961,7 @@ async def retry_instance(instance_id: str, body: Optional[HiveRetryRequest] = No
     The work runs in the background (status 'deleting', then the deploy's own states).
     """
     _require_desktop()
+    await _refuse_not_ec2(instance_id)
     async with _conn() as c:
         cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
         row = await cursor.fetchone()
@@ -1254,3 +1285,146 @@ async def elastic_disable(location_id: str):
         raise _elastic_error(exc) from None
     _keep(asyncio.create_task(elastic.run_disable(location_id), name=f"hive-elastic-off-{location_id[:8]}"))
     return {"id": location_id, "status": "disabling"}
+
+
+# ── SSH machines (design docs/design/2026-11-24-swarm-out-ssh-machine.md §5.3, §8) ─────────
+
+class SshMachineAdd(BaseModel):
+    ssh_host: str = Field(..., max_length=320)
+    # the AWS profile on the machine that reaches the SwarmAI account; the Hive's own role
+    # is assumed from it (hive/ssh_provisioner, D4)
+    source_profile: str = Field(..., max_length=64)
+    name: Optional[str] = Field(default=None, max_length=41)
+    mounts: list[str] = Field(default_factory=list, max_length=12)
+    cert_renew_hint: str = Field(default="", max_length=120)
+    reaches_private: bool = True
+    general_tasks: bool = True
+    remote_port: int = 18321
+
+
+class SshMachineOptions(BaseModel):
+    general_tasks: Optional[bool] = None
+    reaches_private: Optional[bool] = None
+    cert_renew_hint: Optional[str] = Field(default=None, max_length=120)
+
+
+#: the settings shown for a machine (never its Hive password)
+_SSH_SHOWN = ("ssh_host", "remote_port", "local_port", "source_profile", "reaches_private",
+              "general_tasks", "mounts", "cert_renew_hint")
+
+
+async def _ssh_rows() -> list[dict]:
+    async with _conn() as c:
+        cursor = await c.execute("SELECT * FROM hive_instances WHERE carrier = 'ssh' ORDER BY name")
+        return [dict(r) for r in await cursor.fetchall()]
+
+
+@router.get("/ssh")
+async def ssh_machines():
+    """The SSH machines with their settings and what each says now: its SSH certificate's end,
+    whether its tunnel answers, and ssh's last error when it does not. A machine whose tunnel
+    is not up is not waited for: its tunnel is built in the background."""
+    _require_desktop()
+    from core.carriers import ssh as ssh_carrier
+    from core.carriers import ssh_tunnel
+    out = []
+    for r in await _ssh_rows():
+        try:
+            cfg = json.loads(r.get("carrier_config") or "{}")
+        except ValueError:
+            cfg = {}
+        item = {k: r.get(k) for k in ("id", "name", "status", "version", "instance_type", "error_message",
+                                      "updated_at")}
+        item["config"] = {k: cfg.get(k) for k in _SSH_SHOWN}
+        item.update(reachable=None, cert_valid_until=None, tunnel_error="")
+        if r.get("status") == "running":
+            loc = ssh_carrier.SshLocation(r["id"], r["name"])
+            probe = await loc.admission(build=False)
+            if probe is None:
+                try:
+                    c = ssh_carrier.config(r)
+                    ssh_tunnel.ensure_soon(r["id"], c["ssh_host"], c["local_port"], c["remote_port"])
+                except ValueError:
+                    pass
+                item["tunnel_error"] = ssh_tunnel.last_error(r["id"])
+            item.update(reachable=probe is not None, cert_valid_until=(probe or {}).get("cert_valid_until"))
+        out.append(item)
+    return {"machines": out}
+
+
+def _ssh_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, FileExistsError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, RuntimeError):
+        return HTTPException(status_code=409, detail=str(exc))
+    raise exc
+
+
+@router.post("/ssh", status_code=202)
+async def ssh_add(body: SshMachineAdd):
+    """Add an SSH machine: the row is written ('provisioning') and the Hive is installed on
+    the machine in the background (hive/ssh_provisioner.add); 422 for unusable settings."""
+    _require_desktop()
+    from hive import ssh_provisioner
+    try:
+        return await ssh_provisioner.add(body.ssh_host, body.source_profile, body.name, tuple(body.mounts),
+                                         body.cert_renew_hint, body.reaches_private, body.general_tasks,
+                                         body.remote_port)
+    except Exception as exc:  # noqa: BLE001 — mapped, or raised again
+        raise _ssh_error(exc) from None
+
+
+@router.post("/ssh/{machine_id}/retry", status_code=202)
+async def ssh_retry(machine_id: str):
+    _require_desktop()
+    from hive import ssh_provisioner
+    try:
+        await ssh_provisioner.retry(machine_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from None
+    return {"status": "provisioning"}
+
+
+@router.post("/ssh/{machine_id}/update", status_code=202)
+async def ssh_update(machine_id: str):
+    """Update a running machine to this Host's version now (it also follows the Host by itself
+    when idle, core/carriers/ssh.follow_host)."""
+    _require_desktop()
+    from hive import ssh_provisioner
+    try:
+        version = ssh_provisioner._host_version()
+        await ssh_provisioner.claim_update(machine_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from None
+    _keep(asyncio.create_task(ssh_provisioner.update(machine_id, version), name=f"ssh-update-{machine_id[:8]}"))
+    return {"status": "updating", "version": version}
+
+
+@router.patch("/ssh/{machine_id}")
+async def ssh_options(machine_id: str, body: SshMachineOptions):
+    _require_desktop()
+    from hive import ssh_provisioner
+    try:
+        cfg = await ssh_provisioner.set_options(machine_id, body.general_tasks, body.reaches_private,
+                                                body.cert_renew_hint)
+    except ssh_provisioner.SshInstallError:
+        raise HTTPException(status_code=404, detail="SSH machine not found") from None
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from None
+    return {"config": {k: cfg.get(k) for k in _SSH_SHOWN}}
+
+
+@router.delete("/ssh/{machine_id}")
+async def ssh_remove(machine_id: str):
+    """Remove the Hive from the machine and the machine from here (hive/ssh_provisioner.remove);
+    the Hive's data stays on the machine."""
+    _require_desktop()
+    from hive import ssh_provisioner
+    try:
+        return await ssh_provisioner.remove(machine_id)
+    except ssh_provisioner.SshInstallError:
+        raise HTTPException(status_code=404, detail="SSH machine not found") from None

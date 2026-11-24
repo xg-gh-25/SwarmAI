@@ -302,8 +302,13 @@ async def spec(body: SpecBody) -> dict[str, Any]:
                                     base=body.base, parent_run=body.parent_run)
     except task_spec.SpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # whether a machine that reaches a private network is set up and running (an SSH
+    # machine, design 2026-11-24-swarm-out-ssh-machine §4.4): a task with private needs is
+    # placed there, and refused at dispatch only when none can take it
+    from core.carriers import ssh as ssh_carrier
     return {"spec": {k: v for k, v in s.items() if k != "task"},
-            "refusals": task_spec.admit(s), "segment": task_spec.segment(s)}
+            "refusals": task_spec.admit(s), "segment": task_spec.segment(s),
+            "private_reach": await ssh_carrier.private_reach()}
 
 
 @router.get("/hives")

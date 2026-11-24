@@ -495,7 +495,7 @@ def agentcore_identity() -> Optional[tuple[str, str, Optional[str]]]:
 
 async def run_bridge_loop() -> None:
     """Background task for hive mode. Off when the instance has no Hive identity."""
-    from . import hive_agentcore
+    from . import hive_agentcore, hive_ssh_mode
     agentcore = hive_agentcore.active()
     if agentcore:
         ident = agentcore_identity()          # never IMDS: there is none in a microVM
@@ -503,6 +503,16 @@ async def run_bridge_loop() -> None:
             return
         hive, bucket, region = ident
         bridge = Bridge(hive, S3Store(bucket, region, lazy=True))
+    elif hive_ssh_mode.active():
+        # an SSH machine: never IMDS, which answers with the machine's own (company)
+        # role there (design 2026-11-24-swarm-out-ssh-machine §5.2)
+        ident = hive_ssh_mode.identity()
+        if ident is None:
+            logger.warning("swarm_out_bridge: SWARMAI_CARRIER=ssh without a valid SWARMAI_HIVE_NAME / "
+                           "SWARMAI_HIVE_BUCKET / AWS_REGION; bridge off")
+            return
+        hive, bucket, region = ident
+        bridge = Bridge(hive, await asyncio.to_thread(S3Store, bucket, region))
     else:
         ident = await asyncio.to_thread(resolve_identity)
         if ident is None:
