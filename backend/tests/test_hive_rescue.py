@@ -69,7 +69,8 @@ def hive(tmp_path, monkeypatch):
     async def request_review(router, session_id, pm=None):
         reviews.append(session_id)
         return True
-    monkeypatch.setattr(hive_agentcore, "request_review", request_review)
+    from core import hive_review
+    monkeypatch.setattr(hive_review, "request_review", request_review)
     yield SimpleNamespace(ws=ws, s3=s3, msgs=msgs, mod=hive_agentcore, reviews=reviews)
     hive_agentcore._reset_for_tests()
 

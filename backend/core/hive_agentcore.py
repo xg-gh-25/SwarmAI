@@ -578,8 +578,10 @@ def _heartbeat(live: dict[str, Any], workspace: Path, sid: str) -> None:
     if now - _beat["at"] < HEARTBEAT_S:
         return
     try:
+        # a pipeline decision that waits is busy like a question (_decision_waits): without
+        # a beat the Host would read the wait as a silent end
         busy_now = any(live.get(k) for k in ("streaming", "background_work", "waiting_input", "sealing")) \
-            or _review_open() or export_pending(workspace)
+            or _review_open() or export_pending(workspace) or _decision_waits(live, workspace)
     except Exception as exc:  # noqa: BLE001 — unknown: busy (as the busy check counts it)
         logger.warning("hive_agentcore: busy check for the heartbeat failed (%s)", type(exc).__name__)
         busy_now = True

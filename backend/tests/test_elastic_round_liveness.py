@@ -339,3 +339,21 @@ async def test_an_unrecorded_bundle_that_fails_its_checks_stops_the_rerun(world,
     assert "demo" in str(e.value) and "nothing was sent" in str(e.value)
     assert subprocess.run(["git", "rev-parse", "-q", "--verify", f"refs/hive/{DID}/{key}"], cwd=host,
                           capture_output=True).returncode != 0
+
+
+async def test_a_round_waiting_on_a_pipeline_decision_keeps_its_heartbeat(ac, pm, monkeypatch):  # noqa: F811
+    """A pipeline decision that waits is a wait like a question (core/hive_review): the
+    round stays busy, so its heartbeat keeps beating and the Host never reads the wait as a
+    silent end (heartbeat_lost) while nothing streams."""
+    from core import hive_review
+    key = f"bridge/{AC_SID}/heartbeat.json"
+    clock = {"t": 2_000_000.0}
+    monkeypatch.setattr(ac.mod, "time", SimpleNamespace(time=lambda: clock["t"]))
+    monkeypatch.setattr(hive_review, "decision_waits", lambda sid: sid == HIVE_SID)
+    idle_unit = Router(Unit(HIVE_SID))
+    await ac.mod.sync_pass(router=idle_unit, pm=pm, workspace=ac.ws)
+    assert json.loads(ac.s3.objects[key])["at"] == clock["t"]
+    monkeypatch.setattr(hive_review, "decision_waits", lambda sid: False)
+    clock["t"] += ac.mod.HEARTBEAT_S
+    await ac.mod.sync_pass(router=idle_unit, pm=pm, workspace=ac.ws)
+    assert json.loads(ac.s3.objects[key])["at"] == clock["t"] - ac.mod.HEARTBEAT_S   # idle: no beat
