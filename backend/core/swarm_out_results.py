@@ -53,10 +53,12 @@ RECENT_S = 24 * 3600
 MAX_CONCURRENT_CHECKS = 2
 MAX_DELIVERABLES = 50
 MAX_TOOL_NAMES = 20
+#: rounds ``public`` carries (the latest); ``turns`` counts them all
+MAX_SPANS = 50
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 16
+SUMMARY_VERSION = 17
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -305,6 +307,75 @@ def _interventions(all_blocks: list) -> "tuple[int, int, int, int, int, int]":
     return approved, denied, unanswered_perm, answered_q, unanswered_q, host_handled
 
 
+#: who started a round (``turn_spans``): the dispatch itself, the person, the dispatching
+#: agent (a correction it sent, ``metadata.origin`` host) or a wake
+SPAN_BY = ("dispatch", "person", "agent", "wake")
+
+
+def _row_text(row: dict) -> str:
+    return next((b["text"] for b in _blocks(row) if b.get("type") == "text" and isinstance(b.get("text"), str)), "")
+
+
+def _span_by(row: dict, first: bool) -> str:
+    from core.swarm_out_wake import is_wake_text
+    if first:
+        return "dispatch"
+    if (row.get("metadata") or {}).get("origin") == "host":
+        return "agent"
+    return "wake" if is_wake_text(_row_text(row)) else "person"
+
+
+def _time(v: Any) -> Optional[str]:
+    """A time as UTC with its offset written out. The Hive writes its rows' times with no
+    zone (its clock, read as UTC everywhere here, ``_parse_time``); a reader that parses a
+    zoneless time as its own local time would be off by its offset. None when unreadable."""
+    t = _parse_time(v[:40]) if isinstance(v, str) else None
+    return t.astimezone(timezone.utc).isoformat() if t else None
+
+
+def _turn_spans(rows: list[dict], has_more: bool, d: _Drops) -> "tuple[list[dict], bool]":
+    """Each round of the session, in order: ``{start, end, active_s, by}``. ``start`` is
+    the user row that started it, ``end`` its last outcome's ``at`` (None while it has
+    none), ``active_s`` the sum of its outcomes' CLI durations (None with no outcome). An
+    outcome without one (a stopped or crashed turn, a daemon that died) counts from the
+    round's previous outcome, else its start, up to its own ``at``, and makes the second
+    value True (partial); an unreadable time counts nothing. Outcomes before the first
+    turn start read (older turns not read) are a round with no start."""
+    spans: list[dict] = []
+    marks: list[Optional[str]] = []         # each span's last counted moment
+    ms: list[int] = []
+    partial = False
+    first_turn = not has_more
+    for r in rows:
+        if _is_turn_start(r):
+            start = _time(r.get("created_at"))
+            spans.append({"start": start, "end": None, "active_s": None, "by": _span_by(r, first_turn)})
+            marks.append(start)
+            ms.append(0)
+            first_turn = False
+            continue
+        if r.get("role") != "assistant":
+            continue
+        for b in _blocks(r):
+            if b.get("type") != "turn_outcome":
+                continue
+            if not spans:
+                spans.append({"start": None, "end": None, "active_s": None, "by": None})
+                marks.append(None)
+                ms.append(0)
+            at = _time(b.get("at"))
+            dur = d.i(b.get("duration_ms"))
+            if dur is None:
+                partial = True
+                a, z = _parse_time(marks[-1]), _parse_time(at)
+                dur = max(0, round((z - a).total_seconds() * 1000)) if a and z else 0
+            ms[-1] += dur
+            spans[-1]["end"] = at or spans[-1]["end"]
+            spans[-1]["active_s"] = round(ms[-1] / 1000)
+            marks[-1] = at or marks[-1]
+    return spans, partial
+
+
 def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = None,
               dispatch_id: Optional[str] = None,
               check_records: Optional[list[dict]] = None) -> dict[str, Any]:
@@ -362,7 +433,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
     if ended_at is None and rows:
         ended_at = d.s(rows[-1].get("created_at"), 40)
 
-    active_ms = sum(d.i(o.get("duration_ms")) or 0 for o in outcomes)
+    spans, active_partial = _turn_spans(rows, has_more, d)
     # the four kinds of token in each turn's CLI ``usage``: input not read from the cache,
     # output, cache reads and cache writes. That ``usage`` covers the main conversation
     # only, while the cost (the CLI's process total) also counts its sub-agents, so these
@@ -546,7 +617,13 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
         "hive_records_outcomes": bool(outcomes),
         "error": error, "ended_at": ended_at, "turns": turns,
         "older_turns_not_read": bool(has_more),
-        "active_s": round(active_ms / 1000) if outcomes else None,
+        # Hive work: the sum of the rounds' own times (``turn_spans``), never the clock
+        # between the first send and the last end, which counts the gaps between rounds
+        "active_s": sum(x["active_s"] or 0 for x in spans) if outcomes else None,
+        "turn_spans": spans,
+        # some outcome had no CLI duration (stopped, crashed, the daemon died): its time is
+        # counted up to its end, so ``active_s`` is at least this
+        "active_partial": active_partial,
         "tokens": tokens if outcomes else None,
         "cost_usd": cost, "cost_partial": cost_partial,
         # the whole reply: a reply is one unit, shown whole or not at all (the list view
@@ -615,12 +692,18 @@ def _superseded(record: dict) -> None:
         res["superseded"] = True
 
 
-def _later_resend(record: dict, p: Path) -> None:
-    """Keep the latest ``resent_at`` of the record being written and the one on disk."""
+def _on_disk(p: Path) -> dict:
+    """The record as the file on disk holds it now ({} when there is none or it is unreadable)."""
     try:
-        on_disk = json.loads(p.read_text(encoding="utf-8")).get("resent_at") if p.exists() else None
-    except (OSError, ValueError, AttributeError):
-        on_disk = None
+        rec = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    return rec if isinstance(rec, dict) else {}
+
+
+def _later_resend(record: dict, disk: dict) -> None:
+    """Keep the latest ``resent_at`` of the record being written and the one on disk."""
+    on_disk = disk.get("resent_at")
     mine, theirs = _parse_time(record.get("resent_at")), _parse_time(on_disk)
     if theirs is not None and (mine is None or theirs > mine):
         # the re-send came after this record was loaded: it also restarted the
@@ -639,17 +722,41 @@ def _parse_time(v: Any) -> Optional[datetime]:
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 
+def _final_mark(record: dict, disk: dict) -> None:
+    """``final_at``: when the result for its ``ended_at`` (``final_of``) was first written
+    final (not provisional), the moment a wait on whoever takes the result starts. Kept
+    from the file on disk while the result's end stays the same (a check rebuilds the
+    record without it, ``_fetch``); set now when a final result has a new end; cleared
+    when the result is not final and its end is new."""
+    res = record.get("result")
+    ended = res.get("ended_at") if isinstance(res, dict) else None
+    if isinstance(ended, str) and disk.get("final_of") == ended and isinstance(disk.get("final_at"), str):
+        record["final_at"], record["final_of"] = disk["final_at"], ended
+    elif isinstance(ended, str) and res.get("provisional") is not True:
+        # a record kept before final_at was recorded, its result already final for this
+        # end: when it became final is not known; its end is the nearest known moment
+        # (never the first save after the upgrade, which would restart every long wait)
+        old = disk.get("result") if isinstance(disk.get("result"), dict) else {}
+        legacy = "final_of" not in disk and old.get("ended_at") == ended and old.get("provisional") is not True
+        record["final_at"], record["final_of"] = (ended if legacy else _now()), ended
+    else:
+        record["final_at"] = record["final_of"] = None
+
+
 def save(record: dict) -> None:
     """Write the record atomically (a crash leaves the old file or the new one). The
     re-send mark is the later of this record's and the one on disk: ``turn_started``
     writes it without the run's check lock, so a check that loaded the record before
     the re-send and saves after it keeps the mark (``_later_resend``). Then a result older
-    than that re-send is marked superseded (``_superseded``)."""
+    than that re-send is marked superseded (``_superseded``), and the moment the result
+    became final is kept or set (``_final_mark``)."""
     p = _path(record.get("dispatch_id") or "")
     if p is None:
         raise ValueError("record without a valid dispatch_id")
-    _later_resend(record, p)
+    disk = _on_disk(p)
+    _later_resend(record, disk)
     _superseded(record)
+    _final_mark(record, disk)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".tmp-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1376,6 +1483,15 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None,
         "error": error, "ended_at": _match(_TIME_RE, res.get("ended_at")),
         "turns": _int(res.get("turns")), "older_turns_not_read": res.get("older_turns_not_read") is True,
         "active_s": _opt_int(res.get("active_s")),
+        "active_partial": res.get("active_partial") is True,
+        # each round's start, end and own time, and who started it (the latest rounds)
+        "turn_spans": [{"start": _match(_TIME_RE, x.get("start")), "end": _match(_TIME_RE, x.get("end")),
+                        "active_s": _opt_int(x.get("active_s")), "by": _one_of(x.get("by"), SPAN_BY)}
+                       for x in (res.get("turn_spans") or [])[-MAX_SPANS:] if isinstance(x, dict)]
+        if isinstance(res.get("turn_spans"), list) else [],
+        # when this result first came back final (``_final_mark``); None for another end
+        "final_at": _match(_TIME_RE, (record or {}).get("final_at"))
+        if (record or {}).get("final_of") == res.get("ended_at") else None,
         # the ledger's spend when it has the run's rows, else the record's (_usage); a
         # record kept before the cache was counted has no cache keys: None, so the panel
         # says the total is not known rather than showing input + output alone

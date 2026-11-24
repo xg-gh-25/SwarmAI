@@ -1996,7 +1996,7 @@
         "checksNote": "what came back, never a verdict",
         "checkedLater": "checked when it comes back",
         "readAgo": "read {{ago}}",
-        "sentIn": "{{at}} · started in {{n}}s",
+        "sentIn": "{{at}} delivered · dispatch took {{n}}s",
         "steps_one": "{{count}} step",
         "steps_other": "{{count}} steps",
         "state": {
@@ -2206,7 +2206,16 @@
       "ssh": "SSH",
       "stationHere": "current",
       "stationPassed": "done",
-      "stationAhead": "ahead"
+      "stationAhead": "ahead",
+      "time": {
+        "running": "Running {{min}}",
+        "worked": "Worked {{min}}",
+        "workedAtLeast": "Worked ≥ {{min}}",
+        "rounds_one": "{{count}} round",
+        "rounds_other": "{{count}} rounds",
+        "waitAgent": "waiting on agent {{dur}}",
+        "waitYou": "waiting on you {{dur}}"
+      }
     },
     "hist": {
       "range": "Time range",
@@ -2223,7 +2232,7 @@
       "off": "Discarded",
       "warn": "Stopped",
       "open": "In progress",
-      "facts": "{{count}} tasks · median {{min}} · spend {{cost}}",
+      "facts": "{{count}} tasks · Hive work median {{min}} · spend {{cost}}",
       "perDay": "one bar = one day",
       "perWeek": "one bar = one week",
       "dayTip": "{{day}} · {{count}}",
@@ -2238,7 +2247,7 @@
         "runs": "Tasks",
         "result": "Result",
         "unattended": "Accepted, no one stepped in",
-        "median": "Median",
+        "median": "Hive work median",
         "cost": "Spend"
       },
       "records": "All tasks",

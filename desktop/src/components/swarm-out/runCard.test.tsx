@@ -96,7 +96,7 @@ describe('a running card', () => {
     expect(hero.dataset.kind).toBe('run');
     const stations = within(hero).getAllByTestId('swarm-out-card-station');
     expect(stations.map((s) => s.dataset.state)).toEqual(['passed', 'here', 'ahead', 'ahead', 'ahead']);
-    expect(stations[0].textContent).toContain('started in 15s');
+    expect(stations[0].textContent).toContain('delivered · dispatch took 15s');   // the dispatch steps come before delivery
     expect(stations[1].textContent).toContain('native');
     expect(screen.getByTestId('swarm-out-card-now-text').textContent).toBe('Writing the compare subcommand next.');
     expect(screen.getByTestId('swarm-out-card-now-tool').textContent).toBe('Editbackend/scripts/compare.py');

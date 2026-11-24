@@ -1217,4 +1217,4 @@ def test_a_permission_decided_after_its_turn_is_counted_as_decided(host, hive_ws
     # a malformed carried entry changes nothing; the stored summaries are recomputed
     assert hr.later_answers([{"content": [{"type": "cmd_permission_request", "requestId": "x",
                                            "decision": "expired"}]}]) == []
-    assert sor.SUMMARY_VERSION == 16
+    assert sor.SUMMARY_VERSION == 17

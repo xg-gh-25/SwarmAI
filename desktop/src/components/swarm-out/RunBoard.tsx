@@ -11,11 +11,12 @@
  *  - Recently done: the runs that settled (or stopped) in the last 72 hours, the latest
  *    started first (the time each row shows); older ones are in the history.
  * Every card and row names its Brain · Project Agent, where it ran (EC2 or AgentCore and
- * the Hive's name: where.runWhere), its start time and how long it took (where.stamp,
- * where.runMinutes). A card shows the run's place on the dispatch track (track.dispatchTrack:
- * five stations, a pipeline task's live stage under "on Hive") and what its agent is doing
- * now (live_now). A card and a row say how the run's session ended (its recorded ``end``)
- * and, while it is not settled, what still holds it (``settle.why_not``: runCard.EndLine).
+ * the Hive's name: where.runWhere), its start time and its minutes, each saying what it
+ * measures (where.stamp, where.runTime: running, worked and waited on whom). A card
+ * shows the run's place on the dispatch track (track.dispatchTrack: five stations, a
+ * pipeline task's live stage under "on Hive") and what its agent is doing now (live_now).
+ * A card and a row say how the run's session ended (its recorded ``end``) and, while it
+ * is not settled, what still holds it (``settle.why_not``: runCard.EndLine).
  * A click opens the run's big card (RunOverlay), where every command is.
  *
  * Motion (index.css "Swarm Out board"): a live dot's ring, the flowing segment at the
@@ -35,7 +36,7 @@ import { EndLine } from './runCard';
 import { TONE_VAR } from './tone';
 import { CHIP_COLOR, DISPATCH_STATIONS, dispatchTrack, type ChipKind } from './track';
 import { waitingUnasked } from './useSwarmOutActivity';
-import { carrierLabelKey, minutesText, runMinutes, runWhere, stamp } from './where';
+import { carrierLabelKey, minutesText, runTime, runWhere, stamp, waitText } from './where';
 import { outcomeOf, personSteps } from './historyStats';
 
 const muted = 'text-[var(--color-text-muted)]';
@@ -113,14 +114,34 @@ export function RunMeta({ r, fleet }: { r: SwarmOutRun; fleet: SwarmOutFleet | n
   );
 }
 
-/** "11/23 14:02 · 18 min": when it started and how long it took, together. */
-export function StartAndTime({ r, now, open, stacked = false }: { r: SwarmOutRun; now: number; open: boolean; stacked?: boolean }) {
+/** "11/23 14:02 · Worked 18 min · waiting on agent 2 h": when it started and its minutes,
+ *  each named for what it measures (where.runTime). */
+export function StartAndTime({ r, now, asks = [], stacked = false }: { r: SwarmOutRun; now: number; asks?: SwarmOutAsk[]; stacked?: boolean }) {
+  const { t } = useTranslation();
+  const rt = runTime(r, now, asks);
+  const strong = 'font-semibold text-[var(--color-text-secondary)]';
+  const sep = <span className={dim}> · </span>;
+  const worked = rt.phase === 'running' ? null : (
+    <>
+      <b className={strong}>{t(rt.partial ? 'swarmOut.board.time.workedAtLeast' : 'swarmOut.board.time.worked', { min: minutesText(rt.worked) })}</b>
+      {rt.rounds > 1 && <>{sep}{t('swarmOut.board.time.rounds', { count: rt.rounds })}</>}
+    </>
+  );
   return (
     <span className={`inline-flex ${stacked ? 'flex-col items-end' : 'items-baseline gap-1.5'} text-small whitespace-nowrap tabular-nums ${muted}`}
       data-testid="so-when">
       <span>{stamp(r.sent_at)}</span>
       {!stacked && <span className={dim}>·</span>}
-      <b className="font-semibold text-[var(--color-text-secondary)]">{minutesText(runMinutes(r, now, open))}</b>
+      <span data-testid="so-time" data-phase={rt.phase}>
+        {rt.phase === 'running'
+          ? <b className={strong}>{t('swarmOut.board.time.running', { min: minutesText(rt.min) })}</b>
+          : worked}
+        {rt.phase === 'waiting' && (
+          <>{sep}<span style={rt.who === 'person' ? { color: TONE_VAR.attention } : undefined}>
+            {t(rt.who === 'person' ? 'swarmOut.board.time.waitYou' : 'swarmOut.board.time.waitAgent', { dur: waitText(rt.waited) })}
+          </span></>
+        )}
+      </span>
     </span>
   );
 }
@@ -232,7 +253,7 @@ function RunningCard({ r, asks, fleet, now, fresh, needsYou, onOpen, onReload }:
           style={{ background: TONE_VAR.attention }} data-testid="so-you-pill">{tag?.text ?? t('swarmOut.board.waitsYou')}</span>}
         {kind === 'judge' && <span className="text-meta font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
           style={{ color: 'var(--line-judge)', background: 'color-mix(in srgb, var(--line-judge) 13%, transparent)' }}>{t('swarmOut.board.agentHolds')}</span>}
-        <StartAndTime r={r} now={now} open />
+        <StartAndTime r={r} now={now} asks={asks} />
       </div>
       <div className="mt-1.5 flex items-center gap-2 min-w-0">
         <div className="flex-1 min-w-0"><RunMeta r={r} fleet={fleet} /></div>
@@ -299,7 +320,7 @@ export function DoneRow({ r, fleet, now, fresh = false, compact, onOpen, cost }:
         <EndLine r={r} testId="so-done" className="mt-px" />
       </div>
       <div className="flex flex-col items-end">
-        <StartAndTime r={r} now={now} open={outcomeOf(r) === 'open'} stacked={compact} />
+        <StartAndTime r={r} now={now} stacked={compact} />
         {cost != null && <span className={`text-meta tabular-nums ${dim}`} data-testid="so-cost">{cost}</span>}
       </div>
     </div>

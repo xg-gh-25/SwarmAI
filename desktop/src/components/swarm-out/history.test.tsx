@@ -117,6 +117,8 @@ describe('the view', () => {
     expect(v.textContent).toContain('/ 5');
     expect(screen.getByTestId('history-window').querySelector('[aria-pressed="true"]')!.textContent).toBe('7 天');
     expect(screen.getByTestId('history-range-text').textContent).toContain('5 个任务');
+    // the median is of the Hive's work time, and says so
+    expect(screen.getByTestId('history-facts').textContent).toContain('Hive 工作中位');
     expect(screen.getByTestId('history-count-off').textContent).toContain('1');
     expect(screen.getAllByTestId('history-bar')).toHaveLength(7);
     expect(screen.getAllByTestId('so-done-row')).toHaveLength(5);

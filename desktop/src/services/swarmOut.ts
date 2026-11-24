@@ -286,7 +286,18 @@ export interface SwarmOutResult {
   ended_at: string | null;
   turns: number;
   older_turns_not_read: boolean;
+  /** Hive work: the sum of the rounds' own times (``turn_spans``), never the gaps between them */
   active_s: number | null;
+  /** some turn had no CLI duration (stopped, crashed): its time is counted up to its end,
+   *  so ``active_s`` is a lower bound (absent from an older backend) */
+  active_partial?: boolean;
+  /** each round, the latest last: when it started and ended (null while it runs), its own
+   *  work time and who started it (absent from an older backend) */
+  turn_spans?: { start: string | null; end: string | null; active_s: number | null;
+    by: 'dispatch' | 'person' | 'agent' | 'wake' | null }[];
+  /** when this result first came back final: a wait on whoever takes it counts from here
+   *  (null before then, or on a record kept before it was recorded) */
+  final_at?: string | null;
   /** every kind of token the run used: input not read from the cache, output, and the
    *  prompt cache's reads and writes. The cache fields are null on a record kept before
    *  they were counted: its total is not known. */

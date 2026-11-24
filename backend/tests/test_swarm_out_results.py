@@ -833,3 +833,104 @@ def test_the_panels_record_reads_a_legacy_not_run_as_not_seen_and_leaves_the_fil
     out = asyncio.run(swarm_out.run_result(did))
     assert [c["status"] for c in out["record"]["result"]["checks"]] == ["not_seen", "ran"]
     assert path.read_bytes() == before
+
+
+# ── what the minutes measure: each round's span, and when the result became final ──
+
+def _host(text="fix the typo", at="2026-10-28T19:00:00"):
+    row = U(text, at)
+    row["metadata"] = {"origin": "host"}
+    return row
+
+
+def test_turn_spans_a_rerun_18h_later_is_two_rounds():
+    # dispatched at 01:00, worked 1 min; the agent re-ran it 18 h later, 30 s of work
+    rows = [U("go", "2026-10-28T01:00:00"),
+            A(out(duration_ms=60000, at="2026-10-28T01:01:00+00:00")),
+            _host("fix the typo", "2026-10-28T19:00:00"),
+            A(out(duration_ms=30000, at="2026-10-28T19:00:30+00:00"), at="2026-10-28T19:00:30")]
+    r = summarize(rows)
+    assert r["turn_spans"] == [
+        {"start": "2026-10-28T01:00:00+00:00", "end": "2026-10-28T01:01:00+00:00", "active_s": 60, "by": "dispatch"},
+        {"start": "2026-10-28T19:00:00+00:00", "end": "2026-10-28T19:00:30+00:00", "active_s": 30, "by": "agent"},
+    ]
+    # the Hive writes its rows' times without a zone (``datetime.now().isoformat()``): each
+    # span says UTC explicitly, so no reader takes it for its own local time
+    zoned = summarize([U("go", "2026-10-28T01:00:00.123456"), A(out(duration_ms=1000, at="2026-10-28T09:00:00+08:00"))])
+    assert zoned["turn_spans"][0]["start"] == "2026-10-28T01:00:00.123456+00:00"
+    assert zoned["turn_spans"][0]["end"] == "2026-10-28T01:00:00+00:00"
+    # the 18 h between the rounds is not work
+    assert r["active_s"] == 90 == sum(s["active_s"] for s in r["turn_spans"])
+    assert r["turns"] == 2 and r["active_partial"] is False
+    # a person's correction and a wake are told apart from the agent's
+    person = summarize([U("go"), A(out(duration_ms=1000)), U("one more thing", "2026-10-28T02:00:00"),
+                        A(out(duration_ms=1000))])
+    assert [s["by"] for s in person["turn_spans"]] == ["dispatch", "person"]
+    from core.swarm_out_wake import WAKE_TEXT
+    woken = summarize([U("go"), A(out(duration_ms=1000)), U(WAKE_TEXT), A(out(duration_ms=1000))])
+    assert [s["by"] for s in woken["turn_spans"]] == ["dispatch", "wake"]
+    # with older turns not read, the first turn read is not the dispatch
+    assert summarize([U("later"), A(out(duration_ms=1000))], has_more=True)["turn_spans"][0]["by"] == "person"
+
+
+def test_an_outcome_without_duration_counts_up_to_its_end_and_is_partial():
+    # a stopped turn: the CLI never sent its result event, so no duration_ms
+    rows = [U("go", "2026-10-28T01:00:00"), A(out("crashed", at="2026-10-28T01:20:00+00:00"))]
+    r = summarize(rows)
+    assert r["turn_spans"][0]["active_s"] == 1200 and r["active_s"] == 1200
+    assert r["active_partial"] is True
+    # a continuation's second outcome counts from the first one, not again from the start
+    two = summarize([U("go", "2026-10-28T01:00:00"),
+                     A(out("completed", duration_ms=60000, at="2026-10-28T01:01:00+00:00"),
+                       out("daemon_stopped", at="2026-10-28T01:03:00+00:00"))])
+    assert two["active_s"] == 60 + 120 and two["turn_spans"][0]["end"] == "2026-10-28T01:03:00+00:00"
+    # an unreadable time counts nothing and never raises
+    bad = summarize([U("go", at="yesterday"), A(out("stopped", at="nope"))])
+    assert bad["active_s"] == 0 and bad["active_partial"] is True
+    # every outcome with its duration: not partial
+    assert summarize([U(), A(out(duration_ms=4000))])["active_partial"] is False
+    # a turn still running has a span with no end and no time
+    running = summarize([U("go"), A(out(duration_ms=4000)), U("again", "2026-10-28T03:00:00")])
+    assert running["turn_spans"][-1] == {"start": "2026-10-28T03:00:00+00:00", "end": None, "active_s": None, "by": "person"}
+    assert running["active_s"] == 4
+
+
+def test_final_at_is_kept_while_ended_at_stays_and_rewritten_when_it_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
+    did = "so_aaaaaaaaaaaa"
+    clock = iter(["2026-10-28T02:00:00Z", "2026-10-28T09:00:00Z", "2026-10-28T10:00:00Z"])   # one per new mark
+    monkeypatch.setattr(res, "_now", lambda: next(clock))
+    first = {"ended_at": "2026-10-28T01:05:00+00:00", "provisional": False}
+    res.save({"dispatch_id": did, "result": dict(first)})
+    assert res.load(did)["final_at"] == "2026-10-28T02:00:00Z"
+    # a later check rebuilds the record without it (``_fetch``); the same end keeps it
+    res.save({"dispatch_id": did, "result": dict(first)})
+    assert res.load(did)["final_at"] == "2026-10-28T02:00:00Z"
+    # a new round's end: it became final now
+    res.save({"dispatch_id": did, "result": {"ended_at": "2026-10-28T08:00:00+00:00", "provisional": False}})
+    assert res.load(did)["final_at"] == "2026-10-28T09:00:00Z"
+    # a result that is not final yet has no final_at
+    res.save({"dispatch_id": did, "result": {"ended_at": "2026-10-28T09:30:00+00:00", "provisional": True}})
+    assert res.load(did)["final_at"] is None
+    # a record kept before final_at was recorded, its result already final: the wait
+    # counts from its end, not from the first save after the upgrade
+    legacy = {"dispatch_id": did, "result": {"ended_at": "2026-10-27T01:00:00Z", "provisional": False}}
+    (tmp_path / "results" / f"{did}.json").write_text(json.dumps(legacy), encoding="utf-8")
+    res.save({"dispatch_id": did, "result": {"ended_at": "2026-10-27T01:00:00Z", "provisional": False}})
+    assert res.load(did)["final_at"] == "2026-10-27T01:00:00Z"
+    # an unreadable file on disk: written fresh
+    (tmp_path / "results" / f"{did}.json").write_text("{not json", encoding="utf-8")
+    res.save({"dispatch_id": did, "result": dict(first)})
+    assert res.load(did)["final_at"] == "2026-10-28T10:00:00Z"
+
+
+def test_public_carries_turn_spans_active_partial_and_final_at():
+    full = summarize([U("go", "2026-10-28T01:00:00"), A(out("crashed", at="2026-10-28T01:20:00+00:00"))])
+    full["turn_spans"].append({"start": "<b>x</b>", "end": 5, "active_s": -3, "by": "evil"})
+    pub = res.public({"result": full, "final_at": "2026-10-28T02:00:00Z", "final_of": full["ended_at"]})
+    assert pub["turn_spans"][0] == {"start": "2026-10-28T01:00:00+00:00", "end": "2026-10-28T01:20:00+00:00",
+                                    "active_s": 1200, "by": "dispatch"}
+    assert pub["turn_spans"][1] == {"start": None, "end": None, "active_s": None, "by": None}
+    assert pub["active_partial"] is True and pub["final_at"] == "2026-10-28T02:00:00Z"
+    # a final_at kept for another end is not this result's
+    assert res.public({"result": full, "final_at": "2026-10-28T02:00:00Z", "final_of": "other"})["final_at"] is None

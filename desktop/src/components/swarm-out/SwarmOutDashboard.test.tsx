@@ -142,7 +142,7 @@ describe('the run view', () => {
     expect(within(p).getByTestId('so-brain').textContent).toBe('SwarmAI · code-change');
     expect(within(p).getByTestId('so-where').getAttribute('data-carrier')).toBe('ec2');
     expect(within(p).getByTestId('so-where').textContent).toBe('EC2explorer');
-    expect(within(p).getByTestId('so-when').textContent).toBe('10/28 11:42·18 min');
+    expect(within(p).getByTestId('so-when').textContent).toBe('10/28 11:42·运行 18 min');   // a running card's running time
     expect(within(q).getByTestId('so-where').textContent).toBe('AgentCoreElastic Workers');
   });
 

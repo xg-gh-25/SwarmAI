@@ -1996,7 +1996,7 @@
         "checksNote": "只看带回了什么，不是结论",
         "checkedLater": "回来后检查",
         "readAgo": "{{ago}}读取",
-        "sentIn": "{{at}} · {{n}} 秒后开始",
+        "sentIn": "{{at}} 送达 · 派发用了 {{n}} 秒",
         "steps_one": "{{count}} 步",
         "steps_other": "{{count}} 步",
         "state": {
@@ -2206,7 +2206,16 @@
       "ssh": "SSH",
       "stationHere": "当前",
       "stationPassed": "已过",
-      "stationAhead": "未到"
+      "stationAhead": "未到",
+      "time": {
+        "running": "运行 {{min}}",
+        "worked": "干了 {{min}}",
+        "workedAtLeast": "干了 ≥ {{min}}",
+        "rounds_one": "{{count}} 轮",
+        "rounds_other": "{{count}} 轮",
+        "waitAgent": "等 agent {{dur}}",
+        "waitYou": "等你 {{dur}}"
+      }
     },
     "hist": {
       "range": "时间范围",
@@ -2223,7 +2232,7 @@
       "off": "丢弃",
       "warn": "停止",
       "open": "进行中",
-      "facts": "{{count}} 个任务 · 中位 {{min}} · 花费 {{cost}}",
+      "facts": "{{count}} 个任务 · Hive 工作中位 {{min}} · 花费 {{cost}}",
       "perDay": "每根柱子 = 一天",
       "perWeek": "每根柱子 = 一周",
       "dayTip": "{{day}} · {{count}} 个",
@@ -2238,7 +2247,7 @@
         "runs": "任务",
         "result": "结果",
         "unattended": "通过且没人插手",
-        "median": "中位",
+        "median": "Hive 工作中位",
         "cost": "花费"
       },
       "records": "所有任务",

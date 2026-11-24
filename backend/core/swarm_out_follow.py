@@ -102,6 +102,43 @@ def _hash(fp: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(fp, sort_keys=True).encode()).hexdigest()[:16]
 
 
+#: the stages nothing waits in any more (core/swarm_out_settle)
+_SETTLED = ("accepted", "closed")
+
+
+def _waiting(row: dict[str, Any], data: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """(whom the run waits on, since when): ``hive`` while it runs (since its open round
+    started, else since it was sent); a question, since the first one asked, on ``agent``
+    when every open one is the agent's to answer, else ``person``; a result back, since it
+    became final (``final_at``, else its end, else the send), on ``agent`` while the agent
+    answers for it (``needs_person`` False), else ``person``; settled: (None, None). The
+    rules of the panel's ``waitingSince`` (desktop runReview), with ``final_at``."""
+    from core import swarm_out_results, swarm_out_wait_card
+    stage = row.get("stage")
+    if not stage:                        # a dispatch from before stages: its Hive state
+        stage = {"waiting": "needs_answer", "running": "running"}.get(str(row.get("state")), "stopped")
+    if stage in _SETTLED:
+        return None, None
+    res = row.get("result") if isinstance(row.get("result"), dict) else {}
+    sent = row.get("sent_at")
+    if stage == "running":
+        spans = res.get("turn_spans") if isinstance(res.get("turn_spans"), list) else []
+        last = spans[-1] if spans and isinstance(spans[-1], dict) else {}
+        return "hive", (last.get("start") if last.get("end") is None and last.get("start") else sent)
+    if stage == "needs_answer":
+        sid, did = row.get("session_id"), str(row.get("dispatch_id") or "")
+        own = [w for w in data.get("asks") or [] if isinstance(w, dict) and sid
+               and w.get("session_id") == sid and not w.get("refused")]
+        # a Hive writes asked_at: only a time is taken (no Hive text reaches the agent)
+        asked = sorted(w["asked_at"] for w in own if swarm_out_results._match(swarm_out_results._TIME_RE, w.get("asked_at")))
+        if asked:
+            who = {swarm_out_wait_card._who(w.get("approval_class"), bool(
+                swarm_out_wait_card.escalation(did, str(w.get("request_id") or "")))) for w in own}
+            return ("agent" if who == {"you"} else "person"), asked[0]
+    return ("agent" if row.get("needs_person") is False else "person"), (
+        res.get("final_at") or res.get("ended_at") or sent)
+
+
 def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     """What the agent is told about one run: Host fields only."""
     res = row.get("result") if isinstance(row.get("result"), dict) else {}
@@ -122,6 +159,7 @@ def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
                           # the chat card's outcome; its reason is this daemon's own text
                           "card": card})
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
+    waiting_on, waiting_since = _waiting(row, data)
     return {"dispatch_id": row.get("dispatch_id"), "title": row.get("title"), "hive": row.get("hive"),
             "state": row.get("state"), "state_reason": row.get("state_reason"), "stage": row.get("stage"),
             "result_status": row.get("result_status"),
@@ -133,7 +171,10 @@ def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             # what happened, in words, when the stage alone does not say it (a run whose
             # result can no longer come: core/swarm_out_settle.lost_note)
             **({"note": row["note"]} if isinstance(row.get("note"), str) and row["note"] else {}),
-            "waits": waits}
+            "waits": waits,
+            # whom the run waits on now (hive / agent / person) and since when: how long
+            # a result has waited on this agent shows here (``_waiting``)
+            "waiting_on": waiting_on, "waiting_since": waiting_since}
 
 
 # ── what a session has seen ──────────────────────────────────────────────────
@@ -305,6 +346,8 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
             bits.append(f"stage {s['stage']}")
         if s.get("result_status") == "fetched":
             bits.append(f"result {s.get('ended') or 'in'}")
+        if s.get("waiting_on") and s.get("waiting_since"):
+            bits.append(f"waiting on {s['waiting_on']} since {s['waiting_since']}")
         if _NEXT.get(str(r.get("why") or "")):
             bits.append(_NEXT[str(r.get("why"))])
         waits = [f"{w['kind']} {w['phase']}"
