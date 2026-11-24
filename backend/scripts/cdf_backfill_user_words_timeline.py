@@ -97,8 +97,11 @@ def _backup_db(db: Path, dest: Path) -> dict[str, Any]:
     src = sqlite3.connect(f"file:{db.resolve().as_posix()}?mode=ro", uri=True, isolation_level=None)
     try:
         src.execute("BEGIN")
+        # a virtual table (FTS5, vec0) is counted through its shadow tables, which are
+        # ordinary tables; reading it would need its module loaded here
         tables = [r[0] for r in src.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+            "AND COALESCE(sql, '') NOT LIKE 'CREATE VIRTUAL TABLE%'")]
         wanted = {table: src.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in tables}
         copy = sqlite3.connect(dest)
         try:

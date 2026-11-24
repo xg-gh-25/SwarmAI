@@ -229,6 +229,7 @@ def test_the_backup_holds_while_the_running_app_writes_to_the_store(tmp_path, mo
     w = _sqlite3.connect(db)
     w.execute("PRAGMA journal_mode=WAL")
     w.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+    w.execute("CREATE VIRTUAL TABLE messages_fts USING fts5(body)")   # counted by its shadow tables
     w.executemany("INSERT INTO messages (body) VALUES (?)", [("m",)] * 50)
     w.commit()
     dest = tmp_path / "copy.db"
@@ -242,7 +243,8 @@ def test_the_backup_holds_while_the_running_app_writes_to_the_store(tmp_path, mo
 
     monkeypatch.setattr(bf.sqlite3, "connect", connect)
     out = bf._backup_db(db, dest)
-    assert out["tables"] == 1
+    tables = [r[0] for r in w.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    assert out["tables"] == len(tables) - 1 and "messages_fts_data" in tables   # all but the virtual one
     monkeypatch.setattr(bf.sqlite3, "connect", real)
     assert real(dest).execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 50
     w.close()
