@@ -199,12 +199,12 @@ def _session_for(acct: dict, region: str, purpose: str):
 
 
 def _boto_config(timeout: float):
-    from botocore.config import Config
+    from core import aws_account
     t = max(1.0, float(timeout))
     # no automatic retry: a throttled start moves to the next location (D6), and a start
     # resent after a timeout is refused by the supervisor as a replay
-    return Config(connect_timeout=min(10.0, t), read_timeout=t,
-                  retries={"max_attempts": 1, "mode": "standard"})
+    return aws_account.client_config(connect_timeout=min(10.0, t), read_timeout=t,
+                                     retries={"max_attempts": 1, "mode": "standard"})
 
 
 def _error_code(exc: BaseException) -> Optional[str]:
@@ -937,18 +937,13 @@ class AgentCoreLocation:
 def _sign(request: httpx.Request, frozen: Any, region: str) -> None:
     """SigV4 over the method, URL and host only, with the empty-payload hash (no
     ``X-Amz-Content-Sha256`` header: the platform then checks the empty-payload hash)."""
-    from botocore.auth import SigV4Auth
-    from botocore.awsrequest import AWSRequest
-    from botocore.credentials import Credentials
+    from core import aws_account
     for k in ("X-Amz-Content-Sha256", "Authorization", "X-Amz-Date", "X-Amz-Security-Token"):
         if k in request.headers:
             del request.headers[k]
-    aws = AWSRequest(method=request.method, url=str(request.url),
-                     headers={"host": request.url.netloc.decode("ascii")}, data=b"")
-    SigV4Auth(Credentials(frozen.access_key, frozen.secret_key, frozen.token), SERVICE, region).add_auth(aws)
-    for k in ("Authorization", "X-Amz-Date", "X-Amz-Security-Token"):
-        if k in aws.headers:
-            request.headers[k] = aws.headers[k]
+    request.headers.update(aws_account.sigv4_headers(
+        request.method, str(request.url), request.url.netloc.decode("ascii"), frozen,
+        service=SERVICE, region=region))
 
 
 class RunClient(httpx.AsyncClient):

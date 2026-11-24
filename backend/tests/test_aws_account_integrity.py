@@ -5,8 +5,9 @@ Question: does any backend module other than ``core/aws_account.py`` import an A
 (boto3, botocore, aiobotocore, amazon_transcribe, awscrt) without being on the list
 below with its reason — and is every listed module still a real importer (a stale entry
 would hide the next one)? A new direct AWS caller turns this red: it must use
-``core.aws_account`` (``boto_session``, ``resolve``, ``cli_settings``) or be added here
-with the reason it cannot.
+``core.aws_account`` (``boto_session``, ``resolve``, ``cli_settings``, and its SDK helpers
+``client_config``, ``sigv4_headers``, ``endpoint_unreachable``, ``service_model``,
+``sdk_version``) or be added here with the reason it cannot.
 """
 from __future__ import annotations
 
@@ -72,7 +73,8 @@ def test_only_listed_modules_talk_to_aws_directly():
     unlisted = sorted(set(importers) - set(ALLOWED))
     assert not unlisted, (
         f"{unlisted} import an AWS SDK directly: use core.aws_account (boto_session, "
-        f"resolve, cli_settings), or add the module to ALLOWED with the reason")
+        f"resolve, cli_settings; client_config, sigv4_headers, endpoint_unreachable, "
+        f"service_model, sdk_version), or add the module to ALLOWED with the reason")
 
 
 def test_every_listed_module_still_imports_one():

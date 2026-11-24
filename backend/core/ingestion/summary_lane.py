@@ -207,18 +207,15 @@ def model_unreachable(exc: BaseException) -> bool:
     """Whether *exc*, or an error it was raised from, says the model could not be reached:
     AWS credentials missing or expired (``llm.failure_reason``), or the Bedrock endpoint not
     reachable (DNS, connection). Any other failure is one of the summary itself."""
+    from core.aws_account import endpoint_unreachable
     from .llm import failure_reason
     if failure_reason(exc):
         return True
-    try:
-        from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError
-    except ImportError:  # pragma: no cover - botocore ships with the backend
-        return False
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, (EndpointConnectionError, ConnectTimeoutError)):
+        if endpoint_unreachable(current):
             return True
         current = current.__cause__ or current.__context__
     return False

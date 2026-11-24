@@ -343,9 +343,9 @@ def sdk_missing() -> list[str]:
     """What this machine's AWS SDK does not know of the runtime spec (empty: all of it).
     A field the SDK does not know is refused by it, or with validation off, left out of
     the request, and the runtime then gets the default size."""
+    from core import aws_account
     try:
-        import botocore.session
-        model = botocore.session.get_session().get_service_model(ac.CONTROL_SERVICE)
+        model = aws_account.service_model(ac.CONTROL_SERVICE)
     except Exception:  # noqa: BLE001 — no AgentCore in this SDK at all
         return list(SDK_FIELDS)
     missing: list[str] = []
@@ -358,8 +358,8 @@ def sdk_missing() -> list[str]:
 def _check_sdk() -> None:
     missing = sdk_missing()
     if missing:
-        import botocore
-        raise ElasticRefused(f"This SwarmAI's AWS SDK (botocore {botocore.__version__}) does not know the "
+        from core import aws_account
+        raise ElasticRefused(f"This SwarmAI's AWS SDK (botocore {aws_account.sdk_version()}) does not know the "
                              f"Elastic Workers' {', '.join(missing)}; without them the runtime would get the "
                              "default size. Update SwarmAI.")
 
@@ -367,8 +367,9 @@ def _check_sdk() -> None:
 # ── the blocking AWS steps (run in a thread) ─────────────────────────────────────
 
 def _account_of(session) -> str:
-    from botocore.config import Config
-    sts = session.client("sts", config=Config(connect_timeout=10, read_timeout=15, retries={"max_attempts": 2}))
+    from core import aws_account
+    sts = session.client("sts", config=aws_account.client_config(
+        connect_timeout=10, read_timeout=15, retries={"max_attempts": 2}))
     account = str(sts.get_caller_identity()["Account"])
     if not ac.ACCOUNT_RE.fullmatch(account):
         raise RuntimeError("STS answered no account id")

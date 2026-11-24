@@ -23,6 +23,10 @@ What it provides (steps 1-2 of design §9; Hive is step 3):
   (no AWS identity found, a source this version cannot resolve, a Hive) ``active()`` is
   False and each falls back to what it did before: the old path stays until the new one
   covers the case (design §9);
+- ``client_config`` / ``sigv4_headers`` / ``endpoint_unreachable`` / ``service_model`` /
+  ``sdk_version``: what a consumer needs of botocore besides a session (a client's
+  options, a SigV4 signature, an error check, the SDK's service model and version), so a
+  consumer imports no AWS SDK itself (``tests/test_aws_account_integrity.py``);
 - ``write_profile_file``: ``<data dir>/aws/config``, one profile ``swarmai`` whose
   ``credential_process`` is the same subcommand, for a tool that wants the SwarmAI account
   explicitly (``AWS_CONFIG_FILE=… AWS_PROFILE=swarmai``); nothing sets it by default;
@@ -1007,6 +1011,64 @@ def boto_session(region_name: Optional[str] = None):
         return boto3.Session(region_name=region_name) if region_name else boto3.Session()
     return boto3.Session(botocore_session=_refreshable_botocore_session(),
                          region_name=region_name or region())
+
+
+# ── SDK helpers: what a consumer needs of botocore besides a session ──────────────
+# A consumer that has its session (``boto_session``, ``hive/accounts.session_for``) takes
+# these instead of importing botocore, so the integrity test keeps it from building a
+# client on another credential source. botocore is imported on call, not at import.
+
+def client_config(**options: Any):
+    """A botocore ``Config`` with exactly these options (timeouts, retries,
+    ``signature_version``)."""
+    from botocore.config import Config
+    return Config(**options)
+
+
+def sigv4_headers(method: str, url: str, host: str, frozen: Any, *, service: str,
+                  region: str) -> "dict[str, str]":
+    """The SigV4 headers (``Authorization``, ``X-Amz-Date``, and ``X-Amz-Security-Token``
+    with a token) for a request with an empty payload, signed over its method, URL and
+    ``host`` header only.
+
+    ``frozen`` is what a session's ``get_credentials().get_frozen_credentials()`` returns
+    (botocore's ``ReadOnlyCredentials``); anything else, raw keys among them, raises
+    ``TypeError``, so a module outside the integrity test's list cannot hand it keys read
+    from the environment or a file by mistake. It is no wall against code that builds
+    that type on purpose (it is a namedtuple: ``frozen._replace(...)`` works)."""
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from botocore.credentials import Credentials, ReadOnlyCredentials
+    if not isinstance(frozen, ReadOnlyCredentials):
+        raise TypeError("sigv4_headers signs only with a session's frozen credentials")
+    aws = AWSRequest(method=method, url=url, headers={"host": host}, data=b"")
+    SigV4Auth(Credentials(frozen.access_key, frozen.secret_key, frozen.token), service,
+              region).add_auth(aws)
+    return {k: aws.headers[k] for k in ("Authorization", "X-Amz-Date", "X-Amz-Security-Token")
+            if k in aws.headers}
+
+
+def endpoint_unreachable(exc: BaseException) -> bool:
+    """Whether *exc* itself says an AWS endpoint could not be reached (no connection, or
+    the connection timed out). It does not follow ``__cause__``: the caller walks a chain."""
+    try:
+        from botocore.exceptions import ConnectTimeoutError, EndpointConnectionError
+    except ImportError:  # pragma: no cover - botocore ships with the backend
+        return False
+    return isinstance(exc, (EndpointConnectionError, ConnectTimeoutError))
+
+
+def service_model(service: str):
+    """This SDK's model of ``service`` (no credentials, no call). Raises botocore's
+    ``UnknownServiceError`` when the SDK does not know the service."""
+    import botocore.session
+    return botocore.session.get_session().get_service_model(service)
+
+
+def sdk_version() -> str:
+    """The version of this install's botocore."""
+    import botocore
+    return str(botocore.__version__)
 
 
 def auth_check() -> str:

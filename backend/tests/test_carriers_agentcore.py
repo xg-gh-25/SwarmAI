@@ -34,6 +34,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from botocore.credentials import ReadOnlyCredentials
 from botocore.exceptions import ClientError
 
 from core import hive_bundle, hive_records, hive_repo_inbox, swarm_out
@@ -44,7 +45,7 @@ DID = "so_0123456789ab"
 DID2 = "so_ba9876543210"
 BUCKET = "swarmai-hive-123456789012-us-east-1"
 ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/swarm_hive-AbC123"
-Frozen = namedtuple("Frozen", "access_key secret_key token")
+Frozen = ReadOnlyCredentials   # what a session's get_frozen_credentials() returns
 CREDS = Frozen("AKIDEXAMPLE", "secretsecretsecret", "sessiontoken")
 
 

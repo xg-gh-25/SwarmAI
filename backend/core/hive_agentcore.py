@@ -114,11 +114,11 @@ def _client() -> Any:
         if _client_obj is None:
             ident = identity()
             region = ident[2] if ident else None
-            from botocore.config import Config
             from core import aws_account   # the microVM's execution role (the default chain)
             _client_obj = aws_account.boto_session(region).client(
                 "s3", region_name=region,
-                config=Config(connect_timeout=10, read_timeout=60, retries={"max_attempts": 3}))
+                config=aws_account.client_config(connect_timeout=10, read_timeout=60,
+                                                 retries={"max_attempts": 3}))
         return _client_obj
 
 

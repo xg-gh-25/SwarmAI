@@ -34,6 +34,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from botocore.credentials import ReadOnlyCredentials
 from botocore.exceptions import ClientError
 
 from core import hive_bundle, hive_records, hive_repo_inbox
@@ -47,7 +48,7 @@ from tests.test_task_spec import BINDINGS, _brain, ws  # noqa: F401 — the Brai
 BUCKET = "swarmai-hive-123456789012-us-east-1"
 ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/swarm_hive-AbC123"
 URL = "https://github.com/acme/lib.git"
-Frozen = namedtuple("Frozen", "access_key secret_key token")
+Frozen = ReadOnlyCredentials   # what a session's get_frozen_credentials() returns
 
 
 def _err(code, op="Op"):
