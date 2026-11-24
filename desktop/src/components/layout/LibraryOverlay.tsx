@@ -53,6 +53,11 @@ interface SearchResult { query: string; count: number; hits: SearchHit[]; error?
 type TabKey = 'recent' | 'browse' | 'how';
 
 const SOURCES: RecentSource[] = ['cdf', 'chat', 'job'];
+const SOURCE_LABEL_KEY: Record<RecentSource, string> = {
+  cdf: 'ui.LibraryOverlay.source.cdf',
+  chat: 'ui.LibraryOverlay.source.chat',
+  job: 'ui.LibraryOverlay.source.job',
+};
 const SOURCE_COLOR: Record<RecentSource, string> = {
   cdf: 'var(--line-judge)',
   chat: 'var(--color-zone-cognitive)',
@@ -296,7 +301,7 @@ function SourceSplit({ counts, picked, onPick }: {
               picked === s ? 'border-[var(--color-text-secondary)] text-[var(--color-text)]'
                 : `text-[var(--color-text-muted)] hover:text-[var(--color-text)] ${picked ? 'opacity-45 hover:opacity-80' : ''}`}`}>
             <span aria-hidden className="h-2 w-2 rounded-sm" style={{ background: SOURCE_COLOR[s] }} />
-            {t(`ui.LibraryOverlay.source.${s}`)}
+            {t(SOURCE_LABEL_KEY[s])}
             <b className="font-semibold tabular-nums text-[var(--color-text)]">{counts[s]}</b>
           </button>
         ))}
