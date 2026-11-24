@@ -315,7 +315,11 @@ def test_lifespan_closes_turns_before_claims_and_bridge():
     src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     call = src.index("await hive_boot.close_open_turns(session_registry.session_router)")
     gate = src.rindex('if _detect_run_mode() == "hive":', 0, call)
-    assert src[gate:call].count("\n") <= 2
+    # inside that ``if`` block: no line between them returns to the gate's indentation
+    # (other Hive-only boot steps may sit in the same block before it)
+    indent = gate - src.rindex("\n", 0, gate) - 1
+    body = src[gate:call].splitlines()[1:]
+    assert all(len(l) - len(l.lstrip()) > indent for l in body if l.strip())
     assert call < src.index("await reopen_dangling_claims()")
     assert call < src.index("asyncio.create_task(run_bridge_loop()")
     assert src.index("from core import hive_boot") < src.index("async def lifespan")
