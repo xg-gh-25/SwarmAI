@@ -4,7 +4,7 @@ date: 2026-11-24
 created: 2026-11-24
 updated: 2026-11-24
 project: SwarmAI
-status: r2（零上下文审查一轮后修订，§13 记了改了什么）；待 XG 评审 D1–D8；spike 已做完（§2）
+status: 定稿（r3）：D1–D8 全部已定（XG 2026-11-24，D8 改为默认放开）；零上下文审查一轮，§14 记了改了什么；spike 已做完（§2）。下一步按 §12 落地
 related: docs/design/2026-11-20-swarm-out-multi-carrier.md（派发层、执行面契约，本设计在其上加第三种）；docs/design/2026-10-30-dispatch-center.md（准入、§2.2 私有网络）；Knowledge/Designs/2026-10-08-swarm-hive-mind-TECH-DESIGN.md（A2 载体 = 带身份的执行基座）
 ---
 
@@ -21,20 +21,20 @@ brazil 和内网。
 Host 调的还是同一套 Hive HTTP API，区别是：地址是 Host 本机的一个隧道端口；机器不由 Host 起停；它带着人的身份，能访问私有网络。
 
 和 EC2、AgentCore 最大的不同在安全上：**在这台机器上跑的任务就是以这个人的身份在跑**（SSH 证书、Midway、AWS 凭据）。
-所以默认只把需要它的任务派过去（D8），而不是按负载什么都放。
+任务照常按负载放到这台机器上（D8，"能跑就能用"）；每台机器有一个开关，人可以把它收窄到只接需要内网的任务。
 
 ### 要定的决定
 
 | # | 决定 | 建议 | 在哪 | 状态 |
 |---|---|---|---|---|
-| D1 | 做成通用的"SSH 机器"，还是专门的"Cloud Desktop" | 通用（P7：Cloud Desktop 只是一个实例） | §3 | 待定 |
-| D2 | 机器上怎么跑 Hive | Hive 包装进镜像（只读），容器挂进人的 `$HOME` 和配置里列的目录 | §5.1 | 待定 |
-| D3 | Host 怎么连到它 | 每台机器一条 `ssh -N -L` 隧道，本机端口每台固定 | §4.3 | 待定 |
-| D4 | 机器上 Hive 自己用的 AWS 凭据 | 每台机器一个窄角色 `SwarmAI-Hive-<name>`（和 EC2 Hive 同一份策略），由人的 profile 去 assume | §5.3、§7 | 待定（spike 用的是 ada Admin，r2 收窄） |
+| D1 | 做成通用的"SSH 机器"，还是专门的"Cloud Desktop" | 通用（P7：Cloud Desktop 只是一个实例） | §3 | **已定**（XG 2026-11-24） |
+| D2 | 机器上怎么跑 Hive | Hive 包装进镜像（只读），容器挂进人的 `$HOME` 和配置里列的目录 | §5.1 | **已定**（XG 2026-11-24） |
+| D3 | Host 怎么连到它 | 每台机器一条 `ssh -N -L` 隧道，本机端口每台固定 | §4.3 | **已定**（XG 2026-11-24） |
+| D4 | 机器上 Hive 自己用的 AWS 凭据 | 每台机器一个窄角色 `SwarmAI-Hive-<name>`（和 EC2 Hive 同一份策略），由人的 profile 去 assume | §5.3、§7 | **已定**（XG 2026-11-24） |
 | D5 | SSH 证书（Cloud Desktop 上是 Midway）过期 | 派发时已过期：不接新任务；跑到一半过期：不加门槛，run 里的命令失败、照常提问 | §4.2 | **已定**（XG 2026-11-24） |
-| D6 | 需要私有网络的任务 | 准入不再一律拒绝；交给调度，只放到能访问私有网络的位置；放不下时仍按"私有网络"拒收、计数 | §4.4 | 待定 |
-| D7 | 自动更新 | 空闲且版本落后 Host 时自动换新镜像 | §5.4 | 待定 |
-| D8 | 不需要私有网络的任务能不能放到这台机器上 | 默认不放，只接需要私有网络的或点名到它的；每台机器有一个开关可以打开 | §4.4、§7 | 待定（和"能跑就能用"有关，见 §7） |
+| D6 | 需要私有网络的任务 | 准入不再一律拒绝；交给调度，只放到能访问私有网络的位置；放不下时仍按"私有网络"拒收、计数 | §4.4 | **已定**（XG 2026-11-24） |
+| D7 | 自动更新 | 空闲且版本落后 Host 时自动换新镜像 | §5.4 | **已定**（XG 2026-11-24） |
+| D8 | 不需要私有网络的任务能不能放到这台机器上 | 能，默认放开，和在跑的 EC2 一起按负载排；每台机器有一个开关，可以收窄到只接需要私有网络的或点名到它的 | §4.4、§7 | **已定**（XG 2026-11-24：默认放开） |
 
 ## 1. 为什么做，做到哪
 
@@ -111,7 +111,7 @@ Host 调的还是同一套 Hive HTTP API，区别是：地址是 Host 本机的�
 ```json
 {"ssh_host": "dev-dsk-<alias>-1a-0123abcd.us-west-2.amazon.com",
  "remote_port": 18321, "local_port": 28431, "source_profile": "swarmai",
- "reaches_private": true, "general_tasks": false,
+ "reaches_private": true, "general_tasks": true,
  "mounts": ["/apollo:ro", "/workplace"], "cert_renew_hint": "mwinit -o"}
 ```
 
@@ -124,7 +124,7 @@ Host 调的还是同一套 Hive HTTP API，区别是：地址是 Host 本机的�
 | `cert_expired` | 机器报告的 SSH 证书最晚到期时间已过（§5.2）；面板显示到期时间和 `cert_renew_hint` |
 | `out_of_date` | 版本没有 `REQUIRED_CAPS`（同 EC2，`swarm_out.py:1386-1420`） |
 | `saturated` | 机器忙（同 EC2） |
-| `not_general` | 任务不需要私有网络、也没点名到它，而这台机器没打开 `general_tasks`（D8） |
+| `not_general` | 任务不需要私有网络、也没点名到它，而人把这台机器的 `general_tasks` 关了（D8，默认开） |
 
 **D5 的含义。** 只在派发那一刻看证书，剩余时间多少都照常派。run 跑到一半证书过期，run 里的 git/brazil 命令会失败，agent 按现有方式
 提问（经 bridge 问派它的人或 agent），人刷新证书后回答，run 接着做。证书过期这件事本身不进 Needs You：面板上这台机器显示
@@ -173,9 +173,9 @@ ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ConnectTimeout=10 \
 2. **D5（启动停着的 EC2）只看同一种执行面。** 今天 `place` 在"有在跑的 offer 被挡住、原因不是满了"时不启动停着的 EC2
    （`placement.py:81-85`）。SSH 机器的 offer 也是 `TIER_WARM`，它的 `cert_expired` / `not_general` 不该挡住启动一台停着的
    EC2 Hive。改成只数和停着的那台同一个执行面的在跑 offer。
-3. **D8：不需要私有网络的任务默认不放到这台机器上。** offer 在 `needs.private` 为空、没有点名、且 `general_tasks` 为否时
-   `blocked = not_general`。理由在 §7：这台机器上的任务以人的身份跑，Swarm Run 的子任务可能在处理不受信任的公开内容。
-   打开开关后，它和在跑的 EC2 一起按负载排（`load_key`）。
+3. **D8：不需要私有网络的任务也放到这台机器上**（XG："能在上面跑的就可以用"），和在跑的 EC2 一起按负载排（`load_key`）。
+   人把这台机器的 `general_tasks` 关掉后，offer 在 `needs.private` 为空、也没点名时 `blocked = not_general`，这台机器就只接
+   需要私有网络的任务（§7 第 1 条说什么时候值得关）。
 
 ### 4.5 对 run 的操作
 
@@ -307,9 +307,9 @@ Swarm Out › 设置里加一台（§8），Host 在后台做，`status` 走 `pr
 存在的理由（内部任务要的就是人的身份），所以没法、也不该靠"把身份藏起来"来防：同一个 uid 的 run 能读到人的 profile，能直接用
 人的身份做人能做的事。能做、而且本设计做了的是：
 
-1. **限制哪些任务到这里来（D8）。** 默认只有需要私有网络的任务和点名到这台机器的任务。Swarm Run 的子任务、处理公开 repo
-   不受信任内容的任务，默认还在只有窄角色的 EC2 / AgentCore 上跑。这和 XG 的"能跑就能用"有张力：那条规则是说别按任务类型设
-   场景限制；这里限制的是"拿人的身份跑"，打开 `general_tasks` 就取消。建议默认关。
+1. **哪些任务到这里来，由人定（D8）。** 默认什么任务都可以放过来（XG 2026-11-24 定："能跑就能用"）。这意味着 Swarm Run 的
+   子任务、处理公开 repo 里不受信任内容的任务，也可能以人的身份在这台机器上跑。人如果在意这一点（比如机器上有不想让任务碰到的
+   东西），关掉这台机器的 `general_tasks`，它就只接需要私有网络的任务和点名到它的任务。
 2. **Hive 自己只用窄角色（D4）。** Hive 进程（bridge、记录、用量）用 `SwarmAI-Hive-<name>`，和 EC2 Hive 同一份策略：写不了别的
    Hive 的 `bridge/` 前缀，写不了 `answer/`，写不了 `v*` 发布包。Hive 自己的代码出错，波及不到别的 Hive。
 3. **发布包按 GitHub 的校验值确认**（§5.3 最后一段），机器写坏了账户桶里的包，EC2 Hive 也不会装。
@@ -329,7 +329,7 @@ Swarm Out › 设置今天有三块：账户、Elastic Workers、常驻 Hive（`
 接口：
 
 - 行：名字、`instance_type` 里的机器描述和版本、状态词（运行中 / 证书已过期 / 连不上 / 正在安装 / 正在更新 / 出错）。
-- 展开：SSH 主机、证书到期时间和刷新提示、登录（`AuthDisplay`）、Brains（`HiveBrains`）、"也接不需要内网的任务"开关；按钮：重试（出错时）、删除。
+- 展开：SSH 主机、证书到期时间和刷新提示、登录（`AuthDisplay`）、Brains（`HiveBrains`）、"也接不需要内网的任务"开关（默认开）；按钮：重试（出错时）、删除。
 - 加一台：输入 SSH 主机，名字默认取主机名第一段；必填 AWS profile（会以它为源 assume 窄角色）；高级里填挂载目录、证书刷新提示、
   能否访问私有网络。说明里写清楚 §7 第 6 条。
 
@@ -397,7 +397,7 @@ S1 先让读的一侧认它。
 4. round：一次"可能已发出"的 SSH 派发，记录里有 SSH 的 `rounds`，之后的状态、结果、live、release 都走 SSH 执行面；旧的、没有
    `rounds` 的记录照旧当 EC2。
 5. `place`：需要私有网络的任务只落在 `reaches_private` 的位置；没有时抛 `SwarmOutRefused(private=True)`，拒收计数的 `private`
-   加一，原因里有每个位置；不需要私有网络的任务在 `general_tasks` 关时不落在 SSH 机器上、开时能落；SSH 机器 `cert_expired` 或
+   加一，原因里有每个位置；不需要私有网络的任务在 `general_tasks` 开（默认）时能落在 SSH 机器上、关时不落；SSH 机器 `cert_expired` 或
    `not_general` 时，停着的 EC2 照样能被选中。
 6. `admit` 不再因为私有网络拒绝；`/spec` 只在没有能访问私有网络的位置时提示。
 7. SSH offer 的 `blocked`：隧道不在 → `unreachable` 且后台建一条；证书过期 → `cert_expired`；没有证书 → 不挡；版本不够 →
@@ -411,7 +411,7 @@ S1 先让读的一侧认它。
     桶里的 `checksums.txt` 和 GitHub 不一致时拒绝（EC2 部署也是）；任一步失败行变 `error` 带原因，重试跳过已完成的步骤；
     更新失败起回旧容器。
 12. 端到端（S6，在 XG 的 Cloud Desktop 上，手动）：从面板加机器 → 派一个 GCRAIDLCPreset 的小任务（私有网络）→ 任务里用 brazil
-    构建 → 经 bridge 回答一个问题 → 结果以 bundle 回到本机 → 派一个不需要内网的任务，确认它不去这台机器 → 把 Host 版本调高一次，
+    构建 → 经 bridge 回答一个问题 → 结果以 bundle 回到本机 → 关掉 `general_tasks`，派一个不需要内网的任务，确认它不去这台机器，再打开 → 把 Host 版本调高一次，
     空闲时机器自动换新镜像。
 
 **评审：** S1 做 correctness + integration（逐条分类）；S2 做 security（窄角色、凭据传递、发布包校验）；S3 做 correctness +
@@ -421,7 +421,7 @@ concurrency + security（隧道、孤儿进程、地址来源）；S4 做 correc
 
 | 原因 | 审查发现 | 改法 |
 |---|---|---|
-| 人的身份太宽 | Admin profile 能写任何 Hive 的 `answer/`、能改发布包（`provisioner.py:713-716` 见到包就信）；不需要内网的任务也会按负载落到人的身份上；包在可写的 `$HOME` 下 | D4 窄角色、D8 默认只接需要内网的、发布包按 GitHub 校验、包进只读镜像（§5、§7） |
+| 人的身份太宽 | Admin profile 能写任何 Hive 的 `answer/`、能改发布包（`provisioner.py:713-716` 见到包就信）；不需要内网的任务也会按负载落到人的身份上；包在可写的 `$HOME` 下 | D4 窄角色、发布包按 GitHub 校验、包进只读镜像（§5、§7）；D8 加每台机器的开关（r2 建议默认关，XG 定为默认开） |
 | EC2 专用路径会作用到 SSH 行 | `/instances/{id}` 的 stop/start/restart/update/reset-password/retry 没有执行面检查；`release_stale_updates`；账户切换的两处；状态词用错（`failed` 应为 `error`） | §6 第一张表补全，统一检查；状态词和 EC2 一致；重试走 `/ssh` |
 | 到达 run 的路径不全 | `client_for(RunHandle)` 走 `carrier.client`；"可能已发出"时不写 round，读时当 EC2；`_first_round`、`_order_state` 写死 EC2 | §4.5 两条路径都接，round 一律写 |
 | 隧道的生命周期 | 在 offers 里建隧道会让 `_place` 的 20 秒总预算超时、丢掉所有 offer；端口换了以后长期持有的记录连错；ControlMaster 让 pid 跟踪失效 | offers 不建隧道、`_offers` 按执行面计时、端口固定、`ControlMaster=no` |
