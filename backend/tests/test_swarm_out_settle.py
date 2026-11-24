@@ -87,9 +87,9 @@ def test_stage_order(env):
     rows, _ = env
     rows[DID] = _row()
     d = st.derive(_row(state="waiting"), K(True))
-    assert d["stage"] == "needs_answer" and A(d) == ["answer:hint", "open_session", "discard"]
+    assert d["stage"] == "needs_answer" and A(d) == ["answer:hint", "stop", "open_session", "discard"]
     d = st.derive(_row(state="waiting", state_reason="answer_refused"), K(True))
-    assert d["stage"] == "needs_answer" and A(d) == ["*open_session", "discard"]
+    assert d["stage"] == "needs_answer" and A(d) == ["*open_session", "stop", "discard"]
     d = st.derive(_row(state="running", state_reason="answer_sent"), K(True))
     assert d["stage"] == "running" and A(d) == ["open_session", "discard"]
     d = st.derive(_row(state="running"), K(True))
@@ -122,9 +122,9 @@ def test_a_result_that_did_not_deliver_is_stopped(env, ended):
     ("running", True, None, ["*stop", "open_session", "discard"], None),
     ("running", False, None, ["*stop", "discard"], None),
     ("running", True, None, ["open_session", "discard"], "answer_sent"),
-    ("needs_answer", True, None, ["answer:hint", "open_session", "discard"], None),
-    ("needs_answer", True, None, ["*open_session", "discard"], "answer_refused"),
-    ("needs_answer", False, None, ["discard"], "answer_refused"),
+    ("needs_answer", True, None, ["answer:hint", "stop", "open_session", "discard"], None),
+    ("needs_answer", True, None, ["*open_session", "stop", "discard"], "answer_refused"),
+    ("needs_answer", False, None, ["stop", "discard"], "answer_refused"),
     ("awaiting", True, "verdict", ["*accept:verdict", "rerun", "open_session", "discard"], None),
     ("awaiting", True, "land", ["*accept:land", "rerun", "open_session", "discard"], None),
     ("awaiting", True, "manual", ["*accept:manual", "rerun", "open_session", "discard"], None),

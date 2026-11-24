@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 #: the decisions an entry can record
 DECISIONS = ("dispatch", "answer_wait", "said", "review", "rerun", "stop", "land", "accept",
              "take_over", "discard", "escalate", "ask_person", "keep", "revert", "reverted",
-             "place_files", "settle")
+             "place_files", "settle", "settle_without_files", "adopt")
 #: an entry written before ``decision`` existed: its command -> its decision
 _COMMAND_DECISION = {"accept": "accept", "return_prepare": "review", "return_land": "land",
                      "manual_landed": "land", "rerun": "rerun", "stop": "stop",
@@ -476,21 +476,21 @@ def needs_person(row: dict, asks: list[dict]) -> Optional[bool]:
     a = (row.get("funnel") or {}).get("ask")
     if isinstance(a, dict) and a.get("state") == "open":
         return True
-    from core import approval_class, swarm_out_wait_card
+    from core import swarm_out_wait_card
     for w in asks:
         if not isinstance(w, dict) or w.get("session_id") != row.get("session_id"):
             continue
-        if w.get("approval_class") not in approval_class.HOST_CLASSES:
-            return True
-        if swarm_out_wait_card.escalation(str(row.get("dispatch_id") or ""), str(w.get("request_id") or "")):
+        # not the agent's class, escalated, or one the Host cannot answer at all
+        if not swarm_out_wait_card.agent_answers(str(row.get("dispatch_id") or ""), w):
             return True
     return False
 
 
 def actionable(row: dict, asks: list[dict]) -> bool:
-    """The dispatching agent has something to do on the run now: a result to review,
-    land or judge, a stopped or expiring run, a wait of its own class, a revert to carry
-    out. An open ask (the person's) and a settled or running run are not."""
+    """The agent that answers for the run has something to do on it now: a result to
+    review, land or judge, a stopped or expiring run, a wait it answers
+    (``swarm_out_wait_card.agent_answers``), a revert to carry out, an accepted run held
+    back only by files. An open ask (the person's) and a settled or running run are not."""
     if (row.get("settle") or {}).get("settled"):
         return False
     a = (row.get("funnel") or {}).get("ask")
@@ -501,11 +501,14 @@ def actionable(row: dict, asks: list[dict]) -> bool:
     if row.get("stage") in ("awaiting", "stopped") or row.get("cleanup_soon"):
         return True
     if row.get("stage") == "needs_answer":
-        from core import approval_class, swarm_out_wait_card
+        from core import swarm_out_wait_card
         for w in asks:
             if isinstance(w, dict) and w.get("session_id") == row.get("session_id") \
-                    and w.get("approval_class") in approval_class.HOST_CLASSES \
-                    and not swarm_out_wait_card.escalation(str(row.get("dispatch_id") or ""),
-                                                           str(w.get("request_id") or "")):
+                    and swarm_out_wait_card.agent_answers(str(row.get("dispatch_id") or ""), w):
                 return True
+    # accepted, held back only by returned files that are not here: the agent waits for
+    # them or settles without them (``settle-without-files``)
+    settle = row.get("settle") if isinstance(row.get("settle"), dict) else {}
+    if row.get("stage") == "accepted" and list(settle.get("why_not") or []) == ["files"]:
+        return True
     return False

@@ -5,8 +5,9 @@
  * "Needs you" card, then gets out of the way of the composer.
  *
  * - One queue: the card reads `overlayQuery.needsYou()` — the same react-query key
- *   as the Needs You overlay and the left-nav pill (useAttentionQueue), so all
- *   three show the same number (counts.blocking + counts.review).
+ *   as the Needs You overlay and the left-nav pill (useAttentionQueue), so the
+ *   card and the pill show the same number: what waits on the person (counts.person,
+ *   handler `person`); Swarm's own items are not shown here.
  * - Rows (NeedsYouRow, shared with the overlay): the backend's plain title and
  *   summary; click the text = the item's prompt goes into the input (not sent),
  *   ↑ = send it now and start the session. "N more" expands the list in place,

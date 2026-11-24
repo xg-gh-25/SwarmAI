@@ -1546,6 +1546,9 @@ async def _dispatch_round(deadline: "_Deadline", ws: Path, lead: Any, handle: Ru
     again = {"round_task": task_spec.segment(spec, None, work_id=work_id) + spec["task"],
              **({"work_checks": work_checks(spec)} if checks_by_id else {})} \
         if getattr(car, "run_scoped", False) else {}
+    # the person the dispatching session is (core/swarm_out_actor: only that person's
+    # sessions adopt the run); none recorded for the install's owner
+    person = await asyncio.to_thread(_person_of, dispatched_from)
     # the round placement opened (``deadline.opened``), addressed through its carrier
     row = await dispatch(placement.offer.name, title, spec["task"], origin,
                          [{"url": r["url"], "ref": r["ref"], **({"sha": r["sha"]} if r.get("sha") else {}),
@@ -1561,6 +1564,7 @@ async def _dispatch_round(deadline: "_Deadline", ws: Path, lead: Any, handle: Ru
                                 "brain_sync": synced,
                                 # the agent session that follows the run (agent-owns-its-runs §2.1)
                                 "dispatched_from": _session_or_none(dispatched_from),
+                                **({"dispatched_person": person} if person else {}),
                                 # a Swarm Run's child: its lead run and work package (core/swarm_run)
                                 **({"parent_run": lead.run_id, "wp": wp, "project": lead.project}
                                    if lead else {}),
@@ -1584,6 +1588,18 @@ def work_checks(spec: dict[str, Any]) -> dict[str, Any]:
 def _session_or_none(sid: Optional[str]) -> Optional[str]:
     from core.app_session_id import valid_app_session_id
     return sid if valid_app_session_id(sid) else None
+
+
+def _person_of(sid: Optional[str]) -> str:
+    """The person the session is (its ``user_id``), "" for the install's owner or no
+    session, ``swarm_out_actor.UNKNOWN_PERSON`` when the session table does not hold it
+    (nobody adopts that run). Blocking (one read of the session table)."""
+    sid = _session_or_none(sid)
+    if not sid:
+        return ""
+    from core import attention_authority, swarm_out_actor
+    exists, person = attention_authority.session_person(sid)
+    return person if exists else swarm_out_actor.UNKNOWN_PERSON
 
 
 class HiveUnavailable(SwarmOutError, LocationUnavailable):
@@ -2764,17 +2780,31 @@ async def stop_run(dispatch_id: str) -> dict[str, Any]:
 async def stop_turn(dispatch_id: str) -> dict[str, Any]:
     """``stop_run`` without its refusal of an accepted run: for the Conductor only, which
     keeps a Swarm Run's child stopped once its run has closed it
-    (core/swarm_run_conductor). No route calls it."""
-    from core.carriers import registry
+    (core/swarm_run_conductor). No route calls it. A round whose session has already
+    ended (an Elastic Workers round that ended idle: its carrier refuses to send,
+    ``RunEnded``) is stopped: nothing runs there, and ``ended`` says why."""
     row = await _session_row(dispatch_id)
-    handle = registry.handle_of(row)
-    async with registry.client_for(handle) as client:
-        # the round's chat session (an elastic round's run_ref is its runtime session)
-        r = await client.post(f"/api/chat/stop/{handle.session or row['session_id']}")
-    if r.status_code >= 300:
-        raise SwarmOutError(f"the Hive did not stop it (HTTP {r.status_code})")
+    code, ended = await _stop_session(row)
+    if ended is None and code >= 300:
+        raise SwarmOutError(f"the Hive did not stop it (HTTP {code})")
     _refresh_soon()
-    return {"stopped": True}
+    return {"stopped": True, **({"ended": ended} if ended else {})}
+
+
+async def _stop_session(row: dict[str, Any]) -> tuple[int, Optional[str]]:
+    """Stop the turn of the row's current round: (HTTP status, None), or (0, why) when the
+    round's session has ended already (``RunEnded``: the carrier sends nothing to it, so
+    there is nothing to stop). Raises like the carrier for anything else."""
+    from core.carriers import registry
+    from core.carriers.agentcore import RunEnded
+    handle = registry.handle_of(row)
+    try:
+        async with registry.client_for(handle) as client:
+            # the round's chat session (an elastic round's run_ref is its runtime session)
+            r = await client.post(f"/api/chat/stop/{handle.session or row['session_id']}")
+    except RunEnded as e:
+        return 0, e.why
+    return r.status_code, None
 
 
 async def rerun(dispatch_id: str, text: str, origin: Optional[str] = None) -> dict[str, Any]:
@@ -3018,12 +3048,9 @@ async def discard_run(dispatch_id: str, note: str = "") -> dict[str, Any]:
     await _not_closed(dispatch_id)
     stopped: Optional[bool] = None
     if row.get("session_id"):
-        from core.carriers import registry
         try:
-            handle = registry.handle_of(row)
-            async with registry.client_for(handle) as client:
-                r = await client.post(f"/api/chat/stop/{handle.session or row['session_id']}")
-            stopped = r.status_code < 300
+            code, ended = await _stop_session(row)
+            stopped = ended is not None or code < 300
         except (SwarmOutError, httpx.HTTPError):
             stopped = False
     try:

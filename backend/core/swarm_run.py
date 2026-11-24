@@ -12,8 +12,12 @@ child may be dispatched:
   its audit log (re-read only when the log changed). None when it is not a readable v1 run.
 - ``owner_of(row)``: the session that answers for a dispatched run. A child: the lead
   run's current owner (the run may have been taken over since the child went out;
-  responsibility follows the run, design §5.6). Any other run: the session that
+  responsibility follows the run, design §5.6). Any other run: the session that adopted
+  it (``adopted``: its owner session was gone, or the person started a new session in the
+  Swarm Out tab; core/swarm_out_actor ``adopt`` / ``hand_over``), else the session that
   dispatched it (``dispatched_from``). Every check of "is this run yours" reads this.
+- ``adopted(dispatch_id)`` / ``set_owner(...)``: the adoptions, one small file
+  (``state/swarm-out/owners.json``), read through a cache keyed by its stat.
 - ``check_child_dispatch(parent_run, wp, session, rows)``: refuses a child dispatch that
   is not the lead run's owner's, for a run that has ended, or that would send the same
   work package a fourth time (design §6 point 4: at most ``MAX_WP_DISPATCHES``). A
@@ -28,7 +32,7 @@ child may be dispatched:
   since. ``held_hives(rows, brain, digest, run_id)``: the Hives where another running
   Swarm Run holds *brain* at a different digest (a dispatch does not replace it there).
 
-Read-only and deterministic; nothing here asks a model.
+Deterministic; nothing here asks a model. The only write is ``set_owner``'s.
 """
 from __future__ import annotations
 
@@ -135,8 +139,86 @@ def owner_of(row: Any) -> Optional[str]:
     if row.get("parent_run"):
         found = lead(row.get("parent_run"))
         return found.owner if found else None
+    took = adopted(row.get("dispatch_id"))
+    if took:
+        return took
     owner = row.get("dispatched_from")
     return owner if isinstance(owner, str) and owner else None
+
+
+#: the adoptions as last read: (the file's stat, dispatch id -> its entry)
+_OWNERS: dict[str, Any] = {"stamp": None, "map": {}}
+#: guards _OWNERS and every write of the file (held over one small read or write)
+_OWNERS_LOCK = threading.Lock()
+
+
+def _owners_path():
+    from core import swarm_out
+    return swarm_out._state_dir() / "owners.json"
+
+
+def _owners() -> dict[str, dict]:
+    """dispatch id -> ``{session, from, by, at}``; re-read only when the file changed. A
+    file that does not read holds no adoption (each run's owner is then its dispatcher)."""
+    import json
+    import os
+    p = _owners_path()
+    try:
+        st = os.stat(p)
+        stamp: tuple = (str(p), st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = (str(p), None)
+    with _OWNERS_LOCK:
+        if stamp == _OWNERS["stamp"]:
+            return _OWNERS["map"]
+        got: dict[str, dict] = {}
+        if stamp[1] is not None:
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                d = {}
+            got = {k: v for k, v in (d.items() if isinstance(d, dict) else ())
+                   if isinstance(k, str) and isinstance(v, dict) and isinstance(v.get("session"), str)}
+        _OWNERS.update(stamp=stamp, map=got)
+        return got
+
+
+def adopted(dispatch_id: Any) -> Optional[str]:
+    """The session that adopted this run, or None."""
+    if not isinstance(dispatch_id, str) or not dispatch_id:
+        return None
+    e = _owners().get(dispatch_id)
+    return e["session"] if e else None
+
+
+class OwnerChanged(ValueError):
+    """The run's owner changed since the caller checked it; the message is safe to show."""
+
+
+def set_owner(dispatch_id: str, session: str, previous: Optional[str], by: str, at: str) -> None:
+    """Record that *session* answers for *dispatch_id* from now on (core/swarm_out_actor
+    checks who may). *previous*: the owner the caller checked; when the file names
+    another adopter by now (two adoptions at once), OwnerChanged and nothing is written.
+    Written whole to a fresh name renamed into place, under the lock."""
+    import json
+    import os
+    import secrets
+    p = _owners_path()
+    with _OWNERS_LOCK:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            d = {}
+        d = d if isinstance(d, dict) else {}
+        cur = d.get(dispatch_id).get("session") if isinstance(d.get(dispatch_id), dict) else None
+        if cur is not None and cur != previous:
+            raise OwnerChanged("another session took this run over a moment ago")
+        d[dispatch_id] = {"session": session, "from": previous, "by": by, "at": at}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.parent / f".{p.name}.{secrets.token_hex(6)}.tmp"
+        tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+        os.replace(tmp, p)
+        _OWNERS["stamp"] = ("written",)         # the next read takes the file as written
 
 
 def check_child_dispatch(parent_run: str, wp: str, session: Optional[str],

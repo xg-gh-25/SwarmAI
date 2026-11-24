@@ -43,7 +43,8 @@ and its ``runtime_arn`` (one per account, §6.8). A run round is one runtime ses
 - **End** (``release``): ``StopRuntimeSession``; a session already gone counts as done.
 - **When nothing more can come** (``writes_end_at``): a round's microVM exists at most the
   platform's lifetime from its start, so its S3 prefix holds everything it will ever hold
-  once that time passed (plus the start call and clock skew). A pull that started after
+  once that time passed (plus the start call and clock skew), or once this host saw an end
+  the session wrote itself (an idle end, ``closed``, ``replaced``). A pull that started after
   it and read the whole manifest (``outputs``' ``drained``) is the proof the Host needs that
   a result missing then never comes (core/swarm_out_results ``round_end``).
 - **Machine logs** (``log_events``, the ``diagnostics`` duty): the runtime writes to
@@ -492,6 +493,26 @@ def released_at(sid: str) -> Optional[float]:
     return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None
 
 
+#: ends the round's own session wrote (state.json ``ended`` / ``replaced``, a ``closed``
+#: records entry): it writes nothing after them, so a read that starts once this host has
+#: seen one holds everything the round will ever hold (``writes_end_at``)
+_SESSION_ENDS = ("closed", "ended", "carrier_replaced")
+
+
+def _session_end_seen_at(sid: str) -> Optional[float]:
+    """When this host first saw an end the round's session wrote itself
+    (``_SESSION_ENDS``, from its end marker), or None: no marker, another end
+    (``released``, ``carrier_expired``), or a marker that does not read."""
+    try:
+        body = json.loads(_ended_path(sid).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(body, dict) or body.get("why") not in _SESSION_ENDS:
+        return None
+    at = body.get("at")
+    return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None
+
+
 def _expired(handle: RunHandle) -> bool:
     return not isinstance(handle.opened_at, (int, float)) \
         or _now() - float(handle.opened_at) > MAX_RUN_S - END_MARGIN_S
@@ -513,14 +534,21 @@ def writes_end_at(handle: RunHandle) -> Optional[float]:
     """When the round can have written nothing more to its S3 prefix: its microVM lives
     at most MAX_RUN_S from the session's start, which is no later than START_TIMEOUT_S
     after ``opened_at``, and the clocks may differ by END_MARGIN_S (``WRITE_GRACE_S``);
-    sooner when S3 said so (``NO_MORE_WRITES``, recorded with the time it was read). None
-    for a handle without a start time."""
+    sooner when S3 said so (``NO_MORE_WRITES``, recorded with the time it was read), or
+    when the session ended itself before that (an idle end: state.json ``ended``, a
+    ``closed`` entry, ``replaced``): the time this host first saw that end
+    (``_session_end_seen_at``), since the session wrote it last. None for a handle
+    without a start time."""
     at = handle.opened_at if isinstance(handle, RunHandle) else None
     if not isinstance(at, (int, float)) or isinstance(at, bool):
         return None
-    end = float(at) + MAX_RUN_S + WRITE_GRACE_S
+    bound = float(at) + MAX_RUN_S + WRITE_GRACE_S
+    try:
+        seen = _session_end_seen_at(handle.run_ref or "")
+    except ValueError:                       # not a session id: only the lifetime bounds it
+        seen = None
     sooner = _no_more_writes_at(handle.run_ref)
-    return min(end, sooner) if sooner is not None else end
+    return min(x for x in (bound, seen, sooner) if x is not None)
 
 
 def _ended_here(handle: RunHandle) -> Optional[str]:

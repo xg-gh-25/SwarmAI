@@ -98,7 +98,7 @@ export function AskPersonCard({ ask }: { ask: SwarmOutAskPerson }) {
 /** Which gate a decision belongs to. */
 function gateOf(d: string): 'run' | 'review' | 'land' | 'judge' {
   if (d === 'review') return 'review';
-  if (d === 'land' || d === 'place_files') return 'land';
+  if (d === 'land' || d === 'place_files' || d === 'settle_without_files') return 'land';
   if (['accept', 'ask_person', 'keep', 'revert', 'reverted', 'take_over', 'discard', 'settle'].includes(d)) return 'judge';
   return 'run';
 }

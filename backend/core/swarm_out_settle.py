@@ -34,7 +34,9 @@ settles:
   hand, or none came back);
 - the files are here: every returned file the release would remove (under
   ``Outputs/<id>/``) is placed in the Brain, or its Hive said it is gone (a file listed,
-  then moved or deleted before its turn ended: nothing of it is left to remove);
+  then moved or deleted before its turn ended: nothing of it is left to remove), or none
+  can come any more (the round's result is lost), or the dispatching agent settled the run
+  without them (``settle_without_files``, a recorded decision with its reason);
 - the lessons are in: the Hive's run record is closed (or the run has none) and every
   lesson it brought is queued for this machine's CDF; or nothing more is pulled (the
   Hive is stopped or gone, or no new entry for the records backstop). No one takes or
@@ -63,7 +65,7 @@ dispatching agent through the routes, the rest is counted.
   stays the machine's state of the moment. A re-run's turn gets its own end.
 - ``annotate(rows)``         — each row's stage, actions, settle and end; settles and
   expires what is due.
-- ``set_verdict`` / ``set_manual_landed`` / ``discard`` — the person's or the dispatching
+- ``set_verdict`` / ``set_manual_landed`` / ``discard`` / ``settle_without_files`` — the person's or the dispatching
   agent's actions (routes in routers/swarm_out; what an agent may not do with them is
   core/swarm_out_actor's).
 - ``release_due`` — tell the Hives (``annotate`` hands each row out once per try, with backoff).
@@ -339,8 +341,24 @@ def _final(res: Optional[dict]) -> bool:
 _NEVER_BACK = frozenset({"gone", "hive"})
 
 
-def _files_here(dispatch_id: str, kept_result: dict) -> bool:
-    """Every returned file the release would remove is here. A file listed under
+def _skipped(rec: dict, ended_at: Optional[str]) -> frozenset:
+    """The listed file paths the agent settled the run without (``settle_without_files``),
+    for the result that ended at *ended_at* only: they count as never coming back. A newer
+    result (a new turn) is judged afresh."""
+    got = rec.get("files_skipped") if isinstance(rec.get("files_skipped"), dict) else {}
+    if not ended_at or got.get("ended_at") != ended_at:
+        return frozenset()
+    return frozenset(x for x in got.get("paths") or [] if isinstance(x, str) and x)
+
+
+def _files_here(dispatch_id: str, kept_result: dict, skipped: frozenset = frozenset()) -> bool:
+    """Every returned file the release would remove is here (``_files_missing``)."""
+    return not _files_missing(dispatch_id, kept_result, skipped)
+
+
+def _files_missing(dispatch_id: str, kept_result: dict, skipped: frozenset = frozenset()) -> list[str]:
+    """The listed paths of the returned files that hold the run back (empty: every file
+    the release would remove is here). A file listed under
     ``Outputs/<id>/`` (core/hive_workspace.outputs_rel; the release also removes
     ``Hive/work/<id>/``, and a path there with ``Outputs/<id>/`` in it is in scope too) is
     placed in the Brain, as core/hive_files.placed records it, unless its Hive's newest word
@@ -352,9 +370,11 @@ def _files_here(dispatch_id: str, kept_result: dict) -> bool:
     so holding would only keep the run open until its records expire; measured: a pipeline
     run wrote its scratch files into ``Hive/work/<id>/Outputs/<id>/`` and could be neither
     settled nor discarded). A file not placed and not reported holds. A file elsewhere on
-    the Hive is not touched by the release, so it holds nothing back. Read from the
-    placement and record, never from the ``local`` the result summary carries: a summary
-    written before that field existed never has it, though its files are placed."""
+    the Hive is not touched by the release, so it holds nothing back. A path in *skipped*
+    (the agent's recorded ``settle_without_files``) holds nothing: it counts as never
+    coming. Read from the placement and record, never from the ``local`` the result
+    summary carries: a summary written before that field existed never has it, though its
+    files are placed."""
     from core import hive_files, hive_workspace
     rel = hive_workspace.outputs_rel(dispatch_id).strip("/") + "/"
     here: set = set()
@@ -362,21 +382,67 @@ def _files_here(dispatch_id: str, kept_result: dict) -> bool:
         if isinstance(p, dict) and isinstance(p.get("local"), str) and p["local"]:
             here.update(x for x in (p.get("listed"), p.get("path")) if isinstance(x, str))
     words: Optional[dict] = None
+    missing: list[str] = []
     for f in ((kept_result.get("work") or {}).get("files") or []):
         if not isinstance(f, dict):
             continue
         names = [x for x in (f.get("abs"), f.get("path")) if isinstance(x, str) and x]
         if not any(("/" + n.lstrip("/")).find("/" + rel) >= 0 for n in names):
             continue                                   # not in the release's scope
+        if skipped & set(names):
+            continue                                   # settled without it: never coming
         if words is None:                              # the Hive's newest word, by listed path
             words = hive_files.not_sealed(dispatch_id)
         said = {words[n] for n in names if n in words}
         if said and not said <= _NEVER_BACK:           # a copy that may exist only on the Hive
-            return False
+            missing.append(names[0])
+            continue
         if said or here & set(names):                  # gone or never returnable, or placed
             continue
-        return False
-    return True
+        missing.append(names[0])
+    return missing
+
+
+#: listed paths one settle-without-files decision names in its record entry (all of them
+#: are kept in ``files_skipped``)
+SKIPPED_SHOWN = 20
+
+
+def settle_without_files(dispatch_id: str, why: str, by: str = "agent", session: Optional[str] = None,
+                         pulled: Optional[bool] = None, ended_at: Optional[str] = None) -> dict[str, Any]:
+    """The dispatching agent (or the person) settles the run without the returned files
+    that never came back: every file that holds it now (``_files_missing``) is kept in
+    ``files_skipped`` and from then on counts as never coming, and the decision is one
+    entry of the run's record with *why*, the paths and whether the pull tried just
+    before reached its Hive (*pulled*). Only the files are released this way: a run
+    whose files were its only blocker settles at the next look (its Hive removes the
+    workspace and whatever of them is still there). Bound to the result that ended at
+    *ended_at* (the one the caller judged; None: the current one): a newer result is
+    refused, and the skip never covers a later result's files. ``{"skipped": [...]}``;
+    an empty list when nothing holds any more (the pull brought them) writes nothing."""
+    from core import swarm_out_record
+    clean = " ".join(str(why or "").split())[:MAX_NOTE_CHARS]
+    if not clean:
+        raise SettleError("say why the run settles without its files")
+    kept_res = _current_result(dispatch_id)
+    now_at = kept_res.get("ended_at")
+    if ended_at is not None and now_at != ended_at:
+        raise SettleError("the run's result changed since it was judged: look at it again")
+    out: dict[str, Any] = {"skipped": []}
+
+    def change(rec):
+        _not_settled(rec)
+        missing = _files_missing(dispatch_id, kept_res, _skipped(rec, now_at))
+        if not missing:
+            return False
+        out["skipped"] = missing
+        rec["files_skipped"] = {"at": _now(), "by": by, "why": clean, "ended_at": now_at,
+                                "paths": sorted(_skipped(rec, now_at) | set(missing))}
+        rec.setdefault("commands", []).append(swarm_out_record.entry(
+            by, "settle_without_files", clean, session, "settle_without_files",
+            facts={"files": missing[:SKIPPED_SHOWN], "files_total": len(missing), "pulled": pulled}))
+    _update(dispatch_id, change)
+    return out
 
 
 def closed_state(rec: dict, dispatch_id: Optional[str] = None) -> Optional[str]:
@@ -443,8 +509,9 @@ def _actions(stage: str, alive: bool, accept: Optional[str],
     works here (``land`` / ``manual`` / ``verdict``), None when it cannot; ``reason``:
     the run's ``state_reason``. Waiting on an answer, ``answer`` is a hint, not a
     command (the dispatching agent answers with ``swarm_out answer``, the person in the
-    panel's wait card); after an answer the Hive refused, opening the session to answer
-    there leads; after an answer sent and not yet taken there is nothing to do but wait.
+    panel's wait card), and ``stop`` ends the waiting turn; after an answer the Hive
+    refused, opening the session to answer there leads; after an answer sent and not yet
+    taken there is nothing to do but wait.
     ``ask``: the state of the run's ask-person (core/swarm_out_record): open, the person
     keeps or reverts what landed; revert, the dispatching agent carries it out (its
     ``swarm_out reverted``), nothing to give here: what landed counts as accepted for
@@ -465,9 +532,11 @@ def _actions(stage: str, alive: bool, accept: Optional[str],
             return [*session, _act("discard")]
         return [_act("stop", True), *session, _act("discard")]
     if stage == "needs_answer":
+        # stop ends the turn that waits (then discard can follow): a run waiting on an
+        # answer nobody will give is never left without a way out
         if reason == "answer_refused":
-            return [*([_act("open_session", True)] if alive else []), _act("discard")]
-        return [_act("answer", False, "hint"), *session, _act("discard")]
+            return [*([_act("open_session", True)] if alive else []), _act("stop"), _act("discard")]
+        return [_act("answer", False, "hint"), _act("stop"), *session, _act("discard")]
     if stage == "awaiting":
         head = [_act("accept", True, accept)] if accept else []
         rerun = [_act("rerun", not head)] if alive else []
@@ -577,7 +646,10 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     # a handled child's commits are its lead run's material (in refs/hive, or no longer
     # wanted once the run ended): nothing here waits on landing them
     code_done = abandoned or gone or handled or code in ("none", "landed", "rejected")
-    files_done = abandoned or gone or _files_here(row["dispatch_id"], kept_res)
+    # the files: placed, or none can come any more (its Hive gone, the round's result
+    # lost: its store was read whole), or the agent settled without them
+    files_done = abandoned or gone or bool(lost) or _files_here(row["dispatch_id"], kept_res,
+                                                                _skipped(rec, kept_res.get("ended_at")))
     decided = verdict in ("pass", "abandoned", "gone", "reverted", "handled")
     stopped_without_result = _no_result_ever(row, res)
 

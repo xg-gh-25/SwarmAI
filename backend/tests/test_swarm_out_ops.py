@@ -84,6 +84,9 @@ def test_names_are_unique_and_rows_well_formed():
 #: the irreversible ops an owner agent may call, and only these
 _AGENT_IRREVERSIBLE = {"task.dispatch", "task.dispatch_batch", "run.accept", "run.return_land",
                        "run.discard",
+                       # settling a run held back only by files that never came back: a
+                       # recorded decision of the agent that answers for the run
+                       "run.settle_without_files",
                        # the dispatching agent's own answer to a wait it answers for (design
                        # 2026-10-31-hive-approvals): the Hive takes it only for those classes
                        "ask.answer_host", "hive.start",
@@ -283,6 +286,7 @@ _CLI_ARGS = {
     "diagnose": ["so_0123456789ab"],
     "watch": ["so_0123456789ab", "--since", "e30="],
     "card": ["so_0123456789ab", "req1"],
+    "wait": ["so_0123456789ab", "req1"],
     "answer": ["so_0123456789ab", "req1", "--pick", "A", "--why", "w"],
     "escalate": ["so_0123456789ab", "req1", "--why", "w"],
     "start-hive": ["--hive", "h1"],
@@ -294,6 +298,8 @@ _CLI_ARGS = {
     "return-land": ["so_0123456789ab", "--why", "w", "--key", "k", "--tip", "t", "--summary-file", __file__],
     "rerun": ["so_0123456789ab", "--why", "w", "--text-file", __file__],
     "discard": ["so_0123456789ab", "--why", "w"],
+    "settle-without-files": ["so_0123456789ab", "--why", "w"],
+    "adopt": ["so_0123456789ab", "--why", "w"],
     "ask-person": ["so_0123456789ab", "--decide", "keep it?", "--judgment", "fine", "--why", "a preference"],
     "reverted": ["so_0123456789ab", "--commit", "abc123", "--why", "reverted it"],
     "dispatch-many": ["--file", "<specs>"],          # a file the test writes

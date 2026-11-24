@@ -446,7 +446,7 @@ def test_what_the_host_may_not_answer(host, rid, pick, session, word):
 
 def test_no_card_no_answer_and_a_reason_is_required(host):
     from core import swarm_out_wait_card as wc
-    with pytest.raises(wc.CardError, match="build the card first"):
+    with pytest.raises(wc.CardError, match="read the wait first"):
         _host_answer("q-1", "A")
     asyncio.run(wc.card(DID, "q-1"))
     with pytest.raises(wc.CardError, match="say why"):

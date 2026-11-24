@@ -87,6 +87,9 @@ _STATIC: "tuple[Op, ...]" = (
     # the chat card for one of a run's waits (core/swarm_out_wait_card): it writes only
     # this machine's record of the card; the person's pick is forwarded by the daemon
     _op("ask.card", "POST", f"{_SO}/runs/{{dispatch_id}}/card", _PO, "change"),
+    # one wait whole, for the agent that answers it (it writes only this machine's record
+    # of what was shown: the answer is bound to it)
+    _op("ask.view", "GET", f"{_SO}/runs/{{dispatch_id}}/waits/{{request_id}}", _PO, "change"),
     _op("task.route", "POST", f"{_SO}/route", _POC, "read"),
     _op("task.spec", "POST", f"{_SO}/spec", _POC, "read"),
     _op("task.dispatch", "POST", f"{_SO}/dispatch", _POC, "off_machine"),
@@ -111,6 +114,14 @@ _STATIC: "tuple[Op, ...]" = (
     _op("run.rerun", "POST", f"{_SO}/runs/{{dispatch_id}}/rerun", _PO, "change"),
     _op("run.stop", "POST", f"{_SO}/runs/{{dispatch_id}}/stop", _PO, "change"),
     _op("run.discard", "POST", f"{_SO}/runs/{{dispatch_id}}/discard", _PO, "irreversible"),
+    # a run held back only by returned files that never came: settled without them, a
+    # recorded decision (it releases the Hive workspace, and the files there with it)
+    _op("run.settle_without_files", "POST", f"{_SO}/runs/{{dispatch_id}}/settle-without-files", _PO,
+        "irreversible"),
+    # a session of the same person takes over a run whose owner session is gone; the
+    # person's New session in the Swarm Out tab hands that tab's open runs over
+    _op("run.adopt", "POST", f"{_SO}/runs/{{dispatch_id}}/adopt", (OWNER,), "change"),
+    _op("session.hand_over", "POST", f"{_SO}/sessions/hand-over", _P, "change"),
     # the funnel's last gate (design 2026-11-02-hive-run-decision-record §1): the
     # dispatching agent hands a landed result it cannot judge to the person, and reports
     # the revert the person asked for; keeping or reverting is the person's
@@ -304,6 +315,7 @@ def person_only_match(text: str) -> "Op | None":
 #: command
 AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
                            "run.rerun", "run.stop", "run.discard",
+                           "run.settle_without_files", "run.adopt",
                            "ask.answer_host", "ask.escalate", "run.ask_person", "run.reverted",
                            # only when no Hive takes this Host's runs: the CLI checks it
                            "hive.start",

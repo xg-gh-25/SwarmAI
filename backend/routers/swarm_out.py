@@ -518,6 +518,87 @@ async def run_discard(dispatch_id: str, body: DiscardBody) -> dict[str, Any]:
     return out
 
 
+@router.post("/runs/{dispatch_id}/settle-without-files")
+async def run_settle_without_files(dispatch_id: str, body: ActorBody) -> dict[str, Any]:
+    """Settle a run held back only by returned files that never came back
+    (core/swarm_out_settle.settle_without_files): its Hive is pulled once more first, when
+    it answers; the files still missing then count as never coming, a recorded decision
+    with its reason. The person's or the agent that answers for the run's."""
+    _require_desktop()
+    import asyncio
+    from core import swarm_out_actor, swarm_out_settle
+    actor = _actor(body)
+    if not actor.why:
+        raise HTTPException(status_code=403, detail="say why (--why): the person sees the reason")
+    await _allowed(actor, "settle_without_files", dispatch_id)
+    row = await _call(swarm_out.run_row(dispatch_id))
+    why = await asyncio.to_thread(swarm_out_actor.files_blocker, row)
+    if why:
+        raise HTTPException(status_code=403, detail=f"the run cannot be settled without files now: {why}")
+    try:                                       # once, when its Hive answers: they may still come
+        got = await swarm_out.refresh_result(dispatch_id)
+        pulled = not got.get("result_error")
+    except Exception as exc:  # noqa: BLE001 — a Hive that does not answer is why this exists
+        logger.info("swarm_out: pull before settling %s without files failed (%s)", dispatch_id,
+                    type(exc).__name__)
+        pulled = False
+    # bound to the result files_blocker judged: a newer one the pull brought is refused
+    ended_at = ((row or {}).get("result") or {}).get("ended_at") if isinstance((row or {}).get("result"), dict) else None
+    out = await _settle(swarm_out_settle.settle_without_files, dispatch_id, actor.why, actor.by,
+                        actor.session if actor.agent else None, pulled, ended_at)
+    return {**out, "pulled": pulled}
+
+
+@router.post("/runs/{dispatch_id}/adopt")
+async def run_adopt(dispatch_id: str, body: ActorBody) -> dict[str, Any]:
+    """A session of the same person takes over a run whose owner session no longer exists
+    (core/swarm_out_actor.adopt_blocker): it answers for the run from now on."""
+    _require_desktop()
+    import asyncio
+    from core import swarm_out_actor, swarm_run
+    actor = _actor(body)
+    # its own checks whoever the body says it is: a body saying ``person`` skips
+    # ``_allowed``'s agent checks, and the person never adopts this way
+    await _allowed(actor, "adopt", dispatch_id)
+    row = await _call(swarm_out.run_row(dispatch_id))
+    why = await asyncio.to_thread(swarm_out_actor.adopt_blocker, actor, row)
+    if why:
+        raise HTTPException(status_code=403, detail=f"this session may not adopt this run now: {why}")
+    previous = await asyncio.to_thread(swarm_run.owner_of, row)
+    try:
+        await asyncio.to_thread(swarm_out_actor.adopt, dispatch_id, str(actor.session), previous, "agent",
+                                actor.why)
+    except swarm_run.OwnerChanged as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    swarm_out._refresh_soon()
+    return {"adopted": True, "from_session": previous}
+
+
+class HandOverBody(BaseModel):
+    from_session: str = Field(min_length=1, max_length=80)
+    to_session: str = Field(min_length=1, max_length=80)
+
+
+@router.post("/sessions/hand-over")
+async def sessions_hand_over(body: HandOverBody) -> dict[str, Any]:
+    """The person started a new session in the Swarm Out tab: the old session's open runs
+    answer to the new one (core/swarm_out_actor.hand_over; the person's only)."""
+    _require_desktop()
+    import asyncio
+    from core import swarm_out_actor
+
+    def move() -> list[str]:
+        rows = [swarm_out._with_rounds(r) for r in swarm_out._read_log()]
+        return swarm_out_actor.hand_over(body.from_session, body.to_session, rows)
+    try:
+        moved = await asyncio.to_thread(move)
+    except swarm_out_actor.ActorError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if moved:
+        swarm_out._refresh_soon()
+    return {"moved": moved}
+
+
 class CardBody(BaseModel):
     request_id: str = Field(min_length=1, max_length=128)
 
@@ -706,20 +787,27 @@ async def refresh_result(dispatch_id: str) -> dict[str, Any]:
     return await _call(swarm_out.refresh_result(dispatch_id))
 
 
+#: the most questions one Hive wait holds (core/swarm_out._clean_ask keeps 20)
+MAX_WAIT_QUESTIONS = 20
+
+
 class HostAnswerBody(BaseModel):
     """The dispatching agent's own answer to one of its run's waits (the CLI's
-    ``answer``; design 2026-10-31-hive-approvals): the card's question text → one of its
-    option labels, and why."""
+    ``answer``; design 2026-10-31-hive-approvals): one option label per question, and
+    why. Not bound by a chat card's size: a wait with more questions than a card holds is
+    answered whole (``swarm_out wait`` shows it)."""
     session: Optional[str] = Field(default=None, max_length=80)
     why: str = Field(min_length=1, max_length=1000)
-    # a card with one question: the label picked; with more, card question → label
+    # one question (or a decision, an approval): the label picked; with more, question →
+    # label (the Hive's question, or a card's), or one label per question in order
     pick: Optional[str] = Field(default=None, max_length=600)
-    answers: Optional[dict[str, str]] = Field(default=None, max_length=4)
+    answers: Optional[dict[str, str]] = Field(default=None, max_length=MAX_WAIT_QUESTIONS)
+    picks: Optional[list[str]] = Field(default=None, max_length=MAX_WAIT_QUESTIONS)
 
     @model_validator(mode="after")
     def _one_answer(self) -> "HostAnswerBody":
-        if (self.pick is None) == (self.answers is None):
-            raise ValueError("give exactly one of pick and answers")
+        if sum(x is not None for x in (self.pick, self.answers, self.picks)) != 1:
+            raise ValueError("give exactly one of pick, answers and picks")
         return self
 
 
@@ -736,11 +824,27 @@ async def wait_answer_host(dispatch_id: str, request_id: str, body: HostAnswerBo
     from core import swarm_out_wait_card
     try:
         return await swarm_out_wait_card.answer_as_host(body.session, dispatch_id, request_id,
-                                                        body.answers, body.why, pick=body.pick)
+                                                        body.picks if body.picks is not None else body.answers,
+                                                        body.why, pick=body.pick)
     except swarm_out_wait_card.CardError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
     except Exception:
         logger.exception("swarm_out host answer failed")
+        raise HTTPException(status_code=500, detail="Swarm Out request failed")
+
+
+@router.get("/runs/{dispatch_id}/waits/{request_id}")
+async def wait_view(dispatch_id: str, request_id: str) -> dict[str, Any]:
+    """One of the run's waits whole (core/swarm_out_wait_card.view): what the agent reads
+    before it answers it with ``swarm_out answer``."""
+    _require_desktop()
+    from core import swarm_out_wait_card
+    try:
+        return await swarm_out_wait_card.view(dispatch_id, request_id)
+    except (swarm_out_wait_card.CardError, swarm_out.SwarmOutError) as e:
+        raise HTTPException(status_code=getattr(e, "status", 400), detail=str(e))
+    except Exception:
+        logger.exception("swarm_out wait view failed")
         raise HTTPException(status_code=500, detail="Swarm Out request failed")
 
 

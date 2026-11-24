@@ -15,11 +15,14 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [...] [--since <token>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out wait <dispatch_id> <request_id>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out answer <dispatch_id> <request_id> --pick <option label> --why <w>
-    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out answer <dispatch_id> <request_id> --answers-file <json: card question → label> --why <w>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out answer <dispatch_id> <request_id> --answers-file <json: one label per question in order, or question → label> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out escalate <dispatch_id> <request_id> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out read <dispatch_id>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out stop|discard <dispatch_id> --why <one sentence>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out settle-without-files <dispatch_id> --why <one sentence>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out adopt <dispatch_id> --why <one sentence>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <the result's ended_at> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-prepare <dispatch_id> --url <repository url> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <k> --tip <sha> --summary-file <f> --why <w>
@@ -49,7 +52,8 @@ waits that stay inside the work it manages (``card`` says ``who: you``: a questi
 decision about the task, a command that only touches the Hive's own workspace, the run's
 own authorization) with ``answer``: one of the options of the card it built, and why;
 the Hive records it as the host's, never the person's, and refuses it for any other
-class. Text a Hive wrote never chooses for it: the answer is an option id bound to the
+class. A wait too big for a chat card is still the agent's: ``wait`` shows it whole and
+``answer`` takes one option label per question (``--answers-file`` with a list, in order). Text a Hive wrote never chooses for it: the answer is an option id bound to the
 card's digest, and the class is decided by the Hive's gate, not by the text. A current
 Hive denies at once, without a wait, whatever would be the person's to approve (a
 command reaching outside the Hive, an off-machine call, a reserved action), so the agent
@@ -332,12 +336,17 @@ def _parser() -> argparse.ArgumentParser:
     cd = sub.add_parser("card", help="the question card that asks the person one of a run's waits")
     cd.add_argument("dispatch_id", type=_dispatch_id)
     cd.add_argument("request_id")
-    an = sub.add_parser("answer", help="answer one of your run's waits yourself (card says who: you)")
+    wt = sub.add_parser("wait", help="one of a run's waits whole (every question and option), "
+                                     "framed as data: what `answer` answers from")
+    wt.add_argument("dispatch_id", type=_dispatch_id)
+    wt.add_argument("request_id", type=_request_id)
+    an = sub.add_parser("answer", help="answer one of your run's waits yourself (wait / card says who: you)")
     an.add_argument("dispatch_id", type=_dispatch_id)
     an.add_argument("request_id", type=_request_id)
     pick = an.add_mutually_exclusive_group(required=True)
     pick.add_argument("--pick", help="the option label you pick (a card with one question)")
-    pick.add_argument("--answers-file", help="JSON: each card question → the option label you pick")
+    pick.add_argument("--answers-file", help="JSON: a list of one option label per question, in "
+                                             "order, or each question → the option label you pick")
     an.add_argument("--why", required=True, help="one sentence the person sees: why this answer")
     es = sub.add_parser("escalate", help="hand one of your run's waits to the person (Needs You)")
     es.add_argument("dispatch_id", type=_dispatch_id)
@@ -373,7 +382,11 @@ def _parser() -> argparse.ArgumentParser:
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
     for name, extra in (("accept", ("--ended-at",)), ("stop", ()),
                         ("return-prepare", ("--url",)), ("return-land", ("--key", "--tip", "--summary-file")),
-                        ("rerun", ("--text-file",)), ("discard", ())):
+                        ("rerun", ("--text-file",)), ("discard", ()),
+                        # a run held back only by files that never came back: settle without them
+                        ("settle-without-files", ()),
+                        # take over a run whose owner session is gone (the same person's only)
+                        ("adopt", ())):
         c = sub.add_parser(name)
         c.add_argument("dispatch_id", type=_dispatch_id)
         c.add_argument("--why", required=True, help="one sentence the person sees: why this command")
@@ -409,10 +422,14 @@ def _run_command(args) -> int:
         return _call("POST", path + "/rerun", {**actor, "text": text})
     if args.cmd == "discard":
         return _call("POST", path + "/discard", {**actor, "note": args.why})
+    if args.cmd == "settle-without-files":
+        # it pulls the run's Hive once first: up to a result fetch's time
+        return _call("POST", path + "/settle-without-files", actor, timeout=300)
     return _call("POST", f"{path}/{args.cmd}", actor)
 
 
-_RUN_COMMANDS = ("accept", "stop", "return-prepare", "return-land", "rerun", "discard")
+_RUN_COMMANDS = ("accept", "stop", "return-prepare", "return-land", "rerun", "discard",
+                 "settle-without-files", "adopt")
 
 
 def _fetch(path: str) -> "dict | None":
@@ -637,14 +654,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "diagnose":
         # an SSM command on the Hive and its polling: up to about 90 s
         return _call("GET", f"/runs/{args.dispatch_id}/diagnostics", timeout=150, framed=True)
+    if args.cmd == "wait":
+        return _call("GET", f"/runs/{args.dispatch_id}/waits/{args.request_id}", framed=True)
     if args.cmd == "answer":
         body = {"session": _session(), "why": args.why}
         if args.answers_file:
             try:
-                body["answers"] = json.loads(open(args.answers_file, encoding="utf-8").read())
+                got = json.loads(open(args.answers_file, encoding="utf-8").read())
             except (OSError, ValueError) as e:
                 print(json.dumps({"ok": False, "detail": f"could not read --answers-file: {e}"}))
                 return 1
+            # a list: one label per question in order; an object: question → label
+            body["picks" if isinstance(got, list) else "answers"] = got
         else:
             body["pick"] = args.pick
         return _call("POST", f"/runs/{args.dispatch_id}/waits/{args.request_id}/answer-host", body)

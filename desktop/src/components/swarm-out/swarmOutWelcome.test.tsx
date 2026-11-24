@@ -127,6 +127,7 @@ describe('startSwarmOutFresh', () => {
         reset: vi.fn(() => { if (state.tab) state.tab = { id: 'swarm-out', sessionId: undefined }; }),
         clearContext: vi.fn(),
         openOld: vi.fn(),
+        handOverLater: vi.fn(),
         t: (k: string) => k,
       },
     };
@@ -145,6 +146,7 @@ describe('startSwarmOutFresh', () => {
     expect(startSwarmOutFresh(d)).toBe(true);
     expect(d.reset).toHaveBeenCalledWith('swarm-out');
     expect(d.clearContext).toHaveBeenCalled();
+    expect(d.handOverLater).toHaveBeenCalledWith('s-old');       // its runs follow to the new session
     const n = tabNoticeStore.getSnapshot('swarm-out').find((x) => x.id === 'swarm-out-fresh');
     expect(n?.message).toBe('swarmOut.fresh.done');
     n?.action?.run('swarm-out', undefined);

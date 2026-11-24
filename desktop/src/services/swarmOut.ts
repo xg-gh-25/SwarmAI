@@ -612,6 +612,13 @@ export const swarmOutService = {
   async stop(dispatchId: string): Promise<void> {
     await api.post(runPath(dispatchId, 'stop'), { by: PERSON });
   },
+  /** New session in the Swarm Out tab: the old session's open runs answer to the new
+   *  one (the daemon moves only the same person's runs). */
+  async handOver(fromSession: string, toSession: string): Promise<{ moved: string[] }> {
+    const { data } = await api.post('/swarm-out/sessions/hand-over',
+      { from_session: fromSession, to_session: toSession });
+    return data as { moved: string[] };
+  },
   /** Discard the run: stopped, closed, its Hive workspace removed. Final. */
   async discard(dispatchId: string, note: string): Promise<{ discarded: boolean; stopped: boolean | null }> {
     const { data } = await api.post(runPath(dispatchId, 'discard'), { note, by: PERSON });

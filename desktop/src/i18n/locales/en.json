@@ -2082,7 +2082,9 @@
         "revert": "Asked to revert",
         "reverted": "Reverted it",
         "place_files": "Placed files in the Brain",
-        "settle": "Settled"
+        "settle": "Settled",
+        "settle_without_files": "Settled without the missing files",
+        "adopt": "Took the run over"
       },
       "group": {
         "run": "Dispatched and running",

@@ -155,7 +155,8 @@ def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
                           # who answers it (design 2026-10-31-hive-approvals): "you" (this
                           # agent: `swarm_out answer`) or "person" (ask them, or escalate)
                           "approval_class": cls,
-                          "who": swarm_out_wait_card._who(cls, escalated),
+                          "who": swarm_out_wait_card._who(cls, escalated,
+                                                          swarm_out_wait_card.host_answerable(w) is None),
                           # the chat card's outcome; its reason is this daemon's own text
                           "card": card})
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}

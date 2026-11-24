@@ -101,6 +101,18 @@ describe('WelcomeScreen v2', () => {
     expect(screen.getAllByTestId('welcome-needs-row')).toHaveLength(5);
   });
 
+  it('Swarm\'s own items (handler agent) are neither counted nor shown', async () => {
+    fetchAttention.mockResolvedValue({
+      items: [{ ...item(1), handler: 'agent' }, { ...item(2), handler: 'person' }, item(3)],
+      counts: { blocking: 3, review: 0, person: 2, agent: 1 },
+    });
+    renderWelcome();
+    await waitFor(() => expect(screen.getByTestId('welcome-needs-count').textContent).toBe('2'));
+    const rows = screen.getAllByTestId('welcome-needs-row').map((r) => r.textContent);
+    expect(rows).toHaveLength(2);
+    expect(rows.join(' ')).not.toContain('Item 1');
+  });
+
   it('reads the shared needs-you query key (one cache with the pill and overlay)', async () => {
     fetchAttention.mockResolvedValue({ items: [item(1)], counts: { blocking: 1, review: 0 } });
     const { qc } = renderWelcome();

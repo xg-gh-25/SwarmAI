@@ -855,12 +855,33 @@ def session_confirmed(session_id: str) -> bool:
         return False
 
 
+def session_person(session_id: str) -> "tuple[bool, str]":
+    """(whether the session table holds this session, the person it is: its ``user_id``,
+    "" for the install's owner). A missing or unreadable database is (False, ""): nothing
+    is decided on a session that cannot be read (``session_confirmed``'s rule)."""
+    import sqlite3
+    try:
+        db_path = Path(get_app_data_dir()) / "data.db"
+        if not db_path.exists():
+            return False, ""
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+        try:
+            row = conn.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return False, ""
+    return (row is not None), (str(row[0] or "") if row else "")
+
+
 def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list]":
     """Split the open waits of runs an agent dispatched (design 2026-10-31-hive-approvals
     §2.3): one item each for those the person must answer, naming the session that
-    answers for the run (a class the agent may not answer, one it escalated, one whose
-    session is gone); the agent's own are left to it however long they wait: the session
-    that answers for the run is woken to answer them (core/swarm_out_wake; design
+    answers for the run (a class the agent may not answer, one it escalated, one the Host
+    cannot answer at all: core/swarm_out_wait_card ``host_answerable``, one whose session
+    is gone); the agent's own are left to it however long they wait, whatever their size
+    (it answers them through the CLI, not a chat card): the session that answers for the
+    run is woken to answer them (core/swarm_out_wake; design
     2026-11-02-hive-run-decision-record: nothing is handed to the person by a timer).
     Returns (items, the waits of runs no agent dispatched)."""
     from core import approval_class, swarm_out_wait_card, swarm_run
@@ -883,12 +904,15 @@ def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list
         alive, owner_title = titles[owner]
         esc = swarm_out_wait_card.escalation(dispatch_id, request_id)
         kind = str(a.get("kind") or "question")
+        cannot = swarm_out_wait_card.host_answerable(a)
         if esc:
             title, why = f"A Hive {kind} the agent handed to you", str(esc.get("why") or "")
         elif cls not in approval_class.HOST_CLASSES:
             title = f"A Hive {kind} only you can answer"
             why = (f"It is about {cls}." if cls and cls != "unknown"
                    else "Its Hive does not say what it is about.")
+        elif cannot:
+            title, why = f"A Hive {kind} only you can answer", f"It cannot be answered from this host: {cannot}."
         elif not alive:
             title, why = f"A Hive {kind} whose session is gone", "The session that answers for the run no longer exists."
         else:
@@ -898,7 +922,7 @@ def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list
         items.append(AttentionItem(
             id=f"swarm_out:wait:{dispatch_id}:{request_id}", source="swarm_out", tier=TIER_BLOCKING,
             brain=None, title=title, summary=f'"{run_title}" · from session "{session_name}"',
-            detail=why,
+            detail=why, since=_iso(a.get("asked_at")),
             # the agent's escalation reason is shown (detail), never put in the message a
             # click sends in the person's voice: it may echo what the Hive wrote
             dispatch={"message": _prompt("Open Swarm Out: " + title.lower() + ".",
@@ -968,35 +992,84 @@ def _collect_swarm_out() -> list[AttentionItem]:
             if a:
                 items.append(_ask_item(r, a))
 
-        def item(key: str, tier: str, n: int, title: str, detail: str) -> AttentionItem:
+        def item(key: str, tier: str, n: int, title: str, detail: str,
+                 since: Optional[str] = None) -> AttentionItem:
             return AttentionItem(
                 id=f"swarm_out:{key}", source="swarm_out", tier=tier, brain=None,
-                title=title, summary=f"{n} in Swarm Out", detail=detail,
+                title=title, summary=f"{n} in Swarm Out", detail=detail, since=since,
                 dispatch={"message": _prompt("Open Swarm Out: " + title.lower() + "."),
                           "context": {"kind": "swarm_out", "focus": key}})
         if asks:
             n = len(asks)
             items.append(item("questions", TIER_BLOCKING, n,
                               f"{n} Hive question{'s' if n != 1 else ''} waiting for you",
-                              "An agent on a Hive is waiting for your answer."))
+                              "An agent on a Hive is waiting for your answer.",
+                              _oldest(a.get("asked_at") for a in asks)))
         if refused:
             n = len(refused)
             items.append(item("refused", TIER_BLOCKING, n,
                               f"{n} Hive wait{'s' if n != 1 else ''} did not take your answer",
-                              "Answer it on the Hive's own page: open the run's session from Swarm Out."))
+                              "Answer it on the Hive's own page: open the run's session from Swarm Out.",
+                              _oldest(_ended_at(r) for r in refused)))
         if decide:
             n = len(decide)
             items.append(item("decide", TIER_REVIEW, n,
                               f"{n} Swarm Out run{'s' if n != 1 else ''} to accept or decide",
-                              "Accept, re-run with a correction, or discard."))
+                              "Accept, re-run with a correction, or discard.",
+                              _oldest(_ended_at(r) for r in decide)))
         if soon:
             n = len(soon)
             items.append(item("cleanup", TIER_REVIEW, n,
                               f"{n} Swarm Out run{'s' if n != 1 else ''} cleared within 3 days",
-                              "After that, their commits can no longer land."))
+                              "After that, their commits can no longer land.",
+                              _oldest(r.get("sent_at") for r in soon)))
+        try:
+            items += _stuck_items(snap)
+        except Exception as exc:   # one failed read leaves the rest of the source
+            logger.warning("attention: swarm_out re-wake items failed: %s", exc)
     except Exception as exc:
         logger.warning("attention: swarm_out source failed: %s", exc)
     return items
+
+
+def _oldest(values: Any) -> Optional[str]:
+    """The earliest of some ISO times (None when none reads)."""
+    got = [t for t in (_iso(v) for v in values) if t]
+    return min(got) if got else None
+
+
+def _ended_at(r: dict) -> Any:
+    res = r.get("result") if isinstance(r.get("result"), dict) else {}
+    return res.get("ended_at") or r.get("sent_at")
+
+
+def _stuck_items(snap: dict) -> list[AttentionItem]:
+    """One item per run whose live owner was woken again core/swarm_out_wake.MAX_REWAKES
+    times about it and moved nothing (``swarm_out_wake.exhausted``): the run needs the
+    person to tell that session what to do, or to act on it in Swarm Out."""
+    from datetime import datetime, timezone
+    from core import swarm_out_wake, swarm_run
+    out = []
+    for r, e in swarm_out_wake.exhausted(snap):
+        dispatch_id = str(r.get("dispatch_id") or "")
+        owner = swarm_run.owner_of(r) or ""
+        run_title = " ".join(str(r.get("title") or "").split())[:80]
+        session_name = _session_title(owner)[1] or owner[:8]
+        since = e.get("since")
+        when = (datetime.fromtimestamp(float(since), timezone.utc).isoformat()
+                if isinstance(since, (int, float)) else None)
+        title = "A Swarm Out run its agent has not moved"
+        out.append(AttentionItem(
+            id=f"swarm_out:stuck:{dispatch_id}", source="swarm_out", tier=TIER_REVIEW, brain=None,
+            title=title, summary=f'"{run_title}" · from session "{session_name}"',
+            detail=(f"Its session was woken {swarm_out_wake.MAX_REWAKES} times about it and nothing "
+                    f"changed (stage {r.get('stage')}). Tell that session what to do, or act on the run "
+                    "in Swarm Out."),
+            since=when,
+            dispatch={"message": _prompt("Open Swarm Out: " + title.lower() + ".", [("Run", run_title)],
+                                         [f"run {dispatch_id}", f"its chat session {owner}"]),
+                      "context": {"kind": "swarm_out", "focus": dispatch_id, "owner_session_id": owner}}))
+    return out
 
 
 def _open_ask(r: dict) -> Optional[dict]:
@@ -1017,6 +1090,7 @@ def _ask_item(r: dict, a: dict) -> AttentionItem:
     return AttentionItem(
         id=f"swarm_out:ask:{dispatch_id}", source="swarm_out", tier=TIER_BLOCKING, brain=None,
         title="Keep or revert what an agent landed", summary=f'"{run_title}"', detail=detail[:1500],
+        since=_iso(a.get("at")),
         dispatch={"message": _prompt("Open Swarm Out: keep or revert what an agent landed.",
                                      [("Run", run_title)], [f"run {dispatch_id}"]),
                   "context": {"kind": "swarm_out", "focus": dispatch_id}})

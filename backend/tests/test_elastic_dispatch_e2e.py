@@ -357,8 +357,9 @@ def test_its_result_and_state_come_from_s3_and_settling_releases_it(world, monke
     assert swarm_out_settle.load(did)["settled"]["released"] is True
     with pytest.raises(ac.RunEnded):
         registry.client_for(registry.handle_of(so._log_row_of(did)))
-    with pytest.raises(so.SwarmOutError):
-        asyncio.run(so.stop_turn(did))
+    # stopping it is done already: nothing runs there, and nothing is sent
+    out = asyncio.run(so.stop_turn(did))
+    assert out["stopped"] is True and out["ended"]
     assert world.seen == []
 
 

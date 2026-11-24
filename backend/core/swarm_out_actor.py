@@ -12,7 +12,12 @@ request that says nothing is an agent's, so a bare call gets the agent's limits)
 agent the routes refuse what is the person's to decide:
 
 - any command from a session other than the one that answers for the run, or without a
-  reason (``why``);
+  reason (``why``), except ``adopt``: a session of the same person takes over a run whose
+  owner session no longer exists (``adopt_blocker``; never a Swarm Run's child, never
+  another person's run). The person's New session in the Swarm Out tab moves that tab's
+  open runs to the new session (``hand_over``);
+- ``settle_without_files`` on a run held back by anything but returned files that are not
+  here (``files_blocker``): the files it skips count as never coming;
 - any command on a run no agent session is recorded as having dispatched (an older run);
 - a command the panel does not offer the person on the run now (its ``/runs`` row's
   ``actions``): accept only while the run awaits it, on the final result the row shows
@@ -51,7 +56,8 @@ the agent and the daemon share an OS user.
 
 Public: ``Actor``, ``actor``, ``MAX_AGENT_RERUNS``, ``check``, ``row_blocker``,
 ``record``, ``record_wait_answer``, ``reserve_rerun``, ``release_rerun``, ``agent_reruns``,
-``discard_blocker``, ``land_blocker``.
+``discard_blocker``, ``land_blocker``, ``files_blocker``, ``adopt_blocker``, ``adopt``,
+``hand_over``.
 """
 from __future__ import annotations
 
@@ -69,7 +75,8 @@ CHILD_LEAD_ONLY = frozenset({"accept", "rerun"})
 #: what the lead run no longer does on a child once it has ended
 CHILD_AFTER_END = frozenset({"accept", "rerun", "return_prepare"})
 MAX_WHY_CHARS = 400
-COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "rerun", "stop", "discard")
+COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "rerun", "stop", "discard",
+            "settle_without_files", "adopt")
 
 
 class ActorError(ValueError):
@@ -133,6 +140,8 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         return None
     if not isinstance(row, dict):
         return "the run is not in the list of runs now; try again in a moment"
+    if command == "adopt":
+        return adopt_blocker(a, row)         # given by a session that does not answer for it yet
     owner = swarm_run.owner_of(row)
     if not owner and swarm_run.is_child(row):
         return ("the Swarm Run this run belongs to cannot be read: nobody gives commands on it now "
@@ -153,6 +162,8 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         # "landed by hand" settles the run and releases its workspace with whatever
         # commits are not landed yet: an agent lands commits with return_land instead
         return "an agent lands commits with return-land; saying they were landed by hand is the person's"
+    if command == "settle_without_files":
+        return files_blocker(row)
     key, variant = _NEEDS[command]
     listed = row.get("actions")
     if swarm_run.is_child(row):
@@ -172,6 +183,119 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
         if not _final(res) or not ended_at or res.get("ended_at") != ended_at:
             return "accept the run's final result as `runs` shows it now (its result's ended_at)"
     return None
+
+
+def files_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
+    """Why the run may not be settled without its files now, else None: only a run whose
+    one remaining blocker is returned files that are not here (its ``/runs`` row's
+    ``settle.why_not`` is exactly ``files``), the person's command or the agent's alike."""
+    if not isinstance(row, dict):
+        return "the run is not in the list of runs now; try again in a moment"
+    settle = row.get("settle") if isinstance(row.get("settle"), dict) else {}
+    if settle.get("settled"):
+        return "the run is settled"
+    why_not = list(settle.get("why_not") or [])
+    if why_not != ["files"]:
+        return ("settling without files is for a run held back only by returned files that are "
+                "not here; this one waits on: " + (", ".join(why_not) or "nothing (it settles by itself)"))
+    return None
+
+
+def adopt_blocker(a: Actor, row: Optional[dict[str, Any]]) -> Optional[str]:
+    """Why session *a* may not take this run over now, else None. Only an agent session,
+    of the person the run is (its ``dispatched_person``; none recorded: the install's
+    owner), on a run that is not a Swarm Run's child (its lead run's owner answers for
+    it) and not settled, whose current owner session no longer exists (core/swarm_run
+    ``owner_of``; ``attention_authority.session_confirmed``)."""
+    from core import attention_authority, swarm_run
+    if not a.agent:
+        return "the person hands a session's runs to a new one with New session in the Swarm Out tab"
+    if not a.session:
+        return "this command has no session id: run it as one plain command in your Bash tool"
+    if not isinstance(row, dict):
+        return "the run is not in the list of runs now; try again in a moment"
+    if swarm_run.is_child(row):
+        return ("this run is a child of Swarm Run " + str(row.get("parent_run"))
+                + ": whoever drives that run answers for it; take the lead run over instead")
+    if ((row.get("settle") or {}) if isinstance(row.get("settle"), dict) else {}).get("settled"):
+        return "the run is settled: there is nothing left to answer for"
+    owner = swarm_run.owner_of(row)
+    if owner == a.session:
+        return "this session already answers for the run"
+    if owner and attention_authority.session_confirmed(owner):
+        return ("the session that answers for this run still exists: it gives the commands on it "
+                "(the person can open it from history)")
+    exists, person = attention_authority.session_person(a.session)
+    if not exists:
+        return "this session is not in the session table yet; try again after its first turn"
+    if run_person(row) != person:
+        return "this run is another person's (or whose it is was not known when it was sent): only their own sessions take it over"
+    return None
+
+
+#: the ``dispatched_person`` of a run whose dispatching session could not be read when it
+#: was sent: no session matches it, so nobody adopts it (core/swarm_out ``_person_of``)
+UNKNOWN_PERSON = "?unknown"
+
+
+def run_person(row: dict[str, Any]) -> str:
+    """The person a run is: its ``dispatched_person``; none recorded is the install's
+    owner ("": no session had a user id before the field existed, and the owner's still
+    have none)."""
+    return str(row.get("dispatched_person") or "")
+
+
+def adopt(dispatch_id: str, session: str, previous: Optional[str], by: str, why: str) -> None:
+    """*session* answers for the run from now on (``swarm_run.set_owner``), kept as one
+    ``adopt`` entry of its decision record (who, why, the session it came from). The
+    caller checked who may (``adopt_blocker``, ``hand_over``)."""
+    from core import swarm_out_record, swarm_run
+    if not session or session == "None":
+        raise ActorError("no session to hand the run to")
+    swarm_run.set_owner(dispatch_id, session, previous, by, swarm_out_record._now())
+    swarm_out_record.append_quietly(dispatch_id, by, "adopt", why, session if by == "agent" else None,
+                                    "adopt", facts={**swarm_out_record.observed(dispatch_id),
+                                                    "from_session": previous})
+
+
+#: the reason a hand-over records on each run it moves
+HAND_OVER_WHY = "the person started a new session in the Swarm Out tab"
+
+
+def hand_over(from_session: Optional[str], to_session: Optional[str],
+              rows: list[dict[str, Any]]) -> list[str]:
+    """The person started a new session in the Swarm Out tab: every open run the old
+    session answers for (not settled, not a Swarm Run's child) answers to the new one, of
+    the same person. Returns the dispatch ids moved. Raises ActorError on a bad pair."""
+    from core import attention_authority, swarm_out_settle, swarm_run
+    from core.app_session_id import valid_app_session_id
+    if not (valid_app_session_id(from_session) and valid_app_session_id(to_session)) \
+            or from_session == to_session:
+        raise ActorError("name the old session and the new one")
+    exists, person = attention_authority.session_person(str(to_session))
+    if not exists:
+        raise ActorError("the new session is not in the session table yet")
+    _old, old_person = attention_authority.session_person(str(from_session))
+    if _old and old_person != person:
+        raise ActorError("the two sessions are different people's")
+    moved = []
+    for r in rows:
+        did = r.get("dispatch_id") if isinstance(r, dict) else None
+        if not isinstance(did, str) or swarm_run.is_child(r) or swarm_run.owner_of(r) != from_session:
+            continue
+        if run_person(r) != person:
+            continue                         # never across people
+        try:
+            if swarm_out_settle.load(did).get("settled"):
+                continue
+        except swarm_out_settle.SettleError:
+            continue
+        try:
+            adopt(did, str(to_session), str(from_session), "person", HAND_OVER_WHY)
+        except swarm_run.OwnerChanged:
+            continue                         # another session took it over meanwhile
+        moved.append(did)
+    return moved
 
 
 def record(dispatch_id: str, a: Actor, command: str) -> None:
@@ -351,6 +475,10 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
         why_not.remove("code")       # every returned tip is in refs/hive here: nothing is lost
     taken = [_LOST[w] for w in why_not if w in _LOST and w != "lessons"]   # the agent takes these
     lost = ["; ".join(taken) + ": take them first"] if taken else []
+    if "files" in why_not:
+        # files that can no longer come: decide the run, then settle it without them
+        lost.append("files that cannot come any more: once the run is decided, `settle-without-files` "
+                    "pulls once more and settles it without the rest")
     if "lessons" in why_not:
         lost.append(_LOST["lessons"] + _lessons_due())                      # these come by themselves
     return "; ".join(lost) or None

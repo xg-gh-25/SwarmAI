@@ -84,7 +84,7 @@ import { SwarmOutDashboard } from '../components/swarm-out/SwarmOutDashboard';
 import { OPEN_SWARM_OUT_SETTINGS } from '../components/common/settingsEvents';
 import { useSwarmOutChatWidth, chatColumnStyle } from '../components/swarm-out/SwarmOutChatResize';
 import { SwarmOutNewSession, newSessionBlock } from '../components/swarm-out/SwarmOutNewSession';
-import { noticeLongSession, startSwarmOutFresh as startSwarmOutFreshImpl } from './chat/swarmOutFresh';
+import { handOverWithRetry, noticeLongSession, planSwarmOutHandover, startSwarmOutFresh as startSwarmOutFreshImpl } from './chat/swarmOutFresh';
 import { dispatchInjectChatInput, injectDispatchedPrompt } from './chat/injectChatInput';
 import { canBindSessionToActiveTab } from './chat/sessionBinding';
 import { planDispatchBackfill } from './chat/dispatchBackfill';
@@ -158,6 +158,15 @@ const NO_PLUGINS: Awaited<ReturnType<typeof pluginsService.listPlugins>> = [];
 const NO_SESSIONS: ChatSession[] = [];
 
 /** Convert a backend ChatMessage to the frontend Message shape. */
+
+/** Move the old Swarm Out session's runs to the new one (the daemon checks they are the
+ *  same person's); a failure after every try leaves them where they are, logged. */
+function handOverSwarmOutRuns(from: string, to: string): void {
+  void handOverWithRetry((f, t2) => swarmOutService.handOver(f, t2), from, to).then((moved) => {
+    if (moved === null) console.warn('[swarm-out] runs not handed to the new session');
+  });
+}
+
 export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -223,6 +232,9 @@ export default function ChatPage() {
    *  session_id yet — backfilled at first send, dropped per-tab after backfill or
    *  on tab close (bounds growth, Gate-2 MEDIUM #9). */
   const dispatchPendingRef = useRef<{ tabId: string; todoId: string; tabLabel: string }[]>([]);
+  // The Swarm Out tab's session before its New session: its runs move to the new session
+  // once that has an id (planSwarmOutHandover, in backfillDispatchForTab).
+  const swarmOutHandoverRef = useRef<string | null>(null);
   /** Ref mirror of isExpanded for synchronous reads in handleTabSelect (avoids dep array churn). */
   const isExpandedRef = useRef(isExpanded);
   isExpandedRef.current = isExpanded;
@@ -1964,6 +1976,7 @@ export default function ChatPage() {
           document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t('swarmOut.fresh.openOldFailed') } }));
         });
       },
+      handOverLater: (sid) => { swarmOutHandoverRef.current = sid; },
       t: (k) => t(k),
     });
   }, [tabMapRef, swarmOutBlock, resetTabToNewSession, updateTabState, activeTabIdRef, setContextWarning, t]);
@@ -2085,6 +2098,13 @@ export default function ChatPage() {
   // helper, no per-branch duplication. Keeps ToDo logic in ChatPage, out of the
   // streaming hot path (the hook only fires an opaque callback).
   const backfillDispatchForTab = useCallback((tabId: string, boundSessionId: string) => {
+    // The Swarm Out tab's new session got its id: the runs the session before it answered
+    // for move to it (New session loses nothing). Same two bind paths as the ToDo backfill.
+    const handover = planSwarmOutHandover(swarmOutHandoverRef.current, tabId, boundSessionId);
+    if (handover) {
+      swarmOutHandoverRef.current = null;
+      handOverSwarmOutRuns(handover.from, handover.to);
+    }
     const plan = planDispatchBackfill(dispatchPendingRef.current, tabId, boundSessionId);
     if (!plan.toDispatch) return;
     // Idempotency guard: a session_start on the ACTIVE tab reaches this helper by

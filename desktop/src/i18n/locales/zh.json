@@ -2082,7 +2082,9 @@
         "revert": "要求撤回",
         "reverted": "已撤回",
         "place_files": "放进 Brain",
-        "settle": "结单"
+        "settle": "结单",
+        "settle_without_files": "不等缺的文件，结单",
+        "adopt": "接管这个派发"
       },
       "group": {
         "run": "派发和执行",
