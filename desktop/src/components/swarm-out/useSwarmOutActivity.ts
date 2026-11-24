@@ -7,10 +7,13 @@
  * - `waiting` = what waits on the person: the open questions (asks), plus a run the
  *   Hive says is waiting whose question has not been mirrored here (no ask at all). An
  *   ask whose answer the Hive refused is listed as not delivered but does not count
- *   here: it is settled on the Hive's own page or expires. Plus every run that waits on
- *   the person (`toSettle`: its stage is awaiting acceptance, or stopped with a command
- *   to give: re-run or discard; backend core/swarm_out_settle) or whose records this
- *   Host removes soon.
+ *   here: it is settled on the Hive's own page or expires. Plus every other run that
+ *   waits on the person (`toSettle`), by the same judgment as the panel's "Waiting for
+ *   you" (runReview.waitsOnPerson): when a live session answers for the run (its
+ *   `needs_person` is a boolean) only when that is true, so a run the dispatching agent
+ *   is reviewing, landing or judging is not counted; else (null) its stage is awaiting
+ *   acceptance, or stopped with a command to give (re-run or discard; backend
+ *   core/swarm_out_settle), or its records this Host removes soon.
  * - `running` = runs whose state is running on their Hive (backend run_state: streaming,
  *   preparing, starting or stopping). A run waiting on the person is not running, and a
  *   run whose state is unknown (`running` null) is not counted: the tab never claims
@@ -22,6 +25,7 @@
  */
 import { useEffect, useState } from 'react';
 import { swarmOutService, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
+import { stageOf, waitsOnPerson } from './runReview';
 
 export const ACTIVITY_POLL_MS = 30_000;
 
@@ -36,13 +40,11 @@ export function waitingUnasked(d: SwarmOutRuns) {
   return d.runs.filter((r) => r.state === 'waiting' && !asked.has(`${r.hive_id}/${r.session_id}`));
 }
 
-/** A run that waits on the person to decide it (backend core/swarm_out_settle: stage
- *  awaiting, or stopped with a command to give), or whose records go within 3 days
- *  unsettled; never a run waiting on a question (that one is counted by its ask). */
+/** A run that waits on the person (runReview.waitsOnPerson, the panel's judgment) and
+ *  is not waiting on a question: that one is counted by its ask, or by waitingUnasked. */
 export function toSettle(r: SwarmOutRun): boolean {
-  if (r.settle?.settled || r.state === 'waiting') return false;
-  const decides = (r.actions ?? []).some((a) => a.key !== 'open_session');
-  return ((r.stage === 'awaiting' || r.stage === 'stopped') && decides) || !!r.cleanup_soon;
+  if (r.state === 'waiting' || stageOf(r) === 'needs_answer') return false;
+  return waitsOnPerson(r);
 }
 
 export function activityOf(d: SwarmOutRuns): SwarmOutActivity {

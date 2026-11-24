@@ -15,18 +15,21 @@
  *    on a running one, a click opens the card, J walks the runs waiting for you, and a
  *    settled run moves the card on;
  *  - does an accepted run open its session read-only;
- *  - does the tab's count follow the stage.
+ *  - does the tab's count follow the stage, and does it read the panel's own judgment
+ *    (waitsOnPerson, from needs_person): a run the dispatching agent answers for is
+ *    counted only when the backend says it needs the person, and on a mixed set the
+ *    tab's count and "Waiting for you" name the same runs.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
 import { createElement, useState, type ReactNode } from 'react';
-import { swarmOutService, type SwarmOutAction, type SwarmOutRun } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAction, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { CommandPanel, RunOverlay, type PanelMode } from './RunOverlay';
 import { RunList } from './RunList';
 import { OpenSessionContext, PanelHiddenContext, useOpenRun } from './openSession';
-import { brainChips, clock, sections, stageLabel } from './runReview';
-import { activityOf } from './useSwarmOutActivity';
+import { brainChips, clock, sections, stageLabel, waitsOnPerson } from './runReview';
+import { activityOf, toSettle } from './useSwarmOutActivity';
 import i18n from '../../i18n';
 
 beforeAll(async () => { await i18n.changeLanguage('en'); });
@@ -123,6 +126,54 @@ describe('sections', () => {
       run('p1', 'accepted', { settle: { code: 'none', why_not: [], settled: { at: ENDED, outcome: 'passed', released: true } } })], asks: [], errors: [] };
     expect(activityOf(d).waiting).toBe(2);       // a1, s1; s2 offers no decision; p1 is settled
     expect(activityOf(d).running).toBe(1);
+  });
+});
+
+describe('waits on the person: the tab and the panel read one judgment', () => {
+  const d = (...runs: SwarmOutRun[]) => ({ runs, asks: [], errors: [] });
+
+  it('an awaiting run its agent answers for (needs_person false) is not counted', () => {
+    const r = run('a1', 'awaiting', { needs_person: false });
+    expect(waitsOnPerson(r)).toBe(false);
+    expect(activityOf(d(r)).waiting).toBe(0);
+    expect(sections([r], [], NOW).running.map((x) => x.dispatch_id)).toEqual(['a1']);
+  });
+
+  it('an awaiting run the backend hands to the person (needs_person true) is counted', () => {
+    const r = run('a2', 'awaiting', { needs_person: true });
+    expect(waitsOnPerson(r)).toBe(true);
+    expect(activityOf(d(r)).waiting).toBe(1);
+  });
+
+  it('with no live session (needs_person null) the older rule applies: a command to give', () => {
+    expect(activityOf(d(run('a3', 'awaiting', { needs_person: null }))).waiting).toBe(1);
+    expect(activityOf(d(run('s3', 'stopped', { needs_person: null }))).waiting).toBe(1);
+    // a stopped run that only opens its session asks nothing
+    expect(activityOf(d(run('s4', 'stopped', { needs_person: null, actions: [A('open_session')] }))).waiting).toBe(0);
+  });
+
+  it('on a mixed set the tab counts exactly the runs under "Waiting for you"', () => {
+    const settled = { code: 'none' as const, why_not: [], settled: { at: ENDED, outcome: 'passed' as const, released: true } };
+    const runs = [
+      run('a1', 'awaiting', { needs_person: false }),                  // the agent reviews it
+      run('a2', 'awaiting', { needs_person: true }),                   // handed to the person
+      run('a3', 'awaiting', { needs_person: null }),                   // older rules: accept to give
+      run('s1', 'stopped', { needs_person: null, actions: [A('open_session')] }),
+      run('s2', 'stopped', { needs_person: false }),                   // the agent re-runs or discards
+      run('p1', 'accepted', { needs_person: false, settle: settled }),
+      run('c1', 'accepted', { needs_person: true, cleanup_soon: true, settle: { code: 'none', why_not: [], settled: null } }),
+      run('q1', 'needs_answer', { needs_person: true }),               // counted by its ask
+      run('r1', 'running', { needs_person: null }),
+    ];
+    const asks = [{ hive_id: 'h1', session_id: runs[7].session_id!, request_id: 'q', asked_at: ENDED }] as unknown as SwarmOutRuns['asks'];
+    const you = sections(runs, asks, NOW).you.map((r) => r.dispatch_id).sort();
+    expect(you).toEqual(['a2', 'a3', 'c1', 'q1']);
+    // the tab: the runs it counts itself, plus the run whose wait its ask counts
+    const counted = runs.filter(toSettle).map((r) => r.dispatch_id);
+    expect([...counted, 'q1'].sort()).toEqual(you);
+    const a = activityOf({ runs, asks, errors: [] });
+    expect(a.waiting).toBe(you.length);
+    expect(a.running).toBe(1);
   });
 });
 

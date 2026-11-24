@@ -5,13 +5,16 @@
  * The backend decides each run's stage and the commands it offers (core/swarm_out_settle
  * derive: ``stage``, ``actions``); nothing here decides what a person may do. This file
  * only arranges what came back:
+ *  - ``waitsOnPerson``: does the run wait on the person now? The one judgment the
+ *    list's "Waiting for you" and the pinned tab's count (useSwarmOutActivity) both read.
+ *    A run its dispatching session answers for (the backend's ``needs_person`` is a
+ *    boolean) waits for you only when that is true (design
+ *    docs/design/2026-11-02-hive-run-decision-record.md: only a landed result the agent
+ *    handed over, or a wait that is yours); with no live session (null) the older rules
+ *    apply;
  *  - ``sections``: Waiting for you (needs your answer > awaiting acceptance > stopped,
  *    the longest waiting first), Running, Recently done (settled in the last 24 h, the
- *    latest to end first). A run its dispatching session answers for (the backend's
- *    ``needs_person`` is a boolean) waits for you only when that is true (design
- *    docs/design/2026-11-02-hive-run-decision-record.md: only a landed result the agent
- *    handed over, or a wait that is yours); while the agent works it through the funnel
- *    it is under Running;
+ *    latest to end first). A run the agent works through the funnel is under Running;
  *  - ``brainChips``: the Brains the rows went under, with counts, never a fixed list;
  *  - ``autonomyWord``: the one word a row and the card's header carry (Judge verdict for
  *    a pipeline run, else how often a person stepped in);
@@ -147,26 +150,37 @@ export interface RunSections {
   done: SwarmOutRun[];
 }
 
-/** The list's three sections. Waiting for you: needs your answer, then awaiting
- *  acceptance, then stopped; within a stage the longest waiting first. A stopped run
- *  that offers nothing but "open session" (an older dispatch) is not waiting on anyone:
- *  it shows under done while it is recent (one whose session was never named, always). */
+/** Does the run wait on the person now? The one judgment behind the list's "Waiting
+ *  for you" and the pinned tab's count. A live run its dispatching session answers for
+ *  (``needs_person`` is a boolean): only when the backend says true; the agent is taking
+ *  it through the funnel otherwise. With no live session (null) the older rules: it asks
+ *  a question, or awaits acceptance or stopped with a command to give besides "open
+ *  session"; or its records go within days unsettled, whatever its stage (a running run
+ *  never). */
+export function waitsOnPerson(r: SwarmOutRun): boolean {
+  const stage = stageOf(r);
+  if (typeof r.needs_person === 'boolean' && !DONE_STAGES.includes(stage)) return r.needs_person;
+  if (stage === 'running') return false;
+  const asksSomething = actionsOf(r).some((a) => a.key !== 'open_session');
+  return (YOU_ORDER.includes(stage) && (asksSomething || stage === 'needs_answer'))
+    || (!!r.cleanup_soon && !r.settle?.settled);
+}
+
+/** The list's three sections. Waiting for you (``waitsOnPerson``): needs your answer,
+ *  then awaiting acceptance, then stopped; within a stage the longest waiting first. A
+ *  live run the agent answers for and that does not wait on you is under Running. A
+ *  stopped run that offers nothing but "open session" (an older dispatch) is not waiting
+ *  on anyone: it shows under done while it is recent (one whose session was never named,
+ *  always). */
 export function sections(runs: SwarmOutRun[], asks: SwarmOutAsk[], now: number): RunSections {
   const you: SwarmOutRun[] = [];
   const running: SwarmOutRun[] = [];
   const done: SwarmOutRun[] = [];
   for (const r of runs) {
     const stage = stageOf(r);
-    const asksSomething = actionsOf(r).some((a) => a.key !== 'open_session');
-    if (typeof r.needs_person === 'boolean' && !DONE_STAGES.includes(stage)) {
-      // the dispatching session answers for it: yours only when the backend says so
-      (r.needs_person ? you : running).push(r);
-      continue;
-    }
-    if (stage === 'running') running.push(r);
-    // a run whose records go within days waits for you too, whatever its stage
-    else if ((YOU_ORDER.includes(stage) && (asksSomething || stage === 'needs_answer'))
-      || (r.cleanup_soon && !r.settle?.settled)) you.push(r);
+    if (waitsOnPerson(r)) you.push(r);
+    // the dispatching session answers for it and works it through the funnel
+    else if ((typeof r.needs_person === 'boolean' && !DONE_STAGES.includes(stage)) || stage === 'running') running.push(r);
     // an older dispatch whose session was never named may still run: kept in view
     else if (now - ms(waitingSince(r, asks)) < DAY_MS || (!r.stage && r.session_unknown)) done.push(r);
   }
