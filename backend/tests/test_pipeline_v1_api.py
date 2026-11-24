@@ -45,12 +45,12 @@ def test_awaiting_human_maps_to_paused_and_completed_card_survives():
     assert done.audit_card == "Run Audit · run_d"
 
 
-def _real_v1(tmp_path, monkeypatch, run_id: str) -> tuple[RunEngine, TestClient]:
+def _real_v1(tmp_path, monkeypatch, run_id: str, profile: str = "direct") -> tuple[RunEngine, TestClient]:
     workspace = tmp_path / "workspace"
     data_dir = tmp_path / "data"
     monkeypatch.setenv("SWARM_DATA_DIR", str(data_dir))
     engine = RunEngine.create(
-        data_dir=data_dir, workspace=workspace, project="P", profile="direct", requirement="test change",
+        data_dir=data_dir, workspace=workspace, project="P", profile=profile, requirement="test change",
         session_id="session-real", repos={"repo": str(_git_repo(tmp_path / "repo"))},
         run_id=run_id)
     from main import app
@@ -195,6 +195,23 @@ def test_the_listed_identity_is_the_run_directory_not_run_json(tmp_path, monkeyp
         client._v1_patcher.stop()  # type: ignore[attr-defined]
 
 
+def test_a_run_dropped_before_build_needs_no_one(tmp_path, monkeypatch):
+    """A run its agent abandoned before BUILD (a falsified premise) holds no change, so
+    neither its list row nor its detail asks the person to confirm a landing."""
+    from core import run_index
+    engine, client = _real_v1(tmp_path, monkeypatch, "run_prebuild1", profile="full")
+    try:
+        engine.abandon(reason="premise falsified")
+        engine.write_projection()
+        run_index._clear_for_tests()
+        row = client.get("/api/pipelines/analytics").json()["by_project"][0]["runs"][0]
+        assert row["status"] == "abandoned" and row["stage"] == "evaluate"
+        assert row["needs_you"] is False
+        assert client.get("/api/pipelines/run_prebuild1").json()["needs_you"] is False
+    finally:
+        client._v1_patcher.stop()  # type: ignore[attr-defined]
+
+
 def test_a_run_the_user_cancelled_does_not_need_them(tmp_path, monkeypatch):
     """R5 review: Cancel is the user's own decision — no Need You item for it; an
     abandon for any other reason still needs them, with a state-specific title."""
@@ -202,6 +219,12 @@ def test_a_run_the_user_cancelled_does_not_need_them(tmp_path, monkeypatch):
     from core import pipeline_metrics as pm
     assert pm.needs_you("abandoned", None, pm.USER_CANCEL_REASON) is False
     assert pm.needs_you("abandoned", None, "checks_exhausted") is True
+    # dropped before BUILD (or a profile with none): no change can have been dropped
+    pending = {"evaluate": "open", "build": "pending"}
+    assert pm.needs_you("abandoned", None, "premise falsified", profile="full", stages=pending) is False
+    assert pm.needs_you("abandoned", None, "x", profile="research", stages={}) is False
+    assert pm.needs_you("abandoned", None, "x", profile="full", stages={**pending, "build": "open"}) is True
+    assert pm.needs_you("abandoned", None, "x", profile="full", stages={}) is True       # unknown: asked
     base = {"profile": "direct", "stages": {}, "created_at": "", "updated_at": "",
             "_project": "P", "session_id": "s-own"}
     items = aa._collect_paused_runs([
@@ -210,6 +233,8 @@ def test_a_run_the_user_cancelled_does_not_need_them(tmp_path, monkeypatch):
         {**base, "id": "run_c2", "status": "abandoned", "reason": "checks_exhausted",
          "requirement": "b"},
         {**base, "id": "run_c3", "status": "awaiting_human", "requirement": "c"},
+        {**base, "id": "run_c4", "status": "abandoned", "reason": "premise falsified", "requirement": "d",
+         "profile": "full", "stages": {"evaluate": "open", "build": "pending"}},
     ])
     by_id = {i.id: i for i in items}
     assert set(by_id) == {"paused_run:run_c2", "paused_run:run_c3"}

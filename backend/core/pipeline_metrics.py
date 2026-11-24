@@ -65,13 +65,27 @@ def pause_kind(raw: Mapping[str, Any]) -> Optional[str]:
 USER_CANCEL_REASON = "cancelled_by_user"
 
 
+def could_have_changed(profile: Optional[str], stages: Any) -> bool:
+    """Whether an ended run may hold a change of its own: False only when its record shows
+    it never reached BUILD (its profile has no BUILD, or BUILD is still ``pending``); a
+    record that does not say is taken as may (it is asked about, never dropped)."""
+    seq = lifecycle.PROFILE_STAGES.get(str(profile or ""), ())
+    if seq and "build" not in seq:
+        return False
+    return not (isinstance(stages, Mapping) and stages.get("build") == "pending")
+
+
 def needs_you(status: str, kind: Optional[str], reason: Optional[str] = None,
-              landed_as: Optional[Mapping[str, Any]] = None) -> bool:
+              landed_as: Optional[Mapping[str, Any]] = None, *,
+              profile: Optional[str] = None, stages: Any = None) -> bool:
     """A pause a person must act on, or a run that was abandoned without them (a run
     the user cancelled is their own decision, R5 review; a run whose change is on main
-    all the same, ``landed_as``, leaves nothing to act on: design 2026-10-31 §3)."""
+    all the same, ``landed_as``, leaves nothing to act on: design 2026-10-31 §3; a run
+    that never reached BUILD has no change that could have been dropped,
+    ``could_have_changed``)."""
     if status == "abandoned":
-        return reason != USER_CANCEL_REASON and not landed_as
+        return (reason != USER_CANCEL_REASON and not landed_as
+                and could_have_changed(profile, stages))
     return kind in NEEDS_YOU_PAUSE_KINDS
 
 

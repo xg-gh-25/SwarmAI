@@ -332,7 +332,8 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
         pause_kind=kind,
-        needs_you=pm.needs_you(status, kind, raw.get("reason"), landed_as),
+        needs_you=pm.needs_you(status, kind, raw.get("reason"), landed_as,
+                            profile=raw.get("profile"), stages=raw.get("stages")),
         landed_as=landed_as,
         checkpoint_reason=raw.get("reason"),
         owner_session_id=raw.get("session_id"),
@@ -585,7 +586,7 @@ def _detail_model(run_id, raw, report_md, report_path, lessons, decision, projec
         checkpoint_reason=raw.get("reason"), pause_kind=pm.pause_kind(raw),
         decision=decision, owner_session_id=raw.get("session_id"),
         needs_you=pm.needs_you(pm.display_status(raw), pm.pause_kind(raw), raw.get("reason"),
-                               landed_as),
+                               landed_as, profile=raw.get("profile"), stages=raw.get("stages")),
         landed_as=landed_as,
         created_at=_text(raw.get("created_at")), updated_at=_text(raw.get("updated_at")),
         audit_card=raw.get("audit_card"))
