@@ -138,3 +138,11 @@ dev = [
     "bandit==1.9.4",
     "detect-secrets==1.5.0",
 ]
+
+# The package index the lock records. Declared here so `uv lock` writes the same
+# sources on every machine: a user-level uv config (a regional mirror) would otherwise
+# end up in uv.lock and every install, CI run and Hive would fetch from that mirror.
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
