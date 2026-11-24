@@ -21,6 +21,11 @@ Two tiers (design §2 — "does the user NOT-acting break something?"):
     - REVIEW   : work self-advances (L1 timeout auto-accepts); the user's input
                  is confirm-or-override (governance · L1 consult)
 
+Who it waits on (``handler``, decided once by ``handler_of``): ``person`` when only the
+person can answer it, ``agent`` when Swarm can carry it to done itself (fix a failing
+job, learn a fresh result, unstick CDF). ``counts`` carries both; the badge, the
+Welcome card and the north star show the person's count.
+
 Brain attribution (design §4 Gate-1 correction): every item carries the brain
 (project) it belongs to, EXCEPT governance — governance proposals are
 workspace-global OS-level rule/gate changes with NO project, so `brain=None`
@@ -59,6 +64,31 @@ _DIGEST_FRESH_HOURS = 20
 TIER_BLOCKING = "blocking"
 TIER_REVIEW = "review"
 
+# Who an item waits on. ``person``: only the person can answer it (a question, an
+# approval, a sign-in, a change to their own files, a run that may have lost work).
+# ``agent``: Swarm can carry it to done itself (find and fix a cause, learn a fresh
+# result), so it never counts as something the person must do.
+HANDLER_PERSON = "person"
+HANDLER_AGENT = "agent"
+
+#: ``dispatch.context.kind`` values Swarm handles itself (``handler_of``). Every other
+#: kind waits on the person: a new kind is the person's until it is added here.
+AGENT_KINDS = frozenset({
+    "job",              # a job that failed 3 runs in a row: find the cause, fix it, resume it
+    "job_digest",       # a fresh result of a Brain's job: learn what is worth keeping
+    "stalled",          # Cognitive Distillation stopped moving: find why and fix it
+    "poison",           # a CDF item that keeps failing: fix the cause, requeue it
+    "id_collision",     # two CDF candidates with one id: pick the trustworthy one
+    "missing_section",  # a governed file lacks the section CDF writes to: add it
+    "restored_orphan",  # a restored file with no audit record: inspect, change nothing
+})
+
+
+def handler_of(item: "AttentionItem") -> str:
+    """The one rule deciding who an item waits on; every reader uses ``item.handler``."""
+    ctx = (item.dispatch or {}).get("context") or {}
+    return HANDLER_AGENT if ctx.get("kind") in AGENT_KINDS else HANDLER_PERSON
+
 # ── Plain-language writing (design welcome-screen-v2.md "Needs you rows") ──────
 # Everything an item carries is read by the USER first: `title` says what is
 # needed of them, `summary` says which thing it is, `dispatch.message` is written
@@ -67,6 +97,19 @@ TIER_REVIEW = "review"
 
 _SUMMARY_MAX = 160
 _FACT_MAX = 2000
+
+
+def _iso(value: Any) -> Optional[str]:
+    """A source's time as an ISO string (a datetime or an ISO text), else None."""
+    if value is None or value == "":
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        return None
 
 
 def _one_line(text: str, limit: int = _SUMMARY_MAX) -> str:
@@ -107,6 +150,8 @@ class AttentionItem:
     detail: str = ""
     dispatch: dict[str, Any] = field(default_factory=dict)
     summary: str = ""    # plain, one line: which thing this is
+    handler: str = HANDLER_PERSON  # who it waits on; set by collect() from handler_of
+    since: Optional[str] = None    # ISO time it started waiting, when the source knows it
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -115,7 +160,8 @@ class AttentionItem:
 @dataclass
 class AttentionResult:
     items: list[AttentionItem] = field(default_factory=list)
-    counts: dict[str, int] = field(default_factory=lambda: {TIER_BLOCKING: 0, TIER_REVIEW: 0})
+    counts: dict[str, int] = field(default_factory=lambda: {TIER_BLOCKING: 0, TIER_REVIEW: 0,
+                                                             HANDLER_PERSON: 0, HANDLER_AGENT: 0})
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -163,6 +209,7 @@ def _collect_escalations(workspace_root: Path) -> list[AttentionItem]:
                                else "SwarmAI would like your opinion"),
                         summary=_one_line(esc.title),
                         detail=esc.situation or "",
+                        since=_iso(getattr(esc, "created_at", None)),
                         dispatch={
                             "message": _prompt(
                                 (f"SwarmAI {'is stuck and needs my answer' if blocked else 'asks for my opinion'} "
@@ -293,6 +340,7 @@ def _collect_paused_runs(pipeline_runs: Optional[list[dict]] = None) -> list[Att
                     title=title,
                     summary=_one_line(requirement) or run_id,
                     detail=reason or "",
+                    since=_iso(raw.get("updated_at")),
                     dispatch={
                         "message": _prompt(
                             ask,
@@ -346,11 +394,13 @@ def _collect_jobs() -> list[AttentionItem]:
                     title="A scheduled job keeps failing and was paused",
                     summary=f"{name} · failed {fails} runs in a row",
                     detail=(js.last_error or "")[:400],
+                    since=_iso(getattr(js, "last_run", None)),
                     dispatch={
                         "message": _prompt(
                             (f"The scheduled job \u201c{name}\u201d failed {fails} runs in a row, so "
-                             "SwarmAI stopped running it. Find out why, explain it to me simply, and "
-                             "suggest a fix. Don't restart it until I agree."),
+                             "SwarmAI stopped running it. Find out why and fix the cause, run it once "
+                             "to confirm the fix, and resume it. Then tell me in two plain lines what "
+                             "was wrong and what you changed."),
                             [("Last recorded error (raw)", _one_line(js.last_error or "", 400))],
                             [f"job {job_id}"],
                         ),
@@ -370,6 +420,7 @@ def _collect_jobs() -> list[AttentionItem]:
                     title="A scheduled job can't sign in",
                     summary=f"{name} · sign-in failed {auth_fails} times in a row",
                     detail=(js.last_error or "")[:400],
+                    since=_iso(getattr(js, "last_run", None)),
                     dispatch={
                         "message": _prompt(
                             (f"The scheduled job \u201c{name}\u201d failed to sign in {auth_fails} "
@@ -606,6 +657,7 @@ def _collect_job_digests(workspace_root: Path) -> list[AttentionItem]:
                 title=f"A new {owner} digest is ready to learn from",
                 summary=job_name,
                 detail=f"A fresh result from {job_name}, a job of {owner}.",
+                since=run_at.isoformat(),
                 dispatch={
                     "message": _prompt(
                         (f"A new result from \u201c{job_name}\u201d ({owner}) is ready. Read it, tell me "
@@ -1151,6 +1203,7 @@ def _collect_ingestion() -> list[AttentionItem]:
         items.append(AttentionItem(
             id=f"ingestion:{kind}:{row['id']}", source="ingestion", tier=tier, brain=None,
             title=titles[kind], summary=summary, detail=_one_line(json.dumps(detail, ensure_ascii=False), 400),
+            since=_iso(row["at"]),
             dispatch={"message": _prompt(prompt, [("Recorded detail", summary)],
                                           [f"ingestion event {row['id']}"]),
                       "context": {"kind": kind, "event_id": row["id"]}},
@@ -1342,11 +1395,17 @@ def collect(
         # OS-level and NEVER attributed to a single brain.
         items = [it for it in items if it.brain == brain]
 
-    # Order: BLOCKING first (design §5 main axis), stable within tier.
-    items.sort(key=lambda it: 0 if it.tier == TIER_BLOCKING else 1)
+    for it in items:
+        it.handler = handler_of(it)
+    # Order: what waits on the person first, then BLOCKING before REVIEW (design §5
+    # main axis), stable within each.
+    items.sort(key=lambda it: (0 if it.handler == HANDLER_PERSON else 1,
+                               0 if it.tier == TIER_BLOCKING else 1))
 
     counts = {
         TIER_BLOCKING: sum(1 for it in items if it.tier == TIER_BLOCKING),
         TIER_REVIEW: sum(1 for it in items if it.tier == TIER_REVIEW),
+        HANDLER_PERSON: sum(1 for it in items if it.handler == HANDLER_PERSON),
+        HANDLER_AGENT: sum(1 for it in items if it.handler == HANDLER_AGENT),
     }
     return AttentionResult(items=items, counts=counts)

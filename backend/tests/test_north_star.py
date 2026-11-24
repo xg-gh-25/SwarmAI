@@ -68,7 +68,7 @@ def test_the_headline_says_the_state_and_its_direction(parts):
     assert "repeats 8% of 122" in cognition and "missing 60%" in cognition
     assert "useful 83% vs target 90%" in cdf and "GENERAL 55%" in cdf and "DDD" not in cdf
     assert "failing: C3 review output valid" in cdf and "checks 1/3 pass" in cdf
-    assert needs.startswith("Needs You: 1 blocking, 0 to review") and "A run was dropped" in needs
+    assert needs.startswith("Needs You: 1 for you") and "A run was dropped" in needs
     assert any("C10 knowledge is used: no_data" in line for line in snap["detail"])
 
 
@@ -205,3 +205,17 @@ def test_the_detail_says_whether_an_accepted_rule_stopped_its_mistake(parts, mon
     assert "  GC9 accepted 2026-11-05 (10 days): 2 before, 0 after — Read the API first" in detail
     assert any(line.startswith("  GC10 accepted 2026-11-01: not measured (no correction anchors") for line in detail)
     assert len(N.compute(NOW)["headline"]) == 3                   # detail only
+
+
+def test_needs_you_counts_only_what_waits_on_the_person():
+    """Items Swarm handles itself never read as the person's to do."""
+    att = {"items": [
+        {"tier": "blocking", "source": "job", "title": "A job keeps failing", "handler": "agent"},
+        {"tier": "review", "source": "job_digest", "title": "A digest", "handler": "agent"},
+    ]}
+    line, detail, _ = N._needs_you(att)
+    assert line == "Needs You: nothing for you; Swarm handles 2 itself."
+    assert all("Swarm handles it" in d for d in detail[1:])
+    att["items"].append({"tier": "review", "source": "governance", "title": "A rule", "handler": "person"})
+    line, _, _ = N._needs_you(att)
+    assert line.startswith("Needs You: 1 for you — [review] A rule") and line.endswith("Swarm handles 2 itself.")

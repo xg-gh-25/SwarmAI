@@ -317,7 +317,8 @@ def _pending_by_source(project_name: str) -> dict[str, int]:
 
         out: dict[str, int] = {}
         for it in collect(_workspace_root(), brain=project_name).items:
-            out[it.source] = out.get(it.source, 0) + 1
+            if it.handler == "person":  # what Swarm handles itself never waits on the person
+                out[it.source] = out.get(it.source, 0) + 1
         return out
     except Exception as e:
         # Degrade-observable (GC19): still return {} so the gallery cannot 500
@@ -979,7 +980,8 @@ async def list_brains() -> dict:
 
             agg = await executors.run_nav(collect, _workspace_root())
             for it in agg.items:
-                if it.brain:  # governance items have brain=None — excluded (parity with _pending_count)
+                if it.brain and it.handler == "person":  # governance (brain=None) and what Swarm
+                    # handles itself are excluded (parity with _pending_count)
                     src = by_brain.setdefault(it.brain, {})
                     src[it.source] = src.get(it.source, 0) + 1
         except Exception as e:  # never 500 the gallery on an attention-scan hiccup

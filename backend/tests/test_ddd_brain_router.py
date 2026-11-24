@@ -1076,3 +1076,17 @@ class TestGallerySlowLog:
         with caplog.at_level(logging.WARNING, logger=m.logger.name):
             asyncio.run(m.list_brains())
         assert not [r for r in caplog.records if "brains gallery slow" in r.getMessage()]
+
+
+def test_a_brains_pending_count_leaves_out_what_swarm_handles_itself(monkeypatch):
+    """A Brain card counts only what waits on the person (attention ``handler``)."""
+    import core.attention_authority as aa
+    from routers import ddd_brain as m
+
+    def _it(source, handler):
+        return aa.AttentionItem(id=f"{source}:1", source=source, tier=aa.TIER_REVIEW,
+                                brain="P", title="t", handler=handler)
+
+    monkeypatch.setattr(aa, "collect", lambda *a, **k: aa.AttentionResult(
+        items=[_it("escalation", "person"), _it("job_digest", "agent")]))
+    assert m._pending_by_source("P") == {"escalation": 1}

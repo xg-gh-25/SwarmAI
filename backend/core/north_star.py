@@ -214,14 +214,19 @@ def _every_turn_sizes(now: datetime) -> tuple[str, dict]:
 
 def _needs_you(attention: dict) -> tuple[str, list[str], None]:
     items = attention.get("items") or []
-    counts = attention.get("counts") or {}
     if not items:
         return "Needs You: nothing.", ["Needs You: nothing."], None
-    shown = "; ".join(f"[{it['tier']}] {it['title']}" for it in items[:3])
-    more = f"; +{len(items) - 3} more" if len(items) > 3 else ""
-    line = (f"Needs You: {counts.get('blocking', 0)} blocking, {counts.get('review', 0)} to review"
-            f" — {shown}{more}.")
+    mine = [it for it in items if it.get("handler", "person") == "person"]
+    swarm = len(items) - len(mine)
+    handled = f"; Swarm handles {swarm} itself" if swarm else ""
+    if not mine:
+        line = f"Needs You: nothing for you{handled}."
+    else:
+        shown = "; ".join(f"[{it['tier']}] {it['title']}" for it in mine[:3])
+        more = f"; +{len(mine) - 3} more" if len(mine) > 3 else ""
+        line = f"Needs You: {len(mine)} for you — {shown}{more}{handled}."
     detail = ["Needs You:"] + [f"  [{it['tier']}] {it['source']} · {it['title']} · {it.get('summary', '')}"
+                               + ("" if it.get("handler", "person") == "person" else " · Swarm handles it")
                                for it in items]
     return line, detail, None
 

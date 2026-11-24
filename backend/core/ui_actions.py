@@ -312,7 +312,9 @@ def format_attention_for_agent(brain: Optional[str] = None) -> str:
 
     lines: list[str] = [
         f"Need You — {result.counts['blocking']} blocking, "
-        f"{result.counts['review']} review"
+        f"{result.counts['review']} review; "
+        f"{result.counts.get('person', len(result.items))} for the person, "
+        f"{result.counts.get('agent', 0)} Swarm handles itself"
         + (f" (brain '{brain}' only)" if brain else "") + ":",
     ]
     for tier, label in (("blocking", "🔴 BLOCKING (stopped — needs you now)"),
@@ -329,7 +331,8 @@ def format_attention_for_agent(brain: Optional[str] = None) -> str:
         for b in seen_brains:
             lines.append(f"  [{b or 'OS-level'}]")
             for it in (x for x in tier_items if x.brain == b):
-                lines.append(f"    • ({it.source}) {it.title}")
+                lines.append(f"    • ({it.source}) {it.title}"
+                             + (" [Swarm handles it]" if it.handler == "agent" else ""))
                 if it.summary:
                     lines.append(f"        {it.summary}")
                 msg = (it.dispatch or {}).get("message")

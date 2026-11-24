@@ -229,7 +229,8 @@ def test_item_to_dict_shape(patched_sources):
     d = res.to_dict()
     assert "items" in d and "counts" in d
     it = d["items"][0]
-    assert set(it.keys()) == {"id", "source", "tier", "brain", "title", "summary", "detail", "dispatch"}
+    assert set(it.keys()) == {"id", "source", "tier", "brain", "title", "summary", "detail", "dispatch",
+                             "handler", "since"}
 
 
 def test_circuit_breaker_threshold_is_three():
@@ -529,3 +530,75 @@ def test_repeated_entries_for_same_store_surface_once(tmp_path, monkeypatch):
         write_recovery_marker(tmp_path, isolated_path=original, reason="could NOT be moved aside")
     monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
     assert len(aa._collect_db_recovery()) == 1
+
+
+# ── who an item waits on: handler_of is the one rule ─────────────────────────
+
+
+def _kind_item(kind, tier=TIER_REVIEW, iid="k"):
+    it = _item("x", tier, None, iid)
+    it.dispatch = {"message": "m", "context": {"kind": kind}}
+    return it
+
+
+@pytest.mark.parametrize("kind", sorted(aa.AGENT_KINDS))
+def test_work_swarm_can_finish_is_the_agents(kind):
+    assert aa.handler_of(_kind_item(kind)) == aa.HANDLER_AGENT
+
+
+@pytest.mark.parametrize("kind", ["escalation", "paused_run", "governance", "job_auth", "db_recovery",
+                                  "template_drift", "swarm_out", "aws_account", "needs_account",
+                                  "user_race", "writer_unknown", "local_root", "a_kind_added_later"])
+def test_everything_else_waits_on_the_person(kind):
+    assert aa.handler_of(_kind_item(kind)) == aa.HANDLER_PERSON
+
+
+def test_an_item_without_a_kind_waits_on_the_person():
+    assert aa.handler_of(_item("job", TIER_BLOCKING, None)) == aa.HANDLER_PERSON
+
+
+def test_collect_sets_the_handler_counts_it_and_puts_the_persons_first(monkeypatch):
+    agent_blocking = _kind_item("job", TIER_BLOCKING, "a1")
+    person_review = _kind_item("governance", TIER_REVIEW, "p1")
+    for name in [n for n in dir(aa) if n.startswith("_collect_")]:
+        monkeypatch.setattr(aa, name, lambda *a, **k: [])
+    monkeypatch.setattr(aa, "_collect_jobs", lambda *a, **k: [agent_blocking])
+    monkeypatch.setattr(aa, "_collect_governance", lambda *a, **k: [person_review])
+    res = collect(Path("/tmp"))
+    assert [it.handler for it in res.items] == ["person", "agent"]
+    assert res.counts["person"] == 1 and res.counts["agent"] == 1
+    assert res.counts["blocking"] == 1 and res.counts["review"] == 1
+
+
+def test_a_failing_job_is_fixed_and_resumed_and_says_when_it_last_ran(monkeypatch):
+    from datetime import datetime, timezone
+    import jobs.scheduler as sch
+
+    class _JS:
+        consecutive_failures = 3
+        consecutive_auth_failures = 0
+        last_error = "timeout"
+        last_run = datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc)
+
+    class _State:
+        jobs = {"j1": _JS()}
+
+    class _Job:
+        id = "j1"
+        name = "Evening scan"
+
+    monkeypatch.setattr(sch, "load_state", lambda: _State())
+    monkeypatch.setattr(sch, "load_jobs", lambda: [_Job()])
+    (it,) = aa._collect_jobs()
+    assert it.since == "2026-11-23T12:00:00+00:00"
+    msg = it.dispatch["message"]
+    assert "resume it" in msg and "until I agree" not in msg
+    assert aa.handler_of(it) == aa.HANDLER_AGENT
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, None), ("", None), ("not a time", None),
+    ("2026-11-23T12:00:00Z", "2026-11-23T12:00:00+00:00"),
+])
+def test_iso_reads_what_sources_store(value, expected):
+    assert aa._iso(value) == expected
