@@ -88,11 +88,8 @@ PROBE_REGISTRY = [
     # archival moves whole CLASS blocks into EVOLUTION-archive*.md (### CLASS A
     # went 2026-07-19), which made this probe report DRIFTED on a healthy file.
     ("E3/E4", "EVOLUTION.md", "## Corrections Captured"),
-    # X1 PROBE removed 2026-08-14 — this registry row asserted the "## Knowledge
-    # Index" section EXISTS, but that section was deleted with the in-prompt index.
-    # (The X1 *finding* in _check_coherence still works — it reads capability sync
-    # via _capability_sync_gaps, which falls back to the whole architecture text
-    # when no index boundary is present.)
+    # X1 PROBE removed 2026-08-14 (the "## Knowledge Index" section it checked was
+    # deleted); the X1 finding went with KNOWLEDGE.md itself, 2026-11-24.
     # The commit-context probe now anchors on ## Decisions
     # (a stable structural section) instead of the removed ## Memory Index block.
     ("commit-context", "MEMORY.md", "## Decisions"),
@@ -161,7 +158,6 @@ class SelfLoopsHealthEngine:
         self._validate_probes()
         self._check_context()
         self._check_memory()
-        self._check_knowledge()
         self._check_evolution()
         self._check_coherence()
         self._check_brain_safety()
@@ -172,32 +168,6 @@ class SelfLoopsHealthEngine:
 
         self._record_history()
         return self.report
-
-    # ─── Shared coherence helper ──────────────────────────────────────────────
-
-    @staticmethod
-    def _capability_sync_gaps(evolution: str, knowledge: str):
-        """Return (gaps, sample) for capability→KNOWLEDGE coherence.
-
-        Single source of truth shared by X1 and K3 so they cannot disagree.
-        Capabilities come from EVOLUTION's "**Capability**: <Name>" lines; a
-        capability is "synced" if a distinctive 2-word prefix of its name
-        appears in the KNOWLEDGE architecture text. (1 word is too loose —
-        matches common nouns like 'session'; the full name is too strict —
-        rarely verbatim.)"""
-        cap_names = re.findall(r"\*\*Capability\*\*:\s*([^—\-\n]+?)(?:\s*[—\-])", evolution)
-        # "## Knowledge Index" was removed 2026-08-14; the fallback (whole file as
-        # architecture text) is now the normal path, kept for graceful degradation.
-        arch = knowledge[:knowledge.find("## Knowledge Index")] if "## Knowledge Index" in knowledge else knowledge
-        arch_l = arch.lower()
-        sample = [c.strip() for c in cap_names[:6] if c.strip()]
-        gaps = 0
-        for name in sample:
-            words = name.split()
-            probe = " ".join(words[:2]).lower() if len(words) >= 2 else words[0].lower()
-            if probe not in arch_l:
-                gaps += 1
-        return gaps, sample
 
     # ─── Dimension 0: Probe Self-Validation ──────────────────────────────────
 
@@ -233,7 +203,6 @@ class SelfLoopsHealthEngine:
         expected = [
             "SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "USER.md",
             "STEERING.md", "TOOLS.md", "MEMORY.md", "EVOLUTION.md",
-            "KNOWLEDGE.md",
         ]
         missing = [f for f in expected if not (CONTEXT_DIR / f).exists()]
         self.report.findings.append(Finding(
@@ -327,62 +296,8 @@ class SelfLoopsHealthEngine:
             detail=", ".join(dupes_found[:3]) if dupes_found else "No duplicates",
         ))
 
-    # ─── Dimension 3: Self-Knowledge ─────────────────────────────────────────
-
-    def _check_knowledge(self):
-        knowledge = self._read_safe(CONTEXT_DIR / "KNOWLEDGE.md")
-
-        # K1 removed 2026-08-14 — it checked Knowledge/ subdir files against the
-        # in-prompt "## Knowledge Index" table, which was deleted (files are now
-        # discovered via recall/FTS5 + Glob, not a hand-maintained index). There is
-        # no index to be "complete" against, so the check is obsolete.
-
-        # K2: Architecture section currency (git log recency)
-        last_change = self._git_cmd(
-            ["git", "log", "-1", "--format=%ar", "--diff-filter=M", "--", ".context/KNOWLEDGE.md"],
-            WORKSPACE,
-        ).strip()
-        # "X minutes ago", "X hours ago", "X days ago" — pass if <14 days
-        is_recent = any(
-            unit in last_change
-            for unit in ("second", "minute", "hour", "day")
-        ) and "month" not in last_change
-        # Also pass if it says "X days ago" where X < 14
-        if "days" in last_change:
-            try:
-                days_num = int(re.search(r"(\d+) days?", last_change).group(1))
-                is_recent = days_num < 14
-            except (AttributeError, ValueError):
-                pass
-        self.report.findings.append(Finding(
-            id="K2", name="Architecture currency", dimension="knowledge",
-            status="pass" if is_recent else "warn",
-            detail=f"Last change: {last_change or 'unknown'}",
-        ))
-
-        # K3: Capability coverage. Same source + SHARED helper as X1 (they must
-        # not disagree). Legacy "[RC\d+]" MEMORY probe was a vacuous always-pass
-        # (no [RC] entries exist in the 7-type schema). n/a when no registry.
-        evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
-        gaps, sample = self._capability_sync_gaps(evolution, knowledge)
-        self.report.findings.append(Finding(
-            id="K3", name="Capability coverage", dimension="knowledge",
-            status="n/a" if not sample else (
-                "pass" if gaps <= 2 else ("warn" if gaps <= 4 else "fail")),
-            detail=f"{gaps}/{len(sample)} capabilities not in architecture"
-            if sample else "No capability registry entries to check",
-        ))
-
-        # K4: Codebase nav valid
-        nav_section = self._extract_section(knowledge, "## Codebase Navigation", "")
-        entry_points = re.findall(r"`(\w+\.(?:py|tsx?))`", nav_section)
-        # (It used to rglob these names in the SwarmAI source checkout, which only its
-        # maintainer has -- usable-by-anyone P7. Repos are per project now; this check has none.)
-        self.report.findings.append(Finding(
-            id="K4", name="Codebase nav valid", dimension="knowledge", status="n/a",
-            detail=(f"{len(entry_points)} entry points listed; not checked against a repo"
-                    if entry_points else "No codebase navigation entries"),
-        ))
+    # (Dimension 3, Self-Knowledge, checked .context/KNOWLEDGE.md; it was retired with
+    # that file, 2026-11-24.)
 
     # ─── Dimension 4: Self-Evolution ─────────────────────────────────────────
 
@@ -414,22 +329,7 @@ class SelfLoopsHealthEngine:
 
     def _check_coherence(self):
         memory = self._read_safe(CONTEXT_DIR / "MEMORY.md")
-        knowledge = self._read_safe(CONTEXT_DIR / "KNOWLEDGE.md")
         evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
-
-        # X1: Capability→Knowledge sync. Capability registry = EVOLUTION's
-        # "**Capability**: <Name>" lines (legacy "[RC\d+]" MEMORY entries no
-        # longer exist; DEC entries are session decisions NOT capabilities, so
-        # matching them would always false-fail — the trap in pass 1). Uses the
-        # SHARED _capability_sync_gaps helper so X1 and K3 cannot disagree.
-        unsynced, sample = self._capability_sync_gaps(evolution, knowledge)
-        self.report.findings.append(Finding(
-            id="X1", name="Capability→Knowledge sync", dimension="coherence",
-            status="n/a" if not sample else (
-                "pass" if unsynced <= 2 else ("warn" if unsynced <= 4 else "fail")),
-            detail=f"{unsynced}/{len(sample)} capabilities not reflected in KNOWLEDGE"
-            if sample else "No capability registry entries to check",
-        ))
 
         # X2: Memory↔Evolution sync. Live formats: EVOLUTION uses inline "C0NN"
         # correction ids; MEMORY uses "[COR\d+]" correction entries. Healthy if
@@ -870,7 +770,7 @@ class SelfLoopsHealthEngine:
 
         dim_names = {
             "context": "Self-Context", "memory": "Self-Memory",
-            "knowledge": "Self-Knowledge", "evolution": "Self-Evolution",
+            "evolution": "Self-Evolution",
             "coherence": "Cross-Loop", "brain_safety": "Brain Safety",
             "infrastructure": "Infrastructure",
         }

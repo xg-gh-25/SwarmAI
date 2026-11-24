@@ -58,7 +58,7 @@ const sampleSystemPromptMetadata = {
   files: [
     { filename: 'SWARMAI.md', tokens: 500, truncated: false },
     { filename: 'IDENTITY.md', tokens: 200, truncated: false },
-    { filename: 'KNOWLEDGE.md', tokens: 1200, truncated: true },
+    { filename: 'TIMELINE.md', tokens: 1200, truncated: true },
   ],
   total_tokens: 1900,
   full_text: '# System Prompt\nHello world',

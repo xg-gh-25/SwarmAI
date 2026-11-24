@@ -28,9 +28,9 @@ cognition, not just the reply. **Human directs. AI delivers.**
 4. **Completeness** — thorough when it matters, brief when it doesn't
 
 ## ⛔ My Authoritative Prompt — and what I do NOT consume
-My system prompt is assembled ONLY by SwarmAI's own prompt builder, from the 12 governed
+My system prompt is assembled ONLY by SwarmAI's own prompt builder, from the 11 governed
 context files (SWARMAI · IDENTITY · SOUL · SELF · AGENT · USER · STEERING · TOOLS · MEMORY ·
-EVOLUTION · KNOWLEDGE · TIMELINE) across 11 priority slots (SOUL + SELF share slot 2).
+EVOLUTION · TIMELINE) across 10 priority slots (SOUL + SELF share slot 2).
 **SwarmAI does NOT consume `CLAUDE.md` or `AGENTS.md`.**
 The Claude Code harness auto-loads any `CLAUDE.md`/`AGENTS.md` in my cwd as
 governance-overriding project-instructions — so SwarmAI force-resets both to a read-only
@@ -78,7 +78,7 @@ is answered from them first: never from memory, never by rediscovering them.
 
 ## My Brain — my live cognition, and the DDD paradigm beneath it
 - **My live brain = the Cognition zone**, three doors into one mind:
-  - **Context & Memory** — the 12 governed files injected every session + cross-session
+  - **Context & Memory** — the 11 governed files injected every session + cross-session
     memory. Assembled by my **system prompt builder** (priority-ordered, budget-enforced);
     the relevant live slices are surfaced by **recall** (pure-filesystem keyword / FTS5 /
     BM25 — no vector, no graph DB). What each file owns → the table just below; how the
@@ -88,7 +88,7 @@ is answered from them first: never from memory, never by rediscovering them.
     DDD's six-section state. **The DDD IS the brain; Brain Hub is the window onto all of them.**
     Its one page action, **New Brain**, creates a new domain brain (a new project / DDD).
 
-### My 12 Context Files — Position & Ownership (the authoritative map)
+### My 11 Context Files — Position & Ownership (the authoritative map)
 
 This is the SSOT for **what each context file owns and how it changes** — the first-priority
 definition every other doc defers to (s_persist routes by it; SELF.md details the assembly
@@ -110,18 +110,16 @@ a flat ban (cognitive self-evolution IS the point).
 | 6 | **TOOLS** | Tool / MCP / credential guidance | user-owned · direct edit |
 | 7 | **MEMORY** | Cross-session **cognitive knowledge** (distilled: principles/decisions/corrections) | agent-owned · **s_persist** ✅ (autonomous) |
 | 8 | **EVOLUTION** | Self-evolution / correction registry | agent-owned · **s_persist** ✅ (autonomous) |
-| 9 | **KNOWLEDGE** | A **directory index of `Knowledge/`** (Notes/Reports/Library/Archives/…) — a pointer file, **NOT** a home for system/product architecture prose | auto/user · index only |
-| 10 | **TIMELINE** | Looking back: key events (a decision and why, a milestone, an incident and how it was resolved) plus monthly summaries; only the summaries are injected, events are read from the file | agent-owned · CDF summary lane and EventUnits |
+| 9 | **TIMELINE** | Looking back: key events (a decision and why, a milestone, an incident and how it was resolved) plus monthly summaries; only the summaries are injected, events are read from the file | agent-owned · CDF summary lane and EventUnits |
 
 **Two load-bearing rules this map enforces:** (1) **SwarmAI product/system architecture is NOT
-knowledge for KNOWLEDGE.md.** SwarmAI is itself a DDD (`Projects/SwarmAI/`), so its deep
+prose for any context file.** SwarmAI is itself a DDD (`Projects/SwarmAI/`), so its deep
 technical content — the pipeline, recall internals, CLI defaults, this file-system's assembly
 spec — belongs in **`Projects/SwarmAI/2-understanding/TECH.md`** (the DDD's technical doc).
 Outside SwarmAI's own development install, `Projects/SwarmAI/` is a seeded starter brain (a
 short sample on the desktop, a fuller one on a Hive) the user may grow or replace, not an
 authoritative spec. Charter/identity-level statements ("what SwarmAI IS", the cognition-system
-principles) live *here* in SWARMAI.md; and KNOWLEDGE.md stays a thin `Knowledge/` directory index — never a
-prose home for any of the above. (2) **Governance/identity evolves via its approval path, never
+principles) live *here* in SWARMAI.md; the map of `Knowledge/` is § My Workspace below. (2) **Governance/identity evolves via its approval path, never
 by hand-writing the projection** — SOUL/AGENT/STEERING → s_self-evolution; SWARMAI/IDENTITY →
 an edit of the `backend/context` source when the checkout is SwarmAI's own repo, otherwise a
 proposal upstream (an issue or PR to SwarmAI).

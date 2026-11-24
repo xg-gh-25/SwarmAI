@@ -34,6 +34,7 @@ from core.context_directory_loader import (
     BUDGET_LARGE_MODEL,
     ContextDirectoryLoader,
     DEFAULT_TOKEN_BUDGET,
+    _L1_SPEC_SIGNATURE,
     _atomic_write_bytes,
 )
 
@@ -632,7 +633,7 @@ class TestWriteL1Cache:
         loader._write_l1_cache("hello world", budget=40000)
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
-        assert raw.startswith("<!-- budget:40000;timeline:1500;selection-day:2026-10-28;layout:4 -->\n")
+        assert raw.startswith(f"<!-- budget:40000;timeline:1500;selection-day:2026-10-28;layout:4;specs:{_L1_SPEC_SIGNATURE} -->\n")
 
     def test_content_follows_header(self, tmp_dirs):
         """Actual content appears after the budget header line."""
@@ -641,7 +642,7 @@ class TestWriteL1Cache:
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
         lines = raw.split("\n", 1)
-        assert lines[0] == "<!-- budget:25000;timeline:1500;selection-day:2026-10-28;layout:4 -->"
+        assert lines[0] == f"<!-- budget:25000;timeline:1500;selection-day:2026-10-28;layout:4;specs:{_L1_SPEC_SIGNATURE} -->"
         assert lines[1] == "my context content"
 
     def test_default_budget_is_default_token_budget(self, tmp_dirs):
@@ -650,7 +651,7 @@ class TestWriteL1Cache:
         loader._write_l1_cache("content")
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
-        assert raw.startswith(f"<!-- budget:{DEFAULT_TOKEN_BUDGET};timeline:1500;selection-day:2026-10-28;layout:4 -->\n")
+        assert raw.startswith(f"<!-- budget:{DEFAULT_TOKEN_BUDGET};timeline:1500;selection-day:2026-10-28;layout:4;specs:{_L1_SPEC_SIGNATURE} -->\n")
 
     def test_no_temp_file_left_behind(self, tmp_dirs):
         """Atomic write cleans up: only the L1 file exists, no stray temp file.
@@ -804,7 +805,7 @@ class TestLoadL1IfFresh:
         """Helper: write an L1 cache file with a budget header."""
         l1_path = context_dir / "L1_SYSTEM_PROMPTS.md"
         l1_path.write_text(
-            f"<!-- budget:{budget};timeline:1500;selection-day:2026-10-28;layout:4 -->\n{content}", encoding="utf-8"
+            f"<!-- budget:{budget};timeline:1500;selection-day:2026-10-28;layout:4;specs:{_L1_SPEC_SIGNATURE} -->\n{content}", encoding="utf-8"
         )
 
     def test_returns_content_when_budget_matches(self, tmp_dirs):
@@ -829,6 +830,19 @@ class TestLoadL1IfFresh:
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         l1_path.write_text(
             "<!-- budget:40000;timeline:1500;layout:1 -->\nstale layout",
+            encoding="utf-8",
+        )
+        loader._is_l1_fresh = lambda: True
+        assert loader._load_l1_if_fresh(expected_budget=40000) is None
+
+    def test_returns_none_when_spec_list_changed(self, tmp_dirs):
+        """A cache built from another CONTEXT_FILES list (a file added or retired)
+        is stale even when every source mtime is older than the cache."""
+        loader = self._make_loader(tmp_dirs)
+        l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
+        l1_path.write_text(
+            "<!-- budget:40000;timeline:1500;selection-day:2026-10-28;layout:4;"
+            "specs:000000000000 -->\n## Knowledge\nold retired file",
             encoding="utf-8",
         )
         loader._is_l1_fresh = lambda: True
@@ -1096,14 +1110,14 @@ class TestChannelInjectionPrivacy:
         assert "TOOLS.md" in WHOLE_FILE_PRIVATE  # RED until the fix lands
 
     def test_carveouts_are_documented_not_excluded(self):
-        """STEERING/KNOWLEDGE are gitignored-private but deliberately NOT
-        channel-excluded — they must live in the carve-out map WITH a reason,
-        not silently absent (Gate-1: no ungated escape hatch)."""
+        """STEERING is gitignored-private but deliberately NOT channel-excluded —
+        it must live in the carve-out map WITH a reason, not silently absent
+        (Gate-1: no ungated escape hatch)."""
         from core.context_directory_loader import (
             WHOLE_FILE_PRIVATE,
             CHANNEL_INJECTION_CARVE_OUTS,
         )
-        for f in ("STEERING.md", "KNOWLEDGE.md"):
+        for f in ("STEERING.md",):
             assert f not in WHOLE_FILE_PRIVATE
             assert f in CHANNEL_INJECTION_CARVE_OUTS
             assert len(CHANNEL_INJECTION_CARVE_OUTS[f].strip()) >= 12  # real reason
@@ -1127,16 +1141,19 @@ class TestChannelInjectionPrivacy:
         )
 
     def test_gitignore_private_set_matches_channel_privacy(self, tmp_path):
-        """The generated .gitignore private set equals exclusions plus carve-outs."""
+        """The generated .gitignore private set equals exclusions plus carve-outs
+        plus retired files (an older workspace's copy stays private)."""
         from core.context_directory_loader import (
             WHOLE_FILE_PRIVATE,
             CHANNEL_INJECTION_CARVE_OUTS,
+            RETIRED_CONTEXT_FILES,
         )
         from core.swarm_workspace_manager import GITIGNORE_CONTENT
         generated = tmp_path / ".gitignore"
         generated.write_text(GITIGNORE_CONTENT, encoding="utf-8")
         gitignore_private = _parse_gitignore_private_context_md(generated)
-        accounted = set(WHOLE_FILE_PRIVATE) | set(CHANNEL_INJECTION_CARVE_OUTS)
+        accounted = (set(WHOLE_FILE_PRIVATE) | set(CHANNEL_INJECTION_CARVE_OUTS)
+                     | set(RETIRED_CONTEXT_FILES))
         assert gitignore_private == accounted, (
             "PRIVACY-BOUNDARY DRIFT: .gitignore private-context .md set "
             f"{sorted(gitignore_private)} != WHOLE_FILE_PRIVATE ∪ carve-outs "
@@ -1158,6 +1175,7 @@ class TestChannelInjectionPrivacy:
         from core.context_directory_loader import (
             WHOLE_FILE_PRIVATE,
             CHANNEL_INJECTION_CARVE_OUTS,
+            RETIRED_CONTEXT_FILES,
         )
         gi = tmp_path / ".gitignore"
         gi.write_text(
@@ -1178,7 +1196,8 @@ class TestChannelInjectionPrivacy:
         # masks a new private file) and MUST drop the derived cache + glob.
         assert "SECRETS.md" in parsed, "parser masked a new private file — drift-(b) hole"
         assert "L1_SYSTEM_PROMPTS.md" not in parsed  # derived cache dropped
-        accounted = set(WHOLE_FILE_PRIVATE) | set(CHANNEL_INJECTION_CARVE_OUTS)
+        accounted = (set(WHOLE_FILE_PRIVATE) | set(CHANNEL_INJECTION_CARVE_OUTS)
+                     | set(RETIRED_CONTEXT_FILES))
         # The real weld assertion is `parsed == accounted`; with SECRETS.md unwired
         # it MUST be unequal → the weld goes RED. Teeth confirmed on the real path.
         assert parsed != accounted

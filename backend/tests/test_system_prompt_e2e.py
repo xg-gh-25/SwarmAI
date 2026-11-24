@@ -145,13 +145,6 @@ TEMPLATES: dict[str, str] = {
 
         - Monitor DailyActivity file creation.
     """),
-    "KNOWLEDGE.md": textwrap.dedent("""\
-        # Knowledge -- What I Know
-
-        ## Tech Stack
-
-        - Python, TypeScript, Rust
-    """),
     "TIMELINE.md": textwrap.dedent("""\
         # Timeline
 
@@ -414,9 +407,9 @@ class TestE2EDirectChannel:
     """Full pipeline for a normal direct (1:1) channel session."""
 
     def test_all_context_files_present(self, workspace):
-        """All 12 context files (including TIMELINE.md) are inventoried."""
+        """All 11 context files (including TIMELINE.md) are inventoried."""
         prompt, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 12
+        assert len(meta["files"]) == 11
         filenames = {f["filename"] for f in meta["files"]}
         expected = {spec.filename for spec in CONTEXT_FILES}
         assert filenames == expected
@@ -525,12 +518,12 @@ class TestE2EDirectChannel:
         identity_pos = prompt.find("## Identity")
         soul_pos = prompt.find("## Soul")
         memory_pos = prompt.find("## Memory")
-        knowledge_pos = prompt.find("## Knowledge")
+        evolution_pos = prompt.find("## Evolution Registry")
 
         assert swarmai_pos < identity_pos < soul_pos
-        # Memory (P7) comes before Knowledge (P9, now the lowest-priority file
-        # after PROJECTS.md was removed 2026-08-14).
-        assert memory_pos < knowledge_pos
+        # Memory (P7) comes before Evolution (P8). (PROJECTS.md and KNOWLEDGE.md,
+        # once the lowest-priority files, were retired 2026-08-14 / 2026-11-24.)
+        assert memory_pos < evolution_pos
 
     def test_volatile_tail_after_context(self, workspace):
         """Cache-prefix invariant: the minute-precision datetime/runtime tail
@@ -544,17 +537,17 @@ class TestE2EDirectChannel:
         datetime_pos = prompt.find("Current date/time:")
         runtime_pos = prompt.find("agent=")
         swarmai_pos = prompt.find("## SwarmAI")
-        knowledge_pos = prompt.find("## Knowledge")
+        last_pos = prompt.find("## Evolution Registry")  # last file this fixture injects
 
-        assert datetime_pos != -1 and swarmai_pos != -1 and knowledge_pos != -1
+        assert datetime_pos != -1 and swarmai_pos != -1 and last_pos != -1
         # The whole constitution (first file .. last file) precedes the volatile tail.
         assert swarmai_pos < datetime_pos, (
             "datetime must NOT precede context files (cache-prefix killer)"
         )
-        assert knowledge_pos < datetime_pos, (
+        assert last_pos < datetime_pos, (
             "datetime must come after the LAST context file"
         )
-        assert knowledge_pos < runtime_pos, "runtime tail must trail context too"
+        assert last_pos < runtime_pos, "runtime tail must trail context too"
 
     def test_stable_framing_has_no_datetime(self, workspace):
         """build(include_volatile=False) must NOT contain the minute-level
@@ -606,7 +599,7 @@ class TestE2EGroupChannel:
 
         NOTE (2026-08-14): PROJECTS.md was removed entirely (in-prompt index
         deleted) — it is no longer a context file, so it never appears in ANY
-        prompt. KNOWLEDGE.md is the neutral/shared "still present" example."""
+        prompt. KNOWLEDGE.md was retired the same way on 2026-11-24."""
         prompt, _ = _simulate_build(
             workspace, channel_context=self._group_context()
         )
@@ -616,7 +609,7 @@ class TestE2EGroupChannel:
         # STEERING is section-filtered for non-owners: this fixture wraps no text
         # in a channel ... /channel pair, so no Steering section is injected.
         assert "## Steering" not in prompt
-        assert "## Knowledge" in prompt
+        assert "## Knowledge" not in prompt
         # PROJECTS.md was deleted 2026-08-14 — must NOT appear in ANY prompt.
         assert "## Projects" not in prompt
 
@@ -777,11 +770,9 @@ class TestE2ETruncationDetection:
         ctx.mkdir(parents=True)
 
         (ctx / "SWARMAI.md").write_text("Core principles here.")
-        # A massive KNOWLEDGE.md that vastly exceeds the tight budget below.
-        # (Was PROJECTS.md pre-2026-08-14; PROJECTS.md is no longer a context
-        # file, so this uses KNOWLEDGE.md — still a truncatable low-priority file.)
+        # A massive TOOLS.md that vastly exceeds the tight budget below.
         huge_content = "Project details. " * 5000  # ~10K words
-        (ctx / "KNOWLEDGE.md").write_text(f"# Knowledge\n\n{huge_content}")
+        (ctx / "TOOLS.md").write_text(f"# Tools\n\n{huge_content}")
         (ctx / "IDENTITY.md").write_text("Identity info.")
         (ctx / "SOUL.md").write_text("Personality.")
 
@@ -910,9 +901,9 @@ class TestE2EMetadataAccuracy:
     """Prompt metadata is accurate and complete."""
 
     def test_metadata_file_count(self, workspace):
-        """Metadata reports all 12 context files, including TIMELINE."""
+        """Metadata reports all 11 context files, including TIMELINE."""
         _, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 12
+        assert len(meta["files"]) == 11
 
     def test_metadata_total_tokens_positive(self, workspace):
         """Total tokens is a positive number."""

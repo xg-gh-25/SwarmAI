@@ -332,11 +332,12 @@ class TestPersistSkillRoutingGuard:
         await hook({"tool_name": "Edit", "tool_input": {"file_path": "x"}}, "tu_1", MagicMock())
         assert not ctx.get("_persist_skills_this_turn")
 
-    # --- AC2: memory_edit_guard covers KNOWLEDGE.md
+    # --- AC2: KNOWLEDGE.md was retired as a context file (2026-11-24): an old copy
+    # is an ordinary file, the persist routing guard no longer watches it.
 
     @pytest.mark.asyncio
-    async def test_guard_covers_knowledge_md(self):
-        """An Edit to KNOWLEDGE.md with no persist skill this turn → routing WARN."""
+    async def test_guard_ignores_retired_knowledge_md(self):
+        """An Edit to a leftover KNOWLEDGE.md raises no s_persist routing WARN."""
         from core.runtime_hooks import create_memory_edit_guard
         ctx = {}  # no persist skill invoked
         hook = create_memory_edit_guard(ctx)
@@ -349,9 +350,7 @@ class TestPersistSkillRoutingGuard:
             },
         }
         result = await hook(tool_use, "tu_1", MagicMock())
-        hso = result.get("hookSpecificOutput", {})
-        assert "additionalContext" in hso
-        assert "s_persist" in hso["additionalContext"]
+        assert "s_persist" not in str(result)
 
     # --- AC3: WARN fires when no persist skill invoked this turn
 
@@ -516,14 +515,14 @@ class TestPersistSkillRoutingGuard:
 
     @pytest.mark.asyncio
     async def test_multifile_persist_suppresses_all_three(self):
-        """One s_persist invocation covers MEMORY + KNOWLEDGE + EVOLUTION writes in
+        """One s_persist invocation covers MEMORY + EVOLUTION writes in
         the same turn (non-consuming intersection, not consume-on-check)."""
         from core.runtime_hooks import create_persist_skill_tracker, create_memory_edit_guard
         ctx = {}
         tracker = create_persist_skill_tracker(ctx)
         guard = create_memory_edit_guard(ctx)
         await tracker({"tool_name": "Skill", "tool_input": {"skill": "s_persist"}}, "t", MagicMock())
-        for fname in ("MEMORY.md", "KNOWLEDGE.md", "EVOLUTION.md"):
+        for fname in ("MEMORY.md", "EVOLUTION.md"):
             r = await guard({"tool_name": "Edit", "tool_input": {"file_path": f"/x/.context/{fname}", "new_string": "- e"}}, "t", MagicMock())
             assert "s_persist" not in str(r), f"WARN wrongly fired on {fname}"
 

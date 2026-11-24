@@ -160,9 +160,8 @@ def run_suite(cases: list[dict]) -> dict:
 # consistent per run; a frozen fixture for a versioned baseline is a later run).
 #
 # domain "ddd"           → doc ∈ {TECH,PRODUCT,IMPROVEMENT,PROJECT}.md (project DDD)
-# domain "context_files" → doc = MEMORY.md ONLY (.context/). KNOWLEDGE.md is NOT
-#   a served recall path (recall_context only serves MEMORY.md) — see the Gate-2
-#   note at the KNOWLEDGE exclusion below.
+# domain "context_files" → doc = MEMORY.md ONLY (.context/): recall_context serves
+#   only MEMORY.md.
 _SEED_QUERIES = [
     # ── ddd · easy (title overlaps query) ──
     ("how does the autonomous pipeline work — its stages", "ddd", "TECH.md", "Architecture", "easy"),
@@ -223,13 +222,6 @@ _SEED_QUERIES = [
     ("起 bugfix pipeline 修 partial-DB freshness-lockout", "context_files", "MEMORY.md", "Pitfalls", "task"),
     ("ddd recall leg 对宽泛查询被 PRODUCT 营销段挤占", "context_files", "MEMORY.md", ["Pitfalls", "Guidelines"], "task"),
     ("adversarial gate 抓到 test-theater", "context_files", "MEMORY.md", "Corrections", "task"),
-    # NOTE (Gate-2, run_a616dc6b): KNOWLEDGE.md is DELIBERATELY excluded from the
-    # context_files domain. recall_context / production _recall_context_files ONLY
-    # ever serve MEMORY.md (recall_multi.py:443 "MEMORY is the canonical one"); the
-    # scorer is MEMORY-index-shaped, so feeding KNOWLEDGE text yields an EMPTY index
-    # → guaranteed rank 0 for ANY query. Benchmarking KNOWLEDGE here would score a
-    # NONEXISTENT recall path as "failure" and falsely damn the number. If KNOWLEDGE
-    # recall is ever wanted, it needs its own served path first (a separate run).
 ]
 
 # Run-0 single-source rule: never hardcode the canonical-4 tuple (order-independent
@@ -237,8 +229,7 @@ _SEED_QUERIES = [
 # (_load_corpora), so tuple order is irrelevant. core.* resolves on the same sys.path
 # this module already relies on for its deferred core.context_recall import.
 from core.project_registry import DDD_CANONICAL_DOCS as _DDD_DOCS
-# context_files recall serves MEMORY.md ONLY (recall_multi._recall_context_files);
-# KNOWLEDGE.md has no served recall path, so it's not a benchmarkable doc here.
+# context_files recall serves MEMORY.md ONLY (recall_multi._recall_context_files).
 _CONTEXT_DOCS = ("MEMORY.md",)
 
 

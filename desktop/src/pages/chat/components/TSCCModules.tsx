@@ -69,9 +69,9 @@ const OWNER: Record<string, Owner> = {
   'TOOLS.md': { labelKey: 'ui.TSCCModules.owner_user', color: '#4ade80' },
   'MEMORY.md': { labelKey: 'ui.TSCCModules.owner_agent', color: '#a78bfa' },
   'EVOLUTION.md': { labelKey: 'ui.TSCCModules.owner_agent', color: '#a78bfa' },
-  'KNOWLEDGE.md': { labelKey: 'ui.TSCCModules.owner_gen', color: '#38d9c4' },
-  // PROJECTS.md removed 2026-08-14 — the auto-generated in-prompt project index was
-  // deleted; project discovery is now Projects/ folder + FTS5 recall + Glob. 11 files.
+  // PROJECTS.md (2026-08-14) and KNOWLEDGE.md (2026-11-24) were retired as context
+  // files: project discovery is the Projects/ folder + recall, and the Knowledge/ map
+  // is SWARMAI.md § My Workspace.
 };
 export function ownerOf(filename: string): Owner {
   return OWNER[filename] ?? { labelKey: 'ui.TSCCModules.owner_gen', color: '#8b93a7' };
@@ -111,7 +111,7 @@ const FLOW_STAGES: FlowStage[] = [
     chips: [{ t: 'hit → jump to 8', tone: '' }, { t: 'excluded-files → bypass', tone: 'a' }] },
   { n: 3, titleKey: 'ui.TSCCModules.flow3Title', fn: '_assemble_from_sources()',
     descKey: 'ui.TSCCModules.flow3Desc',
-    chips: [{ t: 'SWARMAI', tone: 'b' }, { t: 'IDENTITY', tone: 'b' }, { t: 'SOUL', tone: 'b' }, { t: 'SELF', tone: '' }, { t: 'AGENT', tone: '' }, { t: 'USER', tone: 'g' }, { t: 'STEERING', tone: 'g' }, { t: 'TOOLS', tone: 'g' }, { t: 'MEMORY', tone: 'p' }, { t: 'EVOLUTION', tone: 'p' }, { t: 'KNOWLEDGE', tone: '' }] },
+    chips: [{ t: 'SWARMAI', tone: 'b' }, { t: 'IDENTITY', tone: 'b' }, { t: 'SOUL', tone: 'b' }, { t: 'SELF', tone: '' }, { t: 'AGENT', tone: '' }, { t: 'USER', tone: 'g' }, { t: 'STEERING', tone: 'g' }, { t: 'TOOLS', tone: 'g' }, { t: 'MEMORY', tone: 'p' }, { t: 'EVOLUTION', tone: 'p' }, { t: 'TIMELINE', tone: 'p' }] },
   { n: 4, titleKey: 'ui.TSCCModules.flow4Title', fn: 'select_context_file()', accent: 'recall',
     descKey: 'ui.TSCCModules.flow4Desc',
     chips: [{ t: 'whole units', tone: 'p' }, { t: 'fixed budget', tone: '' }, { t: 'no state filter', tone: '' }] },

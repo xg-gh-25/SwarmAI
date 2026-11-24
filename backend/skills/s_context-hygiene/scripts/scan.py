@@ -73,8 +73,8 @@ def _swarmws() -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 _AUTO_GENERATED = {
     # PROJECTS.md removed 2026-08-14 (in-prompt index deleted — no longer a context file).
-    # KNOWLEDGE.md's auto "Knowledge Index" section was ALSO deleted 2026-08-14; the file
-    # is now fully agent-authored, so it is no longer listed as auto-generated here.
+    # KNOWLEDGE.md was retired as a context file 2026-11-24 (SWARMAI.md § My Workspace
+    # is the Knowledge/ map).
 }
 
 
@@ -113,7 +113,7 @@ def _load_routing() -> tuple[list[dict], str]:
         # system file. Misclassifying it as system emits build-triggering edit guidance
         # for the exact file this skill advertises handling correctly (Gate-2 HIGH).
         system = ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md"]
-        runtime = ["SELF.md", "USER.md", "STEERING.md", "TOOLS.md", "MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md"]
+        runtime = ["SELF.md", "USER.md", "STEERING.md", "TOOLS.md", "MEMORY.md", "EVOLUTION.md"]
         rows = []
         for fn in system:
             rows.append({"file": fn, "owner": "system",

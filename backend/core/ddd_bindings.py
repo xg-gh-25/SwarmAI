@@ -899,7 +899,7 @@ def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = N
     d = Path(project_dir)
     # Resolve each canonical doc via ddd_path (strangler): a migrated DDD keeps
     # its 4 docs under 2-understanding/, so a bare `d / f` root check would find
-    # none → the project vanishes from the KNOWLEDGE.md index (caught by live
+    # none → the project vanishes from the project index (caught by live
     # post-deploy smoke, run_af3dfd9f). ddd_path finds new-or-old location.
     docs = [f for f in _DDD_DOC_NAMES if ddd_path(d, f).is_file()]
     if not docs:

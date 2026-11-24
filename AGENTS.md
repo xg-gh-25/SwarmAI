@@ -99,7 +99,7 @@ backend/
 │   ├── session_router.py      # Multi-session routing, dynamic slot management (1-4 tabs via RAM)
 │   ├── session_unit.py        # 5 states: COLD, IDLE, STREAMING, WAITING_INPUT, DEAD (flow: COLD→STREAMING→IDLE, STREAMING↔WAITING_INPUT)
 │   ├── streaming_orchestrator.py # SDK response streaming, SSE event formatting, liveness
-│   ├── prompt_builder.py      # System prompt assembly from 12 context files + MCP tier loading
+│   ├── prompt_builder.py      # System prompt assembly from 11 context files + MCP tier loading
 │   ├── context_directory_loader.py # Loads/orders/budgets the governed context files
 │   ├── lifecycle_manager.py   # 24h idle TTL, orphan reaper, hook enqueue chokepoint
 │   ├── session_healing.py     # HealthSensor + HealingLoop — invisible auto-respawn
@@ -150,7 +150,7 @@ All agent context lives in `~/.swarm-ai/SwarmWS/.context/` — filesystem-only, 
 git-tracked, human-readable. This is the OS's memory; the design goal is that a human can
 `git diff` how the system's judgment changed.
 
-12 source files across 11 priority slots (SOUL and SELF share P2) are assembled into the
+11 source files across 10 priority slots (SOUL and SELF share P2) are assembled into the
 system prompt on every session start, in priority order (the source of truth is
 `CONTEXT_FILES` in `backend/core/context_directory_loader.py`):
 
@@ -161,8 +161,7 @@ system prompt on every session start, in priority order (the source of truth is
 - **P3 (AGENT):** behavioral rules. System default, truncatable.
 - **P4–P6 (USER, STEERING, TOOLS):** user-customized, copy-only-if-missing (0o644).
 - **P7–P8 (MEMORY, EVOLUTION):** agent-owned cross-session cognition, copy-only-if-missing (0o644).
-- **P9 (KNOWLEDGE):** user-customized domain knowledge, copy-only-if-missing (0o644).
-- **P10 (TIMELINE):** private append-only episodic memory, copy-only-if-missing (0o644);
+- **P9 (TIMELINE):** private append-only episodic memory, copy-only-if-missing (0o644);
   whole-unit selection within a 1.5K-token budget.
 
 Key behaviors:

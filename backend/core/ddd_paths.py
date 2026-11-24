@@ -249,8 +249,8 @@ def confined_doc_path(project_dir: Path | str, target_doc: str) -> Path | None:
     it serves READ paths and legitimate ad-hoc keys — so containment belongs at each
     sink, which is what this helper gives them.
 
-    Confinement root is ``project_dir``, NOT ``2-understanding/``: EVOLUTION.md,
-    KNOWLEDGE.md and MEMORY.md legitimately resolve to the project ROOT (they simply
+    Confinement root is ``project_dir``, NOT ``2-understanding/``: EVOLUTION.md
+    and MEMORY.md legitimately resolve to the project ROOT (they simply
     do not exist there, so those keys still fall through to the caller's
     "doc_missing" branch — a legitimate routing outcome, not an attack).
 

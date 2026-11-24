@@ -13,7 +13,7 @@ command) reads every store below, each cut into whole units with ``path:line`` a
   reads back by its id or its location from the same index (``library_get``);
 - ``memory`` / ``evolution`` / ``timeline`` / ``context`` — the workspace's ``.context/``
   files: MEMORY and its archives, EVOLUTION and its archives, TIMELINE, and the other
-  governed files (SWARMAI, IDENTITY, SOUL, SELF, AGENT, USER, STEERING, TOOLS, KNOWLEDGE);
+  governed files (SWARMAI, IDENTITY, SOUL, SELF, AGENT, USER, STEERING, TOOLS);
 - ``session`` — past sessions (the session recall leg), found only;
 - ``code`` — a project's code graph (the code-intel recall leg), found only.
 
@@ -65,7 +65,7 @@ class Store:
 
 
 CONTEXT_FILES = ("SWARMAI.md", "IDENTITY.md", "SOUL.md", "SELF.md", "AGENT.md", "USER.md",
-                 "STEERING.md", "TOOLS.md", "KNOWLEDGE.md")
+                 "STEERING.md", "TOOLS.md")
 
 STORES: dict[str, Store] = {s.name: s for s in (
     Store("ddd", "a Brain: a project's DDD (--project P), or the General Brain (--project General, "

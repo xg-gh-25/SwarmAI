@@ -65,7 +65,6 @@ def _ctx(tmp_path: Path, steering: str = STEERING) -> Path:
     ctx.mkdir()
     (ctx / "SWARMAI.md").write_text("# SwarmAI\nYou are SwarmAI.\n", encoding="utf-8")
     (ctx / "STEERING.md").write_text(steering, encoding="utf-8")
-    (ctx / "KNOWLEDGE.md").write_text("# Knowledge\nKNOWLEDGE-BODY index.\n", encoding="utf-8")
     (ctx / "MEMORY.md").write_text("# Memory\nMEMORY-SECRET.\n", encoding="utf-8")
     (ctx / "TOOLS.md").write_text("# Tools\nTOOLS-SECRET.\n", encoding="utf-8")
     return ctx
@@ -154,11 +153,11 @@ def test_nonowner_small_model_l0_path_is_filtered(tmp_path):
         assert secret not in prompt
 
 
-def test_private_files_stay_excluded_and_knowledge_stays_whole(tmp_path):
+def test_private_files_stay_excluded_and_shared_files_stay_whole(tmp_path):
     loader = ContextDirectoryLoader(context_dir=_ctx(tmp_path))
     prompt = loader.load_all(exclude_filenames=set(CHANNEL_LIGHT_EXCLUDE))
     assert "MEMORY-SECRET" not in prompt and "TOOLS-SECRET" not in prompt
-    assert "KNOWLEDGE-BODY index." in prompt
+    assert "You are SwarmAI." in prompt
 
 
 def test_nonowner_assembly_never_reads_or_writes_l1(tmp_path):

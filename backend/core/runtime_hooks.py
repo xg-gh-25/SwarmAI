@@ -1637,9 +1637,9 @@ def create_doc_rewrite_check(session_context: dict):
 # ---------------------------------------------------------------------------
 
 # Agent-owned context files that should be written via s_persist / s_self-evolution,
-# not hand-edited. KNOWLEDGE.md added 2026-06-28 (run_3f3be114) — the always-injected
-# index is a routing target too.
-_MEMORY_FILE_SUFFIXES = ("MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md")
+# not hand-edited. (KNOWLEDGE.md was one until it was retired as a context file,
+# 2026-11-24: it is an ordinary workspace file now.)
+_MEMORY_FILE_SUFFIXES = ("MEMORY.md", "EVOLUTION.md")
 
 # Skills whose invocation "covers" a memory-file write this turn (routing satisfied).
 _PERSIST_SKILLS = frozenset({"s_persist", "s_self-evolution"})
@@ -1656,7 +1656,7 @@ def create_memory_edit_guard(session_context: Optional[dict] = None):
     Two independent signals (both WARN-only — observe-after-the-fact, never deny):
 
     1. **Content scan** (always): runs MemoryGuard on the written content when the
-       target ends in MEMORY.md / EVOLUTION.md / KNOWLEDGE.md, warning on dangerous
+       target ends in MEMORY.md / EVOLUTION.md, warning on dangerous
        patterns now sitting in the system prompt.
     2. **Persist-skill routing** (only when ``session_context`` is provided): if the
        file was hand-Edited/Written WITHOUT invoking s_persist / s_self-evolution this
@@ -1852,7 +1852,7 @@ def register_runtime_hooks(
     )
 
     # Phase 2: PostToolUse memory edit guard (content scan + persist-routing WARN on
-    # Edit/Write to MEMORY/EVOLUTION/KNOWLEDGE.md). session_context enables the routing check.
+    # Edit/Write to MEMORY/EVOLUTION.md). session_context enables the routing check.
     registry.register(
         "PostToolUse",
         create_memory_edit_guard(session_context),

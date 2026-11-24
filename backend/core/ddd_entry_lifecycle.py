@@ -60,23 +60,10 @@ MEMORY_ACTIVE_SECTIONS = frozenset(k for k, v in MEMORY_SECTIONS.items() if v["l
 MEMORY_PREFIX_MAP = {k: v["prefix"] for k, v in MEMORY_SECTIONS.items()}
 MEMORY_PREFIX_TO_SECTION = {v["prefix"]: k for k, v in MEMORY_SECTIONS.items()}
 
-# ── KNOWLEDGE.md / EVOLUTION.md Evergreen Sections ────────────────────────────
+# ── EVOLUTION.md Evergreen Sections ───────────────────────────────────────────
 #
 # Reference sections by full header text, as parse_entries records `section`.
 # Read by the duplicate selector's callers; nothing ages out of any section.
-KNOWLEDGE_EVERGREEN_SECTIONS = frozenset({
-    "Architecture Overview [model]",
-    "The 12 Context Files [model]",
-    "Claude Code CLI Hidden Defaults [constraint]",
-    "Code Documentation Standards [guideline]",
-    "Codebase Navigation [model]",
-    "Frontend Architecture [model]",
-    "Database Schema [model]",
-    "Hook System [model]",
-    "Pipeline — What It Is & How To Check State [model]",
-    "Job System [model]",
-})
-
 EVOLUTION_EVERGREEN_SECTIONS = frozenset({
     'Design Philosophy — What "Evolution" Means',
     "Capabilities Built",

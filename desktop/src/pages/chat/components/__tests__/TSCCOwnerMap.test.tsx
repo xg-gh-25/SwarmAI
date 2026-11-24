@@ -26,6 +26,5 @@ describe('TSCC OWNER map — ownerOf', () => {
     expect(ownerOf('SWARMAI.md').labelKey).toBe('ui.TSCCModules.owner_sys');
     expect(ownerOf('USER.md').labelKey).toBe('ui.TSCCModules.owner_user');
     expect(ownerOf('MEMORY.md').labelKey).toBe('ui.TSCCModules.owner_agent');
-    expect(ownerOf('KNOWLEDGE.md').labelKey).toBe('ui.TSCCModules.owner_gen');
   });
 });

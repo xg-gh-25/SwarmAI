@@ -98,8 +98,8 @@ def order(negative: bool) -> int:
     with tempdir() as d:
         ctx = d / ".context"
         loader = _loader(ctx)
-        (ctx / "KNOWLEDGE.md").write_text(
-            "# Knowledge\n\n" + ("oversized knowledge line\n" * 6000) + tail + "\n",
+        (ctx / "TOOLS.md").write_text(
+            "# Tools\n\n" + ("oversized tools line\n" * 6000) + tail + "\n",
             encoding="utf-8")
 
         def positive():

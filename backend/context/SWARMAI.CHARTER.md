@@ -27,7 +27,7 @@ terrain.
 - The CLAUDE.md/AGENTS.md non-consumption declaration (security — its home).
 
 ## MUST NEVER ENTER (route to the file named)
-- ❌ Any MECHANISM / algorithm / full spec        → KNOWLEDGE.md or a DDD doc
+- ❌ Any MECHANISM / algorithm / full spec        → a DDD doc (SwarmAI's own: its TECH.md)
 - ❌ UI-surface INTERNALS (props, events, layout)  → SELF.md (my body map)
 - ❌ A single skill/MCP/job's spec or full roster  → TOOLS.md / the skill's SKILL.md
 - ❌ Behavioral RULES                              → AGENT.md / STEERING.md

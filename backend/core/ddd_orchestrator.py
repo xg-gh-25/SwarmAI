@@ -8,7 +8,6 @@ context_health_hook calls orchestrator.run(), not the other way around.
 
 Channels (see self.channels in __init__ for the live set):
     - DDD staleness detection
-    - DDD→KNOWLEDGE injection
     - Knowledge staleness detection
     - Entity index validation
     - Entry lifecycle (per-entry decay/reclaim)

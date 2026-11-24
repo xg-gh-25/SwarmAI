@@ -48,7 +48,7 @@ qualitatively ("runs in production daily") instead of with a number. A number st
 with a "⚠️ don't trust, re-measure" warning next to it is STILL a liability — the
 warning does not travel with the value when it's later read and quoted.
 
-> **Live anchor (2026-07-19):** a `~91K token` snapshot sat in KNOWLEDGE.md next to its
+> **Live anchor (2026-07-19):** a `~91K token` snapshot sat in an injected context file next to its
 > own "⚠️ do NOT trust as current" warning. The agent read it, ignored the warning, and
 > quoted `91K` as current to the user (real value: 50K). The warning failed; only NOT
 > STORING the number would have. This is why the norm is "don't let it in", not "label it".
@@ -64,11 +64,11 @@ Routing wrong at the file layer is the #1 mis-persist: a system-identity or prod
 design principle wrongly landed in a DDD's TECH.md (2026-08-15) because Step 1 used to
 only fence SOUL/AGENT/STEERING and had no home for SWARMAI/IDENTITY/SELF.
 
-> **SSOT for file ownership = `SWARMAI.md` § "My 12 Context Files — Position & Ownership".**
+> **SSOT for file ownership = `SWARMAI.md` § "My 11 Context Files — Position & Ownership".**
 > The table below is the operational routing view of it — if they ever diverge, SWARMAI.md
-> wins. Key consequence encoded there: **SwarmAI product/system architecture is NOT knowledge
-> for KNOWLEDGE.md** (it goes to the SwarmAI DDD's TECH.md, or SWARMAI.md for charter-level
-> statements); KNOWLEDGE.md is a thin `Knowledge/` directory index, never a prose home.
+> wins. Key consequence encoded there: **SwarmAI product/system architecture goes to the
+> SwarmAI DDD's TECH.md** (or SWARMAI.md for charter-level statements), never into a file
+> read every turn.
 
 **The axis is NOT "can I write it?" — it is "which APPROVAL PATH does it change through?"**
 Everything is changeable (that is what cognitive self-evolution IS); nothing is "forbidden".
@@ -95,7 +95,6 @@ drive this (SSOT: `context_directory_loader.py` `CONTEXT_FILES` + `user_customiz
 | Tool / MCP guidance | **TOOLS.md** | `.context/` (live) | ⚠️ | direct edit ok |
 | **Cross-project** cognitive knowledge / principle — DESCRIPTIVE: *what the agent has learned* (informs, doesn't prescribe) | **MEMORY.md** | `.context/` (live) | ✅ **yes — s_persist home** | agent-autonomous (Step 2 §Principles) |
 | Self-correction / bias | **EVOLUTION.md** | `.context/` (live) | ✅ **yes — s_persist home** | agent-autonomous (Step 2 §Corrections) |
-| (index/cache — never write prose here) | **KNOWLEDGE.md** | auto-rebuilt from fs | ❌ no | write the fact to `Knowledge/Library/` instead |
 | **Project-domain** knowledge | **DDD** PRODUCT/TECH/IMPROVEMENT/PROJECT (`Projects/<X>/2-understanding/`) | project disk | ✅ yes | agent-autonomous (Step 2 table) |
 | Cross-project searchable **reference/fact** | **Knowledge/Library/** | project disk | ✅ yes | agent-autonomous |
 
@@ -132,14 +131,10 @@ layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** 
 | **Self-correction/bias** | — | `.context/EVOLUTION.md` § Corrections Captured |
 | **Reference/fact/spec** | — | `Knowledge/Library/` (searchable store — recall can find it) |
 
-> **⚠️ Routing fix(R4c):** reference/fact content goes to
-> `Knowledge/Library/`, **NOT** `.context/KNOWLEDGE.md`. KNOWLEDGE.md is an
-> always-injected *index/cache* file (one of the governed context files) — it is a
-> **sibling** of `Knowledge/`, so `sync_knowledge_index` (which scans `Knowledge/`
-> only) never chunks it. Content written to KNOWLEDGE.md is injected-as-context but
-> **invisible to FTS5/BM25 recall**. Write durable reference material to
-> `Knowledge/Library/` so it enters the searchable store; KNOWLEDGE.md stays the
-> curated index the agent reads at session start.
+> **⚠️ Routing fix(R4c):** reference/fact content goes to `Knowledge/Library/`, never
+> into a `.context/` file: `sync_knowledge_index` scans `Knowledge/` only, so content
+> written beside it is invisible to FTS5/BM25 recall. (`.context/KNOWLEDGE.md`, the old
+> directory index, was retired as a context file 2026-11-24.)
 
 ### The Key Question
 

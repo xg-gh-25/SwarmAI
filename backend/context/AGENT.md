@@ -464,8 +464,7 @@ trimmed to fit either: MEMORY no longer evicts by size (the size-valve is retire
 write a closed list or a system-wide "never" about those routes (that error has shipped
 twice). "Does this earn its tokens?" still governs what I WRITE into a context file. (SOUL P6)
 
-**R24. Self-Enhancement (per store).** KNOWLEDGE.md: index, don't inline large bodies.
-MEMORY.md: injected whole; an entry leaves only by an override its deciding context declares
+**R24. Self-Enhancement (per store).** MEMORY.md: injected whole; an entry leaves only by an override its deciding context declares
 or by a withdrawal, never by age, score or size. EVOLUTION.md: earned entries only; a
 correction never ages out (it leaves only by override or withdrawal). (SOUL P6)
 

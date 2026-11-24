@@ -10,15 +10,13 @@ centralized directory.  It is responsible for:
 - ``ContextFileSpec``           — Frozen dataclass defining a source file's
                                   metadata (filename, priority, section_name,
                                   truncatable, user_customized, truncate_from)
-- ``CONTEXT_FILES``             — Ordered list of all 12 ContextFileSpec entries
+- ``CONTEXT_FILES``             — Ordered list of all 11 ContextFileSpec entries
 - ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (30,000)
 - ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (50,000)
 - ``BUDGET_1M_MODEL``           — Token budget for >= 500K models (150,000)
 - ``L1_CACHE_FILENAME``         — Filename for the full L1 cache
 - ``L0_CACHE_FILENAME``         — Filename for the compact L0 cache
 - ``THRESHOLD_USE_L1``          — Context window threshold for L1 usage (64K)
-- ``THRESHOLD_SKIP_LOW_PRIORITY`` — Context window threshold below which
-                                    KNOWLEDGE excluded (32K)
 - ``ContextDirectoryLoader``    — Main loader class with load_all(),
                                   ensure_directory(), and estimate_tokens()
 
@@ -40,6 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Literal, Optional
+import hashlib
 import logging
 import os
 import re
@@ -104,9 +103,6 @@ L0_CACHE_FILENAME = "L0_SYSTEM_PROMPTS.md"
 THRESHOLD_USE_L1 = 64_000
 """Model context window >= this value uses L1 cache or source files."""
 
-THRESHOLD_SKIP_LOW_PRIORITY = 32_000
-"""Model context window < this value excludes KNOWLEDGE."""
-
 BUDGET_LARGE_MODEL = 50_000
 """Token budget for models with >= 200K context window (25% of 200K)."""
 
@@ -115,7 +111,7 @@ BUDGET_1M_MODEL = 150_000
 
 Claude 4.6 models have 1M context GA on Bedrock. With 5-15x the room,
 we can afford a richer system prompt (more DailyActivity, fuller
-MEMORY.md, untruncated KNOWLEDGE) while still leaving ~85%
+MEMORY.md) while still leaving ~85%
 for conversation and tool use.
 
 Raised 100K→150K on 2026-09-30: the old base minus EPHEMERAL_HEADROOM
@@ -205,11 +201,14 @@ CHANNEL_INJECTION_CARVE_OUTS: dict[str, str] = {
     # a non-owner prompt carries only the text the owner wrapped between
     # CHANNEL_SECTION_MARKER and CHANNEL_SECTION_END; everything else stays out.
     "STEERING.md": "channel bot needs the owner's bot-governance rules; only the wrapped text is injected",
-    # KNOWLEDGE.md is low-sensitivity for channel exposure (a domain index; its only
-    # local-specific content is the source-repo path, not credentials). Whole-file
-    # excluding it would starve a teammate of genuine domain knowledge for marginal
-    # benefit. Scrubbing the local path is a separate, lower-priority concern.
-    "KNOWLEDGE.md": "low-sensitivity domain index; local paths only, no credentials",
+}
+
+# Retired context files: no longer in CONTEXT_FILES (never seeded, never injected),
+# but a workspace created before the retirement may still hold the user's copy,
+# which is left on disk untouched. It stays in the workspace .gitignore (and on the
+# privacy-untrack list) so an untracked copy is never committed. Each entry carries why it was retired.
+RETIRED_CONTEXT_FILES: dict[str, str] = {
+    "KNOWLEDGE.md": "hand-kept Knowledge/ index that duplicated SWARMAI.md § My Workspace (retired 2026-11-24)",
 }
 
 GROUP_CHANNEL_EXCLUDE: frozenset[str] = WHOLE_FILE_PRIVATE
@@ -313,7 +312,7 @@ class ContextFileSpec:
                          Only these files are checked for template drift
                          (``core.context_template_drift``). False for files whose
                          template is a starting skeleton the user or the agent fills
-                         (USER, STEERING, TOOLS, MEMORY, EVOLUTION, KNOWLEDGE,
+                         (USER, STEERING, TOOLS, MEMORY, EVOLUTION,
                          TIMELINE): they differ from it by design.
     """
 
@@ -345,7 +344,6 @@ class ContextFileSpec:
 #         it was edited).
 #       - User-owned:  USER.md, STEERING.md, TOOLS.md — user edits freely
 #       - Agent-owned: MEMORY.md, EVOLUTION.md — agent writes via hooks/locked_write
-#       - Auto-generated: KNOWLEDGE.md — agent rebuilds from filesystem scans
 #
 CONTEXT_FILES: list[ContextFileSpec] = [
     # ── System-owned (codebase template → always overwrite) ──────────
@@ -378,11 +376,13 @@ CONTEXT_FILES: list[ContextFileSpec] = [
                     selector="cdf"),
     ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head",
                     selector="cdf"),
-    # ── Auto-generated (rebuilt from filesystem, never overwritten) ──
-    ContextFileSpec("KNOWLEDGE.md",         9,  "Knowledge",          True,  True,  "tail"),
     # ── Episodic memory: whole-unit selection, private, copy-if-missing ──
     ContextFileSpec("TIMELINE.md",          10, "Timeline",           True,  True,  "tail",
                     inject_budget_tokens=TIMELINE_BUDGET_TOKENS, selector="timeline"),
+    # KNOWLEDGE.md removed (2026-11-24) — a hand-kept directory index of Knowledge/
+    #   that nothing generated and SWARMAI.md § My Workspace already gives every turn.
+    #   An existing .context/KNOWLEDGE.md is left on disk, unread (no template, no
+    #   seeding, no injection).
     # PROJECTS.md removed (2026-08-14) — the auto-generated in-prompt project index
     #   was a redundant projection of the Projects/ folder (discoverable via recall +
     #   Glob). All its writers (refresh_projects_index + Entity Index) were deleted;
@@ -393,8 +393,9 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     # EVOLUTION_CHANGELOG.jsonl — agent-managed, seeded on first run via
     #   _AGENT_MANAGED_FILES in ensure_directory().  Not a context file.
 ]
-"""All 12 context source files in ascending priority order across 11 priority
-slots (SOUL.md and SELF.md share priority 2)."""
+"""All 11 context source files in ascending priority order across 10 priority
+slots (SOUL.md and SELF.md share priority 2; priority 9 is unused since KNOWLEDGE.md
+was retired)."""
 
 
 def core_section_names() -> list[str]:
@@ -468,6 +469,14 @@ assert WHOLE_FILE_PRIVATE <= {s.filename for s in CONTEXT_FILES}, (
 # unreachable from this built module at import time. This assert only catches a
 # carve-out naming a nonexistent spec; the test catches a NEW private file that
 # never reached these constants (the drift a subset assert structurally cannot see).
+# The L1 cache holds a prompt built from one spec list. A file added to or retired
+# from CONTEXT_FILES (or a changed priority / section name) must make an older cache
+# stale on its own, even when no source file's mtime moved: the header carries this
+# signature and _load_l1_if_fresh refuses a cache whose signature differs.
+_L1_SPEC_SIGNATURE = hashlib.sha256(
+    repr([(s.filename, s.priority, s.section_name) for s in CONTEXT_FILES]).encode("utf-8")
+).hexdigest()[:12]
+
 assert set(CHANNEL_INJECTION_CARVE_OUTS) <= {s.filename for s in CONTEXT_FILES}, (
     "CHANNEL_INJECTION_CARVE_OUTS names a file with no matching CONTEXT_FILES spec: "
     f"{set(CHANNEL_INJECTION_CARVE_OUTS) - {s.filename for s in CONTEXT_FILES}}"
@@ -483,6 +492,11 @@ assert CHANNEL_SECTION_FILTERED <= set(CHANNEL_INJECTION_CARVE_OUTS), (
 assert GROUP_CHANNEL_EXCLUDE and CHANNEL_LIGHT_EXCLUDE, (
     "a non-owner exclusion set is empty: CHANNEL_SECTION_FILTERED files would be "
     "injected whole")
+# A retired file is not a context file any more: it must not be loaded again.
+assert not (set(RETIRED_CONTEXT_FILES) & {s.filename for s in CONTEXT_FILES}), (
+    "RETIRED_CONTEXT_FILES names a file that is still in CONTEXT_FILES: "
+    f"{set(RETIRED_CONTEXT_FILES) & {s.filename for s in CONTEXT_FILES}}"
+)
 # A file cannot be BOTH channel-excluded and a channel carve-out (contradiction).
 assert not (WHOLE_FILE_PRIVATE & set(CHANNEL_INJECTION_CARVE_OUTS)), (
     "A file is both in WHOLE_FILE_PRIVATE and CHANNEL_INJECTION_CARVE_OUTS — "
@@ -1104,13 +1118,10 @@ class ContextDirectoryLoader:
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
-        Reads the 12 source files from the context directory in ascending
-        priority order (0 first, 9 last).  Each non-empty file gets a
+        Reads the 11 source files from the context directory in ascending
+        priority order (0 first, 10 last).  Each non-empty file gets a
         ``## {section_name}`` header.  Empty or missing files are skipped
         entirely — no empty section headers appear in the output.
-
-        For models with a context window below ``THRESHOLD_SKIP_LOW_PRIORITY``
-        (32K), KNOWLEDGE.md is excluded entirely.
 
         Files listed in ``exclude_filenames`` are also skipped (used by
         group channels to suppress MEMORY.md and USER.md).
@@ -1136,8 +1147,6 @@ class ContextDirectoryLoader:
         """
         effective_budget = token_budget if token_budget is not None else self.token_budget
         skip_filenames: set[str] = set(exclude_filenames or ())
-        if model_context_window < THRESHOLD_SKIP_LOW_PRIORITY:
-            skip_filenames |= {"KNOWLEDGE.md"}
 
         # Build section tuples: (priority, section_name, content, truncatable, truncate_from)
         section_tuples: list[tuple[int, str, str, bool, str]] = []
@@ -1316,7 +1325,7 @@ class ContextDirectoryLoader:
         except OSError:
             return False
 
-        # git leg — SCOPED to the 12 context source files ONLY, never the whole
+        # git leg — SCOPED to the context source files ONLY, never the whole
         # .context/ dir. run_0f009a75 root-cause: `.context/` also holds per-session
         # runtime state files that are TRACKED and dirty EVERY session (.memory-usage.json,
         # .eval-canary.json, …). A dir-wide `git status -- .context/`
@@ -1360,7 +1369,7 @@ class ContextDirectoryLoader:
         try:
             header = (f"<!-- budget:{budget};timeline:{TIMELINE_BUDGET_TOKENS};"
                       f"selection-day:{_utc_day(self._clock())};"
-                      f"layout:{_L1_LAYOUT_VERSION} -->\n")
+                      f"layout:{_L1_LAYOUT_VERSION};specs:{_L1_SPEC_SIGNATURE} -->\n")
             # ATOMIC WRITE (run_cc397b0d): delegate to the module-level
             # _atomic_write_bytes helper (run_b1feca42 — unified the two
             # previously hand-rolled mkstemp/fsync/os.replace blocks). os.replace
@@ -1389,7 +1398,7 @@ class ContextDirectoryLoader:
     # Regex for parsing the budget header from L1 cache files.
     _BUDGET_HEADER_RE = re.compile(
         r"^<!--\s*budget:(\d+);timeline:(\d+);"
-        r"selection-day:(\d{4}-\d{2}-\d{2});layout:(\d+)\s*-->"
+        r"selection-day:(\d{4}-\d{2}-\d{2});layout:(\d+);specs:([0-9a-f]+)\s*-->"
     )
 
     def _load_l1_if_fresh(self, expected_budget: int = DEFAULT_TOKEN_BUDGET) -> Optional[str]:
@@ -1432,12 +1441,14 @@ class ContextDirectoryLoader:
         cached_timeline_budget = int(match.group(2))
         cached_selection_day = match.group(3)
         cached_layout = int(match.group(4))
+        cached_specs = match.group(5)
         current_day = _utc_day(self._clock())
         if (cached_budget != expected_budget
                 or cached_timeline_budget != TIMELINE_BUDGET_TOKENS
                 or cached_selection_day != current_day
-                or cached_layout != _L1_LAYOUT_VERSION):
-            return None  # Budget, selector, or rendering-layout mismatch → stale
+                or cached_layout != _L1_LAYOUT_VERSION
+                or cached_specs != _L1_SPEC_SIGNATURE):
+            return None  # Budget, selector, layout or spec-list mismatch → stale
 
         # Return content after the header line
         return raw[first_newline + 1:]
@@ -1452,8 +1463,7 @@ class ContextDirectoryLoader:
         """Load L0 compact cache or fall back to aggressive truncation.
 
         Reads ``L0_SYSTEM_PROMPTS.md`` if it exists.  If missing, falls
-        back to ``_assemble_from_sources()`` which will apply token budget
-        truncation and (for models < 32K) exclude KNOWLEDGE.
+        back to ``_assemble_from_sources()`` which applies the token budget.
 
         ⚠️ PRIVACY (run_20bd4a7b): when ``exclude_filenames`` is non-empty the
         session is a non-owner channel — the shared pre-baked L0 cache is

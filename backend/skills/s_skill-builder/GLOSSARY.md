@@ -93,7 +93,7 @@ synonyms — they cause confusion across the skill ecosystem.
   Guidelines, Pitfalls, Processes, Models) plus the COE Registry. Open work is not
   memory: it is a gap in its project or a ToDo.
   _Avoid:_ "context" (that's the assembled system prompt), "history" (that's raw
-  chat transcript), "knowledge" (that's `KNOWLEDGE.md`).
+  chat transcript), "knowledge" (that's `Knowledge/`).
 
 - **context** — The assembled system prompt built from the governed
   `.context/*.md` files, in priority order. Assembled by `ContextDirectoryLoader`
@@ -101,8 +101,8 @@ synonyms — they cause confusion across the skill ecosystem.
   _Avoid:_ "prompt" (too narrow — context includes memory, knowledge, projects),
   "memory" (that's one file within context).
 
-- **knowledge** — Domain facts, architecture docs, and reference material in
-  `.context/KNOWLEDGE.md` and `Knowledge/` directories. Auto-refreshed index.
+- **knowledge** — Domain facts, architecture docs, and reference material in the
+  `Knowledge/` directories and the project Brains, found by recall.
   _Avoid:_ "memory" (curated decisions/lessons), "notes" (that's `Knowledge/Notes/`).
 
 - **DailyActivity** — Raw per-session log at `Knowledge/DailyActivity/YYYY-MM-DD.md`.

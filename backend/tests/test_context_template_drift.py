@@ -324,7 +324,8 @@ def test_collect_includes_the_drift_source(env, monkeypatch):
     monkeypatch.setattr(ctd, "default_templates_dir", lambda: tpl)
     result = aa.collect(ws)
     assert [i.source for i in result.items] == ["template_drift"]
-    assert result.counts == {aa.TIER_BLOCKING: 0, aa.TIER_REVIEW: 1}
+    assert result.counts == {aa.TIER_BLOCKING: 0, aa.TIER_REVIEW: 1,
+                             aa.HANDLER_PERSON: 1, aa.HANDLER_AGENT: 0}
 
 
 @pytest.mark.parametrize("raw", [
@@ -370,7 +371,7 @@ def test_a_failing_seed_record_never_stops_seeding(env, monkeypatch):
 
 
 SKELETONS = ("USER.md", "STEERING.md", "TOOLS.md", "MEMORY.md", "EVOLUTION.md",
-             "TIMELINE.md", "KNOWLEDGE.md")
+             "TIMELINE.md")
 
 
 def test_covered_set_is_the_template_owned_spec_flag(monkeypatch):

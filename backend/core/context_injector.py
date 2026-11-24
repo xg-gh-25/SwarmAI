@@ -1461,8 +1461,7 @@ async def build_resume_context(
 
     except Exception:
         # fail-LOUD (ERROR, not WARNING) + fail-SOFT (still return "" so the
-        # KNOWLEDGE.md law holds: context-load failure NEVER blocks agent
-        # startup). The counter is what makes this distinguishable from the
+        # rule holds: context-load failure NEVER blocks agent startup). The counter is what makes this distinguishable from the
         # legitimate-empty paths above — that conflation WAS the silent
         # data-loss bug (R1). We return "" exactly as before; only the
         # observability (ERROR log + failed_exception counter) is new.

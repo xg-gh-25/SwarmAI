@@ -10,7 +10,7 @@ instructions written for an older model). Both share the same red line (§4).
 
 > **What this is NOT (scope-away — read first, avoid the trap):**
 > - **NOT `context_health_hook`** — that hook runs every session and does AUTONOMOUS
->   age-decay + dedup + archive (MEMORY/KNOWLEDGE/EVOLUTION lifecycle). It does NOT do semantic compression — proof: echoed-titles + dated-pointer
+>   age-decay + dedup + archive (MEMORY/EVOLUTION lifecycle). It does NOT do semantic compression — proof: echoed-titles + dated-pointer
 >   fragments + drift numbers survive it for months. This skill is the SEMANTIC sweep
 >   the hook cannot do. **Never rebuild or duplicate the hook's autonomous cleanup.**
 > - **NOT `s_persist`** — that routes NEW knowledge by content-type to the right section.
@@ -39,13 +39,13 @@ The three classes (read out of `user_customized` + the auto-gen set):
 |-------|-------|-----------------|---------------------|
 | **System** (`user_customized=False`) | SWARMAI · IDENTITY · SOUL · AGENT | `backend/context/<F>.md` | Startup **always-overwrites** `.context/` from source + `chmod 0444`. **Edit the SOURCE in `backend/context/`, then BUILD + RESTART.** Editing `.context/` is silently overwritten. |
 | **Runtime** (`user_customized=True`) | SELF · USER · STEERING · TOOLS · MEMORY · EVOLUTION | `.context/<F>.md` (copy-if-missing) | The `.context/` copy IS the real store. **Edit `.context/` directly — instant effect next session, no build.** |
-| **Auto-generated** | none today — PROJECTS.md and KNOWLEDGE's auto *Index* section were removed 2026-08-14 | — | KNOWLEDGE is a `Knowledge/` directory index, edited directly like the other runtime files. |
+| **Auto-generated** | none today — PROJECTS.md (2026-08-14) and KNOWLEDGE.md (2026-11-24) were retired as context files | — | The `Knowledge/` directory map is SWARMAI.md § My Workspace. |
 
 **Discriminator code (cite, re-verify — do not memorize a frozen list):**
 - `backend/core/context_directory_loader.py` seeding block (~L490-526): `spec.user_customized`
   True → copy-if-missing + `chmod 0644`; False → always-overwrite + `chmod 0444`.
 - `backend/core/context_brain.py` tier map: `system` / `auto`.
-- `context_health_hook` autonomous cleanup (decay/dedup/archive). (The in-prompt PROJECTS.md index + KNOWLEDGE "## Knowledge Index" auto-nav were removed 2026-08-14 — no longer auto-generated.)
+- `context_health_hook` autonomous cleanup (decay/dedup/archive). (The in-prompt PROJECTS.md and KNOWLEDGE.md indexes were retired, 2026-08-14 and 2026-11-24.)
 
 **Gotchas that bit me:**
 - `SELF.md` is `user_customized=True` (runtime-owned, edit `.context/`) even though it
@@ -160,7 +160,7 @@ MEMORY / EVOLUTION are knowledge stores — use §1-§6 for them.
 **Look for three classes. Each candidate carries the file, the section and the evidence:**
 1. **Contradiction** — two instructions that cannot both be followed. Quote both.
 2. **Duplicate** — the same rule in two or more places. Keep it in the file that owns it
-   (SWARMAI.md § "My 12 Context Files"); elsewhere it becomes a one-line pointer or goes.
+   (SWARMAI.md § "My 11 Context Files"); elsewhere it becomes a one-line pointer or goes.
 3. **Written for an older model or an older architecture** — it compensates for something the
    current model does on its own (narrating progress, checking its work, "read the files that are
    already in your prompt"), or it describes a mechanism that no longer exists. Grep the code

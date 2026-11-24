@@ -44,7 +44,6 @@ class TestTokenBudgetMeasurement:
             "STEERING.md": "x " * 50,
             "MEMORY.md": "x " * 50,
             "EVOLUTION.md": "x " * 50,
-            "KNOWLEDGE.md": "x " * 50,
             "PROJECTS.md": "x " * 50,
             "USER.md": "x " * 50,
             "TOOLS.md": "x " * 50,
@@ -223,12 +222,12 @@ class TestBudgetMeasuresThePrompt:
         from hooks.context_health_hook import ContextHealthHook
 
         ctx = self._ctx(tmp_path)
-        (ctx / "KNOWLEDGE.md").write_text(
+        (ctx / "TOOLS.md").write_text(
             "## Notes\n- one index line\n<!-- " + "generated metadata " * 90_000 + "-->\n",
             encoding="utf-8")
         hook = ContextHealthHook()
         findings = hook._check_token_budget(ctx)
-        assert hook._token_measurement["disk_per_file"]["KNOWLEDGE.md"] > hook._EMERGENCY_THRESHOLD
+        assert hook._token_measurement["disk_per_file"]["TOOLS.md"] > hook._EMERGENCY_THRESHOLD
         assert findings == []
         assert hook._token_measurement["over_budget"] is False
 
@@ -267,9 +266,9 @@ class TestSelfReportDrift:
         hook = ContextHealthHook()
         # A file that CLAIMS "~10K tokens" but is really ~50K+ (25K words × 2.2)
         body = "Context files: ~10K tokens total.\n\n" + ("word " * 25_000)
-        ctx = self._make_ctx(tmp_path, {"KNOWLEDGE.md": body})
+        ctx = self._make_ctx(tmp_path, {"TOOLS.md": body})
         findings = hook._check_self_report_drift(ctx)
-        assert any("self-report-drift" in f and "KNOWLEDGE.md" in f for f in findings)
+        assert any("self-report-drift" in f and "TOOLS.md" in f for f in findings)
 
     def test_accurate_self_claim_no_warning(self, tmp_path):
         from hooks.context_health_hook import ContextHealthHook
@@ -279,7 +278,7 @@ class TestSelfReportDrift:
         real = ContextDirectoryLoader.estimate_tokens(body_words)
         # Claim the REAL size (within 25%)
         body = f"Context files: ~{real // 1000}K tokens total.\n\n" + body_words
-        ctx = self._make_ctx(tmp_path, {"KNOWLEDGE.md": body})
+        ctx = self._make_ctx(tmp_path, {"TOOLS.md": body})
         findings = hook._check_self_report_drift(ctx)
         assert findings == []
 
@@ -293,7 +292,7 @@ class TestSelfReportDrift:
         assert findings == []  # 5 < 5000 floor, skipped
 
     def test_budget_constants_are_not_self_claims(self, tmp_path):
-        """KNOWLEDGE.md documents budget CONSTANTS (real lines from the live file);
+        """A file documenting budget CONSTANTS (real lines from a live file);
         none is a claim about the file's own size, so none may fire drift."""
         from hooks.context_health_hook import ContextHealthHook
         hook = ContextHealthHook()
@@ -304,7 +303,7 @@ class TestSelfReportDrift:
             "| Our context files | ✅ | Static load from `.context/`; measure live |\n"
             "\n" + ("word " * 25_000)
         )
-        ctx = self._make_ctx(tmp_path, {"KNOWLEDGE.md": body})
+        ctx = self._make_ctx(tmp_path, {"TOOLS.md": body})
         assert hook._check_self_report_drift(ctx) == []
 
     def test_explicit_self_claim_variants_still_detected(self, tmp_path):
@@ -316,7 +315,7 @@ class TestSelfReportDrift:
                                    "Total context: 10K tok")):
             d = tmp_path / f"c{i}"
             d.mkdir()
-            ctx = self._make_ctx(d, {"KNOWLEDGE.md": claim + "\n\n" + ("word " * 25_000)})
+            ctx = self._make_ctx(d, {"TOOLS.md": claim + "\n\n" + ("word " * 25_000)})
             findings = hook._check_self_report_drift(ctx)
             assert any("self-report-drift" in f for f in findings), claim
 

@@ -56,7 +56,7 @@ const sampleMetadata: SystemPromptMetadata = {
   files: [
     { filename: 'SWARMAI.md', tokens: 500 },
     { filename: 'IDENTITY.md', tokens: 200 },
-    { filename: 'KNOWLEDGE.md', tokens: 1200 },
+    { filename: 'TIMELINE.md', tokens: 1200 },
   ],
   totalTokens: 1900,
   fullText: '# System Prompt\nHello world',
@@ -171,7 +171,7 @@ describe('TSCCPanel', () => {
       openFilesTab();
       expect(screen.getByText('SWARMAI.md')).toBeInTheDocument();
       expect(screen.getByText('IDENTITY.md')).toBeInTheDocument();
-      expect(screen.getByText('KNOWLEDGE.md')).toBeInTheDocument();
+      expect(screen.getByText('TIMELINE.md')).toBeInTheDocument();
     });
 
     it('shows no truncation badge: a context file is never cut', () => {

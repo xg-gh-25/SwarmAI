@@ -130,7 +130,7 @@ def test_workspace_creates_no_signals_folder():
 
 
 def test_context_files_describe_signals_only_as_archived():
-    for name in ("SWARMAI.md", "KNOWLEDGE.md"):
+    for name in ("SWARMAI.md",):
         text = (BACKEND / "context" / name).read_text(encoding="utf-8")
         for line in text.splitlines():
             if "Signals/" in line or "DailyBriefs/" in line:

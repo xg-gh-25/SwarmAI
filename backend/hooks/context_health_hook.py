@@ -1,9 +1,9 @@
 """Context Health Harness — keeps SwarmAI's brain accurate and current.
 
 Single hook, two modes:
-- **Light** (every session): refresh the KNOWLEDGE.md index
-  if workspace changed since last refresh.
-  (PROJECTS.md in-prompt index was removed 2026-08-14.)
+- **Light** (every session): refresh the FTS5 keyword stores
+  if the workspace changed since the last refresh.
+  (The PROJECTS.md and KNOWLEDGE.md indexes were retired: 2026-08-14, 2026-11-24.)
 - **Deep** (once per day): validate all 11 context files, check MEMORY.md
   accuracy vs git, detect DDD staleness, verify git health.
 
@@ -215,7 +215,7 @@ class ContextHealthHook:
     # ------------------------------------------------------------------
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
-        """Refresh KNOWLEDGE.md index, MEMORY.md index, and FTS5 keyword stores."""
+        """Refresh the MEMORY.md index and the FTS5 keyword stores."""
         # PE-4: Shared cultivation deadline (25s total for BOTH passes).
         # BackgroundHookExecutor has 30s timeout — 25s leaves 5s headroom.
         _cultivation_deadline = time.monotonic() + 25.0
@@ -1335,7 +1335,7 @@ class ContextHealthHook:
     # PROJECTS.md removed 2026-08-14 (in-prompt index deleted).
     _CONTEXT_FILES = (
         "SOUL.md", "AGENT.md", "USER.md", "STEERING.md", "TOOLS.md",
-        "MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md",
+        "MEMORY.md", "EVOLUTION.md",
     )
     # OBSERVABILITY thresholds (run_3f25a73a). These are NOT gates — the
     # assembly line does NOT truncate (XG directive 2026-06-28, pure-filesystem
@@ -1444,7 +1444,7 @@ class ContextHealthHook:
     # context") followed — on the same line, with no other number in between —
     # by "~N[K] tokens" / "≈ 30,000 tokens" / "152K tok". Used by
     # _check_self_report_drift.
-    # A bare "N tokens" is NOT a self-claim: KNOWLEDGE.md documents budget
+    # A bare "N tokens" is NOT a self-claim: a context file may document budget
     # CONSTANTS ("EPHEMERAL_HEADROOM (9,000 tokens)", "= 141,000 tokens for
     # context files", "task_budget | 128K tokens"); the old any-number regex
     # compared those against the file's own size and fired a false drift.
@@ -1458,8 +1458,8 @@ class ContextHealthHook:
     def _check_self_report_drift(self, context_dir: Path) -> list[str]:
         """Catch context files that self-report a token size diverging from reality.
 
-        A context file sometimes states its own size in prose (e.g. KNOWLEDGE.md:
-        "Context files: ~44K tokens"). When the file actually grows, that claim
+        A context file sometimes states its own size in prose (e.g. "Context
+        files: ~44K tokens"). When the file actually grows, that claim
         goes stale and the agent then *believes* a wrong number about its own
         context (the exact drift that motivated run_3f25a73a — the system
         self-reported ~44K when the real calibrated size was ~152K).

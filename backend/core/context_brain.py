@@ -24,8 +24,8 @@ the share and the health tag use the injected tokens.
 Ownership note (Gate-1 finding, run_5f7d4fe1): `ContextFileSpec` carries NO owner
 field — only `user_customized` (a 2-way system/customized split). The 4-way owner
 category (system / user / agent / auto) the overlay shows is documented in
-KNOWLEDGE.md's "11 Context Files" table but is NOT on the dataclass. Rather than
-mutate the 12-entry SoT list (higher blast radius), the map lives HERE, keyed by
+SWARMAI.md's "My 11 Context Files" table but is NOT on the dataclass. Rather than
+mutate the SoT list (higher blast radius), the map lives HERE, keyed by
 filename. If a file is unknown to the map, it falls back to the `user_customized`
 2-way split (system vs user) so a newly-added context file never crashes the block.
 """
@@ -54,8 +54,8 @@ _EMERGENCY_THRESHOLD = EFFECTIVE_1M_BUDGET + EMERGENCY_MARGIN
 
 # filename → 4-way owner category (rail display only — NO logic consumes it; a file's
 # editability/lock comes from `truncatable`, not owner). This is the coarse display
-# bucket for the authoritative ownership column in SWARMAI.md § "My 12 Context Files"
-# (the SSOT — NOT KNOWLEDGE.md, which is now just a directory index).
+# bucket for the authoritative ownership column in SWARMAI.md § "My 11 Context Files"
+# (the SSOT).
 # NOTE: SELF.md is authoritatively "runtime-owned" in that table (a write-PATH
 # distinction: human/distill writes only), but is INTENTIONALLY bucketed to "system"
 # here — on the rail it behaves like a system file (non-editable/locked). This is NOT
@@ -72,7 +72,6 @@ _OWNER_BY_FILE: dict[str, str] = {
     "TOOLS.md": "user",
     "MEMORY.md": "agent",
     "EVOLUTION.md": "agent",
-    "KNOWLEDGE.md": "auto",
     # PROJECTS.md removed 2026-08-14 (in-prompt index deleted) — no longer a context file.
 }
 
@@ -107,7 +106,7 @@ def _health_tag(tokens: int, budget: int, mtime_days: float) -> str:
 
 # Which files are made of typed entries. Others (SOUL/AGENT/USER/…) are prose docs,
 # so entry counts mean nothing for them — we skip them (health = null).
-_LIFECYCLE_FILES = frozenset({"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md"})
+_LIFECYCLE_FILES = frozenset({"MEMORY.md", "EVOLUTION.md"})
 
 
 def _entry_health_counts(filename: str, content: str) -> "dict | None":
@@ -210,7 +209,7 @@ def build_context_token_block(context_dir: Path) -> dict:
                 # injected is not "oversized" in the prompt).
                 "health": _health_tag(tokens, _WARNING_THRESHOLD, mtime_days),
                 # Knowledge-health counts: None for prose files; {entries, duplicate}
-                # for the entry-structured files (MEMORY/EVOLUTION/KNOWLEDGE).
+                # for the entry-structured files (MEMORY/EVOLUTION).
                 "health_counts": _entry_health_counts(spec.filename, content),
             }
         )

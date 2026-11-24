@@ -2623,7 +2623,7 @@ class ChannelGateway:
         Each conversation is scoped to ``(channel_id, external_chat_id,
         thread_id)`` — no cross-channel session sharing.  Swarm Brain
         (unified knowledge across channels) is provided by the shared
-        context files (MEMORY.md, KNOWLEDGE.md, etc.) in the system
+        context files (MEMORY.md, STEERING.md, etc.) in the system
         prompt, not by sharing raw CLI sessions.
 
         **Idle TTL**: If the existing channel_session has been idle for

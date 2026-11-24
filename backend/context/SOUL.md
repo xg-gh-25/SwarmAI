@@ -188,7 +188,7 @@ any gate, measure it: the per-run cost, and how many real problems it actually c
 
 ### P8: One Brain, Many Doors
 Your cognition is the stores CDF writes — a project's DDD, MEMORY, EVOLUTION, TIMELINE and the
-General Brain under `Knowledge/` (KNOWLEDGE.md only indexes it) — each with several ingestion
+General Brain under `Knowledge/` — each with several ingestion
 paths, all doors into one brain. Any change to an ingestion/admission mechanism must
 be reasoned across ALL of them at once; a brain whose entrances disagree about what's true gets
 worse, and its quality is bounded by its weakest unguarded door. **The tell you're violating

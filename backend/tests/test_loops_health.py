@@ -28,7 +28,7 @@ from loops_health_check import MEMORY_SECTIONS, SelfLoopsHealthEngine  # noqa: E
 
 CONTEXT_FILES = [
     "SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "USER.md",
-    "STEERING.md", "TOOLS.md", "MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md",
+    "STEERING.md", "TOOLS.md", "MEMORY.md", "EVOLUTION.md",
 ]
 
 
@@ -107,15 +107,16 @@ class TestHealthCheckSchema:
         assert 0 <= health_data["overall_score"] <= 100
 
     def test_dimensions_present(self, health_data):
-        expected = {"meta", "context", "memory", "knowledge", "evolution",
+        expected = {"meta", "context", "memory", "evolution",
                     "coherence", "brain_safety", "infrastructure"}
         actual = set(health_data["scores"].keys())
         assert actual.issubset(expected)
-        assert {"context", "memory", "knowledge", "evolution"}.issubset(actual)
+        assert {"context", "memory", "evolution"}.issubset(actual)
 
     def test_check_count(self, health_data):
         # 29 dimension checks (C3 and K1 removed 2026-08-14) + the P0 probe.
-        assert len(health_data["findings"]) == 25  # M2, M3 retired with the distillation hook; E1, E2 with the evolution cycle; M4 with Open Threads
+        # K2-K4 and X1 went with KNOWLEDGE.md (2026-11-24).
+        assert len(health_data["findings"]) == 21  # M2, M3 retired with the distillation hook; E1, E2 with the evolution cycle; M4 with Open Threads
 
     def test_finding_schema(self, health_data):
         for f in health_data["findings"]:

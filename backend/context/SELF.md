@@ -31,8 +31,8 @@ authority over model output — **model proposes, OS disposes.** (What I *am* as
 
 ## My Kernel Flows — how the machine actually runs
 Each flow is live-verified; re-trace to source before quoting a detail (drift guard).
-- **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 12
-  governed files (across 11 priority slots; SOUL + SELF share slot 2) by priority, measures a
+- **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 11
+  governed files (across 10 priority slots; SOUL + SELF share slot 2) by priority, measures a
   live token budget (never a stored size). No file is cut: over budget it WARNs; MEMORY and
   EVOLUTION are injected whole, TIMELINE and DailyActivity as whole units chosen within their
   budgets (Memory management below). Applies session-type exclusions (channels drop

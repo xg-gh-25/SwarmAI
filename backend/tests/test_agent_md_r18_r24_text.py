@@ -57,7 +57,7 @@ def test_r24_memory_sentence_is_the_approved_text():
     r24 = _paragraph(_agent(), "**R24.")
     assert R24_MEMORY in r24
     # The rest of R24 stays.
-    assert "KNOWLEDGE.md: index, don't inline large bodies." in r24
+    assert "KNOWLEDGE.md" not in r24  # retired as a context file 2026-11-24
     assert "EVOLUTION.md: earned entries only" in r24
     assert r24.endswith("(SOUL P6)")
 
@@ -133,7 +133,7 @@ def test_shipped_guidance_names_only_context_sections_swarmai_md_has():
 
 
 def test_shipped_guidance_has_no_stale_context_file_count_or_recall_cli_pointer():
-    count = re.compile(r"\b11 context files\b", re.IGNORECASE)
+    count = re.compile(r"\b12 (?:governed )?context files\b", re.IGNORECASE)
     recall_cli = re.compile(r"context_recall_cli(?:\.py)?[^\n]{0,80}--domains")
     hits = []
     for p in _shipped_guidance():

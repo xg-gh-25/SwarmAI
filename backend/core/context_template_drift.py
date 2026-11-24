@@ -3,8 +3,8 @@
 Seeded context files (``CONTEXT_FILES`` entries with ``user_customized=True``) are
 copied from ``backend/context/`` only when the live file is missing, and the live copy
 is authoritative afterwards. For most of them the template is only a starting
-skeleton: USER, STEERING and TOOLS are the person's, MEMORY, EVOLUTION, TIMELINE and
-KNOWLEDGE are written by the agent and CDF, so they differ from their template by
+skeleton: USER, STEERING and TOOLS are the person's, MEMORY, EVOLUTION and TIMELINE
+are written by the agent and CDF, so they differ from their template by
 design and a new skeleton is nothing to ask the person about.
 
 A few seeded files are PRODUCT-OWNED: the template IS the content (today only

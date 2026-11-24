@@ -1499,7 +1499,7 @@ class PromptBuilder:
                 logger.info("Non-owner channel DM — light context, excluding %s", exclude_files)
             # Owner DM and chat tabs: full context (no exclusion)
             #
-            # NOTE: EVOLUTION.md loads UNCONDITIONALLY on desktop (like KNOWLEDGE.md).
+            # NOTE: EVOLUTION.md loads UNCONDITIONALLY on desktop.
             # The old O2 "coding-session-only" gate (removed run_6d2cc624) excluded it
             # from non-coding sessions to save ~5K tokens — but that premise is stale:
             # EVOLUTION.md is now the cognitive failure registry (CLASS A/A′/B/C), and
@@ -1514,7 +1514,7 @@ class PromptBuilder:
             # query). Size is governed write-side by the distillation archive valve.
             # OFF-LOOP (run_cc397b0d; pool-scoped run_6a7e5a2f): load_all forks
             # `git status --porcelain` on an L1-cache-miss (context_directory_loader
-            # _is_l1_fresh_uncached) and reads ~12 context files. On the event loop
+            # _is_l1_fresh_uncached) and reads ~11 context files. On the event loop
             # that fork stalls EVERY concurrently-streaming tab's SSE. Dispatched via
             # executors.run_in on the bounded io pool (NOT the default pool) so a
             # blocking fork never saturates the shared default executor (O006/O020).
@@ -1532,7 +1532,7 @@ class PromptBuilder:
             _t_load = time.perf_counter() - _t1
 
             # recall#G ephemeral-budget observability (run_a16d61ad, design §G):
-            # the 12 context files are token-budgeted inside load_all(), but the
+            # the 11 context files are token-budgeted inside load_all(), but the
             # EPHEMERAL sections appended below (DailyActivity, audit hint, user
             # suggestions, sibling digest, editor, deferred-MCP) are NOT — they
             # just `+=` onto ephemeral_text against a fixed EPHEMERAL_HEADROOM
@@ -1757,7 +1757,7 @@ class PromptBuilder:
                     )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
-            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 12 context files (exists + a full
+            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 11 context files (exists + a full
             # read_text each) inside the async body, purely to compute token counts for a
             # DIAGNOSTIC viewer — the most expensive loop-blocker on the session-start
             # path, and duplicate work on top (the loader already read every one of these

@@ -804,6 +804,7 @@ Projects/*
 .context/STEERING.md
 .context/TOOLS.md
 .context/TIMELINE.md
+# Retired context file (RETIRED_CONTEXT_FILES): an older workspace's copy stays private.
 .context/KNOWLEDGE.md
 # Online eval scoring of the owner's real sessions (titles, snippets, reasons),
 # and the owner's agree / disagree labels on its low scores.
@@ -829,9 +830,9 @@ _PRIVACY_GITIGNORE_RULES = [
 ]
 
 # Already-tracked personal .context files to untrack on an existing workspace.
-# Framework context files (SOUL/AGENT/IDENTITY/SWARMAI/KNOWLEDGE/TOOLS.example)
+# Framework context files (SOUL/AGENT/IDENTITY/SWARMAI/SELF/TOOLS.example)
 # are DELIBERATELY excluded here — they ship publicly as the product's cognition
-# framework. Only these five are the user's personal data.
+# framework. Only these are the user's personal data.
 _PRIVATE_CONTEXT_FILES = [
     ".context/MEMORY.md",
     ".context/USER.md",
@@ -839,12 +840,15 @@ _PRIVATE_CONTEXT_FILES = [
     ".context/STEERING.md",
     ".context/TOOLS.md",
     ".context/TIMELINE.md",
+    # Retired context file (RETIRED_CONTEXT_FILES): a workspace that committed its
+    # copy gets it untracked when it runs this one-time migration.
+    ".context/KNOWLEDGE.md",
 ]
 
 # PUBLIC context files a fresh Hive is seeded with (the system-owned cognition
 # framework — who this AI is + its rules). EXPLICIT WHITELIST, never a glob/blacklist:
-# a Hive is a SHARED instance, so the private six (MEMORY/USER/EVOLUTION/STEERING/
-# TOOLS/KNOWLEDGE — this owner's personal cognition) must NEVER be seeded onto it.
+# a Hive is a SHARED instance, so the private ones (MEMORY/USER/EVOLUTION/STEERING/
+# TOOLS/TIMELINE — this owner's personal cognition) must NEVER be seeded onto it.
 # Mirrors the system-owned set in context_directory_loader. (Hive seed, run_ca7f92c1)
 _PUBLIC_CONTEXT_SEED = [
     "SWARMAI.md",
@@ -1790,7 +1794,7 @@ class SwarmWorkspaceManager:
                     "Projects/SwarmAI/"
                 ):
                     to_untrack.append(path)
-                # .context: only the five personal files (framework files stay).
+                # .context: only the personal files (framework files stay).
                 elif path in private_context:
                     to_untrack.append(path)
 
