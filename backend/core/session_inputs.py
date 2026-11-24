@@ -116,10 +116,11 @@ _WEB_TOOLS = frozenset({"webfetch", "websearch"})
 # tools whose result is third-party when the path they read is under a third-party folder
 _PATH_TOOLS = frozenset({"read", "grep", "glob"})
 # the product's own tools whose result is the session's own work (a shell command is never
-# parsed; a sub-agent's result is its own account): any other tool name cannot be told
+# parsed): any other tool name cannot be told. A sub-agent's result (Agent / Task /
+# TaskOutput) is not here: it may carry what the sub-agent fetched, so it cannot be told
 _OWN_TOOLS = frozenset({
     "bash", "bashoutput", "killshell", "killbash", "write", "edit", "multiedit", "notebookedit",
-    "ls", "agent", "task", "taskoutput", "taskstop", "todowrite", "skill", "toolsearch",
+    "ls", "taskstop", "todowrite", "skill", "toolsearch",
     "askuserquestion", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree",
     "croncreate", "crondelete", "cronlist", "sendmessage", "listagents", "schedulewakeup",
     "workflow", "reportfindings",
@@ -151,7 +152,10 @@ def third_party_tool(name: str | None,
     input, or a persisted call's display object (a Read's path; a search's is its
     pattern, so only a search whose input is known is judged by its path). False for the
     product's own tools (``_OWN_TOOLS``: a Bash command is never parsed); None when it
-    cannot be told: a tool name the product does not know, or a Read without its path."""
+    cannot be told: a tool name the product does not know, a sub-agent's result, a Read
+    without its path, or a search known only by its pattern. The accepted residual is a
+    shell command's output, and a Read of a file outside Attachments/ and Downloads/ that
+    a command or a fetch wrote (it is a step removed: an event is the extractor's account)."""
     import os
     tool = str(name or "")
     lowered = tool.casefold()
@@ -163,7 +167,7 @@ def third_party_tool(name: str | None,
         return None
     if isinstance(tool_input, str):
         if lowered != "read":
-            return False     # a persisted search shows its pattern, not the path it searched
+            return None      # a persisted search shows its pattern, not the path it searched
         raw: Any = tool_input
     elif isinstance(tool_input, Mapping):
         raw = tool_input.get("file_path") or tool_input.get("path") or ""

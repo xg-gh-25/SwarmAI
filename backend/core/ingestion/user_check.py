@@ -59,8 +59,14 @@ class Verdict:
     reason: str
 
 
+#: every field of a unit the writer renders into an every-turn file (writer._cognition_body
+#: and the entry title): the check judges all of them, so no rendered field reaches the
+#: prompt unseen by it (a "why" or "rejected" line steered by text the session read)
+CLAIM_FIELDS = ("title", "what", "how", "why", "applicability", "rejected_alternatives")
+
+
 def claim_of(unit: Any) -> str:
-    parts = [str(getattr(unit, name, "") or "") for name in ("title", "what", "how", "applicability")]
+    parts = [str(getattr(unit, name, "") or "") for name in CLAIM_FIELDS]
     return "\n".join(p for p in parts if p.strip())
 
 

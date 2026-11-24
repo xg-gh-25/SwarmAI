@@ -53,11 +53,14 @@ def test_third_party_is_decided_by_tool_name_and_path_prefix(tmp_path, monkeypat
     local = [("Bash", {"command": "curl https://example.com"}), ("Bash", {"command": "cat ~/Downloads/x"}),
              ("Bash", {"command": "grep -eevil ~/Downloads/x"}), ("Read", {"file_path": str(workspace / "a.py")}),
              ("Read", {"file_path": str(workspace / "AttachmentsOld" / "a.md")}),
-             ("Grep", {"pattern": "TODO"}), ("Grep", "TODO"),               # a persisted search: its pattern
-             ("Edit", {"file_path": str(home / "Downloads" / "x")}), ("Agent", {"description": "x"}),
-             ("Task", None), ("TodoWrite", {})]
+             ("Grep", {"pattern": "TODO"}),
+             ("Edit", {"file_path": str(home / "Downloads" / "x")}), ("TodoWrite", {})]
     unknown = [("", None), ("SomeNewFetchTool", {"url": "https://example.com"}), ("Read", {}),
-               ("Read", None), ("Read", ""), ("Read", {"file_path": "  "})]
+               ("Read", None), ("Read", ""), ("Read", {"file_path": "  "}),
+               # a persisted search shows only its pattern: where it searched cannot be told
+               ("Grep", "TODO"), ("Glob", "*.md"),
+               # a sub-agent's result may carry what it fetched
+               ("Agent", {"description": "x"}), ("Task", None), ("TaskOutput", {})]
     assert [n for n, i in third if third_party_tool(n, i) is not True] == []
     assert [n for n, i in local if third_party_tool(n, i) is not False] == []
     assert [n for n, i in unknown if third_party_tool(n, i) is not None] == []
