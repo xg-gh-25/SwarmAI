@@ -255,3 +255,23 @@ async def test_a_read_stops_at_its_call_budget(diag, monkeypatch):
     out = await hd.read(DID)
     assert out["reachable"] is True and out["truncated"] is True
     assert not [c for c in logs.calls if c[0] == "filter"]
+
+
+async def test_health_ping_access_lines_never_crowd_out_the_sessions_lines(diag):
+    """The supervisor's "GET /ping" lines share the session's stream every 2 s: a real
+    round read 678 lines, all pings. They are dropped (a 5xx answer is kept) and counted."""
+    logs, make = diag
+    h = await make()
+    stream = f"2026/11/24/[runtime-logs]{h.run_ref}"
+    logs.streams = [stream]
+    now = time.time()
+    logs.events = [_ev(now - 3000, "backend: ERROR stream_error in turn", stream)]
+    logs.events += [_ev(now - 2900 + i * 2, 'supervisor: "GET /ping HTTP/1.1" 200 -', stream) for i in range(1200)]
+    logs.events += [_ev(now - 10, 'supervisor: "POST /invocations HTTP/1.1" 503 -', stream)]
+    out = await hd.read(DID)
+    sec = out["sections"]["session"]
+    assert not any("/ping" in x for x in sec["lines"])
+    assert any("ERROR stream_error" in x for x in sec["lines"])
+    assert any(" 503 " in x for x in sec["lines"])
+    assert sec["access_lines_dropped"] == 1200
+    assert out["findings"][0]["kind"] == "session_error"

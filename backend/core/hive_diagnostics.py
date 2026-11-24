@@ -33,7 +33,8 @@ An Elastic Workers (AgentCore) round has no machine to send a command to: its ru
 writes to CloudWatch Logs, so ``read`` asks the round's carrier for that session's log events
 (core/carriers/agentcore ``log_events``, through the location's account session) in the
 round's window (its start to the end of its lifetime, or now), and gives them as one
-``session`` section in the same shape, its ``findings`` from the same rules
+``session`` section in the same shape (without HTTP access lines below 500: the supervisor's
+health pings share the session's stream), its ``findings`` from the same rules
 (``session_error`` with the last lines, or ``none_seen``). A runtime with no log group, or
 CloudWatch refusing the read, answers ``not_reachable`` with the reason.
 
@@ -140,6 +141,11 @@ _MEMCG_RE = re.compile(r"oom_memcg=([^,\s]+)")
 _FAILED_RE = re.compile(r"Failed with result '([^']+)'")
 _STOPPED_RE = re.compile(r"\bStopped\b")
 _ERROR_RE = re.compile(r"\b(?:ERROR|CRITICAL)\b|stream_error|exit code \d+")
+#: an HTTP access-log line ('"GET /ping HTTP/1.1" 200 -'): the AgentCore supervisor answers the
+#: runtime's health ping every few seconds, and its stream is the session's, so these lines
+#: would fill the budget (EC2's script leaves uvicorn's access lines out the same way). A
+#: 5xx answer is kept: it is a finding.
+_ACCESS_RE = re.compile(r'"(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \S+ HTTP/[\d.]+" ([1-4]\d\d)\b')
 
 
 def _time(line: str) -> Optional[str]:
@@ -301,6 +307,9 @@ async def _read_carrier(dispatch_id: str, row: dict, handle: Any, car: Any) -> d
                           "(/aws/bedrock-agentcore/runtimes/...) to read"}
     lines = [f"{datetime.fromtimestamp(e['at'] / 1000, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')} "
              f"{' '.join(str(e.get('message') or '').split())}" for e in got.get("events") or []]
+    read = len(lines)
+    lines = [x for x in lines if not _ACCESS_RE.search(x)]
+    access = read - len(lines)
     kept: list[str] = []
     used = 0
     for line in reversed(lines):                 # the newest whole lines within the budget
@@ -309,8 +318,9 @@ async def _read_carrier(dispatch_id: str, row: dict, handle: Any, car: Any) -> d
             break
         kept.append(line)
     kept.reverse()
-    total = max(int(got.get("total") or 0), len(lines))
-    sections = {"session": {"lines": kept, "total": total, "omitted": max(0, total - len(kept))}}
+    total = max(int(got.get("total") or 0) - access, len(lines))
+    sections = {"session": {"lines": kept, "total": total, "omitted": max(0, total - len(kept)),
+                            "access_lines_dropped": access}}
     win = {"since": datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
            "until": datetime.fromtimestamp(until, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     # every line read is the round's own: errors are counted over all of them, not only
