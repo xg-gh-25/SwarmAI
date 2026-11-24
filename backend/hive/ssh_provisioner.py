@@ -323,7 +323,10 @@ echo "uid=$(id -u)"; echo "gid=$(id -g)"; echo "user=$(id -un)"; echo "home=$hom
 echo "arch=$(uname -m)"; echo "cores=$(nproc 2>/dev/null || echo 0)"
 echo "mem_gb=$(awk '/MemTotal/ {printf "%d", $2/1048576}' /proc/meminfo 2>/dev/null || echo 0)"
 echo "disk_free_gb=$(df -Pk "$home" | awk 'NR==2 {printf "%d", $4/1048576}')"
-if docker info >/dev/null 2>&1; then echo "docker=ok"; else echo "docker=no"; fi
+if docker info >/dev/null 2>&1; then echo "docker=ok"
+elif ! command -v docker >/dev/null 2>&1; then echo "docker=missing"
+elif docker info 2>&1 | grep -qi "permission denied"; then echo "docker=denied"
+else echo "docker=stopped"; fi
 if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then echo "port=taken"; else echo "port=free"; fi
 if docker inspect swarmai-hive >/dev/null 2>&1; then echo "hive_container=yes"; else echo "hive_container=no"; fi
 # what the Host chooses from (hive/ssh_provisioner._found_profiles, _found_mounts)
@@ -455,6 +458,34 @@ for img in $(docker images --format '{{.Repository}}:{{.Tag}}' swarmai-hive-ssh)
 rm -f "$HOME/.swarmai-hive/hive.env"
 echo removed
 '''
+
+
+#: what the person does on the machine when docker is not usable there (the preflight's
+#: ``docker``): the one thing SwarmAI asks of a machine besides SSH, it does not install it
+DOCKER_HINTS = {
+    "missing": "docker is not installed on the machine; install Docker Engine there "
+               "(https://docs.docker.com/engine/install/), then Retry",
+    "denied": "this user may not use docker on the machine; add it to the docker group there "
+              "(sudo usermod -aG docker $USER, then sign in again), then Retry",
+    "stopped": "docker is installed on the machine but not running; start it there "
+               "(sudo systemctl start docker), then Retry",
+}
+
+
+def _ssh_hint(error: str, host: str) -> str:
+    """What the person can do when this Mac cannot reach the machine over SSH, read from ssh's
+    own last line; '' when it says nothing known."""
+    low = error.lower()
+    if "permission denied" in low:
+        return (f"; this computer cannot sign in to {host} without a password: add your SSH key there "
+                f"(ssh-copy-id {host}) or renew your SSH certificate, then Retry")
+    if "host key verification failed" in low:
+        return f"; this computer does not know {host}'s host key yet: run ssh {host} once in a terminal and accept it, then Retry"
+    if "could not resolve hostname" in low or "name or service not known" in low:
+        return f"; {host} does not resolve from this computer: check the name, or join the network it is on, then Retry"
+    if any(w in low for w in ("timed out", "connection refused", "no route to host", "did not finish within")):
+        return f"; {host} does not answer on SSH: check that it is running and reachable from this computer, then Retry"
+    return ""
 
 
 def _parse_kv(text: str) -> dict[str, str]:
@@ -670,14 +701,20 @@ async def _install(machine_id: str) -> None:
     region = _region(acct_row)
     version = _host_version()
 
-    facts = _parse_kv(await _run(host, _bash(PREFLIGHT_SH, str(cfg["remote_port"])), step="preflight"))
+    try:
+        out = await _run(host, _bash(PREFLIGHT_SH, str(cfg["remote_port"])), step="preflight")
+    except SshInstallError as e:               # the first contact: say what the person can do about it
+        raise SshInstallError(f"{e}{_ssh_hint(str(e), host)}") from None
+    facts = _parse_kv(out)
     if facts.get("docker") != "ok":
-        raise SshInstallError("preflight: docker does not run for this user on the machine")
+        raise SshInstallError(f"preflight: {DOCKER_HINTS.get(facts.get('docker', ''), DOCKER_HINTS['missing'])}")
     if facts.get("port") == "taken" and facts.get("hive_container") != "yes":
-        raise SshInstallError(f"preflight: port {cfg['remote_port']} is taken on the machine")
+        raise SshInstallError(f"preflight: port {cfg['remote_port']} is taken on the machine by another program; "
+                              "free it there, then Retry")
     try:
         if int(facts.get("disk_free_gb") or 0) < 5:
-            raise SshInstallError("preflight: less than 5 GB free in the home directory")
+            raise SshInstallError("preflight: less than 5 GB free in the home directory; free some space there, "
+                                  "then Retry")
     except ValueError:
         raise SshInstallError("preflight: the machine did not say how much disk is free") from None
     uid, gid, user, home = _who(facts)
@@ -710,7 +747,8 @@ async def _install(machine_id: str) -> None:
         profile, source_arn, tried = await _find_profile(host, version, _found_profiles(facts), account)
         if not profile:
             raise SshInstallError(f"identity: no AWS profile on the machine reaches the SwarmAI account {account} "
-                                  f"(tried: {', '.join(tried) or 'none found in ~/.aws'})")
+                                  f"(tried: {', '.join(tried) or 'none found in ~/.aws'}); sign in on the machine "
+                                  "with a profile of that account (for example aws configure sso), then Retry")
         cfg["source_profile"] = profile
         await _merge_config(machine_id, source_profile=profile)
     trusted = await _iam_role_arn(acct_row, region, str(source_arn))

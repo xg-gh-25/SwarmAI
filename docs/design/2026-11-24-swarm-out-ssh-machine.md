@@ -240,6 +240,8 @@ Swarm Out › 设置里加一台（§8），Host 在后台做，`status` 走 `pr
 - 证书续期提示、是否通内网不再在表单里：通内网默认开，机器卡片上有开关。
 通过 API 明确给了 profile 或挂载时照给的用。
 
+**机器要满足的只有两件事**：这台电脑能免密 SSH 上去，机器上的用户能用 docker。SwarmAI 不替人装 docker、不改系统（要 root，发行版太多，而且那是机器本身的状态、不是 Hive 的配置）。预检把不满足的情况分开说清楚：docker 没装、用户不在 docker 组、docker 没在跑；SSH 被拒、主机密钥未知、主机名解析不了、连不上；端口被占、磁盘不够、没有能访问账户的 profile。每一种都写明在机器上做哪一件事，然后点重试。
+
 1. **预检**（ssh 一次，只读）：能 BatchMode 登录；`docker info` 能用；`$HOME` 所在盘空闲 ≥ 5 GB；`remote_port` 空着；
    顺带记下 `toolbox --version` 之类常用工具能不能跑（只写进安装记录，不挡）。
 2. **窄角色（D4）。** Host 用自己的账户凭据建 `SwarmAI-Hive-<name>`：策略和 EC2 Hive 角色同一份（只读 `v*` 包，只写自己
