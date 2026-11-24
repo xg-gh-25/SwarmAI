@@ -1,6 +1,6 @@
 # 实现已定稿的设计 docs/design/2026-11-24-swarm-out-ssh-machine.md（r3）：Swarm Out 第三种执行面 S… · Audit through DELIVER
 
-Delivered: 实现已定稿的设计 docs/design/2026-11-24-swarm-out-ssh-machine.md（r3）：Swarm Out 第三种执行面 SSH 机器（首个实例是 XG 的内部 Cloud Desktop dev-dsk-<alias>-1a-0123abcd.us-west-2.amazon.com）。D1–D8 已全部定（XG 2026-11-24，D8 默认放开）。按设计 §1. Landing checks passed.
+Delivered: 实现已定稿的设计 docs/design/2026-11-24-swarm-out-ssh-machine.md（r3）：Swarm Out 第三种执行面 SSH 机器（首个实例是 XG 的内部 Cloud Desktop）。D1–D8 已全部定（XG 2026-11-24，D8 默认放开）。按设计 §1. Landing checks passed.
 
 ## Run Audit
 
