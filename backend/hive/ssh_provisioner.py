@@ -119,6 +119,28 @@ async def _set(machine_id: str, **fields: Any) -> None:
         await conn.commit()
 
 
+async def _merge_config(machine_id: str, **keys: Any) -> dict[str, Any]:
+    """Set *keys* in the machine's ``carrier_config``, reading it under the write lock: the
+    install, an update and the card's switches each change only their own keys, so a switch
+    turned while an image builds is never written back over. The merged settings."""
+    import aiosqlite
+    async with aiosqlite.connect(_db_path()) as conn:
+        await conn.execute("PRAGMA busy_timeout = 3000")
+        await conn.execute("BEGIN IMMEDIATE")
+        cur = await conn.execute("SELECT carrier_config FROM hive_instances WHERE id = ? AND carrier = ?",
+                                 (machine_id, CARRIER))
+        got = await cur.fetchone()
+        if got is None:
+            await conn.rollback()
+            raise SshInstallError("no such SSH machine")
+        raw = json.loads(got[0] or "{}")
+        raw.update(keys)
+        await conn.execute("UPDATE hive_instances SET carrier_config = ?, updated_at = datetime('now') "
+                           "WHERE id = ? AND carrier = ?", (json.dumps(raw), machine_id, CARRIER))
+        await conn.commit()
+    return raw
+
+
 def _iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
@@ -149,20 +171,69 @@ async def release_update_claim(machine_id: str) -> None:
 
 # -- settings ------------------------------------------------------------------------------
 
-def check_settings(ssh_host: Any, source_profile: Any, mounts: Any = (), cert_renew_hint: Any = "",
+def check_settings(ssh_host: Any, source_profile: Any = "", mounts: Any = None, cert_renew_hint: Any = "",
                    remote_port: Any = 18321) -> None:
-    """ValueError for anything that may not reach the machine's shell or its config file."""
+    """ValueError for anything that may not reach the machine's shell or its config file. An
+    empty *source_profile* and *mounts* None mean the install finds them on the machine."""
     if not ssh_tunnel.valid_host(ssh_host):
         raise ValueError("not an SSH host (letters, digits, dots and hyphens, optionally user@)")
-    if not isinstance(source_profile, str) or not PROFILE_RE.fullmatch(source_profile):
+    if not isinstance(source_profile, str) or (source_profile and not PROFILE_RE.fullmatch(source_profile)):
         raise ValueError("not an AWS profile name")
-    if not isinstance(mounts, (list, tuple)) or not all(_mount_ok(m) for m in mounts):
+    if mounts is not None and (not isinstance(mounts, (list, tuple)) or not all(_mount_ok(m) for m in mounts)):
         raise ValueError("each mount is an absolute path, optionally ending in :ro "
                          "(not the root, not a docker socket)")
     if not isinstance(cert_renew_hint, str) or not _HINT_RE.fullmatch(cert_renew_hint):
         raise ValueError("the certificate hint is one short line of plain text")
     if not ssh_tunnel.valid_port(remote_port):
         raise ValueError("the machine's port must be between 1024 and 65535")
+
+
+#: the directories under / that belong to the system itself, never mounted from the machine:
+#: the container has its own, and a machine's own toolchains and workspaces live elsewhere
+STANDARD_TOP_DIRS = frozenset({"bin", "boot", "dev", "etc", "home", "lib", "lib32", "lib64", "libx32",
+                               "lost+found", "media", "mnt", "opt", "proc", "root", "run", "sbin", "snap",
+                               "srv", "sys", "tmp", "usr", "var"})
+#: at most this many of the machine's profiles are asked for their identity on an install
+MAX_PROFILE_TRIES = 8
+
+
+def _found_profiles(facts: dict[str, str]) -> list[str]:
+    """The machine's AWS profile names (its preflight's ``profiles``) that may be used as the
+    source of the Hive's role: of a profile name's shape, not one SwarmAI added
+    (``swarmai-hive-*``), in name order."""
+    names = {n.strip() for n in (facts.get("profiles") or "").split(",")}
+    return sorted(n for n in names if n and PROFILE_RE.fullmatch(n) and not n.startswith("swarmai-hive-"))
+
+
+def _found_mounts(facts: dict[str, str], home: str) -> list[str]:
+    """The machine's own top-level directories to mount (its preflight's ``topdirs``,
+    ``path:rw:real`` or ``path:ro:real``, *real* where a link points): directly under /, not a
+    system directory, and neither is where it really is (a link to /var/run or / is not
+    mounted, docker would follow it); not a system directory
+    (``STANDARD_TOP_DIRS``), not the home or a directory above the home's path or real path
+    (one above it would show other users' homes), and passing ``_mount_ok``. Read-write
+    when the user can write it or a folder directly in it (``/workplace/<user>``), else
+    read-only. Holds on any Linux machine: it names no
+    directory of one company or machine."""
+    import posixpath
+    homes = {h.rstrip("/") for h in (home, facts.get("home_real") or home) if h}
+    out: set[str] = set()
+    for item in (facts.get("topdirs") or "").split(","):
+        path, _, rest = item.strip().partition(":")
+        mode, _, real = rest.partition(":")
+        real = real or path
+        if mode not in ("rw", "ro") or posixpath.dirname(path) != "/" \
+                or posixpath.basename(path) in STANDARD_TOP_DIRS:
+            continue
+        top = real.lstrip("/").split("/", 1)[0]
+        if not real.startswith("/") or not top or top in STANDARD_TOP_DIRS:
+            continue                           # the root, or a link into a system directory
+        if any(h == p or h.startswith(p + "/") for h in homes for p in (path, real)):
+            continue
+        mount = path if mode == "rw" else f"{path}:ro"
+        if _mount_ok(mount) and _mount_ok(real):
+            out.add(mount)
+    return sorted(out)
 
 
 #: what no mount may show inside the container: the docker socket (root on the machine) and
@@ -255,6 +326,21 @@ echo "disk_free_gb=$(df -Pk "$home" | awk 'NR==2 {printf "%d", $4/1048576}')"
 if docker info >/dev/null 2>&1; then echo "docker=ok"; else echo "docker=no"; fi
 if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then echo "port=taken"; else echo "port=free"; fi
 if docker inspect swarmai-hive >/dev/null 2>&1; then echo "hive_container=yes"; else echo "hive_container=no"; fi
+# what the Host chooses from (hive/ssh_provisioner._found_profiles, _found_mounts)
+profiles="$( { sed -n -e 's/^\[profile \([^]]*\)\][[:space:]]*$/\1/p' -e 's/^\[default\][[:space:]]*$/default/p' "$home/.aws/config"
+  sed -n 's/^\[\([^]]*\)\][[:space:]]*$/\1/p' "$home/.aws/credentials"; } 2>/dev/null | sort -u | paste -sd, - )"
+echo "profiles=$profiles"
+dirs=""
+for d in /*; do
+  [ -d "$d" ] || continue
+  real="$(readlink -f "$d" 2>/dev/null || echo "$d")"
+  # writable when the user can write it or a folder directly in it (/workplace/<user>)
+  if [ -w "$d" ] || [ -n "$(find "$d" -mindepth 1 -maxdepth 1 -type d -writable -print -quit 2>/dev/null)" ]; then
+    mode=rw; else mode=ro; fi
+  dirs="$dirs${dirs:+,}$d:$mode:$real"
+done
+echo "topdirs=$dirs"
+echo "home_real=$(readlink -f "$home" 2>/dev/null || echo "$home")"
 '''
 
 BUILD_SH = r'''
@@ -596,8 +682,11 @@ async def _install(machine_id: str) -> None:
         raise SshInstallError("preflight: the machine did not say how much disk is free") from None
     uid, gid, user, home = _who(facts)
     desc = f"{facts.get('arch', '?')} · {facts.get('cores', '?')} vCPU · {facts.get('mem_gb', '?')} GB"
-    raw.update(_home=home)
-    await _set(machine_id, instance_type=desc, carrier_config=json.dumps(raw))
+    found: dict[str, Any] = {"_home": home}
+    if raw.get("mounts_auto"):                 # added without mounts: the machine's own, found now
+        found["mounts"] = cfg["mounts"] = _found_mounts(facts, home)
+    await _set(machine_id, instance_type=desc)
+    await _merge_config(machine_id, **found)
     cfg["_home"] = home
 
     if not row.get("s3_bucket"):
@@ -609,12 +698,21 @@ async def _install(machine_id: str) -> None:
     await _run(host, _bash(BUILD_SH, version, str(uid), str(gid), user, home), _context(package),
                BUILD_TIMEOUT_S, "image")
 
-    out = await _run(host, _bash(IDENTITY_SH, version, cfg["source_profile"]), timeout=120, step="identity")
-    source_arn = json.loads(out.strip().splitlines()[-1]) if out.strip() else ""
-    m = _ROLE_ARN_RE.match(str(source_arn))
-    if not m or m.group(1) != str(acct_row.get("account_id")):
-        raise SshInstallError(f"identity: profile {cfg['source_profile']} is not a role of the SwarmAI account "
-                              f"{acct_row.get('account_id')} ({str(source_arn)[:80]})")
+    account = str(acct_row.get("account_id"))
+    if cfg["source_profile"]:
+        out = await _run(host, _bash(IDENTITY_SH, version, cfg["source_profile"]), timeout=120, step="identity")
+        source_arn = _arn(out)
+        m = _ROLE_ARN_RE.match(source_arn)
+        if not m or m.group(1) != account or m.group(2).startswith("SwarmAI-Hive-"):
+            raise SshInstallError(f"identity: profile {cfg['source_profile']} is not a role of the SwarmAI account "
+                                  f"{account} other than a Hive's own ({source_arn[:80]})")
+    else:                                      # added without one: the profile that reaches the account
+        profile, source_arn, tried = await _find_profile(host, version, _found_profiles(facts), account)
+        if not profile:
+            raise SshInstallError(f"identity: no AWS profile on the machine reaches the SwarmAI account {account} "
+                                  f"(tried: {', '.join(tried) or 'none found in ~/.aws'})")
+        cfg["source_profile"] = profile
+        await _merge_config(machine_id, source_profile=profile)
     trusted = await _iam_role_arn(acct_row, region, str(source_arn))
     hive_role = await _ensure_role(acct_row, region, name, trusted)
     await _set(machine_id, iam_role_name=role_name(name))
@@ -644,6 +742,34 @@ async def _install(machine_id: str) -> None:
     await _health(machine_id, version=version)
     await _set(machine_id, status="running", version=version, error_message=None)
     logger.info("ssh_provisioner: %s runs the Hive v%s", name, version)
+
+
+def _arn(out: str) -> str:
+    """The ARN the identity script printed last (a JSON string), or ''."""
+    try:
+        got = json.loads(out.strip().splitlines()[-1]) if out.strip() else ""
+    except ValueError:
+        return ""
+    return got if isinstance(got, str) else ""
+
+
+async def _find_profile(host: str, version: str, profiles: list[str], account: str) -> tuple[str, str, list[str]]:
+    """The first of *profiles* (at most MAX_PROFILE_TRIES) whose identity in the container is a
+    role of *account* other than a Hive's own narrow role (``SwarmAI-Hive-*``: a new Hive's role
+    trusting it would let that Hive's tasks assume this one): (profile, its ARN, the profiles
+    tried); ('', '', tried) when none is."""
+    tried: list[str] = []
+    for profile in profiles[:MAX_PROFILE_TRIES]:
+        tried.append(profile)
+        try:
+            arn = _arn(await _run(host, _bash(IDENTITY_SH, version, profile), timeout=120, step="identity"))
+        except SshInstallError as e:           # this profile cannot sign in: the next one
+            logger.info("ssh_provisioner: profile %s gives no identity (%s)", profile, str(e)[:120])
+            continue
+        m = _ROLE_ARN_RE.match(arn)
+        if m and m.group(1) == account and not m.group(2).startswith("SwarmAI-Hive-"):
+            return profile, arn, tried
+    return "", "", tried
 
 
 async def _retry_identity(host: str, version: str, name: str) -> str:
@@ -686,17 +812,19 @@ def _keep(coro, name: str) -> None:
     task.add_done_callback(_TASKS.discard)
 
 
-async def add(ssh_host: str, source_profile: str, name: Optional[str] = None, mounts: tuple = (),
+async def add(ssh_host: str, source_profile: str = "", name: Optional[str] = None, mounts: Optional[tuple] = None,
               cert_renew_hint: str = "", reaches_private: bool = True, general_tasks: bool = True,
               remote_port: int = 18321) -> dict[str, Any]:
     """Record a new SSH machine (``provisioning``) and install it in the background.
     ValueError for unusable settings; LookupError when the SwarmAI account is not connected;
-    FileExistsError for a name already taken."""
+    FileExistsError for a name already taken. Only *ssh_host* is needed: an empty
+    *source_profile* and *mounts* None are found on the machine by the install (and the
+    mounts again at each update); given ones are kept as given."""
     import uuid
 
     import aiosqlite
     from hive import accounts
-    check_settings(ssh_host, source_profile, list(mounts), cert_renew_hint, remote_port)
+    check_settings(ssh_host, source_profile, None if mounts is None else list(mounts), cert_renew_hint, remote_port)
     name = name or default_name(ssh_host)
     if not NAME_RE.fullmatch(name):
         raise ValueError("a name is lower-case letters, digits and hyphens, starting with a letter")
@@ -705,7 +833,8 @@ async def add(ssh_host: str, source_profile: str, name: Optional[str] = None, mo
     await accounts.ensure_swarmai_row(Path(_db_path()))
     cfg = {"ssh_host": ssh_host, "remote_port": int(remote_port), "local_port": await _free_local_port(),
            "source_profile": source_profile, "reaches_private": bool(reaches_private),
-           "general_tasks": bool(general_tasks), "mounts": list(mounts), "cert_renew_hint": cert_renew_hint}
+           "general_tasks": bool(general_tasks), "mounts": list(mounts or ()), "mounts_auto": mounts is None,
+           "cert_renew_hint": cert_renew_hint}
     now = _iso()
     row = {"id": str(uuid.uuid4()), "name": name, "account_ref": accounts.SWARMAI_ROW_ID,
            "region": (accounts.swarmai_account() or {}).get("region") or "us-east-1",
@@ -765,6 +894,8 @@ async def update(machine_id: str, version: str) -> None:
         cfg = config(row)
         facts = _parse_kv(await _run(cfg["ssh_host"], _bash(PREFLIGHT_SH, str(cfg["remote_port"])), step="preflight"))
         uid, gid, user, home = _who(facts)
+        if cfg["mounts_auto"]:                 # a directory added to the machine since is mounted now
+            cfg["mounts"] = _found_mounts(facts, home)
         acct = await _account(row["account_ref"])
         region = _region(acct)
         package = await _package(acct, region, row["s3_bucket"], version)
@@ -780,6 +911,8 @@ async def update(machine_id: str, version: str) -> None:
         swapped = True
         await _health(machine_id, version=version)
         await _run(cfg["ssh_host"], _bash(COMMIT_SH, version), timeout=120, step="update")
+        if cfg["mounts_auto"]:                 # recorded once the container with them is the one running
+            await _merge_config(machine_id, mounts=cfg["mounts"])
         await _set(machine_id, status="running", version=version, error_message=None)
         logger.info("ssh_provisioner: %s updated to v%s", row["name"], version)
     except Exception as e:  # noqa: BLE001 — restore what ran before, say why
@@ -834,15 +967,13 @@ async def remove(machine_id: str) -> dict[str, Any]:
 async def set_options(machine_id: str, general_tasks: Optional[bool] = None,
                       reaches_private: Optional[bool] = None, cert_renew_hint: Optional[str] = None) -> dict[str, Any]:
     """Change the settings that take effect without a reinstall."""
-    row = await _row(machine_id)
-    raw = json.loads(row.get("carrier_config") or "{}")
+    keys: dict[str, Any] = {}
     if general_tasks is not None:
-        raw["general_tasks"] = bool(general_tasks)
+        keys["general_tasks"] = bool(general_tasks)
     if reaches_private is not None:
-        raw["reaches_private"] = bool(reaches_private)
+        keys["reaches_private"] = bool(reaches_private)
     if cert_renew_hint is not None:
         if not _HINT_RE.fullmatch(cert_renew_hint):
             raise ValueError("the certificate hint is one short line of plain text")
-        raw["cert_renew_hint"] = cert_renew_hint
-    await _set(machine_id, carrier_config=json.dumps(raw))
-    return raw
+        keys["cert_renew_hint"] = cert_renew_hint
+    return await _merge_config(machine_id, **keys)

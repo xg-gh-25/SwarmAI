@@ -406,7 +406,8 @@ def test_settings_refuse_what_may_not_reach_the_machine():
                 "/var/run", "/run", "/var", "/tmp", "/tmp:ro"):
         with pytest.raises(ValueError):
             sp.check_settings(**dict(ok, mounts=[bad]))
-    for bad in ("", "a b", "x;id", "$(id)", "-p"):
+    sp.check_settings(**dict(ok, source_profile=""))       # empty: found on the machine at install
+    for bad in ("a b", "x;id", "$(id)", "-p"):
         with pytest.raises(ValueError):
             sp.check_settings(**dict(ok, source_profile=bad))
     for bad in ("two\nlines", "`id`", "$(id)", "a\\b", "x" * 121):

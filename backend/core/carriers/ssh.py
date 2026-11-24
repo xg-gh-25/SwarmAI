@@ -62,6 +62,7 @@ def config(row: dict[str, Any]) -> dict[str, Any]:
            "reaches_private": cfg.get("reaches_private", True) is not False,
            "general_tasks": cfg.get("general_tasks", True) is not False,
            "mounts": [m for m in (cfg.get("mounts") or []) if isinstance(m, str)],
+           "mounts_auto": cfg.get("mounts_auto") is True,
            "cert_renew_hint": str(cfg.get("cert_renew_hint") or "")[:120]}
     if not ssh_tunnel.valid_host(out["ssh_host"]):
         raise ValueError("this SSH machine has no usable SSH host")

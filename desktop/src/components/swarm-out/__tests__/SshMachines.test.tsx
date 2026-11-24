@@ -3,10 +3,12 @@
  * 2026-11-24-swarm-out-ssh-machine §8).
  *
  * Questions: (1) does each machine show the one thing that decides whether it takes tasks
- * (running, certificate expired with the renew command, unreachable with ssh's error, an
- * install error with its retry); (2) does adding one send the host, the profile, the folders
- * and the hint, after saying that tasks there run as the person; (3) does the "tasks that need
- * no private network" switch and delete reach the backend?
+ * (running, certificate expired with a renew line that names no command, unreachable with
+ * ssh's error, an install error with its retry); (2) does adding one ask for the host only and
+ * send only it, after saying that tasks there run as the person (the AWS profile and the
+ * directories are found on the machine); (3) does an opened machine show the profile and the
+ * directories it uses, and do its private-network and general-tasks switches and delete reach
+ * the backend?
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -28,7 +30,7 @@ const now = Date.now() / 1000;
 const base = {
   version: '2.5.5', instance_type: 'x86_64 · 4 vCPU · 15 GB', error_message: null, tunnel_error: '',
   config: { ssh_host: 'dev-dsk.example.com', source_profile: 'swarmai', reaches_private: true, general_tasks: true,
-    mounts: ['/apollo:ro'], cert_renew_hint: 'mwinit -o' },
+    mounts: ['/apollo:ro', '/workplace'], mounts_auto: true, cert_renew_hint: '' },
 };
 const MACHINES = [
   { ...base, id: 'm1', name: 'ok-box', status: 'running', reachable: true, cert_valid_until: now + 3600 },
@@ -56,7 +58,9 @@ describe('SSH machines section', () => {
     expect(row('ok-box').dataset.tone).toBe('ok');
     // an expired certificate is the one thing to do, shown without opening the row
     expect(row('expired-box').dataset.tone).toBe('error');
-    expect(within(row('expired-box')).getByTestId('so-ssh-renew').textContent).toContain('mwinit -o');
+    const renew = within(row('expired-box')).getByTestId('so-ssh-renew').textContent ?? '';
+    expect(renew).toMatch(/SSH/);
+    expect(renew).not.toMatch(/mwinit/);
     // unreachable: ssh's own error, when opened
     expect(row('gone-box').dataset.tone).toBe('error');
     fireEvent.click(within(row('gone-box')).getByRole('button', { name: 'gone-box' }));
@@ -67,27 +71,29 @@ describe('SSH machines section', () => {
     fireEvent.click(within(row('broken-box')).getByTestId('so-ssh-retry'));
     await waitFor(() => expect(mocks.retry).toHaveBeenCalledWith('m4'));
 
-    // the general-tasks switch and delete reach the backend
+    // what the machine uses, found on it; its switches and delete reach the backend
     fireEvent.click(within(row('ok-box')).getByRole('button', { name: 'ok-box' }));
+    expect(within(row('ok-box')).getByTestId('so-ssh-profile').textContent).toContain('swarmai');
+    expect(within(row('ok-box')).getByTestId('so-ssh-mounts').textContent).toContain('/apollo:ro');
+    expect(within(row('ok-box')).getByTestId('so-ssh-mounts').textContent).toContain('/workplace');
+    fireEvent.click(within(row('ok-box')).getByTestId('so-ssh-private'));
+    await waitFor(() => expect(mocks.options).toHaveBeenCalledWith('m1', { reaches_private: false }));
     fireEvent.click(within(row('ok-box')).getByTestId('so-ssh-general'));
     await waitFor(() => expect(mocks.options).toHaveBeenCalledWith('m1', { general_tasks: false }));
     fireEvent.click(within(row('ok-box')).getByTestId('so-ssh-delete'));
     fireEvent.click(within(row('ok-box')).getByTestId('so-ssh-delete-go'));
     await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith('m1'));
 
-    // adding one: the identity note is shown, the settings are sent as typed
+    // adding one: the identity note is shown, the host is the one field and the one thing sent
     fireEvent.click(screen.getByTestId('so-ssh-add'));
+    const form = screen.getByTestId('so-ssh-form');
     expect(screen.getByTestId('so-ssh-identity')).toBeTruthy();
+    expect(within(form).getAllByRole('textbox')).toHaveLength(1);
+    expect(within(form).queryAllByRole('checkbox')).toHaveLength(0);
     expect((screen.getByTestId('so-ssh-add-go') as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByTestId('so-ssh-host'), { target: { value: ' dev-dsk-2.example.com ' } });
-    fireEvent.change(screen.getByTestId('so-ssh-profile'), { target: { value: 'swarmai' } });
-    fireEvent.change(screen.getByTestId('so-ssh-mounts'), { target: { value: '/apollo:ro  /workplace' } });
-    fireEvent.change(screen.getByTestId('so-ssh-hint'), { target: { value: 'mwinit -o' } });
     fireEvent.click(screen.getByTestId('so-ssh-add-go'));
-    await waitFor(() => expect(mocks.add).toHaveBeenCalledWith({
-      ssh_host: 'dev-dsk-2.example.com', source_profile: 'swarmai', mounts: ['/apollo:ro', '/workplace'],
-      cert_renew_hint: 'mwinit -o', reaches_private: true,
-    }));
+    await waitFor(() => expect(mocks.add).toHaveBeenCalledWith({ ssh_host: 'dev-dsk-2.example.com' }));
     expect(onError).not.toHaveBeenCalledWith(expect.stringMatching(/./));
   });
 });

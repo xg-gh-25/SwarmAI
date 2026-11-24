@@ -223,7 +223,7 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [confirm, setConfirm] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ host: '', profile: '', mounts: '', hint: '', reachesPrivate: true });
+  const [host, setHost] = useState('');
   const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async () => {
@@ -245,13 +245,10 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
   };
   const toggle = (id: string) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const add = () => act(async () => {
-    await hiveService.addSsh({
-      ssh_host: form.host.trim(), source_profile: form.profile.trim(),
-      mounts: form.mounts.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
-      cert_renew_hint: form.hint.trim(), reaches_private: form.reachesPrivate,
-    });
+    // only the host: the install finds the AWS profile and the directories on the machine
+    await hiveService.addSsh({ ssh_host: host.trim() });
     setAdding(false);
-    setForm({ host: '', profile: '', mounts: '', hint: '', reachesPrivate: true });
+    setHost('');
   });
   const input = 'w-full border border-[var(--color-border)] rounded-md px-2 py-1 bg-[var(--color-card)] text-body';
   const list = machines ?? [];
@@ -303,6 +300,18 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
                 {typeof m.cert_valid_until === 'number' && !expired && (
                   <div className={muted} data-testid="so-ssh-cert">{t('swarmOut.ssh.certUntil', { time: clock(m.cert_valid_until) })}</div>
                 )}
+                <div className={muted} data-testid="so-ssh-profile">
+                  {m.config.source_profile ? t('swarmOut.ssh.profileUsed', { name: m.config.source_profile }) : t('swarmOut.ssh.profilePending')}
+                </div>
+                <div className={`${muted} break-words`} data-testid="so-ssh-mounts">
+                  {(m.config.mounts ?? []).length ? t('swarmOut.ssh.mountsUsed', { list: (m.config.mounts ?? []).join('  ') })
+                    : m.config.mounts_auto && m.status !== 'running' ? t('swarmOut.ssh.mountsPending') : t('swarmOut.ssh.mountsNone')}
+                </div>
+                <label className="inline-flex items-center gap-2 text-[var(--color-text-secondary)]">
+                  <input type="checkbox" checked={m.config.reaches_private !== false} disabled={busy} data-testid="so-ssh-private"
+                    onChange={(ev) => void act(() => hiveService.setSshOptions(m.id, { reaches_private: ev.target.checked }))} />
+                  {t('swarmOut.ssh.reachesPrivate')}
+                </label>
                 <label className="inline-flex items-center gap-2 text-[var(--color-text-secondary)]">
                   <input type="checkbox" checked={m.config.general_tasks !== false} disabled={busy} data-testid="so-ssh-general"
                     onChange={(ev) => void act(() => hiveService.setSshOptions(m.id, { general_tasks: ev.target.checked }))} />
@@ -338,25 +347,13 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
         ) : (
           <div className="flex flex-col gap-2.5 max-w-[520px]" data-testid="so-ssh-form">
             <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.host')}</span>
-              <input className={input} value={form.host} placeholder={t('swarmOut.ssh.hostPlaceholder')} data-testid="so-ssh-host"
-                onChange={(ev) => setForm({ ...form, host: ev.target.value })} /></label>
-            <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.profile')}</span>
-              <input className={input} value={form.profile} data-testid="so-ssh-profile" onChange={(ev) => setForm({ ...form, profile: ev.target.value })} />
-              <span className={`text-small ${dim}`}>{t('swarmOut.ssh.profileHint')}</span></label>
-            <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.mounts')}</span>
-              <input className={input} value={form.mounts} placeholder={t('swarmOut.ssh.mountsPlaceholder')} data-testid="so-ssh-mounts"
-                onChange={(ev) => setForm({ ...form, mounts: ev.target.value })} />
-              <span className={`text-small ${dim}`}>{t('swarmOut.ssh.mountsHint')}</span></label>
-            <label className="flex flex-col gap-1"><span className={`text-small ${muted}`}>{t('swarmOut.ssh.certHint')}</span>
-              <input className={input} value={form.hint} placeholder={t('swarmOut.ssh.certHintPlaceholder')} data-testid="so-ssh-hint"
-                onChange={(ev) => setForm({ ...form, hint: ev.target.value })} /></label>
-            <label className="inline-flex items-center gap-2 text-[var(--color-text-secondary)]">
-              <input type="checkbox" checked={form.reachesPrivate} onChange={(ev) => setForm({ ...form, reachesPrivate: ev.target.checked })} />
-              {t('swarmOut.ssh.reachesPrivate')}</label>
+              <input className={input} value={host} placeholder={t('swarmOut.ssh.hostPlaceholder')} data-testid="so-ssh-host"
+                onChange={(ev) => setHost(ev.target.value)} />
+              <span className={`text-small ${dim}`} data-testid="so-ssh-found-note">{t('swarmOut.ssh.foundNote')}</span></label>
             <p className="text-small" style={{ color: TONE_VAR.attention }} data-testid="so-ssh-identity">{t('swarmOut.ssh.identityNote')}</p>
             <div className="flex flex-wrap items-center gap-3">
               <button type="button" className="btn-sm btn-primary disabled:opacity-50" data-testid="so-ssh-add-go"
-                disabled={busy || !form.host.trim() || !form.profile.trim()} onClick={() => void add()}>{t('swarmOut.ssh.addConfirm')}</button>
+                disabled={busy || !host.trim()} onClick={() => void add()}>{t('swarmOut.ssh.addConfirm')}</button>
               <button type="button" className={link} onClick={() => setAdding(false)}>{t('swarmOut.setup.cancel')}</button>
             </div>
           </div>

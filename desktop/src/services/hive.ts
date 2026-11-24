@@ -334,6 +334,8 @@ export interface SshMachine {
     reaches_private: boolean | null;
     general_tasks: boolean | null;
     mounts: string[] | null;
+    /** the mounts are the machine's own top-level directories, found at each install and update */
+    mounts_auto: boolean | null;
     cert_renew_hint: string | null;
   };
   /** null while it is not running; false: its tunnel or its Hive did not answer */
@@ -344,9 +346,11 @@ export interface SshMachine {
   tunnel_error: string;
 }
 
+/** Adding a machine: only its host is needed; the install finds the AWS profile and the
+ *  mounts on the machine (a given value is kept as given). */
 export interface SshMachineAdd {
   ssh_host: string;
-  source_profile: string;
+  source_profile?: string;
   name?: string;
   mounts?: string[];
   cert_renew_hint?: string;

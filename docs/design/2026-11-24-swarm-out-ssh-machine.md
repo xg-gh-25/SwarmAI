@@ -234,13 +234,19 @@ docker run -d --name swarmai-hive --restart unless-stopped --network host \
 
 Swarm Out › 设置里加一台（§8），Host 在后台做，`status` 走 `provisioning → running`，失败是 `error` 加 `error_message`：
 
+**人只填 SSH 主机**（XG 2026-11-24：「用户不应该去操心 EC2, CloudDesktop, Hive 的各种配置」）。其余由预检从机器上拿：
+- **AWS 源 profile**：读机器 `~/.aws/config` 和 `~/.aws/credentials` 里的 profile 名，去掉 SwarmAI 自己加的 `swarmai-hive-*`，按名字顺序在容器里逐个查身份（最多 8 个），用第一个属于 SwarmAI 账户的角色，记进 `carrier_config.source_profile`；一个都没有就失败，写明账户和试过的 profile，此时还没建角色、没写 profile。
+- **挂载**：`/` 下一层的目录，去掉系统目录（bin、etc、home、opt、tmp、usr、var 等）、家目录和它真实路径的上级（Cloud Desktop 上 `/home/<user>` 指向 `/local/home/<user>`，所以 `/local` 不挂），再过挂载检查；用户能写它或它下一层的目录就读写挂，否则只读挂。每次安装和更新都重新找（`mounts_auto`），机器上新加的目录下次更新就进容器。
+- 证书续期提示、是否通内网不再在表单里：通内网默认开，机器卡片上有开关。
+通过 API 明确给了 profile 或挂载时照给的用。
+
 1. **预检**（ssh 一次，只读）：能 BatchMode 登录；`docker info` 能用；`$HOME` 所在盘空闲 ≥ 5 GB；`remote_port` 空着；
    顺带记下 `toolbox --version` 之类常用工具能不能跑（只写进安装记录，不挡）。
 2. **窄角色（D4）。** Host 用自己的账户凭据建 `SwarmAI-Hive-<name>`：策略和 EC2 Hive 角色同一份（只读 `v*` 包，只写自己
    `bridge/<name>/` 下的 `ask/`、`closed/`，只读自己的 `answer/`，`hive/provisioner.py:90-130`），打 `HiveName` 标签，
    信任人在机器上的 `source_profile` 所解析到的那个身份（由第 4 步读到的 ARN 决定）。
 3. **镜像**：Host 送构建上下文（Dockerfile + 从账户桶取到并按 `checksums.txt` 校验过的 Hive 包），机器上 `docker build`。
-4. **凭据**：写 `~/.aws/config` 里的一个新 profile `swarmai-hive-<name>`（`role_arn` = 窄角色，`source_profile` = 人填的那个），
+4. **凭据**：写 `~/.aws/config` 里的一个新 profile `swarmai-hive-<name>`（`role_arn` = 窄角色，`source_profile` = 上面找到的那个），
    只新增、不改别的 profile；在容器里用它调 `sts get-caller-identity`，**ARN 必须是这个窄角色**，不是就失败并说明。
 5. **环境**（只在启动脚本运行期间存在，见 §5.1）：`SWARMAI_MODE=hive`、`SWARMAI_CARRIER=ssh`、`SWARMAI_HIVE_NAME`、
    `SWARMAI_HIVE_BUCKET`、`AWS_REGION`、`AWS_PROFILE=swarmai-hive-<name>`、`SWARM_DATA_DIR`、`SWARMAI_PORT`、`HIVE_USER`、
