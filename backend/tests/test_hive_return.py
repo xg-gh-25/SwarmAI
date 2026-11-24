@@ -203,7 +203,7 @@ def test_a_bundle_with_two_refs_or_foreign_history_is_refused(world, monkeypatch
     foreign = tmp_path / "foreign.bundle"
     git(lone, "bundle", "create", "-q", str(foreign), f"{a}..main")
     _hive_bundle(world, file=foreign)
-    with pytest.raises(hive_return.ReturnError, match="not in this machine.s main"):
+    with pytest.raises(hive_return.ReturnError, match="not in this machine.s main and not on this machine at all"):
         asyncio.run(hive_return.prepare(DID, URL))
     # a whole history, no prerequisite
     whole = tmp_path / "whole.bundle"
@@ -863,3 +863,197 @@ def test_the_landed_commit_names_its_dispatch(world, monkeypatch):
     trailers = git(world["host"], "log", "-1", "--format=%(trailers:only,unfold)", "main")
     assert f"Hive-Dispatch: {DID}" in trailers.splitlines()
     assert git(world["host"], "rev-list", "--count", f"{before}..main") == "1"
+
+
+# ── a branch rewritten after the dispatch ────────────────────────────────────
+
+def _rewritten(w, *, hive_file: str = "src/a.py", hive_text: str = "a = 2\n") -> dict:
+    """main gets a config line and a feature, the Hive starts from them and commits; then
+    main is rewritten (the config line scrubbed, the feature re-applied with a new sha):
+    the bundle's prerequisite is the old feature commit, still in this machine's objects."""
+    host = w["host"]
+    start = git(host, "rev-parse", "main")
+    _commit(host, "conf.txt", "host = real.example\nport = 1\n", "add the config")
+    old = _commit(host, "src/b.py", "b = 1\n", "add the feature")
+    git(host, "push", "-q", "origin", "main")
+    git(w["hive"], "remote", "set-url", "origin", str(w["origin"]))
+    git(w["hive"], "pull", "-q", "--ff-only", "origin", "main")
+    git(w["hive"], "remote", "set-url", "origin", URL)
+    hive_tip = _commit(w["hive"], hive_file, hive_text, "the Hive's fix")
+    git(host, "checkout", "-q", "-B", "main", start)              # the scrub: one line differs
+    _commit(host, "conf.txt", "host = example.invalid\nport = 1\n", "add the config")
+    git(host, "cherry-pick", old)
+    new = git(host, "rev-parse", "main")
+    assert new != old
+    return {"old": old, "new": new, "hive_tip": hive_tip}
+
+
+def _key_of_dir() -> str:
+    from core import hive_bundle
+    return hive_bundle.key(DIR)
+
+
+def test_a_rewritten_branch_brings_the_bundle_home_replayed_onto_the_mapped_base(world, monkeypatch):
+    """The base the Hive built on was rewritten here (same patch, new sha; an earlier
+    commit differs by one line): the commits come home replayed onto its equivalent, the
+    review shows only the Hive's change (protected paths marked on the replayed diff), the
+    landed tree is the branch plus exactly that diff, and a later turn replays to the same
+    commits, so only what came after lands."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    r = _rewritten(world)
+    _commit(world["hive"], "scripts/x.sh", "echo\n", "a build step")
+    _hive_bundle(world)
+    main_before = git(host, "rev-parse", "main")
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    # what the Hive built against that main no longer has is named: the scrubbed line's file
+    assert st["base_mapped"] == {"from": r["old"], "to": r["new"], "differs": ["conf.txt"], "differs_total": 1}
+    assert st["base"] == r["new"] and st["tip"] != st["hive_tip"]
+    assert git(host, "rev-parse", st["ref"]) == st["tip"]                  # the reviewed tip
+    assert git(host, "rev-parse", st["hive_ref"]) == st["hive_tip"]         # the Hive's own, kept
+    assert git(host, "rev-parse", f"{st['tip']}~2") == r["new"]
+    assert sorted(f["path"] for f in st["files"]) == ["scripts/x.sh", "src/a.py"]   # not conf.txt
+    assert st["protected_files"] == ["scripts/x.sh"]
+    assert [c["subject"] for c in st["commits"]] == ["a build step", "the Hive's fix"]
+    assert git(host, "rev-parse", "main") == main_before                    # nothing moved yet
+    assert git(host, "status", "--porcelain") == ""
+    assert hive_return.load(DID, st["key"])["base_mapped"]["to"] == r["new"]
+    review_diff = git(host, "diff", st["base"], st["tip"])
+    out = hive_return.land(DID, st["key"], st["tip"])
+    assert out["landed"]
+    assert git(host, "diff", main_before, "main") == review_diff           # exactly what was reviewed
+    assert (host / "conf.txt").read_text() == "host = example.invalid\nport = 1\n"
+    msg = git(host, "log", "-1", "--format=%B", "main")
+    assert f"replayed onto {r['new'][:12]}" in msg and f"at refs/hive/{DID}/{st['key']}-hive" in msg
+    assert "The two bases differ in: conf.txt." in msg
+    first = st["tip"]
+    _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
+    _hive_bundle(world)
+    st2 = asyncio.run(hive_return.prepare(DID, URL))
+    assert st2["base"] == first and [f["path"] for f in st2["files"]] == ["src/c.py"]
+    landed_head = git(host, "rev-parse", "main")
+    assert hive_return.land(DID, st2["key"], st2["tip"])["landed"]
+    assert git(host, "diff", "--name-only", landed_head, "main") == "src/c.py"
+
+
+def test_a_rewritten_base_with_no_equivalent_is_refused_as_before(world, monkeypatch):
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    r = _rewritten(world)
+    git(host, "reset", "-q", "--hard", "main~1")                           # the feature changed too
+    _commit(host, "src/b.py", "b = 2\n", "add the feature")
+    _hive_bundle(world)
+    before = git(host, "rev-parse", "main")
+    with pytest.raises(hive_return.ReturnError) as e:
+        asyncio.run(hive_return.prepare(DID, URL))
+    assert str(e.value) == (f"the bundle builds on {r['old'][:12]}, which is not in this machine's main "
+                            "(bring main up to date with its upstream, then take the commits back again)")
+    assert git(host, "rev-parse", "main") == before and hive_return.load(DID, _key_of_dir()) is None
+
+
+def test_a_rewritten_base_with_two_equivalents_is_refused(world, monkeypatch):
+    """Two commits of main make the old base's change: the one with its author and subject
+    is its equivalent; two of those are refused, naming them."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    r = _rewritten(world)
+    git(host, "revert", "--no-edit", "HEAD")
+    git(host, "cherry-pick", "-n", r["old"])
+    git(host, "commit", "-q", "-m", "the feature again, under another subject")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert (st["base_mapped"]["from"], st["base_mapped"]["to"]) == (r["old"], r["new"])   # the subject decided
+    git(host, "revert", "--no-edit", "HEAD")
+    git(host, "cherry-pick", r["old"])                                # same author and subject
+    again = git(host, "rev-parse", "HEAD")
+    with pytest.raises(hive_return.ReturnError, match="2 commits of main make the same change") as e:
+        asyncio.run(hive_return.prepare(DID, URL))
+    assert r["new"][:12] in str(e.value) and again[:12] in str(e.value)
+
+
+def test_a_replay_that_conflicts_is_refused_naming_the_file(world, monkeypatch):
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    r = _rewritten(world, hive_file="conf.txt", hive_text="host = real.example\nport = 2\n")
+    _hive_bundle(world)
+    before = git(host, "rev-parse", "main")
+    ref = f"refs/hive/{DID}/{_key_of_dir()}"
+    with pytest.raises(hive_return.ReturnError,
+                       match=rf"conflicts in conf\.txt; take the change over by hand from {ref}-hive"):
+        asyncio.run(hive_return.prepare(DID, URL))
+    assert git(host, "rev-parse", f"{ref}-hive") == r["hive_tip"]           # kept for the takeover
+    # the run's ref (a next round starts from it) never names the history main rewrote
+    assert subprocess.run(["git", "rev-parse", "-q", "--verify", ref], cwd=host,
+                          capture_output=True).returncode != 0
+    assert hive_return.load(DID, _key_of_dir()) is None and git(host, "rev-parse", "main") == before
+    assert git(host, "status", "--porcelain") == ""
+
+
+def test_a_second_rewrite_after_a_replayed_landing_still_takes_the_next_turn(world, monkeypatch):
+    """main is rewritten again after a replayed landing (the landing too): the next turn's
+    commits replay onto the newest equivalent, and the Hive tip that landed is found in
+    that replay, so only what came after it is reviewed and landed."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    r = _rewritten(world)
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    hive_return.land(DID, st["key"], st["tip"])
+    landing = git(host, "rev-parse", "main")
+    git(host, "checkout", "-q", "-B", "main", f"{r['new']}~2")               # the second scrub
+    _commit(host, "conf.txt", "host = scrubbed.invalid\nport = 1\n", "add the config")
+    git(host, "cherry-pick", r["new"])
+    newer = git(host, "rev-parse", "main")
+    git(host, "cherry-pick", landing)
+    _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
+    _hive_bundle(world)
+    st2 = asyncio.run(hive_return.prepare(DID, URL))
+    assert st2["base_mapped"]["to"] == newer
+    assert [f["path"] for f in st2["files"]] == ["src/c.py"]
+    head = git(host, "rev-parse", "main")
+    assert hive_return.land(DID, st2["key"], st2["tip"])["landed"]
+    assert git(host, "diff", "--name-only", head, "main") == "src/c.py"
+
+
+def test_a_replay_onto_more_than_one_rewritten_base_says_so_not_a_merge(world, monkeypatch):
+    from core import hive_return
+    r = _rewritten(world)
+    git(world["hive"], "bundle", "create", "-q", str(world["tmp"] / "x.bundle"), f"{r['old']}..main")
+    git(world["host"], "fetch", "-q", str(world["tmp"] / "x.bundle"), "main:refs/tmp/hive")
+    two = {r["old"]: r["new"], f"{r['old']}~1": f"{r['new']}~1"}
+    with pytest.raises(hive_return.ReturnError, match="build on 2 commits main rewrote") as e:
+        hive_return._replay(world["host"], "refs/heads/main", "refs/tmp/hive", r["hive_tip"], two)
+    assert "merge" not in str(e.value)
+
+
+def test_a_person_only_path_replayed_onto_a_mapped_base_is_still_held(world, monkeypatch):
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    host = world["host"]
+    _rewritten(world, hive_file=".githooks/pre-commit", hive_text="#!/bin/sh\necho hi\n")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["base_mapped"] and ".githooks/pre-commit" in st["protected_files"]
+    before = git(host, "rev-parse", "main")
+    with pytest.raises(hive_return.ReturnError, match=r"\.githooks/pre-commit"):
+        hive_return.land(DID, st["key"], st["tip"], allow_git_exec=False)
+    assert git(host, "rev-parse", "main") == before
+
+
+def test_a_merge_built_on_a_rewritten_base_is_refused(world, monkeypatch):
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    hive = world["hive"]
+    _rewritten(world)
+    git(hive, "checkout", "-q", "-b", "side", "HEAD~1")
+    _commit(hive, "src/d.py", "d = 1\n", "side work")
+    git(hive, "checkout", "-q", "main")
+    git(hive, "merge", "-q", "--no-edit", "side")
+    _hive_bundle(world)
+    with pytest.raises(hive_return.ReturnError, match="include a merge"):
+        asyncio.run(hive_return.prepare(DID, URL))

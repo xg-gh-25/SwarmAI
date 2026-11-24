@@ -556,6 +556,10 @@ export interface SwarmOutReturn {
   commits: { sha: string; subject: string }[];
   /** the checkout has uncommitted edits: landing may refuse if they touch these files */
   checkout_dirty?: boolean;
+  /** this machine's branch rewrote the commit the Hive built on: the commits shown were
+   *  replayed onto its equivalent (``to``, the same change) and are what lands; ``differs``:
+   *  the paths where the two bases' trees differ (at most 50; ``differs_total`` counts all) */
+  base_mapped?: { from: string; to: string; differs?: string[]; differs_total?: number };
   status: 'prepared' | 'landed' | 'rejected';
 }
 

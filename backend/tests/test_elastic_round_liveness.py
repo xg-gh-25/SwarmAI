@@ -323,6 +323,28 @@ async def test_a_rerun_imports_an_unrecorded_bundle(world, monkeypatch):  # noqa
     assert _git(host, "rev-parse", "main") == one                     # no branch here moved
 
 
+async def test_a_rerun_after_main_was_rewritten_never_starts_from_the_rewritten_history(world, monkeypatch):  # noqa: F811
+    """main was rewritten after the dispatch (here from its first commit on, so the old
+    and new histories share nothing): the unrecorded bundle is replayed onto the new
+    equivalent, and the next round starts from the replayed tip, never from a commit
+    main no longer has (it would be shipped to the Hive again)."""
+    host, one, two, key, row = await _returned(world, monkeypatch, outcome_names_bundle=False)
+    tree = _git(host, "rev-parse", f"{one}^{{tree}}")
+    new_one = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-m", "one"],
+                             cwd=host, check=True, capture_output=True,
+                             text=True, env={**__import__("os").environ, "GIT_AUTHOR_DATE": "@1 +0000",
+                                             "GIT_COMMITTER_DATE": "@1 +0000"}).stdout.strip()
+    _git(host, "checkout", "-q", "-B", "main", new_one)
+    assert new_one != one
+    starts = car._returned_starts(DID, row)
+    sha = starts[0]["sha"]
+    assert sha not in (one, two) and _git(host, "rev-parse", f"{sha}^") == new_one
+    assert subprocess.run(["git", "merge-base", "--is-ancestor", one, sha], cwd=host).returncode != 0
+    assert _git(host, "rev-parse", f"refs/hive/{DID}/{key}") == sha
+    assert _git(host, "rev-parse", f"refs/hive/{DID}/{key}-hive") == two     # never shipped
+    assert _git(host, "show", f"{sha}:a.txt") == "2"
+
+
 async def test_a_recorded_bundle_leaves_the_start_as_before(world, monkeypatch):  # noqa: F811
     host, one, _two, key, row = await _returned(world, monkeypatch, outcome_names_bundle=True)
     starts = car._returned_starts(DID, row)

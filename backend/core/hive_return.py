@@ -10,10 +10,24 @@ here, trusting nothing the Hive reported beyond "there is a bundle with this sha
 - the bundle's bytes have the sha256 the run's outcome named, within the size limit;
 - ``git bundle verify`` passes, it has exactly one ref, and every prerequisite is an
   ancestor of this repository's main branch (the branch itself, not its upstream: a
-  prerequisite only the upstream has is refused until main is brought up to date);
+  prerequisite only the upstream has is refused until main is brought up to date), or
+  it has its equivalent there, as when main's history was rewritten since the
+  dispatch: the prerequisite is still on this machine and exactly one commit of main
+  makes the same change (``git patch-id --stable``, among the newest
+  ``EQUIVALENT_WINDOW`` commits since their merge-base; author and subject decide
+  between several);
 - it is fetched with fsck, without tags or submodules, into
   ``refs/hive/<dispatch>/<key>`` only: no branch or tag here can move;
-- the base is this machine's own ``merge-base`` of that tip and the main branch.
+- the base is this machine's own ``merge-base`` of that tip and the main branch. When a
+  prerequisite was mapped to its equivalent, the bundle is fetched into
+  ``refs/hive/<dispatch>/<key>-hive`` only and the Hive's commits are replayed onto that
+  equivalent from git objects only (no worktree, no hook: ``_replay``); the replayed
+  commits are what is reviewed and landed, and only then does ``refs/hive/<dispatch>/<key>``
+  name them, so a next round that starts from that ref never ships the history main
+  rewrote (the ``-hive`` ref is never shipped). The review says ``base_mapped``: the old
+  base, its equivalent and the paths where the two bases' trees differ (what the Hive
+  built against that main no longer has). A replay that conflicts is refused naming the
+  files; the Hive's own commits stay at the ``-hive`` ref for a takeover by hand.
 
 What the person reviews: the files with their line counts in review order
 (``core.review_order``: source, then tests, then supporting files), the commits (their messages
@@ -34,7 +48,8 @@ protected file.
 repository in the run's kept record is named by no turn outcome (its turn was cut off
 before its record was sealed), fetch it into ``refs/hive/<dispatch>/<key>`` with the same
 checks ``prepare`` makes (the bytes against the record's sha256 and size, verify, one
-ref, prerequisites in the main branch, fsck), so the next round starts from it. Nothing
+ref, prerequisites in the main branch or with their one equivalent there, fsck; a mapped
+one is replayed as ``prepare`` replays it), so the next round starts from it. Nothing
 is shown or landed from it: the person reviews what the next round returns.
 
 ``land(dispatch_id, key, tip, allow_git_exec)``: only for the tip prepared and shown;
@@ -314,36 +329,214 @@ def _bundle_header(path: Path) -> tuple[list[str], list[tuple[str, str]]]:
     return prereq, refs
 
 
+#: how many of the branch's newest commits since its merge-base with a missing
+#: prerequisite are looked through for the prerequisite's equivalent; one older than
+#: that is not found (the bundle is refused as having none)
+EQUIVALENT_WINDOW = 2000
+
+#: one commit's own change as ``git patch-id`` reads it; the same command for the
+#: prerequisite and for the branch's commits, so their ids compare whatever the diff
+#: settings here are (merges have no patch: they match nothing)
+_PATCH_LOG = ("log", "-p", "--diff-merges=off", "--no-renames", "--binary", "--no-ext-diff",
+              "--no-textconv", "--no-color", "--format=commit %H")
+
+
+def _patch_ids(repo: Path, *revs: str) -> dict[str, str]:
+    """{commit: stable patch id} of the commits ``git log *revs`` lists (newest first);
+    a merge, or a commit that changes nothing, has none. The log streams into
+    ``git patch-id`` (no patch text is held here)."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
+    try:
+        with subprocess.Popen(["git", *_SAFE, *_PATCH_LOG, *revs, "--"], cwd=str(repo), env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as log:
+            try:
+                p = subprocess.run(["git", "patch-id", "--stable"], cwd=str(repo), env=env, stdin=log.stdout,
+                                   capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
+            finally:
+                log.stdout.close()
+            rc = log.wait(timeout=GIT_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReturnError(f"git could not run ({type(exc).__name__})") from None
+    if rc != 0 or p.returncode != 0:
+        raise ReturnError("git patch-id failed")
+    out: dict[str, str] = {}
+    for line in p.stdout.decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and _SHA_RE.fullmatch(parts[1]):
+            out[parts[1]] = parts[0]
+    return out
+
+
+def _equivalents(repo: Path, sha: str, branch: str) -> list[str]:
+    """The commits of *branch* that make the same change as *sha* (a commit this machine
+    has that *branch* does not contain): the same stable patch id, among the newest
+    ``EQUIVALENT_WINDOW`` commits since their merge-base (of the whole branch when they
+    have none: a rewrite from the root commit on). Several are narrowed to the ones
+    with the same author name, email and subject (when none has them, all stay); [] when
+    there is none (or *sha* is a merge, or changes nothing)."""
+    own = _patch_ids(repo, "--max-count=1", sha).get(sha)
+    if own is None:
+        return []
+    mb = _git(repo, "merge-base", sha, branch)
+    since = mb.stdout.decode().strip()
+    # no merge-base: the rewrite reached the root commit; the newest commits of the branch
+    window = f"{since}..{branch}" if mb.returncode == 0 and _SHA_RE.fullmatch(since) else branch
+    hits = [c for c, pid in _patch_ids(repo, "--no-merges", f"--max-count={EQUIVALENT_WINDOW}",
+                                       window).items() if pid == own]
+    if len(hits) > 1:
+        def ident(c: str) -> str:
+            return _out(repo, "show", "-s", "--no-show-signature", "--format=%an%x00%ae%x00%s", c)
+        mine = ident(sha)
+        same = [c for c in hits if ident(c) == mine]
+        if same:
+            return same
+    return hits
+
+
 def _verify_and_fetch(repo: Path, branch: str, bundle: Path, local_ref: str,
-                      also: tuple[str, ...] = ()) -> tuple[str, str]:
-    """(tip, base) after every check; the tip is at *local_ref* only. Every
+                      also: tuple[str, ...] = ()) -> tuple[str, str, dict[str, str]]:
+    """(tip, base, mapped) after every check; the tip is at *local_ref* only (when a
+    prerequisite was mapped: at ``<local_ref>-hive`` only, *local_ref* is not moved). Every
     prerequisite must be in *branch* itself (not only in its upstream): the commits
     are reviewed and landed against that branch. *also*: a Swarm Run child's commits
     may build on its lead run's snapshot refs instead (they are material for that run,
-    never landed: design 2026-10-31-swarm-run §5.4)."""
+    never landed: design 2026-10-31-swarm-run §5.4). A prerequisite in neither, but on
+    this machine, with exactly one equivalent on *branch* (``_equivalents``: the branch's
+    history was rewritten since the dispatch) is accepted: *mapped* is {prerequisite:
+    equivalent}, and the caller replays the commits onto it (``_take_replayed``) before
+    anything is reviewed; *base* is then that equivalent (the caller takes the merge-base
+    of the replayed tip)."""
     prereq, refs = _bundle_header(bundle)
     if len(refs) != 1:
         raise ReturnError(f"the bundle has {len(refs)} refs; one is expected")
     if not prereq:
         raise ReturnError("the bundle carries a whole history, not commits on top of this repository")
     short = branch.replace("refs/heads/", "")
+    mapped: dict[str, str] = {}
     for sha in prereq:
-        if _git(repo, "merge-base", "--is-ancestor", sha, branch).returncode != 0 and not any(
+        if _git(repo, "merge-base", "--is-ancestor", sha, branch).returncode == 0 or any(
                 _git(repo, "merge-base", "--is-ancestor", sha, ref).returncode == 0 for ref in also):
+            continue
+        behind = f"(bring {short} up to date with its upstream, then take the commits back again)"
+        if _git(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
             raise ReturnError(f"the bundle builds on {sha[:12]}, which is not in this machine's {short} "
-                              f"(bring {short} up to date with its upstream, then take the commits back again)")
+                              f"and not on this machine at all, so no rewritten copy of it on {short} can "
+                              f"be looked for either {behind}")
+        eq = _equivalents(repo, sha, branch)
+        if not eq:
+            raise ReturnError(f"the bundle builds on {sha[:12]}, which is not in this machine's {short} {behind}")
+        if len(eq) > 1:
+            raise ReturnError(f"the bundle builds on {sha[:12]}, which is not in this machine's {short}; "
+                              f"{len(eq)} commits of {short} make the same change ("
+                              + ", ".join(c[:12] for c in eq[:5]) + ("…" if len(eq) > 5 else "")
+                              + "), so which one it became is not clear: take the change over by hand")
+        mapped[sha] = eq[0]
     if _git(repo, "bundle", "verify", "-q", str(bundle)).returncode != 0:
         raise ReturnError("git bundle verify failed")
     tip, ref = refs[0]
+    into = _hive_ref(local_ref) if mapped else local_ref
     _out(repo, "-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true", "fetch", "-q",
          "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", str(bundle),
-         f"+{ref}:{local_ref}")
-    if _out(repo, "rev-parse", "--verify", f"{local_ref}^{{commit}}") != tip:
+         f"+{ref}:{into}")
+    if _out(repo, "rev-parse", "--verify", f"{into}^{{commit}}") != tip:
         raise ReturnError("the fetched tip is not the bundle's")
+    if mapped:
+        # the replay decides the base (a rewrite from the root shares no history with it)
+        return tip, next(iter(mapped.values())), mapped
     base = _out(repo, "merge-base", tip, branch)
     if not _SHA_RE.fullmatch(base):
         raise ReturnError("the commits share no history with the main branch")
-    return tip, base
+    return tip, base, mapped
+
+
+def _hive_ref(local_ref: str) -> str:
+    """Where the Hive's own commits are kept when they were replayed (never shipped)."""
+    return f"{local_ref}-hive"
+
+
+#: the most paths where the two bases differ that the review lists (the count is whole)
+MAX_DIFFERS_SHOWN = 50
+
+
+def _take_replayed(repo: Path, branch: str, local_ref: str, hive_tip: str,
+                   mapped: dict[str, str]) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Replay the Hive's commits (at ``<local_ref>-hive``) onto the equivalent of their
+    base (``_replay``) and point *local_ref* at the replayed tip. Returns (replayed tip,
+    {Hive commit: replayed commit}, ``base_mapped``: ``{from, to, differs,
+    differs_total}``, *differs* the paths where the old base's tree and its equivalent's
+    differ). *local_ref* is not moved when the replay is refused."""
+    tip, done = _replay(repo, branch, _hive_ref(local_ref), hive_tip, mapped)
+    (old, new), = mapped.items()
+    raw = _git(repo, *_SAFE, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
+               "--no-textconv", old, new, check=True).stdout.decode("utf-8", "replace")
+    differs = [p for p in raw.split("\0") if p]
+    _out(repo, "update-ref", "-m", "hive return: replayed onto the rewritten branch", local_ref, tip)
+    return tip, done, {"from": old, "to": new, "differs": differs[:MAX_DIFFERS_SHOWN],
+                       "differs_total": len(differs)}
+
+
+def _replay(repo: Path, branch: str, hive_ref: str, tip: str, mapped: dict[str, str]) -> tuple[str, dict[str, str]]:
+    """The Hive's commits ``<prerequisite>..tip`` put again onto the prerequisite's
+    equivalent (*mapped*, from ``_verify_and_fetch``), one by one, from git objects only:
+    each is a ``merge-tree`` of the chain so far and the commit over its own parent (a
+    cherry-pick without a worktree, a hook or a filter), committed with the commit's own
+    author, committer, dates and message, so the same bundle replays to the same commits
+    every time (a later turn's ancestry check holds). Returns (replayed tip, {Hive commit:
+    replayed commit}). Refused when the commits include a merge or build on more than one
+    rewritten commit (more than one base to place), or one of them conflicts (the
+    message names the files); *hive_ref* (the Hive's own commits) is named for the
+    takeover by hand."""
+    short = branch.replace("refs/heads/", "")
+    merges = _out(repo, "rev-list", "--count", "--min-parents=2", tip, *(f"^{p}" for p in mapped))
+    if merges != "0":
+        raise ReturnError(f"the commits build on a commit {short} rewrote and include a merge, which is not "
+                          f"replayed here; take the change over by hand from {hive_ref}")
+    if len(mapped) != 1:
+        raise ReturnError(f"the commits build on {len(mapped)} commits {short} rewrote, which is not replayed "
+                          f"here; take the change over by hand from {hive_ref}")
+    (old, new), = mapped.items()
+    chain = _out(repo, "rev-list", "--reverse", "--topo-order", tip, f"^{old}").split()
+    cur, done = new, {}
+    for c in chain:
+        parent = _out(repo, "rev-parse", "--verify", f"{c}^1")
+        mt = _git(repo, *_SAFE, "merge-tree", "--write-tree", "--no-messages", "--name-only", "-z",
+                  f"--merge-base={parent}", cur, c)
+        fields = mt.stdout.decode("utf-8", "replace").split("\0")
+        if mt.returncode == 1:
+            files = sorted({f for f in fields[1:] if f})
+            more = f" and {len(files) - 10} more" if len(files) > 10 else ""
+            raise ReturnError(f"the commits do not replay onto {new[:12]}, the commit of {short} that makes the "
+                              f"same change as {old[:12]} they build on ({short}'s history was rewritten): "
+                              f"{c[:12]} conflicts in " + ", ".join(files[:10]) + more
+                              + f"; take the change over by hand from {hive_ref}")
+        if mt.returncode != 0 or not _SHA_RE.fullmatch(fields[0]):
+            raise ReturnError("git merge-tree failed (git 2.40 or newer is needed)")
+        cur = _recommit(repo, c, fields[0], cur)
+        done[c] = cur
+    return cur, done
+
+
+def _recommit(repo: Path, commit: str, tree: str, parent: str) -> str:
+    """A commit object with *commit*'s author, committer, encoding and message on *tree*
+    over *parent* (its signature is dropped: it signed other content)."""
+    raw = _git(repo, "cat-file", "commit", commit, check=True).stdout
+    head, _, msg = raw.partition(b"\n\n")
+    kept, keep = [], False
+    for line in head.split(b"\n"):
+        if not line.startswith(b" "):            # a header; " ..." continues the one before
+            keep = line.split(b" ", 1)[0] in (b"author", b"committer", b"encoding")
+        if keep:
+            kept.append(line)
+    obj = b"tree %s\nparent %s\n" % (tree.encode(), parent.encode()) + b"\n".join(kept) + b"\n\n" + msg
+    try:
+        p = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"], cwd=str(repo), input=obj,
+                           capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReturnError(f"git could not run ({type(exc).__name__})") from None
+    new = p.stdout.decode().strip()
+    if p.returncode != 0 or not _SHA_RE.fullmatch(new):
+        raise ReturnError("the replayed commit could not be written")
+    return new
 
 
 #: paths that change how git itself behaves on this machine (filters, drivers, LFS,
@@ -482,13 +675,25 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
     def _work() -> dict[str, Any]:
         branch = _target_branch(repo, declared.get("ref"))
         lead = _lead_refs(repo, row)
-        tip, base = _verify_and_fetch(repo, branch, bundle, local_ref, lead)
+        tip, base, mapped = _verify_and_fetch(repo, branch, bundle, local_ref, lead)
+        hive_tip, replayed, moved = tip, {}, {}
+        if mapped:
+            # this machine's branch was rewritten since the dispatch: what is reviewed and
+            # landed is the Hive's commits replayed onto the equivalent of their base
+            # (the ref then names the replayed tip: every reader pairs it with ``tip``)
+            tip, replayed, mapping = _take_replayed(repo, branch, local_ref, hive_tip, mapped)
+            base = _out(repo, "merge-base", tip, branch)
+            moved = {"base_mapped": mapping, "hive_tip": hive_tip, "hive_ref": _hive_ref(local_ref)}
         # a Swarm Run child starts from a snapshot of its lead run's worktree, which may hold
         # the lead's own edits: what the child changed is what came after that snapshot
-        start = _child_base(repo, declared.get("sha"), lead, tip)
+        start = None if mapped else _child_base(repo, declared.get("sha"), lead, tip)
         if start is not None:
             base = start
         landed = before.get("landed_tip")
+        if landed:
+            # the Hive tip that landed is its replayed copy now (whatever it was replayed
+            # onto when it landed: main may have been rewritten again since)
+            landed = replayed.get(before.get("landed_hive_tip") or landed, landed)
         if landed == tip:
             raise ReturnError("these commits already landed")
         if landed:
@@ -499,9 +704,10 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
             base = landed
         review = _review(repo, base, tip, _protected(repo, branch))
         dirty = bool(_out(repo, "status", "--porcelain", "--untracked-files=no"))
-        state = {**{k: before[k] for k in ("landed_tip", "landed", "landed_at") if k in before},
+        kept = ("landed_tip", "landed_hive_tip", "landed", "landed_at")
+        state = {**{k: before[k] for k in kept if k in before},
                  "dispatch_id": dispatch_id, "url": url, "key": b["key"], "repo": str(repo),
-                 "branch": branch, "ref": local_ref, "tip": tip, "base": base, **review,
+                 "branch": branch, "ref": local_ref, "tip": tip, "base": base, **moved, **review,
                  # uncommitted edits in the checkout may make the landing refuse
                  "checkout_dirty": dirty,
                  "prepared_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "status": "prepared"}
@@ -547,7 +753,10 @@ def import_unrecorded(dispatch_id: str, row: dict, declared: dict) -> Optional[d
         if not _from_record(dispatch_id, b, dest):
             raise ReturnError("the run's record here does not hold its newest bundle whole")
         branch = _target_branch(repo, declared.get("ref"))
-        tip, _base = _verify_and_fetch(repo, branch, dest, local_ref, _lead_refs(repo, row))
+        tip, _base, mapped = _verify_and_fetch(repo, branch, dest, local_ref, _lead_refs(repo, row))
+        if mapped:
+            # the next round starts from the ref: never from the history the branch rewrote
+            tip, _done, _mapping = _take_replayed(repo, branch, local_ref, tip, mapped)
     finally:
         dest.unlink(missing_ok=True)
     logger.info("hive_return: %s's newest bundle of %s (seq %d) had no turn record; imported at %s",
@@ -684,11 +893,14 @@ SUMMARY_MAX = 4000
 
 
 def landing_message(title: str, hive: Any, dispatch_id: str, ref: str, files: list,
-                    protected: list, summary: Optional[str]) -> str:
+                    protected: list, summary: Optional[str], mapped: Optional[dict] = None) -> str:
     """The landed commit's message, written on this machine: the run's title, the summary
     the landing's reviewer wrote (what changed and why), and the files with their line
     counts as prepare computed them. The Hive's own commit messages are its text and are
-    never copied here (an agent reads this log later); they stay at *ref*."""
+    never copied here (an agent reads this log later); they stay at *ref*. *mapped*
+    (``base_mapped``: ``{from, to, differs, differs_total}``): the commits were replayed
+    onto the equivalent of the base they built on, which this machine's branch rewrote;
+    the message says so and names the paths where the two bases differ."""
     msg = f"hive: {title}"
     if summary:
         msg += "\n\n" + summary
@@ -698,6 +910,14 @@ def landing_message(title: str, hive: Any, dispatch_id: str, ref: str, files: li
         msg += "\n\nFiles:\n" + "\n".join(rows)
     msg += (f"\n\nThe commits of a Hive run ({hive}, dispatch {dispatch_id}), reviewed and "
             f"squashed on this machine. The Hive's own commits are at {ref}.")
+    if isinstance(mapped, dict) and mapped.get("from") and mapped.get("to"):
+        msg += (f"\n\nThey built on {str(mapped['from'])[:12]}, which this machine's branch rewrote; they "
+                f"were replayed onto {str(mapped['to'])[:12]}, the commit that makes the same change.")
+        differs = [str(p) for p in mapped.get("differs") or []]
+        if differs:
+            total = mapped.get("differs_total") if isinstance(mapped.get("differs_total"), int) else len(differs)
+            msg += (" The two bases differ in: " + ", ".join(differs[:20])
+                    + (f" and {total - 20} more" if total > 20 else "") + ".")
     if protected:
         msg += ("\n\nChanges protected paths: " + ", ".join(protected[:20])
                 + (" …" if len(protected) > 20 else ""))
@@ -766,8 +986,9 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     from core.run_protocol.landing import LandingError, _ident_env, landing_settings, with_trailer
     row = swarm_out._log_row_of(dispatch_id)
     title = " ".join(str(row.get("title") or "").split())[:72] or "a Hive run"
-    msg = landing_message(title, row.get("hive"), dispatch_id, state["ref"], state["files"],
-                          sorted({*state["protected_files"], *held}), summary)
+    msg = landing_message(title, row.get("hive"), dispatch_id, state.get("hive_ref") or state["ref"],
+                          state["files"], sorted({*state["protected_files"], *held}), summary,
+                          state.get("base_mapped"))
     try:   # the repository's own author and trailer ([landing] in .swarmai/pipeline.toml)
         settings = landing_settings(str(repo), branch)
     except LandingError as e:
@@ -792,7 +1013,7 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
         raise ReturnError(f"{branch.replace('refs/heads/', '')} could not fast-forward (it moved, or the checkout "
                           f"has uncommitted edits to these files); the commit {new[:12]} is not landed")
     state.update({"status": "landed", "landed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                  "landed": new, "landed_tip": tip})
+                  "landed": new, "landed_tip": tip, "landed_hive_tip": state.get("hive_tip") or tip})
     _save(dispatch_id, key, state)
     from core import swarm_out_settle
     swarm_out_settle.mark_code_landed(dispatch_id)     # accepted: no turn adds commits now

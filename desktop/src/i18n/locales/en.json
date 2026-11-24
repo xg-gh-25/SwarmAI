@@ -5942,5 +5942,9 @@
     "wakeNone": "A run this session dispatched needs Swarm · Swarm takes over",
     "wakeSep": ", ",
     "verdictOther": "{{count}} running"
+  },
+  "swarmOutReturnMapped": {
+    "baseMapped": "These commits built on {{from}}, which this machine's {{branch}} rewrote; they were replayed onto {{to}}, the commit that makes the same change. Review and land the replayed commits.",
+    "baseDiffers": "The two bases differ in: {{files}}"
   }
 }

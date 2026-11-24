@@ -70,6 +70,18 @@ export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded, on
             {t('swarmOut.return.summary', { commits: t('swarmOut.work.commits', { count: rev.commits.length }),
               files: t('swarmOut.work.files', { count: rev.files_total }), branch: rev.branch.replace('refs/heads/', '') })}
           </div>
+          {rev.base_mapped && (
+            <div className="mt-1 text-[12px] text-[var(--color-status-warning)]" data-testid="swarm-out-return-mapped">
+              {t('swarmOutReturnMapped.baseMapped', { from: rev.base_mapped.from.slice(0, 12), to: rev.base_mapped.to.slice(0, 12),
+                branch: rev.branch.replace('refs/heads/', '') })}
+              {(rev.base_mapped.differs?.length ?? 0) > 0 && (
+                <div className="font-mono text-[11.5px]" data-testid="swarm-out-return-mapped-differs">
+                  {t('swarmOutReturnMapped.baseDiffers', { files: rev.base_mapped.differs!.join(', ')
+                    + ((rev.base_mapped.differs_total ?? 0) > rev.base_mapped.differs!.length ? ' …' : '') })}
+                </div>
+              )}
+            </div>
+          )}
           {rev.checkout_dirty && (
             <div className={`mt-1 text-[12px] text-[var(--color-status-warning)]`} data-testid="swarm-out-return-dirty">
               {t('swarmOut.return.dirty')}

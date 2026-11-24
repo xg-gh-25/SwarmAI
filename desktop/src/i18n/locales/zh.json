@@ -5942,5 +5942,9 @@
     "wakeNone": "本 session 派出的 run 需要 Swarm · Swarm 接手",
     "wakeSep": "、",
     "verdictOther": "{{count}} 单在跑"
+  },
+  "swarmOutReturnMapped": {
+    "baseMapped": "这些 commit 原本基于 {{from}}，本机的 {{branch}} 已改写了这段历史；已把它们重放到做同样改动的 {{to}} 上。审阅和落地的是重放后的 commit。",
+    "baseDiffers": "两个基点不同的文件：{{files}}"
   }
 }

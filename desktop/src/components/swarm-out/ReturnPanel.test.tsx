@@ -64,6 +64,24 @@ describe('ReturnPanel', () => {
     expect(onLanded).toHaveBeenCalledTimes(1);
   });
 
+  it('says when the commits were replayed onto a base this machine rewrote, and only then', async () => {
+    returnPrepare.mockResolvedValueOnce({ ...REV, base_mapped: { from: 'o'.repeat(40), to: 'n'.repeat(40),
+      differs: ['conf.txt'], differs_total: 1 } })
+      .mockResolvedValueOnce(REV);
+    render(<ReturnPanel dispatchId="so_1" url="u" />);
+    fireEvent.click(screen.getByTestId('swarm-out-return-prepare'));
+    const line = (await screen.findByTestId('swarm-out-return-mapped')).textContent ?? '';
+    expect(line).toContain('o'.repeat(12));
+    expect(line).toContain('n'.repeat(12));
+    expect(line).toContain('main');
+    expect(screen.getByTestId('swarm-out-return-mapped-differs').textContent).toContain('conf.txt');
+    cleanup();
+    render(<ReturnPanel dispatchId="so_1" url="u" />);
+    fireEvent.click(screen.getByTestId('swarm-out-return-prepare'));
+    await screen.findByTestId('swarm-out-return-review');
+    expect(screen.queryByTestId('swarm-out-return-mapped')).toBeNull();
+  });
+
   it('shows why taking the commits back was refused', async () => {
     returnPrepare.mockRejectedValue({ detail: 'the bundle has 2 refs; one is expected' });
     render(<ReturnPanel dispatchId="so_1" url="u" />);
