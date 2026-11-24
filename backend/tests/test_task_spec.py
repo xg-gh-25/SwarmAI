@@ -309,7 +309,7 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
     monkeypatch.setattr(host, "sync", sync)
     monkeypatch.setattr(so, "dispatch", dispatch)
 
-    async def can_prepare(inst):
+    async def can_prepare(inst, needs=None):
         return None
     monkeypatch.setattr(so, "_require_work_orders", can_prepare)
 

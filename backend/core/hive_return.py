@@ -29,6 +29,12 @@ here, trusting nothing the Hive reported beyond "there is a bundle with this sha
   built against that main no longer has). A replay that conflicts is refused naming the
   files; the Hive's own commits stay at the ``-hive`` ref for a takeover by hand.
 
+``kept_here(dispatch_id, dir)``: whether a take-back that ``prepare`` refused after it
+fetched the tip (a replay conflict, a merge) still left the commits on this host: the
+bundle kept in the run's state dir is
+the one the result names, verifies in the checkout, and its tip is at the run's ref or its
+``-hive`` ref (core/swarm_out_actor.commits_here: a discard then loses nothing).
+
 What the person reviews: the files with their line counts in review order
 (``core.review_order``: source, then tests, then supporting files), the commits (their messages
 are the Hive's text, shown as data and never put into an agent's context), and the
@@ -682,6 +688,63 @@ def load(dispatch_id: str, key: str) -> Optional[dict]:
         return json.loads((_state_dir(dispatch_id) / f"{_key(key)}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def _is_bundle_named(path: Path, b: dict) -> bool:
+    """*path* holds exactly the bytes the result names (``size`` and ``sha256``)."""
+    if type(b.get("size")) is not int or not isinstance(b.get("sha256"), str):
+        return False
+    try:
+        if path.stat().st_size != b["size"]:
+            return False
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return False
+    return h.hexdigest() == b["sha256"]
+
+
+def kept_here(dispatch_id: str, rdir: str) -> bool:
+    """Whether the commits the run's result names for the repository declared as *rdir*
+    are on this host although taking them back was refused after ``_verify_and_fetch``
+    fetched the tip (a replay that conflicts, a merge, history shared with nothing, the
+    review refusing): the bundle ``prepare`` kept in the run's state dir is the one the
+    result names now (its size and sha256: a file from an earlier turn is not), ``git
+    bundle verify`` passes for it in the Brain's checkout, and its tip is the commit at
+    ``refs/hive/<dispatch>/<key>`` or at its ``-hive`` ref. A refusal before the fetch
+    (two equivalent bases, a prerequisite not here, the wrong branch checked out) leaves
+    the tip at neither: False, as when any of the rest is not so or cannot be read
+    (a malformed record too). Blocking."""
+    from core import hive_bundle
+    try:
+        key = _key(hive_bundle.key(rdir))
+        bundle = _state_dir(dispatch_id) / f"{key}.bundle"
+        if not bundle.is_file():
+            return False
+        row = _row(dispatch_id)
+        declared = next((r for r in row.get("repos") or [] if isinstance(r, dict) and r.get("dir") == rdir), None)
+        brain = row["project_agent"].get("brain")
+        if declared is None or not isinstance(declared.get("url"), str) or not isinstance(brain, str):
+            return False
+        if not _is_bundle_named(bundle, _bundle_fact(dispatch_id, declared)):
+            return False
+        repo = _checkout(brain, declared["url"])
+        if _git(repo, "bundle", "verify", "-q", str(bundle)).returncode != 0:
+            return False
+        _prereq, refs = _bundle_header(bundle)
+        if len(refs) != 1:
+            return False
+        tip = refs[0][0]
+        local_ref = f"refs/hive/{dispatch_id}/{key}"
+        for ref in (local_ref, _hive_ref(local_ref)):
+            p = _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+            if p.returncode == 0 and p.stdout.decode("utf-8", "replace").strip() == tip:
+                return True
+        return False
+    except (ReturnError, OSError, AttributeError, TypeError, KeyError, ValueError):
+        return False                 # not knowing is not "the commits are here"
 
 
 async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:

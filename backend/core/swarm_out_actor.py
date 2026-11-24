@@ -37,8 +37,9 @@ agent the routes refuse what is the person's to decide:
   run (``land_blocker``): it re-runs the task with the failure to fix or takes it over;
 - discarding while something would be lost: commits not landed that are not on this
   host either (``return-prepare`` takes them into ``refs/hive/...``: once every returned
-  tip is there, discarding loses nothing), a file not placed in the Brain, lessons not
-  in, the run running, waiting or its Hive not answering, or its result not final
+  tip is there, discarding loses nothing; when it refused after it fetched the tip, the
+  verified bundle it kept and that tip hold them here, ``commits_here``), a file not
+  placed in the Brain, lessons not in, the run running, waiting or its Hive not answering, or its result not final
   (``discard_blocker``). A run whose Hive never started its session (``not_started``)
   has nothing to lose, and neither has one whose result can no longer come (its settle's
   ``result_lost``: an Elastic Workers round read whole after its machine could write
@@ -495,10 +496,11 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
 def commits_here(dispatch_id: str, res: Any) -> bool:
     """Every repository that brought commits back has them on this host: its bundle was
     taken back (core/hive_return.prepare) and its ``refs/hive/<dispatch>/<key>`` ref
-    still names the tip. A repository whose commits were never sealed into a bundle
-    has them only on the Hive."""
-    from core import hive_bundle, hive_return
-    import subprocess
+    still names the tip, or taking it back was refused after its tip was fetched and the
+    bundle the result names is kept here, verifies in the checkout and has its tip there
+    (core/hive_return.kept_here). A repository whose commits were never sealed into a
+    bundle, or whose bundle never reached this host, has them only on the Hive."""
+    from core import hive_return
     repos = [r for r in (((res or {}).get("work") or {}).get("repos") or []) if isinstance(r, dict)]
     checked = 0
     for r in repos:
@@ -508,18 +510,26 @@ def commits_here(dispatch_id: str, res: Any) -> bool:
             if (r.get("commits_total") or 0) > 0:
                 return False
             continue
-        try:
-            st = hive_return.load(dispatch_id, hive_bundle.key(r["dir"])) or {}
-        except hive_return.ReturnError:
-            return False
-        if st.get("status") not in ("prepared", "landed") or not st.get("repo") or not st.get("ref"):
-            return False
-        try:
-            out = subprocess.run(["git", "-C", str(st["repo"]), "rev-parse", "--verify", "--quiet",
-                                  f"{st['ref']}^{{commit}}"], capture_output=True, text=True, timeout=20)
-        except (OSError, subprocess.SubprocessError):
-            return False
-        if out.returncode != 0 or out.stdout.strip() != st.get("tip"):
+        if not (_taken_back(dispatch_id, r["dir"]) or hive_return.kept_here(dispatch_id, r["dir"])):
             return False
         checked += 1
     return checked > 0          # nothing to check is not proof the commits are here
+
+
+def _taken_back(dispatch_id: str, rdir: str) -> bool:
+    """The repository's take-back is ``prepared`` or ``landed`` and its ref still names
+    the tip it recorded."""
+    from core import hive_bundle, hive_return
+    import subprocess
+    try:
+        st = hive_return.load(dispatch_id, hive_bundle.key(rdir)) or {}
+    except hive_return.ReturnError:
+        return False
+    if st.get("status") not in ("prepared", "landed") or not st.get("repo") or not st.get("ref"):
+        return False
+    try:
+        out = subprocess.run(["git", "-C", str(st["repo"]), "rev-parse", "--verify", "--quiet",
+                              f"{st['ref']}^{{commit}}"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and out.stdout.strip() == st.get("tip")

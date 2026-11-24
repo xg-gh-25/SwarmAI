@@ -1105,3 +1105,102 @@ def test_a_replay_longer_than_the_limit_is_refused(world, monkeypatch):
     monkeypatch.setattr(hive_return, "MAX_REPLAY_COMMITS", 2)
     out, done = hive_return._replay(world["host"], "refs/heads/main", "refs/tmp/hive", tip, {r["old"]: r["new"]})
     assert len(done) == 2
+
+
+# ── discarding after a refused take-back: the kept bundle holds the commits here ──
+
+def _discard_row(w) -> dict:
+    """The run's ``/runs`` row as the discard check reads it: stopped, final, its commits
+    not landed (the public result says only that a bundle is available)."""
+    rec = w["record"]["result"]["work"]["repos"][0]
+    return {"dispatch_id": DID, "state": "stopped",
+            "result": {"ended": "completed", "provisional": False,
+                       "work": {"repos": [{"dir": rec["dir"], "commits_total": rec.get("commits_total") or 1,
+                                           "bundle": {"available": True}}]}},
+            "settle": {"why_not": ["verdict", "code"]}}
+
+
+def _refused_by_a_replay_conflict(world, monkeypatch) -> dict:
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    r = _rewritten(world, hive_file="conf.txt", hive_text="host = real.example\nport = 2\n")
+    _hive_bundle(world)
+    with pytest.raises(hive_return.ReturnError, match="conflicts in conf.txt"):
+        asyncio.run(hive_return.prepare(DID, URL))
+    assert hive_return.load(DID, _key_of_dir()) is None                  # not prepared
+    return r
+
+
+def _bundle_file(world) -> Path:
+    return world["tmp"] / "state" / "returns" / DID / f"{_key_of_dir()}.bundle"
+
+
+def test_after_a_replay_conflict_the_kept_bundle_lets_an_agent_discard(world, monkeypatch):
+    """The take-back was refused, but the verified bundle is kept here and its tip is at the
+    ``-hive`` ref: discarding loses nothing. Without the tip here it refuses again."""
+    from core import swarm_out_actor as act
+    r = _refused_by_a_replay_conflict(world, monkeypatch)
+    row = _discard_row(world)
+    assert act.commits_here(DID, row["result"]) and act.discard_blocker(row) is None
+    git(world["host"], "update-ref", "-d", f"refs/hive/{DID}/{_key_of_dir()}-hive")
+    assert "not landed" in (act.discard_blocker(row) or "")             # the tip is not here
+    git(world["host"], "update-ref", f"refs/hive/{DID}/{_key_of_dir()}-hive", r["old"])
+    assert "not landed" in (act.discard_blocker(row) or "")             # another commit there
+
+
+def test_a_kept_bundle_file_that_is_gone_refuses_the_discard(world, monkeypatch):
+    from core import swarm_out_actor as act
+    _refused_by_a_replay_conflict(world, monkeypatch)
+    row = _discard_row(world)
+    assert act.discard_blocker(row) is None
+    _bundle_file(world).unlink()
+    assert "not landed" in (act.discard_blocker(row) or "")
+
+
+def test_a_kept_bundle_that_fails_verify_refuses_the_discard(world, monkeypatch):
+    """The file is the one the result names (its sha256 and size), and its tip is here, but
+    ``git bundle verify`` fails in the checkout (a prerequisite it names is not there)."""
+    from core import swarm_out_actor as act
+    _refused_by_a_replay_conflict(world, monkeypatch)
+    row = _discard_row(world)
+    assert act.discard_blocker(row) is None
+    f = _bundle_file(world)
+    data = f.read_bytes()
+    head, sep, pack = data.partition(b"\n\n")
+    lines = head.split(b"\n")
+    i = next(n for n, ln in enumerate(lines) if ln.startswith(b"-"))
+    lines[i] = b"-" + b"0" * 40 + b" never here"
+    data = b"\n".join(lines) + sep + pack
+    f.write_bytes(data)
+    b = world["record"]["result"]["work"]["repos"][0]["bundle"]
+    b.update(sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+    assert subprocess.run(["git", "bundle", "verify", "-q", str(f)], cwd=world["host"],
+                          capture_output=True).returncode != 0
+    assert "not landed" in (act.discard_blocker(row) or "")
+
+
+def test_a_kept_bundle_of_an_earlier_turn_refuses_the_discard(world, monkeypatch):
+    """A later turn brought new commits and the result names its bundle now: the file kept
+    from the refused take-back holds only the earlier turn's commits."""
+    from core import swarm_out_actor as act
+    _refused_by_a_replay_conflict(world, monkeypatch)
+    row = _discard_row(world)
+    assert act.discard_blocker(row) is None
+    _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
+    _hive_bundle(world)                                  # not taken back here
+    assert "not landed" in (act.discard_blocker(_discard_row(world)) or "")
+
+
+def test_prepared_and_landed_commits_still_let_an_agent_discard(world, monkeypatch):
+    from core import hive_return, swarm_out_actor as act
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], "src/a.py", "a = 2\n", "the fix")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    row = _discard_row(world)
+    assert act.discard_blocker(row) is None                              # prepared
+    git(world["host"], "update-ref", "-d", st["ref"])
+    assert "not landed" in (act.discard_blocker(row) or "")             # its ref is gone
+    git(world["host"], "update-ref", st["ref"], st["tip"])
+    assert hive_return.land(DID, st["key"], st["tip"])["landed"]
+    assert act.discard_blocker(row) is None                              # landed
