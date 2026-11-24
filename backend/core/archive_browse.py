@@ -59,14 +59,15 @@ _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 _PROVENANCE_RE = re.compile(r"<!--\s*size-evicted from\s+(.+?)\s*-->")
 
 # A REAL evolution entry header leads with one of the known entry-token families
-# (Cxxx / Fxxx / CLASS / DATA-POINT / ROOT-CAUSE / META-CORRECTION / DIRECTIVE).
+# (Cxxx / Fxxx / Kxxx / CLASS / DATA-POINT / ROOT-CAUSE / META-CORRECTION / DIRECTIVE;
+# Kxxx is a competence, under "## Competence Learned").
 # Structural `### ` section markers inside the narrative (e.g. "Core Principle",
 # "Evolution Target Hierarchy", "Indicators of Real Evolution") do NOT match, so
 # they are filtered OUT of the graph — Gate-1 BLOCK#2 (they would otherwise pollute
 # the 'entry' bucket as noise). This is the single source of truth for "is this ###
 # a real entry?", reused by both the archive list and the live-EVOLUTION graph.
 _REAL_EVO_ENTRY_RE = re.compile(
-    r"^(?:C\d|F\d|CLASS\b|DATA[- ]POINT\b|ROOT-CAUSE\b|META-CORRECTION\b|DIRECTIVE\b)",
+    r"^(?:C\d|F\d|K\d|CLASS\b|DATA[- ]POINT\b|ROOT-CAUSE\b|META-CORRECTION\b|DIRECTIVE\b)",
     re.IGNORECASE,
 )
 
@@ -190,6 +191,8 @@ def _evolution_kind(header: str) -> str:
         return "failed-evolution"
     if re.match(r"^C\d", h):
         return "correction"
+    if re.match(r"^K\d", h):
+        return "competence"
     return "entry"
 
 

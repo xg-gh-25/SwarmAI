@@ -188,3 +188,13 @@ def test_list_archive_files_empty_when_no_shards(tmp_path: Path):
     (tmp_path / ".context").mkdir()
     out = list_archive_files(tmp_path, "memory")
     assert out == {"files": [], "total_files": 0, "source": "memory"}
+
+
+def test_competence_k_entries_are_real_and_classified():
+    """### Knnn blocks under "## Competence Learned" are entries of their own kind
+    (the live graph used to miss them: 15 of 18 EVOLUTION entries shown)."""
+    from core.archive_browse import _evolution_kind, is_real_evolution_entry
+    assert is_real_evolution_entry("K001 | 2026-10-29")
+    assert _evolution_kind("K007 | 2026-11-02") == "competence"
+    assert _evolution_kind("C103 | 2026-11-24") == "correction"
+    assert not is_real_evolution_entry("Kind words about the registry")

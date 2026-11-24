@@ -1,20 +1,37 @@
-"""brain_graph — the 7-type knowledge graph for the C&M overlay Memory tab.
+"""brain_graph — the entries of MEMORY.md and EVOLUTION.md for the C&M overlay's 记忆 tab.
 
-DoD2 (goal run_d0ba3f69). The Memory tab shows the agent's sedimented judgment as
-a 7-type ontology: principle / correction / decision / guideline / pitfall /
-process / model. Each type is a NODE (size = entry count; every entry in the file is
-in force, so there is no active/dormant split);
-clicking a node drills the latest-10 entries of that type.
+The tab shows, for each file, how many entries it holds by type (a split bar with a
+legend that filters the list) and the entries newest first. This module serves both:
 
-**Data source (Gate-1 correction #3):** the 7 node types come from
-`Counter(entry_type)` over `parse_entries(MEMORY.md)` using `VALID_TYPES` — NOT
-`knowledge_graph.py`, which is an EDGE/relation store (subject-predicate-object,
-10 relation predicates) with no node-type concept. This reuses the exact pattern
-already proven in `eval._build_learning_dashboard` (parse_entries + entry_type). Backend-primary: every count is served, the frontend invents none (R30).
+- ``build_brain_graph(MEMORY.md)``: the 7-type ontology (principle / correction /
+  decision / model / guideline / pitfall / process) from ``parse_entries``.
+- ``build_evolution_graph(EVOLUTION.md)``: the ``### `` block entries, by kind
+  (correction ``### Cnnn``, competence ``### Knnn`` under "## Competence Learned",
+  class / data-point / … for older shapes).
+
+Response shape (both): ``{nodes, drill, entries, total}``.
+
+- ``nodes``: ``[{type, count}]`` in display-priority order, only the types that have
+  entries (a zero-count type would be a legend chip with nothing behind it).
+- ``drill``: ``{type: [entry]}`` for every type in the display order (an empty list for
+  an absent one), ALL entries of the type, newest first.
+- ``entries``: every entry, newest first (the tab's list; filtering by type is the
+  frontend picking ``type``).
+- ``total``: the entry count, equal to the sum of the node counts.
+
+An entry is ``{title, meta, type, date}``; an evolution entry also has ``id`` (``C103``)
+and ``label`` (its short title). ``date`` is ``YYYY-MM-DD`` or None: for MEMORY the
+entry's trailing stamp ``(2026-11-02, run_…)``, else the first date in its line, else
+its last-referenced date; for EVOLUTION the date in the header (``### C103 | 2026-11-24``).
+Newest first sorts by that date, an undated entry last, keeping document order among
+equal dates. Never raises on malformed content: empty-but-valid instead.
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
+from datetime import date as _date
+from typing import Optional
 
 from core.ddd_entry_lifecycle import VALID_TYPES, parse_entries
 
@@ -23,46 +40,65 @@ __all__ = [
     "MEMORY_DISPLAY_ORDER", "EVOLUTION_DISPLAY_ORDER",
 ]
 
-_DRILL_LIMIT = 10  # latest N entries per type in the drill-down
-
-# DISPLAY-priority ordering (Run C). Node ORDER in the graph follows OUR cognitive
-# priority, NOT the VALID_TYPES tuple order (which is count/decay-engine ordering)
-# and NOT count-size/alphabetical. This is a DISPLAY concern only — VALID_TYPES is
-# left untouched (9 callers + the decay engine depend on it; reordering it is a
-# NEVER boundary). MEMORY_DISPLAY_ORDER MUST be a permutation of VALID_TYPES (a
-# missing type would silently drop a node; an extra would be a phantom).
-# SOUL cognitive layering: meta-cognitive → cognitive → operational.
+# DISPLAY-priority ordering. Node ORDER follows the cognitive priority, NOT the
+# VALID_TYPES tuple order (9 callers depend on that tuple; it is left untouched).
+# MEMORY_DISPLAY_ORDER MUST be a permutation of VALID_TYPES (a missing type would
+# silently drop its entries from the nodes; an extra would be a phantom).
 MEMORY_DISPLAY_ORDER = (
     "principle", "correction",      # meta-cognitive
     "decision", "model",            # cognitive
     "guideline", "pitfall", "process",  # operational
 )
 
-# EVOLUTION has its own vocabulary (not the 7-type ontology). Priority: recurring
-# structural patterns (class) first, then corrections, then their supporting kinds.
-# 'meta-correction' is a real _evolution_kind output → included so it never drops;
-# 'entry' is the catch-all fallback, LAST (structural ### are filtered out upstream,
-# so it is normally zero — kept in the shape for stability).
+# EVOLUTION has its own vocabulary. Priority: recurring structural patterns (class),
+# corrections, what the agent learned it can do (competence), then the supporting
+# kinds; 'entry' is the catch-all fallback, LAST.
 EVOLUTION_DISPLAY_ORDER = (
-    "class", "correction", "meta-correction", "root-cause",
+    "class", "correction", "competence", "meta-correction", "root-cause",
     "data-point", "directive", "failed-evolution", "entry",
 )
 
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# A trailing stamp: "(2026-11-02)" / "(2026-08-25, run_f291ad72)".
+_PAREN_DATE_RE = re.compile(r"\((\d{4}-\d{2}-\d{2})\b[^()]*\)")
+# The leading id of an evolution header: C103 / K007 / F001.
+_EVO_ID_RE = re.compile(r"^([A-Za-z]\d+)\b")
+# The body's first bold after a field label: "- **Correction**: **Assert a state …**".
+_BODY_BOLD_RE = re.compile(r"^\s*-\s*\*\*[^*]+\*\*\s*:\s*\*\*(.+?)\*\*")
+# Leading bracket tags in a title: "[C-bias] Next-step proposals …".
+_TAGS_RE = re.compile(r"^(?:\[[^\]]*\]\s*)+")
+# Where a long bold title turns into its explanation.
+_TITLE_CUTS = (": ", " — ", "; ")
+
+
+def _valid_date(s: Optional[str]) -> Optional[str]:
+    if not s:
+        return None
+    try:
+        return _date.fromisoformat(s).isoformat()
+    except ValueError:
+        return None
+
+
+def _newest_first(items: list[dict]) -> list[dict]:
+    # sorted(reverse=True) is stable: equal dates keep document order; "" (undated) last
+    return sorted(items, key=lambda it: it.get("date") or "", reverse=True)
+
+
+def _memory_entry_date(e) -> Optional[str]:
+    stamps = _PAREN_DATE_RE.findall(e.raw_text or "")
+    for s in reversed(stamps):
+        if _valid_date(s):
+            return _valid_date(s)
+    if e.created_date:
+        return e.created_date.isoformat()
+    if e.last_referenced:
+        return e.last_referenced.isoformat()
+    return None
+
 
 def build_brain_graph(memory_content: str) -> dict:
-    """Build the 7-type node graph + per-type drill-down from MEMORY.md content.
-
-    Returns:
-        {
-          "nodes": [{"type", "count"} × 7],  # ALL 7 types, stable order
-          "drill": {type: [{"title","meta"} × <=10 latest]},
-          "total": int,
-        }
-
-    ALL 7 types always appear as nodes (even zero-count) so the graph is a stable
-    7-node shape the UI can lay out once. Never raises on malformed content —
-    parse_entries is defensive and an empty/garbage doc yields all-zero nodes.
-    """
+    """The type counts and the entries of MEMORY.md (see the module docstring)."""
     try:
         entries = parse_entries(memory_content)
     except Exception:
@@ -70,94 +106,102 @@ def build_brain_graph(memory_content: str) -> dict:
         _logging.getLogger(__name__).debug("build_brain_graph: suppressed exception on a fail-safe path", exc_info=True)
         entries = []
 
-    by_type: dict[str, list] = {t: [] for t in VALID_TYPES}
+    items: list[dict] = []
     for e in entries:
-        # parse_entries already coerces unknown types to DEFAULT_TYPE (guideline),
-        # so entry_type is always in VALID_TYPES — but guard anyway.
-        if e.entry_type in by_type:
-            by_type[e.entry_type].append(e)
+        # parse_entries coerces unknown types to the default, so entry_type is always
+        # in VALID_TYPES; guard anyway so total == sum(node counts) always holds
+        if e.entry_type not in VALID_TYPES:
+            continue
+        items.append({
+            "title": e.title,
+            # meta: a short human hint (last-referenced date if known, else section)
+            "meta": (e.last_referenced.isoformat() if e.last_referenced else e.section or ""),
+            "type": e.entry_type,
+            "date": _memory_entry_date(e),
+        })
+    items = _newest_first(items)
+    counts = Counter(it["type"] for it in items)
+    return {
+        "nodes": [{"type": t, "count": counts[t]} for t in MEMORY_DISPLAY_ORDER if counts[t]],
+        "drill": {t: [it for it in items if it["type"] == t] for t in MEMORY_DISPLAY_ORDER},
+        "entries": items,
+        "total": len(items),
+    }
 
-    counts = Counter({t: len(by_type[t]) for t in VALID_TYPES})
 
-    # Nodes emitted in DISPLAY-priority order (Run C), NOT VALID_TYPES order.
-    # MEMORY_DISPLAY_ORDER is a permutation of VALID_TYPES, so every type still
-    # appears exactly once — only the sequence changes.
-    nodes = []
-    for t in MEMORY_DISPLAY_ORDER:
-        nodes.append({"type": t, "count": counts[t]})
-
-    # Drill: latest N per type. parse_entries returns DOCUMENT order (top→bottom),
-    # and MEMORY.md's auto-writer PREPENDS entries newest-at-TOP (context_health_hook
-    # "PREPEND keeps newest-at-TOP"; locked_write --prepend = "newest-first"). So
-    # by_type[t] is already NEWEST-FIRST → the newest N is the FIRST slice, not the
-    # last. (Gate-2 caught this: [-N:] returned the OLDEST N under a "Latest" label.)
-    drill: dict[str, list[dict]] = {}
-    for t in VALID_TYPES:
-        latest = by_type[t][:_DRILL_LIMIT]  # newest-first → first N = latest N
-        drill[t] = [
-            {
-                "title": e.title,
-                # meta: a short human hint (last-referenced date if known, else section)
-                "meta": (e.last_referenced.isoformat() if e.last_referenced else e.section or ""),
-            }
-            for e in latest  # already newest-first (prepend convention)
-        ]
-
-    return {"nodes": nodes, "drill": drill, "total": sum(counts.values())}
+def _evo_label(header: str, ident: Optional[str], body: list[str]) -> str:
+    """The short title of an evolution entry: the header's own text after its id and
+    date ("C093 | 2026-11-01 · CLASS B: observe before asserting"), else the body's first
+    bold, cut where it turns into its explanation."""
+    rest = header
+    if ident:
+        rest = rest[len(ident):]
+    rest = _DATE_RE.sub("", rest)
+    rest = _TAGS_RE.sub("", rest.strip(" |·-—\t")).strip(" |·-—\t")
+    if rest:
+        return rest
+    for line in body:
+        m = _BODY_BOLD_RE.match(line)
+        if not m:
+            continue
+        text = _TAGS_RE.sub("", m.group(1).strip()).strip()
+        for cut in _TITLE_CUTS:
+            i = text.find(cut)
+            if i >= 12:
+                text = text[:i]
+        return text.strip().rstrip(".")
+    return header
 
 
 def build_evolution_graph(evolution_content: str) -> dict:
-    """Build the kind-graph + drill for the C&M overlay's Evolution tab (Run C).
+    """The kind counts and the entries of EVOLUTION.md (see the module docstring).
 
-    Structurally parallel to build_brain_graph, but for EVOLUTION.md's `### ` block
-    entries (corrections / CLASS patterns / data-points / directives), which
-    parse_entries CANNOT parse (it recognizes `## ` sections + `- ` bullets only).
-    So this uses a dedicated `### ` header scan + archive_browse._evolution_kind for
-    classification, and archive_browse.is_real_evolution_entry to FILTER OUT
-    structural section markers (Gate-1 BLOCK#2 — "Core Principle" etc. must never
-    become 'entry' noise nodes).
-
-    Two honest structural differences from the memory graph (do NOT paper over):
-    - Nodes are count-only, like the memory graph.
-    - Node kinds are the evolution vocabulary (EVOLUTION_DISPLAY_ORDER), not the
-      7-type ontology.
-
-    Returns {nodes:[{type,count}], drill:{kind:[...]}, total} with
-    ALL EVOLUTION_DISPLAY_ORDER kinds present (stable shape, even zero-count), nodes
-    in display-priority order. Newest-first within a kind (document order = the
-    registry's newest-at-top convention). Never raises on malformed content."""
+    EVOLUTION.md's entries are ``### `` blocks, which parse_entries cannot parse (it
+    reads ``## `` sections and ``- `` bullets), so this scans the headers; a block runs
+    to the next ``###`` or ``##``. Structural section markers ("Core Principle", …)
+    are filtered by archive_browse.is_real_evolution_entry; a kind outside
+    EVOLUTION_DISPLAY_ORDER folds into 'entry' so total == sum(node counts)."""
     from core.archive_browse import _evolution_kind, is_real_evolution_entry
 
-    by_kind: dict[str, list[str]] = {k: [] for k in EVOLUTION_DISPLAY_ORDER}
+    items: list[dict] = []
     try:
+        blocks: list[tuple[str, list[str]]] = []
+        current: Optional[tuple[str, list[str]]] = None
         for line in evolution_content.splitlines():
-            if not line.startswith("### "):
-                continue
-            header = line[4:].strip()
-            # Filter structural section markers — only real entry headers count.
+            if line.startswith("### "):
+                current = (line[4:].strip(), [])
+                blocks.append(current)
+            elif line.startswith("## ") or line.startswith("# "):
+                current = None
+            elif current is not None:
+                current[1].append(line)
+        for header, body in blocks:
             if not is_real_evolution_entry(header):
                 continue
             kind = _evolution_kind(header)
-            # Fold any kind NOT in EVOLUTION_DISPLAY_ORDER into the 'entry' catch-all
-            # (Gate-2 HIGH-1): a setdefault would create a node OUTSIDE the ordered
-            # tuple → counted in `total` but never rendered → total ≠ sum(node counts).
-            # Folding to 'entry' keeps total == sum(nodes) always consistent.
-            if kind not in by_kind:
+            if kind not in EVOLUTION_DISPLAY_ORDER:
                 kind = "entry"
-            by_kind[kind].append(header)
+            m = _EVO_ID_RE.match(header)
+            ident = m.group(1).upper() if m else None
+            dm = _DATE_RE.search(header)
+            items.append({
+                "title": header,
+                "meta": "",
+                "type": kind,
+                "date": _valid_date(dm.group(0) if dm else None),
+                "id": ident,
+                "label": _evo_label(header, ident, body),
+            })
     except Exception:
         import logging as _logging
         _logging.getLogger(__name__).debug("build_evolution_graph: suppressed exception on a fail-safe path", exc_info=True)
-        by_kind = {k: [] for k in EVOLUTION_DISPLAY_ORDER}
+        items = []
 
-    nodes = []
-    for k in EVOLUTION_DISPLAY_ORDER:
-        count = len(by_kind.get(k, []))
-        nodes.append({"type": k, "count": count})
-
-    drill: dict[str, list[dict]] = {}
-    for k in EVOLUTION_DISPLAY_ORDER:
-        headers = by_kind.get(k, [])[:_DRILL_LIMIT]  # document order = newest-first
-        drill[k] = [{"title": h, "meta": ""} for h in headers]
-
-    return {"nodes": nodes, "drill": drill, "total": sum(len(v) for v in by_kind.values())}
+    items = _newest_first(items)
+    counts = Counter(it["type"] for it in items)
+    return {
+        "nodes": [{"type": k, "count": counts[k]} for k in EVOLUTION_DISPLAY_ORDER if counts[k]],
+        "drill": {k: [it for it in items if it["type"] == k] for k in EVOLUTION_DISPLAY_ORDER},
+        "entries": items,
+        "total": len(items),
+    }

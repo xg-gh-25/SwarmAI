@@ -5245,6 +5245,60 @@ class SQLiteDatabase(BaseDatabase):
             logger.warning("Failed to summarize recall metrics", exc_info=True)
             return []
 
+    async def get_recall_hit_windows(self, days: int = 7, now: "Optional[datetime]" = None) -> dict:
+        """Per recall context, how many recalls ran and how many brought something back,
+        in the last ``days`` days and in the ``days`` days before that.
+
+        ``{context: {"runs", "hits", "prev_runs", "prev_hits"}}``; a run "hits" when its
+        ``hit_count`` > 0 (session_prompt / session_followup record 1 or 0, session_ddd the
+        number of DDD sections found). Windows: this one is ``[now - days, now]``, the one
+        before ``[now - 2*days, now - days)``. The cutoffs are formatted LOCAL-NAIVE
+        ``%Y-%m-%dT%H:%M:%S`` to MATCH the writer (bulk_insert_recall_metrics): the column
+        is compared as a string, as in get_recall_metrics_summary. Rows not yet flushed
+        from the in-memory rings (at most the ~5-min flush interval) are not counted.
+        Read-only, one SELECT; never raises ({} on error)."""
+        try:
+            from datetime import timedelta
+            now = now or datetime.now()
+            fmt = "%Y-%m-%dT%H:%M:%S"
+            cut = (now - timedelta(days=days)).strftime(fmt)
+            cut_prev = (now - timedelta(days=2 * days)).strftime(fmt)
+            end = now.strftime(fmt)
+            out: dict[str, dict] = {}
+            async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+                cursor = await conn.execute(
+                    """
+                    SELECT context,
+                           SUM(timestamp >= ?),
+                           SUM(timestamp >= ? AND hit_count > 0),
+                           SUM(timestamp < ?),
+                           SUM(timestamp < ? AND hit_count > 0)
+                      FROM recall_metrics
+                     WHERE timestamp >= ? AND timestamp <= ?
+                     GROUP BY context
+                    """,
+                    (cut, cut, cut, cut, cut_prev, end),
+                )
+                for ctx, runs, hits, prev_runs, prev_hits in await cursor.fetchall():
+                    out[str(ctx)] = {"runs": int(runs or 0), "hits": int(hits or 0),
+                                     "prev_runs": int(prev_runs or 0), "prev_hits": int(prev_hits or 0)}
+            return out
+        except Exception:
+            logger.warning("Failed to count recall hits", exc_info=True)
+            return {}
+
+    async def count_message_sessions(self) -> "int | None":
+        """How many sessions have messages (the past sessions recall can search).
+        Read-only, one indexed COUNT(DISTINCT); None on error."""
+        try:
+            async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+                cursor = await conn.execute("SELECT COUNT(DISTINCT session_id) FROM messages")
+                row = await cursor.fetchone()
+                return int(row[0] or 0) if row else 0
+        except Exception:
+            logger.warning("Failed to count message sessions", exc_info=True)
+            return None
+
     async def prune_recall_metrics(self, days: int = 30) -> int:
         """Delete recall_metrics rows older than ``days`` — age-based retention that
         bounds the table's otherwise-unbounded growth. Returns rows pruned.

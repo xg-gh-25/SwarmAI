@@ -565,32 +565,26 @@ async def get_brain_trend(source: str = "memory"):
 
 @router.get("/brain-graph")
 async def get_brain_graph(source: str = "memory"):
-    """Knowledge graph + drill-down for the C&M Memory OR Evolution tab (Run C).
+    """Type counts + entries of MEMORY.md OR EVOLUTION.md for the C&M 记忆 tab.
 
-    ``source=memory`` (default, back-compat): the 7-type graph from
-    parse_entries(MEMORY.md) by entry_type, nodes in cognitive display-priority
-    order. ``source=evolution``: the evolution-kind graph from EVOLUTION.md's ``###``
-    blocks (class/correction/data-point/…), count-only (no decay layer). Nodes are
-    backend-served in priority order — the frontend renders in-order, never re-sorts
-    (R30). Empty-but-valid (all-zero nodes) when the file is absent, so both tabs
-    always render a stable graph shape.
+    ``source=memory`` (default): the 7-type ontology from parse_entries(MEMORY.md).
+    ``source=evolution``: EVOLUTION.md's ``###`` blocks by kind (correction,
+    competence, …). ``{nodes, drill, entries, total}`` (core/brain_graph): nodes are
+    the types that have entries, in display-priority order (the frontend renders them
+    in order, never re-sorts); every entry carries its date and the lists are newest
+    first. Empty-but-valid when the file is absent.
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
-    from core.brain_graph import (
-        build_brain_graph, build_evolution_graph,
-        MEMORY_DISPLAY_ORDER, EVOLUTION_DISPLAY_ORDER,
-    )
+    from core.brain_graph import build_brain_graph, build_evolution_graph
 
     src = source if source in _ARCHIVE_SOURCES else "memory"
     is_evo = src == "evolution"
     fname = "EVOLUTION.md" if is_evo else "MEMORY.md"
-    display_order = EVOLUTION_DISPLAY_ORDER if is_evo else MEMORY_DISPLAY_ORDER
 
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
-        return {"nodes": [{"type": t, "count": 0} for t in display_order],
-                "drill": {t: [] for t in display_order}, "total": 0}
+        return build_evolution_graph("") if is_evo else build_brain_graph("")
 
     file_path = Path(ws_path) / ".context" / fname
 
