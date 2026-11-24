@@ -65,6 +65,9 @@ def ac(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     ws.mkdir()
     monkeypatch.setattr(hive_agentcore, "_workspace", lambda: ws)
+    from core import hive_records, pipeline_human
+    monkeypatch.setattr(hive_records, "_workspace", lambda: ws)     # core/hive_review reads it
+    monkeypatch.setattr(pipeline_human, "_workspace", lambda: ws)   # the session's pipeline runs
     monkeypatch.setattr(hive_agentcore, "_usage_fingerprint", lambda: (0, 0))
     hive_agentcore._reset_for_tests()
     s3 = FakeS3()
@@ -375,21 +378,22 @@ def requests(monkeypatch):
 
 
 async def test_review_requested_immediately_at_turn_end(ac, pm, requests):
-    ok = await ac.mod.request_review(Router(Unit(HIVE_SID)), HIVE_SID, pm=pm)
+    from core import hive_review
+    ok = await hive_review.request_review(Router(Unit(HIVE_SID)), HIVE_SID, pm=pm)
     assert ok and requests == [(HIVE_SID, "session_end", {"sdk_session_id": None, "delay": timedelta(0)})]
     requests.clear()
     for unit in (Unit(HIVE_SID, SessionState.WAITING_INPUT), Unit(HIVE_SID, background=True),
                  Unit(HIVE_SID, SessionState.STREAMING)):
-        assert not await ac.mod.request_review(Router(unit), HIVE_SID, pm=pm)
+        assert not await hive_review.request_review(Router(unit), HIVE_SID, pm=pm)
     pm.publish_prompt(HIVE_SID, {"sessionId": HIVE_SID, "requestId": "req-2", "toolName": "Bash",
                                  "toolInput": {"command": "x"}, "options": ["approve", "deny"]})
-    assert not await ac.mod.request_review(Router(Unit(HIVE_SID)), HIVE_SID, pm=pm)
+    assert not await hive_review.request_review(Router(Unit(HIVE_SID)), HIVE_SID, pm=pm)
     assert requests == []
 
 
-async def test_turn_seal_then_review(ac, monkeypatch):
+async def test_turn_seal_then_review(ac, monkeypatch, requests):
     """The router's turn seal asks for the review after the turn's entry is sealed."""
-    from core import hive_records, project_registry
+    from core import hive_records, hive_review, project_registry
     from core.session_router import SessionRouter
     order: list = []
     monkeypatch.setattr(hive_records, "seal_turn", lambda *a, **k: order.append("sealed"))
@@ -398,13 +402,16 @@ async def test_turn_seal_then_review(ac, monkeypatch):
     async def asked(router, sid, pm=None):
         order.append(("review", sid))
         return True
-    monkeypatch.setattr(ac.mod, "request_review", asked)
+    real = hive_review.request_review
+    monkeypatch.setattr(hive_review, "request_review", asked)
     await SessionRouter._seal_turn_record(SimpleNamespace(), HIVE_SID, "2026-11-20T00:00:00")
     assert order == ["sealed", ("review", HIVE_SID)]
-    order.clear()
+    # an EC2 Hive session no work order names (an interactive one): nothing asked at its
+    # turn's end, the idle hook asks after REVIEW_DELAY (tests/test_hive_dispatched_review)
+    monkeypatch.setattr(hive_review, "request_review", real)
     monkeypatch.delenv("SWARMAI_CARRIER")
     await SessionRouter._seal_turn_record(SimpleNamespace(), HIVE_SID, "2026-11-20T00:00:00")
-    assert order == ["sealed"]
+    assert requests == []
 
 
 async def test_idle_hook_never_delays_the_review_in_the_mode(ac, requests, monkeypatch):
@@ -546,4 +553,5 @@ async def test_request_review_never_raises(ac, monkeypatch):
     class BadPM:
         def open_prompts(self, sid):
             raise RuntimeError("board gone")
-    assert await ac.mod.request_review(Router(Unit(HIVE_SID)), HIVE_SID, pm=BadPM()) is False
+    from core import hive_review
+    assert await hive_review.request_review(Router(Unit(HIVE_SID)), HIVE_SID, pm=BadPM()) is False

@@ -36,7 +36,8 @@ and a session's directory may not be links.
   budget is listed as ``skipped`` without its bytes instead of stopping the pull. After
   placing, the host keeps the turns' ``not_sealed`` reasons (``hive_files.note_not_sealed``).
 - ``closed``: right after the lessons of a session job's end or a deletion: what the
-  session produced so far is all here. A later turn appends after it.
+  session produced so far is all here. A later turn appends after it. A job's end while
+  a pipeline run of the session waits on a decision seals the lessons only.
 
 On an AgentCore Hive (core/hive_agentcore) each append is also written to S3, under
 ``bridge/<sid>/records/``, once its file and manifest line are on disk.
@@ -605,9 +606,20 @@ def _workspace() -> Path:
 
 def on_session_job_end(session_id: str, state: str) -> None:
     """The S2/S7 job of a session reached ``done`` or ``failed`` (worker.S2JobExecutor,
-    also a job a restart failed). Never raises."""
+    also a job a restart failed). While a pipeline run of the session waits on a decision
+    (core/hive_review ``decision_waits``) only its lessons are sealed: ``closed`` would
+    tell the Host the round is over while its wait is still open; the review after the
+    answer's turn closes it. Never raises."""
     try:
         if on_hive() and state in ("done", "failed") and SESSION_RE.fullmatch(session_id or ""):
+            from core import hive_review
+            if hive_review.decision_waits(session_id):
+                logger.info("hive_records: %s waits on a pipeline decision: lessons sealed, not closed",
+                            session_id)
+                from core import hive_agentcore
+                with hive_agentcore.hold():
+                    seal_lessons(_workspace(), session_id)
+                return
             seal_end(_workspace(), session_id, "reviewed" if state == "done" else "review_failed")
     except Exception as exc:  # noqa: BLE001 — never stops the session jobs
         logger.error("hive_records: ending %s failed (%s)", session_id, type(exc).__name__)

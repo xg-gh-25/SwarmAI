@@ -27,13 +27,15 @@ What the mode changes, and where:
   ``{"at", "orders": [<GET /api/hive/work/{id}/checks body>, ...]}``; ``usage.json`` is
   ``{"at", "rows", "last_id"}`` (``usage_accounting.rows_after`` over every row).
 - ``GET /api/hive/busy`` (routers/hive_brains, ``busy``): busy exactly while a session
-  streams or has background work, a permission or question waits, a session review job
-  is queued or running, or something is not yet written to S3 (a record entry, one being
-  sealed, or a stale object). An open work order alone is not busy: the Host releases it
-  only after it settled, and counting it would hold the microVM to its 8-hour limit.
-- ``request_review``: when a turn ends with no open wait and no background work, the
-  session review job is requested now, not after ``s2_jobs.REVIEW_DELAY``; its end seals
-  the lessons and ``closed`` (``hive_records.seal_end``), so the run ends in minutes.
+  streams or has background work, a permission or question waits, a pipeline run of a
+  session here waits on a decision (``core.hive_review.decision_waits``: also ``waiting`` in
+  state.json), a session review job is queued or running, or something is not yet written
+  to S3 (a record entry, one being sealed, or a stale object). An open work order alone
+  is not busy: the Host releases it only after it settled, and counting it would hold the
+  microVM to its 8-hour limit.
+- The review at the turn's end, with no ``s2_jobs.REVIEW_DELAY``, is core/hive_review's
+  (every dispatched Hive session; here every session is the dispatched one); its end
+  seals the lessons and ``closed`` (``hive_records.seal_end``), so the run ends in minutes.
 
 Every boto3 client is created inside a function, on first use (``_client``): a client
 made at import time would carry the credentials from before the microVM's snapshot,
@@ -52,7 +54,6 @@ import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -460,9 +461,10 @@ def _pm(pm: Any = None) -> Any:
     return permission_manager
 
 
-def live_conditions(router: Any = None, pm: Any = None) -> dict[str, bool]:
-    """What the event loop knows (session units, the prompt board, turn seals running).
-    Called on the loop: these objects are loop-side."""
+def live_conditions(router: Any = None, pm: Any = None) -> dict[str, Any]:
+    """What the event loop knows (session units, the prompt board, turn seals running),
+    and the ids of the sessions here (``sessions``, whose pipeline decisions the worker
+    thread reads). Called on the loop: these objects are loop-side."""
     from core.session_unit import SessionState
     r = _router(router)
     units = list(r.list_units()) if r is not None else []
@@ -481,7 +483,8 @@ def live_conditions(router: Any = None, pm: Any = None) -> dict[str, bool]:
     open_turn = any(u.session_id and hub.open_turn_id(u.session_id) is not None for u in units)
     return {"streaming": open_turn or any(u.state == SessionState.STREAMING for u in units),
             "background_work": any(getattr(u, "has_background_work", False) is True for u in units),
-            "waiting_input": bool(waiting), "sealing": sealing}
+            "waiting_input": bool(waiting), "sealing": sealing,
+            "sessions": tuple(u.session_id for u in units if u.session_id)}
 
 
 def _review_open() -> bool:
@@ -498,7 +501,7 @@ def _review_open() -> bool:
         return True
 
 
-def _state_value(live: dict[str, bool], review: bool, pending: bool, workspace: Path) -> str:
+def _state_value(live: dict[str, Any], review: bool, pending: bool, workspace: Path) -> str:
     if live["waiting_input"]:
         return "waiting"
     if live["streaming"] or live["background_work"] or live["sealing"] or review or pending:
@@ -506,23 +509,40 @@ def _state_value(live: dict[str, bool], review: bool, pending: bool, workspace: 
     return "ended" if _record_closed(workspace) else "running"
 
 
-def _fingerprints(live: dict[str, bool], workspace: Path) -> dict[str, Any]:
+def _decision_waits(live: dict[str, Any], workspace: Path) -> bool:
+    """A pipeline run of a session here (a live unit's, or the exported record's after a
+    restart) waits on a decision: a wait like a question, so the microVM stays and the Host
+    keeps showing it (core/hive_review; an unreadable run store counts as waiting). A
+    session whose record is closed waits for nothing here: only a deletion closes it with
+    a decision open, and nothing can answer a deleted session."""
+    from core import hive_review
+    sessions = set(live.get("sessions") or ())
+    pinned = _cursor(workspace)[0]
+    if pinned:
+        sessions.add(pinned)
+    return any(hive_review.decision_waits(s) for s in sorted(sessions)
+               if not _closed(workspace, s))
+
+
+def _fingerprints(live: dict[str, Any], workspace: Path) -> dict[str, Any]:
     review = _review_open()
     pending = export_pending(workspace)
-    return {"_review": review, "_pending": pending,
-            "state.json": _state_value(live, review, pending, workspace),
+    waiting = bool(live["waiting_input"]) or _decision_waits(live, workspace)
+    return {"_review": review, "_pending": pending, "_waiting": waiting,
+            "state.json": _state_value({**live, "waiting_input": waiting}, review, pending, workspace),
             "checks.json": _checks_fingerprint(workspace),
             "usage.json": _usage_fingerprint()}
 
 
-def _thread_conditions(live: dict[str, bool], workspace: Path) -> dict[str, bool]:
+def _thread_conditions(live: dict[str, Any], workspace: Path) -> dict[str, bool]:
     try:
         fp = _fingerprints(live, workspace)
     except Exception as exc:  # noqa: BLE001 — unknown: busy, results kept
         logger.warning("hive_agentcore: busy check failed (%s)", type(exc).__name__)
         return {"review_job": True, "s3_pending": True}
     stale = any(fp[k] != _written.get(k) for k in ("state.json", "checks.json", "usage.json"))
-    return {"review_job": fp["_review"], "s3_pending": fp["_pending"] or stale or live["sealing"]}
+    return {"review_job": fp["_review"], "s3_pending": fp["_pending"] or stale or live["sealing"],
+            "waiting_input": fp["_waiting"]}
 
 
 async def busy(router: Any = None, pm: Any = None, workspace: Optional[Path] = None) -> dict[str, Any]:
@@ -535,7 +555,7 @@ async def busy(router: Any = None, pm: Any = None, workspace: Optional[Path] = N
     return {"busy": bool(reasons), "reasons": reasons}
 
 
-def _sync(live: dict[str, bool], workspace: Path) -> None:
+def _sync(live: dict[str, Any], workspace: Path) -> None:
     """Retry the record export, then write each object whose content changed."""
     ident = identity()
     if ident is None:
@@ -568,45 +588,6 @@ async def sync_pass(router: Any = None, pm: Any = None, workspace: Optional[Path
         await asyncio.wrap_future(_lane_pool().submit(_sync, live, workspace or _workspace()))
     except Exception as exc:  # noqa: BLE001
         logger.warning("hive_agentcore: sync pass failed (%s)", type(exc).__name__)
-
-
-# ── the review right after the turn (design §6.5) ──────────────────────────────
-
-async def request_review(router: Any, session_id: Optional[str], pm: Any = None) -> bool:
-    """A turn of ``session_id`` ended and its record is sealed: when nothing waits and no
-    background work runs, request the session review now. Returns whether it asked."""
-    if not active() or not session_id:
-        return False
-    try:
-        from core.session_unit import SessionState
-        from core import session_events
-        unit = getattr(router, "_units", {}).get(session_id)
-        if unit is not None and (unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
-                                 or getattr(unit, "has_background_work", False) is True):
-            return False                         # its next turn end, or the idle hook, asks
-        if _pm(pm).open_prompts(session_id) or session_events.hub().open_turn_id(session_id) is not None:
-            return False
-        from core.ingestion import s2_jobs
-        await asyncio.to_thread(s2_jobs.request, session_id, "session_end",
-                                sdk_session_id=getattr(unit, "_sdk_session_id", None),
-                                delay=timedelta(0))
-    except Exception as exc:  # noqa: BLE001 — the idle hook asks again (s2_session)
-        logger.warning("hive_agentcore: review of %s not requested (%s)", session_id, type(exc).__name__)
-        return False
-    return True
-
-
-def review_wanted(session_id: str, workspace: Optional[Path] = None) -> bool:
-    """The idle hook's question in this mode: no review job of the session is open and its
-    record is not closed, so a turn ended without one being asked for (background work or
-    a wait at its end, a failed request). Blocking: call it in a thread."""
-    from core.ingestion import s2_jobs
-    if s2_jobs.open_jobs(session_id) > 0:
-        return False
-    from core import hive_records
-    if not hive_records.SESSION_RE.fullmatch(session_id or ""):
-        return True
-    return not _closed(workspace or _workspace(), session_id)
 
 
 def _reset_for_tests() -> None:

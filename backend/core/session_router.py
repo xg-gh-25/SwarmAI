@@ -4556,11 +4556,11 @@ class SessionRouter:
                 except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
                     logger.error("hive_records: sealing the turn of %s failed (%s)", session_id,
                                  type(exc).__name__)
-            # an AgentCore Hive: the turn's end is the run's end, so its review (lessons,
-            # then ``closed``) is asked for now, after the turn's entry (core/hive_agentcore)
-            from . import hive_agentcore
-            if hive_agentcore.active():
-                await hive_agentcore.request_review(self, session_id)
+            # a dispatched session: the turn's end is the task's end, so its review
+            # (lessons, then ``closed``) is asked for now, after the turn's entry, unless a
+            # wait or a pipeline decision is open (core/hive_review)
+            from . import hive_review
+            await hive_review.request_review(self, session_id)
         finally:
             slot[1] -= 1
             if slot[1] == 0 and _SEAL_LOCKS.get(key) is slot:

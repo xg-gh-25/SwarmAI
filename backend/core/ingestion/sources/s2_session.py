@@ -260,20 +260,22 @@ class SessionExtractionHook:
     async def execute(self, context: Any) -> None:
         # Queue only (§12 r16.13). The idle hook fires 120 s after the last turn; the job's
         # not-before waits 58 more minutes and is pushed by later activity, at most
-        # s2_jobs.MAX_WAIT after the first request (extraction-at-task-end E1).
+        # s2_jobs.MAX_WAIT after the first request (extraction-at-task-end E1); a session
+        # dispatched to a Hive is asked for without that wait (core/hive_review).
         if context.deleting:
             # on a Hive, a deleted session's record gets its lessons and ``closed``
             from core import hive_records
             await asyncio.to_thread(hive_records.on_session_deleted, context.session_id)
         if not context.deleting:
-            from core import hive_agentcore
+            from core import hive_records, hive_review
             from core.ingestion import s2_jobs
-            if hive_agentcore.active():
-                # an AgentCore Hive asked for the review when the turn ended, with no delay
-                # (hive_agentcore.request_review); here only a turn that ended without one
-                # (background work or a wait at its end, a failed request), again with no
-                # delay: a delayed one would hold the microVM an hour
-                if await asyncio.to_thread(hive_agentcore.review_wanted, context.session_id):
+            if hive_records.on_hive() and await asyncio.to_thread(hive_review.immediate, context.session_id):
+                # a dispatched Hive session asked for the review when the turn ended, with
+                # no delay (hive_review.request_review); here only a turn that ended without
+                # one (background work or a wait at its end, a failed request), again with
+                # no delay: a delayed one would hold the Hive an hour. Never while a
+                # pipeline decision of it waits (hive_review.review_wanted).
+                if await asyncio.to_thread(hive_review.review_wanted, context.session_id):
                     await asyncio.to_thread(
                         s2_jobs.request, context.session_id, "session_end",
                         sdk_session_id=getattr(context, "sdk_session_id", None))
