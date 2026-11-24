@@ -24,10 +24,11 @@
  * and offers only "open session".
  */
 import i18n from '../../i18n';
-import type { SwarmOutAction, SwarmOutAsk, SwarmOutClosedWhy, SwarmOutCommand, SwarmOutResult, SwarmOutRun, SwarmOutStage } from '../../services/swarmOut';
+import type { SwarmOutAction, SwarmOutAsk, SwarmOutCommand, SwarmOutResult, SwarmOutRun, SwarmOutStage } from '../../services/swarmOut';
 import { judgeState, type JudgeState } from './judge';
 import { brainLabel, checkStatus, interventionsOf, runJudge } from './live';
 import { TONE_VAR } from './tone';
+import { CLOSED_WHYS, STAGE_TONE_KIND, stageOf, stageWord } from './stage';
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -36,33 +37,18 @@ const ms = (iso: string | null | undefined): number => {
   return Number.isNaN(t) ? NaN : t;
 };
 
-/** The run's stage: the backend's, else (an older dispatch) from its Hive state. */
-export function stageOf(r: SwarmOutRun): SwarmOutStage {
-  if (r.stage) return r.stage;
-  if (r.state === 'waiting') return 'needs_answer';
-  if (r.state === 'running') return 'running';
-  return 'stopped';
-}
+export { stageOf, CLOSED_WHYS };
 
-/** Each stage's colour in the big card's header; a closed run (whatever closed it) is muted. */
+/** Each stage's colour in the big card's header (./stage's tone); a closed run (whatever
+ *  closed it) is muted. */
 export const STAGE_TONE: Record<SwarmOutStage, string> = {
-  running: TONE_VAR.busy, needs_answer: TONE_VAR.attention, awaiting: TONE_VAR.attention, stopped: TONE_VAR.error,
-  accepted: TONE_VAR.ok, closed: 'var(--color-text-muted)',
+  ...(Object.fromEntries(Object.entries(STAGE_TONE_KIND).map(([s, k]) => [s, TONE_VAR[k]])) as Record<SwarmOutStage, string>),
+  closed: 'var(--color-text-muted)',
 };
 
-/** Why a closed run is closed, each with its own name (its ``why``). */
-export const CLOSED_WHYS: readonly SwarmOutClosedWhy[] = ['discarded', 'reverted', 'expired', 'hive_gone'];
-
-/** A stage in the person's words. A closed run is named by its reason (Discarded,
- *  Reverted, Expired, Hive gone); a reason this build does not know reads "Closed". */
+/** A stage in the person's words (./stage ``stageWord``, with the app's i18n). */
 export function stageLabel(stage: SwarmOutStage, why?: string | null): string {
-  // a Swarm Run's child its lead run took, or that went with the run's end
-  if (stage === 'accepted' && why === 'swarm_run') return i18n.t('swarmOut.review.handled');
-  if (stage === 'closed') {
-    return why && (CLOSED_WHYS as readonly string[]).includes(why)
-      ? i18n.t(`swarmOut.review.closed.${why}`) : i18n.t('swarmOut.review.stage.closed');
-  }
-  return i18n.t(`swarmOut.review.stage.${stage}`);
+  return stageWord(i18n.t, stage, why);
 }
 
 /** The run's commands in their order: the backend's; an older dispatch only opens. */

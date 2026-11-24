@@ -61,7 +61,7 @@ import { getOverlayCtxBridge } from '../layout/overlayRegistry';
 import { PanelHiddenContext, useOpenRun } from './openSession';
 import { actionsOf, ago, autonomyWord, commandForKey, commandMeta, machineChecks, STAGE_TONE, stageLabel, stageOf, typingIn, waitingSince, waitsOf } from './runReview';
 import { DIMENSIONS, DIMENSION_ROLE } from './shapes';
-import { DispatchHero, DoneWhen, NowLine, SentAs, ZoneLabel } from './runCard';
+import { DispatchHero, DoneWhen, EndLine, NowLine, SentAs, ZoneLabel } from './runCard';
 import { railState, visibleTabs, type CardTab } from './runCardRules';
 import { TONE_VAR } from './tone';
 import { modKeyLabel } from '../../utils/platform';
@@ -445,6 +445,7 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
       <b style={{ color: r.state_reason === 'answer_sent' ? TONE_VAR.busy : STAGE_TONE[stage] }}>{reasonLabel ?? stageLabel(stage, r.why)}</b>
       {r.why && stage !== 'closed' && <span className={muted}> · {t(`swarmOut.review.why.${r.why}`, { defaultValue: r.why })}</span>}
       <span className={muted}> · {ago(waitingSince(r, asks), now ?? Date.now())}</span>
+      <EndLine r={r} testId="swarm-out-review" className="mt-1" />
       {r.cleanup_soon && <div className="mt-1 text-[12px]" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-review-cleanup">{t('swarmOut.review.cleanupSoonLong')}</div>}
     </div>
   );

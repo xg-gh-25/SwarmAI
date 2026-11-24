@@ -1762,7 +1762,26 @@
         "judge": "landed: the agent judges it",
         "revert": "you asked to revert: the agent is undoing it",
         "ask_person": "the agent handed it to you",
-        "reverted": "reverted"
+        "reverted": "reverted",
+        "hive_stopped": "its Hive is stopped and its result was not fetched"
+      },
+      "end": {
+        "completed": "Ended: completed",
+        "turn_limit": "Ended: hit the turn limit",
+        "stopped_by_agent": "Ended: the agent stopped it",
+        "stopped_by_person": "Ended: you stopped it",
+        "crashed": "Ended: it crashed",
+        "carrier_expired": "Ended: the Elastic Workers session reached its time limit",
+        "hive_stopped": "Ended: its Hive stopped while it ran",
+        "lost": "Ended: the session is gone and no result came back",
+        "other": "Ended: {{reason}}"
+      },
+      "whyNot": {
+        "line": "Not settled yet: {{list}}",
+        "verdict": "waiting for the agent's verdict",
+        "code": "the code has not landed yet",
+        "files": "files not in the Brain yet",
+        "lessons": "lessons not in yet"
       },
       "cmd": {
         "accept": {

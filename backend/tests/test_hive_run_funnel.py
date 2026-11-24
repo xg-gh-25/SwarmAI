@@ -498,3 +498,22 @@ def test_a_discarded_run_is_not_shown_as_being_judged(env):
     gates = d["funnel"]["gates"]
     assert gates and all(g["state"] == "done" for g in gates) and d["funnel"]["current"] is None
     assert (gates[-1]["key"], gates[-1]["by"]) == ("judge", "agent")
+
+
+def test_a_stopped_hive_run_its_agent_owns_is_not_needs_you(env, monkeypatch):
+    """A run whose session died with its Hive stopped and no result fetched reads
+    stopped (not running); while its dispatching session lives it is that agent's to
+    handle (start the Hive, re-run, discard), never a Needs You item."""
+    rows, _ = env
+    r = _row(result=None, state_reason="hive_stopped", result_status="pending")
+    rows[DID] = r
+    a = _annotated(r)
+    assert a["stage"] == "stopped" and a["why"] == "hive_stopped"
+    assert rc.actionable(a, []) is True
+    assert rc.needs_person(a, []) is False
+    monkeypatch.setattr(swarm_out, "snapshot", lambda: {"runs": [a], "asks": []})
+    assert [i.id for i in aa._collect_swarm_out()] == []
+    # nobody answers for it any more: still not the person's (the Hive runs again first)
+    orphan = {**a, "dispatched_from": "gone"}
+    monkeypatch.setattr(swarm_out, "snapshot", lambda: {"runs": [orphan], "asks": []})
+    assert [i.id for i in aa._collect_swarm_out()] == []

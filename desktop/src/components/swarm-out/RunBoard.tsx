@@ -14,7 +14,9 @@
  * the Hive's name: where.runWhere), its start time and how long it took (where.stamp,
  * where.runMinutes). A card shows the run's place on the dispatch track (track.dispatchTrack:
  * five stations, a pipeline task's live stage under "on Hive") and what its agent is doing
- * now (live_now). A click opens the run's big card (RunOverlay), where every command is.
+ * now (live_now). A card and a row say how the run's session ended (its recorded ``end``)
+ * and, while it is not settled, what still holds it (``settle.why_not``: runCard.EndLine).
+ * A click opens the run's big card (RunOverlay), where every command is.
  *
  * Motion (index.css "Swarm Out board"): a live dot's ring, the flowing segment at the
  * current station, a card that needs the person breathing, a card or row that arrives
@@ -29,6 +31,7 @@ import { useOpenRun } from './openSession';
 import { RunOverlay } from './RunOverlay';
 import { actionOf, asksOf, DONE_STAGES, sections, stageLabel, stageOf, taskTag, waitingSince } from './runReview';
 import { SwarmOutWaitCard } from './SwarmOutWaitCard';
+import { EndLine } from './runCard';
 import { TONE_VAR } from './tone';
 import { CHIP_COLOR, DISPATCH_STATIONS, dispatchTrack, type ChipKind } from './track';
 import { waitingUnasked } from './useSwarmOutActivity';
@@ -241,6 +244,7 @@ function RunningCard({ r, asks, fleet, now, fresh, needsYou, onOpen, onReload }:
         </div>
       </div>
       <Track r={r} kind={kind} at={at} />
+      <EndLine r={r} testId="so-card" className="mt-2.5" />
       {own.length > 0 ? (
         // the question itself, answered here (the chat's own card)
         <div className="mt-3 flex flex-col gap-2 cursor-default" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
@@ -292,6 +296,7 @@ export function DoneRow({ r, fleet, now, fresh = false, compact, onOpen, cost }:
           {steps > 0 && <span className="text-small" style={{ color: TONE_VAR.attention }}> · {t('swarmOut.review.autonomy.steppedIn', { count: steps })}</span>}
         </div>
         <div className="mt-px"><RunMeta r={r} fleet={fleet} /></div>
+        <EndLine r={r} testId="so-done" className="mt-px" />
       </div>
       <div className="flex flex-col items-end">
         <StartAndTime r={r} now={now} open={outcomeOf(r) === 'open'} stacked={compact} />

@@ -7,8 +7,9 @@
  * The ItemBox look of the turn cards (ItemRows): the status in the title line, the
  * title and brief, one row per field (name · value · a grey "why"), the actions in the
  * last line. Three variants:
- * - gone out: the live state of the run (Swarm Out's runs poll, shared by every card on
- *   screen), "View in Swarm Out" and "Open Hive session";
+ * - gone out: the run's status as the Swarm Out panel shows it (its stage, from Swarm
+ *   Out's runs poll, shared by every card on screen), "View in Swarm Out" and "Open Hive
+ *   session";
  * - refused: why, and that nothing was sent; "Open <Brain>" when it names one;
  * - not sure (the Hive may have taken it but named no session): it may be running there.
  *
@@ -26,6 +27,7 @@ import { isRemoteId } from '../../../services/remoteSession';
 import { getOverlayCtxBridge } from '../../../components/layout/overlayRegistry';
 import { openOverlayAt } from '../../../utils/overlayTarget';
 import { dotStyle, runTone, type Tone } from '../../../components/swarm-out/tone';
+import { STAGE_TONE_KIND, stageOf, stageWord } from '../../../components/swarm-out/stage';
 import { tf } from '../tf';
 
 export const DISPATCH_POLL_MS = 30_000;
@@ -107,10 +109,15 @@ export function syncLabel(t: TFunction, s: string | null): string | null {
   return s;
 }
 
-/** The run's state in the Swarm Out cards' own words (swarmOut.state / swarmOut.ended),
- *  short: the card links to Swarm Out for the rest. Not live.ts's stateLabel: that module
- *  binds the app's i18n instance at import, and a chat message must not. */
+/** The run's status as the Swarm Out panel shows it: the backend's stage and why
+ *  (core/swarm_out_settle derive) through components/swarm-out/stage, the one source the
+ *  panel's pill reads too, so a discarded run reads Discarded here as well. A run the
+ *  backend gives no stage (a dispatch without a Project Agent) is worded from its Hive
+ *  state and its result's ending, as before. Short: the card links to Swarm Out for the
+ *  rest. Worded with this card's own ``t``: the panel's modules that bind the app's i18n
+ *  instance at import are not loaded by a chat message. */
 export function liveWord(t: TFunction, r: SwarmOutRun): string {
+  if (r.stage) return stageWord(t, r.stage, r.why);
   const { state } = r;
   if (state === 'stopped' && r.result?.ended) {
     return tf(t, `swarmOut.ended.${r.result.ended}`, r.result.ended)
@@ -179,10 +186,11 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
         : <span className={TONE_TEXT.error}>✕ {k('failed', 'Not dispatched')}</span>;
   let live: ReactNode = null;
   if (run) {
-    const tone = runTone(run);
+    const stage = run.stage ? stageOf(run) : null;
+    const tone = stage ? STAGE_TONE_KIND[stage] : runTone(run);
     const label = liveWord(t, run);
     live = (
-      <span data-testid="dispatch-live" data-tone={tone} className={`inline-flex items-center gap-1.5 ${TONE_TEXT[tone]}`}>
+      <span data-testid="dispatch-live" data-tone={tone} data-stage={stage ?? undefined} className={`inline-flex items-center gap-1.5 ${TONE_TEXT[tone]}`}>
         <span aria-hidden="true" className="h-[7px] w-[7px] rounded-full" style={dotStyle(tone)} />{label}
       </span>
     );

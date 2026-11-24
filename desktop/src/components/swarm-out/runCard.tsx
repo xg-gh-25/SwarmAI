@@ -14,6 +14,7 @@ import { ago, clock } from './runReview';
 import { acceptanceClauses } from './runCardRules';
 import { CHIP_COLOR, DISPATCH_STATIONS, dispatchTrack } from './track';
 import { TONE_VAR } from './tone';
+import { endWord, whyNotLine } from './stage';
 
 const muted = 'text-[var(--color-text-muted)]';
 const dim = 'text-[var(--color-text-dim)]';
@@ -98,6 +99,22 @@ export function DispatchHero({ r, now }: { r: SwarmOutRun; now: number }) {
         </div>
       )}
       <FunnelLine r={r} />
+    </div>
+  );
+}
+
+/** How the run's session ended (its recorded ``end``) and, for an unsettled run that is
+ *  not running, what still keeps it from settling (``settle.why_not``), each its own
+ *  line; nothing when neither is known. ``testId`` prefixes the lines' test ids. */
+export function EndLine({ r, testId, className = '' }: { r: SwarmOutRun; testId: string; className?: string }) {
+  const { t } = useTranslation();
+  const end = endWord(t, r);
+  const held = whyNotLine(t, r);
+  if (!end && !held) return null;
+  return (
+    <div className={`text-[12.5px] ${muted} ${className}`}>
+      {end && <div className="truncate" data-testid={`${testId}-end`} data-reason={r.end?.reason}>{end}</div>}
+      {held && <div className="truncate" style={{ color: TONE_VAR.attention }} data-testid={`${testId}-why-not`}>{held}</div>}
     </div>
   );
 }

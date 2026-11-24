@@ -1762,7 +1762,26 @@
         "judge": "已落地：agent 在判",
         "revert": "你要求撤回：agent 正在撤回",
         "ask_person": "agent 交给你定",
-        "reverted": "已撤回"
+        "reverted": "已撤回",
+        "hive_stopped": "Hive 已停，结果还没取回"
+      },
+      "end": {
+        "completed": "结束：正常完成",
+        "turn_limit": "结束：到了轮次上限",
+        "stopped_by_agent": "结束：agent 停下了它",
+        "stopped_by_person": "结束：你停下了它",
+        "crashed": "结束：出错中断",
+        "carrier_expired": "结束：Elastic Workers 会话到了时长上限",
+        "hive_stopped": "结束：运行中 Hive 停了",
+        "lost": "结束：会话没了，结果没有回来",
+        "other": "结束：{{reason}}"
+      },
+      "whyNot": {
+        "line": "还没结清：{{list}}",
+        "verdict": "等 agent 判定",
+        "code": "代码还没落地",
+        "files": "文件还没进 Brain",
+        "lessons": "lessons 还没到"
       },
       "cmd": {
         "accept": {

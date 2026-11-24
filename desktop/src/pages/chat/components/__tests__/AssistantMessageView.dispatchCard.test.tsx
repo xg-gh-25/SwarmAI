@@ -128,6 +128,36 @@ describe('a dispatch that went out', () => {
     expect(runs).toHaveBeenCalledTimes(1);
   });
 
+  it('a discarded run reads discarded, from the stage the panel shows, not its result', async () => {
+    runs.mockResolvedValue({
+      runs: [{ dispatch_id: 'so_b150abc3fd86', hive_id: 'h1', hive: 'explorer', session_id: SID, title: 't', origin: 'swarm-out',
+        sent_at: '2026-10-30T05:25:50Z', state: 'stopped', state_reason: 'idle', stage: 'closed', why: 'discarded',
+        result: { ended: 'completed', provisional: false } }],
+      asks: [], errors: [],
+    } as never);
+    render(view([bash('b1'), tr('b1'), OK]));
+    const live = await screen.findByTestId('dispatch-live');
+    expect(live.getAttribute('data-stage')).toBe('closed');
+    // this file's react-i18next mock returns the fallback: the closed run's own why
+    expect(live.textContent).toContain('discarded');
+    expect(live.textContent).not.toMatch(/completed/i);
+    expect(live.getAttribute('data-tone')).toBe('unknown');
+  });
+
+  it('a run the backend gives no stage (no Project Agent) still reads its ending', async () => {
+    runs.mockResolvedValue({
+      runs: [{ dispatch_id: 'so_b150abc3fd86', hive_id: 'h1', hive: 'explorer', session_id: SID, title: 't', origin: 'swarm-out',
+        sent_at: '2026-10-30T05:25:50Z', state: 'stopped', state_reason: 'idle',
+        result: { ended: 'completed', provisional: false } }],
+      asks: [], errors: [],
+    } as never);
+    render(view([bash('b1'), tr('b1'), OK]));
+    const live = await screen.findByTestId('dispatch-live');
+    expect(live.getAttribute('data-stage')).toBeNull();
+    expect(live.textContent).toContain('completed');
+    expect(live.getAttribute('data-tone')).toBe('ok');
+  });
+
   it('a session the Host cannot open has no Open button', () => {
     render(view([bash('b1'), tr('b1'), { ...OK, sessionId: null }]));
     expect(screen.queryByTestId('dispatch-open')).toBeNull();

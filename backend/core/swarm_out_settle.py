@@ -57,8 +57,12 @@ placed here hold the task back. Only discarding overrides that (the panel says w
 removes). No model decides anything here (P5): the verdict is given by the person or the
 dispatching agent through the routes, the rest is counted.
 
-- ``annotate(rows)``         — each row's stage, actions and settle; settles and expires
-  what is due.
+- ``end``: how the run's session ended (``end_of``: its own final result, or proof that no
+  result will come), written once by the first look that shows it; a later machine state
+  (a Hive stopped now, a carrier past its lifetime) never changes it, and ``state_reason``
+  stays the machine's state of the moment. A re-run's turn gets its own end.
+- ``annotate(rows)``         — each row's stage, actions, settle and end; settles and
+  expires what is due.
 - ``set_verdict`` / ``set_manual_landed`` / ``discard`` — the person's or the dispatching
   agent's actions (routes in routers/swarm_out; what an agent may not do with them is
   core/swarm_out_actor's).
@@ -503,7 +507,8 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
 
     ``stage`` and ``actions`` are what the panel shows and offers (design
     2026-10-31-swarm-out-run-review §1.2, §3.2); ``why`` says why a run stopped
-    (``no_session`` / ``no_result`` / how its result ended) or how a ``closed`` run ended
+    (``no_session`` / ``no_result`` / ``hive_stopped``: its Hive is stopped and its result
+    was not fetched / how its result ended) or how a ``closed`` run ended
     (``discarded`` / ``reverted`` / ``expired`` / ``hive_gone``). The rest decides whether
     it settles: the verdict is decided (accepted, discarded, the Hive gone), the code is
     handled, the files the release would remove are here, the lessons are in, and its
@@ -574,11 +579,7 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     code_done = abandoned or gone or handled or code in ("none", "landed", "rejected")
     files_done = abandoned or gone or _files_here(row["dispatch_id"], kept_res)
     decided = verdict in ("pass", "abandoned", "gone", "reverted", "handled")
-    # no result will come: none can be fetched for good (a passing fetch error, the Hive
-    # silent or unusable, may still bring it)
-    stopped_without_result = res is None and row.get("state") == "stopped" and (
-        row.get("result_status") == "not_applicable"
-        or (row.get("result_status") == "failed" and row.get("result_error") in NO_RESULT_ERRORS))
+    stopped_without_result = _no_result_ever(row, res)
 
     # the session can still take a message: named, its Hive here, not lost
     alive = bool(row.get("session_id")) and not gone and not stopped_without_result
@@ -603,6 +604,10 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         stage, why = "stopped", "no_session"
     elif stopped_without_result or lost:
         stage, why = "stopped", "no_result"
+    elif state == "stopped" and row.get("state_reason") == "hive_stopped" and not _final(res):
+        # no session runs on a stopped Hive, and its result was not fetched before it
+        # stopped: stopped, never "running" (the result is read once the Hive runs again)
+        stage, why = "stopped", "hive_stopped"
     elif interrupted(row, res, kept):
         stage, why = "stopped", "no_record"                # cut off: re-run it
     elif state == "running" or res is None or not _final(res):
@@ -657,6 +662,116 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
                                                        "result_final": _final(res)})
     out["person_decisions"] = swarm_out_record.person_decisions(rec, bool(row.get("dispatched_from")))
     return out
+
+
+def _no_result_ever(row: dict, res: Optional[dict]) -> bool:
+    """No result will come: the run is stopped and none can be fetched for good (a
+    passing fetch error, the Hive silent or unusable, may still bring it)."""
+    return res is None and row.get("state") == "stopped" and (
+        row.get("result_status") == "not_applicable"
+        or (row.get("result_status") == "failed" and row.get("result_error") in NO_RESULT_ERRORS))
+
+
+# ── how the run's session ended (``end``) ─────────────────────────────────────
+
+#: ``end.reason``: how the run's session ended, from its own final result, or from what
+#: proved that no result will come
+END_REASONS = ("completed", "turn_limit", "stopped_by_agent", "stopped_by_person", "crashed",
+               "carrier_expired", "hive_stopped", "lost")
+#: a final result's ending -> its end reason (``stopped`` is named by who stopped it);
+#: an ending missing here (paused, no_terminal, no_record, restarted, superseded) does
+#: not say the session ended
+_END_OF = {"completed": "completed", "turn_limit": "turn_limit", "error": "crashed",
+           "crashed": "crashed", "gave_up": "crashed", "daemon_stopped": "hive_stopped"}
+#: a stop or discard recorded this long after the result's end still stopped it (the
+#: command is recorded after the Hive answered, and the clocks may differ)
+STOP_SLACK_S = 120
+
+
+def _stopped_by(rec: dict, ended_at: Any, kept: Optional[dict] = None) -> str:
+    """Who stopped the turn: the last stop or discard command recorded during it (after
+    the last re-send, core/swarm_out_results ``resent_at``, up to its end; ``commands``,
+    core/swarm_out_record), the person's or an agent's; none recorded: the person, from
+    the Hive's own page."""
+    end = _iso(ended_at)
+    sent = _iso((kept or {}).get("resent_at"))
+    by = None
+    for c in rec.get("commands") if isinstance(rec.get("commands"), list) else []:
+        if not isinstance(c, dict) or c.get("command") not in ("stop", "discard"):
+            continue
+        at = _iso(c.get("at"))
+        if end is not None and (at is None or (at - end).total_seconds() > STOP_SLACK_S):
+            continue
+        if sent is not None and at is not None and at < sent:
+            continue                                   # a stop of an earlier turn
+        by = c.get("by")
+    return "stopped_by_person" if by in (None, "person") else "stopped_by_agent"
+
+
+def _stamp(v: Any) -> str:
+    t = _iso(v)
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ") if t else _now()
+
+
+def end_of(row: dict, rec: dict, kept: Optional[dict]) -> Optional[dict]:
+    """``{"reason", "at"}``: how the run's session ended, or None while nothing proves it
+    did. From the session's own final result (``at`` its ``ended_at``); else from proof
+    that no result will come: the round's store read whole after its machine could write
+    no more (``result_lost``: ``carrier_expired`` when its lifetime ended it), its Hive
+    gone, or no result for good (``lost``). A Hive that is only stopped, a carrier past
+    its lifetime whose store was not read yet, or a turn whose ending has not been
+    recorded for a while (``interrupted``, a timer), is not an end: the result may still
+    come and say how it ended (a turn the Hive's stop cut off says ``daemon_stopped``)."""
+    res = row.get("result") if isinstance(row.get("result"), dict) else None
+    if _final(res):
+        ended = res.get("ended")
+        reason = _stopped_by(rec, res.get("ended_at"), kept) if ended == "stopped" else _END_OF.get(ended)
+        if reason:
+            return {"reason": reason, "at": _stamp(res.get("ended_at"))}
+    lost = result_lost(row, kept)
+    if lost:
+        return {"reason": "carrier_expired" if row.get("state_reason") == "carrier_expired" else "lost",
+                "at": _stamp(lost.get("checked_at"))}
+    if row.get("state_reason") == "hive_gone" or _no_result_ever(row, res):
+        return {"reason": "lost", "at": _now()}
+    return None
+
+
+def _of_earlier_turn(end: Any, kept: Optional[dict]) -> bool:
+    """The end is of a turn before the last re-send (core/swarm_out_results ``resent_at``):
+    a correction went into the same session after it."""
+    sent = _iso((kept or {}).get("resent_at"))
+    at = _iso(end.get("at")) if isinstance(end, dict) else None
+    return sent is not None and at is not None and at < sent
+
+
+def _note_end(row: dict, rec: dict, kept: Optional[dict]) -> Optional[dict]:
+    """The run's ``end`` as ``/runs`` shows it, written first if due: once, the first
+    look that proves how the session ended writes it and no later look changes it (a
+    later machine state, ``hive_stopped`` or ``carrier_expired``, never replaces it). A
+    re-run's turn gets its own: an end older than the re-send is not shown and the new
+    turn's end replaces it. A record that cannot be written: the row lists without one,
+    and the next look writes it."""
+    cur = rec.get("end") if isinstance(rec.get("end"), dict) else None
+    if cur and not _of_earlier_turn(cur, kept):
+        return cur
+    end = end_of(row, rec, kept)
+    if end is None or _of_earlier_turn(end, kept):
+        return None
+    out: dict[str, Any] = {}
+
+    def change(r: dict):
+        have = r.get("end") if isinstance(r.get("end"), dict) else None
+        if have and not _of_earlier_turn(have, kept):
+            out["end"] = have                      # another look wrote it first
+            return False
+        r["end"] = out["end"] = end
+    try:
+        _update(row["dispatch_id"], change)
+    except (OSError, SettleError) as e:
+        logger.warning("swarm_out_settle: the end of %s was not kept (%s)", row.get("dispatch_id"), type(e).__name__)
+        return None
+    return out.get("end")
 
 
 def result_lost(row: dict, kept: Optional[dict]) -> Optional[dict]:
@@ -811,9 +926,11 @@ def annotate(rows: list[dict], can_tell: bool = True) -> list[dict]:
     for r in rows:
         if not isinstance(r.get("project_agent"), dict) or not r.get("dispatch_id"):
             continue
-        s = load(r["dispatch_id"]).get("settled")
+        rec = load(r["dispatch_id"])
+        s = rec.get("settled")
         if not isinstance(s, dict):
             kept = swarm_out_results.load(r["dispatch_id"]) or {}
+            r["end"] = _note_end(r, rec, kept)
             d = derive(r, kept)
             idle = _idle_days(r, kept)
             # a run asking a question nobody answered expires too (the Hive sweeps it
@@ -833,6 +950,9 @@ def annotate(rows: list[dict], can_tell: bool = True) -> list[dict]:
                 or load(r["dispatch_id"]).get("settled")
             if not isinstance(s, dict):
                 continue
+        else:
+            # settled: nothing runs any more; an older record may still take its end
+            r["end"] = _note_end(r, rec, None)
         _show_settled(r, s)
         if can_tell and _retry_due(r, s) and _claim(r["dispatch_id"]):
             tell.append(r)

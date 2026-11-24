@@ -53,6 +53,12 @@ export interface SwarmOutRun {
    *  or why it is closed (discarded, reverted, expired, hive_gone) */
   why?: string | null;
   settle?: SwarmOutSettle;
+  /** How the run's session ended, written once by the first look that proved it (its own
+   *  final result, or proof that no result will come: backend core/swarm_out_settle
+   *  ``end_of``); a later machine state never changes it. Null or absent while that is
+   *  not known, or for the turn a re-run started. ``state_reason`` stays the machine's
+   *  state of the moment. */
+  end?: SwarmOutEnd | null;
   /** not settled, and this Host removes its records within 3 days (bundles can no
    *  longer land after that) */
   cleanup_soon?: boolean;
@@ -195,13 +201,23 @@ export interface SwarmOutAction {
   variant?: 'land' | 'manual' | 'verdict' | 'read_only' | 'hint';
 }
 
+export type SwarmOutEndReason = 'completed' | 'turn_limit' | 'stopped_by_agent' | 'stopped_by_person' | 'crashed'
+  | 'carrier_expired' | 'hive_stopped' | 'lost';
+
+/** ``end``: how and when the run's session ended (``at``: its result's end, or when no
+ *  result could come any more). */
+export interface SwarmOutEnd { reason: SwarmOutEndReason; at: string }
+
+/** What still holds a run back from settling (``settle.why_not``). */
+export type SwarmOutWhyNot = 'verdict' | 'code' | 'files' | 'lessons';
+
 export interface SwarmOutSettle {
   /** unsealed: commits the Hive could not seal into a bundle (they exist only in its
    *  workspace: land them by hand, or discarding removes them); rejected: an older
    *  Host's record */
   code: 'none' | 'landed' | 'rejected' | 'waiting' | 'unsealed';
   /** what still holds it back from settling (files: a returned file not yet placed here) */
-  why_not: ('verdict' | 'code' | 'files' | 'lessons')[];
+  why_not: SwarmOutWhyNot[];
   /** settled: the Hive was told to remove its workspace (released false: not yet, told
    *  again after a backoff; null: no Hive to tell) */
   settled: { at: string; outcome: 'passed' | 'abandoned' | 'gone' | 'expired' | 'reverted'; released: boolean | null } | null;

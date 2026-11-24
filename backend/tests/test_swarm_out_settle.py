@@ -709,3 +709,147 @@ def test_the_live_hook_refuses_answering_a_hives_wait():
     cmd = _ANSWER + "req1/answer"
     out = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": cmd}}, "t1", None))
     assert (out.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"
+
+
+# ── how the run's session ended (``end``): written once, never by a later machine state ──
+
+def _commands(*cmds):
+    """Commands as the run's record keeps them (core/swarm_out_record.entry)."""
+    def change(rec):
+        rec.setdefault("commands", []).extend(
+            {"at": at, "by": by, "decision": c, "command": c} for c, by, at in cmds)
+    st._update(DID, change)
+
+
+def test_end_is_written_once_and_never_by_a_later_machine_state(env, monkeypatch):
+    rows, _ = env
+    rows[DID] = _row()
+    r = _row()
+    st.annotate([r])
+    assert r["end"] == {"reason": "completed", "at": ENDED}
+    assert st.load(DID)["end"] == {"reason": "completed", "at": ENDED}
+    # later looks: the Hive is stopped now, or the Elastic carrier's lifetime passed, and
+    # the result reads otherwise; state_reason stays the machine's state of the moment
+    for reason, ended in (("hive_stopped", "daemon_stopped"), ("carrier_expired", "crashed")):
+        later = _row(state_reason=reason)
+        later["result"]["ended"] = ended
+        later["result"]["ended_at"] = "2026-10-30T18:00:00Z"
+        st.annotate([later])
+        assert later["end"] == {"reason": "completed", "at": ENDED}
+        assert later["state_reason"] == reason
+    assert st.load(DID)["end"] == {"reason": "completed", "at": ENDED}
+    # a record that cannot be written: the row lists without an end, nothing raises
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: __import__("pathlib").Path("/proc/no-such-dir"))
+    other = _row()
+    st.annotate([other])
+    assert other.get("end") is None
+
+
+@pytest.mark.parametrize("ended,cmds,want", [
+    ("completed", (), "completed"),
+    ("turn_limit", (), "turn_limit"),
+    ("error", (), "crashed"),
+    ("crashed", (), "crashed"),
+    ("gave_up", (), "crashed"),
+    ("daemon_stopped", (), "hive_stopped"),
+    ("stopped", (("stop", "agent", "2026-10-30T09:59:00Z"),), "stopped_by_agent"),
+    ("stopped", (("stop", "agent", "2026-10-30T09:30:00Z"), ("discard", "person", "2026-10-30T09:59:30Z")),
+     "stopped_by_person"),
+    ("stopped", (), "stopped_by_person"),                    # stopped on the Hive's own page
+    ("stopped", (("stop", "agent", "2026-10-30T11:00:00Z"),), "stopped_by_person"),  # after it ended
+    # the agent stopped the turn before the re-send; this turn was stopped on the Hive's page
+    ("stopped", (("stop", "agent", "2026-10-30T08:00:00Z"),), "stopped_by_person"),
+    ("paused", (), None),                                    # the session did not end
+    ("no_terminal", (), None),
+])
+def test_end_reason_of_each_ending(env, monkeypatch, ended, cmds, want):
+    rows, _ = env
+    rows[DID] = _row()
+    # the turn this result ends was sent at 09:00 (a re-send)
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {
+        "records": {"closed": True}, "resent_at": "2026-10-30T09:00:00Z",
+        "result": {"ended": "completed", "provisional": False, "ended_at": ENDED}})
+    _commands(*cmds)
+    r = _row()
+    r["result"]["ended"] = ended
+    st.annotate([r])
+    assert (r.get("end") or {}).get("reason") == want
+    assert st.load(DID).get("end") == ({"reason": want, "at": ENDED} if want else None)
+
+
+def test_end_when_no_result_can_come(env, monkeypatch):
+    rows, _ = env
+    rows[DID] = _row()
+    mark = {"round": 1, "run_ref": "s1", "checked_at": "2026-10-30T19:00:00Z"}
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"records": {"closed": False}})
+    # a Hive that is only stopped, or an Elastic round past its lifetime whose store was
+    # not read whole yet, may still bring the result: no end yet
+    for reason in ("hive_stopped", "carrier_expired"):
+        r = _row(result=None, state_reason=reason, result_status="pending")
+        st.annotate([r])
+        assert r.get("end") is None and "end" not in st.load(DID)
+    # an Elastic round past its lifetime whose store was read whole: carrier_expired
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"records": {"closed": False}, "round_end": mark})
+    monkeypatch.setattr(swarm_out_results, "round_end_of", lambda row, kept: mark)
+    r = _row(result=None, state_reason="carrier_expired", result_status="pending")
+    st.annotate([r])
+    assert r["end"] == {"reason": "carrier_expired", "at": mark["checked_at"]}
+
+
+@pytest.mark.parametrize("over", [
+    {"state_reason": "hive_gone"},
+    {"state_reason": "not_held", "result_status": "failed", "result_error": "session_gone"},
+])
+def test_a_session_gone_without_a_result_ends_lost(env, over):
+    rows, _ = env
+    rows[DID] = _row()
+    r = _row(result=None, **{"result_status": "pending", **over})
+    st.annotate([r])
+    assert r["end"]["reason"] == "lost" and st.load(DID)["end"]["reason"] == "lost"
+
+
+def test_a_turn_cut_off_by_the_timer_gets_no_end(env, monkeypatch):
+    """``interrupted`` is a timer's guess: the real ending may still come."""
+    rows, _ = env
+    rows[DID] = _row()
+    long_ago = "2026-10-30T09:00:00Z"
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"records": {"closed": True},
+                                                            "no_record_since": long_ago})
+    r = _row()
+    r["result"]["ended"] = "no_record"
+    assert st.interrupted(r, r["result"], swarm_out_results.load(DID))
+    st.annotate([r])
+    assert r.get("end") is None and "end" not in st.load(DID)
+
+
+def test_a_rerun_gets_its_own_end(env, monkeypatch):
+    rows, _ = env
+    rows[DID] = _row()
+    st.annotate([_row()])
+    assert st.load(DID)["end"]["at"] == ENDED
+    # a correction went into the same session after that end: the old end is not shown
+    # while the new turn runs, and the new turn's end is written
+    resent = "2026-10-30T12:00:00Z"
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"records": {"closed": True}, "resent_at": resent})
+    r = _row(state="running", state_reason="streaming")
+    r["result"]["provisional"] = True
+    st.annotate([r])
+    assert r.get("end") is None and st.load(DID)["end"]["at"] == ENDED
+    r = _row()
+    r["result"]["ended"], r["result"]["ended_at"] = "crashed", "2026-10-30T13:00:00Z"
+    st.annotate([r])
+    assert r["end"] == {"reason": "crashed", "at": "2026-10-30T13:00:00Z"}
+    assert st.load(DID)["end"] == {"reason": "crashed", "at": "2026-10-30T13:00:00Z"}
+
+
+def test_a_stopped_hive_without_a_result_is_not_running(env):
+    rows, _ = env
+    rows[DID] = _row()
+    for res in (None, {"ended": "completed", "provisional": True, "ended_at": ENDED, "lessons": None,
+                       "work": {"repos": []}}):
+        r = _row(result=res, state_reason="hive_stopped", result_status="pending")
+        d = st.derive(r, K(True))
+        assert d["stage"] == "stopped" and d["why"] == "hive_stopped"
+        assert "stop" not in [a["key"] for a in d["actions"]] and not d["settles"]
+    # a result that did come is judged as before
+    assert st.derive(_row(state_reason="hive_stopped"), K(True))["stage"] == "awaiting"

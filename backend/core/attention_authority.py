@@ -958,8 +958,10 @@ def _collect_swarm_out() -> list[AttentionItem]:
             items += host_items
         except Exception as exc:   # the split failed: every wait stays the person's
             logger.warning("attention: swarm_out wait split failed: %s", exc)
+        # a run whose Hive is stopped with its result not fetched waits for the Hive to
+        # run again (the Host starts it on the next dispatch or command): not the person's
         decide = [r for r in runs if r.get("stage") in ("awaiting", "stopped") and not owned(r)
-                  and not _open_ask(r)]
+                  and not _open_ask(r) and r.get("why") != "hive_stopped"]
         soon = [r for r in runs if r.get("cleanup_soon") and not owned(r)]
         for r in runs:
             a = _open_ask(r)
