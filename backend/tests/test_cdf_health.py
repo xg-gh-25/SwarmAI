@@ -421,6 +421,24 @@ def test_c2_does_not_count_a_model_that_could_not_be_reached(env):
     assert c2["value"] == {"failed": 0, "errored": 0, "attempts": 34, "unreachable": 34}
 
 
+REGION = ("RuntimeError: review failed: success: API Error: 400 Access to Anthropic models is not "
+          "allowed from unsupported countries, regions, or territories")
+ECONNREFUSED = ("RuntimeError: review failed: success: API Error: Connection refused \u2014 a firewall "
+                "or proxy may be blocking it (ECONNREFUSED)")
+
+
+def test_c2_does_not_count_a_region_block_or_a_refused_connection(env):
+    """The measured week to 2026-11-24: 13 attempts refused for the egress region, 1 refused
+    connection, two jobs failed on the region error; every one is an environment fault."""
+    _attempts(env, [("failed", REGION)] * 13 + [("failed", ECONNREFUSED)] + [("ok", None)] * 20)
+    for sid in ("s-a", "s-b"):
+        env["ing"].execute("INSERT INTO ingestion_s2_jobs(session_id,reason,state,requested_at,finished_at,error) "
+                           "VALUES (?,'session_end','failed',?,?,?)", (sid, iso(), iso(), REGION))
+    c2 = _c2(env)
+    assert c2["status"] == "pass"
+    assert c2["value"] == {"failed": 0, "errored": 0, "attempts": 20, "unreachable": 16}
+
+
 def test_c2_still_fails_on_other_review_errors(env):
     _attempts(env, [("failed", CREDENTIALS)] * 5 + [("failed", "RuntimeError: model down")] * 2
               + [("ok", None)] * 8)

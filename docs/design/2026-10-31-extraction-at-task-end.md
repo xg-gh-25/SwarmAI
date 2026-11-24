@@ -62,7 +62,10 @@ What the stores hold as a result:
 review's not-before after an idle goes from 8 to 58 minutes (60 quiet minutes; measured
 1.2 passes per session-day, p90 3). Later activity still pushes it back, but never past
 `MAX_WAIT` (3 h) after the first request of the wait, so a session that never rests an
-hour is still reviewed while it is used; a rerun after `again` starts a new wait. The
+hour is still reviewed while it is used; once `MAX_WAIT` has passed, later activity
+only ever brings the review forward (the earlier of the two not-befores), so activity at
+least once every 58 minutes can never hold a job back; a rerun after `again` starts a
+new wait. The
 Save to Memory button keeps reviewing at once. (A deleted session is not reviewed, as
 before; closing a tab does not shorten the wait.) The prompt's first line says what is
 true: the conversation has been quiet for an hour and may continue; an earlier review of

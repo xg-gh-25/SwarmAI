@@ -811,7 +811,8 @@ def _relations(run: Runner, fork_id: str | None, cwd: str, prompt: str, model: s
     long to take one more turn, a missing reply), once more in a fresh one — the prompt
     carries the units and their candidates, so it stands alone. If that fails too the
     units stand as new (D1). Each failure is noted on the attempt. When the last try
-    could not reach the model (credentials, DNS: ``s2_jobs.model_unreachable``) its error
+    could not reach the model (credentials, DNS, a refused connection or region:
+    ``s2_jobs.model_unreachable``) its error
     is raised instead: the outage is not the relations turn's, and the whole review waits
     for it (the worker postpones the job; nothing was enqueued yet)."""
     from core.ingestion.s2_jobs import model_unreachable

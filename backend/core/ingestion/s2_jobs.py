@@ -11,8 +11,11 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
   it. The job's passes enqueue with it as ``session_project``. ``delay`` is a
   not-before: the idle hook asks with ``REVIEW_DELAY`` and each new request pushes it
   later, so a review waits for 60 quiet minutes (never more than ``MAX_WAIT`` after the
-  first request of the wait); no delay means now. A request while the job runs sets ``again`` (with its own not-before) so the session is
-  read once more after it finishes.
+  first request of the wait); no delay means now. Once ``MAX_WAIT`` has passed (a wait
+  that ran out, a retry, a postpone) a request only ever brings the job forward: it
+  takes the earlier of its not-before and the job's, so activity can no longer keep a
+  job from becoming due. A request while the job runs sets ``again`` (with its own
+  not-before) so the session is read once more after it finishes.
 - ``open_jobs()`` counts the jobs queued or running (busy on an AgentCore Hive).
 - ``set_watermark`` / the claimed job's ``reviewed_to`` keep where the review stopped.
 - ``claim(conn)`` / ``finish(conn, ...)`` move a job queued -> running -> done/failed.
@@ -24,7 +27,8 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
 - ``postpone(conn, ...)`` puts a claimed job back without spending its attempt: the
   review did not run (no memory, no credentials), or it could not reach the model.
 - ``model_unreachable(text)`` tells such an environment failure (the CLI could not
-  load credentials or reach the API server) from a failure of the review itself; the
+  load credentials, reach or connect to the API server, or was refused for the region
+  it calls from) from a failure of the review itself; the
   executor postpones the first kind and the health check C2 does not count it.
 """
 from __future__ import annotations
@@ -48,14 +52,19 @@ MAX_WAIT = timedelta(hours=3)
 POSTPONE_DELAY = timedelta(minutes=5)   # a job that waits for memory or the model looks again after this
 # The CLI's own error result saying the model could not be reached: credentials it
 # could not load ("API Error: Could not load AWS credentials"), an API server it could
-# not reach ("API Error: Can't reach the API server ... (ENOTFOUND)"). Anchored on the
+# not reach ("API Error: Can't reach the API server ... (ENOTFOUND)") or connect to
+# ("API Error: Connection refused ... (ECONNREFUSED)"), a call refused for the region it
+# came from ("API Error: 400 Access to Anthropic models is not allowed from unsupported
+# countries, regions, or territories": the egress region, not the review). Anchored on the
 # start of the text the review raises for an error result (s7_review.sdk_runner:
 # "review failed: <subtype>: <what the CLI said>", recorded with its exception type in
 # front): what the model writes (a reply without structured output, raised as
 # "reply missing: ...") can never match, so a quoted error never postpones a job.
 _UNREACHABLE_RE = re.compile(
     r"(?:\w+: )?review failed: [^:\s]*: API Error:\s*"
-    r"(?:Could not load (?:AWS )?credentials|Can['\u2019]t reach the API server|[^\n]{0,300}?\bENOTFOUND\b)",
+    r"(?:Could not load (?:AWS )?credentials|Can['\u2019]t reach the API server"
+    r"|[^\n]{0,300}?\b(?:ENOTFOUND|ECONNREFUSED)\b"
+    r"|(?:\d{3} )?Access to Anthropic models is not allowed from unsupported countries)",
     re.IGNORECASE)
 _WAKER: Callable[[], None] | None = None
 
@@ -63,7 +72,8 @@ _WAKER: Callable[[], None] | None = None
 def model_unreachable(error: str | None) -> bool:
     """Whether *error* (an exception's text or a recorded error) says the model could
     not be reached: credentials that could not be loaded, an API server that could not
-    be resolved. Such a failure says nothing about the review; any other error does."""
+    be resolved or refused the connection, a call refused for its region. Such a failure
+    says nothing about the review; any other error does."""
     return bool(error) and _UNREACHABLE_RE.match(error) is not None
 
 
@@ -128,8 +138,8 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            row = conn.execute("SELECT state, requested_at FROM ingestion_s2_jobs WHERE session_id=?",
-                               (session_id,)).fetchone()
+            row = conn.execute("SELECT state, requested_at, next_attempt_at FROM ingestion_s2_jobs "
+                               "WHERE session_id=?", (session_id,)).fetchone()
             if row is None:
                 conn.execute(
                     """INSERT INTO ingestion_s2_jobs(session_id,reason,state,requested_at,
@@ -143,8 +153,9 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
                     (reason, not_before, sdk_session_id, session_id))
                 state = "running"
             elif row[0] == "queued":
-                not_before = _capped(not_before, row[1])
-                # a later request pushes the not-before (more activity); no delay = now
+                not_before = _capped(not_before, row[1], row[2])
+                # a later request pushes the not-before (more activity) until MAX_WAIT,
+                # then only brings it forward; no delay = now
                 conn.execute(
                     """UPDATE ingestion_s2_jobs SET reason=?, next_attempt_at=?,
                        sdk_session_id=COALESCE(?, sdk_session_id) WHERE session_id=?""",
@@ -170,14 +181,21 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     return state
 
 
-def _capped(not_before: str | None, requested_at: str | None) -> str | None:
-    """*not_before*, but no later than ``MAX_WAIT`` after *requested_at*."""
+def _capped(not_before: str | None, requested_at: str | None,
+            current: str | None = None) -> str | None:
+    """*not_before*, but no later than ``MAX_WAIT`` after *requested_at*. Once that limit
+    has passed (the wait ran out, or the start is a retry's or a postpone's) it is no
+    later than the job's *current* not-before: the earlier of the two, and a NULL one
+    (due now) stays NULL. The limit is never put in its place, which would pull the
+    review into the past; activity past the cap only ever brings the job forward."""
     if not not_before or not requested_at:
         return not_before
     try:
         limit = datetime.fromisoformat(requested_at) + MAX_WAIT
         if limit <= datetime.now(timezone.utc):
-            return not_before        # a stale start (a retry, a postpone) caps nothing
+            if not current:
+                return None
+            return min(not_before, current, key=datetime.fromisoformat)
         if datetime.fromisoformat(not_before) > limit:
             return limit.isoformat()
     except (TypeError, ValueError):

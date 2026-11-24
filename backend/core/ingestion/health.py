@@ -677,7 +677,8 @@ def run_checks(ing: sqlite3.Connection | None, data: sqlite3.Connection | None, 
 
     # C2 reviews succeed: no failed review job, at most 10% of review attempts errored.
     # It judges the reviews that reached the model: an attempt (or a job) that failed
-    # because the model could not be reached (credentials, DNS: s2_jobs.model_unreachable)
+    # because the model could not be reached (credentials, DNS, a refused connection, a
+    # region the API refuses: s2_jobs.model_unreachable)
     # says nothing about the review, and the worker postpones such a job without spending
     # an attempt; it is counted apart, as unreachable
     failed = unreachable = 0

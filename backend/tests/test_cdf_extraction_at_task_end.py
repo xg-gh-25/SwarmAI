@@ -1,7 +1,8 @@
 """Extraction at task end (docs/design/2026-10-31-extraction-at-task-end.md).
 
 - the idle review waits 60 quiet minutes, pushed back by activity but never past
-  MAX_WAIT after the first request of the wait (E1);
+  MAX_WAIT after the first request of the wait; past it, activity only brings the review
+  forward, so a session used every half hour is still reviewed (E1);
 - a later review pass is shown what this session's earlier passes wrote, TIMELINE
   events included, marked as its own; an event is compared with events (E2);
 - an event may retire an event or gap its own session wrote earlier, nothing else; a
@@ -308,7 +309,8 @@ def test_an_events_same_never_matches_a_gap(cdf_env):
 
 
 def test_a_cap_already_past_does_not_pull_the_review_into_the_past(cdf_env, monkeypatch):
-    """A job whose first request is older than MAX_WAIT is not scheduled before now."""
+    """A job whose first request is older than MAX_WAIT is not scheduled before now (the
+    limit is not put in its place), nor pushed later than the not-before it already had."""
     from core.ingestion import s2_jobs
     from core.ingestion.api import connect_rw
     monkeypatch.setattr(s2_jobs, "_WAKER", None)
@@ -317,11 +319,76 @@ def test_a_cap_already_past_does_not_pull_the_review_into_the_past(cdf_env, monk
         s2_jobs.request("s1", "session_end", delay=s2_jobs.REVIEW_DELAY)
         conn.execute("UPDATE ingestion_s2_jobs SET requested_at='2020-01-01T00:00:00+00:00'")
         conn.commit()
+        earlier = conn.execute("SELECT next_attempt_at FROM ingestion_s2_jobs").fetchone()[0]
         s2_jobs.request("s1", "session_end", delay=s2_jobs.REVIEW_DELAY)
         nb = conn.execute("SELECT next_attempt_at FROM ingestion_s2_jobs").fetchone()[0]
     finally:
         conn.close()
+    assert datetime.fromisoformat(nb) <= datetime.fromisoformat(earlier)
     assert datetime.fromisoformat(nb) > datetime.now(timezone.utc) + timedelta(minutes=50)
+
+
+def _clock(monkeypatch, start):
+    """s2_jobs' clock, moved by hand: returns a function that sets it."""
+    from core.ingestion import s2_jobs
+    state = {"now": start}
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return state["now"]
+
+    monkeypatch.setattr(s2_jobs, "datetime", Clock)
+    return lambda t: state.update(now=t)
+
+
+def test_activity_every_half_hour_cannot_hold_a_job_past_its_cap(cdf_env, monkeypatch):
+    """Measured: a job requested at 10:29 was still queued, attempts 0, a day later, each
+    new activity pushing it another 58 minutes once the cap had passed. Past the cap a
+    request only brings the job forward: it is due at MAX_WAIT and claimed."""
+    from core.ingestion import s2_jobs
+    from core.ingestion.api import connect_rw
+    monkeypatch.setattr(s2_jobs, "_WAKER", None)
+    t0 = datetime(2026, 11, 23, 10, 29, tzinfo=timezone.utc)
+    move = _clock(monkeypatch, t0)
+    conn = connect_rw()
+    try:
+        s2_jobs.request("s1", "idle", delay=s2_jobs.REVIEW_DELAY)
+        for step in range(1, 11):                       # activity every 30 min for 5 hours
+            move(t0 + timedelta(minutes=30 * step))
+            s2_jobs.request("s1", "idle", delay=s2_jobs.REVIEW_DELAY)
+        nb = conn.execute("SELECT next_attempt_at FROM ingestion_s2_jobs").fetchone()[0]
+        assert datetime.fromisoformat(nb) <= t0 + s2_jobs.MAX_WAIT
+        job = s2_jobs.claim(conn)
+    finally:
+        conn.close()
+    assert job is not None and job["session_id"] == "s1" and job["attempts"] == 1
+
+
+def test_past_the_cap_a_job_due_now_stays_due_and_a_postpone_is_kept(cdf_env, monkeypatch):
+    """A NULL not-before (due now) stays NULL past the cap; a postponed job keeps its
+    5-minute look rather than taking the 58-minute idle wait."""
+    from core.ingestion import s2_jobs
+    from core.ingestion.api import connect_rw
+    monkeypatch.setattr(s2_jobs, "_WAKER", None)
+    now = datetime.now(timezone.utc)
+    conn = connect_rw()
+    try:
+        s2_jobs.request("s1", "session_end")
+        old = (now - s2_jobs.MAX_WAIT - timedelta(hours=1)).isoformat()
+        conn.execute("UPDATE ingestion_s2_jobs SET requested_at=?", (old,))
+        conn.commit()
+        s2_jobs.request("s1", "idle", delay=s2_jobs.REVIEW_DELAY)
+        assert conn.execute("SELECT next_attempt_at FROM ingestion_s2_jobs").fetchone()[0] is None
+        assert s2_jobs.claim(conn)["session_id"] == "s1"
+        s2_jobs.postpone(conn, "s1", s2_jobs.POSTPONE_DELAY)
+        postponed = conn.execute("SELECT next_attempt_at FROM ingestion_s2_jobs").fetchone()[0]
+        s2_jobs.request("s1", "idle", delay=s2_jobs.REVIEW_DELAY)
+        nb = conn.execute("SELECT next_attempt_at FROM ingestion_s2_jobs").fetchone()[0]
+    finally:
+        conn.close()
+    assert nb == postponed
+    assert datetime.fromisoformat(nb) <= now + s2_jobs.POSTPONE_DELAY + timedelta(minutes=1)
 
 
 # ── a gap closes when an event says it is done, whichever session opened it ────────

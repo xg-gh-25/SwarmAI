@@ -6,8 +6,9 @@ What is tested:
   no review runs and no extraction attempt is recorded: the job is postponed, its
   attempt unspent, never failed, however often it is claimed.
 - ``valid``, ``unknown`` and an unreadable snapshot let the review run (fail open, as chat).
-- A review that fails with the CLI's credentials or ENOTFOUND error is postponed without
-  spending an attempt, and the lane claims nothing else until POSTPONE_DELAY passes.
+- A review that fails with the CLI's credentials, ENOTFOUND, ECONNREFUSED or region-block
+  error is postponed without spending an attempt, and the lane claims nothing else until
+  POSTPONE_DELAY passes.
 - Any other error is recorded on the job, retried and failed after MAX_ATTEMPTS as before.
 - Only the CLI's own error result counts as unreachable (what ``sdk_runner`` raises for
   it), never model-written text that quotes it: such a reply spends its attempt and
@@ -28,6 +29,10 @@ CREDENTIALS = ("review failed: success: API Error: Could not load AWS credential
                "· Could not load credentials from any providers")
 ENOTFOUND = ("review failed: success: API Error: Can't reach the API server "
              "— check your internet or DNS (ENOTFOUND)")
+ECONNREFUSED = ("review failed: success: API Error: Connection refused — a firewall or proxy "
+                "may be blocking it (ECONNREFUSED)")
+REGION = ("review failed: success: API Error: 400 Access to Anthropic models is not allowed "
+          "from unsupported countries, regions, or territories")
 
 
 @pytest.fixture
@@ -110,7 +115,7 @@ def test_a_stale_snapshot_lets_the_review_run(lane):
     assert lane["executor"].drain(lane["conn"]) == 1 and lane["calls"] == ["s-1"]
 
 
-@pytest.mark.parametrize("message", [CREDENTIALS, ENOTFOUND])
+@pytest.mark.parametrize("message", [CREDENTIALS, ENOTFOUND, ECONNREFUSED, REGION])
 def test_an_unreachable_model_postpones_without_spending_an_attempt(lane, message):
     from core.ingestion import s2_jobs
 
@@ -192,7 +197,10 @@ def test_other_review_errors_spend_attempts_as_before(lane, message):
 def test_only_the_clis_api_error_report_counts_as_unreachable():
     from core.ingestion.s2_jobs import model_unreachable
     assert model_unreachable(CREDENTIALS) and model_unreachable(ENOTFOUND)
+    assert model_unreachable(ECONNREFUSED) and model_unreachable(REGION)
     assert model_unreachable("RuntimeError: " + CREDENTIALS)            # as recorded
+    assert model_unreachable("RuntimeError: " + REGION) and model_unreachable("RuntimeError: " + ECONNREFUSED)
+    assert model_unreachable("review failed: success: API Error: connect ECONNREFUSED 127.0.0.1:443")
     assert model_unreachable("review failed: success: API Error: Can’t reach the API server (ENOTFOUND)")
     assert model_unreachable("review failed: success: API Error: getaddrinfo ENOTFOUND "
                              "bedrock-runtime.us-east-1.amazonaws.com")
@@ -201,6 +209,9 @@ def test_only_the_clis_api_error_report_counts_as_unreachable():
                   f"reply missing: no structured output ({quoted})",
                   f"UntypedOutput: reply missing: no structured output (review failed: success: {quoted})",
                   "review failed: success: the session fixed ENOTFOUND in its DNS code",
+                  "review failed: success: the session handled ECONNREFUSED in its client",
+                  "API Error: 400 Access to Anthropic models is not allowed from unsupported countries",
+                  "reply missing: no structured output (" + REGION + ")",
                   "review failed: success: API Error: 500 Internal server error",
                   "review failed: success: API Error: 403 You don't have access to the model"):
         assert not model_unreachable(other), other
