@@ -144,6 +144,9 @@ _STRUCTURAL = {
     r"<!--.*?-->",                          # a metadata comment
     r"[^0-9a-z\u4e00-\u9fff]+", r"-{2,}",   # slugify a name into a file name
     r"[\s_\-]+",                            # a project name's spelling, compared without separators
+    # a scope's spelling: a project's name followed by a part of it, or a Projects/ prefix
+    # (pipeline_v2._resolve_project), read for the name it starts with, never its meaning
+    r"\s*(?:[/\\:(\[#>·]|\s[-–—]\s|[–—])", r"^\s*Projects\s*/\s*",
     r"https?://[^\s<>()\"']+",              # a URL, checked for a credential parameter (security)
     # a conventional-commit subject's shape (contracts_v2.COMMIT_SUBJECT): the format of an
     # event title, never its meaning; an event titled so is a commit copied into TIMELINE

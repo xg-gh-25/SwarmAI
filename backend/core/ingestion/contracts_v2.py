@@ -224,10 +224,15 @@ class EventUnit(_Unit):
     # REFLECT report only; design 2026-10-30-cdf-gap-lifecycle §2)
     closes: list[str] | None = Field(default=None, max_length=GAP_LIST_TOP)
     # declared in the review's relation step (design 2026-10-31-extraction-at-task-end
-    # E3): the event already recorded (``same``: not written again), and the events or
-    # gaps of this same session this one completes or restates (``overrides``: retired,
-    # a gap as closed). overrides.check holds them to this session's own entries.
+    # E3) or by a run's report: the event already recorded (``same``: not written again);
+    # the recorded event this one is a later step of (``adds``: designed, approved,
+    # landed, verified; it resolves to that event and is not written again, unless it
+    # also finishes a gap, pipeline_v2); and the events or gaps of this same session this
+    # one completes or restates (``overrides``: retired, a gap as closed).
+    # overrides.check_session_own holds overrides to this session's own entries, and an
+    # open gap of the project.
     same: OverrideRef | None = None
+    adds: OverrideRef | None = None
     overrides: list[OverrideRef] = Field(default_factory=list, max_length=OVERRIDES_TOP)
 
     @model_validator(mode="before")
@@ -239,6 +244,12 @@ class EventUnit(_Unit):
         if isinstance(data, dict) and "follow_up" in data:
             data = {k: v for k, v in data.items() if k != "follow_up"}
         return data
+
+    @model_validator(mode="after")
+    def _one_relation(self):
+        if self.same and self.adds:
+            raise ValueError("same and adds exclude each other")
+        return self
 
     @model_validator(mode="after")
     def _impact_or_outcome(self):
@@ -315,7 +326,12 @@ SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
 # resolved), led by what it is, one per piece of work. The CDF judge found the timeline's
 # dominant miss was the construction log: a defect found and fixed in the same session, a
 # sync or rebuild, a rollup of where things stand; SAME_WORK_STEP says so where the agent
-# extracts. Stated by both extraction prompts (extract_llm, s7_review) and the run's
+# extracts. The second miss was the same work recorded again by each session that
+# touched it (designed, approved, landed, verified, each its own event): LATER_STEP says
+# such a step is ``adds`` to the event already recorded, which the decision step resolves
+# to that event (not written again); it applies where recorded events are shown (the
+# session review's relations turn, a run's report), so a door shown none records the work
+# as before. Stated by both extraction prompts (extract_llm, s7_review) and the run's
 # REFLECT report (``pipeline-v1 events`` returns it as event_rule). The standard is what
 # the extractor reads: nothing checks an event against it.
 SAME_WORK_STEP = ("A step begun and finished within the same piece of work is not an event, "
@@ -326,7 +342,12 @@ SAME_WORK_STEP = ("A step begun and finished within the same piece of work is no
                   "delivered, or to none. A defect is an incident only when it reached beyond "
                   "the work in progress: a person using the product, a running system, "
                   "stored data.")
-EVENT_RULE = ("An event is recorded only when a session weeks later, looking back at when and "
+LATER_STEP = ("When the recorded events are shown and one of them records the piece of work, "
+              "a later step of it (it was designed, then approved, landed or verified; a "
+              "follow-up of the same incident) is not a new event, whichever conversation "
+              "recorded the first: declare it adds to that event, which stays the one record "
+              "of that work.")
+EVENT_RULE = ("An event is recorded only when a session a month later, looking back at when and "
               "why something changed, would still need it, and it is one of three things: a "
               "decision or change of direction (and why); a milestone, such as a deliverable "
               "the user asked for landed; an incident, something that went wrong beyond the "
@@ -335,9 +356,10 @@ EVENT_RULE = ("An event is recorded only when a session weeks later, looking bac
               "the decision, milestone or "
               "incident, and the first sentence of what says what was decided, reached or "
               "went wrong, in plain words, never left inside file names, a checklist or "
-              f"status detail. {SAME_WORK_STEP} Routine operations are not events whether "
-              "they succeed or fail: a build, a restart, a deploy, an install, a test run, "
-              "checking a result, dispatching the next step of a plan. The steps of one "
+              f"status detail. {SAME_WORK_STEP} {LATER_STEP} Routine operations are not "
+              "events whether they succeed or fail: a build, a restart, a deploy, an "
+              "install, a test run, checking a result, dispatching the next step of a plan, "
+              "publishing, a minor edit, an admin action. The steps of one "
               "deliverable are one event, not one each: its notes, docs, copies, CI fixes, "
               "review rounds and design revisions belong to the event of what it delivered. "
               "An event is never a status and never work still to do: an outcome that only "

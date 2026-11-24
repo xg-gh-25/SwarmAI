@@ -18,9 +18,11 @@
   items) and, for the user's words, a ``user_quote`` copied verbatim.
 - Turn two, in the same conversation: for each unit, code retrieves the entries it may
   relate to (``relations_v2.candidates``: the closest of the every-turn files and the
-  session project's DDD, the session's earlier units, every captured correction) and the
-  agent declares new / same / adds / overrides / repeats. Code only checks those
-  declarations later (pipeline_v2); it never judges them.
+  session project's DDD, the session's earlier units, every captured correction; for an
+  event, the closest recorded events, the pool a run's report is ranked against too,
+  ``relations_v2.event_entries``) and the agent declares new / same / adds /
+  overrides / repeats. A later step of an event already recorded is ``adds`` to it.
+  Code only checks those declarations later (pipeline_v2); it never judges them.
 - ``evidence``: the index (user messages in full, labelled by kind; measured fields) and
   the read set; ``_record``: the record, every item with its anchors (the agent's words
   and tool output are citable too; what is cited sets the unit's trust downstream);
@@ -350,7 +352,9 @@ _EXAMPLES = """- research: which sources were reliable and which not, and why; t
 - mockups and design: what each round changed and why; directions rejected and why.
 - brainstorming: ideas chosen and dropped, and why (decision); open questions (gap);
   ideas worth bringing back later (reference).
-- code: root cause, fix and rejected alternatives, only when not obvious.
+- code: the lesson a root cause teaches and a decision with its rejected alternatives,
+  only when not obvious; never the particulars of one bug, one module's wiring or a
+  construction step (git and the run records hold them).
 - a reference is only for a source the next session cannot otherwise find: an outside
   link (its URL), or a result that exists only in this conversation. A report, design,
   mockup or deck saved as a file is found where it is (the workspace and the bound
@@ -377,9 +381,9 @@ _WHERE = """Where a unit goes follows from what you declare and what it rests on
 - scope "project:<name>" goes to that project's knowledge; a name that is no project goes
   to the general knowledge under that name. The projects that exist are listed below:
   a subsystem or part of one of them (a module, a feature, a tab) is that project, also
-  when the general knowledge already holds a subject of that name; a topic of its own
-  that none of them is (a document, a customer, an outside product) goes under its own
-  name."""
+  when the general knowledge already holds a subject of that name, and is declared with
+  the project's name as listed; a topic of its own that none of them is (a document, a
+  customer, an outside product) goes under its own name."""
 
 
 def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, record: str,
@@ -401,7 +405,9 @@ def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, reco
         "Record what stays true, as it stands at the end of this record.", ks.NOT_KNOWLEDGE[0],
         "A problem the record leaves open at its end is a gap; one opened and solved within it "
         "is not. A decision, milestone or incident is an event, worded as it stands now "
-        '("the outage of X resolved by Y", not "root cause of X found" when the fix followed). '
+        '("the outage of X resolved by Y", not "root cause of X found" when the fix followed); '
+        "a later step of work an event already records is that event, declared in the next "
+        "step. "
         "A bug found and fixed within this record is not a pitfall, and not an event of its "
         "own: it is a step of the work it belonged to, and a lesson is only the general rule "
         "that would have caught it, when that rule holds beyond this one piece of code.",
@@ -536,9 +542,10 @@ left empty. For each unit:
   reworked in this conversation (the unit recording the change names every entry about
   the old one); or a measurement showed it wrong. Never one that is merely related. An
   entry the user wrote by hand is not replaced.
-- When the unit completes or corrects an entry about the same particular thing, write
-  the unit as the whole current statement and declare it overrides that entry, rather
-  than "adds" beside it: one current entry per thing.
+- When the unit completes or corrects an entry about the same particular thing (other
+  than an event another conversation recorded, below), write the unit as the whole
+  current statement and declare it overrides that entry, rather than "adds" beside it:
+  one current entry per thing.
 - For a correction or a lesson about how you work, the same particular thing is the kind
   of judgment that went wrong, not the incident: when an entry already states that kind,
   the unit is "same" (it says nothing more) or the whole current statement of that kind
@@ -548,6 +555,10 @@ left empty. For each unit:
 - An event an earlier review of this session recorded (marked "(this session)") that this
   unit finishes, corrects or restates: an event declares it in overrides. A unit that says
   the same as an event already recorded is "same".
+- An event about the decision, milestone or incident an event of another conversation
+  already records: {contracts_v2.LATER_STEP} So it is "adds" (target = that event), not
+  "new" and not overrides: it is not written as an event of its own, unless it also
+  finishes an open gap.
 - An open gap (marked "(open gap)"), whichever conversation recorded it, that the work
   this event records finished: the event declares it in overrides and the gap is closed.
   Only when the work done here finished it, never one that is merely related.
@@ -559,8 +570,10 @@ Copy "<id> | <first line>" exactly as shown. Leave a field empty when unsure.
 
 def apply_relations(units: list[Any], answer: dict[str, Any] | None) -> list[Any]:
     """*units* with the declarations of *answer* (turn two) set; an item that names no
-    unit, or that the unit's contract refuses (repeats on a non-correction), is left out:
-    the unit then stands as new."""
+    unit, or that the unit's contract refuses (repeats on a non-correction, same and adds
+    together), is left out: the unit then stands as new. A declaration the unit's kind has
+    no field for (a reference declaring same) is left out too, and logged with the unit's
+    number: dropped without a trace, it hid that an event could not declare adds."""
     out = list(units)
     for item in (answer or {}).get("relations") or []:
         if not isinstance(item, dict):
@@ -575,11 +588,18 @@ def apply_relations(units: list[Any], answer: dict[str, Any] | None) -> list[Any
         fields = set(type(unit).model_fields)
         update: dict[str, Any] = {}
         relation, target = str(item.get("relation") or "new"), item.get("target")
-        if relation in {"same", "adds"} and target and relation in fields:
+        declared = [name for name, value in (
+            (relation if relation in {"same", "adds"} else "", target),
+            ("overrides", item.get("overrides")), ("repeats", item.get("repeats"))) if name and value]
+        unheld = [name for name in declared if name not in fields]
+        if unheld:
+            logger.info("CDF review: unit %d (%s) cannot hold %s; dropped", index + 1,
+                        getattr(unit, "kind", "?"), ", ".join(unheld))
+        if relation in declared and relation in fields:
             update[relation] = str(target)
-        if item.get("overrides") and "overrides" in fields:
+        if "overrides" in declared and "overrides" in fields:
             update["overrides"] = [str(o) for o in item["overrides"]][:contracts_v2.OVERRIDES_TOP]
-        if item.get("repeats") and "repeats" in fields:
+        if "repeats" in declared and "repeats" in fields:
             update["repeats"] = str(item["repeats"])
         if not update:
             continue
@@ -913,28 +933,29 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
     # the project as the pipeline resolves it, so what is shown is what resolves
     project = pipeline_v2._resolve_project(workspace, project) or project
     pool = relations_v2.pool(workspace, project)
-    timeline = relations_v2.timeline_entries(workspace)
+    # the recorded events, as a run's report is shown them (relations_v2.event_entries)
+    events = relations_v2.event_entries(workspace)
     withdrawn_pool = relations_v2.withdrawn_entries(pipeline_v2._withdrawn_records())
     corrections = relations_v2.corrections(pool)
     from core.ingestion.overrides import is_open_gap
     open_gaps = [e for e in pool if is_open_gap(e)]
     out = []
     for unit in units:
-        text = " ".join(str(getattr(unit, f, "") or "") for f in ("title", "what", "why", "how", "summary"))
+        text = relations_v2.unit_text(unit)
         # ranked like every other pool: the earlier unit a unit restates or finishes is
         # about the same thing, so it is among the closest
         also = relations_v2.candidates(text, earlier, top=EARLIER_SHOWN)
         if getattr(unit, "type", None) == "correction":
             also += relations_v2.candidates(text, corrections, top=CORRECTIONS_SHOWN)
         also += relations_v2.candidates(text, withdrawn_pool, top=2)
-        # an event is compared with the events (TIMELINE) and with the project's open
+        # an event is compared with the recorded events (TIMELINE without its month
+        # summaries, ranked as a run's report is shown them) and with the project's open
         # gaps it may close; the rest with the shared pool
         if getattr(unit, "kind", "") == "event":
             also += relations_v2.candidates(text, open_gaps, top=GAPS_SHOWN)
-            searched = timeline
+            out.append(relations_v2.candidates(text, events, also=also))
         else:
-            searched = pool
-        out.append(relations_v2.candidates(text, searched, also=also))
+            out.append(relations_v2.candidates(text, pool, also=also))
     return out
 
 

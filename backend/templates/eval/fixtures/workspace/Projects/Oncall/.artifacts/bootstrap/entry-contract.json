@@ -93,8 +93,8 @@
   "Commit hashes, run ids, version numbers of a document and approval dates are evidence, not knowledge: they stay out of a unit's text.",
   "The general knowledge takes a unit only when its rule can be stated in one sentence that still holds with every project, document and incident taken out.",
   "A gap is exactly one problem, with a concrete next step; a note on the progress of the work is not a gap.",
-  "An event is a decision (and why), a milestone or an incident (and how it was resolved) that a later session looking back would still need; a step begun and finished within the same piece of work (a defect found and fixed while building it, a sync, a rebuild, a rollup of where things stand) is not one.",
-  "A project's knowledge takes only what changes how a later judgment in that project is made (a decision, a model, a pitfall with the sign that it is coming); what a piece of work did is in git and the activity record, not in the project's knowledge."
+  "An event is a decision (and why), a milestone or an incident (and how it was resolved) that a session looking back a month later would still need; a step begun and finished within the same piece of work (a defect found and fixed while building it, a sync, a rebuild, a rollup of where things stand) is not one, nor is publishing, a minor edit or an admin action, and a later step of work an event already records (designed, approved, landed, verified) adds to that event instead of being a new one.",
+  "A project's knowledge takes one unit per durable lesson or decision that changes a future judgment in that project (a decision, a model, a pitfall with the sign that it is coming); the particulars of one incident, one module's wiring or a construction step are not a unit: what a piece of work did is in git and the run records, not in the project's knowledge."
  ],
  "sections": [
   {

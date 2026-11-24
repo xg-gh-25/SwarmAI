@@ -16,7 +16,9 @@ correction) repeats an earlier correction. Code never judges that; it does two t
 Ids are ``ddd_entry_lifecycle.unit_id`` of the entry's text (what ``knowledge find``
 prints for a DDD entry). ``restated`` finds the same text already written in the target
 file (identity, not meaning). Public: ``Entry``, ``pool``, ``withdrawn_entries``,
-``candidates``, ``corrections``, ``restated``, ``resolve``, ``MIN_HEAD``.
+``candidates``, ``corrections``, ``restated``, ``resolve``, ``MIN_HEAD``; for events,
+``event_entries`` / ``closest_event_entries`` / ``closest_events`` (one ranking for both
+doors that write events) and ``unit_text`` (what a unit is ranked by).
 """
 from __future__ import annotations
 
@@ -156,25 +158,58 @@ TIMELINE_FILE = ".context/TIMELINE.md"
 
 
 def timeline_entries(workspace: Path) -> list[Entry]:
-    """The TIMELINE events: what a new event is declared against (an event is compared
-    with events only; the shared pool stays the every-turn files and the DDD docs)."""
+    """Every TIMELINE entry, the month summaries included: what an event's declaration is
+    resolved against (``pipeline_v2``) and what a session's own earlier events are found
+    in. The events a new event is shown are ``event_entries``."""
     path = Path(workspace) / TIMELINE_FILE
     return _entries_of(path, Path(workspace)) if path.is_file() else []
 
 
+def _is_month_summary(entry: Entry) -> bool:
+    return "month_summary" in entry.text or "month_supplement" in entry.text
+
+
+def event_entries(workspace: Path) -> list[Entry]:
+    """The TIMELINE events a new event is compared with: every event, none of the month
+    summaries (a summary names every event of its month, so it ranked near the top for
+    any query and is no event to declare ``same`` or ``adds`` against)."""
+    return [e for e in timeline_entries(workspace) if not _is_month_summary(e)]
+
+
+# what a unit is ranked by: everything it says. An event says it in its title, what,
+# impact and outcome (it has no why or how); a query without impact and outcome missed
+# the words an event shares with the earlier record of the same work
+_QUERY_FIELDS = {"event": ("title", "what", "impact", "outcome")}
+_DEFAULT_QUERY = ("title", "what", "why", "how", "summary")
+
+
+def unit_text(unit) -> str:
+    """The text *unit* is ranked by against the entries it may relate to."""
+    fields = _QUERY_FIELDS.get(str(getattr(unit, "kind", "") or ""), _DEFAULT_QUERY)
+    return " ".join(str(getattr(unit, f, "") or "") for f in fields)
+
+
+def closest_event_entries(query: str, workspace: Path, *, top: int = TOP,
+                          also: Iterable[Entry] = ()) -> list[Entry]:
+    """The *top* recorded events closest to *query* (BM25 over ``event_entries``), plus
+    *also*. Both doors that write events rank against ``event_entries`` (the session
+    review, ``s7_review._candidates``, which reads them once for all its units; a run's
+    report, ``closest_events``), so they agree on what is already recorded."""
+    return candidates(query, event_entries(workspace), top=top, also=also)
+
+
 def closest_events(query: str, workspace: Path | None = None, *, top: int = TOP) -> list[str]:
-    """The TIMELINE events closest to *query* (BM25), as the ``<id> | <first line>`` refs
-    an event declares ``same`` with: shown to a writer of events that has no other view of
-    the timeline (a run's report, ``pipeline-v1 events``), so work already recorded by a
-    session review is declared the same instead of written again. No query, no events."""
+    """The TIMELINE events closest to *query* (``closest_event_entries``), as the ``<id> |
+    <first line>`` refs an event declares ``same`` or ``adds`` with: shown to a writer of
+    events that has no other view of the timeline (a run's report, ``pipeline-v1
+    events``), so work already recorded by a session review is declared instead of
+    written again. No query, no events."""
     if workspace is None:
         from config import get_swarmws
         workspace = Path(get_swarmws())
     if not (query or "").strip():
         return []
-    events = [e for e in timeline_entries(workspace)
-              if "month_summary" not in e.text and "month_supplement" not in e.text]
-    return [e.shown() for e in candidates(query, events, top=top)]
+    return [e.shown() for e in closest_event_entries(query, workspace, top=top)]
 
 
 def withdrawn_entries(records) -> list[Entry]:

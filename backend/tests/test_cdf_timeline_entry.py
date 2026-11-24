@@ -161,7 +161,7 @@ def test_a_step_closed_within_the_same_work_is_no_event_in_every_door(monkeypatc
     assert step in rule
     for kind in ("a decision", "a milestone", "an incident"):
         assert kind in rule, kind
-    assert "weeks later" in rule and "leads with what it is" in rule
+    assert "a month later" in rule and "leads with what it is" in rule
     # the incident kind agrees with the step rule: a defect that caused rework inside the
     # work is a step, not an incident
     assert "went wrong beyond the work in progress" in rule

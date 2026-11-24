@@ -17,7 +17,9 @@ producing agent's declaration; this module only checks facts and routes:
   call here, ``user_check``, shown only the user's messages and the claim;
 - its declared relations (relations_v2.resolve: id and first line name one entry) and
   overrides (overrides.check);
-- an exact restatement of a withdrawn entry, an event already recorded (by its key).
+- an exact restatement of a withdrawn entry, an event already recorded (by its key, or
+  declared ``same`` as it, or ``adds`` to it when it finishes nothing: a later step of
+  the same work).
 
 It never rewrites semantic fields: it routes the original values to the writer.
 """
@@ -595,11 +597,30 @@ def _project_key(name: str) -> str:
     return re.sub(r"[\s_\-]+", "", name).casefold()
 
 
+# what follows a project's name when a scope names a part of it ("SwarmAI/Inbox",
+# "SwarmAI (CDF)", "SwarmAI: Hive", "SwarmAI - Swarm Out", "SwarmAI — Brain Hub"); a bare
+# hyphen stays part of a name ("billing-service")
+_PART_OF = re.compile(r"\s*(?:[/\\:(\[#>·]|\s[-–—]\s|[–—])")
+_PROJECTS_PREFIX = re.compile(r"^\s*Projects\s*/\s*", re.IGNORECASE)
+
+
 def _resolve_project(root: Path, name: str | None) -> str | None:
     """The existing project *name* refers to (case, spaces, - and _ ignored), or None:
-    an invented name ("Hive Tab Pipeline") never becomes a new file."""
+    an invented name ("Hive Tab Pipeline") never becomes a new file. A name that is an
+    existing project's name followed by a part of it ("SwarmAI/Inbox", "SwarmAI (CDF)",
+    "Projects/SwarmAI") is that project: the scope named it, and the part is no subject
+    of its own. A name that only starts with a project's letters ("Swarm Out" beside a
+    project "Swarm") is not: no subsystem is guessed."""
     if not name:
         return None
+    found = _existing_project(root, name)
+    if found is not None:
+        return found
+    head = _PART_OF.split(_PROJECTS_PREFIX.sub("", name), 1)[0].strip()
+    return _existing_project(root, head) if head and head != name.strip() else None
+
+
+def _existing_project(root: Path, name: str) -> str | None:
     projects = root / "Projects"
     if not projects.is_dir():
         return None
@@ -710,9 +731,10 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         return _decision(unit_id, "reject", "reject", card0.reason, vectors=vectors, card0=card0)
 
     # the project: one a source fixed (an S3 run's Brain, a Hive lesson, S1's explicit
-    # project; the inbox's project_hint) wins for a project unit or gap; otherwise the
-    # unit's own scope=project:X. The project the session worked in is not a declaration:
-    # it is the project of a gap or project unit that names one that does not exist.
+    # project; the inbox's project_hint) wins for a project unit or gap when it exists;
+    # otherwise the unit's own scope=project:X. The project the session worked in is not
+    # a declaration: it is the project of a gap or project unit that names one that does
+    # not exist.
     snapshot = _json(_get(row, "project_snapshot"), {})
     declared = _get(row, "project_hint") or snapshot_project(snapshot)
     session_project = snapshot.get("session_project") if isinstance(snapshot, dict) else None
@@ -731,8 +753,10 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         # the project the producing agent named, or none: a name that is no project goes
         # to the General Brain under that name (D7). The session's project is not
         # guessed for it — the agent was shown the projects that exist (s7_review) and
-        # names one of them when that is where the unit belongs.
-        project = _resolve_project(root, subject)
+        # names one of them when that is where the unit belongs. A project the source
+        # declared wins when it exists; one that does not never hides an existing
+        # project the unit's own scope names (that scope is where the unit belongs).
+        project = _resolve_project(root, declared) or _resolve_project(root, scope_project)
     else:
         project = _resolve_project(root, declared)
     corpus_project = project or session_home
@@ -878,6 +902,17 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         _ask_user_about_targets(checked, unit, row)
     if checked is not None and checked.older:
         return _decision(unit_id, "reject", "reject", "older_than_existing", **done)
+    earlier = declared_rel.get("adds")
+    if (isinstance(unit, EventUnit) and earlier is not None
+            and earlier.path == relations_v2.TIMELINE_FILE
+            and not unit.closes and not (checked is not None and checked.targets)):
+        # a later step of an event already recorded (designed, approved, landed, verified)
+        # is that event (contracts_v2.LATER_STEP): it resolves to the earlier one and is
+        # not written again. One that also finishes a gap or retires its own session's
+        # event is written, linked to the earlier one: only a written unit closes a gap
+        # (overrides.apply, gaps.close_declared)
+        return _same_entry(_with_relations(_decision(unit_id, "reject", "reject", "already_exists", **done),
+                                           declared_rel, refused), earlier)
     result = _decision(unit_id, "write", "add", "adds" if "adds" in declared_rel else "new", **done)
     if checked is not None and checked.targets:
         result.version_vector["overrides"] = checked.targets
