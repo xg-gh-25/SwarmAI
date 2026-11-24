@@ -181,7 +181,10 @@ def test_list_runs_splits_what_needs_the_person_from_what_was_answered(monkeypat
     assert data["answered"], data["errors"]
     assert [a["phase"] for a in data["answered"]] == ["sent"]
     run = data["runs"][0]
-    assert (run["state"], run["state_reason"], run["waiting"]) == ("running", "answer_sent", False)
+    # the answer was sent: the run runs on, nothing left to answer (the row has no
+    # ``waiting`` field since the one closed stage; its state says it)
+    assert (run["state"], run["state_reason"]) == ("running", "answer_sent")
+    assert "waiting" not in run
     assert data["answered"][0]["dispatch_title"] == "T"
 
 
