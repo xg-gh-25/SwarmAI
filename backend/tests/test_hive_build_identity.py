@@ -107,9 +107,8 @@ def test_release_desktop_build_and_package_check_carry_the_identity(tmp_path):
     assert 'build_identity.py" write "$BACKEND_DIR/.." "$BUILD_DIR/BUILD.json"' in desktop
     assert "datas += [('BUILD.json', '.')]" in desktop
     assert 'check "^BUILD.json"' in (REPO / "hive" / "verify_package.sh").read_text()
-    # the release workflow's upload of dist/swarmai-hive-*.build.json is a CI pipeline
-    # change, the person's to land: until it does, a GitHub release carries no build.json
-    # and a Host finds no package of its build there (same-version wake sends nothing)
+    wf = (REPO / ".github" / "workflows" / "release.yml").read_text()
+    assert "dist/swarmai-hive-*.build.json" in wf
     for script in ("hive/release.sh", "desktop/scripts/build-backend.sh", "hive/verify_package.sh"):
         assert subprocess.run(["bash", "-n", str(REPO / script)]).returncode == 0, script
 

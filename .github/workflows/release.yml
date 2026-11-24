@@ -260,6 +260,7 @@ jobs:
           path: |
             dist/swarmai-hive-*.tar.gz
             dist/swarmai-hive-*.tar.gz.sha256
+            dist/swarmai-hive-*.build.json
           if-no-files-found: error
 
   agentcore-image:
