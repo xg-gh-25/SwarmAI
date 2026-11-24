@@ -90,22 +90,28 @@ class BackupFailed(RuntimeError):
 def _backup_db(db: Path, dest: Path) -> dict[str, Any]:
     if not db.is_file():
         raise BackupFailed(f"{db} not found")
-    src = sqlite3.connect(f"file:{db.resolve().as_posix()}?mode=ro", uri=True)
+    # isolation_level=None: the explicit BEGIN below is the only transaction. The counts
+    # and the copy are read inside one read transaction, so both see the same snapshot
+    # while the running app keeps writing (a count read after the copy would include rows
+    # written since, and refuse a good backup).
+    src = sqlite3.connect(f"file:{db.resolve().as_posix()}?mode=ro", uri=True, isolation_level=None)
     try:
+        src.execute("BEGIN")
+        tables = [r[0] for r in src.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        wanted = {table: src.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in tables}
         copy = sqlite3.connect(dest)
         try:
             src.backup(copy)
         finally:
             copy.close()
+        src.execute("COMMIT")
         check = sqlite3.connect(f"file:{dest.resolve().as_posix()}?mode=ro", uri=True)
         try:
             if check.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise BackupFailed(f"{dest}: integrity_check failed")
-            tables = [r[0] for r in src.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
             counts = {}
-            for table in tables:
-                want = src.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            for table, want in wanted.items():
                 got = check.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
                 if want != got:
                     raise BackupFailed(f"{dest}: {table} holds {got} rows, the store {want}")

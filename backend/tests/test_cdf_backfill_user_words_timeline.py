@@ -218,3 +218,31 @@ def test_a_failed_backup_stops_before_any_write(before, monkeypatch):
     # only the backup directory was written, under the data dir; nothing in the stores or files
     assert after == snapshot
     assert before["asked"] == []
+
+
+def test_the_backup_holds_while_the_running_app_writes_to_the_store(tmp_path, monkeypatch):
+    """A row the app writes after the copy was taken does not fail the backup: the
+    counts it is checked against are read in the copy's own snapshot."""
+    import sqlite3 as _sqlite3
+    from scripts import cdf_backfill_user_words_timeline as bf
+    db = tmp_path / "data.db"
+    w = _sqlite3.connect(db)
+    w.execute("PRAGMA journal_mode=WAL")
+    w.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+    w.executemany("INSERT INTO messages (body) VALUES (?)", [("m",)] * 50)
+    w.commit()
+    dest = tmp_path / "copy.db"
+    real = _sqlite3.connect
+
+    def connect(target, *a, **k):
+        if str(target).startswith("file:") and str(dest.resolve().as_posix()) in str(target):
+            w.execute("INSERT INTO messages (body) VALUES ('written while backing up')")
+            w.commit()
+        return real(target, *a, **k)
+
+    monkeypatch.setattr(bf.sqlite3, "connect", connect)
+    out = bf._backup_db(db, dest)
+    assert out["tables"] == 1
+    monkeypatch.setattr(bf.sqlite3, "connect", real)
+    assert real(dest).execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 50
+    w.close()
