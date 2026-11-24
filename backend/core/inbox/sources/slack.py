@@ -81,6 +81,7 @@ from core.inbox.sources.common import (
     call_timeout,
     looks_like_auth_failure,
     matches_sent,
+    source_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -441,21 +442,22 @@ class _SlackSource:
         channel_name = next((m.extra.get("channel_name") for m in messages if m.extra.get("channel_name")), "")
         if channel.startswith("D"):
             who = others[-1] if others else await self._dm_peer_label(channel, me)
-            label = f"私信 · {who}"
+            label = source_text("slack_dm", who=who)
         else:
-            label = f"#{channel_name or channel} 的 thread"
+            label = source_text("slack_thread", channel=channel_name or channel)
         recipient = f"{channel}:{thread_ts}" if thread_ts else channel
         return ReplyTarget(label=label, recipients=(recipient,))
 
     async def _dm_peer_label(self, channel: str, me: Identity) -> str:
         """Who a DM whose messages are all the person's own goes to: 自己 for the person's
-        own DM, else the member the backend lists, else the channel id."""
+        own DM ("yourself" in the app's language), else the member the backend lists, else the
+        channel id."""
         peer = await self._dm_peer(channel)
         if peer is None:
             return channel
         user_id, name = peer
         if user_id and me.is_me(user_id):
-            return "自己"
+            return source_text("slack_self")
         return name or user_id or channel
 
     def _thread_of(self, raw: dict) -> Optional[tuple[str, str]]:
@@ -743,7 +745,6 @@ _AUTH_ERRORS = frozenset({
     "invalid_auth", "not_authed", "token_revoked", "token_expired", "account_inactive",
     "no_permission", "missing_scope", "not_allowed_token_type", "ekm_access_denied", "org_login_required",
 })
-_TOKEN_FIX = "在 Inbox 渠道设置里重新填 Slack user token（xoxp-…）后点重试"
 
 
 class SlackApiError(RuntimeError):
@@ -787,9 +788,9 @@ class SlackWebSource(_SlackSource):
 
             token = await asyncio.to_thread(read_secret, self.config.id, "user_token")
         if not token:
-            raise SourceAuthError("no Slack user token stored for this source", fix=_TOKEN_FIX)
+            raise SourceAuthError("no Slack user token stored for this source", fix=source_text("slack_token"))
         if token.startswith("xoxb-"):
-            raise SourceAuthError("a bot token cannot read your own messages; a user token is needed", fix=_TOKEN_FIX)
+            raise SourceAuthError("a bot token cannot read your own messages; a user token is needed", fix=source_text("slack_token"))
         return token
 
     async def _api(self, method: str, params: dict, *, write: bool = False) -> dict:
@@ -814,7 +815,7 @@ class SlackWebSource(_SlackSource):
         except httpx.TransportError as exc:
             raise SourceUnavailable(f"{method}: {type(exc).__name__}") from exc
         if response.status_code in (401, 403):
-            raise SourceAuthError(f"Slack refused the token ({response.status_code})", fix=_TOKEN_FIX)
+            raise SourceAuthError(f"Slack refused the token ({response.status_code})", fix=source_text("slack_token"))
         if response.status_code == 429:
             raise SourceUnavailable(f"{method}: rate limited by Slack")
         if response.status_code >= 400:
@@ -826,7 +827,7 @@ class SlackWebSource(_SlackSource):
         if not data.get("ok"):
             code = str(data.get("error") or "unknown_error")
             if code in _AUTH_ERRORS:
-                raise SourceAuthError(f"Slack: {code}", fix=_TOKEN_FIX)
+                raise SourceAuthError(f"Slack: {code}", fix=source_text("slack_token"))
             raise SlackApiError(method, code)
         return data
 

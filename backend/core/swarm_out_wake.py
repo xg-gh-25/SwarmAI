@@ -29,6 +29,8 @@ pass waits for the receipt only, at most ACCEPT_WAIT_S, and a session whose wake
 being read is not woken again. It carries no text a Hive wrote: what changed comes as
 the digest, Host fields only.
 
+- ``is_wake_text(text)`` — whether a user row is a wake: it starts with a marker, the
+  English one or the Chinese one wakes carried before (still in existing transcripts).
 - ``wake_sessions()`` — one pass; never raises. core/swarm_out.run_refresh_loop runs it
   in a task of its own, one at a time, so a slow send never holds the refresh.
 """
@@ -44,13 +46,13 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 #: the first line of every wake: a turn it starts is recognisable as the system's
-MARKER = "[Swarm Out 自动继续]"
+MARKER = "[Swarm Out auto-continue]"
 WAKE_TEXT = (MARKER + " Runs you dispatched need you (listed above). Take each through the "
              "funnel yourself: review the result, land it on this host or re-run / take it over / "
              "discard it, then judge it (`swarm_out accept`) or, only when you cannot, hand the "
              "landed result to the person (`swarm_out ask-person`). Say in a line or two what you did.")
 #: the wake of a lead run whose Swarm Run children changed (design 2026-10-31-swarm-run §5.5)
-RUN_MARKER = "[Swarm Run 自动继续]"
+RUN_MARKER = "[Swarm Run auto-continue]"
 RUN_WAKE_TEXT = (RUN_MARKER + " Children of your Swarm Run changed (listed above). Read them with "
                  "`pipeline-v1 child status`: take what meets its acceptance (`child merge`, `child apply`, "
                  "`child accept`), correct or re-dispatch what does not, answer their waits (`child card`, "
@@ -58,6 +60,17 @@ RUN_WAKE_TEXT = (RUN_MARKER + " Children of your Swarm Run changed (listed above
 #: both at once: the run's children and runs the session dispatched itself
 MIXED_WAKE_TEXT = (RUN_WAKE_TEXT + " Runs you dispatched yourself need you too: "
                    + WAKE_TEXT[len(MARKER):].strip())
+#: the markers wakes started with before they became English: transcripts written
+#: then still carry them, and they are recognised the same way
+LEGACY_MARKERS = ("[Swarm Out 自动继续]", "[Swarm Run 自动继续]")
+_ALL_MARKERS = (MARKER, RUN_MARKER) + LEGACY_MARKERS
+
+
+def is_wake_text(text: object) -> bool:
+    """True when *text* (a user row's text) starts with a wake marker, new or legacy."""
+    return isinstance(text, str) and text.lstrip().startswith(_ALL_MARKERS)
+
+
 #: sessions woken in one pass at most (each starts a turn); the rest wait for the next
 MAX_WAKES_PER_PASS = 5
 #: how long a pass waits for a send's ``accepted`` receipt (the turn goes on either way;

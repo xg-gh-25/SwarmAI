@@ -406,7 +406,7 @@ async def test_patch_changes_enabled_interval_and_the_options_of_its_kind(env):
     out = r.json()
     assert not out["enabled"] and out["interval_s"] == 1800
     assert out["options"] == {"tool_family": "slack-mcp", "watched_channels": ["#ops", "C0TEAM1"]}
-    assert out["detail"] == "关注 2 个频道"
+    assert out["detail"] == "watching 2 channels"
     r = await http.patch("/api/inbox/sources/ml", headers=fx.UA, json={"extra_addresses": ["Me@Alias.example"]})
     assert r.json()["options"] == {"extra_addresses": ["me@alias.example"]}
     for sid, body in (("ml", {"watched_channels": ["#x"]}), ("sl", {"extra_addresses": ["a@b.example"]}),

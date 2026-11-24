@@ -39,12 +39,9 @@ EASTMONEY_HEADERS = {
 FS_A_SHARES = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"  # All A-shares (SH+SZ)
 FS_CONCEPTS = "m:90+t:3"  # Concept/thematic sectors
 
-# Keywords to filter concept sectors for business relevance
-DEFAULT_CONCEPT_KEYWORDS = [
-    "AI", "人工智能", "大模型", "机器人", "芯片", "半导体",
-    "云计算", "数据中心", "算力", "智能", "Agent", "6G",
-    "自动驾驶", "物联网", "数字经济",
-]
+# No built-in topics: a feed without ``concept_keywords`` keeps the top concept sectors.
+# The person's own keywords filter them.
+DEFAULT_CONCEPT_KEYWORDS: list[str] = []
 
 
 def fetch_eastmoney_market(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
@@ -55,7 +52,7 @@ def fetch_eastmoney_market(feed: Feed, max_age_hours: int = 48) -> list[RawSigna
         feed: Feed config. Config keys:
             - hot_stocks_count: int, max hot stocks to return (default 20)
             - concepts_count: int, max concept sectors to return (default 15)
-            - concept_keywords: list[str], keywords to filter concepts (default: DEFAULT_CONCEPT_KEYWORDS)
+            - concept_keywords: list[str], keywords to filter concepts (default: none, no filter)
             - include_losers: bool, also fetch top losers (default False)
         max_age_hours: Unused (market data is always "now"), kept for adapter interface
 
@@ -64,7 +61,8 @@ def fetch_eastmoney_market(feed: Feed, max_age_hours: int = 48) -> list[RawSigna
     """
     hot_stocks_count = feed.config.get("hot_stocks_count", 20)
     concepts_count = feed.config.get("concepts_count", 15)
-    concept_keywords = feed.config.get("concept_keywords", DEFAULT_CONCEPT_KEYWORDS)
+    concept_keywords = [str(k) for k in (feed.config.get("concept_keywords") or DEFAULT_CONCEPT_KEYWORDS)
+                        if str(k).strip()]
     include_losers = feed.config.get("include_losers", False)
 
     signals: list[RawSignal] = []
@@ -107,7 +105,7 @@ def _fetch_top_movers(feed_id: str, count: int, descending: bool = True) -> list
         "np": "1",
         "fltt": "2",
         "invt": "2",
-        "fid": "f3",  # sort by 涨跌幅
+        "fid": "f3",  # sort by percent change
         "fs": FS_A_SHARES,
         "fields": "f2,f3,f4,f12,f14",  # price, percent, change, code, name
         "ut": EASTMONEY_UT,
@@ -123,7 +121,7 @@ def _fetch_top_movers(feed_id: str, count: int, descending: bool = True) -> list
         logger.warning("East Money top movers: no items in response")
         return []
 
-    direction = "涨幅" if descending else "跌幅"
+    direction = "gainers" if descending else "losers"
     for stock in items:
         code = stock.get("f12", "")
         name = stock.get("f14", "")
@@ -140,9 +138,9 @@ def _fetch_top_movers(feed_id: str, count: int, descending: bool = True) -> list
             feed_id=feed_id,
             title=f"{name} ({code}) {percent:+.2f}%",
             url=f"https://quote.eastmoney.com/{code}.html?d={today}",
-            summary=f"现价:{price} {direction}:{percent:+.2f}%",
+            summary=f"Price: {price} · Change: {percent:+.2f}%",
             published=datetime.now(timezone.utc),
-            source="东方财富" + direction + "榜",
+            source=f"East Money top {direction}",
             tags=["eastmoney", "stock", "china", "market"],
             score=score,
         ))
@@ -153,13 +151,13 @@ def _fetch_top_movers(feed_id: str, count: int, descending: bool = True) -> list
 def _fetch_hot_concepts(
     feed_id: str, count: int, keywords: list[str]
 ) -> list[RawSignal]:
-    """Fetch trending concept sectors, filtered by business-relevant keywords."""
+    """Fetch trending concept sectors, filtered by *keywords* when there are any."""
     signals: list[RawSignal] = []
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
 
     params = {
         "pn": "1",
-        "pz": str(min(count * 3, 100)),  # fetch more to filter
+        "pz": str(min(count * 3, 100) if keywords else min(count, 100)),  # more to filter
         "po": "1",
         "np": "1",
         "fltt": "2",
@@ -191,11 +189,9 @@ def _fetch_hot_concepts(
         if not name:
             continue
 
-        # Check keyword relevance
+        # Keyword filter: only the person's own keywords, and only when they set some
         name_lower = name.lower()
-        is_relevant = any(kw in name_lower for kw in keywords_lower)
-
-        if not is_relevant:
+        if keywords_lower and not any(kw in name_lower for kw in keywords_lower):
             continue
 
         # Score: sector movement (3%+ = strong signal)
@@ -205,9 +201,9 @@ def _fetch_hot_concepts(
             feed_id=feed_id,
             title=f"📊 {name} {percent:+.2f}%",
             url=f"https://quote.eastmoney.com/bk/{code}.html?d={today}",
-            summary=f"概念板块涨跌:{percent:+.2f}%",
+            summary=f"Concept sector change: {percent:+.2f}%",
             published=datetime.now(timezone.utc),
-            source="东方财富概念板块",
+            source="East Money concept sectors",
             tags=["eastmoney", "concept", "china", "sector"],
             score=score,
         ))

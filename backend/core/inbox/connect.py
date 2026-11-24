@@ -320,7 +320,7 @@ async def add(kind: str, backend: str, options: Any, secrets: dict[str, str]) ->
     try:
         if getattr(source, "category", None) is not SourceCategory.CONVERSATION:
             raise ConnectRefused(422, "invalid_source",
-                                 "only a conversation source is added here; feeds are configured under 信息流")
+                                 "only a conversation source is added here; feeds are configured under Feeds")
         allowed = frozenset(getattr(source, "SECRET_NAMES", frozenset()))
         unknown = sorted(set(secrets) - allowed)
         if unknown:
@@ -413,7 +413,7 @@ async def update(source_id: str, *, enabled: Optional[bool] = None, interval_s: 
     lists = {k: v for k, v in (lists or {}).items() if v is not None}
     if source_id == store.FEED_SOURCE_ID and (enabled is not None or lists):
         raise ConnectRefused(422, "feed_source",
-                             "the feed source follows config.yaml: change the feeds under 信息流")
+                             "the feed source follows config.yaml: change the feeds under Feeds")
     fields: dict[str, Any] = {}
     if enabled is not None:
         fields["enabled"] = 1 if enabled else 0
@@ -452,7 +452,7 @@ async def remove(source_id: str) -> dict:
     await _row(source_id)
     if source_id == store.FEED_SOURCE_ID:
         raise ConnectRefused(422, "feed_source",
-                             "the feed source follows config.yaml: remove the feeds under 信息流")
+                             "the feed source follows config.yaml: remove the feeds under Feeds")
     try:
         counts = await runner.remove_source(source_id)
     except store.SendInFlight:

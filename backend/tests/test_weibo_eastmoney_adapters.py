@@ -3,7 +3,7 @@ Tests for Weibo and East Money signal adapters.
 
 Verifies:
 - Output shape: returns list[RawSignal] with correct fields
-- Keyword filtering: Weibo only emits business-relevant signals
+- Keyword filtering: only the person's own keywords filter; none configured keeps every item
 - Graceful failure: returns empty list on API error, never raises
 - Metadata: East Money includes change_pct in score, concept filtering
 """
@@ -119,7 +119,7 @@ def test_weibo_hot_search_output_shape(mock_client, weibo_feed):
     assert sig.feed_id == "test-weibo"
     assert sig.title == "AI大模型突破"
     assert "weibo.com" in sig.url
-    assert sig.source == "微博热搜"
+    assert sig.source == "Weibo hot search"
     assert 0.0 <= sig.score <= 1.0
     assert sig.published is not None
     assert "weibo" in sig.tags
@@ -152,8 +152,9 @@ def test_weibo_parse_mblog():
     assert "AI" in signal.title
     assert "大模型" in signal.title
     assert signal.url == "https://m.weibo.cn/detail/12345678"
-    assert "转发:100" in signal.summary
-    assert "评论:50" in signal.summary
+    assert "Reposts: 100" in signal.summary
+    assert "Comments: 50" in signal.summary
+    assert signal.source == "Weibo search" and signal.title.startswith("[Weibo] ")
     assert signal.score == min(150.0 / 1000.0, 1.0)  # (100+50)/1000
 
 
@@ -213,8 +214,8 @@ def test_eastmoney_top_movers_output_shape(mock_client):
     assert "301151" in sig.title
     assert "+20.03%" in sig.title
     assert "eastmoney.com" in sig.url
-    assert "涨幅:+20.03%" in sig.summary
-    assert sig.source == "东方财富涨幅榜"
+    assert "Change: +20.03%" in sig.summary
+    assert sig.source == "East Money top gainers"
     assert "eastmoney" in sig.tags
     # Score = abs(20.03) / 10.0 = 2.003, capped at 1.0
     assert sig.score == 1.0
@@ -286,7 +287,7 @@ def test_eastmoney_hot_concepts_output_shape(mock_client):
     assert isinstance(sig, RawSignal)
     assert "AI芯片" in sig.title
     assert "eastmoney.com/bk/" in sig.url
-    assert sig.source == "东方财富概念板块"
+    assert sig.source == "East Money concept sectors"
     assert "concept" in sig.tags
     # Score = abs(4.37) / 3.0 = 1.46, capped at 1.0
     assert sig.score == 1.0
@@ -360,3 +361,53 @@ def test_adapter_map_routes_new_types():
     assert FeedType.EASTMONEY_MARKET in ADAPTER_MAP
     assert ADAPTER_MAP[FeedType.WEIBO_TRENDING] is fetch_weibo_trending
     assert ADAPTER_MAP[FeedType.EASTMONEY_MARKET] is fetch_eastmoney_market
+
+
+# ── No built-in keywords: a feed without the person's own keywords is not filtered ──
+
+def _client(mock_client, payload):
+    mock_response = MagicMock()
+    mock_response.json.return_value = payload
+    mock_response.raise_for_status = MagicMock()
+    mock_http = MagicMock()
+    mock_http.get.return_value = mock_response
+    mock_client.return_value.__enter__ = MagicMock(return_value=mock_http)
+    mock_client.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_http
+
+
+def test_default_keywords_are_empty():
+    from core.inbox.feeds import eastmoney_market, weibo_trending
+    assert weibo_trending.DEFAULT_KEYWORDS == []
+    assert eastmoney_market.DEFAULT_CONCEPT_KEYWORDS == []
+
+
+@patch("core.inbox.feeds.weibo_trending.safe_client")
+def test_no_keywords_keeps_every_item(mock_client):
+    """Weibo: no keywords configured (or an empty list) keeps every hot-search item and
+    runs no keyword search; the person's own keywords still filter."""
+    http = _client(mock_client, MOCK_WEIBO_HOT_RESPONSE)
+    for config in ({}, {"keywords": []}, {"keywords": [], "keyword_search": True}):
+        feed = Feed(id="w", name="W", type=FeedType.WEIBO_TRENDING, config=config)
+        http.get.reset_mock()
+        signals = fetch_weibo_trending(feed)
+        assert [s.title for s in signals] == [i["word"] for i in MOCK_WEIBO_HOT_RESPONSE["data"]["realtime"]]
+        assert http.get.call_count == 1          # the hot search only
+        assert all(s.source == "Weibo hot search" for s in signals)
+    own = Feed(id="w", name="W", type=FeedType.WEIBO_TRENDING, config={"keywords": ["AWS"]})
+    assert [s.title for s in fetch_weibo_trending(own)] == ["AWS发布新服务"]
+
+
+@patch("core.inbox.feeds.eastmoney_market.safe_client")
+def test_no_concept_keywords_keeps_the_top_concepts(mock_client):
+    """East Money: no concept keywords keeps the top concept sectors up to the count;
+    the person's own keywords still filter."""
+    http = _client(mock_client, MOCK_EASTMONEY_CONCEPTS_RESPONSE)
+    signals = _fetch_hot_concepts("e", 4, [])
+    assert [s.title.split()[1] for s in signals] == ["AI芯片", "机器人执行器", "裸眼3D", "云计算概念"]
+    assert http.get.call_args.kwargs["params"]["pz"] == "4"
+    feed = Feed(id="e", name="E", type=FeedType.EASTMONEY_MARKET,
+                config={"hot_stocks_count": 5, "concepts_count": 10})
+    concepts = [s for s in fetch_eastmoney_market(feed) if "concept" in s.tags]
+    assert len(concepts) == len(MOCK_EASTMONEY_CONCEPTS_RESPONSE["data"]["diff"])
+    assert [s.title.split()[1] for s in _fetch_hot_concepts("e", 10, ["白酒"])] == ["白酒概念"]

@@ -150,7 +150,7 @@ const { chromium } = await import(process.env.FM_PLAYWRIGHT);
 const browser = await chromium.launch({ timeout: 60000 });
 try {
   const page = await browser.newPage();
-  await page.setContent('<span id="t" style="font-family:sans-serif">Feature Map 回放 ✓</span>');
+  await page.setContent('<span id="t" style="font-family:sans-serif">Feature Map replay ✓</span>');
   const width = await page.evaluate(() => document.getElementById('t').getBoundingClientRect().width);
   console.log(JSON.stringify({ version: browser.version(), text_width: width }));
 } finally {

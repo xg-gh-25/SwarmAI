@@ -49,6 +49,13 @@ ANSWER_PREFIX = "I answered decision "
 _NOT_STEERING = (CONTINUE_PREFIX, ANSWER_PREFIX)
 
 
+def _not_steering(text: str) -> bool:
+    """The continue prompt, a decision note, or a Swarm Out / Swarm Run wake (its marker,
+    new or legacy: core/swarm_out_wake), for a row the provenance ledger does not cover."""
+    from core.swarm_out_wake import is_wake_text
+    return text.startswith(_NOT_STEERING) or is_wake_text(text)
+
+
 def _utc(value: Any) -> datetime | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return datetime.fromtimestamp(float(value), tz=timezone.utc)
@@ -91,16 +98,17 @@ def _local_naive(dt: datetime) -> str:
 
 
 def _is_steer(content: Any) -> bool:
-    """A message the person typed: it has a text block that is not the continue prompt."""
+    """A message the person typed: it has a text block that is not the continue prompt,
+    a decision note or a Swarm Out / Swarm Run wake."""
     try:
         blocks = json.loads(content) if isinstance(content, str) and content.startswith("[") else None
     except ValueError:
         blocks = None
     if blocks is None:
         text = content if isinstance(content, str) else ""
-        return bool(text.strip()) and not text.startswith(_NOT_STEERING)
+        return bool(text.strip()) and not _not_steering(text)
     texts = [b.get("text", "") for b in blocks if isinstance(b, Mapping) and b.get("type") == "text"]
-    return any(t.strip() and not t.startswith(_NOT_STEERING) for t in texts)
+    return any(t.strip() and not _not_steering(t) for t in texts)
 
 
 def _db_path() -> Path:

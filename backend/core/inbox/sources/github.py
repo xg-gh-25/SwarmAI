@@ -62,6 +62,7 @@ from core.inbox.sources.common import (
     call_timeout,
     matches_sent,
     parse_time,
+    source_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ async def _run_gh(argv: list[str], stdin: Optional[bytes], timeout: float) -> tu
             env=env,
         )
     except FileNotFoundError as exc:
-        raise SourceAuthError("the GitHub CLI (gh) is not installed", fix="安装 GitHub CLI（gh）并运行 gh auth login") from exc
+        raise SourceAuthError("the GitHub CLI (gh) is not installed", fix=source_text("gh_install")) from exc
     try:
         out, err = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
     finally:
@@ -237,10 +238,7 @@ class GitHubSource:
                 await self._api("notifications", "notifications?per_page=1")
             except _NotPermitted:
                 self.feed_only = True
-                self.feed_only_reason = (
-                    "这个 GitHub token 读不了通知（fine-grained PAT 或 GitHub App token），只能看趋势；"
-                    "用 gh auth login 换成经典登录后才能收到 @ 和 review 请求"
-                )
+                self.feed_only_reason = source_text("gh_feed_only")
                 logger.info("github source %s: the token cannot read notifications; feed-only", self.config.id)
         return self._me
 
@@ -495,7 +493,7 @@ class GitHubSource:
         if number is None or kind == "none":
             return Thread(ref=ref, messages=messages, target=None)
         public = not await self._is_private(repo)
-        where = {"review": f"{repo}#{number} 的 review thread", "discussion": f"{repo} discussion #{number}"}.get(kind, f"{repo}#{number}")
+        where = {"review": source_text("gh_review_thread", repo=repo, number=number), "discussion": f"{repo} discussion #{number}"}.get(kind, f"{repo}#{number}")
         target = ReplyTarget(
             label=where,
             recipients=(f"{self.hostname or 'github.com'}/{repo}#{number}",),

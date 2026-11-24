@@ -155,7 +155,7 @@ async def test_expired_midway_login_raises_source_auth_error():
     expired = _outlook(email_folders=lambda a: mcp_error("401 Unauthorized: Midway cookie expired"))
     with pytest.raises(SourceAuthError) as info:
         await OutlookMcpSource(_cfg(), client=expired).pull(None)
-    assert info.value.fix == "运行 mwinit -f"
+    assert info.value.fix == "Run mwinit -f, then click Retry"
 
 
 def test_factory():
@@ -224,7 +224,7 @@ async def test_imap_cursor_reads_only_newer_uids():
 async def test_imap_bad_password_is_source_auth_error():
     with pytest.raises(SourceAuthError) as info:
         await _imap_source(FakeImap(_inbox(), accept="other")).pull(None)
-    assert "密码" in info.value.fix
+    assert "mail password" in info.value.fix
 
 
 async def test_smtp_reply_threads_and_goes_only_to_the_sender():
@@ -474,7 +474,7 @@ async def test_imap_own_messages_to_and_an_smtp_login_refusal_keeps_the_fix():
     with pytest.raises(SendFailed) as info:
         await _imap_source(FakeImap(_inbox()), RefusingLogin()).reply(
             ThreadRef("mail", {"root": "<a1@x.example>", "message_id": "<a1@x.example>"}), "x")
-    assert "密码" in info.value.fix
+    assert "mail password" in info.value.fix
 
 
 async def test_outlook_own_messages_to_reads_sent_conversations_when_the_listing_has_no_messages():

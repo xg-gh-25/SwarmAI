@@ -65,7 +65,34 @@ DEFAULT_INTERVAL_S = {SourceCategory.CONVERSATION.value: 900, SourceCategory.FEE
 EXCERPT_CHARS = 2_000
 LATE_AFTER = timedelta(days=2)
 
-_CHANNEL_LABELS = {"slack": "Slack", "mail": "邮件", "github": "GitHub", "feed": "信息流"}
+_CHANNEL_LABELS = {"slack": "Slack", "github": "GitHub"}
+
+# The Inbox's own words on cards and channel settings, in the app's language
+# (core/ui_language): the frontend shows them as they are.
+_TEXT_EN = {
+    "mail": "Mail", "feed": "Feeds", "dm": "{label} DM", "mention": "{label} · @you",
+    "feeds": "{n} feeds", "watched_channels": "watching {n} channels",
+    "watched_repos": "watching {n} repos",
+    "feeds_one": "1 feed", "watched_channels_one": "watching 1 channel",
+    "watched_repos_one": "watching 1 repo",
+}
+_TEXT_ZH = {
+    "mail": "邮件", "feed": "信息流", "dm": "{label} 私信", "mention": "{label} · @你",
+    "feeds": "{n} 个 feed", "watched_channels": "关注 {n} 个频道",
+    "watched_repos": "关注 {n} 个仓库",
+    "feeds_one": "1 个 feed", "watched_channels_one": "关注 1 个频道",
+    "watched_repos_one": "关注 1 个仓库",
+}
+
+
+def _t(key: str, **fmt: object) -> str:
+    from core.ui_language import text
+    return text(_TEXT_EN, _TEXT_ZH, key, **fmt)
+
+
+def _count(key: str, n: int) -> str:
+    """*key* for a count: its ``_one`` form for 1."""
+    return _t(key + "_one") if n == 1 else _t(key, n=n)
 
 #: the options ``source_out`` shows: an allowlist, so an option that should never have been
 #: stored (a secret under an unexpected name) is never echoed back
@@ -112,6 +139,8 @@ def new_id(prefix: str) -> str:
 
 def channel_label(kind: str) -> str:
     base = (kind or "").split(":", 1)[0]
+    if base in ("mail", "feed"):
+        return _t(base)
     return _CHANNEL_LABELS.get(base, base or kind)
 
 
@@ -252,9 +281,9 @@ def _where(row: dict, meta: dict) -> str:
         return str(meta["where"])
     label = channel_label(row["source_kind"])
     if meta.get("is_direct"):
-        return f"{label} 私信"
+        return _t("dm", label=label)
     if meta.get("mentions_me"):
-        return f"{label} · @你"
+        return _t("mention", label=label)
     return label
 
 
@@ -321,12 +350,12 @@ def source_out(row: dict, *, feeds: Optional[int] = None) -> dict:
     identity = (me.display or (sorted(me.ids)[0] if me.ids else "")) if me else ""
     options = json.loads(row.get("config") or "{}")
     if row["id"] == FEED_SOURCE_ID:
-        detail = f"{feeds} 个 feed" if feeds is not None else ""
+        detail = _count("feeds", feeds) if feeds is not None else ""
     else:
         parts = []
-        for key, word in (("watched_channels", "频道"), ("watched_repos", "仓库")):
+        for key in ("watched_channels", "watched_repos"):
             if isinstance(options.get(key), list) and options[key]:
-                parts.append(f"关注 {len(options[key])} 个{word}")
+                parts.append(_count(key, len(options[key])))
         detail = " · ".join(parts)
     read_only = row["health"] == SourceHealth.READ_ONLY.value
     return {

@@ -53,18 +53,18 @@ async def test_draft_context_holds_only_this_thread_and_own_messages(monkeypatch
     assert "Can you send the Q3 numbers?" in fake.user_turn
     assert fake.user_turn.count("Looking now.") == 1
     assert "Can you send" not in fake.system          # thread text never in the system prompt
-    assert draft.note == "参考了你和 Priya 的 1 条往来"
+    assert draft.note == "Drew on 1 exchange between you and Priya"
 
 
 async def test_draft_returns_lang_and_note(monkeypatch):
     FakeBedrock(monkeypatch, text_reply("LANG: en\n\nHi Priya, the total is [the number]."))
     d = await make_draft(thread(m("a", "U_PRIYA", "What is the total?")), ME, [])
-    assert (d.text, d.lang, d.note) == ("Hi Priya, the total is [the number].", "en", "只参考了这个 thread")
+    assert (d.text, d.lang, d.note) == ("Hi Priya, the total is [the number].", "en", "Drew only on this thread")
 
     FakeBedrock(monkeypatch, text_reply("好的，周五前发你。"))     # no LANG line: script fallback
     d = await make_draft(thread(m("a", "U_ZL", "方案什么时候能给我看？", name="周琳")), ME,
                          [m("h", "U_ME", "我先整理一下", ref=OTHER, name="Me", minutes=-5)])
-    assert (d.text, d.lang, d.note) == ("好的，周五前发你。", "zh", "参考了你和周琳的 1 条往来")
+    assert (d.text, d.lang, d.note) == ("好的，周五前发你。", "zh", "Drew on 1 exchange between you and 周琳")
 
 
 async def test_draft_with_only_a_lang_line_is_missing(monkeypatch):

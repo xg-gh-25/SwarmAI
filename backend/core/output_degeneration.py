@@ -35,8 +35,11 @@ Public symbols:
 - ``ProgressWatch`` — thinking-stall / silence notice tracker (notices are
   delivered as the in-tab ``still_working`` status, never as conversation
   content — they describe the stream, not something the model said).
-- ``DEGENERATION_NOTICE`` / ``DEGENERATION_TRANSCRIPT_MARKER`` /
-  ``THINKING_STALL_S`` / ``SILENT_STALL_S`` — user-facing text and thresholds.
+- ``degeneration_notice(tool=None)`` — the notice shown (and persisted) for a cut turn,
+  in the app's language (core/ui_language); ``tool`` names a tool whose input looped.
+- ``DEGENERATION_NOTICE`` (the English notice, for callers with no language) /
+  ``DEGENERATION_TRANSCRIPT_MARKER`` / ``THINKING_STALL_S`` / ``SILENT_STALL_S`` —
+  text and thresholds.
 """
 
 from __future__ import annotations
@@ -62,17 +65,34 @@ SILENT_STALL_S = 240.0
 # A thinking_tokens frame older than this no longer counts as "still thinking".
 _THINKING_FRESH_S = 60.0
 
-# Shown to the user (persisted with the turn) when a loop is cut off.
-DEGENERATION_NOTICE = (
-    "⚠️ 输出陷入重复已中止 —— 检测到模型输出进入重复循环,本轮已自动停止,"
-    "重复部分未保存。可以重新发送或换个说法继续。"
-    "(Output stopped: the model fell into a repetition loop.)"
-)
+# Shown to the user (persisted with the turn) when a loop is cut off, in the app's
+# language (degeneration_notice).
+_NOTICE_EN = {
+    "notice": ("⚠️ Output stopped: the model fell into a repetition loop, so this turn was "
+               "stopped and the repeated part was not saved. Send again, or rephrase, to go on."),
+    "tool": ("(The input of the call to {tool} kept repeating and was stopped; if the tool had "
+             "already started, its result may be incomplete.)"),
+}
+_NOTICE_ZH = {
+    "notice": "⚠️ 输出陷入重复已中止 —— 检测到模型输出进入重复循环,本轮已自动停止,"
+              "重复部分未保存。可以重新发送或换个说法继续。",
+    "tool": "(工具 {tool} 的调用输入陷入重复,已中止;若它已开始执行,结果可能不完整)",
+}
+DEGENERATION_NOTICE = _NOTICE_EN["notice"]
 # Written into the CLI transcript in place of a cut run. Phrased as a system
 # note so a resumed model reads it as an event, not as its own words to continue.
-DEGENERATION_TRANSCRIPT_MARKER = (
-    "[system: output stopped — repetition loop detected and removed / 输出陷入重复已中止]"
-)
+DEGENERATION_TRANSCRIPT_MARKER = "[system: output stopped — repetition loop detected and removed]"
+
+
+def degeneration_notice(tool: Optional[str] = None) -> str:
+    """The notice for a cut turn in the app's language; *tool* (a tool name) adds the
+    line about a tool call whose input looped."""
+    from core.ui_language import text, ui_language
+    lang = ui_language()
+    notice = text(_NOTICE_EN, _NOTICE_ZH, "notice", lang)
+    if tool is None:
+        return notice
+    return notice + "\n" + text(_NOTICE_EN, _NOTICE_ZH, "tool", lang, tool=tool)
 
 # Run-edge search. A window can only reach the threshold when the loop fills
 # most of it, so the last ``_CORE`` chars of the first degenerate window lie

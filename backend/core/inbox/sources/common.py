@@ -21,7 +21,8 @@
 
 Key public symbols: ``ReadToolRefused``, ``ToolGate``, ``Deadline``, ``BudgetExhausted``,
 ``normalize_text``, ``matches_sent``, ``strip_mail_quotes``, ``parse_address``,
-``domain_of``, ``parse_time``, ``SourceUnavailable``, ``auth_fix_for``.
+``domain_of``, ``parse_time``, ``SourceUnavailable``, ``auth_fix_for``,
+``source_text`` (the sources' card text in the app's language).
 """
 from __future__ import annotations
 
@@ -264,11 +265,13 @@ def parse_time(value: Any) -> Optional[datetime]:
 
 
 _HTTP_401 = re.compile(r"\b(?:http|status|code|error)\W{0,3}401\b", re.I)
+# words of an expired Midway sign-in in an MCP server's own error (auth_fix_for)
+_MIDWAY_WORDS = ("mwinit", "midway")
 _AUTH_MARKERS = (
     "unauthorized", "unauthenticated", "not authenticated", "authentication failed",
     "invalid_auth", "not_authed", "token_expired", "token_revoked", "token expired",
     "expired token", "credentials have expired", "session expired", "login required",
-    "please log in", "please login", "mwinit", "midway", "bad credentials", "re-authenticate",
+    "please log in", "please login", *_MIDWAY_WORDS, "bad credentials", "re-authenticate",
 )
 
 
@@ -277,9 +280,61 @@ def looks_like_auth_failure(text: str) -> bool:
     return any(marker in low for marker in _AUTH_MARKERS) or bool(_HTTP_401.search(low))
 
 
+# What the sources tell the person on a channel's card (a fix, why it cannot send, where
+# a reply goes), in the app's language (core/ui_language).
+_TEXT_EN = {
+    "mcp_mwinit": "Run mwinit -f, then click Retry",
+    "mcp_relogin": 'Sign in to MCP server "{server}" again, then click Retry',
+    "gh_install": "Install the GitHub CLI (gh) and run gh auth login",
+    "gh_feed_only": ("This GitHub token cannot read notifications (a fine-grained PAT or a GitHub "
+                     "App token), so only trends are shown; sign in with gh auth login (classic "
+                     "login) to get @mentions and review requests"),
+    "gh_review_thread": "{repo}#{number} review thread",
+    "mail_tools_unreadable": ('Cannot read the tool list of MCP server "{server}" ({error}); '
+                              "sending is off for now"),
+    "mail_no_reply_tool": 'MCP server "{server}" has no email_reply tool: it can receive but not send',
+    "mail_send_off": ('Sending is off: {env} of MCP server "{server}" is not true; set it to true '
+                      "in its MCP config, then click Retry"),
+    "mail_login": ("Enter the mail password again in the Inbox channel settings (an app password "
+                   "for Gmail and similar), then click Retry"),
+    "mail_no_smtp": ("No SMTP server is set: it can receive but not send; add SMTP in the channel "
+                     "settings, then click Retry"),
+    "slack_dm": "DM · {who}",
+    "slack_thread": "#{channel} thread",
+    "slack_self": "yourself",
+    "slack_token": "Enter the Slack user token (xoxp-…) again in the Inbox channel settings, then click Retry",
+}
+_TEXT_ZH = {
+    "mcp_mwinit": "运行 mwinit -f 后点重试",
+    "mcp_relogin": "重新登录 MCP server「{server}」后点重试",
+    "gh_install": "安装 GitHub CLI（gh）并运行 gh auth login",
+    "gh_feed_only": ("这个 GitHub token 读不了通知（fine-grained PAT 或 GitHub App token），只能看趋势；"
+                     "用 gh auth login 换成经典登录后才能收到 @ 和 review 请求"),
+    "gh_review_thread": "{repo}#{number} 的 review thread",
+    "mail_tools_unreadable": "读不到 MCP server「{server}」的工具列表（{error}），先不能发送",
+    "mail_no_reply_tool": "MCP server「{server}」没有 email_reply 工具，只能收不能发",
+    "mail_send_off": "发送没开：MCP server「{server}」的 {env} 不是 true；在它的 MCP 配置里设成 true 后点重试",
+    "mail_login": "在 Inbox 渠道设置里重新填邮箱密码（Gmail 等用应用专用密码）后点重试",
+    "mail_no_smtp": "没填 SMTP 服务器，只能收不能发；在渠道设置里加上 SMTP 后点重试",
+    "slack_dm": "私信 · {who}",
+    "slack_thread": "#{channel} 的 thread",
+    "slack_self": "自己",
+    "slack_token": "在 Inbox 渠道设置里重新填 Slack user token（xoxp-…）后点重试",
+}
+
+
+def source_text(key: str, **fmt: object) -> str:
+    """The sources' text *key* in the app's language, formatted with *fmt*."""
+    from core.ui_language import text
+    return text(_TEXT_EN, _TEXT_ZH, key, **fmt)
+
+
 def auth_fix_for(text: str, server_id: str) -> str:
-    """The action to show for an expired login of an MCP server."""
+    """The action to show for an expired login of an MCP server. ``mwinit`` is named only
+    when the server's own error names mwinit or Midway: how an MCP server signs in is its
+    own, whatever SwarmAI's AWS account uses. Any other expired login: sign the MCP server
+    in again."""
     low = (text or "").lower()
-    if "mwinit" in low or "midway" in low:
-        return "运行 mwinit -f"
-    return f"重新登录 MCP server「{server_id}」后点重试"
+    if any(word in low for word in _MIDWAY_WORDS):
+        return source_text("mcp_mwinit")
+    return source_text("mcp_relogin", server=server_id)

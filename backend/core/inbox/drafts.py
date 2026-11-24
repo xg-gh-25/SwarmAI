@@ -159,12 +159,32 @@ def _script_lang(thread: Thread, me: Identity) -> str:
     return best if counts[best] * 2 >= counts["latin"] and counts[best] else "en"
 
 
+# What a draft drew on, in the app's language (core/ui_language)
+_NOTE_EN = {
+    "thread": "Drew only on this thread",
+    "history": "Drew on {n} earlier exchanges of yours",
+    "with": "Drew on {n} exchanges between you and {name}",
+    "history_one": "Drew on 1 earlier exchange of yours",
+    "with_one": "Drew on 1 exchange between you and {name}",
+}
+_NOTE_ZH = {
+    "thread": "只参考了这个 thread",
+    "history": "参考了你之前的 {n} 条往来",
+    "with": "参考了你和{name}的 {n} 条往来",
+    "history_one": "参考了你之前的 1 条往来",
+    "with_one": "参考了你和{name}的 1 条往来",
+}
+
+
 def _note(name: str, n: int) -> str:
     """What the draft drew on, as the UI shows it under the draft."""
+    from core.ui_language import text, ui_language
+    lang = ui_language()
     if n == 0:
-        return "只参考了这个 thread"
+        return text(_NOTE_EN, _NOTE_ZH, "thread", lang)
+    one = "_one" if n == 1 else ""
     if not name:
-        return f"参考了你之前的 {n} 条往来"
-    if name[0].isascii() or name[-1].isascii():
+        return text(_NOTE_EN, _NOTE_ZH, "history" + one, lang, n=n)
+    if lang == "zh" and (name[0].isascii() or name[-1].isascii()):
         name = f" {name} "
-    return f"参考了你和{name}的 {n} 条往来"
+    return text(_NOTE_EN, _NOTE_ZH, "with" + one, lang, n=n, name=name)

@@ -136,8 +136,8 @@ def test_inbox_code_writes_no_file_and_feeds_no_index():
                 assert not set(str(mode)) & set("wax+"), f"{path.name} opens a file for writing"
 
 
-@pytest.mark.parametrize("kind,label", [("slack", "Slack"), ("mail", "邮件"), ("github", "GitHub"),
-                                        ("feed:rss", "信息流"), ("teams", "teams")])
+@pytest.mark.parametrize("kind,label", [("slack", "Slack"), ("mail", "Mail"), ("github", "GitHub"),
+                                        ("feed:rss", "Feeds"), ("teams", "teams")])
 def test_channel_label(kind, label):
     assert store.channel_label(kind) == label
 

@@ -88,6 +88,7 @@ from core.inbox.sources.common import (
     parse_address,
     parse_addresses,
     parse_time,
+    source_text,
     strip_mail_quotes,
 )
 
@@ -559,15 +560,16 @@ class OutlookMcpSource(_MailSource):
         try:
             names = {t.get("name") for t in await client.list_tools()}
         except Exception as exc:  # noqa: BLE001 - an unreadable tool list means: do not offer sending
-            self.read_only_reason = f"读不到 MCP server「{self.server_id}」的工具列表（{type(exc).__name__}），先不能发送"
+            self.read_only_reason = source_text("mail_tools_unreadable", server=self.server_id,
+                                                    error=type(exc).__name__)
             return False
         if "email_reply" not in names:
-            self.read_only_reason = f"MCP server「{self.server_id}」没有 email_reply 工具，只能收不能发"
+            self.read_only_reason = source_text("mail_no_reply_tool", server=self.server_id)
             return False
         env = {**os.environ, **(getattr(client, "env", None) or {})}
         if str(env.get(self.WRITES_ENV, "")).strip().lower() not in _TRUE:
-            self.read_only_reason = (f"发送没开：MCP server「{self.server_id}」的 {self.WRITES_ENV} 不是 true；"
-                                     "在它的 MCP 配置里设成 true 后点重试")
+            self.read_only_reason = source_text("mail_send_off", server=self.server_id,
+                                                env=self.WRITES_ENV)
             return False
         self.read_only_reason = ""
         return True
@@ -691,7 +693,8 @@ class OutlookMcpSource(_MailSource):
 # ---------------------------------------------------------------------------
 
 _PEEK_SPECS = frozenset({"(UID BODY.PEEK[])"})
-_LOGIN_FIX = "在 Inbox 渠道设置里重新填邮箱密码（Gmail 等用应用专用密码）后点重试"
+# a subject that already says it is a reply (English or Chinese mail clients)
+_REPLY_PREFIX = re.compile(r"^\s*(re|回复|答复)\s*[:：]", re.I)
 
 
 def imap_quote(value: str) -> str:
@@ -713,7 +716,7 @@ class _Imap:
         try:
             self._conn.login(user, password)
         except imaplib.IMAP4.error as exc:
-            raise SourceAuthError("the mail server refused the login", fix=_LOGIN_FIX) from exc
+            raise SourceAuthError("the mail server refused the login", fix=source_text("mail_login")) from exc
 
     def examine(self, folder: str) -> tuple[str, Optional[int]]:
         self._gate.check("EXAMINE")
@@ -885,7 +888,7 @@ class ImapSmtpSource(_MailSource):
     def _session(self) -> _Imap:
         password = self._secret("password")
         if not password:
-            raise SourceAuthError("no mail password stored for this source", fix=_LOGIN_FIX)
+            raise SourceAuthError("no mail password stored for this source", fix=source_text("mail_login"))
         try:
             conn = self._imap_factory(self.host, self.port)
         except (OSError, imaplib.IMAP4.error) as exc:
@@ -902,7 +905,7 @@ class ImapSmtpSource(_MailSource):
 
     async def can_send(self) -> bool:
         if not self.smtp_host:
-            self.read_only_reason = "没填 SMTP 服务器，只能收不能发；在渠道设置里加上 SMTP 后点重试"
+            self.read_only_reason = source_text("mail_no_smtp")
             return False
         self.read_only_reason = ""
         return True
@@ -1029,7 +1032,7 @@ class ImapSmtpSource(_MailSource):
         msg["From"] = sender
         msg["To"] = ", ".join(target.recipients)
         subject = rec.subject or ""
-        msg["Subject"] = subject if re.match(r"^\s*(re|回复|答复)\s*[:：]", subject, re.I) else f"Re: {subject}".strip()
+        msg["Subject"] = subject if _REPLY_PREFIX.match(subject) else f"Re: {subject}".strip()
         msg["In-Reply-To"] = rec.message_id
         refs = list(dict.fromkeys([*self._references_for(ref, rec), rec.message_id]))
         msg["References"] = " ".join(refs)
@@ -1050,12 +1053,12 @@ class ImapSmtpSource(_MailSource):
         self._gate.check("SMTP SEND", write=True)
         password = self._secret("smtp_password") or self._secret("password")
         if not password:
-            raise SendFailed("no mail password stored for this source", fix=_LOGIN_FIX)
+            raise SendFailed("no mail password stored for this source", fix=source_text("mail_login"))
         try:
             smtp = self._smtp_factory(self.smtp_host, self.smtp_port, self.smtp_security)
             smtp.login(self.username, password)
         except smtplib.SMTPAuthenticationError as exc:
-            raise SendFailed("the mail server refused the login", fix=_LOGIN_FIX) from exc
+            raise SendFailed("the mail server refused the login", fix=source_text("mail_login")) from exc
         except Exception as exc:  # noqa: BLE001 - nothing is sent before DATA: every failure here is "not sent"
             raise SendFailed(f"the mail server did not accept the session: {type(exc).__name__}") from exc
         try:

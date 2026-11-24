@@ -168,13 +168,13 @@ async def test_expired_midway_login_raises_source_auth_error():
     expired = FakeMcp(_mcp_handlers(search=lambda a: mcp_error("Midway session expired; run mwinit")))
     with pytest.raises(SourceAuthError) as info:
         await SlackMcpSource(_config(), client=expired).pull(None)
-    assert info.value.fix == "运行 mwinit -f"
+    assert info.value.fix == "Run mwinit -f, then click Retry"
 
 
 async def test_thread_target_names_the_thread(mcp):
     src = SlackMcpSource(_config(), client=mcp)
     thread = await src.thread(ThreadRef("slack", {"channel": "C0TEAM", "thread_ts": ts(5000)}))
-    assert thread.target.label == "#team 的 thread"
+    assert thread.target.label == "#team thread"
     assert thread.target.recipients == (f"C0TEAM:{ts(5000)}",)
     assert [m.author_id for m in thread.messages] == [ME, "U0CAT", ME]
 
@@ -497,16 +497,16 @@ def test_an_app_users_name_comes_from_slack_mcps_realname():
 
 
 async def test_a_dm_of_only_my_messages_names_its_member():
-    """The person's own DM reads 私信 · 自己; a DM where only the person wrote names the
+    """The person's own DM reads "DM · yourself"; a DM where only the person wrote names the
     member the backend lists, never the channel id."""
     dms = {"dms": [{"channelId": "D0SELF", "userId": ME, "name": "me.person"},
                    {"channelId": "D0DAN", "userId": "U0DAN", "name": "Dan"}]}
     mine = lambda a: {"messages": [{"ts": ts(60), "user": ME, "text": "note to self"}]}  # noqa: E731
     src = SlackMcpSource(_config(), client=FakeMcp(_mcp_handlers(list_dms=dms, get_messages=mine)))
-    assert (await src.thread(ThreadRef("slack", {"channel": "D0SELF"}))).target.label == "私信 · 自己"
-    assert (await src.thread(ThreadRef("slack", {"channel": "D0DAN"}))).target.label == "私信 · Dan"
+    assert (await src.thread(ThreadRef("slack", {"channel": "D0SELF"}))).target.label == "DM · yourself"
+    assert (await src.thread(ThreadRef("slack", {"channel": "D0DAN"}))).target.label == "DM · Dan"
     unknown = await src.thread(ThreadRef("slack", {"channel": "D0GONE"}))
-    assert unknown.target.label == "私信 · D0GONE"
+    assert unknown.target.label == "DM · D0GONE"
 
 
 async def test_web_dm_of_only_my_messages_names_its_member():
@@ -523,6 +523,6 @@ async def test_web_dm_of_only_my_messages_names_its_member():
     src = SlackWebSource(SourceConfig(id="w", kind="slack", backend="slack-web"),
                          transport=httpx.MockTransport(api), token_reader=lambda: "xoxp-1")  # pragma: allowlist secret
     try:
-        assert (await src.thread(ThreadRef("slack", {"channel": "D0SELF"}))).target.label == "私信 · 自己"
+        assert (await src.thread(ThreadRef("slack", {"channel": "D0SELF"}))).target.label == "DM · yourself"
     finally:
         await src.close()

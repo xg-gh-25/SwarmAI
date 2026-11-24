@@ -5,6 +5,10 @@
   or key that existing files and reports on disk still use, or text that is only matched
   or sent to a model, never shown). Docstrings and comments are not shown to anyone and
   are not checked.
+- Text shown in the app's language (core/ui_language) comes in pairs of tables: the
+  Chinese one is assigned to a name ending in ``_ZH`` and is allowed CJK only because a
+  table of the same name ending in ``_EN`` sits next to it with the same keys and the
+  same ``{placeholders}`` (``test_zh_tables_match_en_tables``).
 - F4: a STEERING.md that already has the old Chinese appendix heading gets the new
   auto-extracted entry under that heading: no second appendix section.
 """
@@ -30,6 +34,26 @@ MODULES = (
     "core/pipeline_stage_events.py",
     "jobs/handlers/brain_mistake_audit.py",
     "core/ingestion/worker.py",
+    "core/ui_language.py",
+    "core/inbox/store.py",
+    "core/inbox/drafts.py",
+    "core/inbox/submit.py",
+    "core/inbox/connect.py",
+    "core/inbox/sources/github.py",
+    "core/inbox/sources/mail.py",
+    "core/inbox/sources/slack.py",
+    "core/inbox/sources/common.py",
+    "core/inbox/feeds/weibo_trending.py",
+    "core/inbox/feeds/eastmoney_market.py",
+    "core/output_degeneration.py",
+    "core/streaming_orchestrator.py",
+    "core/swarm_out_wake.py",
+    "core/run_interventions.py",
+    "scripts/eval_runner.py",
+    "core/feature_map/runtime.py",
+    "core/attention_authority.py",
+    "core/swarm_out_wait_card.py",
+    "core/swarm_out_follow.py",
 )
 
 # (module, the name the literal is assigned to) -> why it stays
@@ -47,6 +71,19 @@ EXCEPTIONS = {
         "the outcome keys stored in the monthly report JSON and read by "
         "core/ingestion/cognition_level.py and the Cognition Level panel, which shows "
         "them through i18n; the report shows OUTCOME_LABELS",
+    ("core/inbox/sources/common.py", "_QUOTE_HEADERS"):
+        "patterns matching the quote headers Chinese mail clients write; matched, never shown",
+    ("core/inbox/sources/common.py", "_FROM_LINE"):
+        "the sender line of a Chinese mail client's quoted header; matched, never shown",
+    ("core/inbox/sources/common.py", "_SENT_LINE"):
+        "the date line of a Chinese mail client's quoted header; matched, never shown",
+    ("core/inbox/sources/mail.py", "_BANNER_WORDS"):
+        "external-sender banner words in Chinese mail; matched to strip the banner, never shown",
+    ("core/inbox/sources/mail.py", "_REPLY_PREFIX"):
+        "the reply prefix Chinese mail clients put on a subject; matched, never shown",
+    ("core/swarm_out_wake.py", "LEGACY_MARKERS"):
+        "the wake markers transcripts written before they became English still start with; "
+        "matched by is_wake_text, never sent again",
 }
 
 _CJK = re.compile(r"[　-〿぀-ヿ㐀-䶿一-鿿가-힯＀-￯]")
@@ -94,11 +131,42 @@ def _cjk_literals(rel: str) -> list[tuple[int, str, str]]:
     return found
 
 
+def _zh_table(name: str) -> bool:
+    return name.endswith("_ZH")
+
+
 @pytest.mark.parametrize("rel", MODULES)
 def test_no_cjk_in_fixed_text(rel):
     bad = [(line, name, text[:60]) for line, name, text in _cjk_literals(rel)
-           if (rel, name) not in EXCEPTIONS]
+           if (rel, name) not in EXCEPTIONS and not _zh_table(name)]
     assert bad == [], f"{rel}: CJK in fixed text (line, assigned to, text): {bad}"
+
+
+def _module_of(rel: str):
+    import importlib
+    return importlib.import_module(rel[:-3].replace("/", "."))
+
+
+def _fields(value: str) -> set[str]:
+    import string
+    return {f for _lit, f, _spec, _conv in string.Formatter().parse(value) if f is not None}
+
+
+@pytest.mark.parametrize("rel", MODULES)
+def test_zh_tables_match_en_tables(rel):
+    """Every ``*_ZH`` table (the only place CJK is allowed besides EXCEPTIONS) has an
+    ``*_EN`` twin with the same keys and placeholders, and the English side is English."""
+    names = {n for _l, n, _t in _cjk_literals(rel) if _zh_table(n) and (rel, n) not in EXCEPTIONS}
+    if not names:
+        return
+    mod = _module_of(rel)
+    for name in names:
+        zh, en = getattr(mod, name), getattr(mod, name[:-3] + "_EN", None)
+        assert isinstance(zh, dict) and isinstance(en, dict), f"{rel}:{name} has no {name[:-3]}_EN table"
+        assert set(zh) == set(en), f"{rel}:{name} keys differ from its _EN table"
+        for key in zh:
+            assert _fields(zh[key]) == _fields(en[key]), f"{rel}:{name}[{key}] placeholders differ"
+            assert not _CJK.search(en[key]), f"{rel}:{name[:-3]}_EN[{key}] is not English"
 
 
 def test_every_exception_is_still_needed():

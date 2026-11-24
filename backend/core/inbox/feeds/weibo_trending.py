@@ -1,7 +1,7 @@
 """
 Weibo Trending Signal Adapter
 
-Fetches Weibo hot search (热搜) and optional keyword-matched posts.
+Fetches Weibo hot search and optional keyword-matched posts.
 All endpoints are public — no authentication required.
 
 Data sources:
@@ -39,11 +39,9 @@ WEIBO_HEADERS = {
     "Referer": "https://weibo.com/",
 }
 
-# Default keywords relevant to cloud/AI business
-DEFAULT_KEYWORDS = [
-    "云计算", "AI", "人工智能", "大模型", "AWS", "亚马逊云",
-    "数字化转型", "AIGC", "智能体", "Agent",
-]
+# No built-in topics: a feed without ``keywords`` keeps every hot-search item. The
+# person's own keywords filter it (and drive the optional keyword search).
+DEFAULT_KEYWORDS: list[str] = []
 
 
 def fetch_weibo_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
@@ -53,14 +51,14 @@ def fetch_weibo_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]
     Args:
         feed: Feed config. Config keys:
             - keyword_search: bool, whether to also search by keyword (default False)
-            - keywords: list[str], keywords to search (default: DEFAULT_KEYWORDS)
+            - keywords: list[str], keywords to filter by and search (default: none, no filter)
             - top_n: int, max hot search items to scan (default 30)
         max_age_hours: Unused (trending is always "now"), kept for adapter interface
 
     Returns:
-        List of RawSignal, filtered to business-relevant topics
+        List of RawSignal, filtered by the configured keywords when there are any
     """
-    keywords = feed.config.get("keywords", DEFAULT_KEYWORDS)
+    keywords = [str(k) for k in (feed.config.get("keywords") or DEFAULT_KEYWORDS) if str(k).strip()]
     top_n = feed.config.get("top_n", 30)
     keyword_search = feed.config.get("keyword_search", False)
 
@@ -92,7 +90,7 @@ def fetch_weibo_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]
 
 
 def _fetch_hot_search(feed_id: str, keywords: list[str], top_n: int) -> list[RawSignal]:
-    """Fetch hot search and filter by keywords."""
+    """Fetch hot search, filtered by *keywords* when there are any."""
     signals: list[RawSignal] = []
 
     with safe_client(timeout=15, headers=WEIBO_HEADERS) as client:
@@ -110,8 +108,8 @@ def _fetch_hot_search(feed_id: str, keywords: list[str], top_n: int) -> list[Raw
         if not word:
             continue
 
-        # Keyword filter: only keep items matching business-relevant keywords
-        if not any(kw.lower() in word.lower() for kw in keywords):
+        # Keyword filter: only the person's own keywords, and only when they set some
+        if keywords and not any(kw.lower() in word.lower() for kw in keywords):
             continue
 
         raw_hot = item.get("raw_hot", 0)
@@ -122,9 +120,9 @@ def _fetch_hot_search(feed_id: str, keywords: list[str], top_n: int) -> list[Raw
             feed_id=feed_id,
             title=word,
             url=f"https://s.weibo.com/weibo?q=%23{quote(word)}%23",
-            summary=f"微博热搜 热度:{raw_hot:,}",
+            summary=f"Weibo hot search · heat {raw_hot:,}",
             published=datetime.now(timezone.utc),
-            source="微博热搜",
+            source="Weibo hot search",
             tags=["weibo", "hot-search", "china"],
             score=score,
         ))
@@ -199,11 +197,11 @@ def _parse_mblog(feed_id: str, mblog: dict, keyword: str) -> RawSignal | None:
 
     return RawSignal(
         feed_id=feed_id,
-        title=f"[微博] {clean_text[:80]}",
+        title=f"[Weibo] {clean_text[:80]}",
         url=f"https://m.weibo.cn/detail/{mid}" if mid else f"https://weibo.com/u/{uid}",
-        summary=f"转发:{reposts} 评论:{comments} 关键词:{keyword}",
+        summary=f"Reposts: {reposts} · Comments: {comments} · Keyword: {keyword}",
         published=datetime.now(timezone.utc),
-        source="微博搜索",
+        source="Weibo search",
         tags=["weibo", "search", "china", keyword],
         score=score,
     )

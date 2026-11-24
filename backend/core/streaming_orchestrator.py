@@ -1388,8 +1388,8 @@ class StreamingOrchestrator:
         (``leak_transcript``) before --resume.
         """
         from .output_degeneration import (
-            DEGENERATION_NOTICE,
             compress_ratio,
+            degeneration_notice,
             find_degenerate_run,
         )
         from .session_utils import strip_glitch_prefix, strip_tool_call_leak
@@ -1404,16 +1404,13 @@ class StreamingOrchestrator:
             len(text), cut, compress_ratio(text[-2000:]), text[cut:cut + 80],
         )
         if det.kind == "tool_use":
-            body = (
-                f"{DEGENERATION_NOTICE}\n(工具 {det.name or '?'} 的调用输入陷入重复,已中止;"
-                f"若它已开始执行,结果可能不完整 / the call to {det.name or 'a tool'} was "
-                "stopped; if it had already started, its result may be incomplete.)"
-            )
+            body = degeneration_notice(tool=det.name or "a tool")
         else:
             prefix = ""
             if not parent_tool_use_id and det.kind == "text":
                 prefix = strip_glitch_prefix(strip_tool_call_leak(text[:cut])).rstrip()
-            body = f"{prefix}\n\n{DEGENERATION_NOTICE}" if prefix else DEGENERATION_NOTICE
+            notice = degeneration_notice()
+            body = f"{prefix}\n\n{notice}" if prefix else notice
         start = self._parent._streaming_start_time
         events = [
             self._notice_event(body),
@@ -2376,7 +2373,7 @@ class StreamingOrchestrator:
                                 "session_unit.tool_call_leak_stripped "
                                 "session_id=%s — tool-call XML in text channel; "
                                 "stripped from persistence (block_len=%d→%d), "
-                                "turn preserved (no kill/respawn — 去容灾化)",
+                                "turn preserved (no kill/respawn: no disaster-recovery)",
                                 self._parent.session_id,
                                 len(block.text), len(cleaned_text),
                             )

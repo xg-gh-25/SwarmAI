@@ -39,7 +39,7 @@ async def test_auth_failed_source_is_one_blocking_item():
     items = aa._collect_inbox_sources()
     assert [(i.id, i.source, i.tier, i.brain) for i in items] == [
         ("inbox:mail-1", "inbox", aa.TIER_BLOCKING, None)]
-    assert "邮件" in items[0].title and "run mwinit -f" in items[0].title
+    assert "Mail" in items[0].title and "run mwinit -f" in items[0].title
     assert "run mwinit -f" in items[0].dispatch["message"]
     assert "inbox:mail-1" in [i.id for i in aa.collect(Path(get_app_data_dir())).items]
 

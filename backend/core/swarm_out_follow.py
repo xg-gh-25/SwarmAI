@@ -310,7 +310,7 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
         if waits:
             bits.append("waits: " + ", ".join(waits))
         title = " ".join(str(s.get("title") or "").split())[:80]
-        lines.append(f"- {s['dispatch_id']} 「{title}」: " + " · ".join(b for b in bits if b))
+        lines.append(f"- {s['dispatch_id']} \"{title}\": " + " · ".join(b for b in bits if b))
     if not lines:
         return None, {}
     body = "\n".join(lines) + (f"\n- and {more} more that changed: `swarm_out runs`" if more else "")

@@ -2271,20 +2271,100 @@ def write_run(run_result: dict, root: Path) -> Path:
 # The five dimensions (core/eval_release.FIVE_DIMENSIONS), each one question. A case
 # belongs to the dimension its own `dimension` field names.
 DIMENSIONS = [
-    {"id": "cognition", "question": "它真的懂你的工作吗？", "subtitle": "Cognition — memory, recall, project docs, knowledge",
+    {"id": "cognition", "question": "Does it really understand your work?", "subtitle": "Cognition — memory, recall, project docs, knowledge",
      "when": "Quick check daily; offline cases every two weeks",
      "purpose": "Catch the agent losing or misusing what it knows about your work"},
-    {"id": "quality", "question": "对不对、有没有交付？", "subtitle": "Quality — correct, complete, not agreeing with a wrong premise",
+    {"id": "quality", "question": "Is it right, and did it deliver?", "subtitle": "Quality — correct, complete, not agreeing with a wrong premise",
      "when": "Offline cases every two weeks",
      "purpose": "Catch answers that are wrong, unfounded, or not what was asked"},
-    {"id": "responsibility", "question": "守不守边界和规矩？", "subtitle": "Responsibility — privacy, irreversible actions, isolation, your rules",
+    {"id": "responsibility", "question": "Does it keep to the boundaries and your rules?", "subtitle": "Responsibility — privacy, irreversible actions, isolation, your rules",
      "when": "Quick check daily; offline cases every two weeks",
      "purpose": "Catch the agent crossing a boundary or ignoring how you asked it to work"},
-    {"id": "cost", "question": "每轮花多少？", "subtitle": "Cost — no golden case; read from usage records online",
+    {"id": "cost", "question": "How much does each turn cost?", "subtitle": "Cost — no golden case; read from usage records online",
      "when": "Online scoring", "purpose": "Watch spend per turn"},
-    {"id": "performance", "question": "要等多久？", "subtitle": "Performance — no golden case; read from turn timings online",
+    {"id": "performance", "question": "How long do you wait?", "subtitle": "Performance — no golden case; read from turn timings online",
      "when": "Online scoring", "purpose": "Watch time per turn"},
 ]
+
+# The report's own words in the app's language (core/ui_language): English, or Chinese
+# when the app runs in Chinese. Same keys and placeholders in both tables.
+_DIMENSION_QUESTION_EN = {dim["id"]: dim["question"] for dim in DIMENSIONS}
+_DIMENSION_QUESTION_ZH = {
+    "cognition": "它真的懂你的工作吗？", "quality": "对不对、有没有交付？",
+    "responsibility": "守不守边界和规矩？", "cost": "每轮花多少？", "performance": "要等多久？",
+}
+_REPORT_EN = {
+    "html_lang": "en",
+    "headline": '"Am I still myself? Am I still good?"',
+    "verdict_release": "Release", "verdict_blocked": "Blocked",
+    "verdict_incomplete": "Incomplete", "verdict_legacy": "Old record",
+    "fu_title": "Suggested follow-up", "fu_none": "Nothing needs handling",
+    "evo_title": "Evolution suggestion",
+    "evo_sub": "Signals about the agent's behaviour; nothing is changed automatically",
+    "track_exec": "Programmatic + judge", "track_behavior": "Behavior",
+    "not_run_here": "not run this time",
+    "matrix_title": "Classification: cognitive dimension × proof strength (eval_method)",
+    "matrix_sub": ("Each cell = passed/total in this run. Empty = no case of that kind, or not "
+                   "run (e.g. the behavior tier pending)."),
+    "tiers_title": "Five dimensions by tier",
+    "tiers_sub": ("Each cell = passed/total in this run. Red-line and gate cases decide the "
+                  "release; watch cases are only observed. Trend = the pass share of red-line "
+                  "and gate cases over comparable full runs, no weighted total."),
+    "th_red": "Red line", "th_gate": "Gate", "th_watch": "Watch",
+    "check_redline": "Red line · any failure blocks",
+    "check_dimensions": "Each dimension passes its bar · no weighted total",
+    "check_denominator": "Denominator check · what did not run cannot be left out",
+    "check_record": "Recorded reasoning · why this version is released",
+    "fixed_recent": "Recently fixed:", "all_passed": "Everything passed this run",
+    "n_failed": "{n} failed this run; see the details in each dimension",
+    "growth_title": "Growth Intelligence — evidence of getting better",
+    "golden_sub": "cases defined", "stable_sub": "behaviour settled (passed 10+ times in a row)",
+    "active_sub": "actively watched",
+    "offline_sub": "offline cases (a real agent in a sample workspace)",
+    "reconcile": "{executed} run this time + {pending} pending",
+    "orphans": "{n} orphan (cases retired since the run)",
+}
+_REPORT_ZH = {
+    "html_lang": "zh",
+    "headline": "\"我还是我吗？还好吗？\"",
+    "verdict_release": "可以放行", "verdict_blocked": "不放行",
+    "verdict_incomplete": "结论不完整", "verdict_legacy": "旧记录",
+    "fu_title": "Suggested follow-up · 需要你注意的事", "fu_none": "Nothing needs handling · 没有需要处理的事",
+    "evo_title": "Evolution suggestion · 进化建议",
+    "evo_sub": "Signals about the agent's behaviour; nothing is changed automatically · agent 行为信号，不会自动改任何东西",
+    "track_exec": "机械+判断层 (programmatic+judge)", "track_behavior": "行为层 (behavior)",
+    "not_run_here": "未在本次运行",
+    "matrix_title": "分类矩阵 — Classification: cognitive dimension × proof strength (eval_method)",
+    "matrix_sub": "每格 = 本次运行的 passed/total。空格 = 该类无 case 或未运行（如 behavior 层 pending）。",
+    "tiers_title": "五个维度 · 按档位 — Five dimensions by tier",
+    "tiers_sub": "每格 = 本次 通过/总数。红线、门禁决定能否放行；观测只看不拦。趋势 = 可比全量里红线和门禁项的通过比例，不做加权总分。",
+    "th_red": "红线", "th_gate": "门禁", "th_watch": "观测",
+    "check_redline": "红线 · 一票否决",
+    "check_dimensions": "分维过线 · 不做总分加权",
+    "check_denominator": "分母核对 · 没跑的不能排除",
+    "check_record": "口径留痕 · 这一版为什么放行",
+    "fixed_recent": "最近修复:", "all_passed": "本次全部通过",
+    "n_failed": "本次 {n} 条未通过，见各维度里的明细",
+    "growth_title": "Growth Intelligence — 越来越好的证据",
+    "golden_sub": "定义的 case 总数", "stable_sub": "行为已固化（连续通过 10+ 次）",
+    "active_sub": "活跃监测中",
+    "offline_sub": "离线考题（真 agent 在样例工作区里跑）",
+    "reconcile": "本次运行 {executed} + 待运行 {pending}",
+    "orphans": "{n} orphan (run 中已退役 case)",
+}
+
+
+def _report_text(lang: str | None = None) -> dict:
+    """The report's text table for *lang* (default: the app's language)."""
+    if lang is None:
+        from core.ui_language import ui_language
+        lang = ui_language()
+    return _REPORT_ZH if lang == "zh" else _REPORT_EN
+
+
+def _dim_question(dim: dict, lang: str) -> str:
+    table = _DIMENSION_QUESTION_ZH if lang == "zh" else _DIMENSION_QUESTION_EN
+    return table.get(dim["id"], dim["question"])
 
 
 def _dim_color(passed: int, total: int) -> str:
@@ -2585,27 +2665,30 @@ def _report_follow_ups(run_result: dict, history: list, golden_set: dict, root: 
                             include_session_text=False)
 
 
-def _render_follow_ups(items: list) -> str:
+def _render_follow_ups(items: list, lang: str = "en") -> str:
     """Two sections from one list (core.eval_followups ``kind``): what needs the
-    user's attention about the evaluation, then the agent-behaviour signals."""
+    user's attention about the evaluation, then the agent-behaviour signals. Each item's
+    own text is English; in Chinese (*lang* ``zh``) its Chinese text follows."""
     esc = html_mod.escape
+    T = _report_text(lang)
 
     def rows(group):
         out = []
         for i in group:
             sub = " · ".join(p for p in (i.get("why") or "", i["action"]["en"]) if p)
+            zh = (f' <span class="fu-sub">{esc(i["what"].get("zh") or "")}</span>'
+                  if lang == "zh" and i["what"].get("zh") else "")
             out.append(f'<div class="fu fu-{esc(i["severity"])}"><div class="fu-what">{esc(i["what"]["en"])}'
-                       f' <span class="fu-sub">{esc(i["what"]["zh"])}</span></div>'
+                       f'{zh}</div>'
                        f'<div class="fu-sub">{esc(sub)}</div></div>')
         return "".join(out)
     needs = [i for i in items if i.get("kind") != "evolution"]
     evolution = [i for i in items if i.get("kind") == "evolution"]
-    html = ('<div class="follow-ups"><h2>Suggested follow-up · 需要你注意的事</h2>'
-            + (rows(needs) or '<p class="fu-none">Nothing needs handling · 没有需要处理的事</p>') + "</div>")
+    html = (f'<div class="follow-ups"><h2>{esc(T["fu_title"])}</h2>'
+            + (rows(needs) or f'<p class="fu-none">{esc(T["fu_none"])}</p>') + "</div>")
     if evolution:
-        html += ('<div class="follow-ups"><h2>Evolution suggestion · 进化建议</h2>'
-                 '<p class="fu-sub">Signals about the agent\'s behaviour; nothing is changed automatically · '
-                 'agent 行为信号，不会自动改任何东西</p>' + rows(evolution) + "</div>")
+        html += (f'<div class="follow-ups"><h2>{esc(T["evo_title"])}</h2>'
+                 f'<p class="fu-sub">{esc(T["evo_sub"])}</p>' + rows(evolution) + "</div>")
     return html
 
 
@@ -2621,6 +2704,9 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     - First section: Suggested follow-up (core.eval_followups.build_follow_ups)
     """
 
+    from core.ui_language import ui_language
+    lang = ui_language()
+    T = _report_text(lang)
     cases = golden_set["cases"]
     case_results = {r["id"]: r for r in run_result["cases"]}
 
@@ -2764,8 +2850,8 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     behavior_pending = behavior_total - behavior_run
 
     two_track_html = f'''<div class="two-track">
-        <span class="track track-exec">机械+判断层 (programmatic+judge): <strong>{exec_passed}/{exec_total}</strong> ({exec_pct}%)</span>
-        <span class="track track-behavior">行为层 (behavior): <strong>{f"{executed_by_method['behavior']['passed']}/{behavior_run} run" if behavior_run else f"⏸️ {behavior_pending} pending — 未在本次运行"}</strong></span>
+        <span class="track track-exec">{T["track_exec"]}: <strong>{exec_passed}/{exec_total}</strong> ({exec_pct}%)</span>
+        <span class="track track-behavior">{T["track_behavior"]}: <strong>{f"{executed_by_method['behavior']['passed']}/{behavior_run} run" if behavior_run else f"⏸️ {behavior_pending} pending — {T['not_run_here']}"}</strong></span>
     </div>'''
 
     # Classification matrix: cognitive dimension × eval_method proof strength.
@@ -2779,7 +2865,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             else:
                 col = _dim_color(cell["passed"], cell["total"])
                 cells += f'<td class="mx-cell" style="color:{col}">{cell["passed"]}/{cell["total"]}</td>'
-        _mrow += f'<tr><td class="mx-dim">{html_mod.escape(dim["question"])}</td>{cells}</tr>'
+        _mrow += f'<tr><td class="mx-dim">{html_mod.escape(_dim_question(dim, lang))}</td>{cells}</tr>'
     # Per-dimension rows: this run's counts per tier, and a trend of the gate cases'
     # pass share over comparable runs that carry a dimension_summary (records written
     # before the release decision have none and are left out, never guessed).
@@ -2806,24 +2892,23 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         latest = series[-1] if series else None
         col = _dim_color(latest, 100) if latest is not None else "#6b7280"
         spark = _mini_sparkline(series, color=col)
-        _dim_trend_rows += (f'<tr><td class="mx-dim">{html_mod.escape(dim["question"])}</td>'
+        _dim_trend_rows += (f'<tr><td class="mx-dim">{html_mod.escape(_dim_question(dim, lang))}</td>'
                             f'<td class="mx-cell">{_tier_cell(dim["id"], "red")}</td><td class="mx-cell">{_tier_cell(dim["id"], "gate")}</td>'
                             f'<td class="mx-cell">{_tier_cell(dim["id"], "watch")}</td><td class="dt-spark">{spark}</td></tr>')
 
     matrix_html = f'''<div class="matrix-section">
-        <h3>分类矩阵 — Classification: cognitive dimension × proof strength (eval_method)</h3>
-        <p class="matrix-sub">每格 = 本次运行的 passed/total。空格 = 该类无 case 或未运行（如 behavior 层 pending）。</p>
+        <h3>{T["matrix_title"]}</h3>
+        <p class="matrix-sub">{T["matrix_sub"]}</p>
         <table class="matrix"><thead><tr><th></th>{"".join(f"<th>{_METHOD_LABEL[m]}</th>" for m in _METHOD_ORDER)}</tr></thead>
         <tbody>{_mrow}</tbody></table>
-        <h3 style="margin-top:1.25rem;">五个维度 · 按档位 — Five dimensions by tier</h3>
-        <p class="matrix-sub">每格 = 本次 通过/总数。红线、门禁决定能否放行；观测只看不拦。趋势 = 可比全量里红线和门禁项的通过比例，不做加权总分。</p>
-        <table class="matrix"><thead><tr><th></th><th>红线</th><th>门禁</th><th>观测</th><th>Trend</th></tr></thead>
+        <h3 style="margin-top:1.25rem;">{T["tiers_title"]}</h3>
+        <p class="matrix-sub">{T["tiers_sub"]}</p>
+        <table class="matrix"><thead><tr><th></th><th>{T["th_red"]}</th><th>{T["th_gate"]}</th><th>{T["th_watch"]}</th><th>Trend</th></tr></thead>
         <tbody>{_dim_trend_rows}</tbody></table>
     </div>'''
 
     # The release checks in order (core/eval_release): the headline's evidence.
-    _CHECK_LABEL = {"redline": "红线 · 一票否决", "dimensions": "分维过线 · 不做总分加权",
-                    "denominator": "分母核对 · 没跑的不能排除", "record": "口径留痕 · 这一版为什么放行"}
+    _CHECK_LABEL = {k: T["check_" + k] for k in ("redline", "dimensions", "denominator", "record")}
     _checks_li = ""
     for ck in release.get("checks") or []:
         mark = "✅" if ck.get("passed") else "❌"
@@ -2872,42 +2957,42 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     # previous run also had is not a fix and not clean either.
     failed_now = [c["id"] for c in run_result.get("cases", []) if c.get("status") == "failed"]
     if recently_fixed:
-        _fixed_html = f'<div class="growth-fixed"><strong>最近修复:</strong> {html_mod.escape(", ".join(recently_fixed))}</div>'
+        _fixed_html = f'<div class="growth-fixed"><strong>{T["fixed_recent"]}</strong> {html_mod.escape(", ".join(recently_fixed))}</div>'
     elif not failed_now:
-        _fixed_html = '<div class="growth-fixed"><span class="growth-clean">本次全部通过</span></div>'
+        _fixed_html = f'<div class="growth-fixed"><span class="growth-clean">{T["all_passed"]}</span></div>'
     else:
-        _fixed_html = f'<div class="growth-fixed">本次 {len(failed_now)} 条未通过，见各维度里的明细</div>'
+        _fixed_html = f'<div class="growth-fixed">{T["n_failed"].format(n=len(failed_now))}</div>'
     _other_card = (f'''<div class="growth-card">
                 <div class="growth-value">{len(other_cases)}</div>
                 <div class="growth-label">Other</div>
                 <div class="growth-sub">draft / live / archived</div>
             </div>''' if other_cases else "")
     growth_html = f'''<div class="growth-section">
-        <h3>Growth Intelligence — 越来越好的证据</h3>
+        <h3>{T["growth_title"]}</h3>
         <div class="growth-grid">
             <div class="growth-card">
                 <div class="growth-value">{golden_size}</div>
                 <div class="growth-label">Golden Set</div>
-                <div class="growth-sub">定义的 case 总数{f" (+{growth_delta} since first run)" if growth_delta > 0 else ""}</div>
+                <div class="growth-sub">{T["golden_sub"]}{f" (+{growth_delta} since first run)" if growth_delta > 0 else ""}</div>
             </div>
             <div class="growth-card">
                 <div class="growth-value">{len(stable_cases)}</div>
                 <div class="growth-label">Stable</div>
-                <div class="growth-sub">行为已固化（连续通过 10+ 次）</div>
+                <div class="growth-sub">{T["stable_sub"]}</div>
             </div>
             <div class="growth-card">
                 <div class="growth-value">{len(active_cases)}</div>
                 <div class="growth-label">Active</div>
-                <div class="growth-sub">活跃监测中</div>
+                <div class="growth-sub">{T["active_sub"]}</div>
             </div>
             <div class="growth-card">
                 <div class="growth-value">{len(offline_cases)}</div>
                 <div class="growth-label">Offline</div>
-                <div class="growth-sub">离线考题（真 agent 在样例工作区里跑）</div>
+                <div class="growth-sub">{T["offline_sub"]}</div>
             </div>
             {_other_card}
         </div>
-        <div class="growth-reconcile">Stable {len(stable_cases)} + Active {len(active_cases)} + Offline {len(offline_cases)}{f" + Other {len(other_cases)}" if other_cases else ""} = {golden_size} · 本次运行 {executed} + 待运行 {pending} = {golden_size}{f" · {orphans} orphan (run 中已退役 case)" if orphans else ""}</div>
+        <div class="growth-reconcile">Stable {len(stable_cases)} + Active {len(active_cases)} + Offline {len(offline_cases)}{f" + Other {len(other_cases)}" if other_cases else ""} = {golden_size} · {T["reconcile"].format(executed=executed, pending=pending)} = {golden_size}{" · " + T["orphans"].format(n=orphans) if orphans else ""}</div>
         {_fixed_html}
     </div>'''
 
@@ -2973,7 +3058,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             <div class="dim-header">
                 <span class="dim-num" style="color:{color}">{circled}</span>
                 <div class="dim-title">
-                    <h3>{d["question"]}</h3>
+                    <h3>{html_mod.escape(_dim_question(d, lang))}</h3>
                     <p class="dim-subtitle">{d["subtitle"]}</p>
                 </div>
                 <div class="dim-score" style="color:{color}">
@@ -3015,10 +3100,10 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     '''
 
     # First section: what needs the user's attention (eval_followups).
-    follow_html = _render_follow_ups(_report_follow_ups(run_result, history, golden_set, root))
+    follow_html = _render_follow_ups(_report_follow_ups(run_result, history, golden_set, root), lang)
 
     html = f'''<!DOCTYPE html>
-<html lang="en">
+<html lang="{T["html_lang"]}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -3152,9 +3237,9 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
 <body>
 <div class="container">
     <div class="header">
-        <h1>OS Eval — "我还是我吗？还好吗？"</h1>
+        <h1>OS Eval — {html_mod.escape(T["headline"])}</h1>
         <p class="subtitle">SwarmAI Proprioception System — Continuous Self-Evaluation</p>
-        <div class="score-ring verdict-{html_mod.escape(str(release.get("verdict", "legacy")))}">{ {"release": "可以放行", "blocked": "不放行", "incomplete": "结论不完整"}.get(release.get("verdict"), "旧记录") }</div>
+        <div class="score-ring verdict-{html_mod.escape(str(release.get("verdict", "legacy")))}">{ T["verdict_" + release["verdict"]] if release.get("verdict") in ("release", "blocked", "incomplete") else T["verdict_legacy"] }</div>
         <p class="subtitle">{html_mod.escape(str(release.get("reason", "")))}</p>
         {f'<div class="error-banner" style="background:#ef4444;color:#fff;padding:8px 12px;border-radius:6px;margin:8px 0;font-weight:600;">🔴 {total_error} case(s) ERRORED — judge infra failed; they count as not run.</div>' if total_error else ''}
         <div class="meta-row">

@@ -35,8 +35,13 @@ from typing import Any, Optional
 
 from core.inbox import store
 from core.inbox.models import ItemState, Lane, Message, SendStatus, SourceCategory, ThreadRef
+from core.ui_language import text
 
 logger = logging.getLogger(__name__)
+
+# The note under a submitted draft, in the app's language (core/ui_language)
+_NOTE_EN = {"drafted_by": "Drafted by {producer}"}
+_NOTE_ZH = {"drafted_by": "由 {producer} 起草"}
 
 _PRODUCER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SCHEMA_VERSION = 20
@@ -168,7 +173,7 @@ async def submit(req: SubmitRequest) -> dict:
         if latest is None or latest["text"] != req.draft:
             await db.inbox_insert_draft({
                 "id": store.new_id("dr"), "item_id": item_id, "text": req.draft, "lang": "",
-                "note": f"由 {req.producer} 起草", "model": f"submit:{req.producer}",
+                "note": text(_NOTE_EN, _NOTE_ZH, "drafted_by", producer=req.producer), "model": f"submit:{req.producer}",
                 "created_at": store.ts(store.now())})
     return {"item_id": item_id, "created": created}
 

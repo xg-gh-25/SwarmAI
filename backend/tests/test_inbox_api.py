@@ -113,14 +113,14 @@ async def test_reads_return_their_shapes(env):
     assert (counts.reply, counts.aware, counts.proposed) == (1, 1, 0)
     items = [contract.ItemOut(**x) for x in (await http.get("/api/inbox/items?lane=reply")).json()]
     assert [i.id for i in items] == [item["id"]]
-    assert items[0].channel_label == "fake" and items[0].where == "fake 私信"
+    assert items[0].channel_label == "fake" and items[0].where == "fake DM"
     assert (await http.get("/api/inbox/items?lane=skip")).status_code == 422
     target = contract.TargetOut(**(await http.get(f"/api/inbox/items/{item['id']}/target")).json())
     assert target.recipients == ["priya@example.com"] and target.can_send
     sends = contract.SendsOut(**(await http.get("/api/inbox/sends")).json())
     assert sends.need_you == [] and sends.sent == []
     sources = [contract.SourceOut(**s) for s in (await http.get("/api/inbox/sources")).json()]
-    assert [(s.id, s.health, s.identity, s.detail) for s in sources] == [("s1", "ok", "@me", "关注 2 个仓库")]
+    assert [(s.id, s.health, s.identity, s.detail) for s in sources] == [("s1", "ok", "@me", "watching 2 repos")]
     summary = contract.TrendSummaryOut(**(await http.get("/api/inbox/trends/summary")).json())
     assert summary.points == [] and summary.watched_repos == 2 and summary.feeds == 0
     assert (await http.get("/api/inbox/items/nope/target")).status_code == 404
@@ -301,7 +301,7 @@ async def test_feed_list_and_the_feed_source(env):
     listed = (await http.get("/api/inbox/feeds")).json()
     assert listed["count"] == 1 and listed["sources"][0]["id"] == "hn"
     sources = {s["id"]: s for s in (await http.get("/api/inbox/sources")).json()}
-    assert sources["feed"]["detail"] == "1 个 feed" and sources["feed"]["interval_s"] == 21600
+    assert sources["feed"]["detail"] == "1 feed" and sources["feed"]["interval_s"] == 21600
     await http.put("/api/inbox/feeds/hn", json={"enabled": False}, headers=fx.UA)
     await http.get("/api/inbox/sources")
     assert (await db.inbox_get_source("feed"))["enabled"] == 0, "no enabled feed: the source is off"

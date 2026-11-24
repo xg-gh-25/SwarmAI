@@ -841,7 +841,7 @@ def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list
         session_name = owner_title or owner[:8]
         items.append(AttentionItem(
             id=f"swarm_out:wait:{dispatch_id}:{request_id}", source="swarm_out", tier=TIER_BLOCKING,
-            brain=None, title=title, summary=f"「{run_title}」 · from session 「{session_name}」",
+            brain=None, title=title, summary=f'"{run_title}" · from session "{session_name}"',
             detail=why,
             # the agent's escalation reason is shown (detail), never put in the message a
             # click sends in the person's voice: it may echo what the Hive wrote
@@ -958,7 +958,7 @@ def _ask_item(r: dict, a: dict) -> AttentionItem:
               f"Agent's judgment: {a.get('judgment') or ''}\nWhy it could not decide: {a.get('why') or ''}")
     return AttentionItem(
         id=f"swarm_out:ask:{dispatch_id}", source="swarm_out", tier=TIER_BLOCKING, brain=None,
-        title="Keep or revert what an agent landed", summary=f"「{run_title}」", detail=detail[:1500],
+        title="Keep or revert what an agent landed", summary=f'"{run_title}"', detail=detail[:1500],
         dispatch={"message": _prompt("Open Swarm Out: keep or revert what an agent landed.",
                                      [("Run", run_title)], [f"run {dispatch_id}"]),
                   "context": {"kind": "swarm_out", "focus": dispatch_id}})

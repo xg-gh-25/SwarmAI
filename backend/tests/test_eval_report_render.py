@@ -179,8 +179,8 @@ def _run(status, release=True):
 def test_the_report_headline_is_the_release_verdict_not_a_score(tmp_path):
     run, golden = _run("failed")
     html = Path(generate_html_report(run, golden, tmp_path / "a")).read_text()
-    assert "verdict-blocked" in html and "不放行" in html
-    assert "分维过线" in html and "分母核对" in html          # the four checks are listed
+    assert "verdict-blocked" in html and "Blocked" in html
+    assert "Each dimension passes its bar" in html and "Denominator check" in html          # the four checks are listed
     assert 'class="score-ring verdict-blocked"' in html
     import re
     ring = re.search(r'class="score-ring[^"]*">([^<]*)<', html).group(1)
@@ -191,7 +191,7 @@ def test_the_report_headline_is_the_release_verdict_not_a_score(tmp_path):
 def test_a_record_without_a_release_block_reads_as_legacy(tmp_path):
     run, golden = _run("passed", release=False)
     html = Path(generate_html_report(run, golden, tmp_path / "b")).read_text()
-    assert "旧记录" in html
+    assert "Old record" in html
 
 
 # ─── _report_populations (single-source counts) ──────────────────────────────
@@ -284,6 +284,6 @@ def test_the_report_says_all_passed_only_when_nothing_failed(tmp_path):
         return Path(generate_html_report(run, {"cases": [case]}, tmp_path / sub)).read_text()
 
     failed, passed = render("failed", "f"), render("passed", "p")
-    assert "本次 1 条未通过" in failed and "本次全部通过" not in failed
-    assert "本次全部通过" in passed
+    assert "1 failed this run" in failed and "Everything passed this run" not in failed
+    assert "Everything passed this run" in passed
     assert "Flywheel" not in passed and "correction → case" not in passed

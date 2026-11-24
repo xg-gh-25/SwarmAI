@@ -133,7 +133,7 @@ def _shape(questions: Any) -> str:
 
 def _marker(dispatch_id: str, request_id: str, title: str, hive: str) -> str:
     title = " ".join(str(title or "").split())[:80]
-    return f"[Hive · {dispatch_id} · {request_id}] 「{title}」 on {hive} asks:"
+    return f'[Hive · {dispatch_id} · {request_id}] "{title}" on {hive} asks:'
 
 
 def _risk(o: dict[str, Any]) -> str:
