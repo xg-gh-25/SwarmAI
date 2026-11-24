@@ -965,7 +965,7 @@ def _ask_item(r: dict, a: dict) -> AttentionItem:
                   "context": {"kind": "swarm_out", "focus": dispatch_id}})
 
 
-NEEDS_ACCOUNT_TITLE = "Background cognition needs the SwarmAI AWS account"
+NEEDS_ACCOUNT_TITLE = "Background cognition's Bedrock credentials are not working"
 
 
 def _needs_account(conn: Any) -> str:
@@ -999,10 +999,82 @@ def _needs_account(conn: Any) -> str:
     return found
 
 
+def _background_failures() -> list[dict]:
+    """The credentials failures of background model calls recorded in
+    ``core.background_credentials`` (newest first). The record is cleared by the next
+    call that gets a reply from Bedrock, CDF's extractions included (they pass the same
+    ``jobs.bedrock._call``); a CDF attempt is not read as proof here, since several CDF
+    sources record an attempt without calling the model."""
+    try:
+        from core import background_credentials
+        return background_credentials.failures()
+    except Exception as exc:  # noqa: BLE001 - fail-soft: no item, never a crash
+        logger.warning("attention: background credentials record unreadable: %s", exc)
+        return []
+
+
+# The plain name of a background caller (its usage feature) in the credentials item
+_CALLER_LABELS = {
+    "summarize.session": "session summaries",
+    "eval.session_score": "session scoring",
+    "job.skill_proposer": "the skill proposer job",
+    "job.memory_health": "the memory health job",
+    "eval.judge": "OS Eval judges",
+    "eval.cdf_batch": "the CDF batch evaluation",
+}
+
+
+def _credentials_item(cdf_failure: str, others: list[dict]) -> Optional[AttentionItem]:
+    """The ONE item for background cognition that cannot reach Bedrock for lack of
+    credentials, whether CDF (*cdf_failure*) or another background caller (*others*)
+    failed, or both. Worded, and pointed at the Settings tab, for how this install signs
+    in to Bedrock (``aws_account.get_chat_via``): a Bedrock API key is entered on LLM
+    Models, an AWS sign-in (the Swarm AWS account, a profile or SSO) on Swarm AWS Account."""
+    if not cdf_failure and not others:
+        return None
+    try:
+        from core import aws_account
+        via = aws_account.get_chat_via()
+    except Exception as exc:  # noqa: BLE001 - unknown mode: the AWS sign-in wording
+        logger.warning("attention: Bedrock sign-in mode unknown (%s); AWS wording used", exc)
+        via = "aws"
+    if via == "bedrock_key":
+        why = ("Background cognition calls Bedrock with your Bedrock API key, and Bedrock "
+               "did not accept it (missing, expired or invalid).")
+        ask = ("Open Settings → LLM Models and enter a working Bedrock API key, so "
+               "background cognition can run again.")
+        tab = "ai-models"
+    else:
+        why = ("Background cognition calls Bedrock with your AWS sign-in (the Swarm AWS "
+               "account, or this computer's AWS profile or SSO), and no working AWS "
+               "credentials were found.")
+        ask = ("Open Settings → Swarm AWS Account and sign in again or connect an "
+               "account, so background cognition can run again.")
+        tab = "aws-account"
+    what: list[str] = []
+    for name in (["cdf"] if cdf_failure else []) + [str(r.get("source") or "") for r in others]:
+        label = _CALLER_LABELS.get(name) or (
+            "Cognitive Distillation" if name.startswith("cdf") or name == "user_check" else name)
+        if label and label not in what:
+            what.append(label)
+    last = cdf_failure or str(others[0].get("reason") or "")
+    summary = _one_line(last)
+    failed = _one_line(", ".join(what), 200)
+    return AttentionItem(
+        id="ingestion:needs_account", source="ingestion", tier=TIER_REVIEW, brain=None,
+        title=NEEDS_ACCOUNT_TITLE, summary=summary,
+        detail=_one_line(f"{why} Failed: {failed}. {last}", 400),
+        dispatch={"message": _prompt(ask, [("Failed", failed), ("Last error", summary)]),
+                  "context": {"kind": "aws_account", "settings_tab": tab}},
+    )
+
+
 def _collect_ingestion() -> list[AttentionItem]:
     """Unresolved CDF anomalies, one item per kind; a missing DB is silent. A model call
-    that failed for lack of AWS credentials is ONE item that opens Settings → SwarmAI
-    AWS Account, and a poison of the same cause is not shown again as a generic one."""
+    of background cognition (CDF's, or another caller's recorded in
+    ``core.background_credentials``) that failed for lack of credentials is ONE item
+    (``_credentials_item``), and a poison of the same cause is not shown again as a
+    generic one."""
     import json
     import sqlite3
     from contextlib import closing
@@ -1026,6 +1098,9 @@ def _collect_ingestion() -> list[AttentionItem]:
         "missing_section": "Add the missing governed-file section so Cognitive Distillation can continue.",
         "stalled": "Run `\"$SWARM_BACKEND_BIN\" ingest status`, find why Cognitive Distillation stopped moving and fix the cause.",
     }
+    rows: list = []
+    stalled: list = []
+    account_failure = ""
     try:
         from core.ingestion.api import connect_ro
         with closing(connect_ro()) as conn:
@@ -1037,26 +1112,16 @@ def _collect_ingestion() -> list[AttentionItem]:
             stalled = stalls(conn)
             account_failure = _needs_account(conn)
     except (OSError, sqlite3.Error):
-        return []
+        rows, stalled, account_failure = [], [], ""  # CDF's anomalies stay silent
     except Exception as exc:
         logger.warning("attention: ingestion source failed: %s", exc)
-        return []
+        rows, stalled, account_failure = [], [], ""
 
     items: list[AttentionItem] = []
     seen: set[str] = set()
-    if account_failure:
-        summary = _one_line(account_failure)
-        items.append(AttentionItem(
-            id="ingestion:needs_account", source="ingestion", tier=TIER_REVIEW, brain=None,
-            title=NEEDS_ACCOUNT_TITLE, summary=summary,
-            detail=_one_line("Background cognition (Cognitive Distillation, background jobs) "
-                             "calls Bedrock with the SwarmAI AWS account, and no working "
-                             "AWS credentials were found. " + account_failure, 400),
-            dispatch={"message": _prompt("Open Settings → SwarmAI AWS Account and connect or "
-                                         "sign in to the account, so background cognition "
-                                         "can run again.", [("Last error", summary)]),
-                      "context": {"kind": "aws_account", "settings_tab": "aws-account"}},
-        ))
+    credentials = _credentials_item(account_failure, _background_failures())
+    if credentials is not None:
+        items.append(credentials)
     if stalled:
         # computed from the store, not an event: it clears by itself once CDF moves
         summary = _one_line("; ".join(stalled))
@@ -1076,8 +1141,8 @@ def _collect_ingestion() -> list[AttentionItem]:
         except (TypeError, ValueError):
             detail = {"detail": str(row["detail"] or "")}
         if kind == "poison" and AWS_CREDENTIALS_REASON in str(detail.get("reason") or ""):
-            if account_failure:
-                continue        # the same cause, already the one "needs the account" item
+            if credentials is not None:
+                continue        # the same cause, already the one credentials item
         seen.add(kind)
         summary = _one_line(str(detail.get("summary") or detail.get("reason") or kind))
         tier = TIER_BLOCKING if kind in {"user_race", "writer_unknown"} else TIER_REVIEW

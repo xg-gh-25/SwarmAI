@@ -673,6 +673,15 @@ def _reply_parts(resp: dict) -> tuple[str, list]:
     return (resp or {}).get("stopReason") or "", blocks
 
 
+def _current_feature() -> str | None:
+    """The enclosing ``usage_accounting.attribute`` block's feature, else None."""
+    try:
+        from core import usage_accounting
+        return usage_accounting.current_feature()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperature: float,
           region: str | None, read_timeout: int | None, max_attempts: int | None,
           tool_config: dict | None,
@@ -682,13 +691,21 @@ def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperatu
     inference: dict = {"maxTokens": max_tokens}
     if supports_custom_temperature(model_id):  # opus 4.7+ reject a custom temperature
         inference["temperature"] = temperature
-    resp = converse_with_retry(
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        system=[{"text": system}] if system else [],
-        inference_config=inference,
-        model_id=model_id, region=region, read_timeout=read_timeout,
-        max_attempts=max_attempts, tool_config=tool_config, feature=feature,
-    )
+    from core import background_credentials
+    try:
+        resp = converse_with_retry(
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            system=[{"text": system}] if system else [],
+            inference_config=inference,
+            model_id=model_id, region=region, read_timeout=read_timeout,
+            max_attempts=max_attempts, tool_config=tool_config, feature=feature,
+        )
+    except Exception as exc:
+        # many callers only log a failed call: a credentials failure is recorded for the
+        # one "Bedrock credentials are not working" attention item (core.background_credentials)
+        background_credentials.note_failure(feature or _current_feature(), exc)
+        raise
+    background_credentials.note_reply()  # a reply: the credentials work again
     if usage is not None:
         u = (resp or {}).get("usage") or {}
         usage["input_tokens"] = int(u.get("inputTokens") or 0)

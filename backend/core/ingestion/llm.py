@@ -24,7 +24,8 @@ from .prompts import prompt_hash
 T = TypeVar("T")
 
 # The reason recorded when background cognition cannot reach Bedrock for lack of AWS
-# credentials; the attention overlay turns it into one "needs the account" item.
+# credentials; the attention overlay turns it into one credentials item (with the failures
+# other background callers record in core.background_credentials).
 AWS_CREDENTIALS_REASON = "judge_unavailable:aws_credentials"
 
 # AWS error codes that mean "these credentials are missing, expired or not accepted"

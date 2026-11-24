@@ -3,8 +3,9 @@
 - A Bedrock call of the CDF extractor that fails because no AWS credentials resolve, or
   because AWS rejects them, is recorded with the reason ``judge_unavailable:aws_credentials``
   (core/ingestion/llm.py); any other failure is recorded as before.
-- The attention overlay then shows ONE item, "Background cognition needs the SwarmAI AWS
-  account", that opens Settings -> SwarmAI AWS Account, instead of a generic failure.
+- The attention overlay then shows ONE item, "Background cognition's Bedrock credentials
+  are not working", that opens Settings -> Swarm AWS Account (LLM Models for a Bedrock
+  API key: tests/test_background_credentials.py), instead of a generic failure.
 - Once an extraction succeeds again the item is gone.
 """
 from __future__ import annotations
@@ -109,11 +110,11 @@ def test_one_needs_account_item(store, monkeypatch):
     store.commit()
 
     items = authority._collect_ingestion()
-    account = [i for i in items if i.title == "Background cognition needs the SwarmAI AWS account"]
+    account = [i for i in items if i.title == authority.NEEDS_ACCOUNT_TITLE]
     assert len(account) == 1
     item = account[0]
     assert item.dispatch["context"] == {"kind": "aws_account", "settings_tab": "aws-account"}
-    assert "Settings" in item.dispatch["message"] and "SwarmAI AWS Account" in item.dispatch["message"]
+    assert "Settings → Swarm AWS Account" in item.dispatch["message"]
     # the generic "repeatedly failed" item is not shown for the same cause
     assert not [i for i in items if i.dispatch["context"].get("kind") == "poison"]
 

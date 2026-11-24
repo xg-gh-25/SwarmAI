@@ -6,7 +6,8 @@ calling a **helper writer**, a function in a non-marker module that writes, dire
 or through another helper (calls resolved across modules through imports,
 ``self`` / ``cls`` and class names). A writer in a marker module is a hit itself, so
 the chain stops there. The sanctioned writers (``EXEMPT``: the CDF writer,
-materializer and governed editor) are never hits and never helpers. The
+materializer and governed editor, and the modules that write only one fixed file of
+their own in the data dir) are never hits and never helpers. The
 caller decides whether a hit is a real governed write or a documented exemption
 (``tests/cdf_materializer_allowlist.txt``).
 
@@ -37,6 +38,9 @@ EXEMPT = frozenset({
     "core/ingestion/materializer.py",
     "core/ingestion/governed_edit.py",
     "core/ingestion/writer.py",  # the single CDF writer (journaled plans + materializer)
+    # writes only <data dir>/background_credentials.json, reached from every
+    # jobs.bedrock model call (_call): never a governed file
+    "core/background_credentials.py",
 })
 # Every production source under backend/: whole top-level packages and modules.
 ROOTS = ("apps", "channels", "core", "database", "hooks", "jobs", "mcp_servers",
