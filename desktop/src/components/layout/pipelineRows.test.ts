@@ -25,7 +25,7 @@ import type { PipelineRunSummary } from '../../services/pipelines';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import {
   allRows, autonomy, brainChips, brainLanes, evalByBrain, evalMeasures, filterRows, fromHive, fromLocal, lineGroups, sections, speed,
-  stationCounts, timeGoes, tokenM, trackOf, verdictOf, wilson,
+  timeGoes, tokenM, trackOf, wilson,
 } from './pipelineRows';
 
 const NOW = Date.parse('2026-11-01T12:00:00Z');
@@ -222,7 +222,7 @@ describe('the Line', () => {
     expect(ended.pipelineStage).toBeNull();
   });
 
-  it('a Swarm Run\'s work packages sit under their lead; counts and the sentence read the same tracks', () => {
+  it('a Swarm Run\'s work packages sit under their lead', () => {
     const lead = fromLocal(run({ id: 'run_lead', status: 'running', stage: 'build', stages: STAGES(FULL, 'build') }), 'SwarmAI');
     const child = fromHive(hive({ dispatch_id: 'c1', state: 'running', stage: 'running', settle: null, parent_run: 'run_lead', wp: 'W1' },
       { ended: null, ended_at: null }))!;
@@ -234,9 +234,6 @@ describe('the Line', () => {
     expect(item.children.map((c) => c.row.key)).toEqual(['c1']);
     expect(g[0].items.some((i) => i.track.row.key === 'c1')).toBe(false);
     expect([g[0].count, g[0].running, g[0].waiting]).toEqual([3, 2, 1]);
-    const c = stationCounts(g);
-    expect([c.build.n, c.plan.n, c.plan.you]).toEqual([1, 1, 1]);
-    expect(verdictOf(g)).toMatchObject({ onLine: 3, running: 2, waiting: 1, stopped: 0, oldest: { station: 'plan' } });
   });
 
   it('rows without a stage record have no timing', () => {

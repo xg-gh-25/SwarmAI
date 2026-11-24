@@ -13,8 +13,8 @@
  *  - ``filterRows`` / ``brainChips``: the shared filter (everywhere / this machine / Hive,
  *    and a Brain made from the rows, with counts);
  *  - ``autonomy`` and ``speed``, read by the Eval measures;
- *  - the Line (``trackOf``, ``lineGroups``, ``stationCounts``, ``verdictOf``,
- *    ``timeGoes``) and the Eval (``evalMeasures``, ``evalByBrain``, ``wilson``), in the
+ *  - the Runs tab (``trackOf``, ``lineGroups``, ``timeGoes``) and the Eval
+ *    (``evalMeasures``, ``evalByBrain``, ``wilson``), in the
  *    CNTech & IVT S7 order;
  *  - ``brainLanes``: the runs of one Brain going now, one lane each, for the Brain map's
  *    loop (design 2026-11-01-brain-eval-and-runs §2.4: the map reads these same rows,
@@ -310,8 +310,6 @@ export const PIPELINE_STATIONS = ['evaluate', 'think', 'plan', 'build', 'review'
 export const RETURN_STATIONS = ['return', 'land', 'judge'] as const;
 export const STATIONS = [...PIPELINE_STATIONS, ...RETURN_STATIONS] as const;
 export type Station = typeof STATIONS[number];
-/** the machine gates: they decide from checks, never a person */
-export const GATES: Partial<Record<Station, string>> = { evaluate: 'Gate-0', review: 'Gate-2' };
 
 export interface Track {
   row: PipelineRow;
@@ -348,8 +346,29 @@ export function trackOf(r: PipelineRow): Track {
   return { row: r, at: isStation(r.pipelineStage) ? r.pipelineStage : null, kind, path, rounds };
 }
 
+/** How many runs wait on the person and how many stopped asking them (``sections``'
+ *  Waiting for you, split): the one count the tab's label and the Runs tab show. */
+export function waitingCounts(rows: PipelineRow[]): { waiting: number; stopped: number } {
+  const you = sections(rows).you;
+  const stopped = you.filter((r) => r.stage === 'stopped').length;
+  return { waiting: you.length - stopped, stopped };
+}
+
 export interface LineItem { track: Track; children: Track[] }
 export interface LineGroup { brain: string; items: LineItem[]; running: number; waiting: number; count: number }
+
+/** Every run in flight as one list, the most urgent first: a lead ranks by the most urgent
+ *  kind among it and its work packages (waiting on you, stopped, judged, working), then by
+ *  its place in ``sections`` (to answer > to confirm > stopped, the longest waiting first;
+ *  the running newest first), whatever its Brain. */
+const KIND_RANK: Record<ChipKind, number> = { you: 0, stop: 1, judge: 2, run: 3, done: 4 };
+export function inFlight(rows: PipelineRow[]): LineItem[] {
+  const s = sections(rows);
+  const place = new Map([...s.you, ...s.running].map((r, i) => [r.key, i]));
+  const rank = (it: LineItem) => Math.min(...[it.track, ...it.children].map((x) => KIND_RANK[x.kind]));
+  return lineGroups(rows).flatMap((g) => g.items)
+    .sort((a, b) => (rank(a) - rank(b)) || ((place.get(a.track.row.key) ?? 0) - (place.get(b.track.row.key) ?? 0)));
+}
 
 /** The runs in flight (waiting on you, running, stopped and asking) by Brain: a Hive run
  *  that is a work package of a local run sits under it. A Brain with more runs first. */
@@ -376,33 +395,6 @@ export function lineGroups(rows: PipelineRow[]): LineGroup[] {
       running: all.filter((t) => t.kind === 'run' || t.kind === 'judge').length,
       waiting: all.filter((t) => t.kind === 'you').length };
   }).sort((a, b) => (b.count - a.count) || a.brain.localeCompare(b.brain));
-}
-
-/** Each station's header: the runs at it and how many of them wait on the person. */
-export function stationCounts(groups: LineGroup[]): Record<Station, { n: number; you: number }> {
-  const out = Object.fromEntries(STATIONS.map((s) => [s, { n: 0, you: 0 }])) as Record<Station, { n: number; you: number }>;
-  for (const t of groups.flatMap((g) => g.items.flatMap((i) => [i.track, ...i.children]))) {
-    if (!t.at) continue;
-    out[t.at].n += 1;
-    if (t.kind === 'you') out[t.at].you += 1;
-  }
-  return out;
-}
-
-export interface Verdict {
-  onLine: number; running: number; waiting: number; stopped: number;
-  oldest: { title: string; station: Station | null; since: string } | null;
-}
-
-/** The one sentence above the Line, from the same tracks. */
-export function verdictOf(groups: LineGroup[]): Verdict {
-  const all = groups.flatMap((g) => g.items.flatMap((i) => [i.track, ...i.children]));
-  const you = all.filter((t) => t.kind === 'you').sort((a, b) => ms(a.row.since) - ms(b.row.since));
-  return {
-    onLine: all.length, running: all.filter((t) => t.kind === 'run' || t.kind === 'judge').length,
-    waiting: you.length, stopped: all.filter((t) => t.kind === 'stop').length,
-    oldest: you[0] ? { title: you[0].row.title, station: you[0].at, since: you[0].row.since } : null,
-  };
 }
 
 const median = (xs: number[]): number | null => {

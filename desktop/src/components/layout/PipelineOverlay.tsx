@@ -5,13 +5,10 @@
  *
  * Two tabs under one filter row (everywhere / this machine / Hive, and a Brain made
  * from the rows, with counts; switching tabs keeps it):
- * - **Line** (default): PipelineLine (design: the factory-line overlays,
- *   Knowledge/Designs/2026-11-18-swarmai-factory-line-overlays-mockup.html): one sentence,
- *   the runs waiting for you as rows (to answer > to confirm or accept > stopped, the
- *   longest waiting first), every run in flight as a track along the stage stations by
- *   Brain, where time goes, and the finished runs folded. A row: status dot, title, Brain,
- *   profile, where it ran (a neutral pill), the one autonomy word, what it asks of you,
- *   how long it waited, and Open session. The tab's label carries the waiting count.
+ * - **Runs** (default): PipelineLine (design: Knowledge/Mockups/2026-11-24-pipeline-
+ *   overlay-redesign.html): every run in flight as a card with its stages, the ones waiting
+ *   for you first and marked on the card; the runs that ended in the 30 days as rows; the
+ *   median minutes per stage. The tab's label carries the waiting count.
  * - **Eval**: PipelineEval (the CNTech & IVT S7 measures, in that order).
  * A click on a row opens its big card: a local run the new shell (PipelineRunCard,
  * GET /pipelines/{id}/view, its commands from the backend), a Hive run Swarm Out's card
@@ -31,20 +28,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import { classifyLoadError } from '../../services/api';
 import type { PipelineAnalytics } from '../../services/pipelines';
-import type { SwarmOutRun } from '../../services/swarmOut';
 import { Tabs } from '../overlay';
 import { OverlayError } from './OverlayState';
 import { BRAIN_TARGET, takeOverlayTarget } from '../../utils/overlayTarget';
 import { useRuns } from '../swarm-out/live';
-import { Dot } from '../swarm-out/LiveDispatches';
 import { RunOverlay } from '../swarm-out/RunOverlay';
-import { useOpenRun } from '../swarm-out/openSession';
-import { ago } from '../swarm-out/runReview';
-import { TONE_VAR, type Tone } from '../swarm-out/tone';
 import { PipelineRunCard } from './PipelineRunCard';
 import { PipelineEval } from './PipelineEval';
-import { PipelineLine, WherePill } from './PipelineLine';
-import { allRows, autonomyOf, brainChips, filterRows, sections, type PipelineRow, type RowFilter } from './pipelineRows';
+import { PipelineLine } from './PipelineLine';
+import { allRows, brainChips, filterRows, sections, waitingCounts, type PipelineRow, type RowFilter } from './pipelineRows';
 
 export interface PipelineContentProps {
   /** Hand a prompt to a chat tab (land+activate a tab, THEN inject). Returns true
@@ -59,68 +51,7 @@ export interface PipelineContentProps {
 }
 
 const muted = 'text-[var(--color-text-muted)]';
-const STAGE_TONE: Record<PipelineRow['stage'], Tone> = {
-  needs_answer: 'attention', awaiting: 'attention', stopped: 'error', running: 'busy', done: 'unknown',
-};
-
-function rowTone(r: PipelineRow): Tone {
-  if (r.stage !== 'done') return STAGE_TONE[r.stage];
-  return r.outcome === 'landed' || r.outcome === 'manual' ? 'ok' : r.outcome === 'discarded' ? 'unknown' : 'error';
-}
-
-const TAG_STYLE = {
-  answer: { background: TONE_VAR.attention, color: 'var(--color-bg)' },
-  soft: { color: TONE_VAR.attention, background: `color-mix(in srgb, ${TONE_VAR.attention} 13%, transparent)` },
-  stopped: { color: TONE_VAR.error, background: `color-mix(in srgb, ${TONE_VAR.error} 13%, transparent)` },
-} as const;
-
-function HiveOpen({ r }: { r: SwarmOutRun }) {
-  const { t } = useTranslation();
-  const open = useOpenRun(r);
-  if (!open) return null;
-  return (
-    <button type="button" className="btn-sm btn-ghost whitespace-nowrap" data-testid="pipeline-row-open"
-      onClick={(e) => { e.stopPropagation(); open(); }}>{t('swarmOut.review.cmd.open.name')} ↗</button>
-  );
-}
-
-function Row({ r, now, onOpen, onOpenSession }: {
-  r: PipelineRow; now: number; onOpen: () => void; onOpenSession: (r: PipelineRow) => void;
-}) {
-  const { t } = useTranslation();
-  const word = autonomyOf(r);
-  const tone = rowTone(r);
-  return (
-    <div role="button" tabIndex={0} onClick={onOpen} aria-label={r.title}
-      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
-      className="grid items-center gap-2.5 px-2.5 py-[7px] rounded-lg hover:bg-[var(--color-hover)] cursor-pointer min-w-0"
-      style={{ gridTemplateColumns: '10px minmax(0,1fr) auto auto auto 44px' }}
-      data-testid={`pipeline-run-${r.key}`} data-stage={r.stage} data-where={r.where}>
-      <Dot tone={tone} className={tone === 'busy' ? 'swarm-out-icon--busy' : ''} />
-      <div className="min-w-0">
-        <div className="text-body truncate" title={r.title}>{r.title}</div>
-        <div className={`text-meta truncate flex items-center gap-1.5 min-w-0 ${muted}`}>
-          <WherePill r={r} />
-          <span className="truncate">{[r.brain, r.agentMode && t('ui.PipelineOverlay.agentMode', { mode: r.agentMode, defaultValue: 'Project Agent {{mode}}' }),
-            r.profile, r.runId].filter(Boolean).join(' · ')}</span>
-        </div>
-      </div>
-      {word ? <span className="text-meta px-[7px] py-[1px] rounded-[5px] border whitespace-nowrap" data-testid="pipeline-row-autonomy"
-        style={{ color: word.full ? TONE_VAR.ok : TONE_VAR.attention, borderColor: `color-mix(in srgb, ${word.full ? TONE_VAR.ok : TONE_VAR.attention} 45%, var(--color-border))` }}>
-        {word.full ? t('swarmOut.review.autonomy.full') : t('swarmOut.review.autonomy.steppedIn', { count: word.n })}</span> : <span />}
-      {r.task ? <span className="text-small px-[9px] py-[2px] rounded-md whitespace-nowrap font-semibold" data-testid="pipeline-row-tag"
-        style={r.task === 'answer' ? TAG_STYLE.answer : r.task === 'stopped' || r.task === 'resume' ? TAG_STYLE.stopped : TAG_STYLE.soft}>
-        {t(`ui.PipelineOverlay.task_${r.task}`)}</span>
-        : <span className={`text-small ${muted}`}>{t(`ui.PipelineOverlay.outcome_${r.stage === 'running' ? 'running' : r.outcome}`)}</span>}
-      <span className="flex items-center">
-        {r.where === 'hive' && r.hive_run ? <HiveOpen r={r.hive_run} />
-          : r.ownerSessionId ? <button type="button" className="btn-sm btn-ghost whitespace-nowrap" data-testid="pipeline-row-open"
-            onClick={(e) => { e.stopPropagation(); onOpenSession(r); }}>{t('swarmOut.review.cmd.open.name')} ↗</button> : null}
-      </span>
-      <span className={`text-meta text-right tabular-nums ${muted}`}>{ago(r.since, now)}</span>
-    </div>
-  );
-}
+const COMPACT_PX = 720;
 
 export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   const { t } = useTranslation();
@@ -134,6 +65,15 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(id); }, []);
 
   const [tab, setTab] = useState<'line' | 'eval'>('line');
+  // narrow: the finished rows stack their time (Swarm Out's rule, SwarmOutDashboard)
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    if (!box || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(([e]) => setCompact(e.contentRect.width < COMPACT_PX));
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [box]);
   const [filter, setFilter] = useState<RowFilter>({ where: 'all', brain: null });
   const [open, setOpen] = useState<{ key: string; order: string[] } | null>(null);
 
@@ -142,6 +82,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   const shown = useMemo(() => filterRows(rows, filter), [rows, filter]);
   const chips = useMemo(() => brainChips(filterRows(rows, { ...filter, brain: null })), [rows, filter]);
   const s = useMemo(() => sections(shown), [shown]);
+  const waiting = useMemo(() => waitingCounts(shown).waiting, [shown]);
   const reload = useCallback(() => { void qc.invalidateQueries({ queryKey: analyticsQ.queryKey }); hive.reload(); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [qc, hive.reload]);
@@ -166,7 +107,6 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   }, [onContinue, close]);
 
   const openRow = open ? rows.find((r) => r.key === open.key) : undefined;
-  const row = (r: PipelineRow) => <Row key={r.key} r={r} now={now} onOpen={() => openKey(r.key)} onOpenSession={openSession} />;
   const segment = (key: RowFilter['where'], label: string) => (
     <button key={key} type="button" role="radio" aria-checked={filter.where === key} onClick={() => setFilter((f) => ({ ...f, where: key, brain: null }))}
       data-testid={`pipeline-where-${key}`}
@@ -174,13 +114,12 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
   );
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col relative" data-testid="pipeline-overlay">
+    <div ref={setBox} className="flex-1 min-h-0 flex flex-col relative" data-testid="pipeline-overlay">
       <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b border-[var(--color-border)]">
         <Tabs value={tab} onChange={setTab} testid="pipeline-tabs" items={[
-          { key: 'line', label: s.you.length ? t('ui.PipelineOverlay.tabLineWaiting', { count: s.you.length }) : t('ui.PipelineOverlay.tabLine'), testid: 'pipeline-tab-line' },
+          { key: 'line', label: waiting ? t('ui.PipelineOverlay.tabLineWaiting', { count: waiting }) : t('ui.PipelineOverlay.tabLine'), testid: 'pipeline-tab-line' },
           { key: 'eval', label: t('ui.PipelineOverlay.tabEval'), testid: 'pipeline-tab-eval' },
         ]} />
-        <span className={`text-small ${muted}`}>{t('ui.PipelineOverlay.window')}</span>
         <div className="ml-auto flex flex-wrap items-center gap-2" data-testid="pipeline-filter">
           <div role="radiogroup" aria-label={t('ui.PipelineOverlay.whereLabel')} className="inline-flex gap-0.5 rounded-lg p-[3px] bg-[color-mix(in_srgb,var(--color-text)_5%,transparent)]">
             {segment('all', t('ui.PipelineOverlay.whereAll'))}{segment('local', t('ui.PipelineOverlay.local'))}{segment('hive', 'Hive')}
@@ -205,8 +144,9 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
         {hive.failed && !hive.data && <div className={`text-small mb-2 ${muted}`} data-testid="pipeline-hive-unreadable">{t('ui.PipelineOverlay.hiveUnreadable')}</div>}
         {tab === 'eval' ? <PipelineEval rows={shown} now={now} /> : (
           <div data-testid="pipeline-run-list">
-            {analytics && rows.length === 0 && !loadErr && <div className="text-center py-10 text-body text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.empty')}</div>}
-            <PipelineLine rows={shown} now={now} onOpen={openKey} renderRow={row} />
+            {analytics && rows.length === 0 && !loadErr
+              ? <div className="text-center py-10 text-body text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.empty')}</div>
+              : <PipelineLine rows={shown} now={now} onOpen={openKey} onOpenSession={openSession} compact={compact} />}
           </div>
         )}
       </div>

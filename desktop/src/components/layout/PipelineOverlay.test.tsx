@@ -4,11 +4,12 @@ import type React from 'react';
  * docs/design/2026-11-01-brain-eval-and-runs.md §4).
  *
  * Questions, one per test:
- * - does the Line tab (the default) list this machine's runs and the Hive pipeline runs (a
- *   native Hive run stays out), each tagged where it ran (a neutral pill, never the old
- *   viz-2 orange), waiting-for-you on top, the tab's label carrying the waiting count?
- * - does the Line draw a run in flight as a track whose chip sits at its stage and opens
- *   its big card, with ↺N where a stage reran?
+ * - does the Runs tab (the default) list this machine's runs and the Hive pipeline runs (a
+ *   native Hive run stays out), each tagged where it ran, the runs waiting for you first
+ *   and marked on their own card, the tab's label carrying the waiting count, and no
+ *   explanation strips?
+ * - is a run in flight a card whose stations mark its stage and ↺N where a stage reran,
+ *   opening its big card?
  * - does the filter (where, Brain) hold across the two tabs?
  * - does a local row open the big card, whose commands come from the backend, and do
  *   answering, resuming, cancelling and confirming a landing go through the run's routes
@@ -126,49 +127,117 @@ describe('PipelineOverlay', () => {
   it('lists every pipeline run, tagged where it ran, waiting for you on top', async () => {
     open();
     await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
-    const you = screen.getByTestId('pipeline-section-you').nextElementSibling as HTMLElement;
-    expect(within(you).getAllByRole('button', { name: /Pick storage|Dropped one/ }).map((b) => b.getAttribute('data-testid')))
-      .toEqual(['pipeline-run-run_ask', 'pipeline-run-run_drop']);      // to answer before to confirm
+    // running: the cards that wait on you first, to answer before to confirm
+    const running = screen.getByTestId('pipeline-running');
+    expect(within(running).getAllByTestId(/^pipeline-run-/).map((b) => b.getAttribute('data-testid')))
+      .toEqual(['pipeline-run-run_ask', 'pipeline-run-run_drop']);
+    expect(screen.getByTestId('pipeline-section-running').textContent).toContain('2 wait on you');
     expect(screen.getByTestId('pipeline-tab-line').textContent).toContain('2');
     expect(within(screen.getByTestId('pipeline-run-run_ask')).getByTestId('pipeline-row-tag').textContent).toBe('Answer');
     expect(within(screen.getByTestId('pipeline-run-run_drop')).getByTestId('pipeline-row-tag').textContent).toBe('Confirm it landed');
-    fireEvent.click(screen.getByTestId('pipeline-section-done'));
-    expect(within(screen.getByTestId('pipeline-run-d1')).getByTestId('pipeline-row-where').textContent).toBe('demo');
-    // the row names the Project Agent kind of work beside its Brain
-    expect(screen.getByTestId('pipeline-run-d1').textContent).toContain('SwarmAI · Project Agent change · bugfix');
+    // done: a row each, where it ran (EC2 and the Hive's name, or this machine), Brain · profile
+    const done = screen.getByTestId('pipeline-done');
+    const d1 = within(done).getByTestId('pipeline-run-d1');
+    expect(within(d1).getByTestId('pipeline-row-where').textContent).toBe('EC2demo');
+    expect(d1.textContent).toContain('SwarmAI · bugfix');
     expect(within(screen.getByTestId('pipeline-run-run_done')).getByTestId('pipeline-row-where').textContent).toBe('This machine');
     expect(screen.queryByTestId('pipeline-run-native')).toBeNull();     // a native Hive run stays in Swarm Out
     expect(screen.queryByTestId('pipeline-overall')).toBeNull();        // no row of totals
-    const pill = within(screen.getByTestId('pipeline-run-d1')).getByTestId('pipeline-row-where');
-    expect(pill.getAttribute('style') ?? '').not.toContain('viz-2');    // a neutral pill
+    // no explanation strips: no sentence, no legend, no 30-day note in the header
+    expect(screen.queryByTestId('pipeline-line-verdict')).toBeNull();
+    expect(screen.queryByTestId('pipeline-line-legend')).toBeNull();
+    expect(screen.getByTestId('pipeline-overlay').textContent).not.toContain('Showing runs from');
   });
 
-  it('the Line: a run in flight is a track at its stage; its chip opens the big card', async () => {
+  it('a run in flight is a card with its stages; it opens the big card', async () => {
     open();
     await waitFor(() => expect(screen.getByTestId('pipeline-track-run_ask')).toBeInTheDocument());
     const track = screen.getByTestId('pipeline-track-run_ask');
     expect(track.getAttribute('data-kind')).toBe('you');
-    const chip = screen.getByTestId('pipeline-track-chip-run_ask');
-    expect(chip.closest('[data-station]')?.getAttribute('data-station')).toBe('build');
-    expect(chip.textContent).toContain('Answer');
-    expect(within(track).getByTestId('pipeline-track-rounds').textContent).toBe('↺2');
+    expect(track.querySelector('[data-state="here"]')?.getAttribute('data-station')).toBe('build');
+    expect(within(track).queryByTestId('pipeline-station-sub')).toBeNull();     // what it asks: once, in the pill
+    expect(within(screen.getByTestId('pipeline-run-run_ask')).getByTestId('pipeline-card-ask').textContent).toContain('Answer');   // no reason written: what it asks
+    expect(within(track).getByTestId('pipeline-track-rounds').textContent).toBe('↺2ran 2 times');      // read out, not a bare symbol
     expect(within(track).getByTestId('pipeline-track-rounds').closest('[data-station]')?.getAttribute('data-station')).toBe('plan');
-    expect(screen.getByTestId('pipeline-station-build').textContent).toContain('1');
-    expect(screen.getByTestId('pipeline-line-verdict').textContent).toMatch(/2 runs on the line.*2 wait on you/);
-    expect(screen.queryByTestId('pipeline-track-run_done')).toBeNull();   // finished: in Done, not on the line
-    expect(screen.getByTestId('pipeline-time-none')).toBeInTheDocument();  // no stage times recorded: said, not 0
-    fireEvent.click(chip);
+    expect(track.querySelectorAll('[data-station]').length).toBe(8);            // a local run: the eight stages
+    expect(screen.queryByTestId('pipeline-track-run_done')).toBeNull();          // finished: in Done
+    expect(screen.queryByTestId('pipeline-time')).toBeNull();                    // no stage times recorded: no chart
+    fireEvent.click(within(screen.getByTestId('pipeline-run-run_ask')).getByTestId('pipeline-card-ask').querySelector('button')!);
     await waitFor(() => expect(screen.getByTestId('pipeline-card')).toBeInTheDocument());
     expect(fetchRunView).toHaveBeenCalledWith('run_ask');
   });
 
-  it('nothing waits on you: no Waiting strip', async () => {
+  it('a profile\'s skipped stage is struck; recorded stage times draw the minutes per stage', async () => {
+    const stages = ['evaluate', 'plan', 'build', 'review', 'test', 'deliver', 'reflect'].map((name) => ({ name, status: name === 'review' ? 'open' : name < 'r' && name !== 'plan' ? 'completed' : 'pending', attempts: 1 }));
+    fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [{ project: 'SwarmAI', runs: [
+      run({ id: 'run_trivial', requirement: 'Small one', status: 'running', profile: 'trivial', landing: null, stage: 'review', stages }),
+      run({ id: 'run_timed', requirement: 'Timed one', stageTimeline: {
+        build: { enteredAt: '2026-10-31T10:00:00Z', activeS: 900, waitS: 0 }, review: { enteredAt: '2026-10-31T10:15:00Z', activeS: 300, waitS: 120 } } }),
+    ] }] });
+    HIVE = { runs: [], asks: [] };
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-track-run_trivial')).toBeInTheDocument());
+    const track = screen.getByTestId('pipeline-track-run_trivial');
+    expect(track.querySelector('[data-station="think"]')?.getAttribute('data-state')).toBe('skipped');
+    expect(track.querySelector('[data-station="review"]')?.getAttribute('data-state')).toBe('here');
+    const time = screen.getByTestId('pipeline-time');
+    expect(within(time).getByTestId('pipeline-time-build').textContent).toContain('15 min');
+    expect(within(time).getByTestId('pipeline-time-review').textContent).toContain('7 min');
+  });
+
+  it('a Hive run back here: its eight stages passed, none struck, it stands at RETURN', async () => {
+    HIVE = { runs: [{ ...hiveRun('back', true), state: 'stopped', stage: 'awaiting', needs_person: false, settle: null }], asks: [] };
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-track-back')).toBeInTheDocument());
+    const track = screen.getByTestId('pipeline-track-back');
+    expect(track.querySelectorAll('[data-station]').length).toBe(11);
+    expect(track.querySelector('[data-state="here"]')?.getAttribute('data-station')).toBe('return');
+    expect(track.querySelectorAll('[data-state="skipped"]').length).toBe(0);
+    expect(['evaluate', 'build', 'reflect'].map((st) => track.querySelector(`[data-station="${st}"]`)?.getAttribute('data-state')))
+      .toEqual(['passed', 'passed', 'passed']);
+  });
+
+  it('the most urgent first, whatever its Brain; the tab and the section count alike', async () => {
+    const ask = (id: string, at: string) => run({ id, requirement: id, status: 'paused', pauseKind: 'decision', needsYou: true, landing: null, updatedAt: at });
+    const working = (id: string) => run({ id, requirement: id, status: 'running', landing: null, stage: 'build' });
+    fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [
+      { project: 'Big', runs: [working('w1'), working('w2'), ask('a_late', '2026-10-31T12:00:00Z')] },
+      { project: 'Small', runs: [ask('a_early', '2026-10-31T08:00:00Z'),
+        run({ id: 's_stop', requirement: 's_stop', status: 'paused', pauseKind: 'user_stop', needsYou: true, landing: null })] },
+    ] });
+    HIVE = { runs: [], asks: [] };
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-run-a_early')).toBeInTheDocument());
+    const order = within(screen.getByTestId('pipeline-running')).getAllByTestId(/^pipeline-run-/).map((e) => e.getAttribute('data-testid'));
+    expect(order.slice(0, 3)).toEqual(['pipeline-run-a_early', 'pipeline-run-a_late', 'pipeline-run-s_stop']);
+    expect(screen.getByTestId('pipeline-tab-line').textContent).toContain('2');
+    expect(screen.getByTestId('pipeline-section-running').textContent).toContain('2 wait on you');
+    expect(screen.getByTestId('pipeline-section-running').textContent).toContain('1 stopped');
+  });
+
+  it('the done list shows 8, then 20 more; its cost reads in cents below $10', async () => {
+    const many = Array.from({ length: 10 }, (_, i) => run({ id: `d${i}`, requirement: `done ${i}`, costUsd: i === 0 ? 0.95 : 12.34,
+      finishedAt: `2026-10-31T1${i}:00:00Z` }));
+    fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [{ project: 'SwarmAI', runs: many }] });
+    HIVE = { runs: [], asks: [] };
+    open();
+    await waitFor(() => expect(screen.getByTestId('pipeline-done')).toBeInTheDocument());
+    const rows = () => within(screen.getByTestId('pipeline-done')).getAllByTestId(/^pipeline-run-/);
+    expect(rows()).toHaveLength(8);
+    expect(within(screen.getByTestId('pipeline-run-d9')).getByTestId('pipeline-cost').textContent).toBe('$12.3');
+    fireEvent.click(screen.getByTestId('pipeline-done-more'));
+    expect(rows()).toHaveLength(10);
+    expect(within(screen.getByTestId('pipeline-run-d0')).getByTestId('pipeline-cost').textContent).toBe('$0.95');
+    expect(screen.getByTestId('pipeline-run-d0').textContent).toContain('Landed');    // the outcome is read out
+  });
+
+  it('nothing in flight: one line says so', async () => {
     fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [{ project: 'AIDLC', runs: [run({ id: 'run_aidlc', requirement: 'Other brain' })] }] });
     HIVE = { runs: [], asks: [] };
     open();
     await waitFor(() => expect(screen.getByTestId('pipeline-line')).toBeInTheDocument());
-    expect(screen.queryByTestId('pipeline-section-you')).toBeNull();
     expect(screen.getByTestId('pipeline-line-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('pipeline-section-running').textContent).not.toContain('wait on you');
   });
 
   it('the filter holds across the tabs', async () => {
