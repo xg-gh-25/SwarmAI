@@ -422,10 +422,10 @@ class TestDetectActiveProject:
     """M2 (run_91bc0651, DDD-alive): active-project detection for runtime DDD
     recall. FAIL-CLOSED — ambiguous/no-signal → None (inject nothing)."""
 
-    # SYNTHETIC project names only — NEVER real private/customer names (e.g.
-    # CMHK). This test file is git-tracked → public repo; a real private skill/
-    # project name here is a leak (C041 family, run_f1fe156b Gate-2 LOW). Acme_
-    # SalesIntel exercises the business-suffix derive path (→ s_acme-) identically.
+    # SYNTHETIC project names only — NEVER real private/customer names. This test
+    # file is git-tracked → public repo; a real private skill/project name here is
+    # a leak. Skill-path ownership is declared in a project's bindings.yaml, never
+    # derived from its name (tests/test_recall_skill_ownership.py covers the rule).
     CANDS = ["AIDLC", "Acme_SalesIntel", "Widgets_Community", "Zeta_Platform", "SwarmAI"]
 
     def test_signal1_project_path(self):
@@ -436,8 +436,16 @@ class TestDetectActiveProject:
         )
         assert proj == "Acme_SalesIntel" and sig == "signal1_project_path"
 
-    def test_signal1_skill_path_maps_to_business_project(self):
+    def test_signal1_skill_path_maps_to_declaring_project(self, tmp_path, monkeypatch):
+        import core.project_registry as pr
         from core.recall_multi import detect_active_project
+        brain = tmp_path / "Acme_SalesIntel"
+        brain.mkdir()
+        (brain / "bindings.yaml").write_text(
+            "governed_assets:\n  - kind: skill-set\n    name: acme\n    prefix: s_acme-\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(pr, "get_projects_dir", lambda: tmp_path)
         proj, sig = detect_active_project(
             editor_file_path="backend/skills/s_acme-weekly-report/SKILL.md",
             candidates=self.CANDS,

@@ -51,27 +51,6 @@ class TestDddDocLockConvergence:
                 assert got2 is False, "second acquire on SAME doc must be excluded"
 
 
-class TestSkillPrefixDerivation:
-    """_derive_skill_prefix (used by recall_multi): business projects only, fail-closed."""
-
-    def test_derive_skill_prefix_allowlisted_suffixes(self):
-        from core.ddd_orchestrator import _derive_skill_prefix
-        # allowlisted business suffixes → derive
-        assert _derive_skill_prefix("CMHK_SalesIntel") == "s_cmhk-"
-        assert _derive_skill_prefix("BMS_BIZ") == "s_bms-"
-        assert _derive_skill_prefix("Rocky_ISV") == "s_rocky-"
-        assert _derive_skill_prefix("") is None
-
-    def test_derive_rejects_non_business_names(self):
-        """Gate-2 H3/H4: a naive token-prefix mis-attributes. Non-business
-        names must NOT derive (fail-closed allowlist), else GitHub_Community
-        would wrongly attach unrelated s_github-* skills."""
-        from core.ddd_orchestrator import _derive_skill_prefix
-        assert _derive_skill_prefix("GitHub_Community") is None
-        assert _derive_skill_prefix("ai_ready_repo") is None
-        assert _derive_skill_prefix("SwarmAI") is None       # single token
-        assert _derive_skill_prefix("PhysicalAI") is None
-
 class TestOrchestratorExists:
     """AC1: DddCultivationOrchestrator class exists with run() method."""
 

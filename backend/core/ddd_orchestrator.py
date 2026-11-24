@@ -119,40 +119,6 @@ def _upstream_source_head(project_dir: Path) -> "tuple[str, str] | None":
 # Sections that are never auto-applied (require human judgment)
 _SEMANTIC_SECTIONS = ("Non-Goals", "Vision", "Architecture")
 
-# Business-domain project suffixes that follow the "domain owns s_<domain>-*"
-# convention (a project `<DOMAIN>_<SUFFIX>` owns the whole s_<domain>-* skill
-# family). This is an ALLOWLIST, not a denylist (allowlist fails closed —
-# per session lesson: a naive token-prefix mis-attributes, e.g. GitHub_Community
-# would wrongly attach unrelated s_github-research/s_github-trending AND miss the
-# real s_github_community; ai_ready_repo would broad-match s_ai-*). Only the
-# business-project family is known to follow the domain-owns-family convention;
-# everything else falls back to _MANUAL_WATCH_PATHS ∪ Strategy-1 commit-grep
-# (project-agnostic, already covers every project). run_91bc0651 Gate-2 H3/H4.
-_BUSINESS_PROJECT_SUFFIXES: frozenset[str] = frozenset({
-    "salesintel", "biz", "isv",
-})
-
-
-def _derive_skill_prefix(project_name: str) -> "str | None":
-    """Derive the skill-prefix for a BUSINESS-DOMAIN project by convention.
-
-    ONLY `<DOMAIN>_<SUFFIX>` where SUFFIX ∈ _BUSINESS_PROJECT_SUFFIXES (e.g.
-    CMHK_SalesIntel → `s_cmhk-`, Foo_BIZ → `s_foo-`). These projects follow the
-    "domain owns the whole s_<domain>-* skill family" convention. Any other name
-    (GitHub_Community, ai_ready_repo, SwarmAI, PhysicalAI, single-token names)
-    returns None. Used by recall_multi to scope a business project's skills.
-
-    Fail-closed by construction: an allowlisted-suffix match is the ONLY path to
-    a derived prefix.
-    """
-    if not project_name or "_" not in project_name:
-        return None
-    head, _, suffix = project_name.partition("_")
-    head = head.strip().lower()
-    if not head or suffix.strip().lower() not in _BUSINESS_PROJECT_SUFFIXES:
-        return None
-    return f"s_{head}-"
-
 
 class DddCultivationOrchestrator:
     """Orchestrates DDD Cultivation feed channels with fault isolation.

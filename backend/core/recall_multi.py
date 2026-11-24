@@ -1431,7 +1431,8 @@ def detect_active_project(
     Three signals, first hit wins:
 
       signal-1 (DETERMINISTIC): editor_file_path points into `Projects/<X>/` or
-        `backend/skills/s_<x>-*` whose owning project is unambiguous.
+        `backend/skills/<skill>/` that exactly one project declares it owns (a
+        ``kind: skill-set`` asset in its bindings.yaml, ``_owns_skill``).
       signal-2 (DETERMINISTIC): the project whose ``bindings.yaml`` binds the repo
         this session last worked in (``repo_guidance.session_bound_project``,
         passed in by the caller). 79 of 100 replayed sessions had one, while the
@@ -1458,14 +1459,15 @@ def detect_active_project(
             proj = tail.split("/", 1)[0] if "/" in tail else tail
             if proj in candidates:
                 return proj, "signal1_project_path"
-        # b) skill path s_<x>-* → map to the business project that owns it
+        # b) skill path backend/skills/<skill>/ → the ONE project that declares it
+        # owns that skill. Ownership is declared, never derived from a project's
+        # name; two declaring owners attribute it to nobody (fail-closed) and
+        # detection goes on to the next signal.
         if "backend/skills/s_" in fp:
             skill = fp.split("backend/skills/", 1)[1].split("/", 1)[0]
-            # match a candidate whose derived prefix owns this skill dir
-            for proj in candidates:
-                pref = _project_skill_prefix(proj)
-                if pref and skill.startswith(pref):
-                    return proj, "signal1_skill_path"
+            owners = [p for p in candidates if _owns_skill(p, skill)]
+            if len(owners) == 1:
+                return owners[0], "signal1_skill_path"
 
     # ── signal-2: the repo this session works in is bound to a project ──
     if session_bound_project and session_bound_project in candidates:
@@ -1483,22 +1485,56 @@ def detect_active_project(
     return None, "no_signal"
 
 
-def _project_skill_prefix(project_name: str) -> Optional[str]:
-    """`<domain>_<BizSuffix>` → `s_<domain>-` (business-project convention only).
+def _declared_skill_ownership(project_name: str) -> tuple[frozenset[str], tuple[str, ...]]:
+    """The skills project *project_name* declares it owns: ``(members, prefixes)``.
 
-    Delegates to the SINGLE source ddd_orchestrator._derive_skill_prefix (R25 —
-    was a duplicated allowlist literal; drift risk if a suffix is added to one
-    copy only, Gate-2 M2). signal-1's skill-path branch thus attributes a skill
-    to the SAME project the WRITE side (staleness watch) does.
+    Read from ``Projects/<name>/bindings.yaml``, every ``governed_assets`` entry of
+    ``kind: skill-set``: its ``members`` (exact skill names) and its optional
+    ``prefix`` (a whole skill family, e.g. ``s_acme-``; it must start with ``s_``
+    and end with ``-`` so it stops at a family boundary). Raw ``yaml.safe_load``,
+    as ``ddd_bindings.governed_repo_roots`` does: ``load_bindings`` parses only the
+    ``bindings:`` array and refuses a ``governed_assets``-only file.
+
+    A project that declares nothing owns nothing, whatever its name. A missing,
+    unreadable or malformed file, and any member or prefix that is not well
+    formed, are ignored (logged at debug): detection never raises.
     """
+    members: set[str] = set()
+    prefixes: list[str] = []
     try:
-        from core.ddd_orchestrator import _derive_skill_prefix
-        return _derive_skill_prefix(project_name)
-    except Exception as exc:  # noqa: BLE001 — detection must never crash recall
-        # Degrade-OBSERVABLE. None reads as "this project has no skill prefix", so
-        # prefix-scoped recall silently widens instead of reporting a broken derivation.
-        logger.debug("skill-prefix derivation failed for %r: %s", project_name, exc)
-        return None
+        import yaml
+        from core.project_registry import get_projects_dir
+
+        f = get_projects_dir() / project_name / "bindings.yaml"
+        if not f.is_file():
+            return frozenset(), ()
+        doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — a bad bindings.yaml owns no skill
+        logger.debug("skill ownership unavailable for %r: %s", project_name, exc)
+        return frozenset(), ()
+    assets = doc.get("governed_assets") if isinstance(doc, dict) else None
+    for asset in assets if isinstance(assets, list) else []:
+        if not isinstance(asset, dict) or asset.get("kind") != "skill-set":
+            continue
+        listed = asset.get("members")
+        for m in listed if isinstance(listed, list) else []:
+            if isinstance(m, str) and m.strip():
+                members.add(m.strip())
+        pref = asset.get("prefix")
+        if isinstance(pref, str):
+            pref = pref.strip()
+            if pref.startswith("s_") and pref.endswith("-") and len(pref) > 3:
+                prefixes.append(pref)
+            else:
+                logger.debug("skill-set prefix %r of %r ignored (want s_<family>-)",
+                             pref, project_name)
+    return frozenset(members), tuple(prefixes)
+
+
+def _owns_skill(project_name: str, skill: str) -> bool:
+    """True if *project_name* declares *skill* as a member or under a family prefix."""
+    members, prefixes = _declared_skill_ownership(project_name)
+    return skill in members or any(skill.startswith(p) for p in prefixes)
 
 
 def _project_matches_query(project_name: str, query_lower: str) -> bool:
