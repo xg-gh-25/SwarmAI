@@ -446,7 +446,8 @@ same as an entry, adds to one, replaces one, or repeats an earlier correction (d
 `<id> | <first line>`); CDF only checks facts (the declaration names one entry, the evidence
 exists, no secret or injection) and writes. The files injected every turn take only what the
 user's own words (a `user_quote` found verbatim in a cited user message) or a measurement
-show, and nothing citing external content; anything else goes to the project's DDD or the
+show; a unit that also cites external content only when user_check confirms the person's words
+carry it; anything else goes to the project's DDD or the
 General Brain, read on demand. Value comes first: there is no daily write budget and no
 injection budget — MEMORY / EVOLUTION / STEERING / USER / TOOLS are injected whole and
 query-independent, kept lean by those declarations (the same entry reinforced, a replaced one

@@ -141,3 +141,11 @@ def test_shipped_guidance_has_no_stale_context_file_count_or_recall_cli_pointer(
         if count.search(text) or recall_cli.search(text):
             hits.append(str(p.relative_to(BACKEND)))
     assert hits == []
+
+
+def test_r22_admits_external_citing_units_only_on_user_check_confirmed_words():
+    text = (Path(__file__).resolve().parents[1] / "context" / "AGENT.md").read_text()
+    r22 = text[text.index("**R22."):text.index("**R23.")]
+    assert ("a unit that also cites external content only when user_check confirms the person's words\ncarry it"
+            in r22)
+    assert "and nothing citing external content" not in r22
