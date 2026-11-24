@@ -10,7 +10,10 @@ string has not changed (VERSION moves only at a release).
   git stores them, so a Windows and a Linux builder of the same commit agree, and files a build
   writes (untracked) never change it. Outside one, every file under those directories, each
   blob id computed here the way git computes it.
-- ``id``: the first 16 hex digits of sha256(``<commit or ->\\n<digest>``): what is compared.
+- ``id``: the first 16 hex digits of sha256(``<digest>``): what is compared. The commit is
+  kept for display, never compared: a commit that changes nothing under SOURCE_DIRS (a CI
+  workflow, a doc) leaves the code a Hive runs the same, so a Host built before it and a
+  package built after it must agree.
 
 The Hive package (hive/release.sh), the desktop backend (desktop/scripts/build-backend.sh) and
 a Host started from its checkout (core/build_identity) all call ``compute`` on the same
@@ -118,7 +121,9 @@ def _walk_blobs(root: Path) -> dict[str, str]:
 
 
 def make_id(commit: Optional[str], digest: str) -> str:
-    return hashlib.sha256(f"{commit or '-'}\n{digest}".encode()).hexdigest()[:16]
+    """The compared id: from the source digest alone (*commit* is display only, kept in the
+    signature so every caller still names both)."""
+    return hashlib.sha256(digest.encode()).hexdigest()[:16]
 
 
 def compute(root: Path | str) -> dict[str, Any]:
@@ -139,7 +144,7 @@ def compute(root: Path | str) -> dict[str, Any]:
 
 def valid(d: Any) -> Optional[dict[str, Any]]:
     """A build identity read from a file or a Hive's answer, checked (its id must be the one
-    its commit and digest make), or None."""
+    its digest makes), or None."""
     if not isinstance(d, dict):
         return None
     commit, digest, bid = d.get("commit"), d.get("digest"), d.get("id")

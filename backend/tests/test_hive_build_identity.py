@@ -85,6 +85,27 @@ def test_one_identity_for_one_checkout_from_every_entry(tmp_path, monkeypatch):
     assert out["commit"] is None and out["digest"] == dirty["digest"]
 
 
+def test_a_commit_outside_the_source_keeps_the_identity(tmp_path):
+    """A commit that changes nothing a Hive or the Host's backend runs (a CI workflow, a doc,
+    the desktop shell) keeps the identity: a Host built before it and a package built after
+    it run the same code, so the Host must not read its Hives as stale nor miss the package.
+    The commit stays in the record, for display only."""
+    root = _checkout(tmp_path)
+    before = _write(root, tmp_path / "a.json")
+    (root / ".github").mkdir()
+    (root / ".github" / "release.yml").write_text("on: push\n")
+    (root / "README.md").write_text("changed\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "c2")
+    after = _write(root, tmp_path / "b.json")
+    assert after["commit"] != before["commit"] and after["digest"] == before["digest"]
+    assert after["id"] == before["id"]
+    # and a source tree outside git with the same content has that identity too
+    plain = tmp_path / "plain2"
+    shutil.copytree(root, plain, ignore=shutil.ignore_patterns(".git"))
+    assert bi._tool().compute(plain)["id"] == before["id"]
+
+
 def test_a_crlf_checkout_has_the_identity_of_the_lf_one(tmp_path):
     """A Windows builder (core.autocrlf) of the same commit stamps the same identity."""
     root = _checkout(tmp_path)

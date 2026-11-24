@@ -183,7 +183,7 @@ _REAL_ASYNC_CLIENT = _httpx.AsyncClient
 
 def _ident(commit_char: str) -> dict:
     from core import build_identity as bi
-    d = {"commit": commit_char * 40, "digest": "e" * 64}
+    d = {"commit": commit_char * 40, "digest": commit_char * 64}   # another build: other source
     d["id"] = bi._tool().make_id(d["commit"], d["digest"])
     return d
 

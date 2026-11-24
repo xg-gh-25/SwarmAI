@@ -85,8 +85,7 @@ def current_id() -> Optional[str]:
 
 
 def reported_id(value: Any) -> Optional[str]:
-    """The id of a build identity a Hive reported (checked: the id its commit and digest
-    make), else None."""
+    """The id of a build identity a Hive reported (checked: the id its digest makes), else None."""
     got = _tool().valid(value)
     return got["id"] if got else None
 

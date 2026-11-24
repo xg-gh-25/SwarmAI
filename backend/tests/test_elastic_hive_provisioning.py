@@ -1013,7 +1013,7 @@ def _host_build(monkeypatch, commit_char: str) -> str:
     """Make this Host's build known (core/build_identity) with the real tag functions; its tag."""
     import config
     from core import build_identity as bi
-    host = {"commit": commit_char * 40, "digest": "b" * 64}
+    host = {"commit": commit_char * 40, "digest": commit_char * 64}   # another build: other source
     host["id"] = bi._tool().make_id(host["commit"], host["digest"])
     bi._CACHE[:] = [True, host]
     monkeypatch.setattr(config.settings, "app_version", "2.5.5")
