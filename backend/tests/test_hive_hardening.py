@@ -669,3 +669,88 @@ def test_the_hive_unit_passes_a_resumed_history_in_the_query():
     service = unit[unit.index("[Service]"):unit.index("[Install]")]
     env = [ln.strip() for ln in service.splitlines() if ln.strip().startswith("Environment=")]
     assert "Environment=SWARM_RESUME_VIA_QUERY=true" in env
+
+
+# ── first boot: a wait long enough for it, and its console kept when it gives up ──
+
+def test_the_first_boot_wait_covers_its_deadlines():
+    """The deploy's wait is a hang guard: it outlasts every bounded step of the first boot
+    (each step's own deadline) plus room for the unbounded ones, so a slow but working
+    boot is never cut off. The boot's output also reaches the console, which is all that
+    is left once a timed-out instance is gone."""
+    from hive import user_data as ud
+    bounded = ud.TREE_SITTER_SETUP_DEADLINE_S + ud.REPLAY_HOST_DEADLINE_S + ud.BACKEND_HEALTH_WAIT_S
+    assert prov.FIRST_BOOT_WAIT_S >= bounded + prov.FIRST_BOOT_UNBOUNDED_S
+    assert prov.FIRST_BOOT_WAIT_S == 900
+    script = render_user_data(s3_bucket="b", version="2.5.5", auth_user="admin", auth_hash="$2b$14$x",
+                              region="us-east-1")
+    assert f"for i in $(seq 1 {ud.BACKEND_HEALTH_WAIT_S}); do" in script
+    assert "exec > >(tee -a /var/log/hive-setup.log) 2>&1" in script
+
+
+def _timed_out_deploy(console):
+    """A deploy whose first boot never tags ready; *console* is what GetConsoleOutput answers
+    (an exception: it is refused). Returns (provisioner, events)."""
+    import base64
+    from tests.test_hive_origin_secret import FAKE_HASH, FakeCloudFront, FakeSession, _db_conn
+    events: list = []
+
+    class Ec2:
+        def get_console_output(self, **kw):
+            events.append(("console", kw))
+            if isinstance(console, Exception):
+                raise console
+            return {"InstanceId": "i-1", "Output": base64.b64encode(console.encode()).decode()}
+
+    class Session(FakeSession):
+        def client(self, name, **kw):
+            return Ec2() if name == "ec2" else super().client(name, **kw)
+    p = HiveProvisioner(Path("/tmp/unused.db"))
+    instance = {"id": "inst-1", "name": "demo", "account_ref": "acc-1",
+                "region": "us-east-1", "version": "2.4.4", "instance_type": "m7g.xlarge"}
+    p._get_instance = AsyncMock(return_value=instance)
+    p._get_account = AsyncMock(return_value={"account_id": "123456789012"})
+    p._update_instance = AsyncMock()
+    p._get_session = MagicMock(return_value=Session(FakeCloudFront([])))
+    p._resolve_version = AsyncMock(return_value="2.4.4")
+    p._ensure_s3_bucket = AsyncMock(return_value="swarmai-hive-123456789012-us-east-1")
+    p._sync_release_to_s3 = AsyncMock()
+    p._create_iam_role = AsyncMock(return_value="arn:role")
+    p._create_instance_profile = AsyncMock(return_value="arn:profile")
+    p._create_security_group = AsyncMock(return_value="sg-1")
+    p._launch_ec2 = AsyncMock(return_value="i-1")
+    p._allocate_elastic_ip = AsyncMock(return_value=("eipalloc-1", "3.80.1.2"))
+    p._wait_healthy_via_tag = AsyncMock(return_value=False)
+    p._cleanup_resources = AsyncMock(side_effect=lambda *a, **kw: events.append("cleanup"))
+    p._forget_terminated_instance = AsyncMock()
+    with patch("hive.provisioner.aiosqlite.connect", return_value=_db_conn()), \
+         patch("hive.user_data.caddy_hash_password", return_value=FAKE_HASH), \
+         patch("hive.provisioner.asyncio.sleep", new=AsyncMock()), \
+         patch("hive.provisioner.hive_network", return_value=(None, VPC, True)), \
+         patch("hive.provisioner._put_hive_role_policy"):
+        asyncio.run(p.deploy("inst-1"))
+    return p, events
+
+
+def _error_message(p):
+    return [c.kwargs["error_message"] for c in p._update_instance.call_args_list if c.kwargs.get("error_message")][-1]
+
+
+def test_a_setup_timeout_keeps_the_console_output():
+    lines = [f"line {i}" for i in range(400)] + ["[4/9] Setting up Python environment...", "\x1b[0mstuck here"]
+    p, events = _timed_out_deploy("\r\n".join(lines))
+    assert p._wait_healthy_via_tag.await_args.kwargs["timeout"] == prov.FIRST_BOOT_WAIT_S
+    msg = _error_message(p)
+    assert msg.startswith("EC2 setup timeout") and "[4/9] Setting up Python environment..." in msg
+    assert "stuck here" in msg and "\x1b" not in msg and "line 0\n" not in msg   # the tail, printable
+    assert len(msg) <= 400 + prov.CONSOLE_TAIL_CHARS
+    # read before the instance it comes from is cleaned up
+    console = [i for i, e in enumerate(events) if isinstance(e, tuple) and e[0] == "console"]
+    assert console and console[0] < events.index("cleanup")
+    assert events[console[0]][1] == {"InstanceId": "i-1", "Latest": True}
+
+
+def test_a_console_that_cannot_be_read_still_cleans_up():
+    p, events = _timed_out_deploy(RuntimeError("UnauthorizedOperation"))
+    assert _error_message(p).startswith("EC2 setup timeout — check /var/log/hive-setup.log.")
+    assert "cleanup" in events

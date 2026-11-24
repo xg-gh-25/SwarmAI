@@ -21,10 +21,25 @@ import pytest
 
 from core import aws_permissions as ap
 
-PROVISIONER = Path(__file__).resolve().parents[1] / "hive" / "provisioner.py"
-#: every module whose AWS calls a Hive deploy makes with the SwarmAI identity
-DEPLOY_MODULES = (PROVISIONER, PROVISIONER.with_name("bpa_subnet.py"))
+BACKEND = Path(__file__).resolve().parents[1]
+PROVISIONER = BACKEND / "hive" / "provisioner.py"
+#: every module whose AWS calls deploy or manage an EC2 Hive with the SwarmAI identity.
+#: Not routers/hive.py: its account verify probes a legacy access-key account, and each
+#: probe's refusal is that probe's result, not a step that fails half-way through.
+DEPLOY_MODULES = (PROVISIONER, PROVISIONER.with_name("bpa_subnet.py"), PROVISIONER.with_name("fleet.py"),
+                  PROVISIONER.with_name("accounts.py"), BACKEND / "core" / "hive_diagnostics.py")
 _SERVICE = {"cf": "cloudfront"}
+#: every module whose AWS calls Elastic Workers makes with the SwarmAI identity (turning
+#: it on, updating, turning off, starting and stopping a round, reading its bridge and logs)
+ELASTIC_MODULES = (BACKEND / "hive" / "agentcore_provisioner.py", BACKEND / "core" / "carriers" / "agentcore.py")
+#: the name a boto3 client has in the Elastic modules -> its botocore service
+_ELASTIC_CLIENTS = {"iam": "iam", "sts": "sts", "ecr": "ecr", "s3": "s3", "logs": "logs",
+                    "sq": "service-quotas", "ctl": "bedrock-agentcore-control",
+                    "client": "bedrock-agentcore"}
+#: ``session.client(<constant>, ...).<call>(`` in the carrier
+_CLIENT_CONSTANTS = {"SERVICE": "bedrock-agentcore", "CONTROL_SERVICE": "bedrock-agentcore-control"}
+#: botocore service -> its IAM action prefix, where they differ
+_IAM_PREFIX = {"bedrock-agentcore-control": "bedrock-agentcore", "service-quotas": "servicequotas"}
 
 
 def test_every_provisioner_call_is_in_the_action_list():
@@ -39,6 +54,60 @@ def test_every_provisioner_call_is_in_the_action_list():
     assert not missing, f"provisioner calls without a permission in the list: {missing}"
 
 
+def _elastic_calls() -> set:
+    """(botocore service, method) of every AWS call in the Elastic modules: a call on a
+    client name (``ctl.create_agent_runtime(``) or on ``session.client(SERVICE, ...)``,
+    kept only when the method is an operation of that service (``client.put(`` of the
+    httpx round client is not)."""
+    import botocore.session
+    from botocore import xform_name
+    bs = botocore.session.get_session()
+    ops = {svc: {xform_name(o) for o in bs.get_service_model(svc).operation_names}
+           for svc in set(_ELASTIC_CLIENTS.values())}
+    calls: set = set()
+    for module in ELASTIC_MODULES:
+        src = module.read_text()
+        for var, method in re.findall(r"\b([a-z0-9]+)\.([a-z0-9_]+)\(", src):
+            svc = _ELASTIC_CLIENTS.get(var)
+            if svc and method in ops[svc]:
+                calls.add((svc, method))
+        for const, method in re.findall(r"\.client\(([A-Z_]+)(?:[^()]|\([^()]*\))*\)\.([a-z0-9_]+)\(", src):
+            svc = _CLIENT_CONSTANTS.get(const)
+            if svc and method in ops[svc]:
+                calls.add((svc, method))
+    return calls
+
+
+def test_every_elastic_call_is_in_the_action_list():
+    """A template user turns Elastic Workers on: every call it makes is allowed, or it
+    fails half-way through with AccessDenied."""
+    calls = _elastic_calls()
+    assert {("bedrock-agentcore-control", "create_agent_runtime"),
+            ("bedrock-agentcore-control", "delete_agent_runtime"),
+            ("bedrock-agentcore", "invoke_agent_runtime"), ("bedrock-agentcore", "stop_runtime_session"),
+            ("iam", "update_assume_role_policy"), ("iam", "put_role_permissions_boundary"),
+            ("logs", "filter_log_events"), ("ecr", "describe_images")} <= calls, \
+        "the pattern no longer finds the Elastic modules' AWS calls"
+    missing = sorted({ap.action_for_method(_IAM_PREFIX.get(svc, svc), m) for svc, m in calls}
+                     - ap.all_actions())
+    assert not missing, f"Elastic Workers calls without a permission in the list: {missing}"
+    # what AWS checks besides the call itself (Service Authorization Reference: the
+    # dependent actions of CreateAgentRuntime and DeleteAgentRuntime)
+    assert {"bedrock-agentcore:CreateAgentRuntimeEndpoint", "bedrock-agentcore:TagResource",
+            "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
+            "bedrock-agentcore:DeleteWorkloadIdentity", "iam:PassRole"} <= set(ap.ACTIONS["elastic"]) | ap.all_actions()
+
+
+def test_every_listed_action_is_in_the_template():
+    granted = {a for st in _statements() for a in _actions(st)}
+    assert not ap.all_actions() - granted, sorted(ap.all_actions() - granted)
+
+
+def test_the_elastic_names_are_the_provisioners():
+    from hive import agentcore_provisioner as ep
+    assert ap.ELASTIC_ROLE_PREFIX == ep.ROLE_PREFIX and ap.ELASTIC_RUNTIME_NAME == ep.RUNTIME_NAME
+
+
 def _statements(account="123456789012"):
     return ap.template(account)["policy"]["Statement"]
 
@@ -47,11 +116,28 @@ def _actions(st):
     return st["Action"] if isinstance(st["Action"], list) else [st["Action"]]
 
 
+HIVE_ROLE = "arn:aws:iam::123456789012:role/SwarmAI-Hive-*"
+ELASTIC_ROLE = "arn:aws:iam::123456789012:role/SwarmAI-ElasticHive-*"
+BOUNDARY = "arn:aws:iam::123456789012:policy/SwarmAI-Hive-Boundary"
+
+
+def _resources(st):
+    return st["Resource"] if isinstance(st["Resource"], list) else [st["Resource"]]
+
+
 def test_no_wildcard_actions_and_no_trust_policy_change():
-    text = json.dumps(ap.template("123456789012")["policy"])
-    assert "UpdateAssumeRolePolicy" not in text
+    """No action wildcard; a Hive role's trust policy and boundary never change: only the
+    Elastic Workers role's trust is rewritten (its adopt path), and its boundary only set
+    to the SwarmAI boundary."""
     for st in _statements():
         assert all(not a.endswith(":*") and a != "*" for a in _actions(st)), st["Sid"]
+    for action in ("iam:UpdateAssumeRolePolicy", "iam:PutRolePermissionsBoundary"):
+        st, = _with(action)
+        # and only while the role carries the SwarmAI boundary: a role of that name made
+        # without it (by someone else, or before the template) cannot be taken over
+        assert _resources(st) == [ELASTIC_ROLE], action
+        assert st["Condition"] == {"StringEquals": {"iam:PermissionsBoundary": BOUNDARY}}, action
+    assert not _with("iam:DeleteRolePermissionsBoundary")
 
 
 def _with(action):
@@ -59,14 +145,77 @@ def _with(action):
 
 
 def test_roles_only_with_the_boundary_and_only_the_ssm_core_policy():
-    create, = _with("iam:CreateRole")
-    assert create["Condition"] == {"StringEquals": {
-        "iam:PermissionsBoundary": "arn:aws:iam::123456789012:policy/SwarmAI-Hive-Boundary"}}
-    assert create["Resource"] == "arn:aws:iam::123456789012:role/SwarmAI-Hive-*"
+    creates = {json.dumps(_resources(st)): st["Condition"] for st in _with("iam:CreateRole")}
+    assert creates == {json.dumps([HIVE_ROLE]): {"StringEquals": {"iam:PermissionsBoundary": BOUNDARY}},
+                       json.dumps([ELASTIC_ROLE]): {"StringEquals": {"iam:PermissionsBoundary": BOUNDARY}}}
     attach, = _with("iam:AttachRolePolicy")
     assert attach["Condition"]["ArnEquals"]["iam:PolicyARN"] == ap.SSM_CORE
-    passrole, = _with("iam:PassRole")
-    assert passrole["Condition"]["StringEquals"]["iam:PassedToService"] == "ec2.amazonaws.com"
+    assert _resources(attach) == [HIVE_ROLE]
+    # each role is passed only to the service that runs it
+    passes = {json.dumps(_resources(st)): st["Condition"]["StringEquals"]["iam:PassedToService"]
+              for st in _with("iam:PassRole")}
+    assert passes == {json.dumps([HIVE_ROLE]): "ec2.amazonaws.com",
+                      json.dumps([ELASTIC_ROLE]): "bedrock-agentcore.amazonaws.com"}
+
+
+#: actions IAM cannot scope by resource (no resource type in the Service Authorization
+#: Reference): the only Elastic ones a "*" resource is allowed for
+UNSCOPABLE = {"bedrock-agentcore:CreateAgentRuntime", "bedrock-agentcore:ListAgentRuntimes",
+              "logs:DescribeLogGroups", "servicequotas:ListServiceQuotas"}
+
+
+def test_the_elastic_statements_are_scoped():
+    elastic = set(ap.ACTIONS["elastic"])
+    for st in _statements():
+        acts = set(_actions(st)) & elastic
+        if not acts:
+            continue
+        res = _resources(st)
+        if res == ["*"]:
+            assert acts <= UNSCOPABLE, (st["Sid"], sorted(acts - UNSCOPABLE))
+        for r in res:
+            assert r == "*" or ":123456789012:" in r or r.startswith("arn:aws:iam::123456789012:"), (st["Sid"], r)
+        if any(a.startswith("iam:") for a in acts):
+            assert res == [ELASTIC_ROLE], st["Sid"]
+    create, = _with("bedrock-agentcore:CreateAgentRuntime")
+    assert create["Condition"] == {"StringEquals": {"aws:RequestTag/swarmai:managed": "true"}}
+    runtime = "arn:aws:bedrock-agentcore:*:123456789012:runtime/swarmai_elastic_hive-*"
+    for action in ("bedrock-agentcore:UpdateAgentRuntime", "bedrock-agentcore:DeleteAgentRuntime",
+                   "bedrock-agentcore:GetAgentRuntime", "bedrock-agentcore:TagResource",
+                   "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:StopRuntimeSession"):
+        st, = _with(action)
+        assert _resources(st) == [runtime], action
+    for action in ("logs:FilterLogEvents", "logs:DescribeLogStreams"):
+        st, = _with(action)
+        assert _resources(st) == ["arn:aws:logs:*:123456789012:log-group:/aws/bedrock-agentcore/*"], action
+    st, = _with("ecr:DescribeImages")
+    assert _resources(st) == ["arn:aws:ecr:*:123456789012:repository/*"]
+
+
+def _allows(policy: dict, action: str, resource: str) -> bool:
+    from fnmatch import fnmatchcase
+    for st in policy["Statement"]:
+        if st["Effect"] != "Allow" or not any(fnmatchcase(action, a) for a in _actions(st)):
+            continue
+        if any(fnmatchcase(resource, r) for r in _resources(st)):
+            return True
+    return False
+
+
+def test_the_boundary_allows_the_elastic_execution_role():
+    """The Elastic Workers role is created with the SwarmAI boundary when the account has
+    it (template users do): everything its own policy grants must be inside the boundary,
+    or the runtime loses its logs or its image pull."""
+    from core.carriers import agentcore as ac
+    boundary = ap.boundary_policy()
+    for repo in (None, "swarmai-hive"):
+        own = ac.execution_role_policy("123456789012", "us-east-1", "swarmai-hive-123456789012-us-east-1", repo)
+        for st in own["Statement"]:
+            if st["Effect"] != "Allow":
+                continue
+            for action in _actions(st):
+                for res in _resources(st):
+                    assert _allows(boundary, action, res), (st["Sid"], action, res)
 
 
 def test_tags_only_while_creating_and_management_only_on_tagged_resources():
@@ -353,3 +502,127 @@ def test_bpa_that_cannot_be_read_is_never_ok():
     hive, _ = ap.run_hive_checks(sess, "us-east-1", "123456789012", ARN)
     assert hive["status"] == "unknown"
     assert "ec2:DescribeVpcBlockPublicAccessOptions (UnauthorizedOperation)" in hive["detail"]
+
+
+ACCT = "123456789012"
+
+
+def test_the_elastic_check_names_what_is_missing():
+    sess = FakeSess(denied=["bedrock-agentcore:CreateAgentRuntime", "iam:PassRole"])
+    v = ap.run_elastic_checks(sess, "us-east-1", ACCT, ARN)
+    assert v["status"] == "missing"
+    assert v["missing"] == ["bedrock-agentcore:CreateAgentRuntime", "iam:PassRole"]
+    assert "bedrock-agentcore:CreateAgentRuntime" in v["detail"]
+    simulated = {a for s_ in sess.simulated for a in s_["ActionNames"]}
+    assert set(ap.ACTIONS["elastic"]) - {"ecr:DescribeImages"} <= simulated
+    # each on the resource it acts on, with the values SwarmAI's calls carry
+    on = {a: (s_.get("ResourceArns") or ["*"])[0] for s_ in sess.simulated for a in s_["ActionNames"]}
+    assert on["iam:PassRole"] == f"arn:aws:iam::{ACCT}:role/SwarmAI-ElasticHive-us-east-1"
+    assert on["bedrock-agentcore:InvokeAgentRuntime"].startswith(
+        f"arn:aws:bedrock-agentcore:us-east-1:{ACCT}:runtime/swarmai_elastic_hive-")
+    assert on["logs:FilterLogEvents"].startswith(
+        f"arn:aws:logs:us-east-1:{ACCT}:log-group:/aws/bedrock-agentcore/runtimes/")
+    ctx = {e["ContextKeyName"]: e["ContextKeyValues"][0] for s_ in sess.simulated
+           if "iam:PassRole" in s_["ActionNames"] for e in s_.get("ContextEntries") or []}
+    assert ctx["iam:PassedToService"] == "bedrock-agentcore.amazonaws.com"
+    assert ctx["iam:PermissionsBoundary"] == f"arn:aws:iam::{ACCT}:policy/SwarmAI-Hive-Boundary"
+
+
+def test_the_elastic_check_is_ok_under_the_templates_conditions_and_looks_up_a_private_image():
+    sess = FakeSess()
+    sess.conditions = {"bedrock-agentcore:CreateAgentRuntime": ["aws:RequestTag/swarmai:managed"],
+                       "iam:PassRole": ["iam:PassedToService"], "iam:CreateRole": ["iam:PermissionsBoundary"],
+                       "iam:PutRolePermissionsBoundary": ["iam:PermissionsBoundary"]}
+    assert ap.run_elastic_checks(sess, "us-east-1", ACCT, ARN)["status"] == "ok"
+    sess = FakeSess(denied=["ecr:DescribeImages"])
+    assert ap.run_elastic_checks(sess, "us-east-1", ACCT, ARN)["status"] == "ok"   # public image: no ECR call
+    v = ap.run_elastic_checks(sess, "us-east-1", ACCT, ARN, image_repo="swarmai-hive")
+    assert v["status"] == "missing" and v["missing"] == ["ecr:DescribeImages"]
+
+
+def test_an_elastic_check_that_cannot_simulate_is_never_ok():
+    v = ap.run_elastic_checks(FakeSess(simulate_error="AccessDenied"), "us-east-1", ACCT, ARN)
+    assert v["status"] == "unknown" and "could not confirm" in v["detail"]
+
+
+def test_the_capability_checks_store_the_elastic_verdict(monkeypatch):
+    from core import aws_account as acct
+
+    class Any:
+        def client(self, name, **kw):
+            raise RuntimeError("offline")
+    stored = {}
+    monkeypatch.setattr(acct, "get_record", lambda: {"region": "us-east-1", "account_id": ACCT,
+                                                     "caller_arn": ARN})
+    monkeypatch.setattr(acct, "session", lambda region: Any())
+    monkeypatch.setattr(acct, "get_chat_via", lambda config=None: "bedrock_key")
+    monkeypatch.setattr(acct, "is_hive_mode", lambda: False)
+    monkeypatch.setattr(acct, "_update_record", lambda **kw: stored.update(kw))
+    monkeypatch.setattr(acct, "_voice_check", lambda sess, rec: {"status": "ok"})
+    monkeypatch.setattr(ap, "run_hive_checks", lambda *a: ({"status": "ok"}, {"status": "ok"}))
+    seen = []
+    monkeypatch.setattr(ap, "run_elastic_checks", lambda sess, region, account, arn, image_repo=None:
+                        seen.append((region, account, arn)) or {"status": "missing", "missing": ["x:Y"]})
+    out = acct.run_capability_checks({}, "eu-west-1")
+    assert out["elastic"]["status"] == "missing" and out["elastic"]["region"] == "eu-west-1"
+    assert seen == [("eu-west-1", ACCT, ARN)] and stored["capabilities"]["elastic"]["missing"] == ["x:Y"]
+
+    def boom(*a, **kw):
+        raise RuntimeError("simulate failed")
+    monkeypatch.setattr(ap, "run_elastic_checks", boom)
+    out = acct.run_capability_checks({}, "eu-west-1")
+    assert out["elastic"]["status"] == "unknown" and out["hive"]["status"] == "ok"
+
+
+def test_the_template_fits_an_inline_policy():
+    """IAM counts a policy without whitespace: a role's or a permission set's inline policy
+    holds 10,240 characters (a customer managed policy only 6,144, which the template
+    already passed before Elastic Workers)."""
+    text = json.dumps(ap.template(ACCT)["policy"], separators=(",", ":"))
+    assert len("".join(text.split())) <= 10240
+
+
+def test_the_boundary_scopes_the_elastic_needs_to_the_account():
+    b = ap.template(ACCT)["boundary"]["document"]
+    pull = _stmt(b, "ElasticImagePull")
+    assert _resources(pull) == [f"arn:aws:ecr:*:{ACCT}:repository/*"]
+    logs = _stmt(b, "ElasticRuntimeLogs")
+    assert _resources(logs) == [f"arn:aws:logs:*:{ACCT}:log-group:/aws/bedrock-agentcore/runtimes/*"]
+
+
+class BoundarySess(FakeSess):
+    """An account whose SwarmAI boundary is *doc* (None: there is none)."""
+
+    def __init__(self, doc, **kw):
+        super().__init__(**kw)
+        self.doc = doc
+
+    def client(self, name, region_name=None):
+        c = super().client(name, region_name)
+        outer = self
+
+        def get_policy(PolicyArn):
+            assert PolicyArn == f"arn:aws:iam::{ACCT}:policy/SwarmAI-Hive-Boundary"
+            if outer.doc is None:
+                raise _Err("NoSuchEntity")
+            return {"Policy": {"DefaultVersionId": "v3"}}
+
+        def get_policy_version(PolicyArn, VersionId):
+            assert VersionId == "v3"
+            return {"PolicyVersion": {"Document": outer.doc}}
+        c.get_policy, c.get_policy_version = get_policy, get_policy_version
+        return c
+
+
+def test_a_boundary_older_than_elastic_workers_is_named():
+    """The Elastic Workers role is created under the account's boundary: one made before
+    Elastic Workers would take its runtime logs away, so the check names it."""
+    current = ap.boundary_policy(ACCT)
+    old = {"Version": "2012-10-17",
+           "Statement": [st for st in current["Statement"] if not st["Sid"].startswith("Elastic")]}
+    v = ap.run_elastic_checks(BoundarySess(old), "us-east-1", ACCT, ARN)
+    assert v["status"] == "missing" and any("SwarmAI-Hive-Boundary" in m for m in v["missing"])
+    # the current document, the one the template made without an account id, or none at all
+    from urllib.parse import quote
+    for doc in (current, quote(json.dumps(ap.boundary_policy())), None):
+        assert ap.run_elastic_checks(BoundarySess(doc), "us-east-1", ACCT, ARN)["status"] == "ok"

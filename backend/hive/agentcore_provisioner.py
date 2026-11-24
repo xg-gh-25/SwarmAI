@@ -112,6 +112,10 @@ _VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*$")
 #: elastic rows a task in this process is working on (a transient status nobody holds is
 #: settled from the runtime's live state by ``status``)
 _WORKING: set[str] = set()
+#: (account id, region) -> the refusal the last permission check of it gave
+#: (``_permission_gap``): what ``status`` shows without asking AWS again. Checked again
+#: by every turn-on, so the standby round clears it once the permission is granted.
+_PERMISSION_GAP: dict[tuple[str, str], str] = {}
 
 
 class ElasticRefused(Exception):
@@ -425,6 +429,36 @@ def _ensure_role(session, account: str, region: str, bucket: str, repo: Optional
     return f"arn:{_partition(region)}:iam::{account}:role/{name}", created
 
 
+def _permission_gap(session, account: str, region: str) -> Optional[str]:
+    """Why this identity cannot run Elastic Workers, naming each missing permission
+    (``core.aws_permissions.run_elastic_checks``: a simulation, nothing is made), or None:
+    everything is allowed, or the check could not tell (an identity without
+    iam:SimulatePrincipalPolicy is not refused for it: the steps' own errors then say what
+    failed). Blocking; remembered for ``status``."""
+    from core import aws_account, aws_permissions
+    key = (account, region)
+    try:
+        sts = session.client("sts", config=aws_account.client_config(
+            connect_timeout=10, read_timeout=15, retries={"max_attempts": 2}))
+        arn = str(sts.get_caller_identity().get("Arn") or "")
+        _, repo = image_location(configured_image(), account, region, _host_version())
+        verdict = aws_permissions.run_elastic_checks(session, region, account, arn, repo)
+    except Exception as exc:  # noqa: BLE001 — could not tell: not a reason to refuse
+        logger.info("elastic workers: permission check not run (%s)", type(exc).__name__)
+        verdict = {"status": "unknown"}
+    if verdict.get("status") != "missing":
+        if verdict.get("status") == "unknown":
+            logger.info("elastic workers: permissions not confirmed: %s", verdict.get("detail"))
+        _PERMISSION_GAP.pop(key, None)
+        return None
+    reason = (f"This AWS identity cannot run Elastic Workers: it is missing "
+              f"{', '.join(verdict['missing'])}. Give the account's administrator SwarmAI's current "
+              "permission template (Settings › AWS account › Details › Copy template); Elastic "
+              "Workers then turns on by itself.")
+    _PERMISSION_GAP[key] = reason
+    return reason
+
+
 def _control(session, region: str):
     return session.client(ac.CONTROL_SERVICE, region_name=region, config=ac._boto_config(60))
 
@@ -586,7 +620,9 @@ class ElasticHive:
     async def claim(self, account_ref: str, region: str) -> dict:
         """Check what turning on needs and write the row (status ``enabling``). Raises
         ElasticRefused, creating nothing, when there is no usable image, the SDK cannot
-        carry the size, or the account already has one. No AWS call."""
+        carry the size, the account's identity lacks a permission Elastic Workers needs
+        (``_permission_gap``: IAM's simulator, nothing is made), or the account already
+        has one."""
         if not ac.REGION_RE.fullmatch(region or ""):
             raise ElasticRefused(f"Not an AWS region: {str(region)[:40]!r}.")
         acct = await self._account(account_ref)
@@ -594,6 +630,15 @@ class ElasticHive:
         if refusal:
             raise ElasticRefused(refusal)
         from hive import accounts as hive_accounts
+        try:
+            session = await asyncio.to_thread(hive_accounts.session_for, acct, region, "manage")
+        except Exception as exc:  # noqa: BLE001 — provision reports an unusable account itself
+            logger.info("elastic workers: no session for the permission check (%s)", type(exc).__name__)
+            session = None
+        if session is not None:
+            gap = await asyncio.to_thread(_permission_gap, session, str(acct["account_id"]), region)
+            if gap:
+                raise ElasticRefused(gap)
         now = _now()
         row = {"id": str(uuid.uuid4()), "name": ELASTIC_NAME, "owner_name": None, "hive_type": "shared",
                "account_ref": account_ref, "region": region, "instance_type": AGENTCORE, "status": ENABLING,
@@ -883,7 +928,11 @@ class ElasticHive:
                 return f"no image for {version}"
             if not standby_on():
                 return "off"
-            await self.enable(account_ref, region)
+            try:
+                row = await self.claim(account_ref, region)
+            except ElasticRefused as exc:   # nothing was made: say why (a missing permission)
+                return f"refused: {exc}"
+            await self.provision(row["id"])
             return "enabled"
         did = []
         for row in rows:
@@ -945,7 +994,11 @@ class ElasticHive:
         await self.disable(row["id"])
         if not standby_on():        # turned off while the failed row was being removed
             return "off"
-        await self.enable(row["account_ref"], row["region"])
+        try:
+            new = await self.claim(row["account_ref"], row["region"])
+        except ElasticRefused as exc:   # nothing was made: say why (a missing permission)
+            return f"refused: {exc}"
+        await self.provision(new["id"])
         return "enabled again"
 
     # ── state ──
@@ -970,7 +1023,8 @@ class ElasticHive:
         region) and why not, and each Elastic Workers with its runtime's live state. A
         transient status no task here holds is settled from that live state."""
         host = _host_version()
-        reason = await self.refusal(*target) if target else (None if configured_image() else NO_IMAGE)
+        reason = (await self.refusal(*target) or _PERMISSION_GAP.get((str(target[0]), str(target[1])))) \
+            if target else (None if configured_image() else NO_IMAGE)
         out = []
         for row in await self.rows():
             live = await self._live(row)

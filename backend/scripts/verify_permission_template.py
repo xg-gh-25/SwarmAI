@@ -27,6 +27,8 @@ Case = "tuple[str, str, str, str, dict, bool]"
 def cases(acct: str) -> list:
     role = f"arn:aws:iam::{acct}:role/{ap.ROLE_PREFIX}x"
     other_role = f"arn:aws:iam::{acct}:role/Admin"
+    elastic_role = f"arn:aws:iam::{acct}:role/{ap.ELASTIC_ROLE_PREFIX}us-east-1"
+    runtime = f"arn:aws:bedrock-agentcore:us-east-1:{acct}:runtime/{ap.ELASTIC_RUNTIME_NAME}-AbC123"
     boundary = f"arn:aws:iam::{acct}:policy/{ap.BOUNDARY_NAME}"
     instance = f"arn:aws:ec2:us-east-1:{acct}:instance/i-0123456789abcdef0"
     managed_rt = {f"ec2:ResourceTag/{ap.MANAGED_TAG}": "true"}
@@ -77,6 +79,37 @@ def cases(acct: str) -> list:
         ("a Hive tags its own instance", "boundary", "ec2:CreateTags", instance,
          {"ec2:ResourceTag/HiveName": "a", "aws:PrincipalTag/HiveName": "a",
           "aws:TagKeys": "HiveStatus"}, True),
+        # Elastic Workers (hive/agentcore_provisioner, core/carriers/agentcore)
+        ("create the Elastic Workers role with the boundary", "policy", "iam:CreateRole", elastic_role,
+         {"iam:PermissionsBoundary": boundary}, True),
+        ("refresh the bounded Elastic Workers role's trust", "policy", "iam:UpdateAssumeRolePolicy",
+         elastic_role, {"iam:PermissionsBoundary": boundary}, True),
+        ("rewrite the trust of an Elastic Workers role without the boundary", "policy",
+         "iam:UpdateAssumeRolePolicy", elastic_role, {}, False),
+        ("pass the Elastic Workers role to AgentCore", "policy", "iam:PassRole", elastic_role,
+         {"iam:PassedToService": "bedrock-agentcore.amazonaws.com"}, True),
+        ("create a tagged runtime", "policy", "bedrock-agentcore:CreateAgentRuntime", "*",
+         {f"aws:RequestTag/{ap.MANAGED_TAG}": "true"}, True),
+        ("update SwarmAI's runtime", "policy", "bedrock-agentcore:UpdateAgentRuntime", runtime, {}, True),
+        ("start a round on SwarmAI's runtime", "policy", "bedrock-agentcore:InvokeAgentRuntime",
+         runtime + "/runtime-endpoint/DEFAULT", {}, True),
+        ("read the runtime's logs", "policy", "logs:FilterLogEvents",
+         f"arn:aws:logs:us-east-1:{acct}:log-group:/aws/bedrock-agentcore/runtimes/{ap.ELASTIC_RUNTIME_NAME}-x-DEFAULT",
+         {}, True),
+        ("the Elastic Workers role writes its runtime's logs", "boundary", "logs:PutLogEvents",
+         f"arn:aws:logs:us-east-1:{acct}:log-group:/aws/bedrock-agentcore/runtimes/{ap.ELASTIC_RUNTIME_NAME}-x-DEFAULT:log-stream:s",
+         {}, True),
+        ("create an untagged runtime", "policy", "bedrock-agentcore:CreateAgentRuntime", "*", {}, False),
+        ("update a runtime that is not SwarmAI's", "policy", "bedrock-agentcore:UpdateAgentRuntime",
+         f"arn:aws:bedrock-agentcore:us-east-1:{acct}:runtime/other-x", {}, False),
+        ("pass the Elastic Workers role to EC2", "policy", "iam:PassRole", elastic_role,
+         {"iam:PassedToService": "ec2.amazonaws.com"}, False),
+        ("pass a Hive role to AgentCore", "policy", "iam:PassRole", role,
+         {"iam:PassedToService": "bedrock-agentcore.amazonaws.com"}, False),
+        ("create the Elastic Workers role without the boundary", "policy", "iam:CreateRole", elastic_role,
+         {}, False),
+        ("set the Elastic Workers role's boundary to another", "policy", "iam:PutRolePermissionsBoundary",
+         elastic_role, {"iam:PermissionsBoundary": f"arn:aws:iam::{acct}:policy/Other"}, False),
         # the escalations §7.4 names
         ("create a role without the boundary", "policy", "iam:CreateRole", role, {}, False),
         ("create a role with another boundary", "policy", "iam:CreateRole", role,

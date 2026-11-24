@@ -934,3 +934,72 @@ def test_standby_turns_it_on_in_the_swarmai_account(world, monkeypatch):
     with sqlite3.connect(world.db) as c:
         assert c.execute("SELECT verified_at FROM hive_accounts WHERE id = ?",
                          (hive_accounts.SWARMAI_ROW_ID,)).fetchone()[0] is None
+
+
+# ── the permissions are checked before anything is made ────────────────────────
+
+CALLER = f"arn:aws:sts::{ACCOUNT}:assumed-role/Admin/me"
+
+
+def _simulated(world, monkeypatch, denied=(), error=None):
+    """The account identity as IAM's simulator sees it: *denied* actions refused, or the
+    simulation itself refused with *error*."""
+    monkeypatch.setattr(ep, "_PERMISSION_GAP", {})
+    monkeypatch.setattr(world.sts, "get_caller_identity", lambda: {"Account": ACCOUNT, "Arn": CALLER})
+    world.denied = set(denied)
+
+    def simulate_principal_policy(**kw):
+        world.calls.append(("simulate", tuple(kw["ActionNames"])))
+        if error:
+            raise _err(error)
+        return {"EvaluationResults": [{"EvalActionName": a,
+                                       "EvalDecision": "implicitDeny" if a in world.denied else "allowed"}
+                                      for a in kw["ActionNames"]]}
+    monkeypatch.setattr(world.iam, "simulate_principal_policy", simulate_principal_policy, raising=False)
+
+
+def _writes(world):
+    return [c for c in world.calls if c[0] in ("create_role", "put_role_policy", "update_trust", "create_bucket")]
+
+
+def test_a_missing_permission_refuses_before_anything_is_created(world, monkeypatch):
+    _simulated(world, monkeypatch, denied=["bedrock-agentcore:CreateAgentRuntime", "iam:PassRole"])
+    with pytest.raises(ep.ElasticRefused) as e:
+        asyncio.run(world.elastic.enable("acct1", REGION))
+    assert "bedrock-agentcore:CreateAgentRuntime" in str(e.value) and "iam:PassRole" in str(e.value)
+    assert _rows(world.db) == [] and _writes(world) == [] and _aws_writes(world) == 0
+    assert any(c[0] == "simulate" for c in world.calls)
+    # the settings view says why, without asking AWS again
+    n = len(world.calls)
+    status = asyncio.run(world.elastic.status((ACCOUNT, REGION)))
+    assert status["can_enable"] is False and "iam:PassRole" in status["reason"]
+    assert [c for c in world.calls[n:] if c[0] == "simulate"] == []
+
+
+def test_standby_names_the_missing_permission(world, monkeypatch):
+    _simulated(world, monkeypatch, denied=["bedrock-agentcore:CreateAgentRuntime"])
+    did = asyncio.run(world.elastic.reconcile())
+    assert did.startswith("refused: ") and "bedrock-agentcore:CreateAgentRuntime" in did
+    assert _rows(world.db) == [] and _writes(world) == [] and _aws_writes(world) == 0
+    # the person grants it: the next round turns Elastic Workers on, and the reason is gone
+    world.denied.clear()
+    assert asyncio.run(world.elastic.reconcile()) == "enabled"
+    assert asyncio.run(world.elastic.status((ACCOUNT, REGION)))["reason"] is None
+
+
+def test_a_permission_check_that_cannot_run_does_not_refuse(world, monkeypatch):
+    _simulated(world, monkeypatch, error="AccessDenied")
+    row = asyncio.run(world.elastic.enable("acct1", REGION))
+    assert row["status"] == "ready" and len(world.control.creates) == 1
+    assert any(c[0] == "simulate" for c in world.calls)
+
+
+def test_a_repair_that_is_refused_names_the_missing_permission(world, monkeypatch):
+    asyncio.run(world.elastic.reconcile())
+    (row,) = _rows(world.db)
+    with sqlite3.connect(world.db) as c:     # a failed turn-on: no runtime recorded
+        c.execute("UPDATE hive_instances SET status = 'failed', runtime_arn = NULL")
+    _simulated(world, monkeypatch, denied=["iam:PassRole"])
+    did = asyncio.run(world.elastic.reconcile())
+    assert did.startswith("refused: ") and "iam:PassRole" in did
+    assert _rows(world.db) == []

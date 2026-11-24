@@ -13,7 +13,9 @@ _USER_DATA_TEMPLATE = r"""#!/bin/bash
 # SwarmAI Hive — EC2 user-data (runs once on first boot)
 # Fully automated: pull from S3 -> install -> start -> tag ready
 set -euo pipefail
-exec > /var/log/hive-setup.log 2>&1
+# The log, and the console too: once a first boot that never ended is cleaned up, the
+# console output the provisioner copies into the error is all that is left of it.
+exec > >(tee -a /var/log/hive-setup.log) 2>&1
 
 echo "=== SwarmAI Hive Setup — $(date) ==="
 
@@ -230,7 +232,7 @@ echo "[8/9] Starting services..."
 systemctl start swarmai-hive
 echo "Waiting for backend..."
 HEALTHY=false
-for i in $(seq 1 120); do
+for i in $(seq 1 ${backend_health_wait_s}); do
     if curl -sf http://127.0.0.1:18321/health > /dev/null 2>&1; then
         echo "Backend healthy after ${i}s"
         HEALTHY=true
@@ -836,6 +838,10 @@ def caddy_binary_update_sh() -> str:
             .replace("@CADDY_BINARY_SHA512@", CADDY_ARM64_BINARY_SHA512))
 
 
+# How long the first boot waits for the backend's /health before it tags the instance
+# (provisioner.FIRST_BOOT_WAIT_S counts it).
+BACKEND_HEALTH_WAIT_S = 120
+
 # The code-intel grammars, put on disk by the first boot and by every update, never by the
 # backend itself: the library's own download holds the GIL and stops every thread of the
 # server (core/code_intel/grammars.py). Outside the prebaked-stripped segments, so a
@@ -986,6 +992,7 @@ def render_user_data(
         caddy_install=CADDY_INSTALL_SH,
         tree_sitter_grammars=TREE_SITTER_GRAMMARS_SH,
         replay_host=REPLAY_HOST_SH,
+        backend_health_wait_s=str(BACKEND_HEALTH_WAIT_S),
     )
     if origin_secret is not None:
         values["origin_secret"] = origin_secret
@@ -1011,7 +1018,7 @@ def render_user_data(
     # Only check for our known template vars (shell vars like ${i}, ${HASH} are expected).
     _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region",
                       "origin_secret", "tmp_on_disk", "package_check", "caddy_install",
-                      "tree_sitter_grammars", "replay_host"}
+                      "tree_sitter_grammars", "replay_host", "backend_health_wait_s"}
     for var in _TEMPLATE_VARS:
         if f"${{{var}}}" in result:
             raise ValueError(f"Unresolved template variable: ${{{var}}}")

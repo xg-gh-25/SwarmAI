@@ -867,9 +867,10 @@ def _voice_check(sess: Any, rec: dict) -> dict:
 
 def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dict:
     """One verdict per capability: ``ok`` | ``missing`` (with what is missing) |
-    ``unknown`` (could not tell) | ``not_applicable``. Stored on the record. Hive and
-    storage are "can it create" checks in *hive_region* (default the main region):
-    DryRun and policy simulation, nothing is created (``core.aws_permissions``)."""
+    ``unknown`` (could not tell) | ``not_applicable``. Stored on the record. Hive,
+    storage and elastic (Elastic Workers) are "can it create" checks in *hive_region*
+    (default the main region): DryRun and policy simulation, nothing is created
+    (``core.aws_permissions``)."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rec = get_record() or {}
     region = _main_region()
@@ -877,7 +878,7 @@ def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dic
     try:
         sess = session(region)
     except AccountError as exc:
-        for cap in ("bedrock", "hive", "storage", "voice"):
+        for cap in ("bedrock", "hive", "storage", "elastic", "voice"):
             out[cap] = {"status": "unknown", "detail": exc.message}
         _update_record(capabilities=out)
         return out
@@ -901,7 +902,7 @@ def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dic
             out["bedrock"] = _verdict(exc, f"bedrock:InvokeModel {model_id}")
 
     if is_hive_mode():
-        out["hive"] = out["storage"] = {"status": "not_applicable", "detail": "this is a Hive"}
+        out["hive"] = out["storage"] = out["elastic"] = {"status": "not_applicable", "detail": "this is a Hive"}
         out["voice"] = {"status": "not_applicable", "detail": "this is a Hive"}
         _update_record(capabilities=out)
         return out
@@ -909,14 +910,26 @@ def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dic
     from core import aws_permissions
     hive_region = hive_region or region
     try:
+        hive_sess = sess if hive_region == region else session(hive_region)
         out["hive"], out["storage"] = aws_permissions.run_hive_checks(
-            sess if hive_region == region else session(hive_region), hive_region,
-            str(rec.get("account_id") or ""), str(rec.get("caller_arn") or ""))
+            hive_sess, hive_region, str(rec.get("account_id") or ""), str(rec.get("caller_arn") or ""))
         out["hive"]["region"] = hive_region
     except Exception as exc:  # noqa: BLE001 — a check that breaks reads "could not tell"
+        hive_sess = None
         out["hive"] = {"status": "unknown", "region": hive_region,
                        "detail": f"{type(exc).__name__}: {_redact(str(exc))}"}
         out["storage"] = {k: v for k, v in out["hive"].items() if k != "region"}
+    # Elastic Workers in the same region (its released image is on public ECR; a private
+    # one's lookup is checked when it is turned on, hive/agentcore_provisioner)
+    if hive_sess is None:
+        out["elastic"] = dict(out["hive"])
+    else:
+        try:
+            out["elastic"] = aws_permissions.run_elastic_checks(
+                hive_sess, hive_region, str(rec.get("account_id") or ""), str(rec.get("caller_arn") or ""))
+        except Exception as exc:  # noqa: BLE001 — a check that breaks reads "could not tell"
+            out["elastic"] = {"status": "unknown", "detail": f"{type(exc).__name__}: {_redact(str(exc))}"}
+        out["elastic"]["region"] = hive_region
     out["voice"] = _voice_check(sess, rec)
     _update_record(capabilities=out)
     return out

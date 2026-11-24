@@ -37,6 +37,7 @@ import httpx
 
 from hive import bpa_subnet
 from hive import bucket_name as _bucket_name
+from hive import user_data as _user_data
 
 logger = logging.getLogger(__name__)
 
@@ -458,6 +459,40 @@ UPDATE_STALE_S = 15 * 60
 # the script still runs. Below UPDATE_STALE_S, so a waiting update is never taken as stale.
 UPDATE_WAIT_POLLS = 150
 UPDATE_WAIT_INTERVAL_S = 5
+# How long deploy() waits for a new instance's first boot to tag it (HiveStatus). A hang
+# guard, not a limit on work: the wait ends at once on ready or error, and it outlasts every
+# bounded step of the boot (their own deadlines) plus FIRST_BOOT_UNBOUNDED_S for the steps
+# with none (the instance's own boot, dnf, the package download, Node, pip, Caddy).
+FIRST_BOOT_UNBOUNDED_S = 420
+FIRST_BOOT_WAIT_S = (FIRST_BOOT_UNBOUNDED_S + _user_data.TREE_SITTER_SETUP_DEADLINE_S
+                     + _user_data.REPLAY_HOST_DEADLINE_S + _user_data.BACKEND_HEALTH_WAIT_S)
+#: how much of the console output a failed first boot keeps in its error (its end: where it
+#: stopped)
+CONSOLE_TAIL_CHARS = 1500
+_CONSOLE_JUNK_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[^\x20-\x7e\n\t]")
+
+
+def _console_tail(session, region: str, ec2_id: str) -> Optional[str]:
+    """The end of the instance's console output (GetConsoleOutput, which carries the
+    first-boot script's lines: hive/user_data tees its log there), printable text only, or
+    None when it cannot be read. Blocking."""
+    import base64
+    ec2 = session.client("ec2", region_name=region)
+    try:
+        try:
+            got = ec2.get_console_output(InstanceId=ec2_id, Latest=True)
+        except Exception as exc:  # noqa: BLE001 — Latest is for Nitro instances only
+            logger.info("console output (latest) of %s not read (%s): the buffered one", ec2_id, type(exc).__name__)
+            got = ec2.get_console_output(InstanceId=ec2_id)
+        raw = got.get("Output") if isinstance(got, dict) else None
+        if not isinstance(raw, str) or not raw:
+            return None
+        text = base64.b64decode(raw).decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001 — the error says what it can without it
+        logger.warning("console output of %s not read (%s)", ec2_id, type(exc).__name__)
+        return None
+    text = _CONSOLE_JUNK_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
+    return text[-CONSOLE_TAIL_CHARS:] or None
 
 
 def _script_error(output: str, limit: int = 300) -> str:
@@ -1411,15 +1446,18 @@ class HiveProvisioner:
                 None, False)
 
             # Step 9: Wait for healthy (via EC2 tag, not HTTP — SG blocks non-CF traffic)
-            healthy = await self._wait_healthy_via_tag(session, ec2_id, region, timeout=300)
+            healthy = await self._wait_healthy_via_tag(session, ec2_id, region, timeout=FIRST_BOOT_WAIT_S)
             if not healthy:
                 note = (" The Hive's VPC could not be read, so its role refused requests through "
                         "this VPC's endpoints (an S3 or SSM endpoint there stops the setup); retry "
                         "once EC2 answers." if role_policy == "closed" else "")
+                # read now: the cleanup below terminates the instance, and its log with it
+                console = await asyncio.to_thread(_console_tail, session, region, ec2_id)
                 await self._update_instance(
                     instance_id,
                     status="error",
-                    error_message="EC2 setup timeout — check /var/log/hive-setup.log." + note,
+                    error_message="EC2 setup timeout — check /var/log/hive-setup.log." + note
+                    + (f"\nThe instance's console output, last lines:\n{console}" if console else ""),
                 )
                 # Cleanup partial resources on health timeout
                 try:

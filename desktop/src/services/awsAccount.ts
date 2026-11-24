@@ -61,7 +61,8 @@ export interface AwsAccountView {
   chat_via: 'aws' | 'bedrock_key';
   /** the main region: Bedrock, cloud storage, voice, the default for new Hives */
   region?: string;
-  capabilities: (Record<'bedrock' | 'hive' | 'storage' | 'voice', Capability> & { checked_at?: string }) | null;
+  /** ``elastic``: can this identity run Elastic Workers (Swarm Out's settings show its reason); absent in a record checked before it existed */
+  capabilities: (Record<'bedrock' | 'hive' | 'storage' | 'voice', Capability> & { elastic?: Capability; checked_at?: string }) | null;
   profile_file: string;
   supported: boolean;
   /** what the credential banner says if the credentials stop working: for the account
