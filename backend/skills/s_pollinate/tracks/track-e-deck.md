@@ -1,7 +1,7 @@
 # Track E: Deck (PPTX)
 
 > Leadership-ready presentations with speaker notes and progressive reveal.
-> "I would present this to Rob as-is."
+> "I would present this to my leadership as-is."
 
 ## When This Track Runs
 

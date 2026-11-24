@@ -290,6 +290,29 @@ def test_uninstall_cleanup_reports_what_the_scheduler_step_did(monkeypatch, tmp_
     assert not (tmp_path / "backend.port").exists()
 
 
+def test_uninstall_cleanup_never_returns_internal_error_text(monkeypatch, tmp_path):
+    """A failing step is reported as "error"; its exception text (paths, internals)
+    stays in the log and never reaches the client (secure-coding baseline: generic
+    client errors)."""
+    import asyncio
+    from unittest.mock import AsyncMock
+    from jobs import install_scheduler as ins
+    from core import service_manager as sm
+    from routers import system
+
+    def boom():
+        raise RuntimeError("/Users/someone/Library/LaunchAgents/secret.plist denied")
+
+    monkeypatch.setattr(ins, "uninstall", boom)
+    monkeypatch.setattr(sm.service_manager, "stop_all",
+                        AsyncMock(side_effect=RuntimeError("internal service detail")))
+    monkeypatch.setattr(system, "PORT_FILE", tmp_path / "backend.port")
+    out = asyncio.run(system.uninstall_cleanup())
+    assert out["details"]["scheduler_plist"] == "error"
+    assert out["details"]["services"] == "error"
+    assert "secret.plist" not in str(out) and "internal service detail" not in str(out)
+
+
 # ── 5. the sentinel and the new-Brain template ───────────────────────────────────
 
 def test_sentinel_names_every_governed_file():

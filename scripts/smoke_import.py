@@ -53,7 +53,7 @@ def main() -> int:
             # expected in CI — the module loaded, just can't fully init.
             ok += 1
 
-    platform = "Windows" if sys.platform == "win32" else "Linux"
+    platform = {"win32": "Windows", "darwin": "macOS"}.get(sys.platform, "Linux")
 
     if ok == 0:
         print(f"No module found under {BACKEND}: nothing was checked")

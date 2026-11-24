@@ -106,3 +106,5 @@ test_inbox_feed_config.py  # Inbox feed settings: config.yaml feeds parsed whole
 test_inbox_deletion_sweep.py  # what the Inbox replaced (fallback_script, signal chain, Community) has no reader left
 test_recall_no_inject_segments.py  # a DailyBriefs / Signals file anywhere is indexed but never auto-injected; Signals is fenced untrusted
 test_slack_outbound.py  # Slack bot outbound: Web API with the bot token only; unreachable or refused sends nothing, no fallback to the person's MCP
+test_install_docs.py  # the install docs (README, QUICK_START, USER_GUIDE) match the release targets and the app's labels (repo files only)
+test_aws_account_integrity.py  # no module outside the AWS account layer imports the AWS SDK (parses source only, no AWS call)

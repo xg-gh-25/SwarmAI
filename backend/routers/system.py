@@ -1043,7 +1043,7 @@ async def uninstall_cleanup():
         results["scheduler_plist"] = uninstall_scheduler()
     except Exception as e:
         logger.error("Failed to remove scheduler plist: %s", e)
-        results["scheduler_plist"] = f"error: {e}"
+        results["scheduler_plist"] = "error"  # detail stays in the log, never to the client
 
     # 2. Stop managed services
     try:
@@ -1052,7 +1052,7 @@ async def uninstall_cleanup():
         results["services"] = "stopped"
     except Exception as e:
         logger.error("Failed to stop services: %s", e)
-        results["services"] = f"error: {e}"
+        results["services"] = "error"  # detail stays in the log, never to the client
 
     # 3. Remove port file — unlink is blocking FS I/O, off the loop (run_6ea3cb12).
     port_file = PORT_FILE
