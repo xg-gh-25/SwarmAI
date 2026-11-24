@@ -33,7 +33,7 @@ _Reference materials, documentation, guides, and long-lived resources._
 
 ## Archives (`Knowledge/Archives/`)
 
-_Archived daily activity files, and the history of the retired signal digest and morning brief (`Signals/`, `DailyBriefs/`: fetched content, never auto-injected). Auto-managed — older entries are pruned after 90 days._
+_Archived daily activity files, and the history of the retired signal digest and morning brief (`Signals/`, `DailyBriefs/`: fetched content, never auto-injected). Auto-managed: a DailyActivity file moves here after 90 days, and a dated file here is deleted after 365 days (the `Signals/` and `DailyBriefs/` folders are kept)._
 
 ## DailyActivity (`Knowledge/DailyActivity/`)
 

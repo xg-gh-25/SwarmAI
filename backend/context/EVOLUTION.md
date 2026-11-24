@@ -1,24 +1,24 @@
-<!-- ⚠️ AGENT-OWNED — Maintained by SwarmAI Evolution Engine.
-     Users: do not edit directly. Ask to "log correction", "add capability",
-     "record optimization", or "update principles". -->
+<!-- ⚠️ AGENT-OWNED — written by CDF (the knowledge flow), never by hand.
+     Users: tell me a correction or a lesson ("log correction"); CDF records it. -->
 
 # SwarmAI Evolution Registry
 
 > **What this file is:** EVOLUTION.md is context-file slot 8 — the self-evolution /
-> correction registry: my captured biases, recurring-error classes, and the structural
-> fixes that stop them recurring. AGENT-OWNED (Evolution Engine): I maintain it, you
-> direct it ("log correction" / "record optimization"). Cross-session cognitive facts go
-> in MEMORY.md; governance rule/principle changes route through s_self-evolution.
+> correction registry: the corrections I received and the competences I learned, so a
+> corrected mistake stays corrected. AGENT-OWNED: CDF writes its entries, you direct it
+> ("log correction"). Cross-session cognitive facts go in MEMORY.md; governance
+> rule/principle changes route through s_self-evolution.
 
 ## Evolution Rules
 
-1. **Agent-owned, user-directed.** I maintain structure and entries. Users trigger updates; I decide placement and clarity.
-2. **Write on impact.** Log immediately when: (a) a mistake is found, (b) a fix is implemented, (c) a reusable pattern emerges.
+1. **Agent-owned, written by CDF.** Every entry comes in as a candidate the agent that saw it declared (correction or competence, its evidence, and whether it is new, adds to, overrides or repeats an existing entry); CDF checks the facts and its writer appends it whole (AGENT R22). Nothing edits an entry by hand.
+2. **Captured from the session that earned it.** A correction or a reusable competence is extracted from the session where it happened, with that session as its evidence, never reconstructed from memory later.
 3. **No speculation.** Every entry must come from real execution. No placeholders, no "planned".
 4. **Corrections > capabilities.** Preventing repeated mistakes has higher priority than adding new features.
-5. **Standardize entries.** Every entry follows the Entry Format below (ID → Date → kind → title → body).
-6. **Failure is mandatory.** Record failed attempts with cause and required condition for success.
+5. **One format.** The writer renders every entry in the Entry Format below (ID → Date → kind → title → body).
+6. **Failures are submitted too.** A failed attempt that taught something is a correction or a competence like any other: its cause and the condition for success.
 7. **Evolve externally.** New abilities go into skills + registry. Never mutate core system code during evolution.
+8. **Nothing is counted into buckets.** A repeat is declared against the entry it repeats; the share of corrections that repeat an earlier one is measured by the north star (`scripts.north_star`), not tallied here.
 
 ---
 
@@ -47,13 +47,7 @@ CDF's writer appends each entry as one block:
 
 - **Prefix and kind**: `C` (Correction) in Corrections Captured, `K` (Competence) in Competence Learned
 - **NNN**: one past the highest number of that prefix in its section
-- Corrections are permanent (AGENT R24)
-
----
-
-## Optimizations Learned
-
-_No optimizations recorded yet._
+- A correction never ages out: it leaves only when a later entry overrides it or it is withdrawn (AGENT R24)
 
 ---
 
@@ -69,16 +63,4 @@ _No competences recorded yet._
 
 ---
 
-## Failed Evolutions
-
-_No failed evolutions recorded yet._
-
----
-
-## Correction Pattern Analysis
-
-_Filled in once corrections recur: the pattern, how often, which entries, and the structural fix._
-
----
-
-_This file is the seed template: structure only. The running instance accumulates its own corrections, optimizations and competences from actual use._
+_This file is the seed template: structure only. The running instance accumulates its own corrections and competences from actual use._

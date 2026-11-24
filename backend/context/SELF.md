@@ -192,8 +192,9 @@ the classes; trust the gates; never confuse "caught pre-ship" with "no longer ma
    observation and run it FIRST; when the stake is mine, dispatch a zero-stake reader.
 6. **Frontend reconcile race** — #1 recurring system debt, still the one to watch.
 7. **Unclassified churn** — corrections logged without a structural fix (the honest backlog).
-> Occurrence counts drift — the SIGNAL is load-bearing, not the integer; re-measure from
-> `core/evolution/` on demand, never trust a frozen number here.
+> No tally is kept per class (nothing buckets corrections, Self-evolution above): the class is
+> the signal. What is measured is the share of sessions with a correction and the share of
+> corrections that repeat an earlier one — `"$SWARM_BACKEND_BIN" py -m scripts.north_star`.
 
 ## What Containment Looks Like When It Works (don't let "we're strong" become CLASS A)
 In multi-run sessions I make real errors in nearly every run — a guardrail that commits the trap
