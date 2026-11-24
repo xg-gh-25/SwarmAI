@@ -142,8 +142,10 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.instance.get", "GET", f"{_HV}/instances/{{instance_id}}", _P, "read"),
     _op("hive.delete", "DELETE", f"{_HV}/instances/{{instance_id}}", _P, "irreversible"),
     _op("hive.stop", "POST", f"{_HV}/instances/{{instance_id}}/stop", _P, "change"),
-    # one Hive's own idle stop (always on keeps paying for the machine): the person's
-    _op("hive.idle_stop", "PUT", f"{_HV}/instances/{{instance_id}}/idle-stop", _P, "change"),
+    # one Hive's own idle stop (always on, N minutes or the default): a setting, it starts
+    # or stops nothing; the owner agent sets it too, through idle-stop (the person asks
+    # their agent to keep a Hive on)
+    _op("hive.idle_stop", "PUT", f"{_HV}/instances/{{instance_id}}/idle-stop", _PO, "change"),
     # restarting a running Hive nothing uses (none of this Host's open runs, no session
     # streaming: the route checks both) is the owner agent's too, through restart-hive
     _op("hive.restart", "POST", f"{_HV}/instances/{{instance_id}}/restart", _PO, "change"),
@@ -292,7 +294,9 @@ AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land"
                            # only when no Hive takes this Host's runs: the CLI checks it
                            "hive.start",
                            # through restart-hive, which waits for the restart to end
-                           "hive.restart"})
+                           "hive.restart",
+                           # through idle-stop
+                           "hive.idle_stop"})
 
 
 @lru_cache(maxsize=1)

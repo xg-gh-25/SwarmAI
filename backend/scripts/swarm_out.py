@@ -234,6 +234,12 @@ def _parser() -> argparse.ArgumentParser:
     rs = sub.add_parser("restart-hive", help="stop and start a running Hive that holds none of "
                                              "this Host's open runs and has no session streaming")
     rs.add_argument("--hive", required=True, help="the Hive's name")
+    ist = sub.add_parser("idle-stop", help="set one EC2 Hive's own idle stop: always on, "
+                                           "N idle minutes, or the default")
+    ist.add_argument("--hive", required=True, help="the Hive's name")
+    ist.add_argument("--minutes", required=True, type=_idle_minutes,
+                     help="'always' (never stopped when idle), 'default' (the Swarm Out "
+                          "settings default), or 30-480")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id", type=_dispatch_id)
     dg = sub.add_parser("diagnose", help="why the run's Hive session stopped: OOM kills, service stops, "
@@ -430,6 +436,29 @@ def _start_hive(args) -> int:
     return _call("POST", f"/instances/{hid}/start", None, api="hive")
 
 
+def _idle_minutes(v: str) -> "int | None":
+    """--minutes: 'always' -> 0, 'default' -> None, else a whole number (the route checks
+    its range)."""
+    s = v.strip().lower()
+    if s == "always":
+        return 0
+    if s == "default":
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError("'always', 'default' or a number of minutes") from None
+
+
+def _idle_stop(args) -> int:
+    """Set one EC2 Hive's own idle stop (routers/hive set_idle_stop): the column only, the
+    Hive is neither started nor stopped here."""
+    hid = _hive_id(args.hive)
+    if hid is None:
+        return 1
+    return _call("PUT", f"/instances/{hid}/idle-stop", {"minutes": args.minutes}, api="hive")
+
+
 def _restart_hive(args) -> int:
     """Restart a running Hive nothing is using. The daemon checks it (none of this Host's
     open runs, unknown refuses; it answers its status check with no session streaming;
@@ -481,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
         return _start_hive(args)
     if args.cmd == "restart-hive":
         return _restart_hive(args)
+    if args.cmd == "idle-stop":
+        return _idle_stop(args)
     if args.cmd == "watch":
         # the route answers within WATCH_MAX_S (540 s); this waits a little longer
         return _call("POST", "/watch", {"ids": args.dispatch_ids, "since": args.since,

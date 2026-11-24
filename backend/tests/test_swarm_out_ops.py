@@ -113,7 +113,9 @@ def test_only_restart_widens_the_agents_hive_rights():
     hive_agent = {op.name for op in swarm_out_ops.ops()
                   if op.name.startswith("hive.") and OWNER in op.callers and op.weight != "read"}
     assert hive_agent == {"hive.restart", "hive.start", "hive.update", "hive.elastic.update",
-                          "hive.elastic.standby_round"}, hive_agent
+                          "hive.elastic.standby_round", "hive.idle_stop"}, hive_agent
+    # one Hive's idle stop is a setting (it starts and stops nothing), set only through idle-stop
+    assert "hive.idle_stop" in swarm_out_ops.AGENT_LIMITED
     by_name = {op.name: op for op in swarm_out_ops.ops()}
     for name in ("hive.elastic.enable", "hive.elastic.disable"):          # costs money / deletes
         assert by_name[name].callers == {PERSON}, name
@@ -284,6 +286,7 @@ _CLI_ARGS = {
     "escalate": ["so_0123456789ab", "req1", "--why", "w"],
     "start-hive": ["--hive", "h1"],
     "restart-hive": ["--hive", "h1"],
+    "idle-stop": ["--hive", "h1", "--minutes", "always"],
     "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
     "stop": ["so_0123456789ab", "--why", "w"],
     "return-prepare": ["so_0123456789ab", "--why", "w", "--url", "https://x/y.git"],
@@ -517,3 +520,23 @@ def test_the_agent_may_read_the_elastic_hive_state():
     # nor through the settings route
     from routers.settings import WRITABLE_KEYS
     assert "hive_elastic_standby" not in WRITABLE_KEYS
+
+
+def test_idle_stop_sends_the_policy_the_person_asked_for(monkeypatch):
+    """idle-stop maps always -> 0, default -> null, a number -> itself, and PUTs it to the
+    one Hive's idle-stop route (an owner-agent op)."""
+    from scripts import swarm_out as cli
+    from core.knowledge_cli import RESTRICTED_ENV
+    monkeypatch.delenv(RESTRICTED_ENV, raising=False)
+    monkeypatch.setattr(cli, "_fetch", lambda path: {"hives": [{"id": "inst1", "name": "h1"}]})
+    sent: list = []
+    monkeypatch.setattr(cli, "_call", lambda method, path, body=None, *a, api="swarm-out", **k:
+                        sent.append((method, f"/api/{api}{path}", body)) or 0)
+    for word, want in (("always", 0), ("default", None), ("90", 90)):
+        assert cli.main(["idle-stop", "--hive", "h1", "--minutes", word]) == 0
+        assert sent[-1] == ("PUT", "/api/hive/instances/inst1/idle-stop", {"minutes": want})
+    op = swarm_out_ops.match("PUT", "/api/hive/instances/inst1/idle-stop")
+    assert op is not None and OWNER in op.callers
+    import pytest
+    with pytest.raises(SystemExit):
+        cli.main(["idle-stop", "--hive", "h1", "--minutes", "forever"])
