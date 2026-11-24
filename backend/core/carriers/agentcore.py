@@ -60,7 +60,10 @@ Hive side, read here):
 - ``records/<name>``: the entry's bytes, ``name`` = ``hive_records._name(seq, kind, key)``
   (recomputed here, never read from the entry);
 - ``state.json``: ``{"state": "running" | "waiting" | "ended" | "replaced"}``;
-- ``checks.json``: ``{"checks": [...]}``, what ``GET /api/hive/work/<id>/checks`` serves;
+- ``checks.json``: ``{"at", "orders": [{"work_id", "checks": [...]}, ...]}``, one entry per
+  work order with a check record, each what ``GET /api/hive/work/<id>/checks`` serves
+  (core/hive_agentcore ``_checks_body``); the dispatch's checks are its order's (the
+  Host sends the order under the dispatch id);
 - ``usage.json``: ``{"rows": [...]}``, what ``GET /api/hive/usage`` serves, rewritten whole.
 """
 from __future__ import annotations
@@ -742,11 +745,17 @@ def _pull_s3_locked(row: dict, dispatch_id: str, round: int, s3: Any, bucket: st
     return {**out, **hr.state(dispatch_id)}
 
 
-def _check_lines(body: Any) -> Optional[list[dict]]:
-    """A round's checks.json as ``swarm_out_results`` keeps check records (same cleaning
-    as its HTTP read), None when there is none."""
+def _check_lines(body: Any, work_id: str) -> Optional[list[dict]]:
+    """The check record of the work order *work_id* in a round's checks.json
+    (``{"at", "orders": [{"work_id", "checks"}, ...]}``, core/hive_agentcore
+    ``_checks_body``), as ``swarm_out_results`` keeps check records (same cleaning as its
+    HTTP read); None when the body lists no such order. The order is picked by its id,
+    the one the Host sent it under (the dispatch id), never by its place in the list."""
     from core.swarm_out_results import MAX_CHECK_LINES
-    lines = body.get("checks") if isinstance(body, dict) else None
+    orders = body.get("orders") if isinstance(body, dict) else None
+    mine = [o for o in orders if isinstance(o, dict) and o.get("work_id") == work_id] \
+        if isinstance(orders, list) else []
+    lines = mine[-1].get("checks") if mine else None
     if not isinstance(lines, list):
         return None
     keep = []
@@ -1237,7 +1246,8 @@ class AgentCoreCarrier:
                     **await asyncio.to_thread(hr.state, dispatch_id), "check_records": None}
         rec = await asyncio.to_thread(_pull_s3, {**row, "dispatch_id": dispatch_id}, dispatch_id, rnd, s3, bucket, sid)
         try:
-            checks = _check_lines(await asyncio.to_thread(_get_json, s3, bucket, f"bridge/{sid}/checks.json", CHECKS_MAX))
+            checks = _check_lines(await asyncio.to_thread(_get_json, s3, bucket, f"bridge/{sid}/checks.json", CHECKS_MAX),
+                                  dispatch_id)
         except Exception as exc:  # noqa: BLE001 — keep what an earlier read kept
             logger.warning("agentcore: check record of %s not read (%s)", dispatch_id, type(exc).__name__)
             checks = None

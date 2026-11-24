@@ -488,8 +488,12 @@ async def test_s3_outputs_equal_the_http_read(world, monkeypatch):
         transport=httpx.MockTransport(serve), base_url="https://demo.cloudfront.net"))
     by_http = await hive_records.pull({"dispatch_id": DID, "session_id": sid}, {})
     _to_s3(world, ws, sid)
-    world.s3.put(f"bridge/{sid}/checks.json", {"checks": [{"id": "backend-bvt", "exit": 0, "started_at": "a",
-                                                           "ended_at": "b", "noise": "x"}, {"id": 5}]})
+    # the shape the Hive's bridge writes (core/hive_agentcore._checks_body): one entry per
+    # work order; only the dispatch's own order is its check record
+    world.s3.put(f"bridge/{sid}/checks.json", {"at": 1.0, "orders": [
+        {"work_id": "so_" + "f" * 12, "checks": [{"id": "backend-bvt", "exit": 9}]},
+        {"work_id": DID2, "checks": [{"id": "backend-bvt", "exit": 0, "started_at": "a",
+                                      "ended_at": "b", "noise": "x"}, {"id": 5}]}]})
     by_s3 = await world.carrier.outputs(h, DID2, row={"dispatch_id": DID2})
     assert _kept(DID) == _kept(DID2) and len(_kept(DID)) == 5
     assert {k: by_http[k] for k in ("supported", "seq", "closed", "error")} == \
