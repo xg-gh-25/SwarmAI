@@ -354,9 +354,11 @@ async def get_context_health_lite():
         return result
     root = Path(ws_path)
 
-    # 1. Calibrated per-file token block (the one unavoidable cost — bounded file reads).
+    # 1. Calibrated per-file token block (the one unavoidable cost — bounded file reads
+    #    plus the loader's per-file selection, e.g. TIMELINE's unit parse). Off the
+    #    event loop, on the nav pool like the other overlay reads.
     try:
-        result["token_block"] = build_context_token_block(root / ".context")
+        result["token_block"] = await executors.run_nav(build_context_token_block, root / ".context")
     except Exception as exc:
         logger.debug("context-health/lite: token block failed: %s", exc)
 
@@ -425,7 +427,7 @@ async def get_context_health():
     try:
         from core.context_brain import build_context_token_block
 
-        result["token_block"] = build_context_token_block(root / ".context")
+        result["token_block"] = await executors.run_nav(build_context_token_block, root / ".context")
     except Exception as exc:
         logger.debug("context-health: token block failed: %s", exc)
         result["token_block"] = None

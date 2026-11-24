@@ -5,7 +5,9 @@
  * Memory / Guideline) with ONLY the Context tab implemented (Memory + Guideline
  * are labeled placeholders), plus a fixed overview rail (live total tokens +
  * composition, Needs-you counts). The Context tab renders the assembled
- * context-file stack from the /eval/context-health token_block payload.
+ * context-file stack from the /eval/context-health token_block payload: each row's
+ * `tokens` is what the file puts in the prompt (the main number), `disk_tokens` the
+ * file on disk (secondary, shown only where it differs).
  *
  * The backend fetch is mocked at the api boundary (services/api). We assert the
  * overlay CONSUMES the payload (rows, ownership, lock, %) — not that it invents
@@ -342,12 +344,14 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     expect(screen.queryByTestId('cm-health-counts-KNOWLEDGE.md')).toBeNull();
   });
 
-  it('shows the legend: every file is injected whole, nothing is cut', async () => {
+  it('shows the legend: numbers are what each file puts in the prompt, nothing is cut', async () => {
     renderOverlay();
     openOverlay();
     const panel = await screen.findByTestId('cm-panel-context');
-    // the read path cuts nothing (R23): no truncation contract is taught
-    expect(panel.textContent).toMatch(/injected in full/i);
+    // the read path cuts nothing (R23): no truncation contract is taught, and the
+    // legend no longer claims disk size == prompt load (TIMELINE is selected)
+    expect(panel.textContent).toMatch(/what the file puts in the prompt/i);
+    expect(panel.textContent).not.toMatch(/disk size = prompt load|injected in full/i);
     expect(panel.textContent).not.toMatch(/truncat|cut from/i);
     expect(panel.textContent).toMatch(/fresh.*idle.*growing.*oversized|Health/i);
   });
@@ -623,9 +627,9 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     expect(num.textContent).toContain('48');
   });
 
-  // NEW ARCHITECTURE (2026-08-14): selective injection was DELETED — live memory is
-  // ALWAYS full-injected (disk == prompt load). The ✂ cue + the rail's "actually
-  // injected (selective)" line are GONE. Teeth: re-adding a selective branch fails this.
+  // The old ✂ selective cue and the rail's "actually injected (selective)" line stay
+  // gone: the injected size is now the row's main number itself (and the disk size
+  // its secondary line, see "injected tokens, disk secondary" below).
   it('shows NO selective cue and NO injected-estimate line (full-injection architecture)', async () => {
     mockHealth();
     renderOverlay();
@@ -634,7 +638,7 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     // No ✂ selective cue on any row (MEMORY was the selective one under the old arch).
     const memRow = await screen.findByTestId('cm-file-row-MEMORY.md');
     expect(memRow.querySelector('[data-testid="cm-selective"]')).toBeNull();
-    // No "actually injected (selective)" rail line — disk size IS the prompt load.
+    // No "actually injected (selective)" rail line — the headline IS the injected load.
     expect(screen.queryByTestId('cm-injected')).toBeNull();
   });
 });
@@ -856,5 +860,75 @@ describe('CMBrainOverlay — Memory / Evolution say how they work today', () => 
     const evo = await screen.findByTestId('cm-panel-evolution');
     expect(evo.textContent).toMatch(/nothing is moved out by size/);
     expect(evo.textContent).not.toMatch(/size cap|bias tag/);
+  });
+});
+
+describe('CMBrainOverlay — injected tokens, disk secondary', () => {
+  // The person's case: TIMELINE.md is 67K on disk but injects only its month
+  // summaries (~0.5K); MEMORY.md goes in whole (disk == injected at the shown K).
+  const SELECTED_BLOCK = {
+    total_tokens: 71000,
+    disk_tokens: 139000,
+    budget: 133000,
+    warning_threshold: 133000,
+    emergency_threshold: 172000,
+    over_budget: false,
+    per_file: [
+      { name: 'SWARMAI.md', tokens: 2000, disk_tokens: 2010, pct: 2.8, owner: 'system', priority: 0, locked: true, health: 'fresh' },
+      { name: 'MEMORY.md', tokens: 68500, disk_tokens: 68510, pct: 96.5, owner: 'agent', priority: 7, locked: false, health: 'fresh' },
+      { name: 'TIMELINE.md', tokens: 500, disk_tokens: 67000, pct: 0.7, owner: 'user', priority: 10, locked: false, health: 'fresh' },
+    ],
+  };
+
+  it('a row shows the injected tokens as the main number and the disk size as secondary', async () => {
+    mockHealth({ token_block: SELECTED_BLOCK });
+    renderOverlay();
+    const row = await screen.findByTestId('cm-file-row-TIMELINE.md');
+    expect(within(row).getByTestId('cm-file-tokens').textContent).toBe('500');
+    expect(within(row).getByTestId('cm-file-disk').textContent).toBe('67K on disk');
+    // the share bar is the injected share the backend computed
+    expect((row.querySelector('[data-testid="cm-pct-bar"]') as HTMLElement).style.width).toMatch(/2%|0\.7/);
+  });
+
+  it('a file injected whole shows no disk line', async () => {
+    mockHealth({ token_block: SELECTED_BLOCK });
+    renderOverlay();
+    const row = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(within(row).getByTestId('cm-file-tokens').textContent).toBe('69K');
+    expect(within(row).queryByTestId('cm-file-disk')).toBeNull();
+  });
+
+  it('the rail total is the injected load, with the disk total as secondary', async () => {
+    mockHealth({ token_block: SELECTED_BLOCK });
+    renderOverlay();
+    const rail = await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(rail.textContent).toContain('71K'));
+    expect(within(rail).getByTestId('cm-total-disk').textContent).toBe('139K on disk');
+  });
+
+  it('the banner does not fire when only the disk size is over the warning line', async () => {
+    mockHealth({ token_block: SELECTED_BLOCK });
+    renderOverlay();
+    const rail = await screen.findByTestId('cm-overview-rail');
+    await waitFor(() => expect(within(rail).getByTestId('cm-total-disk')).toBeInTheDocument());
+    expect(screen.queryByTestId('cm-budget-alert')).toBeNull();
+  });
+
+  it('the banner names only files whose injected size carries the load', async () => {
+    mockHealth({ token_block: {
+      ...SELECTED_BLOCK,
+      total_tokens: 140000,
+      over_budget: true,
+      per_file: [
+        // no growing/oversized tag, so the alert falls back to the biggest files: a
+        // file that injects nothing is never one of them, however big on disk
+        { name: 'MEMORY.md', tokens: 140000, disk_tokens: 140000, pct: 100, owner: 'agent', priority: 7, locked: false, health: 'fresh' },
+        { name: 'TIMELINE.md', tokens: 0, disk_tokens: 90000, pct: 0, owner: 'user', priority: 10, locked: false, health: 'fresh' },
+      ],
+    } });
+    renderOverlay();
+    const alert = await screen.findByTestId('cm-budget-alert');
+    expect(alert.textContent).toMatch(/MEMORY\.md/);
+    expect(alert.textContent).not.toMatch(/TIMELINE\.md/);
   });
 });

@@ -8,9 +8,18 @@ Design (run_5f7d4fe1): read-only telemetry for the Brain overlay UI. It joins th
 canonical assembly metadata (`ContextDirectoryLoader.CONTEXT_FILES` — the SoT for
 filename / priority / section_name / truncatable) with the CANONICAL
 `ContextDirectoryLoader.estimate_tokens` (the SAME CJK-aware estimator prompt
-assembly + `_check_token_budget` use — NOT byte length, which diverges ~2.2x on CJK)
-and the real budget thresholds. This is why the overview number equals the prompt's
-real load, not a naive char count.
+assembly uses — NOT byte length, which diverges ~2.2x on CJK) and the real budget
+thresholds.
+
+Injected, not disk: a file's prompt load is what assembly puts in the prompt, and
+that is not always the file. TIMELINE.md contributes only the current and previous
+month's summaries plus one line counting its events (``select_timeline``); the
+loader also removes metadata comments and the title line, skips an unfilled user
+template, and strips MEMORY's generated index block. So each row is measured on
+``ContextDirectoryLoader.render_section`` — the loader's own per-file step, the one
+assembly uses — through ``section_text``, the same text the budget check counts. The
+disk size is kept beside it as ``disk_tokens``; the total, the warning comparison,
+the share and the health tag use the injected tokens.
 
 Ownership note (Gate-1 finding, run_5f7d4fe1): `ContextFileSpec` carries NO owner
 field — only `user_customized` (a 2-way system/customized split). The 4-way owner
@@ -77,12 +86,6 @@ def _owner_for(filename: str, user_customized: bool) -> str:
     return "user" if user_customized else "system"
 
 
-# NEW ARCHITECTURE (2026-08-14): NO file runs through selective injection anymore —
-# live MEMORY.md is always full-injected (injected size == disk size). The old
-# _SELECTIVE_FILES set, _injected_floor() stub, and the has_selective/injected_floor/
-# injected_estimate token-block fields were always-inert and were removed (run_8f852625).
-
-
 def _health_tag(tokens: int, budget: int, mtime_days: float) -> str:
     """Single per-file Health tag, severity-first (Gate-1 precedence, run_d0ba3f69).
 
@@ -139,15 +142,20 @@ def build_context_token_block(context_dir: Path) -> dict:
 
     Returns:
         {
-          "total_tokens": int,           # sum of per-file calibrated tokens
+          "total_tokens": int,           # sum of per-file INJECTED tokens
+          "disk_tokens": int,            # sum of per-file disk tokens (secondary)
           "budget": int,                 # WARNING threshold = the assembly budget
           "warning_threshold": int,
           "emergency_threshold": int,
-          "over_budget": bool,
+          "over_budget": bool,           # total_tokens (injected) > warning
           "per_file": [                  # sorted by priority ascending (P0 first)
-            {"name","tokens","pct","owner","priority","locked"}
+            {"name","tokens","disk_tokens","pct","owner","priority","locked",
+             "health","health_counts"}
           ],
         }
+
+    ``tokens`` is what the file puts in the owner's prompt (0 when assembly skips
+    it, e.g. an unfilled template); ``disk_tokens`` is the whole file.
 
     Never raises for a missing dir / unreadable file — a health telemetry read
     must not crash the endpoint (O030: observability, not a gate). A missing dir
@@ -155,6 +163,9 @@ def build_context_token_block(context_dir: Path) -> dict:
     """
     per_file: list[dict] = []
     total = 0
+    disk_total = 0
+    # The owner's prompt (no exclusions): the form the C&M overlay's person sees.
+    loader = ContextDirectoryLoader(context_dir)
 
     for spec in CONTEXT_FILES:
         path = context_dir / spec.filename
@@ -165,12 +176,16 @@ def build_context_token_block(context_dir: Path) -> dict:
         except OSError as exc:
             logger.debug("context_brain: read failed for %s: %s", spec.filename, exc)
             continue
-        tokens = ContextDirectoryLoader.estimate_tokens(content)
+        disk_tokens = ContextDirectoryLoader.estimate_tokens(content)
+        try:
+            body = loader.render_section(spec)
+        except Exception as exc:  # never crash telemetry (O030); disk is the fallback
+            logger.warning("context_brain: render failed for %s, counting disk: %s", spec.filename, exc)
+            body = content
+        tokens = (ContextDirectoryLoader.estimate_tokens(
+            ContextDirectoryLoader.section_text(spec.section_name, body)) if body else 0)
         total += tokens
-        # NEW ARCHITECTURE (2026-08-14): selective injection was deleted — every
-        # file is FULL-injected (disk size == prompt load). There is no "injected
-        # floor below disk" to report, so the old has_selective/injected_floor/
-        # injected_estimate fields were always-inert and are removed (run_8f852625).
+        disk_total += disk_tokens
         # File age in days from mtime (for the Health tag). Read defensively —
         # a stat failure must not crash the telemetry read (O030).
         try:
@@ -180,7 +195,8 @@ def build_context_token_block(context_dir: Path) -> dict:
         per_file.append(
             {
                 "name": spec.filename,
-                "tokens": tokens,
+                "tokens": tokens,            # injected: what the prompt carries
+                "disk_tokens": disk_tokens,  # the whole file on disk
                 "pct": 0.0,  # filled after total is known (composition %)
                 "owner": _owner_for(spec.filename, spec.user_customized),
                 "priority": spec.priority,
@@ -189,7 +205,9 @@ def build_context_token_block(context_dir: Path) -> dict:
                 "locked": not spec.truncatable,
                 # Health tag: budget-relative size + mtime, severity-first
                 # (oversized>growing>idle>fresh). Backend-derived so the UI invents
-                # nothing (R30). budget is the same _WARNING_THRESHOLD used below.
+                # nothing (R30). budget is the same _WARNING_THRESHOLD used below;
+                # sized on the injected tokens (a big TIMELINE whose events are not
+                # injected is not "oversized" in the prompt).
                 "health": _health_tag(tokens, _WARNING_THRESHOLD, mtime_days),
                 # Knowledge-health counts: None for prose files; {entries, duplicate}
                 # for the entry-structured files (MEMORY/EVOLUTION/KNOWLEDGE).
@@ -197,8 +215,8 @@ def build_context_token_block(context_dir: Path) -> dict:
             }
         )
 
-    # Composition % over DISK total (headline is the conservative disk size — the
-    # pct answers "share of the on-disk context", stable + query-independent).
+    # Composition % over the INJECTED total: "this file's share of what the context
+    # files put in the prompt" (query-independent, like the assembly itself).
     if total > 0:
         for row in per_file:
             row["pct"] = round(row["tokens"] / total * 100, 1)
@@ -207,13 +225,14 @@ def build_context_token_block(context_dir: Path) -> dict:
     per_file.sort(key=lambda r: (r["priority"], r["name"]))
 
     return {
-        "total_tokens": total,           # DISK total == prompt load (full-injected)
+        "total_tokens": total,           # INJECTED total == the context files' prompt load
+        "disk_tokens": disk_total,       # the files' size on disk (secondary)
         "budget": _WARNING_THRESHOLD,
         "warning_threshold": _WARNING_THRESHOLD,
         "emergency_threshold": _EMERGENCY_THRESHOLD,
-        # over_budget uses DISK total (conservative — flags a file that COULD be
-        # trimmed even if selective currently masks it). The UI also shows the
-        # injected_estimate so the user sees the real prompt load, not just disk.
+        # over_budget compares what the prompt carries with the warning line: a file
+        # that is big on disk but mostly not injected (TIMELINE's events) does not
+        # push the prompt over it.
         "over_budget": total > _WARNING_THRESHOLD,
         "per_file": per_file,
     }

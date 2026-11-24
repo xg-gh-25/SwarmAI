@@ -3788,8 +3788,6 @@
       "backTo": "← 返回{{label}}",
       "loadingQueue": "正在加载{{label}}…",
       "nothingInQueue": "{{label}}目前没有内容。",
-      "contextIntro": "每次都会注入的系统提示词——{{count}} 个文件，按优先级排列，每个都完整注入。不会截断任何内容：超过警戒线时，通过合并条目让文件保持精简。",
-      "contextLegend": "点击文件在 Canvas 中打开 · 条形 = 占上下文的比例（磁盘大小 = 提示词负载）· 锁 = 系统所有，只读打开 · 状态：新鲜 / 闲置 / 增长 / 过大",
       "colPri": "优先级",
       "colFile": "文件",
       "colOwner": "归属",
@@ -3797,12 +3795,10 @@
       "colShare": "占比",
       "colHealth": "健康",
       "budgetNotAvailable": "上下文预算暂不可用。",
-      "tokenTitle": "{{tokens}} tokens（完整注入 — 磁盘 == 提示负载）",
       "openInCanvas": "在 Canvas 中打开 {{name}}",
       "openInCanvasReadOnly": "在 Canvas 中打开 {{name}}（只读）",
       "dupTitle": "知识健康 — 与同一段落中另一条完全重复的条目",
       "dupCount": "{{count}} 条重复",
-      "pctTitle": "占磁盘上下文的 {{pct}}%",
       "lockTitle": "系统所有 · 只读打开",
       "graphTitleTypes": "知识图谱 · 7 种类型作为节点（点击查看详情）",
       "graphTitleKinds": "知识图谱 · 各类别作为节点（点击查看详情）",
@@ -5907,6 +5903,14 @@
       "shortNotResponding": "后端无响应",
       "shortNotBack": "后端尚未恢复",
       "shortUnreachable": "无法连接后端"
+    },
+    "CMBrainOverlayLoad": {
+      "contextIntro": "每次都会注入的系统提示词——{{count}} 个文件，按优先级排列。每个数字是该文件实际放进提示词的内容：多数文件整份注入，TIMELINE 只注入月度汇总，所以磁盘上更大的文件会另外标出磁盘大小。不会截断任何内容：超过警戒线时，通过合并条目让文件保持精简。",
+      "contextLegend": "点击文件在 Canvas 中打开 · 数字和条形 = 该文件放进提示词的内容 · 锁 = 系统所有，只读打开 · 状态：新鲜 / 闲置 / 增长 / 过大",
+      "onDisk": "磁盘上 {{tokens}}",
+      "tokenTitle": "提示词中 {{tokens}} tokens（整份文件）",
+      "tokenTitleDisk": "提示词中 {{tokens}} tokens，磁盘上 {{disk}}",
+      "pctTitle": "占上下文文件放进提示词总量的 {{pct}}%"
     }
   }
 }

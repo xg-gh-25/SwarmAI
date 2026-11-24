@@ -3788,8 +3788,6 @@
       "backTo": "← Back to {{label}}",
       "loadingQueue": "Loading {{label}}…",
       "nothingInQueue": "Nothing in {{label}} right now.",
-      "contextIntro": "The always-injected system prompt — {{count}} files, priority-ordered, each injected in full. Nothing is cut: above the warning line, the files are kept lean by consolidating entries.",
-      "contextLegend": "click a file to open it in Canvas · bar = share of the context (disk size = prompt load) · lock = system-owned, opens read-only · Health: fresh / idle / growing / oversized",
       "colPri": "Pri",
       "colFile": "File",
       "colOwner": "Owner",
@@ -3797,12 +3795,10 @@
       "colShare": "Share",
       "colHealth": "Health",
       "budgetNotAvailable": "Context budget not available yet.",
-      "tokenTitle": "{{tokens}} tokens (full-injected — disk == prompt load)",
       "openInCanvas": "Open {{name}} in Canvas",
       "openInCanvasReadOnly": "Open {{name}} in Canvas (read-only)",
       "dupTitle": "Knowledge health — entries that repeat another entry of the same section exactly",
       "dupCount": "{{count}} dup",
-      "pctTitle": "{{pct}}% of the on-disk context",
       "lockTitle": "System-owned · opens read-only",
       "graphTitleTypes": "Knowledge graph · 7 types as nodes (click to drill in)",
       "graphTitleKinds": "Knowledge graph · kinds as nodes (click to drill in)",
@@ -5907,6 +5903,14 @@
       "shortNotResponding": "Backend not responding",
       "shortNotBack": "Backend not back yet",
       "shortUnreachable": "Backend unreachable"
+    },
+    "CMBrainOverlayLoad": {
+      "contextIntro": "The always-injected system prompt — {{count}} files, priority-ordered. Each number is what the file puts in the prompt: most files go in whole, TIMELINE only its month summaries, so a file that is bigger on disk says so. Nothing is cut: above the warning line, the files are kept lean by consolidating entries.",
+      "contextLegend": "click a file to open it in Canvas · number and bar = what the file puts in the prompt · lock = system-owned, opens read-only · Health: fresh / idle / growing / oversized",
+      "onDisk": "{{tokens}} on disk",
+      "tokenTitle": "{{tokens}} tokens in the prompt (the whole file)",
+      "tokenTitleDisk": "{{tokens}} tokens in the prompt, {{disk}} on disk",
+      "pctTitle": "{{pct}}% of what the context files put in the prompt"
     }
   }
 }

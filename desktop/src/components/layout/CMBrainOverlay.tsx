@@ -32,8 +32,9 @@ import { trendVerdict } from './cognitionLevelText';
 type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
 interface TokenFileRow {
   name: string;
-  tokens: number;          // DISK size (conservative headline)
-  pct: number;             // share of DISK total
+  tokens: number;          // INJECTED: what the file puts in the prompt (the headline)
+  disk_tokens?: number;    // the whole file on disk (secondary; absent from an older backend)
+  pct: number;             // share of the INJECTED total
   owner: 'system' | 'user' | 'agent' | 'auto';
   priority: number;
   locked: boolean;
@@ -58,7 +59,8 @@ const HEALTH_TINT: Record<HealthTag, string> = {
   oversized: 'var(--color-status-error)',
 };
 interface TokenBlock {
-  total_tokens: number;         // DISK total == prompt load (always full-injected)
+  total_tokens: number;         // INJECTED total: the context files' prompt load
+  disk_tokens?: number;         // the files' size on disk (secondary)
   budget: number;
   warning_threshold: number;
   emergency_threshold: number;
@@ -146,6 +148,16 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
+// The disk size is worth a second line only where it differs from the injected size
+// at the precision the overlay shows sizes in K (TIMELINE: 67K on disk, 0.5K injected).
+// A file injected whole differs only by its title line and section header: same K.
+function toK(n: number): string {
+  return (n / 1000).toFixed(n >= 10000 ? 0 : 1);
+}
+function diskDiffers(tokens: number, disk: number | undefined): disk is number {
+  return typeof disk === 'number' && toK(disk) !== toK(tokens);
+}
+
 const LITE_QUERY_KEY = overlayQuery.contextLite().queryKey;
 
 function useContextHealth(enabled: boolean) {
@@ -231,6 +243,12 @@ export function CMBrainContent() {
                 {t('ui.CMBrainOverlay.ofBudget', { budget: block ? fmtTokens(block.budget) : '—' })}
               </span>
             </div>
+            {/* The headline is what the prompt carries; the disk size is secondary. */}
+            {block && diskDiffers(block.total_tokens, block.disk_tokens) && (
+              <div data-testid="cm-total-disk" className="text-meta tabular-nums text-[var(--color-text-faint)]">
+                {t('ui.CMBrainOverlayLoad.onDisk', { tokens: fmtTokens(block.disk_tokens) })}
+              </div>
+            )}
             {healthErr && !block && (
               <div className="mt-1 text-meta text-[var(--color-status-warning)]">{t('ui.CMBrainOverlay.couldNotLoadNotZero')}</div>
             )}
@@ -396,18 +414,22 @@ function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
 }
 
 // Over-the-warning-line alert (AC7) — honest: how much over + which files carry the
-// load + an OPEN action (never a fake "distill" that does nothing). Every file is
-// injected whole (nothing is truncated), so the alert asks for consolidation. Only
-// rendered when block.over_budget is true.
+// load + an OPEN action (never a fake "distill" that does nothing). Nothing is
+// truncated, so the alert asks for consolidation. Only rendered when
+// block.over_budget is true, which the backend decides on the INJECTED total: a file
+// big only on disk (TIMELINE's events, not injected) never raises it. The files named
+// are ranked by what they put in the prompt, so the advice points at files whose
+// injected size is the big part.
 function BudgetAlert({ block }: { block: TokenBlock }) {
   const { t } = useTranslation();
   const over = block.total_tokens - block.budget;
+  const injected = block.per_file.filter((f) => f.tokens > 0);
   // The offenders: biggest files that are growing/oversized (the ones worth acting on).
-  const offenders = [...block.per_file]
+  const offenders = [...injected]
     .filter((f) => f.health === 'oversized' || f.health === 'growing')
     .sort((a, b) => b.tokens - a.tokens)
     .slice(0, 2);
-  const top = offenders.length ? offenders : [...block.per_file].sort((a, b) => b.tokens - a.tokens).slice(0, 2);
+  const top = offenders.length ? offenders : [...injected].sort((a, b) => b.tokens - a.tokens).slice(0, 2);
   return (
     <div
       data-testid="cm-budget-alert"
@@ -573,10 +595,10 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
   return (
     <div data-testid="cm-panel-context" className="flex flex-col gap-1">
       <div className="mb-2 text-body text-[var(--color-text-muted)]">
-        {t('ui.CMBrainOverlay.contextIntro', { count: rows.length })}
+        {t('ui.CMBrainOverlayLoad.contextIntro', { count: rows.length })}
       </div>
       <div className="mb-3 text-meta text-[var(--color-text-faint)]">
-        {t('ui.CMBrainOverlay.contextLegend')}
+        {t('ui.CMBrainOverlayLoad.contextLegend')}
       </div>
       {/* Column header — fixed widths so every row's cells line up (AC4 alignment).
           Grid columns match the row grid below exactly. */}
@@ -584,7 +606,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         <div
           data-testid="cm-file-header"
           className={`grid items-center gap-3 px-3 pb-1 max-w-3xl ${tableHeadClass}`}
-          style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
+          style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 5.5rem 6rem 4rem 1.5rem' }}
         >
           <span>{t('ui.CMBrainOverlay.colPri')}</span>
           <span aria-hidden />
@@ -602,9 +624,13 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
         </div>
       )}
       {rows.map((f) => {
-        // Every file is full-injected (new architecture 2026-08-14): disk size IS the
-        // prompt load — no selective mode, no "injected floor below disk".
-        const tokenTitle = t('ui.CMBrainOverlay.tokenTitle', { tokens: fmtTokens(f.tokens) });
+        // The main number is what the file puts in the prompt; where the file on disk
+        // is bigger at the shown precision (TIMELINE injects only its month summaries),
+        // the disk size is the secondary line.
+        const showDisk = diskDiffers(f.tokens, f.disk_tokens);
+        const tokenTitle = showDisk
+          ? t('ui.CMBrainOverlayLoad.tokenTitleDisk', { tokens: fmtTokens(f.tokens), disk: fmtTokens(f.disk_tokens as number) })
+          : t('ui.CMBrainOverlayLoad.tokenTitle', { tokens: fmtTokens(f.tokens) });
         return (
         // The WHOLE row opens the file in Canvas. Layout is a fixed-column GRID
         // (AC4): every cell aligns across rows — Pri | owner-dot | name(flex) |
@@ -619,7 +645,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))
           }
           className="grid w-full items-center gap-3 rounded-md px-3 py-2 max-w-3xl text-left hover:bg-[var(--color-hover)]"
-          style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
+          style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 5.5rem 6rem 4rem 1.5rem' }}
         >
           <span className="tabular-nums text-small text-[var(--color-text-faint)]">P{f.priority}</span>
           <span
@@ -644,14 +670,20 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             )}
           </span>
           <span className="text-right text-meta text-[var(--color-text-faint)]">{OWNER_LABEL[f.owner]}</span>
-          {/* Tokens — DISK size, right-aligned, fixed col */}
-          <span className="text-right tabular-nums text-small text-[var(--color-text-muted)]" title={tokenTitle}>
-            {fmtTokens(f.tokens)}
+          {/* Tokens — INJECTED size (main), the disk size below it where it differs;
+              right-aligned, fixed col */}
+          <span className="flex flex-col items-end tabular-nums" title={tokenTitle}>
+            <span data-testid="cm-file-tokens" className="text-small text-[var(--color-text-muted)]">{fmtTokens(f.tokens)}</span>
+            {showDisk && (
+              <span data-testid="cm-file-disk" className="whitespace-nowrap text-meta text-[var(--color-text-faint)]">
+                {t('ui.CMBrainOverlayLoad.onDisk', { tokens: fmtTokens(f.disk_tokens as number) })}
+              </span>
+            )}
           </span>
           {/* AC4: SHARE — an explicit visible bar + % number (user-requested; this
               intentionally overrides the prior subtle-tint approach). Bar width =
-              pct of on-disk total, owner-tinted; the % number is shown to its right. */}
-          <span className="flex items-center gap-1.5" title={t('ui.CMBrainOverlay.pctTitle', { pct: f.pct })}>
+              pct of the injected total, owner-tinted; the % number is shown to its right. */}
+          <span className="flex items-center gap-1.5" title={t('ui.CMBrainOverlayLoad.pctTitle', { pct: f.pct })}>
             <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-border)]">
               {typeof f.pct === 'number' && f.pct > 0 && (
                 <span

@@ -981,6 +981,120 @@ class ContextDirectoryLoader:
             return False
         return True
 
+    @staticmethod
+    def section_text(section_name: str, content: str) -> str:
+        """One assembled section: its ``## {section_name}`` header and *content*
+        (what assembly joins, what the budget check and the C&M overlay measure)."""
+        return f"## {section_name}\n{content}"
+
+    def render_section(
+        self,
+        spec: ContextFileSpec,
+        exclude_filenames: set[str] | None = None,
+    ) -> str:
+        """The text *spec*'s file puts under its ``## {section_name}`` header in
+        the assembled prompt, or ``""`` when the file contributes nothing (missing,
+        unreadable, empty, an unfilled user template).
+
+        The ONE place a file's injected form is decided: the system appendix split,
+        the channel carve-out filter for a non-owner session (*exclude_filenames*
+        given), the selectors (MEMORY / EVOLUTION through
+        ``memory_injection.select_context_file``, TIMELINE through
+        ``memory_injection.select_timeline``), comment and title cleaning, and the
+        MEMORY index strip. ``_assemble_from_sources`` assembles from it, and the
+        C&M overlay (``core.context_brain``) measures it, so what the overlay counts
+        is what the prompt carries.
+        """
+        filepath = self.context_dir / spec.filename
+        try:
+            if not filepath.exists():
+                return ""
+            content = filepath.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            logger.warning(
+                "Skipping file with invalid UTF-8 encoding: %s",
+                filepath,
+            )
+            return ""
+        except OSError as exc:
+            logger.warning(
+                "Cannot read source file %s: %s", filepath, exc
+            )
+            return ""
+
+        appendix_content = ""
+        if spec.filename in _SYSTEM_APPENDIX_FILES:
+            content, appendix_content = split_system_appendix(content)
+
+        # Non-owner session (exclusions given): a section-filtered carve-out
+        # keeps only the text its owner wrapped in channel markers. Must run on
+        # the RAW text — the markers are HTML comments _clean_content strips.
+        if exclude_filenames and spec.filename in CHANNEL_SECTION_FILTERED:
+            content, problem = channel_sections(content)
+            if problem:
+                # the owner meant to share something and nothing is: say why
+                logger.warning("%s: channel markers are malformed (%s) — nothing "
+                               "of this file reaches non-owner prompts; wrap each "
+                               "shared part in %s ... %s", spec.filename, problem,
+                               CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
+            elif not content.strip():
+                logger.info("%s: no %s ... %s pair — nothing of it reaches this "
+                            "non-owner prompt", spec.filename,
+                            CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
+
+        # No lifecycle filter: what is in a main file is in force, and what is not in
+        # force has left it (design 2026-10-30-brain-driven §2.3): the whole file.
+        if spec.selector == "cdf":
+            from core.memory_injection import select_context_file
+
+            selection = select_context_file(
+                filepath,
+                estimate=self.estimate_tokens,
+                now=self._clock(),
+            )
+            content = selection.text
+
+        if spec.selector == "timeline":
+            from datetime import date
+            from core.memory_injection import select_timeline
+
+            selection = select_timeline(
+                filepath,
+                today=date.today(),
+                estimate=self.estimate_tokens,
+                budget=spec.inject_budget_tokens or 1500,
+            )
+            content = selection.text
+
+        content = self._clean_content(content, spec.section_name)
+        if appendix_content and not exclude_filenames:
+            appendix_rendered = self._clean_content(appendix_content, spec.section_name)
+            if appendix_rendered:
+                content = "\n\n".join(part for part in (
+                    content,
+                    f"{SYSTEM_APPENDIX_NOTICE}\n{appendix_rendered}",
+                ) if part)
+        if not content:
+            return ""
+
+        # Skip user-owned templates that are structurally non-empty
+        # (have markdown headers) but contain no actual user content.
+        # Example: unfilled TOOLS.md with only "## Device Names" stubs.
+        if spec.user_customized and self._is_empty_section_stubs(content):
+            logger.debug("Skipping empty template: %s", spec.filename)
+            return ""
+
+        if spec.filename == "MEMORY.md":
+            # CDF §12 already selected complete MEMORY units without consulting
+            # the user query. Strip only the obsolete generated index block; this
+            # does not change unit selection or source-file bytes.
+            try:
+                from .memory_index import extract_body_without_index
+                content = extract_body_without_index(content)
+            except Exception as exc:
+                logger.warning("index-block strip failed, using raw: %s", exc)
+        return content
+
     def _assemble_from_sources(
         self,
         model_context_window: int = 200_000,
@@ -1030,94 +1144,9 @@ class ContextDirectoryLoader:
             if spec.filename in skip_filenames:
                 continue
 
-            filepath = self.context_dir / spec.filename
-            try:
-                if not filepath.exists():
-                    continue
-                content = filepath.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                logger.warning(
-                    "Skipping file with invalid UTF-8 encoding: %s",
-                    filepath,
-                )
-                continue
-            except OSError as exc:
-                logger.warning(
-                    "Cannot read source file %s: %s", filepath, exc
-                )
-                continue
-
-            appendix_content = ""
-            if spec.filename in _SYSTEM_APPENDIX_FILES:
-                content, appendix_content = split_system_appendix(content)
-
-            # Non-owner session (exclusions given): a section-filtered carve-out
-            # keeps only the text its owner wrapped in channel markers. Must run on
-            # the RAW text — the markers are HTML comments _clean_content strips.
-            if exclude_filenames and spec.filename in CHANNEL_SECTION_FILTERED:
-                content, problem = channel_sections(content)
-                if problem:
-                    # the owner meant to share something and nothing is: say why
-                    logger.warning("%s: channel markers are malformed (%s) — nothing "
-                                   "of this file reaches non-owner prompts; wrap each "
-                                   "shared part in %s ... %s", spec.filename, problem,
-                                   CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
-                elif not content.strip():
-                    logger.info("%s: no %s ... %s pair — nothing of it reaches this "
-                                "non-owner prompt", spec.filename,
-                                CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
-
-            # No lifecycle filter: what is in a main file is in force, and what is not in
-            # force has left it (design 2026-10-30-brain-driven §2.3): the whole file.
-            if spec.selector == "cdf":
-                from core.memory_injection import select_context_file
-
-                selection = select_context_file(
-                    filepath,
-                    estimate=self.estimate_tokens,
-                    now=self._clock(),
-                )
-                content = selection.text
-
-            if spec.selector == "timeline":
-                from datetime import date
-                from core.memory_injection import select_timeline
-
-                selection = select_timeline(
-                    filepath,
-                    today=date.today(),
-                    estimate=self.estimate_tokens,
-                    budget=spec.inject_budget_tokens or 1500,
-                )
-                content = selection.text
-
-            content = self._clean_content(content, spec.section_name)
-            if appendix_content and not exclude_filenames:
-                appendix_rendered = self._clean_content(appendix_content, spec.section_name)
-                if appendix_rendered:
-                    content = "\n\n".join(part for part in (
-                        content,
-                        f"{SYSTEM_APPENDIX_NOTICE}\n{appendix_rendered}",
-                    ) if part)
+            content = self.render_section(spec, exclude_filenames)
             if not content:
                 continue
-
-            # Skip user-owned templates that are structurally non-empty
-            # (have markdown headers) but contain no actual user content.
-            # Example: unfilled TOOLS.md with only "## Device Names" stubs.
-            if spec.user_customized and self._is_empty_section_stubs(content):
-                logger.debug("Skipping empty template: %s", spec.filename)
-                continue
-
-            if spec.filename == "MEMORY.md":
-                # CDF §12 already selected complete MEMORY units without consulting
-                # the user query. Strip only the obsolete generated index block; this
-                # does not change unit selection or source-file bytes.
-                try:
-                    from .memory_index import extract_body_without_index
-                    content = extract_body_without_index(content)
-                except Exception as exc:
-                    logger.warning("index-block strip failed, using raw: %s", exc)
 
             section_tuples.append(
                 (spec.priority, spec.section_name, content, spec.truncatable, spec.truncate_from)
@@ -1132,7 +1161,7 @@ class ContextDirectoryLoader:
         # Join into final assembled string
         parts: list[str] = []
         for _, section_name, content, _, _ in section_tuples:
-            parts.append(f"## {section_name}\n{content}")
+            parts.append(self.section_text(section_name, content))
 
         return "\n\n".join(parts)
 
@@ -1167,8 +1196,7 @@ class ContextDirectoryLoader:
 
         def _section_tokens(section_name: str, content: str) -> int:
             """Estimate tokens for a full section including header."""
-            full_text = f"## {section_name}\n{content}"
-            return self.estimate_tokens(full_text)
+            return self.estimate_tokens(self.section_text(section_name, content))
 
         # Separator is "\n\n" between sections — estimate its token cost
         separator_tokens = self.estimate_tokens("\n\n") if len(sections) > 1 else 0
