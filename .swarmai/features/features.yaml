@@ -130,7 +130,7 @@ features:
       - desktop/src/components/common/CredentialBanner.tsx
       - desktop/src/components/layout/ArtifactsOverlay.tsx
       - desktop/src/components/layout/CMBrainOverlay.tsx
-      - desktop/src/components/layout/CdfDashboard.tsx
+      - desktop/src/components/layout/needYouParts.tsx
       - desktop/src/components/layout/CdfFlowDetails.tsx
       - desktop/src/components/layout/CdfGuideline.tsx
       - desktop/src/components/layout/CdfHealth.tsx
