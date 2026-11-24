@@ -5926,7 +5926,7 @@
     }
   },
   "sessionRuns": {
-    "tab": "Runs",
+    "tab": "Hive Runs",
     "follows": "Swarm follows it",
     "verdictYou": "{{count}} need your decision",
     "verdictYouRest": "{{count}} need your decision · Swarm follows the other {{rest}}",

@@ -5926,7 +5926,7 @@
     }
   },
   "sessionRuns": {
-    "tab": "Runs",
+    "tab": "Hive Runs",
     "follows": "Swarm 在跟",
     "verdictYou": "{{count}} 单要你决定",
     "verdictYouRest": "{{count}} 单要你决定 · 另外 {{rest}} 单 Swarm 在跟",
