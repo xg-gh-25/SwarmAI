@@ -215,3 +215,37 @@ async def test_an_unattended_session_is_built_without_the_ui_tool_or_mcp(tmp_pat
         assert tool in auto.disallowed_tools, tool
     attended = await build({"id": "default", "model": "claude-opus-5-5"})
     assert UI_MCP_SERVER_NAME in (attended.mcp_servers or {})
+
+
+def test_a_turn_tells_the_adopt_whether_it_is_unattended(monkeypatch):
+    """The call site: a turn passes its agent config's ``unattended`` flag to the
+    adopt, so an automatic run never takes a pooled process (the adopt's own refusal
+    is tested above)."""
+    import pytest as _pytest
+    from core.session_router import SessionRouter
+    monkeypatch.setenv("SWARM_DESKTOP_PREWARM", "1")
+    router = SessionRouter(prompt_builder=object())
+    seen: list = []
+
+    async def spy(session_id, agent_id, model, *, unattended=False):
+        seen.append(unattended)
+        return False
+
+    class Stop(Exception):
+        pass
+
+    def stop(*_a, **_k):
+        raise Stop()
+
+    router._try_adopt_desktop_pool = spy
+    router.get_or_create_unit = stop
+
+    async def first_event(agent_config):
+        gen = router._run_conversation_impl(
+            "agent-default", user_message="hi", agent_config=agent_config, writer=None)
+        with _pytest.raises(Stop):
+            await gen.__anext__()
+
+    asyncio.run(first_event({"model": "m", "unattended": True}))
+    asyncio.run(first_event({"model": "m"}))
+    assert seen == [True, False]

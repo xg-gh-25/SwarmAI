@@ -109,3 +109,5 @@ test_slack_outbound.py  # Slack bot outbound: Web API with the bot token only; u
 test_install_docs.py  # the install docs (README, QUICK_START, USER_GUIDE) match the release targets and the app's labels (repo files only)
 test_aws_account_integrity.py  # no module outside the AWS account layer imports the AWS SDK (parses source only, no AWS call)
 test_uv_lock_index.py  # uv.lock records pypi.org for every package, not a machine's mirror (repo files only)
+test_unattended_gate.py  # an automatic Needs You run: Bash passes only backend commands bound to its item; no UI tool, no denied tool
+test_attention_auto.py  # Swarm's own Needs You items run once each, one at a time; a run that did not work goes back to the person
