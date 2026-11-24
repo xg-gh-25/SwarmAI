@@ -107,7 +107,7 @@ def test_one_deadline_is_shared_by_every_step_of_dispatch_spec(hive, monkeypatch
     async def sync(inst, brain, ws=None):
         await asyncio.sleep(0.3)
 
-    async def can_prepare(inst):
+    async def can_prepare(inst, needs=None):
         return None
     monkeypatch.setattr(host, "hive_brains", hive_brains)
     monkeypatch.setattr(host, "sync", sync)

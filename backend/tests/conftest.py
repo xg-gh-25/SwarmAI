@@ -1303,3 +1303,19 @@ def _reset_dispatch_index():
     if mod is not None:
         mod._reset()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_build_identity():
+    """Every test starts with this install's build identity unknown (core/build_identity).
+
+    It comes from the environment the test runs in (a BUILD.json, or the checkout's own
+    commit and source digest), so without the pin a test of how a Host compares Hives would
+    depend on which checkout runs it. A test that needs an identity sets
+    ``build_identity._CACHE`` itself; the pin is put back after it.
+    """
+    from core import build_identity as _bi
+    saved = list(_bi._CACHE)
+    _bi._CACHE[:] = [True, None]
+    yield
+    _bi._CACHE[:] = saved

@@ -127,7 +127,7 @@ def test_open_run_is_unavailable_when_the_tunnel_or_certificate_fails(tmp_path, 
         return "http://127.0.0.1:28411"
     monkeypatch.setattr(ssh_tunnel, "ensure", up)
 
-    async def expired(inst):
+    async def expired(inst, needs=None):
         return {"work_orders": True, "fixed_reserved": True, "zero_touch": True, "saturated": False,
                 "ssh_cert_valid_until": time.time() - 60}
     monkeypatch.setattr(swarm_out, "_require_work_orders", expired)
@@ -135,7 +135,7 @@ def test_open_run_is_unavailable_when_the_tunnel_or_certificate_fails(tmp_path, 
         asyncio.run(ssh.SshLocation("s1").open_run("so_aaaaaaaaaaaa", 1))
     assert getattr(e.value, "why", None) == ssh.CERT_EXPIRED
 
-    async def fine(inst):
+    async def fine(inst, needs=None):
         return {"work_orders": True, "fixed_reserved": True, "zero_touch": True, "saturated": False,
                 "ssh_cert_valid_until": time.time() + 3600}
     monkeypatch.setattr(swarm_out, "_require_work_orders", fine)

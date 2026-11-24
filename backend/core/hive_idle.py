@@ -31,25 +31,32 @@ stopped and started between two looks, or a Host that just restarted, never coun
 it did not see. Then the Hive is claimed (``claim_stop``) and stopped in the background;
 when a dispatch began between the last look and the claim, the claim is given back.
 
-**A Hive follows the Host's version** (``settings.app_version``, never the latest release),
-so no person has to press Update. Two moments update it: the idle loop, for a running Hive
-idle at one look (the same checks as above) whose ``version`` differs (a row with none
-differs): it is claimed (``claim_update``) and updated in the background, and not stopped
-in that round; and ``wake``, for a Hive it just started, before the dispatch is let through
-(within WAKE_LIMIT_S; an update that raises or leaves the Hive not running fails the wake;
-one another update holds is waited for). The idle loop updates even with the idle stop
-off (by default, or for a Hive set always on), and gives the claim back when a dispatch began while it was made. Each Hive gets one
-automatic try per version per process: a refused claim or a failed update (``update``
-records why on the row and ends it 'running') is not tried again until the Host restarts.
+**A Hive follows the Host's build** (``settings.app_version`` and the build identity,
+core/build_identity: never the latest release), so no person has to press Update. A Hive is
+behind when its row's ``version`` differs (a row with none differs), or, at the same version,
+when the build its admission state reports is not the Host's (one that answers without a
+build is behind; one whose admission state cannot be read is judged by the version alone; a
+Host with no build identity compares versions only). Two moments update it: the idle loop,
+for a running Hive idle at one look (the same checks as above) that is behind: it is claimed
+(``claim_update``) and updated in the background, and not stopped in that round; and
+``wake``, for a Hive it just started, before the dispatch is let through (within
+WAKE_LIMIT_S; an update that raises or leaves the Hive not running fails the wake; one
+another update holds is waited for). The idle loop updates even with the idle stop off (by
+default, or for a Hive set always on), and gives the claim back when a dispatch began while
+it was made. A Hive is tried again whenever it is still behind, after a backoff
+(``swarm_out_settle``'s: RETRY_FIRST_S doubling up to RETRY_MAX_S, counted per Hive and
+target): a refused claim or a failed update (``update`` records why on the row and ends it
+'running') waits for it, and so does an update that ended with the Hive still on another
+build (no package of the Host's build was found: hive/provisioner).
 
 - ``idle_after_s(value)``    — the default as seconds, or None (off).
 - ``own_minutes(value)``     — a row's own value as the loop reads it (None: the default).
 - ``own_idle_after_s(own, default_s)`` — one Hive's idle time: its own value, else the default.
 - ``busy_reasons(...)``      — why a Hive is not idle now ([] = idle).
 - ``check_once(now)``        — one look at every running Hive: updates the idle ones behind
-  the Host's version, stops the others idle long enough; returns the names stopped.
+  the Host's build, stops the others idle long enough; returns the names stopped.
 - ``run_loop()``             — ``check_once`` every CHECK_EVERY_S (main.py, host only).
-- ``wake(hive_id)``          — bring a stopped (or stopping) Hive up at the Host's version;
+- ``wake(hive_id)``          — bring a stopped (or stopping) Hive up at the Host's build;
   one start per Hive.
 - ``wake_pending(hive_id)``  — whether one is under way (a dispatch then joins it).
 """
@@ -78,8 +85,15 @@ _LAST_BUSY: dict[str, float] = {}
 _STOPS: set = set()
 #: updates started by the loop or a wake (kept alive the same way)
 _UPDATES: set = set()
-#: (hive id, version) of every automatic update tried by this process: one try each
-_TRIED: set[tuple[str, str]] = set()
+#: hive id -> {target, tries, next_at} of its automatic updates: tried again, whenever it is
+#: still behind, once ``next_at`` (wall clock) has passed
+_TRIES: dict[str, dict[str, Any]] = {}
+#: what ``_reported_build`` answers for a Hive whose admission state could not be read
+_UNREAD = (False, None)
+
+
+def _clock() -> float:
+    return time.time()
 
 
 def idle_after_s(value: Any = ...) -> Optional[float]:
@@ -247,22 +261,70 @@ def _host_version() -> Optional[str]:
     return version
 
 
-def _behind(hive: dict[str, Any], version: str) -> bool:
-    """True when the row's version differs from *version* (a NULL or empty one differs).
+def _behind(hive: dict[str, Any], version: str, host_build: Optional[str] = None,
+            reported: tuple[bool, Optional[str]] = _UNREAD) -> bool:
+    """True when the row's version differs from *version* (a NULL or empty one differs), or,
+    when the Host knows its build (*host_build*), the Hive answered (*reported*: whether its
+    admission state was read, and the build id it gave) with another build or with none.
     A row read without its version column has nothing to compare and is left as it is."""
     if "version" not in hive:
         return False
-    return str(hive.get("version") or "").removeprefix("v") != version
+    if str(hive.get("version") or "").removeprefix("v") != version:
+        return True
+    answered, build = reported
+    return host_build is not None and answered and build != host_build
 
 
-def _to_try(hive: dict[str, Any]) -> Optional[str]:
-    """The Host's version when this Hive is behind it and no automatic update of it to that
-    version was tried yet (the try is counted now), else None."""
+async def _reported_build(hive_id: str) -> tuple[bool, Optional[str]]:
+    """(answered, build id) of a running Hive's admission state (``swarm_out._admission``):
+    ``_UNREAD`` when it did not answer properly, ``(True, None)`` when it answered without a
+    build (a Hive older than build identities)."""
+    from core import swarm_out
+    try:
+        probe = await swarm_out._admission(hive_id)
+    except Exception as e:  # noqa: BLE001 — not read: the version alone decides this look
+        logger.info("hive_idle: admission probe of %s failed (%s)", hive_id, type(e).__name__)
+        return _UNREAD
+    if probe is None:
+        return _UNREAD
+    return True, probe.get("build_id")
+
+
+async def _host_build() -> Optional[str]:
+    from core import build_identity
+    return await asyncio.to_thread(build_identity.current_id)
+
+
+def _to_try(hive: dict[str, Any], host_build: Optional[str] = None,
+            reported: tuple[bool, Optional[str]] = _UNREAD, now: Optional[float] = None) -> Optional[str]:
+    """The Host's version when this Hive is behind the Host (``_behind``) and its backoff
+    for this target has passed (the try is counted now, and the next wait doubles), else
+    None. A Hive no longer behind starts its count again; one whose admission state was not
+    read keeps it (it is not judged, not caught up)."""
     version = _host_version()
-    if version is None or not _behind(hive, version) or (hive["id"], version) in _TRIED:
+    if version is None or not _behind(hive, version, host_build, reported):
+        if version is None or reported[0] or host_build is None \
+                or str(hive.get("version") or "").removeprefix("v") != version:
+            _TRIES.pop(str(hive.get("id")), None)   # caught up (a Hive not read is not judged)
         return None
-    _TRIED.add((hive["id"], version))
+    from core.swarm_out_settle import RETRY_FIRST_S, RETRY_MAX_S
+    now = _clock() if now is None else now
+    target = f"{version}+{host_build or ''}"
+    last = _TRIES.get(hive["id"])
+    if last is not None and last["target"] == target and now < last["next_at"]:
+        return None
+    tries = last["tries"] + 1 if last is not None and last["target"] == target else 1
+    _TRIES[hive["id"]] = {"target": target, "tries": tries,
+                          "next_at": now + min(RETRY_MAX_S, RETRY_FIRST_S * 2 ** (tries - 1)),
+                          "before": None if last is None else {k: last[k] for k in ("target", "tries", "next_at")}}
     return version
+
+
+def _untry(hive_id: str) -> None:
+    """Take back the try ``_to_try`` just counted (nothing ran under it)."""
+    entry = _TRIES.pop(hive_id, None)
+    if entry is not None and entry.get("before") is not None:
+        _TRIES[hive_id] = entry["before"]
 
 
 async def _update(prov, hive_id: str, name: str, version: str) -> None:
@@ -298,13 +360,15 @@ async def _release_update_claim(hive_id: str) -> None:
         await conn.commit()
 
 
-async def _follow_host(prov, hive: dict[str, Any]) -> bool:
-    """Start the update of an idle running Hive behind the Host's version. True when an
+async def _follow_host(prov, hive: dict[str, Any], now: Optional[float] = None) -> bool:
+    """Start the update of an idle running Hive behind the Host's build. True when an
     update was tried or the Hive was claimed (it is then left alone for this round). A
     dispatch that began while the claim was made keeps the Hive: the claim is given back
     and the try is not counted."""
     from core import swarm_out
-    version = _to_try(hive)
+    host_build = await _host_build()
+    reported = await _reported_build(hive["id"]) if host_build is not None else _UNREAD
+    version = _to_try(hive, host_build, reported, now)
     if version is None:
         return False
     try:
@@ -313,16 +377,17 @@ async def _follow_host(prov, hive: dict[str, Any]) -> bool:
         logger.info("hive_idle: %s left 'running' before its update to v%s", hive["name"], version)
         return True
     except Exception as e:  # noqa: BLE001 — the store did not answer: not a try, next round
-        _TRIED.discard((hive["id"], version))
+        _untry(hive["id"])
         logger.warning("hive_idle: claiming %s for its update failed (%s)", hive["name"],
                        type(e).__name__)
         return True
     if swarm_out.dispatch_in_flight(hive["id"], hive["name"]):
-        _TRIED.discard((hive["id"], version))
+        _untry(hive["id"])
         await _release_update_claim(hive["id"])
         return True
-    logger.info("hive_idle: Hive %s is at v%s: updating it to the Host's v%s", hive["name"],
-                str(hive.get("version") or "?").removeprefix("v"), version)
+    logger.info("hive_idle: Hive %s is at v%s (build %s): updating it to the Host's v%s (build %s)",
+                hive["name"], str(hive.get("version") or "?").removeprefix("v"),
+                reported[1] or "?", version, host_build or "?")
     _keep(_update(prov, hive["id"], hive["name"], version), f"hive-auto-update-{hive['id'][:8]}")
     return True
 
@@ -343,7 +408,7 @@ async def _follow_other_carriers() -> list[str]:
 
 
 async def check_once(now: Optional[float] = None) -> list[str]:
-    """One look at every running Hive: update each idle one behind the Host's version,
+    """One look at every running Hive: update each idle one behind the Host's build,
     stop each other one idle for its idle time (its own, else the default; never one set
     always on). Returns the names of the Hives whose stop
     it started. Both are duties of the EC2 carrier (its Hives are EC2 instances this Host
@@ -379,7 +444,7 @@ async def check_once(now: Optional[float] = None) -> list[str]:
             continue
         prov = prov or _provisioner()
         idle_s = own_idle_after_s(h.get("idle_stop_minutes"), default_s)
-        if await _follow_host(prov, h) or idle_s is None:
+        if await _follow_host(prov, h, now) or idle_s is None:
             continue
         since = max(_LAST_BUSY.get(h["id"], 0.0), _db_time(h.get("updated_at")), _HOST_UP_AT["at"])
         if now - since < idle_s:
@@ -458,7 +523,7 @@ async def _update_for_wake(prov, row: dict[str, Any], version: str, end: float) 
         logger.info("hive_idle: %s not claimed for its update to v%s (%s)", name, version, e)
         return
     except Exception as e:  # noqa: BLE001 — the store did not answer: not a try
-        _TRIED.discard((row["id"], version))
+        _untry(row["id"])
         raise WakeError(f"Hive {name} could not be claimed for its update to v{version} "
                         f"({type(e).__name__})") from None
     logger.info("hive_idle: Hive %s is at v%s: updating it to the Host's v%s before the "
@@ -469,6 +534,13 @@ async def _update_for_wake(prov, row: dict[str, Any], version: str, end: float) 
         raise WakeError(f"Hive {name} did not finish its update to v{version} within "
                         f"{WAKE_LIMIT_S:.0f} s")
     exc = task.exception()
+    from hive.provisioner import BuildPackageMissing
+    if isinstance(exc, BuildPackageMissing):
+        # at the Host's version, another build, and no package of the Host's build: nothing
+        # was sent to it, and it takes the task as it would have before (a task it cannot
+        # read the walks of is refused when its round opens: swarm_out._require_work_orders)
+        logger.info("hive_idle: %s stays on its build for this dispatch (%s)", name, exc)
+        return
     if exc is not None:
         try:
             why = (await hive_row(row["id"])).get("error_message")
@@ -485,7 +557,9 @@ async def _bring_up(hive_id: str) -> None:
         row = await hive_row(hive_id)
         status = row["status"]
         if status == "running":
-            version = _to_try(row)
+            host_build = await _host_build()
+            reported = await _reported_build(row["id"]) if host_build is not None else _UNREAD
+            version = _to_try(row, host_build, reported)
             if version is None:
                 return
             await _update_for_wake(prov, row, version, end)
@@ -515,7 +589,7 @@ def wake_pending(hive_id: str) -> bool:
 
 async def wake(hive_id: str) -> None:
     """Bring the Hive up: wait for a stop in progress to end, start it, wait until it is
-    running, and update it when it is behind the Host's version. Raises WakeError when it
+    running, and update it when it is behind the Host's build. Raises WakeError when it
     ends anywhere else. Every caller waits for the same start; a caller that stops waiting
     leaves it running to its end."""
     task = _STARTS.get(hive_id)

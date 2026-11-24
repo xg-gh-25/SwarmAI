@@ -1273,7 +1273,8 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
     held = frozenset(await asyncio.to_thread(lambda: swarm_run.held_hives(
         _read_log(), brain, digest, lead.run_id if lead else None)))
     needs = Needs(private=tuple(str(x) for x in spec.get("private") or ()), named=hive_ref or None,
-                  held=held, brain=brain)
+                  held=held, brain=brain,
+                  features_schema=await asyncio.to_thread(_features_need, ws, brain, spec))
     # the dispatch layer (design 2026-11-20-swarm-out-multi-carrier §4.4): every carrier's
     # offers, one deterministic choice, then the chosen location opened, the next one
     # tried only when it was unavailable before anything was written to it
@@ -1303,6 +1304,23 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
         deadline.opened = handle
         return await _dispatch_spec_on(deadline, ws, lead, handle, placement, spec, frozen,
                                        brain, title, origin, brief, dispatched_from, wp, dispatch_id)
+
+
+def _features_need(ws: Path, brain: str, spec: dict[str, Any]) -> Optional[int]:
+    """The highest features.yaml schema a repo of the task declares where its feature folder
+    has walks (core/feature_map/files ``declared_schema``: in the checkout, or kept in the
+    Brain), None when none has: a Hive must read it to replay them. Blocking (reads files)."""
+    from core.feature_map import files
+    project = Path(ws) / "Projects" / brain
+    need: Optional[int] = None
+    for r in spec.get("repos") or []:
+        if not isinstance(r, dict) or not isinstance(r.get("name"), str):
+            continue
+        root = Path(r["checkout"]) if r.get("checkout") else project / ".no-checkout"
+        n = files.declared_schema(project if project.is_dir() else None, r["name"], root)
+        if n is not None:
+            need = max(need or 0, n)
+    return need
 
 
 #: what one carrier's offers may take (design docs/design/2026-11-24-swarm-out-ssh-machine.md
@@ -1613,9 +1631,11 @@ class HiveUnavailable(SwarmOutError, LocationUnavailable):
         self.why = why
 
 
-async def _require_work_orders(inst: dict[str, Any]) -> dict[str, Any]:
+async def _require_work_orders(inst: dict[str, Any], needs: Optional[Needs] = None) -> dict[str, Any]:
     """The Hive's admission state when it can take a Brain's task now; HiveUnavailable
-    when it did not answer, its version cannot (REQUIRED_CAPS), or it is full."""
+    when it did not answer, its version cannot (REQUIRED_CAPS), it reads an older features
+    schema than the task's repo declares (*needs*, ``features_schema``: its Feature Map walks
+    could not be replayed there), or it is full."""
     try:
         async with _client(inst, PROBE_TIMEOUT_S) as client:
             r = await client.get("/api/chat/sessions/admission-state")
@@ -1642,6 +1662,14 @@ async def _require_work_orders(inst: dict[str, Any]) -> dict[str, Any]:
         # task waits for nobody (design 2026-11-01-brain-to-hive-zero-touch)
         raise HiveUnavailable(f"Hive {inst['name']}'s version waits for a person on a dispatched "
                               "task; update it once", "out_of_date")
+    from core.carriers.base import FEATURES_SCHEMA, features_below
+    if features_below(body.get("features_schema"), needs):
+        have = body.get("features_schema")
+        raise HiveUnavailable(
+            f"Hive {inst['name']} reads features schema {have if isinstance(have, int) else 1}, and the "
+            f"task's repo declares features schema {needs.features_schema} (Feature Map walks): its "
+            "replay could not run there. It is updated to this Host's build when it is idle; "
+            "nothing was sent", FEATURES_SCHEMA)
     if body.get("saturated") is True:
         raise HiveUnavailable(f"Hive {inst['name']} is busy; try again later", "saturated")
     return body
@@ -3221,6 +3249,8 @@ async def fleet() -> dict[str, Any]:
     the Swarm Out panel's fleet. Each row is built from FLEET_KEYS only, never an
     address or a credential. Running Hives are probed concurrently."""
     import aiosqlite
+
+    from core import build_identity
     async with aiosqlite.connect(_db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
         cur = await conn.execute(
@@ -3240,6 +3270,8 @@ async def fleet() -> dict[str, Any]:
     out = []
     for h in found:
         row = {k: h.get(k) for k in ("name", "status", "version", "region", "instance_type")}
+        # an Elastic Workers row keeps its image tag (<version>-b<build>): shown as the version
+        row["version"] = build_identity.display_version(row["version"])
         row["carrier"] = h.get("carrier") or "ec2"
         # None when the dispatch log cannot be read: update-hive then refuses (unknown)
         row["open_runs"] = None if held is None else held.get(str(h.get("name")), 0)

@@ -23,6 +23,7 @@
 #     packager's own S3 bucket, never to a GitHub release.
 #
 # Output: dist/swarmai-hive-v{VERSION}-linux-arm64.tar.gz
+#         dist/swarmai-hive-v{VERSION}-linux-arm64.build.json (its build identity and sha256)
 #         dist/checksums.txt
 
 set -euo pipefail
@@ -150,6 +151,16 @@ rm -f "${HIVE_LIST}"
 # version fail that check and roll back.
 echo "[release] Writing VERSION (${VERSION})..."
 printf '%s\n' "${VERSION}" > "${STAGING}/VERSION"
+
+# The build identity (backend/scripts/build_identity.py: the commit and a digest of the source
+# this package is built from), read on the Hive by core/build_identity and reported in its
+# admission state: the Host updates a Hive whose identity is not its own, also under the same
+# version. The desktop backend stamps the same function's answer on the same checkout.
+echo "[release] Writing BUILD.json..."
+python3 "${PROJECT_ROOT}/backend/scripts/build_identity.py" write "${PROJECT_ROOT}" "${STAGING}/BUILD.json" \
+    --version "${VERSION}" >/dev/null
+BUILD_INFO="${DIST_DIR}/${PACKAGE_NAME}.build.json"
+cp "${STAGING}/BUILD.json" "${BUILD_INFO}.in"
 
 # ---------------------------------------------------------------------------
 # Hive seed material — read once by SwarmWorkspaceManager._seed_hive_from_package on a
@@ -339,6 +350,11 @@ rm -rf "${STAGING}"
 echo "[release] Generating checksums..."
 cd "${DIST_DIR}"
 shasum -a 256 "${PACKAGE_NAME}.tar.gz" > checksums.txt
+# <package>.build.json: its BUILD.json plus the package's sha256, so a Host can tell the
+# build of a package (here, in the bucket, in a release) without unpacking it
+python3 "${PROJECT_ROOT}/backend/scripts/build_identity.py" sidecar "${BUILD_INFO}.in" \
+    "${PACKAGE_NAME}.tar.gz" "${BUILD_INFO}"
+rm -f "${BUILD_INFO}.in"
 
 # ---------------------------------------------------------------------------
 # Supply closure (direction Y): auto-upload the tar to the account's S3 bucket the
@@ -391,13 +407,15 @@ if command -v aws >/dev/null 2>&1; then
         if aws s3api put-object --bucket "${S3_BUCKET}" --key "${S3_KEY}" --body "${ARCHIVE}" \
                 --region "${S3_REGION}" --expected-bucket-owner "${S3_ACCT}" >/dev/null 2>&1 \
            && aws s3api put-object --bucket "${S3_BUCKET}" --key "v${VERSION}/checksums.txt" --body "${DIST_DIR}/checksums.txt" \
+                --region "${S3_REGION}" --expected-bucket-owner "${S3_ACCT}" >/dev/null 2>&1 \
+           && aws s3api put-object --bucket "${S3_BUCKET}" --key "v${VERSION}/build.json" --body "${BUILD_INFO}" \
                 --region "${S3_REGION}" --expected-bucket-owner "${S3_ACCT}" >/dev/null 2>&1; then
             UPLOADED_TO="s3://${S3_BUCKET}/${S3_KEY}"
             echo "[release] Uploaded to ${UPLOADED_TO}"
         else
             echo "[release] WARN: S3 upload failed (AccessDenied/network?) — place the tar manually:"
             echo "[release]        aws s3api put-object --bucket ${S3_BUCKET} --key ${S3_KEY} --body ${ARCHIVE} --region ${S3_REGION} --expected-bucket-owner ${S3_ACCT}"
-            echo "[release]        (and v${VERSION}/checksums.txt beside it)"
+            echo "[release]        (and v${VERSION}/checksums.txt and v${VERSION}/build.json beside it)"
         fi
     elif [ -n "${S3_LOOKUP}" ]; then
         echo "[release] WARN: could not tell which S3 bucket is this account's (${S3_LOOKUP}) — skipping S3 upload"

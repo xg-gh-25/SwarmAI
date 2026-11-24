@@ -300,3 +300,43 @@ def test_smoke_launches_the_browser_and_ci_installs_its_dependencies():
     assert deps < steps.index("Install and start the package (smoke)")
     run = jobs["build-hive"]["steps"][deps]["run"]
     assert "PLAYWRIGHT_VERSION" in run and "install-deps chromium" in run
+
+
+def _stub_host(tmp_path: Path, missing_user: bool = False) -> tuple[dict, Path]:
+    """A PATH whose system commands only log (root's id, rpm, dnf, useradd, install,
+    getent, setfacl, visudo, systemctl, nft), so the script's steps run without root."""
+    bin_ = tmp_path / "stubs"
+    bin_.mkdir(parents=True)
+    log = tmp_path / "calls.log"
+    home = tmp_path / "home-swarm"
+    home.mkdir()
+    stubs = {
+        "id": 'if [ "$1" = -u ] && [ -z "$2" ]; then echo 0; exit 0; fi\n'
+              + ('echo "id: no such user" >&2; exit 1\n' if missing_user else 'echo 990\n'),
+        "getent": f'echo "swarm:x:1000:1000::{home}:/bin/bash"\n',
+        "useradd": "exit 1\n" if missing_user else "exit 0\n",
+    }
+    for name in ("id", "rpm", "dnf", "useradd", "install", "getent", "setfacl", "visudo", "systemctl", "nft"):
+        (bin_ / name).write_text(f'#!/bin/sh\necho "{name} $*" >> "{log}"\n' + stubs.get(name, "exit 0\n"))
+        (bin_ / name).chmod(0o755)
+    return {"PATH": f"{bin_}:/usr/bin:/bin", "SWARM_USER": "swarm", "HOME": str(tmp_path)}, log
+
+
+def test_the_image_mode_sets_up_everything_but_the_firewall(tmp_path):
+    """An image (Elastic Workers) is built as root but runs as the Hive user, with no systemd
+    and no way to load an nftables rule: its mode installs the packages, the replay user and
+    sudoers, loads no firewall, and fails the build when one of those fails. Replay there then
+    finds the metadata service open to the replay user and reports not_run."""
+    env, log = _stub_host(tmp_path)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = log.read_text()
+    assert "rpm -q" in calls and "setfacl -m u:swarm-replay:x" in calls and "visudo -cf" in calls
+    assert "systemctl" not in calls and "nft " not in calls
+    assert "no firewall rule in an image" in r.stdout
+    # (the default mode loads the firewall: test_the_ruleset_loads_at_every_boot_before_the_hive;
+    # it writes /etc, so it is not run here)
+    # a step that fails fails the image build
+    env, log = _stub_host(tmp_path / "x", missing_user=True)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode != 0 and "useradd swarm-replay failed" in r.stdout

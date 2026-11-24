@@ -10,8 +10,8 @@ from __future__ import annotations
 import dataclasses
 from typing import Awaitable, Callable, Optional
 
-from core.carriers.base import (TIER_COLD, TIER_ELASTIC, TIER_WARM, LocationUnavailable, Needs,
-                                Offer, Placement, RunHandle)
+from core.carriers.base import (FEATURES_SCHEMA, TIER_COLD, TIER_ELASTIC, TIER_WARM, LocationUnavailable,
+                                Needs, Offer, Placement, RunHandle)
 
 _TIERS = (TIER_WARM, TIER_ELASTIC, TIER_COLD)
 
@@ -42,6 +42,14 @@ def _reason(o: Offer, usable_warm: int) -> str:
     return "idle" if busy == 0 else f"least_busy:{busy}"
 
 
+def _cold_can_read(needs: Needs) -> tuple[str, ...]:
+    """(FEATURES_SCHEMA,) when a stopped Hive, updated to this Host's build as it starts, can
+    read the features schema the task needs; () when not even this Host reads it."""
+    from core.feature_map.files import SCHEMA_MAJOR
+    need = needs.features_schema
+    return (FEATURES_SCHEMA,) if need is not None and need <= SCHEMA_MAJOR else ()
+
+
 def _filtered(needs: Needs, o: Offer) -> Optional[str]:
     """Why a hard condition leaves ``o`` out, or None (design §4.4 step 1)."""
     if needs.private and not o.reaches_private:
@@ -62,7 +70,9 @@ def place(needs: Needs, offers: list[Offer]) -> Placement:
     order by tier (warm EC2 with room, elastic, stopped EC2) and within a tier by
     ``Offer.load_key``. A stopped EC2 Hive is a candidate only when no running EC2 Hive can
     take the task and either none was offered or every blocked one was left out as
-    saturated, not out of date or unreachable (D5); with an elastic offer it comes after it,
+    saturated or as reading an older features schema than this task's repo (a stopped Hive is
+    updated to the Host's build when it starts), not out of date or unreachable (D5); with an
+    elastic offer it comes after it,
     as the failover when the elastic runtime is throttled. A named location is taken in
     whatever tier it is. ``skipped``: (name, reason) of every offer left out, by name."""
     skipped: list[tuple[str, str]] = []
@@ -86,7 +96,7 @@ def place(needs: Needs, offers: list[Offer]) -> Placement:
         blocked_running = [o.blocked for o in running if o.blocked]
         if warm:
             cold_why: Optional[str] = NOT_NEEDED
-        elif running and any(b != "saturated" for b in blocked_running):
+        elif running and any(b not in ("saturated", *_cold_can_read(needs)) for b in blocked_running):
             cold_why = RUNNING_NOT_FULL
         else:
             cold_why = None

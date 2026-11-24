@@ -70,6 +70,7 @@ check "^backend/"                      "backend/ directory"
 check "^desktop/dist/"                 "desktop/dist/ directory"
 check "^hive/"                         "hive/ directory"
 check "^VERSION"                       "VERSION file"
+check "^BUILD.json"                    "BUILD.json (build identity, core/build_identity)"
 
 echo ""
 echo "Backend essentials:"

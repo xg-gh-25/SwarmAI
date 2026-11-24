@@ -35,6 +35,13 @@ pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"),
                                 reason="the replay user exists on Linux")
 
 
+@pytest.fixture(autouse=True)
+def _rule_loaded(monkeypatch):
+    """The network rule's unit counts as active (a real one needs systemd and root); the test
+    of the check itself puts the real one back."""
+    monkeypatch.setattr(replay_user, "network_rule_loaded", lambda: True)
+
+
 @pytest.fixture
 def fresh(monkeypatch, tmp_path):
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "appdata"))
@@ -137,6 +144,66 @@ def test_missing_boundary_is_not_run_and_starts_nothing(tmp_path, fresh, monkeyp
     assert ("has no swarm-replay-absent-user" if why == "no user" else "metadata service answers") \
         in results[0]["error"]
     assert not started.exists(), "a repo command ran without the boundary"
+
+
+def test_a_missing_network_rule_is_named_in_the_reason(tmp_path, fresh, monkeypatch):
+    """A host with the replay user but without the network rule that keeps it off the metadata
+    service (an image that cannot load nftables at run time: hive/agentcore/Dockerfile, or a
+    Hive whose rule did not load) reports every walk not_run, saying which rule is missing and
+    where it comes from; nothing of the repo starts."""
+    fake, _log = _fake_sudo(tmp_path)
+    me = pwd.getpwuid(os.getuid())
+    monkeypatch.setattr(replay_user, "needs_replay_user", lambda: True)
+    monkeypatch.setattr(replay_user, "REPLAY_USER", me.pw_name)
+    monkeypatch.setattr(replay_user, "_find_sudo", lambda: str(fake))
+    monkeypatch.setattr(replay_user.ReplayUser, "kill_all", lambda self: 0)
+    monkeypatch.setattr(replay_user.ReplayUser, "probe", lambda self, paths=(): [
+        "the instance metadata service answers this user at 169.254.169.254:80"])
+    started = tmp_path / "started"
+    root = make_repo(tmp_path / "r", specs={}, target=TARGET.replace(
+        "prepare:\n", f"prepare:\n  - [touch, {started}]\n"), features=WALKS)
+    fmap = files.load_folder(root / ".swarmai/features")
+    results, sbdir = replay(fmap, root, Selection(list(fmap.features)))
+    assert sbdir is None and not started.exists()
+    assert {(r["result"], r["reason"]) for r in results} == {("not_run", "runtime unavailable")}
+    why = results[0]["error"]
+    assert "network rule" in why and "nftables" in why and "hive/replay-host.sh" in why, why
+    assert "metadata service answers" in why
+
+
+_REAL_RULE_LOADED = replay_user.network_rule_loaded
+
+
+def test_no_active_network_rule_unit_refuses_before_any_probe(tmp_path, fresh, monkeypatch):
+    """A fixed fact, not the metadata probe alone: without the unit that loads the rule active
+    (a container image has no systemd; credentials may come from somewhere the probe does not
+    try), the replay user is refused before anything is probed or started."""
+    fake, _log = _fake_sudo(tmp_path)
+    me = pwd.getpwuid(os.getuid())
+    monkeypatch.setattr(replay_user, "needs_replay_user", lambda: True)
+    monkeypatch.setattr(replay_user, "REPLAY_USER", me.pw_name)
+    monkeypatch.setattr(replay_user, "_find_sudo", lambda: str(fake))
+    probed = []
+    monkeypatch.setattr(replay_user.ReplayUser, "probe", lambda self, paths=(): probed.append(1) or [])
+    monkeypatch.setattr(replay_user.ReplayUser, "kill_all", lambda self: probed.append(2) or 0)
+    monkeypatch.setattr(replay_user, "network_rule_loaded", _REAL_RULE_LOADED)
+    bin_ = tmp_path / "sysbin"
+    bin_.mkdir()
+    (bin_ / "systemctl").write_text('#!/bin/sh\necho "$*" >> "%s"\nexit 3\n' % (tmp_path / "sc.log"))
+    (bin_ / "systemctl").chmod(0o755)
+    monkeypatch.setitem(replay_user._SUDO_ENV, "PATH", f"{bin_}")
+    with pytest.raises(replay_user.Unavailable) as exc:
+        replay_user.resolve()
+    assert exc.value.reason == replay_user.NO_NETWORK_RULE and probed == []
+    assert (tmp_path / "sc.log").read_text().split() == ["is-active", "--quiet", replay_user.NETWORK_RULE_UNIT]
+    # an active unit (exit 0) lets the probe decide; no systemctl at all is not loaded
+    (bin_ / "systemctl").write_text("#!/bin/sh\nexit 0\n")
+    assert replay_user.network_rule_loaded() is True
+    (bin_ / "systemctl").unlink()
+    assert replay_user.network_rule_loaded() is False
+    # the unit is the one hive/replay-host.sh installs
+    script = (Path(__file__).resolve().parents[2] / "hive" / "replay-host.sh").read_text()
+    assert f'NFT_UNIT="/etc/systemd/system/{replay_user.NETWORK_RULE_UNIT}"' in script
 
 
 def test_every_start_runs_as_the_replay_user(tmp_path, fresh, monkeypatch):

@@ -21,7 +21,7 @@ Where the folder lives (design §4.4) is decided once per binding and recorded o
 
 ``location()`` is the one resolver every reader uses; ``choose_location()`` records the
 first value by that rule. Exports: FeatureMapError, Feature, Target, FeatureMap,
-load_folder, location, choose_location, content_hash, REPO_FOLDER.
+load_folder, location, choose_location, declared_schema, content_hash, REPO_FOLDER.
 """
 from __future__ import annotations
 
@@ -423,6 +423,25 @@ def location(project_dir: Path | None, repo: str | None, root: Path) -> tuple[Pa
     if in_brain is not None and (in_brain / "features.yaml").is_file():
         return in_brain, "brain"
     return None, "none"
+
+
+def declared_schema(project_dir: Path | None, repo: str | None, root: Path) -> int | None:
+    """The schema *repo*'s feature folder (``location``) declares in features.yaml when it
+    holds at least one feature (a walk to replay), else None: what a Hive must read to replay
+    it (core/swarm_out). Reads that one file, without validating the rest; never raises."""
+    try:
+        folder, _mode = location(project_dir, repo, Path(root))
+        if folder is None:
+            return None
+        doc = yaml.safe_load((folder / "features.yaml").read_text(encoding="utf-8"))
+    except (OSError, ValueError, yaml.YAMLError):
+        return None
+    if not isinstance(doc, Mapping):
+        return None
+    schema, features = doc.get("schema"), doc.get("features")
+    if isinstance(schema, bool) or not isinstance(schema, int) or schema < 1:
+        return None
+    return schema if isinstance(features, list) and features else None
 
 
 def rule(project_dir: Path, repo: str) -> str:

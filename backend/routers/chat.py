@@ -933,6 +933,8 @@ async def get_admission_state_endpoint():
     from core.resource_monitor import resource_monitor
 
     from core.session_router import PREWARM_SESSION_PREFIX
+    from core import build_identity
+    from core.feature_map.files import SCHEMA_MAJOR as FEATURES_SCHEMA
 
     streaming_count = _get_streaming_count()
     mem = resource_monitor.system_memory()
@@ -976,6 +978,13 @@ async def get_admission_state_endpoint():
         # them by id (scripts/task_checks), recording each exit code; a Host sends them as
         # data, and reads their statuses from that record, only when this is set
         "task_checks": True,
+        # the build this daemon runs (core/build_identity: commit, source digest, id; None
+        # for an install without one): a Host updates a Hive whose build is not its own,
+        # also under the same version string (core/hive_idle)
+        "build": await asyncio.to_thread(build_identity.current),
+        # the features.yaml schema this daemon reads (core/feature_map/files): a Host sends
+        # a task whose repo has Feature Map walks only where they can be read (core/swarm_out)
+        "features_schema": FEATURES_SCHEMA,
         **(await _ssh_machine_state()),
     }
 

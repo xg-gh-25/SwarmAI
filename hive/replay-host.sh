@@ -22,7 +22,14 @@
 #      instance metadata service (169.254.169.254, fd00:ec2::254), loaded now and at every boot by
 #      its own systemd unit, so a replayed app cannot read the instance role's credentials.
 #
+# An image (the Elastic Workers image, hive/agentcore/Dockerfile) runs steps 1-3 at build time,
+# as root (`replay-host.sh image`): its container then runs as the Hive user with no systemd, so
+# nothing could load step 4's rule at run time, and replay there finds the metadata service
+# open to the replay user and reports its walks not_run with that reason. A failed step fails
+# the image build instead of only warning.
+#
 # Usage: replay-host.sh                       the steps above (idempotent)
+#        replay-host.sh image                 steps 1-3, for an image build (no firewall)
 #        replay-host.sh render-nft <uid>        print the nftables ruleset for that uid
 #        replay-host.sh render-sudoers <user>   print the sudoers drop-in for the Hive user
 #        replay-host.sh render-unit <nft>       print the systemd unit that loads the ruleset
@@ -176,8 +183,8 @@ case "${1:-setup}" in
     render-sudoers) render_sudoers "${2:-}"; exit $? ;;
     render-unit) render_unit "${2:-/usr/sbin/nft}"; exit $? ;;
     packages) echo "$BROWSER_LIBRARIES $BROWSER_FONTS $BOUNDARY_PACKAGES"; exit 0 ;;
-    setup) ;;
-    *) echo "usage: $0 [setup|render-nft <uid>|render-sudoers <user>|render-unit <nft>|packages]" >&2; exit 2 ;;
+    setup|image) ;;
+    *) echo "usage: $0 [setup|image|render-nft <uid>|render-sudoers <user>|render-unit <nft>|packages]" >&2; exit 2 ;;
 esac
 
 if [ "$(id -u)" != 0 ]; then
@@ -189,5 +196,9 @@ status=0
 install_packages || status=1
 ensure_user || status=1
 install_sudoers || status=1
-install_firewall || status=1
+if [ "${1:-setup}" = image ]; then
+    echo "replay host: no firewall rule in an image (it is loaded as root at boot, and an image has no root at run time)"
+else
+    install_firewall || status=1
+fi
 exit "$status"

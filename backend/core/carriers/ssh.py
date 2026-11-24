@@ -34,8 +34,8 @@ from typing import Any, Optional
 import httpx
 
 from core.carriers import ssh_tunnel
-from core.carriers.base import (BRAIN_SYNC, FLEET, FOLLOW_HOST, SSH, TIER_WARM, USAGE_SYNC,
-                                LocationUnavailable, Needs, Offer, RunHandle)
+from core.carriers.base import (BRAIN_SYNC, FEATURES_SCHEMA, FLEET, FOLLOW_HOST, SSH, TIER_WARM, USAGE_SYNC,
+                                LocationUnavailable, Needs, Offer, RunHandle, features_below)
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,8 @@ def blocked(probe: Optional[dict[str, Any]], cfg: dict[str, Any], needs: Needs,
         return CERT_EXPIRED
     if probe.get("capable") is not True:
         return OUT_OF_DATE
+    if features_below(probe.get("features_schema"), needs):
+        return FEATURES_SCHEMA
     if probe.get("saturated"):
         return SATURATED
     return None
@@ -266,7 +268,7 @@ class SshLocation:
         if rec["id"] in held or rec["name"] in held:
             raise swarm_out._held_refusal(rec["name"])
         body = await swarm_out._within(deadline, f"checking SSH machine {self.name}", 2 * swarm_out.PROBE_TIMEOUT_S,
-                                       lambda: swarm_out._require_work_orders(rec))
+                                       lambda: swarm_out._require_work_orders(rec, needs))
         until = body.get("ssh_cert_valid_until")
         if isinstance(until, (int, float)) and not isinstance(until, bool) and until <= _now():
             raise swarm_out.HiveUnavailable(

@@ -106,6 +106,24 @@ class Needs:
     named: Optional[str] = None                 # a location named by the person or agent
     held: frozenset = frozenset()               # ids or names a Swarm Run holds at another Brain version
     brain: Optional[str] = None                 # the Brain the task goes under (what ``held`` holds)
+    #: the features.yaml schema the task's repos declare where they have Feature Map walks
+    #: (core/swarm_out._features_need); None: no walks, any Hive will do
+    features_schema: Optional[int] = None
+
+
+#: an offer's (and a refused open's) reason: the location reads an older features.yaml schema
+#: than the task's repo declares, so its Feature Map walks could not be replayed there
+FEATURES_SCHEMA = "features_schema"
+
+
+def features_below(reported: Any, needs: Optional[Needs]) -> bool:
+    """Whether a location reading features schema *reported* cannot read the task's (an
+    install that does not say reads schema 1: it is older than the field)."""
+    need = needs.features_schema if needs is not None else None
+    if not need:
+        return False
+    have = reported if isinstance(reported, int) and not isinstance(reported, bool) and reported > 0 else 1
+    return have < need
 
 
 @dataclass(frozen=True)

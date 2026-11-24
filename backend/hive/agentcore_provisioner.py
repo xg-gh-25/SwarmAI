@@ -13,8 +13,9 @@ region the Host manages:
 - the runtime ``swarmai_elastic_hive`` (``runtime_spec``: platform V2, network PUBLIC,
   protocol HTTP, ports 8080 and 8081, idle timeout 900 s, lifetime 28800 s, and
   ``resourceConfigurations`` ``minimumMemoryInMiB: 8192``: 2 vCPU / 8 GB baseline, 8 vCPU /
-  32 GB peak, 32 GB disk), its image the configured repository at this Host's version
-  (``image_location``). A runtime of that name already in the account that SwarmAI made
+  32 GB peak, 32 GB disk), its image the configured repository at the tag of this Host's
+  build (``_host_version``: ``<version>-b<build id>``, core/build_identity;
+  ``image_location``). A runtime of that name already in the account that SwarmAI made
   (tagged ``swarmai:managed``: an Elastic Workers runtime whose row was lost) is updated to the same
   spec instead of created twice; one SwarmAI did not make is refused, as is a role of the
   role's name that SwarmAI did not make for this or that carries other policies.
@@ -23,7 +24,7 @@ The ``hive_instances`` row (``carrier='agentcore'``, ``runtime_arn``, name ``ela
 what ``core.carriers.agentcore`` offers from. It is written before the AWS steps, so a
 runtime created by an enable that later failed is still known and ``disable`` deletes it;
 the carrier offers a row only once it has a runtime ARN and is not changing, and asks AWS
-whether that runtime is READY at this Host's version every time. A transient status left by
+whether that runtime is READY at this Host's build every time. A transient status left by
 a SwarmAI that quit is settled from the runtime's live state (``ElasticHive.status``). The row never takes an EC2 status (``running``,
 ``stopped``, ``updating``, ``deleting``, ``error``): EC2 offers, idle stop, stale-update release
 and the EC2 routes act on those, so the elastic row keeps its own (``STATUSES``). It does not
@@ -37,7 +38,7 @@ next enable).
 
 **Where the image comes from** (``image_location``): ``RELEASED_IMAGE``, the public ECR
 repository the release pushes to (``.github/workflows/release.yml`` ``agentcore-image``:
-``<repo>:<version>``, its ``AGENTCORE_IMAGE_REPO``), unless the config key
+``<repo>:<version>`` and ``<repo>:<version>-b<build id>``, its ``AGENTCORE_IMAGE_REPO``), unless the config key
 ``hive_agentcore_image`` names another repository (no tag) — a build of one's own. And
 CreateAgentRuntime's ``containerUri`` accepts ``public.ecr.aws/...`` as well as
 ``<account>.dkr.ecr.<region>.amazonaws.com/...`` (the ``RuntimeContainerUri`` pattern of the
@@ -184,15 +185,48 @@ def set_chosen_account(account_ref: str) -> None:
     AppConfigManager.instance().update({ACCOUNT_SETTING: account_ref})
 
 
-def _image_published(account: str, region: str, version: str) -> bool:
-    """Whether the image of *version* can be pulled: a public repository's tag resolves to
-    a digest; a private one is left to the provision's own pin. Raises ElasticRefused
-    for an image this account cannot use."""
+def _image_published(account: str, region: str, version: str, session: Any = None) -> bool:
+    """Whether the image of *version* (an image tag) can be pulled: a public repository's tag
+    resolves to a digest; a private one's tag is in that ECR repository when *session* is
+    given (else it is left to the provision's own pin). Raises ElasticRefused for an image
+    this account cannot use."""
     uri, repo = image_location(configured_image(), account, region, version)
     if repo is not None:
-        return True
+        if session is None:
+            return True
+        try:
+            got = session.client("ecr", region_name=region).describe_images(
+                repositoryName=repo, imageIds=[{"imageTag": version}])
+        except Exception as exc:  # noqa: BLE001 — not found, or not readable: not published
+            logger.info("elastic workers: %s:%s not found (%s)", repo, version, type(exc).__name__)
+            return False
+        return bool(got.get("imageDetails"))
     path = uri[len(PUBLIC_REGISTRY) + 1:].rsplit(":", 1)[0]
     return _public_manifest_digest(path, version) is not None
+
+
+async def _target(account: Any, region: Any, tag: str, session: Any = None) -> Optional[str]:
+    """The image tag Elastic Workers should run for this Host's tag *tag*: the image of its
+    build when that is published, else its version's image (no image of this build exists:
+    a Host started from changed source before anyone built one), else None."""
+    from core import build_identity
+    if await asyncio.to_thread(_image_published, str(account), str(region), tag, session):
+        return tag
+    bare = build_identity.display_version(tag)
+    if bare != tag and await asyncio.to_thread(_image_published, str(account), str(region), bare, session):
+        logger.info("elastic workers: no image of this Host's build (%s) is published: %s it is", tag, bare)
+        return bare
+    return None
+
+
+async def _read_session(acct: dict, region: str) -> Any:
+    """A read session for *acct* (to look a private image up), or None."""
+    from hive import accounts as hive_accounts
+    try:
+        return await asyncio.to_thread(hive_accounts.session_for, acct, region, "read")
+    except Exception as exc:  # noqa: BLE001 — the image is then left to the provision's pin
+        logger.info("elastic workers: no read session (%s)", type(exc).__name__)
+        return None
 
 
 def _sleep(seconds: float):
@@ -208,8 +242,20 @@ def _partition(region: str) -> str:
 
 
 def _host_version() -> str:
+    """The image tag of this Host's build, what Elastic Workers must run: its version and
+    build identity (core/build_identity ``image_tag``: ``<version>-b<id>``, as
+    hive/agentcore/build_image.sh tags the image of a package; the version alone when the
+    Host knows no build). Blocking the first time in a process: an async caller warms it
+    off the loop first (``_warm``)."""
     from config import settings
-    return str(settings.app_version).removeprefix("v")
+    from core import build_identity
+    return build_identity.image_tag(str(settings.app_version), build_identity.current_id())
+
+
+async def _warm() -> None:
+    """Read this Host's build identity off the event loop (it may run git once)."""
+    from core import build_identity
+    await asyncio.to_thread(build_identity.current)
 
 
 def configured_image() -> Optional[str]:
@@ -235,11 +281,13 @@ def image_location(configured: Optional[str], account: str, region: str, version
     (``public.ecr.aws/<alias>/<name>``) is used as it is and pulls without credentials: the
     repository is None, and the execution role gets no ECR permission. A private one must
     be this account's, in this region: the repository is its path, the only one the role may
-    pull. The tag is *version*, as the release pushes it. Raises ElasticRefused otherwise."""
+    pull. The tag is *version*: an image tag of a version or of a build (``<version>-b<id>``,
+    ``_host_version``), as hive/agentcore/build_image.sh pushes them. Raises ElasticRefused
+    otherwise."""
     if not configured:
         raise ElasticRefused(NO_IMAGE)
-    if not isinstance(version, str) or len(version) > 32 or not _VERSION_RE.fullmatch(version):
-        raise ElasticRefused(f"Not a release version: {str(version)[:40]!r}.")
+    if not isinstance(version, str) or len(version) > 64 or not _VERSION_RE.fullmatch(version):
+        raise ElasticRefused(f"Not an image tag of a version or build: {str(version)[:70]!r}.")
     ref = configured.strip().rstrip("/")
     if "://" in ref or "@" in ref or ":" in ref.rsplit("/", 1)[-1]:
         raise ElasticRefused(f"{IMAGE_SETTING} must name a repository without a scheme, tag or digest "
@@ -617,12 +665,14 @@ class ElasticHive:
 
     # ── turn on ──
 
-    async def claim(self, account_ref: str, region: str) -> dict:
-        """Check what turning on needs and write the row (status ``enabling``). Raises
+    async def claim(self, account_ref: str, region: str, tag: Optional[str] = None) -> dict:
+        """Check what turning on needs and write the row (status ``enabling``), at image tag
+        *tag* (default: this Host's build's image, else its version's: ``_target``). Raises
         ElasticRefused, creating nothing, when there is no usable image, the SDK cannot
         carry the size, the account's identity lacks a permission Elastic Workers needs
         (``_permission_gap``: IAM's simulator, nothing is made), or the account already
         has one."""
+        await _warm()
         if not ac.REGION_RE.fullmatch(region or ""):
             raise ElasticRefused(f"Not an AWS region: {str(region)[:40]!r}.")
         acct = await self._account(account_ref)
@@ -642,7 +692,8 @@ class ElasticHive:
         now = _now()
         row = {"id": str(uuid.uuid4()), "name": ELASTIC_NAME, "owner_name": None, "hive_type": "shared",
                "account_ref": account_ref, "region": region, "instance_type": AGENTCORE, "status": ENABLING,
-               "version": _host_version(), "error_message": None, "created_at": now, "updated_at": now,
+               "version": tag or (await _target(acct.get("account_id"), region, _host_version(), session))
+               or _host_version(), "error_message": None, "created_at": now, "updated_at": now,
                "carrier": AGENTCORE, "runtime_arn": None}
         async with hive_accounts.fleet_lock:
             conn = await self._conn()
@@ -741,14 +792,20 @@ class ElasticHive:
     # ── update ──
 
     async def claim_update(self, location_id: str, version: Optional[str] = None) -> tuple[dict, str]:
-        """Check the update can be made (image, SDK) and claim the row (``upgrading``)."""
-        version = (version or _host_version()).removeprefix("v")
+        """Check the update can be made (image, SDK) and claim the row (``upgrading``).
+        *version*: the image tag (default: this Host's build's image, else its version's:
+        ``_target``)."""
+        await _warm()
         row = await self._row(location_id)
         if not row.get("runtime_arn"):
             raise ElasticRefused("Elastic Workers has no runtime yet: turn it off and on again.")
         arn = ac.parse_runtime_arn(row["runtime_arn"])
         if arn is None:
             raise ElasticRefused("Elastic Workers' runtime ARN is not readable.")
+        if not version:
+            session = await _read_session(await self._account(row["account_ref"]), arn["region"])
+            version = await _target(arn["account"], arn["region"], _host_version(), session) or _host_version()
+        version = version.removeprefix("v")
         image_location(configured_image(), arn["account"], arn["region"], version)
         await asyncio.to_thread(_check_sdk)
         return await self._claim(location_id, UPGRADING, (READY, FAILED)), version
@@ -883,7 +940,7 @@ class ElasticHive:
 
     async def reconcile(self, retry: bool = False) -> str:
         """Keep Elastic Workers on standby (design 2026-11-20-swarm-out-multi-carrier
-        §6.8): update every Elastic Workers there is to this Host's version and repair a
+        §6.8): update every Elastic Workers there is to this Host's build and repair a
         failed one once per process and version (*retry*: once more, an agent's round);
         turn one on when there is none. While the person has turned it off (read again
         before every change: a round waits minutes on AWS) it turns off one that is still
@@ -897,7 +954,8 @@ class ElasticHive:
     async def _round(self, retry: bool) -> str:
         if not standby_on():
             return await self._off()
-        version = _host_version()
+        await _warm()
+        version = _host_version()           # the image tag of this Host's build
         rows = []
         for r in await self.rows():
             if r.get("status") in TRANSIENT and r["id"] not in _WORKING:
@@ -924,12 +982,13 @@ class ElasticHive:
             reason = await self.refusal(account, region)
             if reason:
                 return f"refused: {reason}"
-            if not await asyncio.to_thread(_image_published, str(account), str(region), version):
+            target = await _target(account, region, version, await _read_session(acct, str(region)))
+            if target is None:
                 return f"no image for {version}"
             if not standby_on():
                 return "off"
             try:
-                row = await self.claim(account_ref, region)
+                row = await self.claim(account_ref, region, target)
             except ElasticRefused as exc:   # nothing was made: say why (a missing permission)
                 return f"refused: {exc}"
             await self.provision(row["id"])
@@ -964,21 +1023,32 @@ class ElasticHive:
         return f"turned off {', '.join(did)}" if did else "off"
 
     async def _keep(self, row: dict, version: str, retry: bool) -> str:
-        """One Elastic Workers kept at *version*, or repaired once."""
-        if row.get("status") == READY and (row.get("version") or "").removeprefix("v") == version:
+        """One Elastic Workers kept at *version* (this Host's image tag), or repaired once.
+        With no image of this Host's build published, a runtime already at the Host's version
+        keeps its image, and one at another version moves to the version's image."""
+        from core import build_identity
+        current = (row.get("version") or "").removeprefix("v")
+        if row.get("status") == READY and current == version:
             return "ready"
         arn = ac.parse_runtime_arn(row.get("runtime_arn"))
         account = arn["account"] if arn else None
         region = arn["region"] if arn else row.get("region")
+        if row.get("status") not in (READY, FAILED):
+            return f"left {row.get('status')}"
+
+        async def target_tag() -> Optional[str]:
+            acct = await self._account(row["account_ref"])
+            return await _target(account, region, version, await _read_session(acct, str(region)))
         if row.get("status") == READY:
-            if not await asyncio.to_thread(_image_published, str(account), str(region), version):
+            target = await target_tag()
+            if target is None:
                 return f"no image for {version}"
+            if target != version and build_identity.display_version(current) == target:
+                return f"ready at {current}: no image for {version}"
             if not standby_on():
                 return "off"
-            await self.update(row["id"], version)
+            await self.update(row["id"], target)
             return "updated"
-        if row.get("status") != FAILED:
-            return f"left {row.get('status')}"
         # by account, not row: turning on again makes a new row, which must not count as
         # never tried
         key = f"repair:{row['account_ref']}"
@@ -989,7 +1059,7 @@ class ElasticHive:
         if not standby_on():
             return "off"
         if arn is not None:
-            await self.update(row["id"], version)
+            await self.update(row["id"], await target_tag() or version)
             return "repaired"
         await self.disable(row["id"])
         if not standby_on():        # turned off while the failed row was being removed
@@ -1011,6 +1081,7 @@ class ElasticHive:
             return "The AWS account's id is not known: verify the account first."
         if not ac.REGION_RE.fullmatch(str(region or "")):
             return f"Not an AWS region: {str(region)[:40]!r}."
+        await _warm()
         try:
             image_location(configured_image(), str(account), str(region), _host_version())
             await asyncio.to_thread(_check_sdk)
@@ -1021,7 +1092,11 @@ class ElasticHive:
     async def status(self, target: Optional[tuple[Any, Any]] = None) -> dict[str, Any]:
         """What Swarm Out › settings shows: whether it can be turned on in *target* (account id,
         region) and why not, and each Elastic Workers with its runtime's live state. A
-        transient status no task here holds is settled from that live state."""
+        transient status no task here holds is settled from that live state. Versions are
+        shown as versions; whether a runtime is up to date compares its image tag with the
+        one of this Host's build."""
+        from core import build_identity
+        await _warm()
         host = _host_version()
         reason = (await self.refusal(*target) or _PERMISSION_GAP.get((str(target[0]), str(target[1])))) \
             if target else (None if configured_image() else NO_IMAGE)
@@ -1036,10 +1111,12 @@ class ElasticHive:
             open_runs = await asyncio.to_thread(ac._active_sessions, row["id"])
             out.append({"id": row["id"], "name": row["name"], "account_ref": row["account_ref"],
                         "region": row["region"], "status": row["status"], "error_message": row.get("error_message"),
-                        "runtime_status": live.get("runtime_status"), "image_version": image,
+                        "runtime_status": live.get("runtime_status"),
+                        "image_version": build_identity.display_version(image),
                         "up_to_date": image is not None and image.removeprefix("v") == host,
                         "open_runs": open_runs, "working": row["id"] in _WORKING})
-        return {"host_version": host, "can_enable": reason is None, "reason": reason, "size": dict(SIZE),
+        return {"host_version": build_identity.display_version(host), "can_enable": reason is None,
+                "reason": reason, "size": dict(SIZE),
                 "hives": out}
 
     async def _settle(self, row: dict, live: dict) -> Optional[dict]:

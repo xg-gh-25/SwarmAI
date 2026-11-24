@@ -502,6 +502,115 @@ def _script_error(output: str, limit: int = 300) -> str:
     return (errors[-1] if errors else (output or "").strip())[:limit]
 DELETING_STALE_S = 60 * 60
 
+
+# ── the package of a build (core/build_identity) ────────────────────────────
+
+class BuildPackageMissing(RuntimeError):
+    """No package of the Host's build was found for a Hive already at its version: updating
+    would change nothing, so nothing was sent to the Hive (``_sync_release_to_s3`` strict)."""
+
+
+#: a build.json is a few hundred bytes; anything bigger is not one
+BUILD_INFO_MAX_BYTES = 8192
+
+
+def _parse_build_info(data: Optional[bytes]) -> Optional[dict]:
+    """A ``<package>.build.json`` (hive/release.sh) read and checked, or None."""
+    if not data:
+        return None
+    from core import build_identity
+    try:
+        return build_identity._tool().valid(json.loads(data.decode("utf-8")))
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def _build_json(side: dict) -> bytes:
+    return (json.dumps(side, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _local_package_dirs() -> list[Path]:
+    """Where a Host started from its checkout finds the packages hive/release.sh built there
+    (its ``dist/``); nothing else on this machine is looked at."""
+    from config import _PROJECT_ROOT
+    return [Path(_PROJECT_ROOT) / "dist"]
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _local_package(version: str, want: str) -> Optional[tuple[bytes, dict]]:
+    """(bytes, build info) of a package of build *want* beside this Host's checkout whose
+    sha256 is the one its build.json names, or None. Blocking."""
+    base = f"swarmai-hive-v{version}-linux-arm64"
+    for d in _local_package_dirs():
+        pkg, info = d / f"{base}.tar.gz", d / f"{base}.build.json"
+        try:
+            if not (pkg.is_file() and info.is_file()):
+                continue
+            side = _parse_build_info(info.read_bytes()[:BUILD_INFO_MAX_BYTES + 1])
+            if side is None or side["id"] != want or not side.get("package_sha256"):
+                continue
+            if _sha256_file(pkg) != side["package_sha256"]:
+                logger.warning("Hive package %s is not the package its build.json names; not used", pkg)
+                continue
+            return pkg.read_bytes(), side
+        except OSError as e:
+            logger.warning("Hive package %s could not be read (%s)", pkg, type(e).__name__)
+    return None
+
+
+async def _release_build_info(client: httpx.AsyncClient, gh_url: str, sha: str) -> Optional[dict]:
+    """The release's ``<package>.build.json`` when it names the package of *sha*, else None."""
+    url = gh_url.removesuffix(".tar.gz") + ".build.json"
+    try:
+        r = await client.get(url)
+    except httpx.HTTPError:
+        return None
+    side = _parse_build_info(r.content[:BUILD_INFO_MAX_BYTES + 1]) if r.status_code == 200 else None
+    return side if side is not None and side.get("package_sha256") == sha else None
+
+
+async def _hosts_package(version: str, want: str) -> Optional[tuple[bytes, dict]]:
+    """A package of build *want*: beside this Host's checkout, else in the GitHub release of
+    *version* (its build.json first, the package only when that names *want*, checked
+    against both its published ``.sha256`` and the build.json)."""
+    found = await asyncio.to_thread(_local_package, version, want)
+    if found is not None:
+        return found
+    package = f"swarmai-hive-v{version}-linux-arm64.tar.gz"
+    gh_url = f"https://github.com/{GITHUB_REPO}/releases/download/v{version}/{package}"
+    async with httpx.AsyncClient(follow_redirects=True, timeout=120) as client:
+        try:
+            r = await client.get(gh_url.removesuffix(".tar.gz") + ".build.json")
+        except httpx.HTTPError:
+            return None
+        side = _parse_build_info(r.content[:BUILD_INFO_MAX_BYTES + 1]) if r.status_code == 200 else None
+        if side is None or side["id"] != want or not side.get("package_sha256"):
+            return None
+        try:
+            resp = await client.get(gh_url)
+            sums = await client.get(gh_url + ".sha256")
+        except httpx.HTTPError as e:
+            logger.warning("Hive release v%s of build %s could not be downloaded (%s)", version, want,
+                           type(e).__name__)
+            return None
+    if resp.status_code != 200:
+        return None
+    published = sums.text.split()[0].lower() if sums.status_code == 200 and sums.text.split() else ""
+    actual = hashlib.sha256(resp.content).hexdigest()
+    if actual != published or actual != side["package_sha256"]:
+        logger.warning("Hive release v%s: its package is not the one its checksum and build.json name; "
+                       "not used", version)
+        return None
+    return resp.content, side
+
+
 class HiveProvisioner:
     """Manages AWS resources for Hive instances.
 
@@ -709,15 +818,88 @@ class HiveProvisioner:
         return await asyncio.to_thread(_create)
 
     async def _sync_release_to_s3(
+        self, session, bucket: str, version: str, region: str, account_id: str = "",
+        build: Optional[dict] = None, strict: bool = False,
+    ) -> Optional[str]:
+        """Make sure the bucket holds the Hive package of *version* that *build* (the Host's
+        build identity, core/build_identity) names, and return the build id of the package
+        the bucket then holds (None: not known).
+
+        The bucket's ``v<version>/build.json`` says which build its package is, and counts
+        only when its ``package_sha256`` is the checksum beside the package. When it is not
+        *build* (or says nothing), a package of *build* is looked for, each checked against
+        the sha256 its own ``.build.json`` names: beside a Host started from its checkout
+        (``_local_package_dirs``: what hive/release.sh built there), then in the GitHub
+        release of *version*; the first found replaces the bucket's package, its checksum
+        and its build.json. When none is found: with *strict* (the Hive already runs
+        *version*, so the version's package would change nothing) a RuntimeError naming the
+        build, before anything reaches the Hive; otherwise the version's package as it is
+        (``_ensure_version_package``: the Hive still moves to the Host's version). Without
+        *build* (a Host with no build identity) only the version decides, as before."""
+        from core import build_identity
+        want = build_identity.reported_id(build)
+        package = f"swarmai-hive-v{version}-linux-arm64.tar.gz"
+        s3_key = f"v{version}/{package}"
+        expected_owner = bucket_owner(bucket, account_id)
+
+        def _get(key: str) -> Optional[bytes]:
+            s3 = session.client("s3", region_name=region)
+            try:
+                body = s3.get_object(Bucket=bucket, Key=key, **expected_owner)["Body"]
+                data = body.read(BUILD_INFO_MAX_BYTES + 1)
+            except Exception:
+                return None
+            return data if len(data) <= BUILD_INFO_MAX_BYTES else None
+
+        def _bucket_build() -> Optional[str]:
+            side = _parse_build_info(_get(f"v{version}/build.json"))
+            sums = (_get(f"v{version}/checksums.txt") or b"").decode("utf-8", "replace").split()
+            sha = sums[0].lower() if sums else ""
+            return side["id"] if side and side.get("package_sha256") == sha else None
+
+        def _put(key: str, body: bytes) -> None:
+            s3 = session.client("s3", region_name=region)
+            s3.put_object(Bucket=bucket, Key=key, Body=body, **expected_owner)
+            logger.info("Uploaded s3://%s/%s (%d bytes)", bucket, key, len(body))
+
+        if want is None:
+            await self._ensure_version_package(session, bucket, version, region, account_id)
+            return await asyncio.to_thread(_bucket_build)
+        have = await asyncio.to_thread(_bucket_build)
+        if have == want:
+            logger.info("Release v%s of build %s already in S3", version, want)
+            return want
+        found = await _hosts_package(version, want)
+        if found is not None:
+            data, side = found
+            logger.info("Replacing s3://%s/%s (build %s) with this Host's build %s", bucket, s3_key,
+                        have or "unknown", want)
+            await asyncio.to_thread(_put, s3_key, data)
+            await asyncio.to_thread(_put, f"v{version}/checksums.txt",
+                                    f"{side['package_sha256']}  {package}\n".encode())
+            await asyncio.to_thread(_put, f"v{version}/build.json", _build_json(side))
+            return want
+        if strict:
+            raise BuildPackageMissing(
+                f"Hive release v{version}: the bucket's package is build {have or 'unknown'}, not "
+                f"this Host's build {want}, and no package of build {want} was found (beside "
+                f"this Host's checkout or in the GitHub release v{version}), so updating would "
+                f"change nothing. Fix: build it from this Host's source with "
+                f"`./hive/release.sh {version}` (it uploads to {bucket}), then update again.")
+        await self._ensure_version_package(session, bucket, version, region, account_id)
+        return await asyncio.to_thread(_bucket_build)
+
+    async def _ensure_version_package(
         self, session, bucket: str, version: str, region: str, account_id: str = ""
     ) -> None:
-        """Make sure the bucket holds the Hive package of *version* and the
-        ``checksums.txt`` beside it, which first boot and every update check the package
-        against before unpacking it (hive/user_data.PACKAGE_CHECK_SH). A package not in the
-        bucket comes from the GitHub release, checked against the release's ``.sha256``;
-        its checksum is written with it. A package already there without one (put there by
-        an older SwarmAI) gets the release's published checksum; ``hive/release.sh`` uploads
-        both itself."""
+        """Make sure the bucket holds a Hive package of *version* and the ``checksums.txt``
+        beside it, which first boot and every update check the package against before
+        unpacking it (hive/user_data.PACKAGE_CHECK_SH). A package not in the bucket comes
+        from the GitHub release, checked against the release's ``.sha256``; its checksum is
+        written with it, and the release's ``.build.json`` (its build identity) when it
+        names that package. A package already there without a checksum (put there by an
+        older SwarmAI) gets the release's published checksum; ``hive/release.sh`` uploads
+        all three itself."""
         package = f"swarmai-hive-v{version}-linux-arm64.tar.gz"
         s3_key = f"v{version}/{package}"
         sums_key = f"v{version}/checksums.txt"
@@ -790,10 +972,15 @@ class HiveProvisioner:
                     f"checksum (HTTP {sums.status_code} for {gh_url}.sha256). Not uploaded."
                 )
 
+            side = await _release_build_info(client, gh_url, actual)
+
         # Upload to S3: the package, then its checksum (a package without one is refused
-        # on the box, so a failed second put is repaired by the next sync above)
+        # on the box, so a failed second put is repaired by the next sync above), then the
+        # build identity that names both
         await asyncio.to_thread(_put, s3_key, data)
         await asyncio.to_thread(_put, sums_key, _sums(actual))
+        if side is not None:
+            await asyncio.to_thread(_put, f"v{version}/build.json", _build_json(side))
 
     # ── IAM ────────────────────────────────────────────────────────
 
@@ -1377,8 +1564,11 @@ class HiveProvisioner:
             bucket = await self._ensure_s3_bucket(session, region, aws_account_id)
             await self._update_instance(instance_id, s3_bucket=bucket)
 
-            # Step 2: Sync release to S3
-            await self._sync_release_to_s3(session, bucket, version, region, aws_account_id)
+            # Step 2: Sync release to S3 (the package of this Host's build when one is found)
+            from core import build_identity
+            host_build = await asyncio.to_thread(build_identity.current)
+            await self._sync_release_to_s3(session, bucket, version, region, aws_account_id,
+                                           build=host_build)
 
             # Step 3: IAM
             role_arn = await self._create_iam_role(session, name)
@@ -1795,9 +1985,15 @@ class HiveProvisioner:
             if not VERSION_RE.fullmatch(version):
                 raise ValueError(f"Invalid version string: {version!r}")
 
-            # Ensure new version is in S3
+            # Ensure the package of this Host's build is in S3 (core/build_identity). The
+            # Hive already at *version* is updated only to that build: without its package
+            # the sync refuses before anything reaches the Hive.
+            from core import build_identity
+            host_build = await asyncio.to_thread(build_identity.current)
+            at_version = str(instance.get("version") or "").removeprefix("v") == version
             await self._sync_release_to_s3(session, bucket, version, region,
-                                           account.get("account_id", ""))
+                                           account.get("account_id", ""),
+                                           build=host_build, strict=at_version)
 
             # Refresh the role's inline policy so a policy change reaches existing Hives,
             # with the Hive's Elastic IP (stored at deploy step 8; read back from EC2 when

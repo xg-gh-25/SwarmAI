@@ -1646,6 +1646,15 @@ async def lifespan(app: FastAPI):
         from core.swarm_out import run_refresh_loop as _swarm_out_refresh_loop
         _swarm_out_refresh_task = asyncio.create_task(_swarm_out_refresh_loop(), name="swarm-out-refresh")
 
+    # ── This install's build identity, read once now (core/build_identity) ──
+    # Run from a checkout it is computed from the source as it is at start, the code this
+    # process loaded (a first look hours later would see later edits); off the event loop,
+    # it may run git. Hives compare against it (core/hive_idle, admission-state).
+    from core import build_identity as _build_identity
+    _build_identity_task = asyncio.create_task(asyncio.to_thread(_build_identity.current),
+                                               name="build-identity")
+    _build_identity_task.add_done_callback(lambda t: t.cancelled() or t.exception())
+
     # ── Hives idle for their idle time are stopped (host only): each Hive's own
     # idle_stop_minutes, else hive_idle_stop_minutes; never one set always on ──
     # A dispatch to a stopped Hive starts it again (core/hive_idle).

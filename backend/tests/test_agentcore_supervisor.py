@@ -503,3 +503,95 @@ def test_a_session_id_the_backend_would_not_serve_is_refused(sup, monkeypatch, s
 def test_the_session_id_rule_is_the_backends(sup):
     from core import hive_agentcore
     assert sup._SID_RE.pattern == "^" + hive_agentcore.SID_RE.pattern + "$"
+
+
+# ── the image carries the package's build and its replay host setup ──
+
+def _package_with(tmp_path: Path, files: dict[str, str]) -> Path:
+    import tarfile
+    top = tmp_path / "pkgsrc" / "swarmai-hive-v9.9.9-linux-arm64"
+    for rel, text in files.items():
+        f = top / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    with tarfile.open(dist / "swarmai-hive-v9.9.9-linux-arm64.tar.gz", "w:gz") as t:
+        t.add(top, arcname=top.name)
+    return dist
+
+
+def test_build_image_tags_the_packages_build_and_its_context_holds_the_replay_script(tmp_path):
+    """build_image.sh reads the build id from the package's BUILD.json, tags and pushes the
+    image as <version>-b<id> beside <version>; the build context is the package (holding
+    hive/replay-host.sh, which the Dockerfile's root step runs) and the supervisor, nothing else."""
+    bid = "0123456789abcdef"
+    build = json.dumps({"commit": "a" * 40, "digest": "b" * 64, "id": bid, "version": "9.9.9"}, indent=2)
+    dist = _package_with(tmp_path, {"BUILD.json": build, "hive/replay-host.sh": "echo replay\n",
+                                    "VERSION": "9.9.9\n"})
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log, ctx_log = tmp_path / "calls.log", tmp_path / "context.log"
+    (bin_dir / "docker").write_text(
+        f'#!/bin/sh\necho "docker $*" >> "{log}"\n'
+        f'if [ "$1" = build ]; then for a; do last="$a"; done; ls "$last" >> "{ctx_log}"; '
+        f'tar tzf "$last/swarmai-hive.tar.gz" >> "{ctx_log}"; fi\n')
+    (bin_dir / "docker").chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "DIST_DIR": str(dist), "HOME": str(tmp_path)}
+    r = subprocess.run(["bash", str(AC / "build_image.sh"), "9.9.9", "--push", "public.ecr.aws/x/hive"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    calls = log.read_text().splitlines()
+    assert f"-t public.ecr.aws/x/hive:9.9.9-b{bid}" in calls[0] and "-t public.ecr.aws/x/hive:9.9.9 " in calls[0]
+    assert calls[1:] == ["docker push public.ecr.aws/x/hive:9.9.9", f"docker push public.ecr.aws/x/hive:9.9.9-b{bid}"]
+    listed = ctx_log.read_text().splitlines()
+    assert sorted(x for x in listed if "/" not in x) == ["supervisor.py", "swarmai-hive.tar.gz"]
+    assert "swarmai-hive-v9.9.9-linux-arm64/hive/replay-host.sh" in listed
+
+    # a package without a build identity (older) gets the version tag only, and says so
+    log.unlink()
+    dist2 = _package_with(tmp_path / "old", {"VERSION": "9.9.9\n", "hive/replay-host.sh": "echo\n"})
+    r = subprocess.run(["bash", str(AC / "build_image.sh"), "9.9.9", "--push", "public.ecr.aws/x/hive"],
+                       env={**env, "DIST_DIR": str(dist2)}, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "-b" not in log.read_text().split("--platform", 1)[1].split(" -f ")[0]
+    assert log.read_text().splitlines()[1:] == ["docker push public.ecr.aws/x/hive:9.9.9"]
+    assert "no build identity" in r.stderr
+
+
+def _dockerfile_steps() -> list[str]:
+    import re
+    text = (AC / "Dockerfile").read_text()
+    logical = re.sub(r"\\\n\s*", " ", text).splitlines()
+    return [ln.strip() for ln in logical if ln.strip() and not ln.strip().startswith("#")]
+
+
+@pytest.mark.skipif(subprocess.run(["tar", "--version"], capture_output=True, text=True).stdout.find("GNU tar") < 0,
+                    reason="the image step uses GNU tar (Amazon Linux)")
+def test_the_image_runs_the_packages_replay_host_setup_as_root(tmp_path):
+    """The Dockerfile's replay step: after the Hive user exists and before USER swarm (so as
+    root), with the browser's system needs (sudo, acl) installed first; it takes
+    hive/replay-host.sh from the bind-mounted package (never a tree the Hive user owns) and
+    runs its image mode for that user. The step's own command is run here against a package."""
+    steps = _dockerfile_steps()
+    at = next(i for i, s in enumerate(steps) if "replay-host.sh image" in s)
+    step = steps[at]
+    assert at > next(i for i, s in enumerate(steps) if "useradd -m -s /bin/bash swarm" in s)
+    assert at < steps.index("USER swarm")
+    assert all(f" {pkg} " in steps[1] or steps[1].endswith(f" {pkg}") for pkg in ("sudo", "acl"))
+    assert step.startswith("RUN --mount=type=bind,source=swarmai-hive.tar.gz,target=/tmp/hive.tar.gz ")
+    cmd = step.split("target=/tmp/hive.tar.gz ", 1)[1]
+    pkg = _package_with(tmp_path, {"hive/replay-host.sh": 'echo "replay-host $1 for $SWARM_USER"\n',
+                                   "VERSION": "9.9.9\n"}) / "swarmai-hive-v9.9.9-linux-arm64.tar.gz"
+    libexec = tmp_path / "libexec"
+    cmd = cmd.replace("/tmp/hive.tar.gz", str(pkg)).replace("/usr/local/libexec/swarmai", str(libexec))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "dnf").write_text("#!/bin/sh\nexit 0\n")      # the step's cleanup, not the test's
+    (bin_dir / "dnf").chmod(0o755)
+    r = subprocess.run(["bash", "-c", "set -e\n" + cmd], capture_output=True, text=True, timeout=60,
+                       env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)})
+    assert r.returncode == 0, r.stderr
+    assert "replay-host image for swarm" in r.stdout
+    script = libexec / "replay-host.sh"
+    assert script.read_text().startswith('echo "replay-host') and (script.stat().st_mode & 0o777) == 0o700

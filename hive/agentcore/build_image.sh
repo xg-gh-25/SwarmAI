@@ -4,9 +4,12 @@
 #
 # Usage: hive/agentcore/build_image.sh <version> [--push <registry/repo>]
 #   <version>  the package dist/swarmai-hive-v<version>-linux-arm64.tar.gz (hive/release.sh)
-#   --push     tag <registry/repo>:<version> and push it (already logged in). No moving tag such
-#              as latest: an elastic Hive pins the digest its version's tag serves
-#              (backend/hive/agentcore_provisioner.pinned_uri).
+#   --push     tag <registry/repo>:<version> and <registry/repo>:<version>-b<build id> and push
+#              both (already logged in). The build id is the package's own (its BUILD.json,
+#              backend/scripts/build_identity.py): a Host runs Elastic Workers on the image of
+#              its own build (backend/hive/agentcore_provisioner._host_version), so a build of
+#              new code under the same version gets its own tag. No moving tag such as latest:
+#              an elastic Hive pins the digest its tag serves (agentcore_provisioner.pinned_uri).
 #
 # Uses docker or finch, whichever is installed (docker first). The build context is a
 # temporary directory holding only the package and the supervisor, never the checkout.
@@ -64,17 +67,36 @@ trap 'rm -rf "${CTX}"' EXIT
 cp "${PACKAGE}" "${CTX}/swarmai-hive.tar.gz"
 cp "${SCRIPT_DIR}/supervisor.py" "${CTX}/supervisor.py"
 
+# The package's build id (its BUILD.json; GNU tar needs --wildcards for the pattern, bsdtar
+# takes it as one). Only 16 hex digits are taken: anything else is no id.
+BUILD_ID=""
+if command -v tar >/dev/null 2>&1 && command -v sed >/dev/null 2>&1; then
+    BUILD_ID="$( { tar xzf "${PACKAGE}" --wildcards -O '*/BUILD.json' 2>/dev/null \
+                   || tar xzf "${PACKAGE}" -O '*/BUILD.json' 2>/dev/null; } \
+                 | sed -n 's/^ *"id": *"\([0-9a-f]\{16\}\)",\{0,1\} *$/\1/p' | head -n 1)" || BUILD_ID=""
+fi
+if [ -z "${BUILD_ID}" ]; then
+    echo "[agentcore-image] WARN: ${NAME} carries no build identity (BUILD.json): tagged ${VERSION} only," \
+         "so a Host of a known build will not take it" >&2
+fi
+
 LOCAL_TAG="swarmai-hive-agentcore:${VERSION}"
 TAGS=(-t "${LOCAL_TAG}")
+PUSHED=()
 if [ -n "${PUSH}" ]; then
     TAGS+=(-t "${PUSH}:${VERSION}")
+    PUSHED+=("${PUSH}:${VERSION}")
+    if [ -n "${BUILD_ID}" ]; then
+        TAGS+=(-t "${PUSH}:${VERSION}-b${BUILD_ID}")
+        PUSHED+=("${PUSH}:${VERSION}-b${BUILD_ID}")
+    fi
 fi
 
 echo "[agentcore-image] building ${LOCAL_TAG} (linux/arm64) with ${TOOL}"
 "${TOOL}" build --platform linux/arm64 -f "${SCRIPT_DIR}/Dockerfile" "${TAGS[@]}" "${CTX}"
 
-if [ -n "${PUSH}" ]; then
-    echo "[agentcore-image] pushing ${PUSH}:${VERSION}"
-    "${TOOL}" push "${PUSH}:${VERSION}"
-fi
-echo "[agentcore-image] done: ${LOCAL_TAG}${PUSH:+ -> ${PUSH}:${VERSION}}"
+for ref in ${PUSHED[@]+"${PUSHED[@]}"}; do
+    echo "[agentcore-image] pushing ${ref}"
+    "${TOOL}" push "${ref}"
+done
+echo "[agentcore-image] done: ${LOCAL_TAG}${PUSH:+ -> ${PUSHED[*]}}"

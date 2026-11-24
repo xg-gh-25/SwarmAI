@@ -32,6 +32,8 @@ from hive import agentcore_provisioner as ep
 ACCOUNT = "123456789012"
 REGION = "us-east-1"
 PUBLIC_IMAGE = "public.ecr.aws/swarmai/swarmai-hive"
+#: what the fixture replaces: the Host's tag made of its version and build (core/build_identity)
+_REAL_EP_HOST, _REAL_AC_HOST = ep._host_version, ac._host_version
 PRIVATE_IMAGE = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/swarmai-hive"
 RUNTIME_ID = "swarmai_elastic_hive-AbC123"
 RUNTIME_ARN = f"arn:aws:bedrock-agentcore:{REGION}:{ACCOUNT}:runtime/{RUNTIME_ID}"
@@ -1003,3 +1005,72 @@ def test_a_repair_that_is_refused_names_the_missing_permission(world, monkeypatc
     did = asyncio.run(world.elastic.reconcile())
     assert did.startswith("refused: ") and "iam:PassRole" in did
     assert _rows(world.db) == []
+
+
+# ── the build, not only the version (core/build_identity) ──
+
+def _host_build(monkeypatch, commit_char: str) -> str:
+    """Make this Host's build known (core/build_identity) with the real tag functions; its tag."""
+    import config
+    from core import build_identity as bi
+    host = {"commit": commit_char * 40, "digest": "b" * 64}
+    host["id"] = bi._tool().make_id(host["commit"], host["digest"])
+    bi._CACHE[:] = [True, host]
+    monkeypatch.setattr(config.settings, "app_version", "2.5.5")
+    monkeypatch.setattr(ep, "_host_version", _REAL_EP_HOST)
+    monkeypatch.setattr(ac, "_host_version", _REAL_AC_HOST)
+    return f"2.5.5-b{host['id']}"
+
+
+def test_a_runtime_of_another_build_is_updated_to_the_hosts_build(world, monkeypatch):
+    """Same version, another build: the standby round updates the runtime to the image of the
+    Host's build (tag <version>-b<id>) through the update path a version change takes; until
+    then it takes only tasks whose Feature Map walks it can read (schema unknown: 1), and the
+    settings page shows versions, never tags."""
+    from core.carriers.base import FEATURES_SCHEMA, Needs
+    asyncio.run(world.elastic.reconcile())                       # on, at 2.5.5 (no build known)
+    tag = _host_build(monkeypatch, "a")
+    monkeypatch.setattr(ac, "_session_for", lambda acct, region, purpose: FakeSession(world))
+    monkeypatch.setattr(ac, "_session_quota", lambda *a: 10)
+    car = ac.AgentCoreCarrier()
+    (offer,) = asyncio.run(car.offers(Needs()))
+    assert offer.blocked is None
+    (offer,) = asyncio.run(car.offers(Needs(features_schema=2)))
+    assert offer.blocked == FEATURES_SCHEMA
+    (h,) = asyncio.run(world.elastic.status())["hives"]
+    assert h["up_to_date"] is False and h["image_version"] == "2.5.5"
+
+    assert asyncio.run(world.elastic.reconcile()) == "updated"
+    (row,) = _rows(world.db)
+    assert row["status"] == "ready" and row["version"] == tag
+    _assert_size(world.control.updates[-1], f"{PUBLIC_IMAGE}:{tag}@{DIGEST}")
+    (offer,) = asyncio.run(car.offers(Needs(features_schema=2)))
+    assert offer.blocked is None
+    got = asyncio.run(world.elastic.status())
+    (h,) = got["hives"]
+    assert h["up_to_date"] is True and h["image_version"] == "2.5.5" and got["host_version"] == "2.5.5"
+    assert asyncio.run(world.elastic.reconcile()) == "ready"
+
+    # a newer build with no image published: the runtime stays at its image of this version
+    newer = _host_build(monkeypatch, "c")
+    world.missing_tags.add(newer)
+    assert asyncio.run(world.elastic.reconcile()) == f"ready at {tag}: no image for {newer}"
+    assert len(world.control.updates) == 1
+    (offer,) = asyncio.run(car.offers(Needs()))
+    assert offer.blocked is None
+
+
+def test_a_host_whose_build_has_no_image_turns_on_at_its_version(world, monkeypatch):
+    """A Host started from changed source before anyone built its image still gets Elastic
+    Workers, on its version's image; the image of its build replaces it once published."""
+    tag = _host_build(monkeypatch, "d")
+    world.missing_tags.add(tag)
+    assert asyncio.run(world.elastic.reconcile()) == "enabled"
+    (row,) = _rows(world.db)
+    assert row["version"] == "2.5.5"
+    assert world.control.creates[0]["agentRuntimeArtifact"]["containerConfiguration"]["containerUri"] == \
+        f"{PUBLIC_IMAGE}:2.5.5@{DIGEST}"
+    assert asyncio.run(world.elastic.reconcile()) == f"ready at 2.5.5: no image for {tag}"
+    world.missing_tags.discard(tag)
+    assert asyncio.run(world.elastic.reconcile()) == "updated"
+    assert _rows(world.db)[0]["version"] == tag

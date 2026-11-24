@@ -100,8 +100,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from core.carriers.base import (AGENTCORE, DIAGNOSTICS, TIER_ELASTIC, LocationUnavailable, Needs,
-                                Offer, RunHandle, current_handle, rounds_of)
+from core.carriers.base import (AGENTCORE, DIAGNOSTICS, FEATURES_SCHEMA, TIER_ELASTIC, LocationUnavailable,
+                                Needs, Offer, RunHandle, current_handle, features_below, rounds_of)
 from core.swarm_out import SwarmOutError
 
 logger = logging.getLogger(__name__)
@@ -250,8 +250,11 @@ def _db_path() -> str:
 
 
 def _host_version() -> str:
-    from config import settings
-    return str(settings.app_version)
+    """The image tag of this Host's build (hive/agentcore_provisioner ``_host_version``):
+    the runtime must run it to take a run. Blocking the first time (``_readiness`` runs in a
+    thread)."""
+    from hive.agentcore_provisioner import _host_version as tag
+    return tag()
 
 
 def _session_for(acct: dict, region: str, purpose: str):
@@ -947,6 +950,26 @@ def _session_quota(session: Any, account: str, region: str) -> int:
     return value
 
 
+def image_behind(image: Optional[str], host_tag: str) -> bool:
+    """Whether a runtime on image tag *image* runs another version than this Host (tag
+    *host_tag*, ``hive/agentcore_provisioner._host_version``). Another build of the same
+    version is not refused here, as an EC2 Hive of another build is not: the standby round
+    moves it to the image of the Host's build once one is published, and a task whose
+    Feature Map walks need what only that build reads goes elsewhere (``features_blocked``)."""
+    from core import build_identity
+    return build_identity.display_version((image or "").removeprefix("v")) != \
+        build_identity.display_version(host_tag)
+
+
+def features_blocked(needs: Optional[Needs], image: Optional[str] = None) -> Optional[str]:
+    """``features_schema`` when the runtime cannot read the features schema the task's repo
+    declares: on the image of this Host's build it reads what the Host reads; on any other
+    tag (a bare version tag) what it reads is not known, so it counts as schema 1."""
+    from core.feature_map.files import SCHEMA_MAJOR
+    reads = SCHEMA_MAJOR if image is None or (image or "").removeprefix("v") == _host_version() else None
+    return FEATURES_SCHEMA if features_below(reads, needs) else None
+
+
 class AgentCoreLocation:
     """The account's AgentCore runtime (one ``hive_instances`` row)."""
 
@@ -991,7 +1014,7 @@ class AgentCoreLocation:
         # run, even while the runtime still answers READY
         if out["status"] != "READY" or inst.get("status") in CHANGING_ROW_STATUSES:
             out["blocked"] = "not_ready"
-        elif (out["image"] or "").removeprefix("v") != _host_version():
+        elif image_behind(out["image"], _host_version()):
             out["blocked"] = "image_version"
         elif out["active"] >= out["quota"]:
             out["blocked"] = "at_quota"
@@ -1200,7 +1223,8 @@ class AgentCoreCarrier:
     async def offers(self, needs: Needs) -> list[Offer]:
         """One tier-2 offer per runtime in an account this Host can manage; blocked
         ``not_ready`` / ``image_version`` / ``at_quota`` / ``unreachable`` when it cannot
-        take a run now (placement decides, and records why)."""
+        take a run now, ``features_schema`` when the task's repo needs a newer features schema
+        than this Host's build reads (placement decides, and records why)."""
         out: list[Offer] = []
         for inst, acct in await _location_rows():
             arn = parse_runtime_arn(inst.get("runtime_arn"))
@@ -1216,7 +1240,8 @@ class AgentCoreCarrier:
             got = await asyncio.to_thread(loc._readiness, session, inst, arn)
             out.append(Offer(carrier=AGENTCORE, location_id=loc.id, name=loc.name, tier=TIER_ELASTIC,
                              open_runs=got["active"] or 0, start_s=START_S, reaches_private=self.reaches_private,
-                             brain_lock_scope=self.brain_lock_scope, blocked=got["blocked"]))
+                             brain_lock_scope=self.brain_lock_scope,
+                             blocked=got["blocked"] or features_blocked(needs, got["image"])))
         return out
 
     def location(self, location_id: str) -> AgentCoreLocation:

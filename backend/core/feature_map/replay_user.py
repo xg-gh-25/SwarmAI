@@ -15,7 +15,10 @@ Which machines need it (``needs_replay_user``) is decided from fixed facts first
 a probe that could fail open: a Hive (``SWARMAI_MODE=hive``) and a Linux machine where the
 replay user exists always do; only elsewhere does a TCP connect to the metadata service
 decide (a desktop: it does not answer, and the sandbox runs as the person, as before). That
-"not needed" answer is never cached.
+"not needed" answer is never cached. Where the replay user is needed, the unit that loads its
+network rule must be active (``network_rule_loaded``, a fixed fact: a container image such as
+the Elastic Workers one has no systemd and no root at run time, so it never is) before the
+probe runs at all.
 
 One replay at a time uses the replay user on a machine: ``resolve`` takes a lock (held until
 the process ends) and stops every process of the replay user before the replay starts, and
@@ -59,6 +62,15 @@ HELPER = Path(__file__).resolve().with_name("replay_user_helper.py")
 LOCK_WAIT_S = 2 * 3600          # a hang guard for another replay holding the replay user
 _HELPER_TIMEOUT_S = 60
 _SUDO_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+#: the systemd unit hive/replay-host.sh installs to load the replay user's network rule at
+#: boot (its NFT_UNIT): active only once that rule loaded
+NETWORK_RULE_UNIT = "swarmai-replay-imds.service"
+#: why a replay user without its network rule cannot be used
+NO_NETWORK_RULE = (f"the network rule that keeps {REPLAY_USER} off the instance metadata service "
+                   f"is not in force on this machine ({NETWORK_RULE_UNIT} is not active: "
+                   "hive/replay-host.sh loads the rule as root with nftables at boot; a machine "
+                   "without nftables, without CAP_NET_ADMIN or without root at run time, such as a "
+                   "container image, has none)")
 
 
 class Unavailable(RuntimeError):
@@ -214,6 +226,22 @@ def _find_sudo() -> str | None:
     return shutil.which("sudo", path=_SUDO_ENV["PATH"])
 
 
+def network_rule_loaded() -> bool:
+    """Whether the unit that loads the replay user's network rule is active (``systemctl
+    is-active``, readable without root). A fixed fact checked before any probe, so a machine
+    whose credentials come some other way than the two metadata addresses the probe tries
+    is refused too: no unit, no systemd, no answer all count as not loaded."""
+    systemctl = shutil.which("systemctl", path=_SUDO_ENV["PATH"])
+    if systemctl is None:
+        return False
+    try:
+        proc = subprocess.run([systemctl, "is-active", "--quiet", NETWORK_RULE_UNIT], capture_output=True,
+                              timeout=_HELPER_TIMEOUT_S, env=_SUDO_ENV, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
 def _lock_path() -> Path:
     from config import get_app_data_dir
     return Path(get_app_data_dir()) / "feature_map" / "replay-user.lock"
@@ -268,6 +296,8 @@ def resolve(paths: Iterable[Path | str] = (), *, lock_wait_s: float = LOCK_WAIT_
         sudo = _find_sudo()
         if sudo is None:
             raise Unavailable(f"no sudo to start the replay as {REPLAY_USER}")
+        if not network_rule_loaded():
+            raise Unavailable(NO_NETWORK_RULE)
         user = ReplayUser(REPLAY_USER, pw.pw_uid, Path(pw.pw_dir), sudo, sys.executable)
         _take_lock(lock_wait_s)
     # every replay of this process, also the second (a base and a head replay): none of that
@@ -280,6 +310,9 @@ def resolve(paths: Iterable[Path | str] = (), *, lock_wait_s: float = LOCK_WAIT_
                           "and could not be stopped")
     problems = user.probe(paths)
     if problems:
+        if any("metadata service answers" in p for p in problems):
+            # the user is there but the boundary is not: say which rule, and who loads it
+            problems = [NO_NETWORK_RULE, *problems]
         raise Unavailable(f"replay user {REPLAY_USER}: " + "; ".join(problems))
     _current = user
     return user

@@ -95,6 +95,13 @@ done
 cp "$PROJECT_ROOT/resources/mcp-catalog.json" "$BUILD_DIR/mcp-catalog.json"
 cp "$PROJECT_ROOT/resources/required-cli-tools.json" "$BUILD_DIR/required-cli-tools.json"
 cp "$BACKEND_DIR/../VERSION" "$BUILD_DIR/VERSION"
+# This build's identity (backend/scripts/build_identity.py: the commit and a digest of the
+# source), read by core/build_identity: the Host compares it with each Hive's, so a Hive is
+# updated whenever it runs other code than this build, also under the same version. The same
+# function hive/release.sh stamps into the Hive package, on the same checkout.
+"$HOST_PYTHON" "$BACKEND_DIR/scripts/build_identity.py" write "$BACKEND_DIR/.." "$BUILD_DIR/BUILD.json" \
+    --version "$(tr -d '[:space:]' < "$BACKEND_DIR/../VERSION")" >/dev/null \
+    || { echo "Error: the build identity could not be written (backend/scripts/build_identity.py)"; exit 1; }
 
 # The entry point is backend/desktop_main.py (copied above with the rest of backend/): the
 # subcommands daemon / pipeline-v1 / py, the same file the dev shim backend/bin/python-backend runs.
@@ -312,6 +319,8 @@ datas += [('mcp-catalog.json', '.')]
 datas += [('required-cli-tools.json', '.')]
 # VERSION file — single source of truth for app version (eliminates hardcoded fallback in config.py)
 datas += [('VERSION', '.')]
+# BUILD.json — this build's identity (core/build_identity), compared with each Hive's
+datas += [('BUILD.json', '.')]
 
 # Auto-discover local modules from filesystem instead of hardcoding.
 # This eliminates the class of bugs where new .py files are added to the

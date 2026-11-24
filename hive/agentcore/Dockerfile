@@ -9,9 +9,11 @@
 #   supervisor.py        hive/agentcore/supervisor.py
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
-# Step 1 of user_data.py, plus what the image lacks that an EC2 AMI has.
+# Step 1 of user_data.py, plus what the image lacks that an EC2 AMI has (sudo and acl:
+# Feature Map replay starts its processes as the replay user with sudo, and gives that user
+# traverse on the Hive user's home with setfacl; hive/replay-host.sh below).
 RUN dnf install -y python3.12 python3.12-pip python3.12-devel nodejs20 npm git gcc make \
-        tar gzip shadow-utils procps-ng util-linux \
+        tar gzip shadow-utils procps-ng util-linux sudo acl \
     && dnf clean all && rm -rf /var/cache/dnf
 
 RUN useradd -m -s /bin/bash swarm \
@@ -23,6 +25,23 @@ RUN --mount=type=bind,source=swarmai-hive.tar.gz,target=/tmp/hive.tar.gz \
     tar xzf /tmp/hive.tar.gz --strip-components=1 -C /opt/swarmai \
     && bash /opt/swarmai/hive/ensure-node.sh \
     && chown -R swarm:swarm /opt/swarmai
+
+# The host side of Feature Map replay, as an EC2 Hive's first boot and every update run it:
+# hive/replay-host.sh taken from the package itself (as the update takes it, never from a tree
+# the Hive user owns), run as root (no USER yet) in its image mode: the pinned Chromium's
+# system libraries and fonts, the swarm-replay user and the sudoers rule for the Hive user.
+# Its firewall rule (no metadata service for that user) needs root and nftables at run time,
+# which this image does not have: the container runs as the Hive user, with no systemd. So
+# replay here finds the unit that loads that rule inactive and reports its walks not_run with
+# the reason (core/feature_map/replay_user.py network_rule_loaded), whatever way the platform
+# hands out credentials, never running without it. A failed step fails the build.
+RUN --mount=type=bind,source=swarmai-hive.tar.gz,target=/tmp/hive.tar.gz \
+    mkdir -p -m 0755 /usr/local/libexec/swarmai \
+    && (umask 077; tar xzf /tmp/hive.tar.gz --wildcards --no-wildcards-match-slash -O '*/hive/replay-host.sh' > /usr/local/libexec/swarmai/replay-host.sh) \
+    && test -s /usr/local/libexec/swarmai/replay-host.sh \
+    && chmod 0700 /usr/local/libexec/swarmai/replay-host.sh \
+    && SWARM_USER=swarm bash /usr/local/libexec/swarmai/replay-host.sh image \
+    && dnf clean all && rm -rf /var/cache/dnf
 
 COPY --chown=swarm:swarm supervisor.py /opt/swarmai/hive/agentcore/supervisor.py
 

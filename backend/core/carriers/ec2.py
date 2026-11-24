@@ -26,8 +26,9 @@ from typing import Any, Optional
 
 import httpx
 
-from core.carriers.base import (BRAIN_SYNC, DIAGNOSTICS, EC2, FLEET, IDLE_STOP, TIER_COLD, TIER_WARM,
-                                USAGE_SYNC, LocationUnavailable, Needs, Offer, RunHandle)
+from core.carriers.base import (BRAIN_SYNC, DIAGNOSTICS, EC2, FEATURES_SCHEMA, FLEET, IDLE_STOP, TIER_COLD,
+                                TIER_WARM, USAGE_SYNC, LocationUnavailable, Needs, Offer, RunHandle,
+                                features_below)
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +93,17 @@ def stopped_blocked(hive_id: str, version: Optional[str], probes: dict[str, dict
     return None if last.get("capable") is True else OUT_OF_DATE
 
 
-def running_blocked(probe: Optional[dict[str, Any]]) -> Optional[str]:
+def running_blocked(probe: Optional[dict[str, Any]], needs: Optional[Needs] = None) -> Optional[str]:
     """Why a running Hive cannot take a run now, or None. A Hive whose version cannot
-    take the task is out of date whether or not it is full (D5: out of date is not full)."""
+    take the task is out of date whether or not it is full (D5: out of date is not full);
+    one that reads an older features schema than the task's repo declares cannot replay its
+    Feature Map walks (``features_schema``)."""
     if probe is None:
         return UNREACHABLE
     if probe["capable"] is not True:
         return OUT_OF_DATE
+    if features_below(probe.get("features_schema"), needs):
+        return FEATURES_SCHEMA
     if probe["saturated"]:
         return SATURATED
     return None
@@ -112,9 +117,16 @@ def parse_admission(d: Any) -> Optional[dict[str, Any]]:
     streaming, saturated = swarm_out._count(d.get("streaming_count"), 0), d.get("saturated")
     if streaming is None or not isinstance(saturated, bool):
         return None
+    from core import build_identity
+    schema = d.get("features_schema")
     return {"streaming": streaming, "saturated": saturated,
             "memory_percent": swarm_out._percent(d.get("memory_percent")),
-            "capable": all(d.get(c) is True for c in swarm_out.REQUIRED_CAPS)}
+            "capable": all(d.get(c) is True for c in swarm_out.REQUIRED_CAPS),
+            # the features.yaml schema it reads (None: an older Hive, which reads 1)
+            "features_schema": schema if isinstance(schema, int) and not isinstance(schema, bool)
+            and 0 < schema < 1000 else None,
+            # the build it runs (core/build_identity; None: an older Hive, out of date)
+            "build_id": build_identity.reported_id(d.get("build"))}
 
 
 # -- a Hive by id or name ----------------------------------------------------------------
@@ -358,7 +370,7 @@ class Ec2Location:
                                           "version; send it to another Hive, or when that run ends")
         try:
             await swarm_out._within(deadline, f"checking Hive {self.name}", 2 * swarm_out.PROBE_TIMEOUT_S,
-                                    lambda: swarm_out._require_work_orders(inst))
+                                    lambda: swarm_out._require_work_orders(inst, needs))
         except LocationUnavailable as e:
             why = getattr(e, "why", None)
             if why in (SATURATED, OUT_OF_DATE):
@@ -446,7 +458,7 @@ class Ec2Carrier:
                              streaming=p["streaming"] if p else 0,
                              memory_percent=p["memory_percent"] if p else None,
                              reaches_private=self.reaches_private, brain_lock_scope=self.brain_lock_scope,
-                             blocked=running_blocked(p)))
+                             blocked=running_blocked(p, needs)))
         for h in stopped:
             name = str(h["name"])
             out.append(Offer(EC2, str(h["id"]), name, TIER_COLD, open_runs=open_runs.get(name, 0),
