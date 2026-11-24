@@ -2443,7 +2443,8 @@ async def _order_state(hive_id: str, work_id: str) -> Optional[dict[str, Any]]:
     try:
         try:
             row = await asyncio.to_thread(_log_row_of, work_id)
-        except Exception:  # noqa: BLE001 — no such row: the Hive's own round
+        except Exception as e:  # noqa: BLE001 — no such row: the Hive's own round
+            logger.debug("swarm_out: dispatch row of %s not read (%s)", work_id, type(e).__name__)
             row = {}
         if row.get("hive_id") != hive_id or not isinstance(row.get("rounds"), list):
             row = {"hive_id": hive_id}

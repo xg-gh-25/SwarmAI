@@ -149,7 +149,8 @@ def _listens(pid: int, port: int) -> bool:
     try:
         import psutil
         conns = psutil.Process(pid).net_connections(kind="tcp")
-    except Exception:  # noqa: BLE001 — gone, or not readable: not known to be ours
+    except Exception as e:  # noqa: BLE001 — gone, or not readable: not known to be ours
+        logger.debug("ssh tunnel: connections of pid %s not read (%s)", pid, type(e).__name__)
         return False
     return any(c.status == "LISTEN" and c.laddr and c.laddr.port == port and c.laddr.ip == "127.0.0.1"
                for c in conns)
@@ -173,7 +174,8 @@ def _cmdline(pid: int) -> Optional[list[str]]:
     try:
         import psutil
         return psutil.Process(pid).cmdline()
-    except Exception:  # noqa: BLE001 — gone, not ours to read: nothing to end
+    except Exception as e:  # noqa: BLE001 — gone, not ours to read: nothing to end
+        logger.debug("ssh tunnel: command line of pid %s not read (%s)", pid, type(e).__name__)
         return None
 
 

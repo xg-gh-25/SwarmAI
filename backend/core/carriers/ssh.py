@@ -435,7 +435,8 @@ class SshCarrier:
             mid, name = str(r["id"]), str(r["name"])
             try:
                 sessions = await SshLocation(mid, name).sessions()
-            except Exception:  # noqa: BLE001 — unreachable: unknown, so busy
+            except Exception as e:  # noqa: BLE001 — unreachable: unknown, so busy
+                logger.debug("ssh: sessions of %s not read (%s): counted busy", name, type(e).__name__)
                 sessions = None
             reasons = hive_idle.busy_reasons(None if open_runs is None else open_runs.get(name, 0), sessions,
                                              None if lessons is None else lessons.get(mid, 0),
