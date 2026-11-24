@@ -202,6 +202,11 @@ def judgment_pending(rec: dict) -> bool:
         if not isinstance(e, dict):
             continue
         d = decision_of(e)
+        if d == "land" and e.get("kind") == "by_hand":
+            # the agent's hand landing (core/swarm_out_settle.set_landed_by_hand) passes
+            # like the person's: it landed and tested that change itself. It neither holds
+            # the run nor judges a return-land of another repository before it
+            continue
         if d == "land":
             # only a landing kept the funnel's way holds a run (an older record's landing
             # was its pass)
@@ -235,7 +240,8 @@ def person_decisions(rec: dict, by_agent: bool) -> Optional[int]:
 
 def funnel(row: dict, rec: dict, d: dict) -> dict[str, Any]:
     """The gates the run passed and the one it is at, for the card's line: ``review``,
-    ``land`` (``ref``: the commit or the first file placed), ``judge``; ``state`` is
+    ``land`` (``ref``: the commit or the first file placed; ``hand``: landed by hand),
+    ``judge``; ``state`` is
     ``done``, ``now`` or ``person`` (only an open ask); a discarded or expired run has
     no gate ``now``. ``d`` is derive's verdict."""
     es = entries(rec)
@@ -272,7 +278,16 @@ def funnel(row: dict, rec: dict, d: dict) -> dict[str, Any]:
                        (review or {}).get("by"), (review or {}).get("at")))
     if commits:
         le = last("land")
-        if landed:
+        hand = rec.get("manual_landed") if isinstance(rec.get("manual_landed"), dict) else {}
+        hand_commits = [c for x in hand.get("repos") or [] if isinstance(x, dict) for c in x.get("commits") or []]
+        if landed and rec.get("manual_landed_at"):
+            # landed by hand: the person's word, or the agent's checked record with its commits
+            g = _gate("land", "done", (le or {}).get("by"), (le or {}).get("at"),
+                      hand_commits[0] if hand_commits else
+                      (landed_facts[0].get("commit") if landed_facts else None))
+            g["hand"] = True
+            gates.append(g)
+        elif landed:
             gates.append(_gate("land", "done", (le or {}).get("by"), (le or {}).get("at"),
                                (landed_facts[0].get("commit") if landed_facts else None)))
         elif review:

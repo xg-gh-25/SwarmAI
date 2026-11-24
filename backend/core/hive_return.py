@@ -47,10 +47,16 @@ checkout are refused at prepare (git would write a file into a virtualenv), and 
 person-only paths (``PERSON_ONLY``) are protected in every repository. Not good enough is
 not recorded here: the person re-runs the task with a correction or discards it. Qualifying the change (build, tests,
 deploy) is the repository's own process and the person's, after this.
+
+``verify_hand_landing(states, commits, dropped)``: when ``land`` refused (a conflict, a
+change larger than the review shows), the dispatching agent lands the change itself and
+names the commits; git here checks they are on the prepared branch, after the base, and
+carry the run's change to the returned files (core/swarm_out_settle.set_landed_by_hand records it).
 """
 from __future__ import annotations
 
 import fnmatch
+from collections import Counter
 import hashlib
 import json
 import logging
@@ -793,6 +799,222 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     return {"landed": True, "head": new[:12], "into": branch.replace("refs/heads/", ""),
             "protected_files": state["protected_files"][:20]}
 
+
+
+#: a commit id the agent names: hex only, so git never reads it as an option or a ref name
+_COMMIT_ID_RE = re.compile(r"[0-9a-f]{7,64}")
+MAX_HAND_COMMITS = 50
+_SHOWN = 10
+#: a dropped path scoped to one repository: ``<url>::<path>``
+_SCOPE = "::"
+
+
+def _changed(repo: Path, a: str, b: str) -> set[str]:
+    """The paths that differ between two commits (renames as delete + add), exactly as git
+    names them (split on NUL, nothing stripped)."""
+    raw = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", a, b,
+               check=True).stdout.decode("utf-8", "replace")
+    return {p for p in raw.split("\0") if p}
+
+
+def _blob(repo: Path, rev: str, path: str) -> str:
+    p = _git(repo, "rev-parse", "--verify", "--quiet", f"{rev}:{path}")
+    return p.stdout.decode().strip() if p.returncode == 0 else ""
+
+
+def _content(repo: Path, obj: str) -> Optional[Counter]:
+    """A blob's lines, counted (stripped, blank ones left out); None for an object that
+    is not a blob (a submodule's commit)."""
+    if not obj:
+        return Counter()
+    if _out(repo, "cat-file", "-t", obj) != "blob":
+        return None
+    raw = _git(repo, *_SAFE, "cat-file", "blob", obj, check=True).stdout.decode("utf-8", "replace")
+    return Counter(x.strip() for x in raw.split("\n") if x.strip())
+
+
+class _Run:
+    """The run's own change to one returned file (``base..tip``), read once."""
+
+    def __init__(self, repo: Path, base: str, tip: str, path: str):
+        self.tip_obj = _blob(repo, tip, path)
+        base_obj = _blob(repo, base, path)
+        self.base = _content(repo, base_obj)
+        tip_lines = _content(repo, self.tip_obj)
+        if self.base is None or tip_lines is None:
+            self.added = self.removed = Counter()     # a submodule: compared by its commit
+        else:
+            self.added = tip_lines - self.base        # what the run wrote there, net
+            self.removed = self.base - tip_lines      # what it took out, net
+
+
+def _holds(repo: Path, run: _Run, commit: str, path: str) -> bool:
+    """The file as *commit* leaves it holds the run's whole change to it: every line the
+    run wrote there, as many times more than the base had it as the run wrote it (a
+    conflict resolution keeps them wherever main's edits put them; another edit of the
+    same file lacks them, and a line the base already had does not count for the run);
+    for a run that only took lines out, they are out; a file the run deleted is gone; a
+    binary file, a mode change or a submodule is the tip's exact object. Main having
+    removed a base copy of a line the run also wrote reads as not holding (fail closed:
+    the agent names that file ``--dropped``)."""
+    obj = _blob(repo, commit, path)
+    if not run.tip_obj:
+        return not obj
+    if not run.added and not run.removed:
+        return obj == run.tip_obj
+    have = _content(repo, obj) if obj else None
+    if not have:
+        return False
+    base = run.base or Counter()
+    return (all(have[x] >= base[x] + n for x, n in run.added.items())
+            and all(have[x] <= base[x] - n for x, n in run.removed.items()))
+
+
+def _drops(states: list[dict], returned: list[set[str]], dropped: list[str]) -> list[set[str]]:
+    """Each repository's dropped paths: ``<path>`` for the one repository that returned
+    it, ``<url>::<path>`` for one of several that did. Raises ReturnError for a path no
+    repository returned, or one several returned without naming which."""
+    per: list[set[str]] = [set() for _ in states]
+    unknown, ambiguous = [], []
+    for raw in dropped or []:
+        d = str(raw or "")
+        if not d:
+            continue
+        # scoped by a repository's url as its prefix (a path or a url may hold ``::``)
+        scoped = [(i, d[len(s["url"]) + len(_SCOPE):]) for i, s in enumerate(states)
+                  if d.startswith(s["url"] + _SCOPE) and d[len(s["url"]) + len(_SCOPE):] in returned[i]]
+        hits = [i for i, _p in scoped] or [i for i, files in enumerate(returned) if d in files]
+        path = scoped[0][1] if scoped else d
+        if not hits:
+            unknown.append(d)
+        elif len(hits) > 1:
+            ambiguous.append(path)
+        else:
+            per[hits[0]].add(path)
+    if unknown:
+        raise ReturnError("these paths are not files the run returned: " + ", ".join(unknown[:_SHOWN]))
+    if ambiguous:
+        raise ReturnError("more than one repository of this run returned " + ", ".join(ambiguous[:_SHOWN])
+                          + f": name the one you dropped it from as <url>{_SCOPE}<path>")
+    return per
+
+
+def _ancestor(repo: Path, a: str, b: str) -> bool:
+    p = _git(repo, "merge-base", "--is-ancestor", a, b)
+    if p.returncode not in (0, 1):
+        raise ReturnError("git merge-base failed")
+    return p.returncode == 0
+
+
+def verify_hand_landing(states: list[dict], commits: list[str], dropped: list[str]) -> list[dict[str, Any]]:
+    """The commits the dispatching agent says landed a run's change by hand, after
+    ``land`` answered a conflict (or a change larger than the review shows). *states* are
+    the return-prepare states of the repositories still waiting to land (``prepare``:
+    repo, branch, base, tip). Checked from git here, no model:
+
+    - each named commit is in exactly one of those repositories, reachable from its
+      prepared branch and not from its prepared base (made after the run started);
+    - each makes at least one file the run returned there hold the run's whole change
+      to it, which a parent of it did not (``base..tip``, read whole: the review's file list
+      is capped; see ``_holds``), so a commit on the branch that only edits the same
+      file (the one the conflict was with, say), or a later one that only keeps the
+      landed lines, is not the run's landing;
+    - for every returned file but those the agent names in *dropped* (left out on
+      purpose, kept in the record: ``_drops``), one named commit leaves the file holding
+      the run's whole change, so a commit unrelated to the run, or one that lands only
+      part of it unsaid, cannot settle it; every repository needs a commit.
+
+    Raises ReturnError naming what does not hold; returns per repository its url, key,
+    the full commit ids and the dropped paths."""
+    wanted: list[str] = []
+    for c in commits or []:
+        c = str(c or "").strip().lower()
+        if not _COMMIT_ID_RE.fullmatch(c):
+            raise ReturnError(f"not a commit id: {c[:20]!r} (7 to 64 hex characters)")
+        if c not in wanted:
+            wanted.append(c)
+    if not wanted:
+        raise ReturnError("name the commit(s) that landed the run's change on the branch (--commit)")
+    if len(wanted) > MAX_HAND_COMMITS:
+        raise ReturnError(f"name at most {MAX_HAND_COMMITS} commits")
+    if not states:
+        raise ReturnError("no repository of this run waits to land")
+    returned = [_changed(Path(s["repo"]), s["base"], s["tip"]) for s in states]
+    drops = _drops(states, returned, dropped)
+    per: list[list[str]] = [[] for _ in states]
+    for c in wanted:
+        hits, seen = [], set()
+        for i, s in enumerate(states):
+            repo, branch, base = Path(s["repo"]), s["branch"], s["base"]
+            p = _git(repo, "rev-parse", "--verify", "--quiet", f"{c}^{{commit}}")
+            full = p.stdout.decode().strip() if p.returncode == 0 else ""
+            if not _SHA_RE.fullmatch(full):
+                continue
+            if not _ancestor(repo, full, branch):
+                seen.add(f"{c[:12]} is not on {branch.replace('refs/heads/', '')} in {s['url']}: land it "
+                         "there first (`scripts.session_worktree land`)")
+                continue
+            if _ancestor(repo, full, base):
+                seen.add(f"{c[:12]} is older than the run's base {base[:12]} in {s['url']}: it was on "
+                         f"{branch.replace('refs/heads/', '')} before the run started")
+                continue
+            hits.append((i, full))
+        if not hits:
+            raise ReturnError("; ".join(sorted(seen)) if seen else
+                              f"{c[:12]} is not a commit in any repository this run brought commits to")
+        if len(hits) > 1:
+            raise ReturnError(f"{c[:12]} names a commit in more than one repository of this run: give more of its id")
+        i, full = hits[0]
+        if full not in per[i]:
+            per[i].append(full)
+    left = [s["url"] for s, shas in zip(states, per) if not shas]
+    if left:
+        raise ReturnError("no commit you named landed " + ", ".join(left)
+                          + ": name the commit(s) on its branch that landed its change")
+    out = []
+    for s, shas, files, drop in zip(states, per, returned, drops):
+        if not files:
+            raise ReturnError(f"the run's commits in {s['url']} change no file: there is nothing to land by hand")
+        repo, carried, run = Path(s["repo"]), set(), {}
+        for full in shas:
+            parents = _out(repo, "rev-parse", f"{full}^@").split()
+            # what the commit changes against any parent (a merge brings the run's files in
+            # from one side)
+            mine = set().union(*(_changed(repo, par, full) for par in parents)) & files
+            if not mine:
+                raise ReturnError(f"{full[:12]} changes none of the files the run returned in {s['url']}: "
+                                  "it did not land this run")
+            here, before = set(), set()
+            for path in sorted(mine):
+                if path not in run:
+                    run[path] = _Run(repo, s["base"], s["tip"], path)
+                if not _holds(repo, run[path], full, path):
+                    continue
+                # the commit that makes the file hold it (a parent did not: for a merge of
+                # main into the run's side, main): a later commit that only keeps the
+                # landed lines is not part of the landing
+                if any(not _holds(repo, run[path], par, path) for par in parents):
+                    here.add(path)
+                else:
+                    before.add(path)
+            if not here and before:
+                raise ReturnError(f"{', '.join(sorted(before)[:_SHOWN])} in {s['url']} already held the run's whole "
+                                  f"change before {full[:12]}: name the commit that made it hold the change, or "
+                                  "--dropped it when main already had those lines")
+            if not here:
+                raise ReturnError(f"{full[:12]} changes " + ", ".join(sorted(mine)[:_SHOWN]) + f" in {s['url']} "
+                                  "but leaves none of them holding the run's whole change: it is not the run's "
+                                  "landing (when one file landed over several commits, name the one that "
+                                  "completed it)")
+            carried |= here
+        missing = sorted(files - carried - drop)
+        if missing:
+            more = f" and {len(missing) - _SHOWN} more" if len(missing) > _SHOWN else ""
+            raise ReturnError(f"no commit you named leaves the run's whole change in files it returned in "
+                              f"{s['url']}: " + ", ".join(missing[:_SHOWN]) + more + "; name the commits that "
+                              "land them, or --dropped <path> for each you left out on purpose")
+        out.append({"url": s["url"], "key": s["key"], "commits": shas, "dropped": sorted(drop)})
+    return out
 
 
 def _patch_id(repo: Path, a: str, b: str) -> Optional[str]:

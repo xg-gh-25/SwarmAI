@@ -84,6 +84,9 @@ def test_names_are_unique_and_rows_well_formed():
 #: the irreversible ops an owner agent may call, and only these
 _AGENT_IRREVERSIBLE = {"task.dispatch", "task.dispatch_batch", "run.accept", "run.return_land",
                        "run.discard",
+                       # the agent's record of a landing it made by hand, checked by git
+                       # here before the run settles
+                       "run.landed_by_hand",
                        # settling a run held back only by files that never came back: a
                        # recorded decision of the agent that answers for the run
                        "run.settle_without_files",
@@ -302,6 +305,7 @@ _CLI_ARGS = {
     "adopt": ["so_0123456789ab", "--why", "w"],
     "ask-person": ["so_0123456789ab", "--decide", "keep it?", "--judgment", "fine", "--why", "a preference"],
     "reverted": ["so_0123456789ab", "--commit", "abc123", "--why", "reverted it"],
+    "landed-by-hand": ["so_0123456789ab", "--commit", "abc1234", "--why", "resolved the conflict"],
     "dispatch-many": ["--file", "<specs>"],          # a file the test writes
 }
 

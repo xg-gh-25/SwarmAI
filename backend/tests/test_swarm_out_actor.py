@@ -126,9 +126,13 @@ def test_an_agent_gives_only_what_the_panel_offers_now():
     # commits to land are not accepted by a verdict, and the reverse
     assert act.row_blocker(a, "accept", _offer("accept", accept="land"), "2026-10-31T00:00:00Z") is not None
     assert act.row_blocker(a, "return_land", _offer("accept", accept="land")) is None
-    # "landed by hand" is never an agent's: it would release commits not landed yet
+    # the person's "landed by hand" button is never an agent's: it would release commits
+    # not landed yet, unchecked; the agent records its own hand landing, which git checks
     for variant in ("manual", "land"):
-        assert "by hand is the person's" in act.row_blocker(a, "manual_landed", _offer("accept", accept=variant))
+        assert "the manual-landed button is the person's" in act.row_blocker(
+            a, "manual_landed", _offer("accept", accept=variant))
+    assert act.row_blocker(a, "landed_by_hand", _offer("accept", accept="land")) is None
+    assert act.row_blocker(a, "landed_by_hand", _offer("accept", accept="manual")) is not None
     # the person is not limited
     assert act.row_blocker(act.actor("person", None, ""), "stop", _offer()) is None
 

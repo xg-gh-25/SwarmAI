@@ -22,8 +22,14 @@ agent the routes refuse what is the person's to decide:
 - a command the panel does not offer the person on the run now (its ``/runs`` row's
   ``actions``): accept only while the run awaits it, on the final result the row shows
   (``ended_at``); stop only while it runs (``row_blocker``);
-- "landed by hand" at all: it settles the run and releases its workspace with any
-  commits not landed yet; an agent lands commits with ``return_land``;
+- "landed by hand" (``manual_landed``, the person's button) at all: it settles the run
+  and releases its workspace with any commits not landed yet, on the person's word. An
+  agent lands commits with ``return_land``; when that answers a conflict it lands them
+  itself and records it with ``landed_by_hand``, which git here checks first (the named
+  commits on the prepared branch, after the base, carrying the run's change to the
+  returned files:
+  core/swarm_out_settle.set_landed_by_hand), only where the run offers landing and never
+  over a check that errored (``land_blocker``), as for ``return_land``;
 - re-sending with a correction more than ``MAX_AGENT_RERUNS`` times (``reserve_rerun``
   counts it under the run's lock before it is sent): after that the agent takes the
   task over or discards it;
@@ -69,14 +75,14 @@ from typing import Any, Optional
 
 MAX_AGENT_RERUNS = 2
 #: commands no one gives on a Swarm Run's child (design 2026-10-31-swarm-run §5.3)
-CHILD_REFUSED = frozenset({"return_land", "manual_landed"})
+CHILD_REFUSED = frozenset({"return_land", "manual_landed", "landed_by_hand"})
 #: commands on a child that are its lead run's only (§5.9: the person stops or discards)
 CHILD_LEAD_ONLY = frozenset({"accept", "rerun"})
 #: what the lead run no longer does on a child once it has ended
 CHILD_AFTER_END = frozenset({"accept", "rerun", "return_prepare"})
 MAX_WHY_CHARS = 400
-COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "rerun", "stop", "discard",
-            "settle_without_files", "adopt")
+COMMANDS = ("accept", "manual_landed", "return_prepare", "return_land", "landed_by_hand", "rerun", "stop",
+            "discard", "settle_without_files", "adopt")
 
 
 class ActorError(ValueError):
@@ -118,7 +124,7 @@ def check(a: Actor, command: str, *, dispatch_id: str = "") -> None:
 #: which offered action of the run's row each command needs (core/swarm_out_settle
 #: _actions): accept's variant says how accept works on the run now
 _NEEDS = {"accept": ("accept", "verdict"), "return_prepare": ("accept", "land"),
-          "return_land": ("accept", "land"),
+          "return_land": ("accept", "land"), "landed_by_hand": ("accept", "land"),
           "rerun": ("rerun", None), "stop": ("stop", None), "discard": ("discard", None)}
 
 
@@ -159,9 +165,11 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
             return (f"its Swarm Run {found.run_id} has ended ({found.status}): its children are "
                     "closed with it; stop or discard this one")
     if command == "manual_landed":
-        # "landed by hand" settles the run and releases its workspace with whatever
-        # commits are not landed yet: an agent lands commits with return_land instead
-        return "an agent lands commits with return-land; saying they were landed by hand is the person's"
+        # the person's "landed by hand" settles the run and releases its workspace with
+        # whatever commits are not landed yet, unchecked: an agent records its own hand
+        # landing with landed_by_hand, which git checks first
+        return ("an agent lands commits with return-land, and records a landing it made by hand with "
+                "`swarm_out landed-by-hand` (git checks the commits); the manual-landed button is the person's")
     if command == "settle_without_files":
         return files_blocker(row)
     key, variant = _NEEDS[command]

@@ -102,8 +102,13 @@ _STATIC: "tuple[Op, ...]" = (
     # refuse for ``by: agent`` (core/swarm_out_actor) ──
     _op("run.accept", "POST", f"{_SO}/runs/{{dispatch_id}}/verdict", _PO, "irreversible"),
     # "landed by hand" settles the run and releases its workspace with any commits not
-    # landed yet: the person's (an agent lands commits with return/land)
+    # landed yet: the person's button (an agent lands commits with return/land)
     _op("run.manual_landed", "POST", f"{_SO}/runs/{{dispatch_id}}/manual-landed", _P, "irreversible"),
+    # the dispatching agent's record of a landing it made by hand after return/land
+    # answered a conflict: git here checks the named commits first (on the prepared
+    # branch, after the base, carrying the run's change to the returned files), then the
+    # run settles accepted
+    _op("run.landed_by_hand", "POST", f"{_SO}/runs/{{dispatch_id}}/landed-by-hand", (OWNER,), "irreversible"),
     _op("run.return_prepare", "POST", f"{_SO}/runs/{{dispatch_id}}/return/prepare", _PO, "change"),
     # both versions of one changed file the prepared review lists, from git's objects
     # here (core/hive_return.file_versions): nothing written, nothing sent
@@ -313,7 +318,7 @@ def person_only_match(text: str) -> "Op | None":
 #: ``pipeline-v1 child`` commands (``core.run_protocol.child_cli``, on the run's own
 #: children), and core/run_owner_gate refuses a direct HTTP call to any of them from a
 #: command
-AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
+AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land", "run.landed_by_hand",
                            "run.rerun", "run.stop", "run.discard",
                            "run.settle_without_files", "run.adopt",
                            "ask.answer_host", "ask.escalate", "run.ask_person", "run.reverted",

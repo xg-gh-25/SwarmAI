@@ -26,6 +26,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <the result's ended_at> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-prepare <dispatch_id> --url <repository url> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <k> --tip <sha> --summary-file <f> --why <w>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out landed-by-hand <dispatch_id> --commit <sha> [--commit <sha> ...] [--dropped <path> ...] --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out rerun <dispatch_id> --text-file <correction> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out ask-person <dispatch_id> --decide <what the person decides> --judgment <yours> --why <why you cannot decide>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out reverted <dispatch_id> [--commit <sha> ...] --why <what you did>
@@ -375,6 +376,17 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--decide", required=True, help="what the person decides (keep or revert, and the question)")
     ap.add_argument("--judgment", required=True, help="your own judgment of what landed")
     ap.add_argument("--why", required=True, help="why you cannot decide it yourself")
+    # return-land answered a conflict and you landed the change yourself (a session
+    # worktree): the daemon checks the commits with git before it records them
+    lh = sub.add_parser("landed-by-hand", help="record the commits you landed by hand on the run's "
+                                               "branch after return-land answered a conflict")
+    lh.add_argument("dispatch_id", type=_dispatch_id)
+    lh.add_argument("--commit", action="append", required=True,
+                    help="a commit on the branch that landed the run's change (repeat; every repository)")
+    lh.add_argument("--dropped", action="append", default=[],
+                    help="a file the run returned that you left out on purpose (repeat; "
+                         "<url>::<path> when several repositories returned it)")
+    lh.add_argument("--why", required=True, help="one sentence the person sees: how you landed it")
     rv = sub.add_parser("reverted", help="report the revert the person asked for, once done")
     rv.add_argument("dispatch_id", type=_dispatch_id)
     rv.add_argument("--commit", action="append", default=[], help="a commit that undoes a landing (repeat per repository)")
@@ -675,6 +687,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ask-person":
         return _call("POST", f"/runs/{args.dispatch_id}/ask-person",
                      {"session": _session(), "decide": args.decide, "judgment": args.judgment, "why": args.why})
+    if args.cmd == "landed-by-hand":
+        return _call("POST", f"/runs/{args.dispatch_id}/landed-by-hand",
+                     {**_actor(args), "commits": args.commit, "dropped": args.dropped}, timeout=300)
     if args.cmd == "reverted":
         return _call("POST", f"/runs/{args.dispatch_id}/reverted",
                      {"session": _session(), "commits": args.commit, "why": args.why})

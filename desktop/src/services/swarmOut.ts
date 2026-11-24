@@ -145,6 +145,8 @@ export interface SwarmOutGate {
   at: string | null;
   /** land: the commit or the first file placed */
   ref: string | null;
+  /** land: landed by hand (the person's button, or the agent's checked record) */
+  hand?: boolean;
 }
 
 /** A landed result the dispatching agent handed to the person (backend

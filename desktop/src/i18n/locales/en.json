@@ -2052,6 +2052,10 @@
         "land": "Landed",
         "judge": "Judged"
       },
+      "hand": {
+        "agent": "Landed by hand by the agent: {{ref}}",
+        "person": "Landed by hand by you"
+      },
       "yours": "the agent could not judge it: your call",
       "reruns_one": "re-ran once before",
       "reruns_other": "re-ran {{count}} times before",

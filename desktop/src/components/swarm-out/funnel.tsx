@@ -39,14 +39,18 @@ function Gate({ g, last }: { g: SwarmOutGate; last: boolean }) {
   const mark = g.state === 'done' ? '✓' : '●';
   const who = g.by ? t(`swarmOut.funnel.by.${g.by}`) : null;
   const ref = short(g.ref);
+  // landed by hand: who did it, and the agent's commit (git checked it on this host)
+  const hand = g.hand && g.key === 'land' && ((g.by === 'agent' && ref) || g.by === 'person') ? g.by : null;
   return (
     <>
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap" data-testid="swarm-out-funnel-gate"
         data-gate={g.key} data-state={g.state}>
-        <span className="font-semibold" style={{ color }}>{mark} {t(`swarmOut.funnel.gate.${g.key}`)}</span>
+        {hand
+          ? <span className="font-semibold" style={{ color }}>{mark} {t(`swarmOut.funnel.hand.${hand}`, { ref: ref ?? '' })}</span>
+          : <span className="font-semibold" style={{ color }}>{mark} {t(`swarmOut.funnel.gate.${g.key}`)}</span>}
         {g.state === 'person'
           ? <span className="font-semibold" style={{ color }}>{t('swarmOut.funnel.yours')}</span>
-          : <span className={muted}>{[who, ref, hhmm(g.at)].filter(Boolean).join(' · ')}</span>}
+          : <span className={muted}>{(hand ? [hhmm(g.at)] : [who, ref, hhmm(g.at)]).filter(Boolean).join(' · ')}</span>}
       </span>
       {!last && <span className="text-[var(--color-text-dim)]">→</span>}
     </>

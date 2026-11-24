@@ -35,6 +35,7 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <result ended_at> --why "<one sentence>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-prepare <dispatch_id> --url <repository url> --why "<w>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <key> --tip <sha> --summary-file <file> --why "<w>"
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out landed-by-hand <dispatch_id> --commit <sha> [--commit <sha> ...] [--dropped <path> ...] --why "<w>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out rerun <dispatch_id> --text-file <correction> --why "<w>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out stop|discard <dispatch_id> --why "<w>"
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out ask-person <dispatch_id> --decide "<what the person decides>" --judgment "<yours>" --why "<why you cannot decide>"
@@ -280,10 +281,22 @@ numbered text options ("reply with a number"). Only this question.
      tests and review. The person may land them from the run's card; never send a landing
      in the person's name. A repository's `[hive_return] protected` adds paths to read
      with care; it cannot remove these.
-     When `return-land` is refused (a conflict, rewritten commits): take the change over
-     yourself in this session, then `discard` the run saying so (its commits stay in
-     `refs/hive/...` here once prepared, so nothing is lost); or `rerun` it on the current
-     code. Never hand an unlanded change to the person.
+     When `return-land` answers a conflict (or a change larger than its review shows),
+     land it by hand: `"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create <repo>`,
+     bring the run's commits in from the `refs/hive/...` ref it names (`git cherry-pick
+     <base>..<ref>` there), resolve the conflict, run the tests the change touches, commit,
+     then `session_worktree land` and `remove`. Then record it: `landed-by-hand` with
+     each landed commit (`--commit`, from every repository that brought commits) and how
+     you landed it (`--why`). The daemon checks with git that each commit is on the
+     branch, made after the run's base, and that after them every file the run returned
+     holds the run's whole change (every line it wrote); a file you left out on purpose,
+     or whose lines main already had, you name with `--dropped <path>` (`<url>::<path>`
+     when several repositories returned it). Name the commit after which a file holds the
+     change (the last one, when it landed over several), never main's own commits. The run then settles as accepted, with your commits on its card;
+     never `discard` a run whose code is on main. When the commits were rewritten, or the
+     change no longer makes sense on the current code, `rerun` it there or take it over
+     and `discard` it saying so (its commits stay in `refs/hive/...` here once prepared,
+     so nothing is lost). Never hand an unlanded change to the person.
      After it lands, judge it: run the tests on this machine's branch, then `accept`
      with the result's `ended_at` and why it meets the acceptance (the run does not
      settle until you do). When it works but the call is the person's (a tradeoff of

@@ -2052,6 +2052,10 @@
         "land": "落地",
         "judge": "判"
       },
+      "hand": {
+        "agent": "agent 手工落地：{{ref}}",
+        "person": "你手工落地"
+      },
       "yours": "agent 判不了，等你定",
       "reruns_one": "之前打回过 1 次",
       "reruns_other": "之前打回过 {{count}} 次",

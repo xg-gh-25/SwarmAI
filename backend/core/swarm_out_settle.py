@@ -11,8 +11,10 @@ that holds what was decided, by the person or by the agent that dispatched the r
 - ``verdict``: ``pass``, for a task whose deliverable is an answer or a document,
   bound to the result it judged (``ended_at``): a new turn on the Hive voids it. A task
   that delivers commits has no verdict of its own: landing them is the pass, "landed by
-  hand" (``manual_landed_at``) too; when the dispatching agent landed them, its own
-  judgment (its ``accept`` after the landing) completes the pass. Not good enough is not
+  hand" (``manual_landed_at``) too: the person's word, or the dispatching agent's checked
+  record of its own hand landing (``set_landed_by_hand``: ``manual_landed_by`` agent and
+  the commits in ``manual_landed``); when the dispatching agent landed them with
+  return-land, its own judgment (its ``accept`` after the landing) completes the pass. Not good enough is not
   a verdict: the run is re-run with a correction (a new turn) or discarded.
 - ``ask_person``: the dispatching agent handed its landed result to the person
   (core/swarm_out_record; design 2026-11-02-hive-run-decision-record): while it is
@@ -65,7 +67,7 @@ dispatching agent through the routes, the rest is counted.
   stays the machine's state of the moment. A re-run's turn gets its own end.
 - ``annotate(rows)``         — each row's stage, actions, settle and end; settles and
   expires what is due.
-- ``set_verdict`` / ``set_manual_landed`` / ``discard`` / ``settle_without_files`` — the person's or the dispatching
+- ``set_verdict`` / ``set_manual_landed`` / ``set_landed_by_hand`` / ``discard`` / ``settle_without_files`` — the person's or the dispatching
   agent's actions (routes in routers/swarm_out; what an agent may not do with them is
   core/swarm_out_actor's).
 - ``release_due`` — tell the Hives (``annotate`` hands each row out once per try, with backoff).
@@ -247,6 +249,80 @@ def set_manual_landed(dispatch_id: str) -> dict[str, Any]:
         _not_settled(rec)
         rec["manual_landed_at"] = _now()
     return _update(dispatch_id, change)
+
+
+def set_landed_by_hand(dispatch_id: str, commits: list[str], dropped: list[str], why: str,
+                       session: Optional[str]) -> dict[str, Any]:
+    """The dispatching agent landed the run's commits by hand (``return-land`` answered a
+    conflict): checked from git here before anything is written. Every repository that
+    brought commits back is prepared here (``return-prepare``: its state is what the
+    check reads) or already landed; the named commits pass
+    ``hive_return.verify_hand_landing`` for each one still waiting. Then, in one update,
+    ``manual_landed_at``, ``manual_landed_by: "agent"`` and ``manual_landed`` (the commits
+    and dropped paths per repository, the why, the session) and one ``land`` entry of
+    kind ``by_hand`` in the decision record: the run is landed by hand and passes, like
+    the person's ``set_manual_landed``, with no judgment after it (the agent landed and
+    tested it itself); a return-land of another repository of the run still waits for
+    the agent's accept (core/swarm_out_record.judgment_pending). Which agent may (the session that answers for the run, never on a
+    Swarm Run's child) is the route's (core/swarm_out_actor)."""
+    from core import hive_bundle, hive_return, swarm_out_record
+    row = _row(dispatch_id)
+    returns = (row.get("project_agent") or {}).get("returns")
+    if returns not in (None, "commits"):
+        raise SettleError("this task delivers no commits")
+    why = " ".join((why or "").split())[:MAX_NOTE_CHARS]
+    if not why:
+        raise SettleError("say how you landed them (--why)")
+    # the repository as this host declared it, never the Hive's own report of it
+    declared = {r.get("dir"): r.get("url") for r in row.get("repos") or [] if isinstance(r, dict)}
+    waiting, brought = [], 0
+    for r in ((_current_result(dispatch_id).get("work") or {}).get("repos") or []):
+        if not isinstance(r, dict):
+            continue
+        name = declared.get(r.get("dir")) or str(r.get("dir") or "a repository")
+        b = r.get("bundle")
+        if not (isinstance(b, dict) and (b.get("available") or b.get("sha256")) and isinstance(r.get("dir"), str)):
+            if (r.get("commits_total") or 0) > 0:
+                raise SettleError(f"the commits of {name} were never sealed into a bundle: they are only on "
+                                  "the Hive, not prepared here")
+            continue
+        brought += 1
+        try:
+            state = hive_return.load(dispatch_id, hive_bundle.key(r["dir"])) or {}
+        except hive_return.ReturnError:
+            state = {}
+        if state.get("status") in ("landed", "rejected"):
+            continue                       # handled already (return-land)
+        if state.get("status") != "prepared" or not all(state.get(k) for k in ("repo", "branch", "base", "tip")):
+            raise SettleError(f"the commits of {name} were not prepared on this machine: "
+                              f"`swarm_out return-prepare {dispatch_id} --url {name}` first")
+        waiting.append(state)
+    if not brought:
+        raise SettleError("this run brought no commits back: there is nothing landed by hand to record")
+    if not waiting:
+        raise SettleError("every repository of this run is landed already")
+    try:
+        landed = hive_return.verify_hand_landing(waiting, commits, dropped)
+    except hive_return.ReturnError as e:
+        raise SettleError(str(e)) from None
+    shas = [c for x in landed for c in x["commits"]]
+    e = swarm_out_record.entry("agent", "land", why, session, "landed_by_hand",
+                               {"commits": shas, "kind": "by_hand"}, swarm_out_record.observed(dispatch_id))
+
+    def change(rec):
+        _not_settled(rec)
+        if rec.get("manual_landed_at"):
+            raise SettleError("this run is already recorded as landed by hand")
+        if rec.get("abandoned_at"):
+            raise SettleError("this run is discarded")
+        rec["manual_landed_at"] = e["at"]
+        rec["manual_landed_by"] = "agent"
+        rec["manual_landed"] = {"repos": landed, "why": why, "session": session}
+        cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
+        cmds.append(e)
+        rec["commands"] = cmds
+    _update(dispatch_id, change)
+    return {"landed_by_hand": True, "repos": landed}
 
 
 def discard(dispatch_id: str, note: str = "") -> dict[str, Any]:

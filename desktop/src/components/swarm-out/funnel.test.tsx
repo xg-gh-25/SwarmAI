@@ -101,6 +101,33 @@ describe('the funnel on the card', () => {
     expect(line.textContent).toContain('re-ran once before');
   });
 
+  it('a run landed by hand says who landed it, and the agent\'s commit (en and zh)', async () => {
+    const hand = () => run({ funnel: { gates: [
+      { key: 'review', state: 'done', by: 'agent', at: '2026-11-02T09:52:00Z', ref: null },
+      { key: 'land', state: 'done', by: 'agent', at: '2026-11-02T09:55:00Z', ref: '7c0ffee1aabbccddeeff0011', hand: true },
+      { key: 'judge', state: 'done', by: null, at: null, ref: null },
+    ], current: null, ask: null, reruns: 0 } });
+    const { unmount } = card(hand());
+    const land = within(screen.getByTestId('swarm-out-funnel')).getAllByTestId('swarm-out-funnel-gate')[1];
+    expect(land.textContent).toContain('Landed by hand by the agent: 7c0ffee');
+    expect(land.textContent).not.toContain('7c0ffee1');
+    unmount();
+    await i18n.changeLanguage('zh');
+    try {
+      const { unmount: u2 } = card(hand());
+      const zh = within(screen.getByTestId('swarm-out-funnel')).getAllByTestId('swarm-out-funnel-gate')[1];
+      expect(zh.textContent).toContain('agent 手工落地：7c0ffee');
+      u2();
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+    // the person's button: by you, no commit
+    card(run({ funnel: { gates: [
+      { key: 'land', state: 'done', by: 'person', at: '2026-11-02T09:55:00Z', ref: null, hand: true },
+    ], current: null, ask: null, reruns: 0 } }));
+    expect(screen.getByTestId('swarm-out-funnel-gate').textContent).toContain('Landed by hand by you');
+  });
+
   it('nothing while the run is on its Hive', () => {
     card(run({ stage: 'running', funnel: { gates: [], current: null, ask: null, reruns: 0 } }));
     expect(screen.queryByTestId('swarm-out-funnel')).toBeNull();

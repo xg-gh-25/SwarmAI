@@ -239,7 +239,7 @@ async def _allowed(actor, command: str, dispatch_id: str,
     why = await asyncio.to_thread(swarm_out_actor.row_blocker, actor, command, row, ended_at)
     if why is None and actor.agent and command == "discard":
         why = await asyncio.to_thread(swarm_out_actor.discard_blocker, row)
-    if why is None and actor.agent and command == "return_land":
+    if why is None and actor.agent and command in ("return_land", "landed_by_hand"):
         why = await asyncio.to_thread(swarm_out_actor.land_blocker, dispatch_id)
     if why:
         who = "an agent" if actor.agent else "you"
@@ -456,6 +456,34 @@ async def run_manual_landed(dispatch_id: str, body: Optional[ActorBody] = None) 
     out = await _settle(swarm_out_settle.set_manual_landed, dispatch_id)
     _recorded(actor, "manual_landed", dispatch_id)
     return out
+
+
+class LandedByHandBody(ActorBody):
+    # the commits on the prepared branch that landed the run's change (hex ids, checked
+    # by core/hive_return.verify_hand_landing), and returned files left out on purpose
+    # (``<path>``, or ``<url>::<path>`` when several repositories returned it)
+    commits: list[str] = Field(default_factory=list, max_length=60)
+    dropped: list[str] = Field(default_factory=list, max_length=1000)
+
+
+@router.post("/runs/{dispatch_id}/landed-by-hand")
+async def run_landed_by_hand(dispatch_id: str, body: LandedByHandBody) -> dict[str, Any]:
+    """The dispatching agent landed the run's commits by hand (return-land answered a
+    conflict) and names the commits: git here checks them before anything is written
+    (core/swarm_out_settle.set_landed_by_hand), then the run settles accepted, kept as
+    one entry of its decision record. The agent's only (the CLI's ``landed-by-hand``);
+    the person's button is manual-landed."""
+    _require_desktop()
+    from core import swarm_out_settle
+    actor = _actor(body)
+    if not actor.agent:
+        raise HTTPException(status_code=403, detail="you say the commits were landed by hand with the "
+                                                    "run's Landed by hand button")
+    if any(len(c) > 80 for c in body.commits) or any(len(p) > 500 for p in body.dropped):
+        raise HTTPException(status_code=400, detail="a commit id or a path is too long")
+    await _allowed(actor, "landed_by_hand", dispatch_id)
+    return await _settle(swarm_out_settle.set_landed_by_hand, dispatch_id, list(body.commits),
+                         list(body.dropped), actor.why, actor.session)
 
 
 class RerunBody(ActorBody):
