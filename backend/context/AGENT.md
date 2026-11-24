@@ -421,8 +421,10 @@ without, 16.5% vs 0.33% once a glitch is in history. (SOUL P3)
 **R21. MEMORY.md + EVOLUTION.md are agent-owned** — user directs content, agent decides
 structure, operations silent. (SOUL P1)
 
-**R22. Memory is written by CDF and injected whole.** Every write to MEMORY.md /
-EVOLUTION.md goes through CDF: its sources only submit candidates. The agent that produced a
+**R22. Memory is written by CDF and injected whole.** Every entry in MEMORY.md /
+EVOLUTION.md is written by CDF: its sources only submit candidates. The person's own edits,
+and their verdicts on governance proposals, go through the governed edit path
+(`governed_edit.apply_user_edit`). The agent that produced a
 unit, with the context, decides what it means: its type and scope, and whether it is new, the
 same as an entry, adds to one, replaces one, or repeats an earlier correction (declared as
 `<id> | <first line>`); CDF only checks facts (the declaration names one entry, the evidence
@@ -446,8 +448,10 @@ write a closed list or a system-wide "never" about those routes (that error has 
 twice). "Does this earn its tokens?" still governs what I WRITE into a context file. (SOUL P6)
 
 **R24. Self-Enhancement (per store).** KNOWLEDGE.md: index, don't inline large bodies.
-MEMORY.md: relevance > age — CDF's score and decay decide what is injected; nothing is pruned
-by hand or by size. EVOLUTION.md: earned entries only, corrections permanent. (SOUL P6)
+MEMORY.md: injected whole (R22) — no score or decay decides what is injected; an entry leaves
+only when a later one overrides it or it is withdrawn, never by hand or by size. EVOLUTION.md:
+earned entries only; a correction never ages out (it leaves only by override or withdrawal).
+(SOUL P6)
 
 **R30. Context-file correctness is a FIRST priority — cognitive organs, not reference docs.**
 (1) **Verify-before-quote** — re-measure any context-file figure against live source in the
@@ -476,10 +480,11 @@ project; "this instance × this codebase × this one time" content (a perf numbe
 tradeoff, one module's wiring, a restatement of a held principle) is a construction log → the run
 record. "Verify a registration with a behaviour assertion, never the discarded name" transfers
 (keep); "removing hook X made gate Y sole-occupy group Z" does not (drop). **Guard the ENTRANCE —
-never submit self-dev noise to the cultivation judge and rely on it to discard** (P8: a brain is
+never submit self-dev noise and rely on CDF to discard it — CDF checks facts only, so what
+arrives with valid evidence is written** (P8: a brain is
 bounded by its weakest unguarded door). (Cited across files as `R30#4` — keep it point (4).)
-(5) **Cross-door consistency (P8)** — a change to any ingestion/admission mechanism (judge, trust
-rule, dedup, noise filter) is reasoned across ALL four stores at once. (6) **Whole-file
+(5) **Cross-door consistency (P8)** — a change to any ingestion/admission mechanism (fact check, trust
+rule, dedup, override) is reasoned across every store CDF writes at once (SOUL P8). (6) **Whole-file
 contradiction check** — after editing one section, re-read the WHOLE file (a corrected block
 contradicting a stale one paragraphs away is my #1 recurring miss). **Tell for (5)+(6): editing
 one path or section without checking the other doors.** (7) **A published artifact carries no
