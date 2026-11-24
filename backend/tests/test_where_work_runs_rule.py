@@ -3,7 +3,8 @@
 The rule is text the agent reads every turn, and its skill (s_swarm-out) must trigger on
 the person accepting the agent's proposal and say the same conditions. These assertions
 pin the content the agent relies on: a lean-to-Hive list, a stay-local list, the
-proposal-then-accept step and the never-without-their-word floor.
+proposal-then-accept step, the never-without-their-word floor, and with no Hive a
+proposal made once for long work, never per task.
 """
 from __future__ import annotations
 
@@ -38,7 +39,7 @@ def test_agent_r1_and_swarm_out_say_where_work_runs():
     for phrase in SHARED:
         assert phrase in r1, phrase
     assert "Never dispatch without their word" in r1
-    assert "with no Hive, everything runs locally and I propose none" in r1
+    assert "with no Hive, everything runs locally, and I propose one once when the work is long" in r1
     assert "only once they accept or ask for it" in r1
 
     front, body = _skill()
@@ -47,4 +48,4 @@ def test_agent_r1_and_swarm_out_say_where_work_runs():
     for phrase in SHARED:
         assert phrase in section, phrase
     assert "dispatch only once they accept" in section
-    assert "No Hive: run it here and propose nothing" in section
+    assert "No Hive: run it here, and propose a Hive once when the work is long, never per task" in section

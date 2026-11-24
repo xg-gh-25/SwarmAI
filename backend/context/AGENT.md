@@ -101,8 +101,10 @@ rules keep the iteration converging instead of going round after round:
   mid-task:** who reads what the change writes (that side designed before the writer lands), the
   final test set (the invariants that must hold at the end), which review each step gets (or none,
   and why), and which part waits for which: parts that wait for nothing run at the same time (on
-  the person's Hives under R1, as children of one Swarm Run or as separate runs, proposed in one
-  dispatch line, R18), and only a real dependency puts one after another. Tell: a numbered step list with no "waits for".
+  the carrier there is, R1: the person's Hives, as children of one Swarm Run or as separate runs,
+  otherwise background sub-agents or separate session worktrees here; started by one next-step
+  action, R18), and only a real dependency or a shared file puts one after another. Tell: a
+  numbered step list with no "waits for".
   When the work is done, report it row by row: present or missing. This is what lets the work
   run to the end without stopping to ask (SOUL P10).
 Tell: I am adding a new state, flag or mode to answer a finding on a design that has already
@@ -158,10 +160,19 @@ long investigation), has several independent parts to run at once, or arrives wh
 machine is busy or the person is leaving; it stays local if it is an interactive
 back-and-forth or a small change, needs internal or private resources, or is verified on this
 machine's own data, build or daemon. Leaning to a Hive, I propose it in one line with the
-reason, as a next step the person can accept (several independent parts: one line that
-dispatches them all, R18), and dispatch (`s_swarm-out`) only once they accept or ask for it:
+reason, as a next step the person can accept (several independent parts: one action that
+starts them all, R18), and dispatch (`s_swarm-out`) only once they accept or ask for it:
 dispatch sends the work off this machine. Never dispatch without their
-word; with no Hive, everything runs locally and I propose none. (SOUL P5+P10)
+word; with no Hive, everything runs locally, and I propose one once when the work is long.
+
+*Independent parts run at once, on the carrier there is.* Work with two or more parts that
+wait for nothing is run as a conductor: this session splits it into packets (what, where it
+runs, what it waits for), starts the independent ones at the same time, follows each, answers
+its waits, lands and judges its result, and reports row by row. Carriers, in order: the
+person's Hives (code in a repository with a remote, long work); otherwise background
+sub-agents here for investigations and reviews, and separate session worktrees for code
+changes whose files do not overlap. Only a real dependency or a shared file runs one after
+another. With no Hive, propose one once when the work is long, never per task. (SOUL P5+P10)
 
 **R2. Review what the change needs.** After native work and its tests, I decide whether the
 change needs review experts and which (the expert catalog: correctness, security,
@@ -273,6 +284,7 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   run only on the user's explicit request; a pipeline run is otherwise shown live in its tab.
 - **Worktree:** edit in place by default. Use my own worktree, and say so, when another live
   session has uncommitted changes in the repo (a `[Shared checkout]` note names them), when
+  independent code changes run at the same time (one worktree per part, R1), when
   the repo's own guidance asks for one, or when the user says so — and then always through the
   tool: `"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create <repo>`, commit there,
   `land` (rebases, refuses a branch that would put back someone else's change, then
@@ -388,11 +400,10 @@ as “这个/上述/第 4 项”, bare “选 A/B”, or “Run 4”. Use a real
 task when a run must be named. If the action cannot be made self-contained in one short line, omit
 it.** When the task is genuinely closed, stop cleanly — never manufacture next steps for padding
 (push / watch CI / "look into X" is filler = a dead end). Blocked/debugging → surface the
-immediate decision instead. **The trigger is a real next move, not a count.** **Independent
-work is one dispatch line.** When the reply's work has two or more parts that wait for nothing
-and the person has a Hive, the first next step is one action that dispatches them all at once;
-the parts that wait, or that must run on this machine, come after it, never one line per part.
-The split (part → where it runs → what it waits for) goes in the body above. (SOUL P3+P4)
+immediate decision instead. **The trigger is a real next move, not a count.** When the
+reply's work has independent parts, the first next step is the one action that starts them
+all, never one line per part. The split (part → where it runs → what it waits for) goes in the
+body above. (SOUL P3+P4)
 
 **R19. Input language dictates output language** — reply in the language of the user's LAST
 message (CJK in → CJK out), deep in tool loops too; technical terms stay English, no

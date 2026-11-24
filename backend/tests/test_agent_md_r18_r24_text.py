@@ -2,9 +2,12 @@
 
 R24 once said "CDF's score and decay decide what is injected", which contradicted R22/R23,
 SELF.md's Memory management flow and the MEMORY.md footer: MEMORY is injected whole and an
-entry leaves only by a declared override or a withdrawal. R18 now says that independent
-parts of a reply's work are dispatched in one next-step line, and R1 / § Iterative
-Refinement point at it. The shipped skills and templates must not name a context-file
+entry leaves only by a declared override or a withdrawal. R1 ends with the conductor
+paragraph (independent parts run at once on the carrier there is: the person's Hives,
+otherwise background sub-agents or separate session worktrees here), R18 says that the
+first next step is the one action that starts all those parts, and R1 / § Iterative
+Refinement point at both. The earlier R18 sentence, which covered only a person with a
+Hive, is gone. The shipped skills and templates must not name a context-file
 section that SWARMAI.md no longer has, nor send the agent to ``context_recall_cli --domains``
 (kept for eval probes only; the agent's recall command is ``cognition find``).
 """
@@ -17,12 +20,21 @@ AGENT = CTX / "AGENT.md"
 
 R24_MEMORY = ("MEMORY.md: injected whole; an entry leaves only by an override its deciding "
               "context declares or by a withdrawal, never by age, score or size.")
-R18_DISPATCH = (
-    "**Independent work is one dispatch line.** When the reply's work has two or more parts "
-    "that wait for nothing and the person has a Hive, the first next step is one action that "
-    "dispatches them all at once; the parts that wait, or that must run on this machine, come "
-    "after it, never one line per part. The split (part → where it runs → what it waits for) "
-    "goes in the body above."
+R18_INDEPENDENT = (
+    "When the reply's work has independent parts, the first next step is the one action that "
+    "starts them all, never one line per part. The split (part → where it runs → what it "
+    "waits for) goes in the body above."
+)
+R1_CONDUCTOR = (
+    "*Independent parts run at once, on the carrier there is.* Work with two or more parts "
+    "that wait for nothing is run as a conductor: this session splits it into packets (what, "
+    "where it runs, what it waits for), starts the independent ones at the same time, follows "
+    "each, answers its waits, lands and judges its result, and reports row by row. Carriers, "
+    "in order: the person's Hives (code in a repository with a remote, long work); otherwise "
+    "background sub-agents here for investigations and reviews, and separate session "
+    "worktrees for code changes whose files do not overlap. Only a real dependency or a "
+    "shared file runs one after another. With no Hive, propose one once when the work is "
+    "long, never per task."
 )
 
 
@@ -56,17 +68,44 @@ def test_agent_md_no_longer_says_score_or_decay_decides_injection():
         assert stale not in flat, stale
 
 
-def test_r18_ends_with_the_dispatch_line_sentence():
+def _r1_block(text: str) -> str:
+    """R1 up to R2, whitespace-flattened (R1 spans more than one paragraph)."""
+    return _flat(text[text.index("**R1."):text.index("**R2.")])
+
+
+def test_r18_ends_with_the_independent_parts_sentence():
     r18 = _paragraph(_agent(), "**R18.")
-    assert r18.endswith(R18_DISPATCH + " (SOUL P3+P4)")
+    assert r18.endswith(R18_INDEPENDENT + " (SOUL P3+P4)")
 
 
-def test_r1_and_iterative_refinement_point_at_the_r18_dispatch_line():
+def test_r1_ends_with_the_conductor_paragraph():
+    r1 = _r1_block(_agent())
+    assert r1.endswith(R1_CONDUCTOR + " (SOUL P5+P10)")
+
+
+def test_replaced_hive_only_dispatch_line_is_gone():
+    flat = _flat(_agent())
+    for stale in ("Independent work is one dispatch line", "and the person has a Hive, the first",
+                  "proposed in one dispatch line", "one line that dispatches them all",
+                  "I propose none"):
+        assert stale not in flat, stale
+
+
+def test_r1_and_iterative_refinement_point_at_r1_and_r18():
     text = _agent()
-    r1 = _paragraph(text, "**R1.")
-    assert "several independent parts: one line that dispatches them all, R18" in r1
-    section = text[text.index("### Iterative Refinement"):text.index("### Escalation")]
-    assert "proposed in one dispatch line, R18" in _flat(section)
+    r1 = _r1_block(text)
+    assert "several independent parts: one action that starts them all, R18" in r1
+    assert "with no Hive, everything runs locally, and I propose one once when the work is long" in r1
+    section = _flat(text[text.index("### Iterative Refinement"):text.index("### Escalation")])
+    assert "on the carrier there is, R1" in section
+    assert "started by one next-step action, R18" in section
+    assert "only a real dependency or a shared file puts one after another" in section
+
+
+def test_worktree_rule_allows_one_worktree_per_parallel_code_part():
+    text = _agent()
+    worktree = _flat(text[text.index("- **Worktree:**"):text.index("- **Tests (any language")])
+    assert "independent code changes run at the same time (one worktree per part, R1)" in worktree
 
 
 def _shipped_guidance() -> list[Path]:

@@ -65,8 +65,8 @@ It stays local when it is an interactive back-and-forth or a small change, needs
 internal or private resources (the checks of step 4 refuse those anyway), or is verified
 on this machine's own data, build or daemon. Leaning to a Hive: propose it in one line
 with the reason, as a next step the person can accept, and dispatch only once they
-accept (dispatch sends the work off this machine). No Hive: run it here and propose
-nothing.
+accept (dispatch sends the work off this machine). No Hive: run it here, and propose
+a Hive once when the work is long, never per task.
 
 ## When to ask the person
 
