@@ -151,11 +151,12 @@ function VerdictDot({ pending }: { pending: number }) {
  *  render (pending is the verdict; a run in progress is a supporting fact).
  *  All from the cheap BrainSummary — no fetch. */
 function NeedsActionable({ health }: { health: BrainHealth }) {
+  const { t } = useTranslation();
   const items: { key: string; n: string; label: string }[] = [];
   // this brain's Need You items, every source (escalations, paused runs), not only
   // proposals: the same word as the left nav (fixing spec H2)
-  if (health.pending > 0) items.push({ key: 'pending', n: String(health.pending), label: 'need you' });
-  if (health.liveRun) items.push({ key: 'liveRun', n: '•', label: 'run in progress' });
+  if (health.pending > 0) items.push({ key: 'pending', n: String(health.pending), label: t('ui.DddCard.needYouItem') });
+  if (health.liveRun) items.push({ key: 'liveRun', n: '•', label: t('ui.DddCard.runInProgress') });
   return (
     <div data-testid="dddcard-needs-actionable" className="flex flex-col gap-1 mt-1.5">
       {items.map((it) => (
@@ -420,7 +421,7 @@ export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number>
         <div key={l.key} data-testid={`ddd-layer-${l.key}`} className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-sm" style={{ background: l.color }} />
-            <span className="text-meta font-semibold" style={{ color: l.color }}>{l.label}</span>
+            <span className="text-meta font-semibold" style={{ color: l.color }}>{t(l.labelKey)}</span>
             <span className="text-meta text-[var(--color-text-muted)]">{totals[l.key]}</span>
             <span className="flex-1 h-1.5 rounded-sm bg-[var(--color-bg)] overflow-hidden ml-1">
               <span className="block h-full" style={{ width: `${(totals[l.key] / total) * 100}%`, background: l.color }} />

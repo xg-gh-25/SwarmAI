@@ -273,7 +273,7 @@ describe('Chat Constants - Property-Based Tests', () => {
           // Property: Each slash command SHALL have a description
           for (const command of SLASH_COMMANDS) {
             expect(command.name.length).toBeGreaterThan(0);
-            expect(command.description.length).toBeGreaterThan(0);
+            expect(command.descriptionKey?.length ?? 0).toBeGreaterThan(0);
           }
         }),
         { numRuns: 1 }

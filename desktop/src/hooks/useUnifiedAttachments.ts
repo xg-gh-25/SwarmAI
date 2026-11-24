@@ -17,6 +17,7 @@
  * Workspace files store only the path at attach time — content is read at
  * send time inside ``buildContentArray`` to avoid stale data.
  */
+import i18next from 'i18next';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { UnifiedAttachment, AttachmentType } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
@@ -188,7 +189,7 @@ export function useUnifiedAttachments(
       const currentCount = tab.attachments.length;
       const available = MAX_ATTACHMENTS - currentCount;
       if (available <= 0) {
-        setError(`Maximum ${MAX_ATTACHMENTS} attachments allowed`);
+        setError(i18next.t('ui.useUnifiedAttachments.maxAttachments', { max: MAX_ATTACHMENTS }));
         return;
       }
 
@@ -196,7 +197,7 @@ export function useUnifiedAttachments(
       const toProcess = files.slice(0, available);
       if (files.length > available) {
         setError(
-          `Only ${available} more attachment(s) allowed. ${files.length - available} file(s) skipped.`,
+          i18next.t('ui.useUnifiedAttachments.onlyMoreSkipped', { available, skipped: files.length - available }),
         );
       }
 
@@ -208,7 +209,7 @@ export function useUnifiedAttachments(
           // 1. Classify
           const fileType = classifyFile({ name: file.name, type: file.type });
           if (!fileType) {
-            errors.push(`Unsupported: ${file.name}`);
+            errors.push(i18next.t('ui.useUnifiedAttachments.unsupported', { name: file.name }));
             continue;
           }
 
@@ -290,7 +291,7 @@ export function useUnifiedAttachments(
             updateAttachments(tid, (prev) =>
               prev.map((a) =>
                 a.id === id
-                  ? { ...a, isLoading: false, error: 'Failed to process file' }
+                  ? { ...a, isLoading: false, error: i18next.t('ui.useUnifiedAttachments.processFailed') }
                   : a,
               ),
             );
@@ -298,7 +299,7 @@ export function useUnifiedAttachments(
         }
         // Surface accumulated errors
         if (errors.length > 0) {
-          setError(errors.length === 1 ? errors[0] : `${errors.length} file(s) skipped: ${errors[0]}`);
+          setError(errors.length === 1 ? errors[0] : i18next.t('ui.useUnifiedAttachments.filesSkipped', { n: errors.length, first: errors[0] }));
         }
       } finally {
         setIsProcessing(false);
@@ -321,7 +322,7 @@ export function useUnifiedAttachments(
       const currentCount = tab.attachments.length;
       const available = MAX_ATTACHMENTS - currentCount;
       if (available <= 0) {
-        setError(`Maximum ${MAX_ATTACHMENTS} attachments allowed`);
+        setError(i18next.t('ui.useUnifiedAttachments.maxAttachments', { max: MAX_ATTACHMENTS }));
         return;
       }
 
@@ -329,7 +330,7 @@ export function useUnifiedAttachments(
       const toProcess = fileItems.slice(0, available);
       if (fileItems.length > available) {
         setError(
-          `Only ${available} more attachment(s) allowed. Some files skipped.`,
+          i18next.t('ui.useUnifiedAttachments.onlyMoreSomeSkipped', { available }),
         );
       }
 
@@ -347,7 +348,7 @@ export function useUnifiedAttachments(
           // 2. Classify by extension (workspace files have no MIME type)
           const fileType = classifyFile({ name: file.name, type: '' });
           if (!fileType) {
-            setError(`Unsupported file type: ${file.name}`);
+            setError(i18next.t('ui.useUnifiedAttachments.unsupportedType', { name: file.name }));
             continue;
           }
 
@@ -409,7 +410,7 @@ export function useUnifiedAttachments(
       const tab = tabMapRef.current.get(tid);
       if (!tab) return false;
       if (!tab.attachments.some(isTerminalAttachment) && tab.attachments.length >= MAX_ATTACHMENTS) {
-        setError(`Maximum ${MAX_ATTACHMENTS} attachments allowed`);
+        setError(i18next.t('ui.useUnifiedAttachments.maxAttachments', { max: MAX_ATTACHMENTS }));
         return false;
       }
       updateAttachments(tid, (prev) => addTerminalText_(prev, text, cwd, generateId));

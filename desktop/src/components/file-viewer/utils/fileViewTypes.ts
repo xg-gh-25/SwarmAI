@@ -9,6 +9,7 @@
  * - classifyFileForViewer  — Extension-based file → renderer routing
  * - getFileTypeInfo        — Human-friendly label + icon for any type
  */
+import i18next from 'i18next';
 
 export type FileViewType =
   | 'text'
@@ -129,21 +130,21 @@ export function getFileTypeInfo(fileName: string): FileTypeInfo {
     case 'text':
       return { label: detectTextLabel(ext), icon: 'code', category: 'text' };
     case 'markdown':
-      return { label: 'Markdown', icon: 'description', category: 'text' };
+      return { label: i18next.t('ui.fileViewTypes.markdown'), icon: 'description', category: 'text' };
     case 'svg':
-      return { label: 'SVG Image', icon: 'image', category: 'text' };
+      return { label: i18next.t('ui.fileViewTypes.svgImage'), icon: 'image', category: 'text' };
     case 'image':
-      return { label: `${ext.toUpperCase()} Image`, icon: 'image', category: 'media' };
+      return { label: i18next.t('ui.fileViewTypes.image', { ext: ext.toUpperCase() }), icon: 'image', category: 'media' };
     case 'pdf':
-      return { label: 'PDF Document', icon: 'picture_as_pdf', category: 'document' };
+      return { label: i18next.t('ui.fileViewTypes.pdfDocument'), icon: 'picture_as_pdf', category: 'document' };
     case 'html-preview':
-      return { label: 'HTML Document', icon: 'language', category: 'text' };
+      return { label: i18next.t('ui.fileViewTypes.htmlDocument'), icon: 'language', category: 'text' };
     case 'csv':
-      return { label: ext === 'tsv' ? 'TSV Spreadsheet' : 'CSV Spreadsheet', icon: 'table_chart', category: 'data' };
+      return { label: ext === 'tsv' ? i18next.t('ui.fileViewTypes.tsvSpreadsheet') : i18next.t('ui.fileViewTypes.csvSpreadsheet'), icon: 'table_chart', category: 'data' };
     case 'video':
-      return { label: `${ext.toUpperCase()} Video`, icon: 'movie', category: 'media' };
+      return { label: i18next.t('ui.fileViewTypes.video', { ext: ext.toUpperCase() }), icon: 'movie', category: 'media' };
     case 'audio':
-      return { label: `${ext.toUpperCase()} Audio`, icon: 'audiotrack', category: 'media' };
+      return { label: i18next.t('ui.fileViewTypes.audio', { ext: ext.toUpperCase() }), icon: 'audiotrack', category: 'media' };
     case 'office':
     case 'unsupported':
       return { label: detectUnsupportedLabel(ext), icon: detectUnsupportedIcon(ext), category: 'binary' };

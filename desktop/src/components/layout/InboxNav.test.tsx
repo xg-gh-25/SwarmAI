@@ -101,7 +101,7 @@ describe('Inbox overlay registration', () => {
     await import('./overlaySurfaces');
     expect(OVERLAY_IDS).toContain('inbox');
     expect(registeredOverlayIds()).toContain('inbox');
-    expect(NAV.inbox).toMatchObject({ zone: 'work', navLabel: 'Inbox', width: 'xl' });
+    expect(NAV.inbox).toMatchObject({ zone: 'work', navLabelKey: 'ui.navTable.inbox', width: 'xl' });
     expect(ALL_SHOW_EVENTS).not.toContain('swarm:show-inbox');
   });
 });

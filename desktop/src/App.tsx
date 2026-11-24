@@ -184,6 +184,7 @@ export default function App() {
  */
 function PostUpdateToast() {
   const { addToast } = useToast();
+  const { t } = useTranslation();
 
   useEffect(() => {
     const checkVersion = async () => {
@@ -201,7 +202,7 @@ function PostUpdateToast() {
         if (lastVersion && lastVersion !== currentVersion) {
           addToast({
             severity: 'success',
-            message: `Updated to v${currentVersion}. All your data is exactly where you left it.`,
+            message: t('ui.App.updatedTo', { version: currentVersion }),
             durationMs: 8000,
             id: 'post-update-toast',
           });
@@ -216,7 +217,7 @@ function PostUpdateToast() {
     // This component is only mounted after isBackendReady=true, so no long wait needed.
     const timer = setTimeout(checkVersion, 500);
     return () => clearTimeout(timer);
-  }, [addToast]);
+  }, [addToast, t]);
 
   return null;
 }

@@ -57,9 +57,9 @@ export const STATUS_ICONS: Record<string, string> = {
 };
 
 export const INSTANCE_SIZES = [
-  { id: 'm7g.large', label: 'm7g.large — 8 GB', cost: '~$60/mo' },
-  { id: 'm7g.xlarge', label: 'm7g.xlarge — 16 GB (recommended)', cost: '~$119/mo' },
-  { id: 'm7g.2xlarge', label: 'm7g.2xlarge — 32 GB', cost: '~$238/mo' },
+  { id: 'm7g.large', labelKey: 'ui.hiveComponents.sizeLarge', cost: '~$60/mo' },
+  { id: 'm7g.xlarge', labelKey: 'ui.hiveComponents.sizeXlarge', cost: '~$119/mo' },
+  { id: 'm7g.2xlarge', labelKey: 'ui.hiveComponents.size2xlarge', cost: '~$238/mo' },
 ];
 
 // ── Hive Section ──────────────────────────────────────────────────
@@ -307,13 +307,14 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
 // ── Deploy Progress ───────────────────────────────────────────────
 
 export function DeployProgress({ instance }: { instance: HiveInstance }) {
+  const { t } = useTranslation();
   const steps = getDeploySteps(instance);
   const currentIdx = steps.findIndex(s => !s.done);
 
   return (
     <div className="mt-2 space-y-1">
       {steps.map((step, i) => (
-        <div key={step.label} className="flex items-center gap-2 text-xs">
+        <div key={step.labelKey} className="flex items-center gap-2 text-xs">
           {step.done ? (
             <span className="text-green-400 w-4 text-center">{'✓'}</span>
           ) : i === currentIdx ? (
@@ -322,7 +323,7 @@ export function DeployProgress({ instance }: { instance: HiveInstance }) {
             <span className="w-4 text-center text-[var(--color-text-muted)]">{'○'}</span>
           )}
           <span className={step.done ? 'text-[var(--color-text-muted)]' : i === currentIdx ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]/50'}>
-            {step.label}
+            {t(step.labelKey)}
           </span>
         </div>
       ))}
@@ -739,7 +740,7 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
               {INSTANCE_SIZES.map((s) => (
                 <button key={s.id} onClick={() => setInstanceType(s.id)}
                   className={`w-full p-2.5 rounded-lg text-left text-xs flex justify-between ${instanceType === s.id ? 'bg-[var(--color-primary)]/20 border-2 border-[var(--color-primary)]' : 'bg-[var(--color-bg)] border border-[var(--color-border)]'}`}>
-                  <span className="text-[var(--color-text)]">{s.label}</span>
+                  <span className="text-[var(--color-text)]">{t(s.labelKey)}</span>
                   <span className="text-[var(--color-text-muted)]">{s.cost}</span>
                 </button>
               ))}

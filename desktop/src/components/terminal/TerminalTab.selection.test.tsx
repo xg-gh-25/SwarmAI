@@ -6,6 +6,9 @@
  * back to the DOM renderer; right-click opens the menu, whose Copy / Add to chat /
  * Select all / Clear act and close it.
  *
+ * These are the macOS keys: navigator.platform is MacIntel here. The Windows / Linux
+ * keys (Ctrl+Shift+C / A / K / ↵) are in TerminalTab.shortcuts.test.tsx.
+ *
  * xterm and the WebGL addon are mocked at the module boundary; the component is real.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -49,6 +52,7 @@ vi.mock('@xterm/addon-webgl', () => ({
   },
 }));
 const copyMock = vi.fn(async (_t: string) => true);
+let platformSpy: { mockRestore: () => void };
 vi.mock('../../utils/clipboard', () => ({ copyToClipboard: (t: string) => copyMock(t) }));
 
 import TerminalTab from './TerminalTab';
@@ -75,8 +79,9 @@ describe('TerminalTab selection', () => {
   beforeEach(() => {
     term = null; lossCb = null; glDispose.mockClear(); copyMock.mockClear();
     vi.stubGlobal('ResizeObserver', class { observe = vi.fn(); disconnect = vi.fn(); });
+    platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
   });
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); platformSpy.mockRestore(); });
 
   it('text is eased toward the card, not full --color-text; bold is 500 (no glare)', async () => {
     await mount();

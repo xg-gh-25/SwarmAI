@@ -365,7 +365,7 @@ function FileViewerImpl({
             if (status === 413) {
               const detail = (err as { detail?: string })?.detail ??
                 (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-              setContentError(detail || 'File too large to preview here. Open it in a local app instead.');
+              setContentError(detail || t('ui.FileViewer.tooLarge'));
               return;
             }
             // 404: the file is gone. Mounting the renderer would only fail to stream,
@@ -482,7 +482,7 @@ function FileViewerImpl({
           // gone by here, so the old read was always undefined → generic
           // fallback only, run_7f6539b5 Gate-2 MED).
           const detail = (err as { detail?: string })?.detail;
-          setContentError(detail || 'File too large to preview here. Open it in a local app instead.');
+          setContentError(detail || t('ui.FileViewer.tooLarge'));
           return;
         }
         // 404: the file is gone (deleted on disk / moved). A filesystem/CLI delete
@@ -556,7 +556,7 @@ function FileViewerImpl({
           if (cp === changedPath || changedPath.endsWith(`/${cp}`)) delete contentCache.current[cp];
         }
         if (isActiveMatch) {
-          setContentError('This file was deleted.');
+          setContentError(t('ui.FileViewer.fileDeleted'));
           // Clear the dirty flag: the file is gone from disk, so its unsaved buffer
           // can't be saved anywhere. Without this, closeTab no-ops on the dirty guard
           // and a multi-tab panel leaves the dead tab stuck open (run_7f6539b5 Gate-2
@@ -607,7 +607,7 @@ function FileViewerImpl({
     // D1 (run_5d9178bf): subscribe via the single fileChangedBroker (was a raw
     // window listener). handler signature unchanged — broker forwards the event.
     return subscribeFileChanged(handler);
-  }, [activeTab?.filePath, activeTab?.viewType]);
+  }, [activeTab?.filePath, activeTab?.viewType, t]);
 
   /* -------------------------------------------------------------- */
   /*  Save handler for text-editable files                           */

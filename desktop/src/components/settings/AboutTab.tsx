@@ -61,7 +61,7 @@ export default function AboutTab() {
         setUpdateState('idle');
       }
     } catch (e) {
-      setUpdateError(e instanceof Error ? e.message : 'Failed');
+      setUpdateError(e instanceof Error ? e.message : t('ui.AboutTab.failed'));
       setUpdateState('error');
     }
   };
@@ -73,7 +73,7 @@ export default function AboutTab() {
       await downloadAndInstallUpdate(availableUpdate, setUpdateProgress);
       setUpdateState('ready');
     } catch (e) {
-      setUpdateError(e instanceof Error ? e.message : 'Failed');
+      setUpdateError(e instanceof Error ? e.message : t('ui.AboutTab.failed'));
       setUpdateState('error');
     }
   };

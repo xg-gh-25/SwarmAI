@@ -63,7 +63,7 @@ function parentName(path: string): string {
 function buildSegments(repo: { path: string; name: string } | null, current: { kind: string; key: string },
                        tabs: TerminalTabModel[]): Segment[] {
   const wsDir = joinDir(defaultDataDir(), 'SwarmWS').replace(/[\\/]+$/, '');
-  const segs: Segment[] = [{ key: SWARMWS_KEY, kind: 'swarmws', label: 'SwarmWS', title: `SwarmWS (${wsDir})` }];
+  const segs: Segment[] = [{ key: SWARMWS_KEY, kind: 'swarmws', label: 'SwarmWS', title: i18n.t('ui.TerminalPanel.swarmwsTitle', { path: wsDir }) }];
   if (repo) {
     segs.push({ key: keyOfCwd(repo.path), kind: 'repo', label: repo.name, cwd: repo.path,
                 title: i18n.t('ui.TerminalPanel.repoTitle', { path: repo.path }) });

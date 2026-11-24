@@ -134,7 +134,7 @@ function findSeparatorIndices(rows: FlattenedRow[]): { index: number; label: str
     .filter(({ row }) => row.kind === 'section-header')
     .map(({ row, index }) => ({
       index,
-      label: (row as Extract<FlattenedRow, { kind: 'section-header' }>).label,
+      label: (row as Extract<FlattenedRow, { kind: 'section-header' }>).id,
     }));
 }
 

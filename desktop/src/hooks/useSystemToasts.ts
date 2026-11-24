@@ -15,6 +15,7 @@
  *   - `promptCannotLand(msg)`  — a prompt could not be placed in any tab (msg
  *                                explains which tab blocked it and what to do)
  */
+import i18next from 'i18next';
 import { useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
 
@@ -29,12 +30,12 @@ export function useSystemToasts(): SystemToasts {
   return useMemo(() => ({
     tabLimitReached: () => addToast({
       severity: 'info',
-      message: 'Memory usage is high. Close an idle tab or quit other apps to free memory, then try again.',
+      message: i18next.t('ui.useSystemToasts.tabLimitReached'),
       autoDismiss: true,
     }),
     allTabsBusy: () => addToast({
       severity: 'warning',
-      message: 'Could not open a new tab — all tabs are busy.',
+      message: i18next.t('ui.useSystemToasts.allTabsBusy'),
       autoDismiss: true,
     }),
     promptCannotLand: (message: string) => addToast({ severity: 'warning', message, autoDismiss: true }),

@@ -16,9 +16,9 @@ import ModelProvider from './ModelProvider';
 import { isDesktop } from '../../services/tauri';
 
 const THINKING_MODE_OPTIONS = [
-  { id: 'adaptive', name: 'Adaptive', description: 'Model decides when to think deeply' },
-  { id: 'enabled', name: 'Enabled', description: 'Always use extended thinking' },
-  { id: 'disabled', name: 'Disabled', description: 'Never use extended thinking' },
+  { id: 'adaptive', name: 'Adaptive', descriptionKey: 'ui.AIModelsTab.modeAdaptiveDesc' },
+  { id: 'enabled', name: 'Enabled', descriptionKey: 'ui.AIModelsTab.modeEnabledDesc' },
+  { id: 'disabled', name: 'Disabled', descriptionKey: 'ui.AIModelsTab.modeDisabledDesc' },
 ];
 
 export default function AIModelsTab() {
@@ -62,7 +62,8 @@ export default function AIModelsTab() {
     ? THINKING_MODE_OPTIONS.filter((o) => supportedThinkingModes.includes(o.id))
     : [];
   // Never render an empty picker (an unexpected payload falls back to all modes).
-  const thinkingModeOptions = supportedOptions.length ? supportedOptions : THINKING_MODE_OPTIONS;
+  const thinkingModeOptions = (supportedOptions.length ? supportedOptions : THINKING_MODE_OPTIONS)
+    .map(({ descriptionKey, ...o }) => ({ ...o, description: t(descriptionKey) }));
   const shownThinkingMode = effectiveThinkingMode ?? thinkingMode;
   const storedModeIsKnown = THINKING_MODE_OPTIONS.some((o) => o.id === thinkingMode);
   const storedModeName = THINKING_MODE_OPTIONS.find((o) => o.id === thinkingMode)?.name ?? thinkingMode;
@@ -230,11 +231,11 @@ export default function AIModelsTab() {
             label={t('ui.AIModelsTab.thinkingEffort')}
             disabled={shownThinkingMode === 'disabled'}
             options={[
-              { id: 'low', name: 'Low', description: 'Minimal thinking — fastest responses' },
-              { id: 'medium', name: 'Medium', description: 'Balanced speed and depth' },
-              { id: 'high', name: 'High', description: 'Deep thinking (default)' },
-              { id: 'xhigh', name: 'Extra High', description: 'Very thorough analysis' },
-              { id: 'max', name: 'Maximum', description: 'Deepest reasoning — slowest' },
+              { id: 'low', name: 'Low', description: t('ui.AIModelsTab.effortLowDesc') },
+              { id: 'medium', name: 'Medium', description: t('ui.AIModelsTab.effortMediumDesc') },
+              { id: 'high', name: 'High', description: t('ui.AIModelsTab.effortHighDesc') },
+              { id: 'xhigh', name: 'Extra High', description: t('ui.AIModelsTab.effortXhighDesc') },
+              { id: 'max', name: 'Maximum', description: t('ui.AIModelsTab.effortMaxDesc') },
             ]}
             selectedId={thinkingEffort}
             onChange={async (id) => {

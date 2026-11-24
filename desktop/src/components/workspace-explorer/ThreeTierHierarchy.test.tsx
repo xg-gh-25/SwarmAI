@@ -72,7 +72,7 @@ describe('AC1: Knowledge section-header', () => {
 
     // Find the Knowledge section-header
     const sectionHeaders = rows.filter(
-      (r) => r.kind === 'section-header' && r.label === 'Knowledge',
+      (r) => r.kind === 'section-header' && r.id === 'Knowledge',
     );
     expect(sectionHeaders.length).toBe(1);
 
@@ -88,7 +88,7 @@ describe('AC1: Knowledge section-header', () => {
     const rows = flattenTree(tree, new Set(['Knowledge']));
 
     const headerIdx = rows.findIndex(
-      (r) => r.kind === 'section-header' && r.label === 'Knowledge',
+      (r) => r.kind === 'section-header' && r.id === 'Knowledge',
     );
     expect(headerIdx).toBeGreaterThanOrEqual(0);
 
@@ -106,7 +106,7 @@ describe('AC1: Knowledge section-header', () => {
     const rows = flattenTree(tree, new Set(['Knowledge']));
 
     const header = rows.find(
-      (r) => r.kind === 'section-header' && r.label === 'Knowledge',
+      (r) => r.kind === 'section-header' && r.id === 'Knowledge',
     );
     expect(header).toBeDefined();
     if (header && header.kind === 'section-header') {
@@ -116,7 +116,7 @@ describe('AC1: Knowledge section-header', () => {
   });
 
   it('Knowledge section-header has yellow accent config', () => {
-    const knowledgeSection = EXPLORER_SECTIONS.find((s) => s.label === 'Knowledge');
+    const knowledgeSection = EXPLORER_SECTIONS.find((s) => s.id === 'Knowledge');
     expect(knowledgeSection).toBeDefined();
     expect(knowledgeSection!.accentBg).toContain('--color-status-warning');
     expect(knowledgeSection!.accentBorder).toContain('--color-status-warning');
@@ -129,7 +129,7 @@ describe('AC2: Projects section-header', () => {
     const rows = flattenTree(tree, new Set(['Projects']));
 
     const sectionHeaders = rows.filter(
-      (r) => r.kind === 'section-header' && r.label === 'Projects',
+      (r) => r.kind === 'section-header' && r.id === 'Projects',
     );
     expect(sectionHeaders.length).toBe(1);
 
@@ -144,7 +144,7 @@ describe('AC2: Projects section-header', () => {
     const rows = flattenTree(tree, new Set(['Projects']));
 
     const headerIdx = rows.findIndex(
-      (r) => r.kind === 'section-header' && r.label === 'Projects',
+      (r) => r.kind === 'section-header' && r.id === 'Projects',
     );
     const nextRow = rows[headerIdx + 1];
     expect(nextRow.kind).toBe('node');
@@ -155,7 +155,7 @@ describe('AC2: Projects section-header', () => {
   });
 
   it('Projects section-header has blue accent config', () => {
-    const projectsSection = EXPLORER_SECTIONS.find((s) => s.label === 'Projects');
+    const projectsSection = EXPLORER_SECTIONS.find((s) => s.id === 'Projects');
     expect(projectsSection).toBeDefined();
     expect(projectsSection!.accentBg).toContain('--color-primary');
     expect(projectsSection!.accentBorder).toContain('--color-primary');
@@ -168,7 +168,7 @@ describe('AC3: System section dimmed and collapsed by default', () => {
     const rows = flattenTree(tree, new Set());
 
     const systemHeader = rows.find(
-      (r) => r.kind === 'section-header' && r.label === 'System',
+      (r) => r.kind === 'section-header' && r.id === 'System',
     );
     expect(systemHeader).toBeDefined();
     if (systemHeader && systemHeader.kind === 'section-header') {
@@ -205,7 +205,7 @@ describe('AC4: Attachments and Services under "Other" label', () => {
     const rows = flattenTree(tree, new Set());
 
     const otherLabel = rows.find(
-      (r) => r.kind === 'secondary-label' && r.label === 'Other',
+      (r) => r.kind === 'secondary-label' && r.labelKey === 'ui.VirtualizedTree.other',
     );
     expect(otherLabel).toBeDefined();
 
@@ -244,16 +244,16 @@ describe('AC5: Section ordering and dividers', () => {
     const rows = flattenTree(tree, new Set(), new Set(), { System: false });
 
     const knowledgeIdx = rows.findIndex(
-      (r) => r.kind === 'section-header' && r.label === 'Knowledge',
+      (r) => r.kind === 'section-header' && r.id === 'Knowledge',
     );
     const projectsIdx = rows.findIndex(
-      (r) => r.kind === 'section-header' && r.label === 'Projects',
+      (r) => r.kind === 'section-header' && r.id === 'Projects',
     );
     const otherIdx = rows.findIndex(
-      (r) => r.kind === 'secondary-label' && r.label === 'Other',
+      (r) => r.kind === 'secondary-label' && r.labelKey === 'ui.VirtualizedTree.other',
     );
     const systemIdx = rows.findIndex(
-      (r) => r.kind === 'section-header' && r.label === 'System',
+      (r) => r.kind === 'section-header' && r.id === 'System',
     );
 
     expect(knowledgeIdx).toBeLessThan(projectsIdx);
@@ -302,7 +302,8 @@ describe('AC9: FlattenedRow type includes section-header and secondary-label', (
       { kind: 'section-header' }
     >;
     expect(header).toBeDefined();
-    expect(header.label).toBeDefined();
+    expect(header.id).toBeDefined();
+    expect(header.labelKey).toBeDefined();
     expect(typeof header.childCount).toBe('number');
     expect(typeof header.isCollapsed).toBe('boolean');
     expect(header.config).toBeDefined();
@@ -317,7 +318,7 @@ describe('AC9: FlattenedRow type includes section-header and secondary-label', (
       { kind: 'secondary-label' }
     >;
     expect(label).toBeDefined();
-    expect(label.label).toBe('Other');
+    expect(label.labelKey).toBe('ui.VirtualizedTree.other');
   });
 });
 
@@ -327,17 +328,17 @@ describe('AC9: FlattenedRow type includes section-header and secondary-label', (
 
 describe('EXPLORER_SECTIONS configuration', () => {
   it('has Knowledge and Projects sections defined', () => {
-    expect(EXPLORER_SECTIONS.find((s) => s.label === 'Knowledge')).toBeDefined();
-    expect(EXPLORER_SECTIONS.find((s) => s.label === 'Projects')).toBeDefined();
+    expect(EXPLORER_SECTIONS.find((s) => s.id === 'Knowledge')).toBeDefined();
+    expect(EXPLORER_SECTIONS.find((s) => s.id === 'Projects')).toBeDefined();
   });
 
   it('Knowledge maps to Knowledge/ path', () => {
-    const k = EXPLORER_SECTIONS.find((s) => s.label === 'Knowledge')!;
+    const k = EXPLORER_SECTIONS.find((s) => s.id === 'Knowledge')!;
     expect(k.paths).toContain('Knowledge');
   });
 
   it('Projects maps to Projects/ path', () => {
-    const p = EXPLORER_SECTIONS.find((s) => s.label === 'Projects')!;
+    const p = EXPLORER_SECTIONS.find((s) => s.id === 'Projects')!;
     expect(p.paths).toContain('Projects');
   });
 });
@@ -353,7 +354,7 @@ describe('Section collapse hides children', () => {
     const rows = flattenTree(tree, new Set(['Knowledge']), new Set(), { Knowledge: true });
 
     const header = rows.find(
-      (r) => r.kind === 'section-header' && r.label === 'Knowledge',
+      (r) => r.kind === 'section-header' && r.id === 'Knowledge',
     );
     expect(header).toBeDefined();
     if (header && header.kind === 'section-header') {

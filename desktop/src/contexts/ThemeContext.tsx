@@ -5,12 +5,12 @@ type Theme = 'light' | 'dark' | 'system';
 type ResolvedTheme = 'light' | 'dark';
 export type AccentColor = 'blue' | 'purple' | 'green' | 'orange' | 'rose';
 
-export const ACCENT_PRESETS: { id: AccentColor; label: string; color: string }[] = [
-  { id: 'blue',   label: 'Blue',   color: '#2b6cee' },
-  { id: 'purple', label: 'Purple', color: '#8b5cf6' },
-  { id: 'green',  label: 'Green',  color: '#10b981' },
-  { id: 'orange', label: 'Orange', color: '#f59e0b' },
-  { id: 'rose',   label: 'Rose',   color: '#f43f5e' },
+export const ACCENT_PRESETS: { id: AccentColor; labelKey: string; color: string }[] = [
+  { id: 'blue',   labelKey: 'ui.ThemeContext.blue',   color: '#2b6cee' },
+  { id: 'purple', labelKey: 'ui.ThemeContext.purple', color: '#8b5cf6' },
+  { id: 'green',  labelKey: 'ui.ThemeContext.green',  color: '#10b981' },
+  { id: 'orange', labelKey: 'ui.ThemeContext.orange', color: '#f59e0b' },
+  { id: 'rose',   labelKey: 'ui.ThemeContext.rose',   color: '#f43f5e' },
 ];
 
 interface ThemeContextType {

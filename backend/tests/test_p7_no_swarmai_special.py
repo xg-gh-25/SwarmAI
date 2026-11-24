@@ -18,8 +18,11 @@ violation, one fewer means the line must shrink. The scan must also have read th
 product tree (a broken file list would otherwise pass over nothing).
 
 The same instance-term rule (one deployment's customer, internal-tool and sign-in names)
-also runs over the shipped text: backend/context, skills, experts and templates
-(``test_shipped_text_has_no_instance_terms``).
+also runs over the shipped text: backend/context, skills, experts and templates, and the
+desktop UI's locale files (``test_shipped_text_has_no_instance_terms``). The locale files
+are parsed: a text is checked with its key path, and mwinit is allowed only under a path
+with an ``ada`` segment (the Amazon-internal ADA sign-in's remedy texts); every other term,
+and mwinit anywhere else, is a hit. No count file is involved for them.
 
 Known limit: a bare ``"SwarmAI"`` literal (the product name, also the seeded default
 project's name) is not a rule; the default-project literals of usable-by-anyone §3.9
@@ -29,6 +32,7 @@ class B are a separate cleanup.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -207,9 +211,13 @@ def test_the_rules_catch_what_they_name():
 
 
 #: Shipped text read by every user's agent or shown to them.
-_TEXT_ROOTS = ("backend/context/", "backend/skills/", "backend/experts/", "backend/templates/")
+_LOCALE_ROOT = "desktop/src/i18n/locales/"
+_TEXT_ROOTS = ("backend/context/", "backend/skills/", "backend/experts/", "backend/templates/",
+               _LOCALE_ROOT)
 _TEXT_SUFFIXES = (".md", ".yaml", ".yml", ".json", ".txt", ".toml")
-INSTANCE_TERMS = re.compile(r"(?i:\b(?:cmhk|ivt|sentral|highspot|mwinit)\b)")
+INSTANCE_TERMS = re.compile(r"(?i:\b(?:cmhk|ivt|sentral|highspot|mwinit|cntech)\b)")
+#: A locale key path segment naming the ADA sign-in (needs_login_ada, remedy.ada, ada_account).
+_ADA_SEGMENT = re.compile(r"(?:^|_)ada(?:_|$)")
 
 
 def _shipped_text_files() -> list[str]:
@@ -218,11 +226,37 @@ def _shipped_text_files() -> list[str]:
     return [f for f in out if f.endswith(_TEXT_SUFFIXES) and not _TEST_FILE.search(f)]
 
 
+def _locale_hits(rel: str, text: str) -> list[tuple[str, int, str]]:
+    """Instance terms in a locale JSON's texts; mwinit only counts off an ADA key path."""
+    hits: list[tuple[str, int, str]] = []
+
+    def walk(node, path: list[str]) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, [*path, key])
+            return
+        if not isinstance(node, str):
+            return
+        ada = any(_ADA_SEGMENT.search(seg) for seg in path)
+        for m in INSTANCE_TERMS.finditer(node):
+            if ada and m.group(0).lower() == "mwinit":
+                continue
+            at = text.find(json.dumps(node, ensure_ascii=False))
+            hits.append((rel, text.count("\n", 0, at) + 1 if at >= 0 else 0,
+                         f"{m.group(0)} (key {'.'.join(path)})"))
+
+    walk(json.loads(text), [])
+    return hits
+
+
 def _text_hits(files: list[str]) -> list[tuple[str, int, str]]:
     hits = []
     for rel in files:
-        for no, line in enumerate((REPO / rel).read_text(encoding="utf-8", errors="replace")
-                                  .splitlines(), 1):
+        text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        if rel.startswith(_LOCALE_ROOT):
+            hits += _locale_hits(rel, text)
+            continue
+        for no, line in enumerate(text.splitlines(), 1):
             hits += [(rel, no, m.group(0)) for m in INSTANCE_TERMS.finditer(line)]
     return hits
 
@@ -242,3 +276,41 @@ def test_shipped_text_has_no_instance_terms():
 def test_instance_terms_are_caught():
     code = 'A = "CMHK report"\nB = "run mwinit -f"\nC = "aws-sentral-mcp"\nD = "native"\n'
     assert sorted(t for _p, _n, t in _python_hits("x.py", code)) == ["CMHK", "mwinit", "sentral"]
+    assert [t for _p, _n, t in _text_hits_of("x.md", "the CNTech standard\n")] == ["CNTech"]
+
+
+def _text_hits_of(rel: str, text: str) -> list[tuple[str, int, str]]:
+    hits = []
+    for no, line in enumerate(text.splitlines(), 1):
+        hits += [(rel, no, m.group(0)) for m in INSTANCE_TERMS.finditer(line)]
+    return hits
+
+
+def test_locale_text_has_no_instance_terms():
+    """The desktop locales are in the scan, parsed, and carry no instance term."""
+    files = _shipped_text_files()
+    locales = [f for f in files if f.startswith(_LOCALE_ROOT)]
+    assert {"desktop/src/i18n/locales/en.json", "desktop/src/i18n/locales/zh.json"} <= set(locales)
+    hits = _text_hits(locales)
+    assert not hits, ("UI text names one deployment's customer, internal tool or sign-in "
+                      "command:\n" + "\n".join(f"{p}:{n}: {t}" for p, n, t in hits))
+    # The ADA remedy texts really say mwinit: the scan saw them and let them through.
+    en = json.loads((REPO / _LOCALE_ROOT / "en.json").read_text(encoding="utf-8"))
+    assert "mwinit" in en["credentialBanner"]["remedy"]["ada"]["fix"]
+
+
+def test_locale_scan_allows_mwinit_only_on_ada_paths():
+    text = json.dumps({
+        "remedy": {"ada": {"fix": "run mwinit -f"}, "ada_account": {"fix": "mwinit"},
+                   "sso": {"fix": "run mwinit"}},
+        "needs_login_ada": "Run mwinit -f",
+        "adapter": {"hint": "mwinit"},
+        "pipeline": {"ev_since": "the CNTech & IVT standard", "ada": "CMHK"},
+        "plain": "nothing here",
+    }, indent=2)
+    tokens = sorted(t for _p, _n, t in _locale_hits("x.json", text))
+    assert tokens == sorted([
+        "mwinit (key remedy.sso.fix)", "mwinit (key adapter.hint)",
+        "CNTech (key pipeline.ev_since)", "IVT (key pipeline.ev_since)", "CMHK (key pipeline.ada)",
+    ])
+    assert all(n > 1 for _p, n, _t in _locale_hits("x.json", text))

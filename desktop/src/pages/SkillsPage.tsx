@@ -636,7 +636,7 @@ function GenerateSkillForm({
     // Use finalSkillName (sanitized by backend) if available, otherwise fall back to user input
     const skillNameToFinalize = finalSkillName || name;
     if (!skillNameToFinalize) {
-      setError('No skill name available to finalize');
+      setError(t('ui.SkillsPage.noSkillName'));
       return;
     }
 
@@ -648,7 +648,7 @@ function GenerateSkillForm({
       onGenerate(skill);
     } catch (err) {
       console.error('Failed to finalize skill:', err);
-      setError(err instanceof Error ? err.message : 'Failed to finalize skill');
+      setError(err instanceof Error ? err.message : t('ui.SkillsPage.finalizeFailed'));
     } finally {
       setIsFinalizing(false);
     }

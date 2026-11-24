@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import i18next from 'i18next';
 import { ApiError } from '../../services/api';
 import { failureReason } from './VirtualizedTree';
 
@@ -14,5 +15,14 @@ describe('failureReason', () => {
   it('falls back to the error message', () => {
     expect(failureReason(new Error('boom'))).toBe('boom');
     expect(failureReason('x')).toBe('Unknown error');
+  });
+
+  describe('in the Chinese UI', () => {
+    afterEach(async () => { await i18next.changeLanguage('en'); });
+
+    it('the unknown-error fallback follows the UI language', async () => {
+      await i18next.changeLanguage('zh');
+      expect(failureReason('x')).toBe('未知错误');
+    });
   });
 });

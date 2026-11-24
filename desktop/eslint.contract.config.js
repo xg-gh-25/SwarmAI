@@ -94,9 +94,11 @@ export default defineConfig([
   // UI text contract: every word a person reads goes through i18n, so the app can
   // be used in English and Chinese. The rule, its scope and its reviewed exceptions
   // are in eslint-rules/no-hardcoded-ui-text.js; it skips test and story files.
+  // It runs on .ts too: data tables, hooks and services hold text a component
+  // renders later ({item.label}, a toast, an error message).
   // Like the URL rule above, noInlineConfig means it cannot be disabled per line.
   {
-    files: ['src/**/*.tsx'],
+    files: ['src/**/*.{ts,tsx}'],
     ignores: ['**/__tests__/**', '**/*.test.*', '**/*.stories.*'],
     plugins: { local: { rules: { 'no-hardcoded-ui-text': noHardcodedUiText } } },
     rules: {

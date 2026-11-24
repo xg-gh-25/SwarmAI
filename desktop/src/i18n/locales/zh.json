@@ -2982,8 +2982,8 @@
     "title": "连接 AWS 账号",
     "titleChange": "更换 SwarmAI 账号",
     "lead": "SwarmAI 的对话（Bedrock）、Hive 和云存储都用这一个账号。",
-    "ctxInternal": "检测到 Amazon 内部环境。",
-    "ctxExternal": "没有检测到 Amazon 内部环境。",
+    "ctxInternal": "检测到内部（ADA）环境。",
+    "ctxExternal": "没有检测到内部（ADA）环境。",
     "ctxSwitch": "切换",
     "detecting": "正在查找这台电脑上的 AWS 账号…",
     "found": "在这台电脑上找到的账号",
@@ -3400,7 +3400,11 @@
   },
   "ui": {
     "ChatPage": {
-      "rateLimitedResuming": "请求受限，{{seconds}} 秒后继续"
+      "rateLimitedResuming": "请求受限，{{seconds}} 秒后继续",
+      "stillWorking": "仍在处理——后端在运行，但这一轮已经有一段时间没有输出。如果看起来卡住了，请按“停止”。",
+      "refreshBusy": "AI 正忙，无法刷新。请先停止或回答。",
+      "refreshFailed": "刷新失败：{{msg}}",
+      "refreshFailedPlain": "刷新失败"
     },
     "UserMessageView": {
       "showLess": "收起",
@@ -3477,7 +3481,9 @@
       "requestChanges": "提出修改或改进...",
       "sendAMessage": "发送消息...",
       "stopGeneration": "停止生成",
-      "sendMessage": "发送消息"
+      "sendMessage": "发送消息",
+      "noSkillName": "没有可用于完成的技能名称",
+      "finalizeFailed": "技能完成失败"
     },
     "CsvRenderer": {
       "noContent": "没有 CSV 内容",
@@ -3732,14 +3738,16 @@
       "updatesSafe": "更新只替换应用，不会动你的数据。",
       "setupTitle": "设置向导",
       "setupBody": "重新运行初始设置向导，可重新配置认证、频道或排查问题。",
-      "rerunSetup": "重新运行设置向导"
+      "rerunSetup": "重新运行设置向导",
+      "failed": "失败"
     },
     "App": {
       "backendUnreachable": "无法连接后端",
       "statusLoadFailed": "SwarmAI 无法加载状态。后端可能还在启动，或已经停止。",
       "checkLogsBefore": "请查看日志：",
       "checkLogsAfter": "。",
-      "mayBeRestarting": "后端可能正在重启 — 请稍后重试；如果问题持续，请联系管理员。"
+      "mayBeRestarting": "后端可能正在重启 — 请稍后重试；如果问题持续，请联系管理员。",
+      "updatedTo": "已更新到 v{{version}}。你的所有数据都原样保留。"
     },
     "AudioRenderer": {
       "duration": "时长：{{duration}}",
@@ -3850,7 +3858,41 @@
       "nsTarget": "目标 {{target}}",
       "nsAsOf": "截至 {{time}}",
       "nsWeekSessions_one": "{{week}} · {{count}} 个会话",
-      "nsOfCorrections_one": "共 {{count}} 条纠正"
+      "nsOfCorrections_one": "共 {{count}} 条纠正",
+      "lcAssemble": "组装",
+      "lcAssembleDesc": "每个上下文文件按优先级整份注入",
+      "lcRecall": "召回",
+      "lcRecallDesc": "每条消息都会拉取相关的项目、Library 和过往会话知识",
+      "lcJudge": "判断",
+      "lcJudgeDesc": "模型基于这些上下文进行推理",
+      "lcSediment": "沉淀",
+      "lcSedimentDesc": "会话结束后，其 agent 声明学到了什么；代码核对证据",
+      "lcRevise": "修订",
+      "lcReviseDesc": "更新的决策会覆盖旧条目；被撤回的条目会移除",
+      "autoRecall": "召回",
+      "autoRecallDesc": "每条消息：项目大脑、Library、过往会话、代码图谱",
+      "autoReview": "会话后复盘",
+      "autoReviewDesc": "把会话学到的内容写入 MEMORY、EVOLUTION、项目大脑、Library 或 Timeline",
+      "autoOverride": "覆盖与撤回",
+      "autoOverrideDesc": "声明的更新决策替换一个条目；记录保存在文件之外",
+      "autoSessionRecord": "会话记录",
+      "autoSessionRecordDesc": "每个会话做了什么、停在哪里，供下一个会话读取",
+      "autoRuleProposals": "规则提议",
+      "autoRuleProposalsDesc": "有 3× 证据的反复纠正会成为一条待你批准的规则",
+      "autoNorthStar": "北极星指标",
+      "autoNorthStarDesc": "衡量我是否在变得更好（见左侧栏）",
+      "manualSteering": "STEERING 规则",
+      "manualSteeringDesc": "你的长期指令（最高优先级）",
+      "manualUser": "USER 档案",
+      "manualUserDesc": "你是谁、你喜欢怎样工作",
+      "manualSkills": "Skills 与 MCP 服务器",
+      "manualSkillsDesc": "此 agent 可以使用哪些能力（能力）",
+      "manualProjectBrain": "创建项目大脑",
+      "manualProjectBrainDesc": "每个项目一个领域大脑（Brain Hub）",
+      "manualRemember": "记住这个",
+      "manualRememberDesc": "让我现在保存一条经验或决策",
+      "manualApproveRule": "批准一条规则",
+      "manualApproveRuleDesc": "接受或拒绝一项提议（需要你 → 治理规则）"
     },
     "CapabilitiesOverlay": {
       "loadingHealth": "正在加载健康状态…",
@@ -3899,7 +3941,16 @@
       "internalOwnerOnly": "内部（仅所有者）",
       "dotEnabled": "已启用",
       "dotOff": "关闭",
-      "toggleName": "切换 {{name}}"
+      "toggleName": "切换 {{name}}",
+      "healthHealthy": "健康——最近使用过，运行成功",
+      "healthLowSuccess": "成功率低",
+      "healthStale": "陈旧——最近未使用",
+      "healthNeverUsed": "从未使用——可考虑停用",
+      "tierAlways": "始终加载",
+      "tierLazy": "惰性——使用时加载",
+      "mcpTierAlways": "始终——会话开始时加载",
+      "mcpTierOnDemand": "按需——会话需要时加载",
+      "mcpTierChannel": "频道——在频道会话中加载"
     },
     "ContentBlockRenderer": {
       "approxTokens": "约 {{n}} tokens"
@@ -3924,7 +3975,8 @@
       "activity": "活跃度",
       "edited": "编辑于 {{age}}",
       "sediments30d": "{{n}} 次沉淀 / 30 天",
-      "ontologyTitle": "知识本体 · 3 层 × 7 种类型"
+      "ontologyTitle": "知识本体 · 3 层 × 7 种类型",
+      "runInProgress": "运行中"
     },
     "ExplorerHeader": {
       "sortDefault": "排序：默认（Knowledge 中最新在前）",
@@ -4075,7 +4127,9 @@
       "svg": "SVG",
       "downloadPng": "下载为 PNG",
       "png": "PNG",
-      "openInCanvas": "在 Canvas 中打开"
+      "openInCanvas": "在 Canvas 中打开",
+      "renderFailed": "图表渲染失败",
+      "pngDownloadFailed": "PNG 下载失败，请改为下载 SVG。"
     },
     "HiveBrains": {
       "canBeSent": "可以发到这里",
@@ -4113,7 +4167,8 @@
       "zoomOut": "缩小",
       "zoomIn": "放大",
       "loadingPdf": "正在加载 PDF...",
-      "renderingPage": "正在显示第 {{page}} 页..."
+      "renderingPage": "正在显示第 {{page}} 页...",
+      "loadFailed": "PDF 加载失败"
     },
     "ChatErrorMessage": {
       "aiServiceTimeout": "AI 服务超时",
@@ -4307,7 +4362,10 @@
       "saving": "保存中…",
       "creating": "创建中…",
       "saveChanges": "保存修改",
-      "createTodo": "创建 ToDo"
+      "createTodo": "创建 ToDo",
+      "range7d": "7天",
+      "range30d": "30天",
+      "range90d": "90天"
     },
     "JobsRunsOverlay": {
       "viewJobs": "Job",
@@ -4415,7 +4473,9 @@
       "disconnect": "断开连接",
       "reconnect": "重新连接",
       "remove": "移除",
-      "errorPrefix": "错误：{{error}}"
+      "errorPrefix": "错误：{{error}}",
+      "botToken": "Bot 令牌",
+      "appToken": "App 令牌"
     },
     "ChatInput": {
       "commands": "命令",
@@ -4457,7 +4517,16 @@
     "FileContextMenu": {
       "trashTitle": "移到废纸篓？",
       "trashConfirm": "移到废纸篓",
-      "menuLabel": "文件右键菜单"
+      "menuLabel": "文件右键菜单",
+      "moveFailed": "移到废纸篓失败",
+      "newFile": "新建文件",
+      "newFolder": "新建文件夹",
+      "openTerminalHere": "在此处打开终端",
+      "openFile": "打开文件",
+      "attachToChat": "附加到聊天",
+      "askSwarm": "问 Swarm",
+      "rename": "重命名",
+      "copyPath": "复制路径"
     },
     "HtmlRenderer": {
       "noContent": "没有可显示的 HTML 内容。",
@@ -4513,7 +4582,25 @@
       "tools": "工具：{{list}}"
     },
     "ToolSelector": {
-      "builtInTools": "内置工具"
+      "builtInTools": "内置工具",
+      "bashCategoryDesc": "执行终端命令",
+      "fileCategoryDesc": "读取、写入和搜索文件",
+      "webCategoryDesc": "获取网页内容并搜索",
+      "advancedCategoryDesc": "任务管理与智能体控制",
+      "bashToolDesc": "在终端中执行 shell 命令",
+      "killShellToolDesc": "终止正在后台运行的 shell 进程",
+      "readToolDesc": "读取文件内容",
+      "writeToolDesc": "将内容写入文件",
+      "editToolDesc": "编辑已有文件",
+      "globToolDesc": "按模式查找文件",
+      "grepToolDesc": "搜索文件内容",
+      "webFetchToolDesc": "从 URL 获取内容",
+      "webSearchToolDesc": "搜索网络",
+      "todoWriteToolDesc": "管理任务列表并跟踪进度",
+      "taskToolDesc": "为复杂任务启动子智能体",
+      "taskOutputToolDesc": "获取后台任务的输出",
+      "enterPlanModeToolDesc": "进入规划模式以制定实现方案",
+      "skillToolDesc": "执行技能和斜杠命令"
     },
     "OverlayState": {
       "loading": "加载中…"
@@ -4616,7 +4703,26 @@
       "guideRecallTitle": "recall 怎样使用你的 Library",
       "guideRecallBody": "搜索 Library 走的就是同一条 recall 路径，只是手动运行：你看到的就是 agent 会检索到的内容。",
       "guideManageTitle": "怎样管理：重操作在聊天里做，轻操作在这个面板里做",
-      "guideManageFooter": "面板 = 浏览 + 轻操作（打开 · 删除 · 移动 · 取消挂载 · 刷新）。聊天 = 添加 + 重的语义操作。"
+      "guideManageFooter": "面板 = 浏览 + 轻操作（打开 · 删除 · 移动 · 取消挂载 · 刷新）。聊天 = 添加 + 重的语义操作。",
+      "sourceSession": "会话",
+      "sourceYou": "你",
+      "sourceJob": "任务",
+      "tabRecent": "最近",
+      "tabBrowse": "浏览",
+      "tabGuide": "指南",
+      "mountDialogTitle": "选择要挂载的文件夹",
+      "mountFailed": "挂载失败——请查看日志。",
+      "mountViaChat": "在聊天中说 \"mount <path>\" 来添加文件夹。",
+      "stepWhen": "何时",
+      "stepWhenDesc": "会话中第一条有实质内容的消息（每个会话只触发一次），而非每条消息",
+      "stepHow": "如何",
+      "stepHowDesc": "从你的消息中提取关键词 → 在 5 个领域中进行关键词 / FTS5 / BM25 匹配（无向量/嵌入通道）",
+      "stepLands": "注入什么",
+      "stepLandsDesc": "匹配的片段注入系统提示，标记为 [RECALLED]——是待核实的线索，而非事实",
+      "stepMountHit": "命中挂载时",
+      "stepMountHitDesc": "召回落在指针上 → agent 读取实时源（渐进式）",
+      "stepIndexing": "索引",
+      "stepIndexingDesc": "sync_knowledge_index 扫描 Knowledge/，在会话钩子中分块并增量同步到 FTS5"
     },
     "ArtifactsOverlay": {
       "roleDeliverables": "交付物",
@@ -4654,7 +4760,15 @@
       "refreshFromBedrock": "从 Bedrock 刷新",
       "availableOnBedrock": "你的 Bedrock 账号可用：",
       "newBadge": "新",
-      "added": "已添加"
+      "added": "已添加",
+      "modeAdaptiveDesc": "由模型决定何时深入思考",
+      "modeEnabledDesc": "始终使用扩展思考",
+      "modeDisabledDesc": "从不使用扩展思考",
+      "effortLowDesc": "最少思考——响应最快",
+      "effortMediumDesc": "兼顾速度与深度",
+      "effortHighDesc": "深入思考（默认）",
+      "effortXhighDesc": "非常透彻的分析",
+      "effortMaxDesc": "最深入的推理——最慢"
     },
     "AttachmentPreviewCard": {
       "hideTerminal": "隐藏终端输出",
@@ -4712,14 +4826,24 @@
       "longKeyAfter": "：在控制台生成会自动创建一个 IAM User，token 一旦泄露影响面很大。请优先用短期 key，并定期轮换。",
       "storedSecurely": "安全保存在这台设备上（不同步，也不在配置备份里）。",
       "detectQuestion": "我们没能识别你的环境 — 你是哪一种？",
-      "iAmInternal": "我是 Amazon 员工（内部）",
+      "iAmInternal": "我使用内部（ADA）环境",
       "iAmExternal": "我是外部用户",
-      "switchInternal": "Amazon 员工？切换到内部选项",
-      "switchExternal": "不是内部用户？切换到外部选项"
+      "switchInternal": "有内部（ADA）环境？切换到内部选项",
+      "switchExternal": "不是内部用户？切换到外部选项",
+      "methodBedrockKey": "Bedrock API 密钥",
+      "methodBedrockKeyDesc": "Bearer 令牌",
+      "methodAda": "Ada",
+      "methodAdaDesc": "Amazon 内部",
+      "methodSso": "AWS SSO",
+      "methodSsoDesc": "Identity Center"
     },
     "BackendStartupOverlay": {
       "startingBackend": "正在启动后端... {{seconds}}s",
-      "failedToStart": "启动失败"
+      "failedToStart": "启动失败",
+      "stepLoadingData": "正在加载你的数据",
+      "stepPreparingAgent": "正在准备你的智能体",
+      "stepSettingUpWorkspace": "正在设置工作区",
+      "initFailed": "后端初始化失败：{{error}}"
     },
     "BackendUpgradeBanner": {
       "updatingBuild": "正在把后端 v{{version}} 更新到新版本…",
@@ -4752,7 +4876,9 @@
     },
     "FileViewer": {
       "noFileOpen": "没有打开的文件",
-      "versionsNote": "Hive 的改动，只读：改前与改后（都不是本机上的文件）"
+      "versionsNote": "Hive 的改动，只读：改前与改后（都不是本机上的文件）",
+      "tooLarge": "文件太大，无法在此预览。请用本地应用打开。",
+      "fileDeleted": "此文件已被删除。"
     },
     "PipelineOverlay": {
       "window": "显示最近 30 天的 run",
@@ -4890,7 +5016,7 @@
       "fl_timeNone": "还没记录：从现在起 run 会记下每个 stage 的开始时间。",
       "fl_timeHint": "每个工位每个 run 的中位分钟数：干活 · 等你 · 多跑的轮数",
       "fl_waitMin": "等你 {{n}} 分",
-      "ev_since": "最近 {{days}} 天对比之前 {{days}} 天 · 按 CNTech & IVT Autonomous 标准（S7）的指标和顺序",
+      "ev_since": "最近 {{days}} 天对比之前 {{days}} 天 · 按 S7 指标及其顺序",
       "ev_noChange": "和之前 {{days}} 天一样",
       "ev_vsBefore": "对比之前 {{days}} 天",
       "ev_pts": "{{n}} 个百分点",
@@ -4968,7 +5094,8 @@
       "openTerminal": "打开终端",
       "exitedCode": "进程已退出（代码 {{code}}）",
       "exited": "进程已退出",
-      "restart": "重启"
+      "restart": "重启",
+      "swarmwsTitle": "SwarmWS（{{path}}）"
     },
     "ThreeColumnLayout": {
       "usageLabel": "Token 用量 — 打开用量视图",
@@ -4990,7 +5117,17 @@
       "moreActions": "更多操作"
     },
     "VirtualizedTree": {
-      "treeLabel": "工作区浏览器"
+      "treeLabel": "工作区浏览器",
+      "sharedKnowledge": "共享知识",
+      "activeWork": "进行中的工作",
+      "knowledge": "知识",
+      "projects": "项目",
+      "other": "其他",
+      "system": "系统",
+      "renameFailed": "重命名失败：{{reason}}",
+      "moveFailed": "移动失败：{{reason}}",
+      "createFailed": "创建失败：{{reason}}",
+      "unknownError": "未知错误"
     },
     "hiveComponents": {
       "atMost": "最多 {{max}} 个 Hive",
@@ -5053,7 +5190,10 @@
       "swarmaiAccount": "（SwarmAI 账号）",
       "instanceSize": "实例规格",
       "deploying": "正在部署...",
-      "deploy": "部署"
+      "deploy": "部署",
+      "sizeLarge": "m7g.large — 8 GB",
+      "sizeXlarge": "m7g.xlarge — 16 GB（推荐）",
+      "size2xlarge": "m7g.2xlarge — 32 GB"
     },
     "workspaceParts": {
       "localMain": "本地 main",
@@ -5085,7 +5225,9 @@
       "downloaded": "更新已下载，重启后生效。",
       "later": "稍后",
       "updateNow": "立即更新",
-      "restartNow": "立即重启"
+      "restartNow": "立即重启",
+      "downloadFailed": "下载失败",
+      "restartFailed": "重启失败"
     },
     "SystemTab": {
       "mode": "模式",
@@ -5129,7 +5271,10 @@
       "roleSHELF": "存档",
       "roleHintGOVERN": "由它管理的资产：会被绑定，repo 还会获得 code-intel",
       "roleHintDISTILL": "读一次，提炼进它的知识",
-      "roleHintSHELF": "留作参考，需要时再读"
+      "roleHintSHELF": "留作参考，需要时再读",
+      "pickFilesTitle": "向这个大脑添加文件",
+      "pickFolderTitle": "向这个大脑添加文件夹",
+      "fileBrowserUnavailable": "此处无法使用文件浏览器——请在输入框中粘贴完整路径。"
     },
     "MultiSelect": {
       "selectItems": "选择项目...",
@@ -5155,7 +5300,8 @@
       "cannotLoad": "无法加载文件",
       "loadingPdf": "正在加载 PDF 查看器...",
       "binaryContent": "[二进制内容]",
-      "title": "文件预览"
+      "title": "文件预览",
+      "revealUnavailable": "文件路径：{{path}}\n\n（浏览器模式下无法在文件管理器中显示）"
     },
     "FileViewerStatusBar": {
       "reloadFromDisk": "从磁盘重新加载这个文件",
@@ -5256,7 +5402,12 @@
       "tab_security": "安全",
       "tab_prompt": "Prompt",
       "noSession": "没有活动会话",
-      "degraded": "Prompt 组装不完整"
+      "degraded": "Prompt 组装不完整",
+      "owner_sys": "系统",
+      "owner_user": "用户",
+      "owner_agent": "智能体",
+      "owner_gen": "生成",
+      "domainDdd": "DDD"
     },
     "PollinateOverlay": {
       "previewUnavailable": "无法预览：{{name}}",
@@ -5611,6 +5762,175 @@
         "adding": "添加中…",
         "loadError": "加载失败。"
       }
+    },
+    "api": {
+      "cannotConnect": "无法连接到后端服务",
+      "networkError": "发生网络错误",
+      "invalidRequest": "请求无效",
+      "notFound": "未找到资源",
+      "conflict": "冲突",
+      "conflictOccurred": "发生冲突",
+      "tooManyRequests": "请求过于频繁",
+      "waitSeconds": "请等待 {{seconds}} 秒后再试",
+      "serverError": "服务器错误",
+      "serverUnexpected": "服务器发生意外错误",
+      "unavailable": "服务暂时不可用",
+      "requestFailed": "请求失败，状态码 {{status}}",
+      "unexpected": "发生意外错误"
+    },
+    "hive": {
+      "stepS3": "S3 存储桶已就绪",
+      "stepIam": "IAM 角色已创建",
+      "stepSecurityGroup": "安全组已配置",
+      "stepEc2": "EC2 已启动",
+      "stepElasticIp": "弹性 IP 已分配",
+      "stepInstalling": "正在安装 SwarmAI...",
+      "stepHealth": "后端健康检查",
+      "stepCloudFront": "CloudFront HTTPS"
+    },
+    "ThemeContext": {
+      "blue": "蓝色",
+      "purple": "紫色",
+      "green": "绿色",
+      "orange": "橙色",
+      "rose": "玫红"
+    },
+    "navTable": {
+      "history": "历史",
+      "artifacts": "产出",
+      "needYou": "需要你",
+      "cm": "C&M",
+      "subGlobalBrain": "全局大脑",
+      "library": "Library",
+      "subBookshelf": "书架",
+      "brainHub": "Brain Hub",
+      "subBrainHub": "每个项目知道什么、交付什么、学到什么",
+      "newBrain": "新建 Brain",
+      "subNewBrain": "培育一个新大脑",
+      "inbox": "Inbox",
+      "todo": "待办",
+      "workspace": "工作区",
+      "subWorkspace": "SwarmWS 工作区浏览器",
+      "pipeline": "Pipeline",
+      "pollinate": "Pollinate",
+      "jobsRuns": "任务与运行",
+      "capabilities": "能力",
+      "subCapabilities": "产品与能力",
+      "usage": "用量",
+      "subUsage": "平台的模型花费去向",
+      "osEval": "OS 评估",
+      "settings": "设置"
+    },
+    "brainMapModel": {
+      "sectionIdentity": "身份",
+      "sectionKnowledge": "知识",
+      "sectionGates": "关卡",
+      "sectionCapabilities": "能力",
+      "sectionRefresher": "更新",
+      "sectionDelivery": "交付"
+    },
+    "dddLayers": {
+      "layerMeta": "元认知",
+      "layerCognitive": "认知",
+      "layerOperational": "操作"
+    },
+    "StatusBadge": {
+      "online": "在线",
+      "offline": "离线",
+      "error": "错误",
+      "active": "活跃",
+      "inactive": "未激活"
+    },
+    "fileViewTypes": {
+      "markdown": "Markdown",
+      "svgImage": "SVG 图片",
+      "image": "{{ext}} 图片",
+      "pdfDocument": "PDF 文档",
+      "htmlDocument": "HTML 文档",
+      "tsvSpreadsheet": "TSV 表格",
+      "csvSpreadsheet": "CSV 表格",
+      "video": "{{ext}} 视频",
+      "audio": "{{ext}} 音频"
+    },
+    "constants": {
+      "cmdClear": "清除对话上下文",
+      "cmdCompact": "压缩对话历史",
+      "cmdPluginList": "列出已安装的插件",
+      "cmdPluginInstall": "安装插件：/plugin install {name}@{marketplace}",
+      "cmdPluginUninstall": "卸载插件：/plugin uninstall {id}",
+      "cmdMarketplaceList": "列出可用的插件市场"
+    },
+    "contextUsage": {
+      "contextFull": "上下文已用 {{pct}}%"
+    },
+    "useRateLimiter": {
+      "expired": "{{endpoint}} 的速率限制已解除，可以继续了。",
+      "limited": "{{endpoint}} 触发了速率限制，请等待 {{seconds}} 秒。"
+    },
+    "useSystemToasts": {
+      "tabLimitReached": "内存占用过高。请关闭一个空闲标签页或退出其他应用以释放内存，然后重试。",
+      "allTabsBusy": "无法打开新标签页——所有标签页都在忙。"
+    },
+    "useCanvasHost": {
+      "severalMatch": "有多个文件匹配 {{path}}：{{list}}",
+      "fileNotFound": "未找到文件：{{path}}"
+    },
+    "useUnifiedAttachments": {
+      "maxAttachments": "最多只能添加 {{max}} 个附件",
+      "onlyMoreSkipped": "还能再添加 {{available}} 个附件，已跳过 {{skipped}} 个文件。",
+      "onlyMoreSomeSkipped": "还能再添加 {{available}} 个附件，部分文件已跳过。",
+      "filesSkipped": "已跳过 {{n}} 个文件：{{first}}",
+      "unsupportedType": "不支持的文件类型：{{name}}",
+      "unsupported": "不支持：{{name}}",
+      "processFailed": "文件处理失败"
+    },
+    "useChatStreamingLifecycle": {
+      "askingQuestion": "Swarm 在这个会话中向你提了一个问题。",
+      "waitingApproval": "Swarm 正在等待你批准：{{tool}}。",
+      "recoveryStopped": "这个会话的自动恢复已停止。请开启一个新会话继续。",
+      "startFresh": "开启新会话",
+      "guardEvent": "防护事件",
+      "connectionDropped": "这条回复的连接已断开。如果它已完成，约 15 秒内会显示在这里；如果没有，请重新发送你的消息。"
+    },
+    "backendIssue": {
+      "stillRunning": "它仍在运行，稍后会跟上。",
+      "loadPerCore": "每核负载 {{load}}",
+      "busiest": "最繁忙：{{top}}",
+      "detailCpu": "后端变慢了：这台电脑的 CPU 已满负荷。{{still}}",
+      "detailCpuEv": "后端变慢了：这台电脑的 CPU 已满负荷（{{ev}}）。{{still}}",
+      "memUsed": "已用 {{pct}}%",
+      "memPressureCritical": "macOS 内存压力严重",
+      "detailMemory": "后端变慢了：这台电脑内存不足。{{still}}",
+      "detailMemoryEv": "后端变慢了：这台电脑内存不足（{{ev}}）。{{still}}",
+      "detailBattery": "后端变慢了：电量不足，macOS 正在限制它的速度。请接上充电器。",
+      "detailBatteryPct": "后端变慢了：电量不足（{{pct}}%），macOS 正在限制它的速度。请接上充电器。",
+      "detailBusy": "后端一直在忙；忙完后就会响应。",
+      "detailBusyFor": "后端已经忙了 {{t}}；忙完后就会响应。",
+      "detailBusyIn": "后端一直在 {{where}} 中忙；忙完后就会响应。",
+      "detailBusyForIn": "后端已经在 {{where}} 中忙了 {{t}}；忙完后就会响应。",
+      "detailPausedFor": "后端已有 {{t}} 没有运行；它的进程仍在，通常会自行恢复。",
+      "detailPausedFew": "后端已有几秒没有运行；它的进程仍在，通常会自行恢复。",
+      "detailSlowFor": "后端已有 {{t}} 没有响应；它的进程在运行。",
+      "detailSlowFew": "后端已有几秒没有响应；它的进程在运行。",
+      "detailStopped": "后端进程没有在运行；macOS 会自动重启它。",
+      "detailStuckAwake": "后端进程还在，但在这台 Mac 处于唤醒状态时已有 {{min}} 分钟没有运行，所以不是 macOS 暂停了它：它很可能卡住了。",
+      "stuckIn": "卡在 {{where}}",
+      "loopStuck": "它的事件循环卡住了",
+      "detailStuck": "后端没有响应：{{reason}}。它的进程仍在运行。",
+      "detailStuckFor": "后端已有 {{t}} 没有响应：{{reason}}。它的进程仍在运行。",
+      "detailNotResponding": "后端没有响应；正在重新连接…",
+      "detailSlowRestart": "后端重启的时间比预期长…",
+      "detailUnreachable": "应用对后端的健康检查失败了，也没有其他迹象表明它在运行。",
+      "shortCpu": "变慢：CPU 满负荷",
+      "shortMemory": "变慢：内存不足",
+      "shortBattery": "变慢：电量不足",
+      "shortBusy": "后端忙碌",
+      "shortPaused": "后端已暂停",
+      "shortStopped": "后端已停止",
+      "shortStuck": "后端卡住了",
+      "shortNotResponding": "后端无响应",
+      "shortNotBack": "后端尚未恢复",
+      "shortUnreachable": "无法连接后端"
     }
   }
 }

@@ -15,7 +15,7 @@ import { ownerOf } from '../TSCCModules';
 
 describe('TSCC OWNER map — ownerOf', () => {
   it('classifies SELF.md as a system-owned file (sys / blue), matching SWARMAI.md', () => {
-    expect(ownerOf('SELF.md')).toEqual({ label: 'sys', color: '#6ea8fe' });
+    expect(ownerOf('SELF.md')).toEqual({ labelKey: 'ui.TSCCModules.owner_sys', color: '#6ea8fe' });
   });
 
   it('keeps SELF.md consistent with its priority-2 sibling SOUL.md', () => {
@@ -23,9 +23,9 @@ describe('TSCC OWNER map — ownerOf', () => {
   });
 
   it('leaves the other owners unchanged', () => {
-    expect(ownerOf('SWARMAI.md').label).toBe('sys');
-    expect(ownerOf('USER.md').label).toBe('user');
-    expect(ownerOf('MEMORY.md').label).toBe('agent');
-    expect(ownerOf('KNOWLEDGE.md').label).toBe('gen');
+    expect(ownerOf('SWARMAI.md').labelKey).toBe('ui.TSCCModules.owner_sys');
+    expect(ownerOf('USER.md').labelKey).toBe('ui.TSCCModules.owner_user');
+    expect(ownerOf('MEMORY.md').labelKey).toBe('ui.TSCCModules.owner_agent');
+    expect(ownerOf('KNOWLEDGE.md').labelKey).toBe('ui.TSCCModules.owner_gen');
   });
 });

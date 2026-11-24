@@ -11,6 +11,7 @@
  * Validates: Requirements 6.1, 6.2, 6.4
  */
 
+import i18next from 'i18next';
 import { useRef, useState, useCallback, useEffect } from 'react';
 import type { RateLimitEntry } from '../types';
 import { useToast } from '../contexts/ToastContext';
@@ -46,7 +47,7 @@ export function useRateLimiter(): UseRateLimiterReturn {
           changed = true;
           addToast({
             severity: 'info',
-            message: `Rate limit expired for ${ep}. You may resume.`,
+            message: i18next.t('ui.useRateLimiter.expired', { endpoint: ep }),
             autoDismiss: true,
             id: `rate-limit-expired-${ep}`,
           });
@@ -71,7 +72,7 @@ export function useRateLimiter(): UseRateLimiterReturn {
 
       addToast({
         severity: 'warning',
-        message: `Rate limited on ${endpoint}. Please wait ${retryAfterSec}s.`,
+        message: i18next.t('ui.useRateLimiter.limited', { endpoint, seconds: retryAfterSec }),
         autoDismiss: false,
         id: `rate-limit-${endpoint}`,
       });

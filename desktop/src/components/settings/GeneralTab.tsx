@@ -125,7 +125,7 @@ export default function GeneralTab() {
               key={preset.id}
               onClick={() => setAccentColor(preset.id)}
               className="flex flex-col items-center gap-1.5 group"
-              title={preset.label}
+              title={t(preset.labelKey)}
             >
               <span
                 className={`w-8 h-8 rounded-full transition-all ${
@@ -141,7 +141,7 @@ export default function GeneralTab() {
               <span className={`text-xs ${
                 accentColor === preset.id ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'
               }`}>
-                {preset.label}
+                {t(preset.labelKey)}
               </span>
             </button>
           ))}

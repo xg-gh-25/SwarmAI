@@ -35,10 +35,11 @@ export const ZONE_TINT: Record<NavZone, string> = {
 
 export interface NavEntry {
   zone: NavZone;
-  /** The label on the nav item; also the overlay header title (XG D4). */
-  navLabel: string;
-  /** A second line under the overlay title. */
-  subtitle?: string;
+  /** i18n key of the label on the nav item; also the overlay header title (XG D4).
+   *  Readers render it with t(navLabelKey). */
+  navLabelKey: string;
+  /** i18n key of a second line under the overlay title. */
+  subtitleKey?: string;
   /** Mono badge in the overlay header — each surface's own (XG D5). */
   mode: string;
   /** Overlay width tier (OverlayHost OVERLAY_WIDTH). */
@@ -54,27 +55,27 @@ export interface NavEntry {
 
 export const NAV: Record<OverlayId, NavEntry> = {
   // Chat zone (rows under the Chat hero + the Need You slot)
-  history: { zone: 'chat', navLabel: 'History', mode: 'HISTORY', width: 'xl' },
-  artifacts: { zone: 'chat', navLabel: 'Artifacts', mode: 'ARTIFACTS', width: 'xl' },
-  'needs-you': { zone: 'chat', navLabel: 'Need You', mode: 'ATTENTION', width: 'xl' },
+  history: { zone: 'chat', navLabelKey: 'ui.navTable.history', mode: 'HISTORY', width: 'xl' },
+  artifacts: { zone: 'chat', navLabelKey: 'ui.navTable.artifacts', mode: 'ARTIFACTS', width: 'xl' },
+  'needs-you': { zone: 'chat', navLabelKey: 'ui.navTable.needYou', mode: 'ATTENTION', width: 'xl' },
   // Cognition zone
-  context: { zone: 'cognitive', navLabel: 'C&M', subtitle: 'Global Brain', mode: 'BRAIN', width: 'xl' },
-  library: { zone: 'cognitive', navLabel: 'Library', subtitle: 'Bookshelf', mode: 'LIBRARY', width: 'xl' },
-  'brain-hub': { zone: 'cognitive', navLabel: 'Brain Hub', subtitle: 'what each project knows, delivers and learns', mode: 'BRAIN', width: 'xl', titleGoesHome: true },
-  'new-brain': { zone: 'cognitive', navLabel: 'New Brain', subtitle: 'Grow a new brain', mode: 'BRAIN', width: 'xl', parent: 'brain-hub' },
+  context: { zone: 'cognitive', navLabelKey: 'ui.navTable.cm', subtitleKey: 'ui.navTable.subGlobalBrain', mode: 'BRAIN', width: 'xl' },
+  library: { zone: 'cognitive', navLabelKey: 'ui.navTable.library', subtitleKey: 'ui.navTable.subBookshelf', mode: 'LIBRARY', width: 'xl' },
+  'brain-hub': { zone: 'cognitive', navLabelKey: 'ui.navTable.brainHub', subtitleKey: 'ui.navTable.subBrainHub', mode: 'BRAIN', width: 'xl', titleGoesHome: true },
+  'new-brain': { zone: 'cognitive', navLabelKey: 'ui.navTable.newBrain', subtitleKey: 'ui.navTable.subNewBrain', mode: 'BRAIN', width: 'xl', parent: 'brain-hub' },
   // Work zone (Inbox first: what comes in, then what to do)
-  inbox: { zone: 'work', navLabel: 'Inbox', mode: 'INBOX', width: 'xl' },
-  todo: { zone: 'work', navLabel: 'ToDo', mode: 'TODO', width: 'xl' },
+  inbox: { zone: 'work', navLabelKey: 'ui.navTable.inbox', mode: 'INBOX', width: 'xl' },
+  todo: { zone: 'work', navLabelKey: 'ui.navTable.todo', mode: 'TODO', width: 'xl' },
   // width 'm': a file tree fills ~45% of an 'xl' panel and leaves a void
-  swarmws: { zone: 'work', navLabel: 'Workspace', subtitle: 'SwarmWS workspace explorer', mode: 'WORKSPACE', width: 'm' },
-  pipeline: { zone: 'work', navLabel: 'Pipeline', mode: 'PIPELINE', width: 'xl' },
-  pollinate: { zone: 'work', navLabel: 'Pollinate', mode: 'POLLINATE', width: 'xl' },
+  swarmws: { zone: 'work', navLabelKey: 'ui.navTable.workspace', subtitleKey: 'ui.navTable.subWorkspace', mode: 'WORKSPACE', width: 'm' },
+  pipeline: { zone: 'work', navLabelKey: 'ui.navTable.pipeline', mode: 'PIPELINE', width: 'xl' },
+  pollinate: { zone: 'work', navLabelKey: 'ui.navTable.pollinate', mode: 'POLLINATE', width: 'xl' },
   // System zone
-  jobs: { zone: 'system', navLabel: 'Jobs & Runs', mode: 'JOBS', width: 'xl' },
-  capabilities: { zone: 'system', navLabel: 'Capabilities', subtitle: 'Products and abilities', mode: 'CAPABILITIES', width: 'xl' },
-  usage: { zone: 'system', navLabel: 'Usage', subtitle: 'Where the platform\'s model spend goes', mode: 'USAGE', width: 'xl' },
-  eval: { zone: 'system', navLabel: 'OS Eval', mode: 'EVAL', width: 'xl' },
-  settings: { zone: 'system', navLabel: 'Settings', mode: 'SETTINGS', width: 'xl' },
+  jobs: { zone: 'system', navLabelKey: 'ui.navTable.jobsRuns', mode: 'JOBS', width: 'xl' },
+  capabilities: { zone: 'system', navLabelKey: 'ui.navTable.capabilities', subtitleKey: 'ui.navTable.subCapabilities', mode: 'CAPABILITIES', width: 'xl' },
+  usage: { zone: 'system', navLabelKey: 'ui.navTable.usage', subtitleKey: 'ui.navTable.subUsage', mode: 'USAGE', width: 'xl' },
+  eval: { zone: 'system', navLabelKey: 'ui.navTable.osEval', mode: 'EVAL', width: 'xl' },
+  settings: { zone: 'system', navLabelKey: 'ui.navTable.settings', mode: 'SETTINGS', width: 'xl' },
 };
 
 /** The row for `id`, or undefined for an id that is not a nav item. */

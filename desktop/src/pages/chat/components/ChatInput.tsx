@@ -857,7 +857,7 @@ export function ChatInput({
                                   globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
                                 )}
                               >
-                                {cmd.description}
+                                {cmd.descriptionKey ? t(cmd.descriptionKey) : cmd.description}
                               </p>
                             </div>
                           </button>
@@ -896,7 +896,7 @@ export function ChatInput({
                                   globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
                                 )}
                               >
-                                {cmd.description}
+                                {cmd.descriptionKey ? t(cmd.descriptionKey) : cmd.description}
                               </p>
                             </div>
                           </button>

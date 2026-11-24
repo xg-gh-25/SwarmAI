@@ -97,9 +97,9 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     } else {
       // Fallback for browser dev mode - just log the path
       console.log('Would reveal file:', fullPath);
-      alert(`File path: ${fullPath}\n\n(Reveal not available in browser mode)`);
+      alert(t('ui.FilePreviewModal.revealUnavailable', { path: fullPath }));
     }
-  }, [file, basePath]);
+  }, [file, basePath, t]);
 
   // Render content based on unified FileViewType
   const renderContent = () => {

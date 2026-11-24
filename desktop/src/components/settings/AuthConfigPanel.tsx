@@ -141,16 +141,16 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
   // SSO is shared by both (same `aws sso login` → Bedrock, identity-agnostic).
   // Bedrock API Key is shown in BOTH — a bearer token is account-agnostic and is
   // the fastest path to Bedrock for internal AND external users alike.
-  const bedrockKeyCard = { id: 'bedrock_api_key' as AuthMethod, label: 'Bedrock API Key', desc: 'Bearer Token' };
+  const bedrockKeyCard = { id: 'bedrock_api_key' as AuthMethod, label: t('ui.AuthConfigPanel.methodBedrockKey'), desc: t('ui.AuthConfigPanel.methodBedrockKeyDesc') };
   const methods: { id: AuthMethod; label: string; desc: string }[] =
     context === 'internal'
       ? [
-          { id: 'ada', label: 'Ada', desc: 'Amazon Internal' },
-          { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
+          { id: 'ada', label: t('ui.AuthConfigPanel.methodAda'), desc: t('ui.AuthConfigPanel.methodAdaDesc') },
+          { id: 'sso', label: t('ui.AuthConfigPanel.methodSso'), desc: t('ui.AuthConfigPanel.methodSsoDesc') },
           bedrockKeyCard,
         ]
       : [
-          { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
+          { id: 'sso', label: t('ui.AuthConfigPanel.methodSso'), desc: t('ui.AuthConfigPanel.methodSsoDesc') },
           bedrockKeyCard,
         ];
 

@@ -53,10 +53,10 @@ interface MountsList { count: number; mounts: MountRow[]; registry_ready: boolea
 
 type TabKey = 'browse' | 'recent' | 'guide';
 
-const SOURCE_META: Record<RecentItem['source'], { icon: string; label: string }> = {
-  session: { icon: 'smart_toy', label: 'session' },
-  you: { icon: 'person', label: 'you' },
-  job: { icon: 'schedule', label: 'job' },
+const SOURCE_META: Record<RecentItem['source'], { icon: string; labelKey: string }> = {
+  session: { icon: 'smart_toy', labelKey: 'ui.LibraryOverlay.sourceSession' },
+  you: { icon: 'person', labelKey: 'ui.LibraryOverlay.sourceYou' },
+  job: { icon: 'schedule', labelKey: 'ui.LibraryOverlay.sourceJob' },
 };
 
 const HEALTH_TINT: Record<MountRow['health'], string> = {
@@ -142,9 +142,9 @@ export function LibraryContent() {
           <div className="border-b border-[var(--color-border)] px-4 py-2.5">
             {/* Recent first — the surface used most. */}
             <Tabs label={t('ui.LibraryOverlay.tabsLabel')} value={tab} onChange={setTab} items={[
-              { key: 'recent', label: 'Recent', testid: 'library-tab-recent', count: recent?.count },
-              { key: 'browse', label: 'Browse', testid: 'library-tab-browse', count: native?.category_count },
-              { key: 'guide', label: 'Guide', testid: 'library-tab-guide' },
+              { key: 'recent', label: t('ui.LibraryOverlay.tabRecent'), testid: 'library-tab-recent', count: recent?.count },
+              { key: 'browse', label: t('ui.LibraryOverlay.tabBrowse'), testid: 'library-tab-browse', count: native?.category_count },
+              { key: 'guide', label: t('ui.LibraryOverlay.tabGuide'), testid: 'library-tab-guide' },
             ]} />
           </div>
 
@@ -346,7 +346,7 @@ function AddFolderButton() {
     setBusy(true);
     try {
       const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
-      const picked = await openDialog({ directory: true, multiple: false, title: 'Add a folder to mount' });
+      const picked = await openDialog({ directory: true, multiple: false, title: t('ui.LibraryOverlay.mountDialogTitle') });
       if (typeof picked === 'string') {
         try {
           const res = await api.post<{ kind: string; status?: string; symbols?: number; next?: string }>(
@@ -368,12 +368,12 @@ function AddFolderButton() {
           qc.invalidateQueries({ queryKey: ['library-mounts'] });
         } catch (err: unknown) {
           const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: detail || 'Mount failed — see logs.' } }));
+          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: detail || t('ui.LibraryOverlay.mountFailed') } }));
         }
       }
     } catch {
       // dialog unavailable (non-Tauri/dev) — fall back to chat guidance.
-      document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: 'Say "mount <path>" in chat to add a folder.' } }));
+      document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t('ui.LibraryOverlay.mountViaChat') } }));
     } finally {
       setBusy(false);
     }
@@ -448,7 +448,7 @@ function RecentTab({
                 onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: it.path } }))}
                 className="flex items-center gap-3 rounded-md px-3 py-2 text-left hover:bg-[var(--color-hover)]"
               >
-                <span className="shrink-0 material-symbols-outlined icon-sm text-[var(--color-text-muted)]" title={meta.label}>{meta.icon}</span>
+                <span className="shrink-0 material-symbols-outlined icon-sm text-[var(--color-text-muted)]" title={t(meta.labelKey)}>{meta.icon}</span>
                 <span className="flex-1 min-w-0 truncate text-body text-[var(--color-text)]">{it.path.replace('Knowledge/', '')}</span>
                 <span className="shrink-0 text-meta text-[var(--color-text-faint)]">{it.category}</span>
                 <span className="w-16 shrink-0 text-right tabular-nums text-meta text-[var(--color-text-faint)]">{fmtWhen(it.mtime)}</span>
@@ -465,12 +465,12 @@ function RecentTab({
 // verified against session_router._maybe_inject_recall + recall_multi (2026-08-02) —
 // once-per-session latch, keyword/FTS5/BM25, NO vector leg (allow_embed=False),
 // [RECALLED] tag. Describing a vector/hybrid leg here would be a stale-teaching bug.
-const RECALL_STEPS: Array<{ icon: string; title: string; desc: string }> = [
-  { icon: 'schedule', title: 'When', desc: 'first substantive message of a session (once-per-session latch), not every message' },
-  { icon: 'search', title: 'How', desc: 'keywords from your message → keyword / FTS5 / BM25 match across 5 domains (no vector/embed leg)' },
-  { icon: 'download', title: 'What lands', desc: 'matching chunks injected into the system prompt, tagged [RECALLED] — a lead to verify, not fact' },
-  { icon: 'link', title: 'On a mount hit', desc: 'recall lands on the pointer → the agent Reads the LIVE source (progressive)' },
-  { icon: 'water_drop', title: 'Indexing', desc: 'sync_knowledge_index scans Knowledge/, chunks + delta-syncs to FTS5 on the session hook' },
+const RECALL_STEPS: Array<{ icon: string; titleKey: string; descKey: string }> = [
+  { icon: 'schedule', titleKey: 'ui.LibraryOverlay.stepWhen', descKey: 'ui.LibraryOverlay.stepWhenDesc' },
+  { icon: 'search', titleKey: 'ui.LibraryOverlay.stepHow', descKey: 'ui.LibraryOverlay.stepHowDesc' },
+  { icon: 'download', titleKey: 'ui.LibraryOverlay.stepLands', descKey: 'ui.LibraryOverlay.stepLandsDesc' },
+  { icon: 'link', titleKey: 'ui.LibraryOverlay.stepMountHit', descKey: 'ui.LibraryOverlay.stepMountHitDesc' },
+  { icon: 'water_drop', titleKey: 'ui.LibraryOverlay.stepIndexing', descKey: 'ui.LibraryOverlay.stepIndexingDesc' },
 ];
 const MANAGE_ROWS: Array<{ want: string; say: string; result: string }> = [
   { want: 'Add a note/fact', say: 'remember: <X>', result: 'routed by s_persist to the right home' },
@@ -508,11 +508,11 @@ function GuideTab() {
         </div>
         <div data-testid="library-recall-steps" className="flex flex-col gap-1.5">
           {RECALL_STEPS.map((s) => (
-            <div key={s.title} className="flex items-start gap-3 rounded-md border border-[var(--color-border)] px-3 py-2">
+            <div key={s.titleKey} className="flex items-start gap-3 rounded-md border border-[var(--color-border)] px-3 py-2">
               <span className="shrink-0 material-symbols-outlined icon-md text-[var(--color-text-muted)] mt-0.5">{s.icon}</span>
               <div className="min-w-0">
-                <span className="text-small font-semibold text-[var(--color-text)]">{s.title}</span>
-                <span className="ml-2 text-meta text-[var(--color-text-muted)]">{s.desc}</span>
+                <span className="text-small font-semibold text-[var(--color-text)]">{t(s.titleKey)}</span>
+                <span className="ml-2 text-meta text-[var(--color-text-muted)]">{t(s.descKey)}</span>
               </div>
             </div>
           ))}

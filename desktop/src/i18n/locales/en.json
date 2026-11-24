@@ -2982,8 +2982,8 @@
     "title": "Connect your AWS account",
     "titleChange": "Change the SwarmAI account",
     "lead": "Chat (Bedrock), Hive and cloud storage all use this one account.",
-    "ctxInternal": "Amazon internal setup found.",
-    "ctxExternal": "No Amazon internal setup found.",
+    "ctxInternal": "Internal (ADA) setup found.",
+    "ctxExternal": "No internal (ADA) setup found.",
     "ctxSwitch": "Switch",
     "detecting": "Looking for AWS accounts on this computer…",
     "found": "Accounts found on this computer",
@@ -3400,7 +3400,11 @@
   },
   "ui": {
     "ChatPage": {
-      "rateLimitedResuming": "Rate limited — resuming in {{seconds}}s"
+      "rateLimitedResuming": "Rate limited — resuming in {{seconds}}s",
+      "stillWorking": "Still working — the backend is alive but this turn has been silent for a while. Press Stop if it looks stuck.",
+      "refreshBusy": "Cannot refresh while the AI is busy. Stop or answer first.",
+      "refreshFailed": "Refresh failed: {{msg}}",
+      "refreshFailedPlain": "Refresh failed"
     },
     "UserMessageView": {
       "showLess": "Show less",
@@ -3477,7 +3481,9 @@
       "requestChanges": "Request changes or improvements...",
       "sendAMessage": "Send a message...",
       "stopGeneration": "Stop generation",
-      "sendMessage": "Send message"
+      "sendMessage": "Send message",
+      "noSkillName": "No skill name available to finalize",
+      "finalizeFailed": "Failed to finalize skill"
     },
     "CsvRenderer": {
       "noContent": "No CSV content available",
@@ -3732,14 +3738,16 @@
       "updatesSafe": "Updates replace the app. Your data is never touched.",
       "setupTitle": "Setup",
       "setupBody": "Re-run the initial setup wizard to reconfigure authentication, channels, or troubleshoot issues.",
-      "rerunSetup": "Re-run Setup Wizard"
+      "rerunSetup": "Re-run Setup Wizard",
+      "failed": "Failed"
     },
     "App": {
       "backendUnreachable": "Couldn’t reach the backend",
       "statusLoadFailed": "SwarmAI couldn’t load its status. The backend may still be starting or may have stopped.",
       "checkLogsBefore": "Check the logs at ",
       "checkLogsAfter": ".",
-      "mayBeRestarting": "It may be restarting — retry in a moment, or contact your administrator if this persists."
+      "mayBeRestarting": "It may be restarting — retry in a moment, or contact your administrator if this persists.",
+      "updatedTo": "Updated to v{{version}}. All your data is exactly where you left it."
     },
     "AudioRenderer": {
       "duration": "Duration: {{duration}}",
@@ -3850,7 +3858,41 @@
       "nsOfCorrections_other": "of {{count}} corrections",
       "nsUseful": "Knowledge useful",
       "nsTarget": "target {{target}}",
-      "nsAsOf": "as of {{time}}"
+      "nsAsOf": "as of {{time}}",
+      "lcAssemble": "Assemble",
+      "lcAssembleDesc": "every context file injected whole, by priority",
+      "lcRecall": "Recall",
+      "lcRecallDesc": "each message pulls related project, Library and past-session knowledge",
+      "lcJudge": "Judge",
+      "lcJudgeDesc": "the model reasons on that context",
+      "lcSediment": "Sediment",
+      "lcSedimentDesc": "after a session, its agent declares what it learned; the code checks the evidence",
+      "lcRevise": "Revise",
+      "lcReviseDesc": "a newer decision overrides; a withdrawn entry leaves",
+      "autoRecall": "Recall",
+      "autoRecallDesc": "each message: the project brain, Library, past sessions, code graph",
+      "autoReview": "After-session review",
+      "autoReviewDesc": "writes what a session learned to MEMORY, EVOLUTION, a project brain, Library or Timeline",
+      "autoOverride": "Override & withdraw",
+      "autoOverrideDesc": "a declared newer decision replaces an entry; the record stays outside the file",
+      "autoSessionRecord": "Session record",
+      "autoSessionRecordDesc": "what each session did and where it stopped, read by the next one",
+      "autoRuleProposals": "Rule proposals",
+      "autoRuleProposalsDesc": "a recurring correction with 3× evidence becomes a rule for you to approve",
+      "autoNorthStar": "North star",
+      "autoNorthStarDesc": "measures whether I am getting better (see the left rail)",
+      "manualSteering": "STEERING rules",
+      "manualSteeringDesc": "your standing directives (highest precedence)",
+      "manualUser": "USER profile",
+      "manualUserDesc": "who you are, how you like to work",
+      "manualSkills": "Skills & MCP servers",
+      "manualSkillsDesc": "which capabilities this agent may use (Capabilities)",
+      "manualProjectBrain": "Create a project brain",
+      "manualProjectBrainDesc": "a domain brain per project (Brain Hub)",
+      "manualRemember": "Remember this",
+      "manualRememberDesc": "ask me to save a lesson or decision now",
+      "manualApproveRule": "Approve a rule",
+      "manualApproveRuleDesc": "accept or reject a proposal (Needs you → Governance)"
     },
     "CapabilitiesOverlay": {
       "loadingHealth": "loading health…",
@@ -3899,7 +3941,16 @@
       "internalOwnerOnly": "internal (owner-only)",
       "dotEnabled": "enabled",
       "dotOff": "off",
-      "toggleName": "toggle {{name}}"
+      "toggleName": "toggle {{name}}",
+      "healthHealthy": "Healthy — recently used, succeeding",
+      "healthLowSuccess": "Low success rate",
+      "healthStale": "Stale — not used recently",
+      "healthNeverUsed": "Never used — candidate to retire",
+      "tierAlways": "Always loaded",
+      "tierLazy": "Lazy — loaded on use",
+      "mcpTierAlways": "Always — loads at session start",
+      "mcpTierOnDemand": "On-demand — loads when a session needs it",
+      "mcpTierChannel": "Channel — loads in channel sessions"
     },
     "ContentBlockRenderer": {
       "approxTokens": "~{{n}} tokens"
@@ -3924,7 +3975,8 @@
       "activity": "Activity",
       "edited": "edited {{age}}",
       "sediments30d": "{{n}} sediments / 30d",
-      "ontologyTitle": "Knowledge ontology · 3 layers × 7 types"
+      "ontologyTitle": "Knowledge ontology · 3 layers × 7 types",
+      "runInProgress": "run in progress"
     },
     "ExplorerHeader": {
       "sortDefault": "Sort: default (newest-first in Knowledge)",
@@ -4075,7 +4127,9 @@
       "svg": "SVG",
       "downloadPng": "Download as PNG",
       "png": "PNG",
-      "openInCanvas": "Open in Canvas"
+      "openInCanvas": "Open in Canvas",
+      "renderFailed": "Failed to render diagram",
+      "pngDownloadFailed": "PNG download failed. Please try downloading as SVG instead."
     },
     "HiveBrains": {
       "canBeSent": "Can be sent here",
@@ -4113,7 +4167,8 @@
       "zoomOut": "Zoom out",
       "zoomIn": "Zoom in",
       "loadingPdf": "Loading PDF...",
-      "renderingPage": "Rendering page {{page}}..."
+      "renderingPage": "Rendering page {{page}}...",
+      "loadFailed": "Failed to load PDF"
     },
     "ChatErrorMessage": {
       "aiServiceTimeout": "AI Service Timeout",
@@ -4307,7 +4362,10 @@
       "saving": "Saving…",
       "creating": "Creating…",
       "saveChanges": "Save changes",
-      "createTodo": "Create ToDo"
+      "createTodo": "Create ToDo",
+      "range7d": "7d",
+      "range30d": "30d",
+      "range90d": "90d"
     },
     "JobsRunsOverlay": {
       "viewJobs": "Jobs",
@@ -4415,7 +4473,9 @@
       "disconnect": "Disconnect",
       "reconnect": "Reconnect",
       "remove": "Remove",
-      "errorPrefix": "Error: {{error}}"
+      "errorPrefix": "Error: {{error}}",
+      "botToken": "Bot Token",
+      "appToken": "App Token"
     },
     "ChatInput": {
       "commands": "Commands",
@@ -4457,7 +4517,16 @@
     "FileContextMenu": {
       "trashTitle": "Move to Trash?",
       "trashConfirm": "Move to Trash",
-      "menuLabel": "File context menu"
+      "menuLabel": "File context menu",
+      "moveFailed": "Failed to move to Trash",
+      "newFile": "New File",
+      "newFolder": "New Folder",
+      "openTerminalHere": "Open terminal here",
+      "openFile": "Open File",
+      "attachToChat": "Attach to Chat",
+      "askSwarm": "Ask Swarm",
+      "rename": "Rename",
+      "copyPath": "Copy Path"
     },
     "HtmlRenderer": {
       "noContent": "No HTML content available.",
@@ -4513,7 +4582,25 @@
       "tools": "Tools: {{list}}"
     },
     "ToolSelector": {
-      "builtInTools": "Built-in Tools"
+      "builtInTools": "Built-in Tools",
+      "bashCategoryDesc": "Execute terminal commands",
+      "fileCategoryDesc": "Read, write, and search files",
+      "webCategoryDesc": "Fetch web content and search",
+      "advancedCategoryDesc": "Task management and agent control",
+      "bashToolDesc": "Execute shell commands in terminal",
+      "killShellToolDesc": "Kill running background shell processes",
+      "readToolDesc": "Read file contents",
+      "writeToolDesc": "Write content to files",
+      "editToolDesc": "Edit existing files",
+      "globToolDesc": "Find files by pattern",
+      "grepToolDesc": "Search file contents",
+      "webFetchToolDesc": "Fetch content from URLs",
+      "webSearchToolDesc": "Search the web",
+      "todoWriteToolDesc": "Manage task lists and track progress",
+      "taskToolDesc": "Launch sub-agents for complex tasks",
+      "taskOutputToolDesc": "Retrieve output from background tasks",
+      "enterPlanModeToolDesc": "Enter planning mode for implementation",
+      "skillToolDesc": "Execute skills and slash commands"
     },
     "OverlayState": {
       "loading": "Loading…"
@@ -4616,7 +4703,26 @@
       "guideRecallTitle": "How recall uses your library",
       "guideRecallBody": "Searching Library IS this same recall path, run manually — you see what the agent would retrieve.",
       "guideManageTitle": "How to manage — chat-native (heavy ops), overlay (light ops)",
-      "guideManageFooter": "Overlay = browse + light ops (open · delete · move · unmount · refresh). Chat = add + heavy semantic ops."
+      "guideManageFooter": "Overlay = browse + light ops (open · delete · move · unmount · refresh). Chat = add + heavy semantic ops.",
+      "sourceSession": "session",
+      "sourceYou": "you",
+      "sourceJob": "job",
+      "tabRecent": "Recent",
+      "tabBrowse": "Browse",
+      "tabGuide": "Guide",
+      "mountDialogTitle": "Add a folder to mount",
+      "mountFailed": "Mount failed — see logs.",
+      "mountViaChat": "Say \"mount <path>\" in chat to add a folder.",
+      "stepWhen": "When",
+      "stepWhenDesc": "first substantive message of a session (once-per-session latch), not every message",
+      "stepHow": "How",
+      "stepHowDesc": "keywords from your message → keyword / FTS5 / BM25 match across 5 domains (no vector/embed leg)",
+      "stepLands": "What lands",
+      "stepLandsDesc": "matching chunks injected into the system prompt, tagged [RECALLED] — a lead to verify, not fact",
+      "stepMountHit": "On a mount hit",
+      "stepMountHitDesc": "recall lands on the pointer → the agent Reads the LIVE source (progressive)",
+      "stepIndexing": "Indexing",
+      "stepIndexingDesc": "sync_knowledge_index scans Knowledge/, chunks + delta-syncs to FTS5 on the session hook"
     },
     "ArtifactsOverlay": {
       "roleDeliverables": "Deliverables",
@@ -4654,7 +4760,15 @@
       "refreshFromBedrock": "Refresh from Bedrock",
       "availableOnBedrock": "Available on your Bedrock account:",
       "newBadge": "NEW",
-      "added": "added"
+      "added": "added",
+      "modeAdaptiveDesc": "Model decides when to think deeply",
+      "modeEnabledDesc": "Always use extended thinking",
+      "modeDisabledDesc": "Never use extended thinking",
+      "effortLowDesc": "Minimal thinking — fastest responses",
+      "effortMediumDesc": "Balanced speed and depth",
+      "effortHighDesc": "Deep thinking (default)",
+      "effortXhighDesc": "Very thorough analysis",
+      "effortMaxDesc": "Deepest reasoning — slowest"
     },
     "AttachmentPreviewCard": {
       "hideTerminal": "Hide terminal output",
@@ -4712,14 +4826,24 @@
       "longKeyAfter": " in production: generating one in the console auto-creates an IAM User, and a leaked token carries a high blast radius. Prefer short-term keys and rotate them.",
       "storedSecurely": "Stored securely on this device (not synced, not in config backups).",
       "detectQuestion": "We couldn't detect your environment — which are you?",
-      "iAmInternal": "I'm an Amazon employee (internal)",
+      "iAmInternal": "I use an internal (ADA) setup",
       "iAmExternal": "I'm external",
-      "switchInternal": "Amazon employee? Switch to internal options",
-      "switchExternal": "Not internal? Switch to external options"
+      "switchInternal": "Have an internal (ADA) setup? Switch to internal options",
+      "switchExternal": "Not internal? Switch to external options",
+      "methodBedrockKey": "Bedrock API Key",
+      "methodBedrockKeyDesc": "Bearer Token",
+      "methodAda": "Ada",
+      "methodAdaDesc": "Amazon Internal",
+      "methodSso": "AWS SSO",
+      "methodSsoDesc": "Identity Center"
     },
     "BackendStartupOverlay": {
       "startingBackend": "Starting backend... {{seconds}}s",
-      "failedToStart": "Failed to start"
+      "failedToStart": "Failed to start",
+      "stepLoadingData": "Loading your data",
+      "stepPreparingAgent": "Preparing your agent",
+      "stepSettingUpWorkspace": "Setting up workspace",
+      "initFailed": "Failed to initialize backend: {{error}}"
     },
     "BackendUpgradeBanner": {
       "updatingBuild": "Updating backend v{{version}} to the new build…",
@@ -4752,7 +4876,9 @@
     },
     "FileViewer": {
       "noFileOpen": "No file open",
-      "versionsNote": "The Hive's change, read only: before and after (nothing here is a file on this machine)"
+      "versionsNote": "The Hive's change, read only: before and after (nothing here is a file on this machine)",
+      "tooLarge": "File too large to preview here. Open it in a local app instead.",
+      "fileDeleted": "This file was deleted."
     },
     "PipelineOverlay": {
       "window": "Showing runs from the last 30 days",
@@ -4890,7 +5016,7 @@
       "fl_timeNone": "Not recorded yet: runs record when each stage starts from now on.",
       "fl_timeHint": "median minutes per run at each station: working · waiting on you · extra rounds",
       "fl_waitMin": "{{n}}m you",
-      "ev_since": "Last {{days}} days against the {{days}} before · the measures of the CNTech & IVT Autonomous standard (S7), in its order",
+      "ev_since": "Last {{days}} days against the {{days}} before · the S7 measures, in their order",
       "ev_noChange": "no change vs the {{days}} days before",
       "ev_vsBefore": "vs the {{days}} days before",
       "ev_pts": "{{n}} pts",
@@ -4968,7 +5094,8 @@
       "openTerminal": "Open terminal",
       "exitedCode": "Process exited (code {{code}})",
       "exited": "Process exited",
-      "restart": "Restart"
+      "restart": "Restart",
+      "swarmwsTitle": "SwarmWS ({{path}})"
     },
     "ThreeColumnLayout": {
       "usageLabel": "Token usage — open the usage view",
@@ -4990,7 +5117,17 @@
       "moreActions": "More actions"
     },
     "VirtualizedTree": {
-      "treeLabel": "Workspace Explorer"
+      "treeLabel": "Workspace Explorer",
+      "sharedKnowledge": "Shared Knowledge",
+      "activeWork": "Active Work",
+      "knowledge": "Knowledge",
+      "projects": "Projects",
+      "other": "Other",
+      "system": "System",
+      "renameFailed": "Rename failed: {{reason}}",
+      "moveFailed": "Move failed: {{reason}}",
+      "createFailed": "Create failed: {{reason}}",
+      "unknownError": "Unknown error"
     },
     "hiveComponents": {
       "atMost": "At most {{max}} Hives",
@@ -5053,7 +5190,10 @@
       "swarmaiAccount": "(SwarmAI account)",
       "instanceSize": "Instance Size",
       "deploying": "Deploying...",
-      "deploy": "Deploy"
+      "deploy": "Deploy",
+      "sizeLarge": "m7g.large — 8 GB",
+      "sizeXlarge": "m7g.xlarge — 16 GB (recommended)",
+      "size2xlarge": "m7g.2xlarge — 32 GB"
     },
     "workspaceParts": {
       "localMain": "local main",
@@ -5085,7 +5225,9 @@
       "downloaded": "Update downloaded. Restart to apply.",
       "later": "Later",
       "updateNow": "Update Now",
-      "restartNow": "Restart Now"
+      "restartNow": "Restart Now",
+      "downloadFailed": "Download failed",
+      "restartFailed": "Restart failed"
     },
     "SystemTab": {
       "mode": "Mode",
@@ -5129,7 +5271,10 @@
       "roleSHELF": "Shelf",
       "roleHintGOVERN": "An asset it manages: bound, and a repo gets code-intel",
       "roleHintDISTILL": "Read once and distilled into its knowledge",
-      "roleHintSHELF": "Kept for reference, read when needed"
+      "roleHintSHELF": "Kept for reference, read when needed",
+      "pickFilesTitle": "Add files to this brain",
+      "pickFolderTitle": "Add a folder to this brain",
+      "fileBrowserUnavailable": "File browser unavailable here — paste a full path into the field instead."
     },
     "MultiSelect": {
       "selectItems": "Select items...",
@@ -5155,7 +5300,8 @@
       "cannotLoad": "Cannot Load File",
       "loadingPdf": "Loading PDF viewer...",
       "binaryContent": "[Binary content]",
-      "title": "File Preview"
+      "title": "File Preview",
+      "revealUnavailable": "File path: {{path}}\n\n(Reveal not available in browser mode)"
     },
     "FileViewerStatusBar": {
       "reloadFromDisk": "Reload this file from disk",
@@ -5256,7 +5402,12 @@
       "tab_security": "Security",
       "tab_prompt": "Prompt",
       "noSession": "No active session",
-      "degraded": "Prompt assembled incomplete"
+      "degraded": "Prompt assembled incomplete",
+      "owner_sys": "sys",
+      "owner_user": "user",
+      "owner_agent": "agent",
+      "owner_gen": "gen",
+      "domainDdd": "DDD"
     },
     "PollinateOverlay": {
       "previewUnavailable": "Preview unavailable: {{name}}",
@@ -5611,6 +5762,175 @@
         "adding": "adding…",
         "loadError": "Couldn't load."
       }
+    },
+    "api": {
+      "cannotConnect": "Unable to connect to backend service",
+      "networkError": "Network error occurred",
+      "invalidRequest": "Invalid request",
+      "notFound": "Resource not found",
+      "conflict": "Conflict",
+      "conflictOccurred": "A conflict occurred",
+      "tooManyRequests": "Too many requests",
+      "waitSeconds": "Please wait {{seconds}} seconds before trying again",
+      "serverError": "Server error",
+      "serverUnexpected": "An unexpected error occurred on the server",
+      "unavailable": "Service temporarily unavailable",
+      "requestFailed": "Request failed with status {{status}}",
+      "unexpected": "An unexpected error occurred"
+    },
+    "hive": {
+      "stepS3": "S3 bucket ready",
+      "stepIam": "IAM Role created",
+      "stepSecurityGroup": "Security Group configured",
+      "stepEc2": "EC2 launched",
+      "stepElasticIp": "Elastic IP assigned",
+      "stepInstalling": "Installing SwarmAI...",
+      "stepHealth": "Backend health check",
+      "stepCloudFront": "CloudFront HTTPS"
+    },
+    "ThemeContext": {
+      "blue": "Blue",
+      "purple": "Purple",
+      "green": "Green",
+      "orange": "Orange",
+      "rose": "Rose"
+    },
+    "navTable": {
+      "history": "History",
+      "artifacts": "Artifacts",
+      "needYou": "Need You",
+      "cm": "C&M",
+      "subGlobalBrain": "Global Brain",
+      "library": "Library",
+      "subBookshelf": "Bookshelf",
+      "brainHub": "Brain Hub",
+      "subBrainHub": "what each project knows, delivers and learns",
+      "newBrain": "New Brain",
+      "subNewBrain": "Grow a new brain",
+      "inbox": "Inbox",
+      "todo": "ToDo",
+      "workspace": "Workspace",
+      "subWorkspace": "SwarmWS workspace explorer",
+      "pipeline": "Pipeline",
+      "pollinate": "Pollinate",
+      "jobsRuns": "Jobs & Runs",
+      "capabilities": "Capabilities",
+      "subCapabilities": "Products and abilities",
+      "usage": "Usage",
+      "subUsage": "Where the platform's model spend goes",
+      "osEval": "OS Eval",
+      "settings": "Settings"
+    },
+    "brainMapModel": {
+      "sectionIdentity": "Identity",
+      "sectionKnowledge": "Knowledge",
+      "sectionGates": "Gates",
+      "sectionCapabilities": "Capabilities",
+      "sectionRefresher": "Refresher",
+      "sectionDelivery": "Delivery"
+    },
+    "dddLayers": {
+      "layerMeta": "Meta-cognitive",
+      "layerCognitive": "Cognitive",
+      "layerOperational": "Operational"
+    },
+    "StatusBadge": {
+      "online": "Online",
+      "offline": "Offline",
+      "error": "Error",
+      "active": "Active",
+      "inactive": "Inactive"
+    },
+    "fileViewTypes": {
+      "markdown": "Markdown",
+      "svgImage": "SVG Image",
+      "image": "{{ext}} Image",
+      "pdfDocument": "PDF Document",
+      "htmlDocument": "HTML Document",
+      "tsvSpreadsheet": "TSV Spreadsheet",
+      "csvSpreadsheet": "CSV Spreadsheet",
+      "video": "{{ext}} Video",
+      "audio": "{{ext}} Audio"
+    },
+    "constants": {
+      "cmdClear": "Clear conversation context",
+      "cmdCompact": "Compact conversation history",
+      "cmdPluginList": "List installed plugins",
+      "cmdPluginInstall": "Install a plugin: /plugin install {name}@{marketplace}",
+      "cmdPluginUninstall": "Uninstall a plugin: /plugin uninstall {id}",
+      "cmdMarketplaceList": "List available marketplaces"
+    },
+    "contextUsage": {
+      "contextFull": "Context {{pct}}% full"
+    },
+    "useRateLimiter": {
+      "expired": "Rate limit expired for {{endpoint}}. You may resume.",
+      "limited": "Rate limited on {{endpoint}}. Please wait {{seconds}}s."
+    },
+    "useSystemToasts": {
+      "tabLimitReached": "Memory usage is high. Close an idle tab or quit other apps to free memory, then try again.",
+      "allTabsBusy": "Could not open a new tab — all tabs are busy."
+    },
+    "useCanvasHost": {
+      "severalMatch": "Several files match {{path}}: {{list}}",
+      "fileNotFound": "File not found: {{path}}"
+    },
+    "useUnifiedAttachments": {
+      "maxAttachments": "Maximum {{max}} attachments allowed",
+      "onlyMoreSkipped": "Only {{available}} more attachment(s) allowed. {{skipped}} file(s) skipped.",
+      "onlyMoreSomeSkipped": "Only {{available}} more attachment(s) allowed. Some files skipped.",
+      "filesSkipped": "{{n}} file(s) skipped: {{first}}",
+      "unsupportedType": "Unsupported file type: {{name}}",
+      "unsupported": "Unsupported: {{name}}",
+      "processFailed": "Failed to process file"
+    },
+    "useChatStreamingLifecycle": {
+      "askingQuestion": "Swarm is asking a question in this session.",
+      "waitingApproval": "Swarm is waiting for your approval: {{tool}}.",
+      "recoveryStopped": "Automatic recovery for this session has stopped. Start a fresh session to continue.",
+      "startFresh": "Start fresh session",
+      "guardEvent": "Guard event",
+      "connectionDropped": "The connection to this reply dropped. If it finished, it appears here within about 15s; if not, send your message again."
+    },
+    "backendIssue": {
+      "stillRunning": "It is still running and will catch up.",
+      "loadPerCore": "load {{load}} per core",
+      "busiest": "busiest: {{top}}",
+      "detailCpu": "The backend is slowed down: this computer's CPU is fully used. {{still}}",
+      "detailCpuEv": "The backend is slowed down: this computer's CPU is fully used ({{ev}}). {{still}}",
+      "memUsed": "{{pct}}% used",
+      "memPressureCritical": "macOS memory pressure critical",
+      "detailMemory": "The backend is slowed down: this computer is low on memory. {{still}}",
+      "detailMemoryEv": "The backend is slowed down: this computer is low on memory ({{ev}}). {{still}}",
+      "detailBattery": "The backend is slowed down: macOS is throttling it on low battery. Plug in the charger.",
+      "detailBatteryPct": "The backend is slowed down: macOS is throttling it on low battery ({{pct}}%). Plug in the charger.",
+      "detailBusy": "The backend has been busy; it answers when that finishes.",
+      "detailBusyFor": "The backend has been busy for {{t}}; it answers when that finishes.",
+      "detailBusyIn": "The backend has been busy in {{where}}; it answers when that finishes.",
+      "detailBusyForIn": "The backend has been busy for {{t}} in {{where}}; it answers when that finishes.",
+      "detailPausedFor": "The backend has not run for {{t}}; its process is still there and usually resumes on its own.",
+      "detailPausedFew": "The backend has not run for a few seconds; its process is still there and usually resumes on its own.",
+      "detailSlowFor": "The backend has not answered for {{t}}; its process is running.",
+      "detailSlowFew": "The backend has not answered for a few seconds; its process is running.",
+      "detailStopped": "The backend process is not running; macOS restarts it automatically.",
+      "detailStuckAwake": "The backend process exists but has not run for {{min}} min while this Mac was awake, so macOS is not what paused it: it is probably stuck.",
+      "stuckIn": "stuck in {{where}}",
+      "loopStuck": "its event loop is stuck",
+      "detailStuck": "The backend has not answered: {{reason}}. Its process is still running.",
+      "detailStuckFor": "The backend has not answered for {{t}}: {{reason}}. Its process is still running.",
+      "detailNotResponding": "The backend is not responding; reconnecting…",
+      "detailSlowRestart": "The backend is taking longer than expected to restart…",
+      "detailUnreachable": "The app's health checks to the backend failed, and there is no other sign that it is running.",
+      "shortCpu": "Slowed: CPU fully used",
+      "shortMemory": "Slowed: low memory",
+      "shortBattery": "Slowed: low battery",
+      "shortBusy": "Backend busy",
+      "shortPaused": "Backend paused",
+      "shortStopped": "Backend stopped",
+      "shortStuck": "Backend stuck",
+      "shortNotResponding": "Backend not responding",
+      "shortNotBack": "Backend not back yet",
+      "shortUnreachable": "Backend unreachable"
     }
   }
 }

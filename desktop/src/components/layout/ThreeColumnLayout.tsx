@@ -250,7 +250,7 @@ function LeftSidebar() {
           data-testid="history-row"
         >
           <span data-testid="history-row-icon" className="w-4 flex items-center justify-center opacity-85"><NavSvgIcon name="history" /></span>
-          <span className="flex-1 text-left text-meta whitespace-nowrap">{NAV.history.navLabel}</span>
+          <span className="flex-1 text-left text-meta whitespace-nowrap">{t(NAV.history.navLabelKey)}</span>
           <span className="text-body text-[var(--color-text-faint)]">›</span>
         </button>
 
@@ -274,7 +274,7 @@ function LeftSidebar() {
           <span data-testid="artifacts-row-icon" className="w-4 flex items-center justify-center" style={{ color: 'var(--color-primary)' }}><NavSvgIcon name="gallery" /></span>
           <span
             className="flex-1 text-left text-meta whitespace-nowrap"
-          >{NAV.artifacts.navLabel}</span>
+          >{t(NAV.artifacts.navLabelKey)}</span>
           <span className="text-body text-[var(--color-text-faint)]">›</span>
         </button>
 
@@ -700,7 +700,8 @@ interface A10CardProps {
  *  statusDot sits on the chip's top-right corner (signal-driven only). */
 function A10Card({ navId, icon, flag, isActive, highlight, statusDot, badge, onClick, onPrefetch, 'data-testid': testId }: A10CardProps) {
   const { t } = useTranslation();
-  const { navLabel: label, zone } = NAV[navId];
+  const { navLabelKey, zone } = NAV[navId];
+  const label = t(navLabelKey);
   const tint = ZONE_TINT[zone];
   // (navSource push removed M5: the OverlayHost re-derives THIS card's live rect from
   // its data-nav-id (navTable) at open time, so the spout origin no longer

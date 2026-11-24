@@ -81,24 +81,25 @@ vi.mock('../../services/chat', async (importOriginal) => {
 });
 
 // ── The target spec (one row per nav item) ─────────────────────────────────────
+// label: the nav label's i18n key (react-i18next is mocked to t(k) = k above).
 const ZONE = { chat: 'var(--color-primary)', cognitive: 'var(--color-zone-cognitive)', work: 'var(--color-zone-work)', system: 'var(--color-zone-system)' } as const;
 interface Item { id: string; nav: string; label: string; zone: keyof typeof ZONE; fetches?: string[] }
 const ITEMS: Item[] = [
-  { id: 'history', nav: 'history-row', label: 'History', zone: 'chat', fetches: ['/chat/sessions'] },
-  { id: 'artifacts', nav: 'artifacts-row', label: 'Artifacts', zone: 'chat', fetches: ['/artifacts'] },
-  { id: 'context', nav: 'nav-context', label: 'C&M', zone: 'cognitive', fetches: ['/eval/context-health', '/eval/brain'] },
-  { id: 'library', nav: 'nav-library', label: 'Library', zone: 'cognitive', fetches: ['/library'] },
-  { id: 'brain-hub', nav: 'nav-brain-hub', label: 'Brain Hub', zone: 'cognitive', fetches: ['/ddd/brains'] },
-  { id: 'inbox', nav: 'nav-inbox', label: 'Inbox', zone: 'work', fetches: ['/inbox'] },
-  { id: 'todo', nav: 'nav-todo', label: 'ToDo', zone: 'work', fetches: ['/todos'] },
-  { id: 'pipeline', nav: 'nav-pipeline', label: 'Pipeline', zone: 'work', fetches: ['/pipelines'] },
-  { id: 'pollinate', nav: 'nav-pollinate', label: 'Pollinate', zone: 'work', fetches: ['/pollinate'] },
-  { id: 'swarmws', nav: 'nav-swarmws', label: 'Workspace', zone: 'work' },
-  { id: 'jobs', nav: 'nav-jobs', label: 'Jobs & Runs', zone: 'system', fetches: ['/jobs'] },
-  { id: 'capabilities', nav: 'nav-capabilities', label: 'Capabilities', zone: 'system', fetches: ['/apps'] },
+  { id: 'history', nav: 'history-row', label: 'ui.navTable.history', zone: 'chat', fetches: ['/chat/sessions'] },
+  { id: 'artifacts', nav: 'artifacts-row', label: 'ui.navTable.artifacts', zone: 'chat', fetches: ['/artifacts'] },
+  { id: 'context', nav: 'nav-context', label: 'ui.navTable.cm', zone: 'cognitive', fetches: ['/eval/context-health', '/eval/brain'] },
+  { id: 'library', nav: 'nav-library', label: 'ui.navTable.library', zone: 'cognitive', fetches: ['/library'] },
+  { id: 'brain-hub', nav: 'nav-brain-hub', label: 'ui.navTable.brainHub', zone: 'cognitive', fetches: ['/ddd/brains'] },
+  { id: 'inbox', nav: 'nav-inbox', label: 'ui.navTable.inbox', zone: 'work', fetches: ['/inbox'] },
+  { id: 'todo', nav: 'nav-todo', label: 'ui.navTable.todo', zone: 'work', fetches: ['/todos'] },
+  { id: 'pipeline', nav: 'nav-pipeline', label: 'ui.navTable.pipeline', zone: 'work', fetches: ['/pipelines'] },
+  { id: 'pollinate', nav: 'nav-pollinate', label: 'ui.navTable.pollinate', zone: 'work', fetches: ['/pollinate'] },
+  { id: 'swarmws', nav: 'nav-swarmws', label: 'ui.navTable.workspace', zone: 'work' },
+  { id: 'jobs', nav: 'nav-jobs', label: 'ui.navTable.jobsRuns', zone: 'system', fetches: ['/jobs'] },
+  { id: 'capabilities', nav: 'nav-capabilities', label: 'ui.navTable.capabilities', zone: 'system', fetches: ['/apps'] },
   // Settings / OS Eval fetching is out of scope (design §7): no refetch/prefetch checks.
-  { id: 'eval', nav: 'nav-eval', label: 'OS Eval', zone: 'system' },
-  { id: 'settings', nav: 'nav-settings', label: 'Settings', zone: 'system' },
+  { id: 'eval', nav: 'nav-eval', label: 'ui.navTable.osEval', zone: 'system' },
+  { id: 'settings', nav: 'nav-settings', label: 'ui.navTable.settings', zone: 'system' },
 ];
 
 // Divergences on main at P0 (2026-10-23), grouped by the design's root cause.
@@ -217,7 +218,7 @@ describe('Left Nav × overlay contract', () => {
     act(() => { probe!.overlay.openOverlay('needs-you'); });
     await settle(20);
     if (panel().style.getPropertyValue('--panel-accent') !== ZONE.chat) found.add('needs-you:tint');
-    if (panel().querySelector('h2')?.textContent !== 'Need You') found.add('needs-you:title');
+    if (panel().querySelector('h2')?.textContent !== 'ui.navTable.needYou') found.add('needs-you:title');
     cleanup();
     // New Brain opens from Brain Hub's New Brain, not a nav card: zone colour + title only
     renderApp();
@@ -225,7 +226,7 @@ describe('Left Nav × overlay contract', () => {
     act(() => { probe!.overlay.openOverlay('new-brain'); });
     await settle(20);
     if (panel().style.getPropertyValue('--panel-accent') !== ZONE.cognitive) found.add('new-brain:tint');
-    if (panel().querySelector('h2')?.textContent !== 'New Brain') found.add('new-brain:title');
+    if (panel().querySelector('h2')?.textContent !== 'ui.navTable.newBrain') found.add('new-brain:title');
 
     const sorted = (s: Set<string>) => [...s].sort();
     expect(sorted(found)).toEqual(sorted(KNOWN));

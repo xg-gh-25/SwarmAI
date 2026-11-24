@@ -22,6 +22,7 @@
  *                                    — typed signal: "the backend value changed outside
  *                                      a stream" (manual compact / refresh)
  */
+import i18next from 'i18next';
 import { useEffect, useRef } from 'react';
 import type { ContextWarning } from './useChatStreamingLifecycle';
 import type { StreamEvent } from '../types';
@@ -50,7 +51,7 @@ export function toContextWarning(s: ContextUsageSnapshot): ContextWarning | null
     level: s.level,
     pct: s.pct,
     tokensEst: s.tokensEst ?? 0,
-    message: s.message ?? `Context ${s.pct}% full`,
+    message: s.message ?? i18next.t('ui.contextUsage.contextFull', { pct: s.pct }),
   };
 }
 

@@ -29,6 +29,7 @@
  *
  * @exports useCanvasHost
  */
+import i18next from 'i18next';
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, startTransition } from 'react';
 import api from '../services/api';
 import { useCanvasAutoSurface, type CanvasSuppression } from './useCanvasAutoSurface';
@@ -675,7 +676,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
           const cands = (err as { response?: { data?: { detail?: { candidates?: unknown } } } })?.response?.data?.detail?.candidates;
           const list = Array.isArray(cands) ? cands.filter((c): c is string => typeof c === 'string') : [];
           document.dispatchEvent(new CustomEvent('swarm:toast', {
-            detail: { message: `Several files match ${filePath}: ${list.join(', ')}`, severity: 'warning', id: 'canvas-file-ambiguous' },
+            detail: { message: i18next.t('ui.useCanvasHost.severalMatch', { path: filePath, list: list.join(', ') }), severity: 'warning', id: 'canvas-file-ambiguous' },
           }));
           settle('ignored', 'several files match');
           return;
@@ -691,7 +692,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
           // Stable id → rapid repeated bad-path opens collapse into ONE refreshed toast
           // instead of stacking (meta-review LOW; ToastContext dedups by id).
           document.dispatchEvent(new CustomEvent('swarm:toast', {
-            detail: { message: `File not found: ${filePath}`, severity: 'warning', id: 'canvas-file-not-found' },
+            detail: { message: i18next.t('ui.useCanvasHost.fileNotFound', { path: filePath }), severity: 'warning', id: 'canvas-file-not-found' },
           }));
           settle('ignored', 'file not found');
           return;

@@ -248,12 +248,12 @@ export default function FileContextMenu({
       console.error('Failed to delete:', error);
       // Keep confirm dialog visible so user sees something went wrong
       setDeleteError(
-        error instanceof Error ? error.message : 'Failed to move to Trash',
+        error instanceof Error ? error.message : t('ui.FileContextMenu.moveFailed'),
       );
     } finally {
       setIsDeleting(false);
     }
-  }, [item, onDelete, onFileSystemChange, onClose]);
+  }, [item, onDelete, onFileSystemChange, onClose, t]);
 
   // Cancel delete
   const handleDeleteCancel = useCallback(() => {
@@ -274,19 +274,19 @@ export default function FileContextMenu({
   if (item.type === 'directory') {
     menuItems.push({
       id: 'new-file',
-      label: 'New File',
+      label: t('ui.FileContextMenu.newFile'),
       icon: 'note_add',
       action: handleNewFile,
     });
     menuItems.push({
       id: 'new-folder',
-      label: 'New Folder',
+      label: t('ui.FileContextMenu.newFolder'),
       icon: 'create_new_folder',
       action: handleNewFolder,
     });
     menuItems.push({
       id: 'open-terminal',
-      label: 'Open terminal here',
+      label: t('ui.FileContextMenu.openTerminalHere'),
       icon: 'terminal',
       action: handleOpenTerminal,
       dividerAfter: true,
@@ -297,7 +297,7 @@ export default function FileContextMenu({
   if (item.type === 'file') {
     menuItems.push({
       id: 'open',
-      label: 'Open File',
+      label: t('ui.FileContextMenu.openFile'),
       icon: 'open_in_new',
       action: handleOpenFile,
     });
@@ -307,7 +307,7 @@ export default function FileContextMenu({
   if (item.type === 'file') {
     menuItems.push({
       id: 'attach',
-      label: 'Attach to Chat',
+      label: t('ui.FileContextMenu.attachToChat'),
       icon: 'attach_file',
       action: handleAttachToChat,
     });
@@ -316,7 +316,7 @@ export default function FileContextMenu({
   // Ask Swarm about this file or folder
   menuItems.push({
     id: 'ask-swarm',
-    label: 'Ask Swarm',
+    label: t('ui.FileContextMenu.askSwarm'),
     icon: 'smart_toy',
     action: handleAskAbout,
     dividerAfter: true,
@@ -325,7 +325,7 @@ export default function FileContextMenu({
   // Rename
   menuItems.push({
     id: 'rename',
-    label: 'Rename',
+    label: t('ui.FileContextMenu.rename'),
     icon: 'edit',
     action: handleRename,
     // Disable rename for Swarm Workspace root
@@ -335,7 +335,7 @@ export default function FileContextMenu({
   // Move to Trash - enabled for all items, but Swarm Workspace items show warning dialog
   menuItems.push({
     id: 'delete',
-    label: 'Move to Trash',
+    label: t('ui.FileContextMenu.trashConfirm'),
     icon: 'delete',
     action: handleDeleteClick,
     danger: true,
@@ -345,7 +345,7 @@ export default function FileContextMenu({
   // Copy Path
   menuItems.push({
     id: 'copy-path',
-    label: 'Copy Path',
+    label: t('ui.FileContextMenu.copyPath'),
     icon: 'content_copy',
     action: handleCopyPath,
   });

@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 export interface ToolCategory {
   id: string;
   name: string;
-  description: string;
+  descriptionKey: string;
   icon: string;
   tools: Tool[];
   enabledByDefault: boolean;
@@ -16,7 +16,7 @@ export interface ToolCategory {
 export interface Tool {
   id: string;
   name: string;
-  description: string;
+  descriptionKey: string;
   enabledByDefault?: boolean; // Override category default for specific tools
 }
 
@@ -25,51 +25,51 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   {
     id: 'bash',
     name: 'Bash Tools',
-    description: 'Execute terminal commands',
+    descriptionKey: 'ui.ToolSelector.bashCategoryDesc',
     icon: 'terminal',
     enabledByDefault: true,
     tools: [
-      { id: 'Bash', name: 'Bash', description: 'Execute shell commands in terminal' },
-      { id: 'KillShell', name: 'KillShell', description: 'Kill running background shell processes' },
+      { id: 'Bash', name: 'Bash', descriptionKey: 'ui.ToolSelector.bashToolDesc' },
+      { id: 'KillShell', name: 'KillShell', descriptionKey: 'ui.ToolSelector.killShellToolDesc' },
     ],
   },
   {
     id: 'file',
     name: 'File Tools',
-    description: 'Read, write, and search files',
+    descriptionKey: 'ui.ToolSelector.fileCategoryDesc',
     icon: 'folder',
     enabledByDefault: true,
     tools: [
-      { id: 'Read', name: 'Read', description: 'Read file contents' },
-      { id: 'Write', name: 'Write', description: 'Write content to files' },
-      { id: 'Edit', name: 'Edit', description: 'Edit existing files' },
-      { id: 'Glob', name: 'Glob', description: 'Find files by pattern' },
-      { id: 'Grep', name: 'Grep', description: 'Search file contents' },
+      { id: 'Read', name: 'Read', descriptionKey: 'ui.ToolSelector.readToolDesc' },
+      { id: 'Write', name: 'Write', descriptionKey: 'ui.ToolSelector.writeToolDesc' },
+      { id: 'Edit', name: 'Edit', descriptionKey: 'ui.ToolSelector.editToolDesc' },
+      { id: 'Glob', name: 'Glob', descriptionKey: 'ui.ToolSelector.globToolDesc' },
+      { id: 'Grep', name: 'Grep', descriptionKey: 'ui.ToolSelector.grepToolDesc' },
     ],
   },
   {
     id: 'web',
     name: 'Web Tools',
-    description: 'Fetch web content and search',
+    descriptionKey: 'ui.ToolSelector.webCategoryDesc',
     icon: 'language',
     enabledByDefault: true,
     tools: [
-      { id: 'WebFetch', name: 'WebFetch', description: 'Fetch content from URLs' },
-      { id: 'WebSearch', name: 'WebSearch', description: 'Search the web' },
+      { id: 'WebFetch', name: 'WebFetch', descriptionKey: 'ui.ToolSelector.webFetchToolDesc' },
+      { id: 'WebSearch', name: 'WebSearch', descriptionKey: 'ui.ToolSelector.webSearchToolDesc' },
     ],
   },
   {
     id: 'advanced',
     name: 'Advanced Tools',
-    description: 'Task management and agent control',
+    descriptionKey: 'ui.ToolSelector.advancedCategoryDesc',
     icon: 'settings_suggest',
     enabledByDefault: false,
     tools: [
-      { id: 'TodoWrite', name: 'TodoWrite', description: 'Manage task lists and track progress', enabledByDefault: true },
-      { id: 'Task', name: 'Task', description: 'Launch sub-agents for complex tasks' },
-      { id: 'TaskOutput', name: 'TaskOutput', description: 'Retrieve output from background tasks' },
-      { id: 'EnterPlanMode', name: 'EnterPlanMode', description: 'Enter planning mode for implementation' },
-      { id: 'Skill', name: 'Skill', description: 'Execute skills and slash commands', enabledByDefault: true },
+      { id: 'TodoWrite', name: 'TodoWrite', descriptionKey: 'ui.ToolSelector.todoWriteToolDesc', enabledByDefault: true },
+      { id: 'Task', name: 'Task', descriptionKey: 'ui.ToolSelector.taskToolDesc' },
+      { id: 'TaskOutput', name: 'TaskOutput', descriptionKey: 'ui.ToolSelector.taskOutputToolDesc' },
+      { id: 'EnterPlanMode', name: 'EnterPlanMode', descriptionKey: 'ui.ToolSelector.enterPlanModeToolDesc' },
+      { id: 'Skill', name: 'Skill', descriptionKey: 'ui.ToolSelector.skillToolDesc', enabledByDefault: true },
     ],
   },
 ];
@@ -187,7 +187,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                         ({enabledCount}/{category.tools.length})
                       </span>
                     </div>
-                    <p className="text-xs text-[var(--color-text-muted)]">{category.description}</p>
+                    <p className="text-xs text-[var(--color-text-muted)]">{t(category.descriptionKey)}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -238,7 +238,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                       >
                         <div>
                           <span className="text-sm text-[var(--color-text)]">{tool.name}</span>
-                          <p className="text-xs text-[var(--color-text-muted)]">{tool.description}</p>
+                          <p className="text-xs text-[var(--color-text-muted)]">{t(tool.descriptionKey)}</p>
                         </div>
                         <button
                           type="button"

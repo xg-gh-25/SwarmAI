@@ -29,6 +29,7 @@ import React, { useContext, useEffect, useMemo, useRef, useState, useCallback } 
 import { createPortal } from 'react-dom';
 import { List } from 'react-window';
 import { useTranslation } from 'react-i18next';
+import i18next from 'i18next';
 import type { TreeNode } from '../../types';
 import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
 import type { FileTreeItem } from './FileTreeNode';
@@ -51,13 +52,13 @@ import FileContextMenu from './FileContextMenu';
  *  409 detail says why), not the generic status text. */
 export function failureReason(err: unknown): string {
   if (isApiError(err)) return err.detail || err.message;
-  return err instanceof Error ? err.message : 'Unknown error';
+  return err instanceof Error ? err.message : i18next.t('ui.VirtualizedTree.unknownError');
 }
 
 /** Zone configuration — maps filesystem paths to semantic zones. */
 export const SEMANTIC_ZONES = [
-  { label: 'Shared Knowledge', paths: ['Knowledge'] },
-  { label: 'Active Work', paths: ['Projects'] },
+  { labelKey: 'ui.VirtualizedTree.sharedKnowledge', paths: ['Knowledge'] },
+  { labelKey: 'ui.VirtualizedTree.activeWork', paths: ['Projects'] },
 ] as const;
 
 /** Root-level files displayed above the first zone separator. */
@@ -74,7 +75,10 @@ const ROW_HEIGHT = 32;
 
 /** Configuration for a primary or system section in the explorer. */
 export interface SectionConfig {
-  label: string;
+  /** Stable identity (collapse state, localStorage key `explorer-section-<id>`). */
+  id: string;
+  /** i18n key of the header text. */
+  labelKey: string;
   paths: string[];
   accentBg?: string;
   accentBorder?: string;
@@ -85,13 +89,15 @@ export interface SectionConfig {
 /** Primary sections with accent colours — Knowledge and Projects. */
 export const EXPLORER_SECTIONS: SectionConfig[] = [
   {
-    label: 'Knowledge',
+    id: 'Knowledge',
+    labelKey: 'ui.VirtualizedTree.knowledge',
     paths: ['Knowledge'],
     accentBg: 'color-mix(in srgb, var(--color-status-warning) 6%, transparent)',
     accentBorder: 'color-mix(in srgb, var(--color-status-warning) 45%, transparent)',
   },
   {
-    label: 'Projects',
+    id: 'Projects',
+    labelKey: 'ui.VirtualizedTree.projects',
     paths: ['Projects'],
     accentBg: 'color-mix(in srgb, var(--color-primary) 6%, transparent)',
     accentBorder: 'color-mix(in srgb, var(--color-primary) 45%, transparent)',
@@ -103,9 +109,9 @@ export const EXPLORER_SECTIONS: SectionConfig[] = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type FlattenedRow =
-  | { kind: 'zone-separator'; zoneLabel: string }
-  | { kind: 'section-header'; label: string; childCount: number; isCollapsed: boolean; dimmed?: boolean; defaultCollapsed?: boolean; config: SectionConfig }
-  | { kind: 'secondary-label'; label: string }
+  | { kind: 'zone-separator'; zoneLabelKey: string }
+  | { kind: 'section-header'; id: string; labelKey: string; childCount: number; isCollapsed: boolean; dimmed?: boolean; defaultCollapsed?: boolean; config: SectionConfig }
+  | { kind: 'secondary-label'; labelKey: string }
   | { kind: 'node'; node: TreeNode; depth: number; isMatched: boolean; isExpanded: boolean; sectionConfig?: SectionConfig }
   | { kind: 'creating'; parentPath: string; itemType: 'file' | 'directory'; depth: number };
 
@@ -258,7 +264,7 @@ function flattenChildren(
  * @param treeData          — Top-level nodes from the workspace tree API
  * @param expandedPaths     — Set of directory paths currently expanded
  * @param matchedPaths      — Set of paths matching the current search query
- * @param sectionCollapsed  — Map of section label → collapsed state
+ * @param sectionCollapsed  — Map of section id → collapsed state
  * @returns Ordered array of FlattenedRow entries
  */
 export function flattenTree(
@@ -349,11 +355,12 @@ export function flattenTree(
     );
 
     const childCount = rootNode?.children?.length ?? 0;
-    const isCollapsed = sectionCollapsed[section.label] ?? false;
+    const isCollapsed = sectionCollapsed[section.id] ?? false;
 
     rows.push({
       kind: 'section-header',
-      label: section.label,
+      id: section.id,
+      labelKey: section.labelKey,
       childCount,
       isCollapsed,
       dimmed: section.dimmed,
@@ -383,7 +390,7 @@ export function flattenTree(
   }
 
   if (secondaryDirs.length > 0) {
-    rows.push({ kind: 'secondary-label', label: 'Other' });
+    rows.push({ kind: 'secondary-label', labelKey: 'ui.VirtualizedTree.other' });
 
     for (const node of secondaryDirs) {
       const isExpanded = expandedPaths.has(node.path);
@@ -402,7 +409,8 @@ export function flattenTree(
 
   // 5. System section — pinned at the bottom (dimmed, collapsed by default)
   const systemConfig: SectionConfig = {
-    label: 'System',
+    id: 'System',
+    labelKey: 'ui.VirtualizedTree.system',
     paths: [],
     accentBorder: 'color-mix(in srgb, var(--color-text-muted) 25%, transparent)',
     dimmed: true,
@@ -415,7 +423,8 @@ export function flattenTree(
 
     rows.push({
       kind: 'section-header',
-      label: 'System',
+      id: systemConfig.id,
+      labelKey: systemConfig.labelKey,
       childCount: systemNodes.length,
       isCollapsed: isSystemCollapsed,
       dimmed: true,
@@ -454,8 +463,8 @@ interface RowCustomProps {
   renamingPath: string | null;
   dragOverPath: string | null;
   toggleExpand: (path: string) => void;
-  onSectionToggle: (label: string) => void;
-  onSectionContextMenu: (e: React.MouseEvent, sectionLabel: string) => void;
+  onSectionToggle: (sectionId: string) => void;
+  onSectionContextMenu: (e: React.MouseEvent, sectionId: string) => void;
   setSelectedPath: (path: string | null) => void;
   onFileDoubleClick?: (node: FileTreeItem) => void;
   onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
@@ -486,26 +495,27 @@ function RowRenderer(props: {
     onRenameSubmit, onRenameCancel, onDragOverPath, onDropOnFolder,
     onCreateSubmit, onCreateCancel,
   } = props;
+  const { t } = useTranslation();
   const row = rows[index];
 
   if (!row) return null;
 
   if (row.kind === 'zone-separator') {
-    return <ZoneSeparator label={row.zoneLabel} style={style} />;
+    return <ZoneSeparator label={t(row.zoneLabelKey)} style={style} />;
   }
 
   // ── Section header row (3-tier primary/system) ─────────────────────
   if (row.kind === 'section-header') {
     return (
       <SectionHeader
-        label={row.label}
+        label={t(row.labelKey)}
         count={row.childCount}
         isCollapsed={row.isCollapsed}
         dimmed={row.dimmed}
         accentBg={row.config.accentBg}
         accentBorder={row.config.accentBorder}
-        onToggle={() => onSectionToggle(row.label)}
-        onContextMenu={(e) => onSectionContextMenu(e, row.label)}
+        onToggle={() => onSectionToggle(row.id)}
+        onContextMenu={(e) => onSectionContextMenu(e, row.id)}
         style={style}
       />
     );
@@ -537,7 +547,7 @@ function RowRenderer(props: {
             color: 'var(--color-text-dim, var(--color-explorer-zone-label))',
           }}
         >
-          {row.label}
+          {t(row.labelKey)}
         </span>
       </div>
     );
@@ -708,9 +718,9 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     try {
       // Primary sections default to expanded, System defaults to collapsed
       for (const section of EXPLORER_SECTIONS) {
-        const key = `explorer-section-${section.label}`;
+        const key = `explorer-section-${section.id}`;
         const val = localStorage.getItem(key);
-        stored[section.label] = val !== null ? val === 'true' : (section.defaultCollapsed ?? false);
+        stored[section.id] = val !== null ? val === 'true' : (section.defaultCollapsed ?? false);
       }
       // System section
       const sysKey = 'explorer-section-System';
@@ -723,22 +733,22 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
   });
 
   /** Toggle section collapse and persist to localStorage. */
-  const toggleSectionCollapse = useCallback((label: string) => {
+  const toggleSectionCollapse = useCallback((sectionId: string) => {
     setSectionCollapsed((prev) => {
-      const next = { ...prev, [label]: !prev[label] };
-      try { localStorage.setItem(`explorer-section-${label}`, String(next[label])); } catch { /* localStorage unavailable */ }
+      const next = { ...prev, [sectionId]: !prev[sectionId] };
+      try { localStorage.setItem(`explorer-section-${sectionId}`, String(next[sectionId])); } catch { /* localStorage unavailable */ }
       return next;
     });
   }, []);
 
   /** Right-click on a section header → open context menu for the root directory. */
   const handleSectionContextMenu = useCallback(
-    (e: React.MouseEvent, sectionLabel: string) => {
+    (e: React.MouseEvent, sectionId: string) => {
       e.preventDefault();
       e.stopPropagation();
       // Find the root dir path for this section
-      const section = EXPLORER_SECTIONS.find((s) => s.label === sectionLabel);
-      const rootDirName = section?.paths[0] ?? sectionLabel;
+      const section = EXPLORER_SECTIONS.find((s) => s.id === sectionId);
+      const rootDirName = section?.paths[0] ?? sectionId;
       returnFocusRef.current = e.currentTarget as HTMLElement;
       setContextMenu({
         isOpen: true,
@@ -835,12 +845,12 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
         console.error('Rename failed:', err);
         toastCtx?.addToast({
           severity: 'error',
-          message: `Rename failed: ${failureReason(err)}`,
+          message: t('ui.VirtualizedTree.renameFailed', { reason: failureReason(err) }),
         });
       }
       setRenamingPath(null);
     },
-    [refreshTree, toastCtx],
+    [refreshTree, toastCtx, t],
   );
 
   /** Inline input cancelled → clear rename state. */
@@ -905,11 +915,11 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
         console.error('Move failed:', err);
         toastCtx?.addToast({
           severity: 'error',
-          message: `Move failed: ${failureReason(err)}`,
+          message: t('ui.VirtualizedTree.moveFailed', { reason: failureReason(err) }),
         });
       }
     },
-    [refreshTree, toastCtx],
+    [refreshTree, toastCtx, t],
   );
 
   // ── New file/folder handlers ───────────────────────────────────────────
@@ -951,12 +961,12 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
         console.error('Create failed:', err);
         toastCtx?.addToast({
           severity: 'error',
-          message: `Create failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          message: t('ui.VirtualizedTree.createFailed', { reason: err instanceof Error ? err.message : t('ui.VirtualizedTree.unknownError') }),
         });
       }
       setCreatingItem(null);
     },
-    [creatingItem, refreshTree, toastCtx],
+    [creatingItem, refreshTree, toastCtx, t],
   );
 
   const handleCreateCancel = useCallback(() => {

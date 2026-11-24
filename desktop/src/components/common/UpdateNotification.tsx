@@ -58,19 +58,19 @@ export default function UpdateNotification() {
       setState('ready');
     } catch (err) {
       console.error('Download failed:', err);
-      setError(err instanceof Error ? err.message : 'Download failed');
+      setError(err instanceof Error ? err.message : t('ui.UpdateNotification.downloadFailed'));
       setState('error');
     }
-  }, [update]);
+  }, [update, t]);
 
   const handleRestart = useCallback(async () => {
     try {
       await restartApp();
     } catch (err) {
       console.error('Restart failed:', err);
-      setError(err instanceof Error ? err.message : 'Restart failed');
+      setError(err instanceof Error ? err.message : t('ui.UpdateNotification.restartFailed'));
     }
-  }, []);
+  }, [t]);
 
   const handleDismiss = useCallback(() => {
     setDismissed(true);

@@ -199,8 +199,9 @@ export function BrainMap({ version, counts, needs, reflect, agentLine, evalLine,
         <text x={C.x} y={C.y - 3} textAnchor="middle" className="text-heading font-semibold fill-[var(--color-text)]">{t('ui.BrainMap.brainTitle')}</text>
         <text x={C.x} y={C.y + 15} textAnchor="middle" className="text-small fill-[var(--color-primary)]">{version}</text>
       </Part>
-      {SECTION_ORDER.map(({ key, label }) => {
+      {SECTION_ORDER.map(({ key, labelKey }) => {
         const p = secPos(key);
+        const label = t(labelKey);
         return (
           <Part key={key} label={`${label}: ${counts[key]}`} onClick={() => onOpen('browse', key)} testid={`bm-sec-${key}`}>
             <polygon points={hex(p.x, p.y, HR)} className={box} {...OUTLINE} />

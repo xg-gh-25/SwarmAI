@@ -17,13 +17,14 @@
  */
 import type { BrainDetail, BrainSummary, GeneralBrain, SectionKey } from '../../services/ddd';
 
-export const SECTION_ORDER: { key: SectionKey; label: string }[] = [
-  { key: 'identity', label: 'Identity' },
-  { key: 'knowledge', label: 'Knowledge' },
-  { key: 'gates', label: 'Gates' },
-  { key: 'capabilities', label: 'Capabilities' },
-  { key: 'refresher', label: 'Refresher' },
-  { key: 'delivery', label: 'Delivery' },
+/** labelKey: the i18n key of the section's display name (render with t()). */
+export const SECTION_ORDER: { key: SectionKey; labelKey: string }[] = [
+  { key: 'identity', labelKey: 'ui.brainMapModel.sectionIdentity' },
+  { key: 'knowledge', labelKey: 'ui.brainMapModel.sectionKnowledge' },
+  { key: 'gates', labelKey: 'ui.brainMapModel.sectionGates' },
+  { key: 'capabilities', labelKey: 'ui.brainMapModel.sectionCapabilities' },
+  { key: 'refresher', labelKey: 'ui.brainMapModel.sectionRefresher' },
+  { key: 'delivery', labelKey: 'ui.brainMapModel.sectionDelivery' },
 ];
 
 /** The short count line under each hex. */

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import i18next from 'i18next';
 import type { AxiosError, AxiosResponse } from 'axios';
 import type { ErrorResponse, RateLimitErrorResponse } from '../types';
 import { ErrorCodes } from '../types';
@@ -51,8 +52,8 @@ export function parseApiError(error: AxiosError): ErrorResponse {
   if (!error.response) {
     return {
       code: ErrorCodes.SERVICE_UNAVAILABLE,
-      message: 'Unable to connect to backend service',
-      detail: error.message || 'Network error occurred',
+      message: i18next.t('ui.api.cannotConnect'),
+      detail: error.message || i18next.t('ui.api.networkError'),
       suggestedAction: 'Please check that the backend service is running',
     };
   }
@@ -90,14 +91,14 @@ function fromStatus(status: number, data: unknown, error: AxiosError): ErrorResp
     case 400:
       return {
         code: ErrorCodes.VALIDATION_FAILED,
-        message: 'Invalid request',
+        message: i18next.t('ui.api.invalidRequest'),
         detail: typeof data === 'string' ? data : JSON.stringify(data),
         suggestedAction: 'Please check your input and try again',
       };
     case 404:
       return {
         code: 'NOT_FOUND',
-        message: 'Resource not found',
+        message: i18next.t('ui.api.notFound'),
         suggestedAction: 'The requested resource does not exist',
       };
     case 409: {
@@ -106,8 +107,8 @@ function fromStatus(status: number, data: unknown, error: AxiosError): ErrorResp
       const detail409 = typeof data === 'object' && data !== null ? data as Record<string, unknown> : {};
       return {
         code: (detail409.code as string) || ErrorCodes.DUPLICATE_RESOURCE,
-        message: (detail409.message as string) || 'Conflict',
-        detail: (detail409.detail as string) || 'A conflict occurred',
+        message: (detail409.message as string) || i18next.t('ui.api.conflict'),
+        detail: (detail409.detail as string) || i18next.t('ui.api.conflictOccurred'),
         suggestedAction: (detail409.suggested_action as string) || 'Please resolve the conflict',
         // Preserve policy_violations for callers (snake_case from backend)
         ...(detail409.policy_violations ? { policyViolations: detail409.policy_violations } : {}),
@@ -117,28 +118,28 @@ function fromStatus(status: number, data: unknown, error: AxiosError): ErrorResp
       const retryAfter = error.response?.headers?.['retry-after'];
       return {
         code: ErrorCodes.RATE_LIMIT_EXCEEDED,
-        message: 'Too many requests',
-        detail: `Please wait ${retryAfter || 60} seconds before trying again`,
+        message: i18next.t('ui.api.tooManyRequests'),
+        detail: i18next.t('ui.api.waitSeconds', { seconds: retryAfter || 60 }),
         suggestedAction: 'Slow down your requests',
       };
     }
     case 500:
       return {
         code: ErrorCodes.SERVER_ERROR,
-        message: 'Server error',
-        detail: 'An unexpected error occurred on the server',
+        message: i18next.t('ui.api.serverError'),
+        detail: i18next.t('ui.api.serverUnexpected'),
         suggestedAction: 'Please try again later',
       };
     case 503:
       return {
         code: ErrorCodes.SERVICE_UNAVAILABLE,
-        message: 'Service temporarily unavailable',
+        message: i18next.t('ui.api.unavailable'),
         suggestedAction: 'Please try again in a few moments',
       };
     default:
       return {
         code: ErrorCodes.SERVER_ERROR,
-        message: `Request failed with status ${status}`,
+        message: i18next.t('ui.api.requestFailed', { status }),
         suggestedAction: 'Please try again later',
       };
   }
@@ -287,7 +288,7 @@ export function extractErrorResponse(error: unknown): ErrorResponse {
 
   return {
     code: ErrorCodes.SERVER_ERROR,
-    message: 'An unexpected error occurred',
+    message: i18next.t('ui.api.unexpected'),
     suggestedAction: 'Please try again later',
   };
 }

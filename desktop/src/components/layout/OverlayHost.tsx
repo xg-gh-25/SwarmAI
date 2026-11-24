@@ -219,7 +219,7 @@ export function OverlayHost() {
       <div
         ref={panelRef}
         role="dialog"
-        aria-label={chrome?.navLabel ?? renderedId}
+        aria-label={chrome ? t(chrome.navLabelKey) : renderedId}
         tabIndex={-1}
         className={clsx(
           'absolute rounded-[18px] flex flex-col bg-[var(--color-card)] border shadow-2xl outline-none',
@@ -270,11 +270,11 @@ export function OverlayHost() {
                 type="button"
                 onClick={() => openOverlay(chrome.parent!)}
                 className="flex items-center gap-1 font-semibold text-heading tracking-tight text-[var(--color-text-muted)] hover:text-[var(--panel-accent)] transition-colors"
-                aria-label={t('ui.OverlayHost.backTo', { name: parentChrome.navLabel })}
+                aria-label={t('ui.OverlayHost.backTo', { name: t(parentChrome.navLabelKey) })}
                 data-testid="overlay-host-parent"
               >
                 <span className="material-symbols-outlined icon-md" aria-hidden>arrow_back</span>
-                {parentChrome.navLabel}
+                {t(parentChrome.navLabelKey)}
               </button>
               <span className="text-heading text-[var(--color-text-faint)]" aria-hidden>/</span>
             </>
@@ -286,18 +286,18 @@ export function OverlayHost() {
                 // no target: the surface reads it as "go to your home" (BrainHub → gallery)
                 onClick={() => window.dispatchEvent(new CustomEvent(`swarm:show-${renderedId}`))}
                 className="hover:text-[var(--panel-accent)] transition-colors"
-                title={t('ui.OverlayHost.home', { name: chrome.navLabel })}
+                title={t('ui.OverlayHost.home', { name: t(chrome.navLabelKey) })}
                 data-testid="overlay-host-title-home"
               >
-                {chrome.navLabel}
+                {t(chrome.navLabelKey)}
               </button>
             </h2>
           ) : (
-            <h2 className="font-semibold text-heading tracking-tight text-[var(--color-text)]">{chrome?.navLabel ?? renderedId}</h2>
+            <h2 className="font-semibold text-heading tracking-tight text-[var(--color-text)]">{chrome ? t(chrome.navLabelKey) : renderedId}</h2>
           )}
-          {chrome?.subtitle && (
+          {chrome?.subtitleKey && (
             <span className="text-small text-[var(--color-text-muted)] truncate" data-testid="overlay-host-subtitle">
-              {chrome.subtitle}
+              {t(chrome.subtitleKey)}
             </span>
           )}
           <div className="ml-auto flex items-center gap-3">

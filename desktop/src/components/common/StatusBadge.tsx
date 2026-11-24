@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 
 type Status = 'online' | 'offline' | 'error' | 'active' | 'inactive';
 
@@ -7,35 +8,36 @@ interface StatusBadgeProps {
   className?: string;
 }
 
-const statusConfig: Record<Status, { label: string; color: string; bgColor: string }> = {
+const statusConfig: Record<Status, { labelKey: string; color: string; bgColor: string }> = {
   online: {
-    label: 'Online',
+    labelKey: 'ui.StatusBadge.online',
     color: 'text-status-online',
     bgColor: 'bg-status-online/20',
   },
   offline: {
-    label: 'Offline',
+    labelKey: 'ui.StatusBadge.offline',
     color: 'text-status-offline',
     bgColor: 'bg-status-offline/20',
   },
   error: {
-    label: 'Error',
+    labelKey: 'ui.StatusBadge.error',
     color: 'text-status-error',
     bgColor: 'bg-status-error/20',
   },
   active: {
-    label: 'Active',
+    labelKey: 'ui.StatusBadge.active',
     color: 'text-status-online',
     bgColor: 'bg-status-online/20',
   },
   inactive: {
-    label: 'Inactive',
+    labelKey: 'ui.StatusBadge.inactive',
     color: 'text-status-offline',
     bgColor: 'bg-status-offline/20',
   },
 };
 
 export default function StatusBadge({ status, className }: StatusBadgeProps) {
+  const { t } = useTranslation();
   const config = statusConfig[status];
 
   return (
@@ -48,7 +50,7 @@ export default function StatusBadge({ status, className }: StatusBadgeProps) {
       )}
     >
       <span className="w-1.5 h-1.5 rounded-full bg-current" />
-      {config.label}
+      {t(config.labelKey)}
     </span>
   );
 }

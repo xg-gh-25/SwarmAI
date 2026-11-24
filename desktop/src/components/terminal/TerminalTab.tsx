@@ -23,6 +23,7 @@ import '@xterm/xterm/css/xterm.css';
 import { sendTerminalTextToChat, type TerminalTab as TerminalTabModel } from '../../stores/TerminalStore';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useEscape } from '../../hooks/useLayer';
+import { isMac, modKeyLabel } from '../../utils/platform';
 
 interface TerminalTabProps {
   tab: TerminalTabModel;
@@ -121,6 +122,24 @@ function useThemeKey(): string {
   return key;
 }
 
+/**
+ * A terminal shortcut as shown to the user: ⌘C on macOS, Ctrl+Shift+C elsewhere
+ * (the shell keeps plain Ctrl). *cap* is the key cap: a letter or ↵.
+ */
+export function terminalShortcutLabel(mac: boolean, cap: string): string {
+  return mac ? `${modKeyLabel()}${cap}` : `${modKeyLabel()}+Shift+${cap}`;
+}
+
+/**
+ * True when *e* is this platform's terminal shortcut chord: ⌘ alone on macOS (as
+ * before), Ctrl+Shift elsewhere. Plain Ctrl never matches off mac: Ctrl-C / Ctrl-K
+ * belong to the shell.
+ */
+function isShortcutChord(e: KeyboardEvent, mac: boolean): boolean {
+  if (e.type !== 'keydown' || e.altKey) return false;
+  return mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && e.shiftKey && !e.metaKey;
+}
+
 export default function TerminalTab({ tab, active }: TerminalTabProps) {
   // `tr`, not `t`: this component names its xterm Terminal instances `t`.
   const { t: tr } = useTranslation();
@@ -147,6 +166,9 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
   const [hasSelection, setHasSelection] = useState(false);
   const [sent, setSent] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // The platform, read once per mount: the key handler below runs on every keystroke
+  // and only checks this boolean.
+  const [mac] = useState(isMac);
   const sendSelection = (t: Terminal | null): boolean => {
     const text = t?.getSelection() ?? '';
     if (!sendTerminalTextToChat(text.replace(/\s+$/, ''), tab.cwd)) return false;
@@ -237,15 +259,22 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
 
       // ⌘C copies the selection, ⌘A selects all, ⌘K clears the screen + scrollback,
       // ⌘↵ adds the selection to the chat input. All swallowed (never sent to the
-      // shell). macOS ⌘ only — Ctrl-C / Ctrl-K must reach the shell. ⌘C goes
-      // through the app's native clipboard command: navigator.clipboard is denied
-      // in the Tauri webview (utils/clipboard). ⌘V is left to the native paste.
+      // shell). On Windows / Linux the same four are Ctrl+Shift+C / A / K / ↵ (the
+      // usual terminal-emulator keys): plain Ctrl-C / Ctrl-K must reach the shell.
+      // ⌘C with nothing selected passes through on macOS (it sends nothing);
+      // Ctrl+Shift+C is always swallowed, so it can never reach the shell as an
+      // interrupt-like key. Copy goes through the app's native clipboard command:
+      // navigator.clipboard is denied in the Tauri webview (utils/clipboard). ⌘V is
+      // left to the native paste.
       t.attachCustomKeyEventHandler((e) => {
-        if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey) return true;
+        if (!isShortcutChord(e, mac)) return true;
         const k = e.key.toLowerCase();
-        if (k === 'c' && t.hasSelection()) {
-          void copyToClipboard(t.getSelection());
-          return false;
+        if (k === 'c') {
+          if (t.hasSelection()) {
+            void copyToClipboard(t.getSelection());
+            return false;
+          }
+          return mac;   // nothing selected: ⌘C passes on macOS, Ctrl+Shift+C is swallowed
         }
         if (k === 'a') {
           t.selectAll();
@@ -256,8 +285,8 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
           return false;
         }
         if (e.key === 'Enter') {
-          // Never reaches the shell (⌘↵ would run the typed command): the
-          // selection, else the last lines, goes to the chat input.
+          // Never reaches the shell (⌘↵ / Ctrl+Shift+↵ would run the typed
+          // command): the selection, else the last lines, goes to the chat input.
           if (t.hasSelection()) sendSelectionRef.current(t);
           else if (tab.getBuffer) sendTerminalTextToChat(tab.getBuffer(), tab.cwd);
           return false;
@@ -432,7 +461,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
         >
           <span className="material-symbols-outlined icon-xs">{sent ? 'check' : 'add_comment'}</span>
           {sent ? tr('ui.TerminalTab.addedToChat') : tr('ui.TerminalTab.addToChat')}
-          {!sent && <span className="text-[var(--color-text-muted)] font-normal">⌘↵</span>}
+          {!sent && <span className="text-[var(--color-text-muted)] font-normal">{terminalShortcutLabel(mac, '↵')}</span>}
         </button>
       )}
       {menu && (
@@ -440,6 +469,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
           x={menu.x}
           y={menu.y}
           hasSelection={hasSelection}
+          mac={mac}
           onClose={() => setMenu(null)}
           onCopy={() => { const t = termRef.current; if (t?.hasSelection()) void copyToClipboard(t.getSelection()); }}
           onAdd={() => {
@@ -457,8 +487,8 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
 
 /** The terminal's right-click menu. Items act on mousedown so the xterm selection
  *  is still there when they run; it closes on outside mousedown, Escape or scroll. */
-function TerminalMenu({ x, y, hasSelection, onClose, onCopy, onAdd, onSelectAll, onClear }: {
-  x: number; y: number; hasSelection: boolean; onClose: () => void;
+function TerminalMenu({ x, y, hasSelection, mac, onClose, onCopy, onAdd, onSelectAll, onClear }: {
+  x: number; y: number; hasSelection: boolean; mac: boolean; onClose: () => void;
   onCopy: () => void; onAdd: () => void; onSelectAll: () => void; onClear: () => void;
 }) {
   const { t } = useTranslation();
@@ -506,11 +536,11 @@ function TerminalMenu({ x, y, hasSelection, onClose, onCopy, onAdd, onSelectAll,
       style={{ left: x, top: y }}
       className="absolute z-50 w-48 p-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg"
     >
-      {item('copy', 'content_copy', t('common.copy.copy'), '⌘C', onCopy, !hasSelection)}
-      {item('add', 'add_comment', hasSelection ? t('ui.TerminalTab.addSelection') : t('ui.TerminalTab.addLastLines', { count: 200 }), '⌘↵', onAdd)}
+      {item('copy', 'content_copy', t('common.copy.copy'), terminalShortcutLabel(mac, 'C'), onCopy, !hasSelection)}
+      {item('add', 'add_comment', hasSelection ? t('ui.TerminalTab.addSelection') : t('ui.TerminalTab.addLastLines', { count: 200 }), terminalShortcutLabel(mac, '↵'), onAdd)}
       <div className="h-px my-1 bg-[var(--color-border)]" />
-      {item('select-all', 'select_all', t('ui.TerminalTab.selectAll'), '⌘A', onSelectAll)}
-      {item('clear', 'mop', t('common.button.clear'), '⌘K', onClear)}
+      {item('select-all', 'select_all', t('ui.TerminalTab.selectAll'), terminalShortcutLabel(mac, 'A'), onSelectAll)}
+      {item('clear', 'mop', t('common.button.clear'), terminalShortcutLabel(mac, 'K'), onClear)}
     </div>
   );
 }

@@ -206,7 +206,7 @@ export function CMBrainContent() {
   // never shows a FALSE "nothing to approve" during the lazy governance fetch (Gate-2 HIGH-1).
   const govLoading = needsFilter === 'approve' && gov === undefined && !govErr;
   const needsMeta = {
-    approve: { label: 'Approve', count: approveCount, items: govLoading ? null : ((gov?.proposals ?? []) as Array<Record<string, unknown>>) },
+    approve: { count: approveCount, items: govLoading ? null : ((gov?.proposals ?? []) as Array<Record<string, unknown>>) },
   };
 
   return (
@@ -530,7 +530,7 @@ function NeedsList({
   kind, meta, backLabel, onBack, onDecide,
 }: {
   kind: 'approve';
-  meta: { label: string; count: number; items: Array<Record<string, unknown>> | null };
+  meta: { count: number; items: Array<Record<string, unknown>> | null };
   backLabel: string;
   onBack: () => void;
   onDecide: (kind: 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
@@ -1056,31 +1056,31 @@ function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'm
 // ── Guideline tab: static teaching content — "how a powerful agent brain works".
 // R30: describes MECHANISMS, not counts — NO baked numbers (they'd drift). Every line
 // must stay true of the running system: re-check it when a mechanism changes.
-const LIFECYCLE: Array<{ key: string; icon: string; title: string; desc: string }> = [
-  { key: 'assemble', icon: 'move_to_inbox', title: 'Assemble', desc: 'every context file injected whole, by priority' },
-  { key: 'recall', icon: 'search', title: 'Recall', desc: 'each message pulls related project, Library and past-session knowledge' },
-  { key: 'judge', icon: 'psychology', title: 'Judge', desc: 'the model reasons on that context' },
-  { key: 'sediment', icon: 'water_drop', title: 'Sediment', desc: 'after a session, its agent declares what it learned; the code checks the evidence' },
-  { key: 'revise', icon: 'published_with_changes', title: 'Revise', desc: 'a newer decision overrides; a withdrawn entry leaves' },
+const LIFECYCLE: Array<{ key: string; icon: string; titleKey: string; descKey: string }> = [
+  { key: 'assemble', icon: 'move_to_inbox', titleKey: 'ui.CMBrainOverlay.lcAssemble', descKey: 'ui.CMBrainOverlay.lcAssembleDesc' },
+  { key: 'recall', icon: 'search', titleKey: 'ui.CMBrainOverlay.lcRecall', descKey: 'ui.CMBrainOverlay.lcRecallDesc' },
+  { key: 'judge', icon: 'psychology', titleKey: 'ui.CMBrainOverlay.lcJudge', descKey: 'ui.CMBrainOverlay.lcJudgeDesc' },
+  { key: 'sediment', icon: 'water_drop', titleKey: 'ui.CMBrainOverlay.lcSediment', descKey: 'ui.CMBrainOverlay.lcSedimentDesc' },
+  { key: 'revise', icon: 'published_with_changes', titleKey: 'ui.CMBrainOverlay.lcRevise', descKey: 'ui.CMBrainOverlay.lcReviseDesc' },
 ];
 // What runs by itself. One list (it used to be told twice: here and in an "under the
 // hood" list). Nothing decays or is cut by size: an entry leaves only by an override or
 // a withdrawal (design 2026-10-30-brain-driven §2.3).
-const AUTO_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
-  { icon: 'search', name: 'Recall', desc: 'each message: the project brain, Library, past sessions, code graph', tag: 'hook' },
-  { icon: 'water_drop', name: 'After-session review', desc: 'writes what a session learned to MEMORY, EVOLUTION, a project brain, Library or Timeline', tag: 'job' },
-  { icon: 'published_with_changes', name: 'Override & withdraw', desc: 'a declared newer decision replaces an entry; the record stays outside the file', tag: 'job' },
-  { icon: 'event_note', name: 'Session record', desc: 'what each session did and where it stopped, read by the next one', tag: 'hook' },
-  { icon: 'genetics', name: 'Rule proposals', desc: 'a recurring correction with 3× evidence becomes a rule for you to approve', tag: 'job' },
-  { icon: 'monitoring', name: 'North star', desc: 'measures whether I am getting better (see the left rail)', tag: 'job' },
+const AUTO_ITEMS: Array<{ icon: string; nameKey: string; descKey: string; tag: string }> = [
+  { icon: 'search', nameKey: 'ui.CMBrainOverlay.autoRecall', descKey: 'ui.CMBrainOverlay.autoRecallDesc', tag: 'hook' },
+  { icon: 'water_drop', nameKey: 'ui.CMBrainOverlay.autoReview', descKey: 'ui.CMBrainOverlay.autoReviewDesc', tag: 'job' },
+  { icon: 'published_with_changes', nameKey: 'ui.CMBrainOverlay.autoOverride', descKey: 'ui.CMBrainOverlay.autoOverrideDesc', tag: 'job' },
+  { icon: 'event_note', nameKey: 'ui.CMBrainOverlay.autoSessionRecord', descKey: 'ui.CMBrainOverlay.autoSessionRecordDesc', tag: 'hook' },
+  { icon: 'genetics', nameKey: 'ui.CMBrainOverlay.autoRuleProposals', descKey: 'ui.CMBrainOverlay.autoRuleProposalsDesc', tag: 'job' },
+  { icon: 'monitoring', nameKey: 'ui.CMBrainOverlay.autoNorthStar', descKey: 'ui.CMBrainOverlay.autoNorthStarDesc', tag: 'job' },
 ];
-const MANUAL_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
-  { icon: 'explore', name: 'STEERING rules', desc: 'your standing directives (highest precedence)', tag: 'file' },
-  { icon: 'person', name: 'USER profile', desc: 'who you are, how you like to work', tag: 'file' },
-  { icon: 'extension', name: 'Skills & MCP servers', desc: 'which capabilities this agent may use (Capabilities)', tag: 'config' },
-  { icon: 'folder_copy', name: 'Create a project brain', desc: 'a domain brain per project (Brain Hub)', tag: 'chat' },
-  { icon: 'bookmark_add', name: 'Remember this', desc: 'ask me to save a lesson or decision now', tag: 'chat' },
-  { icon: 'gavel', name: 'Approve a rule', desc: 'accept or reject a proposal (Needs you → Governance)', tag: 'click' },
+const MANUAL_ITEMS: Array<{ icon: string; nameKey: string; descKey: string; tag: string }> = [
+  { icon: 'explore', nameKey: 'ui.CMBrainOverlay.manualSteering', descKey: 'ui.CMBrainOverlay.manualSteeringDesc', tag: 'file' },
+  { icon: 'person', nameKey: 'ui.CMBrainOverlay.manualUser', descKey: 'ui.CMBrainOverlay.manualUserDesc', tag: 'file' },
+  { icon: 'extension', nameKey: 'ui.CMBrainOverlay.manualSkills', descKey: 'ui.CMBrainOverlay.manualSkillsDesc', tag: 'config' },
+  { icon: 'folder_copy', nameKey: 'ui.CMBrainOverlay.manualProjectBrain', descKey: 'ui.CMBrainOverlay.manualProjectBrainDesc', tag: 'chat' },
+  { icon: 'bookmark_add', nameKey: 'ui.CMBrainOverlay.manualRemember', descKey: 'ui.CMBrainOverlay.manualRememberDesc', tag: 'chat' },
+  { icon: 'gavel', nameKey: 'ui.CMBrainOverlay.manualApproveRule', descKey: 'ui.CMBrainOverlay.manualApproveRuleDesc', tag: 'click' },
 ];
 
 function GuidelineTab() {
@@ -1104,8 +1104,8 @@ function GuidelineTab() {
                 className="flex-1 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5 text-center"
               >
                 <span className="material-symbols-outlined icon-lg text-[var(--color-text-muted)]">{s.icon}</span>
-                <div className="mt-1 text-small font-semibold text-[var(--color-text)]">{s.title}</div>
-                <div className="mt-0.5 text-meta leading-tight text-[var(--color-text-muted)]">{s.desc}</div>
+                <div className="mt-1 text-small font-semibold text-[var(--color-text)]">{t(s.titleKey)}</div>
+                <div className="mt-0.5 text-meta leading-tight text-[var(--color-text-muted)]">{t(s.descKey)}</div>
               </div>
               {i < LIFECYCLE.length - 1 && <span className="shrink-0 text-[var(--color-text-faint)]">→</span>}
             </div>
@@ -1130,7 +1130,8 @@ function GuidelineTab() {
 
 function AmColumn({
   testid, head, badge, items, accent,
-}: { testid: string; head: string; badge: string; items: Array<{ icon: string; name: string; desc: string; tag: string }>; accent: string }) {
+}: { testid: string; head: string; badge: string; items: Array<{ icon: string; nameKey: string; descKey: string; tag: string }>; accent: string }) {
+  const { t } = useTranslation();
   return (
     <div data-testid={testid} className="rounded-lg border border-[var(--color-border)] p-3">
       <div className="mb-2 flex items-center gap-2 text-body font-semibold text-[var(--color-text)]">
@@ -1139,11 +1140,11 @@ function AmColumn({
       </div>
       <div className="flex flex-col gap-1.5">
         {items.map((it) => (
-          <div key={it.name} className="flex items-center gap-2">
+          <div key={it.nameKey} className="flex items-center gap-2">
             <span className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">{it.icon}</span>
             <div className="min-w-0 flex-1">
-              <div className="text-small text-[var(--color-text)]">{it.name}</div>
-              <div className="truncate text-meta text-[var(--color-text-muted)]">{it.desc}</div>
+              <div className="text-small text-[var(--color-text)]">{t(it.nameKey)}</div>
+              <div className="truncate text-meta text-[var(--color-text-muted)]">{t(it.descKey)}</div>
             </div>
             <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-[1px] tabular-nums text-meta text-[var(--color-text-faint)]">{it.tag}</span>
           </div>

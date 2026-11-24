@@ -55,25 +55,26 @@ type FetchState = 'idle' | 'loading' | 'done' | 'error';
 // Ownership classification (matches backend context_directory_loader priority)
 // ---------------------------------------------------------------------------
 
-interface Owner { label: string; color: string; }
+/** labelKey is an i18n key (ui.TSCCModules.owner_<owner>); the Files tab shows t(labelKey). */
+interface Owner { labelKey: string; color: string; }
 const OWNER: Record<string, Owner> = {
-  'SWARMAI.md': { label: 'sys', color: '#6ea8fe' },
-  'IDENTITY.md': { label: 'sys', color: '#6ea8fe' },
-  'SOUL.md': { label: 'sys', color: '#6ea8fe' },
-  'AGENT.md': { label: 'sys', color: '#6ea8fe' },
+  'SWARMAI.md': { labelKey: 'ui.TSCCModules.owner_sys', color: '#6ea8fe' },
+  'IDENTITY.md': { labelKey: 'ui.TSCCModules.owner_sys', color: '#6ea8fe' },
+  'SOUL.md': { labelKey: 'ui.TSCCModules.owner_sys', color: '#6ea8fe' },
+  'AGENT.md': { labelKey: 'ui.TSCCModules.owner_sys', color: '#6ea8fe' },
   // system(runtime)-owned per SWARMAI.md (priority-2, same slot as SOUL.md) — sys, not agent.
-  'SELF.md': { label: 'sys', color: '#6ea8fe' },
-  'USER.md': { label: 'user', color: '#4ade80' },
-  'STEERING.md': { label: 'user', color: '#4ade80' },
-  'TOOLS.md': { label: 'user', color: '#4ade80' },
-  'MEMORY.md': { label: 'agent', color: '#a78bfa' },
-  'EVOLUTION.md': { label: 'agent', color: '#a78bfa' },
-  'KNOWLEDGE.md': { label: 'gen', color: '#38d9c4' },
+  'SELF.md': { labelKey: 'ui.TSCCModules.owner_sys', color: '#6ea8fe' },
+  'USER.md': { labelKey: 'ui.TSCCModules.owner_user', color: '#4ade80' },
+  'STEERING.md': { labelKey: 'ui.TSCCModules.owner_user', color: '#4ade80' },
+  'TOOLS.md': { labelKey: 'ui.TSCCModules.owner_user', color: '#4ade80' },
+  'MEMORY.md': { labelKey: 'ui.TSCCModules.owner_agent', color: '#a78bfa' },
+  'EVOLUTION.md': { labelKey: 'ui.TSCCModules.owner_agent', color: '#a78bfa' },
+  'KNOWLEDGE.md': { labelKey: 'ui.TSCCModules.owner_gen', color: '#38d9c4' },
   // PROJECTS.md removed 2026-08-14 — the auto-generated in-prompt project index was
   // deleted; project discovery is now Projects/ folder + FTS5 recall + Glob. 11 files.
 };
 export function ownerOf(filename: string): Owner {
-  return OWNER[filename] ?? { label: 'gen', color: '#8b93a7' };
+  return OWNER[filename] ?? { labelKey: 'ui.TSCCModules.owner_gen', color: '#8b93a7' };
 }
 
 function fmtK(n: number): string {
@@ -91,40 +92,40 @@ function fmtK(n: number): string {
 // ---------------------------------------------------------------------------
 
 type ChipTone = 'b' | 'p' | 'g' | 'a' | '';
-/** title and desc are the English text; the Flow tab shows ui.TSCCModules.flow<n>Title / flow<n>Desc. */
+/** titleKey and descKey are i18n keys; the Flow tab shows t(titleKey) / t(descKey). */
 interface FlowStage {
   n: number;
-  title: string;
+  titleKey: string;
   fn: string;
-  desc: string;
+  descKey: string;
   chips: { t: string; tone: ChipTone }[];
   accent?: 'accent' | 'recall' | 'gate';
 }
 
 const FLOW_STAGES: FlowStage[] = [
-  { n: 1, title: 'Compute dynamic budget', fn: 'compute_token_budget()', accent: 'accent',
-    desc: "Set the context-file budget ceiling from the model's context window.",
+  { n: 1, titleKey: 'ui.TSCCModules.flow1Title', fn: 'compute_token_budget()', accent: 'accent',
+    descKey: 'ui.TSCCModules.flow1Desc',
     chips: [{ t: '≥500K → 100K', tone: 'b' }, { t: '≥200K → 50K', tone: '' }, { t: '≥64K → 30K', tone: '' }, { t: '<64K → L0 cache', tone: 'a' }] },
-  { n: 2, title: 'L1 cache check', fn: '_load_l1_if_fresh()',
-    desc: 'Models ≥64K try the full L1_SYSTEM_PROMPTS.md cache: reused only if git status (15s TTL) + budget header match. The desktop main path is cache-safe (the prompt is now a pure function of the on-disk files); only excluded-file sessions bypass to avoid poisoning the shared cache.',
+  { n: 2, titleKey: 'ui.TSCCModules.flow2Title', fn: '_load_l1_if_fresh()',
+    descKey: 'ui.TSCCModules.flow2Desc',
     chips: [{ t: 'hit → jump to 8', tone: '' }, { t: 'excluded-files → bypass', tone: 'a' }] },
-  { n: 3, title: 'Read 11 context files in order', fn: '_assemble_from_sources()',
-    desc: 'P0→P9 sequential read, each _clean_content() (strip comments, redundant H1). (PROJECTS.md was removed 2026-08-14.)',
+  { n: 3, titleKey: 'ui.TSCCModules.flow3Title', fn: '_assemble_from_sources()',
+    descKey: 'ui.TSCCModules.flow3Desc',
     chips: [{ t: 'SWARMAI', tone: 'b' }, { t: 'IDENTITY', tone: 'b' }, { t: 'SOUL', tone: 'b' }, { t: 'SELF', tone: '' }, { t: 'AGENT', tone: '' }, { t: 'USER', tone: 'g' }, { t: 'STEERING', tone: 'g' }, { t: 'TOOLS', tone: 'g' }, { t: 'MEMORY', tone: 'p' }, { t: 'EVOLUTION', tone: 'p' }, { t: 'KNOWLEDGE', tone: '' }] },
-  { n: 4, title: 'Select MEMORY / EVOLUTION by whole units', fn: 'select_context_file()', accent: 'recall',
-    desc: 'Every entry in the file is in force; nothing is filtered by a state. Within budget the file goes in whole; over it, whole entries compete by score, meta-cognition first, rendered in file order. An entry not chosen stays in the file and is reached by recall.',
+  { n: 4, titleKey: 'ui.TSCCModules.flow4Title', fn: 'select_context_file()', accent: 'recall',
+    descKey: 'ui.TSCCModules.flow4Desc',
     chips: [{ t: 'whole units', tone: 'p' }, { t: 'fixed budget', tone: '' }, { t: 'no state filter', tone: '' }] },
-  { n: 5, title: 'Multi-domain recall fusion', fn: 'recall_all() → render', accent: 'recall',
-    desc: 'Pure-filesystem keyword search (allow_embed=False, vector infra off). 5 domains serial, injected with [RECALLED] provenance tags.',
+  { n: 5, titleKey: 'ui.TSCCModules.flow5Title', fn: 'recall_all() → render', accent: 'recall',
+    descKey: 'ui.TSCCModules.flow5Desc',
     chips: [{ t: 'context_files', tone: 'p' }, { t: 'ddd', tone: 'p' }, { t: 'library', tone: 'p' }, { t: 'session', tone: '' }, { t: 'codeintel', tone: '' }] },
-  { n: 6, title: 'Budget check (warn only)', fn: '_enforce_token_budget()', accent: 'gate',
-    desc: 'Sum section tokens incl. ## headers. Over budget → WARNING log, inject full, no truncation (design §3.5). CJK 1.1 tok/char, Latin 2.2 tok/word.',
+  { n: 6, titleKey: 'ui.TSCCModules.flow6Title', fn: '_enforce_token_budget()', accent: 'gate',
+    descKey: 'ui.TSCCModules.flow6Desc',
     chips: [{ t: 'WARN 70%', tone: 'a' }, { t: 'CRITICAL 85%', tone: 'a' }] },
-  { n: 7, title: 'Ephemeral injections', fn: 'not cached',
-    desc: 'Dynamic, session-specific content appended at the tail.',
+  { n: 7, titleKey: 'ui.TSCCModules.flow7Title', fn: 'not cached',
+    descKey: 'ui.TSCCModules.flow7Desc',
     chips: [{ t: 'DailyActivity ×2', tone: '' }, { t: 'briefing', tone: '' }, { t: 'UserObserver', tone: '' }, { t: 'sibling digest', tone: '' }, { t: 'resume ctx', tone: '' }, { t: 'UI state', tone: '' }] },
-  { n: 8, title: 'Return final System Prompt', fn: 'system_prompt', accent: 'accent',
-    desc: 'Join sections with \\n\\n → full prompt; metadata stored for this panel (GET /chat/{id}/system-prompt).',
+  { n: 8, titleKey: 'ui.TSCCModules.flow8Title', fn: 'system_prompt', accent: 'accent',
+    descKey: 'ui.TSCCModules.flow8Desc',
     chips: [] },
 ];
 
@@ -160,10 +161,10 @@ function FlowTab() {
             {/* stage card */}
             <div className={`flex-1 mb-2.5 rounded-lg border p-2.5 bg-[var(--color-hover)]/30 ${s.accent ? ACCENT_BORDER[s.accent] : 'border-[var(--color-border)]'}`}>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[12.5px] font-semibold text-[var(--color-text)]">{t(`ui.TSCCModules.flow${s.n}Title`)}</span>
+                <span className="text-[12.5px] font-semibold text-[var(--color-text)]">{t(s.titleKey)}</span>
                 <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-[#38d9c4]/10 text-[#38d9c4]">{s.fn}</span>
               </div>
-              <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-snug">{t(`ui.TSCCModules.flow${s.n}Desc`)}</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-snug">{t(s.descKey)}</div>
               {s.chips.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1.5">
                   {s.chips.map((c, j) => (
@@ -319,7 +320,7 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
         {[['sys', '#6ea8fe'], ['user', '#4ade80'], ['agent', '#a78bfa'], ['gen', '#38d9c4']].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 rounded-sm" style={{ background: c as string }} />
-            {l}
+            {t(`ui.TSCCModules.owner_${l}`)}
           </span>
         ))}
       </div>
@@ -336,7 +337,7 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
                 <span className="text-[var(--color-text)] truncate flex items-center gap-1.5 text-[12px]">
                   <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: o.color }} />
                   <span className="font-mono">{f.filename}</span>
-                  <span className="text-[11px] px-1 rounded" style={{ background: `${o.color}22`, color: o.color }}>{o.label}</span>
+                  <span className="text-[11px] px-1 rounded" style={{ background: `${o.color}22`, color: o.color }}>{t(o.labelKey)}</span>
                 </span>
                 <span className="text-[11px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
                   {f.tokens.toLocaleString()} · {share}%
@@ -380,7 +381,7 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
   const DOMAIN_META: Record<string, { icon: string; label: string; sub: string }> = {
     context_files: { icon: '🧩', label: t('ui.TSCCModules.domainMemory'), sub: 'MEMORY.md' },
     library: { icon: '📚', label: t('ui.TSCCModules.domainLibrary'), sub: 'Knowledge/' },
-    ddd: { icon: '🏗️', label: 'DDD', sub: t('ui.TSCCModules.domainDddSub') },
+    ddd: { icon: '🏗️', label: t('ui.TSCCModules.domainDdd'), sub: t('ui.TSCCModules.domainDddSub') },
     session: { icon: '💬', label: t('ui.TSCCModules.domainSessions'), sub: t('ui.TSCCModules.domainSessionsSub') },
     codeintel: { icon: '🔣', label: t('ui.TSCCModules.domainCode'), sub: t('ui.TSCCModules.domainCodeSub') },
   };
@@ -644,13 +645,13 @@ function PromptTab({
 // SystemPromptModule — tabbed shell (fetches on open)
 // ===========================================================================
 
-/** label is the English text; the tab bar shows ui.TSCCModules.tab_<key>. */
-const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'flow', label: 'Flow', icon: 'account_tree' },
-  { key: 'files', label: 'Files', icon: 'description' },
-  { key: 'recall', label: 'Recall', icon: 'travel_explore' },
-  { key: 'security', label: 'Security', icon: 'security' },
-  { key: 'prompt', label: 'Prompt', icon: 'article' },
+/** labelKey is an i18n key; the tab bar shows t(labelKey). */
+const TABS: { key: TabKey; labelKey: string; icon: string }[] = [
+  { key: 'flow', labelKey: 'ui.TSCCModules.tab_flow', icon: 'account_tree' },
+  { key: 'files', labelKey: 'ui.TSCCModules.tab_files', icon: 'description' },
+  { key: 'recall', labelKey: 'ui.TSCCModules.tab_recall', icon: 'travel_explore' },
+  { key: 'security', labelKey: 'ui.TSCCModules.tab_security', icon: 'security' },
+  { key: 'prompt', labelKey: 'ui.TSCCModules.tab_prompt', icon: 'article' },
 ];
 
 export function SystemPromptModule({ sessionId, metadata: metadataProp }: SystemPromptModuleProps) {
@@ -778,7 +779,7 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
             {/* whitespace-nowrap + overflow-hidden on the button (above) prevents any
                 wrap; truncate keeps a long label from pushing siblings — the icon
                 always stays visible so the tab is identifiable even if text clips. */}
-            <span className="truncate">{t(`ui.TSCCModules.tab_${tb.key}`)}</span>
+            <span className="truncate">{t(tb.labelKey)}</span>
           </button>
         ))}
       </div>

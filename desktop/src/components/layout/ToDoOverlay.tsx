@@ -95,12 +95,13 @@ function mergeWorkPacket(
   return JSON.stringify(merged);
 }
 // ── Range + status filter options ───────────────────────────────────
-type RangeOpt = { label: string; days: number | null };
+// id: the option's value / test id (never shown); labelKey: the i18n key shown.
+type RangeOpt = { id: string; labelKey: string; days: number | null };
 const RANGES: RangeOpt[] = [
-  { label: '7d', days: 7 },
-  { label: '30d', days: TODO_DEFAULT_DAYS },
-  { label: '90d', days: 90 },
-  { label: 'All', days: null },
+  { id: '7d', labelKey: 'ui.ToDoOverlay.range7d', days: 7 },
+  { id: '30d', labelKey: 'ui.ToDoOverlay.range30d', days: TODO_DEFAULT_DAYS },
+  { id: '90d', labelKey: 'ui.ToDoOverlay.range90d', days: 90 },
+  { id: 'All', labelKey: 'common.label.all', days: null },
 ];
 const DEFAULT_RANGE_IDX = 1; // 30d
 
@@ -323,9 +324,9 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
             <Segmented
               label={t('ui.ToDoOverlay.range')}
               testid="todo-range"
-              options={RANGES.map((r) => ({ value: r.label, label: r.days === null ? t('common.label.all') : r.label }))}
-              value={RANGES[rangeIdx].label}
-              onChange={(v) => setRangeIdx(RANGES.findIndex((r) => r.label === v))}
+              options={RANGES.map((r) => ({ value: r.id, label: t(r.labelKey) }))}
+              value={RANGES[rangeIdx].id}
+              onChange={(v) => setRangeIdx(RANGES.findIndex((r) => r.id === v))}
               optionTestid={(v) => `todo-range-${v}`}
             />
             <span aria-hidden className="h-5 w-px bg-[var(--color-border)] shrink-0" />
@@ -353,7 +354,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
       <GuideBanner />
 
       {/* KPI row */}
-      <KpiRow kpis={kpis} rangeLabel={RANGES[rangeIdx].days === null ? t('common.label.all') : RANGES[rangeIdx].label} />
+      <KpiRow kpis={kpis} rangeLabel={t(RANGES[rangeIdx].labelKey)} />
 
       {/* Analytics strip — always visible */}
       <AnalyticsStrip weekly={weekly} sources={sources} />

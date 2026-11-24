@@ -23,6 +23,7 @@
  * - `useUnifiedTabState`        — The hook itself
  */
 
+import i18next from 'i18next';
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import type { Message, UnifiedAttachment, SystemPromptMetadata, CompactionGuardEvent, TurnPhase, SessionActivity } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
@@ -448,7 +449,7 @@ export interface UseUnifiedTabStateReturn {
 function createDefaultTab(agentId: string): UnifiedTab {
   return {
     id: crypto.randomUUID(),
-    title: 'New Session',
+    title: i18next.t('chat.newSession'),
     agentId,
     isNew: true,
     sessionId: undefined,
@@ -848,7 +849,7 @@ export function useUnifiedTabState(
       }
       const tab: UnifiedTab = {
         id: tabId,
-        title: 'New Session',
+        title: i18next.t('chat.newSession'),
         agentId: defaultAgentId,
         isNew: true,
         sessionId: undefined,
@@ -993,7 +994,7 @@ export function useUnifiedTabState(
         if (tab.sessionId && !validSessionIds.has(tab.sessionId)) {
           tab.sessionId = undefined;
           tab.isNew = true;
-          tab.title = isSwarmOutTab(tab.id) ? SWARM_OUT_TITLE : 'New Session';
+          tab.title = isSwarmOutTab(tab.id) ? SWARM_OUT_TITLE : i18next.t('chat.newSession');
           changed = true;
         }
       }

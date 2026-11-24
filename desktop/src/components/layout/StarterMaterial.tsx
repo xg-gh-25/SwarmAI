@@ -30,12 +30,12 @@ export interface MaterialRow extends StarterItem {
   touched?: boolean;
 }
 
-/** The three roles, as a segmented choice on each material row. label and hint are the
- *  English text; the row shows ui.StarterMaterial.role<ROLE> / roleHint<ROLE>. */
-export const ROLES: { role: StarterRole; label: string; hint: string; tone: string }[] = [
-  { role: 'GOVERN', label: 'Govern', hint: 'An asset it manages: bound, and a repo gets code-intel', tone: 'var(--color-primary)' },
-  { role: 'DISTILL', label: 'Distill', hint: 'Read once and distilled into its knowledge', tone: 'var(--color-status-warning)' },
-  { role: 'SHELF', label: 'Shelf', hint: 'Kept for reference, read when needed', tone: 'var(--color-text-muted)' },
+/** The three roles, as a segmented choice on each material row. labelKey and hintKey
+ *  are the i18n keys the row renders with t(). */
+export const ROLES: { role: StarterRole; labelKey: string; hintKey: string; tone: string }[] = [
+  { role: 'GOVERN', labelKey: 'ui.StarterMaterial.roleGOVERN', hintKey: 'ui.StarterMaterial.roleHintGOVERN', tone: 'var(--color-primary)' },
+  { role: 'DISTILL', labelKey: 'ui.StarterMaterial.roleDISTILL', hintKey: 'ui.StarterMaterial.roleHintDISTILL', tone: 'var(--color-status-warning)' },
+  { role: 'SHELF', labelKey: 'ui.StarterMaterial.roleSHELF', hintKey: 'ui.StarterMaterial.roleHintSHELF', tone: 'var(--color-text-muted)' },
 ];
 
 const KIND_ICON: Record<string, string> = {
@@ -116,18 +116,18 @@ export function MaterialPicker({
       const picked = await open({
         multiple: mode === 'file',
         directory: mode === 'folder',
-        title: mode === 'file' ? 'Add files to this brain' : 'Add a folder to this brain',
+        title: mode === 'file' ? t('ui.StarterMaterial.pickFilesTitle') : t('ui.StarterMaterial.pickFolderTitle'),
       });
       const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
       paths.forEach((p) => addItem(p, mode));
     } catch {
       document.dispatchEvent(new CustomEvent('swarm:toast', {
-        detail: { message: 'File browser unavailable here — paste a full path into the field instead.' },
+        detail: { message: t('ui.StarterMaterial.fileBrowserUnavailable') },
       }));
     } finally {
       setPicking(false);
     }
-  }, [addItem, picking]);
+  }, [addItem, picking, t]);
 
   const removeItem = useCallback((id: number) => setItems((prev) => prev.filter((it) => it.id !== id)), [setItems]);
   const setRole = useCallback((id: number, role: StarterRole) => {
@@ -222,12 +222,12 @@ export function MaterialPicker({
                   {ROLES.map((r) => {
                     const on = it.role === r.role;
                     return (
-                      <button key={r.role} type="button" role="radio" aria-checked={on} title={t(`ui.StarterMaterial.roleHint${r.role}`)}
+                      <button key={r.role} type="button" role="radio" aria-checked={on} title={t(r.hintKey)}
                         data-testid={`${p}-role-${it.id}-${r.role}`}
                         onClick={() => setRole(it.id, r.role)}
                         className={`h-7 px-2.5 text-meta ${on ? 'font-semibold' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
                         style={on ? { color: r.tone, background: `color-mix(in srgb, ${r.tone} 14%, transparent)` } : undefined}>
-                        {t(`ui.StarterMaterial.role${r.role}`)}
+                        {t(r.labelKey)}
                       </button>
                     );
                   })}

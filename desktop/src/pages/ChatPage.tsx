@@ -200,7 +200,7 @@ export default function ChatPage() {
     tabNoticeStore.post(tab, tab?.sessionId, {
       id: 'stream-still-working',
       severity: 'info',
-      message: 'Still working — the backend is alive but this turn has been silent for a while. Press Stop if it looks stuck.',
+      message: t('ui.ChatPage.stillWorking'),
       autoDismissMs: 8000,
     });
   });
@@ -1979,7 +1979,7 @@ export default function ChatPage() {
   const fileCount = attachments.length;
   useEffect(() => {
     setActiveSessionMeta({
-      topic: activeTabTitle || 'New Session',
+      topic: activeTabTitle || t('chat.newSession'),
       contextPct,
       fileCount,
       agentName: agentName || 'SwarmAI',
@@ -1987,7 +1987,7 @@ export default function ChatPage() {
       tabId: activeTabId ?? undefined,
     });
     return () => setActiveSessionMeta(null);
-  }, [activeTabTitle, contextPct, fileCount, agentName, sessionId, activeTabId, setActiveSessionMeta]);
+  }, [activeTabTitle, contextPct, fileCount, agentName, sessionId, activeTabId, setActiveSessionMeta, t]);
 
   // Cmd+1-9 / Ctrl+1-9 keyboard shortcuts for tab switching.
   // Uses openTabsRef to avoid re-registering the listener on every tab change.
@@ -2717,14 +2717,14 @@ export default function ChatPage() {
         },
       ]);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Refresh failed';
+      const msg = err instanceof Error ? err.message : t('ui.ChatPage.refreshFailedPlain');
       tabNoticeStore.post(
         refreshTabId ? tabMapRef.current.get(refreshTabId) : undefined,
         refreshSessionId,
         {
           id: 'refresh-failed',
           severity: 'warning',
-          message: msg.includes('active') ? 'Cannot refresh while the AI is busy. Stop or answer first.' : `Refresh failed: ${msg}`,
+          message: msg.includes('active') ? t('ui.ChatPage.refreshBusy') : t('ui.ChatPage.refreshFailed', { msg }),
           autoDismissMs: 8000,
         },
       );

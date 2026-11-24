@@ -72,11 +72,11 @@ const DOMAIN_LABEL: Record<string, string> = {
   content: 'Content',
 };
 
-const HEALTH_DOT: Record<SkillHealthStatus, { color: string; label: string }> = {
-  healthy: { color: 'var(--color-success, #4ade80)', label: 'Healthy — recently used, succeeding' },
-  low_success: { color: 'var(--color-danger, #f87171)', label: 'Low success rate' },
-  stale: { color: 'var(--color-warning, #fbbf24)', label: 'Stale — not used recently' },
-  never_used: { color: 'var(--color-border-strong)', label: 'Never used — candidate to retire' },
+const HEALTH_DOT: Record<SkillHealthStatus, { color: string; labelKey: string }> = {
+  healthy: { color: 'var(--color-success, #4ade80)', labelKey: 'ui.CapabilitiesOverlay.healthHealthy' },
+  low_success: { color: 'var(--color-danger, #f87171)', labelKey: 'ui.CapabilitiesOverlay.healthLowSuccess' },
+  stale: { color: 'var(--color-warning, #fbbf24)', labelKey: 'ui.CapabilitiesOverlay.healthStale' },
+  never_used: { color: 'var(--color-border-strong)', labelKey: 'ui.CapabilitiesOverlay.healthNeverUsed' },
 };
 
 /** Human-readable status word for the on-card health line. */
@@ -88,18 +88,18 @@ const STATUS_LABEL: Record<SkillHealthStatus, string> = {
 };
 
 /** Faint tier marker — deliberately muted so it does NOT compete with the health dot. */
-const TIER_MARK: Record<'always' | 'lazy', { icon: string; label: string }> = {
-  always: { icon: 'bolt', label: 'Always loaded' },
-  lazy: { icon: 'bedtime', label: 'Lazy — loaded on use' },
+const TIER_MARK: Record<'always' | 'lazy', { icon: string; labelKey: string }> = {
+  always: { icon: 'bolt', labelKey: 'ui.CapabilitiesOverlay.tierAlways' },
+  lazy: { icon: 'bedtime', labelKey: 'ui.CapabilitiesOverlay.tierLazy' },
 };
 
 /** MCP load-timing marker (distinct from the skill always/lazy map — MCP tiers are
  *  always/channel/ondemand). Faint by design: it says WHEN a session loads the MCP, it
  *  is NOT a live-connection state (this panel is a config registry, not a liveness probe). */
-const MCP_TIER_MARK: Record<'always' | 'channel' | 'ondemand', { icon: string; label: string }> = {
-  always: { icon: 'bolt', label: 'Always — loads at session start' },
-  ondemand: { icon: 'bedtime', label: 'On-demand — loads when a session needs it' },
-  channel: { icon: 'cell_tower', label: 'Channel — loads in channel sessions' },
+const MCP_TIER_MARK: Record<'always' | 'channel' | 'ondemand', { icon: string; labelKey: string }> = {
+  always: { icon: 'bolt', labelKey: 'ui.CapabilitiesOverlay.mcpTierAlways' },
+  ondemand: { icon: 'bedtime', labelKey: 'ui.CapabilitiesOverlay.mcpTierOnDemand' },
+  channel: { icon: 'cell_tower', labelKey: 'ui.CapabilitiesOverlay.mcpTierChannel' },
 };
 
 export interface CapabilitiesContentProps {
@@ -272,7 +272,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
         <span
           className="inline-block w-2 h-2 rounded-full shrink-0"
           style={{ background: dot.color }}
-          title={dot.label}
+          title={t(dot.labelKey)}
         />
         <span className="truncate">
           <span className="">{label}</span>
@@ -302,8 +302,8 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
           <span
             data-testid={`cap-tier-${idSuffix}`}
             data-tier={s.tier}
-            title={TIER_MARK[s.tier]?.label ?? s.tier}
-            aria-label={TIER_MARK[s.tier]?.label ?? s.tier}
+            title={TIER_MARK[s.tier] ? t(TIER_MARK[s.tier].labelKey) : s.tier}
+            aria-label={TIER_MARK[s.tier] ? t(TIER_MARK[s.tier].labelKey) : s.tier}
             className="ml-auto shrink-0 material-symbols-outlined icon-xs text-[var(--color-text-faint)] opacity-50"
           >
             {TIER_MARK[s.tier]?.icon ?? ''}
@@ -315,7 +315,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
         {healthLineFor(s, idSuffix)}
       </button>
     );
-  }, [healthLineFor]);
+  }, [healthLineFor, t]);
 
   // Search filters the visible skill set; grouping + hero extraction happen after.
   const visibleSkills = useMemo(() => {
@@ -719,8 +719,8 @@ function ConnGroup({
               <span
                 data-testid={`cap-conn-tier-${m.id}`}
                 data-tier={m.tier}
-                title={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
-                aria-label={MCP_TIER_MARK[m.tier]?.label ?? m.tier}
+                title={MCP_TIER_MARK[m.tier] ? t(MCP_TIER_MARK[m.tier].labelKey) : m.tier}
+                aria-label={MCP_TIER_MARK[m.tier] ? t(MCP_TIER_MARK[m.tier].labelKey) : m.tier}
                 className="shrink-0 material-symbols-outlined icon-xs text-[var(--color-text-faint)] opacity-50"
               >
                 {MCP_TIER_MARK[m.tier]?.icon ?? ''}

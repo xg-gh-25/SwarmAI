@@ -78,7 +78,7 @@ describe('AuthConfigPanel — AC2 context-filtered method cards', () => {
     // external: no ADA yet
     expect(screen.queryByText('Ada')).not.toBeInTheDocument();
     // toggle to internal
-    const toggle = screen.getByText(/Amazon employee/i);
+    const toggle = screen.getByText(/internal \(ADA\) setup/i);
     await act(async () => { fireEvent.click(toggle); });
     expect(screen.getByText('Ada')).toBeInTheDocument();
   });

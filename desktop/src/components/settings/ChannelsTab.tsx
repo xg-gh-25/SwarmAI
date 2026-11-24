@@ -171,8 +171,8 @@ function ConfigSummary({ channel }: { channel: Channel }) {
   const { t } = useTranslation();
   const cfg = channel.config as Record<string, string>;
   const fields = [
-    { label: 'Bot Token', value: cfg.bot_token },
-    { label: 'App Token', value: cfg.app_token },
+    { label: t('ui.ChannelsTab.botToken'), value: cfg.bot_token },
+    { label: t('ui.ChannelsTab.appToken'), value: cfg.app_token },
   ];
 
   return (

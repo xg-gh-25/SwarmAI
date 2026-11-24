@@ -33,6 +33,7 @@
  * @module useChatStreamingLifecycle
  */
 
+import i18next from 'i18next';
 import { collapseAdjacentDuplicateBlocks } from '../utils/duplicateBlocks';
 import { planTranscriptChange, type TranscriptChange } from './transcriptFeed';
 import React, { useState, useReducer, useRef, useCallback, useMemo, useEffect } from 'react';
@@ -1369,7 +1370,7 @@ export function useChatStreamingLifecycle(
                 tabNoticeStore.post(tabState, mirrorSid, {
                   id: noticeId,
                   severity: 'info',
-                  message: 'Swarm is asking a question in this session.',
+                  message: i18next.t('ui.useChatStreamingLifecycle.askingQuestion'),
                 });
                 tabState._pendingQuestionToastId = noticeId;
               }
@@ -1428,7 +1429,7 @@ export function useChatStreamingLifecycle(
                 tabNoticeStore.post(tabState, mirrorSid, {
                   id: noticeId,
                   severity: 'info',
-                  message: `Swarm is waiting for your approval: ${perm.toolName}.`,
+                  message: i18next.t('ui.useChatStreamingLifecycle.waitingApproval', { tool: perm.toolName }),
                 });
                 tabState._pendingPermissionNoticeId = noticeId;
               }
@@ -2767,7 +2768,7 @@ export function useChatStreamingLifecycle(
             return;
           }
           const msg = event.message
-            ?? 'Automatic recovery for this session has stopped. Start a fresh session to continue.';
+            ?? i18next.t('ui.useChatStreamingLifecycle.recoveryStopped');
           tabNoticeStore.post(rexTab, rexTab.sessionId, {
             id: RECOVERY_EXHAUSTED_NOTICE_ID,
             severity: 'warning',
@@ -2775,7 +2776,7 @@ export function useChatStreamingLifecycle(
             // The bar re-checks tab + session at click time, then hands us the
             // notice's own tabId (never the active tab).
             action: onStartFresh
-              ? { label: 'Start fresh session', run: (tabId) => onStartFresh(tabId) }
+              ? { label: i18next.t('ui.useChatStreamingLifecycle.startFresh'), run: (tabId) => onStartFresh(tabId) }
               : undefined,
           });
           return; // side-channel handled; never falls through to stream logic
@@ -3934,7 +3935,7 @@ export function useChatStreamingLifecycle(
             const guardEvent: CompactionGuardEvent = {
               subtype,
               contextPct: (raw.context_pct as number) ?? (event.contextPct as number) ?? 0,
-              message: event.message ?? 'Guard event',
+              message: event.message ?? i18next.t('ui.useChatStreamingLifecycle.guardEvent'),
               patternDescription: (raw.pattern_description as string) ?? event.patternDescription,
             };
             const cgTab = capturedTabId
@@ -4217,7 +4218,7 @@ export function useChatStreamingLifecycle(
               // Not "send it again": once the backend is idle the reconcile loop
               // reloads this session's saved messages, so an answer that finished
               // meanwhile appears by itself; resending would duplicate it.
-              message: 'The connection to this reply dropped. If it finished, it appears here within about 15s; if not, send your message again.',
+              message: i18next.t('ui.useChatStreamingLifecycle.connectionDropped'),
             });
           }, HEAL_GRACE_PERIOD_MS);
           return; // Don't show error — heal grace in progress

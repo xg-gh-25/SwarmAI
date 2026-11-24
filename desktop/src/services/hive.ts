@@ -96,16 +96,16 @@ export function isNewerVersion(latest: string | null | undefined, current: strin
 }
 
 /** Deploy progress steps derived from field presence */
-export function getDeploySteps(inst: HiveInstance): { label: string; done: boolean }[] {
+export function getDeploySteps(inst: HiveInstance): { labelKey: string; done: boolean }[] {
   return [
-    { label: 'S3 bucket ready', done: !!inst.s3Bucket },
-    { label: 'IAM Role created', done: !!inst.iamRoleName },
-    { label: 'Security Group configured', done: !!inst.securityGroupId },
-    { label: 'EC2 launched', done: !!inst.ec2InstanceId },
-    { label: 'Elastic IP assigned', done: !!inst.ec2PublicIp },
-    { label: 'Installing SwarmAI...', done: inst.status === 'running' || !!inst.cloudfrontDomain },
-    { label: 'Backend health check', done: inst.status === 'running' || !!inst.cloudfrontDomain },
-    { label: 'CloudFront HTTPS', done: !!inst.cloudfrontDomain },
+    { labelKey: 'ui.hive.stepS3', done: !!inst.s3Bucket },
+    { labelKey: 'ui.hive.stepIam', done: !!inst.iamRoleName },
+    { labelKey: 'ui.hive.stepSecurityGroup', done: !!inst.securityGroupId },
+    { labelKey: 'ui.hive.stepEc2', done: !!inst.ec2InstanceId },
+    { labelKey: 'ui.hive.stepElasticIp', done: !!inst.ec2PublicIp },
+    { labelKey: 'ui.hive.stepInstalling', done: inst.status === 'running' || !!inst.cloudfrontDomain },
+    { labelKey: 'ui.hive.stepHealth', done: inst.status === 'running' || !!inst.cloudfrontDomain },
+    { labelKey: 'ui.hive.stepCloudFront', done: !!inst.cloudfrontDomain },
   ];
 }
 

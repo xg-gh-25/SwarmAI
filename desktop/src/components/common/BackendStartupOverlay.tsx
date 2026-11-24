@@ -305,23 +305,23 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   const buildInitSteps = useCallback((systemStatus: SystemStatus): InitStep[] => [
     {
       id: 'database',
-      label: 'Loading your data',
+      label: t('ui.BackendStartupOverlay.stepLoadingData'),
       status: getStepStatus(systemStatus.database.healthy, systemStatus.database.error),
       error: systemStatus.database.error,
     },
     {
       id: 'agent',
-      label: 'Preparing your agent',
+      label: t('ui.BackendStartupOverlay.stepPreparingAgent'),
       status: getStepStatus(systemStatus.agent.ready, systemStatus.agent.error),
       error: systemStatus.agent.error,
     },
     {
       id: 'workspace',
-      label: 'Setting up workspace',
+      label: t('ui.BackendStartupOverlay.stepSettingUpWorkspace'),
       status: getStepStatus(systemStatus.swarmWorkspace.ready, systemStatus.swarmWorkspace.error),
       error: systemStatus.swarmWorkspace.error,
     },
-  ], [getStepStatus]);
+  ], [getStepStatus, t]);
 
   // Animate steps appearing sequentially (flat — no children to count)
   useEffect(() => {
@@ -556,7 +556,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
           setStatus('error');
           // Tauri invoke errors may be objects — ensure we display a string
           const msg = error instanceof Error ? error.message : String(error);
-          setErrorMessage(`Failed to initialize backend: ${msg}`);
+          setErrorMessage(t('ui.BackendStartupOverlay.initFailed', { error: msg }));
         }
       }
     };

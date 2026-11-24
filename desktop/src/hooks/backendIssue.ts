@@ -18,6 +18,8 @@
  * @exports BackendDiag, BackendIssue, BackendIssueKind, describeBackendIssue, parseBackendDiag
  */
 
+import i18next from 'i18next';
+
 export interface BackendStall {
   cause?: 'cpu' | 'memory' | 'low_battery' | 'busy' | 'unknown' | string;
   starved?: boolean;
@@ -77,74 +79,97 @@ const where = (busyWith?: string) => (busyWith ? busyWith.replace(/\.py:/, '.py 
 
 function slowed(stall: BackendStall | null | undefined, loopAge?: number | null): Omit<BackendIssue, 'kind'> | null {
   if (!stall) return null;
-  const still = 'It is still running and will catch up.';
+  const still = i18next.t('ui.backendIssue.stillRunning');
   switch (stall.cause) {
     case 'cpu': {
       const top = (stall.topCpu ?? []).slice(0, 3).map((p) => `${p.name} ${p.cpu}%`).join(', ');
-      const load = typeof stall.loadPerCore === 'number' ? `load ${stall.loadPerCore.toFixed(1)} per core` : '';
-      const ev = [load, top && `busiest: ${top}`].filter(Boolean).join('; ');
-      return { cause: 'cpu', short: 'Slowed: CPU fully used',
-        detail: `The backend is slowed down: this computer's CPU is fully used${ev ? ` (${ev})` : ''}. ${still}` };
+      const load = typeof stall.loadPerCore === 'number' ? i18next.t('ui.backendIssue.loadPerCore', { load: stall.loadPerCore.toFixed(1) }) : '';
+      const ev = [load, top && i18next.t('ui.backendIssue.busiest', { top })].filter(Boolean).join('; ');
+      return { cause: 'cpu', short: i18next.t('ui.backendIssue.shortCpu'),
+        detail: ev
+          ? i18next.t('ui.backendIssue.detailCpuEv', { ev, still })
+          : i18next.t('ui.backendIssue.detailCpu', { still }) };
     }
     case 'memory': {
-      const ev = [typeof stall.memPercent === 'number' && `${Math.round(stall.memPercent)}% used`,
-        stall.memPressure === 'critical' && 'macOS memory pressure critical'].filter(Boolean).join(', ');
-      return { cause: 'memory', short: 'Slowed: low memory',
-        detail: `The backend is slowed down: this computer is low on memory${ev ? ` (${ev})` : ''}. ${still}` };
+      const ev = [typeof stall.memPercent === 'number' && i18next.t('ui.backendIssue.memUsed', { pct: Math.round(stall.memPercent) }),
+        stall.memPressure === 'critical' && i18next.t('ui.backendIssue.memPressureCritical')].filter(Boolean).join(', ');
+      return { cause: 'memory', short: i18next.t('ui.backendIssue.shortMemory'),
+        detail: ev
+          ? i18next.t('ui.backendIssue.detailMemoryEv', { ev, still })
+          : i18next.t('ui.backendIssue.detailMemory', { still }) };
     }
     case 'low_battery':
-      return { cause: 'low_battery', short: 'Slowed: low battery',
-        detail: `The backend is slowed down: macOS is throttling it on low battery${typeof stall.battery === 'number' ? ` (${stall.battery}%)` : ''}. Plug in the charger.` };
+      return { cause: 'low_battery', short: i18next.t('ui.backendIssue.shortBattery'),
+        detail: typeof stall.battery === 'number'
+          ? i18next.t('ui.backendIssue.detailBatteryPct', { pct: stall.battery })
+          : i18next.t('ui.backendIssue.detailBattery') };
     case 'busy': {
       const t = secs(loopAge);
-      return { cause: 'busy', short: 'Backend busy',
-        detail: `The backend has been busy${t ? ` for ${t}` : ''}${stall.busyWith ? ` in ${where(stall.busyWith)}` : ''}; it answers when that finishes.` };
+      const w = stall.busyWith ? where(stall.busyWith) : '';
+      let detail: string;
+      if (t && w) detail = i18next.t('ui.backendIssue.detailBusyForIn', { t, where: w });
+      else if (t) detail = i18next.t('ui.backendIssue.detailBusyFor', { t });
+      else if (w) detail = i18next.t('ui.backendIssue.detailBusyIn', { where: w });
+      else detail = i18next.t('ui.backendIssue.detailBusy');
+      return { cause: 'busy', short: i18next.t('ui.backendIssue.shortBusy'), detail };
     }
     default:
       return null;
   }
 }
 
+/** "has not run for <t> / for a few seconds; its process is still there…" */
+const pausedDetail = (t: string) => (t
+  ? i18next.t('ui.backendIssue.detailPausedFor', { t })
+  : i18next.t('ui.backendIssue.detailPausedFew'));
+
 export function describeBackendIssue(kind: BackendIssueKind, diag: BackendDiag = {}): BackendIssue {
   const t = secs(diag.loopAge);
   if (diag.suspended && (kind === 'degraded' || kind === 'not_responding')) {
-    return { kind, cause: 'paused', short: 'Backend paused',
-      detail: `The backend has not run${t ? ` for ${t}` : ' for a few seconds'}; its process is still there and usually resumes on its own.` };
+    return { kind, cause: 'paused', short: i18next.t('ui.backendIssue.shortPaused'),
+      detail: pausedDetail(t) };
   }
   if (kind === 'degraded') {
     const s = slowed(diag.stall, diag.loopAge);
     if (s) return { kind, ...s };
-    return { kind, cause: 'slow', short: 'Reconnecting…',
-      detail: `The backend has not answered${t ? ` for ${t}` : ' for a few seconds'}; its process is running.` };
+    return { kind, cause: 'slow', short: i18next.t('health.degraded'),
+      detail: t
+        ? i18next.t('ui.backendIssue.detailSlowFor', { t })
+        : i18next.t('ui.backendIssue.detailSlowFew') };
   }
   if (kind === 'not_responding') {
     if (diag.processAlive === false) {
-      return { kind, cause: 'stopped', short: 'Backend stopped',
-        detail: 'The backend process is not running; macOS restarts it automatically.' };
+      return { kind, cause: 'stopped', short: i18next.t('ui.backendIssue.shortStopped'),
+        detail: i18next.t('ui.backendIssue.detailStopped') };
     }
     if (diag.processAlive === true && diag.heartbeatFresh === false
         && typeof diag.suspendedSecs === 'number' && diag.suspendedSecs >= 60) {
       const min = Math.round(diag.suspendedSecs / 60);
-      return { kind, cause: 'stuck', short: 'Backend stuck',
-        detail: `The backend process exists but has not run for ${min} min while this Mac was awake, so macOS is not what paused it: it is probably stuck.` };
+      return { kind, cause: 'stuck', short: i18next.t('ui.backendIssue.shortStuck'),
+        detail: i18next.t('ui.backendIssue.detailStuckAwake', { min }) };
     }
     if (diag.processAlive === true && diag.heartbeatFresh === false) {
-      return { kind, cause: 'paused', short: 'Backend paused',
-        detail: `The backend has not run${t ? ` for ${t}` : ' for a few seconds'}; its process is still there and usually resumes on its own.` };
+      return { kind, cause: 'paused', short: i18next.t('ui.backendIssue.shortPaused'),
+        detail: pausedDetail(t) };
     }
     if (diag.heartbeatFresh) {
       const s = slowed(diag.stall, diag.loopAge);
       if (s && diag.stall?.starved) return { kind, ...s };
-      return { kind, cause: 'stuck', short: 'Backend stuck',
-        detail: `The backend has not answered${t ? ` for ${t}` : ''}: ${diag.stall?.busyWith ? `stuck in ${where(diag.stall.busyWith)}` : 'its event loop is stuck'}. Its process is still running.` };
+      const reason = diag.stall?.busyWith
+        ? i18next.t('ui.backendIssue.stuckIn', { where: where(diag.stall.busyWith) })
+        : i18next.t('ui.backendIssue.loopStuck');
+      return { kind, cause: 'stuck', short: i18next.t('ui.backendIssue.shortStuck'),
+        detail: t
+          ? i18next.t('ui.backendIssue.detailStuckFor', { t, reason })
+          : i18next.t('ui.backendIssue.detailStuck', { reason }) };
     }
-    return { kind, cause: 'stopped', short: 'Backend not responding',
-      detail: 'The backend is not responding; reconnecting…' };
+    return { kind, cause: 'stopped', short: i18next.t('ui.backendIssue.shortNotResponding'),
+      detail: i18next.t('ui.backendIssue.detailNotResponding') };
   }
   if (kind === 'slow_restart') {
-    return { kind, cause: 'slow_restart', short: 'Backend not back yet',
-      detail: 'The backend is taking longer than expected to restart…' };
+    return { kind, cause: 'slow_restart', short: i18next.t('ui.backendIssue.shortNotBack'),
+      detail: i18next.t('ui.backendIssue.detailSlowRestart') };
   }
-  return { kind, cause: 'unreachable', short: 'Backend unreachable',
-    detail: 'The app\'s health checks to the backend failed, and there is no other sign that it is running.' };
+  return { kind, cause: 'unreachable', short: i18next.t('ui.backendIssue.shortUnreachable'),
+    detail: i18next.t('ui.backendIssue.detailUnreachable') };
 }

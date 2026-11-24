@@ -33,18 +33,21 @@ export type SlashCommandCategory = 'system' | 'skill';
 
 export interface SlashCommand {
   name: string;
-  description: string;
+  /** i18n key of the description (built-in commands); the renderer calls t() on it */
+  descriptionKey?: string;
+  /** literal description (skill commands: the skill's own text) */
+  description?: string;
   category: SlashCommandCategory;
 }
 
 // Built-in system commands (hardcoded)
 export const SYSTEM_COMMANDS: SlashCommand[] = [
-  { name: '/clear', description: 'Clear conversation context', category: 'system' },
-  { name: '/compact', description: 'Compact conversation history', category: 'system' },
-  { name: '/plugin list', description: 'List installed plugins', category: 'system' },
-  { name: '/plugin install', description: 'Install a plugin: /plugin install {name}@{marketplace}', category: 'system' },
-  { name: '/plugin uninstall', description: 'Uninstall a plugin: /plugin uninstall {id}', category: 'system' },
-  { name: '/plugin marketplace list', description: 'List available marketplaces', category: 'system' },
+  { name: '/clear', descriptionKey: 'ui.constants.cmdClear', category: 'system' },
+  { name: '/compact', descriptionKey: 'ui.constants.cmdCompact', category: 'system' },
+  { name: '/plugin list', descriptionKey: 'ui.constants.cmdPluginList', category: 'system' },
+  { name: '/plugin install', descriptionKey: 'ui.constants.cmdPluginInstall', category: 'system' },
+  { name: '/plugin uninstall', descriptionKey: 'ui.constants.cmdPluginUninstall', category: 'system' },
+  { name: '/plugin marketplace list', descriptionKey: 'ui.constants.cmdMarketplaceList', category: 'system' },
 ];
 
 /** @deprecated Use SYSTEM_COMMANDS + skill-derived commands instead */

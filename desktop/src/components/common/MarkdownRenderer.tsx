@@ -356,12 +356,12 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         // chunk. The stream's end re-runs this with `live` false and reports it then.
         if (live) return;
         console.error('Mermaid rendering error:', err);
-        setError(err instanceof Error ? err.message : 'Failed to render diagram');
+        setError(err instanceof Error ? err.message : t('ui.MarkdownRenderer.renderFailed'));
       }
     };
 
     renderDiagram();
-  }, [chart, cacheKey, live]);
+  }, [chart, cacheKey, live, t]);
 
   // Download as SVG
   const handleDownloadSvg = () => {
@@ -461,7 +461,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
     } catch (err) {
       console.error('PNG download error:', err);
       // Fallback: alert user to use SVG download instead
-      alert('PNG download failed. Please try downloading as SVG instead.');
+      alert(t('ui.MarkdownRenderer.pngDownloadFailed'));
     } finally {
       setIsDownloading(false);
     }

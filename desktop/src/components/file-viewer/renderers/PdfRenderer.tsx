@@ -124,9 +124,9 @@ const PdfRenderer = memo(function PdfRenderer({
 
   const onDocumentLoadError = useCallback((err: Error) => {
     console.error('PDF load error:', err);
-    setError(err.message || 'Failed to load PDF');
+    setError(err.message || t('ui.PdfRenderer.loadFailed'));
     setLoading(false);
-  }, []);
+  }, [t]);
 
   const goToPage = useCallback(
     (page: number) => {

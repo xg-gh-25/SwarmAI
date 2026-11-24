@@ -21,11 +21,12 @@ const LAYER_OF_TYPE: Record<EntryType, Layer> = {
   guideline: 'operational', pitfall: 'operational', process: 'operational',
 };
 
-/** Layer display + which types sit under each (fixed cognitive order, not by count). */
-export const LAYERS: { key: Layer; label: string; color: string; types: EntryType[] }[] = [
-  { key: 'meta', label: 'Meta-cognitive', color: '#a371f7', types: ['principle', 'correction'] },
-  { key: 'cognitive', label: 'Cognitive', color: '#58a6ff', types: ['decision', 'model'] },
-  { key: 'operational', label: 'Operational', color: '#3fb950', types: ['guideline', 'pitfall', 'process'] },
+/** Layer display (labelKey: i18n key, render with t()) + which types sit under each
+ *  (fixed cognitive order, not by count). */
+export const LAYERS: { key: Layer; labelKey: string; color: string; types: EntryType[] }[] = [
+  { key: 'meta', labelKey: 'ui.dddLayers.layerMeta', color: '#a371f7', types: ['principle', 'correction'] },
+  { key: 'cognitive', labelKey: 'ui.dddLayers.layerCognitive', color: '#58a6ff', types: ['decision', 'model'] },
+  { key: 'operational', labelKey: 'ui.dddLayers.layerOperational', color: '#3fb950', types: ['guideline', 'pitfall', 'process'] },
 ];
 
 /** Sum a 7-type histogram into its 3 layer totals. */
