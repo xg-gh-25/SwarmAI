@@ -105,7 +105,7 @@ SwarmAI's chat runs on Claude models on Amazon Bedrock, so you need an AWS accou
 sure Bedrock model access for Claude is enabled in that account.)
 
 On first launch SwarmAI asks you to connect it; you can also do it later in
-Settings → SwarmAI Account. Choose one way to sign in:
+Settings → Swarm AWS Account. Choose one way to sign in:
 
 - **AWS SSO** — your company's IAM Identity Center, signed in through the browser
 - **AWS login** — your AWS console account, signed in through the browser (good for a personal account)
@@ -123,7 +123,7 @@ Open SwarmAI Settings and confirm:
 | Item | Expected |
 |------|----------|
 | Backend Service | ● Running |
-| SwarmAI Account | AWS account connected |
+| Swarm AWS Account | AWS account connected |
 
 Send a test message in the Chat page — if you get an AI response, you're all set.
 

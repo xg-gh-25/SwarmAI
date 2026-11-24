@@ -12,12 +12,13 @@
 
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-  - [macOS (Apple Silicon)](#macos-apple-silicon)
+  - [macOS](#macos)
   - [Windows](#windows)
+  - [Linux](#linux)
   - [Build from Source](#build-from-source)
 - [First Launch](#first-launch)
 - [Configuration](#configuration)
-  - [AI Provider Setup](#ai-provider-setup)
+  - [Connect Your AWS Account](#connect-your-aws-account)
   - [Settings Overview](#settings-overview)
 - [Getting Started](#getting-started)
   - [Your First Conversation](#your-first-conversation)
@@ -42,65 +43,75 @@
 
 Before installing SwarmAI, you need:
 
-| Requirement | Why | How to Get It |
-|------------|-----|---------------|
-| **Claude Code CLI** | SwarmAI's AI engine — spawns Claude as a subprocess | `npm install -g @anthropic-ai/claude-code` |
-| **Node.js 18+** | Required for Claude Code CLI | [nodejs.org](https://nodejs.org/) or `brew install node` |
-| **AI Provider Access** | At least one of the following: | See [AI Provider Setup](#ai-provider-setup) |
-| — AWS Bedrock | Recommended. Claude models via your AWS account | [AWS Console](https://console.aws.amazon.com/bedrock/) |
-| — Anthropic API Key | Direct API access | [console.anthropic.com](https://console.anthropic.com/) |
+| Item | Requirement |
+|------|-------------|
+| **OS** | macOS 10.15+ (Apple Silicon or Intel), Windows 10/11 (x64), Linux x64 (Ubuntu 22.04+ or similar) |
+| **Memory** | 16GB RAM (36GB recommended for multi-tab) |
+| **Disk** | 2GB available |
+| **Network** | Internet connection required |
+| **AWS** | An AWS account with access to Claude models on Amazon Bedrock (chat runs on Bedrock) — see [Connect Your AWS Account](#connect-your-aws-account) |
+| **Software** | git. On Windows: Git for Windows, which includes Git Bash ([git-scm.com](https://git-scm.com/downloads/win)) |
+
+The app brings everything else it needs (its own Python backend and the Claude CLI), so you do
+not install Node.js or the Claude CLI yourself. Building from source needs more tools; see
+[Build from Source](#build-from-source).
 
 ### Verify Prerequisites
 
 ```bash
-# Check Node.js
-node --version    # Should be 18+
-
-# Check Claude Code CLI
-claude --version  # Should return a version number
-
-# Check AWS credentials (if using Bedrock)
-aws sts get-caller-identity  # Should return your account info
+# Check git (on Windows, run this in Git Bash)
+git --version
 ```
 
 ---
 
 ## Installation
 
-### macOS (Apple Silicon)
+Download the installer for your system from [GitHub Releases](https://github.com/xg-gh-25/SwarmAI/releases).
 
-1. **Download** the `.dmg` file from [Releases](https://github.com/xg-gh-25/SwarmAI/releases)
+### macOS
 
-2. **Install** — open the DMG and drag SwarmAI to your Applications folder
+1. **Download** the `.dmg` for your Mac (`aarch64` for Apple Silicon, `x64` for Intel)
 
-3. **Remove quarantine** — the app is not yet code-signed, so macOS will block it:
-   ```bash
-   xattr -cr /Applications/SwarmAI.app
-   ```
+2. **Install** — open the DMG and drag `SwarmAI.app` to your Applications folder
 
-4. **Launch** — double-click SwarmAI in Applications
-   - If macOS still blocks it: **System Settings → Privacy & Security → scroll down → "Open Anyway"**
-
-> **Note**: The current release supports Apple Silicon (M1/M2/M3/M4) only. Intel Mac support is not available yet.
+3. **Launch** — open SwarmAI. The app is not signed by Apple yet, so the first time macOS blocks it:
+   - Open **System Settings → Privacy & Security**
+   - Scroll to the message about SwarmAI and click **Open Anyway**
+   - Confirm, then open SwarmAI again
 
 ### Windows
 
-1. **Download** the `-setup.exe` (NSIS) or `.msi` installer from [Releases](https://github.com/xg-gh-25/SwarmAI/releases)
+1. **Download** `SwarmAI_x.x.x_x64-setup.exe` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases)
 
 2. **Run the installer**
    - Windows SmartScreen may warn: "Windows protected your PC"
    - Click **"More info"** → **"Run anyway"**
 
-3. **Install Git Bash** (if not already installed) — [git-scm.com/downloads/win](https://git-scm.com/downloads/win)
-   - SwarmAI's backend uses bash scripts internally
+3. **Install Git for Windows** (it includes Git Bash) if it is not installed yet — [git-scm.com/downloads/win](https://git-scm.com/downloads/win)
 
 4. **Launch** SwarmAI from the Start Menu or desktop shortcut
+
+### Linux
+
+1. **Download** `SwarmAI_x.x.x_amd64.AppImage` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases)
+
+2. **Make it executable and run it:**
+   ```bash
+   chmod +x SwarmAI_*.AppImage
+   ./SwarmAI_*.AppImage
+   ```
+
+3. If it says FUSE is missing, install it (Ubuntu: `sudo apt install libfuse2`), or run it
+   with `--appimage-extract-and-run`
+
+4. Make sure git is installed (Ubuntu: `sudo apt install git`)
 
 ### Build from Source
 
 For developers or contributors who want to run from source:
 
-**Prerequisites**: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/)), uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+**Prerequisites**: git, Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/)), uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`). On Windows also Git Bash (part of Git for Windows).
 
 ```bash
 # Clone the repo
@@ -113,7 +124,6 @@ npm install
 
 # Set up backend environment
 cp ../backend/.env.example ../backend/.env
-# Edit ../backend/.env if needed (see AI Provider Setup below)
 
 # Run in development mode (recommended — picks up code changes instantly)
 cd .. && ./dev.sh start
@@ -123,11 +133,12 @@ cd desktop && npm run tauri:dev
 
 # Build for production
 npm run build:all
+# Build artifacts: ./src-tauri/target/release/bundle/
 ```
 
 `./dev.sh start` runs the Python backend directly so code changes take effect immediately without rebuilding. Use `npm run build:all` when you need the production binary.
 
-> **Note:** In production, the backend runs as a **launchd daemon** (macOS) that stays alive even when the desktop app is closed — enabling 24/7 Slack bot, background jobs, and scheduled tasks.
+> **Note:** On macOS the installed backend runs as a **launchd daemon** that stays alive even when the desktop app is closed — enabling 24/7 Slack bot, background jobs, and scheduled tasks. On Windows and Linux the app starts the backend as its own child process.
 
 ---
 
@@ -149,57 +160,41 @@ You should see the three-column layout: Explorer (left), Chat (center), Radar (r
 
 ## Configuration
 
-### AI Provider Setup
+### Connect Your AWS Account
 
-Open **Settings** (gear icon at the bottom of the left sidebar).
+SwarmAI's chat runs on Claude models on Amazon Bedrock, so you need an AWS account. (Make
+sure Bedrock model access for Claude is enabled in that account:
+[AWS Bedrock Console](https://console.aws.amazon.com/bedrock/) → Model access.)
 
-#### Option A: AWS Bedrock (Recommended)
+On first launch SwarmAI asks you to connect it; you can also do it later in
+**Settings → Swarm AWS Account**. Choose one way to sign in:
 
-Best for users with an AWS account. No API key management — uses your existing AWS credentials.
+- **AWS SSO** — your company's IAM Identity Center, signed in through the browser
+- **AWS login** — your AWS console account, signed in through the browser (good for a personal account)
+- **Access keys** — an access key ID and secret access key
 
-1. In Settings, enable the **Bedrock** toggle
-2. Select your **AWS Region** (e.g., `us-east-1`)
-3. Ensure your AWS credentials are configured:
-   ```bash
-   # Option 1: AWS SSO (recommended)
-   aws sso login
-
-   # Option 2: Static credentials
-   aws configure
-   ```
-4. Your AWS account needs access to Claude models in Bedrock:
-   - Go to [AWS Bedrock Console](https://console.aws.amazon.com/bedrock/) → Model access
-   - Request access to **Claude Opus 4.8** (current default), **Claude Opus 4.6**, and/or **Claude Sonnet 4.6**
-
-#### Option B: Anthropic API Key
-
-Direct API access, simpler setup:
-
-1. Get an API key from [console.anthropic.com](https://console.anthropic.com/)
-2. In Settings, enter your **Anthropic API Key**
-3. Select your preferred model
+Or paste a **Bedrock API key**: chat works with it right away, but Hives, cloud storage and
+voice still need a connected AWS account.
 
 #### Verify It Works
 
-Send a test message in the chat — any greeting like "hello" will do. If you get a response, you're configured correctly.
+Open Settings and confirm the backend is running (**System** tab) and your AWS account is
+connected (**Swarm AWS Account** tab). Then send a test message in the chat — any greeting like
+"hello" will do. If you get a response, you're configured correctly.
 
 ### Settings Overview
 
-SwarmAI Settings has 11 tabs:
+Open **Settings** (gear icon at the bottom of the left sidebar). It has 7 tabs:
 
 | Tab | What It Does |
 |-----|-------------|
-| **General** | Theme, language, workspace path |
-| **AI & Models** | Provider (Bedrock/Anthropic), model selection, AWS region |
-| **Channels** | Slack bot configuration |
-| **Skills** | Browse and manage 90+ built-in skills |
-| **MCP Servers** | External tool servers (Slack, GitHub, Outlook, etc.) |
-| **Hive** | Cloud Hive instance management (deploy/stop/delete) |
-| **Backup** | Workspace backup configuration |
-| **Core Engine** | Core Engine growth dashboard — flywheel metrics |
-| **System** | Backend status, resource usage, daemon health |
-| **Capabilities** | Enabled capabilities and feature toggles |
-| **About** | Version info, license, links |
+| **General** | Language, theme, accent color, the repository workspace |
+| **Swarm AWS Account** | Your AWS account sign-in, main region, and what the account can use (Bedrock, cloud storage, voice) |
+| **LLM Models** | Where the model is called from, thinking, the model list and the default model |
+| **Channels** | Connected channels; add, edit or disconnect Slack |
+| **Backup** | Workspace backup status, schedule and manual backup |
+| **System** | Backend status, system dependencies, storage paths, a link to MCP servers |
+| **About** | Version, platform, update check, re-run the setup wizard |
 
 ---
 
@@ -402,17 +397,11 @@ SwarmAI can run as a Slack bot, giving you access to Swarm from any Slack conver
 
 **Common causes:**
 
-1. **Claude Code CLI not installed**
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   claude --version  # Verify
-   ```
+1. **AWS account not connected**
+   - Open **Settings → Swarm AWS Account** and connect your account (see [Connect Your AWS Account](#connect-your-aws-account))
 
-2. **AWS credentials expired** (if using Bedrock)
-   ```bash
-   aws sts get-caller-identity  # Check if credentials work
-   aws sso login                # Re-authenticate if needed
-   ```
+2. **AWS sign-in expired**
+   - Open **Settings → Swarm AWS Account** and sign in again
 
 3. **No Bedrock model access**
    - Go to AWS Bedrock Console → Model access
@@ -422,21 +411,19 @@ SwarmAI can run as a Slack bot, giving you access to Swarm from any Slack conver
    - Close extra tabs, retry with a single tab
    - This happens when cold-starting multiple sessions simultaneously
 
-### macOS: "SwarmAI is damaged and can't be opened"
+### macOS blocks the app
 
-The app isn't code-signed yet. Fix:
-```bash
-xattr -cr /Applications/SwarmAI.app
-```
-
-### macOS: App won't open (no error message)
-
-1. Check System Settings → Privacy & Security → scroll down for "Open Anyway"
-2. Try launching from terminal: `open /Applications/SwarmAI.app`
+The app isn't signed by Apple yet. Open **System Settings → Privacy & Security**, scroll to
+the message about SwarmAI and click **Open Anyway**, confirm, then open SwarmAI again.
 
 ### Windows: SmartScreen blocks the installer
 
 Click **"More info"** → **"Run anyway"**. This is normal for unsigned applications.
+
+### Linux: the AppImage does not start
+
+Run `chmod +x` on it first. If it says FUSE is missing, install `libfuse2` (Ubuntu:
+`sudo apt install libfuse2`) or run it with `--appimage-extract-and-run`.
 
 ### Chat is slow / high latency
 
@@ -465,26 +452,27 @@ Fix: close other tabs, wait 30 seconds, try again. The timeout is set to 180 sec
 
 ### Is my data sent to the cloud?
 
-Your **workspace files** stay local — they never leave your machine. The only data sent externally is your **chat messages** to the AI provider (AWS Bedrock or Anthropic API) for generating responses. No workspace files, memory, or context files are uploaded anywhere.
+Your **workspace files** stay local — they never leave your machine. The only data sent externally is your **chat messages** to Claude on Amazon Bedrock, in your AWS account, for generating responses. No workspace files, memory, or context files are uploaded anywhere.
 
 ### What happens when I close the app?
 
-In production mode, the **backend daemon** keeps running via macOS launchd. This means:
+On macOS the installed **backend daemon** keeps running via launchd. This means:
 - Slack bot stays responsive 24/7
 - Scheduled jobs continue running (memory health, maintenance, etc.)
 - Memory and context are maintained
 
 When you reopen the app, it reconnects to the running daemon. To fully stop the backend: `launchctl bootout gui/$(id -u) com.swarmai.backend`.
 
+On Windows and Linux the app starts the backend as its own child process, so the backend stops
+when you close the app.
+
 ### Can I use SwarmAI offline?
 
-No — SwarmAI requires an active internet connection to reach the AI provider (Bedrock or Anthropic API). Your workspace and memory are local, but the AI model runs in the cloud.
+No — SwarmAI requires an active internet connection to reach Claude on Amazon Bedrock. Your workspace and memory are local, but the AI model runs in the cloud.
 
 ### How much does it cost to run?
 
-SwarmAI itself is free and open-source (MIT). The AI model usage costs depend on your provider:
-- **AWS Bedrock**: Pay-per-token, billed to your AWS account. Claude Opus (4.8/4.6) is ~$15/M input tokens, ~$75/M output tokens. A typical heavy session uses $1-5.
-- **Anthropic API**: Similar per-token pricing. Check [anthropic.com/pricing](https://www.anthropic.com/pricing) for current rates.
+SwarmAI itself is free and open-source (MIT). The model usage is billed by Amazon Bedrock to your AWS account, pay-per-token. Check [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/) for the current rates of the Claude models.
 
 ### Can multiple people use one installation?
 

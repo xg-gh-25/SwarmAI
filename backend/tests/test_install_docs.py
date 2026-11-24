@@ -9,7 +9,11 @@
 - Linux ships an AppImage: make it executable and run it.
 - The installed app needs git (and Git Bash on Windows); building from source has its own
   list.
+- docs/USER_GUIDE.md (linked from docs/README.md) tells the same story as QUICK_START.md: no
+  Claude CLI / Node.js prerequisite for the installed app, Intel Macs supported, a Linux
+  section, and the AWS account connected under the Settings tab's real name.
 """
+import json
 import re
 from pathlib import Path
 
@@ -19,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[2]
 QUICK_START = ROOT / "QUICK_START.md"
 README = ROOT / "README.md"
 README_ZH = ROOT / "README.zh-CN.md"
-DOCS = [QUICK_START, README, README_ZH]
+USER_GUIDE = ROOT / "docs" / "USER_GUIDE.md"
+DOCS = [QUICK_START, README, README_ZH, USER_GUIDE]
 
 
 def _text(p: Path) -> str:
@@ -42,6 +47,7 @@ def test_no_msi_and_no_xattr():
 def test_aws_account_is_required():
     assert "AWS account" in _text(QUICK_START)
     assert "AWS account" in _text(README)
+    assert "AWS account" in _text(USER_GUIDE)
     assert "AWS" in _text(README_ZH) and "账号" in _text(README_ZH)
 
 
@@ -54,15 +60,17 @@ def test_windows_installer_is_the_nsis_setup_exe():
 
 
 def test_macos_open_anyway():
-    qs = _text(QUICK_START)
-    assert "Privacy & Security" in qs and "Open Anyway" in qs
+    for doc in (QUICK_START, USER_GUIDE):
+        t = _text(doc)
+        assert "Privacy & Security" in t and "Open Anyway" in t, doc.name
     assert "Open Anyway" in _text(README)
 
 
 def test_linux_appimage_section():
-    qs = _text(QUICK_START)
-    assert re.search(r"^### Linux", qs, re.M)
-    assert "AppImage" in qs and "chmod +x" in qs
+    for doc in (QUICK_START, USER_GUIDE):
+        t = _text(doc)
+        assert re.search(r"^### Linux", t, re.M), doc.name
+        assert "AppImage" in t and "chmod +x" in t and "FUSE" in t, doc.name
     for doc in (README, README_ZH):
         assert "AppImage" in _text(doc), doc.name
 
@@ -79,3 +87,40 @@ def test_installed_app_prerequisites_are_git_and_git_bash():
     for doc in (README, README_ZH):
         t = _text(doc)
         assert "Git Bash" in t and "Node.js" in t, doc.name
+
+
+def _user_guide_prerequisites() -> str:
+    m = re.search(r"^## Prerequisites\n(.*?)^## ", _text(USER_GUIDE), re.M | re.S)
+    assert m, "docs/USER_GUIDE.md has no Prerequisites section"
+    return m.group(1)
+
+
+def test_user_guide_prerequisites_match_quick_start():
+    """The installed app brings its own Claude CLI: no npm install, no Node.js to install."""
+    ug = _text(USER_GUIDE)
+    assert "@anthropic-ai/claude-code" not in ug
+    req = _user_guide_prerequisites()
+    table = [ln for ln in req.splitlines() if ln.startswith("|")]
+    assert table, "the Prerequisites section has no table"
+    assert not any("Node.js" in ln or "Claude Code CLI" in ln for ln in table), table
+    assert "git" in req.lower() and "Git Bash" in req
+    assert "Intel" in req and "Linux" in req
+    src = re.search(r"^### Build from Source\n(.*?)^##", ug, re.M | re.S)
+    assert src and "Node.js" in src.group(1) and "Rust" in src.group(1)
+
+
+def test_user_guide_macos_covers_intel():
+    ug = _text(USER_GUIDE)
+    assert "Apple Silicon only" not in ug and "Intel Mac support is not available" not in ug
+    mac = re.search(r"^### macOS\n(.*?)^### ", ug, re.M | re.S)
+    assert mac and "Intel" in mac.group(1)
+
+
+def test_docs_name_the_aws_account_tab_as_the_app_does():
+    """The Settings tab is named by en.json's settings.awsAccount.title, not "SwarmAI Account"."""
+    en = json.loads((ROOT / "desktop" / "src" / "i18n" / "locales" / "en.json").read_text("utf-8"))
+    label = en["settings"]["awsAccount"]["title"]
+    for doc in (QUICK_START, USER_GUIDE):
+        t = _text(doc)
+        assert "SwarmAI Account" not in t, doc.name
+        assert label in t, doc.name
