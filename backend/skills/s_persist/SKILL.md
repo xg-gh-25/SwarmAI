@@ -64,7 +64,7 @@ Routing wrong at the file layer is the #1 mis-persist: a system-identity or prod
 design principle wrongly landed in a DDD's TECH.md (2026-08-15) because Step 1 used to
 only fence SOUL/AGENT/STEERING and had no home for SWARMAI/IDENTITY/SELF.
 
-> **SSOT for file ownership = `SWARMAI.md` § "My 11 Context Files — Position & Ownership".**
+> **SSOT for file ownership = `SWARMAI.md` § "My 12 Context Files — Position & Ownership".**
 > The table below is the operational routing view of it — if they ever diverge, SWARMAI.md
 > wins. Key consequence encoded there: **SwarmAI product/system architecture is NOT knowledge
 > for KNOWLEDGE.md** (it goes to the SwarmAI DDD's TECH.md, or SWARMAI.md for charter-level
@@ -134,7 +134,7 @@ layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** 
 
 > **⚠️ Routing fix(R4c):** reference/fact content goes to
 > `Knowledge/Library/`, **NOT** `.context/KNOWLEDGE.md`. KNOWLEDGE.md is an
-> always-injected *index/cache* file (one of the 11 context files) — it is a
+> always-injected *index/cache* file (one of the governed context files) — it is a
 > **sibling** of `Knowledge/`, so `sync_knowledge_index` (which scans `Knowledge/`
 > only) never chunks it. Content written to KNOWLEDGE.md is injected-as-context but
 > **invisible to FTS5/BM25 recall**. Write durable reference material to

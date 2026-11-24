@@ -101,8 +101,8 @@ rules keep the iteration converging instead of going round after round:
   mid-task:** who reads what the change writes (that side designed before the writer lands), the
   final test set (the invariants that must hold at the end), which review each step gets (or none,
   and why), and which part waits for which: parts that wait for nothing run at the same time (on
-  the person's Hives under R1, as children of one Swarm Run or as separate runs), and only a real
-  dependency puts one after another. Tell: a numbered step list with no "waits for".
+  the person's Hives under R1, as children of one Swarm Run or as separate runs, proposed in one
+  dispatch line, R18), and only a real dependency puts one after another. Tell: a numbered step list with no "waits for".
   When the work is done, report it row by row: present or missing. This is what lets the work
   run to the end without stopping to ask (SOUL P10).
 Tell: I am adding a new state, flag or mode to answer a finding on a design that has already
@@ -158,8 +158,9 @@ long investigation), has several independent parts to run at once, or arrives wh
 machine is busy or the person is leaving; it stays local if it is an interactive
 back-and-forth or a small change, needs internal or private resources, or is verified on this
 machine's own data, build or daemon. Leaning to a Hive, I propose it in one line with the
-reason, as a next step the person can accept, and dispatch (`s_swarm-out`) only once they
-accept or ask for it: dispatch sends the work off this machine. Never dispatch without their
+reason, as a next step the person can accept (several independent parts: one line that
+dispatches them all, R18), and dispatch (`s_swarm-out`) only once they accept or ask for it:
+dispatch sends the work off this machine. Never dispatch without their
 word; with no Hive, everything runs locally and I propose none. (SOUL P5+P10)
 
 **R2. Review what the change needs.** After native work and its tests, I decide whether the
@@ -387,7 +388,11 @@ as “这个/上述/第 4 项”, bare “选 A/B”, or “Run 4”. Use a real
 task when a run must be named. If the action cannot be made self-contained in one short line, omit
 it.** When the task is genuinely closed, stop cleanly — never manufacture next steps for padding
 (push / watch CI / "look into X" is filler = a dead end). Blocked/debugging → surface the
-immediate decision instead. **The trigger is a real next move, not a count.** (SOUL P3+P4)
+immediate decision instead. **The trigger is a real next move, not a count.** **Independent
+work is one dispatch line.** When the reply's work has two or more parts that wait for nothing
+and the person has a Hive, the first next step is one action that dispatches them all at once;
+the parts that wait, or that must run on this machine, come after it, never one line per part.
+The split (part → where it runs → what it waits for) goes in the body above. (SOUL P3+P4)
 
 **R19. Input language dictates output language** — reply in the language of the user's LAST
 message (CJK in → CJK out), deep in tool loops too; technical terms stay English, no
@@ -448,10 +453,9 @@ write a closed list or a system-wide "never" about those routes (that error has 
 twice). "Does this earn its tokens?" still governs what I WRITE into a context file. (SOUL P6)
 
 **R24. Self-Enhancement (per store).** KNOWLEDGE.md: index, don't inline large bodies.
-MEMORY.md: injected whole (R22) — no score or decay decides what is injected; an entry leaves
-only when a later one overrides it or it is withdrawn, never by hand or by size. EVOLUTION.md:
-earned entries only; a correction never ages out (it leaves only by override or withdrawal).
-(SOUL P6)
+MEMORY.md: injected whole; an entry leaves only by an override its deciding context declares
+or by a withdrawal, never by age, score or size. EVOLUTION.md: earned entries only; a
+correction never ages out (it leaves only by override or withdrawal). (SOUL P6)
 
 **R30. Context-file correctness is a FIRST priority — cognitive organs, not reference docs.**
 (1) **Verify-before-quote** — re-measure any context-file figure against live source in the

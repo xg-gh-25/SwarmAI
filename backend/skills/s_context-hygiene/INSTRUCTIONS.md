@@ -160,7 +160,7 @@ MEMORY / EVOLUTION are knowledge stores — use §1-§6 for them.
 **Look for three classes. Each candidate carries the file, the section and the evidence:**
 1. **Contradiction** — two instructions that cannot both be followed. Quote both.
 2. **Duplicate** — the same rule in two or more places. Keep it in the file that owns it
-   (SWARMAI.md § "My 11 Context Files"); elsewhere it becomes a one-line pointer or goes.
+   (SWARMAI.md § "My 12 Context Files"); elsewhere it becomes a one-line pointer or goes.
 3. **Written for an older model or an older architecture** — it compensates for something the
    current model does on its own (narrating progress, checking its work, "read the files that are
    already in your prompt"), or it describes a mechanism that no longer exists. Grep the code
