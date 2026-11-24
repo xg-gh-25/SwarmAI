@@ -11,6 +11,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <f> [--brain <B>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --returns answer|document|commits [--mode <m>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title <t> --brief <one or two sentences> --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --returns answer|document|commits --revision <r> [--hive <name>] [--mode <m>]
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch-many --file <JSON list of dispatch specs, each with its spec revision>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [...] [--since <token>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
@@ -110,26 +111,27 @@ def _framed(data) -> str:
 
 
 def _call(method: str, path: str, body: dict | None = None, timeout: int = 120,
-          api: str = "swarm-out", framed: bool = False) -> int:
+          api: str = "swarm-out", framed: bool = False, reply=None) -> int:
+    """Call the daemon and print its JSON answer (``framed``: as Hive-written data); exit
+    status 0, or 1 on a refusal (``_http_error``) or no answer. ``reply(out)``: prints the
+    answer or the refusal itself instead and returns the exit status."""
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(_base(api) + path, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             out = json.load(r)
+            if reply is not None:
+                return reply(out)
             print(_framed(out) if framed else json.dumps(out, ensure_ascii=False, indent=2))
             return 0
     except urllib.error.HTTPError as e:
-        try:
-            detail = json.load(e).get("detail")
-        except Exception:
-            detail = None
-        out = {"ok": False, "status": e.code, "detail": detail}
-        if isinstance(detail, dict) and detail.get("refused") is True:
-            # refused at intake (core/swarm_out.SwarmOutRefused): nothing was sent
-            out.update(detail=str(detail.get("message") or ""), refused=True, private=detail.get("private") is True)
+        out = _http_error(e)
         if e.code == 504 and path == "/dispatch":
             out["maybe_sent"] = True   # the Hive may have taken it (core/swarm_out_card)
+        if reply is not None:
+            reply(out)
+            return 1
         print(json.dumps(out, ensure_ascii=False))
         return 1
     except urllib.error.URLError as e:
@@ -141,11 +143,118 @@ def _call(method: str, path: str, body: dict | None = None, timeout: int = 120,
         return _timed_out(path)
 
 
+def _http_error(e: urllib.error.HTTPError) -> dict:
+    """What the daemon's refusal says: its status and detail; a refusal at intake with
+    ``refused`` and ``private``; a request its validation refused with each field and
+    why (``fields``, also in ``detail``: pydantic's message names the limit, e.g. "String
+    should have at most 20000 characters"), so the caller knows what to fix."""
+    try:
+        body = json.load(e)
+    except Exception:
+        body = None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    out = {"ok": False, "status": e.code, "detail": detail}
+    if isinstance(detail, dict) and detail.get("refused") is True:
+        # refused at intake (core/swarm_out.SwarmOutRefused): nothing was sent
+        out.update(detail=str(detail.get("message") or ""), refused=True, private=detail.get("private") is True)
+    fields = body.get("fields") if isinstance(body, dict) else None
+    if isinstance(fields, list):
+        clean = [{"field": str(f.get("field") or "")[:200], "error": str(f.get("error") or "")[:300]}
+                 for f in fields[:20] if isinstance(f, dict)]
+        if clean:
+            out["fields"] = clean
+            out["detail"] = (f"{detail}: " if isinstance(detail, str) and detail else "") + \
+                "; ".join(f"{f['field']}: {f['error']}" for f in clean)
+    return out
+
+
+#: what a dispatch-many spec may carry besides its task (a /dispatch body's fields)
+_MANY_KEYS = ("title", "brief", "brain", "acceptance", "mode", "execution", "why", "returns",
+              "needs_private", "revision", "hive")
+
+
+def _dispatch_many(args) -> int:
+    """Several independent dispatches in one request (POST /dispatch/batch): the daemon
+    runs them at once, at most core/swarm_out.BATCH_CONCURRENCY at a time, within one
+    dispatch deadline. ``--file``: a JSON list of specs, each what ``dispatch`` takes by
+    name (``task`` or ``task_file``; ``base`` a ref or a list), each with the revision its
+    own ``spec`` returned. Prints ``{"ok", "results": [{index, title, ok, ...}]}`` in the
+    file's order; a spec whose task cannot be read is not sent and says why. Exit 1 when
+    any item did not go out."""
+    session = _session()
+    if session is None:
+        print(json.dumps({"ok": False, "detail": (
+            "this command has no session id (SWARM_APP_SESSION_ID); run it as one plain "
+            "command in your Bash tool, not from a script or a sub-shell that drops it")}))
+        return 1
+    try:
+        with open(args.file, encoding="utf-8") as f:
+            specs = json.load(f)
+    except (OSError, ValueError) as e:
+        print(json.dumps({"ok": False, "detail": f"could not read --file: {e}"}))
+        return 1
+    if isinstance(specs, dict):
+        specs = specs.get("items")
+    if not isinstance(specs, list) or not specs:
+        print(json.dumps({"ok": False, "detail": "--file holds no list of dispatch specs"}))
+        return 1
+    results: dict[int, dict] = {}
+    sent: list[tuple[int, dict]] = []
+    for i, sp in enumerate(specs):
+        if not isinstance(sp, dict):
+            results[i] = {"index": i, "ok": False, "detail": "this spec is not a JSON object; not sent"}
+            continue
+        try:
+            if sp.get("task") is not None:
+                task = str(sp["task"])
+            else:
+                with open(sp["task_file"], encoding="utf-8") as f:
+                    task = f.read()
+        except (OSError, KeyError, TypeError) as e:
+            results[i] = {"index": i, "title": sp.get("title"), "ok": False,
+                          "detail": f"could not read the task (task or task_file): {e}; not sent"}
+            continue
+        item = {k: sp[k] for k in _MANY_KEYS if sp.get(k) is not None}
+        item["task"] = task
+        if sp.get("base"):
+            item["base"] = [sp["base"]] if isinstance(sp["base"], str) else list(sp["base"])
+        sent.append((i, item))
+    local = [results[k] for k in sorted(results)]
+
+    def merged(got: dict) -> int:
+        if got.get("ok") is False:
+            # the whole request was refused: nothing of it was dispatched
+            print(json.dumps({**got, "results": local}, ensure_ascii=False))
+            return 1
+        for r in got.get("results") or []:
+            k = r.get("index") if isinstance(r, dict) else None
+            if isinstance(k, int) and 0 <= k < len(sent):
+                i, item = sent[k]
+                results[i] = {**r, "index": i, "title": item.get("title")}
+        for i, item in sent:
+            results.setdefault(i, {"index": i, "title": item.get("title"), "ok": False,
+                                   "detail": "the daemon gave no answer for this task"})
+        out = [results[k] for k in sorted(results)]
+        ok = all(r.get("ok") is True for r in out)
+        print(json.dumps({"ok": ok, "results": out}, ensure_ascii=False, indent=2))
+        return 0 if ok else 1
+
+    if not sent:
+        print(json.dumps({"ok": False, "results": local}, ensure_ascii=False, indent=2))
+        return 1
+    return _call("POST", "/dispatch/batch", {"session": session, "items": [it for _i, it in sent]},
+                 timeout=DISPATCH_TIMEOUT_S, reply=merged)
+
+
 def _timed_out(path: str) -> int:
     if path == "/dispatch":
         print(json.dumps({"ok": False, "maybe_sent": True, "detail": (
             "no answer in time; the task may be running on the Hive. Check the Hive's own "
             "page (or `runs`) before sending it again")}))
+    elif path == "/dispatch/batch":
+        print(json.dumps({"ok": False, "maybe_sent": True, "detail": (
+            "no answer in time; some of the tasks may be running on Hives. Check `runs` "
+            "before sending any of them again")}))
     else:
         print(json.dumps({"ok": False, "detail": "no answer from the SwarmAI daemon in time"}))
     return 1
@@ -204,6 +313,11 @@ def _parser() -> argparse.ArgumentParser:
                        help="start from this commit instead of HEAD: <ref>, or <repo>=<ref> (repeat per repository)")
         if name == "dispatch":
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
+    many = sub.add_parser("dispatch-many", help="several independent tasks at once")
+    many.add_argument("--file", required=True, help=(
+        "a JSON list of dispatch specs, each with title, brief, brain, task or task_file, "
+        "acceptance, execution, why, returns and the revision its spec returned "
+        "[, hive, mode, needs_private, base]"))
     sub.add_parser("runs")
     sub.add_parser("hives")
     sub.add_parser("elastic-standby", help="run one round of Elastic Workers' standby now "
@@ -543,6 +657,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "reverted":
         return _call("POST", f"/runs/{args.dispatch_id}/reverted",
                      {"session": _session(), "commits": args.commit, "why": args.why})
+    if args.cmd == "dispatch-many":
+        return _dispatch_many(args)
     if args.cmd in ("spec", "dispatch"):
         body = {"brain": args.brain, "task": _task(args), "acceptance": args.acceptance,
                 "mode": args.mode, "execution": args.execution, "why": args.why,

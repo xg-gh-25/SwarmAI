@@ -25,6 +25,7 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <file> [--brain <B>] [--file <path>] [--bound-project <P>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits [--mode <m>] [--needs-private <why>] [--base <ref>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits --revision <revision from spec> [--needs-private <why>] [--hive <name>] [--mode <m>] [--base <ref>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch-many --file <JSON list of dispatch specs>
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [<dispatch_id> ...] [--since <token>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
@@ -108,6 +109,10 @@ numbered text options ("reply with a number"). Only this question.
 2. **Write the task so it stands alone.** The Hive sees only this text, the Brain and
    its own workspace: not this conversation, not files on this machine. Include the
    goal, every input it needs (links, pasted content) and where to leave results. The
+   task text is at most 20000 characters: `spec` and `dispatch` refuse a longer one,
+   naming the field (`body.task`) and the limit. Put long material (logs, data, a long
+   design) in a repository the Brain binds or in the Brain itself, and name its path in
+   the task: the Hive reads it there. The
    repositories are every one the Brain binds, whatever the mode, at this machine's own
    commit: the Hive prepares a worktree of each before the task starts and tells the
    task where it is. Do not add them, and do not write clone, pull or checkout
@@ -184,6 +189,30 @@ numbered text options ("reply with a number"). Only this question.
    the Hive's own page first (a second dispatch would run the task twice). A refusal
    saying the Brain could not be synced because the Hive is busy: send it again when
    that Hive's runs under the Brain end.
+
+   **Several independent tasks go out in one `dispatch-many`**, never as one `dispatch`
+   after another (each waits for its Hive to come up). Independent: none needs another's
+   result. Run `spec` for each, then write a JSON file holding a list with one object
+   per task, with what `dispatch` takes by name and the revision of that task's own
+   `spec`:
+
+   ```json
+   [{"title": "...", "brief": "...", "brain": "<B>", "task_file": "<file>", "acceptance": "...",
+     "execution": "native", "why": "...", "returns": "commits", "revision": "<from its spec>"},
+    {"title": "...", "brief": "...", "brain": "<B>", "task": "<text>", "acceptance": "...",
+     "execution": "pipeline:full", "why": "...", "returns": "commits", "revision": "<from its spec>",
+     "base": "<ref>"}]
+   ```
+
+   (`hive`, `mode`, `needs_private` too, as `dispatch` takes them.) Run `dispatch-many
+   --file <file>` once, in the foreground with a Bash `timeout` of 590000 ms, alone in
+   its command. The daemon sends the tasks at the same time, a few at a time, all within
+   one dispatch's time, and prints one result per task in the file's order: each that
+   went out draws its own dispatch card; each that did not says why (`detail`; a spec
+   error also lists its `fields`), and the others go out all the same. Follow every one
+   that went out (step 5; `watch` takes several ids). Send again only the tasks whose
+   result says nothing was sent, never one that "may be running". A dependent task waits
+   until the one it needs is done.
 5. **Follow it and finish it.** Following: run `watch <dispatch_id>` in the foreground
    with a Bash `timeout` of 600000 ms. It returns as soon as the run changes (or after
    nine minutes with `"changed": false`: call it again with the `token` it printed, and

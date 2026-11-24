@@ -125,20 +125,79 @@ async def _call(coro) -> Any:
 @router.post("/dispatch")
 async def dispatch(body: DispatchBody) -> dict[str, Any]:
     _require_desktop()
+    return await _call(swarm_out.dispatch_spec(**_dispatch_args(body)))
+
+
+class BatchBody(BaseModel):
+    """Several dispatches at once (``dispatch_batch``): each item is a /dispatch body,
+    validated on its own so one bad item is that item's answer, not the batch's. The
+    length bound is the request's size (each item up to MAX_TASK_CHARS), not a limit on
+    how many tasks go out: send more in another batch."""
+    session: Optional[str] = Field(default=None, max_length=80)
+    items: list[dict[str, Any]] = Field(min_length=1, max_length=100)
+
+
+def _item_error(e: BaseException) -> dict[str, Any]:
+    """One batch item's failure, as /dispatch would answer it (``_call``): its status and
+    detail, a refusal at intake with ``refused`` and ``private``, a dispatch the Hive may
+    have taken with ``maybe_sent``; anything else a generic 500 with no internal detail."""
+    if isinstance(e, swarm_out.SwarmOutRefused):
+        return {"status": 422, "detail": str(e), "refused": True, "private": e.private}
+    if isinstance(e, swarm_out.SwarmOutMaybeSent):
+        return {"status": 504, "detail": str(e), "maybe_sent": True}
+    if isinstance(e, swarm_out.SwarmOutError):
+        return {"status": 400, "detail": str(e)}
+    if isinstance(e, HTTPException):
+        return {"status": e.status_code, "detail": e.detail}
+    logger.error("swarm_out batch item failed", exc_info=e)
+    return {"status": 500, "detail": "Swarm Out request failed"}
+
+
+def _dispatch_args(body: DispatchBody) -> dict[str, Any]:
+    """``swarm_out.dispatch_spec``'s arguments for one /dispatch body (what ``dispatch``
+    passes), or HTTPException 400 for what /dispatch refuses before it."""
     if not body.brain:
         raise HTTPException(status_code=400, detail=(
             "say which Brain the task belongs to (route it first); General sends it to the "
             "Runner Agent"))
     if not body.revision:
         raise HTTPException(status_code=400, detail="pass the revision the spec showed (run spec first)")
-    return await _call(swarm_out.dispatch_spec(body.hive or None, body.title, body.brain, body.task,
-                                               body.acceptance or "", body.mode, body.execution,
-                                               body.origin, seen_revision=body.revision,
-                                               brief=body.brief or "", why=body.why or "",
-                                               returns=body.returns, needs_private=body.needs_private or "",
-                                               dispatched_from=body.session, base=body.base,
-                                               parent_run=body.parent_run, wp=body.wp,
-                                               again=bool(body.again)))
+    return {"hive_ref": body.hive or None, "title": body.title, "brain": body.brain, "task": body.task,
+            "acceptance": body.acceptance or "", "mode": body.mode, "execution": body.execution,
+            "origin": body.origin, "seen_revision": body.revision, "brief": body.brief or "",
+            "why": body.why or "", "returns": body.returns, "needs_private": body.needs_private or "",
+            "dispatched_from": body.session, "base": body.base, "parent_run": body.parent_run,
+            "wp": body.wp, "again": bool(body.again)}
+
+
+@router.post("/dispatch/batch")
+async def dispatch_batch(body: BatchBody) -> dict[str, Any]:
+    """Several dispatches at once (core/swarm_out.dispatch_batch, at most BATCH_CONCURRENCY
+    at a time, within one DISPATCH_DEADLINE_S): ``{"results": [{index, ok, ...}]}`` in the
+    items' order, each the row /dispatch returns (``ok: true``) or its own failure
+    (``ok: false`` with ``status`` and ``detail``; a validation error with its
+    ``fields``). One item's failure never fails another. Every item goes under the
+    batch's ``session`` unless it names its own."""
+    from pydantic import ValidationError
+    _require_desktop()
+    results: list[Optional[dict[str, Any]]] = [None] * len(body.items)
+    calls: list[tuple[int, dict[str, Any]]] = []
+    for i, raw in enumerate(body.items):
+        try:
+            item = DispatchBody.model_validate({**({"session": body.session} if body.session else {}), **raw})
+            calls.append((i, _dispatch_args(item)))
+        except ValidationError as e:
+            fields = [{"field": ".".join(str(x) for x in err.get("loc", ())), "error": err.get("msg", "")}
+                      for err in e.errors()]
+            results[i] = {"index": i, "ok": False, "status": 400, "fields": fields,
+                          "detail": "; ".join(f"{f['field']}: {f['error']}" for f in fields)[:600]}
+        except HTTPException as e:
+            results[i] = {"index": i, "ok": False, **_item_error(e)}
+    got = await swarm_out.dispatch_batch([kw for _i, kw in calls]) if calls else []
+    for (i, _kw), g in zip(calls, got):
+        results[i] = {"index": i, "ok": False, **_item_error(g)} if isinstance(g, BaseException) \
+            else {"index": i, "ok": True, **g}
+    return {"results": results}
 
 
 class ReturnBody(ActorBody):

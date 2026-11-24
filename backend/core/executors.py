@@ -144,6 +144,18 @@ _POOL_SPECS: dict[str, int] = {
                       # the repos other sessions wrote in (seconds when there are several).
                       # Only discard commands use it, so it never holds a 'gate' worker
                       # every other tool call's judgment waits on.
+    "elastic_start": 4,  # core/carriers/agentcore: InvokeAgentRuntime(start) of a run round
+                      # (about 17 s while the microVM's backend comes up). Sized to the
+                      # dispatches Swarm Out sends at once (core/swarm_out.BATCH_CONCURRENCY):
+                      # a batch's starts overlap, and none holds a thread of the default pool
+                      # the chat path waits on. A start that waited here for a thread gets
+                      # only what is left of its time (``open_run``).
+    "elastic_stop": 2,  # core/carriers/agentcore: StopRuntimeSession (a release, a start it
+                      # cannot use); apart from elastic_start so a release never queues
+                      # ahead of the starts that pool is sized for.
+    "elastic_s3": 4,  # core/carriers/agentcore: the round-end check (S3 reads) before every
+                      # request to a run round; apart from elastic_start so a request to an
+                      # open round never queues behind another round's start.
     "hive_auth": 2,   # middleware/hive_auth: the bcrypt check (cost 14, about 1 s) of a
                       # credential not yet in its success cache. A wrong password is never
                       # cached, so a flood of them lands here (the middleware caps how many
@@ -188,9 +200,10 @@ async def run_in(name: str, fn: Callable[..., T], *args: Any) -> T:
 
     ONE semantic difference from ``to_thread`` (inert today, documented so a future
     caller isn't surprised): ``to_thread`` copies the current ``contextvars.Context``
-    into the worker thread; this bare ``run_in_executor`` does NOT. Harmless while the
-    backend defines no ``ContextVar`` (verified — zero ContextVar in core/hooks). If a
-    ContextVar is ever introduced AND a pooled ``fn`` must read it, wrap with
+    into the worker thread; this bare ``run_in_executor`` does NOT. A ``ContextVar`` set on
+    the event loop is therefore None in a pooled ``fn`` (``core.swarm_out._BATCH``, the
+    batch a dispatch belongs to, is read only on the event loop for this reason). A pooled
+    ``fn`` that must read one is wrapped with
     ``functools.partial(contextvars.copy_context().run, fn, *args)`` at that callsite."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(get_pool(name), fn, *args)

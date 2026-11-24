@@ -11,9 +11,10 @@ and its ``runtime_arn`` (one per account, §6.8). A run round is one runtime ses
   session id is derived from the dispatch, the round and the attempt (``session_id_for``):
   every start is a new attempt, recorded here before the call, so a session id is asked
   for once only (its supervisor would refuse a second start, ``{"started": false, "why":
-  "replaced"}``, and a released one is marked ended here). Throttling or the account's session quota
-  raise ``LocationUnavailable`` (nothing was written yet: D6); any other failure is an
-  ordinary error.
+  "replaced"}``, and a released one is marked ended here). Throttling, the account's session
+  quota, or too little of the dispatch's time left once a start thread is free (the
+  ``elastic_start`` pool: core/executors) raise ``LocationUnavailable`` (nothing was
+  written yet: D6); any other failure is an ordinary error.
 - **Talk** (``AgentCoreCarrier.client``): an ``httpx.AsyncClient`` on the session
   endpoint's backend port (``https://8081--<host>/...``). Each request is signed SigV4
   (service ``bedrock-agentcore``, the runtime's region, the empty-payload hash: no
@@ -907,6 +908,7 @@ class AgentCoreLocation:
         session_id_for(dispatch_id, round)            # a dispatch id and round, before anything else
         left = deadline.left() if hasattr(deadline, "left") else (
             float(deadline) if isinstance(deadline, (int, float)) else START_TIMEOUT_S)
+        ends_at = time.monotonic() + left
         if left < MIN_START_S:
             raise LocationUnavailable(f"{self.name}: too little time left to start a session")
         inst, acct, arn = await self._load()
@@ -924,8 +926,24 @@ class AgentCoreLocation:
         # before the call: the platform's lifetime starts at the session's start, which is
         # no earlier than this
         opened_at = _now()
-        answer, url = await asyncio.to_thread(self._invoke, session, inst["runtime_arn"], arn["region"],
-                                              sid, payload, min(left, START_TIMEOUT_S))
+        # the start blocks until the microVM's backend is up (about 17 s): on its own pool
+        # (several dispatches start at once), and a step of the dispatch's ``timings``
+        from core import executors
+        started = time.monotonic()
+        start_ends = min(ends_at, started + START_TIMEOUT_S)
+
+        def start() -> tuple[Any, Optional[str]]:
+            # its time is what is left once a thread of the pool is free: a wait behind
+            # other rounds' starts is not added on top of the dispatch's deadline
+            t = start_ends - time.monotonic()
+            if t < MIN_START_S:
+                raise LocationUnavailable(f"{self.name}: too little time left to start a session")
+            return self._invoke(session, inst["runtime_arn"], arn["region"], sid, payload, t)
+        try:
+            answer, url = await executors.run_in("elastic_start", start)
+        finally:
+            if hasattr(deadline, "took"):
+                deadline.took(f"opening a round on Elastic Workers {self.name}", started)
         if not isinstance(answer, dict) or answer.get("started") is not True:
             why = answer.get("why") if isinstance(answer, dict) and isinstance(answer.get("why"), str) else None
             raise AgentCoreError(f"Elastic Workers {self.name} refused the start"
@@ -935,7 +953,8 @@ class AgentCoreLocation:
         except AgentCoreError:
             # the session started: it is stopped here, or its microVM runs on, billed, to
             # its idle timeout with nothing able to reach it
-            await asyncio.to_thread(self._stop_quietly, session, inst["runtime_arn"], arn["region"], sid)
+            await executors.run_in("elastic_stop", self._stop_quietly, session, inst["runtime_arn"],
+                                   arn["region"], sid)
             raise
         return RunHandle(carrier=AGENTCORE, location_id=self.id, round=round, run_ref=sid,
                          address=address, auth_ref=f"run_cred:{dispatch_id}:{round}",
@@ -1172,7 +1191,9 @@ class AgentCoreCarrier:
         if why:
             return why
         s3 = await self._s3(handle)
-        why = await asyncio.to_thread(_ended_in_s3, s3, _bucket_of(handle), sid)
+        # read before every request to the round: its own pool, never the default one
+        from core import executors
+        why = await executors.run_in("elastic_s3", _ended_in_s3, s3, _bucket_of(handle), sid)
         if why:
             await asyncio.to_thread(_mark_ended, sid, why)
         return why
@@ -1320,7 +1341,8 @@ class AgentCoreCarrier:
                 if _error_code(exc) not in NOT_FOUND_CODES:
                     raise AgentCoreError(f"Elastic Workers session was not stopped "
                                          f"({_error_code(exc) or type(exc).__name__})") from None
-        await asyncio.to_thread(stop)
+        from core import executors
+        await executors.run_in("elastic_stop", stop)
 
     async def next_round(self, handle: RunHandle, dispatch_id: str, deadline: Any = None) -> RunHandle:
         """Where a correction of the run goes (D7; core/carriers/base.Carrier): *handle*

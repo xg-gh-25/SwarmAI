@@ -9,8 +9,9 @@ swarm_out_dispatch_index; ``cards_of_claimed``), so a wrapper script, a loop or 
 that dispatches shows its cards like ``scripts.swarm_out dispatch`` does. A Swarm Run's
 child row draws its run's card once (core/swarm_run_card), never a card per child.
 
-A literal ``scripts.swarm_out dispatch`` call (``watched``) is also read from what it
-printed, through ``cards``, because a refusal writes no row: a dispatch that went out is
+A literal ``scripts.swarm_out dispatch`` call (``watched``; ``dispatch-many`` is not one:
+its rows draw their cards from the log, and each refused item is in what it printed) is
+also read from what it printed, through ``cards``, because a refusal writes no row: a dispatch that went out is
 shown from its log row with the ``dispatch_id`` the call printed (``from_row``), never
 from the printed text: what the card says is what was sent. A call that printed nothing
 (its output went to a file) is shown from the one row this session dispatched after the
@@ -50,7 +51,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 BLOCK_TYPE = "swarm_out_dispatch"
-_DISPATCH_RE = re.compile(r"scripts[./]swarm_out(?:\.py)?\s+dispatch\b")
+_DISPATCH_RE = re.compile(r"scripts[./]swarm_out(?:\.py)?\s+dispatch(?![\w-])")
 _ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _DETAIL_MAX = 600
 _FIELD_MAX = 300

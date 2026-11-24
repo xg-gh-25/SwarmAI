@@ -35,10 +35,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import calendar
+import contextvars
 import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -841,12 +843,17 @@ def _record_maybe_sent(extra: Optional[dict], inst: dict[str, Any], title: str, 
     _append(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+_APPEND_LOCK = threading.Lock()
+
+
 def _append(line: str) -> None:
     """Write one dispatch log row: the log's only writer (the CLI goes through the
     daemon's HTTP route). The row is also indexed by the chat session that sent it, so
     every Bash result of that session can draw its card from the row (core/
-    swarm_out_dispatch_index); an index failure never fails the dispatch."""
-    with open(_log_path(), "a", encoding="utf-8") as f:
+    swarm_out_dispatch_index); an index failure never fails the dispatch. One writer at a
+    time (``_APPEND_LOCK``): the dispatches of a batch write their rows from worker
+    threads at once, and a long row is not one write."""
+    with _APPEND_LOCK, open(_log_path(), "a", encoding="utf-8") as f:
         f.write(line)
     try:
         from core import swarm_out_dispatch_index
@@ -1039,13 +1046,143 @@ def open_runs_by_hive(strict: bool = False) -> "dict[str, int] | None":
     return out
 
 
+#: how many dispatches of one batch run at once (``dispatch_batch``): a bound that keeps the
+#: Host responsive (each holds a git bundle, a Brain package, its Hive's requests and an
+#: Elastic start thread: core/executors ``elastic_start`` is as wide), not a limit on what
+#: goes out: every item of a batch is sent
+BATCH_CONCURRENCY = 4
+
+
+class _BatchCache:
+    """What the dispatches of one batch share (``dispatch_batch``): each Brain's package,
+    made once (one read under the Brain's lock, one pack) and given to every item with its
+    digest, and each repository's bundle, made once per (checkout, url, ref, sha, pinned):
+    its tracking base is decided by these at the batch's moment. Each is one shared task,
+    shielded, so one item's cancel does not cancel what the others wait for. The batch owns
+    the bundle files: they are removed when it ends (``close``), never by an item."""
+
+    def __init__(self) -> None:
+        self._brains: dict[str, asyncio.Future] = {}
+        self._bundles: dict[tuple, asyncio.Future] = {}
+
+    async def brain(self, ws: Path, brain: str) -> tuple[bytes, str, int]:
+        """(package, digest, files) as core/brain_sync_host packages *brain*; its refusal
+        (SyncRefused, brain_sync.SyncError) is raised to every item alike."""
+        from core import brain_sync_host
+        got = self._brains.get(brain)
+        if got is None:
+            got = self._brains[brain] = asyncio.ensure_future(asyncio.to_thread(
+                brain_sync_host._package, ws, brain, brain in brain_sync_host.DEFAULT_BRAINS))
+        return await asyncio.shield(got)
+
+    async def digest(self, ws: Path, brain: str) -> Optional[str]:
+        """The package's digest, None when it cannot be made (``local_brain``'s None: the
+        item then fails where it needs the package, saying why)."""
+        from core import brain_sync, brain_sync_host
+        try:
+            return (await self.brain(ws, brain))[1]
+        except (brain_sync.SyncError, brain_sync_host.SyncRefused):
+            return None
+
+    async def bundle(self, r: dict[str, Any], timeout: float) -> tuple[Optional[Path], Optional[str], int]:
+        """``repo_ship.pack`` of repository *r* (``_ship_repos``), once per key; the
+        first item's *timeout* bounds its git."""
+        from core import repo_ship
+        key = (os.path.realpath(r["checkout"]), r["url"], r["ref"], r["sha"], bool(r.get("base")))
+        got = self._bundles.get(key)
+        if got is None:
+            got = self._bundles[key] = asyncio.ensure_future(asyncio.to_thread(
+                repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"], timeout=timeout,
+                **({"pinned": True} if r.get("base") else {})))
+        return await asyncio.shield(got)
+
+    async def close(self) -> None:
+        """Remove every bundle file the batch made; one still being made (its items were
+        cancelled) is removed when it is done."""
+        paths = []
+        for f in self._bundles.values():
+            if f.done():
+                path = _made_bundle(f)
+                if path is not None:
+                    paths.append(path)
+            else:
+                f.add_done_callback(_drop_late_bundle)
+        for f in self._brains.values():
+            if f.done() and not f.cancelled():
+                f.exception()                     # retrieved: a refusal was each item's to say
+        if paths:
+            await asyncio.to_thread(lambda: [p.unlink(missing_ok=True) for p in paths])
+
+
+def _made_bundle(f: "asyncio.Future") -> Optional[Path]:
+    """The file a finished pack made, or None (it failed, was cancelled or had nothing to
+    send)."""
+    if f.cancelled() or f.exception() is not None:
+        return None
+    return f.result()[0]
+
+
+def _drop_late_bundle(f: "asyncio.Future") -> None:
+    """Remove the file of a pack that ended after its batch (``_BatchCache.close``)."""
+    path = _made_bundle(f)
+    if path is not None:
+        task = asyncio.ensure_future(asyncio.to_thread(path.unlink, missing_ok=True))
+        _LATE_UNLINKS.add(task)
+        task.add_done_callback(_LATE_UNLINKS.discard)
+
+
+#: removals of late bundle files in progress (a reference keeps each alive until it ends)
+_LATE_UNLINKS: set = set()
+
+
+#: the batch a dispatch belongs to (``dispatch_batch`` sets it; each item's task gets a
+#: copy of the context it was made in), None for a dispatch on its own
+_BATCH: "contextvars.ContextVar[Optional[_BatchCache]]" = contextvars.ContextVar("swarm_out_batch", default=None)
+
+
+async def dispatch_batch(items: list[dict[str, Any]]) -> list[Any]:
+    """Dispatch several tasks at once: each item is ``dispatch_spec``'s arguments by name,
+    at most BATCH_CONCURRENCY running at a time. Returns, in the items' order, each one's
+    row (what ``dispatch_spec`` returns) or the exception it ended with: one item's failure
+    never stops another. Every item runs within the batch's one DISPATCH_DEADLINE_S,
+    counted from the batch's start, so the whole answer comes within the CLI's wait
+    (scripts/swarm_out DISPATCH_TIMEOUT_S); an item whose turn comes with no more than the
+    session's window left fails before anything is asked of a Hive. The items share one
+    ``_BatchCache``. A cancel (the request went away) cancels every item, as it cancels a
+    single dispatch."""
+    started = time.monotonic()
+    sem = asyncio.Semaphore(max(1, int(BATCH_CONCURRENCY)))
+    cache = _BatchCache()
+
+    async def one(kw: dict[str, Any]) -> dict[str, Any]:
+        async with sem:
+            left = DISPATCH_DEADLINE_S - (time.monotonic() - started)
+            if left <= SESSION_ID_WAIT_S:
+                raise SwarmOutError(f"the batch's time ran out before this task's turn (a batch has "
+                                    f"{DISPATCH_DEADLINE_S:g} s in all, {BATCH_CONCURRENCY} tasks at a "
+                                    "time); nothing was sent: send it again")
+            return await dispatch_spec(**kw, deadline_s=left)
+
+    token = _BATCH.set(cache)
+    try:
+        got = await asyncio.gather(*(one(dict(kw)) for kw in items), return_exceptions=True)
+    finally:
+        _BATCH.reset(token)
+        await cache.close()
+    for g in got:
+        if isinstance(g, BaseException) and not isinstance(g, Exception):
+            raise g                                         # a cancel stays a cancel
+    return list(got)
+
+
 async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: str, acceptance: str,
                         mode: Optional[str] = None, execution: Optional[str] = None,
                         origin: str = "swarm-out", *, seen_revision: str, brief: str = "",
                         why: str = "", returns: Optional[str] = None,
                         needs_private: str = "", dispatched_from: Optional[str] = None,
                         base: Optional[list[str]] = None, parent_run: Optional[str] = None,
-                        wp: Optional[str] = None, again: bool = False) -> dict[str, Any]:
+                        wp: Optional[str] = None, again: bool = False,
+                        deadline_s: Optional[float] = None) -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision ``/spec`` returned (``seen_revision``) or admission fails (naming the rule), syncs the Brain when the
@@ -1060,10 +1197,12 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     where the task starts instead of each checkout's HEAD (core/task_spec.build).
     ``parent_run`` and ``wp``: the task is work package *wp* of that Swarm Run's lead run
     (core/swarm_run), refused unless *dispatched_from* drives the run now; ``again``: a
-    new attempt at a package that went out (core/swarm_run.check_child_dispatch)."""
-    from core import brain_sync_host, swarm_run, task_spec
+    new attempt at a package that went out (core/swarm_run.check_child_dispatch).
+    ``deadline_s``: what is left of a batch's deadline (``dispatch_batch``), instead of a
+    whole DISPATCH_DEADLINE_S."""
+    from core import swarm_run
     from core.project_registry import get_swarmws
-    deadline = _Deadline(DISPATCH_DEADLINE_S)
+    deadline = _Deadline(DISPATCH_DEADLINE_S if deadline_s is None else deadline_s)
     ws = get_swarmws()
     lead = None
     if parent_run or wp:
@@ -1123,9 +1262,16 @@ async def _dispatch_spec(deadline: "_Deadline", ws: Path, lead: Any, hive_ref: O
         raise SwarmOutRefused(f"{brain} cannot be sent to a Hive: " + "; ".join(reasons), private)
     # a Hive where another running Swarm Run holds this Brain at another version is not
     # given this one (I15): its children would read a Brain they were not given
-    digest = frozen["digest"] if frozen else (await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)).get("digest")
-    held = frozenset(await asyncio.to_thread(swarm_run.held_hives, _read_log(), brain, digest,
-                                             lead.run_id if lead else None))
+    cache = _BATCH.get()
+    if frozen:
+        digest = frozen["digest"]
+    elif cache is not None:
+        digest = await cache.digest(ws, brain)              # the batch's one package
+    else:
+        digest = (await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)).get("digest")
+    # the dispatch log is read in the thread too, never on the event loop
+    held = frozenset(await asyncio.to_thread(lambda: swarm_run.held_hives(
+        _read_log(), brain, digest, lead.run_id if lead else None)))
     needs = Needs(private=tuple(str(x) for x in spec.get("private") or ()), named=hive_ref or None,
                   held=held, brain=brain)
     # the dispatch layer (design 2026-11-20-swarm-out-multi-carrier §4.4): every carrier's
@@ -1356,7 +1502,17 @@ async def _dispatch_round(deadline: "_Deadline", ws: Path, lead: Any, handle: Ru
         deadline, f"checking Hive {inst['name']}", 2 * PROBE_TIMEOUT_S,
         lambda: _has_cap(inst, "task_checks"))) is True
 
+    cache = _BATCH.get()
+
     async def local_of() -> tuple[str, Any]:
+        if cache is not None and not frozen:
+            # the batch's one package of the Brain, pushed as it is (brain_sync_host.sync)
+            from core import brain_sync
+            try:
+                data, digest, n = await cache.brain(ws, brain)
+            except (brain_sync.SyncError, brain_sync_host.SyncRefused) as e:
+                raise SwarmOutError(f"{brain} cannot be packaged: {e}") from None
+            return digest, (data, digest, n)
         local = {"digest": frozen["digest"]} if frozen else \
             await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)
         if local["digest"] is None:
@@ -1497,15 +1653,17 @@ async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]],
     what is left of it."""
     from core import repo_ship
     deadline = deadline or _Deadline(DISPATCH_DEADLINE_S)
+    cache = _BATCH.get()
     for r in repos:
         if not r.get("sha"):
             continue
         git_s = deadline.budget(f"packing {r['name']}", repo_ship.GIT_TIMEOUT_S, SESSION_ID_WAIT_S)
         try:
-            # a task given a base starts at that commit, whatever HEAD is (core/repo_ship)
-            path, _base, size = await asyncio.to_thread(
+            # a task given a base starts at that commit, whatever HEAD is (core/repo_ship);
+            # in a batch the bundle is made once and shared (``_BatchCache``)
+            path, _base, size = await (cache.bundle(r, git_s) if cache is not None else asyncio.to_thread(
                 repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"], timeout=git_s,
-                **({"pinned": True} if r.get("base") else {}))
+                **({"pinned": True} if r.get("base") else {})))
         except repo_ship.ShipError as e:
             raise SwarmOutError(f"{r['name']} could not be packed: {e}; nothing was sent") from None
         if path is None:
@@ -1514,7 +1672,8 @@ async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]],
             status, detail = await _within(deadline, f"sending {r['name']} to Hive {inst['name']}",
                                            SHIP_TIMEOUT_S, lambda: _put_repo(inst, r, path, size))
         finally:
-            await asyncio.to_thread(path.unlink, missing_ok=True)
+            if cache is None:                # a batch's bundle is the batch's to remove
+                await asyncio.to_thread(path.unlink, missing_ok=True)
         if status == 200:
             continue
         if status == 404:

@@ -22,8 +22,12 @@ When another session has uncommitted edits in the same checkout
   destination branch, stamped ``swarm-land <branch> session=<key> turn=<id>
   onto=<target>`` (design docs/design/2026-10-25-turn-result-card.md §3); "Already up
   to date" lands nothing (``landed: false``).
+  A branch whose content is already in the base (``_content_in_base``: a squash landing
+  such as a Hive run's return-land put it there as a new commit) is not rebased: land
+  answers ``landed: false, already_landed: true`` and moves nothing.
 - remove: removes the worktree and deletes its branch, only once the branch is merged
-  into the main checkout's branch (land first). Never deletes unmerged work.
+  into the main checkout's branch (land first), or its content is already there
+  (``_content_in_base``). Never deletes unmerged work.
 
 Output is one JSON object on stdout; exit 0 on success, 1 on a refusal, 2 on bad use.
 Not ``<app data>/worktrees``: that tree belongs to pipeline runs and its sweeper
@@ -141,6 +145,13 @@ def land(path: str) -> dict:
     # another session landing in between cannot make the check judge a tip the branch
     # was never rebased onto (it would call that session's files our reverts).
     target = _out(main, "rev-parse", "--verify", f"refs/heads/{base}^{{commit}}")
+    if not _is_ancestor(main, branch, target) and _content_in_base(main, branch, target):
+        # squash-landed (return-land's single commit): a rebase would replay commits whose
+        # change is already there and stop on a conflict; nothing is left to land
+        key, turn = _attribution()
+        return {"landed": False, "already_landed": True, "landed_branch": branch, "into": base,
+                "main": str(main), "head": _out(wt, "rev-parse", "HEAD")[:12],
+                "attribution": {"session": key, "turn": turn}}
     p = _git(wt, "rebase", "-q", target)
     if p.returncode != 0:
         _git(wt, "rebase", "--abort")
@@ -180,17 +191,48 @@ def land(path: str) -> dict:
             "record": "ok" if has_log else "missing"}
 
 
+def _is_ancestor(main: Path, branch: str, base: str) -> bool:
+    return _git(main, "merge-base", "--is-ancestor", branch, base).returncode == 0
+
+
+def _content_in_base(main: Path, branch: str, base: str) -> bool:
+    """Whether merging *branch* into *base* would change nothing: ``git merge-tree
+    --write-tree <base> <branch>`` merges cleanly to exactly ``<base>^{tree}``. True for a
+    branch whose commits were landed as another commit (a squash: return-land's single
+    commit, ``git merge --squash``), which is never an ancestor of the base. A conflict,
+    any change the merge would make, or a git that cannot answer is False: the branch
+    then counts as unmerged and nothing is removed."""
+    p = _git(main, "merge-tree", "--write-tree", "--no-messages", base, branch)
+    tree = (p.stdout or "").strip().splitlines()[:1]
+    if p.returncode != 0 or not tree:
+        return False
+    q = _git(main, "rev-parse", "--verify", f"{base}^{{tree}}")
+    return q.returncode == 0 and tree[0] == q.stdout.strip()
+
+
 def remove(path: str) -> dict:
     wt, main, branch = _own_worktree(path)
     base = _branch_of_main(main)
-    if _git(main, "merge-base", "--is-ancestor", branch, base).returncode != 0:
+    # the tip judged below: a squashed branch is deleted only at this tip (a commit made
+    # meanwhile keeps the branch)
+    tip = _out(main, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}")
+    # squashed: not an ancestor, so ``branch -d`` would refuse it; its content was checked
+    squashed = not _is_ancestor(main, tip, base)
+    if squashed and not _content_in_base(main, tip, base):
         raise Refused(f"{branch} is not merged into {base}; land it first (nothing removed)")
     for rel in rw.dep_links(main):          # our links, so the worktree reads clean
         rw.unlink_entries(wt / rel, main / rel)
     p = _git(main, "worktree", "remove", str(wt))
     if p.returncode != 0:
         raise Refused((p.stderr or p.stdout).strip()[:500])
-    _out(main, "branch", "-d", "-q", branch)
+    if squashed:
+        p = _git(main, "update-ref", "-d", f"refs/heads/{branch}", tip)
+        if p.returncode != 0:
+            raise Refused(f"{branch} moved while it was being removed (a new commit): the worktree "
+                          f"is removed, the branch is kept; land it, then remove it with "
+                          f"`git branch -d {branch}`")
+    else:
+        _out(main, "branch", "-d", "-q", branch)
     try:
         wt.parent.rmdir()
     except OSError:

@@ -15,6 +15,7 @@ Questions answered (design §8 invariants 1-4):
 """
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -81,7 +82,7 @@ def test_names_are_unique_and_rows_well_formed():
 
 
 #: the irreversible ops an owner agent may call, and only these
-_AGENT_IRREVERSIBLE = {"task.dispatch", "run.accept", "run.return_land",
+_AGENT_IRREVERSIBLE = {"task.dispatch", "task.dispatch_batch", "run.accept", "run.return_land",
                        "run.discard",
                        # the dispatching agent's own answer to a wait it answers for (design
                        # 2026-10-31-hive-approvals): the Hive takes it only for those classes
@@ -295,11 +296,16 @@ _CLI_ARGS = {
     "discard": ["so_0123456789ab", "--why", "w"],
     "ask-person": ["so_0123456789ab", "--decide", "keep it?", "--judgment", "fine", "--why", "a preference"],
     "reverted": ["so_0123456789ab", "--commit", "abc123", "--why", "reverted it"],
+    "dispatch-many": ["--file", "<specs>"],          # a file the test writes
 }
 
 
-def test_cli_calls_only_owner_agent_ops(monkeypatch):
+def test_cli_calls_only_owner_agent_ops(monkeypatch, tmp_path):
     from scripts import swarm_out as cli
+    specs = tmp_path / "specs.json"
+    specs.write_text(json.dumps([{"title": "t", "brain": "B", "task": "x", "acceptance": "a",
+                                  "execution": "native", "returns": "answer", "revision": "r"}]))
+    monkeypatch.setitem(_CLI_ARGS, "dispatch-many", ["--file", str(specs)])
     from core.knowledge_cli import RESTRICTED_ENV
     monkeypatch.delenv(RESTRICTED_ENV, raising=False)
     sub = next(a for a in cli._parser()._actions if a.dest == "cmd")

@@ -90,6 +90,8 @@ _STATIC: "tuple[Op, ...]" = (
     _op("task.route", "POST", f"{_SO}/route", _POC, "read"),
     _op("task.spec", "POST", f"{_SO}/spec", _POC, "read"),
     _op("task.dispatch", "POST", f"{_SO}/dispatch", _POC, "off_machine"),
+    # several dispatches at once (``dispatch-many``), each item what /dispatch takes
+    _op("task.dispatch_batch", "POST", f"{_SO}/dispatch/batch", _POC, "off_machine"),
     # ── the commands on a run (run-review §1.1): the person's, and the dispatching agent's
     # (design 2026-10-31-swarm-out-agent-owns-its-runs §2.1): every run was dispatched by
     # an agent, which answers for it. What an agent may not do with them (land protected
