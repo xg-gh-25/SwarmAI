@@ -131,8 +131,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # cloned from one is refused before anything is sent (an address in the task text is
     # not judged by its name). The user's own list; the product ships none.
     "swarm_out_private_hosts": [],
-    # A running Hive idle this many minutes is stopped by the Host, and the next dispatch
-    # to it starts it again (core/hive_idle); 0 turns idle stopping off.
+    # The default idle stop: a running Hive without its own (hive_instances.idle_stop_minutes
+    # NULL) idle this many minutes is stopped by the Host, and the next dispatch to it starts
+    # it again (core/hive_idle); 0 turns idle stopping off for those Hives.
     "hive_idle_stop_minutes": 120,
     # Elastic Workers image repository (no tag) when it is not the released one
     # (hive/agentcore_provisioner.RELEASED_IMAGE): a build of one's own, set in config.json

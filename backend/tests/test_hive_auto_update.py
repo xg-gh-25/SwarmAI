@@ -144,6 +144,13 @@ def row(monkeypatch, host):
 
 # ── (1) the idle loop ──
 
+def test_a_hive_set_always_on_still_follows_the_host_version(world):
+    world["hives"] = [{"id": "h1", "name": "worker-1", "version": "2.5.4", "idle_stop_minutes": 0},
+                      {"id": "h2", "name": "worker-2", "version": HOST, "idle_stop_minutes": 0}]
+    assert _look() == []                                # neither is stopped
+    assert world["prov"].calls == [("claim_update", "h1"), ("update", "h1", HOST, True)]
+
+
 def test_an_idle_hive_follows_the_host_version(world, monkeypatch):
     world["hives"] = [
         {"id": "h1", "name": "worker-1", "version": "2.5.4"},    # idle, behind: updated

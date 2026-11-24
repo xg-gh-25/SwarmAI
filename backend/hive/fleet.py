@@ -333,6 +333,9 @@ async def replace(db_path: Path, instance_id: str, *, start_deploy) -> dict:
             row = new_row(name=await _free_name(conn), account_ref=ha.SWARMAI_ROW_ID,
                           region=old["region"], instance_type=old["instance_type"],
                           owner_name=old.get("owner_name"), hive_type=old.get("hive_type") or "my")
+            if old.get("idle_stop_minutes") is not None:
+                # its own idle stop goes with it: a replaced always-on Hive stays always on
+                row["idle_stop_minutes"] = old["idle_stop_minutes"]
             await insert_rows(conn, [row])
             fleet = get_config()
             fleet.setdefault("replacing", {})[row["id"]] = instance_id

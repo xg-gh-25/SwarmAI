@@ -1646,7 +1646,8 @@ async def lifespan(app: FastAPI):
         from core.swarm_out import run_refresh_loop as _swarm_out_refresh_loop
         _swarm_out_refresh_task = asyncio.create_task(_swarm_out_refresh_loop(), name="swarm-out-refresh")
 
-    # ── Hives idle for hive_idle_stop_minutes are stopped (host only) ──
+    # ── Hives idle for their idle time are stopped (host only): each Hive's own
+    # idle_stop_minutes, else hive_idle_stop_minutes; never one set always on ──
     # A dispatch to a stopped Hive starts it again (core/hive_idle).
     _hive_idle_task: asyncio.Task | None = None
     if backend_mode != "hive" and _bjson_written:

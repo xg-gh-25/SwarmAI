@@ -16,11 +16,15 @@
  *    the person's), in the old multi-account mode the account it uses, its state, size,
  *    cost and version;
  *  ③ resident Hives (EC2): one row per Hive (its state, from its record and, for a running
- *    one, whether the fleet poll could reach it); a row opens to why it is broken, its
- *    sign-in (AuthDisplay), its Brains (HiveBrains: which are out of date, one Sync),
- *    restart, retry (a rebuild, after a confirm) and delete; "+ add one" names the monthly
- *    cost before anything is created (when the account cannot build one, what is missing);
- *  ④ new Hives and idle time: the instance type, the idle stop time, the region;
+ *    one, whether the fleet poll could reach it, and its idle stop in a few words); a row
+ *    opens to why it is broken, its own idle stop (PUT /hive/instances/{id}/idle-stop:
+ *    always on, its minutes, or the default; only for a machine the Host stops when idle,
+ *    idleStopSettable), its sign-in (AuthDisplay), its Brains (HiveBrains: which are out of
+ *    date, one Sync), restart, retry (a rebuild, after a confirm) and delete; "+ add one"
+ *    names the monthly cost before anything is created (when the account cannot build one,
+ *    what is missing);
+ *  ④ new Hives and idle time: the instance type, the default idle stop time (for new Hives
+ *    and Hives without their own), the region;
  *  ⑤ Hives in other accounts (desktop only; moved from the App's AWS account page);
  *  then what SwarmAI does by itself, folded.
  * Restart is stop then start (the person's routes): the one way out of a Hive that hangs
@@ -39,6 +43,7 @@ import { CapabilityLine } from '../awsAccount/HiveFleet';
 import { AWS_REGION_OPTIONS } from '../awsAccount/regions';
 import { HiveBrains } from '../settings/HiveBrains';
 import { AccountCard, AddAccountDialog, AuthDisplay, DeployHiveDialog, retryPrompt } from '../settings/hiveComponents';
+import { IDLE_MINUTES, idlePolicyLabel } from './idlePolicy';
 import { hiveStatusLabel } from './live';
 import { TONE_VAR, type Tone } from './tone';
 import { groupedId } from './where';
@@ -48,7 +53,7 @@ const dim = 'text-[var(--color-text-dim)]';
 const link = 'text-[var(--color-primary)] hover:underline disabled:opacity-50';
 const card = 'so-card rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const select = 'border border-[var(--color-border)] rounded-md px-2 py-1 bg-[var(--color-card)] text-body disabled:opacity-50';
-const IDLE_CHOICES = [30, 60, 120, 240, 480, 0];
+const IDLE_CHOICES = [...IDLE_MINUTES, 0];
 const DEFAULT_TYPE = 'm7g.xlarge';
 const CHANGING = ['pending', 'provisioning', 'installing', 'deleting', 'updating', 'starting', 'stopping'];
 
@@ -260,6 +265,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
   const counted = fleetStatus?.counted ?? 0;
   const short = fleetStatus?.state === 'short' && (fleetStatus.short ?? 0) > 0 ? fleetStatus.short ?? 0 : 0;
   const connected = (v: AwsAccountView) => { setView(v); onConnected?.(v); void load(); };
+  const minutesWord = (m: number) => (m === 0 ? t('swarmOut.settings.never') : t('swarmOut.settings.minutes', { count: m }));
 
   return (
     <div className="max-w-[760px] flex flex-col gap-8" data-testid="swarm-out-settings">
@@ -336,6 +342,10 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
             // a broken or unreachable Hive opens by itself: why it is broken is what to read
             const byDefault = st.tone === 'error';
             const isOpen = (expanded.has(h.id) ? !byDefault : byDefault) || confirm?.id === h.id;
+            const policy = idlePolicyLabel(t, h.idleStopEffective);
+            const own = h.idleStopMinutes ?? null;
+            // an own value set outside the choices (through the API) is still shown as set
+            const choices = own != null && own > 0 && !IDLE_MINUTES.includes(own) ? [...IDLE_MINUTES, own].sort((a, b) => a - b) : IDLE_MINUTES;
             return (
               <div key={h.id} className="border-t border-[var(--color-border)]" data-testid="so-hive-row" data-tone={st.tone}>
                 <div className="flex items-center gap-3 px-[18px] py-3 cursor-pointer hover:bg-[var(--color-hover)] transition-colors"
@@ -350,6 +360,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
                   </div>
                   <span className="text-small whitespace-nowrap" style={st.tone === 'error' || st.tone === 'attention' ? { color: TONE_VAR[st.tone] } : undefined}
                     data-testid="so-hive-state">{word}</span>
+                  {policy && <span className={`text-small whitespace-nowrap ${dim}`} data-testid="so-hive-idle-policy">· {policy}</span>}
                   {broken && (
                     <button type="button" className="btn-sm border border-[var(--color-border)] hover:bg-[var(--color-hover)]" disabled={busy}
                       data-testid="so-hive-retry" onClick={(ev) => { ev.stopPropagation(); setConfirm({ id: h.id, what: 'retry' }); }}>
@@ -373,6 +384,18 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
                               onClick={() => void act(() => hiveService.retryInstance(h.id, !!h.ec2InstanceId))}>{t('swarmOut.setup.retryConfirm')}</button>
                             <button type="button" className={link} onClick={() => setConfirm(null)}>{t('swarmOut.setup.cancel')}</button>
                           </div>
+                        )}
+                        {/* its own idle stop: only a machine the Host stops when idle has one */}
+                        {h.idleStopSettable && (
+                          <label className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="so-hive-idle-row">
+                            <span className={muted}>{t('swarmOut.settings.idle')}</span>
+                            <select className={select} value={own == null ? 'default' : String(own)} disabled={busy} data-testid="so-hive-idle"
+                              onChange={(ev) => { const v = ev.target.value; void act(() => hiveService.setIdleStop(h.id, v === 'default' ? null : Number(v))); }}>
+                              <option value="0">{t('swarmOut.settings.alwaysOn')}</option>
+                              {choices.map((m) => <option key={m} value={String(m)}>{minutesWord(m)}</option>)}
+                              <option value="default">{t('swarmOut.settings.idleDefaultChoice', { what: minutesWord(idle ?? 120) })}</option>
+                            </select>
+                          </label>
                         )}
                         {/* each part names itself (its sign-in, its Brains) */}
                         <div className="flex flex-col gap-2 min-w-0">
@@ -449,13 +472,13 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
             </select>
           </Row>
         )}
-        <Row label={t('swarmOut.settings.idle')}>
+        <Row label={t('swarmOut.settings.idleDefault')}>
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
             <select className={select} value={idle ?? 120} disabled={busy || idle === null} data-testid="so-idle"
               onChange={(ev) => { const n = Number(ev.target.value); void act(async () => { await settingsService.updateAPIConfiguration({ hiveIdleStopMinutes: n }); setIdle(n); }); }}>
-              {IDLE_CHOICES.map((m) => <option key={m} value={m}>{m === 0 ? t('swarmOut.settings.never') : t('swarmOut.settings.minutes', { count: m })}</option>)}
+              {IDLE_CHOICES.map((m) => <option key={m} value={m}>{minutesWord(m)}</option>)}
             </select>
-            <span className={`text-small ${dim}`}>{t('swarmOut.settings.idleNote')}</span>
+            <span className={`text-small ${dim}`}>{t('swarmOut.settings.idleDefaultNote')}</span>
           </span>
         </Row>
         {region && (

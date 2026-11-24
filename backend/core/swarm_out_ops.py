@@ -142,6 +142,8 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.instance.get", "GET", f"{_HV}/instances/{{instance_id}}", _P, "read"),
     _op("hive.delete", "DELETE", f"{_HV}/instances/{{instance_id}}", _P, "irreversible"),
     _op("hive.stop", "POST", f"{_HV}/instances/{{instance_id}}/stop", _P, "change"),
+    # one Hive's own idle stop (always on keeps paying for the machine): the person's
+    _op("hive.idle_stop", "PUT", f"{_HV}/instances/{{instance_id}}/idle-stop", _P, "change"),
     # restarting a running Hive nothing uses (none of this Host's open runs, no session
     # streaming: the route checks both) is the owner agent's too, through restart-hive
     _op("hive.restart", "POST", f"{_HV}/instances/{{instance_id}}/restart", _PO, "change"),

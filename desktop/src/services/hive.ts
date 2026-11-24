@@ -73,6 +73,13 @@ export interface HiveInstance {
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
+  /** its own idle stop (backend core/hive_idle): null follows the default
+   *  (hiveIdleStopMinutes), 0 is always on, N stops it after N idle minutes */
+  idleStopMinutes?: number | null;
+  /** the minutes after which the Host stops it now (its own, else the default); 0 = never */
+  idleStopEffective?: number;
+  /** whether it has an idle stop to set: only machines the Host stops when idle (EC2) */
+  idleStopSettable?: boolean;
 }
 
 /** Transitional statuses that require polling */
@@ -262,6 +269,11 @@ export const hiveService = {
 
   async syncDefaultBrains(id: string): Promise<void> {
     await api.post(`/hive/instances/${id}/brains/sync-defaults`);
+  },
+
+  /** Set one EC2 Hive's own idle stop: null = the default, 0 = always on, 30..480 minutes. */
+  async setIdleStop(id: string, minutes: number | null): Promise<void> {
+    await api.put(`/hive/instances/${id}/idle-stop`, { minutes });
   },
 
   async stopInstance(id: string): Promise<void> {

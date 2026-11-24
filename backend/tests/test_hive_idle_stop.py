@@ -7,7 +7,9 @@ Hive stopped (claim_stop, then stop as claimed) only once the idle time has pass
 its last busy look, its last status change and the Host's own start; (4) does a run
 waiting for its lessons keep its Hive until they are in; (5) does a dispatch that begins
 while the claim is made keep the Hive; (6) does a dispatch's wake wait for a stop, start
-the Hive once for every caller, and say why when it ends elsewhere.
+the Hive once for every caller, and say why when it ends elsewhere; (7) does a Hive's own
+idle_stop_minutes decide for it: 0 never stopped, N after N minutes whatever the default,
+NULL (or a bad value) the default, also after the default changes.
 """
 from __future__ import annotations
 
@@ -48,7 +50,7 @@ class _Prov:
 @pytest.fixture
 def world(monkeypatch):
     """One running Hive, idle on every count, last changed and Host up 3 h before NOW."""
-    w = {"minutes": None, "updated_at": _db(NOW - 3 * 3600), "open_runs": {}, "sessions": {},
+    w = {"minutes": None, "own": None, "updated_at": _db(NOW - 3 * 3600), "open_runs": {}, "sessions": {},
          "snapshot": {"runs": []}, "log": True, "prov": _Prov()}
     hive_idle._LAST_BUSY.clear()
     so._IN_FLIGHT.clear()
@@ -62,7 +64,7 @@ def world(monkeypatch):
     monkeypatch.setattr(app_config_manager.AppConfigManager, "instance", classmethod(lambda cls: Cfg()))
 
     async def running():
-        return [{**H, "updated_at": w["updated_at"]}]
+        return [{**H, "updated_at": w["updated_at"], "idle_stop_minutes": w["own"]}]
     monkeypatch.setattr(hive_idle, "_running_hives", running)
     monkeypatch.setattr(so, "open_runs_by_hive", lambda strict=False: w["open_runs"])
 
@@ -318,3 +320,49 @@ def test_the_restart_route_gives_the_claim_back_when_a_dispatch_began_meanwhile(
     finally:
         so._IN_FLIGHT.clear()
     assert r.status_code == 409 and fake.released == ["i1"] and fake.restarted == []
+
+
+# ── (7) each Hive's own idle stop ──
+
+@pytest.mark.parametrize("own,default_s,expected", [
+    (None, 7200.0, 7200.0), (None, None, None),          # NULL: the default, whatever it is
+    (0, 7200.0, None), (0, None, None),                  # always on
+    (30, 7200.0, 1800.0), (240, None, 14400.0),          # its own minutes, also with the default off
+    ("soon", 7200.0, 7200.0), (True, 7200.0, 7200.0), (-5, None, None),   # bad: the default
+    (45.5, 7200.0, 7200.0), (30.0, None, None)])          # a fraction (no route writes one) too
+def test_the_own_value(own, default_s, expected):
+    assert hive_idle.own_idle_after_s(own, default_s) == expected
+
+
+def test_a_hive_set_always_on_is_never_stopped(world):
+    world["own"] = 0
+    assert _look() == [] and world["prov"].calls == []
+    assert _look(NOW + 30 * 86400) == [] and world["prov"].calls == []
+    world["minutes"] = 30                               # a shorter default does not reach it
+    assert _look(NOW + 31 * 86400) == [] and world["prov"].calls == []
+
+
+def test_a_hive_with_its_own_minutes_stops_after_them(world):
+    world["own"] = 240                                  # idle 3 h at NOW, the default is 2 h
+    assert _look() == [] and world["prov"].calls == []
+    assert _look(NOW + 3600) == ["worker-1"]
+    assert world["prov"].calls == [("claim", "h1"), ("stop", "h1", True)]
+
+
+def test_a_hive_with_its_own_minutes_stops_with_the_default_off(world):
+    world.update(own=30, minutes=0)
+    assert _look() == ["worker-1"]
+
+
+def test_a_hive_without_its_own_value_follows_the_default(world):
+    world["minutes"] = 240                              # idle 3 h: kept
+    assert _look() == [] and world["prov"].calls == []
+    world["minutes"] = 0                                # off: kept however long
+    assert _look(NOW + 86400) == [] and world["prov"].calls == []
+    world["minutes"] = 60                               # the default changed: the next look follows it
+    assert _look(NOW + 86400) == ["worker-1"]
+
+
+def test_a_bad_own_value_follows_the_default(world):
+    world["own"] = "never"
+    assert _look() == ["worker-1"]                      # the default 120 min, idle 3 h

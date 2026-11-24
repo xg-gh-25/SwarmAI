@@ -2117,7 +2117,8 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 19 — hive_instances.origin_secret (2026-11-04)
 # 20 — Inbox: inbox_sources / items / drafts / sends / feedback / trend_summaries (2026-11-20)
 # 21 — hive_instances.carrier + runtime_arn: the AgentCore carrier (2026-11-20)
-CURRENT_SCHEMA_VERSION = 21
+# 22 — hive_instances.idle_stop_minutes: each EC2 Hive's own idle stop (2026-11-24)
+CURRENT_SCHEMA_VERSION = 22
 
 #: Inbox tables (v20, core/inbox/store.py, design docs/design/2026-11-20-inbox.md §5). The
 #: person's own messages: never in a backup (core/backup_manager.L2_TABLES lists what is),
@@ -3757,6 +3758,27 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.rollback()
                 raise
             logger.info("Migration v21: hive_instances.carrier, runtime_arn")
+
+        if current_version < 22 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 21:
+            # Version 22: hive_instances.idle_stop_minutes, one EC2 Hive's own idle stop
+            # (core/hive_idle): NULL follows the app config's hive_idle_stop_minutes (the
+            # default), 0 is always on (the Host never stops it), N > 0 stops it after N idle
+            # minutes. Additive only: one nullable column, no row touched, so every existing
+            # Hive reads NULL and behaves as before until someone sets it.
+            await conn.execute("BEGIN")
+            try:
+                cols = {r[1] for r in await (await conn.execute(
+                    "PRAGMA table_info(hive_instances)")).fetchall()}
+                if cols and "idle_stop_minutes" not in cols:   # no table: nothing to add to
+                    await conn.execute(
+                        "ALTER TABLE hive_instances ADD COLUMN idle_stop_minutes INTEGER")
+                await conn.execute("PRAGMA user_version = 22")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v22: hive_instances.idle_stop_minutes")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.

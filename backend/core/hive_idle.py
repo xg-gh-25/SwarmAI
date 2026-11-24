@@ -1,9 +1,16 @@
 """Stop a Hive nobody uses, and start it again for the next task (Host side).
 
 A Hive bills by the hour whether or not anything runs on it; most of a Hive's hours were
-idle. The Host stops a running Hive once it has been idle for ``hive_idle_stop_minutes``
-(app config, default 120; 0 turns it off), and a dispatch to a stopped Hive starts it
-first (``wake``, called from core/swarm_out), so no person is needed to bring it back.
+idle. The Host stops a running Hive once it has been idle for its idle time, and a dispatch
+to a stopped Hive starts it first (``wake``, called from core/swarm_out), so no person is
+needed to bring it back.
+
+**Its idle time** is the Hive's own when it has one (``hive_instances.idle_stop_minutes``,
+set per Hive in Swarm Out › settings, routers/hive ``set_idle_stop``): 0 is always on (the
+Host never stops it), N > 0 stops it after N idle minutes. A row with none (NULL, every
+Hive until someone sets it) follows the default, ``hive_idle_stop_minutes`` (app config,
+default 120; 0 turns it off). Always on only means the Host never stops it: nothing here
+starts a Hive a person stopped.
 
 **Idle** means, at one look, every one of these, each read (one that cannot be read
 counts as busy: stopping wrongly ends work, keeping wrongly costs one more period):
@@ -31,11 +38,13 @@ differs): it is claimed (``claim_update``) and updated in the background, and no
 in that round; and ``wake``, for a Hive it just started, before the dispatch is let through
 (within WAKE_LIMIT_S; an update that raises or leaves the Hive not running fails the wake;
 one another update holds is waited for). The idle loop updates even with the idle stop
-off, and gives the claim back when a dispatch began while it was made. Each Hive gets one
+off (by default, or for a Hive set always on), and gives the claim back when a dispatch began while it was made. Each Hive gets one
 automatic try per version per process: a refused claim or a failed update (``update``
 records why on the row and ends it 'running') is not tried again until the Host restarts.
 
-- ``idle_after_s(value)``    — the setting as seconds, or None (off).
+- ``idle_after_s(value)``    — the default as seconds, or None (off).
+- ``own_minutes(value)``     — a row's own value as the loop reads it (None: the default).
+- ``own_idle_after_s(own, default_s)`` — one Hive's idle time: its own value, else the default.
 - ``busy_reasons(...)``      — why a Hive is not idle now ([] = idle).
 - ``check_once(now)``        — one look at every running Hive: updates the idle ones behind
   the Host's version, stops the others idle long enough; returns the names stopped.
@@ -92,6 +101,30 @@ def idle_after_s(value: Any = ...) -> Optional[float]:
     logger.warning("hive_idle: %s=%r is not a number of minutes; using %d", SETTING, value,
                    DEFAULT_IDLE_MINUTES)
     return DEFAULT_IDLE_MINUTES * 60.0
+
+
+def own_minutes(value: Any) -> Optional[int]:
+    """A row's own ``idle_stop_minutes`` when it is a whole number >= 0 (0 = always on),
+    else None: NULL, or a value no route writes (a fraction, a negative number, text),
+    which follows the default. The one reading of the column: the idle loop and the Hive
+    list (routers/hive) both go through it."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def own_idle_after_s(own: Any, default_s: Optional[float]) -> Optional[float]:
+    """One Hive's idle time in seconds from its own ``idle_stop_minutes``: None when it is
+    0 (always on), its minutes when it is a positive whole number, *default_s* (the
+    default, ``idle_after_s()``) when it is NULL or anything else (``own_minutes``: a bad
+    value never turns stopping off)."""
+    minutes = own_minutes(own)
+    if minutes is None:
+        if own is not None:
+            logger.warning("hive_idle: idle_stop_minutes=%r is not a whole number of minutes; "
+                           "using the default", own)
+        return default_s
+    return None if minutes == 0 else float(minutes) * 60.0
 
 
 def busy_reasons(open_runs: Optional[int], sessions: Optional[dict[str, dict[str, Any]]],
@@ -151,8 +184,10 @@ async def _running_hives() -> list[dict[str, Any]]:
     async with aiosqlite.connect(swarm_out._db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
         cur = await conn.execute(
-            "SELECT id, name, updated_at, version FROM hive_instances WHERE status = 'running'")
-        return [{"id": r[0], "name": r[1], "updated_at": r[2], "version": r[3]}
+            "SELECT id, name, updated_at, version, idle_stop_minutes FROM hive_instances "
+            "WHERE status = 'running'")
+        return [{"id": r[0], "name": r[1], "updated_at": r[2], "version": r[3],
+                 "idle_stop_minutes": r[4]}
                 for r in await cur.fetchall()]
 
 
@@ -290,14 +325,15 @@ async def _follow_host(prov, hive: dict[str, Any]) -> bool:
 
 async def check_once(now: Optional[float] = None) -> list[str]:
     """One look at every running Hive: update each idle one behind the Host's version,
-    stop each other one idle for the idle time. Returns the names of the Hives whose stop
+    stop each other one idle for its idle time (its own, else the default; never one set
+    always on). Returns the names of the Hives whose stop
     it started. Both are duties of the EC2 carrier (its Hives are EC2 instances this Host
     manages); without that carrier nothing is looked at (design
     2026-11-20-swarm-out-multi-carrier §4.5)."""
     from core import swarm_out
     from core.carriers import registry
     from core.carriers.base import EC2, IDLE_STOP
-    idle_s = idle_after_s()                # None: no stop, the Hives still follow the Host
+    default_s = idle_after_s()             # None: no stop by default, the Hives still follow the Host
     if EC2 not in {c.kind for c in registry.with_duty(IDLE_STOP)}:
         return []
     now = time.time() if now is None else now
@@ -321,6 +357,7 @@ async def check_once(now: Optional[float] = None) -> list[str]:
             _LAST_BUSY[h["id"]] = now
             continue
         prov = prov or _provisioner()
+        idle_s = own_idle_after_s(h.get("idle_stop_minutes"), default_s)
         if await _follow_host(prov, h) or idle_s is None:
             continue
         since = max(_LAST_BUSY.get(h["id"], 0.0), _db_time(h.get("updated_at")), _HOST_UP_AT["at"])

@@ -18,7 +18,7 @@ from typing import Optional
 import aiosqlite
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, StrictInt, field_validator
 
 from database import db
 from hive import accounts as hive_accounts
@@ -122,6 +122,45 @@ def _is_elastic(row: dict) -> bool:
 
 
 ELASTIC_NOT_EC2 = "This is Elastic Workers: turn it off in Swarm Out › settings."
+NOT_IDLE_STOPPED = "The Host never stops this machine, so it has no idle stop to set."
+
+#: the per-Hive idle stop's minutes besides 0 (always on) and null (the default): the range
+#: of the Swarm Out › settings selector (desktop SwarmOutSettings IDLE_CHOICES)
+IDLE_MINUTES_MIN = 30
+IDLE_MINUTES_MAX = 480
+
+
+def _idle_stop_kinds() -> frozenset:
+    """The carriers whose locations the Host stops when idle (``base.IDLE_STOP``)."""
+    from core.carriers import registry
+    from core.carriers.base import IDLE_STOP
+    return frozenset(c.kind for c in registry.with_duty(IDLE_STOP))
+
+
+def _idle_stop_applies(row: dict, kinds: frozenset) -> bool:
+    """Whether this row has an idle stop of its own to set: an EC2 Hive (core/hive_idle
+    stops only those) while the EC2 carrier has the idle_stop duty. Elastic Workers and any
+    carrier without the duty (an SSH machine) are never stopped by the Host."""
+    from core.carriers.base import EC2
+    carrier = row.get("carrier") or EC2
+    return carrier == EC2 and carrier in kinds
+
+
+def _with_idle_stop(rows: list[dict]) -> list[dict]:
+    """Each row with its idle stop for the panel: ``idle_stop_minutes`` (its own, None =
+    the default), ``idle_stop_effective`` (the minutes after which the Host stops it, 0 =
+    never) and ``idle_stop_settable`` (whether it has one to set, ``_idle_stop_applies``)."""
+    from core import hive_idle
+    default_s = hive_idle.idle_after_s()
+    kinds = _idle_stop_kinds()
+    out = []
+    for r in rows:
+        settable = _idle_stop_applies(r, kinds)
+        own = hive_idle.own_minutes(r.get("idle_stop_minutes")) if settable else None
+        idle_s = hive_idle.own_idle_after_s(own, default_s) if settable else None
+        out.append({**r, "idle_stop_minutes": own, "idle_stop_settable": settable,
+                    "idle_stop_effective": 0.0 if idle_s is None else idle_s / 60.0})
+    return out
 
 
 # ── Models ──────────────────────────────────────────────────────────
@@ -209,6 +248,28 @@ class HiveInstanceUpdate(BaseModel):
         return v
 
 
+class HiveIdleStop(BaseModel):
+    """One EC2 Hive's own idle stop: null follows the default (app config
+    ``hive_idle_stop_minutes``), 0 is always on, N stops it after N idle minutes."""
+    model_config = ConfigDict(extra="forbid")
+    minutes: Optional[StrictInt]          # required; null is a value
+
+    @field_validator("minutes")
+    @classmethod
+    def validate_minutes(cls, v: Optional[int]) -> Optional[int]:
+        if v is None or v == 0 or IDLE_MINUTES_MIN <= v <= IDLE_MINUTES_MAX:
+            return v
+        raise ValueError(f"minutes must be null, 0 (always on) or {IDLE_MINUTES_MIN} to "
+                         f"{IDLE_MINUTES_MAX}")
+
+
+class HiveIdleStopResponse(BaseModel):
+    id: str
+    idle_stop_minutes: Optional[int] = None
+    idle_stop_effective: float
+    idle_stop_settable: bool
+
+
 class HiveRetryRequest(BaseModel):
     # Optional target version: when provided, retry redeploys THIS version
     # instead of the instance's stale recorded one. None -> keep recorded.
@@ -254,6 +315,11 @@ class HiveInstanceResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: str
     updated_at: str
+    # its idle stop (_with_idle_stop): its own (None = the default), the minutes after which
+    # the Host stops it (0 = never), whether it has one to set
+    idle_stop_minutes: Optional[int] = None
+    idle_stop_effective: float = 0.0
+    idle_stop_settable: bool = False
 
 
 class HiveInstanceDetailResponse(HiveInstanceResponse):
@@ -502,7 +568,7 @@ async def list_instances():
         cursor = await c.execute("SELECT * FROM hive_instances ORDER BY created_at DESC")
         rows = [dict(r) for r in await cursor.fetchall()]
     # Elastic Workers is not an EC2 Hive: it has its own section (GET /elastic)
-    return [HiveInstanceResponse(**r) for r in rows if not _is_elastic(r)]
+    return [HiveInstanceResponse(**r) for r in _with_idle_stop([r for r in rows if not _is_elastic(r)])]
 
 
 @router.post("/instances", response_model=HiveInstanceResponse, status_code=201)
@@ -578,7 +644,7 @@ async def create_instance(body: HiveInstanceCreate):
     task = asyncio.create_task(provisioner.deploy(row["id"]), name=f"hive-deploy-{row['id'][:8]}")
     task.add_done_callback(_log_task_failure)
 
-    return HiveInstanceResponse(**row)
+    return HiveInstanceResponse(**_with_idle_stop([row])[0])
 
 
 @router.get("/instances/{instance_id}", response_model=HiveInstanceDetailResponse)
@@ -589,7 +655,34 @@ async def get_instance(instance_id: str):
         row = await cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Instance not found")
-    return HiveInstanceDetailResponse(**dict(row))
+    return HiveInstanceDetailResponse(**_with_idle_stop([dict(row)])[0])
+
+
+@router.put("/instances/{instance_id}/idle-stop", response_model=HiveIdleStopResponse)
+async def set_idle_stop(instance_id: str, body: HiveIdleStop):
+    """Set one EC2 Hive's own idle stop (core/hive_idle): ``{"minutes": null}`` follows
+    the default, 0 is always on (the Host never stops it; it still follows the Host's
+    version when idle), N stops it after N idle minutes. Refused (409) for Elastic Workers
+    and any machine the Host never stops (``_idle_stop_applies``). Only the column changes:
+    the Hive is neither started nor stopped here, and its idle time keeps counting."""
+    _require_desktop()
+    async with _conn() as c:
+        cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
+        found = await cursor.fetchone()
+        if not found:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        row = dict(found)
+        if _is_elastic(row):
+            raise HTTPException(status_code=409, detail=ELASTIC_NOT_EC2)
+        if not _idle_stop_applies(row, _idle_stop_kinds()):
+            raise HTTPException(status_code=409, detail=NOT_IDLE_STOPPED)
+        await c.execute("UPDATE hive_instances SET idle_stop_minutes = ? WHERE id = ?",
+                        (body.minutes, instance_id))
+        await c.commit()
+    got = _with_idle_stop([{**row, "idle_stop_minutes": body.minutes}])[0]
+    return HiveIdleStopResponse(id=instance_id, idle_stop_minutes=got["idle_stop_minutes"],
+                                idle_stop_effective=got["idle_stop_effective"],
+                                idle_stop_settable=got["idle_stop_settable"])
 
 
 @router.post("/instances/{instance_id}/stop")
