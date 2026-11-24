@@ -177,6 +177,8 @@ def test_the_cdf_line_carries_the_every_turn_file_sizes(parts, monkeypatch):
     cdf = snap["headline"][1]
     assert "every-turn files: EVOLUTION 24.3K tokens (18.1K 7 days ago), MEMORY 17.9K (26.5K)" in cdf
     assert snap["measures"]["cdf"]["every_turn"] == {"EVOLUTION": [24272, 18078], "MEMORY": [17917, 26545]}
+    # the days between the two readings, so the overlay calls the older one "7 days ago" only when it is
+    assert snap["measures"]["cdf"]["every_turn_days"] == {"EVOLUTION": 7, "MEMORY": 7}
     assert len(snap["headline"]) == 3
 
 
@@ -191,8 +193,10 @@ def test_one_day_of_sizes_shows_no_earlier_value(parts, monkeypatch):
     from core import prompt_metrics
     rows = [{"day": "2026-10-31", "files": {"Evolution Registry": {"last": 24272}}}]
     monkeypatch.setattr(prompt_metrics, "daily", lambda days=8, today=None: list(rows))
-    cdf = N.compute(NOW)["headline"][1]
+    snap = N.compute(NOW)
+    cdf = snap["headline"][1]
     assert "every-turn files: EVOLUTION 24.3K tokens." in cdf and "days ago" not in cdf
+    assert snap["measures"]["cdf"]["every_turn_days"] == {"EVOLUTION": 0}
 
 
 def test_the_detail_says_whether_an_accepted_rule_stopped_its_mistake(parts, monkeypatch):

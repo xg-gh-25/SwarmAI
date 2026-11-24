@@ -132,7 +132,8 @@ def build_brain_graph(memory_content: str) -> dict:
 def _evo_label(header: str, ident: Optional[str], body: list[str]) -> str:
     """The short title of an evolution entry: the header's own text after its id and
     date ("C093 | 2026-11-01 · CLASS B: observe before asserting"), else the body's first
-    bold, cut where it turns into its explanation."""
+    bold, cut where it turns into its explanation; "" when there is neither (the header
+    is only an id and a date: the id alone says it, not the header again)."""
     rest = header
     if ident:
         rest = rest[len(ident):]
@@ -150,7 +151,7 @@ def _evo_label(header: str, ident: Optional[str], body: list[str]) -> str:
             if i >= 12:
                 text = text[:i]
         return text.strip().rstrip(".")
-    return header
+    return ""
 
 
 def build_evolution_graph(evolution_content: str) -> dict:

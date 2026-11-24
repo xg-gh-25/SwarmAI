@@ -28,7 +28,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
 import { ingestionService } from '../../services/ingestion';
@@ -60,7 +60,9 @@ interface TokenBlock {
 }
 interface NorthStar {
   at: string;
-  measures: { cdf?: { every_turn?: Record<string, [number, number]> } | null } & Record<string, unknown>;
+  measures: {
+    cdf?: { every_turn?: Record<string, [number, number]>; every_turn_days?: Record<string, number> } | null;
+  } & Record<string, unknown>;
 }
 interface ContextHealthLite {
   token_block?: TokenBlock | null;
@@ -71,6 +73,7 @@ interface GraphEntry { title: string; meta: string; type: string; date: string |
 interface BrainGraph { nodes: Array<{ type: string; count: number }>; entries?: GraphEntry[]; total: number }
 type Source = 'memory' | 'evolution';
 interface ArchiveListResp { files: Array<{ name: string; entry_count: number }>; total_files: number }
+interface GovernancePending { proposals: Array<Record<string, unknown>>; total: number }
 interface ArchiveSearchHit { title: string; snippet: string; source_file: string; shard: string }
 interface RecallWindow { runs: number; hits: number; prev_runs: number; prev_hits: number }
 interface RecallKnowledge {
@@ -91,17 +94,20 @@ const LITE_QUERY_KEY = overlayQuery.contextLite().queryKey;
 const GOV_KEY = ['cm-governance-pending'] as const;
 const LEGS = ['session_prompt', 'session_followup', 'session_ddd'] as const;
 
-// Owner → colour (system slate, the person's blue, the agent's cognition green).
-const OWNER_ORDER_BAR = ['system', 'user', 'agent'];   // the bar and its legend
-const OWNER_ORDER_LIST = ['agent', 'user', 'system'];  // the file list: what changes first
+// Owner → colour (system slate, the person's blue, the agent's cognition green, what is
+// generated violet: never a second grey next to system's in the bar).
+const OWNER_ORDER_BAR = ['system', 'user', 'agent', 'auto'];   // the bar and its legend
+const OWNER_ORDER_LIST = ['agent', 'user', 'system', 'auto'];  // the file list: what changes first
 const OWNER_TINT: Record<string, string> = {
   system: 'var(--color-text-dim)', user: 'var(--color-primary)', agent: 'var(--color-zone-cognitive)',
+  auto: 'var(--line-judge)',
 };
 const ownerTint = (o: string) => OWNER_TINT[o] ?? 'var(--color-text-muted)';
 const TYPE_TINT: Record<string, string> = {
   principle: 'var(--color-status-success)', correction: 'var(--color-status-error)',
   decision: 'var(--color-zone-cognitive)', model: 'var(--color-text-secondary)',
-  guideline: 'var(--color-primary)', pitfall: 'var(--color-zone-work)', process: 'var(--color-text-dim)',
+  // pitfall violet, not a second blue beside guideline's in the same bar (no amber: nothing to decide)
+  guideline: 'var(--color-primary)', pitfall: 'var(--line-judge)', process: 'var(--color-text-dim)',
   competence: 'var(--color-status-success)', class: 'var(--color-zone-work)',
 };
 const typeTint = (t: string) => TYPE_TINT[t] ?? 'var(--color-text-muted)';
@@ -138,10 +144,16 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-/** The 7-days-ago size of a file from the north star's every-turn readings. */
-function weekAgoOf(ns: NorthStar | null | undefined, file: string): number | null {
-  const v = ns?.measures?.cdf?.every_turn?.[baseName(file)];
-  return Array.isArray(v) && typeof v[1] === 'number' ? v[1] : null;
+/** A file's earlier size from the north star's every-turn readings: the oldest day of its
+ *  8-day window and how many days ago that was. Null when no earlier day is on record (one
+ *  day only, or a snapshot from before the days were served): no "N 天前" is better than a
+ *  wrong one. */
+function earlierOf(ns: NorthStar | null | undefined, file: string): { tokens: number; days: number } | null {
+  const name = baseName(file);
+  const v = ns?.measures?.cdf?.every_turn?.[name];
+  const days = ns?.measures?.cdf?.every_turn_days?.[name];
+  return Array.isArray(v) && typeof v[1] === 'number' && typeof days === 'number' && days > 0
+    ? { tokens: v[1], days } : null;
 }
 
 // ── Shell ─────────────────────────────────────────────────────────────────────────────
@@ -184,6 +196,15 @@ function ContextTab() {
   const block = lite.data?.token_block ?? null;
   const pending = lite.data?.governance_pending_count ?? 0;
   const ns = lite.data?.north_star;
+  // the list is fetched only when the lite count says there is something to decide; the
+  // cards' band appears only once there is a card (or the error) to put in it
+  const gov = useQuery<GovernancePending>({
+    queryKey: GOV_KEY,
+    queryFn: async () => (await api.get<GovernancePending>('/eval/governance/pending')).data,
+    staleTime: 30_000,
+    enabled: pending > 0,
+  });
+  const showGov = pending > 0 && (gov.isError || (gov.data?.proposals.length ?? 0) > 0);
   return (
     <div data-testid="cm-panel-context" className="flex flex-col gap-9">
       {lite.isError && !lite.data && (
@@ -191,9 +212,9 @@ function ContextTab() {
           message={classifyLoadError(lite.error, t('ui.CMBrainOverlay.theContext'), t('ui.CMBrainOverlay.loadError'))}
           onRetry={() => { void lite.refetch(); }} />
       )}
-      {(pending > 0 || block?.over_budget) && (
+      {(showGov || block?.over_budget) && (
         <section className="flex flex-col gap-2.5" data-testid="cm-cards">
-          {pending > 0 && <GovernanceCards />}
+          {showGov && <GovernanceCards gov={gov} />}
           {block?.over_budget && <OverBudgetCard block={block} />}
         </section>
       )}
@@ -244,8 +265,11 @@ function FileGroups({ block, ns }: { block: TokenBlock; ns: NorthStar | null | u
   return (
     <section data-testid="cm-files">
       {groups.map((g, gi) => {
-        const agos = g.files.map((f) => weekAgoOf(ns, f.name));
-        const groupAgo = agos.every((v) => v != null) ? agos.reduce<number>((n, v) => n + (v ?? 0), 0) : null;
+        // the group's earlier total only when every file has one, all from the same day
+        const agos = g.files.map((f) => earlierOf(ns, f.name));
+        const days = agos[0]?.days;
+        const groupAgo = agos.every((v) => v != null && v.days === days)
+          ? { tokens: agos.reduce((n, v) => n + (v?.tokens ?? 0), 0), days: days as number } : null;
         return (
           <div key={g.owner} data-testid={`cm-group-${g.owner}`} className={gi ? 'mt-5' : ''}>
             <div className="mb-1 flex items-baseline gap-2.5">
@@ -253,7 +277,7 @@ function FileGroups({ block, ns }: { block: TokenBlock; ns: NorthStar | null | u
               <span className="text-body font-semibold">{t(`ui.CMBrainOverlay.owner_${g.owner}`, { defaultValue: g.owner })}</span>
               <span className={`ml-auto text-small tabular-nums ${MUTED}`} data-testid={`cm-group-total-${g.owner}`}>
                 <b className="font-semibold text-[var(--color-text-secondary)]">{k1(g.total)}</b>
-                {groupAgo != null && <> · {t('ui.CMBrainOverlay.weekAgo', { tokens: k1(groupAgo) })}</>}
+                {groupAgo != null && <> · {t('ui.CMBrainOverlay.daysAgo', { days: groupAgo.days, tokens: k1(groupAgo.tokens) })}</>}
               </span>
             </div>
             <div className="-mx-2.5 flex flex-col divide-y divide-[var(--color-border)]">
@@ -263,8 +287,8 @@ function FileGroups({ block, ns }: { block: TokenBlock; ns: NorthStar | null | u
                 const role = i18n.exists(roleKey) ? t(roleKey) : '';
                 const entries = f.health_counts?.entries;
                 const label = entries != null && role ? `${t('ui.CMBrainOverlay.entries', { count: entries })} · ${role}` : role;
-                const ago = weekAgoOf(ns, f.name);
-                const delta = ago != null ? Math.round((f.tokens - ago) / 100) / 10 : null;
+                const ago = earlierOf(ns, f.name);
+                const delta = ago != null ? Math.round((f.tokens - ago.tokens) / 100) / 10 : null;
                 return (
                   <button key={f.name} type="button" data-testid={`cm-file-row-${f.name}`} data-owner={f.owner}
                     title={t('ui.CMBrainOverlay.openInCanvas', { name: f.name })}
@@ -274,15 +298,15 @@ function FileGroups({ block, ns }: { block: TokenBlock; ns: NorthStar | null | u
                       {f.name}
                       {label && <span className={`ml-2 text-small ${DIM}`} data-testid="cm-file-role">{label}</span>}
                       {f.health_counts && f.health_counts.duplicate > 0 && (
-                        <span className="ml-2 text-small text-[var(--color-status-warning)]" data-testid={`cm-health-counts-${f.name}`}>
+                        <span className={`ml-2 text-small ${DIM}`} data-testid={`cm-health-counts-${f.name}`}>
                           {t('ui.CMBrainOverlay.dupCount', { count: f.health_counts.duplicate })}
                         </span>
                       )}
                     </span>
                     <span className={`flex items-baseline gap-3.5 whitespace-nowrap text-small tabular-nums ${MUTED}`}>
                       <b className="font-semibold text-[var(--color-text-secondary)]" data-testid="cm-file-tokens">{k1(f.tokens)}</b>
-                      {delta != null && delta !== 0 && (
-                        <span data-testid="cm-file-delta">{delta > 0 ? '+' : '−'}{Math.abs(delta).toFixed(1)}K</span>
+                      {delta != null && delta !== 0 && ago != null && (
+                        <span data-testid="cm-file-delta" title={t('ui.CMBrainOverlay.daysAgo', { days: ago.days, tokens: k1(ago.tokens) })}>{delta > 0 ? '+' : '−'}{Math.abs(delta).toFixed(1)}K</span>
                       )}
                       {partlyInjected(f) && (
                         <span data-testid="cm-file-disk">{t('ui.CMBrainOverlay.onDisk', { tokens: kRound(f.disk_tokens as number) })}</span>
@@ -322,15 +346,9 @@ function PersonCard({ title, pill, why, children, testid }: {
   );
 }
 
-function GovernanceCards() {
+function GovernanceCards({ gov }: { gov: UseQueryResult<GovernancePending> }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  // the list is fetched only when the lite count says there is something to decide
-  const gov = useQuery<{ proposals: Array<Record<string, unknown>>; total: number }>({
-    queryKey: GOV_KEY,
-    queryFn: async () => (await api.get<{ proposals: Array<Record<string, unknown>>; total: number }>('/eval/governance/pending')).data,
-    staleTime: 30_000,
-  });
   async function decide(id: string, decision: 'accept' | 'reject' | 'defer') {
     await api.post('/eval/governance/decision', { proposal_id: id, decision });
     await Promise.all([qc.invalidateQueries({ queryKey: LITE_QUERY_KEY }), qc.invalidateQueries({ queryKey: GOV_KEY })]);
@@ -435,7 +453,8 @@ function useArchiveSearch(source: Source, q: string) {
 }
 
 const FILE_OF: Record<Source, string> = { memory: 'MEMORY.md', evolution: 'EVOLUTION.md' };
-const entryText = (e: GraphEntry) => (e.id && e.label ? `${e.id} · ${e.label}` : e.label || e.title);
+/** "C093 · its title"; an entry with an id and no title of its own shows the id alone. */
+const entryText = (e: GraphEntry) => (e.label ? (e.id ? `${e.id} · ${e.label}` : e.label) : e.id || e.title);
 const mmdd = (d: string | null) => (d ? d.slice(5) : '');
 
 function MemoryTab() {
@@ -455,6 +474,8 @@ function MemoryTab() {
       <label className="so-card flex items-center gap-2.5 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)] px-3.5 py-2.5">
         <span aria-hidden className={`material-symbols-outlined icon-sm ${DIM}`}>search</span>
         <input data-testid="cm-memory-search" value={q} onChange={(e) => setQ(e.target.value)}
+          // Esc with a query clears it; the overlay closes only on an empty box (useEscape)
+          onKeyDown={(e) => { if (e.key === 'Escape' && q) { e.preventDefault(); setQ(''); } }}
           placeholder={t('ui.CMBrainOverlay.searchPlaceholder')} aria-label={t('ui.CMBrainOverlay.searchPlaceholder')}
           className="min-w-0 flex-1 bg-transparent text-body text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-dim)]" />
         {query ? (
@@ -488,7 +509,7 @@ function EntryZone({ source, q, label }: { source: Source; q: ReturnType<typeof 
   const total = graph?.total ?? 0;
   const grown = useGrown(nodes.map((n) => `${n.type}:${n.count}`).join('|'));
   const file = lite.data?.token_block?.per_file.find((f) => f.name === FILE_OF[source]);
-  const ago = weekAgoOf(lite.data?.north_star, FILE_OF[source]);
+  const ago = earlierOf(lite.data?.north_star, FILE_OF[source]);
   const entries = graph?.entries ?? [];
   const shown = entries.filter((e) => !sel || e.type === sel);
   const visible = all ? shown : shown.slice(0, LIST_SHOWN);
@@ -510,7 +531,7 @@ function EntryZone({ source, q, label }: { source: Source; q: ReturnType<typeof 
               <span className="flex flex-wrap gap-1.5">
                 {fresh > 0 && <Compare testid={`cm-${source}-fresh`} was={t('ui.CMBrainOverlay.thisWeek', { count: fresh })} />}
                 {file && <Compare testid={`cm-${source}-size`}
-                  was={`${t('ui.CMBrainOverlay.tokensNow', { tokens: k1(file.tokens) })}${ago != null ? ` · ${t('ui.CMBrainOverlay.weekAgo', { tokens: k1(ago) })}` : ''}`} />}
+                  was={`${t('ui.CMBrainOverlay.tokensNow', { tokens: k1(file.tokens) })}${ago != null ? ` · ${t('ui.CMBrainOverlay.daysAgo', { days: ago.days, tokens: k1(ago.tokens) })}` : ''}`} />}
               </span>
             ) : undefined} />
           {total === 0 ? (
@@ -573,7 +594,8 @@ function SearchResults({ query, graphs }: { query: string; graphs: Record<Source
   const main = (['memory', 'evolution'] as Source[]).flatMap((source) =>
     (graphs[source]?.entries ?? []).filter((e) => entryText(e).toLowerCase().includes(needle) || e.title.toLowerCase().includes(needle))
       .map((e) => ({ source, e })));
-  const archived = [...(mem.data?.results ?? []), ...(evo.data?.results ?? [])];
+  // the archive hits only for the text in the box: during the debounce they belong to the old one
+  const archived = debounced === query ? [...(mem.data?.results ?? []), ...(evo.data?.results ?? [])] : [];
   const pending = debounced !== query || mem.isFetching || evo.isFetching;
   const failed = mem.isError || evo.isError;
   return (
@@ -817,7 +839,7 @@ function HowTab() {
         <span>
           {landed.data && totals ? (
             <Trans i18nKey="ui.CMBrainOverlay.loopNumbers"
-              values={{ written: landed.data.steps.written.toLocaleString(), files: landed.data.landed.length, everyTurn: totals[0].toLocaleString() }}
+              values={{ written: landed.data.steps.written.toLocaleString(), files: landed.data.landed.filter((r) => r.written > 0).length, everyTurn: totals[0].toLocaleString() }}
               components={{ b: <b className="font-semibold text-[var(--color-text)]" /> }} />
           ) : t('ui.CMBrainOverlay.loopPlain')}
         </span>

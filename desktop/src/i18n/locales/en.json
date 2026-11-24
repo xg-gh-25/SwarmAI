@@ -3776,7 +3776,7 @@
       "owner_user": "Yours",
       "owner_agent": "Swarm learned",
       "owner_auto": "Generated",
-      "weekAgo": "7 days ago {{tokens}}",
+      "daysAgo": "{{days}} days ago {{tokens}}",
       "onDisk": "file {{tokens}}",
       "role_SWARMAI": "System identity",
       "role_IDENTITY": "Name",

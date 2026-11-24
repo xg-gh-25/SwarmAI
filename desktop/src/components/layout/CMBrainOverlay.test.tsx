@@ -36,7 +36,9 @@ const PER_FILE = [
 const TOTAL = PER_FILE.reduce((n, f) => n + f.tokens, 0); // 71192
 const BLOCK = { total_tokens: TOTAL, disk_tokens: 144415, budget: 133000, warning_threshold: 133000,
   emergency_threshold: 172000, over_budget: false, per_file: PER_FILE };
-const NORTH_STAR = { at: '2026-11-24T08:43:06+00:00', measures: { cdf: { every_turn: { MEMORY: [15269, 15018], EVOLUTION: [8190, 7673] } } } };
+const NORTH_STAR = { at: '2026-11-24T08:43:06+00:00', measures: { cdf: {
+  every_turn: { MEMORY: [15269, 15018], EVOLUTION: [8190, 7673] }, every_turn_days: { MEMORY: 7, EVOLUTION: 7 } } } };
+const withReadings = (cdf: Record<string, unknown>) => ({ north_star: { ...NORTH_STAR, measures: { cdf } } });
 
 const GOV = [
   { id: 'GC14', gc_id: 'GC14', occurrence_count: 3, proposed_rule: 'Give a concurrent plan before dispatching', checked: 'checked against: R16b' },
@@ -82,6 +84,8 @@ const LANDED = {
     { store: 'DDD', project: 'SwarmAI', path: 'a', written: 1617, reinforced: 0 },
     { store: 'MEMORY', project: null, path: 'b', written: 4, reinforced: 0 },
     { store: 'EVOLUTION', project: null, path: 'c', written: 2, reinforced: 0 },
+    // only reinforced this week: not a file written into
+    { store: 'GENERAL', project: null, path: 'd', written: 0, reinforced: 5 },
   ],
   moved: [], attention: [], store_bytes: 0, oldest_at: null,
 };
@@ -222,7 +226,10 @@ describe('上下文 — the files grouped by owner', () => {
     mockAll({ lite: { token_block: { ...BLOCK, per_file: PER_FILE.map((f) => (f.name === 'MEMORY.md'
       ? { ...f, health_counts: { entries: 63, duplicate: 2 } } : f)) } } });
     renderOverlay();
-    expect((await screen.findByTestId('cm-health-counts-MEMORY.md')).textContent).toBe('2 repeated');
+    const dup = await screen.findByTestId('cm-health-counts-MEMORY.md');
+    expect(dup.textContent).toBe('2 repeated');
+    // a health signal, nothing to decide: not amber
+    expect(dup.className).not.toContain('status-warning');
     expect(screen.queryByTestId('cm-health-counts-EVOLUTION.md')).toBeNull();
   });
 
@@ -237,6 +244,52 @@ describe('上下文 — the files grouped by owner', () => {
     expect(cap.seen).toEqual(['.context/MEMORY.md', '.context/SWARMAI.md']);
   });
 
+  it('a group shows its 7-days-ago total only when every file in it has one', async () => {
+    mockAll({ lite: withReadings({ every_turn: { MEMORY: [15269, 15018] }, every_turn_days: { MEMORY: 7 } }) });
+    renderOverlay();
+    const mem = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(within(mem).getByTestId('cm-file-delta').textContent).toBe('+0.3K');
+    expect(screen.getByTestId('cm-group-total-agent').textContent).toBe('23.5K');
+  });
+
+  it('the earlier reading is called by its real age; one day on record, or no age served, shows none', async () => {
+    // 3 days on record: "3 days ago", never "7 days ago"
+    mockAll({ lite: withReadings({ every_turn: NORTH_STAR.measures.cdf.every_turn, every_turn_days: { MEMORY: 3, EVOLUTION: 3 } }) });
+    renderOverlay();
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(screen.getByTestId('cm-group-total-agent').textContent).toBe('23.5K · 3 days ago 22.7K');
+    cleanup();
+    // one day on record (span 0): the older value is today's, no delta and no "days ago"
+    mockAll({ lite: withReadings({ every_turn: { MEMORY: [15269, 15269], EVOLUTION: [8190, 8190] }, every_turn_days: { MEMORY: 0, EVOLUTION: 0 } }) });
+    renderOverlay();
+    const mem = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(within(mem).queryByTestId('cm-file-delta')).toBeNull();
+    expect(screen.getByTestId('cm-group-total-agent').textContent).toBe('23.5K');
+    cleanup();
+    // a snapshot from before the ages were served: no 7-day numbers at all
+    mockAll({ lite: withReadings({ every_turn: { MEMORY: [15269, 15018], EVOLUTION: [8190, 7673] } }) });
+    renderOverlay();
+    const mem2 = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(within(mem2).queryByTestId('cm-file-delta')).toBeNull();
+    expect(screen.getByTestId('cm-group-total-agent').textContent).toBe('23.5K');
+    cleanup();
+    // two ages in one group: no group total "N days ago" (which N?), each row keeps its delta
+    mockAll({ lite: withReadings({ every_turn: NORTH_STAR.measures.cdf.every_turn, every_turn_days: { MEMORY: 7, EVOLUTION: 2 } }) });
+    renderOverlay();
+    const mem3 = await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(within(mem3).getByTestId('cm-file-delta').textContent).toBe('+0.3K');
+    expect(screen.getByTestId('cm-group-total-agent').textContent).toBe('23.5K');
+  });
+
+  it('a generated file has its own colour, not a second grey beside the built-in files', async () => {
+    mockAll({ lite: { token_block: { ...BLOCK, per_file: [...PER_FILE,
+      { name: 'EXTRA.md', tokens: 900, disk_tokens: 900, pct: 1, owner: 'auto', priority: 11, locked: false, health_counts: null }] } } });
+    renderOverlay();
+    const auto = await screen.findByTestId('cm-budget-seg-auto');
+    const system = screen.getByTestId('cm-budget-seg-system');
+    expect(auto.style.background).toContain('--line-judge');
+    expect(auto.style.background).not.toBe(system.style.background);
+  });
   it('without the north star readings no 7-day numbers are shown', async () => {
     mockAll({ lite: { north_star: null } });
     renderOverlay();
@@ -258,6 +311,15 @@ describe('上下文 — amber cards', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/eval/governance/decision', { proposal_id: 'GC14', decision: 'defer' }));
   });
 
+  it('a pending count whose list comes back empty leaves no blank band', async () => {
+    mockAll({ lite: { governance_pending_count: 1 } });
+    renderOverlay();
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    await waitFor(() => expect(get.mock.calls.some((c) => String(c[0]).includes('governance/pending'))).toBe(true));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('cm-cards')).toBeNull();
+  });
+
   it('a refused decision shows the backend reason and keeps its buttons', async () => {
     mockAll({ gov: GOV });
     post.mockRejectedValue({ response: { status: 400, data: { detail: 'GC14 holds a phrase the memory guard blocks' } } });
@@ -276,6 +338,9 @@ describe('上下文 — amber cards', () => {
     expect(within(card).getByTestId('cm-budget-open-AGENT.md')).toBeInTheDocument();
     expect(within(card).getByTestId('cm-budget-open-MEMORY.md')).toBeInTheDocument();
     expect(within(card).queryByTestId('cm-budget-open-TIMELINE.md')).toBeNull();
+    // nothing pending: no governance list is fetched and no rule card shows
+    expect(get.mock.calls.some((c) => String(c[0]).includes('governance/pending'))).toBe(false);
+    expect(screen.queryByTestId(/^cm-proposal-/)).toBeNull();
   });
 });
 
@@ -350,6 +415,53 @@ describe('记忆', () => {
     expect(cap.seen).toEqual(['.context/MEMORY-archive-2026-10.md']);
     act(() => { screen.getByTestId('cm-memory-search-clear').click(); });
     expect(await screen.findByTestId('cm-zone-memory')).toBeInTheDocument();
+  });
+
+  it('Esc in the search box clears the query and stays in the overlay', async () => {
+    await openMemory();
+    await screen.findAllByTestId('cm-entry-memory');
+    const box = screen.getByTestId('cm-memory-search') as HTMLInputElement;
+    await act(async () => { fireEvent.change(box, { target: { value: 'pitfall' } }); });
+    expect(screen.queryByTestId('cm-zone-memory')).toBeNull();
+    // handled (default prevented), so the overlay's Escape does not close it
+    expect(fireEvent.keyDown(box, { key: 'Escape' })).toBe(false);
+    expect(box.value).toBe('');
+    expect(await screen.findByTestId('cm-zone-memory')).toBeInTheDocument();
+    // an empty box lets Escape through
+    expect(fireEvent.keyDown(box, { key: 'Escape' })).toBe(true);
+  });
+
+  it('while a new query waits for its debounce, the old query\'s archive hits are gone', async () => {
+    mockAll({ memHits: [{ title: 'Old pitfall in an archive', snippet: 'body', source_file: '', shard: 'MEMORY-archive-2026-10.md' }] });
+    await openMemory();
+    await screen.findAllByTestId('cm-entry-memory');
+    await act(async () => { fireEvent.change(screen.getByTestId('cm-memory-search'), { target: { value: 'pitfall' } }); });
+    await screen.findByTestId('cm-hit-archive', undefined, { timeout: 2000 });
+    await act(async () => { fireEvent.change(screen.getByTestId('cm-memory-search'), { target: { value: 'principle' } }); });
+    expect(screen.queryByTestId('cm-hit-archive')).toBeNull();
+  });
+
+  it('an entry with an id and no title of its own shows the id once', async () => {
+    const base = get.getMockImplementation() as (url: string) => Promise<unknown>;
+    get.mockImplementation((url: string) => (url.includes('brain-graph?source=evolution')
+      ? Promise.resolve({ data: { nodes: [{ type: 'competence', count: 1 }], total: 1, drill: {},
+        entries: [{ title: 'K009 | 2026-11-20', meta: '', type: 'competence', date: '2026-11-20', id: 'K009', label: '' }] } })
+      : base(url)));
+    await openMemory();
+    const zone = await screen.findByTestId('cm-zone-evolution');
+    const row = (await within(zone).findAllByTestId('cm-entry-evolution'))[0];
+    expect(row.textContent).toContain('K009');
+    expect(row.textContent).not.toContain('K009 ·');
+    expect(row.textContent).not.toContain('|');
+  });
+
+  it('a pitfall is not a second blue beside a guideline in the type bar', async () => {
+    await openMemory();
+    const zone = await screen.findByTestId('cm-zone-memory');
+    const tint = (type: string) => (within(zone).getByTestId(`cm-chip-memory-${type}`).querySelector('i') as HTMLElement).style.background;
+    await within(zone).findByTestId('cm-chip-memory-pitfall');
+    expect(tint('pitfall')).not.toBe(tint('guideline'));
+    expect(tint('pitfall')).not.toMatch(/primary|zone-work|status-warning/);
   });
 
   it('no match says so', async () => {

@@ -198,3 +198,7 @@ def test_competence_k_entries_are_real_and_classified():
     assert _evolution_kind("K007 | 2026-11-02") == "competence"
     assert _evolution_kind("C103 | 2026-11-24") == "correction"
     assert not is_real_evolution_entry("Kind words about the registry")
+    # a K plus one digit, or digits running into a word, is a header, not a competence
+    assert not is_real_evolution_entry("K8s notes")
+    assert not is_real_evolution_entry("K10s rollout")
+    assert _evolution_kind("K8s notes") != "competence"

@@ -3776,7 +3776,7 @@
       "owner_user": "你的",
       "owner_agent": "Swarm 学的",
       "owner_auto": "自动生成",
-      "weekAgo": "7 天前 {{tokens}}",
+      "daysAgo": "{{days}} 天前 {{tokens}}",
       "onDisk": "文件 {{tokens}}",
       "role_SWARMAI": "系统身份",
       "role_IDENTITY": "名字",

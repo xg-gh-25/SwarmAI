@@ -180,17 +180,19 @@ def _k(tokens: int) -> str:
     return f"{tokens / 1000:.1f}K"
 
 
-def _every_turn_sizes(now: datetime) -> tuple[str, dict]:
-    """``("; every-turn files: EVOLUTION 24.3K tokens (18.1K 7 days ago), ...", measures)``.
+def _every_turn_sizes(now: datetime) -> tuple[str, dict, dict]:
+    """``("; every-turn files: EVOLUTION 24.3K tokens (18.1K 7 days ago), ...", measures, days)``.
 
     MEMORY and EVOLUTION are injected whole; a clear rise is answered by the agent
     consolidating the file by declaration (design 2026-10-30-cdf-agent-decides §4), which
     it can do only if it sees the size in every prompt (design
     2026-11-02-knowledge-reaches-judgment ⑤). The newest and the oldest day on record in
-    the window; "" when there is no record."""
+    the window, and ``days`` how many days lie between them per file (0: one day on
+    record, no earlier value; a reader must not call the older value "7 days ago" unless
+    it is); "" when there is no record."""
     from core import prompt_metrics
     days = prompt_metrics.daily(SIZE_DAYS, today=now)
-    parts, measures = [], {}
+    parts, measures, spans = [], {}, {}
     for name, section in _EVERY_TURN:
         seen = [(d["day"], (d.get("files") or {})[section]["last"]) for d in days
                 if section in (d.get("files") or {})]
@@ -199,9 +201,10 @@ def _every_turn_sizes(now: datetime) -> tuple[str, dict]:
         (first_day, first), (last_day, last) = seen[0], seen[-1]
         measures[name] = [last, first]
         span = (datetime.fromisoformat(last_day) - datetime.fromisoformat(first_day)).days
+        spans[name] = span
         parts.append((name, last, first, span))
     if not parts:
-        return "", {}
+        return "", {}, {}
     shown = []
     for i, (name, last, first, span) in enumerate(parts):
         unit = " tokens" if i == 0 else ""
@@ -209,7 +212,7 @@ def _every_turn_sizes(now: datetime) -> tuple[str, dict]:
         before = "" if span <= 0 else f" ({_k(first)} {span} days ago)" if i == 0 or span != parts[0][3] \
             else f" ({_k(first)})"
         shown.append(f"{name} {_k(last)}{unit}{before}")
-    return "; every-turn files: " + ", ".join(shown), measures
+    return "; every-turn files: " + ", ".join(shown), measures, spans
 
 
 def _needs_you(attention: dict) -> tuple[str, list[str], None]:
@@ -236,14 +239,14 @@ def _with_sizes(part: tuple[str, list[str], dict], now: datetime) -> tuple[str, 
     lines); an unreadable size record leaves the line as it was."""
     line, detail, measures = part
     try:
-        sizes, numbers = _every_turn_sizes(now)
+        sizes, numbers, spans = _every_turn_sizes(now)
     except Exception:  # noqa: BLE001 -- the sizes never cost the CDF line
         logger.warning("north star: every-turn sizes unreadable", exc_info=True)
         return part
     if not sizes:
         return part
     line = line[:-1] + sizes + "." if line.endswith(".") else line + sizes
-    measures = dict(measures or {}, every_turn=numbers)
+    measures = dict(measures or {}, every_turn=numbers, every_turn_days=spans)
     return line, detail + [f"  every-turn files (tokens, newest vs oldest of {SIZE_DAYS} days): "
                            + ", ".join(f"{k} {v[0]} vs {v[1]}" for k, v in numbers.items())], measures
 

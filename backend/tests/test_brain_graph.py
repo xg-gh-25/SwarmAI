@@ -183,7 +183,8 @@ def test_evolution_entries_newest_first_with_date_id_and_label():
 def test_evolution_block_body_stops_at_the_next_section():
     # a ## section between two blocks is not part of the first block's body
     g = build_evolution_graph("### C001 | 2026-01-01\n## Other\n- **Correction**: **Not mine** x\n")
-    assert g["entries"][0]["label"] == "C001 | 2026-01-01"
+    # nothing past the id and the date, no bold in its body: no label (the UI shows the id)
+    assert g["entries"][0]["label"] == ""
 
 
 def test_evolution_filters_structural_headers():
@@ -200,9 +201,16 @@ def test_evolution_older_kinds_still_classify():
     by_kind = {n["type"]: n["count"] for n in g["nodes"]}
     assert by_kind == {"class": 2, "correction": 1, "data-point": 1}
     assert g["total"] == sum(by_kind.values())
-    # a header whose rest is only a tag and a body without a bold title keeps the header
+    # a header whose rest is only a tag and a body without a bold title has no label;
+    # the header itself is not repeated as one ("C049 · C049 | 2026-08-11 [Bias A]")
     c049 = next(e for e in g["entries"] if e["id"] == "C049")
-    assert c049["label"] == "C049 | 2026-08-11 [Bias A]"
+    assert c049["label"] == "" and c049["title"] == "C049 | 2026-08-11 [Bias A]"
+
+
+def test_a_competence_header_with_only_its_id_and_date_has_no_label():
+    g = build_evolution_graph("## Competence Learned\n### K001 | 2026-10-29\n- plain text, no bold\n")
+    (e,) = g["entries"]
+    assert (e["id"], e["type"], e["label"]) == ("K001", "competence", "")
 
 
 def test_evolution_nodes_follow_display_order():
