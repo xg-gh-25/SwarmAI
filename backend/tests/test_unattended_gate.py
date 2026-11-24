@@ -68,6 +68,10 @@ DENIED = [
     '"$SWARM_BACKEND_BIN" cognition find --query ~/.ssh/*',
     '"$SWARM_BACKEND_BIN" cognition find --query x\\ y',
     '"$SWARM_BACKEND_BIN" cognition find --query x # comment',
+    # an escaped quote inside double quotes: the shell keeps the span open, a naive
+    # scanner closes it, and the braces after it would be expanded
+    '"$SWARM_BACKEND_BIN" cognition find --query "x\\" " {a,--install} \\"',
+    '"$SWARM_BACKEND_BIN" ingest status "\\" " ~/.ssh/* \\"',
     # outside the item's scope: another job, or CDF changes for a job item
     '"$SWARM_BACKEND_BIN" py -m jobs.scheduler --run-now other-job',
     '"$SWARM_BACKEND_BIN" py -m jobs.job_manager resume other-job',
@@ -176,3 +180,38 @@ def test_unattended_tools_are_denied_and_the_ui_tool_left_out():
     assert cfg["unattended"] is True
     assert PromptBuilder.resolve_disallowed_tools(
         PromptBuilder.__new__(PromptBuilder), {"id": "default"}) == []
+
+
+@pytest.mark.asyncio
+async def test_an_unattended_session_is_built_without_the_ui_tool_or_mcp(tmp_path, monkeypatch):
+    """The real build_options: an unattended config gets no UI tool and every denied
+    tool; the same build for an attended desktop session keeps the UI tool."""
+    from unittest.mock import MagicMock
+    from core import initialization_manager as im
+    from core.attention_auto import unattended_config
+    from core.attention_authority import AttentionItem
+    from core.prompt_builder import PromptBuilder
+    from core.ui_actions import UI_MCP_SERVER_NAME
+
+    monkeypatch.setattr(im.initialization_manager, "get_cached_workspace_path",
+                        lambda: str(tmp_path), raising=False)
+    cfg = MagicMock()
+    values = {"thinking_mode": "adaptive", "thinking_effort": "high"}
+    cfg.get = MagicMock(side_effect=lambda k, d=None: values.get(k, d))
+    cfg.get_model = MagicMock(return_value="claude-opus-5-5")
+
+    async def build(agent_config):
+        return await PromptBuilder(cfg).build_options(
+            agent_config=agent_config, enable_skills=False, enable_mcp=False,
+            resume_session_id=None, session_context={"sdk_session_id": "sid"},
+            channel_context=None, editor_context=None, terminal_context=None,
+            cached_system_prompt="CACHED")
+
+    item = AttentionItem(id="job:j1", source="job", tier="blocking", brain=None, title="t",
+                         dispatch={"message": "m", "context": {"kind": "job", "job_id": "j1"}})
+    auto = await build(unattended_config({"id": "default", "model": "claude-opus-5-5"}, item))
+    assert UI_MCP_SERVER_NAME not in (auto.mcp_servers or {})
+    for tool in unattended_gate.DENIED_TOOLS:
+        assert tool in auto.disallowed_tools, tool
+    attended = await build({"id": "default", "model": "claude-opus-5-5"})
+    assert UI_MCP_SERVER_NAME in (attended.mcp_servers or {})

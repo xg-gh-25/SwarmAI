@@ -8,9 +8,11 @@ about destructive or irreversible commands. So a session marked ``unattended`` i
 agent config gets this PreToolUse hook on Bash, and Bash may run only:
 
 - one simple command, with nothing the shell would expand or split: no pipe, chain,
-  redirect, subshell, substitution or ``$`` (other than the program word itself), and
-  none of ``{ } * ? [ ] ~ \\ # !`` outside quotes (brace expansion would turn one
-  checked word into several arguments: ``--run-now {a,--install}``);
+  redirect, subshell, substitution or ``$`` (other than the program word itself), no
+  backslash anywhere (an escaped quote would make this check and the shell disagree on
+  where a quoted span ends), and none of ``{ } * ? [ ] ~ # !`` outside quotes (brace
+  expansion would turn one checked word into several arguments:
+  ``--run-now {a,--install}``);
 - whose program word is the backend program (the ``$SWARM_BACKEND_BIN`` reference, or
   the exact path that variable holds in this process);
 - with one of these subcommands. Reading, for any item:
@@ -139,7 +141,7 @@ def unattended_command_allowed(command: Any, scope: Optional[dict] = None) -> bo
         if head:
             break
     rest_text = stripped[len(head):]
-    if "$" in rest_text or _expands_unquoted(rest_text):
+    if "$" in rest_text or "\\" in rest_text or _expands_unquoted(rest_text):
         return False
     try:
         tokens = shlex.split(stripped)

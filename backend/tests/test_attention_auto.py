@@ -125,6 +125,12 @@ def _fake_router(monkeypatch, events):
     calls = []
 
     class Router:
+        stopped: list = []
+
+        async def interrupt_session(self, session_id):
+            Router.stopped.append(session_id)
+            return {"success": True}
+
         def run_conversation(self, **kw):
             calls.append(kw)
 
@@ -137,8 +143,11 @@ def _fake_router(monkeypatch, events):
 
     async def cfg(_agent_id):
         return {"id": "default", "enable_web_tools": True}
-    monkeypatch.setattr(session_registry, "session_router", Router(), raising=False)
+    router = Router()
+    Router.stopped = []
+    monkeypatch.setattr(session_registry, "session_router", router, raising=False)
     monkeypatch.setattr(agent_defaults, "build_agent_config", cfg)
+    _fake_router.last = router
     return calls
 
 
@@ -195,9 +204,12 @@ def test_failures_go_to_the_person_with_a_note(env, monkeypatch, tmp_path):
 
     # 4b. an approval request nobody can give
     env["path"].unlink()
-    _fake_router(monkeypatch, [{"type": "cmd_permission_request", "requestId": "r1"}])
+    _fake_router(monkeypatch, [{"type": "session_start", "sessionId": "s-perm"},
+                               {"type": "cmd_permission_request", "requestId": "r1"}])
     rec = _run_one(env, tmp_path, item)
     assert rec["state"] == aa.FAILED and "approval" in rec["note"]
+    # the waiting turn is stopped, so no CLI process and open request are left behind
+    assert _fake_router.last.stopped == ["s-perm"]
 
     # 5. a CDF item resolved, but still queued STALE_DONE_S later
     env["path"].unlink()
@@ -212,12 +224,16 @@ def test_failures_go_to_the_person_with_a_note(env, monkeypatch, tmp_path):
     assert stale.handler == authority.HANDLER_PERSON
     assert stale.auto["state"] == aa.FAILED and "still here" in stale.auto["note"]
 
-    # 5b. a job item is judged by its next run, not by time: still Swarm's hours later
+    # 5b. a job item is judged by its next run: still Swarm's hours later (the breaker
+    # retries within a day), the person's once a day has passed with no run
     job = _item("job:t", "job", job_id="t", consecutive_failures=3)
     rec = _run_one(env, tmp_path, job)
     assert rec["state"] == aa.DONE
     assert _shown(env, job, now=datetime.now(timezone.utc) + timedelta(hours=6)).handler \
         == authority.HANDLER_AGENT
+    gone_quiet = _shown(env, job, now=datetime.now(timezone.utc)
+                        + timedelta(seconds=aa.STALE_JOB_DONE_S + 1))
+    assert gone_quiet.handler == authority.HANDLER_PERSON and "still here" in gone_quiet.auto["note"]
 
     # 6. a daemon restart while running: interrupted, the person's, never started again
     records = {item.id: {"fingerprint": aa.fingerprint(item), "state": aa.RUNNING,
@@ -314,6 +330,7 @@ def test_no_spend_check_and_a_job_may_be_resumed(env, monkeypatch, tmp_path):
     asyncio.run(scenario())
     assert len(calls) == 30
     assert all(c["agent_config"]["unattended"] for c in calls)
+    assert all(c["enable_mcp"] is False and c["enable_skills"] is False for c in calls)
     # each run may change only its own job
     assert [c["agent_config"]["unattended_scope"]["job_ids"] for c in calls[:2]] == [["j0"], ["j1"]]
     assert calls[0]["user_message"].startswith(aa.PREAMBLE)

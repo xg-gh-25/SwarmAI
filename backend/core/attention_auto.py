@@ -25,8 +25,9 @@ model's opinion of its own work: a run that errors, asks for a question or an ap
 prints no RESULT line, is stopped by the hang guard (``HANG_GUARD_S``, a real hang only),
 or is cut by a daemon restart is **failed** (or **interrupted**). A run that said
 resolved did not work either when its item comes back in a new state (a job Swarm said
-it fixed fails again), or, for a CDF item, is still queued ``STALE_DONE_S`` later (a job
-item is judged by its next run, which may be hours away). ``apply_records``
+it fixed fails again), or is still queued unchanged ``STALE_DONE_S`` later (a CDF item)
+or ``STALE_JOB_DONE_S`` later (a job, whose next run may be up to a day away).
+``apply_records``
 (called by ``attention_authority.collect``) shows each record on its item as ``auto``,
 and hands every item whose automatic run did not work back to the person
 (``handler = person``) with a note saying what was tried and where it stopped.
@@ -70,6 +71,10 @@ INTERRUPTED = "interrupted"
 HANG_GUARD_S = 2 * 60 * 60
 #: a CDF run that said resolved, whose item is still queued this long after, did not work
 STALE_DONE_S = 30 * 60
+#: the same for a job: a tripped job is retried within 24 h by the scheduler's circuit
+#: breaker (success clears the item, failure makes a new state, and at 24 h the breaker
+#: resets), so a job item still queued unchanged past this never ran again (paused)
+STALE_JOB_DONE_S = 26 * 60 * 60
 #: how often the daemon loop looks at the queue
 PASS_EVERY_S = 5 * 60
 
@@ -78,9 +83,9 @@ AUTO_KINDS = frozenset({"job", "job_digest", "stalled", "poison"})
 #: kinds whose item leaves the queue once its cause is fixed (a digest stays queued
 #: until its freshness window ends, whatever is learned from it)
 _CLEARED_BY_FIX = frozenset({"job", "stalled", "poison"})
-#: of those, the ones judged by time: CDF moves within minutes of a fix, while a job
-#: item clears only at the job's next run
-_JUDGED_BY_TIME = frozenset({"stalled", "poison"})
+#: how long after a reported fix each kind may stay queued unchanged: CDF moves within
+#: minutes of a fix, a job item clears only at the job's next run
+_STALE_AFTER_S = {"stalled": STALE_DONE_S, "poison": STALE_DONE_S, "job": STALE_JOB_DONE_S}
 
 _RESULT_RE = re.compile(r"^\s*RESULT:\s*(resolved|not resolved)\b\s*[—–:-]*\s*(.*)$",
                         re.IGNORECASE | re.MULTILINE)
@@ -196,9 +201,9 @@ def apply_records(items: list, now: Optional[datetime] = None) -> None:
         state = str(rec.get("state") or "")
         note = str(rec.get("note") or "")
         kind = ((it.dispatch or {}).get("context") or {}).get("kind")
-        if state == DONE and kind in _JUDGED_BY_TIME:
+        if state == DONE and kind in _STALE_AFTER_S:
             done_at = _parse_time(rec.get("at"))
-            if done_at is not None and (now - done_at).total_seconds() >= STALE_DONE_S:
+            if done_at is not None and (now - done_at).total_seconds() >= _STALE_AFTER_S[kind]:
                 state = FAILED
                 note = ("Swarm reported it fixed, but it is still here. "
                         + (f"What it said: {note}" if note else "")).strip()
@@ -370,14 +375,18 @@ async def run_session(item: Any, on_session=None) -> tuple[str, str]:
     message = PREAMBLE + str((item.dispatch or {}).get("message") or item.title)
     texts: list[str] = []
     deltas: list[str] = []
+    session_id: Optional[str] = None
+    stopped: Optional[tuple[str, str]] = None
     async with aclosing(session_registry.session_router.run_conversation(
         agent_id="default", user_message=message, agent_config=unattended_config(base, item),
         enable_skills=False, enable_mcp=False, input_origin="system",
     )) as conversation:
         async for event in conversation:
             kind = event.get("type")
-            if kind == "session_start" and on_session is not None:
-                on_session(event.get("sessionId"))
+            if kind == "session_start":
+                session_id = event.get("sessionId") or session_id
+                if on_session is not None:
+                    on_session(session_id)
             elif kind == "assistant":
                 for block in event.get("content") or []:
                     if isinstance(block, dict) and block.get("type") == "text":
@@ -388,11 +397,24 @@ async def run_session(item: Any, on_session=None) -> tuple[str, str]:
                 err = " ".join(str(event.get("error") or "unknown error").split())[:200]
                 return FAILED, f"The session stopped with an error: {err}"
             elif kind == "ask_user_question":
-                return FAILED, "It needed to ask a question, and nobody was there to answer."
+                stopped = (FAILED, "It needed to ask a question, and nobody was there to answer.")
+                break
             elif kind == "cmd_permission_request":
-                return FAILED, "It needed an approval for a command, and nobody was there to give it."
+                stopped = (FAILED, "It needed an approval for a command, and nobody was there "
+                                   "to give it.")
+                break
             elif kind == "result":
                 break
+    if stopped is not None:
+        # The turn waits on an answer nobody will give: stop it, so the session does
+        # not keep its CLI process and a pending request open.
+        if session_id:
+            try:
+                await session_registry.session_router.interrupt_session(session_id)
+            except Exception:  # noqa: BLE001 — the run is recorded failed either way
+                logger.warning("attention_auto: could not stop session %s", session_id,
+                               exc_info=True)
+        return stopped
     return _final_result("\n".join(texts) if texts else "".join(deltas))
 
 
