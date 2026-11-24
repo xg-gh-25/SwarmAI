@@ -23,9 +23,9 @@ What it provides (steps 1-2 of design §9; Hive is step 3):
   (no AWS identity found, a source this version cannot resolve, a Hive) ``active()`` is
   False and each falls back to what it did before: the old path stays until the new one
   covers the case (design §9);
-- ``client_config`` / ``sigv4_headers`` / ``endpoint_unreachable`` / ``service_model`` /
-  ``sdk_version``: what a consumer needs of botocore besides a session (a client's
-  options, a SigV4 signature, an error check, the SDK's service model and version), so a
+- ``client_config`` / ``sigv4_headers`` / ``endpoint_unreachable`` /
+  ``client_error_message`` / ``service_model`` / ``sdk_version``: what a consumer needs of
+  botocore besides a session (a client's options, a SigV4 signature, error checks, the SDK's service model and version), so a
   consumer imports no AWS SDK itself (``tests/test_aws_account_integrity.py``);
 - ``write_profile_file``: ``<data dir>/aws/config``, one profile ``swarmai`` whose
   ``credential_process`` is the same subcommand, for a tool that wants the SwarmAI account
@@ -1056,6 +1056,19 @@ def endpoint_unreachable(exc: BaseException) -> bool:
     except ImportError:  # pragma: no cover - botocore ships with the backend
         return False
     return isinstance(exc, (EndpointConnectionError, ConnectTimeoutError))
+
+
+def client_error_message(exc: BaseException) -> str | None:
+    """The service's own message when *exc* itself is a botocore ``ClientError`` (what an
+    AWS API answered, e.g. a Bedrock ``ValidationException``'s text); None for any other
+    error. It does not follow ``__cause__``: the caller walks a chain."""
+    try:
+        from botocore.exceptions import ClientError
+    except ImportError:  # pragma: no cover - botocore ships with the backend
+        return None
+    if not isinstance(exc, ClientError):
+        return None
+    return str(((exc.response or {}).get("Error") or {}).get("Message") or "")
 
 
 def service_model(service: str):

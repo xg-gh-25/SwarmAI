@@ -1,8 +1,8 @@
 """The account layer's SDK helpers (core/aws_account.py: client_config, sigv4_headers,
-endpoint_unreachable, service_model, sdk_version).
+endpoint_unreachable, client_error_message, service_model, sdk_version).
 
 Question: does each helper give a consumer exactly what it used to build from botocore
-itself, so the consumers (carriers/agentcore, hive_agentcore, ingestion/summary_lane,
+itself, so the consumers (carriers/agentcore, hive_agentcore, ingestion/unreachable,
 hive/agentcore_provisioner, routers/hive) import no AWS SDK and behave as before?
 """
 from __future__ import annotations
@@ -72,6 +72,17 @@ def test_endpoint_unreachable():
     assert not aws_account.endpoint_unreachable(
         ClientError({"Error": {"Code": "ThrottlingException"}}, "Converse"))
     assert not aws_account.endpoint_unreachable(RuntimeError("boom"))
+
+
+
+def test_client_error_message():
+    region = "Access to Anthropic models is not allowed from unsupported countries"
+    assert aws_account.client_error_message(
+        ClientError({"Error": {"Code": "ValidationException", "Message": region}}, "Converse")) == region
+    assert aws_account.client_error_message(
+        ClientError({"Error": {"Code": "ThrottlingException"}}, "Converse")) == ""
+    assert aws_account.client_error_message(RuntimeError(region)) is None
+    assert aws_account.client_error_message(EndpointConnectionError(endpoint_url="https://x")) is None
 
 
 def test_service_model_known_service():

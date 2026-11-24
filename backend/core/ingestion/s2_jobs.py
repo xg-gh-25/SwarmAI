@@ -26,17 +26,21 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
 - ``set_waker(fn)`` is called by the executor so ``request`` can wake it.
 - ``postpone(conn, ...)`` puts a claimed job back without spending its attempt: the
   review did not run (no memory, no credentials), or it could not reach the model.
-- ``model_unreachable(text)`` tells such an environment failure (the CLI could not
+- ``model_unreachable(text)`` (``core/ingestion/unreachable.py``, the predicate the
+  month-summary lane reads too) tells such an environment failure (the CLI could not
   load credentials, reach or connect to the API server, or was refused for the region
   it calls from) from a failure of the review itself; the
   executor postpones the first kind and the health check C2 does not count it.
 """
 from __future__ import annotations
 
-import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Any, Callable
+
+# the one predicate every CDF lane reads (core/ingestion/unreachable.py); imported here
+# so the executor, s7_review and health C2 keep calling s2_jobs.model_unreachable
+from .unreachable import model_unreachable  # noqa: F401
 
 MAX_ATTEMPTS = 3
 RETRY_DELAY = timedelta(minutes=5)
@@ -50,31 +54,7 @@ REVIEW_DELAY = timedelta(minutes=58)
 # the wait: a session that never rests an hour is still reviewed while it is used.
 MAX_WAIT = timedelta(hours=3)
 POSTPONE_DELAY = timedelta(minutes=5)   # a job that waits for memory or the model looks again after this
-# The CLI's own error result saying the model could not be reached: credentials it
-# could not load ("API Error: Could not load AWS credentials"), an API server it could
-# not reach ("API Error: Can't reach the API server ... (ENOTFOUND)") or connect to
-# ("API Error: Connection refused ... (ECONNREFUSED)"), a call refused for the region it
-# came from ("API Error: 400 Access to Anthropic models is not allowed from unsupported
-# countries, regions, or territories": the egress region, not the review). Anchored on the
-# start of the text the review raises for an error result (s7_review.sdk_runner:
-# "review failed: <subtype>: <what the CLI said>", recorded with its exception type in
-# front): what the model writes (a reply without structured output, raised as
-# "reply missing: ...") can never match, so a quoted error never postpones a job.
-_UNREACHABLE_RE = re.compile(
-    r"(?:\w+: )?review failed: [^:\s]*: API Error:\s*"
-    r"(?:Could not load (?:AWS )?credentials|Can['\u2019]t reach the API server"
-    r"|[^\n]{0,300}?\b(?:ENOTFOUND|ECONNREFUSED)\b"
-    r"|(?:\d{3} )?Access to Anthropic models is not allowed from unsupported countries)",
-    re.IGNORECASE)
 _WAKER: Callable[[], None] | None = None
-
-
-def model_unreachable(error: str | None) -> bool:
-    """Whether *error* (an exception's text or a recorded error) says the model could
-    not be reached: credentials that could not be loaded, an API server that could not
-    be resolved or refused the connection, a call refused for its region. Such a failure
-    says nothing about the review; any other error does."""
-    return bool(error) and _UNREACHABLE_RE.match(error) is not None
 
 
 def _now() -> str:

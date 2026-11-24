@@ -10,8 +10,10 @@ The month summaries are the only part of TIMELINE the prompt carries
 states the month's key events and their outcomes, never a count of them. A summary that
 could not be written, or that the store refused, is a failure: the lane counts it and tries
 again later, and nothing contentless is stored in its place. A writer that could not reach
-the model (credentials not loaded, the endpoint not reachable: ``model_unreachable``) is not
-counted: it says nothing about the summary, and the lane tries again soon.
+the model (credentials not loaded, the endpoint not reachable or refusing the connection, a
+call refused for the region it comes from: ``unreachable.model_unreachable``, the predicate
+the session review reads too) is not counted: it says nothing about the summary, and the
+lane tries again soon.
 
 DailyActivity has no day summary: its rows are already one line per session, and the
 injection shows them for all seven days (design 2026-10-31-daily-activity-useful D7).
@@ -29,6 +31,8 @@ from typing import Callable
 from core.memory_injection import TIMELINE_BUDGET
 
 from .contracts_v2 import EventUnit
+# the one "the model could not be reached" judgment of every CDF lane (s2_jobs reads it too)
+from .unreachable import model_unreachable
 
 # How much of the prompt a summary may take, measured as the prompt measures it
 # (ContextDirectoryLoader.estimate_tokens on the block it shows): select_timeline admits
@@ -201,24 +205,6 @@ def enqueue_month_summary(conn: sqlite3.Connection, workspace: Path, month: str,
     if result.status not in ("queued", "duplicate"):
         raise SummaryNotWritten(f"store refused the summary: {result.status} {result.detail}")
     return event_kind
-
-
-def model_unreachable(exc: BaseException) -> bool:
-    """Whether *exc*, or an error it was raised from, says the model could not be reached:
-    AWS credentials missing or expired (``llm.failure_reason``), or the Bedrock endpoint not
-    reachable (DNS, connection). Any other failure is one of the summary itself."""
-    from core.aws_account import endpoint_unreachable
-    from .llm import failure_reason
-    if failure_reason(exc):
-        return True
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if endpoint_unreachable(current):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
 
 
 class SummaryLane:

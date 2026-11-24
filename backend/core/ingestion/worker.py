@@ -706,8 +706,9 @@ class IngestionWorker:
                 # a passing failure (the model or the store busy) is retried soon; once it
                 # has failed three times in a row (summary_failed is raised) it is the same
                 # failure each time, and each retry is a model call: try again next day.
-                # A model that could not be reached is not counted (summary_lane
-                # .model_unreachable), so an outage is retried every 5 minutes
+                # A model that could not be reached (credentials, DNS, a refused connection,
+                # the region block) is not counted (unreachable.model_unreachable, the
+                # review's predicate too), so an outage is retried every 5 minutes
                 again = (timedelta(minutes=5) if self._summary_lane.consecutive_failures < 3
                          else timedelta(days=1))
                 logger.warning("CDF summary lane failed; retrying in %s: %s", again, exc)
