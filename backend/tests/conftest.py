@@ -1288,3 +1288,18 @@ def _hive_model_already_aligned(request, monkeypatch):
     async def _aligned(client, hive_name, model=None):
         return model
     monkeypatch.setattr(swarm_out_model, "align", _aligned)
+
+
+@pytest.fixture(autouse=True)
+def _reset_dispatch_index():
+    """Start every test with an empty dispatch index (core/swarm_out_dispatch_index).
+
+    It mirrors the dispatch log, which lives in the per-test app data dir
+    (``_isolate_app_data_dir``), and remembers which dispatch ids got a card in a
+    session. Kept across tests, a row or a claim of one test (tests reuse dispatch ids
+    and the session ``sess-test``) would draw or suppress a card in the next.
+    """
+    mod = _sys.modules.get("core.swarm_out_dispatch_index")
+    if mod is not None:
+        mod._reset()
+    yield

@@ -806,8 +806,17 @@ def _record_maybe_sent(extra: Optional[dict], inst: dict[str, Any], title: str, 
 
 
 def _append(line: str) -> None:
+    """Write one dispatch log row: the log's only writer (the CLI goes through the
+    daemon's HTTP route). The row is also indexed by the chat session that sent it, so
+    every Bash result of that session can draw its card from the row (core/
+    swarm_out_dispatch_index); an index failure never fails the dispatch."""
     with open(_log_path(), "a", encoding="utf-8") as f:
         f.write(line)
+    try:
+        from core import swarm_out_dispatch_index
+        swarm_out_dispatch_index.record(json.loads(line))
+    except Exception as e:  # noqa: BLE001 — the row is written; only its card may be missing
+        logger.warning("swarm_out: dispatch row not indexed for its card (%s)", type(e).__name__)
 
 
 #: how many corrections of one pipeline task can each get a run of their own

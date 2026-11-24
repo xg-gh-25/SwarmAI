@@ -1,27 +1,43 @@
 """The dispatch card: what a Swarm Out dispatch did, shown in the chat (design
 docs/design/2026-10-30-swarm-out-dispatch-card.md §3).
 
-The streaming orchestrator watches a Bash call of ``scripts.swarm_out dispatch``
-(``watched``) and, when it returns, asks ``card`` for the block. A dispatch that went
-out is shown from **this machine's dispatch log row** with the ``dispatch_id`` the call
-printed (``from_row``), never from the printed text: what the card says is what was
-sent. A call that printed nothing (its output went to a file) is shown from the one row
-this session dispatched after the call started (``_row_of_session``), so a task that went
-out is never called "not sure". When its ``--title`` is a shell expression (``$n`` in a
-loop), the call may have sent several and their titles are not in the command:
-``cards`` shows every row this session dispatched after the call started. A refused dispatch (``{"ok": false, "detail": ...}``) is a failure card with the
-detail and the Brain / title the command named; it says nothing was sent. A dispatch the
-Hive may have taken without naming a session (``"maybe_sent": true``, the router's 504
-or the CLI's own timeout) says it may be running there instead.
+Which call sent which task is decided by **this machine's dispatch log row**, the
+producer's record (its ``dispatch_id`` and ``dispatched_from``), never by the text of the
+command: after every Bash result the streaming orchestrator draws a card for each row
+its session sent while that call ran and no card claimed yet (core/
+swarm_out_dispatch_index; ``cards_of_claimed``), so a wrapper script, a loop or an alias
+that dispatches shows its cards like ``scripts.swarm_out dispatch`` does. A Swarm Run's
+child row draws its run's card once (core/swarm_run_card), never a card per child.
+
+A literal ``scripts.swarm_out dispatch`` call (``watched``) is also read from what it
+printed, through ``cards``, because a refusal writes no row: a dispatch that went out is
+shown from its log row with the ``dispatch_id`` the call printed (``from_row``), never
+from the printed text: what the card says is what was sent. A call that printed nothing
+(its output went to a file) is shown from the one row this session dispatched after the
+call started (``_row_of_session``), so a task that went out is never called "not sure".
+When its ``--title`` is a shell expression (``$n`` in a loop), the call may have sent
+several and their titles are not in the command: ``cards`` shows every row this session
+dispatched after the call started. A refused dispatch (``{"ok": false, "detail": ...}``)
+is a failure card with the detail and the Brain / title the command named; it says
+nothing was sent. A dispatch the Hive may have taken without naming a session
+(``"maybe_sent": true``, the router's 504 or the CLI's own timeout) says it may be
+running there instead; the row it may have written by the time the call returned is
+claimed by that card (``literal_title``), so it is not drawn a second time as sent. A row
+the daemon writes only after the call returned (the CLI gave up waiting before the
+dispatch finished) is drawn as sent by a later call of the session whose window holds
+it (written while that call ran, or at most the skew before it started): the answer to
+that "not sure". One written in a gap between the session's calls draws no card.
 
 The block carries ``text``, the same card as plain lines with no channel markup, for a
 channel reply (the gateway appends ``channel_text``: the whole card in a DM, its first and
 last line in a group; a channel cannot render the card or open the Hive tab). It is not
 conversation (core/context_injector) and is persisted as its own row.
 
-- ``watched(command)`` — the call is a Swarm Out dispatch (not text inside a heredoc body)
-- ``card(command, output, since)`` — the block for its result, or None
-- ``cards(command, output, since)`` — every block for its result (the orchestrator's)
+- ``watched(command)`` — the call is a literal Swarm Out dispatch (not text inside a heredoc body)
+- ``card(command, output, since)`` — the block for a literal call's result, or None
+- ``cards(command, output, since)`` — every block for a literal call's result
+- ``cards_of_claimed(dispatch_ids, runs)`` — the cards of rows the index claimed
+- ``literal_title(command)`` — the ``--title`` a literal call sent, as the log keeps it
 - ``channel_text(block, direct)`` — what a channel reply carries
 - ``from_row(row)`` / ``failure(...)`` / ``text_of(block)`` / ``hive_reason_text(code)``
 """
@@ -60,8 +76,10 @@ def _without_heredoc_bodies(command: str) -> str:
 
 
 def watched(command: Any) -> bool:
-    """A dispatch call: Swarm Out's, or a Swarm Run's child dispatch (its card is
-    core/swarm_run_card's, made through ``cards``)."""
+    """A literal dispatch call: Swarm Out's, or a Swarm Run's child dispatch (its card
+    is core/swarm_run_card's, made through ``cards``). A call that dispatches some other
+    way (a wrapper script) is not watched; its rows draw their cards all the same
+    (``cards_of_claimed``)."""
     if not isinstance(command, str):
         return False
     if bool(_DISPATCH_RE.search(_without_heredoc_bodies(command))):
@@ -200,6 +218,34 @@ def cards(command: str, output: str, since: Optional[float] = None, cwd: Optiona
             return [from_row(r) for r in rows]
     block = card(command, output, since, cwd, session_id)
     return [block] if block else []
+
+
+def literal_title(command: str) -> Optional[str]:
+    """The ``--title`` a literal dispatch call named, as the dispatch log keeps it
+    (whitespace collapsed, cut at core/swarm_out.MAX_TITLE_CHARS); None when it names
+    none or the shell expands it (``$n``): its rows' titles are then not known."""
+    title = _args(command).get("title")
+    if title is None or _expanded(title):
+        return None
+    from core import swarm_out
+    return " ".join(title.split())[:swarm_out.MAX_TITLE_CHARS]
+
+
+def cards_of_claimed(dispatch_ids: list[str], runs: list[tuple[str, float]]) -> list[dict]:
+    """The cards of the rows core/swarm_out_dispatch_index claimed for a Bash call, from
+    one read of the dispatch log: each dispatch id's row (``from_row``), in the order
+    given, then each Swarm Run's card (``runs``: ``(run_id, since)``) when the call seen
+    at ``since`` sent its first children (core/swarm_run_card ``card_of_run``). An id the
+    log does not hold draws nothing."""
+    if not dispatch_ids and not runs:
+        return []
+    from core import swarm_out, swarm_run_card
+    log = swarm_out._read_log()
+    by_id = {r.get("dispatch_id"): r for r in log}
+    out = [from_row(by_id[d]) for d in dispatch_ids if d in by_id]
+    for run_id, since in runs:
+        out += swarm_run_card.card_of_run(run_id, since, log)
+    return out
 
 
 def card(command: str, output: str, since: Optional[float] = None, cwd: Optional[str] = None,

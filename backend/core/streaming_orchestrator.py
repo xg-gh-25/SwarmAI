@@ -294,7 +294,7 @@ class StreamingOrchestrator:
             "tool_names": {}, "tool_parent": {},
             "task_parent": {}, "subagent_last": {}, "pending_stage_watch": {},
             "background_agents": {}, "agent_inputs": {}, "product_candidates": {},
-            "pending_dispatch_watch": {},
+            "pending_dispatch_watch": {}, "bash_since": {},
         }
 
     def reset_turn_carry(self) -> None:
@@ -533,19 +533,56 @@ class StreamingOrchestrator:
                    for d in docs]
         return events
 
-    async def _dispatch_card_events(self, watch: tuple[str, float], content: Any) -> list[dict]:
-        """The swarm_out_dispatch cards of a Swarm Out dispatch call's result (core/
-        swarm_out_card.cards: from the dispatch log, or a refusal), each one persisted
-        assistant event like a pipeline stage row. Fail-safe: any error -> [] (the turn
-        goes on)."""
-        try:
-            from .turn_products import result_text
-            command, since = watch
-            blocks = await executors.run_in("io", _swarm_out_card.cards, command, result_text(content), since,
-                                            None, self._session_id)
-        except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
-            logger.warning("dispatch card failed: %s", type(e).__name__)
-            return []
+    async def _bash_card_events(self, watch: Optional[tuple[str, float]], since: float,
+                                content: Any) -> list[dict]:
+        """The cards a Bash call's result draws, each one a persisted assistant event like
+        a pipeline stage row. Which tasks the call sent is decided by the dispatch log
+        rows this session sent while it ran (core/swarm_out_dispatch_index: their
+        ``dispatch_id`` and ``dispatched_from``), whatever the command looked like, so a
+        wrapper script's dispatches show like a literal one's.
+
+        1. A literal dispatch call (*watch*: ``swarm_out_card.watched``) first gets its
+           own cards (``swarm_out_card.cards``: its log row, or a refusal / "not sure"),
+           each claiming its dispatch or run id; one an overlapping call already drew is
+           dropped. A "not sure" card claims the rows it may stand for (its literal
+           ``--title``), so the same task is not also drawn as sent.
+        2. Every row of this session sent within ``[since - skew, now]`` that nothing
+           claimed is claimed and drawn from the log (``swarm_out_card.cards_of_claimed``;
+           a Swarm Run child's row draws its run's card once). A session with no rows
+           costs one dict lookup; the claim is an in-memory filter (no I/O); only
+           drawing reads the log, off the event loop in the io pool.
+
+        Fail-safe: an error -> the cards drawn so far (the turn goes on); what a failed
+        draw claimed stays claimed and is drawn at the session's next Bash result
+        (``swarm_out_dispatch_index.undrawn``)."""
+        from . import swarm_out_dispatch_index as _index
+        sid = self._session_id
+        blocks: list[dict] = []
+        if watch is not None:
+            command, seen = watch
+            try:
+                from .turn_products import result_text
+                got = await executors.run_in("io", _swarm_out_card.cards, command, result_text(content), seen,
+                                             None, sid)
+            except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
+                logger.warning("dispatch card failed: %s", type(e).__name__)
+                got = []
+            for block in got:
+                key = block.get("dispatchId") if block.get("type") == _swarm_out_card.BLOCK_TYPE \
+                    else block.get("runId")
+                if key and not _index.mark(sid, key):
+                    continue                  # an overlapping call drew this dispatch's card
+                blocks.append(block)
+                if block.get("type") == _swarm_out_card.BLOCK_TYPE and block.get("maybeSent"):
+                    _index.claim(sid, seen, time.time(), title=_swarm_out_card.literal_title(command))
+        if _index.has(sid):
+            ids, runs = _index.claim(sid, since, time.time())
+            if ids or runs:
+                try:
+                    blocks += await executors.run_in("io", _swarm_out_card.cards_of_claimed, ids, runs)
+                except Exception as e:  # noqa: BLE001 — a display aid must never break the turn
+                    _index.undrawn(sid, ids, runs)
+                    logger.warning("dispatch card from the log failed: %s", type(e).__name__)
         return [{"type": "assistant", "content": [block], "model": None} for block in blocks]
 
     def _clear_completed_sub_agents(self, message: Any) -> None:
@@ -1626,12 +1663,15 @@ class StreamingOrchestrator:
         # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
         # stage progress shown by the backend, not left to the model writing it.
         _pending_stage_watch: dict[str, str] = self._turn_carry["pending_stage_watch"]
-        # tool_use_id → (command, when seen) of a Bash `scripts.swarm_out dispatch` call:
-        # its result (gone out, refused, or not sure) becomes persisted swarm_out_dispatch
-        # cards (one per task a loop of dispatches sent) built from the dispatch log
-        # (core/swarm_out_card.cards), not
-        # from what the model writes.
+        # tool_use_id → (command, when seen) of a literal Bash `scripts.swarm_out dispatch`
+        # call: its result (gone out, refused, or not sure) becomes persisted
+        # swarm_out_dispatch cards (one per task a loop of dispatches sent) built from the
+        # dispatch log (core/swarm_out_card.cards), not from what the model writes.
         _pending_dispatch_watch: dict[str, tuple[str, float]] = self._turn_carry.setdefault("pending_dispatch_watch", {})
+        # tool_use_id → when EVERY Bash call was seen: at its result, each dispatch log row
+        # this session sent since then that has no card yet draws one, however the
+        # command was written (a wrapper script; _bash_card_events).
+        _bash_since: dict[str, float] = self._turn_carry.setdefault("bash_since", {})
         # Per-TURN resolution cache (perf directive): raw_path → resolved dict|None.
         # Turn-scoped (local to this method), so no cross-session leak; keyed by the
         # raw path string. Only deliverable-candidate writes are ever resolved —
@@ -2247,10 +2287,12 @@ class StreamingOrchestrator:
                             _pending_file_deletes.pop(_tuid, None)
                             _pending_stage_watch.pop(_tuid, None)
                             _product_candidates.pop(_tuid, None)
-                        # ── Dispatch card (gone out or refused: both are shown) ──
-                        if _tuid in _pending_dispatch_watch:
-                            for _ev in await self._dispatch_card_events(
-                                    _pending_dispatch_watch.pop(_tuid), getattr(_blk, "content", None)):
+                        # ── Dispatch cards (gone out or refused: both are shown), after
+                        #    every Bash result: from the rows this session sent meanwhile ──
+                        if _tuid in _bash_since:
+                            for _ev in await self._bash_card_events(
+                                    _pending_dispatch_watch.pop(_tuid, None), _bash_since.pop(_tuid),
+                                    getattr(_blk, "content", None)):
                                 yield _ev
                 # ── Glitch prefix in history → clean + resume at this boundary ──
                 # Tool results just came back, so the model is about to write
@@ -2498,10 +2540,12 @@ class StreamingOrchestrator:
                             _del_targets = parse_bash_delete_targets(_cmd)
                             if _del_targets:
                                 _pending_file_deletes[block.id] = _del_targets
-                            # ── Dispatch card: a Swarm Out dispatch call, with the moment
-                            # it was seen (its card shows only a row sent after it).
+                            # ── Dispatch cards: the moment every Bash call was seen (a card
+                            # shows only a row sent after it), and a literal Swarm Out
+                            # dispatch call's command (its refusal / "not sure" card).
+                            _bash_since[block.id] = _seen = time.time()
                             if _swarm_out_card.watched(_cmd):
-                                _pending_dispatch_watch[block.id] = (_cmd, time.time())
+                                _pending_dispatch_watch[block.id] = (_cmd, _seen)
                             # ── Pipeline stage rows: watch every artifact_cli call that
                             # names a run; its successful result yields the stages it
                             # finished (see _pipeline_stage_events). Seed the baseline
@@ -2696,10 +2740,12 @@ class StreamingOrchestrator:
                             _pending_file_deletes.pop(block.tool_use_id, None)
                             _pending_stage_watch.pop(block.tool_use_id, None)
                             _product_candidates.pop(block.tool_use_id, None)
-                        # ── Dispatch card (gone out or refused: both are shown) ──
-                        if block.tool_use_id in _pending_dispatch_watch:
-                            _fc_events += await self._dispatch_card_events(
-                                _pending_dispatch_watch.pop(block.tool_use_id), block.content)
+                        # ── Dispatch cards (gone out or refused: both are shown), after
+                        #    every Bash result: from the rows this session sent meanwhile ──
+                        if block.tool_use_id in _bash_since:
+                            _fc_events += await self._bash_card_events(
+                                _pending_dispatch_watch.pop(block.tool_use_id, None),
+                                _bash_since.pop(block.tool_use_id), block.content)
                         if _fc_events:
                             # Flush accumulated content blocks first (ordering:
                             # the tool_result must precede its file_changed).

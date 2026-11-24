@@ -2,15 +2,19 @@
 §5.9; impl step 8).
 
 A ``swarm_run`` block, like the dispatch card (core/swarm_out_card): written by the
-backend after a ``pipeline-v1 child … dispatch`` call's result, from this machine's
-dispatch log, never from model text, and persisted as its own row. One card per Swarm
-Run: only the call that sent the run's first children makes it; later dispatches show
-in the same card, which reads the live runs (the desktop SwarmRunCard filters Swarm Out's
-``/runs`` by ``parent_run`` and reads ``/swarm-runs/<run>`` for its head). A child gets
-no dispatch card of its own.
+backend after the result of a Bash call that sent the run's children, from this
+machine's dispatch log, never from model text, and persisted as its own row: a literal
+``pipeline-v1 child … dispatch`` call (``cards``), or any other call whose session's
+child rows core/swarm_out_dispatch_index found in its window (``card_of_run``, through
+core/swarm_out_card ``cards_of_claimed``). One card per Swarm Run: only the call that
+sent the run's first children makes it; later dispatches show in the same card, which
+reads the live runs (the desktop SwarmRunCard filters Swarm Out's ``/runs`` by
+``parent_run`` and reads ``/swarm-runs/<run>`` for its head). A child gets no dispatch
+card of its own.
 
-- ``watched(command)``: a child dispatch call.
+- ``watched(command)``: a literal child dispatch call.
 - ``cards(command, output, since)``: ``[block]`` or ``[]``.
+- ``card_of_run(run_id, since, log)``: the same for a run named by its children's rows.
 - ``channel_text(block)``: the card as one line where it cannot be drawn.
 """
 from __future__ import annotations
@@ -47,15 +51,25 @@ def _run_id(command: str) -> Optional[str]:
 
 def cards(command: str, output: str, since: Optional[float] = None, *_: Any) -> list[dict]:
     """The run's card when this call sent its first children (see the module doc)."""
-    from core import swarm_out, swarm_run
-    from core.swarm_out_card import _sent_at
+    from core import swarm_out
     run_id = _run_id(command)
     if run_id is None or since is None:
         return []
-    kids = swarm_run.children(swarm_out._read_log(), run_id)
+    return card_of_run(run_id, since, swarm_out._read_log())
+
+
+def card_of_run(run_id: str, since: Optional[float], log: list[dict]) -> list[dict]:
+    """``[block]`` when the run's first children in *log* (the dispatch log) were sent
+    after *since* (when the call was seen, epoch seconds), else ``[]``: nothing went
+    out, or the card was made by an earlier call."""
+    from core import swarm_run
+    from core.swarm_out_card import _sent_at
+    if since is None:
+        return []
+    kids = swarm_run.children(log, run_id)
     times = [t for t in (_sent_at(r) for r in kids) if t is not None]
     if not times or min(times) < since - _SKEW_S:
-        return []          # nothing went out, or the card was made by an earlier call
+        return []
     project = next((r.get("project") for r in kids if r.get("project")), None)
     return [{"type": BLOCK_TYPE, "runId": run_id, "project": project}]
 
