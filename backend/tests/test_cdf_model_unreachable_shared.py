@@ -16,6 +16,7 @@ What is tested:
 """
 from __future__ import annotations
 
+import errno
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -45,7 +46,7 @@ def _region_block() -> ClientError:
 def _refused_endpoint() -> EndpointConnectionError:
     try:
         try:
-            raise ConnectionRefusedError(111, "Connection refused")
+            raise ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
         except ConnectionRefusedError as inner:
             raise EndpointConnectionError(
                 endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com/") from inner
@@ -91,7 +92,7 @@ def test_both_lanes_read_one_predicate():
 @pytest.mark.parametrize("error", [
     _region_block,
     _refused_endpoint,
-    lambda: ConnectionRefusedError(111, "Connection refused"),
+    lambda: ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused"),
 ], ids=["region-block-validation", "refused-endpoint", "connection-refused"])
 def test_the_summary_lane_postpones_when_the_model_cannot_be_reached(lane, error):
     lane["error"] = error
@@ -120,7 +121,7 @@ def test_the_exception_form():
     assert model_unreachable(_client_error("AccessDeniedException", REGION_MESSAGE))
     assert model_unreachable(_refused_endpoint())
     assert model_unreachable(ConnectionRefusedError())
-    assert model_unreachable(OSError(111, "Connection refused"))
+    assert model_unreachable(OSError(errno.ECONNREFUSED, "Connection refused"))
     assert model_unreachable(NoCredentialsError())
     try:                                # wrapped, as enqueue_month_summary wraps the writer
         try:
