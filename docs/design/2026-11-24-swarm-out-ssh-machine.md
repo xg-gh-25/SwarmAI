@@ -4,7 +4,7 @@ date: 2026-11-24
 created: 2026-11-24
 updated: 2026-11-24
 project: SwarmAI
-status: 定稿（r3）：D1–D8 全部已定（XG 2026-11-24，D8 改为默认放开）；零上下文审查一轮，§14 记了改了什么；spike 已做完（§2）。下一步按 §12 落地
+status: 定稿（r3）：D1–D8 全部已定（XG 2026-11-24，D8 改为默认放开）；r3 在 pipeline THINK 时删掉了 r2 的“发布包按 GitHub 校验”（§7 第 3 条）；零上下文审查一轮，§14 记了改了什么；spike 已做完（§2）。下一步按 §12 落地
 related: docs/design/2026-11-20-swarm-out-multi-carrier.md（派发层、执行面契约，本设计在其上加第三种）；docs/design/2026-10-30-dispatch-center.md（准入、§2.2 私有网络）；Knowledge/Designs/2026-10-08-swarm-hive-mind-TECH-DESIGN.md（A2 载体 = 带身份的执行基座）
 ---
 
@@ -247,10 +247,8 @@ Swarm Out › 设置里加一台（§8），Host 在后台做，`status` 走 `pr
 
 每一步可以重跑（已完成的跳过）。失败后的"重试"走 SSH 自己的接口（§6），不走 EC2 的 `/instances/{id}/retry`。
 
-**发布包要先确认是真的。** 账户桶里已有 `v<版本>/` 包和 `checksums.txt` 时，EC2 的 `_sync_release_to_s3` 直接信它
-（`hive/provisioner.py:713-716`）。在本设计之前，能写这个桶的只有人的 Host；本设计之后多了一台以人身份跑任务的机器。
-所以第 3 步（以及 EC2 的部署和升级）改成：桶里的 `checksums.txt` 必须和 GitHub 发布页上同版本的 `.sha256` 一致才用，
-不一致就拒绝并说明。窄角色本身写不了 `v*`，这一条防的是人的身份（§7）。
+**发布包按 `checksums.txt` 校验，和 EC2 一样**（`_sync_release_to_s3`，`hive/provisioner.py:676-760`；第 3 步由 Host 取包、
+校验后经 SSH 送过去）。r2 曾加一条"桶里的 `checksums.txt` 必须和 GitHub 发布页一致"，r3 删掉了，理由在 §7 第 3 条。
 
 ### 5.4 更新和移除（D7）
 
@@ -312,7 +310,10 @@ Swarm Out › 设置里加一台（§8），Host 在后台做，`status` 走 `pr
    东西），关掉这台机器的 `general_tasks`，它就只接需要私有网络的任务和点名到它的任务。
 2. **Hive 自己只用窄角色（D4）。** Hive 进程（bridge、记录、用量）用 `SwarmAI-Hive-<name>`，和 EC2 Hive 同一份策略：写不了别的
    Hive 的 `bridge/` 前缀，写不了 `answer/`，写不了 `v*` 发布包。Hive 自己的代码出错，波及不到别的 Hive。
-3. **发布包按 GitHub 的校验值确认**（§5.3 最后一段），机器写坏了账户桶里的包，EC2 Hive 也不会装。
+3. **不额外守发布包**（r3 删掉了 r2 的"按 GitHub 校验"）。这台机器上的任务用的是人的身份；在 XG 这里就是 SwarmAI 账户的
+   Admin，它能直接改 EC2 Hive、用 SSM 在上面跑命令，只守住发布包挡不住它。人的 Mac 上的 agent 今天也有同样的身份，
+   这不是本设计新开的口子。而且人自己用 `hive/release.sh` 打的版本（例如 `2.5.5-hive1`）只上传到账户桶，GitHub 上没有，
+   按 GitHub 校验会全部被拒。要真正收窄，得让这台机器上的任务拿不到人的 Admin，这超出本设计（§11 Q4）。
 4. **Hive 的门禁代码在只读镜像里**（§5.1），run 改不了。
 5. **派出去的任务 zero-touch**：危险命令当场拒绝，push、发布这类保留动作回到人手里（`routers/chat.py:960-971` 的 `fixed_reserved`、
    `zero_touch`）。
@@ -365,6 +366,7 @@ Swarm Out › 设置今天有三块：账户、Elastic Workers、常驻 Hive（`
 | Q1 | 要不要读这台机器的容器日志（诊断职责） | 先不做；真遇到看不到原因的失败再加 |
 | Q2 | 一台机器上的 Hive 和人自己的工作（kirocrew 等）抢资源 | 由 `admission-state` 的内存和在流数挡；不够再加每台机器的并发上限 |
 | Q3 | 窄角色的信任对象：人的 `source_profile` 解析到的是 Isengard 的 Admin 角色会话，信任它等于信任这个角色 | 实现时按第 4 步读到的 ARN 设；够用，若要更窄再看 |
+| Q4 | 让这台机器上的任务拿不到人的 AWS Admin（只给窄角色，人的 Admin profile 不进容器） | 单独设计；要先回答 ada 靠 Midway 就能换出 Admin 这件事怎么办 |
 
 ## 12. 分步落地和等待关系
 
@@ -373,7 +375,7 @@ Swarm Out › 设置今天有三块：账户、Elastic Workers、常驻 Hive（`
 | 步 | 内容 | 等 |
 |---|---|---|
 | S1 | 迁移 v22；`hive_instances` 的全部语句逐条分类，只管 EC2 的加检查（§6 第一张表）；`registry.location_of` 和第二张表的七处；round 和句柄的三处。EC2 和 AgentCore 行为不变 | 不等 |
-| S2 | Hive 包里的两处（§5.2）；派生镜像；发布包按 GitHub 校验（§5.3 最后一段，EC2 也用）；`hive/ssh_provisioner.py` 的安装、更新、移除，含窄角色 | 不等（和 S1 同时） |
+| S2 | Hive 包里的两处（§5.2）；派生镜像；`hive/ssh_provisioner.py` 的安装、更新、移除，含窄角色 | 不等（和 S1 同时） |
 | S3 | `ssh_tunnel.py`、`ssh.py`（offers、位置、client、记录）、`_base_url`、`_offers` 按执行面计时、`follow_host` | S1 |
 | S4 | 准入和调度的三处变化（§4.4），含 `SwarmOutRefused(private)`、技能文本 | S1 |
 | S5 | `/ssh` 接口和面板（§8） | S2、S3 |
@@ -408,7 +410,7 @@ S1 先让读的一侧认它。
 10. Hive 包：`SWARMAI_CARRIER=ssh` 时 bridge 身份来自环境，不访问 IMDS；`admission-state` 报证书到期时间；EC2 和 AgentCore
     模式下两处都不变；镜像里 `/opt/swarmai` 对运行用户不可写。
 11. 安装：口令不出现在任何命令行参数和日志里，机器上只有哈希；窄角色的 ARN 不对就失败；`~/.aws/config` 里只新增一个 profile；
-    桶里的 `checksums.txt` 和 GitHub 不一致时拒绝（EC2 部署也是）；任一步失败行变 `error` 带原因，重试跳过已完成的步骤；
+    包和 `checksums.txt` 不一致时拒绝；任一步失败行变 `error` 带原因，重试跳过已完成的步骤；
     更新失败起回旧容器。
 12. 端到端（S6，在 XG 的 Cloud Desktop 上，手动）：从面板加机器 → 派一个 GCRAIDLCPreset 的小任务（私有网络）→ 任务里用 brazil
     构建 → 经 bridge 回答一个问题 → 结果以 bundle 回到本机 → 关掉 `general_tasks`，派一个不需要内网的任务，确认它不去这台机器，再打开 → 把 Host 版本调高一次，
@@ -421,7 +423,7 @@ concurrency + security（隧道、孤儿进程、地址来源）；S4 做 correc
 
 | 原因 | 审查发现 | 改法 |
 |---|---|---|
-| 人的身份太宽 | Admin profile 能写任何 Hive 的 `answer/`、能改发布包（`provisioner.py:713-716` 见到包就信）；不需要内网的任务也会按负载落到人的身份上；包在可写的 `$HOME` 下 | D4 窄角色、发布包按 GitHub 校验、包进只读镜像（§5、§7）；D8 加每台机器的开关（r2 建议默认关，XG 定为默认开） |
+| 人的身份太宽 | Admin profile 能写任何 Hive 的 `answer/`、能改发布包（`provisioner.py:713-716` 见到包就信）；不需要内网的任务也会按负载落到人的身份上；包在可写的 `$HOME` 下 | D4 窄角色、包进只读镜像（§5、§7）；D8 加每台机器的开关（r2 建议默认关，XG 定为默认开）；r2 的"发布包按 GitHub 校验"在 r3 删掉（§7 第 3 条） |
 | EC2 专用路径会作用到 SSH 行 | `/instances/{id}` 的 stop/start/restart/update/reset-password/retry 没有执行面检查；`release_stale_updates`；账户切换的两处；状态词用错（`failed` 应为 `error`） | §6 第一张表补全，统一检查；状态词和 EC2 一致；重试走 `/ssh` |
 | 到达 run 的路径不全 | `client_for(RunHandle)` 走 `carrier.client`；"可能已发出"时不写 round，读时当 EC2；`_first_round`、`_order_state` 写死 EC2 | §4.5 两条路径都接，round 一律写 |
 | 隧道的生命周期 | 在 offers 里建隧道会让 `_place` 的 20 秒总预算超时、丢掉所有 offer；端口换了以后长期持有的记录连错；ControlMaster 让 pid 跟踪失效 | offers 不建隧道、`_offers` 按执行面计时、端口固定、`ControlMaster=no` |
