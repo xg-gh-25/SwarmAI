@@ -6,7 +6,9 @@
  * derive: ``stage``, ``actions``); nothing here decides what a person may do. This file
  * only arranges what came back:
  *  - ``waitsOnPerson``: does the run wait on the person now? The one judgment the
- *    list's "Waiting for you" and the pinned tab's count (useSwarmOutActivity) both read.
+ *    list's "Waiting for you", the board's amber cards and track chip (track), the
+ *    pinned tab's count (useSwarmOutActivity), a chat tab's runs mark and its Canvas
+ *    Runs tab, and the Pipelines rows (layout/pipelineRows) all read.
  *    A run its dispatching session answers for (the backend's ``needs_person`` is a
  *    boolean) waits for you only when that is true (design
  *    docs/design/2026-11-02-hive-run-decision-record.md: only a landed result the agent
@@ -15,6 +17,8 @@
  *  - ``sections``: Waiting for you (needs your answer > awaiting acceptance > stopped,
  *    the longest waiting first), Running, Recently done (settled in the last 24 h, the
  *    latest to end first). A run the agent works through the funnel is under Running;
+ *  - ``boardParts``: the run board's live cards and recent rows (RunBoard, a chat tab's
+ *    runs mark);
  *  - ``brainChips``: the Brains the rows went under, with counts, never a fixed list;
  *  - ``autonomyWord``: the one word a row and the card's header carry (Judge verdict for
  *    a pipeline run, else how often a person stepped in);
@@ -178,6 +182,38 @@ export function sections(runs: SwarmOutRun[], asks: SwarmOutAsk[], now: number):
   const end = (r: SwarmOutRun) => ms(r.result?.ended_at ?? r.settle?.settled?.at ?? r.sent_at);
   done.sort((a, b) => end(b) - end(a));
   return { you, running, done };
+}
+
+/** How long a settled (or stopped) run stays in the board's "Recently done". */
+export const RECENT_MS = 72 * 3600 * 1000;
+
+export interface BoardParts {
+  /** every run not settled, one card each: what waits on the person first */
+  live: SwarmOutRun[];
+  /** settled or stopped in the last RECENT_MS, the latest started first */
+  recent: SwarmOutRun[];
+  /** the dispatch ids of the live runs that wait on the person (``waitsOnPerson``) */
+  you: Set<string>;
+}
+
+/** The run board's two parts (RunBoard, and a chat tab's runs mark that counts the same
+ *  cards). Live: what waits on you, what runs, and what ``sections`` put under done
+ *  although it is not settled (an older dispatch never named may still run; a stage
+ *  with nothing to do here, such as awaiting with only "open session"). Recent: the
+ *  settled or stopped rest that ended in the last RECENT_MS. */
+export function boardParts(runs: SwarmOutRun[], asks: SwarmOutAsk[], now: number): BoardParts {
+  const s = sections(runs, asks, now);
+  const live = [...s.you, ...s.running, ...s.done.filter((r) => (!r.stage && r.session_unknown)
+    || (!DONE_STAGES.includes(stageOf(r)) && stageOf(r) !== 'stopped'))];
+  const liveIds = new Set(live.map((r) => r.dispatch_id));
+  // when a run settled (or stopped): what the window is counted from
+  const endOf = (r: SwarmOutRun) => Date.parse(waitingSince(r, asks) ?? r.sent_at);
+  const recent = runs
+    .filter((r) => !liveIds.has(r.dispatch_id) && (DONE_STAGES.includes(stageOf(r)) || stageOf(r) === 'stopped')
+      && now - endOf(r) < RECENT_MS)
+    // newest first by the time each row shows (its start)
+    .sort((a, b) => Date.parse(b.sent_at) - Date.parse(a.sent_at));
+  return { live, recent, you: new Set(s.you.map((r) => r.dispatch_id)) };
 }
 
 /** The Brain filter chips: every Brain the rows went under, with its count, the

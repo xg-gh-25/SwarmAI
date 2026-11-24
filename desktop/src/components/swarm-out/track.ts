@@ -16,7 +16,7 @@
  *  - ``done``: it ended (accepted or closed).
  */
 import type { SwarmOutGateKey, SwarmOutRun } from '../../services/swarmOut';
-import { DONE_STAGES, stageOf } from './runReview';
+import { DONE_STAGES, stageOf, waitsOnPerson } from './runReview';
 import { TONE_VAR } from './tone';
 
 export const DISPATCH_STATIONS = ['sent', 'on_hive', 'return', 'land', 'judge'] as const;
@@ -33,8 +33,23 @@ export const CHIP_COLOR: Record<ChipKind, string> = {
   run: TONE_VAR.busy, judge: 'var(--line-judge)', you: TONE_VAR.attention, stop: TONE_VAR.error, done: 'var(--color-text-muted)',
 };
 
-/** The station the run is at and its chip's kind. */
+/** The station the run is at and its chip's kind. The chip says ``you`` exactly when
+ *  the run waits on the person (runReview.waitsOnPerson), the one answer the board's
+ *  card, the counts and a chat tab's runs mark give too. */
 export function dispatchTrack(r: SwarmOutRun): DispatchTrack {
+  const t = stationOf(r);
+  if (t.kind === 'done') return t;
+  const you = waitsOnPerson(r);
+  if (t.kind === 'you' && !you) {
+    const stage = stageOf(r);
+    // the agent's (judge), stopped with nothing to give here (stop), or come back /
+    // still going with nothing asked of anyone here (run: never the error colour)
+    return { at: t.at, kind: r.needs_person === false ? 'judge' : stage === 'stopped' ? 'stop' : 'run' };
+  }
+  return you && t.kind !== 'you' ? { at: t.at, kind: 'you' } : t;
+}
+
+function stationOf(r: SwarmOutRun): DispatchTrack {
   const stage = stageOf(r);
   const f = r.funnel;
   const gate = f?.current ? f.gates.find((g) => g.key === f.current) : undefined;

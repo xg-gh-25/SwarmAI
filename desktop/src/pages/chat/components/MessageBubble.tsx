@@ -2,7 +2,8 @@
  * MessageBubble — thin dispatcher that routes rendering by message role.
  *
  * Branches on `message.role`:
- * - `'user'`      -> delegates to UserMessageView (minimal text bubble)
+ * - `'user'`      -> delegates to UserMessageView (minimal text bubble); a Swarm Out
+ *                    wake (its row's `metadata.origin === 'wake'`) is a WakeLine instead
  * - `'assistant'`  -> delegates to AssistantMessageView (branded SwarmAI layout)
  *
  * All layout, avatar, header, and content rendering logic lives in the
@@ -24,6 +25,7 @@ import type { Message } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { UserMessageView } from './UserMessageView';
 import { AssistantMessageView } from './AssistantMessageView';
+import { WakeLine, wakeOf } from './WakeLine';
 
 export interface MessageBubbleProps {
   message: Message;
@@ -84,6 +86,8 @@ function MessageBubbleImpl({
   viewKey,
 }: MessageBubbleProps) {
   if (message.role === 'user') {
+    const wake = wakeOf(message);
+    if (wake) return <WakeLine message={message} wake={wake} />;
     return (
       <UserMessageView
         message={message}

@@ -30,7 +30,11 @@ it and that it has not seen gets one system message:
 The message is fixed text with a marker line (it is never mistaken for the person's),
 sent as ``system`` origin through ``run_conversation`` with a client id made from the
 changes it is about, so a resend of the same wake is the same send; it counts as
-delivered once the router says ``accepted``. The turn it starts is read to its end in a
+delivered once the router says ``accepted``. Its persisted row carries
+``metadata.origin = "wake"`` and the runs it is about (``wake_metadata``: each one's
+dispatch id, title and stage, this Host's own fields), so the chat shows it as one
+system line naming the runs instead of the marker text (design "the runs this session
+dispatched, visible in the dispatching tab" r2 §3 ③). The turn it starts is read to its end in a
 task of its own (closing ``run_conversation`` early would end the turn it started); the
 pass waits for the receipt only, at most ACCEPT_WAIT_S, and a session whose wake is still
 being read is not woken again. It carries no text a Hive wrote: what changed comes as
@@ -38,6 +42,7 @@ the digest, Host fields only.
 
 - ``is_wake_text(text)`` — whether a user row is a wake: it starts with a marker, the
   English one or the Chinese one wakes carried before (still in existing transcripts).
+- ``wake_metadata(data, ids, kind)`` — the metadata a wake row carries.
 - ``wake_sessions()`` — one pass; never raises. core/swarm_out.run_refresh_loop runs it
   in a task of its own, one at a time, so a slow send never holds the refresh.
 """
@@ -107,6 +112,24 @@ def _client_id(session: str, shown: dict[str, str]) -> str:
     return "swarm-out-wake-" + hashlib.sha256(key.encode()).hexdigest()[:24]
 
 
+#: the runs a wake row names at most (a pass wakes a session for a few at a time)
+MAX_WAKE_DISPATCHES = 20
+
+
+def wake_metadata(data: Optional[dict[str, Any]], ids: list[str], kind: str) -> dict[str, Any]:
+    """The wake row's metadata: ``origin: wake``, the wake's kind (``runs``, ``swarm_run``
+    or ``mixed``) and, for each run it is about, its dispatch id, title and stage from
+    this Host's runs snapshot (a run the snapshot no longer lists: its id alone)."""
+    rows = {str(r.get("dispatch_id")): r for r in (data or {}).get("runs") or [] if isinstance(r, dict)}
+    dispatches = []
+    for did in ids[:MAX_WAKE_DISPATCHES]:
+        r = rows.get(did) or {}
+        title, stage = r.get("title"), r.get("stage")
+        dispatches.append({"id": did, "title": title if isinstance(title, str) else None,
+                           "stage": stage if isinstance(stage, str) else None})
+    return {"origin": "wake", "wake": {"kind": kind, "dispatches": dispatches}}
+
+
 def candidates(data: Optional[dict[str, Any]]) -> dict[str, list[str]]:
     """Each live session that answers for runs -> the dispatch ids of its runs that need it now."""
     from core import swarm_out_record, swarm_run
@@ -139,16 +162,18 @@ async def _idle(router: Any, session: str) -> bool:
         return False
 
 
-async def _send(router: Any, session: str, client_id: str, text: str = WAKE_TEXT) -> bool:
+async def _send(router: Any, session: str, client_id: str, text: str = WAKE_TEXT,
+                row_metadata: Optional[dict[str, Any]] = None) -> bool:
     """Send the wake; True once the router owns it (``accepted``) within ACCEPT_WAIT_S.
-    The turn is read to its end in a task of its own whatever this returns."""
+    The turn is read to its end in a task of its own whatever this returns.
+    *row_metadata* goes on its persisted user row (``wake_metadata``)."""
     accepted = asyncio.Event()
 
     async def drain() -> None:
         try:
             gen = router.run_conversation(agent_id="default", user_message=text,
                                           session_id=session, client_id=client_id,
-                                          input_origin="system")
+                                          input_origin="system", row_metadata=row_metadata)
             async with contextlib.aclosing(gen) as events:
                 async for ev in events:
                     if isinstance(ev, dict) and ev.get("type") == "accepted":
@@ -311,8 +336,10 @@ async def wake_sessions(router: Any = None) -> list[str]:
             if not await _idle(router, session):
                 continue
             kids = children & set(unseen)
-            text = (WAKE_TEXT if not kids else RUN_WAKE_TEXT if kids == set(unseen) else MIXED_WAKE_TEXT)
-            if await _send(router, session, _client_id(session, unseen), text):
+            kind = "runs" if not kids else "swarm_run" if kids == set(unseen) else "mixed"
+            text = {"runs": WAKE_TEXT, "swarm_run": RUN_WAKE_TEXT, "mixed": MIXED_WAKE_TEXT}[kind]
+            meta = wake_metadata(data, [i for i in ids if i in unseen], kind)
+            if await _send(router, session, _client_id(session, unseen), text, meta):
                 woken.append(session)
         if not cands:
             await asyncio.to_thread(rewake_due, {}, time.time(), set())   # nothing needs anyone

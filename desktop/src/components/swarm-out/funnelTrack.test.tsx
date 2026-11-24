@@ -57,7 +57,13 @@ describe('the dispatch track', () => {
     const ended = run({ state: 'stopped', stage: 'accepted',
       funnel: { gates: [gate('review', 'done'), gate('land', 'done'), gate('judge', 'done')], current: null, ask: null, reruns: 0 } });
     expect(dispatchTrack(ended)).toEqual({ at: 'judge', kind: 'done' });
-    expect(dispatchTrack(run({ state: 'stopped', stage: 'stopped', needs_person: null, actions: [A('rerun', true)] }))).toEqual({ at: 'on_hive', kind: 'stop' });
+    // stopped with a command to give and no live session answering for it: it waits on
+    // the person (runReview.waitsOnPerson), so the chip says so, as the board's card does
+    expect(dispatchTrack(run({ state: 'stopped', stage: 'stopped', needs_person: null, actions: [A('rerun', true)] }))).toEqual({ at: 'on_hive', kind: 'you' });
+    // stopped with nothing to give here: stopped, nobody's
+    expect(dispatchTrack(run({ state: 'stopped', stage: 'stopped', needs_person: null, actions: [A('open_session')] }))).toEqual({ at: 'on_hive', kind: 'stop' });
+    // come back with nothing to give here: on its way, never the error colour
+    expect(dispatchTrack(run({ state: 'stopped', stage: 'awaiting', needs_person: null, actions: [A('open_session')] }))).toEqual({ at: 'return', kind: 'run' });
   });
 
   it('each row shows its track; the person\'s one is amber and first', () => {

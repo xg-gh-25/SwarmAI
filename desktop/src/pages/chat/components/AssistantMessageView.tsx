@@ -452,7 +452,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     renderDispatch: (z) => (z.block.type === 'swarm_run'
       // its own boundary: a card that fails to load leaves the rest of the turn standing
       ? <ErrorBoundary fallback={null}><Suspense fallback={null}><SwarmRunCard block={z.block} /></Suspense></ErrorBoundary>
-      : <DispatchCard block={z.block} />),
+      : <DispatchCard block={z.block} sessionId={sessionId} />),
   };
   // The ending (spec §8): one output card. Code changes come only from turn_changes;
   // a deliverable is not listed again as a changed file; a pipeline run's documents are

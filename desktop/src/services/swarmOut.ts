@@ -77,6 +77,10 @@ export interface SwarmOutRun {
    *  (backend core/machine_cost.agentcore_cost); null when it cannot be told; absent on
    *  an EC2 run (its Hive's hours are shared in the history view) */
   machine?: { seconds: number; usd: number } | null;
+  /** The app session that dispatched it (its chat tab's session id, unchanged by
+   *  self-healing); null or absent for a dispatch the person made from the Swarm Out
+   *  panel. Each chat tab lists the runs whose value is its session (Canvas Runs). */
+  dispatched_from?: string | null;
   /** The person has something to do on it now (an open ask, a wait that is theirs);
    *  null: no live session answers for the run, the older rules apply. */
   needs_person?: boolean | null;

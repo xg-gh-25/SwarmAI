@@ -22,6 +22,9 @@
  *   - `swarm:ui-command-result`  → listened on **window** (uiCommands reports an
  *                                   agent Canvas command; this hook is the ONLY
  *                                   writer of a tab's `commands`).
+ *   - `swarm:open-canvas-runs`   → listened on **window** (utils/canvasRuns: a tab's
+ *                                   runs mark, a dispatch card's "View in Canvas"):
+ *                                   the tab's Canvas opens on its Runs tab.
  *   Auto-surface reads the slice directly (pinned, canvasTab, file.auto) — no event.
  * Fullscreen (FileEditorModal) stays in ThreeColumnLayout; when the user asks to
  * fullscreen a Canvas file we re-dispatch `swarm:open-file-fullscreen` (window)
@@ -39,6 +42,7 @@ import type { GitStatus } from '../types';
 import { MAX_SNAPSHOT_COMMANDS, MAX_SNAPSHOT_OUTPUTS, type CanvasFileViewReport, type CanvasSnapshot, type UiCommandResult } from '../utils/uiContext';
 import { UI_COMMAND_RESULT_EVENT, type UiCommandResultDetail } from '../utils/uiCommands';
 import { isHiveTab } from '../pages/chat/swarmOut';
+import { OPEN_CANVAS_RUNS_EVENT, type OpenCanvasRunsDetail } from '../utils/canvasRuns';
 import { isRemote } from '../services/remoteSession';
 import i18n from '../i18n';
 import { OPEN_FILE_VERSIONS_EVENT, versionsDocPath, type FileVersionsDetail } from '../components/file-viewer/utils/fileVersions';
@@ -99,11 +103,18 @@ interface CanvasTabState {
   /** Whether ONLY the output LIST is folded (panel keeps full width). Per-tab, same
    *  bleed + fix as railed (Bug 2). In-memory. */
   outputsCollapsed: boolean;
-  /** The Canvas tab shown (Artifacts | Changes). Per tab for the same reason as
+  /** The Canvas tab shown (Artifacts | Changes | Runs). Per tab for the same reason as
    *  railed: the panel never remounts on a tab switch, so panel-local state carried
    *  tab A's Changes view (and auto-surface's yield) into tab B. Every file open
    *  brings Artifacts forward (the open handler writes it with the file). */
   canvasTab: CanvasTabId;
+  /** The session the Runs tab was chosen for (the runs it lists are that session's).
+   *  When the tab's session is another one now (a reset, a resume of another session),
+   *  Runs is not shown: the tab shows Artifacts (``shownTab``), so a new session never
+   *  inherits the old one's Runs view. Kept, not cleared: ChatPage's tab id and session
+   *  id can change in different renders, and clearing on such a moment would reset a
+   *  tab during an ordinary tab switch. */
+  runsFor: string | null;
   /** The shown file has unsaved edits (FileViewer reports it through the panel).
    *  While true, a user open of another file waits in `pendingOpen`, and an auto
    *  open (auto-surface, default selection) is dropped (super-canvas-fixing.md C1). */
@@ -113,8 +124,15 @@ interface CanvasTabState {
   pendingOpen: CanvasFile | null;
 }
 
-/** The two Canvas tabs. */
-export type CanvasTabId = 'artifacts' | 'changes';
+/** The Canvas tabs. Runs (the runs this tab's session dispatched) shows only while the
+ *  session dispatched any (FileViewerPanel); no agent command selects it. */
+export type CanvasTabId = 'artifacts' | 'changes' | 'runs';
+
+/** The tab a slice shows for the tab's current session: Runs only for the session it
+ *  was chosen for, else Artifacts. */
+export function shownTab(st: { canvasTab: CanvasTabId; runsFor: string | null }, sessionId: string | null | undefined): CanvasTabId {
+  return st.canvasTab === 'runs' && st.runsFor !== (sessionId ?? null) ? 'artifacts' : st.canvasTab;
+}
 
 /** An agent Canvas change, computed from the tab's state at the moment it applies. */
 type AgentCompute = (cur: CanvasTabState) => {
@@ -139,6 +157,7 @@ const EMPTY: CanvasTabState = {
   railed: false,
   outputsCollapsed: false,
   canvasTab: 'artifacts',
+  runsFor: null,
   fileDirty: false,
   pendingOpen: null,
 };
@@ -188,7 +207,8 @@ export interface CanvasHostApi {
   /** Patch the active tab's collapse state (Bug 2). useCallback-stable — FileViewerPanel
    *  is memo'd on referentially-stable props, so this MUST NOT be a fresh fn per render. */
   setCollapse: (p: Partial<CanvasCollapse>) => void;
-  /** The active tab's Canvas tab (per tab, in the slice). */
+  /** The active tab's Canvas tab (per tab, in the slice), as shown for its session
+   *  (``shownTab``: Runs only for the session it was chosen for). */
   canvasTab: CanvasTabId;
   /** Switch the active tab's Canvas tab. useCallback-stable (memo'd panel prop). */
   setCanvasTab: (t: CanvasTabId) => void;
@@ -371,7 +391,9 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   }, [isStreaming, activeTabId, applyAgent, writeQuiet]);
 
   const setCollapse = useCallback((p: Partial<CanvasCollapse>) => patch(p), [patch]);
-  const setCanvasTab = useCallback((t: CanvasTabId) => patch({ canvasTab: t }), [patch]);
+  // Runs is chosen for the tab's current session (runsFor, see CanvasTabState).
+  const setCanvasTab = useCallback((t: CanvasTabId) => patch(t === 'runs'
+    ? { canvasTab: t, runsFor: sessionId ?? null } : { canvasTab: t }), [patch, sessionId]);
   // setFile also un-rails on a NEW non-null file (Bug 2 root fix — no bypass): the
   // swarm:open-file handler is the primary write chokepoint, but setFile is a public
   // CanvasHostApi method, so it carries the SAME un-rail invariant to close the bypass
@@ -463,9 +485,9 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // null — never a silent fall back to the active tab (a queued message drained for
   // a background tab must not carry the foreground tab's Canvas). Returns null when
   // there is nothing reportable.
-  const liveRef = useRef<{ activeTabId: string | null | undefined; rows: ReferencedFile[] }>({ activeTabId, rows });
+  const liveRef = useRef<{ activeTabId: string | null | undefined; sessionId: string | null | undefined; rows: ReferencedFile[] }>({ activeTabId, sessionId, rows });
   useLayoutEffect(() => {
-    liveRef.current = { activeTabId, rows };
+    liveRef.current = { activeTabId, sessionId, rows };
   });
   const getCanvasSnapshotFor = useCallback((tabId: string | null): CanvasSnapshot | null => {
     const live = liveRef.current;
@@ -490,7 +512,8 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     return {
       open: openNow,
       visible: !openNow ? 'hidden' : cur.railed ? 'rail' : 'open',
-      tab: cur.canvasTab,
+      // the active tab's shown tab for its session; another tab's as stored
+      tab: forActive ? shownTab(cur, live.sessionId) : cur.canvasTab,
       listFolded: cur.outputsCollapsed,
       pinned: cur.pinned,
       file: f ? {
@@ -556,6 +579,33 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     window.addEventListener('swarm:open-canvas', onOpenCanvas);
     return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
   }, [applyAgent]);
+
+  // ── swarm:open-canvas-runs (window) — a user's way to the tab's Runs ─────────
+  // The tab's runs mark (on any tab: its id and session come with it) or a dispatch
+  // card's "View in Canvas" (the active tab). The landing tab's Canvas opens unfolded
+  // on Runs for that session. A user layout change: an agent change still waiting for
+  // the answer to finish is dropped, as patch() does. No session: nothing to list.
+  const patchRef = useRef(patch);
+  patchRef.current = patch;
+  useEffect(() => {
+    const onOpenRuns = (e: Event) => {
+      const { tabId: stampedTab, sessionId: sid } = (e as CustomEvent<OpenCanvasRunsDetail>).detail ?? {};
+      const landingTab = stampedTab ?? activeTabIdRef.current;
+      const active = landingTab === activeTabIdRef.current;
+      const runsFor = sid ?? (active ? sessionIdRef.current : null);
+      if (!runsFor) return;
+      const p: Partial<CanvasTabState> = { manuallyOpen: true, railed: false, canvasTab: 'runs', runsFor };
+      if (active) { patchRef.current(p); return; }
+      const k = keyFor(landingTab);
+      const cur = mapRef.current.get(k) ?? EMPTY;
+      if (cur.deferred) {
+        recordCommand(k, { id: cur.deferred.cmdId, cmd: cur.deferred.cmd, result: 'ignored', reason: 'the user changed the Canvas first' });
+      }
+      mapRef.current.set(k, { ...(mapRef.current.get(k) ?? EMPTY), ...p, deferred: null });
+    };
+    window.addEventListener(OPEN_CANVAS_RUNS_EVENT, onOpenRuns);
+    return () => window.removeEventListener(OPEN_CANVAS_RUNS_EVENT, onOpenRuns);
+  }, [recordCommand]);
 
   // ── Agent-only Canvas layout commands (§4) — no user sender ─────────────────
   useEffect(() => {
@@ -813,7 +863,9 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // per-tab source of truth; stable identity so the hook's listener never resubscribes).
   const stateFor = useCallback((tabId: string): CanvasSuppression => {
     const s = mapRef.current.get(keyFor(tabId)) ?? EMPTY;
-    return { pinned: s.pinned, canvasTab: s.canvasTab, viewingUserChoice: !!s.file && !s.file.auto };
+    // the active tab: the tab it shows for its session (Runs only for its own session)
+    const tab = tabId === activeTabIdRef.current ? shownTab(s, sessionIdRef.current) : s.canvasTab;
+    return { pinned: s.pinned, canvasTab: tab, viewingUserChoice: !!s.file && !s.file.auto };
   }, []);
   useCanvasAutoSurface({
     stateFor,
@@ -831,7 +883,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     lastSeenOutputCount: outputCount - unseenCount,
     collapse,
     setCollapse,
-    canvasTab: slice.canvasTab,
+    canvasTab: shownTab(slice, sessionId),
     setCanvasTab,
     setFile,
     setPinned,

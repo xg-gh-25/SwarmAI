@@ -7,7 +7,10 @@
  * - `waiting` = what waits on the person: the open questions (asks), plus a run the
  *   Hive says is waiting whose question has not been mirrored here (no ask at all). An
  *   ask whose answer the Hive refused is listed as not delivered but does not count
- *   here: it is settled on the Hive's own page or expires. Plus every other run that
+ *   here: it is settled on the Hive's own page or expires. An ask follows its run's
+ *   judgment (`askWaitsOnPerson`): one of a listed run its dispatching agent answers for
+ *   and that does not wait on the person (`needs_person` false) is the agent's to
+ *   answer and does not count; neither does such a run's unmirrored wait. Plus every other run that
  *   waits on the person (`toSettle`), by the same judgment as the panel's "Waiting for
  *   you" (runReview.waitsOnPerson): when a live session answers for the run (its
  *   `needs_person` is a boolean) only when that is true, so a run the dispatching agent
@@ -19,25 +22,42 @@
  *   run whose state is unknown (`running` null) is not counted: the tab never claims
  *   work it has not seen.
  *
- * It polls while the tab exists, also when Swarm Out is not the active tab — that is
- * when the signal matters. Null until the first answer; a failed poll keeps the last
- * answer (an unreachable daemon is not "nothing running").
+ * It reads Swarm Out's one shared runs poll (./runsPoll) and keeps it going while the
+ * tab exists, also when Swarm Out is not the active tab — that is when the signal
+ * matters. Null until the first answer; a failed poll keeps the last answer (an
+ * unreachable daemon is not "nothing running").
  */
-import { useEffect, useState } from 'react';
-import { swarmOutService, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
-import { stageOf, waitsOnPerson } from './runReview';
-
-export const ACTIVITY_POLL_MS = 30_000;
+import { useMemo } from 'react';
+import type { SwarmOutAsk, SwarmOutRun, SwarmOutRuns } from '../../services/swarmOut';
+import { DONE_STAGES, stageOf, waitsOnPerson } from './runReview';
+import { useSharedRuns } from './runsPoll';
 
 export interface SwarmOutActivity {
   running: number;
   waiting: number;
 }
 
-/** Runs the Hive says wait on the person whose question has not reached this Host. */
+/** A listed run its dispatching agent answers for and that does not wait on the
+ *  person (``needs_person`` false, not settled): its waits are the agent's. */
+const agentAnswers = (r: SwarmOutRun): boolean =>
+  r.needs_person === false && !DONE_STAGES.includes(stageOf(r));
+
+/** Does an open ask wait on the person? It follows its run (runReview.waitsOnPerson):
+ *  an ask of a run the agent answers for does not; one of no listed run, or of a run no
+ *  live session answers for, does (when several listed runs share the Hive session,
+ *  it waits on the person unless the agent answers for every one). A refused ask never
+ *  counts here. */
+export function askWaitsOnPerson(a: SwarmOutAsk, runs: SwarmOutRun[]): boolean {
+  if (a.refused) return false;
+  const own = runs.filter((r) => r.hive_id === a.hive_id && r.session_id === a.session_id);
+  return own.length === 0 || !own.every(agentAnswers);
+}
+
+/** Runs the Hive says wait on the person whose question has not reached this Host (a
+ *  run the agent answers for is not one of them). */
 export function waitingUnasked(d: SwarmOutRuns) {
   const asked = new Set(d.asks.map((a) => `${a.hive_id}/${a.session_id}`));
-  return d.runs.filter((r) => r.state === 'waiting' && !asked.has(`${r.hive_id}/${r.session_id}`));
+  return d.runs.filter((r) => r.state === 'waiting' && !asked.has(`${r.hive_id}/${r.session_id}`) && !agentAnswers(r));
 }
 
 /** A run that waits on the person (runReview.waitsOnPerson, the panel's judgment) and
@@ -49,21 +69,12 @@ export function toSettle(r: SwarmOutRun): boolean {
 
 export function activityOf(d: SwarmOutRuns): SwarmOutActivity {
   return {
-    waiting: d.asks.filter((a) => !a.refused).length + waitingUnasked(d).length + d.runs.filter(toSettle).length,
+    waiting: d.asks.filter((a) => askWaitsOnPerson(a, d.runs)).length + waitingUnasked(d).length + d.runs.filter(toSettle).length,
     running: d.runs.filter((r) => r.state === 'running').length,
   };
 }
 
 export function useSwarmOutActivity(): SwarmOutActivity | null {
-  const [state, setState] = useState<SwarmOutActivity | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      swarmOutService.runs().then((d) => { if (alive) setState(activityOf(d)); }).catch(() => { /* keep the last answer */ });
-    };
-    load();
-    const id = window.setInterval(load, ACTIVITY_POLL_MS);
-    return () => { alive = false; window.clearInterval(id); };
-  }, []);
-  return state;
+  const { data } = useSharedRuns(true);
+  return useMemo(() => (data ? activityOf(data) : null), [data]);
 }

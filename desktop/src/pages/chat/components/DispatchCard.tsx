@@ -8,8 +8,8 @@
  * title and brief, one row per field (name · value · a grey "why"), the actions in the
  * last line. Three variants:
  * - gone out: the run's status as the Swarm Out panel shows it (its stage, from Swarm
- *   Out's runs poll, shared by every card on screen), "View in Swarm Out" and "Open Hive
- *   session";
+ *   Out's one shared runs poll, components/swarm-out/runsPoll), "View in Canvas" (the
+ *   dispatching tab's Canvas Runs tab), "View in Swarm Out" and "Open Hive session";
  * - refused: why, and that nothing was sent; "Open <Brain>" when it names one;
  * - not sure (the Hive may have taken it but named no session): it may be running there.
  *
@@ -18,55 +18,29 @@
  *
  * @exports DispatchCard, useDispatchedRun, useRunsPoll, reloadRunsPoll, hiveReasonLabel, syncLabel, liveWord
  */
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import type { SwarmOutDispatchContent } from '../../../types';
-import { swarmOutService, type SwarmOutRun, type SwarmOutRuns } from '../../../services/swarmOut';
+import type { SwarmOutRun, SwarmOutRuns } from '../../../services/swarmOut';
+import { POLL_MS, _resetSharedPolls, reloadRuns, useSharedRuns } from '../../../components/swarm-out/runsPoll';
 import { isRemoteId } from '../../../services/remoteSession';
 import { getOverlayCtxBridge } from '../../../components/layout/overlayRegistry';
 import { openOverlayAt } from '../../../utils/overlayTarget';
 import { dotStyle, runTone, type Tone } from '../../../components/swarm-out/tone';
 import { STAGE_TONE_KIND, stageOf, stageWord } from '../../../components/swarm-out/stage';
 import { tf } from '../tf';
+import { openCanvasRuns } from '../../../utils/canvasRuns';
+import { ReadOnlyContext } from '../readOnlyContext';
 
-export const DISPATCH_POLL_MS = 30_000;
+export const DISPATCH_POLL_MS = POLL_MS;
 
-// ── one runs poll for every card on screen ──────────────────────────────────────
-
-let latest: SwarmOutRuns | null = null;
-let timer: number | null = null;
-const listeners = new Set<() => void>();
-
-function load(): void {
-  swarmOutService.runs().then((d) => {
-    latest = d;
-    listeners.forEach((l) => l());
-  }).catch(() => { /* keep the last answer: an unreachable daemon is not "nothing" */ });
-}
-
-function subscribe(l: () => void): () => void {
-  listeners.add(l);
-  if (listeners.size === 1) {
-    load();
-    timer = window.setInterval(load, DISPATCH_POLL_MS);
-  }
-  return () => {
-    listeners.delete(l);
-    if (listeners.size === 0 && timer != null) {
-      window.clearInterval(timer);
-      timer = null;
-    }
-  };
-}
-
-const noop = () => () => {};
-const none = () => null;
+// ── the runs: Swarm Out's one shared poll (components/swarm-out/runsPoll) ────────
 
 /** The run a dispatch started, from the shared poll; null until it is listed (or when
- *  there is no dispatch id: nothing is polled then). */
+ *  there is no dispatch id: the card does not keep the poll going then). */
 export function useDispatchedRun(dispatchId: string | null): SwarmOutRun | null {
-  const runs = useSyncExternalStore(dispatchId ? subscribe : noop, dispatchId ? () => latest : none);
+  const runs = useSharedRuns(!!dispatchId).data;
   if (!dispatchId || !runs) return null;
   return runs.runs.find((r) => r.dispatch_id === dispatchId) ?? null;
 }
@@ -74,17 +48,17 @@ export function useDispatchedRun(dispatchId: string | null): SwarmOutRun | null 
 /** Every run, from the same shared poll (the Swarm Run card reads its children from it);
  *  null until the first answer. */
 export function useRunsPoll(): SwarmOutRuns | null {
-  return useSyncExternalStore(subscribe, () => latest);
+  return useSharedRuns(true).data;
 }
 
 /** Ask the shared poll again now (after a command). */
 export function reloadRunsPoll(): void {
-  load();
+  reloadRuns();
 }
 
 /** Test hook: forget the shared poll's answer. */
 export function _resetDispatchPoll(): void {
-  latest = null;
+  _resetSharedPolls();
 }
 
 // ── words ──────────────────────────────────────────────────────────────────────
@@ -164,11 +138,17 @@ const Chip = ({ children }: { children: ReactNode }) => (
 );
 const Mono = ({ children }: { children: ReactNode }) => <span className="font-mono text-[12.5px]">{children}</span>;
 
-export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
+export function DispatchCard({ block, sessionId }: {
+  block: SwarmOutDispatchContent;
+  /** the session of the chat the card is in: "View in Canvas" shows only when it
+   *  dispatched the run (that tab's Canvas Runs lists it) */
+  sessionId?: string;
+}) {
   const { t } = useTranslation();
   const k = (key: string, fallback: string, vars?: Record<string, string | number>) =>
     tf(t, `chat.swarmOut.dispatch.${key}`, fallback, vars);
   const run = useDispatchedRun(block.ok ? block.dispatchId : null);
+  const readOnly = useContext(ReadOnlyContext);
   const bridge = getOverlayCtxBridge();
   const unsure = !block.ok && block.maybeSent === true;
   // refused at intake (dispatch-center §2.3): nothing was asked of a Hive
@@ -287,6 +267,13 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
               : !block.ok && !unsure ? k('retryHint', 'Once it is fixed, say "send it again"') : null}
         </span>
         <span className="flex-1" />
+        {/* the run is listed and this chat's session dispatched it: this tab's Canvas
+            Runs tab shows it with the session's others (not in a read-only preview) */}
+        {block.ok && !readOnly && !!sessionId && run?.dispatched_from === sessionId && (
+          <button type="button" data-testid="dispatch-view-canvas" className="btn-sm btn-secondary" onClick={() => openCanvasRuns({ sessionId })}>
+            ⬡ {tf(t, 'sessionRuns.viewInCanvas', 'View in Canvas')}
+          </button>
+        )}
         {(block.ok || unsure) && bridge.showSwarmOut && (
           <button type="button" data-testid="dispatch-view" className="btn-sm btn-secondary" onClick={() => bridge.showSwarmOut?.()}>
             {k('view', 'View in Swarm Out')}

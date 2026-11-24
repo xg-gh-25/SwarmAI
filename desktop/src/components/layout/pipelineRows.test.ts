@@ -22,6 +22,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { PipelineRunSummary } from '../../services/pipelines';
+import { waitsOnPerson } from '../swarm-out/runReview';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import {
   allRows, autonomy, brainChips, brainLanes, evalByBrain, evalDays, evalHalves, evalMeasures, filterRows, steppedIn, fromHive, fromLocal, lineGroups, sections, speed,
@@ -73,6 +74,11 @@ describe('pipelineRows', () => {
     expect(sections([opensOnly]).done.map((x) => x.key)).toEqual(['d1']);
     const asks = fromHive(hive({ stage: 'stopped', settle: null, actions: [{ key: 'rerun', primary: true }] }))!;
     expect(asks.task).toBe('stopped');
+    // one judgment with Swarm Out (runReview.waitsOnPerson): a stopped run that only opens
+    // its session but whose records this Host removes soon, unsettled, waits on you
+    const expiring = hive({ stage: 'stopped', settle: { settled: null }, cleanup_soon: true, actions: [{ key: 'open_session', primary: false }] });
+    expect(waitsOnPerson(expiring)).toBe(true);
+    expect(fromHive(expiring)!.task).toBe('stopped');
     expect(fromHive(hive({}, { work: { human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 1 } } }))!.interventions?.total).toBeNull();
     // the person's decisions on the run's record, as every "stepped in" reader counts them (swarm-run I13)
     expect(fromHive(hive({ person_decisions: 0 }))!.interventions?.total).toBe(0);

@@ -5920,5 +5920,23 @@
       "tokenTitleDisk": "{{tokens}} tokens in the prompt, {{disk}} on disk",
       "pctTitle": "{{pct}}% of what the context files put in the prompt"
     }
+  },
+  "sessionRuns": {
+    "tab": "Runs",
+    "follows": "Swarm follows it",
+    "verdictYou": "{{count}} need your decision",
+    "verdictYouRest": "{{count}} need your decision · Swarm follows the other {{rest}}",
+    "verdictRunning": "{{count}} running, Swarm follows them · when they finish it reviews, lands and judges them, nothing needed from you",
+    "verdictNone": "Nothing running from this session",
+    "footer": "Click a row to open the run's card (the same one as in Swarm Out)",
+    "allInSwarmOut": "every run and the history are in Swarm Out",
+    "viewInCanvas": "View in Canvas",
+    "mark": "{{count}} runs from this session, Swarm follows them · open in Canvas",
+    "markWaits": "{{count}} runs from this session, one needs you · open in Canvas",
+    "wakeDone": "{{names}} came back · Swarm takes over: review the diff → land → judge",
+    "wakeChanged": "{{names}} changed · Swarm takes over",
+    "wakeNone": "A run this session dispatched needs Swarm · Swarm takes over",
+    "wakeSep": ", ",
+    "verdictOther": "{{count}} running"
   }
 }

@@ -1,10 +1,12 @@
 /**
  * The Swarm Out panel's live data (design docs/design/2026-10-28-swarm-out-live-dashboard.md).
  *
- * Two polls while the panel is shown: /api/swarm-out/runs (dispatched runs with their
+ * Two answers while the panel is shown: /api/swarm-out/runs (dispatched runs with their
  * state from the Hive, and the questions waiting) and /api/swarm-out/fleet (every
- * Hive with the load a running one reports). Each keeps its last answer on a failed
- * poll (an unreachable daemon is not "nothing"), and says whether the last poll failed.
+ * Hive with the load a running one reports). Both come from the one shared poll every
+ * reader of the runs uses (./runsPoll): opening the panel adds no request of its own.
+ * Each keeps its last answer on a failed poll (an unreachable daemon is not "nothing"),
+ * and says whether the last poll failed.
  *
  * The labels and facts below are pure functions of those answers; the history's
  * numbers are ./historyStats.
@@ -13,13 +15,13 @@
  * call time through the app's i18n instance, so a panel rendered after a language
  * switch speaks the new language. Text a Hive wrote is data and is never translated.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
 import i18n from '../../i18n';
-import { swarmOutService, type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
+import { type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 import { endedTone, type Tone } from './tone';
+import { POLL_MS, reloadFleet, reloadRuns, useSharedFleet, useSharedRuns } from './runsPoll';
 
-export const LIVE_POLL_MS = 30_000;
+export const LIVE_POLL_MS = POLL_MS;
 
 interface Polled<T> {
   data: T | null;
@@ -27,33 +29,17 @@ interface Polled<T> {
   reload: () => void;
 }
 
-function usePoll<T>(fetch: () => Promise<T>, hidden: boolean): Polled<T> {
-  const [data, setData] = useState<T | null>(null);
-  const [failed, setFailed] = useState(false);
-  const seq = useRef(0);
-  const load = useCallback(async () => {
-    const mine = ++seq.current;   // an older answer arriving late never overwrites a newer one
-    try {
-      const d = await fetch();
-      if (mine === seq.current) { setData(d); setFailed(false); }
-    } catch {
-      if (mine === seq.current) setFailed(true);   // keep the last answer
-    }
-  }, [fetch]);
-  useEffect(() => {
-    if (hidden) return undefined;
-    void load();
-    const id = window.setInterval(() => { void load(); }, LIVE_POLL_MS);
-    return () => window.clearInterval(id);
-  }, [hidden, load]);
-  return { data, failed, reload: () => { void load(); } };
+/** The shared runs answer; ``hidden``: read it without keeping the poll going. */
+export function useRuns(hidden: boolean): Polled<SwarmOutRuns> {
+  const s = useSharedRuns(!hidden);
+  return { data: s.data, failed: s.failed, reload: reloadRuns };
 }
 
-const fetchRuns = () => swarmOutService.runs();
-const fetchFleet = () => swarmOutService.fleet();
-
-export const useRuns = (hidden: boolean): Polled<SwarmOutRuns> => usePoll(fetchRuns, hidden);
-export const useFleet = (hidden: boolean): Polled<SwarmOutFleet> => usePoll(fetchFleet, hidden);
+/** The shared fleet answer; ``hidden`` as for useRuns. */
+export function useFleet(hidden: boolean): Polled<SwarmOutFleet> {
+  const s = useSharedFleet(!hidden);
+  return { data: s.data, failed: s.failed, reload: reloadFleet };
+}
 
 /** The Brain a run went under, as the cards name it. */
 export function brainLabel(r: SwarmOutRun): string {

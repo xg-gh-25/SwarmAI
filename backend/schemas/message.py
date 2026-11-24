@@ -95,7 +95,7 @@ class CanvasState(BaseModel):
     muted: bool = False
     collapsed: bool = False
     visible: str | None = None  # hidden | rail | open
-    tab: str | None = None  # artifacts | changes
+    tab: str | None = None  # artifacts | changes | runs
     list_folded: bool = False
     file: CanvasFileState | None = None
     pending_open: str | None = None

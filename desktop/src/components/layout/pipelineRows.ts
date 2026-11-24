@@ -25,7 +25,7 @@
 import type { PipelineRunSummary, PipelineStageInfo, PipelineStageTime } from '../../services/pipelines';
 import type { SwarmOutAsk, SwarmOutRun } from '../../services/swarmOut';
 import { brainLabel, interventionsOf, tokenTotal } from '../swarm-out/live';
-import { actionsOf, DONE_STAGES, stageOf, waitingSince as hiveWaitingSince } from '../swarm-out/runReview';
+import { DONE_STAGES, stageOf, waitingSince as hiveWaitingSince, waitsOnPerson } from '../swarm-out/runReview';
 import { dispatchTrack, type ChipKind } from '../swarm-out/track';
 
 export type Where = 'local' | 'hive';
@@ -116,14 +116,13 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
   if (!runId) return null;
   const s = stageOf(r);
   const live = !DONE_STAGES.includes(s);
-  // Swarm Out's rule (runReview.sections): when the dispatching session answers for the
-  // run (needs_person is a boolean) it waits for you only when the backend says so; the
-  // agent taking it through the funnel is working on it, not waiting on you. Otherwise a
-  // run waits for you only when it asks something: a stopped or awaiting run that only
-  // opens its session is done.
+  // Swarm Out's one judgment (runReview.waitsOnPerson): when the dispatching session
+  // answers for the run (needs_person is a boolean) it waits for you only when the
+  // backend says so; the agent taking it through the funnel is working on it, not
+  // waiting on you. Otherwise the older rules: it asks a question, or awaits acceptance
+  // or stopped with a command to give, or its records go soon unsettled.
   const answered = typeof r.needs_person === 'boolean' && live;
-  const asksYou = answered ? r.needs_person === true
-    : s === 'needs_answer' || actionsOf(r).some((a) => a.key !== 'open_session');
+  const asksYou = waitsOnPerson(r);
   const stage: RowStage = answered
     ? (r.needs_person ? (s === 'running' ? 'needs_answer' : s as RowStage) : 'running')
     : s === 'needs_answer' || s === 'awaiting' || s === 'stopped' || s === 'running' ? s : 'done';

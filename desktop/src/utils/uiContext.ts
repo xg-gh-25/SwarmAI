@@ -63,7 +63,7 @@ export interface CanvasSnapshot {
   /** visible !== 'hidden' (kept for the legacy renderer / old fields). */
   open: boolean;
   visible: CanvasVisible;
-  tab: 'artifacts' | 'changes';
+  tab: 'artifacts' | 'changes' | 'runs';
   listFolded: boolean;
   pinned: boolean;
   file: CanvasFileSnapshot | null;
@@ -91,7 +91,7 @@ export interface EditorContextPayload {
   canvas?: {
     open: boolean;
     visible: CanvasVisible;
-    tab: 'artifacts' | 'changes';
+    tab: 'artifacts' | 'changes' | 'runs';
     list_folded: boolean;
     pinned: boolean;
     output_count: number;

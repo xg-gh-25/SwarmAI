@@ -36,6 +36,7 @@ describe('T5 — every CanvasTabState field is classified', () => {
     railed: 'visible (rail)',
     outputsCollapsed: 'listFolded',
     canvasTab: 'tab',
+    runsFor: 'tab (Runs is reported only for the session it was chosen for: shownTab)',
     fileDirty: 'file.dirty',
     pendingOpen: 'pendingOpen',
     seen: 'outputs[].isNew',

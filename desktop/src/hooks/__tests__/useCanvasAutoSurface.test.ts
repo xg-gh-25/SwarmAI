@@ -173,6 +173,25 @@ describe('useCanvasAutoSurface', () => {
     expect(opened).toEqual(['Knowledge/out2.md']);
   });
 
+  it('SUPPRESSES while the Canvas shows the Runs tab (the session\'s runs), and resumes on Artifacts', () => {
+    const { rerender } = renderSurface({ pinned: false, canvasTab: 'runs', debounceMs: DEBOUNCE });
+    writeFile('Knowledge/out.md');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]);
+    rerender({ pinned: false, canvasTab: 'artifacts', debounceMs: DEBOUNCE });
+    writeFile('Knowledge/out2.md');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual(['Knowledge/out2.md']);
+  });
+
+  it('SUPPRESSES when the landing tab (stateFor) shows Runs', () => {
+    renderHook(() => useCanvasAutoSurface({ activeTabId: 'tab-A', debounceMs: DEBOUNCE,
+      stateFor: () => ({ pinned: false, canvasTab: 'runs', viewingUserChoice: false }) }));
+    writeFile('Knowledge/out.md', 'written', 'tab-A');
+    vi.advanceTimersByTime(DEBOUNCE + 5);
+    expect(opened).toEqual([]);
+  });
+
   it('ignores read/searched operations', () => {
     renderHook(() => useCanvasAutoSurface({ pinned: false, debounceMs: DEBOUNCE }));
     writeFile('a.md', 'read');

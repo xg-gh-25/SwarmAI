@@ -5920,5 +5920,23 @@
       "tokenTitleDisk": "提示词中 {{tokens}} tokens，磁盘上 {{disk}}",
       "pctTitle": "占上下文文件放进提示词总量的 {{pct}}%"
     }
+  },
+  "sessionRuns": {
+    "tab": "Runs",
+    "follows": "Swarm 在跟",
+    "verdictYou": "{{count}} 单要你决定",
+    "verdictYouRest": "{{count}} 单要你决定 · 另外 {{rest}} 单 Swarm 在跟",
+    "verdictRunning": "{{count}} 单在跑，Swarm 在跟 · 完成后它来审、落地、判定，不需要你",
+    "verdictNone": "本 session 没有在跑的单",
+    "footer": "点一行打开 run 大卡（和 Swarm Out 里同一张）",
+    "allInSwarmOut": "全部 run 与历史在 Swarm Out",
+    "viewInCanvas": "在 Canvas 查看",
+    "mark": "本 session 派出的 {{count}} 单，Swarm 在跟 · 在 Canvas 查看",
+    "markWaits": "本 session 派出的 {{count}} 单，有要你决定的 · 在 Canvas 查看",
+    "wakeDone": "{{names}} 已完成 · Swarm 接手：审 diff → 落地 → 判定",
+    "wakeChanged": "{{names}} 有变化 · Swarm 接手",
+    "wakeNone": "本 session 派出的 run 需要 Swarm · Swarm 接手",
+    "wakeSep": "、",
+    "verdictOther": "{{count}} 单在跑"
   }
 }

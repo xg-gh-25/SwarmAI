@@ -329,13 +329,18 @@ def _ui_plain(value: object, limit: int = 80) -> str:
     return text[:limit]
 
 
+#: the Canvas tab shown, in the words of the snapshot lines (Runs: the runs the tab's
+#: session dispatched to Hives); any other value reads as Artifacts
+_CANVAS_TABS = {"changes": "Changes tab", "runs": "Runs tab (the runs this session dispatched)"}
+
+
 def _render_canvas_lines(canvas: dict, output_budget: int) -> list[str]:
     """The Canvas lines for a canvas-proprioception.md §3.1 snapshot (new client)."""
     visible = canvas.get("visible")
     head = {"open": "open", "rail": "folded to the side rail", "hidden": "closed"}.get(visible, "closed")
     bits = [head]
     if visible != "hidden":
-        bits.append("Changes tab" if canvas.get("tab") == "changes" else "Artifacts tab")
+        bits.append(_CANVAS_TABS.get(canvas.get("tab") or "", "Artifacts tab"))
         if canvas.get("list_folded"):
             bits.append("output list folded")
     if canvas.get("pinned"):

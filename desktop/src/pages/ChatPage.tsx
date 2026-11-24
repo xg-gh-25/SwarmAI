@@ -3080,6 +3080,8 @@ export default function ChatPage() {
             onTogglePin={canvas.togglePin}
             canvasTab={canvas.canvasTab}
             onCanvasTabChange={canvas.setCanvasTab}
+            // the Runs tab lists the runs this tab's session dispatched (a primitive)
+            runsSessionId={sessionId ?? null}
             fileDirty={canvas.fileDirty}
             onFileDirtyChange={canvas.setFileDirty}
             onViewChange={canvas.setFileView}

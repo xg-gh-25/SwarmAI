@@ -9,6 +9,10 @@ import { useRunningAgentDescriptions } from '../../../stores/backgroundAgentsSto
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import type { SwarmOutActivity } from '../../../components/swarm-out/useSwarmOutActivity';
+import type { RunsMark } from '../../../components/swarm-out/sessionRuns';
+
+/** the agent's colour (Swarm Out's "agent holds it" pill) */
+const AGENT = 'var(--line-judge)';
 
 interface SessionTabProps {
   tab: OpenTab;
@@ -28,6 +32,12 @@ interface SessionTabProps {
    *  person (amber, takes precedence) or else how many runs are running; the hive icon
    *  breathes while any run is running. Null / absent = not known yet: nothing shown. */
   activity?: SwarmOutActivity | null;
+  /** A chat tab only: the runs its session dispatched (SessionTabBar, from Swarm Out's
+   *  shared poll). While any is unsettled, a hexagon chip after the title with their
+   *  number, in the agent's colour, amber when one waits on the person; a click on it
+   *  selects the tab and opens its Canvas on Runs (onOpenRuns). Null / absent: none. */
+  runsMark?: RunsMark | null;
+  onOpenRuns?: () => void;
 }
 
 /**
@@ -62,6 +72,8 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
     onKeyDown,
     variant,
     activity,
+    runsMark,
+    onOpenRuns,
   },
   ref
 ) {
@@ -166,6 +178,32 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         title={hive ? tf(t, 'chat.swarmOut.hiveTabFrom', 'From Swarm Out · {{title}}', { title: tab.title }) : tab.title}>
         {displayTitle}
       </span>
+
+      {/* The runs this tab's session dispatched, still unsettled (not the background
+          agents' ring before the title: those run on this machine). */}
+      {!pinned && !hive && runsMark && runsMark.live > 0 && (
+        <button
+          type="button"
+          data-testid="tab-runs-mark"
+          data-waits={runsMark.waits || undefined}
+          className="inline-flex items-center gap-0.5 flex-shrink-0 px-1.5 rounded-full text-[10.5px] leading-[16px] font-semibold tabular-nums"
+          style={runsMark.waits
+            ? { background: 'var(--color-status-warning)', color: 'var(--color-bg)' }
+            : { color: AGENT, background: `color-mix(in srgb, ${AGENT} 14%, transparent)` }}
+          aria-label={runsMark.waits
+            ? tf(t, 'sessionRuns.markWaits', '{{count}} runs from this session, one needs you · open in Canvas', { count: runsMark.live })
+            : tf(t, 'sessionRuns.mark', '{{count}} runs from this session, Swarm follows them · open in Canvas', { count: runsMark.live })}
+          title={runsMark.waits
+            ? tf(t, 'sessionRuns.markWaits', '{{count}} runs from this session, one needs you · open in Canvas', { count: runsMark.live })
+            : tf(t, 'sessionRuns.mark', '{{count}} runs from this session, Swarm follows them · open in Canvas', { count: runsMark.live })}
+          // the tab's own click selects it; this one also opens its Canvas on Runs (Enter
+          // and Space are the button's, not the tab's: its keydown would cancel the click)
+          onClick={() => onOpenRuns?.()}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
+        >
+          <span aria-hidden="true">⬡</span>{runsMark.live}
+        </button>
+      )}
 
       {pinned && activity && (activity.waiting > 0 || activity.running > 0) && (
         <span

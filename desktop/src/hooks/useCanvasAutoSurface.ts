@@ -15,8 +15,9 @@
  *
  * Suppression (gentle — user intent always wins):
  *   - pinned      → user pinned the Canvas; it does not change by itself
- *   - changes tab → the Canvas shows the Changes tab; an open would replace the
- *                   Artifacts file and pull the user off the diff
+ *   - changes / runs tab → the Canvas shows the Changes or the Runs tab; an open
+ *                   would replace the Artifacts file and pull the user off the diff,
+ *                   or off the runs the tab's session dispatched
  *   - viewingUserChoice → the Canvas shows a file the USER opened (the slice's file
  *                   has no `auto` mark); don't steal the view — the output still
  *                   lands in the rail, just no auto-open.
@@ -34,7 +35,7 @@ import { OPEN_FILE_EVENT } from '../components/common/MarkdownRenderer';
 
 export interface CanvasSuppression {
   pinned: boolean;
-  canvasTab: 'artifacts' | 'changes';
+  canvasTab: 'artifacts' | 'changes' | 'runs';
   viewingUserChoice: boolean;
 }
 
@@ -45,8 +46,9 @@ export interface CanvasAutoSurfaceOptions {
   /** The active tab's Canvas shows a file the USER opened (slice.file without the
    *  `auto` mark). Auto-surface yields; a file Canvas opened itself may be replaced. */
   viewingUserChoice?: boolean;
-  /** The active tab's Canvas tab. On 'changes' the user is reading a diff: yield. */
-  canvasTab?: 'artifacts' | 'changes';
+  /** The active tab's Canvas tab. On 'changes' the user is reading a diff, on 'runs'
+   *  the session's runs: yield. */
+  canvasTab?: 'artifacts' | 'changes' | 'runs';
   /** The suppression state of ANY tab, read at fire time for the tab the open lands
    *  on (useCanvasHost passes a stable getter over its per-tab map). When given, it
    *  is the source and pinned/viewingUserChoice/canvasTab above are not read; they
@@ -191,8 +193,8 @@ export function useCanvasAutoSurface({ pinned = false, viewingUserChoice = false
         // stays closed. A live write whose session resolved during the debounce window
         // now passes (the window's transient undefined is gone by fire time).
         if (isStreamingRef.current !== undefined && !activeSessionIdRef.current) return;
-        // Gentle: the user's pin always wins, and so does the Changes tab, and so
-        // does a file the user opened. Judged for the tab the open LANDS on (the
+        // Gentle: the user's pin always wins, and so do the Changes and Runs tabs,
+        // and so does a file the user opened. Judged for the tab the open LANDS on (the
         // write's origin tab, else the active one): a tab switch during the debounce
         // must not let tab B's state decide an open that changes tab A.
         const landing = targetTabId ?? activeTabIdRef.current;
@@ -200,7 +202,7 @@ export function useCanvasAutoSurface({ pinned = false, viewingUserChoice = false
           ? stateForRef.current(landing)
           : { pinned: pinnedRef.current, canvasTab: canvasTabRef.current, viewingUserChoice: viewingUserChoiceRef.current };
         if (st.pinned) return;
-        if (st.canvasTab === 'changes') return;
+        if (st.canvasTab === 'changes' || st.canvasTab === 'runs') return;
         if (st.viewingUserChoice) return;
         // Stamp the write's ORIGIN tab (run_d3cc1f2c edit3) so useCanvasHost lands the
         // file on the producing tab — closes the debounce-window tab-switch gap

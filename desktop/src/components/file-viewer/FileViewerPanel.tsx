@@ -20,6 +20,7 @@ import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 import { ChangesCount, ChangesDetail, ChangesNav, ChangesRefresh, type ChangesSelection } from './CanvasChanges';
 import type { GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import type { CanvasCollapse, CanvasTabId } from '../../hooks/useCanvasHost';
+import { CanvasRuns, CanvasRunsTab } from './CanvasRuns';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { useTranslation } from 'react-i18next';
 // the app's i18next instance (initialised in src/i18n, imported by main.tsx)
@@ -144,6 +145,9 @@ type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
    *  together with onCanvasTabChange; otherwise the panel keeps its own. */
   canvasTab?: CanvasTabId;
   onCanvasTabChange?: (t: CanvasTabId) => void;
+  /** The owning chat tab's session id: the Runs tab lists the runs it dispatched
+   *  (CanvasRuns) and shows only while there are any. A primitive (the memo holds). */
+  runsSessionId?: string | null;
   /** The shown file's unsaved state, owned by the slice (useCanvasHost). Controlled
    *  when set with onFileDirtyChange; otherwise the panel keeps its own. */
   fileDirty?: boolean;
@@ -197,8 +201,9 @@ function FileViewerPanelImpl({
   const railTabId = props.tabScopeKey;
   const { t } = useTranslation();
   // Canvas tabs: Artifacts (this session's written files, the existing rail + file
-  // viewer) and Changes (each code repo's local state, CanvasChanges). The file
-  // viewer stays MOUNTED while Changes shows: it holds open files and unsaved edits.
+  // viewer), Changes (each code repo's local state, CanvasChanges) and Runs (the runs
+  // this session dispatched to Hives, CanvasRuns; only while there are any). The file
+  // viewer stays MOUNTED while Changes or Runs shows: it holds open files and unsaved edits.
   // The tab lives in the owning chat tab's Canvas slice (useCanvasHost), because
   // this panel never remounts on a chat-tab switch; every file open brings
   // Artifacts forward there. Uncontrolled fallback only when no host wires it.
@@ -209,6 +214,8 @@ function FileViewerPanelImpl({
   const canvasTab = controlledTab ? props.canvasTab! : localCanvasTab;
   const setCanvasTab = controlledTab ? props.onCanvasTabChange! : setLocalCanvasTab;
   const [changesSel, setChangesSel] = useState<ChangesSelection>(null);
+  const showRuns = useCallback(() => setCanvasTab('runs'), [setCanvasTab]);
+  const showArtifacts = useCallback(() => setCanvasTab('artifacts'), [setCanvasTab]);
   const openedFile = props.initialFile;
   // Uncontrolled only: bring Artifacts forward when a file opens. Controlled, the
   // host's swarm:open-file handler writes canvasTab with the file (one writer).
@@ -772,7 +779,8 @@ function FileViewerPanelImpl({
               >
                 <span className={`material-symbols-outlined icon-sm block transition-transform duration-200 ${outputsCollapsed ? '-rotate-90' : ''}`}>expand_more</span>
               </button>
-              {/* Tabs: Artifacts (this session's files) | Changes (code repos' local state). */}
+              {/* Tabs: Artifacts (this session's files) | Changes (code repos' local state)
+                  | Runs (the runs this session dispatched, while it has any). */}
               <div className="flex items-center min-w-0 flex-1">
                 <div role="tablist" aria-label={t('ui.FileViewerPanel.canvasTabs')} className="inline-flex p-[2px] rounded-lg bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)]">
                   {([
@@ -795,6 +803,8 @@ function FileViewerPanelImpl({
                         : <ChangesCount />}
                     </button>
                   ))}
+                  {/* Runs: only while this tab's session dispatched a listed run */}
+                  <CanvasRunsTab sessionId={props.runsSessionId} selected={canvasTab === 'runs'} onSelect={showRuns} onGone={showArtifacts} />
                 </div>
                 {canvasTab === 'changes' && <ChangesRefresh />}
                 {/* List folded: the header says which file the card shows. */}
@@ -904,7 +914,7 @@ function FileViewerPanelImpl({
         {/* Content layer: a raised card below the navigation layer (the header and
             its list sit on the recessed canvas surface). */}
         <div className={`flex-1 min-w-0 overflow-hidden ${railTabId !== undefined ? 'canvas-content-card' : ''}`}>
-          <div className={canvasTab === 'changes' ? 'hidden' : 'h-full'}>
+          <div className={canvasTab !== 'artifacts' ? 'hidden' : 'h-full'}>
             <FileViewer
               {...props}
               variant="panel"
@@ -913,6 +923,7 @@ function FileViewerPanelImpl({
             />
           </div>
           {canvasTab === 'changes' && <ChangesDetail selected={changesSel} />}
+          {canvasTab === 'runs' && <CanvasRuns sessionId={props.runsSessionId} />}
         </div>
       </div>
     </div>

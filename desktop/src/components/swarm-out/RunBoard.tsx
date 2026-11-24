@@ -19,18 +19,29 @@
  * is not settled, what still holds it (``settle.why_not``: runCard.EndLine).
  * A click opens the run's big card (RunOverlay), where every command is.
  *
+ * Two scopes. ``all`` (the Swarm Out panel): every run, as above. ``session`` (a chat
+ * tab's Canvas Runs tab; design "the runs this session dispatched, visible in the
+ * dispatching tab" r2 §3): only the runs whose ``dispatched_from`` is ``sessionId`` and
+ * the asks of their Hive sessions (runsPoll.sessionScope), no questions of other
+ * sessions, a verdict line on top (how many wait on the person, how many Swarm follows)
+ * and a footer pointing to Swarm Out; the cards, rows and big card are the same. A card
+ * waits on the person exactly when runReview.waitsOnPerson says so, in both scopes.
+ * The answer comes from Swarm Out's one shared runs poll (live.useRuns), or from the
+ * caller (``source``) that already reads it.
+ *
  * Motion (index.css "Swarm Out board"): a live dot's ring, the flowing segment at the
  * current station, a card that needs the person breathing, a card or row that arrives
  * after the first load sliding in. Everything a Hive wrote is plain text.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { openSwarmOutSettings } from '../common/settingsEvents';
 import { agentFacts, errorLabel, useRuns, when } from './live';
+import { sessionScope } from './runsPoll';
 import { useOpenRun } from './openSession';
 import { RunOverlay } from './RunOverlay';
-import { actionOf, asksOf, DONE_STAGES, sections, stageLabel, stageOf, taskTag, waitingSince } from './runReview';
+import { actionOf, asksOf, boardParts, stageLabel, stageOf, taskTag } from './runReview';
 import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { EndLine } from './runCard';
 import { TONE_VAR } from './tone';
@@ -41,7 +52,8 @@ import { outcomeOf, personSteps } from './historyStats';
 
 const muted = 'text-[var(--color-text-muted)]';
 const dim = 'text-[var(--color-text-dim)]';
-const RECENT_MS = 72 * 3600 * 1000;
+/** the agent's colour (the "agent holds it" pill, a chat tab's runs mark) */
+export const AGENT_COLOR = 'var(--line-judge)';
 
 /** The ids that appeared after the first answer, for ~1.6 s (the arrival animation). */
 function useFresh(ids: string[], loaded: boolean): Set<string> {
@@ -225,15 +237,18 @@ function OpenSessionButton({ r }: { r: SwarmOutRun }) {
 }
 
 /** One run that is not settled. */
-function RunningCard({ r, asks, fleet, now, fresh, needsYou, onOpen, onReload }: {
+function RunningCard({ r, asks, fleet, now, fresh, needsYou, follows, onOpen, onReload }: {
   r: SwarmOutRun; asks: SwarmOutAsk[]; fleet: SwarmOutFleet | null; now: number; fresh: boolean;
-  /** the run is in "waiting for you" (runReview.sections) */
+  /** the run waits on the person (runReview.waitsOnPerson, as sections() put it) */
   needsYou: boolean;
+  /** say "Swarm follows it" on a run its dispatching agent answers for (session scope) */
+  follows?: boolean;
   onOpen: () => void; onReload: () => void;
 }) {
   const { t } = useTranslation();
   const { at, kind } = dispatchTrack(r);
-  const you = kind === 'you' || needsYou;
+  // one answer: the track's chip follows waitsOnPerson too (track.dispatchTrack)
+  const you = needsYou;
   const tag = taskTag(r);
   const own = you ? asksOf(r, asks) : [];
   const nowLine = r.state === 'running' ? r.live_now : null;
@@ -251,8 +266,11 @@ function RunningCard({ r, asks, fleet, now, fresh, needsYou, onOpen, onReload }:
           aria-haspopup="dialog" data-testid="so-run-title" onClick={(e) => { e.stopPropagation(); onOpen(); }}>{r.title}</button>
         {you && <span className="so-pop text-meta font-semibold px-2 py-0.5 rounded-full text-white whitespace-nowrap"
           style={{ background: TONE_VAR.attention }} data-testid="so-you-pill">{tag?.text ?? t('swarmOut.board.waitsYou')}</span>}
-        {kind === 'judge' && <span className="text-meta font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
-          style={{ color: 'var(--line-judge)', background: 'color-mix(in srgb, var(--line-judge) 13%, transparent)' }}>{t('swarmOut.board.agentHolds')}</span>}
+        {!you && kind === 'judge' && <span className="text-meta font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+          style={{ color: AGENT_COLOR, background: `color-mix(in srgb, ${AGENT_COLOR} 13%, transparent)` }}>{t('swarmOut.board.agentHolds')}</span>}
+        {!you && kind !== 'judge' && follows && r.needs_person === false && <span className="text-meta font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+          data-testid="so-follow-pill"
+          style={{ color: AGENT_COLOR, background: `color-mix(in srgb, ${AGENT_COLOR} 13%, transparent)` }}>{t('sessionRuns.follows')}</span>}
         <StartAndTime r={r} now={now} asks={asks} />
       </div>
       <div className="mt-1.5 flex items-center gap-2 min-w-0">
@@ -327,32 +345,59 @@ export function DoneRow({ r, fleet, now, fresh = false, compact, onOpen, cost }:
   );
 }
 
-/** When a run settled (or stopped): what the 72-hour window is counted from. */
-const endOf = (r: SwarmOutRun, asks: SwarmOutAsk[]) => Date.parse(waitingSince(r, asks) ?? r.sent_at);
+/** What the board reads: the runs answer, whether its last poll failed, and how to ask
+ *  again (live.useRuns' shape). */
+export interface RunsSource {
+  data: SwarmOutRuns | null;
+  failed: boolean;
+  reload: () => void;
+}
 
-export function RunBoard({ hidden = false, fleet = null, now, compact = false }: {
+/** The session board's one line on top: how many wait on the person
+ *  (runReview.waitsOnPerson), how many Swarm follows (the rest its dispatching agent
+ *  answers for: ``needs_person`` false, the "Swarm follows it" pill's rule), and how many
+ *  others run with no live session answering for them (said plainly, never "followed"). */
+function Verdict({ live, you }: { live: SwarmOutRun[]; you: Set<string> }) {
+  const { t } = useTranslation();
+  const mine = live.filter((r) => !you.has(r.dispatch_id));
+  const follows = mine.filter((r) => r.needs_person === false).length;
+  const others = mine.length - follows;
+  const main = you.size > 0
+    ? (follows > 0 ? t('sessionRuns.verdictYouRest', { count: you.size, rest: follows }) : t('sessionRuns.verdictYou', { count: you.size }))
+    : follows > 0 ? t('sessionRuns.verdictRunning', { count: follows }) : null;
+  const rest = others > 0 ? t('sessionRuns.verdictOther', { count: others }) : null;
+  const text = [main, rest].filter(Boolean).join(' · ') || t('sessionRuns.verdictNone');
+  return (
+    <div className="mb-4 text-body font-semibold" data-testid="so-session-verdict" data-you={you.size}
+      data-follows={follows} data-others={others}
+      style={{ color: you.size > 0 ? TONE_VAR.attention : follows > 0 ? AGENT_COLOR : 'var(--color-text-muted)' }}>{text}</div>
+  );
+}
+
+export function RunBoard({ hidden = false, fleet = null, now, compact = false, source, scope = 'all', sessionId = null, onShowAll }: {
   hidden?: boolean; fleet?: SwarmOutFleet | null; now?: number; compact?: boolean;
+  /** the runs answer from the caller (it reads the shared poll itself); absent: the board reads it */
+  source?: RunsSource;
+  /** ``session``: only the runs ``sessionId`` dispatched (see the header) */
+  scope?: 'all' | 'session';
+  sessionId?: string | null;
+  /** session scope: the footer's way to everything in Swarm Out */
+  onShowAll?: () => void;
 }) {
   const { t } = useTranslation();
-  const { data, failed, reload } = useRuns(hidden);
+  const own = useRuns(hidden || !!source);
+  const { data: all, failed, reload } = source ?? own;
+  const session = scope === 'session';
+  const data = useMemo(() => (session ? sessionScope(all, sessionId) : all), [session, all, sessionId]);
   const at = now ?? Date.now();
   const runs = useMemo(() => data?.runs ?? [], [data]);
   const asks = useMemo(() => data?.asks ?? [], [data]);
   const answered = data?.answered ?? [];
-  const s = sections(runs, asks, at);
-  // every run not settled is a card: what waits on you, what runs, and what sections()
-  // put under done although it is not settled (an older dispatch never named may still
-  // run; a stage with nothing to do here, such as awaiting with only "open session")
-  const live = [...s.you, ...s.running, ...s.done.filter((r) => (!r.stage && r.session_unknown)
-    || (!DONE_STAGES.includes(stageOf(r)) && stageOf(r) !== 'stopped'))];
-  const liveIds = new Set(live.map((r) => r.dispatch_id));
-  const recent = runs
-    .filter((r) => !liveIds.has(r.dispatch_id) && (DONE_STAGES.includes(stageOf(r)) || stageOf(r) === 'stopped')
-      && at - endOf(r, asks) < RECENT_MS)
-    // newest first by the time each row shows (its start)
-    .sort((a, b) => Date.parse(b.sent_at) - Date.parse(a.sent_at));
+  // the cards and rows (runReview.boardParts: the same split a chat tab's runs mark counts)
+  const { live, recent, you: youIds } = boardParts(runs, asks, at);
   // a question of no listed run, answered at the top; one the Hive refused, or that never
-  // reached here, is handled on the Hive's own page (its sign-in is in the settings)
+  // reached here, is handled on the Hive's own page (its sign-in is in the settings).
+  // The session board has none of the first: sessionScope keeps only its own runs' asks.
   const listed = new Set(runs.filter((r) => r.session_id).map((r) => `${r.hive_id}/${r.session_id}`));
   const mine = (a: SwarmOutAsk) => listed.has(`${a.hive_id}/${a.session_id}`);
   const loose = [...asks.filter((a) => !a.refused && !mine(a)), ...answered.filter((a) => !mine(a))];
@@ -363,16 +408,18 @@ export function RunBoard({ hidden = false, fleet = null, now, compact = false }:
   const freshDone = useFresh(recent.map((r) => r.dispatch_id), loaded);
   // the big card: which run, and the order it walks (frozen when it opened)
   const [open, setOpen] = useState<{ id: string; order: string[] } | null>(null);
-  const youCount = s.you.length;
-  const youIds = new Set(s.you.map((r) => r.dispatch_id));
+  const youCount = youIds.size;
   return (
-    <div data-testid="so-run-board">
+    <div data-testid="so-run-board" data-scope={scope}>
       {failed && <div className={`text-small mb-2 ${muted}`}>{t('swarmOut.runsUnreadable')}</div>}
       {(data?.errors ?? []).map((e) => <div key={e} className="text-small mb-1" style={{ color: TONE_VAR.attention }}>{errorLabel(e)}</div>)}
+      {/* the session board's one verdict (it says how many wait on you: the section head
+          does not repeat it) */}
+      {session && loaded && <Verdict live={live} you={youIds} />}
 
       <section data-testid="so-running">
         <SectionHead title={t('swarmOut.board.running')} count={live.length + loose.length}
-          right={youCount ? <span className="font-semibold" style={{ color: TONE_VAR.attention }} data-testid="so-you-count">{t('swarmOut.board.waiting', { count: youCount })}</span> : null} />
+          right={youCount && !session ? <span className="font-semibold" style={{ color: TONE_VAR.attention }} data-testid="so-you-count">{t('swarmOut.board.waiting', { count: youCount })}</span> : null} />
         {loose.length > 0 && (
           <div className="flex flex-col gap-2 mb-2.5" data-testid="so-loose">
             {loose.map((a) => (
@@ -406,7 +453,7 @@ export function RunBoard({ hidden = false, fleet = null, now, compact = false }:
             <div className="flex flex-col gap-2.5">
               {live.map((r) => (
                 <RunningCard key={r.dispatch_id} r={r} asks={asks} fleet={fleet} now={at} fresh={freshLive.has(r.dispatch_id)}
-                  needsYou={youIds.has(r.dispatch_id)}
+                  needsYou={youIds.has(r.dispatch_id)} follows={session}
                   onReload={reload} onOpen={() => setOpen({ id: r.dispatch_id, order: live.map((x) => x.dispatch_id) })} />
               ))}
             </div>
@@ -425,8 +472,18 @@ export function RunBoard({ hidden = false, fleet = null, now, compact = false }:
         )}
       </section>
 
+      {session && (
+        <div className={`mt-6 text-small ${dim}`} data-testid="so-session-footer">
+          {t('sessionRuns.footer')}
+          {onShowAll && <> · <button type="button" className="text-[var(--color-primary)] hover:underline" onClick={onShowAll}
+            data-testid="so-session-all">{t('sessionRuns.allInSwarmOut')}</button></>}
+        </div>
+      )}
+
+      {/* the same big card from either scope: it reads the whole answer (a lead run's
+          children, every wait), and walks the rows this board listed */}
       {open && (
-        <RunOverlay runs={runs} asks={asks} answered={answered} order={open.order} id={open.id} now={at}
+        <RunOverlay runs={all?.runs ?? []} asks={all?.asks ?? []} answered={all?.answered ?? []} order={open.order} id={open.id} now={at}
           onSelect={(id) => setOpen((o) => (o ? { ...o, id } : o))}
           onSettled={(id) => setOpen((o) => (o ? { ...o, order: o.order.filter((x) => x !== id) } : o))}
           onClose={() => setOpen(null)} onReload={reload} />

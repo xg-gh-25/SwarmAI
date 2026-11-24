@@ -2443,13 +2443,26 @@ _SEAL_LOCKS: dict = {}
 
 
 
-def user_row_metadata(client_id: Optional[str], input_origin: str) -> Optional[dict]:
+#: the keys a system turn's sender may record on its user row (the Swarm Out wake's)
+SYSTEM_ROW_KEYS = ("origin", "wake")
+
+
+def user_row_metadata(client_id: Optional[str], input_origin: str,
+                      row_metadata: Optional[dict] = None) -> Optional[dict]:
     """The metadata of a persisted user row: its ``client_id`` (optimistic dedup), and
     ``origin: host`` for a message the Host's agent sent into a Hive session (design
-    2026-10-31-swarm-run §5.10), so no reader counts it as the person's."""
+    2026-10-31-swarm-run §5.10), so no reader counts it as the person's.
+
+    *row_metadata*: what a system turn's sender records about its message (the Swarm Out
+    wake: ``origin: wake`` and the runs it is about, core/swarm_out_wake), merged only
+    for ``input_origin == "system"``: a message the person typed, a channel's or the
+    Host's never carries it. Only the wake's own keys are taken (``SYSTEM_ROW_KEYS``):
+    never ``client_id``, and never another origin."""
     meta = {"client_id": client_id} if client_id else {}
     if input_origin == "host":
         meta["origin"] = "host"
+    if input_origin == "system" and isinstance(row_metadata, dict) and row_metadata.get("origin") == "wake":
+        meta.update({k: row_metadata[k] for k in SYSTEM_ROW_KEYS if k in row_metadata})
     return meta or None
 
 class SessionRouter:
@@ -4635,6 +4648,7 @@ class SessionRouter:
         _drained_pending: bool = False,
         project_agent: Optional[dict] = None,
         input_origin: str = "system",
+        row_metadata: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
         """Entry point for chat requests: one turn, published to the session hub.
 
@@ -4648,6 +4662,9 @@ class SessionRouter:
         Hive, ``"host"``: a correction the Host's agent sent (design 2026-10-31-swarm-run
         §5.10): recorded like ``"system"`` and marked on the message (``metadata.origin``)
         so it is never counted as the person's.
+
+        ``row_metadata`` (a system turn only): recorded on the persisted user row's
+        metadata (``user_row_metadata``); the Swarm Out wake marks its message with it.
 
         A turn without a client_id of its own (drain, channel, task, skill
         creator) gets a server one, so its persisted assistant rows and a
@@ -4671,6 +4688,7 @@ class SessionRouter:
             client_id=client_id, _drained_pending=_drained_pending,
             input_origin=input_origin, writer=writer,
             opener=opener, project_agent=project_agent,
+            row_metadata=row_metadata,
         )
         async with aclosing(self._published_turn(
             agen, session_id=session_id,
@@ -4960,6 +4978,7 @@ class SessionRouter:
         writer: TurnWriter,
         opener: Optional[TurnOpener] = None,
         project_agent: Optional[dict] = None,
+        row_metadata: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
         """One chat turn (called through ``run_conversation``).
 
@@ -5100,7 +5119,7 @@ class SessionRouter:
                         # pipeline session whose run exists (a resume would be stuck)
                         await record_pin(session_id, {"broken": "its pipeline run could not be created"})
                         raise
-                _msg_metadata = user_row_metadata(client_id, input_origin)
+                _msg_metadata = user_row_metadata(client_id, input_origin, row_metadata)
                 persisted_msg_id = str(uuid4())
                 # Strip raw tool-call leaks before persisting — symmetric with the
                 # assistant path (_clean_blocks_for_persist at the assistant put).

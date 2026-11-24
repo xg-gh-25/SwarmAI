@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTab } from './SessionTab';
+import { useSessionRunsMarks } from '../../../components/swarm-out/sessionRuns';
+import { openCanvasRuns } from '../../../utils/canvasRuns';
 
 interface SessionTabBarProps {
   tabs: OpenTab[];
@@ -21,6 +23,9 @@ interface SessionTabBarProps {
  * Horizontal scrollable container for session tabs.
  * Renders SessionTab components with smooth scrolling and custom scrollbar styling.
  * Supports keyboard navigation with arrow keys following WAI-ARIA tabs pattern.
+ * Each tab whose session dispatched runs still unsettled gets its runs mark
+ * (sessionRuns.useSessionRunsMarks: one read of Swarm Out's shared runs poll for every
+ * tab); a click on it selects the tab and opens its Canvas on Runs.
  *
  * Validates: Requirements 1.2
  */
@@ -36,6 +41,7 @@ export function SessionTabBar({
 }: SessionTabBarProps) {
   const { t } = useTranslation();
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const marks = useSessionRunsMarks(tabs.map((tab) => tab.sessionId));
 
   const setTabRef = useCallback((tabId: string, element: HTMLDivElement | null) => {
     if (element) {
@@ -127,6 +133,8 @@ export function SessionTabBar({
             maxTitleLength={maxTitleLength}
             onKeyDown={(e) => handleKeyDown(e, tab.id)}
             ref={(el) => setTabRef(tab.id, el)}
+            runsMark={tab.sessionId ? marks[tab.sessionId] ?? null : null}
+            onOpenRuns={tab.sessionId ? () => openCanvasRuns({ tabId: tab.id, sessionId: tab.sessionId as string }) : undefined}
           />
         ))}
       </div>
