@@ -9,7 +9,9 @@
  *   overlay-redesign.html): every run in flight as a card with its stages, the ones waiting
  *   for you first and marked on the card; the runs that ended in the 30 days as rows; the
  *   median minutes per stage. The tab's label carries the waiting count.
- * - **Eval**: PipelineEval (the CNTech & IVT S7 measures, in that order).
+ * - **Eval**: PipelineEval (design: Knowledge/Mockups/2026-11-24-pipeline-eval-redesign.html):
+ *   the share nobody stepped into, four numbers against the 15 days before, the runs
+ *   someone stepped into, and the same by Brain.
  * A click on a row opens its big card: a local run the new shell (PipelineRunCard,
  * GET /pipelines/{id}/view, its commands from the backend), a Hive run Swarm Out's card
  * (RunOverlay, with its asks). J / K in a card walk the runs waiting for you there.
@@ -142,7 +144,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
             className="mx-auto my-8 max-w-sm" />
         )}
         {hive.failed && !hive.data && <div className={`text-small mb-2 ${muted}`} data-testid="pipeline-hive-unreadable">{t('ui.PipelineOverlay.hiveUnreadable')}</div>}
-        {tab === 'eval' ? <PipelineEval rows={shown} now={now} /> : (
+        {tab === 'eval' ? <PipelineEval rows={shown} now={now} onOpen={openKey} compact={compact} /> : (
           <div data-testid="pipeline-run-list">
             {analytics && rows.length === 0 && !loadErr
               ? <div className="text-center py-10 text-body text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.empty')}</div>

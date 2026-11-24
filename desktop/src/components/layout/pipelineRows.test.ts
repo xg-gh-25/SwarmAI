@@ -24,7 +24,7 @@ import { describe, it, expect } from 'vitest';
 import type { PipelineRunSummary } from '../../services/pipelines';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import {
-  allRows, autonomy, brainChips, brainLanes, evalByBrain, evalMeasures, filterRows, fromHive, fromLocal, lineGroups, sections, speed,
+  allRows, autonomy, brainChips, brainLanes, evalByBrain, evalDays, evalHalves, evalMeasures, filterRows, steppedIn, fromHive, fromLocal, lineGroups, sections, speed,
   timeGoes, tokenM, trackOf, wilson,
 } from './pipelineRows';
 
@@ -251,6 +251,45 @@ describe('the Line', () => {
 });
 
 describe('Eval', () => {
+  it('evalDays: 30 local days by start, nobody / someone stepped in / not finished; steppedIn: the last 15 days, newest first', () => {
+    const day = (d: number) => new Date(NOW - d * 86400_000).toISOString();
+    const iv = (total: number) => ({ answers: total, corrections: 0, rescues: 0, total });
+    const rows = [
+      fromLocal(run({ id: 'a', createdAt: day(0), interventions: iv(0) }), 'P'),
+      fromLocal(run({ id: 'b', createdAt: day(0), interventions: iv(2) }), 'P'),
+      fromLocal(run({ id: 'c', createdAt: day(1), status: 'running', interventions: iv(0) }), 'P'),
+      fromLocal(run({ id: 'd', createdAt: day(3), interventions: iv(1) }), 'P'),
+      fromLocal(run({ id: 'e', createdAt: day(20), interventions: iv(1) }), 'P'),
+      fromLocal(run({ id: 'f', createdAt: day(40), interventions: iv(0) }), 'P'),     // outside the 30 days
+    ];
+    const days = evalDays(rows, NOW);
+    expect(days).toHaveLength(30);
+    expect(days[29]).toMatchObject({ auto: 1, stepped: 1, other: 0 });
+    expect(days[28]).toMatchObject({ auto: 0, stepped: 0, other: 1 });                // still running
+    expect(days.reduce((n, d) => n + d.auto + d.stepped + d.other, 0)).toBe(5);
+    expect(steppedIn(rows, NOW).map((r) => r.key)).toEqual(['b', 'd']);
+  });
+
+  it('a paused run is not finished: not in the stepped-in list, a grey bar; the halves cut at local midnight', () => {
+    const iv = (total: number) => ({ answers: total, corrections: 0, rescues: 0, total });
+    const paused = fromLocal(run({ id: 'p', createdAt: new Date(NOW - 3600_000).toISOString(), status: 'paused', pauseKind: 'decision',
+      needsYou: true, interventions: iv(1) }), 'P');
+    expect(steppedIn([paused], NOW)).toEqual([]);
+    expect(evalDays([paused], NOW)[29]).toMatchObject({ auto: 0, stepped: 0, other: 1 });
+    expect(evalMeasures([paused], NOW).cur.autonomous.n).toBe(0);
+    // the 15th day back, late in the evening: the earlier half; the 14th, just after midnight: the last 15 days
+    const at = (back: number, h: number, m: number) => { const d = new Date(NOW); d.setDate(d.getDate() - back); d.setHours(h, m, 0, 0); return d.toISOString(); };
+    const early = fromLocal(run({ id: 'e', createdAt: at(15, 23, 50), interventions: iv(1) }), 'P');
+    const late = fromLocal(run({ id: 'l', createdAt: at(14, 0, 10), interventions: iv(1) }), 'P');
+    const { cut } = evalHalves(NOW);
+    expect(Date.parse(late.createdAt) >= cut && Date.parse(early.createdAt) < cut).toBe(true);
+    expect(steppedIn([early, late], NOW).map((r) => r.key)).toEqual(['l']);
+    const { cur, prev } = evalMeasures([early, late], NOW);
+    expect([cur.started, prev.started]).toEqual([1, 1]);
+    const days = evalDays([early, late], NOW);
+    expect([days[14].stepped, days[15].stepped]).toEqual([1, 1]);         // each in its half's bars
+  });
+
   it('evalMeasures leaves unrecorded measures null', () => {
     const rows = [
       fromLocal(run({ id: 'a', createdAt: '2026-10-30T10:00:00Z', costUsd: null, billedTokens: null, tokensActual: null, interventions: null }), 'P'),

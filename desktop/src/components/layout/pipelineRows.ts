@@ -80,7 +80,6 @@ const ms = (iso: string | null | undefined): number => {
   const t = iso ? Date.parse(iso) : NaN;
   return Number.isNaN(t) ? NaN : t;
 };
-const DAY_MS = 24 * 3600 * 1000;
 
 /** A run of this machine (``project`` is its Brain). */
 export function fromLocal(r: PipelineRunSummary, project: string): PipelineRow {
@@ -241,7 +240,8 @@ export function brainLanes(rows: PipelineRow[], brain: string, max = 3): BrainLa
 /** One word on a row: nobody stepped in, or how often; null when not known yet. */
 export function autonomyOf(r: PipelineRow): { full: boolean; n: number } | null {
   const total = r.interventions?.total;
-  if (total == null || r.stage === 'running') return null;
+  // finished only, the rule ``autonomy`` counts by (a paused run is not finished)
+  if (total == null || r.stage === 'running' || r.outcome === 'running') return null;
   return { full: total === 0, n: total };
 }
 
@@ -480,15 +480,54 @@ function periodOf(rows: PipelineRow[]): EvalPeriod {
 
 export const EVAL_HALF_DAYS = 15;
 
-/** The S7 measures for the last 15 days and the 15 before (the 30-day window's halves),
- *  each over the runs started in it. */
+/** The two halves' starts, at local midnight: the last 15 days are today and the 14
+ *  before, the 15 before them come first. The verdict, the numbers, the stepped-in list
+ *  and the daily bars all cut here. */
+export function evalHalves(now: number): { start: number; cut: number } {
+  const at = (back: number) => { const d = new Date(now); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - back); return d.getTime(); };
+  return { start: at(2 * EVAL_HALF_DAYS - 1), cut: at(EVAL_HALF_DAYS - 1) };
+}
+
+/** The measures for the last 15 days and the 15 before (``evalHalves``), each over the
+ *  runs started in it. */
 export function evalMeasures(rows: PipelineRow[], now: number): { cur: EvalPeriod; prev: EvalPeriod } {
-  const cut = now - EVAL_HALF_DAYS * DAY_MS, start = now - 2 * EVAL_HALF_DAYS * DAY_MS;
+  const { cut, start } = evalHalves(now);
   const t = (r: PipelineRow) => ms(r.createdAt);
   return {
     cur: periodOf(rows.filter((r) => t(r) >= cut)),
     prev: periodOf(rows.filter((r) => t(r) >= start && t(r) < cut)),
   };
+}
+
+export interface EvalDay { label: string; auto: number; stepped: number; other: number }
+
+/** The window's 30 local days, oldest first, each with its runs (by the day they started):
+ *  ``auto`` finished with nobody stepping in, ``stepped`` finished with someone stepping
+ *  in, ``other`` not finished or its count unknown (``autonomyOf``). */
+export function evalDays(rows: PipelineRow[], now: number): EvalDay[] {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const key = (t: number) => { const d = new Date(t); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+  const days: (EvalDay & { k: string })[] = [];
+  for (let i = 2 * EVAL_HALF_DAYS - 1; i >= 0; i -= 1) {
+    const d = new Date(now); d.setDate(d.getDate() - i);
+    days.push({ k: key(d.getTime()), label: `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`, auto: 0, stepped: 0, other: 0 });
+  }
+  const by = new Map(days.map((d) => [d.k, d]));
+  for (const r of rows) {
+    const t = ms(r.createdAt);
+    const d = Number.isNaN(t) ? undefined : by.get(key(t));
+    if (!d) continue;
+    const a = autonomyOf(r);
+    if (!a) d.other += 1; else if (a.full) d.auto += 1; else d.stepped += 1;
+  }
+  return days.map(({ k: _k, ...d }) => d);
+}
+
+/** The finished runs of the last 15 days someone stepped into, newest first. */
+export function steppedIn(rows: PipelineRow[], now: number): PipelineRow[] {
+  const { cut } = evalHalves(now);
+  return rows.filter((r) => ms(r.createdAt) >= cut && autonomyOf(r)?.full === false)
+    .sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
 }
 
 /** The same measures per Brain over the whole window, the Brains with more runs first. */

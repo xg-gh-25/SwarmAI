@@ -20,7 +20,7 @@
  * Pure presentation over ``pipelineRows`` (sections, inFlight, waitingCounts, timeGoes); the rows'
  * order and states are the backend's.
  *
- * Exports: PipelineLine, WherePill
+ * Exports: PipelineLine, WherePill, Meta, When (the Eval tab's rows)
  */
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -62,7 +62,7 @@ const stationLabel = (s: Station, t: (k: string) => string) =>
     : s === 'judge' ? t('ui.PipelineOverlay.fl_judge') : s.toUpperCase();
 
 /** Brain · profile, then where it runs. */
-function Meta({ r }: { r: PipelineRow }) {
+export function Meta({ r }: { r: PipelineRow }) {
   return (
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-small min-w-0 ${muted}`}>
       <span className="truncate"><b className="font-semibold text-[var(--color-text)]">{r.brain}</b>{r.profile ? ` · ${r.profile}` : ''}</span>
@@ -72,7 +72,7 @@ function Meta({ r }: { r: PipelineRow }) {
 }
 
 /** "11/24 08:41 · 38 min": when it started and how long it ran (so far). */
-function When({ r, now, stacked = false }: { r: PipelineRow; now: number; stacked?: boolean }) {
+export function When({ r, now, stacked = false }: { r: PipelineRow; now: number; stacked?: boolean }) {
   const start = Date.parse(r.createdAt);
   const min = r.durationMin != null ? Math.round(r.durationMin)
     : r.endedAt == null && !Number.isNaN(start) ? Math.max(0, Math.round((now - start) / 60000)) : null;

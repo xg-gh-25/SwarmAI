@@ -15,8 +15,9 @@ import type React from 'react';
  *   answering, resuming, cancelling and confirming a landing go through the run's routes
  *   (the run's session continues it)?
  * - does a Hive row open Swarm Out's card, and does a run the overlay was opened at open?
- * - does the Eval tab read the S7 measures, with what nothing records said as such
- *   (never 0), and a By-Brain table?
+ * - does the Eval tab read one verdict against the 15 days before, four numbers with their
+ *   change, the runs someone stepped into (each opening its card) and a By-Brain table,
+ *   with what nothing records said as such (never 0)?
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
@@ -231,6 +232,35 @@ describe('PipelineOverlay', () => {
     expect(screen.getByTestId('pipeline-run-d0').textContent).toContain('Landed');    // the outcome is read out
   });
 
+  it('Eval: cost compares like with like; a change too small to show is the same', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date('2026-11-01T12:00:00Z'));
+    try {
+      const at = (d: number) => new Date(Date.parse('2026-11-01T12:00:00Z') - d * 86400_000).toISOString();
+      const iv0 = { answers: 0, corrections: 0, rescues: 0, total: 0 };
+      fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [{ project: 'SwarmAI', runs: [
+        // the last 15 days have dollars, the 15 before only tokens: compared in tokens
+        run({ id: 'c1', createdAt: at(1), costUsd: 2, billedTokens: 4_000_000, interventions: iv0, knowledge: { used: 10, new: 1.04 } }),
+        run({ id: 'p1', createdAt: at(20), costUsd: null, billedTokens: 2_000_000, interventions: iv0, knowledge: { used: 10, new: 1.0 } }),
+      ] }] });
+      HIVE = { runs: [], asks: [] };
+      open();
+      await waitFor(() => expect(screen.getByTestId('pipeline-tab-eval')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('pipeline-tab-eval'));
+      expect(screen.getByTestId('pipeline-eval-cost-value').textContent).toBe('4.0M');
+      expect(screen.getByTestId('pipeline-eval-cost-change').textContent).toContain('100%');
+      expect(screen.getByTestId('pipeline-eval-cost-change').textContent).toContain('2.0M');
+      expect(screen.getByTestId('pipeline-eval-cost-change').textContent).toContain('(worse)');
+      // 1.00 → 1.04 written back: too small to show as 0.0, so as its percent
+      const kc = screen.getByTestId('pipeline-eval-knowledge-change');
+      expect(kc.textContent).toContain('4%');
+      expect(kc.textContent).not.toContain('0.0 ');
+      expect(kc.textContent).toContain('written back');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('nothing in flight: one line says so', async () => {
     fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [{ project: 'AIDLC', runs: [run({ id: 'run_aidlc', requirement: 'Other brain' })] }] });
     HIVE = { runs: [], asks: [] };
@@ -332,21 +362,42 @@ describe('PipelineOverlay', () => {
     expect(screen.queryByTestId('pipeline-card')).toBeNull();            // a Brain is not a run to open
   });
 
-  it('Eval: the S7 measures in order; what nothing records says so, never 0', async () => {
+  it('Eval: one verdict against the 15 days before, four numbers, who stepped in, by Brain', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-11-01T12:00:00Z'));
     try {
+      const at = (d: number) => new Date(Date.parse('2026-11-01T12:00:00Z') - d * 86400_000).toISOString();
+      const fin = (id: string, d: number, total: number, o: Record<string, unknown> = {}) => run({ id, requirement: id, createdAt: at(d),
+        costUsd: null, interventions: { answers: total ? 1 : 0, corrections: total > 1 ? total - 1 : 0, rescues: 0, total }, ...o });
+      fetchAnalytics.mockResolvedValue({ ...ANALYTICS, byProject: [
+        { project: 'SwarmAI', runs: [fin('n1', 1, 0, { cycleTimeMin: 30 }), fin('n2', 2, 0, { cycleTimeMin: 50 }), fin('n3', 3, 2, { cycleTimeMin: 40 }),
+          fin('p1', 20, 1, { cycleTimeMin: 20 }), fin('p2', 21, 1, { cycleTimeMin: 20 })] },
+        { project: 'AIDLC', runs: [fin('a1', 4, 0)] },
+      ] });
+      HIVE = { runs: [], asks: [] };
       open();
-      await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByTestId('pipeline-tab-eval')).toBeInTheDocument());
       fireEvent.click(screen.getByTestId('pipeline-tab-eval'));
-      const ids = Array.from(screen.getByTestId('pipeline-eval').querySelectorAll('[data-testid^="pipeline-eval-m"]'))
-        .map((e) => e.getAttribute('data-testid')).filter((x) => /^pipeline-eval-m\d$/.test(x ?? ''));
-      expect(ids).toEqual(['pipeline-eval-m1', 'pipeline-eval-m2', 'pipeline-eval-m3', 'pipeline-eval-m4', 'pipeline-eval-m6', 'pipeline-eval-m5']);
-      expect(screen.getByTestId('pipeline-eval-m3-value').textContent).toBe('not recorded');
-      expect(screen.getByTestId('pipeline-eval-m4-value').textContent).toContain('M');   // tokens recorded, $ not
-      expect(screen.getByTestId('pipeline-eval-m4-value').textContent).not.toContain('$');
-      expect(screen.getByTestId('pipeline-eval-m1-sub').textContent).toMatch(/of \d+ finished runs nobody stepped into · 95% range/);
+      // 3 of the last 15 days' 4 finished runs nobody stepped into; 0 of 2 before
+      expect(screen.getByTestId('pipeline-eval-rate').textContent).toBe('75%');
+      expect(screen.getByTestId('pipeline-eval-rate-of').textContent).toMatch(/^3 \/ 4 runs · 95% range \d+–\d+%$/);
+      expect(screen.getByTestId('pipeline-eval-rate-was').textContent).toContain('75 points');
+      expect(screen.getAllByTestId('pipeline-eval-day')).toHaveLength(30);
+      // what nothing records says so, never 0; a time that grew reads as worse
+      expect(screen.getByTestId('pipeline-eval-knowledge-value').textContent).toBe('not recorded');
+      expect(screen.getByTestId('pipeline-eval-cost-value').textContent).toContain('M');           // tokens recorded, $ not
+      expect(screen.getByTestId('pipeline-eval-cycle-change').getAttribute('data-good')).toBe('false');
+      expect(screen.getByTestId('pipeline-eval-started-change').getAttribute('data-good')).toBe('true');
+      // the run someone stepped into, how, and it opens its card
+      const st = screen.getByTestId('pipeline-eval-stepped-n3');
+      expect(within(st).getByTestId('pipeline-eval-how').textContent).toContain('answered 1 time');
+      expect(within(st).getByTestId('pipeline-eval-how').textContent).toContain('corrected 1 time');
+      expect(screen.queryByTestId('pipeline-eval-stepped-p1')).toBeNull();                        // before the 15 days
       expect(screen.getAllByTestId('pipeline-eval-brain').map((r) => r.firstElementChild?.textContent)).toEqual(['SwarmAI', 'AIDLC']);
+      expect(screen.getByTestId('pipeline-eval').textContent).not.toMatch(/S7|①|Human on the loop/);
+      fireEvent.click(st);
+      await waitFor(() => expect(screen.getByTestId('pipeline-card')).toBeInTheDocument());
+      expect(fetchRunView).toHaveBeenCalledWith('n3');
     } finally {
       vi.useRealTimers();
     }
