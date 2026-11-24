@@ -1,26 +1,25 @@
 /**
- * Cognition flow — the Cognitive Distillation Flow inside the Need You overlay, written
- * for a person to read (design docs/design/2026-10-30-cdf-flow-view.md). One level of
- * tabs: the overlay holds Needs you · Cognition flow · How it works (CdfGuideline).
+ * Cognition flow — the Cognitive Distillation Flow inside the Need You overlay (design
+ * docs/design/2026-10-30-cdf-flow-view.md; layout Knowledge/Mockups/
+ * 2026-11-24-needs-you-redesign.html). Read top to bottom:
  *
- * Read from the result backward:
- * - the dashboard (CdfDashboard): captured, learned, reinforced, not kept, each with its
- *   change against the window before and its trend; the anomalies worth a look (each can
- *   be sent to chat);
- * - side by side, WHERE kept items landed (every-turn files, project brains, General Brain
- *   & Library, one shared scale; a click filters the list) and HOW each item is decided
- *   (the six steps top to bottom, their numbers in one column);
- * - WHAT it learned (CdfUnitFeed), and a one-line health strip whose Details keep the raw
- *   audit (CdfFlowDetails).
+ * - one status line, the same conclusion the Needs you tab and the north star draw: the
+ *   CDF items of the attention queue (stuck, failing) and the flow's own anomalies, each
+ *   with "Hand to Swarm"; amber when any, else one calm line;
+ * - one number: how many entries it learned (new or added to an entry) against the window
+ *   before; under it what was captured, reinforced, already known and moved out of the
+ *   every-turn files; one bar per hour (24 h) or day;
+ * - where it landed, three columns on one scale (every-turn files, project brains, the
+ *   General Brain and Library); a row filters the list below;
+ * - what it learned (CdfUnitFeed); the raw audit behind one line (CdfFlowDetails).
+ * How each item is decided, with these numbers, is drawn in How it works.
  *
- * Data: GET /ingestion/landed (summary + trend) and /ingestion/units (the list), both
- * read-only. The backend decides which step produced an outcome (flow_view.reason_group);
- * this view only phrases it. No approvals: a wrong outcome is something to ask Swarm about.
+ * Data: GET /ingestion/landed (summary + trend), /ingestion/units (the list) and the
+ * attention queue, all read-only. No approvals: a wrong outcome is something to ask Swarm.
  *
- * Key export: `CognitiveDistillationFlow`.
+ * Key exports: `CognitiveDistillationFlow`, `attentionText`.
  */
-import { Fragment, useMemo, useState, type ReactNode } from 'react';
-import { bytes, fileName, fmt } from './cdfText';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -32,103 +31,170 @@ import {
   type LandedRow,
   type UnitFilters,
 } from '../../services/ingestion';
-import { SectionLabel, Segmented } from '../overlay';
+import { Segmented } from '../overlay';
 import { OverlayError, OverlayLoading } from './OverlayState';
 import { CdfUnitFeed } from './CdfUnitFeed';
 import { CdfFlowDetails } from './CdfFlowDetails';
-import { CdfDashboard } from './CdfDashboard';
+import { overlayQuery } from './overlayQueries';
+import { itemOpener, needsYouPrompt } from './NeedsYouRow';
+import { bytes, fileName, fmt } from './cdfText';
+import { Big, CARD, Compare, DIM, MUTED, ZoneLabel, useGrown } from './needYouParts';
 import type { DispatchPrompt } from './overlayRegistry';
 
-const EVERY_TURN = ['TIMELINE', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'MEMORY'];
+const EVERY_TURN = ['MEMORY', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'TIMELINE'];
 const GENERAL = ['COMMON_DDD', 'KNOWLEDGE'];
-const NOT_KEPT_GROUPS = ['known', 'withdrawn', 'older', 'backlog', 'place', 'no_project', 'retired', 'basic', 'other', 'expired'];
-const KEPT = 'var(--color-zone-cognitive)';
-const KEPT_SOFT = 'color-mix(in srgb, var(--color-zone-cognitive) 40%, transparent)';
-const WARN_TINT = 'color-mix(in srgb, var(--color-status-warning) 8%, transparent)';
+const LEARNED = 'color-mix(in srgb, var(--color-status-success) 72%, transparent)';
+const REINFORCED = 'var(--color-zone-cognitive)';
+const KNOWN = 'color-mix(in srgb, var(--color-text-dim) 50%, transparent)';
+const SHOWN_PROJECTS = 4;
 
-export function CognitiveDistillationFlow({ onDispatch, close }: {
-  onDispatch?: DispatchPrompt; close?: () => void;
+type Focus = Partial<UnitFilters> & { label?: string };
+
+export function CognitiveDistillationFlow({ onDispatch, close, onOpenHealth }: {
+  onDispatch?: DispatchPrompt; close?: () => void; onOpenHealth?: () => void;
 }) {
   const { t } = useTranslation();
-  const [window, setWindow] = useState<IngestionWindow>('24h');
-  const [focus, setFocus] = useState<Partial<UnitFilters> & { label?: string }>({});
+  const [window, setWindow] = useState<IngestionWindow>('7d');
+  const [focus, setFocus] = useState<Focus>({});
   const landed = useQuery({ queryKey: ['ingestion', 'landed', window], queryFn: () => ingestionService.landed(window) });
-
-  const ask = (text: string) => {
-    if (onDispatch?.(t('cdf.att.prompt', { text }), { autoSend: false })) close?.();
-  };
+  const hand = (text: string) => { if (onDispatch?.(text, { autoSend: true })) close?.(); };
 
   return (
-    <div className="space-y-8 py-5" data-testid="cdf-flow">
-      <section className="space-y-3" data-testid="cdf-verdict">
-        <div className="flex items-center gap-4">
-          {landed.data ? <Status data={landed.data} /> : <span className="flex-1" />}
+    <div className="space-y-8 py-2" data-testid="cdf-flow">
+      {/* the window on the right; the status beside it, or under it on a narrow window */}
+      <div className="flex flex-col-reverse gap-3 md:flex-row md:items-start md:gap-4">
+        <Status overview={landed.data} ready={!!landed.data} onHand={onDispatch ? hand : undefined} onOpenHealth={onOpenHealth} />
+        <div className="self-end md:self-auto">
           <Segmented
-            options={(['24h', '7d', '30d'] as const).map((key) => ({ key, label: key }))}
+            options={(['24h', '7d', '30d'] as const).map((key) => ({ key, label: t(`cdf.w${key}`) }))}
             value={window}
             onChange={(next) => { setWindow(next); setFocus({}); }}
           />
         </div>
-        {landed.isPending && <OverlayLoading testid="cdf-landed-loading" />}
-        {landed.isError && <OverlayError compact message={t('ingestion.loadFailed')}
-          onRetry={() => { void landed.refetch(); }} testid="cdf-landed-error" />}
-        {landed.data && <CdfDashboard data={landed.data} window={window} notKeptHint={notKeptHint(t, landed.data)} />}
-        {landed.data && landed.data.attention.length > 0 && (
-          <div className="space-y-0.5" data-testid="cdf-attention">
-            {landed.data.attention.map((item) => {
-              const line = attentionText(t, item);
-              return (
-                <div key={item.code} className="flex items-center gap-3 rounded-lg px-3 py-2" style={{ background: WARN_TINT }}>
-                  <span className="material-symbols-outlined icon-sm text-[var(--color-status-warning)]" aria-hidden>error</span>
-                  <span className="min-w-0 flex-1 text-body text-[var(--color-text)]">
-                    {line.main}
-                    {line.extra && <span className="text-[var(--color-text-muted)]"> · {line.extra}</span>}
-                  </span>
-                  {onDispatch && <button type="button" className="btn-sm btn-secondary"
-                    onClick={() => ask(line.prompt)}>{t('cdf.att.ask')}</button>}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {landed.data && (
-        <div className="grid grid-cols-2 gap-10">
-          <Landed data={landed.data} onPick={(next) => setFocus(next)} />
-          <HowItDecides data={landed.data} />
-        </div>
-      )}
-
-      <CdfUnitFeed window={window} overview={landed.data} focus={focus} onClearFocus={() => setFocus({})} />
-
+      </div>
+      {landed.isPending && <OverlayLoading testid="cdf-landed-loading" />}
+      {landed.isError && <OverlayError compact message={t('ingestion.loadFailed')}
+        onRetry={() => { void landed.refetch(); }} testid="cdf-landed-error" />}
+      {landed.data && <Verdict data={landed.data} window={window} />}
+      {landed.data && <Landed data={landed.data} focus={focus} onPick={(next) => setFocus(next)} />}
+      <CdfUnitFeed window={window} focus={focus} onClearFocus={() => setFocus({})} />
       <CdfFlowDetails overview={landed.data} window={window} />
     </div>
   );
 }
 
-/** One line of state: whether anything waits or failed (the numbers are in the dashboard). */
-function Status({ data }: { data: LandedOverview }) {
+/** One status line: the attention queue's CDF items and the flow's anomalies, or a calm one
+ *  once both have loaded. An item only the person can answer keeps its own action (open its
+ *  page, or handle it in chat), never "Hand to Swarm": the same item says the same thing here
+ *  as in the Needs you tab. */
+function Status({ overview, ready, onHand, onOpenHealth }: {
+  overview?: LandedOverview; ready: boolean; onHand?: (text: string) => void; onOpenHealth?: () => void;
+}) {
   const { t } = useTranslation();
-  const waiting = data.totals.waiting;
+  const q = useQuery(overlayQuery.needsYou());
+  const queued = (q.data?.items ?? []).filter((it) => it.source === 'ingestion');
+  const flow = (overview?.attention ?? []).map((item) => attentionText(t, item));
+  type Line = { key: string; main: string; extra?: string; prompt: string; mine: boolean; open?: { label: string; run: () => void } };
+  const lines: Line[] = [
+    ...queued.map((it): Line => {
+      const opener = it.handler === 'agent' ? null : itemOpener(it);
+      return { key: it.id, main: it.title, extra: it.summary && it.summary !== it.title ? it.summary : undefined,
+        prompt: needsYouPrompt(it), mine: it.handler !== 'agent',
+        open: opener ? { label: opener.kind === 'settings' ? t('needYou.openSettings') : t('needYou.openSwarmOut'), run: opener.open } : undefined };
+    }),
+    ...flow.map((line, i): Line => ({ key: `flow-${i}`, main: line.main, extra: line.extra, mine: false,
+      prompt: t('cdf.att.prompt', { text: line.prompt }) })),
+  ];
+  if (!lines.length) {
+    // "healthy" only once both readings arrived; unknown is never shown as healthy
+    if (!ready || q.isError || !q.data) return <span className="min-w-0 flex-1" data-testid="cdf-status" />;
+    return (
+      <p className={`flex min-w-0 flex-1 items-center gap-2 text-body ${MUTED}`} data-testid="cdf-status" data-ok="true">
+        <span className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--color-status-success)' }} />
+        {t('cdf.healthOk')}
+      </p>
+    );
+  }
   return (
-    <p className="flex-1 text-body text-[var(--color-text-muted)]" data-testid="cdf-status">
-      <span className="mr-2 inline-block h-2 w-2 rounded-full align-middle"
-        style={{ background: waiting > 0 ? 'var(--color-status-warning)' : 'var(--color-zone-cognitive)' }} />
-      {waiting > 0 ? t('cdf.healthWaiting', { n: fmt(waiting) }) : t('cdf.healthOk')}
-    </p>
+    <div className="min-w-0 flex-1 space-y-1.5" data-testid="cdf-status">
+      {lines.map((line) => (
+        <div key={line.key} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl px-4 py-3" data-testid="cdf-attention"
+          data-mine={line.mine} style={{ background: 'color-mix(in srgb, var(--color-status-warning) 8%, transparent)' }}>
+          <span aria-hidden className="so-live inline-block h-2 w-2 rounded-full" style={{ background: 'var(--color-status-warning)' }} />
+          <span className="min-w-0 flex-1 text-body">
+            <b className="font-semibold">{line.main}</b>
+            {line.extra && <span className="text-[var(--color-text-secondary)]"> · {line.extra}</span>}
+          </span>
+          {line.open ? (
+            <button type="button" className="btn-sm btn-primary" onClick={line.open.run}>{line.open.label}</button>
+          ) : onHand && (line.mine ? (
+            <button type="button" className="btn-sm btn-primary" onClick={() => onHand(line.prompt)}>{t('needYou.handle')}</button>
+          ) : (
+            <button type="button" className="btn-sm btn-secondary" style={{ color: 'var(--color-zone-cognitive)' }}
+              onClick={() => onHand(line.prompt)}>{t('needYou.hand')}</button>
+          ))}
+        </div>
+      ))}
+      {onOpenHealth && (
+        <button type="button" className={`text-small ${MUTED} hover:text-[var(--color-text)]`} onClick={onOpenHealth}
+          data-testid="cdf-open-health">{t('cdf.openHealth')} ›</button>
+      )}
+    </div>
   );
 }
 
-/** Why most items were not kept: the largest reason. */
-function notKeptHint(t: TFunction, data: LandedOverview): string {
-  const top = NOT_KEPT_GROUPS
-    .map((group) => [group, data.groups[group] ?? 0] as const)
-    .filter(([, count]) => count > 0)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 1)          // the largest reason; the rest is in the steps and the list
-    .map(([group, count]) => t('cdf.groupCount', { label: t(`cdf.group.${group}`), n: fmt(count) }));
-  return top.length ? t('cdf.dash.notKeptMostly', { top: top.join(t('cdf.and')) }) : t('cdf.notKeptNone');
+function bucketLabel(bucket: string, window: IngestionWindow): string {
+  if (window === '24h') {
+    const date = new Date(`${bucket}:00:00Z`);
+    return Number.isNaN(date.getTime()) ? bucket.slice(11) : `${String(date.getHours()).padStart(2, '0')}:00`;
+  }
+  return bucket.slice(5).replace('-', '/');
+}
+
+function Verdict({ data, window }: { data: LandedOverview; window: IngestionWindow }) {
+  const { t } = useTranslation();
+  const learned = data.totals.new + data.totals.adds;
+  const prev = data.previous?.learned ?? null;
+  const series = data.series;
+  const grown = useGrown(`${window}:${series.map((p) => `${p.learned}/${p.reinforced}/${p.notKept}`).join(',')}`);
+  const max = Math.max(1, ...series.map((p) => p.learned + p.reinforced + p.notKept));
+  const was = t(`cdf.dash.was${window}`, { n: fmt(prev ?? 0) });
+  let change: string | undefined;
+  if (prev != null && prev > 0 && learned !== prev) {
+    const p = Math.round(((learned - prev) / prev) * 100);
+    change = p !== 0 ? `${p > 0 ? '▲' : '▼'} ${Math.abs(p)}%` : undefined;
+  }
+  return (
+    <section className={`${CARD} px-[18px] py-4`} data-testid="cdf-dashboard">
+      <Big testid="cdf-learned" value={fmt(learned)} what={t('cdf.dash.learnedWhat')}
+        compare={prev == null ? <Compare was={t('cdf.dash.noPrevious')} /> : <Compare change={change} was={was} testid="cdf-learned-was" />} />
+      <div className={`mt-2 flex flex-wrap gap-x-[18px] gap-y-1 text-small ${MUTED}`} data-testid="cdf-facts">
+        {([['captured', data.total], ['reinforced', data.totals.reinforced], ['known', data.totals.notKept], ['moved', data.steps.moved]] as const).map(([k, n]) => (
+          <span key={k}>{t(`cdf.fact.${k}`)} <b className="font-semibold tabular-nums text-[var(--color-text-secondary)]">{fmt(n)}</b></span>
+        ))}
+      </div>
+      <div className="mt-4 flex h-[84px] items-end gap-[3px] border-b border-[var(--color-border)]" role="group" aria-label={t('cdf.dash.barsLabel')}>
+        {series.map((p, i) => {
+          const tip = t('cdf.dash.barTip', { when: bucketLabel(p.bucket, window), learned: fmt(p.learned), reinforced: fmt(p.reinforced), known: fmt(p.notKept) });
+          return (
+            <div key={p.bucket} className="flex h-full min-w-0 flex-1 flex-col-reverse" title={tip} role="img" aria-label={tip} data-testid="cdf-bar">
+              {([['learned', LEARNED], ['reinforced', REINFORCED], ['notKept', KNOWN]] as const).map(([k, color]) => p[k] > 0 && (
+                <span key={k} className="so-grow block" style={{ height: `${Math.max(2, (p[k] / max) * 100)}%`, background: color,
+                  transform: grown ? 'scaleY(1)' : 'scaleY(0)', transitionDelay: `${i * 10}ms` }} />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+      {series.length > 0 && (
+        <div className={`mt-1 flex justify-between text-meta ${DIM}`} aria-hidden>
+          <span>{bucketLabel(series[0].bucket, window)}</span>
+          <span>{bucketLabel(series[Math.floor(series.length / 2)].bucket, window)}</span>
+          <span>{bucketLabel(series[series.length - 1].bucket, window)}</span>
+        </div>
+      )}
+    </section>
+  );
 }
 
 export function attentionText(t: TFunction, item: FlowAttention): { main: string; extra?: string; prompt: string } {
@@ -151,167 +217,95 @@ export function attentionText(t: TFunction, item: FlowAttention): { main: string
   }
 }
 
-interface DestRow { key: string; label: string; hint?: string; written: number; reinforced: number; indent?: boolean; filter: Partial<UnitFilters>; flag?: string }
+interface DestRow { key: string; label: string; written: number; reinforced: number; sub?: boolean; filter: Focus }
+interface Tier { key: 'every_turn' | 'project' | 'general'; total: number; rows: DestRow[] }
 
-function Landed({ data, onPick }: { data: LandedOverview; onPick: (focus: Partial<UnitFilters> & { label?: string }) => void }) {
-  const { t } = useTranslation();
-  const tiers = useMemo(() => buildTiers(t, data.landed), [t, data.landed]);
-  const max = Math.max(1, ...tiers.flatMap((tier) => tier.rows.map((row) => row.written + row.reinforced)));
-  const movedTo = data.moved.reduce((sum, row) => sum + row.count, 0);
-  const movedFrom = [...new Set(data.moved.map((row) => t(`cdf.store.${row.from}`, { defaultValue: row.from })))].join(' / ');
-  const spelling = data.attention.find((item) => item.code === 'spelling')?.example?.split(', ') ?? [];
-  return (
-    <section data-testid="cdf-landed" className="min-w-0">
-      <SectionLabel right={t('cdf.landedHint')}>{t('cdf.landedTitle')}</SectionLabel>
-      {tiers.every((tier) => tier.rows.length === 0) && <p className="mt-3 text-body text-[var(--color-text-muted)]">{t('cdf.landedEmpty')}</p>}
-      <div className="mt-3 space-y-5">
-        {tiers.filter((tier) => tier.rows.length > 0).map((tier) => (
-          <div key={tier.key}>
-            <div className="mb-1 flex items-baseline gap-2.5">
-              <span className="text-body font-semibold text-[var(--color-text)]">{t(`cdf.tier.${tier.key}`)}</span>
-              <span className="text-small text-[var(--color-text-muted)]">{t(`cdf.tier.${tier.key}Hint`)}</span>
-            </div>
-            {tier.rows.map((row) => (
-              <Fragment key={row.key}>
-                <button type="button" data-testid={`cdf-dest-${row.key}`}
-                  onClick={() => onPick({ ...row.filter, label: row.label })}
-                  className="grid w-full grid-cols-[minmax(0,170px)_minmax(0,1fr)_170px] items-center gap-4 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-hover)]">
-                  <span className={`truncate text-body ${row.indent ? 'pl-4 text-[var(--color-text-muted)]' : 'text-[var(--color-text)]'}`}>
-                    {row.label}{row.hint && <span className="ml-1.5 text-small text-[var(--color-text-dim)]">{row.hint}</span>}
-                  </span>
-                  <span className="flex h-2 overflow-hidden rounded-sm" style={{ background: 'color-mix(in srgb, var(--color-border) 60%, transparent)' }}>
-                    <span style={{ width: `${(row.written / max) * 100}%`, background: KEPT }} />
-                    <span style={{ width: `${(row.reinforced / max) * 100}%`, background: KEPT_SOFT }} />
-                  </span>
-                  <span className="whitespace-nowrap text-right text-body tabular-nums text-[var(--color-text-muted)]">
-                    {countsText(t, row.written, row.reinforced)}
-                  </span>
-                </button>
-                {spelling.includes(row.label) && row.label === spelling[spelling.length - 1] && (
-                  <p className="pl-7 text-small text-[var(--color-status-warning)]">{t('cdf.att.spelling', { example: spelling.join(', ') })}</p>
-                )}
-              </Fragment>
-            ))}
-            {tier.key === 'every_turn' && movedTo > 0 && (
-              <p className="mt-1.5 border-l-2 border-[var(--color-border)] px-2.5 py-1 text-small text-[var(--color-text-muted)]" data-testid="cdf-moved-note">
-                {t('cdf.movedNote', { n: fmt(movedTo), stores: movedFrom })}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-      <div className="mt-2 flex gap-4 text-small text-[var(--color-text-dim)]">
-        <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2.5 rounded-sm" style={{ background: KEPT }} />{t('cdf.legendKept')}</span>
-        <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2.5 rounded-sm" style={{ background: KEPT_SOFT }} />{t('cdf.legendReinforced')}</span>
-        <span>{t('cdf.legendScale')}</span>
-      </div>
-    </section>
-  );
-}
-
-function countsText(t: TFunction, written: number, reinforced: number): string {
-  if (written && reinforced) return t('cdf.counts', { written: fmt(written), reinforced: fmt(reinforced) });
-  return written ? t('cdf.countsNew', { written: fmt(written) }) : t('cdf.countsReinforced', { reinforced: fmt(reinforced) });
-}
-
-function buildTiers(t: TFunction, rows: LandedRow[]): Array<{ key: 'every_turn' | 'project' | 'general'; rows: DestRow[] }> {
+function buildTiers(t: TFunction, rows: LandedRow[]): Tier[] {
   const sum = (list: LandedRow[]) => list.reduce((acc, row) => ({
     written: acc.written + row.written, reinforced: acc.reinforced + row.reinforced }), { written: 0, reinforced: 0 });
-  const byStore = (stores: string[]) => stores.map((store) => {
+  const byStore = (stores: string[]): DestRow[] => stores.map((store) => {
     const list = rows.filter((row) => row.store === store);
     return { store, list, ...sum(list) };
   }).filter((entry) => entry.list.length > 0)
-    .sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced));
-  const storeRow = (entry: { store: string; list: LandedRow[]; written: number; reinforced: number }): DestRow => ({
-    key: entry.store, label: t(`cdf.store.${entry.store}`, { defaultValue: entry.store }),
-    hint: t(`cdf.storeHint.${entry.store}`, { defaultValue: '' }) || undefined,
-    written: entry.written, reinforced: entry.reinforced,
-    // one file (every every-turn store): filter by where units really landed
-    filter: entry.list.length === 1 && entry.list[0].path ? { path: entry.list[0].path } : { store: entry.store },
-  });
+    .sort((a, b) => b.written - a.written)
+    .map((entry) => ({
+      key: entry.store, label: t(`cdf.store.${entry.store}`, { defaultValue: entry.store }),
+      written: entry.written, reinforced: entry.reinforced,
+      // one file (every every-turn store): filter by where units really landed
+      filter: entry.list.length === 1 && entry.list[0].path ? { path: entry.list[0].path } : { store: entry.store },
+    }));
   const projects = new Map<string, LandedRow[]>();
   for (const row of rows.filter((item) => item.store === 'DDD')) {
     const name = row.project ?? '—';
     projects.set(name, [...(projects.get(name) ?? []), row]);
   }
-  const projectRows: DestRow[] = [...projects.entries()]
-    .map(([name, list]) => ({ name, list, ...sum(list) }))
-    .sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced))
-    .flatMap((entry) => [
-      { key: `p-${entry.name}`, label: entry.name, written: entry.written, reinforced: entry.reinforced,
-        filter: { pathPrefix: `Projects/${entry.name}/` } },
-      ...(entry.list.length > 1 ? [...entry.list].sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced))
-        .map((row) => ({ key: `f-${row.path}`, label: fileName(row.path), written: row.written, reinforced: row.reinforced,
-          indent: true, filter: { path: row.path ?? undefined } })) : []),
-    ]);
-  return [
-    { key: 'every_turn', rows: byStore(EVERY_TURN).map(storeRow) },
-    { key: 'project', rows: projectRows },
-    { key: 'general', rows: byStore(GENERAL).map(storeRow) },
+  const ranked = [...projects.entries()].map(([name, list]) => ({ name, list, ...sum(list) }))
+    .sort((a, b) => b.written - a.written);
+  const projectRows: DestRow[] = ranked.slice(0, SHOWN_PROJECTS).flatMap((entry, index) => [
+    { key: `p-${entry.name}`, label: entry.name, written: entry.written, reinforced: entry.reinforced,
+      filter: { pathPrefix: `Projects/${entry.name}/` } },
+    // the largest project's files, one row each
+    ...(index === 0 && entry.list.length > 1 ? [...entry.list].filter((row) => row.written > 0).sort((a, b) => b.written - a.written)
+      .map((row) => ({ key: `f-${row.path}`, label: fileName(row.path).replace(/\.md$/, ''), written: row.written,
+        reinforced: row.reinforced, sub: true, filter: { path: row.path ?? undefined } })) : []),
+  ]);
+  const rest = ranked.slice(SHOWN_PROJECTS);
+  if (rest.length) {
+    const r = rest.reduce((acc, e) => ({ written: acc.written + e.written, reinforced: acc.reinforced + e.reinforced }), { written: 0, reinforced: 0 });
+    projectRows.push({ key: 'p-rest', label: t('cdf.restProjects', { count: rest.length }), ...r, sub: true, filter: { store: 'DDD' } });
+  }
+  const tiers: Tier[] = [
+    { key: 'every_turn', rows: byStore(EVERY_TURN), total: 0 },
+    { key: 'project', rows: projectRows, total: ranked.reduce((n, e) => n + e.written, 0) },
+    { key: 'general', rows: byStore(GENERAL), total: 0 },
   ];
+  for (const tier of tiers) if (tier.key !== 'project') tier.total = tier.rows.reduce((n, r) => n + r.written, 0);
+  return tiers;
 }
 
-function HowItDecides({ data }: { data: LandedOverview }) {
+function Landed({ data, focus, onPick }: { data: LandedOverview; focus: Focus; onPick: (focus: Focus) => void }) {
   const { t } = useTranslation();
-  const [showRules, setShowRules] = useState(false);
-  const s = data.steps;
-  const sources = Object.entries(data.sources).sort((a, b) => b[1] - a[1]);
-  const retired = data.groups.retired ?? 0;
-  const backlog = data.groups.backlog ?? 0;
-  const g = (name: string) => data.groups[name] ?? 0;
-  const also = [
-    retired > 0 ? t('cdf.alsoRetired', { n: fmt(retired) }) : null,
-    backlog > 0 ? t('cdf.alsoBacklog', { n: fmt(backlog) }) : null,
-    g('no_project') > 0 ? t('cdf.alsoNoProject', { n: fmt(g('no_project')) }) : null,
-    g('other') > 0 ? t('cdf.alsoOther', { n: fmt(g('other')) }) : null,
-    g('expired') > 0 ? t('cdf.alsoExpired', { n: fmt(g('expired')) }) : null,
-    data.totals.waiting > 0 ? t('cdf.alsoWaiting', { n: fmt(data.totals.waiting) }) : null,
-  ].filter(Boolean).join('; ');
-  // one row per step, the numbers in one column so they read top to bottom. A step shows
-  // what it let through, dropped or moved; the totals (captured, learned, reinforced) are
-  // the dashboard's and are not repeated here.
-  const steps: Array<{ key: string; out: ReactNode }> = [
-    { key: 'captured', out: <>{sources.map(([source, count]) => (
-      <Out key={source} tone="dim">{`${t(`cdf.source.${source}`, { defaultValue: source })} ${fmt(count)}`}</Out>))}</> },
-    { key: 'basic', out: <Out tone="dim">{t('cdf.out.dropped', { n: fmt(s.basicDropped) })}</Out> },
-    { key: 'place', out: s.placeDropped > 0 ? <Out tone="warn">{t('cdf.out.place', { n: fmt(s.placeDropped) })}</Out>
-      : <Out tone="dim">{t('cdf.out.dropped', { n: '0' })}</Out> },
-    { key: 'trust', out: <Out tone="accent">{t('cdf.out.moved', { n: fmt(s.moved) })}</Out> },
-    { key: 'compare', out: <>
-      <Out tone="dim">{t('cdf.out.known', { n: fmt(s.known) })}</Out>
-      {s.withdrawn > 0 && <Out tone="dim">{t('cdf.out.withdrawn', { n: fmt(s.withdrawn) })}</Out>}
-      {s.older > 0 && <Out tone="dim">{t('cdf.out.older', { n: fmt(s.older) })}</Out>}</> },
-    { key: 'written', out: <Out tone="kept">{t('cdf.out.writtenSplit', { new: fmt(data.totals.new), adds: fmt(data.totals.adds) })}</Out> },
-  ];
+  const tiers = useMemo(() => buildTiers(t, data.landed), [t, data.landed]);
+  const max = Math.max(1, ...tiers.flatMap((tier) => tier.rows.map((row) => row.written)));
+  const grown = useGrown(tiers.flatMap((tier) => tier.rows.map((row) => `${row.key}:${row.written}`)).join('|'));
+  const picked = focus.label;
+  if (tiers.every((tier) => tier.rows.length === 0)) {
+    return <section data-testid="cdf-landed"><ZoneLabel>{t('cdf.landedTitle')}</ZoneLabel>
+      <p className={`text-body ${MUTED}`}>{t('cdf.landedEmpty')}</p></section>;
+  }
   return (
-    <section data-testid="cdf-decide" className="min-w-0">
-      <SectionLabel right={(
-        <button type="button" className="text-meta text-[var(--color-primary)]" aria-expanded={showRules}
-          onClick={() => setShowRules((value) => !value)} data-testid="cdf-rules-toggle">
-          {showRules ? t('cdf.hideRules') : t('cdf.showRules')}
-        </button>
-      )}>{t('cdf.decideTitle')}</SectionLabel>
-      <ol className="mt-3">
-        {steps.map((step, index) => (
-          <li key={step.key} className="grid grid-cols-[22px_minmax(0,1fr)_auto] gap-x-4 py-2">
-            <span className="text-small tabular-nums text-[var(--color-text-dim)]">{index + 1}</span>
-            <div className="min-w-0">
-              <div className="text-body font-semibold text-[var(--color-text)]" title={t(`cdf.step.${step.key}Rule`)}>
-                {t(`cdf.step.${step.key}`)}
-              </div>
-              {showRules && <p className="mt-0.5 text-small text-[var(--color-text-muted)]">{t(`cdf.step.${step.key}Rule`)}</p>}
+    <section data-testid="cdf-landed">
+      <ZoneLabel>{t('cdf.landedTitle')}</ZoneLabel>
+      <div className="grid grid-cols-1 gap-x-7 gap-y-5 md:grid-cols-3">
+        {tiers.map((tier) => (
+          <div key={tier.key} className="min-w-0" data-testid={`cdf-tier-${tier.key}`}>
+            <div className="mb-1.5 flex items-baseline gap-2 border-b border-[var(--color-border)] pb-1.5 text-body font-semibold">
+              {t(`cdf.tier.${tier.key}`)}
+              <span className="ml-auto tabular-nums text-[var(--color-text-secondary)]">{fmt(tier.total)}</span>
             </div>
-            <div className="text-right">{step.out}</div>
-          </li>
+            {tier.rows.length === 0 && <p className={`px-1.5 py-1 text-small ${DIM}`}>—</p>}
+            {tier.rows.map((row) => (
+              <button key={row.key} type="button" data-testid={`cdf-dest-${row.key}`} aria-pressed={picked === row.label}
+                title={row.reinforced ? t('cdf.countsTip', { written: fmt(row.written), reinforced: fmt(row.reinforced) }) : undefined}
+                onClick={() => onPick(picked === row.label ? {} : { ...row.filter, label: row.label })}
+                className={`grid w-full grid-cols-[minmax(0,1fr)_64px_44px] items-center gap-x-2.5 rounded-md px-1.5 py-1 text-left hover:bg-[var(--color-hover)] ${row.sub ? 'text-small text-[var(--color-text-secondary)]' : 'text-body'}`}
+                style={picked === row.label ? { background: 'color-mix(in srgb, var(--color-primary) 12%, transparent)' } : undefined}>
+                <span className={`truncate ${row.sub ? 'pl-3.5' : ''} ${row.written ? '' : DIM}`}>{row.label}</span>
+                <span className="h-1.5 overflow-hidden rounded-[3px] bg-[var(--color-bg-chrome)]">
+                  <span className="so-width block h-full rounded-[3px]"
+                    style={{ width: grown && row.written ? `${Math.max(2, (row.written / max) * 100)}%` : '0%', background: 'var(--color-status-success)' }} />
+                </span>
+                <span className={`text-right tabular-nums ${row.written ? 'text-[var(--color-text-secondary)]' : DIM}`}>{row.written ? fmt(row.written) : '—'}</span>
+              </button>
+            ))}
+          </div>
         ))}
-      </ol>
-      {also && <p className="mt-2 text-small text-[var(--color-text-dim)]">{t('cdf.alsoPrefix')}{also}.</p>}
+      </div>
+      {data.steps.moved > 0 && (
+        <p className={`mt-2.5 text-small ${MUTED}`} data-testid="cdf-moved-note">
+          {t('cdf.movedNote', { n: fmt(data.steps.moved) })}
+        </p>
+      )}
     </section>
   );
-}
-
-function Out({ tone, children }: { tone: 'dim' | 'warn' | 'accent' | 'kept' | 'text'; children: ReactNode }) {
-  const color = { dim: 'var(--color-text-dim)', warn: 'var(--color-status-warning)', accent: 'var(--color-primary)',
-    kept: KEPT, text: 'var(--color-text)' }[tone];
-  return <span className="block whitespace-nowrap text-small tabular-nums" style={{ color }}>{children}</span>;
 }

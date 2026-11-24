@@ -46,7 +46,7 @@ vi.mock('react-i18next', async () => {
 });
 
 import { WelcomeScreen as WelcomeScreenImpl } from './WelcomeScreen';
-import { useAttentionQueue } from '../../../hooks/useAttentionQueue';
+import { personCount, useAttentionQueue } from '../../../hooks/useAttentionQueue';
 import { landedTransform } from './welcomeBee';
 import { INJECT_CHAT_INPUT, type InjectChatInputDetail } from '../injectChatInput';
 
@@ -87,15 +87,18 @@ describe('WelcomeScreen v2', () => {
     expect([...slogan.querySelectorAll('.welcome-brand-text')].map((e) => e.textContent)).toEqual(['Brain', 'Anything']);
   });
 
-  it('count = blocking + review from the attention query; at most 3 rows', async () => {
+  it("count = the person's items from the attention query; what Swarm handles itself is left out; at most 3 rows", async () => {
     fetchAttention.mockResolvedValue({
-      items: [1, 2, 3, 4, 5].map((i) => item(i)),
-      counts: { blocking: 5, review: 3 },
+      items: [...[1, 2, 3, 4, 5].map((i) => ({ ...item(i), handler: 'person' })),
+        { ...item(6), handler: 'agent' }, { ...item(7), handler: 'agent' }],
+      counts: { blocking: 5, review: 2, person: 5, agent: 2 },
     });
     renderWelcome();
-    await waitFor(() => expect(screen.getByTestId('welcome-needs-count').textContent).toBe('8'));
+    await waitFor(() => expect(screen.getByTestId('welcome-needs-count').textContent).toBe('5'));
     expect(screen.getAllByTestId('welcome-needs-row')).toHaveLength(3);
-    expect(screen.getByTestId('welcome-needs-more').textContent).toContain('5');
+    expect(screen.getByTestId('welcome-needs-more').textContent).toContain('2');
+    fireEvent.click(screen.getByTestId('welcome-needs-more'));
+    expect(screen.getAllByTestId('welcome-needs-row')).toHaveLength(5);
   });
 
   it('reads the shared needs-you query key (one cache with the pill and overlay)', async () => {
@@ -106,17 +109,31 @@ describe('WelcomeScreen v2', () => {
   });
 
   it('the pill hook and the Welcome card share one request and one number', async () => {
-    fetchAttention.mockResolvedValue({ items: [item(1)], counts: { blocking: 4, review: 4 } });
+    fetchAttention.mockResolvedValue({ items: [item(1)], counts: { blocking: 4, review: 4, person: 6, agent: 2 } });
     let pillCount = -1;
     function Pill() {
       const { counts } = useAttentionQueue();
-      pillCount = counts.blocking + counts.review;
+      pillCount = counts.person;
       return null;
     }
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={qc}><Pill /><WelcomeScreen /></QueryClientProvider>);
-    await waitFor(() => expect(screen.getByTestId('welcome-needs-count').textContent).toBe('8'));
-    expect(pillCount).toBe(8);
+    await waitFor(() => expect(screen.getByTestId('welcome-needs-count').textContent).toBe('6'));
+    expect(pillCount).toBe(6);
+  });
+
+  it("with nothing for the person, Swarm's own items are named, not counted", async () => {
+    fetchAttention.mockResolvedValue({ items: [{ ...item(1), handler: 'agent' }], counts: { blocking: 1, review: 0, person: 0, agent: 1 } });
+    renderWelcome();
+    const line = await screen.findByTestId('welcome-needs-swarm');
+    expect(screen.queryByTestId('welcome-needs-count')).toBeNull();
+    expect(screen.getByTestId('welcome-needs-empty')).toBeTruthy();
+    fireEvent.click(line);
+    expect(dispatchUiCommand).toHaveBeenCalledWith('show-needs-you');
+    // the badge's own rule: the person's count, else every item not Swarm's
+    expect(personCount({ items: [], counts: { blocking: 4, review: 4, person: 6, agent: 2 } })).toBe(6);
+    expect(personCount({ items: [{ ...item(1), handler: 'person' }, { ...item(2), handler: 'agent' }],
+      counts: { blocking: 2, review: 0 } } as never)).toBe(1);
     expect(fetchAttention).toHaveBeenCalledTimes(1);
   });
 

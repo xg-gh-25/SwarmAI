@@ -166,7 +166,8 @@
       "openAll": "Open all",
       "nothing": "Nothing needs your decision right now",
       "more": "{{n}} more",
-      "less": "Show less"
+      "less": "Show less",
+      "swarmHandles": "Swarm is handling {{n}}"
     },
     "placeholder": "Type a message...",
     "streamingPlaceholder": "Waiting for response...",
@@ -443,8 +444,6 @@
         "stopContinueHint": "Continue picks up from here: the agent is told what was stopped and checks what it already did before going on.",
         "stopAgentButton": "Stop this agent"
       },
-      "doc": {},
-      "runResult": {},
       "bgAgentLabel": "Agent",
       "viewOriginalAgent": "View original agent",
       "viewOriginalAgentNamed": "View original agent: {{name}}",
@@ -2379,13 +2378,8 @@
     "tabAttention": "Needs you",
     "tabFlow": "Cognition flow",
     "title": "Need You",
-    "description": "Everything SwarmAI can't finish without you. Click an item to put it in the chat input, or ↑ to send it now.",
     "loadFailed": "Couldn't load the attention queue.",
-    "empty": "Nothing needs you right now",
-    "blocking": "Blocking",
-    "blockingHint": "Stopped — nothing moves without you",
-    "review": "Review",
-    "reviewHint": "Self-advancing — your input confirms or overrides",
+    "empty": "Nothing needs your decision right now",
     "tabGuide": "How it works",
     "tabHealth": "Health",
     "openSwarmOut": "Open Swarm Out",
@@ -2407,11 +2401,44 @@
     "fillHint": "Add to the chat input",
     "sendNow": "Send now",
     "sendNowLabel": "Send now: {{title}}",
-    "openSettings": "Open the settings page"
+    "openSettings": "Open the settings page",
+    "mine": "For you",
+    "swarm": "Swarm can handle these itself",
+    "system": "System",
+    "hand": "Hand to Swarm",
+    "handAll": "Hand all to Swarm",
+    "handle": "Handle in chat",
+    "handAllPrompt_one": "Handle this yourself, then tell me in two plain lines what you did:\n\n{{items}}",
+    "handAllPrompt_other": "Handle these {{count}} yourself, one after another, then tell me in a few plain lines what you did for each:\n\n{{items}}",
+    "ago": {
+      "min_one": "{{count}} min",
+      "min_other": "{{count}} min",
+      "h_one": "{{count}} h",
+      "h_other": "{{count}} h",
+      "d_one": "{{count}} day",
+      "d_other": "{{count}} days"
+    },
+    "ask": {
+      "default": "Needs you",
+      "escalation": "Answer",
+      "governance": "Approve or reject",
+      "paused_run": "Decide on the run",
+      "job_auth": "Sign in again",
+      "db_recovery": "Recover or discard",
+      "template_drift": "Merge the file",
+      "swarm_out": "Open Swarm Out",
+      "aws_account": "Sign in again",
+      "needs_account": "Sign in again",
+      "inbox": "Sign in again",
+      "todo": "Sort the ToDos",
+      "local_root": "Keep or remove",
+      "user_race": "Check the change",
+      "writer_unknown": "Check the change"
+    },
+    "notLanded": "Couldn't reach a chat tab: open one and try again."
   },
   "cogLevel": {
-    "title": "Swarm's cognition",
-    "hint": "Is it needing you less",
+    "title": "Is Swarm needing you less",
     "empty": "No week has enough conversations yet.",
     "line": {
       "tooFew": "Too early for a trend: it needs {{n}} weeks of conversations",
@@ -2423,107 +2450,66 @@
       "same": "no visible change (±{{margin}} points)",
       "tooFew": "too few sessions for a trend"
     },
-    "repeats": "of this week's corrections repeat one you made before",
-    "legend": {
-      "trend": "4-week share not corrected",
-      "week": "one week",
-      "repeats": "corrections that repeat an earlier one",
-      "marks": "a change to the rules it reads"
-    },
     "mark": {
       "review": "the review starts recording corrections",
       "version": "version {{v}}"
     },
     "point": "week of {{week}}: {{rate}} not corrected, {{n}} conversations",
-    "repeatPoint": "week of {{week}}: {{repeats}} of {{corrections}} corrections were repeats",
     "chain": {
-      "title": "Where its mistakes come from",
-      "rule": "Each month every real mistake is traced back: was the knowledge it needed already there, was it put in front of it, did it use it right, was it still true. The link that leaks most is the one to fix.",
+      "title": "Where mistakes come from",
       "month": "{{month}} · {{n}} mistakes",
-      "baseline": "baseline of {{label}} · {{n}} mistakes",
-      "count": "mistakes · {{pct}}",
-      "prev": "{{n}} the month before",
-      "prevBaseline": "{{n}} in the baseline",
-      "none": "No monthly mistake audit yet: the first one runs on the 1st of next month."
+      "baseline": "baseline {{label}} · {{n}} mistakes",
+      "none": "No monthly mistake audit yet: the first one runs on the 1st of next month.",
+      "mostly": "· mostly “{{stage}}”, {{pct}}%"
     },
-    "stage": {
-      "missing": "Learned and kept",
-      "notDelivered": "Put in front of it",
-      "usedWrong": "Used right",
-      "stale": "Still true"
-    },
-    "stageQ": {
-      "missing": "was the knowledge there beforehand",
-      "notDelivered": "it was there; was it found this time",
-      "usedWrong": "it was found; did the judgment use it",
-      "stale": "was what it held out of date"
-    },
-    "stageFix": {
-      "missing": "missing: improve what is written",
-      "notDelivered": "not delivered: improve recall",
-      "usedWrong": "delivered and still wrong: a judgment problem",
-      "stale": "out of date: improve updating"
-    },
-    "used": "{{pct}} of written knowledge was used within {{days}} days",
-    "usedNone": "Whether written knowledge gets used within {{days}} days: no entry is old enough yet",
-    "openHealth": "Is CDF itself working → Health",
-    "notCorrected": "of the last 4 weeks' conversations you did not have to correct",
-    "thisWeek": "this week {{rate}} · {{n}} conversations",
+    "notCorrected": "of conversations needed no correction",
     "thisWeekNone": "this week: too few conversations yet",
-    "how": "Every week is judged the same way: a judge reads only your own messages and decides whether you corrected it.",
-    "agreeCorrected": "Checked against the review's record: of {{n}} conversations it recorded a correction in, the judge found {{a}}.",
-    "agreeClean": "Of {{n}} it read through with none, the judge agreed on {{a}}.",
-    "agreeNone": "The review's record has nothing to check the judge against yet."
+    "of": "last 4 weeks · {{n}} conversations",
+    "pts_one": "{{sign}} {{count}} point",
+    "pts_other": "{{sign}} {{count}} points",
+    "was": "4 weeks before {{pct}}%",
+    "weeksLabel": "Share of conversations needing no correction, by week",
+    "changed": "rules changed: {{what}}",
+    "kpi": {
+      "week": "This week",
+      "conversations_one": "{{count}} conversation",
+      "conversations_other": "{{count}} conversations",
+      "repeats": "This week's corrections that repeat an earlier one",
+      "used": "Knowledge used within {{days}} days"
+    },
+    "cause": {
+      "missing": "not known beforehand",
+      "notDelivered": "known, not delivered",
+      "usedWrong": "delivered, still wrong",
+      "stale": "out of date",
+      "unknown": "cannot tell"
+    }
   },
   "cogHealth": {
     "loadFailed": "Could not load the health view.",
     "w7d": "7 days",
     "w30d": "30 days",
-    "per7d": "/ 7 days",
-    "per30d": "/ 30 days",
     "recheck": "Check now",
     "running": "Checking…",
-    "generatedAt": "Last checked {{at}}",
     "neverRun": "Not checked yet: the check runs every weekday, or press Check now.",
-    "useful": "useful",
     "passed": "checks pass",
-    "notEnough": "too few samples",
     "noData": "no data yet",
     "line": {
-      "ok": "The cognition system is working and what it keeps is useful",
-      "notEnough": "The cognition system is working; too few entries are scored yet to judge their value",
-      "checksFail": "{{count}} check(s) are failing",
-      "valueLow": "{{pct}} of what was kept is not useful",
-      "and": ", and "
+      "notEnough": "The cognition system is working; too few entries are scored yet to judge their value"
     },
     "q": {
-      "value": "Is what was kept useful",
       "checks": "Is CDF itself healthy",
       "cost": "What CDF costs"
     },
-    "valueNote": "Target {{target}} · {{scored}} entries scored by the judge",
-    "checksNote": "{{failing}} failing · {{noData}} with no data yet (not counted as passing)",
-    "costShare": "{{pct}} of the system's spend",
-    "perUseful": "≈ {{usd}} per useful entry",
+    "costShare": "{{pct}}% of all",
     "value": {
-      "clickHint": "Click a row to see the sampled entries and the judge's reasons",
-      "rule": "Each weekday a judge that took no part in writing them scores a sample of new entries in each destination, by what that destination is for: useful, weak or withdraw. The line in each bar is the target. The judge only scores; it removes nothing. It judges each entry as written, for where it is: whether the writer checked the code or researched enough is the writer's job, not the judge's.",
-      "counts": "{{scored}} scored · {{written}} new",
-      "minNote": "A rate needs at least {{n}} scored entries",
       "noSamples": "No entries scored here yet.",
-      "samplesHint": "Set your own verdict on an entry: it replaces the judge's in the rates and shows how far to trust the judge.",
-      "byYou": "your verdict",
       "judgeSaid": "judge said {{verdict}}"
     },
     "group": {
       "every_turn": "Read in every session",
       "on_demand": "Looked up when relevant",
       "other": "Gaps · references"
-    },
-    "groupHint": {
-      "every_turn": "a bad entry here misleads every turn: target 95%",
-      "on_demand": "found only when a judgment needs it",
-      "other": "open problems, sources found nowhere else"
     },
     "dest": {
       "MEMORY": "MEMORY",
@@ -2534,16 +2520,6 @@
       "GAP": "Open gaps",
       "TIMELINE": "Timeline",
       "REFERENCE": "References"
-    },
-    "destHint": {
-      "MEMORY": "judgments that hold across projects",
-      "EVOLUTION": "where the agent was corrected",
-      "USER_FILES": "STEERING / USER / TOOLS",
-      "DDD": "what each project is and what was decided",
-      "GENERAL": "lessons that belong to no one project",
-      "GAP": "problems still to solve",
-      "TIMELINE": "events and their outcomes",
-      "REFERENCE": "links and results seen only in a conversation"
     },
     "verdict": {
       "useful": "useful",
@@ -2557,12 +2533,6 @@
       "status": "status",
       "copy": "copy of a saved document",
       "unclear": "unclear"
-    },
-    "checks": {
-      "rule": "Deterministic checks, no model involved. A check with nothing to measure says so and does not count as passing.",
-      "name": "Check",
-      "measured": "Measured",
-      "requirement": "Requirement"
     },
     "check": {
       "C1": "Every session reviewed",
@@ -2601,10 +2571,11 @@
       "C10": "some used"
     },
     "cost": {
-      "rule": "CDF's model spend by purpose. Each bar below is one day of the whole system's spend; the coloured part is CDF's. Recorded only, never capped.",
       "calls": "{{calls}} calls",
       "avg": "{{usd}} per call",
-      "unpriced": "{{calls}} calls have no recorded cost and are not in the totals."
+      "unpriced": "{{calls}} calls have no recorded cost and are not in the totals.",
+      "legend": "amber is CDF, grey the rest",
+      "dayTip": "{{day}} · CDF {{cdf}} of {{all}}"
     },
     "feature": {
       "cdf_s7": "After-session review",
@@ -2613,32 +2584,43 @@
       "cdf_s3": "Run reports",
       "cdf_user_check": "Checking your words",
       "cdf_health": "Health judge",
-      "cdf": "Other CDF"
+      "cdf": "Other CDF",
+      "cdf_s4": "Code changes"
     },
     "reading": {
       "title": "The judge's reading",
-      "by": "Written by the judge from the last 7 days' numbers and scored entries · {{at}}. It only reads; it changes nothing.",
-      "staleNote": "the latest attempt failed, this is the previous reading",
-      "seen": "What it saw",
-      "why": "Why",
-      "suggest": "What to change",
       "basis": "Based on {{scored}} scored entries and {{checks}} checks.",
       "noAgreement": "How often the judge agrees with you is not known yet ({{n}} of your verdicts so far; 10 needed), so take it as a reference.",
-      "agreement": "The judge agreed with {{pct}} of your {{n}} verdicts.",
-      "failed": "The reading could not be written; the next check tries again.",
-      "none": "No reading yet."
+      "agreement": "The judge agreed with {{pct}} of your {{n}} verdicts."
     },
-    "usedNote": "{{pct}} of older entries were used after their write"
+    "usefulWhat": "of what was kept is useful",
+    "below": "{{pts}} points below",
+    "onTarget": "on target",
+    "target": "target {{pct}}%",
+    "stamp": "checked {{at}} · {{ago}} ago",
+    "costIn7d": "Cost · 7 days",
+    "costIn30d": "Cost · 30 days",
+    "perUsefulLabel": "Per useful entry",
+    "fixes": "To fix",
+    "fixesNone": "Nothing to fix: every check passed and every place meets its target.",
+    "lowLine": "{{scored}} scored · weak {{weak}} · withdraw {{withdraw}}",
+    "fixPrompt": "Cognitive Distillation needs fixing: {{what}}. {{detail}}. Find the cause and fix it, then tell me in two plain lines what was wrong and what you changed. The health judge suggested:\n{{suggest}}",
+    "destinations": "Each place",
+    "fewSamples": "too few",
+    "scored": "{{n}} scored",
+    "restPassed_one": "{{count}} other check passed",
+    "restPassed_other": "the other {{count}} checks passed",
+    "restNoData_one": "{{count}} without data",
+    "restNoData_other": "{{count}} without data",
+    "expand": "Show ▸",
+    "collapse": "Hide ▾",
+    "stampAt": "checked {{at}}"
   },
   "cdf": {
     "w24h": "24 hours",
     "w7d": "7 days",
     "w30d": "30 days",
-    "notKeptNone": "Everything that came in was kept.",
-    "healthOk": "Nothing is waiting or failing.",
-    "healthWaiting": "{{n}} are waiting or failed.",
-    "groupCount": "{{label}} ({{n}})",
-    "and": " and ",
+    "healthOk": "Nothing is stuck.",
     "group": {
       "basic": "failed a basic check",
       "place": "could not be placed (a Hive lesson about another Brain's project)",
@@ -2664,7 +2646,6 @@
       "cleanup_overdue": "{{n}} items are older than 30 days and were not cleaned up (the store is {{size}})"
     },
     "landedTitle": "Where it landed",
-    "landedHint": "click a row to see its items",
     "landedEmpty": "Nothing was kept in this window.",
     "tier": {
       "every_turn": "Read every turn",
@@ -2685,50 +2666,7 @@
       "KNOWLEDGE": "Knowledge Library",
       "DDD": "Project brain"
     },
-    "storeHint": {
-      "MEMORY": "principles, decisions, pitfalls",
-      "EVOLUTION": "corrections, competence",
-      "STEERING": "your standing rules",
-      "USER": "who you are",
-      "TOOLS": "your environment",
-      "TIMELINE": "key events",
-      "COMMON_DDD": "by subject",
-      "KNOWLEDGE": "references, notes"
-    },
-    "counts": "{{written}} new · {{reinforced}} reinforced",
-    "countsNew": "{{written}} new",
-    "countsReinforced": "{{reinforced}} reinforced",
-    "movedNote": "{{n}} items the agent meant for {{stores}} went to a project brain or the General Brain instead: they rest on the agent's own reading of the session — no words of yours and no measurement — so they are recalled when relevant, not read every turn.",
-    "legendKept": "new or added to an entry",
-    "legendReinforced": "reinforced an existing entry",
-    "legendScale": "one scale for every row",
-    "decideTitle": "How it decides",
-    "step": {
-      "captured": "Captured",
-      "capturedRule": "An agent that was there writes down what is worth keeping.",
-      "basic": "Basic checks",
-      "basicRule": "Empty text or a link carrying a password is dropped. Nothing about meaning is judged here.",
-      "place": "Pick the place",
-      "placeRule": "What it is (lesson, gap, event, reference) and who it is about (you, the agent, the world, a project) pick the file and section.",
-      "trust": "Trust floor",
-      "trustRule": "Files read every turn take only your own words or a measurement. Anything else goes to a brain that is recalled on demand.",
-      "compare": "Compare with what it knows",
-      "compareRule": "The agent that wrote it says whether it is new, adds to an entry, or is the same as one.",
-      "written": "Written",
-      "writtenRule": "Saved with its sources and its link to the entry it adds to."
-    },
-    "out": {
-      "dropped": "{{n}} dropped",
-      "moved": "{{n}} moved out of every-turn files",
-      "known": "{{n}} already known — skipped",
-      "writtenSplit": "{{new}} new · {{adds}} add to an entry",
-      "place": "{{n}} could not be placed",
-      "withdrawn": "{{n}} you had withdrawn — refused",
-      "older": "{{n}} older than an existing entry — skipped"
-    },
-    "alsoRetired": "{{n}} dropped by the quality reviewer that ran before the agent-decides change (now retired)",
-    "alsoBacklog": "{{n}} cleared once when the old backlog was discarded",
-    "alsoPrefix": "Also in this window: ",
+    "movedNote": "{{n}} items meant for the files read every turn rest on no words of yours and no measurement, so they went to a brain instead.",
     "source": {
       "S0": "System summaries",
       "S1": "You said it",
@@ -2748,16 +2686,12 @@
       "not_kept": "Not kept",
       "waiting": "Waiting"
     },
-    "everySource": "Every source",
-    "everyPlace": "Every place",
     "search": "Search titles and text",
     "showMore": "Show more",
     "feedEmpty": "No items match.",
     "showing": "Showing {{label}}",
     "clearFilter": "Show all",
-    "verbNew": "new",
     "verbAdded": "added to",
-    "verbAnEntry": "an existing entry",
     "verbReinforced": "reinforced",
     "verbMoved": "moved here from {{store}}",
     "verbNotKept": "Not kept — {{reason}}",
@@ -2862,31 +2796,39 @@
         "maintenance": "maintenance"
       }
     },
-    "alsoNoProject": "{{n}} dropped for naming no such project, before the General Brain took these",
-    "alsoOther": "{{n}} not kept for another reason",
-    "alsoExpired": "{{n}} expired before they were processed",
-    "alsoWaiting": "{{n}} waiting or failed",
     "cmpWithdrawn": "The same as something you withdrew → refused; it stays out.",
     "cmpOlder": "An existing entry is newer → this older one is skipped.",
     "searchCapped": "Searched the first {{n}} matches; narrow the search to see the rest.",
     "dash": {
-      "captured": "Captured",
-      "capturedHint": "items the agents wrote down",
-      "learned": "Learned",
-      "learnedHint": "new, or added to an existing entry",
-      "reinforced": "Reinforced",
-      "reinforcedHint": "an existing entry confirmed again",
-      "notKept": "Not kept",
-      "notKeptMostly": "mostly {{top}}",
-      "up": "↑ {{pct}}% vs previous {{window}}",
-      "down": "↓ {{pct}}% vs previous {{window}}",
-      "same": "same as previous {{window}}",
-      "fromZero": "none in previous {{window}}",
-      "noPrevious": "no full earlier period yet"
+      "noPrevious": "no earlier window to compare",
+      "learnedWhat": "learned",
+      "was24h": "24 h before {{n}}",
+      "was7d": "7 days before {{n}}",
+      "was30d": "30 days before {{n}}",
+      "barsLabel": "What it learned over time",
+      "barTip": "{{when}} · learned {{learned}} · reinforced {{reinforced}} · already known {{known}}"
     },
-    "showRules": "Show what each step does",
-    "hideRules": "Hide the rules",
-    "feedCount": "{{n}} items"
+    "feedCount": "{{n}} items",
+    "openHealth": "See Health",
+    "fact": {
+      "captured": "captured",
+      "reinforced": "reinforced",
+      "known": "already known",
+      "moved": "moved out of every-turn files"
+    },
+    "restProjects_one": "{{count}} more",
+    "restProjects_other": "{{count}} more",
+    "countsTip": "{{written}} written · {{reinforced}} reinforced",
+    "mark": {
+      "new": "new",
+      "adds": "adds",
+      "reinforced": "+1",
+      "known": "known",
+      "waiting": "waiting",
+      "notKept": "not kept",
+      "place": "no place",
+      "failed": "failed"
+    }
   },
   "brainLearned": {
     "loading": "Loading what this Brain learned…",

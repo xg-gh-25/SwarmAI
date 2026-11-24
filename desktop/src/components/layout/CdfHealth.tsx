@@ -1,20 +1,25 @@
 /**
  * Health — the cognition system's health inside the Need You overlay (design
- * docs/design/2026-10-31-cdf-health.md). Read top to bottom:
+ * docs/design/2026-10-31-cdf-health.md; layout Knowledge/Mockups/
+ * 2026-11-24-needs-you-redesign.html). Read top to bottom:
  *
- * - one sentence, then three numbers, each against something: is what was kept useful
- *   (vs its target), is CDF itself healthy (checks passed of those measured), what it
- *   costs (its share of the system's spend, per useful entry);
- * - the details of each: value per destination (a click shows the sampled entries with
- *   the judge's reason; the person can set their own verdict), the checks, the spend;
- * - last, the judge's reading.
+ * - one number: the share of what was kept that is useful, against its target, with the
+ *   weekly rates beside it; under it three numbers: checks passed of those measured, what
+ *   CDF cost (its share of all spend), the cost per useful entry;
+ * - what to fix: every failing check and every destination below its target, each with
+ *   "Hand to Swarm"; the judge's reading behind one disclosure;
+ * - each destination as one split bar (useful / weak / withdraw) with its target as a
+ *   tick; a row opens the sampled entries with the judge's reason, where the person can
+ *   give their own verdict;
+ * - the checks that passed as one line, opened on demand; the spend by purpose and by day.
+ * When the checks last ran sits in the controls, amber once it is a day old.
  *
  * Data: GET /ingestion/cognition-health (backend core/ingestion/health.overview). The
  * judge only scores; nothing here removes an entry. "No data" is never shown as a pass.
  *
  * Key export: `CdfHealth`.
  */
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -24,65 +29,30 @@ import {
   type HealthDestination,
   type HealthVerdict,
   type HealthWindow,
-  type WeekRate,
 } from '../../services/ingestion';
-import { SectionLabel, Segmented } from '../overlay';
+import { Segmented } from '../overlay';
 import { OverlayError, OverlayLoading } from './OverlayState';
+import { Big, CARD, Compare, DIM, Kpis, MUTED, ZoneLabel, agoText, useGrown } from './needYouParts';
+import type { DispatchPrompt } from './overlayRegistry';
 
-const KEPT = 'var(--color-zone-cognitive)';
+const OK = 'var(--color-status-success)';
 const WARN = 'var(--color-status-warning)';
 const ERR = 'var(--color-status-error)';
-const DIM = 'var(--color-text-dim)';
-const WEAK = 'color-mix(in srgb, var(--color-status-warning) 55%, transparent)';
-const TRACK = 'color-mix(in srgb, var(--color-border) 60%, transparent)';
+const WEAK = 'color-mix(in srgb, var(--color-status-warning) 75%, transparent)';
 const GROUPS: HealthDestination['group'][] = ['every_turn', 'on_demand', 'other'];
+const MIN_SCORED = 10;
+const STALE_MS = 24 * 3600 * 1000;
 
-const pct = (v: number) => `${Math.round(v * 100)}%`;
+const pct = (v: number) => Math.round(v * 100);
 const usd = (v: number) => (v >= 100 ? `$${Math.round(v)}` : v >= 1 ? `$${v.toFixed(1)}` : `$${v.toFixed(2)}`);
-const rateTone = (rate: number | null, target: number) =>
-  rate == null ? DIM : rate >= target ? KEPT : rate >= target - 0.2 ? WARN : ERR;
+type T = (k: string, o?: Record<string, unknown>) => string;
 
-function Spark({ values, color, testid }: { values: Array<number | null>; color: string; testid?: string }) {
-  const pts = values.map((v, i) => [i, v] as const).filter((p): p is readonly [number, number] => p[1] != null);
-  if (pts.length < 2) return <div className="mt-2 h-7 text-meta text-[var(--color-text-dim)]" data-testid={testid} />;
-  const max = Math.max(...pts.map((p) => p[1]), 1e-9);
-  const min = Math.min(...pts.map((p) => p[1]));
-  const span = max - min || 1;
-  const n = Math.max(1, values.length - 1);
-  const line = pts.map(([i, v]) => `${(i / n) * 100},${26 - ((v - min) / span) * 22}`).join(' ');
-  return (
-    <svg viewBox="0 0 100 28" preserveAspectRatio="none" className="mt-2 block h-7 w-56" data-testid={testid}>
-      <polyline fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" points={line} />
-    </svg>
-  );
+function checkValue(t: T, c: HealthCheck): string {
+  if (c.status === 'no_data' || !c.value) return t('cogHealth.noData');
+  return t(`cogHealth.checkValue.${c.id}`, c.value as Record<string, unknown>);
 }
 
-function Indicator({ question, big, unit, tone, note, spark }: {
-  question: string; big: string; unit: string; tone: string; note: ReactNode; spark: ReactNode;
-}) {
-  return (
-    <div className="min-w-0 px-7 first:pl-0 [&+&]:border-l [&+&]:border-[var(--color-border)]">
-      <div className="text-small text-[var(--color-text-muted)]">{question}</div>
-      <div className="mt-1 text-[34px] font-semibold leading-tight tabular-nums" style={{ color: tone }}>
-        {big}<span className="ml-1.5 text-body font-normal text-[var(--color-text-muted)]">{unit}</span>
-      </div>
-      <div className="text-meta text-[var(--color-text-muted)]">{note}</div>
-      {spark}
-    </div>
-  );
-}
-
-function verdictLine(t: (k: string, o?: Record<string, unknown>) => string, data: CognitionHealth): string {
-  const failing = data.checks.filter((c) => c.status === 'fail').length;
-  const { rate, target } = data.value;
-  const parts: string[] = [];
-  if (failing) parts.push(t('cogHealth.line.checksFail', { count: failing }));
-  if (rate != null && rate < target) parts.push(t('cogHealth.line.valueLow', { pct: pct(1 - rate) }));
-  if (!parts.length) return rate == null ? t('cogHealth.line.notEnough') : t('cogHealth.line.ok');
-  return parts.join(t('cogHealth.line.and'));
-}
-
-export function CdfHealth() {
+export function CdfHealth({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: () => void }) {
   const { t, i18n } = useTranslation();
   const zh = (i18n.language || '').startsWith('zh');
   const [window, setWindow] = useState<HealthWindow>('7d');
@@ -96,140 +66,209 @@ export function CdfHealth() {
     mutationFn: () => ingestionService.recheckHealth(),
     onSettled: () => { void client.invalidateQueries({ queryKey: ['ingestion', 'cognition-health'] }); },
   });
-
-  if (q.isPending) return <OverlayLoading />;
-  if (q.isError || !q.data) {
-    return <OverlayError testid="health-load-error" retryTestid="health-load-retry"
-      message={t('cogHealth.loadFailed')} onRetry={() => { void q.refetch(); }} />;
-  }
+  const hand = onDispatch ? (text: string) => { if (onDispatch(text, { autoSend: true })) close?.(); } : undefined;
   const data = q.data;
+  const running = !!data?.running || recheck.isPending;
+  const stale = !!data?.generatedAt && Date.now() - new Date(data.generatedAt).getTime() > STALE_MS;
+
+  return (
+    <div className="flex flex-col gap-8 py-2" data-testid="cdf-health">
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+        {data && (
+          <span className="text-small" style={{ color: stale ? WARN : 'var(--color-text-muted)' }} data-testid="health-stamp" data-stale={stale}>
+            {data.generatedAt ? (() => {
+              const at = new Date(data.generatedAt).toLocaleString(i18n.language, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+              const ago = agoText(t, data.generatedAt);
+              return ago ? t('cogHealth.stamp', { at, ago }) : t('cogHealth.stampAt', { at });
+            })() : t('cogHealth.neverRun')}
+          </span>
+        )}
+        <button type="button" data-testid="health-recheck" disabled={running} onClick={() => recheck.mutate()} className="btn-sm btn-secondary">
+          {running ? t('cogHealth.running') : t('cogHealth.recheck')}
+        </button>
+        <Segmented<HealthWindow> value={window} onChange={setWindow}
+          options={[{ key: '7d', label: t('cogHealth.w7d') }, { key: '30d', label: t('cogHealth.w30d') }]} />
+      </div>
+      {q.isPending && <OverlayLoading />}
+      {(q.isError || (!q.isPending && !data)) && (
+        <OverlayError testid="health-load-error" retryTestid="health-load-retry"
+          message={t('cogHealth.loadFailed')} onRetry={() => { void q.refetch(); }} />
+      )}
+      {data && (
+        <>
+          <Verdict data={data} window={window} />
+          <Fixes data={data} zh={zh} onHand={hand} />
+          <Destinations data={data} zh={zh} />
+          <Checks checks={data.checks} />
+          <Cost data={data} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function Verdict({ data, window }: { data: CognitionHealth; window: HealthWindow }) {
+  const { t } = useTranslation();
   const measured = data.checks.filter((c) => c.status !== 'no_data');
   const passed = measured.filter((c) => c.status === 'pass').length;
-  const noData = data.checks.length - measured.length;
-  const failing = measured.length - passed;
-  const rate = data.value.rate;
-  const running = data.running || recheck.isPending;
-
+  const { rate, target } = data.value;
+  const gap = rate == null ? null : pct(target) - Math.round(rate * 1000) / 10;
+  const trend = data.value.trend;
   return (
-    <div className="flex flex-col gap-12 py-4" data-testid="cdf-health">
-      <section>
-        <div className="flex items-start gap-5">
-          <p className="m-0 flex-1 text-[20px] font-semibold text-[var(--color-text)]" data-testid="health-line">
-            {verdictLine(t, data)}
-          </p>
-          <Segmented<HealthWindow> value={window} onChange={setWindow}
-            options={[{ key: '7d', label: t('cogHealth.w7d') }, { key: '30d', label: t('cogHealth.w30d') }]} />
-          <button type="button" data-testid="health-recheck" disabled={running}
-            onClick={() => recheck.mutate()}
-            className="btn-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] disabled:opacity-50">
-            {running ? t('cogHealth.running') : t('cogHealth.recheck')}
-          </button>
+    <section className={`${CARD} px-[18px] py-4`} data-testid="health-verdict">
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          {rate == null ? (
+            <p className={`text-heading ${MUTED}`} data-testid="health-line">{t('cogHealth.line.notEnough')}</p>
+          ) : (
+            <Big testid="health-rate" value={(Math.round(rate * 1000) / 10).toString()} unit="%" what={t('cogHealth.usefulWhat')}
+              compare={<Compare testid="health-target"
+                change={gap != null && gap > 0 ? t('cogHealth.below', { pts: gap.toFixed(1).replace(/\.0$/, '') }) : t('cogHealth.onTarget')}
+                good={!(gap != null && gap > 0)} was={t('cogHealth.target', { pct: pct(target) })} />} />
+          )}
         </div>
-        <div className="mt-1 text-meta text-[var(--color-text-dim)]">
-          {data.generatedAt ? t('cogHealth.generatedAt', { at: new Date(data.generatedAt).toLocaleString(i18n.language) })
-            : t('cogHealth.neverRun')}
-        </div>
-        <div className="mt-6 grid grid-cols-3">
-          <Indicator question={t('cogHealth.q.value')}
-            big={rate == null ? '—' : pct(rate)} unit={rate == null ? t('cogHealth.notEnough') : t('cogHealth.useful')}
-            tone={rateTone(rate, data.value.target)}
-            note={<>
-              {t('cogHealth.valueNote', { target: pct(data.value.target), scored: data.value.scored })}
-              {data.used.usedRate != null && <span className="block">{t('cogHealth.usedNote', { pct: pct(data.used.usedRate) })}</span>}
-            </>}
-            spark={<Spark values={data.value.trend.map((w) => w.rate)} color={rateTone(rate, data.value.target)} />} />
-          <Indicator question={t('cogHealth.q.checks')}
-            big={measured.length ? `${passed} / ${measured.length}` : '—'} unit={t('cogHealth.passed')}
-            tone={!measured.length ? DIM : failing ? ERR : KEPT}
-            note={t('cogHealth.checksNote', { failing, noData })}
-            spark={<Spark values={data.checksTrend.map((p) => (p.measured ? p.passed / p.measured : null))}
-              color={failing ? ERR : KEPT} />} />
-          <Indicator question={t('cogHealth.q.cost')}
-            big={usd(data.cost.cdfUsd)} unit={t(`cogHealth.per${window}`)} tone="var(--color-text)"
-            note={<>
-              {data.cost.share != null && t('cogHealth.costShare', { pct: pct(data.cost.share) })}
-              {data.cost.perUsefulUsd != null && ` · ${t('cogHealth.perUseful', { usd: usd(data.cost.perUsefulUsd) })}`}
-            </>}
-            spark={<Spark values={data.cost.days.map((d) => d.cdfUsd)} color={WARN} />} />
-        </div>
-      </section>
-
-      <ValueSection data={data} zh={zh} />
-      <ChecksSection checks={data.checks} />
-      <CostSection data={data} />
-      <ReadingSection data={data} zh={zh} />
-    </div>
-  );
-}
-
-function Bar({ d }: { d: HealthDestination }) {
-  if (d.rate == null) return <div />;
-  const total = d.useful + d.weak + d.withdraw || 1;
-  return (
-    <div className="relative flex h-2 overflow-hidden rounded-sm" style={{ background: TRACK }}>
-      <i style={{ width: `${(d.useful / total) * 100}%`, background: KEPT }} />
-      <i style={{ width: `${(d.weak / total) * 100}%`, background: WEAK }} />
-      <i style={{ width: `${(d.withdraw / total) * 100}%`, background: ERR }} />
-      <span className="absolute -bottom-1 -top-1 w-px opacity-50" style={{ left: `${d.target * 100}%`, background: 'var(--color-text)' }} />
-    </div>
-  );
-}
-
-function MiniTrend({ trend, color }: { trend: WeekRate[]; color: string }) {
-  const pts = trend.map((w, i) => [i, w.rate] as const).filter((p): p is readonly [number, number] => p[1] != null);
-  if (pts.length < 2) return <span />;
-  const n = Math.max(1, trend.length - 1);
-  return (
-    <svg viewBox="0 0 60 18" className="h-[18px] w-[60px]">
-      <polyline fill="none" stroke={color} strokeWidth={1.5}
-        points={pts.map(([i, v]) => `${(i / n) * 60},${16 - v * 14}`).join(' ')} />
-    </svg>
-  );
-}
-
-function ValueSection({ data, zh }: { data: CognitionHealth; zh: boolean }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState<string | null>(null);
-  return (
-    <section data-testid="health-value">
-      <SectionLabel right={t('cogHealth.value.clickHint')}>{t('cogHealth.q.value')}</SectionLabel>
-      <p className="mb-4 mt-1 max-w-[900px] text-meta text-[var(--color-text-dim)]">{t('cogHealth.value.rule')}</p>
-      {GROUPS.map((group) => (
-        <div key={group} className="mb-4">
-          <div className="mb-1 ml-2.5 flex items-baseline gap-2.5">
-            <span className="font-semibold text-[var(--color-text)]">{t(`cogHealth.group.${group}`)}</span>
-            <span className="text-meta text-[var(--color-text-dim)]">{t(`cogHealth.groupHint.${group}`)}</span>
+        {trend.length > 1 && (
+          <div className="flex h-[34px] items-end gap-1" role="img" data-testid="health-weeks"
+            aria-label={trend.map((w) => `${w.week} ${w.rate == null ? '—' : `${pct(w.rate)}%`}`).join(', ')}>
+            {trend.map((w) => (
+              <i key={w.week} className="block w-3 rounded-t-sm" title={`${w.week} · ${w.rate == null ? '—' : `${pct(w.rate)}%`}`}
+                style={{ height: w.rate == null ? 2 : Math.max(4, ((w.rate - 0.7) / 0.3) * 34),
+                  background: w.rate != null && w.rate < target ? WEAK : `color-mix(in srgb, ${OK} 65%, transparent)` }} />
+            ))}
           </div>
-          {data.value.destinations.filter((d) => d.group === group).map((d) => (
-            <div key={d.key}>
-              <button type="button" data-testid={`health-dest-${d.key}`}
-                onClick={() => setOpen(open === d.key ? null : d.key)}
-                className="grid w-full grid-cols-[240px_1fr_80px_64px_140px] items-center gap-4 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-hover)]">
-                <span className="min-w-0">
-                  <span className="block text-[var(--color-text)]">{t(`cogHealth.dest.${d.key}`)}</span>
-                  <span className="block text-meta text-[var(--color-text-dim)]">{t(`cogHealth.destHint.${d.key}`)}</span>
-                </span>
-                <Bar d={d} />
-                <span className="text-right font-semibold tabular-nums" style={{ color: rateTone(d.rate, d.target) }}>
-                  {d.rate == null ? <span className="text-meta font-normal">{t('cogHealth.notEnough')}</span> : pct(d.rate)}
-                </span>
-                <MiniTrend trend={d.trend} color={rateTone(d.rate, d.target)} />
-                <span className="text-right text-meta tabular-nums text-[var(--color-text-dim)]">
-                  {t('cogHealth.value.counts', { scored: d.scored, written: d.written })}
-                </span>
-              </button>
-              {open === d.key && <Samples d={d} zh={zh} />}
+        )}
+      </div>
+      <Kpis testid="health-kpis" items={[
+        { key: 'checks', label: t('cogHealth.q.checks'), warn: passed < measured.length,
+          value: measured.length ? <>{passed}<small className={`mx-0.5 text-small font-medium ${MUTED}`}>/</small>{measured.length}<small className={`ml-1 text-small font-medium ${MUTED}`}>{t('cogHealth.passed')}</small></> : '—' },
+        { key: 'cost', label: t(`cogHealth.costIn${window}`),
+          value: <>{usd(data.cost.cdfUsd)}{data.cost.share != null && <small className={`ml-1 text-small font-medium ${MUTED}`}>{t('cogHealth.costShare', { pct: pct(data.cost.share) })}</small>}</> },
+        { key: 'perUseful', label: t('cogHealth.perUsefulLabel'), value: data.cost.perUsefulUsd == null ? '—' : usd(data.cost.perUsefulUsd) },
+      ]} />
+    </section>
+  );
+}
+
+function Fixes({ data, zh, onHand }: { data: CognitionHealth; zh: boolean; onHand?: (text: string) => void }) {
+  const { t } = useTranslation();
+  const [readOpen, setReadOpen] = useState(false);
+  const failing = data.checks.filter((c) => c.status === 'fail');
+  const low = data.value.destinations.filter((d) => d.rate != null && d.scored >= MIN_SCORED && d.rate < d.target)
+    .sort((a, b) => (a.rate ?? 0) - (b.rate ?? 0));
+  const part = data.reading ? (zh ? data.reading.zh : data.reading.en) : null;
+  const rows = [
+    ...failing.map((c) => ({ key: `check-${c.id}`, title: t(`cogHealth.check.${c.id}`), num: '', tag: t(`cogHealth.requirement.${c.id}`, { req: c.requirement }),
+      line: checkValue(t, c) })),
+    ...low.map((d) => ({ key: `dest-${d.key}`, title: t(`cogHealth.dest.${d.key}`), num: `${pct(d.rate ?? 0)}%`, tag: t('cogHealth.target', { pct: pct(d.target) }),
+      line: t('cogHealth.lowLine', { scored: d.scored, weak: d.weak, withdraw: d.withdraw }) })),
+  ];
+  return (
+    <section data-testid="health-fixes">
+      <ZoneLabel count={rows.length}>{t('cogHealth.fixes')}</ZoneLabel>
+      {rows.length === 0 ? (
+        <p className={`text-body ${MUTED}`} data-testid="health-fixes-none">{t('cogHealth.fixesNone')}</p>
+      ) : (
+        <div className="flex flex-col divide-y divide-[var(--color-border)]">
+          {rows.map((r) => (
+            <div key={r.key} className="grid grid-cols-[18px_minmax(0,1fr)_auto] gap-x-3 py-3" data-testid={`health-fix-${r.key}`}>
+              <span aria-hidden className="grid h-[18px] w-[18px] place-items-center rounded-full text-meta font-semibold"
+                style={{ color: WARN, background: 'color-mix(in srgb, var(--color-status-warning) 12%, transparent)' }}>!</span>
+              <div className="min-w-0">
+                <div className="text-body">
+                  <b className="font-semibold">{r.title}</b>
+                  {r.num && <b className="ml-1.5 font-semibold tabular-nums" style={{ color: WARN }}>{r.num}</b>}
+                  <span className={`ml-1.5 text-small ${MUTED}`}>{r.tag}</span>
+                </div>
+                <div className="mt-0.5 text-small text-[var(--color-text-secondary)]">{r.line}</div>
+              </div>
+              {onHand && (
+                <button type="button" className="btn-sm btn-secondary self-start" style={{ color: 'var(--color-zone-cognitive)' }}
+                  onClick={() => onHand(t('cogHealth.fixPrompt', { what: `${r.title} ${r.num}`.trim(), detail: `${r.line} (${r.tag})`,
+                    suggest: part?.suggest.length ? part.suggest.map((s, i) => `${i + 1}. ${s}`).join('\n') : '—' }))}>
+                  {t('needYou.hand')}
+                </button>
+              )}
             </div>
           ))}
         </div>
-      ))}
-      <div className="ml-2.5 flex gap-4 text-meta text-[var(--color-text-dim)]">
-        {(['useful', 'weak', 'withdraw'] as const).map((v) => (
-          <span key={v}><i className="mr-1.5 inline-block h-2 w-2.5 rounded-sm align-middle"
-            style={{ background: v === 'useful' ? KEPT : v === 'weak' ? WEAK : ERR }} />{t(`cogHealth.verdict.${v}`)}</span>
-        ))}
-        <span>{t('cogHealth.value.minNote', { n: 10 })}</span>
-      </div>
+      )}
+      {part && (
+        <>
+          <button type="button" className={`mt-1 text-small ${MUTED} hover:text-[var(--color-text)]`} aria-expanded={readOpen}
+            onClick={() => setReadOpen((v) => !v)} data-testid="health-reading-toggle">
+            {t('cogHealth.reading.title')} {readOpen ? '▾' : '▸'}
+          </button>
+          {readOpen && data.reading && (
+            <div className="mt-2 max-w-[860px] space-y-1.5 text-small text-[var(--color-text-secondary)]" data-testid="health-reading">
+              {[...part.seen, ...part.why].map((p, i) => <p key={i}>{p}</p>)}
+              {part.suggest.length > 0 && (
+                <ol className="ml-[18px] list-decimal">{part.suggest.map((p, i) => <li key={i} className="my-0.5">{p}</li>)}</ol>
+              )}
+              <p className={`pt-1 text-meta ${DIM}`}>
+                {t('cogHealth.reading.basis', { scored: data.reading.basis.scored, checks: data.reading.basis.checks })}{' '}
+                {data.agreement.rate == null
+                  ? t('cogHealth.reading.noAgreement', { n: data.agreement.judgedByPerson })
+                  : t('cogHealth.reading.agreement', { pct: pct(data.agreement.rate), n: data.agreement.judgedByPerson })}
+              </p>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function Destinations({ data, zh }: { data: CognitionHealth; zh: boolean }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState<string | null>(null);
+  const grown = useGrown(data.value.destinations.map((d) => `${d.key}:${d.useful}/${d.weak}/${d.withdraw}`).join('|'));
+  return (
+    <section data-testid="health-value">
+      <ZoneLabel right={(
+        <span className={`flex gap-3.5 text-small ${MUTED}`}>
+          {(['useful', 'weak', 'withdraw'] as const).map((v) => (
+            <span key={v} className="inline-flex items-center gap-1.5"><i className="inline-block h-2 w-2 rounded-sm"
+              style={{ background: v === 'useful' ? OK : v === 'weak' ? WEAK : ERR }} />{t(`cogHealth.verdict.${v}`)}</span>
+          ))}
+        </span>
+      )}>{t('cogHealth.destinations')}</ZoneLabel>
+      {GROUPS.map((group) => {
+        const ds = data.value.destinations.filter((d) => d.group === group);
+        if (!ds.length) return null;
+        return (
+          <div key={group} className="mb-2">
+            <div className={`pb-1 pt-2 text-meta font-semibold tracking-[0.04em] ${DIM}`}>{t(`cogHealth.group.${group}`)}</div>
+            {ds.map((d) => {
+              const few = d.rate == null || d.scored < MIN_SCORED;
+              const total = d.useful + d.weak + d.withdraw || 1;
+              const low = !few && (d.rate ?? 0) < d.target;
+              return (
+                <div key={d.key}>
+                  <button type="button" data-testid={`health-dest-${d.key}`} aria-expanded={open === d.key}
+                    onClick={() => setOpen(open === d.key ? null : d.key)}
+                    className="grid w-full grid-cols-[minmax(104px,1fr)_minmax(72px,2.2fr)_64px_72px] items-center gap-x-3.5 rounded-md border-t border-[var(--color-border)] px-1.5 py-[7px] text-left text-body hover:bg-[var(--color-hover)]">
+                    <span className="truncate font-semibold">{t(`cogHealth.dest.${d.key}`)}</span>
+                    <span className="relative" style={{ opacity: few ? 0.35 : 1 }}>
+                      <span className="flex h-2 overflow-hidden rounded bg-[var(--color-bg-chrome)]">
+                        {([['useful', OK], ['weak', WEAK], ['withdraw', ERR]] as const).map(([k, c]) => (
+                          <i key={k} className="so-width block h-full" style={{ width: grown ? `${(d[k] / total) * 100}%` : '0%', background: c }} />
+                        ))}
+                      </span>
+                      <span aria-hidden className="absolute -bottom-[3px] -top-[3px] w-0.5 rounded-[1px] opacity-55"
+                        style={{ left: `${d.target * 100}%`, background: 'var(--color-text)' }} />
+                    </span>
+                    <span className={`text-right tabular-nums ${few ? `text-small ${DIM}` : 'font-semibold'}`} style={low ? { color: WARN } : undefined}>
+                      {few ? t('cogHealth.fewSamples') : `${pct(d.rate ?? 0)}%`}
+                    </span>
+                    <span className={`whitespace-nowrap text-right text-small tabular-nums ${DIM}`}>{t('cogHealth.scored', { n: d.scored })}</span>
+                  </button>
+                  {open === d.key && <Samples d={d} zh={zh} />}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -243,35 +282,31 @@ function Samples({ d, zh }: { d: HealthDestination; zh: boolean }) {
     onSettled: () => { void client.invalidateQueries({ queryKey: ['ingestion', 'cognition-health'] }); },
   });
   if (!d.samples.length) {
-    return <div className="mb-2 ml-2.5 border-l-2 border-[var(--color-border)] px-3.5 py-2 text-meta text-[var(--color-text-dim)]">
-      {t('cogHealth.value.noSamples')}</div>;
+    return <div className={`mb-2 ml-1 border-l-2 border-[var(--color-border)] px-3 py-2 text-small ${DIM}`}>{t('cogHealth.value.noSamples')}</div>;
   }
   return (
-    <div className="mb-2 ml-2.5 border-l-2 border-[var(--color-border)] px-3.5 py-2" data-testid={`health-samples-${d.key}`}>
-      <div className="mb-1.5 text-meta text-[var(--color-text-muted)]">{t('cogHealth.value.samplesHint')}</div>
+    <div className="mb-2 ml-1 border-l-2 border-[var(--color-border)] py-1 pl-3" data-testid={`health-samples-${d.key}`}>
       {d.samples.map((s) => {
         const shown = s.userVerdict ?? s.verdict;
+        const tone = shown === 'useful' ? OK : shown === 'weak' ? WARN : ERR;
         return (
-          <div key={s.unitId} className="grid grid-cols-[64px_1fr_auto] gap-2.5 py-1">
-            <span className="text-meta font-semibold"
-              style={{ color: shown === 'useful' ? KEPT : shown === 'weak' ? WARN : ERR }}>
+          <div key={s.unitId} className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-start gap-x-2.5 py-1.5 text-small">
+            <span className="h-[18px] rounded text-center text-meta font-semibold leading-[18px]"
+              style={{ color: tone, background: `color-mix(in srgb, ${tone} 12%, transparent)` }}
+              title={s.userVerdict ? t('cogHealth.value.judgeSaid', { verdict: t(`cogHealth.verdict.${s.verdict}`) }) : undefined}>
               {t(`cogHealth.verdict.${shown}`)}
-              {s.userVerdict && <span className="block font-normal text-[var(--color-text-dim)]">{t('cogHealth.value.byYou')}</span>}
             </span>
             <span className="min-w-0">
-              <span className="block text-[var(--color-text)]">{s.title}{s.project && <span className="text-[var(--color-text-dim)]"> · {s.project}</span>}</span>
-              <span className="block text-meta text-[var(--color-text-muted)]">
-                {s.userVerdict && <>{t('cogHealth.value.judgeSaid', { verdict: t(`cogHealth.verdict.${s.verdict}`) })} · </>}
+              <span className="block font-semibold text-[var(--color-text)]">{s.title}{s.project && <span className={`font-normal ${DIM}`}> · {s.project}</span>}</span>
+              <span className={`block ${MUTED}`}>
                 {s.klass && s.verdict === 'withdraw' && <>{t(`cogHealth.klass.${s.klass}`)} · </>}{zh ? s.reasonZh || s.reasonEn : s.reasonEn || s.reasonZh}
               </span>
             </span>
             <span className="flex gap-1">
               {(['useful', 'weak', 'withdraw'] as const).map((v) => (
-                <button key={v} type="button" data-testid={`health-verdict-${s.unitId}-${v}`}
-                  disabled={set.isPending}
-                  onClick={() => set.mutate({ unitId: s.unitId, verdict: v })}
-                  aria-pressed={s.userVerdict === v}
-                  className="btn-sm border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] aria-pressed:text-[var(--color-text)]">
+                <button key={v} type="button" data-testid={`health-verdict-${s.unitId}-${v}`} disabled={set.isPending}
+                  onClick={() => set.mutate({ unitId: s.unitId, verdict: v })} aria-pressed={s.userVerdict === v}
+                  className="btn-sm btn-secondary aria-pressed:bg-[var(--color-text)] aria-pressed:text-[var(--color-bg)]">
                   {t(`cogHealth.verdict.${v}`)}
                 </button>
               ))}
@@ -283,126 +318,77 @@ function Samples({ d, zh }: { d: HealthDestination; zh: boolean }) {
   );
 }
 
-function checkValue(t: (k: string, o?: Record<string, unknown>) => string, c: HealthCheck): string {
-  if (c.status === 'no_data' || !c.value) return t('cogHealth.noData');
-  return t(`cogHealth.checkValue.${c.id}`, c.value as Record<string, unknown>);
-}
-
-function ChecksSection({ checks }: { checks: HealthCheck[] }) {
+function Checks({ checks }: { checks: HealthCheck[] }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const rest = checks.filter((c) => c.status !== 'fail');
+  const passed = rest.filter((c) => c.status === 'pass').length;
+  if (!checks.length) return <section data-testid="health-checks"><ZoneLabel>{t('cogHealth.q.checks')}</ZoneLabel><p className={`text-small ${DIM}`}>{t('cogHealth.neverRun')}</p></section>;
   return (
     <section data-testid="health-checks">
-      <SectionLabel>{t('cogHealth.q.checks')}</SectionLabel>
-      <p className="mb-3 mt-1 text-meta text-[var(--color-text-dim)]">{t('cogHealth.checks.rule')}</p>
-      {!checks.length && <p className="ml-2.5 text-meta text-[var(--color-text-dim)]">{t('cogHealth.neverRun')}</p>}
-      {checks.length > 0 && (
-        <div className="grid grid-cols-[14px_240px_1fr_280px] gap-x-2.5 px-2.5 py-1.5 text-meta text-[var(--color-text-dim)]">
-          <span /><span>{t('cogHealth.checks.name')}</span><span>{t('cogHealth.checks.measured')}</span>
-          <span className="text-right">{t('cogHealth.checks.requirement')}</span>
-        </div>
-      )}
-      {checks.map((c) => (
+      <ZoneLabel>{t('cogHealth.q.checks')}</ZoneLabel>
+      <div className="flex items-center gap-2.5 text-body">
+        {/* green only when every one of them passed: a check with no data is no pass */}
+        <span className="inline-block h-2 w-2 rounded-full" data-testid="health-checks-dot"
+          style={{ background: passed > 0 && passed === rest.length ? OK : 'var(--color-text-dim)' }} />
+        <span>{t('cogHealth.restPassed', { count: passed })}{rest.length > passed && ` · ${t('cogHealth.restNoData', { count: rest.length - passed })}`}</span>
+        <button type="button" className={`text-small ${MUTED} hover:text-[var(--color-text)]`} aria-expanded={open}
+          onClick={() => setOpen((v) => !v)} data-testid="health-checks-toggle">{open ? t('cogHealth.collapse') : t('cogHealth.expand')}</button>
+      </div>
+      {open && rest.map((c) => (
         <div key={c.id} data-testid={`health-check-${c.id}`} data-status={c.status}
-          className="grid grid-cols-[14px_240px_1fr_280px] items-baseline gap-x-2.5 border-b border-[color-mix(in_srgb,var(--color-border)_60%,transparent)] px-2.5 py-1.5">
-          <span className="inline-block h-2 w-2 rounded-full"
-            style={{ background: c.status === 'pass' ? KEPT : c.status === 'fail' ? ERR : DIM }} />
-          <span className="text-[var(--color-text)]">{t(`cogHealth.check.${c.id}`)}</span>
-          <span className={c.status === 'fail' ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}>
-            {checkValue(t, c)}
-          </span>
-          <span className="text-right text-meta text-[var(--color-text-dim)]">{t(`cogHealth.requirement.${c.id}`, { req: c.requirement })}</span>
+          className="mt-1 grid grid-cols-[14px_minmax(0,1.2fr)_minmax(0,1.6fr)] gap-x-3 border-t border-[var(--color-border)] py-1.5 text-small">
+          <span className="mt-[5px] inline-block h-2 w-2 rounded-full" style={{ background: c.status === 'pass' ? OK : 'var(--color-text-dim)' }} />
+          <span>{t(`cogHealth.check.${c.id}`)}</span>
+          <span className={`tabular-nums ${MUTED}`}>{checkValue(t, c)}</span>
         </div>
       ))}
     </section>
   );
 }
 
-function CostSection({ data }: { data: CognitionHealth }) {
+function Cost({ data }: { data: CognitionHealth }) {
   const { t } = useTranslation();
   const { cost } = data;
-  const top = Math.max(1e-9, ...cost.features.map((f) => f.usd));
+  const features = cost.features.filter((f) => f.usd >= 0.05);
+  const top = Math.max(1e-9, ...features.map((f) => f.usd));
   const dayMax = Math.max(1e-9, ...cost.days.map((d) => d.systemUsd));
+  const grown = useGrown(features.map((f) => `${f.feature}:${f.usd}`).join('|'));
   return (
     <section data-testid="health-cost">
-      <SectionLabel>{t('cogHealth.q.cost')}</SectionLabel>
-      <p className="mb-3 mt-1 text-meta text-[var(--color-text-dim)]">{t('cogHealth.cost.rule')}</p>
-      {cost.features.map((f) => (
-        <div key={f.feature} className="grid grid-cols-[240px_1fr_90px_64px] items-center gap-3 px-2.5 py-1.5">
-          <span className="min-w-0">
-            <span className="block text-[var(--color-text)]">{t(`cogHealth.feature.${f.feature.replace('.', '_')}`, { defaultValue: f.feature })}</span>
-            <span className="block text-meta text-[var(--color-text-dim)]">
-              {t('cogHealth.cost.calls', { calls: f.calls })}{f.avgUsd != null && ` · ${t('cogHealth.cost.avg', { usd: usd(f.avgUsd) })}`}
-            </span>
-          </span>
-          <div><div className="h-2 rounded-sm" style={{ width: `${Math.max(0.5, (f.usd / top) * 100)}%`, background: WARN }} /></div>
-          <span className="text-right tabular-nums text-[var(--color-text)]">{usd(f.usd)}</span>
-          <span className="text-right text-meta tabular-nums text-[var(--color-text-dim)]">
-            {cost.cdfUsd ? pct(f.usd / cost.cdfUsd) : ''}
-          </span>
-        </div>
-      ))}
-      {cost.unpricedCalls > 0 && (
-        <p className="ml-2.5 text-meta text-[var(--color-text-dim)]">{t('cogHealth.cost.unpriced', { calls: cost.unpricedCalls })}</p>
-      )}
-      {cost.days.length > 0 && (
-        <div className="ml-[262px] mr-2.5 mt-4">
-          <div className="flex h-[90px] items-end gap-2.5">
-            {cost.days.map((d) => (
-              <span key={d.day} title={`${d.day} · ${usd(d.cdfUsd)} / ${usd(d.systemUsd)}`}
-                className="flex flex-1 items-end rounded-t-sm"
-                style={{ height: `${(d.systemUsd / dayMax) * 100}%`, background: 'color-mix(in srgb, var(--color-border) 90%, transparent)' }}>
-                <i className="block w-full rounded-t-sm" style={{ height: d.systemUsd ? `${(d.cdfUsd / d.systemUsd) * 100}%` : 0, background: WARN }} />
-              </span>
-            ))}
-          </div>
-          <div className="mt-1 flex gap-2.5 text-meta text-[var(--color-text-dim)]">
-            {cost.days.map((d) => <span key={d.day} className="flex-1 text-center">{d.day.slice(5)}</span>)}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function ReadingSection({ data, zh }: { data: CognitionHealth; zh: boolean }) {
-  const { t, i18n } = useTranslation();
-  const r = data.reading;
-  const part = r ? (zh ? r.zh : r.en) : null;
-  return (
-    <section className="max-w-[900px]" data-testid="health-reading">
-      <SectionLabel>{t('cogHealth.reading.title')}</SectionLabel>
-      {!r || !part ? (
-        <p className="mt-2 text-small text-[var(--color-text-dim)]">
-          {data.readingFailed ? t('cogHealth.reading.failed') : t('cogHealth.reading.none')}
-        </p>
-      ) : (
-        <>
-          <div className="mb-3 mt-1 text-meta text-[var(--color-text-dim)]">
-            {t('cogHealth.reading.by', { at: new Date(r.at).toLocaleString(i18n.language) })}
-            {data.readingFailed && ` · ${t('cogHealth.reading.staleNote')}`}
-          </div>
-          {(['seen', 'why'] as const).map((k) => part[k].length > 0 && (
-            <div key={k}>
-              <h3 className="mb-1 mt-4 text-small font-semibold text-[var(--color-text)]">{t(`cogHealth.reading.${k}`)}</h3>
-              {part[k].map((p, i) => <p key={i} className="mb-1.5 text-[var(--color-text)]">{p}</p>)}
+      <ZoneLabel>{t('cogHealth.q.cost')}</ZoneLabel>
+      <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <div>
+          {features.map((f) => (
+            <div key={f.feature} className="grid grid-cols-[128px_minmax(0,1fr)_56px] items-center gap-x-2.5 py-1 text-small"
+              title={t('cogHealth.cost.calls', { calls: f.calls }) + (f.avgUsd != null ? ` · ${t('cogHealth.cost.avg', { usd: usd(f.avgUsd) })}` : '')}>
+              <span className="truncate">{t(`cogHealth.feature.${f.feature.replace('.', '_')}`, { defaultValue: f.feature })}</span>
+              <span className="h-1.5 overflow-hidden rounded-[3px] bg-[var(--color-bg-chrome)]">
+                <span className="so-width block h-full" style={{ width: grown ? `${(f.usd / top) * 100}%` : '0%', background: WARN }} /></span>
+              <span className="text-right tabular-nums text-[var(--color-text-secondary)]">{usd(f.usd)}</span>
             </div>
           ))}
-          {part.suggest.length > 0 && (
-            <>
-              <h3 className="mb-1 mt-4 text-small font-semibold text-[var(--color-text)]">{t('cogHealth.reading.suggest')}</h3>
-              <ol className="ml-[18px] list-decimal">
-                {part.suggest.map((p, i) => <li key={i} className="my-0.5 text-[var(--color-text)]">{p}</li>)}
-              </ol>
-            </>
-          )}
-          <p className="mt-3.5 border-t border-[var(--color-border)] pt-2.5 text-meta text-[var(--color-text-muted)]">
-            {t('cogHealth.reading.basis', { scored: r.basis.scored, checks: r.basis.checks })}{' '}
-            {data.agreement.rate == null
-              ? t('cogHealth.reading.noAgreement', { n: data.agreement.judgedByPerson })
-              : t('cogHealth.reading.agreement', { pct: pct(data.agreement.rate), n: data.agreement.judgedByPerson })}
-          </p>
-        </>
-      )}
+          {cost.unpricedCalls > 0 && <p className={`mt-1 text-meta ${DIM}`}>{t('cogHealth.cost.unpriced', { calls: cost.unpricedCalls })}</p>}
+        </div>
+        {cost.days.length > 0 && (
+          <div>
+            <div className="flex h-[70px] items-end gap-[3px] border-b border-[var(--color-border)]">
+              {cost.days.map((d) => (
+                <span key={d.day} className="flex h-full flex-1 flex-col-reverse" title={t('cogHealth.cost.dayTip', { day: d.day.slice(5), cdf: usd(d.cdfUsd), all: usd(d.systemUsd) })}>
+                  <i className="block" style={{ height: `${(d.cdfUsd / dayMax) * 100}%`, background: WARN }} />
+                  <i className="block rounded-t-sm" style={{ height: `${(Math.max(0, d.systemUsd - d.cdfUsd) / dayMax) * 100}%`,
+                    background: 'color-mix(in srgb, var(--color-text-dim) 35%, transparent)' }} />
+                </span>
+              ))}
+            </div>
+            <div className={`mt-1 flex justify-between text-meta ${DIM}`}>
+              <span>{cost.days[0].day.slice(5).replace('-', '/')}</span>
+              <span>{t('cogHealth.cost.legend')}</span>
+              <span>{cost.days[cost.days.length - 1].day.slice(5).replace('-', '/')}</span>
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

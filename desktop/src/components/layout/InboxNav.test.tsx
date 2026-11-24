@@ -115,14 +115,16 @@ describe('Inbox design tokens and naming', () => {
   });
 
   it('the CDF queue stage is labelled Queue / 待写入, not INBOX', async () => {
-    const { unmount } = render(<CdfGuideline />);
+    const guide = () => (
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })}><CdfGuideline /></QueryClientProvider>);
+    const { unmount } = render(guide());
     const diagram = screen.getByTestId('cdf-guide-diagram');
-    expect(diagram.textContent).toContain('QUEUE');
+    expect(diagram.textContent).toContain('Queue');
     expect(diagram.textContent).not.toContain('INBOX');
     unmount();
     await i18n.changeLanguage('zh');
     try {
-      render(<CdfGuideline />);
+      render(guide());
       expect(screen.getByTestId('cdf-guide-diagram').textContent).toContain('待写入');
     } finally {
       await i18n.changeLanguage('en');

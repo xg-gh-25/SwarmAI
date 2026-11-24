@@ -1,19 +1,24 @@
 /**
- * Guideline — how the Cognitive Distillation Flow turns work into judgment, with its flow
- * diagram (Need You → How it works). Written from the running code, not the first
- * design: sources only enqueue; one worker decides each unit in five steps (basic checks,
- * pick the place, trust floor, compare, write — core/ingestion/pipeline_v2.run_unit_v2);
- * the producing agent decides meaning, code checks facts (docs/design/2026-10-30-cdf-
- * agent-decides.md); routing by kind and scope (core/ingestion/contracts_v2.route_unit).
+ * How it works — how the Cognitive Distillation Flow turns work into judgment (Need You →
+ * How it works; layout Knowledge/Mockups/2026-11-24-needs-you-redesign.html). Written from
+ * the running code: sources only enqueue; one worker decides each unit in five steps
+ * (basic checks, pick the place, trust floor, compare, write —
+ * core/ingestion/pipeline_v2.run_unit_v2); the producing agent decides meaning, code
+ * checks facts (docs/design/2026-10-30-cdf-agent-decides.md); routing by kind and scope
+ * (core/ingestion/contracts_v2.route_unit).
  *
- * Mechanisms only — no counts or dates (the Cognition flow tab shows the live ones).
- * Bilingual inline like the Eval guide: the prose is long and belongs next to the figure.
+ * The diagram carries the last 7 days' numbers (GET /ingestion/landed, the Cognition flow
+ * tab's own query): how much each source sent, what each step dropped or moved, how much
+ * reached each place. Below it, one line each: the four kinds it keeps, where each goes,
+ * four rules. Bilingual inline like the Eval guide: the text belongs next to the figure.
  *
  * Key export: `CdfGuideline`.
  */
-import type { ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { SectionLabel } from '../overlay';
+import { ingestionService, type LandedOverview } from '../../services/ingestion';
+import { ZoneLabel } from './needYouParts';
+import { fmt } from './cdfText';
 
 type Say = (en: string, zh: string) => string;
 
@@ -23,245 +28,158 @@ function useSay(): Say {
   return (en, zh_) => (zh ? zh_ : en);
 }
 
-// Names of files, the same in every language (not translated).
-const QUEUE_DB_FILE = 'ingestion.db';
-const CHECKED_FILES = 'Steering · User · Tools';
-const MEASURED_FILES = 'Memory · Evolution';
-
 const CARD = 'var(--color-card)';
 const LINE = 'var(--color-border)';
 const TEXT = 'var(--color-text)';
 const MUTED = 'var(--color-text-muted)';
 const DIM = 'var(--color-text-dim)';
-const KEPT = 'var(--color-zone-cognitive)';
-const MOVE = 'var(--color-primary)';
-const WARN = 'var(--color-status-warning)';
+const KEPT = 'var(--color-status-success)';
+const MOVE = 'var(--color-zone-cognitive)';
 
-function Box({ x, y, w, h, title, sub, accent }: {
-  x: number; y: number; w: number; h: number; title: string; sub?: string; accent?: string;
-}) {
-  return (
-    <g>
-      <rect x={x} y={y} width={w} height={h} rx={8} fill={CARD} stroke={accent ?? LINE} />
-      <text x={x + 12} y={y + (sub ? 22 : h / 2 + 4)} fill={TEXT} fontSize={13} fontWeight={600}>{title}</text>
-      {sub && <text x={x + 12} y={y + 40} fill={MUTED} fontSize={11}>{sub}</text>}
-    </g>
-  );
+const SOURCES = ['S1', 'S7', 'S2', 'S4', 'S3', 'S6'] as const;
+const EVERY_TURN = new Set(['MEMORY', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'TIMELINE']);
+const GENERAL = new Set(['COMMON_DDD', 'KNOWLEDGE']);
+
+function placeTotals(data: LandedOverview | undefined): [number, number, number] | null {
+  if (!data) return null;
+  const sum = (keep: (store: string) => boolean) => data.landed.filter((r) => keep(r.store)).reduce((n, r) => n + r.written, 0);
+  return [sum((s) => EVERY_TURN.has(s)), sum((s) => s === 'DDD'), sum((s) => GENERAL.has(s))];
 }
 
-function FlowDiagram() {
+function FlowDiagram({ data }: { data?: LandedOverview }) {
   const say = useSay();
-  const sources = [
-    [say('You said it', '你说的'), say('a correction, “remember this”', '纠正、“记住这个”')],
-    [say('Post-session review', '会后复盘'), say('a fork of the session reads it back', 'fork 出的会话回看全程')],
-    [say('Session', '会话'), say('lessons and events while working', '工作中的经验和事件')],
-    [say('Pipeline run', 'Pipeline run'), say('the run’s REFLECT report', 'run 的 REFLECT 报告')],
-    [say('Hive & signals', 'Hive 和外部信号'), say('Hive lessons, outside references', 'Hive 教训、外部参考资料')],
-    [say('Code changes · metrics', '代码变更 · 系统度量'), say('scheduled', '定时')],
+  const n = (v: number | undefined) => (data && v != null ? fmt(v) : '');
+  const srcName: Record<string, string> = {
+    S1: say('You said it', '你说的'), S7: say('Post-session review', '会后复盘'), S2: say('Session', '会话'),
+    S4: say('Code changes', '代码变更'), S3: say('Pipeline run', 'Pipeline run'), S6: say('Hive & signals', 'Hive 和外部信号'),
+  };
+  // a source that sent nothing this week is left out once the numbers are known
+  const sources = SOURCES.filter((s) => !data || (data.sources[s] ?? 0) > 0);
+  const s = data?.steps;
+  const steps: Array<[string, string, string]> = [
+    [say('Basic checks', '基础检查'), data ? say(`dropped ${n(s?.basicDropped)}`, `丢掉 ${n(s?.basicDropped)}`) : say('facts only', '只看事实'), DIM],
+    [say('Pick the place', '定位置'), data ? say(`no place ${n(s?.placeDropped)}`, `没地方放 ${n(s?.placeDropped)}`) : say('kind × who it is about', '类型 × 关于谁'), DIM],
+    [say('Trust floor', '信任底线'), data ? say(`moved to a brain ${n(s?.moved)}`, `改投到大脑 ${n(s?.moved)}`) : say('every-turn files: your words or a measurement', '每轮文件：你的原话或实测'), MOVE],
+    [say('Compare with what it knows', '和已有的比'), data ? say(`same ${n(s?.reinforced)} · known ${n(s?.known)}`, `相同 ${n(s?.reinforced)} · 已有 ${n(s?.known)}`) : say('new · adds to · same as', '新的 · 补充 · 相同'), DIM],
+    [say('Write', '写入'), data ? say(`${n(s?.written)} entries`, `${n(s?.written)} 条`) : say('with its sources and links', '带上来源和关联'), KEPT],
   ];
-  const steps = [
-    [say('1  Basic checks', '1  基础检查'), say('facts only: empty, a password in a link', '只看事实：空内容、链接带密码')],
-    [say('2  Pick the place', '2  定位置'), say('kind × who it is about → file › section', '类型 × 关于谁 → 文件 › 小节')],
-    [say('3  Trust floor', '3  信任底线'), say('every-turn files: your words or a measurement', '每轮文件：你的原话或实测')],
-    [say('4  Compare with what it knows', '4  和已有内容比对'), say('the agent declared: new · adds to · same as', 'agent 声明：新的 · 补充 · 相同')],
-    [say('5  Write', '5  写入'), say('with its sources and its links', '带上来源和关联')],
+  const totals = placeTotals(data);
+  const tiers: Array<[string, string]> = [
+    [say('Read every turn', '每轮都读'), say('Memory · Evolution · your rules · Timeline', 'Memory · Evolution · 你的规则 · 时间线')],
+    [say('Project brains', '项目大脑'), 'PRODUCT · TECH · IMPROVEMENT · PROJECT'],
+    [say('General Brain & Library', '公共大脑和 Library'), say('by subject · references', '按主题 · 参考资料')],
   ];
-  const sy = (i: number) => 44 + i * 64;          // source box top
-  const ky = (i: number) => 44 + i * 72;          // step box top
-  const tiers = [
-    { y: 44, h: 130, title: say('Read every turn', '每轮都读'), sub: say('in every prompt', '进每轮 prompt'),
-      items: [say('Memory · Evolution', 'Memory · Evolution'), say('Steering · User · Tools', 'Steering · User · Tools'), say('Timeline', '时间线')] },
-    { y: 190, h: 104, title: say('Project brains', '项目大脑'), sub: say('recalled when working on it', '做这个项目时召回'),
-      items: [say('PRODUCT · TECH', 'PRODUCT · TECH'), say('IMPROVEMENT · PROJECT', 'IMPROVEMENT · PROJECT')] },
-    { y: 310, h: 84, title: say('General Brain & Library', '公共大脑和 Library'), sub: say('recalled everywhere', '所有地方都能召回'),
-      items: [say('by subject · references', '按主题 · 参考资料')] },
-  ];
-  const DX = 900, DW = 280, TRUNK = 872;
+  const sy = (i: number) => 40 + i * Math.min(66, 330 / Math.max(1, sources.length));
+  const ky = (i: number) => 40 + i * 80;
+  const ty = (i: number) => 40 + i * 130;
+  const lastSource = sources.length ? sy(sources.length - 1) + 50 : 90;
   return (
-    <svg viewBox="0 0 1180 520" width="100%" role="img" data-testid="cdf-guide-diagram"
+    <svg viewBox="0 0 1180 470" width="100%" role="img" data-testid="cdf-guide-diagram"
       aria-label={say('Cognitive Distillation Flow diagram', '认知蒸馏流程图')}>
       <defs>
-        <marker id="cdf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <marker id="cdf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M0,0 L10,5 L0,10 z" fill={DIM} />
         </marker>
-        <marker id="cdf-arrow-kept" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <marker id="cdf-arrow-kept" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M0,0 L10,5 L0,10 z" fill={KEPT} />
         </marker>
-        <marker id="cdf-arrow-move" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-          <path d="M0,0 L10,5 L0,10 z" fill={MOVE} />
-        </marker>
       </defs>
-
-      {[[0, say('WHERE IT COMES FROM', '从哪来')], [244, say('QUEUE', '待写入')], [430, say('ONE WORKER DECIDES EACH ITEM', '一个 worker 逐条判断')], [DX, say('WHERE IT LANDS', '落到哪里')]]
-        .map(([x, label]) => <text key={String(x)} x={Number(x)} y={24} fill={MUTED} fontSize={11} fontWeight={600} letterSpacing={1.2}>{label}</text>)}
-
-      {sources.map(([title, sub], i) => (
+      {([[0, say('WHERE IT COMES FROM', '从哪来')], [430, say('ONE WORKER DECIDES EACH ITEM', '逐条判断')], [880, say('WHERE IT LANDS', '落到哪里')]] as const)
+        .map(([x, label]) => <text key={x} x={x} y={18} fill={MUTED} fontSize={12} fontWeight={600} letterSpacing={1}>{label}</text>)}
+      {sources.map((key, i) => (
+        <g key={key}>
+          <rect x={0} y={sy(i)} width={210} height={50} rx={10} fill={CARD} stroke={LINE} />
+          <text x={14} y={sy(i) + 30} fill={TEXT} fontSize={15} fontWeight={600}>{srcName[key]}</text>
+          <text x={196} y={sy(i) + 30} fill={MUTED} fontSize={14} textAnchor="end">{n(data?.sources[key])}</text>
+          <path d={`M210,${sy(i) + 25} C260,${sy(i) + 25} 260,194 300,194`} fill="none" stroke={DIM} />
+        </g>
+      ))}
+      <rect x={300} y={160} width={96} height={68} rx={34} fill={CARD} stroke={LINE} />
+      <text x={348} y={data ? 190 : 199} fill={TEXT} fontSize={14} fontWeight={600} textAnchor="middle">{say('Queue', '待写入')}</text>
+      {data && <text x={348} y={210} fill={MUTED} fontSize={12} textAnchor="middle">{fmt(data.total)}</text>}
+      <path d="M396,194 L430,194" stroke={DIM} markerEnd="url(#cdf-arrow)" />
+      {steps.map(([title, sub, tone], i) => (
         <g key={title}>
-          <Box x={0} y={sy(i)} w={196} h={52} title={title} sub={sub} />
-          <path d={`M196,${sy(i) + 26} C222,${sy(i) + 26} 222,236 244,236`} fill="none" stroke={DIM} />
+          <rect x={430} y={ky(i)} width={290} height={58} rx={10} fill={CARD} stroke={i === steps.length - 1 ? KEPT : LINE} />
+          <text x={446} y={ky(i) + 25} fill={TEXT} fontSize={15} fontWeight={600}>{title}</text>
+          <text x={446} y={ky(i) + 46} fill={tone} fontSize={13}>{sub}</text>
+          {i < steps.length - 1 && <path d={`M575,${ky(i) + 58} L575,${ky(i + 1)}`} stroke={DIM} markerEnd="url(#cdf-arrow)" />}
         </g>
       ))}
-
-      <g>
-        <ellipse cx={314} cy={164} rx={70} ry={14} fill={CARD} stroke={LINE} />
-        <path d="M244,164 L244,306 A70,14 0 0 0 384,306 L384,164" fill={CARD} stroke={LINE} />
-        <ellipse cx={314} cy={164} rx={70} ry={14} fill={CARD} stroke={LINE} />
-        <text x={314} y={206} fill={TEXT} fontSize={13} fontWeight={600} textAnchor="middle">{QUEUE_DB_FILE}</text>
-        <text x={314} y={228} fill={MUTED} fontSize={11} textAnchor="middle">{say('a source only enqueues', 'source 只负责入队')}</text>
-        <text x={314} y={246} fill={MUTED} fontSize={11} textAnchor="middle">{say('one insert, never waits', '一次插入，不等待')}</text>
-        <text x={314} y={264} fill={MUTED} fontSize={11} textAnchor="middle">{say('on chat; kept 30 days', '不阻塞 chat；保留 30 天')}</text>
-      </g>
-      <path d={`M384,236 C408,236 408,${ky(0) + 29} 430,${ky(0) + 29}`} fill="none" stroke={DIM} markerEnd="url(#cdf-arrow)" />
-
-      {steps.map(([title, sub], i) => (
+      <path d={`M720,${ky(2) + 29} C800,${ky(2) + 29} 800,${ty(1) + 24} 880,${ty(1) + 24}`} fill="none" stroke={MOVE} strokeDasharray="4 4" markerEnd="url(#cdf-arrow)" />
+      {tiers.map(([title, sub], i) => (
         <g key={title}>
-          <Box x={430} y={ky(i)} w={270} h={58} title={title} sub={sub} accent={i === 4 ? KEPT : undefined} />
-          {i < steps.length - 1 && <path d={`M565,${ky(i) + 58} L565,${ky(i + 1)}`} stroke={DIM} markerEnd="url(#cdf-arrow)" />}
+          <rect x={880} y={ty(i)} width={300} height={104} rx={10} fill={CARD} stroke={LINE} />
+          <text x={896} y={ty(i) + 28} fill={TEXT} fontSize={15} fontWeight={600}>{title}</text>
+          <text x={896} y={ty(i) + 48} fill={MUTED} fontSize={12}>{sub}</text>
+          {totals && <text x={896} y={ty(i) + 84} fill={KEPT} fontSize={24} fontWeight={600}>{fmt(totals[i])}</text>}
+          <path d={`M720,${ky(4) + 29} C820,${ky(4) + 29} 820,${ty(i) + 60} 880,${ty(i) + 60}`} fill="none" stroke={KEPT} markerEnd="url(#cdf-arrow-kept)" />
         </g>
       ))}
-      {/* side exits: labels only, except the trust floor's move (a dashed line into the project brains) */}
-      <text x={712} y={ky(0) + 33} fill={DIM} fontSize={11}>{say('→ dropped', '→ 丢掉')}</text>
-      <text x={712} y={ky(1) + 25} fill={WARN} fontSize={11}>{say('no such project', '项目不存在')}</text>
-      <text x={712} y={ky(1) + 41} fill={WARN} fontSize={11}>{say('→ General Brain', '→ 公共大脑')}</text>
-      <text x={712} y={ky(2) + 22} fill={MOVE} fontSize={11}>{say('not your words', '不是你的原话')}</text>
-      <path d={`M700,${ky(2) + 29} L${DX},${ky(2) + 29}`} fill="none" stroke={MOVE} strokeDasharray="4 4" markerEnd="url(#cdf-arrow-move)" />
-      <text x={712} y={ky(3) + 25} fill={KEPT} fontSize={11}>{say('same → +1 confirmation', '相同 → +1 次确认')}</text>
-      <text x={712} y={ky(3) + 41} fill={DIM} fontSize={11}>{say('nothing new → skipped', '没有新证据 → 跳过')}</text>
-      {/* what is written: one trunk, one branch into each place */}
-      <path d={`M700,${ky(4) + 29} L${TRUNK},${ky(4) + 29} L${TRUNK},${tiers[0].y + 24}`} fill="none" stroke={KEPT} />
-      {tiers.map((tier) => (
-        <path key={tier.title} d={`M${TRUNK},${tier.y + 24} L${DX},${tier.y + 24}`} fill="none" stroke={KEPT} markerEnd="url(#cdf-arrow-kept)" />
-      ))}
-
-      {tiers.map((tier) => (
-        <g key={tier.title}>
-          <rect x={DX} y={tier.y} width={DW} height={tier.h} rx={8} fill={CARD} stroke={LINE} />
-          <text x={DX + 14} y={tier.y + 24} fill={TEXT} fontSize={13} fontWeight={600}>{tier.title}</text>
-          <text x={DX + 14} y={tier.y + 42} fill={DIM} fontSize={11}>{tier.sub}</text>
-          {tier.items.map((item, index) => (
-            <text key={item} x={DX + 14} y={tier.y + 64 + index * 19} fill={MUTED} fontSize={12}>{item}</text>
-          ))}
-        </g>
-      ))}
-
-      {/* the loop: what lands is read back by the next session */}
-      <path d={`M${DX + DW / 2},394 L${DX + DW / 2},456 L98,456 L98,${sy(5) + 52 + 4}`} fill="none" stroke={KEPT} strokeDasharray="2 5" markerEnd="url(#cdf-arrow-kept)" />
-      <text x={540} y={482} fill={TEXT} fontSize={12} fontWeight={600} textAnchor="middle">
-        {say('The next session starts with it', '下一个会话带着它开始')}
-      </text>
-      <text x={540} y={502} fill={MUTED} fontSize={11} textAnchor="middle">
-        {say('every-turn files are in the prompt, brains are recalled when relevant → better judgment → better lessons. That is how it compounds.',
-          '每轮文件在 prompt 里，大脑在相关时召回 → 判断更好 → 沉淀更好的经验。这就是复利。')}
-      </text>
+      <path d={`M1030,${ty(2) + 104} L1030,452 L105,452 L105,${lastSource + 6}`} fill="none" stroke={KEPT} strokeDasharray="2 5" markerEnd="url(#cdf-arrow-kept)" />
+      <text x={575} y={444} fill={TEXT} fontSize={13} fontWeight={600} textAnchor="middle">{say('The next session starts with it', '下一个会话带着它开始')}</text>
     </svg>
-  );
-}
-
-function Block({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section>
-      <SectionLabel>{title}</SectionLabel>
-      <div className="mt-2.5">{children}</div>
-    </section>
-  );
-}
-
-function Row({ left, right }: { left: string; right: ReactNode }) {
-  return (
-    <div className="grid grid-cols-[220px_1fr] gap-4 border-t border-[var(--color-border)] py-2 text-body">
-      <span className="text-[var(--color-text)]">{left}</span>
-      <span className="text-[var(--color-text-muted)]">{right}</span>
-    </div>
   );
 }
 
 export function CdfGuideline() {
   const say = useSay();
-  const kinds = [
-    [say('Lesson', '经验'), say('A piece of judgment: principle, correction, decision, model, guideline, pitfall or process. The only kind that compounds.',
-      '一条判断：原则、纠正、决定、心智模型、做法、坑或流程。唯一会产生复利的一类。')],
-    [say('Gap', '缺口'), say('A weak point of the project still open: debt, a risk, a deferred finding, a process issue. Closed when an event says it is done. Work left for later is a ToDo, not a gap.',
-      '项目还没解决的薄弱点：技术债、风险、推迟的发现、流程问题。等有事件说明做完了才关闭。留到以后做的事是 ToDo，不是缺口。')],
-    [say('Event', '事件'), say('What happened and what it changed. Kept as history, summarised by month, read for retros; a later review of the same session replaces one it wrote earlier that no longer holds.',
-      '发生了什么、带来了什么影响。作为历史保留，按月汇总，供复盘用；同一会话后来的复盘会替换它自己先前写下、已经不成立的那条。')],
-    [say('Reference', '参考资料'), say('A document or a link worth keeping. Recalled, never treated as judgment.',
-      '值得留下的文档或链接。可以召回，但不当作判断。')],
+  // the Cognition flow tab's own 7-day query: reused while fresh, not fetched again on a tab switch
+  const landed = useQuery({ queryKey: ['ingestion', 'landed', '7d'], queryFn: () => ingestionService.landed('7d'), staleTime: 60_000 });
+  const kinds: Array<[string, string]> = [
+    [say('Lesson', '经验'), say('Principles, corrections, decisions, practices, pitfalls. The only kind that compounds.', '原则、纠正、决定、做法、坑。唯一会复利的一类。')],
+    [say('Gap', '缺口'), say('A weak point still open; closed when an event says it is done.', '还没解决的薄弱点，有事件说做完了才关闭。')],
+    [say('Event', '事件'), say('What happened and what it changed, summarised by month.', '发生了什么、改变了什么，按月汇总。')],
+    [say('Reference', '参考'), say('A document or link worth keeping; recalled, never treated as judgment.', '值得留的文档和链接，能召回，不当判断。')],
+  ];
+  const places: Array<[string, string]> = [
+    [say('About you', '关于你'), say('preference → Steering · profile → User · environment → Tools', '偏好 → Steering · 画像 → User · 环境 → Tools')],
+    [say('About the agent', '关于 agent'), say('a correction or a competence → Evolution', '纠正、能力 → Evolution')],
+    [say('True anywhere', '处处成立'), 'Memory'],
+    [say('About a project', '关于某个项目'), say('decision → PROJECT · product → PRODUCT · building → TECH · lessons and gaps → IMPROVEMENT', '决定 → PROJECT · 产品 → PRODUCT · 构建 → TECH · 经验和缺口 → IMPROVEMENT')],
+    [say('No such project', '项目不存在'), say('the General Brain, by subject', '公共大脑，按主题')],
+    [say('An event · a reference', '事件 · 参考'), say('Timeline · Library', '时间线 · Library')],
+  ];
+  const rules = [
+    say('The agent that was there decides the meaning; code only checks facts.', '在场的 agent 判断含义，代码只核对事实。'),
+    say('Files read every turn take only your words or a measurement; the rest goes to a brain, never dropped.', '每轮都读的文件只收你的原话或实测，其余改投到大脑，不丢。'),
+    say('The same thing again is one more confirmation; a replaced entry is archived before it leaves.', '相同的多记一次确认；被替换的先归档再移走。'),
+    say('Something wrong? Say “forget that” in chat; what you said in the last 24 hours can be removed.', '不对就在对话里说「忘掉这条」；24 小时内你说的话可以删掉。'),
   ];
   return (
-    <div className="space-y-9 pt-6" data-testid="cdf-guide">
-      <div className="max-w-[900px]">
-        <h2 className="text-title font-semibold text-[var(--color-text)]">{say('How SwarmAI turns work into judgment', 'SwarmAI 怎样把工作沉淀成判断力')}</h2>
-        <p className="mt-2 text-body text-[var(--color-text-muted)]">
-          {say('The Cognitive Distillation Flow (CDF) is the engine behind SwarmAI’s memory. Whatever is worth keeping from a session, a run, your corrections or an outside source is written down by the agent that was there, then decided item by item and filed in the one place it belongs. Everything below happens on its own, and every step is recorded — the Cognition flow tab shows each item’s path.',
-            '认知蒸馏流（CDF）是 SwarmAI 记忆背后的引擎。会话、run、你的纠正和外部资料里值得保留的内容，由在场的 agent 写下来，再逐条判断、放进唯一该放的位置。下面这些都自动进行，每一步都有记录；在“认知沉淀”里能看到每一条走过的路径。')}
-        </p>
-      </div>
-
-      <FlowDiagram />
-
-      <Block title={say('Four kinds of things it keeps', '它保留的四类东西')}>
-        <div className="grid grid-cols-4 gap-6">
+    <div className="space-y-8 py-2" data-testid="cdf-guide">
+      <section className="so-card overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] px-[18px] py-4">
+        <FlowDiagram data={landed.data} />
+      </section>
+      <section>
+        <ZoneLabel>{say('Four kinds of things it keeps', '它留下四类东西')}</ZoneLabel>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {kinds.map(([title, body]) => (
-            <div key={title}>
-              <div className="text-body font-semibold text-[var(--color-text)]">{title}</div>
-              <p className="mt-1 text-small text-[var(--color-text-muted)]">{body}</p>
+            <div key={title} className="rounded-[10px] bg-[var(--color-bg-chrome)] px-3 py-2.5">
+              <div className="text-body font-semibold">{title}</div>
+              <div className="text-small text-[var(--color-text-muted)]">{body}</div>
             </div>
           ))}
         </div>
-      </Block>
-
-      <Block title={say('Who it is about decides where it goes', '关于谁，决定放到哪')}>
-        <Row left={say('About you', '关于你')} right={say('your preference → Steering · your profile → User · your environment → Tools', '你的偏好 → Steering · 你的画像 → User · 你的环境 → Tools')} />
-        <Row left={say('About the agent', '关于 agent')} right={say('a correction or a competence → Evolution', '纠正或能力 → Evolution')} />
-        <Row left={say('About the world', '关于世界')} right={say('true anywhere → Memory, in the section of its type', '放到哪都成立 → Memory，按类型进对应小节')} />
-        <Row left={say('About a project', '关于某个项目')} right={say('a decision → PROJECT · product → PRODUCT · how it is built → TECH · a lesson learned building it, or a gap → IMPROVEMENT',
-          '决定 → PROJECT · 产品 → PRODUCT · 怎么构建 → TECH · 构建中学到的经验或缺口 → IMPROVEMENT')} />
-        <Row left={say('A project that does not exist', '项目不存在')} right={say('the General Brain keeps it under the subject it named', '由公共大脑按它提到的主题保存')} />
-        <Row left={say('An event · a reference', '事件 · 参考资料')} right={say('Timeline · Knowledge Library', '时间线 · Knowledge Library')} />
-      </Block>
-
-      <div className="grid grid-cols-2 gap-10">
-        <Block title={say('Who decides what', '谁判断什么')}>
-          <div className="text-body font-semibold text-[var(--color-text)]">{say('The agent that was there decides the meaning', '在场的 agent 判断含义')}</div>
-          <p className="mt-1 text-small text-[var(--color-text-muted)]">
-            {say('Is it worth keeping, what kind, who it is about, whether it is new, adds to an entry or is the same as one, what it replaces, whether a correction repeats an old one. It has the whole session in view.',
-              '值不值得留、是哪一类、关于谁、是新的还是补充或等同某条、它替换了什么、这次纠正是不是旧错重犯。它看得到整个会话。')}
-          </p>
-          <div className="mt-3 text-body font-semibold text-[var(--color-text)]">{say('Code checks only facts', '代码只核对事实')}</div>
-          <p className="mt-1 text-small text-[var(--color-text-muted)]">
-            {say('Whose words are quoted, whether outside content is cited, secrets and injected text, an exact restatement, whether the section exists. A weaker judge — a pattern, a keyword match, a model that saw less — never overrules the agent.',
-              '引用的是谁的话、有没有引用外部内容、密钥和注入、是否逐字重复、目标小节是否存在。更弱的判断者（正则、关键词匹配、看到更少上下文的模型）不能推翻 agent 的判断。')}
-          </p>
-        </Block>
-        <Block title={say('The trust floor', '信任底线')}>
-          <p className="text-small text-[var(--color-text-muted)]">
-            {say('Files read in every turn shape every answer, so only what you said or what was measured may enter them:',
-              '每轮都读的文件会影响每一次回答，所以只有你说过的话或实测出来的结果才能进去：')}
-          </p>
-          <ul className="mt-2 space-y-1.5 text-small text-[var(--color-text-muted)]">
-            <li><span className="text-[var(--color-text)]">{CHECKED_FILES}</span> — {say('a verbatim quote of yours, then checked by a model that sees only your messages', '要有你的逐字原话，再由一个只看得到你消息的模型核对')}</li>
-            <li><span className="text-[var(--color-text)]">{MEASURED_FILES}</span> — {say('your words or a measurement from the session or run', '你的原话，或会话 / run 里的实测数据')}</li>
-            <li><span className="text-[var(--color-text)]">{say('Anything else', '其余的')}</span> — {say('kept in the project brain or the General Brain and recalled when relevant. Moved, never dropped.', '放进项目大脑或公共大脑，相关时召回。只改投，不丢弃。')}</li>
-          </ul>
-        </Block>
-      </div>
-
-      <div className="grid grid-cols-2 gap-10">
-        <Block title={say('How it compounds', '怎么产生复利')}>
-          <ul className="space-y-1.5 text-small text-[var(--color-text-muted)]">
-            <li><span className="text-[var(--color-text)]">{say('Same', '相同')}</span> — {say('the entry gets one more independent confirmation; nothing is written twice', '那一条多一次独立确认，不重复写')}</li>
-            <li><span className="text-[var(--color-text)]">{say('Adds to', '补充')}</span> — {say('written and linked to the entry it builds on', '写入，并关联到它所补充的那一条')}</li>
-            <li><span className="text-[var(--color-text)]">{say('Replaces', '替换')}</span> — {say('the old entry is archived first, then removed; the main files hold only what is in force', '旧条目先归档再移除；主文件里只保留当前有效的内容')}</li>
-            <li><span className="text-[var(--color-text)]">{say('Withdrawn by you', '你撤回的')}</span> — {say('stays out: saying it again is refused', '不再进来：再次出现会被拒')}</li>
-          </ul>
-        </Block>
-        <Block title={say('What you can do', '你可以做什么')}>
-          <ul className="space-y-1.5 text-small text-[var(--color-text-muted)]">
-            <li>{say('Read any item’s path in Cognition flow — where it landed, why there, what it was compared with.', '在“认知沉淀”里看任何一条的路径：落在哪、为什么在那、和什么比对过。')}</li>
-            <li>{say('Tell Swarm in chat when something is wrong (“forget that”, “that is not what I said”). There are no approval buttons here: the fix goes into the rules, not into one item.', '发现不对就在 chat 里告诉 Swarm（“忘掉这条”、“我不是这个意思”）。这里没有审批按钮：问题要修在规则上，不是改某一条。')}</li>
-            <li>{say('Something you said in the last 24 hours can be redacted from its row.', '最近 24 小时内你说过的话，可以在对应条目里删除。')}</li>
-          </ul>
-        </Block>
+      </section>
+      <div className="grid grid-cols-1 gap-x-10 gap-y-7 md:grid-cols-2">
+        <section>
+          <ZoneLabel>{say('Who it is about decides where it goes', '关于谁，就放到哪')}</ZoneLabel>
+          {places.map(([who, where]) => (
+            <div key={who} className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 border-t border-[var(--color-border)] py-1.5 text-small">
+              <b className="font-semibold">{who}</b><span className="text-[var(--color-text-secondary)]">{where}</span>
+            </div>
+          ))}
+        </section>
+        <section>
+          <ZoneLabel>{say('A few rules', '几条规矩')}</ZoneLabel>
+          {rules.map((rule, i) => (
+            <div key={rule} className="grid grid-cols-[18px_minmax(0,1fr)] gap-x-2.5 py-1.5 text-body">
+              <span className="font-semibold" style={{ color: KEPT }}>{i + 1}</span>
+              <span className="text-[var(--color-text-secondary)]">{rule}</span>
+            </div>
+          ))}
+        </section>
       </div>
     </div>
   );

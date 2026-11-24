@@ -125,10 +125,12 @@ function NeedsYouCard() {
     return <div data-testid="welcome-needs" className="h-[120px]" aria-hidden="true" />;
   }
 
-  const count = data.counts.blocking + data.counts.review;
-  const rows = open ? data.items : data.items.slice(0, MAX_ROWS);
+  // only what waits on the person; what Swarm handles itself stays in the overlay
+  const mine = data.items.filter((it) => it.handler !== 'agent');
+  const count = data.counts.person ?? mine.length;
+  const rows = open ? mine : mine.slice(0, MAX_ROWS);
   // "N more" agrees with the badge: everything counted that is not shown.
-  const more = Math.max(0, Math.max(count, data.items.length) - Math.min(MAX_ROWS, data.items.length));
+  const more = Math.max(0, Math.max(count, mine.length) - Math.min(MAX_ROWS, mine.length));
 
   return (
     <section data-testid="welcome-needs" className="welcome-rise [animation-delay:0.12s]">
@@ -165,6 +167,13 @@ function NeedsYouCard() {
           <div data-testid="welcome-needs-empty" className="flex items-center gap-2.5 pl-4 pr-3.5 py-3 text-body text-[var(--color-text-secondary)]">
             <HexDot tone="calm" />
             {tf(t, 'chat.welcome.nothing', 'Nothing needs your decision right now')}
+            {/* what Swarm handles itself is not counted, but not hidden either */}
+            {(data.counts.agent ?? 0) > 0 && (
+              <button type="button" data-testid="welcome-needs-swarm" onClick={openNeedsYou}
+                className="ml-auto whitespace-nowrap text-small text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:underline cursor-pointer">
+                {tf(t, 'chat.welcome.swarmHandles', 'Swarm is handling {{n}}', { n: data.counts.agent })} ›
+              </button>
+            )}
           </div>
         ) : (
           <>

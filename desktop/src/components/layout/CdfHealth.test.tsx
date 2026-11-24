@@ -2,10 +2,12 @@
  * The Health tab (docs/design/2026-10-31-cdf-health.md §9.9), against a fixture of
  * GET /ingestion/cognition-health:
  * - it sits between Cognition flow and How it works;
- * - the three numbers read against something, a check with nothing to measure says
- *   "no data yet" and is not counted as passing;
+ * - one number against its target, three numbers beside it; a check with nothing to
+ *   measure is not counted as passing;
+ * - what to fix: each failing check and each place below its target, handed to Swarm with
+ *   the judge's suggestions;
  * - a sampled entry's verdict buttons send the person's verdict;
- * - the reading shows in the user's language with its basis.
+ * - the reading opens on demand, in the user's language with its basis; an old check says so.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -21,7 +23,8 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'en' },
     t: (key: string, values?: Record<string, unknown>) => {
-      const found = lookup(key);
+      const plural = typeof values?.count === 'number' ? lookup(`${key}_${values.count === 1 ? 'one' : 'other'}`) : undefined;
+      const found = plural ?? lookup(key);
       const text = typeof found === 'string' ? found : String(values?.defaultValue ?? key);
       return text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? ''));
     },
@@ -67,7 +70,8 @@ const FIXTURE: CognitionHealth = {
           klass: 'status', reasonEn: 'Only progress.', reasonZh: '只是进度。', userVerdict: null,
           writtenAt: '2026-10-31T08:00:00+00:00' }],
       }),
-      DEST('GENERAL', 'on_demand'), DEST('GAP', 'other'), DEST('REFERENCE', 'other'),
+      DEST('GENERAL', 'on_demand'), DEST('GAP', 'other', { scored: 5, useful: 2, weak: 3, rate: 0.4, written: 9 }),
+      DEST('REFERENCE', 'other'),
     ],
   },
   used: { usedRate: null, matureWritten: 0, matureUsed: 0, windowDays: 14 },
@@ -104,19 +108,47 @@ describe('Health tab', () => {
     expect(tabs).toEqual(['need-you-tab', 'cdf-tab', 'cdf-health-tab', 'cdf-guide-tab']);
   });
 
-  it('reads each number against something and never counts no data as a pass', async () => {
+  it('reads the number against its target and never counts no data as a pass', async () => {
     render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap });
     fireEvent.click(screen.getByTestId('cdf-health-tab'));
-    const line = await screen.findByTestId('health-line');
-    expect(line).toHaveTextContent('1 check(s) are failing');
-    expect(line).toHaveTextContent('15% of what was kept is not useful');
-    const page = screen.getByTestId('cdf-health');
-    expect(page).toHaveTextContent('1 / 2');                      // passed of measured, not of 3
-    expect(page).toHaveTextContent('1 with no data yet');
+    expect(await screen.findByTestId('health-rate-value')).toHaveTextContent('85%');
+    expect(screen.getByTestId('health-target')).toHaveTextContent('5 points below · target 90%');
+    const kpis = screen.getByTestId('health-kpis');
+    expect(within(kpis).getByTestId('health-kpis-checks')).toHaveTextContent('1/2');   // passed of measured, not of 3
+    expect(within(kpis).getByTestId('health-kpis-cost')).toHaveTextContent('$120');
+    expect(within(kpis).getByTestId('health-kpis-cost')).toHaveTextContent('12% of all');
+    expect(within(kpis).getByTestId('health-kpis-perUseful')).toHaveTextContent('$1.5');
+    const checks = screen.getByTestId('health-checks');
+    expect(checks).toHaveTextContent('1 other check passed');
+    expect(checks).toHaveTextContent('1 without data');
+    expect(screen.queryByTestId('health-check-C10')).toBeNull();
+    fireEvent.click(screen.getByTestId('health-checks-toggle'));
     expect(screen.getByTestId('health-check-C10')).toHaveTextContent('no data yet');
-    expect(screen.getByTestId('health-check-C3')).toHaveTextContent('7 of 100 units refused as invalid');
-    expect(page).toHaveTextContent('12% of the system');
-    expect(page).toHaveTextContent('≈ $1.5 per useful entry');
+    // one pass and one without data: the line is not green
+    expect(screen.getByTestId('health-checks-dot').getAttribute('style')).not.toContain('--color-status-success');
+    // a check run a while ago says so
+    expect(screen.getByTestId('health-stamp').getAttribute('data-stale')).toBe('true');
+    // the reading waits behind its toggle
+    expect(screen.queryByTestId('health-reading')).toBeNull();
+  });
+
+  it('lists what to fix (the failing check, the place below target) and hands it to Swarm', async () => {
+    const onDispatch = vi.fn((_p: string, _o: { autoSend: boolean }) => true);
+    render(<NeedYouContent onDispatch={onDispatch} close={() => {}} />, { wrapper: wrap });
+    fireEvent.click(screen.getByTestId('cdf-health-tab'));
+    const check = await screen.findByTestId('health-fix-check-C3');
+    expect(check).toHaveTextContent('7 of 100 units refused as invalid');
+    const place = screen.getByTestId('health-fix-dest-DDD');
+    expect(place).toHaveTextContent('85%');
+    expect(place).toHaveTextContent('20 scored · weak 1 · withdraw 2');
+    // too few samples (here 5 scored at 40%) is never a problem to fix
+    expect(screen.queryByTestId('health-fix-dest-GAP')).toBeNull();
+    expect(screen.queryByTestId('health-fix-dest-MEMORY')).toBeNull();
+    fireEvent.click(within(check).getByRole('button'));
+    const [msg, opts] = onDispatch.mock.calls[0];
+    expect(opts).toEqual({ autoSend: true });
+    expect(msg).toContain('7 of 100 units refused as invalid');
+    expect(msg).toContain('Ask if it still holds.');
   });
 
   it("sends the person's verdict on a sampled entry", async () => {
@@ -133,7 +165,8 @@ describe('Health tab', () => {
   it('shows the reading in the user language with its basis', async () => {
     render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap });
     fireEvent.click(screen.getByTestId('cdf-health-tab'));
-    const reading = await screen.findByTestId('health-reading');
+    fireEvent.click(await screen.findByTestId('health-reading-toggle'));
+    const reading = screen.getByTestId('health-reading');
     expect(reading).toHaveTextContent('Most entries hold.');
     expect(reading).toHaveTextContent('Ask if it still holds.');
     expect(reading).toHaveTextContent('Based on 20 scored entries and 3 checks.');

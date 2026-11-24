@@ -15,12 +15,20 @@ import type { ReactNode } from 'react';
 import en from '../../i18n/locales/en.json';
 
 // The real English strings, so the test reads what an English-locale user sees.
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string) => key.split('.').reduce<unknown>(
-      (node, part) => (node as Record<string, unknown> | undefined)?.[part], en) as string ?? key,
-  }),
-}));
+// Plural keys (_one / _other) and {{name}} interpolation as i18next does them.
+vi.mock('react-i18next', () => {
+  const look = (key: string) => key.split('.').reduce<unknown>(
+    (node, part) => (node as Record<string, unknown> | undefined)?.[part], en) as string | undefined;
+  return {
+    useTranslation: () => ({
+      t: (key: string, o?: Record<string, unknown>) => {
+        const raw = (typeof o?.count === 'number' ? look(`${key}_${o.count === 1 ? 'one' : 'other'}`) : undefined)
+          ?? look(key) ?? (o?.defaultValue as string | undefined) ?? key;
+        return typeof raw === 'string' ? raw.replace(/\{\{(\w+)\}\}/g, (_, n: string) => String(o?.[n] ?? '')) : key;
+      },
+    }),
+  };
+});
 
 const fetchAttention = vi.fn();
 vi.mock('../../services/attention', async (orig) => ({
@@ -86,40 +94,75 @@ describe('NeedYouOverlay — data', () => {
   });
 });
 
-describe('NeedYouOverlay — row actions (same as Next steps)', () => {
+describe('NeedYouOverlay — for you, and what Swarm handles itself', () => {
   beforeEach(() => fetchAttention.mockReset());
+  const PERSON = { ...ITEM, id: 'p1', source: 'governance', title: 'A rule proposal', summary: 'One dispatch for independent work',
+    detail: 'Seen 3 times', handler: 'person', since: null, dispatch: { message: 'explain the rule', context: { kind: 'governance' } } };
+  const AGENT = { ...ITEM, id: 'g1', handler: 'agent', summary: 'Evening scan · failed 3 runs in a row', detail: 'timeout',
+    dispatch: { message: 'fix the job', context: { kind: 'job' } } };
+  const AGENT2 = { ...AGENT, id: 'g2', summary: 'Morning scan', title: 'A digest is ready', detail: '',
+    dispatch: { message: 'learn the digest', context: { kind: 'job_digest' } } };
+  const both = { items: [PERSON, AGENT, AGENT2], counts: { blocking: 2, review: 1, person: 1, agent: 2 } };
 
-  it('row text fills the chat input with the prompt (not sent) and closes', async () => {
-    fetchAttention.mockResolvedValue(ok);
-    const onDispatch = vi.fn(() => true);
-    const close = vi.fn();
-    render(<NeedYouContent onDispatch={onDispatch} close={close} />, { wrapper: wrap(freshQc()) });
-    fireEvent.click(await screen.findByTestId('needs-you-row-fill'));
-    expect(onDispatch).toHaveBeenCalledWith('look at job X', { autoSend: false });
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('↑ sends the prompt now and closes', async () => {
-    fetchAttention.mockResolvedValue(ok);
-    const onDispatch = vi.fn(() => true);
-    const close = vi.fn();
-    render(<NeedYouContent onDispatch={onDispatch} close={close} />, { wrapper: wrap(freshQc()) });
-    fireEvent.click(await screen.findByTestId('needs-you-row-send'));
-    expect(onDispatch).toHaveBeenCalledWith('look at job X', { autoSend: true });
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('stays open when the prompt could not land (all tabs busy)', async () => {
-    fetchAttention.mockResolvedValue(ok);
-    const close = vi.fn();
-    render(<NeedYouContent onDispatch={() => false} close={close} />, { wrapper: wrap(freshQc()) });
-    fireEvent.click(await screen.findByTestId('needs-you-row-send'));
-    expect(close).not.toHaveBeenCalled();
-  });
-
-  it('shows the summary under the title', async () => {
-    fetchAttention.mockResolvedValue({ ...ok, items: [{ ...ITEM, summary: 'X · failed 7 runs in a row' }] });
+  it("a person's item is a card titled by the thing, with its ask; the tab counts only the person's", async () => {
+    fetchAttention.mockResolvedValue(both);
     render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap(freshQc()) });
-    expect(await screen.findByText('X · failed 7 runs in a row')).toBeInTheDocument();
+    const card = await screen.findByTestId('needs-you-card');
+    expect(card).toHaveTextContent('One dispatch for independent work');
+    expect(card).toHaveTextContent('Seen 3 times');
+    expect(screen.getByTestId('needs-you-ask')).toHaveTextContent(en.needYou.ask.governance);
+    expect(screen.getAllByTestId('needs-you-card')).toHaveLength(1);
+    expect(screen.getByTestId('need-you-tab-count')).toHaveTextContent('1');
+    expect(screen.getAllByTestId('needs-you-swarm-row')).toHaveLength(2);
+  });
+
+  it('the card sends its prompt now or fills the input, then closes; it stays open when nothing landed', async () => {
+    fetchAttention.mockResolvedValue(both);
+    const onDispatch = vi.fn(() => true);
+    const close = vi.fn();
+    const view = render(<NeedYouContent onDispatch={onDispatch} close={close} />, { wrapper: wrap(freshQc()) });
+    fireEvent.click(await screen.findByTestId('needs-you-send'));
+    expect(onDispatch).toHaveBeenLastCalledWith('explain the rule', { autoSend: true });
+    fireEvent.click(screen.getByTestId('needs-you-fill'));
+    expect(onDispatch).toHaveBeenLastCalledWith('explain the rule', { autoSend: false });
+    expect(close).toHaveBeenCalledTimes(2);
+    view.unmount();
+    const stay = vi.fn();
+    render(<NeedYouContent onDispatch={() => false} close={stay} />, { wrapper: wrap(freshQc()) });
+    fireEvent.click(await screen.findByTestId('needs-you-send'));
+    expect(stay).not.toHaveBeenCalled();
+    expect(screen.getByTestId('needs-you-missed')).toHaveTextContent(en.needYou.notLanded);
+  });
+
+  it('a row of Swarm’s hands its own prompt over; "all" hands every one in one message', async () => {
+    fetchAttention.mockResolvedValue(both);
+    const onDispatch = vi.fn((_p: string, _o: { autoSend: boolean }) => true);
+    render(<NeedYouContent onDispatch={onDispatch} close={() => {}} />, { wrapper: wrap(freshQc()) });
+    fireEvent.click((await screen.findAllByTestId('needs-you-hand'))[1]);
+    expect(onDispatch).toHaveBeenLastCalledWith('learn the digest', { autoSend: true });
+    fireEvent.click(screen.getByTestId('needs-you-hand-all'));
+    const [msg, opts] = onDispatch.mock.calls[onDispatch.mock.calls.length - 1];
+    expect(opts).toEqual({ autoSend: true });
+    expect(msg).toContain('fix the job');
+    expect(msg).toContain('learn the digest');
+    expect(msg).not.toContain('explain the rule');
+  });
+
+  it('with nothing for the person: one calm line, no count, and Swarm’s rows still listed', async () => {
+    fetchAttention.mockResolvedValue({ items: [AGENT], counts: { blocking: 1, review: 0, person: 0, agent: 1 } });
+    render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap(freshQc()) });
+    expect(await screen.findByTestId('needs-you-calm')).toHaveTextContent(en.needYou.empty);
+    expect(screen.queryByTestId('needs-you-card')).toBeNull();
+    expect(screen.queryByTestId('need-you-tab-count')).toBeNull();
+    expect(screen.getByTestId('needs-you-swarm-row')).toHaveTextContent('Evening scan');
+  });
+
+  it('a summary that only repeats the detail gives way to the title', async () => {
+    const stall = { ...AGENT, id: 's1', title: 'Cognitive Distillation has stopped moving', summary: 'a job waits 16 h', detail: 'a job waits 16 h' };
+    fetchAttention.mockResolvedValue({ items: [stall], counts: { blocking: 0, review: 1, person: 0, agent: 1 } });
+    render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap(freshQc()) });
+    const row = await screen.findByTestId('needs-you-swarm-row');
+    expect(row.querySelector('b')?.textContent).toBe('Cognitive Distillation has stopped moving');
+    expect(row.textContent?.match(/a job waits 16 h/g)).toHaveLength(1);
   });
 });

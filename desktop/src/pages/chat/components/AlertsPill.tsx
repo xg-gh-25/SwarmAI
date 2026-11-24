@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 
 interface AlertsPillProps {
-  /** Total Need You items (counts.blocking + counts.review). */
+  /** The Need You items that wait on the person (counts.person). */
   count: number;
   /** Warm the Need You overlay's code + data on hover/focus (prefetchNav). */
   onPrefetch?: () => void;

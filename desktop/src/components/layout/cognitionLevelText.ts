@@ -4,28 +4,14 @@
  * (core/ingestion/cognition_level.trend: the last four weeks pooled against the four
  * before, with a 95% interval of the difference); this file only words it, in the same
  * verdicts the prompt headline uses (core/north_star.trend_verdict; both held to
- * backend/tests/fixtures/north_star_trend_wording.json). The curve's line pools four weeks
- * too, weighted by the conversations judged (one week swings by 20-40 points).
+ * backend/tests/fixtures/north_star_trend_wording.json).
  *
- * Key exports: `rolling`, `pooled`, `levelLine`, `trendVerdict`, `WINDOW`.
+ * Key exports: `levelLine`, `trendVerdict`, `WINDOW`.
  */
 import type { TFunction } from 'i18next';
-import type { LevelTrend, LevelWeek } from '../../services/ingestion';
+import type { LevelTrend } from '../../services/ingestion';
 
 export const WINDOW = 4;
-const MIN_POOLED = 10;   // fewer judged conversations in a window give no share
-
-/** The share not corrected over *weeks*, pooled; null with too few conversations. */
-export function pooled(weeks: LevelWeek[]): number | null {
-  const judged = weeks.reduce((n, w) => n + w.judged, 0);
-  if (judged < MIN_POOLED) return null;
-  return 1 - weeks.reduce((n, w) => n + w.corrected, 0) / judged;
-}
-
-/** For each week, the pooled share over it and the WINDOW - 1 weeks before it. */
-export function rolling(weeks: LevelWeek[]): Array<number | null> {
-  return weeks.map((_, i) => (i < WINDOW - 1 ? null : pooled(weeks.slice(i - WINDOW + 1, i + 1))));
-}
 
 /** The verdict on the backend's trend: better / worse only when its 95% interval excludes
  *  zero, otherwise no visible change within ±the interval; too few without a direction. */

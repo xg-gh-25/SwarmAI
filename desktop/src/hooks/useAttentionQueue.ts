@@ -19,6 +19,7 @@
  *
  * Exports:
  * - useAttentionQueue — React hook → { items, counts }
+ * - personCount — what the left-nav badge shows: the items that wait on the person
  */
 import { useQuery } from '@tanstack/react-query';
 import { overlayQuery } from '../components/layout/overlayQueries';
@@ -28,10 +29,16 @@ const POLL_MS = 30_000;
 
 export interface AttentionQueue {
   items: AttentionEntry[];
-  counts: { blocking: number; review: number };
+  counts: { blocking: number; review: number; person: number; agent: number };
 }
 
-const EMPTY: AttentionQueue = { items: [], counts: { blocking: 0, review: 0 } };
+const EMPTY: AttentionQueue = { items: [], counts: { blocking: 0, review: 0, person: 0, agent: 0 } };
+
+/** The badge's number: only what waits on the person (what Swarm handles itself is not
+ *  theirs to do); an older backend without the split counts every item as theirs. */
+export function personCount(q: AttentionQueue): number {
+  return q.counts.person ?? q.items.filter((it) => it.handler !== 'agent').length;
+}
 
 export function useAttentionQueue(): AttentionQueue {
   const { data } = useQuery({ ...overlayQuery.needsYou(), refetchInterval: POLL_MS });

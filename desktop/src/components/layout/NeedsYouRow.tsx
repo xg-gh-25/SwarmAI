@@ -16,7 +16,7 @@
  * A SwarmAI account item (`kind` = "aws_account": sign in again, Hives short) opens its
  * settings page the same way (design 2026-10-31-swarmai-aws-account §7.1).
  *
- * @exports NeedsYouRow, needsYouPrompt
+ * @exports NeedsYouRow, needsYouPrompt, itemOpener
  */
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -55,22 +55,27 @@ export interface NeedsYouRowProps {
   testid?: string;
 }
 
+/** Where an item is handled instead of in chat — the App's settings page or the Swarm Out
+ *  tab — and how to open it; null for an ordinary prompt. A Swarm Out item whose tab
+ *  cannot be reached (no chat page published it) is an ordinary prompt. */
+export function itemOpener(it: AttentionEntry): { kind: 'settings' | 'swarmOut'; open: () => void } | null {
+  const settingsTab = opensSettingsTab(it);
+  if (settingsTab) {
+    return { kind: 'settings', open: () => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: settingsTab } })) };
+  }
+  // an item about Hives opens the Swarm Out tab on its settings view, where they are set up
+  const bridgeShow = getOverlayCtxBridge().showSwarmOut;
+  if (!opensSwarmOut(it) || !bridgeShow) return null;
+  return { kind: 'swarmOut', open: it.dispatch?.context?.view === 'settings' ? openSwarmOutSettings : bridgeShow };
+}
+
 export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testid = 'needs-you-row', onOpened }: NeedsYouRowProps) {
   const { t } = useTranslation();
   const prompt = needsYouPrompt(item);
-  // a Swarm Out item opens the Swarm Out tab; where that tab cannot be reached (no
-  // chat page published it) it is an ordinary prompt
-  const settingsTab = opensSettingsTab(item);
-  // an item about Hives opens the Swarm Out tab on its settings view, where they are set up
-  // (only while a chat page can show that tab: else it is an ordinary prompt too)
-  const bridgeShow = getOverlayCtxBridge().showSwarmOut;
-  const showOut = !opensSwarmOut(item) || !bridgeShow ? undefined
-    : item.dispatch?.context?.view === 'settings' ? openSwarmOutSettings : bridgeShow;
-  const show = settingsTab
-    ? () => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: settingsTab } }))
-    : showOut;
-  const swarmOut = !!show;
-  const openSwarmOut = () => { show?.(); onOpened?.(); };
+  const opener = itemOpener(item);
+  const settingsTab = opener?.kind === 'settings';
+  const swarmOut = !!opener;
+  const openSwarmOut = () => { opener?.open(); onOpened?.(); };
   return (
     <div
       data-testid={testid}

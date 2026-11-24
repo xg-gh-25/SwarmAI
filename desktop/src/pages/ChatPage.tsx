@@ -90,7 +90,7 @@ import { canBindSessionToActiveTab } from './chat/sessionBinding';
 import { planDispatchBackfill } from './chat/dispatchBackfill';
 import { todosService } from '../services/todos';
 import type { ToDo } from '../types/todo';
-import { useAttentionQueue } from '../hooks/useAttentionQueue';
+import { personCount, useAttentionQueue } from '../hooks/useAttentionQueue';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
 import { mergeOlderMessages, toDisplayMessage } from './chat/utils';
@@ -2749,8 +2749,7 @@ export default function ChatPage() {
   // frontend merge (paused+jobs+waiting-tabs); the waiting/streaming coupling is
   // GONE (Need You is decoupled from chat). Clicking the pill opens the fullscreen
   // needs-you overlay, which loads + dispatches items itself.
-  const { counts: attentionCounts } = useAttentionQueue();
-  const attentionCount = attentionCounts.blocking + attentionCounts.review;
+  const attentionCount = personCount(useAttentionQueue());
 
   // 🔔 Alerts pill lives in the LEFT SIDEBAR (run_2bdc68ad), not the tab row —
   // the attention signal is GLOBAL (cross-tab / paused runs / failing jobs), so

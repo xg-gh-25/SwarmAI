@@ -1,14 +1,15 @@
 /**
  * "What it learned" — the Cognition flow's item list (CognitiveDistillationFlow).
  *
- * One row per unit, as a person reads it: kind/type, the whole title, its text (clamped to
- * two lines, whole once opened), and one line read backward — where it landed, what the
- * decision was (new / added to «entry» / reinforced / moved here from / not kept: why).
+ * One row per unit, as a person reads it: its type on the left, the whole title, its text
+ * (one line, whole once opened), then where it landed, where it came from and when; on
+ * the right one mark for the decision (new / adds / +1 / already known / not kept /
+ * waiting), the entry it was compared with in that mark's tooltip.
  * Opening a row shows the trace: landed → why this place → trust → compared → came from,
  * and the raw record behind a disclosure (GET /ingestion/items/{candidate}).
  *
- * Filters: outcome (segmented, with counts from the summary), source, place, keyword, and
- * the landed row the user clicked above (`focus`). Pages of 25, "Show more" appends.
+ * Filters: outcome, keyword, and the landed row the user clicked above (`focus`). Pages of
+ * 25, "Show more" appends.
  *
  * Key export: `CdfUnitFeed`.
  */
@@ -20,32 +21,26 @@ import {
   ingestionService,
   type FlowUnit,
   type IngestionWindow,
-  type LandedOverview,
   type UnitFilters,
   type UnitOutcome,
-  type UnitPlace,
 } from '../../services/ingestion';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
-import { SectionLabel, Segmented } from '../overlay';
+import { Segmented } from '../overlay';
+import { ZoneLabel } from './needYouParts';
 import { OverlayEmpty, OverlayError, OverlayLoading } from './OverlayState';
 import { fileName, fmt } from './cdfText';
 
 const OUTCOMES: UnitOutcome[] = ['all', 'new', 'adds', 'reinforced', 'not_kept', 'waiting'];
-const PLACES: UnitPlace[] = ['every_turn', 'project', 'general'];
 const EVERY_TURN = new Set(['MEMORY', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'TIMELINE']);
 const PAGE = 25;
-const selectClass = 'h-7 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 text-small text-[var(--color-text-muted)]';
 
-export function CdfUnitFeed({ window, overview, focus, onClearFocus }: {
+export function CdfUnitFeed({ window, focus, onClearFocus }: {
   window: IngestionWindow;
-  overview?: LandedOverview;
   focus: Partial<UnitFilters> & { label?: string };
   onClearFocus: () => void;
 }) {
   const { t } = useTranslation();
   const [outcome, setOutcome] = useState<UnitOutcome>('all');
-  const [source, setSource] = useState('');
-  const [place, setPlace] = useState<UnitPlace | ''>('');
   const [typed, setTyped] = useState('');
   const [keyword, setKeyword] = useState('');
   useEffect(() => {
@@ -55,8 +50,7 @@ export function CdfUnitFeed({ window, overview, focus, onClearFocus }: {
 
   const { label: focusLabel, ...focusFilters } = focus;
   const filters: UnitFilters = {
-    window, outcome, source: source || undefined, place: place || undefined,
-    keyword: keyword || undefined, ...focusFilters,
+    window, outcome, keyword: keyword || undefined, ...focusFilters,
   };
   const units = useInfiniteQuery({
     queryKey: ['ingestion', 'units', filters],
@@ -65,29 +59,20 @@ export function CdfUnitFeed({ window, overview, focus, onClearFocus }: {
     getNextPageParam: (last) => (last.hasNext ? last.page + 1 : undefined),
   });
   const items = units.data?.pages.flatMap((page) => page.items) ?? [];
-  const sources = Object.keys(overview?.sources ?? {}).sort();
 
   return (
     <section data-testid="cdf-feed">
-      <SectionLabel>{t('cdf.feedTitle')}</SectionLabel>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <ZoneLabel>{t('cdf.feedTitle')}</ZoneLabel>
+      <div className="flex flex-wrap items-center gap-2">
         <Segmented
           options={OUTCOMES.map((key) => ({ key, label: t(`cdf.outcome.${key}`), testid: `cdf-outcome-${key}` }))}
           value={outcome}
           onChange={setOutcome}
         />
-        <select aria-label={t('cdf.everySource')} className={selectClass} value={source} onChange={(event) => setSource(event.target.value)}>
-          <option value="">{t('cdf.everySource')}</option>
-          {sources.map((key) => <option key={key} value={key}>{t(`cdf.source.${key}`, { defaultValue: key })}</option>)}
-        </select>
-        <select aria-label={t('cdf.everyPlace')} className={selectClass} value={place} onChange={(event) => setPlace(event.target.value as UnitPlace | '')}>
-          <option value="">{t('cdf.everyPlace')}</option>
-          {PLACES.map((key) => <option key={key} value={key}>{t(`cdf.tier.${key}`)}</option>)}
-        </select>
         <input aria-label={t('cdf.search')} placeholder={t('cdf.search')} value={typed} onChange={(event) => setTyped(event.target.value)}
           className="ml-auto h-7 w-56 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 text-small text-[var(--color-text)]" />
       </div>
-      {units.data && (outcome !== 'all' || source || place || keyword || focusLabel) && (
+      {units.data && (outcome !== 'all' || keyword || focusLabel) && (
         // unfiltered, the count is the dashboard's "captured": not said twice
         <p className="mt-2 text-small text-[var(--color-text-muted)]" data-testid="cdf-feed-count">
           {t('cdf.feedCount', { n: fmt(units.data.pages[0]?.total ?? 0) })}
@@ -141,37 +126,24 @@ function aboutLabel(t: TFunction, scope: string | null): string {
   return t(`cdf.about.${scope}`, { defaultValue: scope });
 }
 
-function Quote({ children }: { children: string }) {
-  return <span className="text-[var(--color-text-muted)]">“{children}”</span>;
-}
+const MARK_TONE: Record<string, { color: string; bg: string }> = {
+  new: { color: 'var(--color-status-success)', bg: 'color-mix(in srgb, var(--color-status-success) 12%, transparent)' },
+  adds: { color: 'var(--color-status-running)', bg: 'color-mix(in srgb, var(--color-status-running) 12%, transparent)' },
+  reinforced: { color: 'var(--color-zone-cognitive)', bg: 'color-mix(in srgb, var(--color-zone-cognitive) 13%, transparent)' },
+};
+const OTHER_TONE = { color: 'var(--color-text-muted)', bg: 'var(--color-bg-chrome)' };
 
-function DecisionLine({ unit }: { unit: FlowUnit }) {
-  const { t } = useTranslation();
-  const place = placeLabel(t, unit);
+/** The decision as one short mark, and its detail (the entry compared with, the reason). */
+function decision(t: TFunction, unit: FlowUnit): { mark: string; tip: string; tone: { color: string; bg: string } } {
+  const tone = MARK_TONE[unit.group] ?? (unit.group === 'place' || unit.group === 'failed'
+    ? { color: 'var(--color-status-warning)', bg: 'color-mix(in srgb, var(--color-status-warning) 12%, transparent)' } : OTHER_TONE);
+  const mark = t(`cdf.mark.${unit.group}`, { defaultValue: t('cdf.mark.notKept') });
   const kept = unit.group === 'new' || unit.group === 'adds' || unit.group === 'reinforced';
-  if (!kept) {
-    const key = unit.group === 'waiting' ? 'cdf.verbWaiting' : 'cdf.verbNotKept';
-    const warn = unit.group === 'place' || unit.group === 'failed';
-    return (
-      <div className="text-small" style={{ color: warn ? 'var(--color-status-warning)' : 'var(--color-text-muted)' }}>
-        {t(key, { reason: reasonLabel(t, unit) })}
-        {unit.group === 'known' && unit.target && <> <Quote>{unit.target}</Quote></>}
-        {unit.group === 'place' && unit.scope?.startsWith('project:') && <> · {aboutLabel(t, unit.scope)}</>}
-      </div>
-    );
-  }
-  const verb = unit.group === 'reinforced'
-    ? <><span className="text-[var(--color-zone-cognitive)]">{t('cdf.verbReinforced')}</span> {unit.target ? <Quote>{unit.target}</Quote> : t('cdf.verbAnEntry')}</>
-    : unit.movedFrom
-      ? <span className="text-[var(--color-status-warning)]">{t('cdf.verbMoved', { store: t(`cdf.store.${unit.movedFrom}`, { defaultValue: unit.movedFrom }) })}</span>
-      : unit.group === 'adds'
-        ? <><span className="text-[var(--color-zone-cognitive)]">{t('cdf.verbAdded')}</span> {unit.target ? <Quote>{unit.target}</Quote> : t('cdf.verbAnEntry')}</>
-        : <span className="text-[var(--color-zone-cognitive)]">{t('cdf.verbNew')}</span>;
-  return (
-    <div className="flex flex-wrap items-baseline gap-1.5 text-small text-[var(--color-text-dim)]">
-      <span aria-hidden>→</span><span className="text-[var(--color-text)]">{place}</span><span>·</span><span>{verb}</span>
-    </div>
-  );
+  const tip = kept
+    ? (unit.target ? `${t(unit.group === 'reinforced' ? 'cdf.verbReinforced' : 'cdf.verbAdded')} “${unit.target}”` : mark)
+    : t(unit.group === 'waiting' ? 'cdf.verbWaiting' : 'cdf.verbNotKept', { reason: reasonLabel(t, unit) })
+      + (unit.target ? ` “${unit.target}”` : '');
+  return { mark, tip, tone };
 }
 
 function UnitRow({ unit }: { unit: FlowUnit }) {
@@ -180,17 +152,27 @@ function UnitRow({ unit }: { unit: FlowUnit }) {
   const when = new Date(unit.createdAt);
   const time = Number.isNaN(when.getTime()) ? unit.createdAt.slice(11, 16)
     : when.toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const place = placeLabel(t, unit);
+  const d = decision(t, unit);
   return (
-    <div className="border-t border-[var(--color-border)]" data-testid="cdf-unit">
+    <div className="border-t border-[var(--color-border)] first:border-t-0" data-testid="cdf-unit">
       <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}
-        className="block w-full px-2.5 py-3 text-left hover:bg-[var(--color-hover)]">
-        <div className="flex items-baseline gap-2.5">
-          <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 text-meta text-[var(--color-text-muted)]">{kindLabel(t, unit)}</span>
-          <span className="min-w-0 flex-1 text-body font-semibold text-[var(--color-text)]">{unit.title}</span>
-          <span className="shrink-0 text-small text-[var(--color-text-dim)]">{t(`cdf.source.${unit.source}`, { defaultValue: unit.source })} · {time}</span>
-        </div>
-        {unit.text && <p className={`mt-1 text-body text-[var(--color-text-muted)] ${open ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}>{unit.text}</p>}
-        <div className="mt-1"><DecisionLine unit={unit} /></div>
+        className="grid w-full grid-cols-[40px_minmax(0,1fr)_auto] gap-x-3 rounded-lg px-2.5 py-2.5 text-left hover:bg-[var(--color-hover)]">
+        <span className="mt-px h-[18px] rounded bg-[var(--color-bg-chrome)] text-center text-meta font-semibold leading-[18px] text-[var(--color-text-secondary)]">{kindLabel(t, unit)}</span>
+        <span className="min-w-0">
+          <span className="block text-body font-semibold text-[var(--color-text)]">{unit.title}</span>
+          {unit.text && <span className={`mt-px text-small text-[var(--color-text-secondary)] ${open ? 'block whitespace-pre-wrap' : 'line-clamp-1'}`}>{unit.text}</span>}
+          <span className="mt-0.5 flex flex-wrap gap-x-3 text-small text-[var(--color-text-muted)]" data-testid="cdf-unit-meta">
+            {place && <span className="text-[var(--color-text-secondary)]">→ {place}</span>}
+            {unit.movedFrom && <span style={{ color: 'var(--color-status-warning)' }}>{t('cdf.verbMoved', { store: t(`cdf.store.${unit.movedFrom}`, { defaultValue: unit.movedFrom }) })}</span>}
+            <span>{t(`cdf.source.${unit.source}`, { defaultValue: unit.source })}</span>
+            <span className="tabular-nums">{time}</span>
+          </span>
+        </span>
+        <span className="mt-0.5 self-start whitespace-nowrap rounded-full px-[7px] py-px text-meta font-semibold"
+          style={{ color: d.tone.color, background: d.tone.bg }} title={d.tip} data-testid="cdf-unit-mark">
+          {d.mark}<span className="sr-only"> · {d.tip}</span>
+        </span>
       </button>
       {open && <Trace unit={unit} time={time} />}
     </div>

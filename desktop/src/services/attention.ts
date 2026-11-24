@@ -11,6 +11,8 @@
  *
  * Item action = the item's `dispatch.message` is injected into a chat tab via
  * the existing onItemClick mechanism (no /act endpoint, no new dispatch channel).
+ * Each item says who it waits on (`handler`): only the person's items count as
+ * needing the person.
  */
 import api from './api';
 
@@ -28,11 +30,16 @@ export interface AttentionEntry {
   summary: string;
   detail: string;
   dispatch: { message: string; context?: Record<string, unknown> };
+  /** Who it waits on (backend handler_of): the person, or Swarm itself. */
+  handler: 'person' | 'agent';
+  /** When it started waiting (ISO), when the source knows it. */
+  since: string | null;
 }
 
 export interface AttentionResult {
   items: AttentionEntry[];
-  counts: { blocking: number; review: number };
+  /** ``person`` is what the badge, the Welcome card and the tab count show. */
+  counts: { blocking: number; review: number; person: number; agent: number };
 }
 
 /** Raw backend shape (snake_case per FastAPI). */
@@ -46,8 +53,10 @@ interface RawAttention {
     summary?: string;
     detail?: string;
     dispatch?: { message: string; context?: Record<string, unknown> };
+    handler?: string;
+    since?: string | null;
   }>;
-  counts?: { blocking?: number; review?: number };
+  counts?: { blocking?: number; review?: number; person?: number; agent?: number };
 }
 
 function normalize(raw: RawAttention): AttentionResult {
@@ -60,12 +69,17 @@ function normalize(raw: RawAttention): AttentionResult {
     summary: it.summary ?? '',
     detail: it.detail ?? '',
     dispatch: it.dispatch ?? { message: it.title },
+    // anything but an explicit "agent" waits on the person (an older backend sends none)
+    handler: it.handler === 'agent' ? 'agent' : 'person',
+    since: typeof it.since === 'string' && it.since ? it.since : null,
   }));
   return {
     items,
     counts: {
       blocking: raw.counts?.blocking ?? items.filter((i) => i.tier === 'blocking').length,
       review: raw.counts?.review ?? items.filter((i) => i.tier === 'review').length,
+      person: raw.counts?.person ?? items.filter((i) => i.handler === 'person').length,
+      agent: raw.counts?.agent ?? items.filter((i) => i.handler === 'agent').length,
     },
   };
 }

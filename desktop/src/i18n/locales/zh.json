@@ -166,7 +166,8 @@
       "openAll": "全部打开",
       "nothing": "现在没有需要你决定的事",
       "more": "还有 {{n}} 项",
-      "less": "收起"
+      "less": "收起",
+      "swarmHandles": "Swarm 在处理 {{n}} 件"
     },
     "placeholder": "输入消息...",
     "streamingPlaceholder": "等待回复中...",
@@ -443,8 +444,6 @@
         "stopContinueHint": "点\"继续\"会从这里接着做：agent 会被告知停掉了什么，并先检查已经做过的，再往下做。",
         "stopAgentButton": "停止这个 agent"
       },
-      "doc": {},
-      "runResult": {},
       "bgAgentLabel": "Agent",
       "viewOriginalAgent": "查看原 Agent",
       "viewOriginalAgentNamed": "查看原 Agent：{{name}}",
@@ -2379,13 +2378,8 @@
     "tabAttention": "需要你",
     "tabFlow": "认知沉淀",
     "title": "需要你",
-    "description": "SwarmAI 离开你就完成不了的事都在这里。点一条放进聊天输入框，或点 ↑ 直接发送。",
     "loadFailed": "加载待处理队列失败。",
-    "empty": "现在没有需要你处理的事",
-    "blocking": "阻塞",
-    "blockingHint": "已停下，等你处理才能继续",
-    "review": "待确认",
-    "reviewHint": "会自己往前推进，你的意见用来确认或推翻",
+    "empty": "现在没有要你决定的事",
     "tabGuide": "工作原理",
     "tabHealth": "健康度",
     "openSwarmOut": "打开 Swarm Out",
@@ -2407,11 +2401,44 @@
     "fillHint": "放进聊天输入框",
     "sendNow": "直接发送",
     "sendNowLabel": "直接发送：{{title}}",
-    "openSettings": "打开设置页"
+    "openSettings": "打开设置页",
+    "mine": "要你决定",
+    "swarm": "Swarm 自己能处理",
+    "system": "系统",
+    "hand": "交给 Swarm",
+    "handAll": "全部交给 Swarm",
+    "handle": "在对话里处理",
+    "handAllPrompt_one": "你自己处理这件事，做完用两句话告诉我做了什么：\n\n{{items}}",
+    "handAllPrompt_other": "你自己依次处理这 {{count}} 件事，做完每件用一两句话告诉我做了什么：\n\n{{items}}",
+    "ago": {
+      "min_one": "{{count}} 分钟",
+      "min_other": "{{count}} 分钟",
+      "h_one": "{{count}} 小时",
+      "h_other": "{{count}} 小时",
+      "d_one": "{{count}} 天",
+      "d_other": "{{count}} 天"
+    },
+    "ask": {
+      "default": "需要你",
+      "escalation": "回答问题",
+      "governance": "批准或驳回",
+      "paused_run": "决定任务去留",
+      "job_auth": "重新登录",
+      "db_recovery": "恢复还是丢弃",
+      "template_drift": "合并文件",
+      "swarm_out": "去 Swarm Out",
+      "aws_account": "重新登录",
+      "needs_account": "重新登录",
+      "inbox": "重新登录",
+      "todo": "整理待办",
+      "local_root": "保留还是移除",
+      "user_race": "看改动",
+      "writer_unknown": "看改动"
+    },
+    "notLanded": "没能送进对话：先打开一个对话再试。"
   },
   "cogLevel": {
-    "title": "Swarm 认知度",
-    "hint": "它有没有越来越少让你操心",
+    "title": "Swarm 需要你的越来越少吗",
     "empty": "还没有哪一周的对话够多，算不出来。",
     "line": {
       "tooFew": "还看不出趋势：要满 {{n}} 周的对话",
@@ -2423,107 +2450,66 @@
       "same": "看不出变化（±{{margin}} 个点）",
       "tooFew": "会话太少，看不出趋势"
     },
-    "repeats": "本周你纠正的错里，是以前纠正过的",
-    "legend": {
-      "trend": "4 周合计：不用你纠正",
-      "week": "单周",
-      "repeats": "纠正里是旧错重犯的",
-      "marks": "认知规则的改动"
-    },
     "mark": {
       "review": "会后复盘开始记纠正",
       "version": "版本 {{v}}"
     },
     "point": "{{week}} 这周：{{rate}} 不用纠正，{{n}} 个对话",
-    "repeatPoint": "{{week}} 这周：{{corrections}} 次纠正里 {{repeats}} 次是旧错重犯",
     "chain": {
-      "title": "犯的错卡在哪一环",
-      "rule": "每月把真犯过的错倒查一遍：要用的知识，事先有没有、有没有送到眼前、送到了用对没有、是不是已经过时。哪一环漏得多，就该补哪一环。",
-      "month": "{{month}} · {{n}} 个错",
-      "baseline": "{{label}} 基线 · {{n}} 个错",
-      "count": "个错 · {{pct}}",
-      "prev": "上月 {{n}}",
-      "prevBaseline": "基线 {{n}}",
-      "none": "还没有月度错误倒查：下个月 1 号跑第一次。"
+      "title": "错从哪里来",
+      "month": "{{month}} · {{n}} 个",
+      "baseline": "{{label}} 基线 · {{n}} 个",
+      "none": "还没有月度错误倒查：下个月 1 号跑第一次。",
+      "mostly": "· 主要是「{{stage}}」，{{pct}}%"
     },
-    "stage": {
-      "missing": "学到并存进脑子",
-      "notDelivered": "送到眼前",
-      "usedWrong": "用对",
-      "stale": "保持正确"
-    },
-    "stageQ": {
-      "missing": "这条知识事先在不在",
-      "notDelivered": "有，但这次有没有被找出来",
-      "usedWrong": "送到了，判断有没有用上",
-      "stale": "存着的知识有没有过时"
-    },
-    "stageFix": {
-      "missing": "事先没有：要补写入",
-      "notDelivered": "有但没送到：要补召回",
-      "usedWrong": "送到仍犯：判断的问题",
-      "stale": "内容过时：要补更新"
-    },
-    "used": "写进去的知识 {{days}} 天内被用到 {{pct}}",
-    "usedNone": "写进去的知识 {{days}} 天内有没有被用到：还没有满 {{days}} 天的条目",
-    "openHealth": "CDF 自己转得对不对 → 健康度",
-    "notCorrected": "近 4 周的对话不用你纠正",
-    "thisWeek": "本周 {{rate}} · {{n}} 个对话",
+    "notCorrected": "的对话不用你纠正",
     "thisWeekNone": "本周对话还太少",
-    "how": "每周都用同一种量法：判官只读你说的话，判断你有没有纠正我。",
-    "agreeCorrected": "用复盘的记录核对：复盘记下有纠正的 {{n}} 个对话里，判官判出了 {{a}} 个。",
-    "agreeClean": "复盘读完、没发现纠正的 {{n}} 个里，判官同意 {{a}} 个。",
-    "agreeNone": "复盘记录里还没有能用来核对判官的对话。"
+    "of": "近 4 周 · {{n}} 个对话",
+    "pts_one": "{{sign}} {{count}} 个百分点",
+    "pts_other": "{{sign}} {{count}} 个百分点",
+    "was": "前 4 周 {{pct}}%",
+    "weeksLabel": "每周不用你纠正的对话比例",
+    "changed": "规则改了：{{what}}",
+    "kpi": {
+      "week": "这周",
+      "conversations_one": "{{count}} 个对话",
+      "conversations_other": "{{count}} 个对话",
+      "repeats": "这周的纠正里重复以前的",
+      "used": "写下的知识 {{days}} 天内用到"
+    },
+    "cause": {
+      "missing": "事先没有",
+      "notDelivered": "有但没送到",
+      "usedWrong": "送到了仍然错",
+      "stale": "内容过时",
+      "unknown": "判断不了"
+    }
   },
   "cogHealth": {
     "loadFailed": "健康度加载失败。",
     "w7d": "7 天",
     "w30d": "30 天",
-    "per7d": "/ 7 天",
-    "per30d": "/ 30 天",
     "recheck": "立即检查",
     "running": "检查中…",
-    "generatedAt": "上次检查 {{at}}",
     "neverRun": "还没检查过：每个工作日自动检查一次，也可以点「立即检查」。",
-    "useful": "有用",
     "passed": "检查通过",
-    "notEnough": "样本不足",
     "noData": "还没有数据",
     "line": {
-      "ok": "认知系统运转正常，沉淀的内容是有用的",
-      "notEnough": "认知系统运转正常；打过分的条目还太少，判断不了沉淀有没有用",
-      "checksFail": "有 {{count}} 项检查没通过",
-      "valueLow": "沉淀的内容有 {{pct}} 没价值",
-      "and": "，"
+      "notEnough": "认知系统运转正常；打过分的条目还太少，判断不了沉淀有没有用"
     },
     "q": {
-      "value": "沉淀的内容有没有用",
       "checks": "CDF 系统是不是健康",
       "cost": "CDF 花了多少"
     },
-    "valueNote": "目标 {{target}} · 判官已给 {{scored}} 条打分",
-    "checksNote": "{{failing}} 项没通过 · {{noData}} 项还没有数据（不算通过）",
-    "costShare": "占全系统 {{pct}}",
-    "perUseful": "每条有用的沉淀约 {{usd}}",
+    "costShare": "占全部 {{pct}}%",
     "value": {
-      "clickHint": "点一行看抽到的条目和判官的理由",
-      "rule": "每个工作日从每个去处抽一些新进来的条目，交给没有参与写入的判官，按这个去处的用途打分：有用 / 一般 / 该撤。条里的竖线是目标。判官只打分，不删任何东西。它按条目写成的样子、按它所在的去处打分；写的时候有没有看代码、调研够不够，是写入端的事，判官不管。",
-      "counts": "打分 {{scored}} · 新进 {{written}}",
-      "minNote": "每个去处至少 {{n}} 条打过分才算比例",
       "noSamples": "这里还没有打过分的条目。",
-      "samplesHint": "你可以给条目改判：你的判断会替代判官的计入比例，也用来看判官可信到什么程度。",
-      "byYou": "你的判断",
       "judgeSaid": "判官判 {{verdict}}"
     },
     "group": {
       "every_turn": "每个 session 都读",
       "on_demand": "用到时再查",
       "other": "Gap · Reference"
-    },
-    "groupHint": {
-      "every_turn": "这里错一条，每轮都在误导判断：目标 95%",
-      "on_demand": "只在判断需要时被找出来",
-      "other": "还开着的问题 · 别处找不到的来源"
     },
     "dest": {
       "MEMORY": "MEMORY",
@@ -2534,16 +2520,6 @@
       "GAP": "开着的 gap",
       "TIMELINE": "Timeline",
       "REFERENCE": "Reference"
-    },
-    "destHint": {
-      "MEMORY": "跨项目的判断",
-      "EVOLUTION": "被纠正过的地方",
-      "USER_FILES": "STEERING / USER / TOOLS",
-      "DDD": "每个项目是什么、定了什么",
-      "GENERAL": "不属于任何项目的经验",
-      "GAP": "还要解决的问题",
-      "TIMELINE": "事件和结果",
-      "REFERENCE": "外部链接、只在对话里出现过的结果"
     },
     "verdict": {
       "useful": "有用",
@@ -2557,12 +2533,6 @@
       "status": "状态记录",
       "copy": "已存文档的副本",
       "unclear": "单独看不懂"
-    },
-    "checks": {
-      "rule": "确定性的检查，不靠模型判断；没有可测的就显示「还没有数据」，不算通过。",
-      "name": "检查",
-      "measured": "测到的",
-      "requirement": "要求"
     },
     "check": {
       "C1": "都复盘了",
@@ -2601,10 +2571,11 @@
       "C10": "有被用到"
     },
     "cost": {
-      "rule": "CDF 的模型花费，按用途分。下面每根柱是一天全系统的花费，橙色是其中 CDF 的部分。只记录，不设上限。",
       "calls": "{{calls}} 次调用",
       "avg": "每次 {{usd}}",
-      "unpriced": "{{calls}} 次调用没有记录花费，不计入合计。"
+      "unpriced": "{{calls}} 次调用没有记录花费，不计入合计。",
+      "legend": "橙色是 CDF，灰色是其余",
+      "dayTip": "{{day}} · CDF {{cdf}} / 全部 {{all}}"
     },
     "feature": {
       "cdf_s7": "会后复盘",
@@ -2613,32 +2584,43 @@
       "cdf_s3": "运行报告",
       "cdf_user_check": "核对你的原话",
       "cdf_health": "健康判官",
-      "cdf": "其他 CDF"
+      "cdf": "其他 CDF",
+      "cdf_s4": "代码变更"
     },
     "reading": {
-      "title": "判官的解读",
-      "by": "判官读了近 7 天的数字和打过分的条目后写成 · {{at}}。只是解读，不改任何东西。",
-      "staleNote": "最近一次没写成，这是上一次的解读",
-      "seen": "看到了什么",
-      "why": "为什么",
-      "suggest": "建议",
+      "title": "评审原文",
       "basis": "依据：{{scored}} 条打过分的条目、{{checks}} 项检查。",
       "noAgreement": "判官和你判断的一致度还不知道（你已改判 {{n}} 条，要满 10 条），所以先当参考。",
-      "agreement": "你改判的 {{n}} 条里，判官和你一致的占 {{pct}}。",
-      "failed": "这次解读没写成，下次检查会再试。",
-      "none": "还没有解读。"
+      "agreement": "你改判的 {{n}} 条里，判官和你一致的占 {{pct}}。"
     },
-    "usedNote": "较早的条目写入后有 {{pct}} 被用到"
+    "usefulWhat": "记下的知识有用",
+    "below": "差 {{pts}} 个百分点",
+    "onTarget": "达标",
+    "target": "目标 {{pct}}%",
+    "stamp": "上次检查 {{at}} · {{ago}}前",
+    "costIn7d": "花费 · 7 天",
+    "costIn30d": "花费 · 30 天",
+    "perUsefulLabel": "每条有用的知识",
+    "fixes": "要修的",
+    "fixesNone": "没有要修的：检查都通过，每个去处都达标。",
+    "lowLine": "评了 {{scored}} 条 · 一般 {{weak}} · 该撤 {{withdraw}}",
+    "fixPrompt": "认知沉淀有一处要修：{{what}}。{{detail}}。找到原因并修好，然后用两句话告诉我哪里错了、改了什么。健康评审的建议：\n{{suggest}}",
+    "destinations": "每个去处",
+    "fewSamples": "样本不够",
+    "scored": "评了 {{n}} 条",
+    "restPassed_one": "其余 {{count}} 项通过",
+    "restPassed_other": "其余 {{count}} 项都通过",
+    "restNoData_one": "{{count}} 项没有数据",
+    "restNoData_other": "{{count}} 项没有数据",
+    "expand": "展开 ▸",
+    "collapse": "收起 ▾",
+    "stampAt": "上次检查 {{at}}"
   },
   "cdf": {
     "w24h": "24 小时",
     "w7d": "7 天",
     "w30d": "30 天",
-    "notKeptNone": "进来的内容全部保留了。",
-    "healthOk": "没有等待或失败的条目。",
-    "healthWaiting": "{{n}} 条在等待或处理失败。",
-    "groupCount": "{{label}}（{{n}}）",
-    "and": "和",
+    "healthOk": "没有卡住的。",
     "group": {
       "basic": "没过基础检查",
       "place": "放不进去（Hive 教训说的是另一个 Brain 的项目）",
@@ -2664,7 +2646,6 @@
       "cleanup_overdue": "{{n}} 条超过 30 天还没被清理（存储 {{size}}）"
     },
     "landedTitle": "落到了哪里",
-    "landedHint": "点一行看具体条目",
     "landedEmpty": "这段时间没有保留任何内容。",
     "tier": {
       "every_turn": "每轮都读",
@@ -2685,50 +2666,7 @@
       "KNOWLEDGE": "Knowledge Library",
       "DDD": "项目大脑"
     },
-    "storeHint": {
-      "MEMORY": "原则、决定、坑",
-      "EVOLUTION": "纠正、能力",
-      "STEERING": "你的长期规则",
-      "USER": "你是谁",
-      "TOOLS": "你的环境",
-      "TIMELINE": "关键事件",
-      "COMMON_DDD": "按主题",
-      "KNOWLEDGE": "参考资料、笔记"
-    },
-    "counts": "新增 {{written}} · 强化 {{reinforced}}",
-    "countsNew": "新增 {{written}}",
-    "countsReinforced": "强化 {{reinforced}}",
-    "movedNote": "有 {{n}} 条 agent 本来要写进 {{stores}} 的内容，改投到了项目大脑或公共大脑：它们依据的是 agent 自己对会话的理解，没有你的原话，也没有实测数据，所以只在相关时召回，不进每轮 prompt。",
-    "legendKept": "新增或补充已有条目",
-    "legendReinforced": "强化已有条目",
-    "legendScale": "所有行同一个比例尺",
-    "decideTitle": "怎么判断的",
-    "step": {
-      "captured": "记下来",
-      "capturedRule": "在场的 agent 写下值得保留的内容。",
-      "basic": "基础检查",
-      "basicRule": "空内容、带密码的链接直接丢掉。这一步不判断含义。",
-      "place": "定位置",
-      "placeRule": "它是什么（经验、待办缺口、事件、参考资料）、关于谁（你、agent、世界、某个项目），决定写进哪个文件哪一节。",
-      "trust": "信任底线",
-      "trustRule": "每轮都读的文件只收你的原话或实测数据，其余放进按需召回的大脑。",
-      "compare": "和已有内容比对",
-      "compareRule": "写它的 agent 说明它是新的、补充某条，还是和某条相同。",
-      "written": "写入",
-      "writtenRule": "连同来源和它补充的那一条一起保存。"
-    },
-    "out": {
-      "dropped": "丢掉 {{n}}",
-      "moved": "{{n}} 条移出每轮文件",
-      "known": "{{n}} 条已经知道，跳过",
-      "writtenSplit": "新增 {{new}} · 补充 {{adds}}",
-      "place": "{{n}} 条放不进去",
-      "withdrawn": "{{n}} 条是你撤回过的，拒收",
-      "older": "{{n}} 条比已有条目旧，跳过"
-    },
-    "alsoRetired": "{{n}} 条被 agent 自主判断之前的质量判官拒收（已下线）",
-    "alsoBacklog": "{{n}} 条在一次性丢弃旧积压时清掉",
-    "alsoPrefix": "这段时间里还有：",
+    "movedNote": "{{n}} 条想进每轮都读的文件，但不是你的原话或实测，改投进了大脑。",
     "source": {
       "S0": "系统汇总",
       "S1": "你说的",
@@ -2748,16 +2686,12 @@
       "not_kept": "未保留",
       "waiting": "等待中"
     },
-    "everySource": "所有来源",
-    "everyPlace": "所有位置",
     "search": "搜索标题和内容",
     "showMore": "加载更多",
     "feedEmpty": "没有符合条件的条目。",
     "showing": "只看 {{label}}",
     "clearFilter": "看全部",
-    "verbNew": "新增",
     "verbAdded": "补充了",
-    "verbAnEntry": "一条已有条目",
     "verbReinforced": "强化了",
     "verbMoved": "从 {{store}} 改投到这里",
     "verbNotKept": "未保留：{{reason}}",
@@ -2862,31 +2796,39 @@
         "maintenance": "维护"
       }
     },
-    "alsoNoProject": "{{n}} 条因指向不存在的项目被丢掉（公共大脑接管之前）",
-    "alsoOther": "{{n}} 条因其他原因未保留",
-    "alsoExpired": "{{n}} 条超时未处理",
-    "alsoWaiting": "{{n}} 条在等待或处理失败",
     "cmpWithdrawn": "和你撤回过的内容相同，拒收，不会再进来。",
     "cmpOlder": "已有条目更新，这条旧的跳过。",
     "searchCapped": "只搜了前 {{n}} 条匹配；缩小搜索范围才能看到其余的。",
     "dash": {
-      "captured": "进来",
-      "capturedHint": "agent 写下的条目",
-      "learned": "学到",
-      "learnedHint": "新增，或补充已有条目",
-      "reinforced": "强化",
-      "reinforcedHint": "已有条目再次得到确认",
-      "notKept": "未保留",
-      "notKeptMostly": "主要是{{top}}",
-      "up": "比上一个 {{window}} ↑ {{pct}}%",
-      "down": "比上一个 {{window}} ↓ {{pct}}%",
-      "same": "和上一个 {{window}} 持平",
-      "fromZero": "上一个 {{window}} 为 0",
-      "noPrevious": "还没有完整的上一个周期"
+      "noPrevious": "没有更早的记录可比",
+      "learnedWhat": "条学到",
+      "was24h": "前 24 小时 {{n}}",
+      "was7d": "前 7 天 {{n}}",
+      "was30d": "前 30 天 {{n}}",
+      "barsLabel": "学到的条数，按时间",
+      "barTip": "{{when}} · 学到 {{learned}} · 强化 {{reinforced}} · 已有 {{known}}"
     },
-    "showRules": "展开每一步的规则",
-    "hideRules": "收起规则",
-    "feedCount": "共 {{n}} 条"
+    "feedCount": "共 {{n}} 条",
+    "openHealth": "看健康度",
+    "fact": {
+      "captured": "记下",
+      "reinforced": "强化",
+      "known": "已经有了",
+      "moved": "从每轮文件改投到大脑"
+    },
+    "restProjects_one": "其余 {{count}} 个",
+    "restProjects_other": "其余 {{count}} 个",
+    "countsTip": "写入 {{written}} · 强化 {{reinforced}}",
+    "mark": {
+      "new": "新",
+      "adds": "补充",
+      "reinforced": "+1",
+      "known": "已有",
+      "waiting": "等待中",
+      "notKept": "没留",
+      "place": "没地方放",
+      "failed": "失败"
+    }
   },
   "brainLearned": {
     "loading": "正在读取这个 Brain 学到的内容…",

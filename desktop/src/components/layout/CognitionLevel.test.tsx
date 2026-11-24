@@ -1,7 +1,8 @@
 /**
  * Swarm's cognition level in the first Needs You tab (docs/design/2026-10-31-cognition-level.md §6):
- * - it sits under the queue in the first tab;
- * - a trend is claimed only between weeks measured the same way;
+ * - it sits under the queue in the first tab, one number against the four weeks before;
+ * - a change is coloured only when the backend's trend says better or worse;
+ * - a week whose rules changed carries a mark; repeated corrections are amber;
  * - the chain shows where mistakes come from; without an audit it says when the first runs.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -16,7 +17,8 @@ function lookup(key: string): unknown {
   return key.split('.').reduce<unknown>((node, part) => (node as Record<string, unknown> | undefined)?.[part], en);
 }
 const t = ((key: string, values?: Record<string, unknown>) => {
-  const found = lookup(key);
+  const plural = typeof values?.count === 'number' ? lookup(`${key}_${values.count === 1 ? 'one' : 'other'}`) : undefined;
+  const found = plural ?? lookup(key);
   const text = typeof found === 'string' ? found : key;
   return text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? ''));
 }) as unknown as TFunction;
@@ -36,7 +38,7 @@ vi.mock('../../services/attention', async (orig) => ({
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NeedYouContent } from './NeedYouOverlay';
-import { levelLine, rolling, trendVerdict } from './cognitionLevelText';
+import { levelLine, trendVerdict } from './cognitionLevelText';
 import { mapIngestionValue, type LevelTrend } from '../../services/ingestion';
 
 /** The cases the backend's headline test reads too (backend/tests/test_north_star.py). */
@@ -90,37 +92,45 @@ describe('cognition level', () => {
     expect(levelLine(t, trendOf(0.4, 0.6, null, null))).toContain(': too few sessions for a trend');
   });
 
-  it('the curve pools four weeks, weighted by conversations', () => {
-    // weighted by conversations: a 2-conversation week cannot swing the share
-    const r = rolling([W('a', 0.5, 20), W('b', 0.5, 20), W('c', 0.5, 20), W('d', 0, 2)]);
-    expect(r[3]).toBeCloseTo(1 - (30 + 2) / 62, 5);
-    expect(r[2]).toBeNull();
-  });
-
-  it('sits under the queue in the first tab, with this week and the chain', async () => {
+  it('sits under the queue in the first tab: the trend window\'s share against the 4 weeks before', async () => {
     render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap });
     const section = await screen.findByTestId('cognition-level');
     expect(screen.getByTestId('needs-you-attention').compareDocumentPosition(section)
       & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(section).toHaveTextContent('60%');
-    // the sentence and the big number are the backend trend's window, not the curve's own
+    // the big number is the backend trend's own window (1 - 0.45), not this week
+    expect(screen.getByTestId('level-big-value')).toHaveTextContent('55%');
+    const cmp = screen.getByTestId('level-compare');
+    expect(cmp).toHaveTextContent('▲ 15 points');
+    expect(cmp).toHaveTextContent('4 weeks before 40%');
+    expect(cmp.querySelector('b')?.getAttribute('style')).toContain('--color-status-success');
+    // the prompt's wording, for a screen reader and on hover
     expect(screen.getByTestId('level-line')).toHaveTextContent("55% of the last 4 weeks' conversations needed no correction, 40% the 4 weeks before: better");
-    expect(section).toHaveTextContent('55%');
-    expect(section).toHaveTextContent('2 / 12');
-    expect(screen.getByTestId('level-agreement')).toHaveTextContent('of 14 conversations it recorded a correction in, the judge found 13');
-    const missing = within(screen.getByTestId('level-chain')).getByTestId('level-stage-missing');
-    expect(missing).toHaveTextContent('6');
-    expect(missing).toHaveTextContent('60%');
   });
 
-  it('labels a comparison with the baseline as the baseline, not the month before', async () => {
-    const audit = DATA.audit!;
-    cognitionLevel.mockResolvedValue({ ...DATA, audit: { ...audit, previous: { month: '2026-10-30',
-      outcomes: { 事先没有: 22 }, total: 38, baseline: true } } });
+  it('claims no change when the backend sees none, even across a gap', async () => {
+    cognitionLevel.mockResolvedValue({ ...DATA, trend: trendOf(0.45, 0.6, 'same', 21) });
     render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap });
-    const missing = within(await screen.findByTestId('level-chain')).getByTestId('level-stage-missing');
-    expect(missing).toHaveTextContent('22 in the baseline');
-    expect(missing).not.toHaveTextContent('the month before');
+    const cmp = await screen.findByTestId('level-compare');
+    expect(cmp).not.toHaveTextContent('▲');
+    expect(cmp.querySelector('b')).toBeNull();
+    expect(cmp).toHaveTextContent('4 weeks before 40%');
+  });
+
+  it('this week, repeated corrections in amber, and a mark on the week whose rules changed', async () => {
+    cognitionLevel.mockResolvedValue({ ...DATA, marks: [{ at: '2026-10-18T12:00:00', kind: 'governance', label: 'SOUL' }] });
+    render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap });
+    const kpis = await screen.findByTestId('level-kpis');
+    expect(within(kpis).getByTestId('level-kpis-week')).toHaveTextContent('60%');
+    const repeats = within(kpis).getByTestId('level-kpis-repeats');
+    expect(repeats).toHaveTextContent('2 / 12');
+    expect(repeats.querySelector('div:last-child')?.getAttribute('style')).toContain('--color-status-warning');
+    const weeks = screen.getAllByTestId('level-week');
+    const marked = weeks.filter((w) => w.querySelector('[data-testid="level-mark"]'));
+    expect(marked).toHaveLength(1);
+    expect(marked[0].getAttribute('title')).toContain('rules changed: SOUL');
+    const missing = within(screen.getByTestId('level-chain')).getByTestId('level-stage-missing');
+    expect(missing).toHaveTextContent('6');
+    expect(screen.getByTestId('level-chain')).toHaveTextContent('mostly “not known beforehand”, 60%');
   });
 
   it('says when the first audit runs when there is none', async () => {

@@ -3,11 +3,11 @@
  * CdfGuideline), against mocked service responses and the real English strings.
  *
  * Each test answers one question a person asks of the view:
- * - does the first screen say, in a sentence, what was learned and what was not kept;
- * - are anomalies shown with an action that lands a prompt in chat;
- * - does "where it landed" read backward by tier, and filter the list when clicked;
- * - does each item say where it landed and what was decided, and open into its trace;
- * - does the Guideline tab draw the flow; does Details keep the raw audit one click away.
+ * - does the first screen lead with how much was learned, against the window before;
+ * - is the status the same conclusion as Needs you, each line handed to Swarm in one click;
+ * - does "where it landed" read in three columns, and filter the list when clicked;
+ * - does each item say where it landed and mark what was decided, and open into its trace;
+ * - does How it works draw the flow with the week's numbers; does Details keep the raw audit.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -105,56 +105,102 @@ function open(onDispatch = vi.fn(() => true), close = vi.fn()) {
 }
 
 describe('Cognition flow — Activity', () => {
-  it('leads with a dashboard: four numbers, their change and their trend', async () => {
+  it('leads with one number against the window before, what else happened, and its bars', async () => {
     open();
-    const learned = await screen.findByTestId('cdf-kpi-learned');
-    expect(learned).toHaveTextContent('Learned');
-    expect(learned).toHaveTextContent('10');
-    expect(learned).toHaveTextContent('↑ 100% vs previous 24 hours');
-    expect(screen.getByTestId('cdf-kpi-captured')).toHaveTextContent('↑ 25% vs previous 24 hours');
-    expect(screen.getByTestId('cdf-kpi-reinforced')).toHaveTextContent('same as previous 24 hours');
-    const notKept = screen.getByTestId('cdf-kpi-notKept');
-    expect(notKept).toHaveTextContent('↓ 12% vs previous 24 hours');
-    expect(notKept).toHaveTextContent('mostly already known (5)');
-    expect(learned.querySelectorAll('svg rect')).toHaveLength(24);         // one bar per hour
-    expect(screen.getByTestId('cdf-status')).toHaveTextContent('Nothing is waiting or failing.');
+    expect(await screen.findByTestId('cdf-learned-value')).toHaveTextContent('10');
+    expect(screen.getByTestId('cdf-learned-was')).toHaveTextContent('▲ 100% · 7 days before 5');
+    const facts = screen.getByTestId('cdf-facts');
+    expect(facts).toHaveTextContent('captured 20');
+    expect(facts).toHaveTextContent('reinforced 3');
+    expect(facts).toHaveTextContent('already known 7');
+    expect(facts).toHaveTextContent('moved out of every-turn files 3');
+    expect(screen.getAllByTestId('cdf-bar')).toHaveLength(24);          // one bar per bucket
   });
 
   it('claims no change when the store does not reach a full window back', async () => {
     landed.mockResolvedValue({ ...overview, previous: null });
     open();
     const dash = await screen.findByTestId('cdf-dashboard');
-    expect(dash).toHaveTextContent('no full earlier period yet');
-    expect(dash).not.toHaveTextContent('vs previous');
+    expect(dash).toHaveTextContent('no earlier window to compare');
+    expect(screen.queryByTestId('cdf-learned-was')).toBeNull();
   });
 
-  it('shows anomalies with an action that lands a prompt in chat, with no stored text in it', async () => {
+  it('says the same as Needs you: a stuck CDF in the queue is the status, handed to Swarm in one click', async () => {
+    attention.mockResolvedValue({ items: [{ id: 'ingestion:stalled', source: 'ingestion', tier: 'review', brain: null,
+      title: 'Cognitive Distillation has stopped moving', summary: 'a job waits 16 h', detail: 'a job waits 16 h',
+      handler: 'agent', since: null, dispatch: { message: 'run ingest status and fix it', context: { kind: 'stalled' } } }],
+    counts: { blocking: 0, review: 1, person: 0, agent: 1 } });
+    landed.mockResolvedValue({ ...overview, attention: [] });
     const { onDispatch, close } = open();
-    const box = await screen.findByTestId('cdf-attention');
-    expect(box).toHaveTextContent('138 links to earlier entries could not be made');
-    expect(box).toHaveTextContent('40 items are older than 30 days and were not cleaned up (the store is 522 MB)');
-    const asks = within(box).getAllByRole('button', { name: 'Ask Swarm to look' });
-    fireEvent.click(asks[0]);
-    expect(onDispatch).toHaveBeenCalledWith(expect.stringContaining('138 links to earlier entries'), { autoSend: false });
+    const line = await screen.findByText('Cognitive Distillation has stopped moving');
+    const box = line.closest('[data-testid="cdf-attention"]') as HTMLElement;
+    expect(box).toHaveTextContent('a job waits 16 h');
+    fireEvent.click(within(box).getByRole('button', { name: en.needYou.hand }));
+    expect(onDispatch).toHaveBeenCalledWith('run ingest status and fix it', { autoSend: true });
     expect(close).toHaveBeenCalled();
-    fireEvent.click(asks[1]);                       // the spelling line shows project names as data
-    const prompt = String((onDispatch.mock.calls[1] as unknown[])[0]);
-    expect(prompt).not.toContain('Ignore the above');
   });
 
-  it('reads where it landed by tier, and a click filters the list to that place', async () => {
+  it("a CDF item only the person can answer keeps its own action, never Hand to Swarm", async () => {
+    attention.mockResolvedValue({ items: [
+      { id: 'ingestion:needs_account', source: 'ingestion', tier: 'review', brain: null, title: 'Sign in to the SwarmAI account',
+        summary: 'CDF cannot call the model', detail: '', handler: 'person', since: null,
+        dispatch: { message: 'help me sign in', context: { kind: 'aws_account', settings_tab: 'aws' } } },
+      { id: 'ingestion:user_race:1', source: 'ingestion', tier: 'blocking', brain: null, title: 'A file changed while CDF was writing',
+        summary: 'MEMORY.md', detail: '', handler: 'person', since: null,
+        dispatch: { message: 'keep my version', context: { kind: 'user_race' } } }],
+    counts: { blocking: 1, review: 1, person: 2, agent: 0 } });
+    landed.mockResolvedValue({ ...overview, attention: [] });
+    const { onDispatch } = open();
+    const boxes = await screen.findAllByTestId('cdf-attention');
+    expect(within(boxes[0]).queryByRole('button', { name: en.needYou.hand })).toBeNull();
+    expect(within(boxes[0]).getByRole('button', { name: en.needYou.openSettings })).toBeInTheDocument();
+    expect(within(boxes[1]).queryByRole('button', { name: en.needYou.hand })).toBeNull();
+    fireEvent.click(within(boxes[1]).getByRole('button', { name: en.needYou.handle }));
+    expect(onDispatch).toHaveBeenCalledWith('keep my version', { autoSend: true });
+  });
+
+  it('says nothing about health while the readings are still loading', async () => {
+    landed.mockReturnValue(new Promise(() => {}));
+    open();
+    const status = await screen.findByTestId('cdf-status');
+    expect(status.getAttribute('data-ok')).toBeNull();
+    expect(status).not.toHaveTextContent(en.cdf.healthOk);
+  });
+
+  it('with nothing stuck it says so in one calm line', async () => {
+    landed.mockResolvedValue({ ...overview, attention: [] });
+    open();
+    await screen.findByTestId('cdf-dashboard');
+    const status = screen.getByTestId('cdf-status');
+    expect(status.getAttribute('data-ok')).toBe('true');
+    expect(status).toHaveTextContent(en.cdf.healthOk);
+  });
+
+  it("shows the flow's own anomalies, and a prompt carries no stored text", async () => {
+    const { onDispatch } = open();
+    const boxes = await screen.findAllByTestId('cdf-attention');
+    expect(boxes[0]).toHaveTextContent('138 links to earlier entries could not be made');
+    expect(boxes[2]).toHaveTextContent('40 items are older than 30 days and were not cleaned up (the store is 522 MB)');
+    fireEvent.click(within(boxes[0]).getByRole('button', { name: en.needYou.hand }));
+    expect(onDispatch).toHaveBeenLastCalledWith(expect.stringContaining('138 links to earlier entries'), { autoSend: true });
+    fireEvent.click(within(boxes[1]).getByRole('button', { name: en.needYou.hand }));   // the spelling line shows names as data
+    expect(String(onDispatch.mock.calls[onDispatch.mock.calls.length - 1][0])).not.toContain('Ignore the above');
+    expect(screen.getAllByTestId('cdf-open-health')).toHaveLength(1);   // once, after the lines
+    fireEvent.click(screen.getByTestId('cdf-open-health'));
+    expect(screen.getByTestId('cdf-health-tab').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('reads where it landed in three columns on one scale, and a click filters the list to that place', async () => {
     open();
     const landedBox = await screen.findByTestId('cdf-landed');
-    expect(landedBox).toHaveTextContent('Read every turn');
-    expect(landedBox).toHaveTextContent('Evolution');
-    expect(landedBox).toHaveTextContent('Project brains');
-    expect(within(landedBox).getByTestId('cdf-dest-p-SwarmAI')).toHaveTextContent('9 new · 3 reinforced');
-    expect(landedBox).toHaveTextContent('TECH.md');
-    expect(screen.getByTestId('cdf-moved-note')).toHaveTextContent('3 items the agent meant for Evolution went to a project brain');
+    expect(within(landedBox).getByTestId('cdf-tier-every_turn')).toHaveTextContent('Evolution');
+    expect(within(landedBox).getByTestId('cdf-dest-p-SwarmAI')).toHaveTextContent('9');
+    expect(within(landedBox).getByTestId('cdf-tier-project')).toHaveTextContent('TECH');
+    expect(screen.getByTestId('cdf-moved-note')).toHaveTextContent('3 items meant for the files read every turn');
     fireEvent.click(within(landedBox).getByTestId('cdf-dest-f-Projects/SwarmAI/2-understanding/TECH.md'));
     await waitFor(() => expect(units).toHaveBeenLastCalledWith(
       expect.objectContaining({ path: 'Projects/SwarmAI/2-understanding/TECH.md', outcome: 'all' }), 1, 25));
-    expect(screen.getByTestId('cdf-focus')).toHaveTextContent('Showing TECH.md');
+    expect(screen.getByTestId('cdf-focus')).toHaveTextContent('TECH');
     fireEvent.click(within(landedBox).getByTestId('cdf-dest-p-SwarmAI'));   // a project: its own files only
     await waitFor(() => expect(units).toHaveBeenLastCalledWith(
       expect.objectContaining({ pathPrefix: 'Projects/SwarmAI/' }), 1, 25));
@@ -163,34 +209,18 @@ describe('Cognition flow — Activity', () => {
       expect.objectContaining({ path: '.context/EVOLUTION.md' }), 1, 25));
   });
 
-  it('shows the six steps with what each let through, dropped or moved, and no total twice', async () => {
-    open();
-    const steps = await screen.findByTestId('cdf-decide');
-    expect(steps).toHaveTextContent('Post-session review 12');
-    expect(steps).toHaveTextContent('Session 8');
-    expect(steps).toHaveTextContent('2 could not be placed');
-    expect(steps).toHaveTextContent('1 you had withdrawn — refused');
-    expect(steps).toHaveTextContent('3 moved out of every-turn files');
-    expect(steps).toHaveTextContent('5 already known — skipped');
-    expect(steps).toHaveTextContent('4 new · 6 add to an entry');
-    // the dashboard's totals are not repeated in the steps
-    expect(steps).not.toHaveTextContent('10 written');
-    expect(steps).not.toHaveTextContent('3 reinforced an entry');
-    expect(steps).not.toHaveTextContent('20');
-    // the rules are folded: on hover, or all at once
-    expect(steps).not.toHaveTextContent('Files read every turn take only your own words');
-    expect(within(steps).getByText('Trust floor')).toHaveAttribute('title', expect.stringContaining('Files read every turn'));
-    fireEvent.click(within(steps).getByTestId('cdf-rules-toggle'));
-    expect(steps).toHaveTextContent('Files read every turn take only your own words');
-  });
-
-  it('says for each item where it landed and what was decided, and opens its trace', async () => {
+  it('says for each item where it landed and marks the decision, and opens its trace', async () => {
     open();
     const rows = await screen.findAllByTestId('cdf-unit');
     expect(rows[0]).toHaveTextContent('Process');
-    expect(rows[0]).toHaveTextContent('SwarmAI › IMPROVEMENT › What Worked');
+    expect(within(rows[0]).getByTestId('cdf-unit-meta')).toHaveTextContent('→ SwarmAI › IMPROVEMENT › What Worked');
     expect(rows[0]).toHaveTextContent('moved here from Evolution');
-    expect(rows[1]).toHaveTextContent("Not kept — could not be placed (a Hive lesson about another Brain's project) · project CNTech IVT Tenets");
+    const mark = within(rows[0]).getByTestId('cdf-unit-mark');
+    expect(mark).toHaveTextContent(en.cdf.mark.adds);
+    expect(mark.getAttribute('title')).toContain('R22 quota defers units');
+    const dropMark = within(rows[1]).getByTestId('cdf-unit-mark');
+    expect(dropMark).toHaveTextContent(en.cdf.mark.place);
+    expect(dropMark.getAttribute('title')).toContain('Not kept');
     fireEvent.click(within(rows[0]).getByRole('button', { expanded: false }));
     const trace = await screen.findByTestId('cdf-trace');
     expect(trace).toHaveTextContent('Evolution is read every turn and takes only your words or a measurement');
@@ -231,17 +261,16 @@ describe('Cognition flow — Activity', () => {
 });
 
 describe('Cognition flow — Guideline', () => {
-  it('draws the flow and explains who decides what', async () => {
+  it("draws the flow with the week's numbers and says who decides what", async () => {
     open();
+    await screen.findByTestId('cdf-dashboard');
     fireEvent.click(screen.getByTestId('cdf-guide-tab'));   // one level of tabs
     const guide = await screen.findByTestId('cdf-guide');
     const diagram = within(guide).getByTestId('cdf-guide-diagram');
-    for (const label of ['Post-session review', 'ingestion.db', '3 Trust floor', 'Read every turn', 'Project brains', 'The next session starts with it']) {
+    for (const label of ['Post-session review', 'Queue', 'Trust floor', 'moved to a brain 3', 'Read every turn', 'Project brains', 'The next session starts with it']) {
       expect(diagram).toHaveTextContent(label);
     }
-    expect(guide).toHaveTextContent('The agent that was there decides the meaning');
-    expect(guide).toHaveTextContent('Code checks only facts');
-    expect(landed).toHaveBeenCalledTimes(1);          // the flow tab's query ran once; the guide fetches nothing
-    expect(screen.queryByTestId('cdf-sub-guide')).toBeNull();
+    expect(guide).toHaveTextContent('The agent that was there decides the meaning; code only checks facts.');
+    expect(landed).toHaveBeenCalledTimes(1);          // the flow tab's 7-day query, shared with the guide
   });
 });
