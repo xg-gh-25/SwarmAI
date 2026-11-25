@@ -213,7 +213,7 @@
       "execution_release_digest": null,
       "instance_mode": "singleton",
       "lifecycle_controls": [],
-      "package_release_digest": "20c8b0a9c4884a93382d5db8488bcf654eb233741499cbec9da4a3624f9b0287",
+      "package_release_digest": "587cec1b70a48a6cbaf92119fde4eba301699f0e13b75041dd10f7d2176394be",
       "profile_accounting": [
         {
           "blocked_resources": [],
