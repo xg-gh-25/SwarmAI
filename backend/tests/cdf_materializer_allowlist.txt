@@ -126,7 +126,6 @@ main.py:lifespan  # exempt: via _migrate_legacy_state_dir: legacy state dir move
 main.py:read_backend_json  # exempt: backend.json (reads with a lock opened for write)
 main.py:remove_backend_json  # exempt: backend.json
 main.py:write_backend_json  # exempt: backend.json
-routers/pollinate.py:_write_publish_state  # exempt: pollinate publish sidecar
 routers/workspace_api.py:create_file._create  # exempt: non-governed paths only: governed targets go through apply_user_edit
 routers/workspace_api.py:delete_folder._delete  # exempt: non-governed paths only; a dir with governed descendants is refused by forbid_dir_op
 routers/workspace_api.py:put_workspace_file._write  # exempt: non-governed paths only; governed files go through apply_user_edit before this
