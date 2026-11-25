@@ -64,6 +64,11 @@ export interface ReplyLaneProps {
   rootRef: MutableRefObject<HTMLElement | null>;
 }
 
+/** Cmd/Ctrl+Enter sends, once per press. A held key repeats: after a send the next item
+ * opens, and the repeat would send its draft too, which nobody chose to send. */
+export const isSendKey = (e: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'key' | 'repeat'>) =>
+  (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.repeat;
+
 const isTextField = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
@@ -99,7 +104,7 @@ export function ReplyLane(props: ReplyLaneProps) {
       if (!inside) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
-        sendRef.current?.();
+        if (isSendKey(e)) sendRef.current?.();
         return;
       }
       if (isTextField(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;

@@ -175,7 +175,9 @@ core/ddd_bindings.py:_bind_locked  # exempt: a binding's repo checkout and its c
 core/library_mounts.py:index_code_mount  # exempt: a Library mount's code_intel.db
 core/recall_multi.py:_graph_codeintel_hits  # exempt: via code_intel.build.ensure_fresh: the code graph DB
 routers/library_api.py:register_mount._work  # exempt: via library_mounts: mount registry and its code_intel.db
-core/library_mounts.py:_reindex_if_outdated  # exempt: via code_intel.build.spawn_child: starts a mount's re-index child (its code_intel.db); log under app data
+core/library_mounts.py:_keep_current  # exempt: via code_intel.build.spawn_child: starts a mount's re-index child (its code_intel.db or docs index); log under app data
+core/library_mounts.py:_index_running  # exempt: via code_intel.build.write_lock: probes a mount's index/queue lock file under app data
+core/library_mounts.py:index_docs_mount  # exempt: a docs mount's derived Knowledge FTS rows, under its index lock file in app data
 core/library_mounts.py:main  # exempt: the mount re-index child: the mount's code_intel.db and the rebuild-turn lock under app data
 jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via local_roots.migrate_once and code_intel.build: local-roots registry JSON and code graph DBs
 core/ddd_format.py:_append_moved  # exempt: writes the Brain's deep reference (2-understanding/knowledge/), not a governed file; the docs themselves go through governed_edit.apply_user_edit
