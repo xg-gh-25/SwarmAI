@@ -46,8 +46,27 @@ GLOBAL_SCOPE = "GLOBAL"
 
 # Health is a source-exists signal, NOT a content-freshness claim: 'fresh' = the
 # pointer resolves to a live dir/file; 'missing' = the source is gone (dangling
-# reference). 'stale' (source mtime > index) is set by the freshness job cycle.
+# reference). 'stale' (source mtime > index) is set by the freshness job, which
+# then re-indexes the mount.
 VALID_HEALTH = ("fresh", "stale", "missing")
+
+
+def _add_empty_index_column(conn: sqlite3.Connection) -> None:
+    """Add ``indexed_empty_at``; another process (the API, a sweep, a child) may have
+    added it between our check and this ALTER on the first start after an upgrade."""
+    try:
+        conn.execute("ALTER TABLE library_mounts ADD COLUMN indexed_empty_at TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _index_started_stamp() -> str:
+    """The stamp an index writes when it lands: the moment it STARTED reading, one
+    second early (stamps are whole seconds, mtimes are floored to them). A file edited
+    while the index ran is then newer than the stamp and the next sweep takes it."""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class LibraryMounts:
@@ -83,6 +102,12 @@ class LibraryMounts:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_library_mounts_scope_path "
             "ON library_mounts(scope, path)"
         )
+        # When the last index found no content (indexed_empty). A source unchanged
+        # since then is not stale: without this an emptied mount would read stale on
+        # every sweep and be re-indexed forever. Added to tables made before it.
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(library_mounts)")}
+        if "indexed_empty_at" not in cols:
+            _add_empty_index_column(self._conn)
         self._conn.commit()
 
     # ── CRUD ──────────────────────────────────────────────────────────────
@@ -153,16 +178,43 @@ class LibraryMounts:
             _invalidate_mount_graph(mount_id)
         return cur.rowcount > 0
 
-    def mark_synced(self, mount_id: str, index_ref: Optional[str] = None) -> bool:
-        """Record a successful index: stamp last_synced (now) + index_ref, and
-        set health fresh. Called by the indexer after a graph is built."""
+    def mark_synced(self, mount_id: str, index_ref: Optional[str] = None,
+                    synced_at: Optional[str] = None) -> bool:
+        """Record a successful index: stamp last_synced (``synced_at``, the moment the
+        indexer started reading, or now) + index_ref, and set health fresh. Called by
+        the indexer after a graph is built."""
         cur = self._conn.execute(
-            "UPDATE library_mounts SET last_synced = datetime('now'), "
+            "UPDATE library_mounts SET last_synced = COALESCE(?, datetime('now')), "
             "index_ref = COALESCE(?, index_ref), health = 'fresh' WHERE id = ?",
-            (index_ref, mount_id),
+            (synced_at, index_ref, mount_id),
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    def mark_indexed_empty(self, mount_id: str, *, at: Optional[str] = None,
+                           recall_lost: bool = False) -> None:
+        """Record that an index found no content (``at``: when it started), so the
+        unchanged source reads fresh and is not re-indexed on every sweep.
+        ``recall_lost``: the index removed what recall reached (a docs re-index prunes
+        every chunk), so last_synced, the UI's "recall reaches it", is cleared too; an
+        empty code parse keeps the previous graph and its stamp."""
+        self._conn.execute(
+            "UPDATE library_mounts SET indexed_empty_at = COALESCE(?, datetime('now')), "
+            "health = 'fresh'" + (", last_synced = NULL" if recall_lost else "") + " WHERE id = ?",
+            (at, mount_id),
+        )
+        self._conn.commit()
+
+    def set_kind(self, mount_id: str, kind: str) -> None:
+        """Change a mount's kind (the sweep re-judges it; nobody picks a kind by hand).
+        Both index stamps are cleared: no index of the new kind exists yet, so the mount
+        reads not-indexed and every sweep tries again until one lands."""
+        if kind not in VALID_KINDS:
+            raise ValueError(f"invalid mount kind {kind!r}; must be one of {VALID_KINDS}")
+        self._conn.execute(
+            "UPDATE library_mounts SET kind = ?, last_synced = NULL, indexed_empty_at = NULL "
+            "WHERE id = ?", (kind, mount_id))
+        self._conn.commit()
 
     # ── Health ────────────────────────────────────────────────────────────
 
@@ -182,7 +234,7 @@ class LibraryMounts:
         row = self.get_mount(mount_id)
         if row is None:
             return None
-        health = self._probe_health(row["path"], row["last_synced"])
+        health = self._probe_health(row["path"], row["last_synced"], row["indexed_empty_at"])
         self._conn.execute(
             "UPDATE library_mounts SET health = ? WHERE id = ?", (health, mount_id)
         )
@@ -190,18 +242,22 @@ class LibraryMounts:
         return health
 
     @staticmethod
-    def _probe_health(path: str, last_synced: Optional[str] = None) -> str:
+    def _probe_health(path: str, last_synced: Optional[str] = None,
+                      indexed_empty_at: Optional[str] = None) -> str:
         """Health probe: missing (gone) > stale (edited after index) > fresh.
 
         `last_synced` is the SQLite ``datetime('now')`` UTC text stamped by
-        mark_synced. When absent (never indexed), a present source is 'fresh' —
-        there is no index to be stale against yet."""
+        mark_synced, `indexed_empty_at` the one mark_indexed_empty stamps; the newer
+        of the two is the last index. When neither is set (never indexed), a present
+        source is 'fresh' — there is no index to be stale against yet."""
         try:
             p = Path(path).expanduser()
             if not p.exists():
                 return "missing"
-            if last_synced:
-                synced_ts = _parse_sqlite_utc(last_synced)
+            stamps = [t for t in (_parse_sqlite_utc(x) for x in (last_synced, indexed_empty_at) if x)
+                      if t is not None]
+            if stamps:
+                synced_ts = max(stamps)
                 # SQLite datetime('now') is SECOND-granularity; file mtimes are
                 # sub-second. Floor the source mtime to whole seconds before the
                 # compare so a file written at 12:00:00.7 then synced at "12:00:00"
@@ -258,29 +314,49 @@ def _parse_sqlite_utc(text: str) -> Optional[float]:
 
 def _source_max_mtime(root: Path) -> float:
     """Newest mtime across the source (a file → its mtime; a dir → the max over
-    its tree). Bounded scan; a walk error falls back to the root's own mtime so a
-    permission hiccup never crashes the freshness probe."""
+    its tree, directories included, so a created or deleted entry counts as a change).
+
+    Vendored/build dirs are not walked and dot-entries not read: no indexer reads
+    them, and counting them made a mount read stale on every ``git fetch`` or Finder
+    ``.DS_Store`` rewrite, which now starts a re-index. (Creating one still moves its
+    directory's mtime: one extra re-index, not a loop.) An mtime in the future (clock
+    skew, an extracted archive) is skipped: it would read stale on every sweep. A walk
+    error falls back to what was read so far, so a permission hiccup never crashes the
+    freshness probe."""
+    import os
+    import time
+    horizon = time.time() + 60
     try:
         if root.is_file():
             return root.stat().st_mtime
         newest = root.stat().st_mtime
-        for p in root.rglob("*"):
-            try:
-                m = p.stat().st_mtime
-                if m > newest:
-                    newest = m
-            except OSError:
-                continue
-        return newest
+        if newest > horizon:
+            newest = 0.0
     except OSError:
         return 0.0
+    for dirpath, dirnames, filenames in os.walk(root, onerror=lambda _e: None):
+        dirnames[:] = [d for d in dirnames if d not in _JUDGE_SKIP_DIRS and not d.startswith(".")]
+        for name in dirnames + [f for f in filenames if not f.startswith(".")]:
+            try:
+                m = os.stat(os.path.join(dirpath, name)).st_mtime
+            except OSError:
+                continue
+            if newest < m <= horizon:
+                newest = m
+    return newest
 
 
-def refresh_all_mounts(store: "LibraryMounts", scope: Optional[str] = None) -> dict:
-    """Light periodic freshness job: re-probe every mount's health, persist it,
-    start a re-index child for a code mount an older parser wrote, and return a
-    {scanned, fresh, stale, missing[, reindexing]} summary. Never raises on one bad
-    mount (best-effort — a broken mount is counted, not fatal)."""
+def refresh_all_mounts(store: "LibraryMounts", scope: Optional[str] = None, *,
+                       reindex: bool = False) -> dict:
+    """The periodic freshness sweep: re-probe every mount's health, persist it, and
+    return a {scanned, fresh, stale, missing[, reindexing, rejudged]} summary.
+
+    With ``reindex`` (the library-freshness job) an enabled mount is also kept
+    current: its kind is judged again (a mount registered before the judge changed
+    keeps its old kind otherwise), and a mount whose source changed since its last
+    index, whose kind changed, or whose code graph an older parser wrote is
+    re-indexed in a child. Never raises on one bad mount (best-effort — a broken
+    mount is counted, not fatal)."""
     summary = {"scanned": 0, "fresh": 0, "stale": 0, "missing": 0}
     try:
         rows = store.list_mounts(scope=scope)
@@ -296,24 +372,77 @@ def refresh_all_mounts(store: "LibraryMounts", scope: Optional[str] = None) -> d
             continue
         if health in summary:
             summary[health] += 1
-        if row["kind"] == "code" and health != "missing":
-            _reindex_if_outdated(row["id"], summary)
+        if reindex and health != "missing" and row["enabled"]:
+            try:
+                _keep_current(store, row, health, summary)
+            except Exception as exc:  # noqa: BLE001 — one bad mount must not sink the sweep
+                logger.warning("mount %s: keeping it current failed: %s", row["id"], exc)
     return summary
 
 
-def _reindex_if_outdated(mount_id: str, summary: dict) -> None:
-    """A code mount's graph written by an older parser is re-indexed by a child
-    (``python -m core.library_mounts index-code``): after a deploy that changes the
-    parser, nobody re-mounts (design 2026-10-29-code-intel-auto D3)."""
+def _keep_current(store: "LibraryMounts", row, health: str, summary: dict) -> None:
+    """Re-judge one mount's kind and start a re-index child when its index is behind:
+    the source changed since the last index (``stale``), the kind changed, or (code)
+    the graph was written by an older parser — after a deploy that changes the
+    parser nobody re-mounts (design 2026-10-29-code-intel-auto D3)."""
     from core.code_intel.build import db_parser_outdated, spawn_child
-    if not db_parser_outdated(_mount_db_path(mount_id)):
+    mid, kind = row["id"], row["kind"]
+    if kind not in ("code", "docs"):
+        return
+    # stale, or no index has ever landed (a first index that failed, or a kind switch
+    # whose index has not landed yet): both are retried until one does
+    need = health == "stale" or (row["last_synced"] is None and row["indexed_empty_at"] is None)
+    judged = _judge_kind(row["path"])
+    if judged is not None and judged != kind:
+        # Only on a sure verdict (a marker found, or a full shallow scan without one):
+        # an error or a capped scan must not flip a mount and throw its index away.
+        # An indexer of the old kind still writing would write after the clear below.
+        if _index_running(mid, kind):
+            return
+        store.set_kind(mid, judged)
+        # The old index no longer answers for this mount: recall reads a code graph
+        # only for a code mount, and docs chunks are cleared here (the graph file is
+        # left on disk; it is rewritten if the mount turns back into code).
+        if kind == "docs":
+            _remove_mount_knowledge_chunks(mid)
+        else:
+            _invalidate_mount_graph(mid)
+        summary["rejudged"] = summary.get("rejudged", 0) + 1
+        kind, need = judged, True
+    if kind == "code" and db_parser_outdated(_mount_db_path(mid)):
+        need = True
+    if not need or _index_running(mid, kind):
         return
     try:
-        spawn_child(["-m", "core.library_mounts", "index-code", mount_id])
+        spawn_child(["-m", "core.library_mounts", f"index-{kind}", mid])
     except OSError as exc:
-        logger.warning("mount %s: could not start a re-index: %s", mount_id, exc)
+        logger.warning("mount %s: could not start a re-index: %s", mid, exc)
         return
     summary["reindexing"] = summary.get("reindexing", 0) + 1
+
+
+def _index_lock_path(mount_id: str, kind: str) -> Path:
+    """The path whose ``write_lock`` one indexer of this mount holds while it writes."""
+    return _mount_db_path(mount_id) if kind == "code" else _mounts_dir() / mount_id / "docs"
+
+
+def _queue_lock_path(mount_id: str) -> Path:
+    """The path whose ``write_lock`` an index child of this mount holds for its whole
+    life, from its start: a code child waits up to an hour for its parse turn before it
+    takes the write lock, and must be seen while it waits."""
+    return _mounts_dir() / mount_id / "queue"
+
+
+def _index_running(mount_id: str, kind: str) -> bool:
+    """True when another process is indexing this mount now or a child of it is
+    waiting for its turn, so the sweep neither starts a second child behind it nor
+    switches the mount's kind under it."""
+    from core.code_intel.build import write_lock
+    for path in (_queue_lock_path(mount_id), _index_lock_path(mount_id, kind)):
+        with write_lock(path, wait=False) as held:
+            if not held:
+                return True
+    return False
 
 
 # ── Ownership plan A — parallel predicate + composed oracle ──────────────────
@@ -407,6 +536,12 @@ _JUDGE_SCAN_CAP = 5000  # entries scanned before defaulting to 'docs' (bounded)
 
 
 def judge_mount_kind(path: str) -> str:
+    """The kind a mount is registered with: :func:`_judge_kind`, 'docs' when it cannot
+    tell (the lower-risk kind)."""
+    return _judge_kind(path) or "docs"
+
+
+def _judge_kind(path: str) -> Optional[str]:
     """Judge a directory's mount kind by REPO-NESS: 'code' iff it looks like a real,
     buildable repository (carries a repo marker — `.git`, `package.json`,
     `pyproject.toml`, `Cargo.toml`, `go.mod`, … see `_REPO_MARKERS`), else 'docs'.
@@ -420,12 +555,15 @@ def judge_mount_kind(path: str) -> str:
     Knowledge FTS5 by index_docs_mount, so recall still reaches it).
 
     Bounded scan: only root + shallow subdirs (depth <= `_JUDGE_MARKER_DEPTH`),
-    skipping vendored subtrees, capped at `_JUDGE_SCAN_CAP` entries. Defaults to
-    'docs' for an empty / unreadable / huge / marker-less dir."""
+    never descending into vendored subtrees or below that depth, capped at
+    `_JUDGE_SCAN_CAP` entries. 'docs' for an empty or marker-less dir; None when it
+    cannot tell (not a dir, an error, the scan cap): the sweep then leaves the kind
+    as it is, and registration takes 'docs' (judge_mount_kind)."""
+    import os
     try:
         root = Path(path).expanduser()
         if not root.is_dir():
-            return "docs"
+            return None
         # Root-level marker is the cheap common case (git repo / manifest at root).
         for marker in _REPO_MARKERS:
             try:
@@ -434,31 +572,28 @@ def judge_mount_kind(path: str) -> str:
             except OSError:
                 continue
         # Shallow walk for a marker in an immediate subdir (mounted-one-level-up case).
+        # A vendored dir's own name counts, its contents do not (node_modules/dep/
+        # package.json is a dependency's marker); `.git` is BOTH a skip-dir and a
+        # marker, so a shallow `.git` DIR still counts while its contents stay
+        # unread (Gate-2 LOW, run_139d7652: a .git-only subdir repo was mislabeled
+        # docs). os.walk is pruned, so nothing below the depth is ever read.
         scanned = 0
-        for p in root.rglob("*"):
-            try:
-                rel_parts = p.relative_to(root).parts
-            except ValueError:
-                continue
-            # Prune by ANCESTOR only (not p itself): a path INSIDE a vendored dir
-            # (node_modules/dep/package.json) is a dependency's marker, skip it. But
-            # `.git` is BOTH a skip-dir (never descend) AND a repo marker — checking
-            # ancestors (rel_parts[:-1]) instead of all parts lets a shallow `.git`
-            # DIR still count as a marker while its CONTENTS stay pruned (Gate-2 LOW,
-            # run_139d7652: a .git-only subdir repo was mislabeled docs).
-            if any(part in _JUDGE_SKIP_DIRS for part in rel_parts[:-1]):
-                continue
-            depth = len(rel_parts)  # # path parts below root
-            if depth > _JUDGE_MARKER_DEPTH:
-                continue
-            scanned += 1
-            if scanned > _JUDGE_SCAN_CAP:
-                return "docs"  # too big to classify cheaply → safe default
-            if p.name in _REPO_MARKERS:
-                return "code"
+        base = len(root.parts)
+        for dirpath, dirnames, filenames in os.walk(root):
+            depth = len(Path(dirpath).parts) - base  # this dir's entries sit at depth + 1
+            for name in dirnames + filenames:
+                scanned += 1
+                if scanned > _JUDGE_SCAN_CAP:
+                    return None  # too big to classify cheaply
+                if name in _REPO_MARKERS:
+                    return "code"
+            if depth + 2 > _JUDGE_MARKER_DEPTH:
+                dirnames[:] = []
+            else:
+                dirnames[:] = [d for d in dirnames if d not in _JUDGE_SKIP_DIRS]
         return "docs"
     except Exception:  # noqa: BLE001 — judgement must never raise into the caller
-        return "docs"
+        return None
 
 
 def is_protected_system_path(path: str) -> bool:
@@ -556,8 +691,6 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
     row = store.get_mount(mount_id)
     if row is None:
         return {"status": "unknown"}
-    if row["kind"] != "code":
-        return {"status": "skipped_non_code"}
     src = Path(row["path"]).expanduser()
     if not src.is_dir():
         store.check_health(mount_id)  # persists 'missing'
@@ -572,6 +705,11 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
     with write_lock(db_path, wait=False) as held:
         if not held:  # a second index of the same mount is already running
             return {"status": "already_indexing"}
+        # read under the lock: the sweep switches a kind only while no indexer holds it
+        row = store.get_mount(mount_id)
+        if row is None or row["kind"] != "code":
+            return {"status": "skipped_non_code"}
+        started = _index_started_stamp()
         graph = GraphStore(db_path)
         # The one full rebuild, without routes (a library's routes have no reader) and
         # without the indexed stamp (a mount's freshness is its own last_synced). An
@@ -584,10 +722,12 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
         _mount_graph_cache[mount_id] = graph
     if total > 0:
         # Real symbols indexed → stamp last_synced (the UI's "recall reaches it" signal).
-        store.mark_synced(mount_id, index_ref=str(db_path))
+        store.mark_synced(mount_id, index_ref=str(db_path), synced_at=started)
         return {"status": "indexed", "symbols": total}
     # Marker present but no parseable source → empty graph, recall reaches nothing.
-    # Do NOT stamp last_synced: the honesty badge must read this as not-indexed.
+    # Do NOT stamp last_synced: the honesty badge must read this as not-indexed. The
+    # empty result is recorded, so the sweep re-indexes it only after the next change.
+    store.mark_indexed_empty(mount_id, at=started)
     return {"status": "indexed_empty", "symbols": 0}
 
 
@@ -625,13 +765,12 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
       empty/all-binary dir returns 'indexed_empty' WITHOUT stamping last_synced, so
       the UI badge reads it as not-recall-reachable.
 
-    Returns {status: indexed|indexed_empty|skipped_non_docs|unknown|source_missing, chunks}.
+    Returns {status: indexed|indexed_empty|skipped_non_docs|unknown|source_missing|
+    already_indexing|store_unavailable, chunks}.
     """
     row = store.get_mount(mount_id)
     if row is None:
         return {"status": "unknown"}
-    if row["kind"] != "docs":
-        return {"status": "skipped_non_docs"}
     src = Path(row["path"]).expanduser()
     if not src.is_dir():
         store.check_health(mount_id)  # persists 'missing'
@@ -660,25 +799,37 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
                 continue  # binary or unreadable → skip (content-decodability is the gate)
             yield p.relative_to(src).as_posix(), content
 
-    with open_vec_db() as conn:
-        if conn is None:
-            return {"status": "indexed_empty", "chunks": 0}
-        kstore = KnowledgeStore(conn)
-        kstore.ensure_tables()
-        # Shared delta-sync (knowledge_store.index_text_items): only content-bearing
-        # files count as seen — a whitespace-only file must not make the mount read
-        # as indexed (honesty, run_139d7652 badge invariant) — and keys of files that
-        # vanished since the last index are pruned.
-        stats = index_text_items(kstore, key_prefix, _items())
+    from core.code_intel.build import write_lock
+    with write_lock(_index_lock_path(mount_id, "docs"), wait=False) as held:
+        if not held:  # another process is indexing this mount now
+            return {"status": "already_indexing", "chunks": 0}
+        # read under the lock: the sweep switches a kind only while no indexer holds it
+        row = store.get_mount(mount_id)
+        if row is None or row["kind"] != "docs":
+            return {"status": "skipped_non_docs", "chunks": 0}
+        started = _index_started_stamp()
+        with open_vec_db() as conn:
+            if conn is None:  # nothing read, nothing recorded: the next sweep tries again
+                return {"status": "store_unavailable", "chunks": 0}
+            kstore = KnowledgeStore(conn)
+            kstore.ensure_tables()
+            # Shared delta-sync (knowledge_store.index_text_items): only content-bearing
+            # files count as seen — a whitespace-only file must not make the mount read
+            # as indexed (honesty, run_139d7652 badge invariant) — and keys of files that
+            # vanished since the last index are pruned.
+            stats = index_text_items(kstore, key_prefix, _items())
     total_chunks, seen_keys = stats["written"], stats["files"]
 
     if total_chunks > 0 or seen_keys:
         # Content-bearing files exist (seen_keys) — even if a delta re-index added 0
         # NEW chunks, the mount is recall-reachable, so stamp it. An empty/all-binary/
         # all-whitespace dir has empty seen_keys → falls through to indexed_empty.
-        store.mark_synced(mount_id, index_ref=key_prefix)
+        store.mark_synced(mount_id, index_ref=key_prefix, synced_at=started)
         return {"status": "indexed", "chunks": total_chunks}
-    # No text content at all (empty or all-binary) → recall reaches nothing.
+    # No text content at all (empty or all-binary) → recall reaches nothing (its old
+    # chunks were just pruned); recorded, so the sweep re-indexes it only after the
+    # next change.
+    store.mark_indexed_empty(mount_id, at=started, recall_lost=True)
     return {"status": "indexed_empty", "chunks": 0}
 
 
@@ -717,30 +868,39 @@ def recall_mounts(query: str, *, scope: str, store: "LibraryMounts", limit: int 
 
 
 def main(argv: list[str] | None = None) -> int:
-    """``python -m core.library_mounts index-code <mount id>``: index a code mount in
-    this process. The daemon starts it as a child (``code_intel.build.spawn_child``) so
-    a parse never holds the daemon's GIL."""
+    """``python -m core.library_mounts index-code|index-docs <mount id>``: index a
+    mount in this process. The daemon starts it as a child (``code_intel.build.spawn_child``)
+    so an index never holds the daemon's GIL; a code parse waits for its turn."""
     import json
     import sqlite3
     import sys
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 2 or args[0] != "index-code":
-        print("usage: python -m core.library_mounts index-code <mount id>", file=sys.stderr)
+    if len(args) != 2 or args[0] not in ("index-code", "index-docs"):
+        print("usage: python -m core.library_mounts index-code|index-docs <mount id>",
+              file=sys.stderr)
         return 2
     from jobs.paths import DB_PATH
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    from core.code_intel.build import rebuild_turn
+    from core.code_intel.build import rebuild_turn, write_lock
     try:
         store = LibraryMounts(conn)
         store.ensure_table()
-        # a child: one full parse at a time across the machine, as the build children
-        with rebuild_turn() as turn:
-            result = index_code_mount(store, args[1]) if turn else {"status": "no_turn"}
+        # held for the child's whole life, so the sweep sees a child that still waits
+        # for its turn and starts no second one behind it
+        with write_lock(_queue_lock_path(args[1]), wait=False) as queued:
+            if not queued:
+                result = {"status": "already_queued"}
+            elif args[0] == "index-docs":
+                result = index_docs_mount(store, args[1])
+            else:
+                # one full parse at a time across the machine, as the build children
+                with rebuild_turn() as turn:
+                    result = index_code_mount(store, args[1]) if turn else {"status": "no_turn"}
     finally:
         conn.close()
     print(json.dumps({"mount": args[1], **result}))
-    return 0 if result.get("status") in ("indexed", "indexed_empty") else 1
+    return 0 if result.get("status") in ("indexed", "indexed_empty", "already_queued") else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

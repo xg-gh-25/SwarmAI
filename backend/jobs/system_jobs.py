@@ -145,15 +145,16 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
-    # --- Library mount freshness (keep the overlay's 🟢/🟡/🔴 dots accurate) ---
-    # Light read-only sweep: re-probe each registered mount's source (exists +
-    # edited-after-index) and persist health. No LLM, sub-second for a handful of
-    # mounts. Weekday morning (weekday-only policy — no weekend clock jobs).
+    # --- Library mount freshness (a mounted folder's index follows its files) ---
+    # Re-probe each registered mount's source (exists + edited-after-index), persist
+    # health, and re-index in a child every mount whose files changed since its last
+    # index (or whose kind, judged again, changed). No LLM. The probe is a stat walk
+    # of each mount; an unchanged mount costs nothing more.
     Job(
         id="library-freshness",
-        name="Library Mount Freshness — re-probe mount health (🟢/🟡/🔴)",
+        name="Library Mount Freshness — re-index mounts whose files changed",
         type="library_freshness",
-        schedule="0 7 * * 1-5",         # weekday UTC 07:00 = ICT 15:00
+        schedule="*/30 * * * *",        # interval (the scheduler loop runs hourly)
         enabled=True,
         category="system",
         safety=JobSafety(timeout_seconds=120),

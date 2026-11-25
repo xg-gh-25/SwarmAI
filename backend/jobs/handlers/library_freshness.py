@@ -1,9 +1,10 @@
 """Library mount freshness handler — the periodic job body.
 
-Re-probes every registered mount's health (source-exists + edited-after-index)
-and persists it, so the Library overlay's 🟢/🟡/🔴 dots stay accurate without a
-manual check. A health-column write, and a re-index child for a code mount whose
-graph an older parser wrote; no LLM, no external calls.
+Re-probes every registered mount's health (source-exists + edited-after-index),
+persists it, and starts a re-index child for each mount whose files changed since
+its last index, whose kind (judged again) changed, or whose code graph an older
+parser wrote, so recall reaches a mounted folder's current files with nobody
+pressing a button. No LLM, no external calls.
 
 Wired as job type 'library_freshness' (system_jobs.py) → executor dispatch.
 """
@@ -17,7 +18,8 @@ logger = logging.getLogger("swarm.jobs.library_freshness")
 
 
 def run_library_freshness() -> dict:
-    """Re-probe + persist health for all mounts. Returns a summary dict.
+    """Re-probe + persist health for all mounts and re-index the ones behind.
+    Returns a summary dict.
 
     Never raises — a missing DB (no mounts ever registered) or a bad mount is
     reported, not fatal (a scheduled job must not crash the loop)."""
@@ -36,7 +38,7 @@ def run_library_freshness() -> dict:
         try:
             store = LibraryMounts(conn)
             store.ensure_table()
-            summary = refresh_all_mounts(store)
+            summary = refresh_all_mounts(store, reindex=True)
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001
@@ -45,8 +47,8 @@ def run_library_freshness() -> dict:
 
     summary["status"] = "success"
     logger.info(
-        "library freshness: %d scanned (%d fresh, %d stale, %d missing)",
+        "library freshness: %d scanned (%d fresh, %d stale, %d missing), %d re-indexing",
         summary.get("scanned", 0), summary.get("fresh", 0),
-        summary.get("stale", 0), summary.get("missing", 0),
+        summary.get("stale", 0), summary.get("missing", 0), summary.get("reindexing", 0),
     )
     return summary

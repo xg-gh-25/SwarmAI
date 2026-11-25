@@ -226,13 +226,14 @@ def test_the_mount_sweep_reindexes_an_outdated_code_mount(tmp_path, monkeypatch)
     db.parent.mkdir(parents=True)
     g = GraphStore(db)
     rebuild(g, src, head=None, routes=False, stamp=False)
+    store.mark_synced(mount_id, index_ref=str(db))       # an indexed mount, current
     spawned = []
     monkeypatch.setattr(build, "spawn_child", lambda args: spawned.append(args))
-    lm.refresh_all_mounts(store)
+    lm.refresh_all_mounts(store, reindex=True)
     assert spawned == []                                 # current: nothing to do
     _age(g, "0")
     g.close()
-    summary = lm.refresh_all_mounts(store)
+    summary = lm.refresh_all_mounts(store, reindex=True)
     assert spawned == [["-m", "core.library_mounts", "index-code", mount_id]]
     assert summary.get("reindexing") == 1
     conn.close()
