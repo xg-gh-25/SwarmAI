@@ -16,9 +16,15 @@ here, trusting nothing the Hive reported beyond "there is a bundle with this sha
   makes the same change (``git patch-id --stable``, among the newest
   ``EQUIVALENT_WINDOW`` commits since their merge-base; author and subject decide
   between several);
+- its one ref's commit is the head the run's result names for the repository (the
+  take-back is then of that result: ``of_result``);
 - it is fetched with fsck, without tags or submodules, into
   ``refs/hive/<dispatch>/<key>`` only: no branch or tag here can move;
-- the base is this machine's own ``merge-base`` of that tip and the main branch. When a
+- the base is this machine's own ``merge-base`` of that tip and the main branch. A
+  correction round on Elastic Workers starts at the previous round's tip, but counts
+  and bundles its commits from where the run started (the work order's ``base``,
+  core/task_repos), so its bundle builds on a commit main has and what is reviewed and
+  landed holds every round's commits not landed yet. When a
   prerequisite was mapped to its equivalent, the bundle is fetched into
   ``refs/hive/<dispatch>/<key>-hive`` only and the Hive's commits are replayed onto that
   equivalent from git objects only (no worktree, no hook: ``_replay``); the replayed
@@ -58,7 +64,9 @@ ref, prerequisites in the main branch or with their one equivalent there, fsck; 
 one is replayed as ``prepare`` replays it), so the next round starts from it. Nothing
 is shown or landed from it: the person reviews what the next round returns.
 
-``land(dispatch_id, key, tip, allow_git_exec)``: only for the tip prepared and shown;
+``land(dispatch_id, key, tip, allow_git_exec)``: only for the tip prepared and shown, and
+only while it is of the commits the run's result names now (``of_result``: a later turn
+that returned more makes an earlier turn's take-back stale);
 merges the reviewed change (``base..tip``; for a later turn of the same run, what came
 after the tip that landed) onto the run's branch from objects only (no working tree, no
 hook, no filter), as one commit with a message this host writes (the Hive's commits stay at the ``refs/hive/`` ref),
@@ -763,6 +771,13 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
     def _work() -> dict[str, Any]:
         branch = _target_branch(repo, declared.get("ref"))
         lead = _lead_refs(repo, row)
+        # the bundle's one ref is the head the run's result names: the state written below
+        # is then of that result (``of_result``), whatever the Hive reported besides
+        from core import swarm_out_results
+        _prereq, refs = _bundle_header(bundle)
+        if len(refs) == 1 and refs[0][0] != result_head(swarm_out_results.load(dispatch_id), b["key"]):
+            raise ReturnError("the bundle's commit is not the head the run's result names for this "
+                              "repository; refresh the result, then take the commits back")
         tip, base, mapped = _verify_and_fetch(repo, branch, bundle, local_ref, lead)
         hive_tip, replayed, moved = tip, {}, {}
         if mapped:
@@ -887,12 +902,65 @@ def _lead_refs(repo: Path, row: dict) -> tuple[str, ...]:
 # ── land ────────────────────────────────────────────────────────────
 
 def _prepared(dispatch_id: str, key: str, tip: str) -> dict[str, Any]:
+    from core import swarm_out_results
     state = load(dispatch_id, key)
     if not state or state.get("status") != "prepared":
         raise ReturnError("these commits were not prepared for review (take them back first)")
     if not tip or state.get("tip") != tip:
         raise ReturnError("the commits changed since they were shown; review them again")
+    if not of_result(state, result_head(swarm_out_results.load(dispatch_id), key)):
+        raise ReturnError("these commits are an earlier turn's: the run's result names newer ones, which "
+                          "were not taken back; take them back (return-prepare), review them, then land")
     return state
+
+
+def of_result(state: Any, head: Any) -> bool:
+    """Whether the take-back *state* (``prepare``'s, or ``land``'s after it) is of the
+    commits whose head the run's current result names for the repository (*head*:
+    ``result_head``, or the ``head`` of the result's entry for it). The state does not say
+    which turn's bundle it took, so the Hive commit it took is compared: ``hive_tip`` when
+    its base was mapped and ``tip`` is the replayed copy, else ``tip`` (``land`` keeps
+    both). A re-run whose later turn returned more commits makes an earlier turn's
+    take-back, prepared or landed, not this result's: those commits were never reviewed or
+    landed. No head, or a state that took none, is not this result's. The one test of
+    this for every reader (``land``, core/swarm_out_actor ``_taken_back``,
+    core/swarm_out_settle ``set_landed_by_hand`` and ``_code``)."""
+    if not isinstance(state, dict):
+        return False
+    took = state.get("hive_tip") or state.get("tip")
+    return isinstance(took, str) and bool(took) and isinstance(head, str) and took == head
+
+
+def result_head(rec: Any, key: str) -> Optional[str]:
+    """The head commit the kept result *rec* (core/swarm_out_results.load) names for the
+    repository whose bundle key is *key* (``hive_bundle.key`` of its dir), else None (no
+    result, no such repository, or more than one entry for it)."""
+    from core import hive_bundle
+    res = rec.get("result") if isinstance(rec, dict) else None
+    work = res.get("work") if isinstance(res, dict) else None
+    repos = work.get("repos") if isinstance(work, dict) else None
+    heads = [r.get("head") for r in repos or [] if isinstance(r, dict) and isinstance(r.get("dir"), str)
+             and hive_bundle.key(r["dir"]) == key] if isinstance(repos, list) else []
+    return heads[0] if len(heads) == 1 and isinstance(heads[0], str) and heads[0] else None
+
+
+def run_start(repo: Path, declared_sha: Any, tip: str, branch: str) -> Optional[str]:
+    """The commit the run's commits at *tip* count from in the checkout *repo*: the
+    dispatch's own start (*declared_sha*, the row's ``sha``, where round 1 started) when
+    *tip* builds on it, else the merge-base of *tip* and *branch* (an earlier round was
+    replayed onto the equivalent of a base *branch* rewrote: that equivalent); None when
+    neither resolves. A correction round on Elastic Workers starts at the previous
+    round's tip and carries this as its ``base`` (core/carriers/agentcore
+    ``_returned_starts``): where its commits count from and its bundle builds on
+    (core/task_repos: every round's commits not landed yet, on a commit the branch has),
+    and where a failed check is run again (core/hive_workspace ``base_clone``: a check an
+    earlier round broke is the run's own failure, never red on base). Blocking."""
+    if isinstance(declared_sha, str) and _SHA_RE.fullmatch(declared_sha) \
+            and _git(repo, "merge-base", "--is-ancestor", declared_sha, tip).returncode == 0:
+        return declared_sha
+    p = _git(repo, "merge-base", tip, branch)
+    base = p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else ""
+    return base if _SHA_RE.fullmatch(base) else None
 
 
 #: git settings for every command that could check files out or run something: no

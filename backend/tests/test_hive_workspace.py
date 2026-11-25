@@ -113,6 +113,27 @@ def test_two_tasks_on_one_repository_each_work_on_their_own_branch(world, monkey
     assert facts[0]["access"] == "write"
 
 
+def test_a_correction_round_counts_its_commits_from_the_runs_start(world, monkeypatch):
+    """A round that starts at an earlier round's tip (C) with the run's start (A) as its
+    order's base: its facts count from A, so they hold the earlier round's commits too,
+    and its bundle builds on A."""
+    order = hw.prepare(world["ws"], W1, [{**_repo(_ship(world)), "base": world["a"]}])
+    assert hw.task_repos_of(order)[0]["base"] == world["a"]
+    x = _commit(world["ws"] / order["repos"][0]["dir"], "round-2")
+    fact = _facts(world, monkeypatch, order)[0]
+    assert (fact["error"], fact["base"], fact["head"], fact["commits_total"]) == (None, world["a"], x, 3)
+    with pytest.raises(task_repos.TaskRepoError):
+        task_repos.parse([{**hw.task_repos_of(order)[0], "base": "main"}])
+    # a base the clone does not have is said, never replaced by the round's own start
+    gone = task_repos.parse([{**hw.task_repos_of(order)[0], "base": "0" * 40}])
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    assert task_repos.repo_facts(str(world["ws"]), gone)[0]["error"] == task_repos.ERR_NO_COMMIT
+    # a base goes with the round's own start: an order naming a base without one is refused
+    no_sha = {k: v for k, v in _repo(world["c"]).items() if k != "sha"}
+    with pytest.raises(hw.WorkError):
+        hw.prepare(world["ws"], W2, [{**no_sha, "base": world["a"]}])
+
+
 def test_a_read_only_repository_is_detached_and_never_bundled(world, monkeypatch):
     sha = _ship(world)
     order = hw.prepare(world["ws"], W1, [_repo(sha, "read")])

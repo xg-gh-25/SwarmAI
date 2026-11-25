@@ -91,14 +91,21 @@ def world(tmp_path, monkeypatch):
     return w
 
 
-def _hive_bundle(w, *, file: Path | None = None) -> dict:
-    """The Hive side: facts + bundle, kept as the host's record would hold them."""
+def _hive_bundle(w, *, file: Path | None = None, sha: str | None = None, base: str | None = None) -> dict:
+    """The Hive side: facts + bundle, kept as the host's record would hold them. *sha*:
+    the commit the round's work order started from (an Elastic Workers correction round
+    starts from the previous round's returned tip), else the upstream; *base*: the run's
+    own start that order names (core/carriers/agentcore ``_returned_starts``). *file*: a
+    bundle made some other way, its one ref's commit the head the facts name (as the Hive's
+    own bundle always is)."""
     from core import hive_bundle, task_repos
     os.environ["SWARMAI_MODE"] = "hive"
     try:
         facts = hive_bundle.seal_bundles(w["hive_ws"], SID, hive_bundle.add_bundles(
             w["hive_ws"], SID, task_repos.repo_facts(
-                str(w["hive_ws"]), [{"url": URL, "ref": "main", "dir": DIR}], None)))
+                str(w["hive_ws"]), [{"url": URL, "ref": "main", "dir": DIR, **({"sha": sha} if sha else {}),
+                                     **({"base": base} if base else {})}],
+                None)))
     finally:
         os.environ.pop("SWARMAI_MODE", None)
     b = facts[0].get("bundle")
@@ -111,6 +118,10 @@ def _hive_bundle(w, *, file: Path | None = None) -> dict:
         b = {"key": hive_bundle.key(DIR), "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
         assert e["sha256"] == b["sha256"]
         facts[0]["bundle"] = b
+        from core import hive_return
+        refs = hive_return._bundle_header(file)[1]
+        if len(refs) == 1:
+            facts[0]["head"] = refs[0][0]
     w["record"] = {"result": {"work": {"repos": [facts[0]]}}}
     assert task_repos.ERRORS                    # module loaded
     return b
@@ -1268,3 +1279,104 @@ def test_a_mapped_base_take_back_lets_an_agent_discard_only_its_own_turn(world, 
     _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
     _hive_bundle(world)
     assert "not landed" in (act.discard_blocker(_discard_row(world)) or "")
+
+
+# ── an Elastic Workers correction round builds on the previous round's tip ──────
+# (core/carriers/agentcore ``_returned_starts``: round 2 starts at refs/hive/<dispatch>/<key>,
+# so its bundle's prerequisite is round 1's tip, which this machine's main does not have)
+
+def _round_two(w, commit: bool = True) -> dict:
+    """Round 1 committed src/a.py and was taken back; round 2, started at round 1's tip
+    with the run's start as its order's ``base``, commits src/c.py (*commit*) and bundles
+    from the run's start (prerequisite: the run's start, which main has; never round 1's
+    tip, which only the run's ref has)."""
+    from core import hive_return
+    start = git(w["host"], "rev-parse", "main")
+    w["row"]["repos"][0]["sha"] = start                   # the dispatch's start, as the row keeps it
+    _commit(w["hive"], "src/a.py", "a = 2\n", "round 1")
+    _hive_bundle(w)
+    one = asyncio.run(hive_return.prepare(DID, URL))
+    t2 = _commit(w["hive"], "src/c.py", "c = 1\n", "round 2") if commit else one["tip"]
+    _hive_bundle(w, sha=one["tip"], base=start)
+    from core import hive_return
+    prereq, _refs = hive_return._bundle_header(_bundle_path_of_record(w))
+    assert prereq == [start]                                       # not round 1's tip
+    return {"start": start, "one": one, "t2": t2}
+
+
+def _bundle_path_of_record(w) -> Path:
+    from core import hive_bundle, hive_records
+    return hive_records.latest_bundle(w["hive_ws"], SID, hive_bundle.key(DIR))
+
+
+def test_a_correction_round_built_on_the_prepared_tip_prepares_and_lands_both_rounds(world, monkeypatch):
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    r = _round_two(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["tip"] == r["t2"] and st["base"] == r["start"]     # reviewed from the run's own start
+    assert {f["path"] for f in st["files"]} == {"src/a.py", "src/c.py"}
+    assert [c["subject"] for c in st["commits"]] == ["round 2", "round 1"]
+    assert git(world["host"], "rev-parse", "main") == r["start"]          # nothing landed yet
+    assert hive_return.land(DID, st["key"], st["tip"])["landed"]
+    assert git(world["host"], "diff", "--name-only", r["start"], "main").split() == ["src/a.py", "src/c.py"]
+    assert (world["host"] / "src" / "a.py").read_text() == "a = 2\n"
+
+
+def test_a_correction_round_with_no_commit_of_its_own_still_holds_round_ones(world, monkeypatch):
+    """Round 2 changed nothing: its result still names round 1's commits (counted from the
+    run's start), so round 1's take-back is of that result and the run waits for its
+    landing; it never reads as a run that brought no commits back."""
+    from core import hive_bundle, hive_return, swarm_out_settle
+    _no_network(monkeypatch, world)
+    r = _round_two(world, commit=False)
+    fact = world["record"]["result"]["work"]["repos"][0]
+    assert (fact["commits_total"], fact["head"], fact["base"]) == (1, r["one"]["tip"], r["start"])
+    assert hive_return.of_result(hive_return.load(DID, hive_bundle.key(DIR)), fact["head"])
+    assert swarm_out_settle._code(world["row"], world["record"]["result"], {}) == "waiting"
+
+
+def test_a_bundle_whose_commit_is_not_the_results_head_is_not_taken_back(world, monkeypatch):
+    """The take-back state must be of the result it is read against: a bundle whose one
+    ref is not the head the result names is refused before anything is fetched."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], "src/a.py", "a = 2\n", "x")
+    _hive_bundle(world)
+    world["record"]["result"]["work"]["repos"][0]["head"] = "f" * 40
+    with pytest.raises(hive_return.ReturnError, match="not the head the run's result names"):
+        asyncio.run(hive_return.prepare(DID, URL))
+    assert subprocess.run(["git", "rev-parse", "-q", "--verify", f"refs/hive/{DID}/{_key_of_dir()}"],
+                          cwd=world["host"], capture_output=True).returncode != 0      # nothing fetched
+
+
+def test_a_prerequisite_only_the_runs_own_ref_has_is_refused_without_the_runs_start(world, monkeypatch):
+    """The run's own ref is no base by itself: a commit there that is the run's start or
+    older (an EC2 turn whose base main rewrote) is still mapped, never taken as the run's."""
+    from core import hive_return
+    _no_network(monkeypatch, world)
+    r = _rewritten(world)
+    world["row"]["repos"][0]["sha"] = r["old"]
+    git(world["host"], "update-ref", f"refs/hive/{DID}/{_key_of_dir()}", r["old"])
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["base_mapped"]["from"] == r["old"] and st["base"] == r["new"]   # replayed, as before
+
+
+def test_land_refuses_an_earlier_turns_tip_once_the_result_names_a_later_one(world, monkeypatch):
+    """Turn 1 was prepared; turn 2 sealed more commits (the result names them) and nobody
+    took them back. Landing turn 1's tip would close the run with turn 2's commits unlanded."""
+    from core import hive_return, swarm_out_settle
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], "src/a.py", "a = 2\n", "turn 1")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
+    _hive_bundle(world)                                      # sealed, not taken back
+    before = git(world["host"], "rev-parse", "main")
+    with pytest.raises(hive_return.ReturnError, match="earlier turn"):
+        hive_return.land(DID, st["key"], st["tip"])
+    assert git(world["host"], "rev-parse", "main") == before
+    assert swarm_out_settle.closed_state(swarm_out_settle.load(DID)) is None
+    st = asyncio.run(hive_return.prepare(DID, URL))          # turn 2 taken back: it lands
+    assert hive_return.land(DID, st["key"], st["tip"])["landed"]

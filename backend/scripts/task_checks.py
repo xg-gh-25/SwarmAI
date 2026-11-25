@@ -31,9 +31,10 @@ refused and nothing runs. Each check writes two lines to the record: one when it
 and one with its exit code when it ends, so a check cut off (the agent's own time limit,
 SIGTERM) reads as started and not ended. The exit is 0 when every check exited 0.
 
-A check that exits non-zero is run once more on the commit the task started from (the
-order's ``sha`` of each repository): ``_Base`` clones every repository of the order at
-that commit (core/hive_workspace ``base_clone``), runs the order's setup lines there,
+A check that exits non-zero is run once more on the commit the run started from (the
+order's ``base`` of each repository when it names one: a correction round starts at an
+earlier round's tip, and a check that round broke is the run's own failure; else its
+``sha``): ``_Base`` clones every repository of the order at that commit (core/hive_workspace ``base_clone``), runs the order's setup lines there,
 then the same command in the same directory, and appends a third line, the check's end
 line with ``base_exit`` (that run's exit) or ``base_error`` (why the base could not be
 made or the check not run there). The Host reads a check that failed on both with the
@@ -465,8 +466,8 @@ BASE_DIR = "base-"
 
 class _Base:
     """The base a failed check is run on once more: a clone of each repository of the
-    order at the commit the order says it started from (core/hive_workspace
-    ``base_clone``), with the order's own setup lines run there, as on the task's clones
+    order at the commit the run started from (core/hive_workspace ``base_clone``: the
+    order's ``base``, else its ``sha``), with the order's own setup lines run there, as on the task's clones
     (the base's own lockfiles; nothing borrowed from the change's setup, whose output
     lives in the change's clones). Made at the first failed check of a ``run`` call,
     used for every failed check of that call, removed when the call ends (``remove``).

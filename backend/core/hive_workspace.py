@@ -369,11 +369,18 @@ def _parse(work_id: str, repos: Any) -> list[dict[str, Any]]:
         raise WorkError(ERR_BAD_ORDER)               # a malformed or repeated entry
     out, names = [], set()
     for r, d in zip(repos, declared):
-        name, access = r.get("name"), r.get("access")
+        name, access, base = r.get("name"), r.get("access"), r.get("base")
         if not isinstance(name, str) or not NAME_RE.fullmatch(name) or name in names or access not in ACCESS:
             raise WorkError(ERR_BAD_ORDER)
+        if base is not None and not (isinstance(base, str) and _SHA_RE.fullmatch(base) and d.get("sha")):
+            raise WorkError(ERR_BAD_ORDER)               # a base goes with the round's own start
         names.add(name)
-        out.append({"name": name, "url": d["url"], "ref": d["ref"], "sha": d.get("sha"), "access": access})
+        # ``base``: the commit the run started from when this round starts elsewhere (an
+        # Elastic Workers correction round starts at the previous round's tip): where the
+        # round's commits count from (core/task_repos) and ``base_clone`` runs a failed
+        # check again
+        out.append({"name": name, "url": d["url"], "ref": d["ref"], "sha": d.get("sha"), "access": access,
+                    **({"base": base} if base else {})})
     return out
 
 
@@ -542,8 +549,10 @@ ERR_BASE_CLONE = "the base commit could not be checked out"
 
 
 def base_clone(workspace: Path, order: dict[str, Any], name: str, target: Path) -> None:
-    """A clone of the order's repository *name* at the commit the order says it started
-    from (its ``sha``), in *target* (which must not exist), for scripts/task_checks to run
+    """A clone of the order's repository *name* at the commit the run started from (the
+    order's ``base`` when it names one: a correction round that starts at an earlier
+    round's tip, so a check that round broke is not red on base; else its ``sha``), in
+    *target* (which must not exist), for scripts/task_checks to run
     a failed check on the base. Made from the task's own clone with the steps that made
     that clone (``_clone_into``: the same commit identity, origin URL and remote-tracking
     branches), so the only difference is the code; no network, no mirror. WorkError
@@ -552,7 +561,8 @@ def base_clone(workspace: Path, order: dict[str, Any], name: str, target: Path) 
     ws = Path(workspace)
     match = [r for r in order.get("repos") or [] if isinstance(r, dict) and r.get("name") == name]
     r = match[0] if match else None
-    if r is None or not isinstance(r.get("sha"), str) or not _SHA_RE.fullmatch(r["sha"]) \
+    at = (r.get("base") or r.get("sha")) if r is not None else None
+    if r is None or not isinstance(at, str) or not _SHA_RE.fullmatch(at) \
             or not isinstance(r.get("url"), str) or r.get("access") not in ACCESS \
             or not isinstance(r.get("dir"), str) or not _plain(ws, r["dir"]):
         raise WorkError(ERR_NO_BASE)
@@ -560,7 +570,7 @@ def base_clone(workspace: Path, order: dict[str, Any], name: str, target: Path) 
     if not src.is_dir() or target.exists():
         raise WorkError(ERR_BASE_CLONE)
     try:
-        _clone_into(src, r, target, order["work_id"], detached=True)
+        _clone_into(src, {**r, "sha": at}, target, order["work_id"], detached=True)
     except WorkError:
         shutil.rmtree(target, ignore_errors=True)
         raise WorkError(ERR_BASE_CLONE) from None
@@ -654,7 +664,8 @@ def task_repos_of(order: dict[str, Any]) -> list[dict[str, Any]]:
     """The order's repositories as ``sessions.metadata.task_repos`` entries
     (core/task_repos.parse reads ``dir``, ``name`` and ``access``)."""
     return [{"url": r["url"], "ref": r["ref"], "sha": r["sha"], "name": r["name"],
-             "access": r["access"], "dir": r["dir"]} for r in order.get("repos") or []]
+             "access": r["access"], "dir": r["dir"], **({"base": r["base"]} if r.get("base") else {})}
+            for r in order.get("repos") or []]
 
 
 def _orders() -> list[str]:

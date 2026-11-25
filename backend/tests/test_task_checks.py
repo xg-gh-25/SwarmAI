@@ -712,3 +712,25 @@ def test_a_base_the_file_system_refuses_is_recorded_and_the_call_goes_on(world, 
     assert task_checks.main(["run", W1, "bad", "ok"]) == 1
     assert "could not be made" in _ended(world["ws"], "bad")[-1]["base_error"]
     assert [x["exit"] for x in _ended(world["ws"], "ok")] == [0]      # the next check still ran
+
+
+# ── a correction round's base run is at the run's own start (core/swarm_out
+# ``_new_round_work``: the order names it as ``base`` when the round starts elsewhere) ──
+
+def test_a_correction_rounds_failed_check_is_run_on_the_runs_own_start(world, order):
+    """Round 2 starts at round 1's tip (C here) and the order names the run's own start (A)
+    as its base: a check round 1 broke (it passes on A, fails on C) is the run's own failure,
+    never red on base."""
+    hw.prepare(world["ws"], W1, [{**_repo(world["c"]), "base": world["a"]}],
+               _checks(validations=[{"id": "clean", "command": "test ! -f b", "repo": "lib", "cwd": ""}]))
+    assert task_checks.main(["run", W1, "clean"]) == 1
+    last = _ended(world["ws"], "clean")[-1]
+    assert (last["exit"], last["base_exit"]) == (1, 0)
+    from core.swarm_out_results import _checks as host_checks
+    got = host_checks([], {"validations": [{"id": "clean", "command": "test ! -f b"}]}, records=_record(world["ws"]))
+    assert got == [{"id": "clean", "status": "errored"}]
+
+
+def test_an_order_whose_base_is_not_a_commit_id_is_refused(world, order):
+    with pytest.raises(hw.WorkError):
+        hw.prepare(world["ws"], W1, [{**_repo(world["c"]), "base": "main"}], _checks())

@@ -65,14 +65,19 @@ def _row(returns="answer", **kw):
     return r
 
 
+#: the Hive commit a result names for a repository (its ``head``), and the one a take-back
+#: state took (its ``tip``): the state is of the result only when they are the same
+HEAD_A, HEAD_B = "a" * 40, "b" * 40
+
+
 def _with_bundle(row):
-    row["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "bundle": {"available": True}}]
+    row["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "head": HEAD_A, "bundle": {"available": True}}]
     return row
 
 
-def _code_state(returns, status):
+def _code_state(returns, status, tip=HEAD_A):
     from core import hive_bundle
-    returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": status}
+    returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": status, "tip": tip}
 
 
 def A(d):
@@ -372,14 +377,30 @@ def test_every_repo_must_be_handled(env):
     rows, returns = env
     rows[DID] = _row("commits")
     rows[DID]["result"]["work"]["repos"] = [
-        {"dir": "Hive/work/x/repos/a", "bundle": {"available": True}},
-        {"dir": "Hive/work/x/repos/b", "bundle": {"available": True}}]
-    returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": "landed"}
+        {"dir": "Hive/work/x/repos/a", "head": HEAD_A, "bundle": {"available": True}},
+        {"dir": "Hive/work/x/repos/b", "head": HEAD_B, "bundle": {"available": True}}]
+    returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": "landed", "tip": HEAD_A}
     d = st.derive(rows[DID], K(True))
     assert d["code"] == "waiting" and A(d)[0] == "*accept:land" and not d["settles"]
-    returns[(DID, hive_bundle.key("Hive/work/x/repos/b"))] = {"status": "rejected"}
+    returns[(DID, hive_bundle.key("Hive/work/x/repos/b"))] = {"status": "rejected", "tip": HEAD_B}
     d = st.derive(rows[DID], K(True))
     assert d["code"] == "landed" and d["verdict"] == "pass" and d["settles"]
+
+
+def test_an_earlier_turns_landing_does_not_land_a_later_turn(env):
+    """Turn 1's commits landed; a re-run's turn 2 returned more (the result names a new
+    head) that nobody took back: the run's code waits, it is not landed."""
+    rows, returns = env
+    rows[DID] = _with_bundle(_row("commits"))
+    _code_state(returns, "landed")
+    assert st.derive(rows[DID], K(True))["code"] == "landed"
+    rows[DID]["result"]["work"]["repos"][0]["head"] = HEAD_B
+    d = st.derive(rows[DID], K(True))
+    assert d["code"] == "waiting" and d["verdict"] is None and not d["settles"]
+    # a take-back state that names a mapped base keeps the Hive's commit as hive_tip
+    _code_state(returns, "landed", tip="c" * 40)
+    returns[next(iter(returns))]["hive_tip"] = HEAD_B
+    assert st.derive(rows[DID], K(True))["code"] == "landed"
 
 
 def test_unsealed_commits_hold_until_landed_by_hand_or_discarded(env):

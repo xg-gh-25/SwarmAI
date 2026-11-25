@@ -165,7 +165,10 @@ def _is_turn_start(row: dict) -> bool:
 #: a shell loop, a script or a target is not seen, and a Host that says "not run" for it
 #: says something false (design 2026-10-31-swarm-out-agent-owns-its-runs §2.7).
 #: ``pre_existing``: it errored, and the Hive's record says the same check, run once more
-#: on the commit the task started from, errored there too with the same exit code
+#: on the commit the run started from (for a correction round that starts at an earlier
+#: round's tip, still round 1's start, or its equivalent on a rewritten branch:
+#: core/hive_workspace ``base_clone``), errored there
+#: too with the same exit code
 #: (scripts/task_checks ``base_exit``): a failure the base already had, which does not
 #: stop an agent landing (core/swarm_out_actor ``land_blocker``) and is shown apart from
 #: ``errored``. An exit code cannot say the change added no new failure inside a check
@@ -222,7 +225,8 @@ def _checks(blocks: list[dict], agent: Optional[dict],
     ``scripts/task_checks`` ran, by id: ``{id, exit, ...}``) each check's status is the
     record's: ``ran`` for exit 0, ``errored`` for any other exit, ``pre_existing`` for one
     whose line also holds a ``base_exit`` equal to its exit (task_checks ran it on the
-    task's base and it failed there too, the same way as far as an exit code says; a
+    run's base, where its first round started (or its equivalent on a rewritten
+    branch), and it failed there too, the same way as far as an exit code says; a
     ``base_exit`` of 0, another code such as a runner's "no such test" or a shell's
     "command not found", or none, stays ``errored``),
     ``unknown`` for a check started and never ended, ``not_seen`` for a check with no line. The record is written

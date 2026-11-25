@@ -289,17 +289,19 @@ def test_readers_treat_daemon_stopped_final(tmp_path, monkeypatch):
     assert cut["stage"] == "stopped" and cut["why"] == "no_record"
     # commits that came back and landed: final, so its Hive gone does not close it
     from core import hive_bundle, hive_return
-    monkeypatch.setattr(hive_return, "load", lambda d, k: {"status": "landed"}
+    # of the commits the result names (its tip is the result's head)
+    monkeypatch.setattr(hive_return, "load", lambda d, k: {"status": "landed", "tip": "a" * 40}
                         if k == hive_bundle.key("Hive/work/x/repos/a") else None)
 
     def landed(ended):
         r = row(ended, False, state_reason="hive_gone", project_agent={"returns": "commits"})
-        r["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "bundle": {"available": True}}]
+        r["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "head": "a" * 40,
+                                         "bundle": {"available": True}}]
         return st.derive(r, {"records": kept["records"]})
     assert {k: landed("daemon_stopped")[k] for k in keys} == {k: landed("crashed")[k] for k in keys}
     assert landed("daemon_stopped")["verdict"] == "pass"
     # commits kept here, not landed yet: they can still land, so not closed either
-    monkeypatch.setattr(hive_return, "load", lambda d, k: {"status": "prepared"}
+    monkeypatch.setattr(hive_return, "load", lambda d, k: {"status": "prepared", "tip": "a" * 40}
                         if k == hive_bundle.key("Hive/work/x/repos/a") else None)
     assert {k: landed("daemon_stopped")[k] for k in keys} == {k: landed("crashed")[k] for k in keys}
     assert landed("daemon_stopped")["stage"] != "closed"

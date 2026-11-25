@@ -2963,6 +2963,22 @@ def _round_message(row: dict[str, Any], kept: dict[str, Any], text: str, round_n
     return "\n\n".join(parts)
 
 
+def _new_round_work(row: dict[str, Any], starts: list) -> list[dict[str, Any]]:
+    """A new round's work order repositories from the starts its carrier named
+    (``target.extra["repos"]``), with the name and access the run declared. A start at
+    an earlier round's returned commits keeps its ``base`` (the run's own start,
+    core/carriers/agentcore ``_returned_starts``) when it differs from the start: the
+    Hive counts the round's commits from there (core/task_repos) and runs a failed check
+    again there (core/hive_workspace ``base_clone``)."""
+    declared = {r.get("url"): r for r in row.get("repos") or [] if isinstance(r, dict)}
+    return [{"url": s["url"], "ref": s["ref"], **({"sha": s["sha"]} if s.get("sha") else {}),
+             **({"base": s["base"]} if s.get("base") and s.get("base") != s.get("sha") else {}),
+             "name": str((declared.get(s["url"]) or {}).get("name") or s.get("name") or "repo"),
+             "access": (declared.get(s["url"]) or {}).get("access")
+             if (declared.get(s["url"]) or {}).get("access") in ("read", "write") else "write"}
+            for s in starts if isinstance(s, dict) and isinstance(s.get("url"), str)]
+
+
 async def _rerun_on_new_round(row: dict[str, Any], dispatch_id: str, target: RunHandle, text: str,
                               kept: dict[str, Any], origin: Optional[str],
                               took: dict[str, bool]) -> dict[str, Any]:
@@ -3013,12 +3029,7 @@ async def _rerun_on_new_round(row: dict[str, Any], dispatch_id: str, target: Run
     async with registry.client_for(conn) as client:
         order = None
         if fresh:
-            declared = {r.get("url"): r for r in row.get("repos") or [] if isinstance(r, dict)}
-            work = [{"url": s["url"], "ref": s["ref"], **({"sha": s["sha"]} if s.get("sha") else {}),
-                     "name": str((declared.get(s["url"]) or {}).get("name") or s.get("name") or "repo"),
-                     "access": (declared.get(s["url"]) or {}).get("access")
-                     if (declared.get(s["url"]) or {}).get("access") in ("read", "write") else "write"}
-                    for s in starts if isinstance(s, dict) and isinstance(s.get("url"), str)]
+            work = _new_round_work(row, starts)
             checks = row.get("work_checks") if isinstance(row.get("work_checks"), dict) else None
             order = await _within(deadline, f"preparing the workspace on Hive {conn['name']}", PREPARE_TIMEOUT_S,
                                   lambda: _prepare_work(client, conn, dispatch_id, work, checks))

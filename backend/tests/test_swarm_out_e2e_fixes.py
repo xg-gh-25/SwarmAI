@@ -146,9 +146,11 @@ def _repos(env, monkeypatch, states):
     row, kept = env
     row["project_agent"] = {"returns": "commits"}
     dirs = [f"Hive/work/x/repos/r{i}" for i in range(len(states))]
-    kept["result"] = {**kept["result"], "work": {"repos": [{"dir": d, "bundle": {"key": hive_bundle.key(d), "sha256": "s" * 64}}
+    # each state is of the commits the result names (its tip is the result's head)
+    kept["result"] = {**kept["result"], "work": {"repos": [{"dir": d, "head": "a" * 40,
+                                                            "bundle": {"key": hive_bundle.key(d), "sha256": "s" * 64}}
                                                            for d in dirs]}}
-    by_key = {hive_bundle.key(d): {"status": st_} for d, st_ in zip(dirs, states)}
+    by_key = {hive_bundle.key(d): {"status": st_, "tip": "a" * 40} for d, st_ in zip(dirs, states)}
     monkeypatch.setattr(hive_return, "load", lambda d, k: by_key.get(k))
     return by_key, dirs
 

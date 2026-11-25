@@ -1516,8 +1516,9 @@ class AgentCoreCarrier:
         round, its repositories starting at the previous round's returned commits
         (``refs/hive/<dispatch>/<key>``, each shipped pinned). Nothing is sent to the old
         session. Returns the new handle for the caller to append to ``rounds``; its
-        ``extra["repos"]`` names each repository's start (``{url, ref, sha, name}``) for
-        the work order the caller prepares with the correction."""
+        ``extra["repos"]`` names each repository's start (``{url, ref, sha, name}``, and
+        ``base``, the run's own start, when it differs: ``_returned_starts``) for the work
+        order the caller prepares with the correction."""
         from core import swarm_out
         text = (correction or "").strip()
         if not text:
@@ -1567,7 +1568,8 @@ class AgentCoreCarrier:
             for _s, path, _n in packs:
                 if path is not None:
                     await asyncio.to_thread(path.unlink, missing_ok=True)
-        repos = [{"url": s["url"], "ref": s["ref"], "sha": s["sha"], **({"name": s["name"]} if s.get("name") else {})}
+        repos = [{"url": s["url"], "ref": s["ref"], "sha": s["sha"], **({"base": s["base"]} if s.get("base") else {}),
+                  **({"name": s["name"]} if s.get("name") else {})}
                  for s in starts]
         return RunHandle(**{**handle.to_row(), "extra": {**handle.extra, "repos": repos, "after_round": prev.round}})
 
@@ -1736,7 +1738,13 @@ def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:
     newest bundle of it is named by no turn record (``hive_return.import_unrecorded``: a
     turn its backend's death or the lifetime cut off), else when the previous round's
     commits were taken back (core/hive_return), else the dispatch's own start (``{url, ref,
-    sha}``; no checkout: nothing to ship, the remote has it). Blocking."""
+    sha}``; no checkout: nothing to ship, the remote has it). A start at returned commits
+    also names ``base``, the commit the run's commits count from (``hive_return.run_start``:
+    where round 1 started), when it is not the start itself: the next round counts and
+    bundles its commits from there (core/task_repos), so they hold every earlier round's
+    and its bundle builds on a commit the Host's branch has, and runs a failed check again
+    there, so a check an earlier round broke is never read as red on base
+    (core/swarm_out_results ``pre_existing``). Blocking."""
     from core import hive_return, repo_ship
     states: dict[str, dict] = {}
     try:
@@ -1761,7 +1769,8 @@ def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:
                                  f"be taken back ({e}); nothing was sent") from None
         if got is not None:
             out.append({"url": r["url"], "ref": got["branch"].removeprefix("refs/heads/"), "sha": got["tip"],
-                        "checkout": got["repo"], "name": r.get("name"), "from": got["ref"]})
+                        "checkout": got["repo"], "name": r.get("name"), "from": got["ref"],
+                        **_base_of(Path(got["repo"]), r, got["tip"], got["branch"])})
             continue
         st = states.get(r["url"])
         ref = f"refs/hive/{dispatch_id}/{st.get('key')}" if st else None
@@ -1772,10 +1781,26 @@ def _returned_starts(dispatch_id: str, row: dict) -> list[dict]:
                 raise AgentCoreError(f"{r.get('name') or r['url']}: the last round's commits are gone "
                                      f"from this machine ({e}); nothing was sent") from None
             out.append({"url": r["url"], "ref": st["branch"], "sha": sha, "checkout": st["repo"],
-                        "name": r.get("name"), "from": ref})
+                        "name": r.get("name"), "from": ref, **_base_of(Path(st["repo"]), r, sha, st["branch"])})
         else:
             out.append({"url": r["url"], "ref": r.get("ref"), "sha": r.get("sha"), "name": r.get("name")})
     return out
+
+
+def _base_of(repo: Path, declared: dict, sha: str, branch: str) -> dict:
+    """``{"base": <the run's start>}`` for a start at returned commits *sha*, or {} when
+    it is *sha* itself (``_returned_starts``). AgentCoreError when it does not resolve: a
+    round counted from *sha* would bundle commits the Host's branch lacks and hold none of
+    the earlier rounds', so nothing is sent."""
+    from core import hive_return
+    try:
+        base = hive_return.run_start(repo, declared.get("sha"), sha, branch)
+    except hive_return.ReturnError:
+        base = None
+    if not base:
+        raise AgentCoreError(f"{declared.get('name') or declared.get('url')}: where the run started cannot be "
+                             "found in this machine's checkout; nothing was sent")
+    return {"base": base} if base != sha else {}
 
 
 # ── provisioning ─────────────────────────────────────────────────────────────────

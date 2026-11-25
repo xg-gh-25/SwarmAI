@@ -102,7 +102,7 @@ def world(tmp_path, monkeypatch):
            "state": "stopped", "state_reason": "idle",
            "result": {"ended": "completed", "provisional": False, "ended_at": ENDED, "lessons": None,
                       "checks": [],
-                      "work": {"repos": [{"dir": DIR, "url": URL, "commits_total": 1,
+                      "work": {"repos": [{"dir": DIR, "url": URL, "commits_total": 1, "head": lib["tip"],
                                           "bundle": {"available": True}}]}}}
     w = {"row": row, "lib": lib, "tmp": tmp_path, "state": state, "checks": []}
 
@@ -264,6 +264,7 @@ def _new_run_change(world, files: dict) -> str:
     git(repo, "checkout", "-q", "main")
     git(repo, "update-ref", lib["ref"], tip)
     hive_return._save(DID, lib["key"], {**hive_return.load(DID, lib["key"]), "tip": tip})
+    world["row"]["result"]["work"]["repos"][0]["head"] = tip         # the result names the run's tip
     return tip
 
 
@@ -335,6 +336,7 @@ def test_a_submodule_bump_is_compared_by_its_commit(world):
     git(repo, "checkout", "-q", "main")
     git(repo, "update-ref", lib["ref"], tip)
     hive_return._save(DID, lib["key"], {**hive_return.load(DID, lib["key"]), "tip": tip})
+    world["row"]["result"]["work"]["repos"][0]["head"] = tip         # the result names the run's tip
     wrong = bump(lib["base"], "main points it elsewhere")
     r = _post(world, [wrong])
     assert r.status_code == 400 and "vendor/sub" in r.json()["detail"], r.text
@@ -353,7 +355,7 @@ def _second_repo(world, landed=False):
                                             "landed_tip": app["tip"]})
     world["row"]["repos"].append({"url": URL2, "ref": "main", "dir": DIR2})
     world["row"]["result"]["work"]["repos"].append({"dir": DIR2, "url": URL2, "commits_total": 1,
-                                                     "bundle": {"available": True}})
+                                                     "head": app["tip"], "bundle": {"available": True}})
     return app
 
 
@@ -381,6 +383,7 @@ def test_a_path_is_kept_as_git_names_it(world):
     git(repo, "update-ref", lib["ref"], tip)
     state = hive_return.load(DID, lib["key"])
     hive_return._save(DID, lib["key"], {**state, "tip": tip})
+    world["row"]["result"]["work"]["repos"][0]["head"] = tip
     sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
     r = _post(world, [sha])
     assert r.status_code == 400 and "src/two  spaces.py" in r.json()["detail"]
@@ -397,6 +400,7 @@ def test_an_unscoped_path_holding_the_scope_mark_is_still_a_path(world):
     git(repo, "checkout", "-q", "main")
     git(repo, "update-ref", lib["ref"], tip)
     hive_return._save(DID, lib["key"], {**hive_return.load(DID, lib["key"]), "tip": tip})
+    world["row"]["result"]["work"]["repos"][0]["head"] = tip         # the result names the run's tip
     sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
     r = _post(world, [sha], dropped=["src/a::b.py"])
     assert r.status_code == 200, r.text
@@ -420,7 +424,7 @@ def test_a_repository_left_out_is_refused(world):
     world["app"] = app
     world["row"]["repos"].append({"url": URL2, "ref": "main", "dir": DIR2})
     world["row"]["result"]["work"]["repos"].append({"dir": DIR2, "url": URL2, "commits_total": 1,
-                                                     "bundle": {"available": True}})
+                                                     "head": app["tip"], "bundle": {"available": True}})
     sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
     r = _post(world, [sha])
     assert r.status_code == 400 and "no commit you named landed " + URL2 in r.json()["detail"]
@@ -439,7 +443,7 @@ def test_a_repository_already_landed_by_return_land_needs_no_commit(world):
                                         "landed_tip": app["tip"]})
     world["row"]["repos"].append({"url": URL2, "ref": "main", "dir": DIR2})
     world["row"]["result"]["work"]["repos"].append({"dir": DIR2, "url": URL2, "commits_total": 1,
-                                                     "bundle": {"available": True}})
+                                                     "head": app["tip"], "bundle": {"available": True}})
     sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
     r = _post(world, [sha])
     assert r.status_code == 200, r.text
@@ -457,6 +461,40 @@ def test_a_run_not_prepared_here_is_refused(world):
     r = _post(world, [sha])
     assert r.status_code in (400, 403)
     assert "not prepared" in r.json()["detail"] or "does not offer" in r.json()["detail"]
+    _nothing_recorded()
+
+
+def _later_turn(world, repo_key="lib") -> str:
+    """A re-run's later turn returned one more commit on top of the prepared tip: the
+    result names it now, and nobody took it back."""
+    x, repo = world[repo_key], world[repo_key]["repo"]
+    git(repo, "checkout", "-q", "--detach", x["tip"])
+    later = _commit(repo, {"src/d.py": "d = 1\n"}, "a later turn")
+    git(repo, "checkout", "-q", "main")
+    head = next(r for r in world["row"]["result"]["work"]["repos"] if r["dir"] == x["dir"])
+    head["head"] = later
+    return later
+
+
+def test_an_earlier_turns_take_back_does_not_record_a_later_turn_landed_by_hand(world):
+    """Turn 1 was prepared and its return-land conflicted; turn 2 then returned more commits.
+    Landing turn 1's change by hand does not settle the run: turn 2's were never reviewed."""
+    _later_turn(world)
+    sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
+    r = _post(world, [sha])
+    assert r.status_code == 400 and "earlier turn" in r.json()["detail"] and URL in r.json()["detail"]
+    _nothing_recorded()
+    assert _derived(world)["code"] == "waiting"
+
+
+def test_an_earlier_turns_return_land_is_not_counted_as_handled(world):
+    """A repository landed by return-land in turn 1 whose later turn returned more is not
+    handled already: the hand landing of the other repository does not settle the run."""
+    _second_repo(world, landed=True)
+    _later_turn(world, "app")
+    sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
+    r = _post(world, [sha])
+    assert r.status_code == 400 and "earlier turn" in r.json()["detail"] and URL2 in r.json()["detail"]
     _nothing_recorded()
 
 

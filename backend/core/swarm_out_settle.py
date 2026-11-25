@@ -256,7 +256,9 @@ def set_landed_by_hand(dispatch_id: str, commits: list[str], dropped: list[str],
     """The dispatching agent landed the run's commits by hand (``return-land`` answered a
     conflict): checked from git here before anything is written. Every repository that
     brought commits back is prepared here (``return-prepare``: its state is what the
-    check reads) or already landed; the named commits pass
+    check reads) or already landed, either of the commits the run's current result names
+    (core/hive_return ``of_result``: an earlier turn's take-back would settle the run with
+    a later turn's commits never reviewed or landed); the named commits pass
     ``hive_return.verify_hand_landing`` for each one still waiting. Then, in one update,
     ``manual_landed_at``, ``manual_landed_by: "agent"`` and ``manual_landed`` (the commits
     and dropped paths per repository, the why, the session) and one ``land`` entry of
@@ -291,8 +293,13 @@ def set_landed_by_hand(dispatch_id: str, commits: list[str], dropped: list[str],
             state = hive_return.load(dispatch_id, hive_bundle.key(r["dir"])) or {}
         except hive_return.ReturnError:
             state = {}
-        if state.get("status") in ("landed", "rejected"):
+        current = hive_return.of_result(state, r.get("head"))
+        if state.get("status") in ("landed", "rejected") and current:
             continue                       # handled already (return-land)
+        if state.get("status") in ("prepared", "landed", "rejected") and not current:
+            raise SettleError(f"the commits of {name} taken back here are an earlier turn's, not the ones the "
+                              f"run's result names now: `swarm_out return-prepare {dispatch_id} --url {name}` "
+                              "again, then land them")
         if state.get("status") != "prepared" or not all(state.get(k) for k in ("repo", "branch", "base", "tip")):
             raise SettleError(f"the commits of {name} were not prepared on this machine: "
                               f"`swarm_out return-prepare {dispatch_id} --url {name}` first")
@@ -378,7 +385,9 @@ def _code(row: dict, res: dict, rec: dict) -> str:
     """``none`` (no commits came back), ``landed`` (every repository that brought commits
     back is landed or rejected, one at least landed; or landed by hand), ``rejected``
     (all rejected), ``unsealed`` (a repository has commits the Hive did not seal into a
-    bundle: they exist only in its workspace) or ``waiting``."""
+    bundle: they exist only in its workspace) or ``waiting``. A repository's take-back
+    counts only when it is of the commits *res* names for it (core/hive_return
+    ``of_result``): an earlier turn's landing leaves a later turn's commits waiting."""
     from core import hive_bundle, hive_return
     if rec.get("manual_landed_at"):
         return "landed"
@@ -393,7 +402,7 @@ def _code(row: dict, res: dict, rec: dict) -> str:
                 st = hive_return.load(row["dispatch_id"], hive_bundle.key(r["dir"])) or {}
             except hive_return.ReturnError:
                 st = {}
-            states.append(st.get("status"))
+            states.append(st.get("status") if hive_return.of_result(st, r.get("head")) else None)
         elif (r.get("commits_total") or 0) > 0:
             states.append("unsealed")
     if not states:

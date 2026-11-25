@@ -654,6 +654,33 @@ async def test_open_next_round_never_calls_the_old_session(world):
     assert world.data.stops == []
 
 
+async def test_the_next_round_names_the_runs_own_start_as_its_base(world, monkeypatch):
+    """The next round starts at the returned commit; the run's own start (the row's sha,
+    where round 1 started) goes with it as ``base``, where a failed check is run again
+    (core/hive_workspace ``base_clone``), and into the work order."""
+    prev = await _open(world)
+    repo, url, returned = _returned_repo(world, DID)
+    one = _git(repo, "rev-parse", f"{returned}^")
+    row = {"dispatch_id": DID, "repos": [{"url": url, "ref": "main", "sha": one, "name": "demo", "access": "write"}],
+           "rounds": [prev.to_row()]}
+    _close_in_s3(world, prev.run_ref)
+    world.handler = lambda request: httpx.Response(200, json={
+        "bundle": hive_repo_inbox.bundle_rel(request.url.params["sha"]), "bytes": len(request.content)})
+    h = await world.carrier.open_next_round(row, "fix the typo")
+    assert h.extra["repos"] == [{"url": url, "ref": "main", "sha": returned, "base": one, "name": "demo"}]
+    assert swarm_out._new_round_work(row, h.extra["repos"]) == [
+        {"url": url, "ref": "main", "sha": returned, "base": one, "name": "demo", "access": "write"}]
+    # a round that starts where the run started names no base of its own
+    assert swarm_out._new_round_work(row, [{"url": url, "ref": "main", "sha": one, "name": "demo"}]) == [
+        {"url": url, "ref": "main", "sha": one, "name": "demo", "access": "write"}]
+    # where the run started cannot be found: nothing is sent (the round would bundle
+    # commits the branch lacks and hold none of the earlier round's)
+    from core import hive_return
+    monkeypatch.setattr(hive_return, "run_start", lambda *a: None)
+    with pytest.raises(ac.AgentCoreError, match="nothing was sent"):
+        ac._returned_starts(DID, row)
+
+
 # ── provisioning ─────────────────────────────────────────────────────────────────
 
 def test_execution_role_policy_scopes_session_prefix():

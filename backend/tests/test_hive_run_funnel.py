@@ -70,9 +70,10 @@ def _row(returns="answer", **kw):
 def _commits_row(rows, returns, status="landed"):
     from core import hive_bundle
     r = _row("commits")
-    r["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "bundle": {"available": True}}]
+    # the take-back state is of the commits the result names (its tip is the result's head)
+    r["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "head": "a" * 40, "bundle": {"available": True}}]
     rows[DID] = r
-    returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": status}
+    returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": status, "tip": "a" * 40}
     return r
 
 
@@ -445,7 +446,8 @@ def test_agent_landing_waits_for_judgment(env, monkeypatch):
     monkeypatch.setattr(swarm_out_results, "load", lambda d: {
         "records": {"closed": True},
         "result": {"ended": "completed", "provisional": False, "ended_at": ENDED,
-                   "work": {"repos": [{"dir": "Hive/work/x/repos/a", "bundle": {"sha256": "x"}}]}}})
+                   "work": {"repos": [{"dir": "Hive/work/x/repos/a", "head": "a" * 40,
+                                       "bundle": {"sha256": "x"}}]}}})
     rc.append(DID, "agent", "land", "reviewed", SID, "return_land")
     d = st.derive(rows[DID], K())
     assert d["verdict"] is None and d["stage"] == "awaiting" and d["why"] == "judge" and not d["settles"]

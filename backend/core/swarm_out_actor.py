@@ -432,7 +432,9 @@ def land_blocker(dispatch_id: str) -> Optional[str]:
     ``checks``: the Hive's own exit code). A change whose own check last failed is not
     landed by an agent: it re-runs the task with the failure to fix, takes it over, or
     the person lands it. ``pre_existing`` does not refuse: the check failed on the
-    commit the task started from too (the Hive ran it there, scripts/task_checks), so the
+    commit the run started from too (the Hive ran it there, scripts/task_checks; for a
+    correction round, where round 1 started or its equivalent on a rewritten branch,
+    core/hive_workspace ``base_clone``), so the
     failure is not the change's; the card still shows it. A check that failed on the
     change and passed on the base, or has no base result, is ``errored`` and refuses.
     ``not_seen`` and ``unknown`` do not refuse: the Host found no
@@ -525,24 +527,21 @@ def commits_here(dispatch_id: str, res: Any) -> bool:
 
 def _taken_back(dispatch_id: str, rdir: str) -> bool:
     """The repository's take-back is ``prepared`` or ``landed``, it is of the commits the
-    run's kept result names now, and its ref still names the tip it recorded. The state
-    does not say which turn's bundle it took, so the Hive commit it took (``hive_tip``
-    when its base was mapped and ``tip`` is the replayed copy, else ``tip``; ``land``
-    keeps both) is compared with the head the result names for the repository: a re-run
-    whose later turn sealed new commits that nobody took back is not "here" from the
-    earlier turn's take-back. The result is the one ``prepare`` takes the bundle from
-    (core/swarm_out_results), not the caller's copy, so states written before this
-    check count the same way."""
+    run's kept result names now (core/hive_return ``of_result``: a re-run whose later turn
+    sealed new commits that nobody took back is not "here" from the earlier turn's
+    take-back), and its ref still names the tip it recorded. The result is the one
+    ``prepare`` takes the bundle from (core/swarm_out_results), not the caller's copy, so
+    states written before this check count the same way."""
     from core import hive_bundle, hive_return, swarm_out_results
     import subprocess
     try:
-        st = hive_return.load(dispatch_id, hive_bundle.key(rdir)) or {}
+        key = hive_bundle.key(rdir)
+        st = hive_return.load(dispatch_id, key) or {}
     except hive_return.ReturnError:
         return False
     if st.get("status") not in ("prepared", "landed") or not st.get("repo") or not st.get("ref"):
         return False
-    took = st.get("hive_tip") or st.get("tip")
-    if not isinstance(took, str) or not took or took != _result_head(swarm_out_results.load(dispatch_id), rdir):
+    if not hive_return.of_result(st, hive_return.result_head(swarm_out_results.load(dispatch_id), key)):
         return False                 # an earlier turn's commits, or the result names none
     try:
         out = subprocess.run(["git", "-C", str(st["repo"]), "rev-parse", "--verify", "--quiet",
@@ -551,13 +550,3 @@ def _taken_back(dispatch_id: str, rdir: str) -> bool:
         return False
     return out.returncode == 0 and out.stdout.strip() == st.get("tip")
 
-
-def _result_head(rec: Any, rdir: str) -> Optional[str]:
-    """The head commit the kept result *rec* names for the repository declared as *rdir*,
-    else None (no result, no such repository, or more than one entry for it)."""
-    res = rec.get("result") if isinstance(rec, dict) else None
-    work = res.get("work") if isinstance(res, dict) else None
-    repos = work.get("repos") if isinstance(work, dict) else None
-    heads = [r.get("head") for r in repos or [] if isinstance(r, dict) and r.get("dir") == rdir] \
-        if isinstance(repos, list) else []
-    return heads[0] if len(heads) == 1 and isinstance(heads[0], str) and heads[0] else None

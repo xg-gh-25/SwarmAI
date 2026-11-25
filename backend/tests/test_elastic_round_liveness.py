@@ -311,6 +311,7 @@ async def _returned(world, monkeypatch, outcome_names_bundle: bool, bundle_bytes
            "project_agent": {"brain": "Demo", "delivery": "bundle"}}
     await world.carrier.outputs(h, DID, row)
     assert any(e["kind"] == "bundle" for e in hive_records.local_entries(DID))
+    world.round_handle = h
     return host, one, two, key, row
 
 
@@ -318,7 +319,7 @@ async def test_a_rerun_imports_an_unrecorded_bundle(world, monkeypatch):  # noqa
     host, one, two, key, row = await _returned(world, monkeypatch, outcome_names_bundle=False)
     starts = car._returned_starts(DID, row)
     assert starts == [{"url": URL, "ref": "main", "sha": two, "checkout": str(host), "name": "demo",
-                       "from": f"refs/hive/{DID}/{key}"}]
+                       "from": f"refs/hive/{DID}/{key}", "base": one}]    # the run's own start
     assert _git(host, "rev-parse", f"refs/hive/{DID}/{key}") == two
     assert _git(host, "rev-parse", "main") == one                     # no branch here moved
 
@@ -343,6 +344,32 @@ async def test_a_rerun_after_main_was_rewritten_never_starts_from_the_rewritten_
     assert _git(host, "rev-parse", f"refs/hive/{DID}/{key}") == sha
     assert _git(host, "rev-parse", f"refs/hive/{DID}/{key}-hive") == two     # never shipped
     assert _git(host, "show", f"{sha}:a.txt") == "2"
+    assert starts[0]["base"] == new_one              # the equivalent its commits were replayed onto
+
+
+async def test_a_later_rounds_unrecorded_bundle_built_on_the_earlier_rounds_tip_is_imported(world, monkeypatch):  # noqa: F811
+    """Round 1's commits are at the run's ref; the round after it started there (its order's
+    base the run's start) and was cut off before its turn record: its newest bundle holds
+    both rounds' commits on the run's start. It is imported, and the next round counts
+    from the run's start."""
+    host, one, two, key, row = await _returned(world, monkeypatch, outcome_names_bundle=False)
+    car._returned_starts(DID, row)                                       # round 1's tip at the ref
+    hive = world.tmp / "hive-clone"
+    (hive / "a.txt").write_text("3")
+    _git(hive, "commit", "-qam", "the next round's commit, never in a turn record")
+    three = _git(hive, "rev-parse", "HEAD")
+    bundle = world.tmp / "b2.bundle"
+    _git(hive, "bundle", "create", "-q", str(bundle), "main", f"^{one}")    # from the run's start (core/task_repos)
+    ws, h = world.tmp / "hive-ws", world.round_handle
+    tmp = hive_records.tmp_path(ws, h.run_ref, key)
+    tmp.write_bytes(bundle.read_bytes())
+    hive_records.append(ws, h.run_ref, "bundle", src=tmp, key=key)
+    _to_s3(world, ws, h.run_ref)
+    await world.carrier.outputs(h, DID, row)
+    starts = car._returned_starts(DID, row)
+    assert (starts[0]["sha"], starts[0]["base"]) == (three, one)
+    assert _git(host, "rev-parse", f"refs/hive/{DID}/{key}") == three
+    assert _git(host, "rev-parse", "main") == one                     # no branch here moved
 
 
 async def test_a_recorded_bundle_leaves_the_start_as_before(world, monkeypatch):  # noqa: F811

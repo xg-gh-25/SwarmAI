@@ -18,7 +18,11 @@ write a repository's config (and a submodule's), and git runs configured command
 (``base..HEAD``, tree against tree) plus the number of untracked files, and no command
 of the repository's own runs here; uncommitted changes are not measured.
 
-What the task changed is measured from a fixed point: the declared ``sha`` when there is
+What the task changed is measured from a fixed point: the run's ``base`` when the entry
+names one (a correction round on Elastic Workers starts at the previous round's returned
+tip, ``sha``, and ``base`` is where the run started, core/carriers/agentcore
+``_returned_starts``: every round's commits not landed yet are the run's change, and the
+bundle builds on a commit the Host's branch has), else the declared ``sha`` when there is
 one, else the upstream as it was when the task pulled it, read from the remote-tracking
 ref's reflog at the session's start (``_pulled_upstream``), so a task that pushes to the
 declared branch still shows its commits instead of moving its own base.
@@ -138,6 +142,9 @@ def parse(items: Any) -> list[dict[str, Optional[str]]]:
         sha = item.get("sha")
         if sha is not None and not (isinstance(sha, str) and _SHA_RE.fullmatch(sha)):
             raise TaskRepoError("a repository's commit is not a sha")
+        base = item.get("base")
+        if base is not None and not (isinstance(base, str) and _SHA_RE.fullmatch(base) and sha is not None):
+            raise TaskRepoError("a repository's base is not a sha (or it has no commit)")
         if sha is not None and ref is None:
             raise TaskRepoError("a repository with a commit needs its branch")
         d = repo_dir(url)
@@ -156,6 +163,8 @@ def parse(items: Any) -> list[dict[str, Optional[str]]]:
         entry: dict[str, Optional[str]] = {"url": url, "ref": ref, "dir": d}
         if sha is not None:
             entry["sha"] = sha
+        if base is not None:
+            entry["base"] = base
         if work is not None:
             entry["name"], entry["access"] = item["name"], item["access"]
         else:
@@ -373,7 +382,16 @@ def _one(workspace: Path, repo: dict[str, Optional[str]], since: Optional[float]
         fact["error"] = ERR_NO_HEAD
         return fact
     declared = repo.get("sha")
-    if declared:
+    run_base = repo.get("base")
+    if declared and run_base:
+        # a correction round: its commits count from where the run started, not from
+        # where this round started (the earlier round's tip), so they hold every round's;
+        # a base not here is said, never replaced by the round's own start
+        if _git(str(real), "cat-file", "-e", f"{run_base}^{{commit}}") is None:
+            fact["error"] = ERR_NO_COMMIT
+            return fact
+        start = run_base
+    elif declared:
         # the host's commit the task was told to start from; not fetched = said, never
         # replaced by a guess from the remote
         if _git(str(real), "cat-file", "-e", f"{declared}^{{commit}}") is None:
