@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a Pollinate work with Playwright Chromium.
+"""Render a Pollinate work with the pinned Chromium of SwarmAI's browser runtime.
 
 This module is the renderer behind ``work.py render`` and ``work.py cut``. It
 turns a work's source (one HTML file plus its local files) into the fixed
@@ -26,10 +26,17 @@ The renderer also measures each slide with a probe (``PROBE_JS`` from
 here, which only looks for text overflow) and checks that each slide of
 ``deck.html`` is not blank with JavaScript disabled.
 
+The browser is the product's pinned runtime (``core/feature_map/runtime.py``:
+Node, @playwright/test and the Chromium headless shell, installed on first use
+into the app data folder). ``work_render_driver.mjs`` next to this file runs on
+that Node and drives Chromium; this module starts it and sends it JSON-line
+requests (``_Browser``). There is no other renderer and no Python Playwright.
+
 Use it from ``work.py``. Run directly, it renders one HTML file for a quick
 look: ``work_render.py --src deck.html --out DIR [--kind deck] [--size 1920x1080]``.
 Exit codes: 0 rendered without failed checks, 1 a check failed, 2 usage or
-environment error (for example Playwright or Chromium missing).
+environment error (for example the runtime cannot be installed or Chromium does
+not start), with the reason in one line.
 """
 from __future__ import annotations
 
@@ -44,9 +51,12 @@ import mimetypes
 import os
 import re
 import shutil
+import queue
 import socket
+import subprocess
 import sys
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,7 +85,7 @@ _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
 class RenderEnvError(Exception):
-    """The machine cannot render (Playwright or Chromium missing, launch failed)."""
+    """The machine cannot render (the pinned runtime missing, Node or Chromium does not start)."""
 
 
 class FetchError(Exception):
@@ -637,57 +647,241 @@ def _insert_head(text: str, snippet: str) -> str:
     return snippet + "\n" + text
 
 
+DRIVER = Path(__file__).resolve().parent / "work_render_driver.mjs"
+START_HANG_S = 180      # the driver loads Playwright and launches Chromium (its own cap: 60 s)
+REQUEST_HANG_S = 300    # one request; Playwright's own cap is 60 s, but evaluate has none
+_NO_ARG = object()
+
+
+class RenderError(Exception):
+    """A browser request failed during a render (the page's own error message)."""
+
+
+def _runtime_module():
+    """``core.feature_map.runtime``: as the backend interpreter has it, else from the
+    backend folder this skill lives in (``<backend>/skills/s_pollinate/scripts``)."""
+    try:
+        from core.feature_map import runtime
+        return runtime
+    except ImportError:
+        pass
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "core" / "feature_map" / "runtime.py").is_file():
+            sys.path.insert(0, str(parent))
+            try:
+                from core.feature_map import runtime
+                return runtime
+            except ImportError:
+                break
+    raise RenderEnvError(
+        "the renderer needs SwarmAI's pinned browser runtime (core.feature_map.runtime), which "
+        'cannot be imported here; run the script with "$SWARM_BACKEND_BIN" py')
+
+
+def browser_runtime():
+    """The pinned Node + Playwright + Chromium runtime, installed on first use.
+
+    Raises RenderEnvError with the runtime's reason when it cannot be had.
+    """
+    runtime = _runtime_module()
+    try:
+        if (not os.environ.get("SWARM_FEATURE_MAP_RUNTIME")
+                and not (runtime.runtime_dir() / "ready.json").is_file()):
+            print("work_render: installing the pinned browser runtime "
+                  "(a one-time download on first use)", file=sys.stderr)
+        return runtime.ensure()
+    except runtime.RuntimeUnavailable as exc:
+        raise RenderEnvError(f"the pinned browser runtime is not available: {_one_line(exc.reason)}") from None
+    except (ImportError, OSError) as exc:
+        raise RenderEnvError(f"the pinned browser runtime is not available: {_one_line(str(exc))}") from None
+
+
+# What the driver's Node and Chromium get from the caller's environment: what they need to
+# run and lay out text (paths, temp, locale, time zone, fonts, libraries); nothing else, so
+# no credential and no variable that changes how Node or Playwright behave reaches them.
+_DRIVER_ENV = (
+    "PATH", "HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "SystemRoot", "windir",
+    "LOCALAPPDATA", "APPDATA", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ",
+    "FONTCONFIG_FILE", "FONTCONFIG_PATH", "LD_LIBRARY_PATH", "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_DATA_DIRS",
+)
+
+
+def driver_env(rt) -> dict:
+    """The driver's environment: the allowed caller variables, the runtime's own, and
+    the pinned @playwright/test entry point."""
+    env = {k: v for k, v in os.environ.items() if k in _DRIVER_ENV}
+    env.update(rt.env())
+    env["POLLINATE_PLAYWRIGHT"] = (Path(rt.playwright_pkg) / "index.mjs").resolve().as_uri()
+    return env
+
+
+def _one_line(text: str, limit: int = 600) -> str:
+    return " | ".join(ln.strip() for ln in str(text).splitlines() if ln.strip())[:limit]
+
+
 class _Browser:
-    """One Chromium for a render; every context allows only local and data: URLs."""
+    """One Chromium for a render, driven by ``work_render_driver.mjs`` on the pinned runtime.
+
+    Every page the driver opens allows only the URLs it is given and ``data:``, ``blob:``
+    and ``about:`` URLs; every other request, and every WebSocket, is blocked, and
+    ``close`` returns them.
+    """
 
     def __init__(self):
+        rt = browser_runtime()
+        env = driver_env(rt)
+        self._err = tempfile.TemporaryFile()
+        self._next = 0
         try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            raise RenderEnvError(
-                "Playwright for Python is not installed. Install it in user space: "
-                "python3 -m pip install --user playwright && python3 -m playwright install chromium"
-            ) from None
-        self._pw_cm = sync_playwright()
+            self._proc = subprocess.Popen(
+                [str(rt.node), str(DRIVER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=self._err, env=env, cwd=str(DRIVER.parent),
+                text=True, encoding="utf-8", errors="replace")
+        except OSError as exc:
+            self._err.close()
+            raise RenderEnvError(f"the pinned Node could not start: {exc}") from None
+        self._replies: queue.Queue = queue.Queue()
+        threading.Thread(target=self._read, daemon=True).start()
+        hello = self._reply(START_HANG_S)
+        if not hello or not hello.get("ready"):
+            reason = (hello or {}).get("error") or self._stderr_tail() or "the driver printed nothing"
+            self._stop(kill=True)
+            raise RenderEnvError(f"Chromium did not start ({_one_line(reason, 300)})")
+        self.version = hello.get("version")
+
+    def _read(self) -> None:
+        stdout = self._proc.stdout
         try:
-            self._pw = self._pw_cm.start()
-            self.browser = self._pw.chromium.launch()
-        except Exception as exc:  # noqa: BLE001 - any launch failure is an environment error
-            try:
-                self._pw_cm.__exit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass
-            raise RenderEnvError(
-                f"Chromium did not start ({str(exc).splitlines()[0][:300]}). "
-                "Install it with: python3 -m playwright install chromium") from None
-        self.blocked: list = []
+            for line in stdout:
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue            # not a reply (a stray print); replies are JSON objects
+                if isinstance(msg, dict):
+                    self._replies.put(msg)
+        except (OSError, ValueError):
+            pass                        # the stream was closed by _stop
+        self._replies.put(None)         # the driver's stdout closed
 
-    def context(self, w: int, h: int, allowed: set, js: bool = True):
-        ctx = self.browser.new_context(viewport={"width": w, "height": h}, device_scale_factor=1,
-                                       java_script_enabled=js)
+    def _reply(self, wait_s: float):
+        try:
+            return self._replies.get(timeout=wait_s)
+        except queue.Empty:
+            return None
 
-        def route(r):
-            url = r.request.url
-            if url in allowed or url.startswith(("data:", "blob:", "about:")):
-                r.continue_()
+    def _stderr_tail(self) -> str:
+        try:
+            self._err.seek(0)
+            text = self._err.read().decode("utf-8", "replace")
+        except (OSError, ValueError):
+            return ""
+        return _one_line("\n".join(text.strip().splitlines()[-4:]))
+
+    def request(self, op: str, **fields):
+        """Send one request and return its value; RenderError when it failed."""
+        if self._proc is None:
+            raise RenderError(f"the browser driver is closed ('{op}')")
+        self._next += 1
+        rid = self._next
+        try:
+            self._proc.stdin.write(json.dumps({"id": rid, "op": op, **fields}) + "\n")
+            self._proc.stdin.flush()
+        except OSError:
+            pass                        # the driver is gone: the reply below says so
+        try:
+            msg = self._replies.get(timeout=REQUEST_HANG_S)
+        except queue.Empty:
+            self._stop(kill=True)
+            raise RenderError(f"the browser driver did not answer '{op}' in {REQUEST_HANG_S}s") from None
+        if msg is None:
+            tail = self._stderr_tail()
+            self._stop(kill=True)
+            raise RenderError(f"the browser driver stopped during '{op}'" + (f": {tail}" if tail else ""))
+        if msg.get("id") != rid:
+            self._stop(kill=True)
+            raise RenderError(f"the browser driver answered request {msg.get('id')} for request {rid}")
+        if not msg.get("ok"):
+            raise RenderError(msg.get("error") or f"'{op}' failed")
+        return msg.get("value")
+
+    def open(self, w: int, h: int, url: str, allowed: set, js: bool = True) -> "_Page":
+        """Open ``url`` in a new w x h context and wait for load."""
+        value = self.request("open", w=w, h=h, url=url, allowed=sorted(allowed), js=js)
+        return _Page(self, value["page"])
+
+    def close(self) -> list:
+        """Stop the driver and Chromium; return the URLs that were blocked."""
+        if self._proc is None:
+            return []
+        blocked = self.request("blocked") or []
+        self._stop()
+        return blocked
+
+    def _stop(self, kill: bool = False) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        try:
+            if kill:
+                proc.kill()
             else:
-                if url not in self.blocked:
-                    self.blocked.append(url)
-                r.abort()
-
-        ctx.route("**/*", route)
-        ctx.set_default_timeout(NAV_TIMEOUT_MS)
-        return ctx
-
-    def close(self):
-        try:
-            self.browser.close()
+                proc.stdin.close()
+            proc.wait(timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            proc.kill()
+            proc.wait()
         finally:
-            self._pw_cm.__exit__(None, None, None)
+            for stream in (proc.stdin, proc.stdout):
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+            self._err.close()
 
 
-def _shot(target, **kw) -> bytes:
-    return target.screenshot(animations="disabled", caret="hide", type="png", **kw)
+class _Page:
+    """A page the driver opened (its own browser context)."""
+
+    def __init__(self, browser: _Browser, page_id: int):
+        self._b = browser
+        self.id = page_id
+
+    def evaluate(self, js: str, arg=_NO_ARG):
+        fields = {"page": self.id, "js": js}
+        if arg is not _NO_ARG:
+            fields["arg"] = arg
+        return self._b.request("eval", **fields)
+
+    def bounding_box(self, selector: str, nth=None):
+        return self._b.request("box", page=self.id, selector=selector, nth=nth)
+
+    def count(self, selector: str) -> int:
+        return int(self._b.request("count", page=self.id, selector=selector))
+
+    def get_attribute(self, selector: str, nth: int, name: str):
+        return self._b.request("attr", page=self.id, selector=selector, nth=nth, name=name)
+
+    def add_style_tag(self, css: str) -> None:
+        self._b.request("style", page=self.id, css=css)
+
+    def emulate_media(self, media: str) -> None:
+        self._b.request("media", page=self.id, media=media)
+
+    def screenshot(self, selector=None, nth=None, full_page: bool = False, jpeg_quality=None) -> bytes:
+        """PNG (or JPEG with ``jpeg_quality``) of the element or the page, animations off."""
+        fields = {"page": self.id, "selector": selector, "nth": nth, "full_page": full_page,
+                  "type": "jpeg" if jpeg_quality is not None else "png"}
+        if jpeg_quality is not None:
+            fields["quality"] = jpeg_quality
+        return base64.b64decode(self._b.request("shot", **fields))
+
+    def pdf(self, path: Path) -> None:
+        self._b.request("pdf", page=self.id, path=str(Path(path).resolve()))
+
+    def close(self) -> None:
+        if self._b._proc is not None:
+            self._b.request("close", page=self.id)
 
 
 def _write_sheet(browser: _Browser, items: list, path: Path) -> None:
@@ -704,13 +898,12 @@ def _write_sheet(browser: _Browser, items: list, path: Path) -> None:
     tmp = path.with_suffix(".html")
     tmp.write_text(doc, encoding="utf-8")
     try:
-        ctx = browser.context(2100, 800, {tmp.resolve().as_uri()})
+        url = tmp.resolve().as_uri()
+        page = browser.open(2100, 800, url, {url})
         try:
-            page = ctx.new_page()
-            page.goto(tmp.resolve().as_uri(), wait_until="load")
-            path.write_bytes(page.screenshot(full_page=True, type="jpeg", quality=82, animations="disabled"))
+            path.write_bytes(page.screenshot(full_page=True, jpeg_quality=82))
         finally:
-            ctx.close()
+            page.close()
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -731,7 +924,8 @@ def render(src_root: Path, source_rel: str, kind: str, size: dict, out_dir: Path
 
     ``src_root`` is the folder the source and its local files live in; nothing
     outside it is read. ``review_dir`` gets ``sheet.jpg`` (None: no sheet).
-    Raises RenderEnvError when the browser cannot run.
+    Raises RenderEnvError when the browser cannot run, RenderError when a browser
+    request fails during the render.
     """
     src_root = Path(src_root).resolve()
     source = (src_root / source_rel).resolve()
@@ -766,12 +960,12 @@ def render(src_root: Path, source_rel: str, kind: str, size: dict, out_dir: Path
     doc_url = doc.resolve().as_uri()
     probe = probe_js or BUILTIN_PROBE_JS
 
-    browser = _Browser()
+    browser = None
+    blocked: list = []
     try:
-        ctx = browser.context(w, h, {doc_url})
+        browser = _Browser()
+        page = browser.open(w, h, doc_url, {doc_url})
         try:
-            page = ctx.new_page()
-            page.goto(doc_url, wait_until="load")
             for fam in page.evaluate(_SETTLE_JS):
                 findings.append(_finding("font_load", "fail", f"font '{fam}' failed to load", where=fam))
             if kind == "deck":
@@ -779,30 +973,28 @@ def render(src_root: Path, source_rel: str, kind: str, size: dict, out_dir: Path
             else:
                 page.evaluate("() => document.body.setAttribute('data-slide-id', 'main')")
                 if kind == "poster":
-                    png = _shot(page)
+                    png = page.screenshot()
                     (out_dir / "poster.png").write_bytes(png)
                     outputs["poster"] = sha256_bytes(png)
                 else:
-                    png = _shot(page, full_page=True)
+                    png = page.screenshot(full_page=True)
                     (out_dir / "page.png").write_bytes(png)
                     outputs["page"] = sha256_bytes(png)
                     outputs["html"] = sha256_file(doc)
                 measures.append(page.evaluate(probe, "main"))
         finally:
-            ctx.close()
+            page.close()
         if kind == "deck" and "html" in formats:
             _check_js_off(browser, w, h, doc, doc_url, findings)
         if kind == "poster":
             for extra in extra_sizes or []:
                 ew, eh = int(extra["w"]), int(extra["h"])
-                ectx = browser.context(ew, eh, {doc_url})
+                epage = browser.open(ew, eh, doc_url, {doc_url})
                 try:
-                    epage = ectx.new_page()
-                    epage.goto(doc_url, wait_until="load")
                     epage.evaluate(_SETTLE_JS)
-                    png = _shot(epage)
+                    png = epage.screenshot()
                 finally:
-                    ectx.close()
+                    epage.close()
                 (out_dir / f"poster@{ew}x{eh}.png").write_bytes(png)
                 outputs[f"poster@{ew}x{eh}"] = sha256_bytes(png)
         if review_dir is not None:
@@ -814,9 +1006,10 @@ def render(src_root: Path, source_rel: str, kind: str, size: dict, out_dir: Path
                 items = [(p.name, p.read_bytes()) for p in sorted(out_dir.glob("*.png"))]
             if items:
                 _write_sheet(browser, items, Path(review_dir) / "sheet.jpg")
+        blocked = browser.close()
     finally:
-        blocked = list(browser.blocked)
-        browser.close()
+        if browser is not None:
+            browser._stop(kill=True)    # a no-op after close(); stops the driver on an error
         if kind == "poster":
             doc.unlink(missing_ok=True)
     for url in blocked:
@@ -834,7 +1027,7 @@ def _capture_deck(page, w, h, out_dir, doc, formats, findings, outputs, measures
     if not ids:
         findings.append(_finding("slides", "fail", "the deck has no <section> slides"))
         return
-    page.add_style_tag(content=_CAPTURE_CSS)
+    page.add_style_tag(_CAPTURE_CSS)
     slides_dir = out_dir / "slides"
     slides_dir.mkdir(parents=True, exist_ok=True)
     shas = {}
@@ -845,12 +1038,12 @@ def _capture_deck(page, w, h, out_dir, doc, formats, findings, outputs, measures
             "s => s.toggleAttribute('data-pollinate-current', s.getAttribute('data-pollinate-index') === String(i)))",
             i)
         page.evaluate(_SETTLE_JS)
-        el = page.locator(f'[data-pollinate-index="{i}"]')
-        box = el.bounding_box()
+        sel = f'[data-pollinate-index="{i}"]'
+        box = page.bounding_box(sel)
         if not box or box["width"] < 1 or box["height"] < 1:
             findings.append(_finding("slide_size", "fail", "slide is not visible when rendered", sid))
             continue
-        png = _shot(el)
+        png = page.screenshot(sel)
         if round(box["width"]) != w or round(box["height"]) != h:
             findings.append(_finding(
                 "slide_size", "fail",
@@ -863,9 +1056,9 @@ def _capture_deck(page, w, h, out_dir, doc, formats, findings, outputs, measures
     outputs["slides"] = shas
     if "pdf" in formats:
         pdf = out_dir / "deck.pdf"
-        page.emulate_media(media="print")
-        page.pdf(path=str(pdf), print_background=True, prefer_css_page_size=True)
-        page.emulate_media(media="screen")
+        page.emulate_media("print")
+        page.pdf(pdf)
+        page.emulate_media("screen")
         pages = _pdf_pages(pdf)
         if pages != len(ids):
             findings.append(_finding("pdf_pages", "fail", f"deck.pdf has {pages} pages, the deck has {len(ids)} slides"))
@@ -876,22 +1069,20 @@ def _capture_deck(page, w, h, out_dir, doc, formats, findings, outputs, measures
 
 def _check_js_off(browser, w, h, doc, doc_url, findings):
     """Open deck.html with JavaScript disabled; every slide must show something."""
-    ctx = browser.context(w, h, {doc_url}, js=False)
+    page = browser.open(w, h, doc_url, {doc_url}, js=False)
     try:
-        page = ctx.new_page()
-        page.goto(doc_url, wait_until="load")
-        slides = page.locator("section:not(section section)")
-        for i in range(slides.count()):
-            el = slides.nth(i)
-            sid = el.get_attribute("data-slide-id") or f"page {i + 1}"
-            box = el.bounding_box()
-            if not box or box["width"] < 1 or box["height"] < 1 or _is_blank(_shot(el)):
+        sel = "section:not(section section)"
+        for i in range(page.count(sel)):
+            sid = page.get_attribute(sel, i, "data-slide-id") or f"page {i + 1}"
+            box = page.bounding_box(sel, i)
+            if (not box or box["width"] < 1 or box["height"] < 1
+                    or _is_blank(page.screenshot(sel, i))):
                 findings.append(_finding(
                     "js_off_blank", "fail",
                     "this slide is blank in deck.html when JavaScript is off; "
                     "do not hide slides until a script runs", sid))
     finally:
-        ctx.close()
+        page.close()
 
 
 def parse_size(value: str) -> dict:
@@ -917,7 +1108,7 @@ def main(argv=None) -> int:
         size = parse_size(args.size)
         res = render(src.parent, src.name, args.kind, size, Path(args.out), Path(args.out),
                      [f.strip() for f in args.formats.split(",") if f.strip()])
-    except (RenderEnvError, ValueError) as exc:
+    except (RenderEnvError, RenderError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     for m in res["measure"]:

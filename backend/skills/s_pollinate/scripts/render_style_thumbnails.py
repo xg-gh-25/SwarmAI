@@ -7,8 +7,12 @@ PROPERTIES (luminance/saturation), not from the systems' inconsistent role NAMES
   - text   = the remaining color with highest contrast vs bg
   - accent = the most-saturated remaining color (the "signature" hue)
 One NEUTRAL placeholder copy across all 34 → a fair style-only comparison.
-Fonts: the display+body family from the card's Typography line, loaded from Google
-Fonts CDN (skip {token} + CJK + generic). Headless screenshot → Knowledge/assets/deck-styles/<slug>.png.
+Fonts: the display+body family from the card's Typography line, from Google Fonts
+(skip {token} + CJK + generic), downloaded once into the Pollinate font cache and inlined
+(work_render.Inliner). Screenshot with the renderer's browser (work_render: the pinned
+Chromium of SwarmAI's browser runtime, every network request blocked)
+→ Knowledge/assets/deck-styles/<slug>.png. Exit 2 when that browser cannot run or a
+browser request fails.
 Idempotent: re-run overwrites the same 34 files deterministically.
 """
 import re, glob, os, sys, colorsys
@@ -159,7 +163,8 @@ deck-stage>section{{background:{bg};color:{text};width:1920px;height:1080px;
 
 def main():
     import hashlib, json as _json
-    from playwright.sync_api import sync_playwright
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import work_render
     force = "--force" in sys.argv
     base = Path(__file__).resolve().parent.parent / "templates" / "html-deck"
     vp = (base/"shared"/"viewport-base.css").read_text()
@@ -179,8 +184,8 @@ def main():
         except Exception: prev = {}
 
     manifest, cur_sig, rendered, skipped = [], {}, 0, 0
-    with sync_playwright() as p:
-        b = p.chromium.launch()
+    browser = None              # started when the first thumbnail needs drawing
+    try:
         for cf in cards:
             slug = Path(cf).stem
             txt = open(cf).read()
@@ -197,15 +202,30 @@ def main():
                 skipped += 1
                 continue  # inputs unchanged → keep existing PNG (idempotent no-op)
             html = build_html(slug, disp, body, bg, text, accent, deck_js, vp)
-            hp = OUT/f"_{slug}.html"; hp.write_text(html)
-            pg = b.new_page(viewport={"width":1280,"height":720})
-            pg.goto(f"file://{hp}", wait_until="networkidle")
-            pg.wait_for_timeout(400); pg.evaluate("document.fonts.ready"); pg.wait_for_timeout(300)
-            pg.screenshot(path=str(png))
-            pg.close()
-            hp.unlink()  # keep only PNGs
+            problems = []
+            html = work_render.Inliner(OUT, problems).html(html, OUT)  # fonts from the cache, inlined
+            for f in problems:
+                print(f"  {slug}: {f['msg']}", file=sys.stderr)
+            hp = OUT/f"_{slug}.html"; hp.write_text(html, encoding="utf-8")
+            try:
+                if browser is None:
+                    browser = work_render._Browser()
+                url = hp.resolve().as_uri()
+                pg = browser.open(1280, 720, url, {url})
+                try:
+                    pg.evaluate(work_render._SETTLE_JS)
+                    pg.evaluate("() => new Promise(r => setTimeout(r, 300))")  # deck-stage scales
+                    png.write_bytes(pg.screenshot())
+                finally:
+                    pg.close()
+            finally:
+                hp.unlink(missing_ok=True)  # keep only PNGs
             rendered += 1
-        b.close()
+        if browser is not None:
+            browser.close()
+    finally:
+        if browser is not None:
+            browser._stop(kill=True)
     sidecar.write_text(_json.dumps(cur_sig, indent=2, sort_keys=True))
     print(f"thumbnails: {rendered} rendered, {skipped} unchanged-skipped (idempotent)")
     print(f"generated {len(manifest)} thumbnails → {OUT}")
@@ -213,4 +233,10 @@ def main():
         print(f"  {slug:20} {sch:6} {disp:22} bg={bg} tx={tx} ac={ac}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ not in ("RenderEnvError", "RenderError"):
+            raise
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)

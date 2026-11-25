@@ -44,21 +44,20 @@ def test_fixture_deck_renders_all_outputs(env, capsys):
     without_notes = re.sub(r'data-pollinate-from="[^"]*"', "", html)
     assert "fonts.example.test" not in without_notes and "shared.css" not in without_notes
     assert html.count("data:font/ttf;base64,") == 1 and html.count("data:image/png;base64,") == 1
-    # every slide visible with JavaScript off
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        ctx = browser.new_context(viewport={"width": 960, "height": 540}, java_script_enabled=False)
-        ctx.route("**/*", lambda r: r.continue_() if r.request.url.startswith(("file:", "data:")) else r.abort())
-        page = ctx.new_page()
-        page.goto((out / "deck.html").as_uri())
-        sections = page.locator("section[data-slide-id]")
-        assert sections.count() == 5
+    # every slide visible with JavaScript off (through the renderer's own driver)
+    browser = work_render._Browser()
+    try:
+        url = (out / "deck.html").resolve().as_uri()
+        page = browser.open(960, 540, url, {url}, js=False)
+        assert page.count("section[data-slide-id]") == 5
         for i in range(5):
-            img = Image.open(BytesIO(sections.nth(i).screenshot())).convert("L")
+            img = Image.open(BytesIO(page.screenshot("section[data-slide-id]", i))).convert("L")
             lo, hi = img.getextrema()
             assert hi - lo > 40, f"slide {i + 1} is blank with JavaScript off"
-        browser.close()
+        page.close()
+        assert browser.close() == []
+    finally:
+        browser._stop(kill=True)
     # PDF: one page per slide
     from pypdf import PdfReader
     assert len(PdfReader(str(out / "deck.pdf")).pages) == 5
@@ -128,6 +127,23 @@ def test_remote_request_blocked(env, capsys):
     assert env["http"].calls == []
 
 
+def test_websocket_blocked(env, capsys):
+    """A script that opens a WebSocket gets no connection; the cut fails and names it."""
+    need_browser()
+    d = env["tmp"] / "ws"
+    (d / "src").mkdir(parents=True)
+    (d / "src" / "deck.html").write_text(
+        '<html><head><style>section{width:320px;height:180px}</style></head><body>'
+        '<section><h2>Hi</h2></section>'
+        '<script>new WebSocket("ws://127.0.0.1:9/pollinate-test")</script></body></html>')
+    run(["adopt", "--dir", str(d), "--kind", "deck", "--size", "320x180"], capsys)
+    run(["open", "--dir", str(d), "--scope", ""], capsys)
+    code, out = run(["cut", "--dir", str(d), "--formats", "png"], capsys)
+    assert code == 1
+    blocked = [f["where"] for f in out["failed_checks"] if f["check"] == "blocked_request"]
+    assert blocked == ["ws://127.0.0.1:9/pollinate-test"]
+
+
 def test_builtin_probe_reports_overflow(env, capsys, monkeypatch):
     """Without craft_checks.py the built-in probe still fails text that leaves the slide."""
     need_browser()
@@ -162,20 +178,17 @@ def test_poster_renders_png_and_sizes(env, capsys):
     assert not list((d / "out").glob(".*"))
 
 
-def test_cli_reports_missing_playwright(monkeypatch, tmp_path):
-    """Without Playwright the renderer raises an environment error (exit 2), not a crash."""
-    import builtins
-    real_import = builtins.__import__
+def test_cli_reports_runtime_unavailable(monkeypatch, tmp_path, capsys):
+    """Without the pinned runtime the renderer exits 2 with the reason in one line, not a crash."""
+    def unavailable():
+        raise work_render.RenderEnvError("the pinned browser runtime is not available: no network")
 
-    def fake_import(name, *a, **k):
-        if name.startswith("playwright"):
-            raise ImportError("no playwright")
-        return real_import(name, *a, **k)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(work_render, "browser_runtime", unavailable)
     src = tmp_path / "d.html"
     src.write_text("<section>x</section>")
     assert work_render.main(["--src", str(src), "--out", str(tmp_path / "o")]) == 2
+    err = capsys.readouterr().err.strip()
+    assert err == "error: the pinned browser runtime is not available: no network"
 
 
 def test_slides_hidden_until_script_fail_js_off_check(env, capsys):

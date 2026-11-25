@@ -1,8 +1,10 @@
 """Shared helpers for the work.py tests (no tests in this file).
 
-The tests never use the network: ``fake_http`` stands in for the font
+The tests never download a work's files: ``fake_http`` stands in for the font
 download, serving the committed test font for ``https://fonts.example.test/``.
-Tests that need Chromium skip when Playwright or Chromium cannot start.
+Tests that need Chromium use the pinned browser runtime (core.feature_map.runtime),
+which the first of them installs on a machine that does not have it yet (a one-time
+download, like the Feature Map tests); they skip when it cannot be had or cannot run.
 """
 from __future__ import annotations
 

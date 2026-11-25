@@ -3,7 +3,7 @@ name: pollinate
 description: "Make and revise decks, posters, long images, reports and social copy. TRIGGER: deck, slides, HTML deck, 演示文稿, 海报, poster, 长图, report, 报告, 小红书, 文案, \"改这份 deck\", \"revise this deck\". NOT FOR: editing a .pptx file directly (s_pptx), Word/Excel."
 tier: lazy
 python-deps: [boto3, defusedxml, openpyxl, pptx, yaml]
-python-optional-deps: [edge_tts, playwright]
+python-optional-deps: [edge_tts]
 ---
 
 # Pollinate: the content creator

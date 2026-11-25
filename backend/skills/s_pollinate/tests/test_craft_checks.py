@@ -5,12 +5,11 @@
   own check (design section 11, item 3). bad_reference.json is compared with
   good.json as the reference.
 * Config, canvas scaling, reference parts and the command line exit codes.
-* A Playwright test runs PROBE_JS on tests/fixtures/craft/probe.html and checks
-  the result against the section 13.3 shape. It is skipped when Playwright or
-  its Chromium is not installed.
+* A browser test runs PROBE_JS on tests/fixtures/craft/probe.html (through
+  work_render's driver on the pinned runtime) and checks the result against the
+  section 13.3 shape. It is skipped when that runtime's Chromium cannot run.
 """
 import copy
-import importlib.util
 import json
 import subprocess
 import sys
@@ -287,29 +286,19 @@ def test_cli_usage_errors(tmp_path):
 
 # ------------------------------------------------------------ the probe
 
-_HAS_PLAYWRIGHT = importlib.util.find_spec("playwright") is not None
-
-
 @pytest.fixture(scope="module")
 def probe_page():
-    if not _HAS_PLAYWRIGHT:
-        pytest.skip("Playwright is not installed")
-    from playwright.sync_api import sync_playwright
+    """probe.html in the renderer's own browser (work_render's driver on the pinned runtime)."""
+    import work_render
     try:
-        manager = sync_playwright().start()
-    except Exception as exc:  # the Playwright driver itself cannot start
-        pytest.skip(f"Playwright does not start here: {str(exc).splitlines()[0]}")
+        browser = work_render._Browser()
+    except work_render.RenderEnvError as exc:
+        pytest.skip(f"Chromium cannot run here: {exc}")
     try:
-        try:
-            browser = manager.chromium.launch()
-        except Exception as exc:  # Chromium or its system libraries missing
-            pytest.skip(f"Chromium does not start here: {str(exc).splitlines()[0]}")
-        page = browser.new_page(viewport={"width": 1920, "height": 1080})
-        page.goto((FIX / "probe.html").as_uri())
-        yield page
-        browser.close()
+        url = (FIX / "probe.html").resolve().as_uri()
+        yield browser.open(1920, 1080, url, {url})
     finally:
-        manager.stop()
+        browser._stop(kill=True)
 
 
 def assert_box(value):

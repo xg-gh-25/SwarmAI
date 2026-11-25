@@ -98,13 +98,15 @@ slide visible with JavaScript off), `deck.pdf`, `slides/NN-<id>.png` (NN from 01
 order, 1× canvas size), `deck.pptx`; a poster gives `poster.png` (and `poster@<w>x<h>.png`);
 a page gives `page.png`.
 
-The renderer is Playwright Chromium with the viewport set to the work's `size`. The first
+The renderer is the Chromium of SwarmAI's pinned browser runtime (the one Feature Map uses:
+Node, Playwright and Chromium, installed into the app data folder on first use, one time)
+with the viewport set to the work's `size`; no Python Playwright is involved. The first
 time it meets a web font CSS link, it downloads the CSS and font files to
 `~/.swarm-ai/cache/fonts/` and rewrites them to local files; after that it blocks every
 network request while rendering. So keep a design system's font `<link>` in the source.
-If Playwright or Chromium is missing, `work.py` exits 2; install them in user space
-(`python3 -m pip install --user playwright`, then `python3 -m playwright install chromium`),
-never with sudo.
+Run `work.py` with `"$SWARM_BACKEND_BIN" py`. If the runtime cannot be installed or its
+Chromium does not start, `work.py` exits 2 and the error line says why (no network, missing
+system libraries); tell the person that reason, never install a browser with sudo.
 
 Other scripts: `craft_checks.py` and `export_pptx.py` are run by `cut` (a reference deck and
 a .pptx template are `cut --reference` and `cut --template`, kinds/deck.md); `recommend_systems.py` (deck style gallery),
