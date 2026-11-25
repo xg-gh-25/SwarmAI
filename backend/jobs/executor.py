@@ -8,7 +8,7 @@ Handlers:
   agent_task      — Headless Claude CLI subprocess with MCP tools
   script          — Deterministic subprocess (no AI, no tokens)
   maintenance     — Prune caches, reset counters (lightweight, no LLM)
-  ddd_refresh     — Autonomous DDD doc staleness detection + proposals
+  ddd_refresh     — Weekly read of bound repos' new commits, handed to CDF (S4)
   memory_health   — LLM-powered memory analysis + stale entry pruning
   skill_proposer  — Autonomous skill proposals for recurring capability gaps
 """

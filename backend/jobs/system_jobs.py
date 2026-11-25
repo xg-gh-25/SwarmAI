@@ -231,8 +231,8 @@ SYSTEM_JOBS: list[Job] = [
     ),
 
     # --- DDD Weekly Report (summarizes cultivation activity across all projects) ---
-    # Runs after ddd-refresh (which proposes updates). This report surfaces
-    # what was auto-applied, what needs escalation, and DDD health per project.
+    # Runs after ddd-refresh (which hands new commits to CDF). The report sums up
+    # the week's DDD changes and document stats per project (no LLM).
     # Output: Knowledge/Reports/YYYY-MM-DD-ddd-weekly.md
     Job(
         id="ddd-weekly-report",

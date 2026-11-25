@@ -133,7 +133,6 @@ class DddCultivationOrchestrator:
     # Per-channel budget (seconds) for event-driven execution
     _CHANNEL_BUDGETS: dict[str, float] = {
         "ddd_staleness": 2.0,
-        "knowledge_staleness": 1.0,
         # mechanical_refresh/memory_refresh/llm_refresh budgets REMOVED (run_781ffbd9)
     }
 
@@ -362,6 +361,3 @@ class DddCultivationOrchestrator:
                         gate_mgr.record_trigger("file_tracker")
 
         return findings
-
-    # ── Channel 2: Auto-Apply Proposals + Feedback ─────────────────────────
-

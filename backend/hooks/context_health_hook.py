@@ -1192,11 +1192,6 @@ class ContextHealthHook:
 
         return findings
 
-    def _detect_knowledge_staleness(self, root: Path, ws_path: str) -> list[str]:
-        """Thin wrapper for individual channel invocation (used by tests)."""
-        from core.ddd_orchestrator import DddCultivationOrchestrator
-        return DddCultivationOrchestrator()._ch_knowledge_staleness(root, ws_path)
-
     def _check_ddd_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Thin wrapper for individual channel invocation (used by tests)."""
         from core.ddd_orchestrator import DddCultivationOrchestrator

@@ -106,7 +106,7 @@ A DDD is a folder, one per project, with the same six sections for every domain:
 | Section | What it holds |
 |---------|---------------|
 | ① Identity | `AGENTS.md` (what this brain is about) and `aim.json` (its manifest, including how it may be distributed) |
-| ② Knowledge | The four documents below, plus a `knowledge/` folder of deeper reference |
+| ② Understanding | The four documents below, plus a `knowledge/` folder of deeper reference |
 | ③ Gates | The project's own checks |
 | ④ Capabilities | Domain skills, tools and jobs that belong to this project |
 | ⑤ Delivery | `bindings.yaml`: the assets the brain governs — a code repository, a data source, a corpus, or nothing |
