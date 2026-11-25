@@ -583,7 +583,8 @@ def _recent_activity(project_dir: Path) -> int:
     this project's DDD in the last 30 days, counted in the CDF write journal (the record of
     every write; the old ddd-changelog.jsonl has no writer any more). It is a
     sedimentation signal, never an entry count, so the UI calls it "sediments". No journal
-    yet (a fresh install) or an unreadable one → 0, never fabricated, never None."""
+    yet (a fresh install) or an unreadable one → 0, never fabricated, never None. The
+    project is matched by its folder name, case-sensitively, as CDF records it."""
     import sqlite3
     try:
         from core.ingestion.queries import project_write_count
@@ -598,6 +599,7 @@ def _recent_activity(project_dir: Path) -> int:
         return 0
     finally:
         conn.close()
+
 
 def _brain_detail_metrics(
     project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None,

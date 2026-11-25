@@ -433,6 +433,7 @@ def _swarmai_dir() -> Path:
 
 
 class TestBrainDetailSections:
+
     def test_no_spec_details_field(self, tmp_path):
         """spec-details left the product (design 2026-10-27 §5.9): no specs field."""
         from routers import ddd_brain as m
@@ -557,6 +558,7 @@ class TestUnifiedBrainStateBuilder:
         (pd / ".artifacts").mkdir(parents=True)
         h = m.build_brain_state(pd, with_noise=True)["health"]
         assert h["recentActivity"] == 3
+
     def test_recent_activity_without_a_journal_is_zero(self, monkeypatch, tmp_path):
         """No CDF journal yet (fresh install) → recentActivity is 0, never None; and an old
         ddd-changelog.jsonl left on disk is not read any more."""
@@ -569,6 +571,7 @@ class TestUnifiedBrainStateBuilder:
             _json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
         h = m.build_brain_state(pd, with_noise=True)["health"]
         assert h["recentActivity"] == 0
+
     def test_gallery_omits_recent_activity(self, monkeypatch, tmp_path):
         """recentActivity is not a health key on the gallery (with_noise=False): the
         cheap 3-key health base stays exact (Principle-1 / perf: gallery is minimal)."""
@@ -592,6 +595,7 @@ class TestUnifiedBrainStateBuilder:
         detail = m.build_brain_state(pd, with_noise=True)
         assert gallery["recentActivity"] == 2
         assert detail["recentActivity"] == 2 == detail["health"]["recentActivity"]
+
     def test_placeholder_description_reads_as_none(self, tmp_path):
         """The create-time aim.json description describes the format, not the Brain:
         the card shows 'no description yet' instead of repeating it on every card."""
@@ -678,6 +682,7 @@ class TestUnifiedBrainStateBuilder:
         (pd / ".artifacts").mkdir(parents=True)
         h = m.build_brain_state(pd, with_noise=True)["health"]
         assert h["recentActivity"] == 2
+
     def test_shared_parse_grouped_keyed_by_section_member_rel(self, tmp_path):
         """_parse_knowledge_docs_grouped keys by the SAME rel string _section_members
         yields, so entryCount lookup (len(parsed[m['path']])) can never miss."""
