@@ -187,6 +187,9 @@ def test_a_replay_with_value_flags_or_from_elsewhere_is_recognised(repo):
     # argparse also accepts an unambiguous prefix of a value flag
     assert notice._replayed("x scripts.feature_map replay --ba main") == (True, None)
     assert notice._replayed("x scripts.feature_map replay --proj p chat-a1") == (True, {"chat-a1"})
+    # ids before, after and between options, on every Python (3.11's parse_args drops them)
+    assert notice._replayed("x scripts.feature_map replay chat-a1 --run r chat-b2") == (
+        True, {"chat-a1", "chat-b2"})
     # a replay run from another directory with --repo-root clears this repo's set
     assert _call(repo, f"true scripts.feature_map replay --repo-root {repo}", 2,
                  cwd=repo.parent) is None

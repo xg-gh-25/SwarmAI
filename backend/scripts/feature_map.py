@@ -234,7 +234,7 @@ def _base_replay(root: Path, base: str, fmap_rel: str | None, folder: Path, fail
 
 def main(argv: list[str] | None = None) -> int:
     from core.feature_map.cli import parser
-    args = parser(__doc__.split("\n\n")[0]).parse_args(argv)
+    args = parser(__doc__.split("\n\n")[0]).parse_intermixed_args(argv)
 
     def _stop(signum, _frame):           # a capped caller's signal: clean up our children
         raise KeyboardInterrupt(f"signal {signum}")

@@ -4,14 +4,21 @@ botocore reads AWS_BEARER_TOKEN_BEDROCK, and chooses bearer over sigv4, when it 
 each request, not when the client is built. So these tests look at the request that
 reaches the wire (the Authorization header the stub receives) and at os.environ before,
 during and after the call, instead of at what the environment held at construction.
+
+The stub serves HTTPS with a certificate made for the test (trusted through
+AWS_CA_BUNDLE): botocore sends a bearer token only to an HTTPS endpoint (since 1.44).
 """
 from __future__ import annotations
 
 import asyncio
+import datetime
 import http.server
+import ipaddress
 import json
 import os
+import ssl
 import threading
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -23,10 +30,36 @@ _BODY = json.dumps({
 }).encode()
 
 
-class _Stub:
-    """A one-route HTTP server standing in for bedrock-runtime InvokeModel."""
+def _self_signed(tmp: Path) -> tuple[Path, Path]:
+    """A certificate and key for 127.0.0.1, written under *tmp*."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
 
-    def __init__(self) -> None:
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(minutes=5))
+            .not_valid_after(now + datetime.timedelta(hours=1))
+            .add_extension(x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(key, hashes.SHA256()))
+    cert_path, key_path = tmp / "stub-cert.pem", tmp / "stub-key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                           serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    return cert_path, key_path
+
+
+class _Stub:
+    """A one-route HTTPS server standing in for bedrock-runtime InvokeModel."""
+
+    def __init__(self, tmp: Path) -> None:
         self.requests: list[dict] = []
         stub = self
 
@@ -65,7 +98,11 @@ class _Stub:
                 pass
 
         self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_port}"
+        self.cert, key = _self_signed(tmp)
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(self.cert, key)
+        self.server.socket = tls.wrap_socket(self.server.socket, server_side=True)
+        self.url = f"https://127.0.0.1:{self.server.server_port}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def __enter__(self) -> "_Stub":
@@ -78,11 +115,12 @@ class _Stub:
 
 
 @pytest.fixture
-def stub(monkeypatch):
+def stub(monkeypatch, tmp_path):
     """Point every bedrock-runtime client at the stub; no real AWS config or IMDS."""
-    with _Stub() as s:
+    with _Stub(tmp_path) as s:
         monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", s.url)
         monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK", s.url)
+        monkeypatch.setenv("AWS_CA_BUNDLE", str(s.cert))   # trust the stub's certificate
         monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
         monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
         monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")

@@ -1,7 +1,10 @@
 """The ``feature_map`` CLI's arguments, in one place: the CLI (``scripts/feature_map.py``)
 parses with it, and the commit notice (``core/feature_map/notice.py``) reads a replay or
 verify command with the same parser, so every spelling argparse accepts (``--ba`` for
-``--base``, ``--repo-root=X``) means the same thing to both. Exports: parser."""
+``--base``, ``--repo-root=X``) means the same thing to both. Both parse intermixed
+(``parse_intermixed_args`` / ``parse_known_intermixed_args``): feature ids may come before,
+after or between the options, alike on every Python (3.11's ``parse_args`` reads an id after
+an option as unrecognised). Exports: parser."""
 from __future__ import annotations
 
 import argparse

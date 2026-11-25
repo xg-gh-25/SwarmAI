@@ -177,6 +177,8 @@ def _run_release_block(tmp: Path, heads: dict[str, str], account: str = ACCOUNT,
               f'PROJECT_ROOT="{REPO}"\nS3_ACCT="{account}"\nS3_REGION="{region}"\n'
               f'VERSION=9.9.9\nPACKAGE_NAME=swarmai-hive-v9.9.9-linux-arm64\n'
               f'DIST_DIR="{tmp}"\nARCHIVE="{tmp}/pkg.tar.gz"\nUPLOADED_TO=""\n'
+              # set before the block by the script (the package's build identity sidecar)
+              f'BUILD_INFO="{tmp}/pkg.build.json"\n'
               + _release_block() + '\necho "BUCKET=${S3_BUCKET}"\necho "NEW=${S3_NEW_BUCKET}"\n'
               'echo "UPLOADED=${UPLOADED_TO}"\n')
     env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
@@ -200,7 +202,9 @@ def test_release_sh_uploads_to_the_owned_4_digit_bucket(tmp_path, canonical):
     log = _aws_log(tmp_path)
     assert f"s3api head-bucket --bucket {LEGACY} --expected-bucket-owner {ACCOUNT}" in log
     puts = [ln for ln in log.splitlines() if ln.startswith("s3api put-object")]
-    assert len(puts) == 2 and all(f"--bucket {LEGACY} " in ln for ln in puts)
+    # the package, its checksums.txt and its build.json, all to the one owned bucket
+    assert len(puts) == 3 and all(f"--bucket {LEGACY} " in ln for ln in puts)
+    assert any("--key v9.9.9/build.json " in ln for ln in puts)
     assert all(f"--expected-bucket-owner {ACCOUNT}" in ln for ln in puts)
 
 
@@ -252,9 +256,14 @@ async def test_package_sync_pins_the_owner_of_a_4_digit_bucket():
     under is passed on every head/put of the package sync."""
     from hive.provisioner import HiveProvisioner
     s3 = MagicMock()
+    # the bucket holds the package and its checksums.txt but no build.json (as real S3
+    # answers a missing key), so only the version decides
+    s3.get_object.side_effect = ClientError(
+        {"Error": {"Code": "NoSuchKey", "Message": "Not Found"}}, "GetObject")
     session = MagicMock()
     session.client.return_value = s3
     p = HiveProvisioner(Path("/tmp/test.db"))
     await p._sync_release_to_s3(session, LEGACY, "9.9.9", "us-east-1", ACCOUNT)
-    calls = s3.head_object.call_args_list
-    assert calls and all(c.kwargs.get("ExpectedBucketOwner") == ACCOUNT for c in calls)
+    calls = s3.head_object.call_args_list + s3.get_object.call_args_list
+    assert s3.head_object.call_args_list and s3.get_object.call_args_list
+    assert all(c.kwargs.get("ExpectedBucketOwner") == ACCOUNT for c in calls)

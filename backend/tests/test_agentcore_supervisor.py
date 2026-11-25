@@ -587,6 +587,30 @@ def _dockerfile_steps() -> list[str]:
     return [ln.strip() for ln in logical if ln.strip() and not ln.strip().startswith("#")]
 
 
+def _replay_step(tmp_path: Path) -> tuple[str, str]:
+    """The Dockerfile's replay step, and its command with every path it reads or writes on
+    the image (the bind-mounted package, the libexec folder, the dnf cache it removes)
+    moved under *tmp_path*: run by a test, it never touches the host's own folders."""
+    steps = _dockerfile_steps()
+    step = next(s for s in steps if "replay-host.sh image" in s)
+    cmd = step.split("target=/tmp/hive.tar.gz ", 1)[-1]
+    for path, local in (("/tmp/hive.tar.gz", tmp_path / "dist" / "swarmai-hive-v9.9.9-linux-arm64.tar.gz"),
+                        ("/usr/local/libexec/swarmai", tmp_path / "libexec"),
+                        ("/var/cache/dnf", tmp_path / "var-cache-dnf")):
+        cmd = cmd.replace(path, str(local))
+    return step, cmd
+
+
+def test_the_replay_step_a_test_runs_stays_in_its_temp_dir(tmp_path):
+    """Every absolute path in the command the next test runs for real is under its temp dir
+    (the step ends with ``rm -rf /var/cache/dnf``: never the host's)."""
+    import re
+    _, cmd = _replay_step(tmp_path)
+    paths = re.findall(r"(?<![\w.*])/[\w./*-]+", cmd)   # not a tar member ('*/hive/...')
+    assert paths and all(p.startswith(str(tmp_path)) for p in paths), \
+        [p for p in paths if not p.startswith(str(tmp_path))]
+
+
 @pytest.mark.skipif(subprocess.run(["tar", "--version"], capture_output=True, text=True).stdout.find("GNU tar") < 0,
                     reason="the image step uses GNU tar (Amazon Linux)")
 def test_the_image_runs_the_packages_replay_host_setup_as_root(tmp_path):
@@ -596,23 +620,25 @@ def test_the_image_runs_the_packages_replay_host_setup_as_root(tmp_path):
     runs its image mode for that user. The step's own command is run here against a package."""
     steps = _dockerfile_steps()
     at = next(i for i, s in enumerate(steps) if "replay-host.sh image" in s)
-    step = steps[at]
+    step, cmd = _replay_step(tmp_path)
+    assert step == steps[at]
     assert at > next(i for i, s in enumerate(steps) if "useradd -m -s /bin/bash swarm" in s)
     assert at < steps.index("USER swarm")
     assert all(f" {pkg} " in steps[1] or steps[1].endswith(f" {pkg}") for pkg in ("sudo", "acl"))
     assert step.startswith("RUN --mount=type=bind,source=swarmai-hive.tar.gz,target=/tmp/hive.tar.gz ")
-    cmd = step.split("target=/tmp/hive.tar.gz ", 1)[1]
     pkg = _package_with(tmp_path, {"hive/replay-host.sh": 'echo "replay-host $1 for $SWARM_USER"\n',
                                    "VERSION": "9.9.9\n"}) / "swarmai-hive-v9.9.9-linux-arm64.tar.gz"
+    assert str(pkg) in cmd
     libexec = tmp_path / "libexec"
-    cmd = cmd.replace("/tmp/hive.tar.gz", str(pkg)).replace("/usr/local/libexec/swarmai", str(libexec))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "dnf").write_text("#!/bin/sh\nexit 0\n")      # the step's cleanup, not the test's
     (bin_dir / "dnf").chmod(0o755)
+    (tmp_path / "var-cache-dnf" / "x").mkdir(parents=True)  # the image's dnf cache, a temp copy
     r = subprocess.run(["bash", "-c", "set -e\n" + cmd], capture_output=True, text=True, timeout=60,
                        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)})
     assert r.returncode == 0, r.stderr
     assert "replay-host image for swarm" in r.stdout
+    assert not (tmp_path / "var-cache-dnf").exists()        # its rm -rf hit the temp copy
     script = libexec / "replay-host.sh"
     assert script.read_text().startswith('echo "replay-host') and (script.stat().st_mode & 0o777) == 0o700

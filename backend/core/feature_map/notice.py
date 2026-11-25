@@ -126,7 +126,7 @@ def _feature_map_args(command: str):
                 continue
             args.append(a)
         try:
-            ns, _rest = parser(exit_on_error=False).parse_known_args(args)
+            ns, _rest = parser(exit_on_error=False).parse_known_intermixed_args(args)
         except (SystemExit, Exception) as exc:  # noqa: BLE001 — a call the CLI refuses
             logger.debug("not a feature_map call the CLI accepts (%s): %s",
                          type(exc).__name__, exc)

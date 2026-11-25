@@ -61,15 +61,22 @@ def test_a_landing_killed_after_its_first_guard_lands_on_the_next_land(rig):
     assert causes.count("interrupted") == 9, causes
 
 
+def _test_roster() -> list[str]:
+    """TEST's check roster for this profile, as the registry names it (TS-1, and FM-1
+    since the feature map, e7cb44c28): an attempt opens with exactly these."""
+    from core.run_protocol import checks as check_registry
+    return sorted(spec.check_id for spec in check_registry.stage_checks("direct", "test"))
+
+
 def test_a_stage_attempt_killed_before_any_check_is_not_one_of_its_three(rig):
     r = rig
     r.create()
     r.drive(until="test")
     for _ in range(2):
-        _dead_attempt(r, "test", ["TS-1"], {})
+        _dead_attempt(r, "test", _test_roster(), {})
     r.report_and_complete("fail")              # a real failure counts as the first
     assert r.state()["stage"] == "test" and r.state()["stages"]["test"] != "degraded"
-    _dead_attempt(r, "test", ["TS-1"], {})
+    _dead_attempt(r, "test", _test_roster(), {})
     out = r.report_and_complete()
     assert out.get("ok") is True and r.state()["stage"] == "deliver", out
 
@@ -81,7 +88,7 @@ def test_a_passing_attempt_whose_completion_never_came_does_not_block(rig):
     r.create()
     r.drive(until="test")
     r.v1("report-tests", "--artifact", r.artifact("rep", r.report()))
-    _dead_attempt(r, "test", ["TS-1"], {"TS-1": True})
+    _dead_attempt(r, "test", _test_roster(), {check: True for check in _test_roster()})
     out = r.report_and_complete()
     assert out.get("ok") is True and r.state()["stage"] == "deliver", out
 

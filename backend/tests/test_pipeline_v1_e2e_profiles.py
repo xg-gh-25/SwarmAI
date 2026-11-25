@@ -81,8 +81,10 @@ def test_a_doc_only_direct_run_lands_without_any_document(rig):
     assert _main(r) != base and "fixed" in (r.repo / "README.md").read_text()
     report = (r.repo / f".aidlc/deliverables/{r.run_id}/REPORT.md").read_text()
     assert "Fix the README typo." in report
+    # the repository's trailer, then the run's own Agent-Run, in one trailer paragraph
+    # (core/run_protocol/landing.py, since 3d8db9317)
     assert _git(r.repo, "log", "-1", "--format=%B").rstrip().endswith(
-        "Co-Authored-By: Swarm <swarm@swarmai.dev>")
+        f"\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>\nAgent-Run: {r.run_id}")
 
 
 def test_a_direct_code_change_needs_a_build_report_on_the_current_tree(rig):
