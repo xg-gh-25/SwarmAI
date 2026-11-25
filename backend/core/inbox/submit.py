@@ -156,7 +156,10 @@ async def submit(req: SubmitRequest) -> dict:
             logger.debug("inbox submit: source close failed", exc_info=True)
     first = thread.messages[0] if thread.messages else None
     msg = Message(
-        external_id=_item_key(req.producer, req.external_id or req.thread_ref.key()),
+        # the full ref (message_id included), not ThreadRef.key: two proposals for two
+        # messages of one mail conversation are two items
+        external_id=_item_key(req.producer, req.external_id or json.dumps(
+            {"kind": req.thread_ref.source_kind, "data": req.thread_ref.data}, sort_keys=True, ensure_ascii=False)),
         thread=req.thread_ref, author_id=req.producer,
         author_name=req.author or (first.author_name if first else req.producer),
         received_at=store.now(), text=req.text or (first.text if first else ""),

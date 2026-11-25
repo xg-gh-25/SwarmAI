@@ -33,7 +33,7 @@ async def env(monkeypatch):
     await fx.add_source()
     calls: list[list[str]] = []
 
-    def rule_lane(msg, me, category):
+    def rule_lane(msg, me, category, quiet=frozenset()):
         # no own-message check here: the runner's own Identity.is_me check is under test
         if msg.is_direct:
             return triage.RuleVerdict(Lane.REPLY, Lane.AWARE)

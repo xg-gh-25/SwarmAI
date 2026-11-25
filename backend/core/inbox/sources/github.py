@@ -331,7 +331,7 @@ class GitHubSource:
             # releases, commits, check runs: a notice without a reply thread
             return Message(
                 external_id=f"notification:{n.get('id')}@{n.get('updated_at')}",
-                thread=ThreadRef(KIND, {**base, "kind": "none"}),
+                thread=ThreadRef(KIND, {**base, "kind": "none", "notification": str(n.get("id") or "")}),
                 author_id="", author_name=repo, received_at=received, text=title, title=title,
                 url=str(repo_info.get("html_url") or ""), watched=True, extra={"reason": reason, "repo": repo},
             )
@@ -371,7 +371,7 @@ class GitHubSource:
             # No number, no safe way to name the thread: a notice the person opens on GitHub.
             return Message(
                 external_id=f"notification:{n.get('id')}@{n.get('updated_at')}",
-                thread=ThreadRef(KIND, {**base, "kind": "none"}),
+                thread=ThreadRef(KIND, {**base, "kind": "none", "notification": str(n.get("id") or "")}),
                 author_id="", author_name=base["repo"], received_at=received, text=title, title=title,
                 url=str((n.get("repository") or {}).get("html_url") or ""),
                 is_direct=flags["is_direct"], mentions_me=flags["mentions_me"], watched=flags["watched"],

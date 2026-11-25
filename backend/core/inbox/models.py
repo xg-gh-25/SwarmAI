@@ -82,9 +82,15 @@ class ThreadRef:
     source_kind: str
     data: dict[str, Any]
 
+    #: ``data`` fields that name the one message a reply answers, not the thread: kept in
+    #: ``data`` (a mail reply needs its In-Reply-To), left out of ``key``
+    PER_MESSAGE_FIELDS = frozenset({"message_id"})
+
     def key(self) -> str:
-        """A stable key for grouping items of one thread."""
-        return f"{self.source_kind}:{json.dumps(self.data, sort_keys=True, ensure_ascii=False)}"
+        """A stable key for grouping items of one thread: every message of one conversation
+        has the same key (a mail ref without its ``message_id``)."""
+        data = {k: v for k, v in self.data.items() if k not in self.PER_MESSAGE_FIELDS}
+        return f"{self.source_kind}:{json.dumps(data, sort_keys=True, ensure_ascii=False)}"
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,8 @@ class TriageResult:
     priority: int   # 0 (highest) .. 3
     reason: str     # one sentence: why it matters to the person (shown as "要你做什么")
     reply_expected: bool
+    needs_action: bool = False  # AWARE: the person must do something besides replying
+    due: str = ""               # YYYY-MM-DD the action is due by, "" when none is named
 
 
 def target_sha(target: ReplyTarget, ref: ThreadRef) -> str:

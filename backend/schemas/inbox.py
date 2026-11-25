@@ -6,13 +6,17 @@ Design: ``docs/design/2026-11-20-inbox.md`` §7-§8; the desktop mirror of these
 Routes:
 
 - ``GET  /api/inbox/counts``                    -> ``InboxCounts``   (tab counts and the nav badge)
-- ``GET  /api/inbox/items?lane=reply|proposed|aware|trend`` -> ``list[ItemOut]`` (open items, most urgent first)
+- ``GET  /api/inbox/items?lane=reply|proposed|aware|trend`` -> ``list[ItemOut]`` (open items, one row per
+  thread (its newest open item, ``thread_count`` = the open items of the thread in that lane), newest first)
 - ``GET  /api/inbox/items/{id}/target``         -> ``TargetOut``     (resolved fresh from the source)
 - ``GET  /api/inbox/items/{id}/draft``          -> ``DraftOut``      (the latest draft; made on first read)
 - ``POST /api/inbox/items/{id}/redraft``        -> ``DraftOut``
 - ``POST /api/inbox/items/{id}/send``  ``SendRequest`` -> ``SendOut`` (403 caller is not the desktop UI;
   409 ``target_changed`` / ``redacted`` / ``not_open``; the only route that sends)
-- ``POST /api/inbox/items/{id}/action`` ``ItemActionRequest`` -> ``ItemOut`` (later / dismiss / done)
+- ``POST /api/inbox/items/{id}/action`` ``ItemActionRequest`` -> ``ItemOut`` (later / dismiss / done /
+  to_aware / mute_sender; applies to every open item of the thread in the item's lane)
+- ``POST /api/inbox/items/actions`` ``ItemsActionRequest`` -> ``ItemsActionOut`` (``done`` for many rows at
+  once: "这一天的都知道了")
 - ``GET  /api/inbox/sends?filter=all|mine|auto`` -> ``SendsOut``     (needs-you first, then sent by day)
 - ``POST /api/inbox/sends/{id}/not-sent``       -> ``SendOut``       (the person confirms an unknown send failed)
 - ``POST /api/inbox/sends/{id}/resend``         -> ``SendOut``       (only a failed send whose source can send)
@@ -60,7 +64,8 @@ SourceHealthName = Literal["ok", "auth_failed", "error", "read_only"]
 
 
 class InboxCounts(BaseModel):
-    reply: int = 0               # open items in REPLY (the nav badge and the first tab's count)
+    # reply / proposed / aware count THREADS with an open item in the lane (the rows a list shows)
+    reply: int = 0               # the nav badge and the first tab's count
     proposed: int = 0
     aware: int = 0
     trend: int = 0
@@ -78,6 +83,7 @@ class ItemOut(BaseModel):
     source_kind: str             # slack | mail | github | feed:<type>: picks the channel colour
     channel_label: str           # "Slack", "邮件", "GitHub", "信息流": the channel pill text
     author: str
+    author_id: str = ""          # the sender's id in the source (an address, a user id); "" for a notice
     author_role: str = ""        # "你的经理", a repo, an address: the detail header
     where: str = ""              # "Slack 私信", "邮件 · To 你", "#team-leads"
     received_at: str
@@ -88,6 +94,9 @@ class ItemOut(BaseModel):
     url: str = ""
     priority: int = 3
     producer: Optional[str] = None   # PROPOSED items: who submitted it ("github-outreach")
+    needs_action: bool = False   # AWARE items: the person must do something (approve, renew, fill in), no reply
+    due: Optional[str] = None    # YYYY-MM-DD the action is due by, when the message names one
+    thread_count: int = 1        # open items of this thread in this lane, this one included
 
 
 class TargetOut(BaseModel):
@@ -141,7 +150,20 @@ class SendsOut(BaseModel):
 
 
 class ItemActionRequest(BaseModel):
-    action: Literal["later", "dismiss", "done"]
+    # later: snooze (``until``, default 3h) · dismiss: handled elsewhere / not sending ·
+    # done: seen (需要知道) · to_aware: no reply expected, keep it in 需要知道 ·
+    # mute_sender: this sender never waits on a reply again (the source's ``quiet_senders``)
+    action: Literal["later", "dismiss", "done", "to_aware", "mute_sender"]
+    until: Optional[Literal["3h", "tomorrow", "next_week"]] = None
+
+
+class ItemsActionRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+    action: Literal["done"]
+
+
+class ItemsActionOut(BaseModel):
+    handled: int                 # items set to done (open threads of the given rows included)
 
 
 class TrendPoint(BaseModel):
@@ -247,6 +269,7 @@ class SourcePatchRequest(BaseModel):
     interval_s: Optional[int] = Field(default=None, ge=300, le=604_800)
     watched_channels: Optional[list[str]] = Field(default=None, max_length=50)   # slack
     extra_addresses: Optional[list[str]] = Field(default=None, max_length=50)    # mail
+    quiet_senders: Optional[list[str]] = Field(default=None, max_length=500)     # any conversation source
 
 
 class SecretRequest(BaseModel):

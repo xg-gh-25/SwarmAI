@@ -11,8 +11,9 @@ import type { ItemOut } from '../../services/inbox';
 
 const item = (over: Partial<ItemOut> = {}): ItemOut => ({
   id: 'i1', lane: 'reply', state: 'open', source_id: 'slack', source_kind: 'slack', channel_label: 'Slack',
-  author: 'Mallory', author_role: '', where: '#general', received_at: '2026-11-20T09:00:00+08:00', late: false,
-  ask: 'Reply?', ask_sub: '', excerpt: 'hello', url: '', priority: 3, producer: null, ...over,
+  author: 'Mallory', author_id: 'U_MALLORY', author_role: '', where: '#general', received_at: '2026-11-20T09:00:00+08:00', late: false,
+  ask: 'Reply?', ask_sub: '', excerpt: 'hello', url: '', priority: 3, producer: null,
+  needs_action: false, due: null, thread_count: 1, ...over,
 });
 
 /** The text between the first fence line and its closing fence. */

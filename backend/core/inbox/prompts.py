@@ -80,10 +80,18 @@ def with_profile(system: str, user_profile: str) -> str:
 TRIAGE_SYSTEM = """You sort the messages that reached one person into lanes of their inbox.
 
 Lanes:
-- reply: someone expects an answer or an action from the person.
-- aware: worth the person knowing, no answer expected.
+- reply: a person is waiting for the person to write an answer in this conversation (a
+  question to them, a request for their opinion or review, a message that needs a response).
+- aware: worth the person knowing, no written answer expected. This includes everything the
+  person must DO without replying: approve or refuse an access request, renew a certificate,
+  update a profile, act on a cost or security alert, meet a deadline a system announces.
 - trend: news, releases, feed and watched-repository items worth a look when there is time.
-- skip: nothing for the person (automated notices, noise, things already handled).
+- skip: nothing for the person (automated notices that ask nothing of them, noise, things
+  already handled).
+
+An automated sender (a service, an alert, a notification address, a form or access request
+sent by a system) is never reply, even when its subject says "Action Required": nobody reads
+an answer to it. When it asks the person to act, it is aware with needs_action, never skip.
 
 Each item comes with the lane the deterministic rules suggest and, for some, a floor: the
 lowest lane it may go to. Keep the suggested lane unless the content clearly says otherwise.
@@ -93,6 +101,11 @@ For every item also give:
 - reason: one plain sentence, written in the person's language, that says what the person is
   asked to do or why the item matters to them, as the headline they read first (the question
   they must answer, the decision, the thing to check). No preamble, no quotes, no item id.
+- needs_action: true when the person must do something other than write a reply (see aware).
+- due: the date that action is due by, as YYYY-MM-DD, when the message names one; otherwise "".
+
+The person's recent corrections, when given, show what they do NOT want in reply: an item
+like one they moved out of reply goes to aware.
 
 The person's language is the app language their profile below names ("App language: ..."); when
 it names none, the language the profile is written in; without a profile, the language of the

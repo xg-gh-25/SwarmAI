@@ -1,7 +1,23 @@
 /**
- * ReplyLane — 等你回复: the list of items waiting on the person (REPLY, then PROPOSED
- * under its own label) and the detail of the selected one, with the draft to send
- * (design docs/design/2026-11-20-inbox.md §7-§8, mockup "reply lane").
+ * ReplyLane — 等你回复: the list of threads waiting on the person's reply and the detail
+ * of the selected one, with the draft to send (design docs/design/2026-11-20-inbox.md
+ * §7-§8, mockup "reply lane").
+ *
+ * The list is the server's order (newest first), one row per thread: the thread's newest
+ * open item, with a muted "+N" when N more of that thread are open. Every action below
+ * applies to the whole thread on the server.
+ *
+ * Two modes, the same two panes:
+ * - `reply` (the 等你回复 tab): lane `reply` only.
+ * - `proposed` (opened from 已发 → 去批准): the drafts a producer (GitHub outreach)
+ *   wrote, sent only when the person clicks; the list pane starts with "← 已发".
+ *
+ * The detail header has labelled actions, left to right: 打开原文 (icon), 交给 Swarm
+ * (the item into a new chat, nothing sent), 稍后 ▾ (3 小时后 / 明天早上 / 下周一) and
+ * 不用回 ▾: 已在别处处理 (dismiss), 改成「需要知道」 (to_aware: the triage learns from
+ * it), 这个发件人以后都不用回 (mute_sender: the sender's open items move to 需要知道
+ * and later ones stay out; undone in the channel settings). In `proposed` mode 不用回
+ * has one choice, 不发了 (dismiss).
  *
  * Sending: only a click on 发送 (or Cmd/Ctrl+Enter) calls `inboxService.send`, once per
  * press; a press while one is in flight does nothing. A refusal (403, 409
@@ -10,24 +26,35 @@
  * outcome refreshes the Inbox queries, the item's target included, so after
  * target_changed the person sees the new recipients.
  *
- * Keys (when focus is not in a text field): J / K move, E 不用回, H 稍后; Cmd/Ctrl+Enter
- * sends from anywhere in the overlay, the draft included.
+ * Keys (when focus is not in a text field): J / K move, E dismiss (已在别处处理, or 不发了
+ * for a draft), H 稍后 by 3 hours; Cmd/Ctrl+Enter sends from anywhere in the overlay, the
+ * draft included. None of them acts while focus is in an open 稍后 ▾ / 不用回 ▾ menu.
  *
  * The parent (InboxContent) owns the selection, the locally hidden ids and the draft
  * edits, so they survive switching items and tabs.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, invalidateOverlay } from '../layout/overlayQueries';
 import { OverlayError, OverlayLoading } from '../layout/OverlayState';
-import { inboxService, type ItemAction, type ItemOut, type SendOut, type SendRefusal } from '../../services/inbox';
+import { inboxService, type ItemAction, type ItemOut, type SendOut, type SendRefusal, type SnoozeUntil } from '../../services/inbox';
 import { modKeyLabel } from '../../utils/platform';
 import { isApiError } from '../../services/api';
-import { Avatar, ChannelPill, relTime } from './parts';
+import { Avatar, ChannelPill, MenuButton, ThreadMore, relTime, type MenuEntry } from './parts';
 import { openExternal } from '../../utils/openExternal';
 
 export interface DraftEdit { text: string; draftId: string | null }
+
+export type ReplyMode = 'reply' | 'proposed';
+
+/** 稍后 ▾: the menu label and the toast's "when" of each choice. */
+const SNOOZE: Array<{ until: SnoozeUntil; label: string; when: string }> = [
+  { until: '3h', label: 'ui.InboxOverlay.reply.laterOption.in3h', when: 'ui.InboxOverlay.reply.laterWhen.in3h' },
+  { until: 'tomorrow', label: 'ui.InboxOverlay.reply.laterOption.tomorrow', when: 'ui.InboxOverlay.reply.laterWhen.tomorrow' },
+  { until: 'next_week', label: 'ui.InboxOverlay.reply.laterOption.nextWeek', when: 'ui.InboxOverlay.reply.laterWhen.nextWeek' },
+];
 
 /** The text for a refusal the server sent without a message of its own. */
 const REFUSAL_KEY: Record<string, string> = {
@@ -38,6 +65,10 @@ const REFUSAL_KEY: Record<string, string> = {
 };
 
 export interface ReplyLaneProps {
+  /** `proposed`: the drafts waiting on approval, opened from 已发. Default `reply`. */
+  mode?: ReplyMode;
+  /** `proposed` mode: "← 已发" at the top of the list. */
+  onBackToSent?: () => void;
   items: ItemOut[];
   loading: boolean;
   error: boolean;
@@ -47,8 +78,10 @@ export interface ReplyLaneProps {
   narrow: boolean;
   showDetail: boolean;
   onBack: () => void;
-  /** The item is handled (sent / later / dismissed): hide it and select the next. */
-  onHandled: (id: string) => void;
+  /** The item is handled (sent / later / dismissed): hide it, and the rows in
+   *  `alsoHide` the server moved with it (a muted sender's other threads), and select
+   *  the next row. */
+  onHandled: (id: string, alsoHide?: string[]) => void;
   edits: Record<string, DraftEdit>;
   onEdit: (id: string, edit: DraftEdit | null) => void;
   /** Channel labels of the sources that are not healthy (the banner). */
@@ -66,6 +99,15 @@ export interface ReplyLaneProps {
 
 /** Cmd/Ctrl+Enter sends, once per press. A held key repeats: after a send the next item
  * opens, and the repeat would send its draft too, which nobody chose to send. */
+/** The other rows the server moves on mute_sender: the same source and sender id
+ *  (compared lowercased, as the server does); none when the item names no sender. */
+export const sameSender = (items: ItemOut[], item: ItemOut): string[] => {
+  const who = (item.author_id || '').trim().toLowerCase();
+  if (!who) return [];
+  return items.filter((x) => x.id !== item.id && x.source_id === item.source_id
+    && (x.author_id || '').trim().toLowerCase() === who).map((x) => x.id);
+};
+
 export const isSendKey = (e: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | 'key' | 'repeat'>) =>
   (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.repeat;
 
@@ -76,24 +118,33 @@ export function ReplyLane(props: ReplyLaneProps) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { items, selectedId, onSelect, onHandled, notify, rootRef } = props;
+  const proposedMode = props.mode === 'proposed';
   const selected = items.find((x) => x.id === selectedId) ?? null;
   const sendRef = useRef<(() => void) | null>(null);
   const [acting, setActing] = useState(false);
 
-  const act = useCallback(async (item: ItemOut, action: ItemAction) => {
+  const act = useCallback(async (item: ItemOut, action: ItemAction, until?: SnoozeUntil) => {
     if (acting) return;
     setActing(true);
     try {
-      await inboxService.action(item.id, action);
-      onHandled(item.id);
-      notify(t(action === 'later' ? 'ui.InboxOverlay.reply.snoozed' : 'ui.InboxOverlay.reply.dismissed'));
+      await (until ? inboxService.action(item.id, action, until) : inboxService.action(item.id, action));
+      // mute_sender moves every open reply of that sender to 需要知道: hide them all now,
+      // so the selection goes to the next row still waiting, not to the top after the refetch
+      onHandled(item.id, action === 'mute_sender'
+        ? sameSender(items, item)
+        : []);
+      const snooze = SNOOZE.find((x) => x.until === until) ?? SNOOZE[0];
+      notify(action === 'later' ? t('ui.InboxOverlay.reply.snoozedUntil', { when: t(snooze.when) })
+        : action === 'to_aware' ? t('ui.InboxOverlay.reply.movedToAware')
+          : action === 'mute_sender' ? t('ui.InboxOverlay.reply.muted', { who: item.author })
+            : t('ui.InboxOverlay.reply.dismissed'));
     } catch {
       notify(t('ui.InboxOverlay.actionError'));
     } finally {
       setActing(false);
       void invalidateOverlay(qc, 'inbox');
     }
-  }, [acting, onHandled, notify, qc, t]);
+  }, [acting, items, onHandled, notify, qc, t]);
 
   // J / K / E / H and Cmd/Ctrl+Enter, inside the overlay only.
   useEffect(() => {
@@ -102,6 +153,8 @@ export function ReplyLane(props: ReplyLaneProps) {
       const root = rootRef.current;
       const inside = e.target === document.body || (root != null && e.target instanceof Node && root.contains(e.target));
       if (!inside) return;
+      // an open menu (稍后 ▾ / 不用回 ▾) keeps its keys
+      if (e.target instanceof Element && e.target.closest('[role="menu"]')) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
         if (isSendKey(e)) sendRef.current?.();
@@ -113,7 +166,7 @@ export function ReplyLane(props: ReplyLaneProps) {
       if (k === 'j' && i < items.length - 1) { e.preventDefault(); onSelect(items[i + 1].id); }
       else if (k === 'k' && i > 0) { e.preventDefault(); onSelect(items[i - 1].id); }
       else if (k === 'e' && selected) { e.preventDefault(); void act(selected, 'dismiss'); }
-      else if (k === 'h' && selected) { e.preventDefault(); void act(selected, 'later'); }
+      else if (k === 'h' && selected) { e.preventDefault(); void act(selected, 'later', '3h'); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -124,6 +177,19 @@ export function ReplyLane(props: ReplyLaneProps) {
     return (
       <div className="flex-1">
         <OverlayError testid="inbox-load-error" retryTestid="inbox-load-retry" message={t('ui.InboxOverlay.loadError')} onRetry={props.onRetry} />
+      </div>
+    );
+  }
+  if (!selected && proposedMode) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-center" data-testid="inbox-proposed-empty">
+        <div>
+          <h2 className="text-title font-semibold text-[var(--color-text)]">{t('ui.InboxOverlay.reply.proposedEmpty')}</h2>
+          <button type="button" className="mt-2 text-small text-[var(--color-primary)] hover:underline"
+            onClick={props.onBackToSent} data-testid="inbox-proposed-back">
+            {t('ui.InboxOverlay.reply.proposedBack')}
+          </button>
+        </div>
       </div>
     );
   }
@@ -167,9 +233,7 @@ export function ReplyLane(props: ReplyLaneProps) {
     );
   }
 
-  const reply = items.filter((x) => x.lane !== 'proposed');
-  const proposed = items.filter((x) => x.lane === 'proposed');
-  const producers = [...new Set(proposed.map((x) => x.producer).filter(Boolean))].join(' · ');
+  const producers = proposedMode ? [...new Set(items.map((x) => x.producer).filter(Boolean))].join(' · ') : '';
   const listHidden = props.narrow && props.showDetail;
   const detailHidden = props.narrow && !props.showDetail;
 
@@ -190,27 +254,32 @@ export function ReplyLane(props: ReplyLaneProps) {
               </button>
             </div>
           )}
-          <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2" aria-label={t('ui.InboxOverlay.tabs.reply')} data-testid="inbox-list">
-            {reply.map((it) => <ItemRow key={it.id} item={it} on={it.id === selectedId} onClick={() => onSelect(it.id)} />)}
-            {proposed.length > 0 && (
-              <li className="px-2.5 pb-1.5 pt-[18px] text-meta text-[var(--color-text-dim)]" data-testid="inbox-proposed-label">
-                {producers
-                  ? t('ui.InboxOverlay.reply.proposedBy', { producer: producers })
-                  : t('ui.InboxOverlay.reply.proposed')}
-              </li>
-            )}
-            {proposed.map((it) => <ItemRow key={it.id} item={it} on={it.id === selectedId} onClick={() => onSelect(it.id)} />)}
+          {proposedMode && (
+            <div className="px-[18px] pt-3.5 text-small text-[var(--color-text-dim)]" data-testid="inbox-proposed-label">
+              <button type="button" className="text-small text-[var(--color-primary)] hover:underline"
+                onClick={props.onBackToSent} data-testid="inbox-proposed-back">
+                {t('ui.InboxOverlay.reply.proposedBack')}
+              </button>
+              {' · '}
+              {producers ? t('ui.InboxOverlay.reply.proposedBy', { producer: producers }) : t('ui.InboxOverlay.reply.proposed')}
+            </div>
+          )}
+          <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2" data-testid="inbox-list"
+            aria-label={proposedMode ? t('ui.InboxOverlay.reply.proposed') : t('ui.InboxOverlay.tabs.reply')}>
+            {items.map((it) => <ItemRow key={it.id} item={it} on={it.id === selectedId} onClick={() => onSelect(it.id)} />)}
           </ul>
-          <div className="px-[18px] pb-3.5 pt-2.5 text-meta text-[var(--color-text-dim)]">
-            <Kbd>J</Kbd> <Kbd>K</Kbd> {t('ui.InboxOverlay.reply.keysMove')} · <Kbd>{modKeyLabel()}</Kbd><Kbd>↵</Kbd> {t('ui.InboxOverlay.reply.keysSend')} · <Kbd>E</Kbd> {t('ui.InboxOverlay.reply.keysDismiss')}
+          <div className="px-[18px] pb-3.5 pt-2.5 text-meta text-[var(--color-text-dim)]" data-testid="inbox-keys">
+            <Kbd>J</Kbd> <Kbd>K</Kbd> {t('ui.InboxOverlay.reply.keysMove')} · <Kbd>{modKeyLabel()}</Kbd><Kbd>↵</Kbd> {t('ui.InboxOverlay.reply.keysSend')}
+            {' · '}<Kbd>E</Kbd> {proposedMode ? t('ui.InboxOverlay.reply.keysDrop') : t('ui.InboxOverlay.reply.keysDismiss')}
+            {' · '}<Kbd>H</Kbd> {t('ui.InboxOverlay.reply.keysLater')}
           </div>
         </div>
       )}
       {!detailHidden && (
         <ReplyDetail key={selected.id} item={selected} narrow={props.narrow} onBack={props.onBack}
           edit={props.edits[selected.id]} onEdit={(e) => props.onEdit(selected.id, e)}
-          sendRef={sendRef} acting={acting}
-          onLater={() => void act(selected, 'later')} onDismiss={() => void act(selected, 'dismiss')}
+          sendRef={sendRef} acting={acting} proposedMode={proposedMode}
+          onAct={(action, until) => void act(selected, action, until)}
           onToChat={() => props.onToChat(selected)}
           onSent={(s) => {
             props.onEdit(selected.id, null);
@@ -247,6 +316,7 @@ function ItemRow({ item, on, onClick }: { item: ItemOut; on: boolean; onClick: (
               className={`ml-auto shrink-0 text-meta ${item.late ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text-dim)]'}`}>
               {relTime(item.received_at, t)}
             </span>
+            <ThreadMore count={item.thread_count} />
           </span>
           <span className={`mt-0.5 line-clamp-2 text-small ${on ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'}`}>
             {item.ask || item.excerpt}
@@ -312,11 +382,11 @@ export function MessageBody({ text, testid }: { text: string; testid?: string })
   );
 }
 
-function ReplyDetail({ item, narrow, onBack, edit, onEdit, sendRef, acting, onLater, onDismiss, onToChat, onSent }: {
+function ReplyDetail({ item, narrow, onBack, edit, onEdit, sendRef, acting, proposedMode, onAct, onToChat, onSent }: {
   item: ItemOut; narrow: boolean; onBack: () => void;
   edit: DraftEdit | undefined; onEdit: (e: DraftEdit) => void;
-  sendRef: MutableRefObject<(() => void) | null>; acting: boolean;
-  onLater: () => void; onDismiss: () => void; onToChat: () => void; onSent: (s: SendOut) => void;
+  sendRef: MutableRefObject<(() => void) | null>; acting: boolean; proposedMode: boolean;
+  onAct: (action: ItemAction, until?: SnoozeUntil) => void; onToChat: () => void; onSent: (s: SendOut) => void;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -396,23 +466,31 @@ function ReplyDetail({ item, narrow, onBack, edit, onEdit, sendRef, acting, onLa
   return (
     <section className="min-w-0 flex-1 overflow-y-auto" aria-label={item.author} data-testid="inbox-detail">
       <div className={`mx-auto flex max-w-[680px] flex-col ${narrow ? 'px-6 pb-10 pt-5' : 'px-9 pb-12 pt-7'}`}>
-        <div className="flex items-center gap-2.5 text-small text-[var(--color-text-muted)]">
-          {narrow && (
-            <button type="button" className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
-              onClick={onBack} aria-label={t('ui.InboxOverlay.reply.back')} data-testid="inbox-back">
-              <span className="material-symbols-outlined icon-sm">arrow_back</span>
-            </button>
-          )}
-          <Avatar name={item.author} size="sm" icon={bot ? 'smart_toy' : undefined} />
-          <span className="text-body font-semibold text-[var(--color-text)]">{item.author}</span>
-          <ChannelPill kind={item.source_kind} label={item.channel_label} large />
-          <span className="truncate">{[item.author_role, item.where, relTime(item.received_at, t)].filter(Boolean).join(' · ')}</span>
-          <span className="ml-auto flex shrink-0 gap-0.5">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 text-small text-[var(--color-text-muted)]">
+          {/* who: grows and truncates; the actions wrap below it only when the pane is too narrow */}
+          <span className="flex min-w-0 flex-1 basis-[220px] items-center gap-2.5">
+            {narrow && (
+              <button type="button" className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
+                onClick={onBack} aria-label={t('ui.InboxOverlay.reply.back')} data-testid="inbox-back">
+                <span className="material-symbols-outlined icon-sm">arrow_back</span>
+              </button>
+            )}
+            <Avatar name={item.author} size="sm" icon={bot ? 'smart_toy' : undefined} />
+            <span className="shrink-0 text-body font-semibold text-[var(--color-text)]">{item.author}</span>
+            <ChannelPill kind={item.source_kind} label={item.channel_label} large />
+            <span className="truncate">{[item.author_role, item.where, relTime(item.received_at, t)].filter(Boolean).join(' · ')}</span>
+          </span>
+          <span className="ml-auto flex shrink-0 items-center gap-1" data-testid="inbox-detail-actions">
             {item.url && <IconAction icon="open_in_new" label={t('ui.InboxOverlay.reply.openOriginal')}
               onClick={() => { void openExternal(item.url).catch(() => undefined); }} testid="inbox-open-original" />}
-            <IconAction icon="chat" label={t('ui.InboxOverlay.toChat')} onClick={onToChat} testid="inbox-to-chat" />
-            <IconAction icon="schedule" label={t('ui.InboxOverlay.reply.later')} onClick={onLater} testid="inbox-later" disabled={acting} />
-            <IconAction icon="done" label={t('ui.InboxOverlay.reply.dismiss')} onClick={onDismiss} testid="inbox-dismiss" disabled={acting} />
+            <button type="button" className="btn-sm btn-ghost" onClick={onToChat} title={t('ui.InboxOverlay.toChatHint')} data-testid="inbox-to-chat">
+              <span className="material-symbols-outlined icon-xs" aria-hidden>chat</span>
+              {t('ui.InboxOverlay.toChat')}
+            </button>
+            <MenuButton label={t('ui.InboxOverlay.reply.later')} icon="schedule" disabled={acting} testid="inbox-later"
+              items={SNOOZE.map((s) => ({ key: s.until, label: t(s.label), testid: `inbox-later-${s.until}`, onSelect: () => onAct('later', s.until) }))} />
+            <MenuButton label={t('ui.InboxOverlay.reply.dismiss')} icon="done" disabled={acting} testid="inbox-dismiss"
+              items={dismissChoices(item, proposedMode, t, onAct)} />
           </span>
         </div>
 
@@ -478,6 +556,22 @@ function ReplyDetail({ item, narrow, onBack, edit, onEdit, sendRef, acting, onLa
       </div>
     </section>
   );
+}
+
+/** 不用回 ▾: a reply has three ways out, a proposed draft one (不发了). */
+function dismissChoices(item: ItemOut, proposedMode: boolean, t: TFunction,
+  onAct: (action: ItemAction) => void): MenuEntry[] {
+  if (proposedMode) {
+    return [{ key: 'drop', label: t('ui.InboxOverlay.reply.dismissDrop'), testid: 'inbox-dismiss-drop', onSelect: () => onAct('dismiss') }];
+  }
+  return [
+    { key: 'elsewhere', label: t('ui.InboxOverlay.reply.dismissElsewhere'), testid: 'inbox-dismiss-elsewhere', onSelect: () => onAct('dismiss') },
+    { key: 'aware', label: t('ui.InboxOverlay.reply.dismissToAware'), testid: 'inbox-dismiss-to-aware', onSelect: () => onAct('to_aware') },
+    {
+      key: 'mute', testid: 'inbox-dismiss-mute', onSelect: () => onAct('mute_sender'),
+      label: <>{t('ui.InboxOverlay.reply.dismissMute')}<span className="max-w-[160px] truncate text-[var(--color-text-dim)]">{item.author}</span></>,
+    },
+  ];
 }
 
 function IconAction({ icon, label, onClick, testid, disabled }: {

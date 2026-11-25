@@ -281,12 +281,17 @@ async def _record(row: dict, item: dict, status: str, fields: dict) -> dict:
 
 
 async def _mark_replied(item: dict) -> None:
+    """The item is replied, and so is every earlier REPLY / PROPOSED item of its thread
+    (a list row is the thread's newest item; answering it answers the conversation), by
+    the same rule as the person's own message seen at a pull (``inbox_close_thread``)."""
     from database import db
     stamp = store.ts(store.now())
     for state in (ItemState.OPEN.value, ItemState.SNOOZED.value):
         if await db.inbox_update_item(item["id"], stamp, expect_state=state,
                                       state=ItemState.REPLIED.value, snooze_until=None):
-            return
+            break
+    if item.get("lane") != "proposed":
+        await db.inbox_close_thread(item["source_id"], item["thread_key"], item["received_at"], stamp)
 
 
 async def _edit_feedback(row: dict, item: dict) -> None:

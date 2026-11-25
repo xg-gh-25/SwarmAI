@@ -3,17 +3,25 @@
  * lanes, with a draft to send (design docs/design/2026-11-20-inbox.md §7-§8; approved
  * mockup docs/design/2026-11-20-inbox-mockup.html).
  *
- * One lane at a time, through the shared Tabs: 等你回复 (N) · 需要知道 (N) · 趋势 · 已发
- * (an alert count when a send needs the person). The toolbar holds the last update
- * time, refresh and the channel settings (gear); the host header holds the title and
- * close. The lanes live in components/inbox/.
+ * One lane at a time, through the shared Tabs: 等你回复 (N) · 需要知道 (N) · 趋势 · 已发.
+ * The counts are threads. 已发 carries an alert count when a send needs the person,
+ * otherwise the number of drafts waiting on approval (a plain count). The toolbar holds
+ * the last update time, refresh and the channel settings (gear); the host header holds
+ * the title and close. The lanes live in components/inbox/.
+ *
+ * Two pages have no tab of their own: the channel settings (the gear), and 待你批准
+ * (`proposed`, opened from 已发 → 去批准): the drafts GitHub outreach wrote, shown in the
+ * same two-pane ReplyLane, with "← 已发" back. 等你回复 lists lane `reply` only.
  *
  * State owned here (fresh per open — OverlayHost mounts the surface on each open):
- * - the view (a tab, or the channel settings page) and the selected item;
+ * - the view (a tab, the channel settings or 待你批准) and the selected item;
  * - the ids handled in this sitting, hidden until the refetch drops them;
  * - the draft edits per item, so moving between items keeps what was typed;
  * - `narrow`: the content is measured; below 720 px the reply lane shows one pane at
- *   a time (list, or detail with a back button).
+ *   a time (list, or detail with a back button). After a send or an action the detail
+ *   stays open on the next item; the list comes back only when none is left;
+ * - focus after a row is handled: the row now selected (需要知道: the next row), else
+ *   the lane container, never <body>.
  *
  * Every write refreshes all Inbox queries (invalidateOverlay 'inbox'), the nav badge
  * included, which reads the same counts query. Agents do not open this surface: it is
@@ -35,7 +43,7 @@ import { StatusLine, clockTime } from '../inbox/parts';
 import { inboxChatPrompt, inboxLearnPrompt } from '../inbox/chatPrompt';
 
 type TabKey = 'reply' | 'aware' | 'trend' | 'sent';
-type View = TabKey | 'channels';
+type View = TabKey | 'channels' | 'proposed';
 
 /** Below this content width the reply lane shows one pane at a time. */
 export const INBOX_NARROW_PX = 720;
@@ -88,9 +96,13 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
   // no channel to reply in yet (only feeds, or none): the reply lane says so and offers 接入
   const noConversation = sourcesQ.isSuccess && !sourcesQ.data.some((s) => s.kind !== 'feed');
 
-  const queue = useMemo<ItemOut[]>(
-    () => [...(replyQ.data ?? []), ...(proposedQ.data ?? [])].filter((x) => !gone.has(x.id)),
-    [replyQ.data, proposedQ.data, gone],
+  const replyItems = useMemo<ItemOut[]>(() => (replyQ.data ?? []).filter((x) => !gone.has(x.id)), [replyQ.data, gone]);
+  const proposedItems = useMemo<ItemOut[]>(() => (proposedQ.data ?? []).filter((x) => !gone.has(x.id)), [proposedQ.data, gone]);
+  // the two-pane lane on screen: 等你回复, or 待你批准
+  const queue = view === 'proposed' ? proposedItems : replyItems;
+  const producers = useMemo(
+    () => [...new Set((proposedQ.data ?? []).map((x) => x.producer).filter(Boolean))].join(' · '),
+    [proposedQ.data],
   );
   const awareItems = useMemo(() => (awareQ.data ?? []).filter((x) => !gone.has(x.id)), [awareQ.data, gone]);
 
@@ -101,15 +113,41 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
   const notify = useCallback((msg: string) => setStatus(msg), []);
   const clearStatus = useCallback(() => setStatus(null), []);
 
-  /** Hide a handled item and select the next one in the shown order (else the previous). */
-  const onHandled = useCallback((id: string) => {
+  /** Where focus goes once a handled row is gone: that row, else the lane container
+   *  (never <body>, which would lose the overlay's keys for a screen reader). */
+  const laneRef = useRef<HTMLDivElement | null>(null);
+  const [focusReq, setFocusReq] = useState<{ id: string | null; n: number } | null>(null);
+  const focusAfter = useCallback((id: string | null) => setFocusReq((r) => ({ id, n: (r?.n ?? 0) + 1 })), []);
+  useEffect(() => {
+    if (!focusReq) return;
+    const lane = laneRef.current;
+    const row = focusReq.id
+      ? Array.from(lane?.querySelectorAll<HTMLElement>('[data-item-id]') ?? []).find((el) => el.dataset.itemId === focusReq.id)
+      : null;
+    (row ?? lane)?.focus();
+  }, [focusReq]);
+
+  /** Hide a handled item (with `alsoHide`: every row the server moved with it, as a muted
+   *  sender's other threads) and select the next row still shown, in the shown order,
+   *  else the previous one. Narrow: the detail stays open on that next row; the list
+   *  comes back only when nothing is left. */
+  const onHandled = useCallback((id: string, alsoHide: string[] = []) => {
+    const hide = new Set([id, ...alsoHide]);
     const order = queue.map((x) => x.id);
     const i = order.indexOf(id);
-    const rest = order.filter((x) => x !== id);
+    const next = i < 0 ? null
+      : order.slice(i + 1).find((x) => !hide.has(x)) ?? order.slice(0, i).reverse().find((x) => !hide.has(x)) ?? null;
+    setGone((g) => { const n = new Set(g); hide.forEach((x) => n.add(x)); return n; });
+    if (i >= 0) setSelectedId(next);
+    setShowDetail(next != null);
+    focusAfter(next);
+  }, [queue, focusAfter]);
+
+  /** 需要知道: hide the row; the lane says which row takes focus next. */
+  const onAwareHandled = useCallback((id: string, focusId?: string | null) => {
     setGone((g) => new Set(g).add(id));
-    if (i >= 0) setSelectedId(rest[i] ?? rest[i - 1] ?? null);
-    setShowDetail(false);
-  }, [queue]);
+    if (focusId !== undefined) focusAfter(focusId);
+  }, [focusAfter]);
 
   const onEdit = useCallback((id: string, e: DraftEdit | null) => {
     setEdits((all) => {
@@ -120,18 +158,22 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
   }, []);
 
   const goTab = (k: TabKey) => { setView(k); setLastTab(k); setShowDetail(false); };
-  // 有回复: open that item in 等你回复. The reply may be newer than the cached list, so
-  // the lists refetch first; if it is still not waiting on the person afterwards (it
-  // went to 需要知道, or it is handled), say so instead of opening another item.
+  const openProposed = () => { setView('proposed'); setLastTab('sent'); setShowDetail(false); };
+  // 有回复: open that item in 等你回复 (or in 待你批准 when it is a draft). The reply may
+  // be newer than the cached list, so the lists refetch first; if it is still not waiting
+  // on the person afterwards (it went to 需要知道, or it is handled), say so instead of
+  // opening another item.
   const gotoItem = (id: string) => {
     setGone((g) => { const n = new Set(g); n.delete(id); return n; });
     goTab('reply');
     setSelectedId(id);
     setGotoId(id);
     void Promise.all([replyQ.refetch(), proposedQ.refetch()]).then(([r, p]) => {
-      const found = [...(r.data ?? []), ...(p.data ?? [])].some((x) => x.id === id);
+      const inReply = (r.data ?? []).some((x) => x.id === id);
+      const inProposed = !inReply && (p.data ?? []).some((x) => x.id === id);
       setGotoId(null);
-      if (found) setShowDetail(true);
+      if (inProposed) { setView('proposed'); setLastTab('sent'); }
+      if (inReply || inProposed) setShowDetail(true);
       else notify(t('ui.InboxOverlay.reply.gotoMissing'));
     });
   };
@@ -159,14 +201,17 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
     { key: 'trend', label: t('ui.InboxOverlay.tabs.trend'), testid: 'inbox-tab-trend' },
     {
       key: 'sent', label: t('ui.InboxOverlay.tabs.sent'), testid: 'inbox-tab-sent',
-      // a send that needs the person: the shared Tabs' alert count (the mockup's red dot)
-      ...(c && c.sends_need_you > 0 ? { count: c.sends_need_you, tone: 'alert' as const } : {}),
+      // a send that needs the person: the shared Tabs' alert count (the mockup's red dot);
+      // else the drafts waiting on approval, as a plain count
+      ...(c && c.sends_need_you > 0 ? { count: c.sends_need_you, tone: 'alert' as const }
+        : c && c.proposed > 0 ? { count: c.proposed } : {}),
     },
   ];
 
   const unhealthyLabels = unhealthyIds.map((id) => sourcesQ.data?.find((s) => s.id === id)?.channel_label ?? id);
-  const replyLoading = replyQ.isPending || proposedQ.isPending;
-  const replyError = (replyQ.isError && replyQ.data === undefined) || (proposedQ.isError && proposedQ.data === undefined);
+  const laneQ = view === 'proposed' ? proposedQ : replyQ;
+  const replyLoading = laneQ.isPending;
+  const replyError = laneQ.isError && laneQ.data === undefined;
   const updated = refreshing
     ? t('ui.InboxOverlay.refreshing')
     : c?.updated_at ? t('ui.InboxOverlay.updatedAt', { time: clockTime(c.updated_at) }) : '';
@@ -175,7 +220,8 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
     <div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-testid="inbox-overlay"
       data-narrow={narrow || undefined}>
       <div className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-5 py-2.5">
-        <Tabs label={t('ui.InboxOverlay.title')} value={view === 'channels' ? lastTab : view} onChange={goTab} items={tabs} testid="inbox-tabs" />
+        <Tabs label={t('ui.InboxOverlay.title')} value={view === 'channels' ? lastTab : view === 'proposed' ? 'sent' : view}
+          onChange={goTab} items={tabs} testid="inbox-tabs" />
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           {!narrow && updated && <span className="mr-1.5 text-small text-[var(--color-text-dim)]" data-testid="inbox-updated">{updated}</span>}
           <button type="button" className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] disabled:opacity-40"
@@ -192,25 +238,29 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        {view === 'reply' && (
-          <ReplyLane items={queue} loading={replyLoading || gotoId != null} error={replyError}
-            onRetry={() => { void replyQ.refetch(); void proposedQ.refetch(); }}
+      <div ref={laneRef} tabIndex={-1} className="flex min-h-0 flex-1 outline-none" data-testid="inbox-lane">
+        {(view === 'reply' || view === 'proposed') && (
+          <ReplyLane key={view} mode={view} onBackToSent={() => goTab('sent')}
+            items={queue} loading={replyLoading || gotoId != null} error={replyError}
+            onRetry={() => void laneQ.refetch()}
             selectedId={effectiveSelected} onSelect={(id) => { setSelectedId(id); setShowDetail(true); }}
             narrow={narrow} showDetail={showDetail} onBack={() => setShowDetail(false)}
             onHandled={onHandled} edits={edits} onEdit={onEdit}
-            unhealthy={unhealthyLabels} onFixChannels={() => setView('channels')}
-            noChannels={noConversation}
+            unhealthy={view === 'reply' ? unhealthyLabels : []} onFixChannels={() => setView('channels')}
+            noChannels={view === 'reply' && noConversation}
             awareCount={c?.aware ?? awareItems.length} onGoAware={() => goTab('aware')}
             onToChat={toChat} notify={notify} rootRef={rootRef} />
         )}
         {view === 'aware' && (
           <AwareLane items={awareItems} loading={awareQ.isPending} error={awareQ.isError && awareQ.data === undefined}
-            onRetry={() => void awareQ.refetch()} onHandled={(id) => setGone((g) => new Set(g).add(id))}
+            onRetry={() => void awareQ.refetch()} onHandled={onAwareHandled}
             onToChat={toChat} notify={notify} />
         )}
         {view === 'trend' && <TrendLane items={(trendQ.data ?? []).filter((x) => !gone.has(x.id))} onLearn={learn} />}
-        {view === 'sent' && <SentLane onGotoItem={gotoItem} onFixChannels={() => setView('channels')} notify={notify} />}
+        {view === 'sent' && (
+          <SentLane onGotoItem={gotoItem} onFixChannels={() => setView('channels')} notify={notify}
+            proposedCount={c?.proposed ?? 0} proposedBy={producers} onApprove={openProposed} />
+        )}
         {view === 'channels' && <ChannelSettings onBack={() => setView(lastTab)} notify={notify} />}
       </div>
 

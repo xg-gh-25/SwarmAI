@@ -4696,7 +4696,7 @@ class SQLiteDatabase(BaseDatabase):
                                    "interval_s", "cursor", "me", "can_send", "health", "fix",
                                    "last_pull_at", "last_attempt_at", "last_error"))
     _INBOX_ITEM_SET = frozenset(("lane", "priority", "reason", "state", "snooze_until",
-                                 "triaged_at"))
+                                 "triaged_at", "meta"))
     _INBOX_SEND_SET = frozenset(("status", "external_msg_id", "url", "error", "sent_at"))
 
     @staticmethod
@@ -4817,11 +4817,46 @@ class SQLiteDatabase(BaseDatabase):
         return rows[0] if rows else None
 
     async def inbox_list_items(self, lane: str, state: str = "open", limit: int = 200) -> list[dict]:
-        """Items of a lane and state, most urgent first: priority, then oldest first."""
+        """One row per thread of a lane and state: the thread's newest item, with
+        ``thread_count`` = that thread's items in the lane and state. Newest first.
+        PROPOSED items are one row each (a producer may propose twice in one thread, and
+        each draft is its own decision)."""
+        cols = ", ".join(self.INBOX_ITEM_COLS)
+        group = "id" if lane == "proposed" else "source_id, thread_key"
         return await self._inbox_fetch(
-            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items WHERE lane = ? AND state = ? "
-            "ORDER BY priority ASC, received_at ASC, id ASC LIMIT ?",
-            (lane, state, limit), self.INBOX_ITEM_COLS)
+            f"SELECT {cols}, thread_count FROM (SELECT {cols}, "
+            f"ROW_NUMBER() OVER (PARTITION BY {group} ORDER BY received_at DESC, id DESC) AS rn, "
+            f"COUNT(*) OVER (PARTITION BY {group}) AS thread_count "
+            "FROM inbox_items WHERE lane = ? AND state = ?) WHERE rn = 1 "
+            "ORDER BY received_at DESC, id DESC LIMIT ?",
+            (lane, state, limit), (*self.INBOX_ITEM_COLS, "thread_count"))
+
+    async def inbox_thread_keys(self) -> list[dict]:
+        """Every item's id, thread_key and thread_ref (``store.rekey_threads``)."""
+        return await self._inbox_fetch("SELECT id, thread_key, thread_ref FROM inbox_items",
+                                       (), ("id", "thread_key", "thread_ref"))
+
+    async def inbox_set_thread_key(self, item_id: str, thread_key: str) -> None:
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            await conn.execute("UPDATE inbox_items SET thread_key = ? WHERE id = ?", (thread_key, item_id))
+            await conn.commit()
+
+    async def inbox_thread_items(self, source_id: str, thread_key: str, lane: str,
+                                 state: str = "open") -> list[dict]:
+        """The items of one thread in a lane and state, newest first (an action on a row
+        of a list applies to all of them)."""
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items WHERE source_id = ? "
+            "AND thread_key = ? AND lane = ? AND state = ? ORDER BY received_at DESC, id DESC",
+            (source_id, thread_key, lane, state), self.INBOX_ITEM_COLS)
+
+    async def inbox_sender_items(self, source_id: str, author_id: str, lane: str,
+                                 state: str = "open") -> list[dict]:
+        """The items of one sender in a lane and state (a muted sender's open REPLY items)."""
+        return await self._inbox_fetch(
+            f"SELECT {', '.join(self.INBOX_ITEM_COLS)} FROM inbox_items WHERE source_id = ? "
+            "AND lower(author_id) = lower(?) AND lane = ? AND state = ? ORDER BY received_at DESC, id DESC",
+            (source_id, author_id, lane, state), self.INBOX_ITEM_COLS)
 
     async def inbox_items_since(self, lane: str, since: str, limit: int = 200) -> list[dict]:
         return await self._inbox_fetch(
@@ -4889,10 +4924,13 @@ class SQLiteDatabase(BaseDatabase):
             return cursor.rowcount
 
     async def inbox_item_counts(self, skipped_since: str) -> dict[str, int]:
-        """Open items per lane, and SKIP items received since ``skipped_since``."""
+        """Threads with an open item per lane (the rows ``inbox_list_items`` returns), and
+        SKIP items received since ``skipped_since``."""
         async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
             rows = await (await conn.execute(
-                "SELECT lane, COUNT(*) FROM inbox_items WHERE state = 'open' GROUP BY lane")).fetchall()
+                "SELECT lane, COUNT(*) FROM (SELECT DISTINCT lane, "
+                "CASE WHEN lane = 'proposed' THEN id ELSE source_id || char(31) || thread_key END "
+                "FROM inbox_items WHERE state = 'open') GROUP BY lane")).fetchall()
             skipped = await (await conn.execute(
                 "SELECT COUNT(*) FROM inbox_items WHERE lane = 'skip' AND received_at >= ?",
                 (skipped_since,))).fetchone()
@@ -4901,10 +4939,11 @@ class SQLiteDatabase(BaseDatabase):
         return out
 
     async def inbox_later_item(self, source_id: str, thread_key: str, after: str) -> Optional[str]:
-        """The first pulled item of a thread received after ``after`` (a reply came back)."""
+        """The newest pulled item of a thread received after ``after`` (a reply came
+        back): the row the list shows for that thread."""
         rows = await self._inbox_fetch(
             "SELECT id FROM inbox_items WHERE source_id = ? AND thread_key = ? AND origin = 'pull' "
-            "AND received_at > ? ORDER BY received_at ASC, id ASC LIMIT 1",
+            "AND received_at > ? ORDER BY received_at DESC, id DESC LIMIT 1",
             (source_id, thread_key, after), ("id",))
         return rows[0]["id"] if rows else None
 

@@ -60,6 +60,8 @@ describe('inbox client: the schema is covered', () => {
     await inboxService.redraft('i1');
     await inboxService.send('i1', { draft_id: 'd1', text: 'hi', target_sha: 'sha' });
     await inboxService.action('i1', 'later');
+    await inboxService.action('i1', 'later', 'tomorrow');
+    await inboxService.doneMany(['i1']);
     await inboxService.sends('all');
     await inboxService.notSent('s1');
     await inboxService.resend('s1');

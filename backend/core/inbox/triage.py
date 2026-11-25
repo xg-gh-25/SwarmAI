@@ -68,7 +68,8 @@ class TriageContext:
     examples: tuple[str, ...] = field(default=())  # recent re-lane corrections, one line each
 
 
-def rule_lane(msg: Message, me: Identity, category: SourceCategory) -> Optional[RuleVerdict]:
+def rule_lane(msg: Message, me: Identity, category: SourceCategory,
+              quiet: frozenset[str] = frozenset()) -> Optional[RuleVerdict]:
     """Return None for the person's own message (it only closes threads), else the rule
     verdict. Direct messages, mentions and mail with the person in To get lane REPLY with
     floor AWARE: the model may lower them to AWARE, never to SKIP.
@@ -77,13 +78,17 @@ def rule_lane(msg: Message, me: Identity, category: SourceCategory) -> Optional[
     no-reply sender or calendar invite is SKIP even when it addresses the person (it expects
     no answer); a direct message or mention is REPLY even in list mail or a watched channel
     (an explicit ask is never dropped below AWARE); bulk mail, watched channels and any other
-    conversation message are AWARE with no floor, for the model to judge."""
+    conversation message are AWARE with no floor, for the model to judge. A sender in
+    *quiet* (the person said this sender never waits on a reply) is AWARE with no floor; the
+    runner keeps it out of REPLY whatever the model answers (``runner.clamp_lane``)."""
     if me.is_me(msg.author_id):
         return None
     if category == SourceCategory.FEED:
         return RuleVerdict(Lane.TREND, None)
     if msg.is_bot or msg.is_invite:
         return RuleVerdict(Lane.SKIP, None)
+    if (msg.author_id or "").strip().lower() in quiet:
+        return RuleVerdict(Lane.AWARE, None)
     if msg.is_direct or msg.mentions_me:
         return RuleVerdict(Lane.REPLY, Lane.AWARE)
     return RuleVerdict(Lane.AWARE, None)  # bulk, watched, or nothing that asks the person
@@ -139,7 +144,7 @@ def _ask(prompt: str, *, schema: dict, max_tokens: int, system: str) -> dict:
     answer tool ``structured`` carries; the answer is parsed, never executed."""
     return bedrock.structured(prompt, schema=schema, model_id=bedrock.get_model_id(),
                               max_tokens=max_tokens, system=system,
-                              description="Record the lane, priority and reason of every item.",
+                              description="Record the lane, priority, reason and action of every item.",
                               feature=FEATURE)
 
 
@@ -159,6 +164,13 @@ def _schema(ids: list[str]) -> dict:
                         "reason": {"type": "string",
                                    "description": "One plain sentence in the person's language: "
                                                   "what they are asked to do."},
+                        "needs_action": {"type": "boolean",
+                                         "description": "True when the person must do something "
+                                                        "other than write a reply (approve, renew, "
+                                                        "fill in, fix, decide)."},
+                        "due": {"type": "string",
+                                "description": "The date the action is due by as YYYY-MM-DD when "
+                                               "the message names one, else an empty string."},
                     },
                     "required": ["id", "lane", "priority", "reason"],
                 },
@@ -176,8 +188,11 @@ def _result(c: Candidate, entry: dict) -> TriageResult:
     if c.floor is not None and _RANK[lane] < _RANK[c.floor]:
         lane = c.floor                  # never below the rules' floor
     reason = " ".join(str(entry.get("reason") or "").split()) or " ".join(c.message.title.split())
+    due = str(entry.get("due") or "").strip()[:10]
     return TriageResult(id=c.id, lane=lane, priority=int(entry["priority"]), reason=reason,
-                        reply_expected=lane is Lane.REPLY)
+                        reply_expected=lane is Lane.REPLY,
+                        needs_action=bool(entry.get("needs_action")),  # the runner keeps it only off REPLY
+                        due=due)
 
 
 def _signals(m: Message) -> str:

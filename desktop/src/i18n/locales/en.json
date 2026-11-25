@@ -5575,7 +5575,7 @@
       "updatedAt": "Updated {{time}}",
       "channelSettings": "Channel settings",
       "fix": "Fix",
-      "toChat": "Send to chat",
+      "toChat": "Hand to Swarm",
       "tabs": {
         "reply": "Waiting on you",
         "aware": "Good to know",
@@ -5611,10 +5611,9 @@
         "emptyAware_other": "{{count}} things worth knowing",
         "goLook": "Take a look",
         "back": "Back to the list",
-        "later": "Later (H)",
-        "dismiss": "No reply needed (E)",
-        "snoozed": "Moved to later",
-        "dismissed": "Marked as no reply needed",
+        "later": "Later",
+        "dismiss": "No reply needed",
+        "dismissed": "Marked as handled",
         "replyTo": "Reply to",
         "targetLoading": "Checking who this reaches…",
         "targetError": "Couldn't check who this reaches; sending is off.",
@@ -5630,7 +5629,28 @@
         "sendFailed": "Not sent.",
         "sendRejected": "Not sent: {{reason}}",
         "sendUnclear": "The send did not complete. It may have gone out: check Sent. Nothing is sent again by itself.",
-        "gotoMissing": "That reply is no longer waiting on you."
+        "gotoMissing": "That reply is no longer waiting on you.",
+        "keysDrop": "don't send",
+        "keysLater": "later",
+        "laterOption": {
+          "in3h": "In 3 hours",
+          "tomorrow": "Tomorrow morning",
+          "nextWeek": "Next Monday"
+        },
+        "laterWhen": {
+          "in3h": "in 3 hours",
+          "tomorrow": "tomorrow morning",
+          "nextWeek": "next Monday"
+        },
+        "snoozedUntil": "You will be reminded {{when}}",
+        "dismissElsewhere": "Handled elsewhere",
+        "dismissToAware": "Move to Good to know",
+        "dismissMute": "This sender never needs a reply",
+        "dismissDrop": "Don't send",
+        "movedToAware": "Moved to Good to know. Fewer like it will land here.",
+        "muted": "Messages from {{who}} no longer go to Waiting on you",
+        "proposedBack": "← Sent",
+        "proposedEmpty": "No drafts left to approve"
       },
       "refusal": {
         "targetChanged": "Who this reaches has changed. Check the new recipients above, then send again.",
@@ -5640,12 +5660,23 @@
         "other": "The Inbox refused to send this."
       },
       "aware": {
-        "lead_one": "{{count}} thing to know today",
-        "lead_other": "{{count}} things to know today",
+        "lead_one": "{{count}} thing worth knowing",
+        "lead_other": "{{count}} things worth knowing",
         "sub": "No reply needed, just a look",
         "empty": "Nothing you need to know right now.",
         "done": "Got it",
-        "marked": "Marked as seen"
+        "marked": "Marked as seen",
+        "actTitle": "Needs you to act",
+        "due": "Due {{date}}",
+        "handled": "Done",
+        "handledToast": "Marked as done",
+        "dayDone": "Mark this day as seen",
+        "dayMarked_one": "{{count}} marked as seen",
+        "dayMarked_other": "{{count}} marked as seen",
+        "dueOverdue": "Overdue · {{date}}",
+        "dueToday": "Due today",
+        "dayConfirm_one": "Click again to mark this {{count}} as seen",
+        "dayConfirm_other": "Click again to mark these {{count}} as seen"
       },
       "trend": {
         "lead_one": "{{count}} thing worth a look today",
@@ -5680,7 +5711,12 @@
         "auto": "Auto",
         "hasReply": "Replied",
         "openAt": "Open where it was sent",
-        "empty": "Nothing sent yet."
+        "empty": "Nothing sent yet.",
+        "proposed_one": "{{count}} comment drafted by {{producer}} waits for you · nothing is sent until you click",
+        "proposed_other": "{{count}} comments drafted by {{producer}} wait for you · nothing is sent until you click",
+        "proposedAnon_one": "{{count}} drafted comment waits for you · nothing is sent until you click",
+        "proposedAnon_other": "{{count}} drafted comments wait for you · nothing is sent until you click",
+        "approve": "Review"
       },
       "channels": {
         "title": "Channels",
@@ -5750,7 +5786,9 @@
         "intervalMinutes": "{{count}} min",
         "intervalHours": "{{count}} h",
         "smtpSsl": "SSL (465)",
-        "smtpStarttls": "STARTTLS (587)"
+        "smtpStarttls": "STARTTLS (587)",
+        "quietSenders": "Senders who never need a reply",
+        "quietSendersHint": "One per line; 'This sender never needs a reply' adds one here; delete a line to undo"
       },
       "feeds": {
         "updateError": "Couldn't update \"{{id}}\". Try again.",
@@ -5783,7 +5821,10 @@
         "cancel": "cancel",
         "adding": "adding…",
         "loadError": "Couldn't load."
-      }
+      },
+      "toChatHint": "Work on it in a new chat. Nothing is sent.",
+      "threadMore_one": "{{count}} more in this conversation",
+      "threadMore_other": "{{count}} more in this conversation"
     },
     "api": {
       "cannotConnect": "Unable to connect to backend service",

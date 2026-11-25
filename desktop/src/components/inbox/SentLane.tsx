@@ -3,6 +3,9 @@
  * (design docs/design/2026-11-20-inbox.md §7). The data is `inbox_sends` as the API
  * returns it (`GET /api/inbox/sends`), nothing stored apart.
  *
+ * 0. 待你批准 (only when GitHub outreach drafted comments): one quiet line, "N 条代拟评论等你
+ *    批准 · <producer> 起草，你点了才发", and 去批准, which opens the drafts in the two-pane
+ *    reply view (InboxOverlay's `proposed` page). Nothing is sent from here.
  * 1. 要你处理 (only when there is one): a tinted card per send. `unknown` (warning):
  *    去看看 + 确认没发出去; `failed` (error): 再发一次, disabled with 修复渠道 beside it
  *    when the failure is the source's (`blocked_by_source`).
@@ -19,10 +22,12 @@ import { inboxService, type SendOut, type SendsFilter } from '../../services/inb
 import { openExternal } from '../../utils/openExternal';
 import { Avatar, ChannelPill, clockTime, dayKey, dayLabel, webUrl } from './parts';
 
-export function SentLane({ onGotoItem, onFixChannels, notify }: {
+export function SentLane({ onGotoItem, onFixChannels, notify, proposedCount = 0, proposedBy = '', onApprove }: {
   onGotoItem: (itemId: string) => void; onFixChannels: () => void; notify: (msg: string) => void;
+  /** Drafts waiting on approval (threads), their producers, and the way to them. */
+  proposedCount?: number; proposedBy?: string; onApprove?: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const [filter, setFilter] = useState<SendsFilter>('all');
   const q = useQuery(overlayQuery.inboxSends(filter));
@@ -65,6 +70,20 @@ export function SentLane({ onGotoItem, onFixChannels, notify }: {
         </p>
         <p className="mt-1 text-small text-[var(--color-text-dim)]">{t('ui.InboxOverlay.sent.sub', { total: total_7d, auto: auto_7d })}</p>
 
+        {proposedCount > 0 && onApprove && (
+          <div className="mt-5 flex items-center gap-2.5 px-1 text-small text-[var(--color-text-muted)]" data-testid="inbox-sent-proposed">
+            <span className="material-symbols-outlined icon-sm text-[var(--color-zone-system)]" aria-hidden>smart_toy</span>
+            <span className="min-w-0 flex-1">
+              {proposedBy
+                ? t('ui.InboxOverlay.sent.proposed', { count: proposedCount, producer: proposedBy })
+                : t('ui.InboxOverlay.sent.proposedAnon', { count: proposedCount })}
+            </span>
+            <button type="button" className="btn-sm btn-soft" onClick={onApprove} data-testid="inbox-sent-approve">
+              {t('ui.InboxOverlay.sent.approve')}
+            </button>
+          </div>
+        )}
+
         {need.length > 0 && (
           <div className="mt-5 flex flex-col gap-2.5">
             {need.map((s) => <NeedCard key={s.id} s={s} busy={busy === s.id} onFix={onFixChannels}
@@ -86,7 +105,7 @@ export function SentLane({ onGotoItem, onFixChannels, notify }: {
         {sent.length === 0 && <OverlayEmpty>{t('ui.InboxOverlay.sent.empty')}</OverlayEmpty>}
         {days.map((d) => (
           <div key={d}>
-            <div className="mx-3 mb-0.5 mt-[18px] text-meta text-[var(--color-text-dim)]">{dayLabel(d, t)}</div>
+            <div className="mx-3 mb-0.5 mt-[18px] text-meta text-[var(--color-text-dim)]">{dayLabel(d, t, i18n.language)}</div>
             <ul className="flex flex-col gap-1">
               {sent.filter((s) => dayKey(s.sent_at ?? s.created_at) === d).map((s) => (
                 <li key={s.id} data-testid="inbox-sent-row" className="group flex items-center gap-3.5 rounded-xl p-3 hover:bg-[var(--color-hover)]">

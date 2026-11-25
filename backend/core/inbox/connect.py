@@ -23,7 +23,8 @@ Design: ``docs/design/2026-11-20-inbox.md`` §4 ("加一个渠道"). The routes 
   only an allowlist of options). The same identity on the same kind and backend is added
   once.
 - **Changing a source** (``update``): ``enabled``, ``interval_s``, and the options a person
-  edits (Slack ``watched_channels``, mail ``extra_addresses``).
+  edits (Slack ``watched_channels``, mail ``extra_addresses``, any conversation source's
+  ``quiet_senders``).
 - **Removing a source** (``remove``): the row with its items, drafts, sends and feedback
   (``runner.remove_source``, between pulls), then its secrets. The one feed row is
   managed from config.yaml and cannot be removed or disabled here.
@@ -66,8 +67,9 @@ _SECRET_KEY = re.compile(r"pass(word)?|secret|token|api[_-]?key|credential|priva
 _ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
-# which source kind each editable option belongs to (the fields of SourcePatchRequest)
-_EDITABLE_OPTIONS = {"watched_channels": "slack", "extra_addresses": "mail"}
+# which source kind each editable option belongs to (the fields of SourcePatchRequest);
+# "*" = every conversation source (the feed row refuses option edits as a whole)
+_EDITABLE_OPTIONS = {"watched_channels": "slack", "extra_addresses": "mail", "quiet_senders": "*"}
 
 _cache: dict[tuple, tuple[float, Optional[frozenset[str]]]] = {}
 _gh_cache: dict[str, tuple[float, Optional[dict]]] = {}
@@ -388,6 +390,8 @@ def _clean_list(name: str, values: list[str]) -> list[str]:
             continue
         if len(v) > MAX_LIST_ITEM_CHARS or _CONTROL.search(v):
             raise ConnectRefused(422, "invalid_source", f"{name}: {v[:40]!r} is not valid")
+        if name == "quiet_senders":
+            v = v.lower()
         if name == "extra_addresses":
             v = v.lower()
             if not _ADDRESS.match(v):
@@ -423,7 +427,7 @@ async def update(source_id: str, *, enabled: Optional[bool] = None, interval_s: 
         options = json.loads(row.get("config") or "{}")
         for name, values in lists.items():
             owner = _EDITABLE_OPTIONS.get(name)
-            if owner is None or row["kind"] != owner:
+            if owner is None or (owner != "*" and row["kind"] != owner):
                 raise ConnectRefused(422, "invalid_source", f"a {row['kind']} source has no {name}")
             options[name] = _clean_list(name, values)
         fields["config"] = json.dumps(options, ensure_ascii=False)

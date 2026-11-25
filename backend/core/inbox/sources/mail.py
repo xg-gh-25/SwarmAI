@@ -20,7 +20,7 @@ Design: ``docs/design/2026-11-20-inbox.md`` §4. Two backends, picked by ``Sourc
 Per message: ``is_direct`` when one of the person's addresses is in To; ``is_bulk`` when
 it is only in Cc/Bcc (or not listed at all) or the mail has list headers
 (``List-Id``/``List-Unsubscribe``/``Precedence: bulk``); ``is_invite`` for calendar
-invites; ``is_bot`` for no-reply and auto-submitted senders.
+invites; ``is_bot`` for automated addresses (``is_automated_address``) and auto-submitted mail.
 
 The reply target resolves ``Reply-To``. ``ReplyTarget.flags`` gets ``reply_to_differs``
 when ``Reply-To`` is not the sender, and ``external_domain`` when a recipient is outside
@@ -96,7 +96,23 @@ logger = logging.getLogger(__name__)
 
 KIND = "mail"
 _CALL_CAP_S = 60.0
-_AUTOMATED = re.compile(r"^(no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|bounces?|notifications?)([+.\-_].*)?@", re.I)
+# An automated sender, by its address: a token like "noreply" or "notifications" anywhere in
+# the local part between separators (m365-notifications@, no-reply-aws@), or a subdomain label
+# ending in one (anomalydetection@costalerts.example.com). A sender these miss is still
+# caught by its headers (Auto-Submitted), by triage, or by the person's quiet_senders.
+_AUTOMATED_LOCAL = re.compile(
+    r"(^|[+.\-_])(no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|bounces?|"
+    r"notifications?|notify|alerts?)([+.\-_]|$)", re.I)
+_AUTOMATED_LABEL = re.compile(r"(notifications?|alerts?|notify|bounces?|mailer)$", re.I)
+
+
+def is_automated_address(addr: str) -> bool:
+    local, at, domain = (addr or "").strip().rpartition("@")
+    if not at:
+        return False
+    if _AUTOMATED_LOCAL.search(local):
+        return True
+    return any(_AUTOMATED_LABEL.search(label) for label in domain.split(".")[:-2])
 _TRUE = {"1", "true", "yes", "on"}
 
 
@@ -367,7 +383,7 @@ class _MailSource:
             url=rec.url,
             title=rec.subject,
             is_direct=in_to,
-            is_bot=bool(_AUTOMATED.match(rec.from_addr or "")) or auto,
+            is_bot=is_automated_address(rec.from_addr or "") or auto,
             is_bulk=listy or not in_to,
             is_invite=rec.is_invite,
             extra={"to": list(rec.to), "cc": list(rec.cc), "reply_to": list(rec.reply_to), "conversation": rec.conversation},

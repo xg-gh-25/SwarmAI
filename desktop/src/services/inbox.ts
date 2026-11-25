@@ -53,7 +53,9 @@ export type SendStatusName = 'reserved' | 'sent' | 'failed' | 'unknown';
 export type SourceHealthName = 'ok' | 'auth_failed' | 'error' | 'read_only';
 export type ItemStateName = 'open' | 'replied' | 'done' | 'dismissed' | 'snoozed';
 export type SendsFilter = 'all' | 'mine' | 'auto';
-export type ItemAction = 'later' | 'dismiss' | 'done';
+export type ItemAction = 'later' | 'dismiss' | 'done' | 'to_aware' | 'mute_sender';
+/** When a snoozed item comes back: in 3 hours, tomorrow 9:00 local, next Monday 9:00 local. */
+export type SnoozeUntil = '3h' | 'tomorrow' | 'next_week';
 
 export interface InboxCounts {
   reply: number;
@@ -74,6 +76,8 @@ export interface ItemOut {
   source_kind: string;
   channel_label: string;
   author: string;
+  /** The sender's id in the source (an address, a user id); '' for a notice without one. */
+  author_id: string;
   author_role: string;
   where: string;
   received_at: string;
@@ -84,6 +88,12 @@ export interface ItemOut {
   url: string;
   priority: number;
   producer: string | null;
+  /** 需要知道 items the person must act on (approve, renew, fill in) without replying. */
+  needs_action: boolean;
+  /** YYYY-MM-DD the action is due by, when the message names one. */
+  due: string | null;
+  /** Open items of this thread in this lane, this row included (the list shows one row per thread). */
+  thread_count: number;
 }
 
 export interface TargetOut {
@@ -198,6 +208,8 @@ export interface SourcePatchRequest {
   interval_s?: number;
   watched_channels?: string[];
   extra_addresses?: string[];
+  /** senders (ids / mail addresses) whose messages never wait on a reply; any conversation source */
+  quiet_senders?: string[];
 }
 
 export interface SourceDeletedOut {
@@ -347,8 +359,14 @@ export const inboxService = {
     if (res.status === 403 || res.status === 409) return { ok: false, refusal: parseSendRefusal(res.status, res.data) };
     return { ok: true, send: res.data as SendOut };
   },
-  async action(id: string, action: ItemAction): Promise<ItemOut> {
-    return (await api.post<ItemOut>(`/inbox/items/${enc(id)}/action`, { action }, ua('action'))).data;
+  async action(id: string, action: ItemAction, until?: SnoozeUntil): Promise<ItemOut> {
+    const body = until ? { action, until } : { action };
+    return (await api.post<ItemOut>(`/inbox/items/${enc(id)}/action`, body, ua('action'))).data;
+  },
+  /** 知道了 for many rows at once (each row's open thread included). */
+  async doneMany(ids: string[]): Promise<number> {
+    const d = (await api.post(`/inbox/items/actions`, { ids, action: 'done' }, ua('actions'))).data as { handled?: number };
+    return typeof d?.handled === 'number' ? d.handled : 0;
   },
   async sends(filter: SendsFilter): Promise<SendsOut> {
     const d = (await api.get(`/inbox/sends?filter=${enc(filter)}`)).data as Partial<SendsOut> | undefined;

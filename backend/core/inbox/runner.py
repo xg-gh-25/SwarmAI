@@ -153,6 +153,12 @@ async def run_forever() -> None:
         await send.recover_reserved()
     except Exception:  # noqa: BLE001 — pulls still run; the next start recovers again
         logger.exception("inbox runner: recovering interrupted sends failed")
+    try:
+        rekeyed = await store.rekey_threads()
+        if rekeyed:
+            logger.info("inbox runner: %d items regrouped by thread", rekeyed)
+    except Exception:  # noqa: BLE001 — lists still work, grouped as before
+        logger.exception("inbox runner: regrouping items by thread failed")
     while True:
         lock, event = _primitives()
         try:
@@ -353,13 +359,14 @@ async def ingest(row: dict, me, category: SourceCategory, messages: list[Message
     """Store and triage one pull's messages. Returns counts for the log and tests."""
     from database import db
     sid = row["id"]
+    quiet = store.quiet_senders(row)
     own: list[Message] = []
     kept: list[tuple[Message, Lane, Optional[Lane]]] = []
     for msg in sorted(messages, key=lambda m: m.received_at):
         if me.is_me(msg.author_id):
             own.append(msg)
             continue
-        verdict = triage.rule_lane(msg, me, category)
+        verdict = triage.rule_lane(msg, me, category, quiet)
         if verdict is None:          # the rules say it is the person's own
             own.append(msg)
             continue
@@ -394,7 +401,7 @@ async def ingest(row: dict, me, category: SourceCategory, messages: list[Message
     stamp = store.ts(store.now())
     for msg in own:
         closed += await db.inbox_close_thread(sid, msg.thread.key(), store.ts(msg.received_at), stamp)
-    triaged = await _triage(sid, candidates) if candidates else 0
+    triaged = await _triage(sid, candidates, quiet) if candidates else 0
     return {"stored": sum(1 for _i, ins in stored.values() if ins), "closed": closed,
             "triaged": triaged, "own": len(own)}
 
@@ -404,10 +411,15 @@ async def _context(source_id: str) -> triage.TriageContext:
     profile = await store.run_blocking(_user_profile)
     examples = []
     for fb in await db.inbox_recent_feedback(source_id):
-        if fb["action"] == "relane" and fb["from_lane"] and fb["to_lane"]:
-            item = await db.inbox_get_item(fb["item_id"])
-            title = (item or {}).get("title") or (item or {}).get("author") or ""
-            examples.append(f"{fb['from_lane']} -> {fb['to_lane']}: {title[:120]}")
+        # only a relane says "this was not a reply": a dismiss (handled elsewhere) means the
+        # person did answer, outside the Inbox, and teaches nothing about the lane
+        if fb["action"] != "relane" or not fb["from_lane"] or not fb["to_lane"]:
+            continue
+        change = f"{fb['from_lane']} -> {fb['to_lane']}"
+        item = await db.inbox_get_item(fb["item_id"]) or {}
+        what = item.get("title") or " ".join(str(item.get("excerpt") or "").split())[:80]
+        who = item.get("author_id") or item.get("author") or ""
+        examples.append(f"{change}: from {who[:80]}: {what[:120]}")
     return triage.TriageContext(user_profile=profile, examples=tuple(examples))
 
 
@@ -440,7 +452,8 @@ def _user_profile() -> str:
         return head
 
 
-async def _triage(source_id: str, candidates: list[Candidate]) -> int:
+async def _triage(source_id: str, candidates: list[Candidate],
+                  quiet: frozenset[str] = frozenset()) -> int:
     from database import db
     context = await _context(source_id)
     done = 0
@@ -460,9 +473,17 @@ async def _triage(source_id: str, candidates: list[Candidate]) -> int:
         for res in results:
             cand = by_id[res.id]
             lane = clamp_lane(cand.rule_lane, cand.floor, res.lane)
-            await db.inbox_update_item(
-                res.id, stamp, lane=lane.value, priority=max(0, min(3, int(res.priority))),
-                reason=str(res.reason or "")[:300], triaged_at=stamp)
+            if lane is Lane.REPLY and (cand.message.author_id or "").strip().lower() in quiet:
+                lane = Lane.AWARE        # the person said this sender never waits on a reply
+            fields: dict = {"lane": lane.value, "priority": max(0, min(3, int(res.priority))),
+                            "reason": str(res.reason or "")[:300], "triaged_at": stamp}
+            item = await db.inbox_get_item(res.id)
+            if item is not None:
+                meta = json.loads(item.get("meta") or "{}")
+                meta["needs_action"] = bool(res.needs_action) and lane is not Lane.REPLY
+                meta["due"] = str(res.due or "")[:10]
+                fields["meta"] = json.dumps(meta, ensure_ascii=False)
+            await db.inbox_update_item(res.id, stamp, **fields)
             await db.inbox_close_if_answered(res.id, stamp)
             done += 1
     return done

@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import timedelta
+from datetime import datetime, time as dtime, timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -42,7 +42,7 @@ from pydantic import BaseModel
 
 from core import executors
 from core.inbox import caller, connect, drafts, runner, send, store
-from core.inbox.models import ItemState, SendStatus
+from core.inbox.models import ItemState, Lane, SendStatus
 from schemas.inbox import (
     AvailableSourceOut,
     DraftOut,
@@ -51,6 +51,8 @@ from schemas.inbox import (
     InboxCounts,
     ItemActionRequest,
     ItemOut,
+    ItemsActionOut,
+    ItemsActionRequest,
     SecretRequest,
     SendOut,
     SendRefusalBody,
@@ -228,6 +230,16 @@ async def send_reply(item_id: str, body: SendRequest, request: Request,
 @router.post("/items/{item_id}/action", response_model=ItemOut)
 async def item_action(item_id: str, body: ItemActionRequest,
                       user_action: Optional[str] = _UA) -> ItemOut:
+    """One action on a row of a list, applied to every item of its thread in the same lane
+    and state (the list shows one row per thread; a PROPOSED draft is only itself).
+
+    - ``later``: snoozed until ``until`` (3 hours, tomorrow 9:00 or next Monday 9:00 local).
+    - ``dismiss``: handled elsewhere / not sending; recorded as feedback for triage.
+    - ``done``: seen (需要知道).
+    - ``to_aware`` (REPLY only): no reply expected; moved to AWARE and recorded as a relane,
+      which the next triage of the source reads as an example.
+    - ``mute_sender`` (REPLY only): ``to_aware``, plus the sender joins the source's
+      ``quiet_senders`` and every open or snoozed REPLY item of that sender moves to AWARE."""
     from database import db
     _require_app(user_action)
     item = await _item(item_id)
@@ -235,21 +247,104 @@ async def item_action(item_id: str, body: ItemActionRequest,
     if item["state"] not in (ItemState.OPEN.value, ItemState.SNOOZED.value):
         raise HTTPException(status_code=409, detail={"code": "not_open",
                                                      "message": f"the item is {item['state']}"})
+    if body.action in ("to_aware", "mute_sender") and item["lane"] != Lane.REPLY.value:
+        raise HTTPException(status_code=409, detail={"code": "not_reply",
+                                                     "message": "only an item waiting on a reply can move"})
     if body.action == "later":
         fields = {"state": ItemState.SNOOZED.value,
-                  "snooze_until": store.ts(stamp + timedelta(seconds=SNOOZE_S))}
+                  "snooze_until": store.ts(snooze_until(body.until or "3h", stamp))}
     elif body.action == "dismiss":
         fields = {"state": ItemState.DISMISSED.value, "snooze_until": None}
+    elif body.action == "done":
+        fields = {"state": ItemState.DONE.value, "snooze_until": None}
+    else:
+        fields = {"lane": Lane.AWARE.value, "state": ItemState.OPEN.value, "snooze_until": None}
+    if body.action in ("dismiss", "to_aware", "mute_sender"):
         await db.inbox_insert_feedback({
             "id": store.new_id("fb"), "item_id": item_id, "source_id": item["source_id"],
-            "action": "dismiss", "from_lane": item["lane"], "to_lane": None,
+            "action": "dismiss" if body.action == "dismiss" else "relane",
+            "from_lane": item["lane"],
+            "to_lane": None if body.action == "dismiss" else Lane.AWARE.value,
             "created_at": store.ts(stamp)})
-    else:
-        fields = {"state": ItemState.DONE.value, "snooze_until": None}
     if not await db.inbox_update_item(item_id, store.ts(stamp), expect_state=item["state"], **fields):
         raise HTTPException(status_code=409, detail={"code": "not_open",
                                                      "message": "the item changed meanwhile"})
+    # a list row is its thread, except a PROPOSED draft: each is its own decision
+    rest = [] if item["lane"] == Lane.PROPOSED.value else [
+        r for r in await db.inbox_thread_items(item["source_id"], item["thread_key"],
+                                               item["lane"], item["state"])
+        if r["id"] != item_id]
+    if body.action == "mute_sender" and await _mute_sender(item):
+        for state in (ItemState.OPEN.value, ItemState.SNOOZED.value):
+            rest += await db.inbox_sender_items(item["source_id"], item["author_id"],
+                                                Lane.REPLY.value, state)
+    done: set[str] = {item_id}
+    for row in rest:
+        if row["id"] in done:
+            continue
+        done.add(row["id"])
+        await db.inbox_update_item(row["id"], store.ts(stamp), expect_state=row["state"], **fields)
     return ItemOut(**store.item_out(await db.inbox_get_item(item_id)))
+
+
+MAX_QUIET_SENDERS = 500
+
+
+async def _mute_sender(item: dict) -> bool:
+    """Add the item's sender to its source's ``quiet_senders`` (lowercased, once). False
+    when the item names no sender (a GitHub notice, a Slack message without a user id):
+    nothing is remembered and no other item moves."""
+    from database import db
+    sender = str(item.get("author_id") or "").strip().lower()
+    source = await db.inbox_get_source(item["source_id"])
+    if not sender or source is None:
+        return False
+    options = json.loads(source.get("config") or "{}")
+    if not isinstance(options, dict):
+        options = {}
+    quiet = [str(v) for v in options.get("quiet_senders") or []]
+    if sender in quiet:
+        return True
+    options["quiet_senders"] = (quiet + [sender])[-MAX_QUIET_SENDERS:]
+    await db.inbox_update_source(item["source_id"], store.ts(store.now()),
+                                 config=json.dumps(options, ensure_ascii=False))
+    return True
+
+
+def snooze_until(until: str, now: datetime) -> datetime:
+    """When a snoozed item comes back: ``3h`` from now, ``tomorrow`` at 9:00 local time,
+    ``next_week`` on the next Monday at 9:00 local time (a week on when today is Monday)."""
+    if until == "3h":
+        return now + timedelta(seconds=SNOOZE_S)
+    local = now.astimezone()
+    days = 1 if until == "tomorrow" else (7 - local.weekday()) or 7
+    day = (local + timedelta(days=days)).date()
+    # a naive local 9:00 resolved by the system zone on that day, so a DST change in between
+    # still lands on 9:00
+    return datetime.combine(day, dtime(9, 0)).astimezone()
+
+
+@router.post("/items/actions", response_model=ItemsActionOut)
+async def items_action(body: ItemsActionRequest, user_action: Optional[str] = _UA) -> ItemsActionOut:
+    """``done`` for many rows at once ("这一天的都知道了"): each row and the open items of
+    its thread in the same lane. A row that is not open is skipped."""
+    from database import db
+    _require_app(user_action)
+    stamp = store.ts(store.now())
+    handled: set[str] = set()
+    for item_id in dict.fromkeys(body.ids):
+        item = await db.inbox_get_item(item_id)
+        if item is None or item["state"] != ItemState.OPEN.value or item_id in handled:
+            continue
+        rows = [item] if item["lane"] == Lane.PROPOSED.value else [item] + await db.inbox_thread_items(
+            item["source_id"], item["thread_key"], item["lane"], ItemState.OPEN.value)
+        for row in rows:
+            if row["id"] in handled:
+                continue
+            if await db.inbox_update_item(row["id"], stamp, expect_state=ItemState.OPEN.value,
+                                          state=ItemState.DONE.value, snooze_until=None):
+                handled.add(row["id"])
+    return ItemsActionOut(handled=len(handled))
 
 
 # ── sends ────────────────────────────────────────────────────────────────────
@@ -384,7 +479,8 @@ async def update_source(source_id: str, body: SourcePatchRequest, request: Reque
     try:
         await connect.update(source_id, enabled=body.enabled, interval_s=body.interval_s,
                              lists={"watched_channels": body.watched_channels,
-                                    "extra_addresses": body.extra_addresses})
+                                    "extra_addresses": body.extra_addresses,
+                                    "quiet_senders": body.quiet_senders})
     except connect.ConnectRefused as exc:
         raise _source_refused(exc)
     return await _source_out(source_id)

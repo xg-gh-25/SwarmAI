@@ -5575,7 +5575,7 @@
       "updatedAt": "{{time}} 更新",
       "channelSettings": "渠道设置",
       "fix": "修复",
-      "toChat": "送进 chat",
+      "toChat": "交给 Swarm",
       "tabs": {
         "reply": "等你回复",
         "aware": "需要知道",
@@ -5611,10 +5611,9 @@
         "emptyAware_other": "还有 {{count}} 条需要知道的",
         "goLook": "去看看",
         "back": "返回列表",
-        "later": "稍后（H）",
-        "dismiss": "不用回（E）",
-        "snoozed": "移到稍后",
-        "dismissed": "标为不用回",
+        "later": "稍后",
+        "dismiss": "不用回",
+        "dismissed": "标为已处理",
         "replyTo": "回复到",
         "targetLoading": "正在确认收件对象…",
         "targetError": "收件对象没取到，暂时不能发送。",
@@ -5630,7 +5629,28 @@
         "sendFailed": "没有发出去。",
         "sendRejected": "没有发：{{reason}}",
         "sendUnclear": "发送没有完成，可能已经发出去了，去\"已发\"看看。不会自动重发。",
-        "gotoMissing": "那条回复已经不在等你回复里了。"
+        "gotoMissing": "那条回复已经不在等你回复里了。",
+        "keysDrop": "不发了",
+        "keysLater": "稍后",
+        "laterOption": {
+          "in3h": "3 小时后",
+          "tomorrow": "明天早上",
+          "nextWeek": "下周一"
+        },
+        "laterWhen": {
+          "in3h": "3 小时后",
+          "tomorrow": "明天早上",
+          "nextWeek": "下周一"
+        },
+        "snoozedUntil": "{{when}} 再提醒你",
+        "dismissElsewhere": "已在别处处理",
+        "dismissToAware": "改成「需要知道」",
+        "dismissMute": "这个发件人以后都不用回",
+        "dismissDrop": "不发了",
+        "movedToAware": "已移到需要知道，以后类似的会少进这里",
+        "muted": "以后 {{who}} 的消息不再进等你回复",
+        "proposedBack": "← 已发",
+        "proposedEmpty": "代拟的都处理完了"
       },
       "refusal": {
         "targetChanged": "收件对象变了。看一下上面新的收件对象，再点发送。",
@@ -5640,12 +5660,23 @@
         "other": "Inbox 拒绝了这次发送。"
       },
       "aware": {
-        "lead_one": "今天要知道的 {{count}} 件事",
-        "lead_other": "今天要知道的 {{count}} 件事",
+        "lead_one": "{{count}} 件需要知道的事",
+        "lead_other": "{{count}} 件需要知道的事",
         "sub": "不用回，看一眼就行",
         "empty": "现在没有需要知道的。",
         "done": "知道了",
-        "marked": "标为知道了"
+        "marked": "标为知道了",
+        "actTitle": "要你动手",
+        "due": "{{date}} 前",
+        "handled": "处理好了",
+        "handledToast": "标为处理好了",
+        "dayDone": "这一天的都知道了",
+        "dayMarked_one": "{{count}} 条标为知道了",
+        "dayMarked_other": "{{count}} 条标为知道了",
+        "dueOverdue": "已过期 · {{date}}",
+        "dueToday": "今天到期",
+        "dayConfirm_one": "再点一次，标完这一天的 {{count}} 条",
+        "dayConfirm_other": "再点一次，标完这一天的 {{count}} 条"
       },
       "trend": {
         "lead_one": "今天值得看的 {{count}} 件事",
@@ -5680,7 +5711,12 @@
         "auto": "自动",
         "hasReply": "有回复",
         "openAt": "在原处查看",
-        "empty": "还没有发过。"
+        "empty": "还没有发过。",
+        "proposed_one": "{{count}} 条代拟评论等你批准 · {{producer}} 起草，你点了才发",
+        "proposed_other": "{{count}} 条代拟评论等你批准 · {{producer}} 起草，你点了才发",
+        "proposedAnon_one": "{{count}} 条代拟评论等你批准 · 你点了才发",
+        "proposedAnon_other": "{{count}} 条代拟评论等你批准 · 你点了才发",
+        "approve": "去批准"
       },
       "channels": {
         "title": "渠道",
@@ -5750,7 +5786,9 @@
         "intervalMinutes": "{{count}} 分钟",
         "intervalHours": "{{count}} 小时",
         "smtpSsl": "SSL（465）",
-        "smtpStarttls": "STARTTLS（587）"
+        "smtpStarttls": "STARTTLS（587）",
+        "quietSenders": "不进等你回复的发件人",
+        "quietSendersHint": "一行一个；在等你回复里点“这个发件人以后都不用回”会加到这里，删掉一行就恢复"
       },
       "feeds": {
         "updateError": "无法更新“{{id}}”。请重试。",
@@ -5783,7 +5821,10 @@
         "cancel": "取消",
         "adding": "添加中…",
         "loadError": "加载失败。"
-      }
+      },
+      "toChatHint": "在新的 chat 里处理，先不发送",
+      "threadMore_one": "同一对话还有 {{count}} 条",
+      "threadMore_other": "同一对话还有 {{count}} 条"
     },
     "api": {
       "cannotConnect": "无法连接到后端服务",

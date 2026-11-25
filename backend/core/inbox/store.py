@@ -30,7 +30,7 @@ Rules this module keeps:
 
 Key public symbols: ``ts`` / ``parse_ts`` / ``now``, ``run_blocking``, ``channel_label``,
 ``ensure_sources_loaded``, ``sync_feed_source``, ``open_source``, ``identity_from_row``,
-``message_to_item_row``, ``item_message``, ``item_out``, ``send_out``, ``source_out``,
+``message_to_item_row``, ``item_message``, ``item_out``, ``quiet_senders``, ``send_out``, ``source_out``,
 ``counts``, ``mark_auth_failed``, ``delete_source_rows``, ``purge_send``, ``SendInFlight``,
 ``FEED_SOURCE_ID``, ``DEFAULT_INTERVAL_S``.
 """
@@ -98,7 +98,8 @@ def _count(key: str, n: int) -> str:
 #: stored (a secret under an unexpected name) is never echoed back
 SHOWN_OPTIONS = frozenset({
     "watched_channels", "extra_addresses", "watched_repos", "tool_family", "hostname",
-    "host", "port", "username", "folder", "sent_folder", "smtp_host", "smtp_port", "smtp_security"})
+    "host", "port", "username", "folder", "sent_folder", "smtp_host", "smtp_port", "smtp_security",
+    "quiet_senders"})
 
 # The Inbox's own threads: the caller check (a psutil scan of the machine's TCP
 # connections) and its file reads. Not the default pool and none of the pools the chat
@@ -264,6 +265,24 @@ def message_to_item_row(source_id: str, msg: Message, lane: Lane, floor: Optiona
     }
 
 
+async def rekey_threads() -> int:
+    """Rows stored before a change to ``ThreadRef.key`` get the key their own
+    ``thread_ref`` gives now (mail rows were keyed per message). Only the derived
+    ``thread_key`` column changes; ``thread_ref``, the source of it, is kept. Returns the
+    number of rows rekeyed."""
+    from database import db
+    changed = 0
+    for row in await db.inbox_thread_keys():
+        try:
+            key = ref_from_json(row["thread_ref"]).key()
+        except (ValueError, KeyError, TypeError):
+            continue
+        if key != row["thread_key"]:
+            await db.inbox_set_thread_key(row["id"], key)
+            changed += 1
+    return changed
+
+
 def item_message(row: dict) -> Message:
     """The stored part of an item as a ``Message`` (the excerpt, not the full text)."""
     meta = json.loads(row.get("meta") or "{}")
@@ -296,12 +315,35 @@ def item_out(row: dict) -> dict:
         "id": row["id"], "lane": row["lane"], "state": row["state"],
         "source_id": row["source_id"], "source_kind": row["source_kind"],
         "channel_label": channel_label(row["source_kind"]), "author": row["author"],
+        "author_id": row.get("author_id") or "",
         "author_role": str(meta.get("author_role") or ""), "where": _where(row, meta),
         "received_at": row["received_at"], "late": now() - received > LATE_AFTER,
         "ask": ask, "ask_sub": row["title"] if row["reason"] else "",
         "excerpt": row["excerpt"], "url": row["url"], "priority": int(row["priority"]),
         "producer": meta.get("producer"),
+        "needs_action": bool(meta.get("needs_action")), "due": _due(meta.get("due")),
+        "thread_count": max(1, int(row.get("thread_count") or 1)),
     }
+
+
+def _due(value: Any) -> Optional[str]:
+    """A triage ``due`` date as YYYY-MM-DD, or None when it is not one."""
+    text = str(value or "").strip()[:10]
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d") if text else None
+    except ValueError:
+        return None
+
+
+def quiet_senders(row: dict) -> frozenset[str]:
+    """The senders the person said never wait on a reply (the source's ``quiet_senders``
+    option, lowercased): their messages are never put in REPLY."""
+    try:
+        options = json.loads(row.get("config") or "{}")
+    except ValueError:
+        return frozenset()
+    values = options.get("quiet_senders") if isinstance(options, dict) else None
+    return frozenset(str(v).strip().lower() for v in values or [] if str(v).strip())
 
 
 # ── sends ────────────────────────────────────────────────────────────────────

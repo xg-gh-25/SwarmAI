@@ -226,7 +226,7 @@ async def test_item_actions(env):
 async def test_refresh_and_retry_pull_now(env, monkeypatch):
     from core.inbox import triage
     fake, http, _made, _cfg = env
-    monkeypatch.setattr(triage, "rule_lane", lambda m, me, c: triage.RuleVerdict(Lane.REPLY, Lane.AWARE))
+    monkeypatch.setattr(triage, "rule_lane", lambda m, me, c, quiet=frozenset(): triage.RuleVerdict(Lane.REPLY, Lane.AWARE))
 
     async def no_triage(candidates, context):
         raise triage.TriageRejected("later")

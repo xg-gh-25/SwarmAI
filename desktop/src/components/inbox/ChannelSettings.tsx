@@ -6,10 +6,12 @@
  *   1. the connected sources, one row each (icon, backend, identity, pull interval, health;
  *      a source that is not ok shows its fix and 重试, a read-only one why it cannot send).
  *      Its settings sit behind 设置 (disclosure): pull on/off, interval, Slack watched
- *      channels or mail extra addresses, a new token / password for the Web API and IMAP
- *      backends, and 移除 with a second confirm click (the backend then removes its
- *      items, drafts and send records too). The one feed row only has an interval: the
- *      feeds themselves are edited under 信息流;
+ *      channels or mail extra addresses, 不进等你回复的发件人 (`quiet_senders`, every
+ *      conversation source: 等你回复 → 这个发件人以后都不用回 adds a line, deleting the
+ *      line undoes it), a new token / password for the Web API and IMAP backends, and
+ *      移除 with a second confirm click (the backend then removes its items, drafts and
+ *      send records too). The one feed row only has an interval: the feeds themselves
+ *      are edited under 信息流;
  *   2. 加一个渠道 (AddChannel): one-click sources this machine can connect, and the
  *      manual Slack-token / IMAP forms;
  *   3. the feeds the Inbox watches (FeedEditor).
@@ -42,10 +44,15 @@ const SECRET_OF: Record<string, { name: string; labelKey: string }> = {
   imap: { name: 'password', labelKey: 'ui.InboxOverlay.channels.secretPassword' },
 };
 /** The option a person edits per kind (SourcePatchRequest). */
-const LIST_OF: Record<string, { field: 'watched_channels' | 'extra_addresses'; labelKey: string; hintKey: string }> = {
+type ListField = 'watched_channels' | 'extra_addresses' | 'quiet_senders';
+const LIST_OF: Record<string, { field: ListField; labelKey: string; hintKey: string }> = {
   slack: { field: 'watched_channels', labelKey: 'ui.InboxOverlay.channels.watchedChannels', hintKey: 'ui.InboxOverlay.channels.watchedChannelsHint' },
   mail: { field: 'extra_addresses', labelKey: 'ui.InboxOverlay.channels.extraAddresses', hintKey: 'ui.InboxOverlay.channels.extraAddressesHint' },
 };
+/** Every conversation source (not the feed row) lists the senders muted from 等你回复. */
+const QUIET = { field: 'quiet_senders' as const, labelKey: 'ui.InboxOverlay.channels.quietSenders', hintKey: 'ui.InboxOverlay.channels.quietSendersHint' };
+/** One value per line (a comma also splits), trimmed, empty lines dropped. */
+const linesOf = (text: string) => text.split(/[\n,]/).map((v) => v.trim()).filter(Boolean);
 
 const reasonOf = (e: unknown, fallback: string) => (isApiError(e) && e.statusCode < 500 && e.message.trim() ? e.message : fallback);
 const listOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
@@ -148,7 +155,6 @@ function SourceSettings({ source: s, notify, onRemoved }: { source: SourceOut; n
   const list = LIST_OF[s.kind];
   const secret = SECRET_OF[s.backend];
   const isFeed = s.id === FEED_SOURCE_ID;
-  const [values, setValues] = useState(() => (list ? listOf(s.options?.[list.field]).join('\n') : ''));
   const [secretValue, setSecretValue] = useState('');
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -211,17 +217,12 @@ function SourceSettings({ source: s, notify, onRemoved }: { source: SourceOut; n
       </div>
 
       {list && (
-        <label className="block text-small text-[var(--color-text-muted)]">
-          {t(list.labelKey)}
-          <span className="ml-2 text-meta text-[var(--color-text-faint)]">{t(list.hintKey)}</span>
-          <textarea rows={3} value={values} disabled={busy} onChange={(e) => setValues(e.target.value)} spellCheck={false}
-            data-testid="inbox-source-list-input"
-            className="mt-1 block w-full max-w-[460px] rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1.5 font-mono text-small text-[var(--color-text)]" />
-          <button type="button" className="btn-sm btn-secondary mt-2" disabled={busy} data-testid="inbox-source-list-save"
-            onClick={() => void patch({ [list.field]: values.split(/[\n,]/).map((v) => v.trim()).filter(Boolean) })}>
-            {t('ui.InboxOverlay.channels.save')}
-          </button>
-        </label>
+        <ListSetting label={t(list.labelKey)} hint={t(list.hintKey)} initial={listOf(s.options?.[list.field])} busy={busy}
+          testid="inbox-source-list" onSave={(v) => void patch({ [list.field]: v })} />
+      )}
+      {!isFeed && (
+        <ListSetting label={t(QUIET.labelKey)} hint={t(QUIET.hintKey)} initial={listOf(s.options?.[QUIET.field])} busy={busy}
+          testid="inbox-source-quiet" onSave={(v) => void patch({ [QUIET.field]: v })} />
       )}
 
       {secret && (
@@ -261,5 +262,26 @@ function SourceSettings({ source: s, notify, onRemoved }: { source: SourceOut; n
 
       {error && <p role="alert" className="text-small text-[var(--color-status-error)]">{error}</p>}
     </div>
+  );
+}
+
+/** A one-value-per-line option of a source, saved with its own button. */
+function ListSetting({ label, hint, initial, busy, testid, onSave }: {
+  label: string; hint: string; initial: string[]; busy: boolean; testid: string; onSave: (values: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [text, setText] = useState(() => initial.join('\n'));
+  return (
+    <label className="block text-small text-[var(--color-text-muted)]">
+      {label}
+      <span className="ml-2 text-meta text-[var(--color-text-faint)]">{hint}</span>
+      <textarea rows={3} value={text} disabled={busy} onChange={(e) => setText(e.target.value)} spellCheck={false}
+        data-testid={`${testid}-input`}
+        className="mt-1 block w-full max-w-[460px] rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1.5 font-mono text-small text-[var(--color-text)]" />
+      <button type="button" className="btn-sm btn-secondary mt-2" disabled={busy} data-testid={`${testid}-save`}
+        onClick={() => onSave(linesOf(text))}>
+        {t('ui.InboxOverlay.channels.save')}
+      </button>
+    </label>
   );
 }

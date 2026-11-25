@@ -11,7 +11,10 @@
  *     required field posts nothing;
  *   - remove needs a second, confirming click; only then is DELETE sent, once;
  *   - pull on/off, interval and the watched channels go through updateSource; a
- *     read-only source shows why it cannot send; the feed row cannot be removed here.
+ *     read-only source shows why it cannot send; the feed row cannot be removed here;
+ *   - every conversation source (not the feed row) lists 不进等你回复的发件人
+ *     (`quiet_senders`, what 这个发件人以后都不用回 added); deleting a line and saving
+ *     patches the shorter list, which is the undo.
  *
  * The Inbox service is mocked at the boundary; the page's queries are the real ones.
  */
@@ -175,6 +178,32 @@ describe('Inbox channel settings: a connected source', () => {
     await waitFor(() => expect(svc.updateSource).toHaveBeenCalledWith('slack-1', { watched_channels: ['#ops', 'C0TEAM1'] }));
   });
 
+  it('the quiet senders of a conversation source are listed and saved through updateSource (the undo of 以后都不用回)', async () => {
+    svc.sources.mockResolvedValue([
+      source('slack-1', { options: { watched_channels: ['#ops'], quiet_senders: ['u0bot', 'u0news'] } }),
+      source('mail-1', { kind: 'mail', channel_label: 'Mail', backend: 'imap', options: {} }),
+      source('github-1', { kind: 'github', channel_label: 'GitHub', backend: 'gh', options: { quiet_senders: ['dependabot[bot]'] } }),
+    ]);
+    setup();
+    await waitFor(() => expect(screen.getAllByTestId('inbox-source-row')).toHaveLength(3));
+    const [slack, mail, gh] = screen.getAllByTestId('inbox-source-row');
+    fireEvent.click(within(slack).getByTestId('inbox-source-settings'));
+    const quiet = within(slack).getByTestId('inbox-source-quiet-input');
+    expect(quiet).toHaveValue('u0bot\nu0news');
+    expect(within(slack).getByText('Senders who never need a reply')).toBeInTheDocument();
+    // the watched channels are a list of their own, saved apart
+    expect(within(slack).getByTestId('inbox-source-list-input')).toHaveValue('#ops');
+    fireEvent.change(quiet, { target: { value: 'u0news\n' } });
+    fireEvent.click(within(slack).getByTestId('inbox-source-quiet-save'));
+    await waitFor(() => expect(svc.updateSource).toHaveBeenCalledWith('slack-1', { quiet_senders: ['u0news'] }));
+    // mail and github have it too (github has no other list)
+    fireEvent.click(within(mail).getByTestId('inbox-source-settings'));
+    expect(within(mail).getByTestId('inbox-source-quiet-input')).toHaveValue('');
+    fireEvent.click(within(gh).getByTestId('inbox-source-settings'));
+    expect(within(gh).getByTestId('inbox-source-quiet-input')).toHaveValue('dependabot[bot]');
+    expect(within(gh).queryByTestId('inbox-source-list-input')).toBeNull();
+  });
+
   it('a new token for a Web API source is stored as a secret and cleared', async () => {
     svc.sources.mockResolvedValue([source('slack-2', { backend: 'slack-web', health: 'auth_failed', fix: 'paste a new token' })]);
     setup();
@@ -198,6 +227,7 @@ describe('Inbox channel settings: a connected source', () => {
     fireEvent.click(within(feed).getByTestId('inbox-source-settings'));
     expect(within(feed).queryByTestId('inbox-source-remove')).toBeNull();
     expect(within(feed).queryByTestId('inbox-source-enabled')).toBeNull();
+    expect(within(feed).queryByTestId('inbox-source-quiet-input')).toBeNull();
     expect(within(feed).getByTestId('inbox-source-interval')).toHaveValue('21600');
   });
 });
