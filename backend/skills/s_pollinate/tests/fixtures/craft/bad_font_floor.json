@@ -1,0 +1,189 @@
+{
+ "slide": "s-bad0",
+ "w": 1920,
+ "h": 1080,
+ "texts": [
+  {
+   "text": "Quarterly results",
+   "role": "title",
+   "font_px": 72,
+   "lines": 1,
+   "nowrap": false,
+   "box": [
+    160,
+    120,
+    900,
+    86
+   ],
+   "container": [
+    0,
+    0,
+    1920,
+    1080
+   ],
+   "chars": 16,
+   "color": "#1a1a2e"
+  },
+  {
+   "text": "Revenue grew in every region",
+   "role": "subtitle",
+   "font_px": 40,
+   "lines": 1,
+   "nowrap": false,
+   "box": [
+    160,
+    230,
+    700,
+    48
+   ],
+   "container": [
+    0,
+    0,
+    1920,
+    1080
+   ],
+   "chars": 24,
+   "color": "#4a4a68"
+  },
+  {
+   "text": "Europe led with strong demand for the new plan.",
+   "role": "body",
+   "font_px": 30,
+   "lines": 2,
+   "nowrap": false,
+   "box": [
+    160,
+    320,
+    760,
+    80
+   ],
+   "container": [
+    0,
+    0,
+    1920,
+    1080
+   ],
+   "chars": 39,
+   "color": "#1a1a2e"
+  },
+  {
+   "text": "Asia doubled its partner count this quarter.",
+   "role": "body",
+   "font_px": 16,
+   "lines": 2,
+   "nowrap": false,
+   "box": [
+    160,
+    440,
+    760,
+    80
+   ],
+   "container": [
+    0,
+    0,
+    1920,
+    1080
+   ],
+   "chars": 38,
+   "color": "#1a1a2e"
+  },
+  {
+   "text": "Source: internal sales data",
+   "role": "label",
+   "font_px": 22,
+   "lines": 1,
+   "nowrap": false,
+   "box": [
+    160,
+    940,
+    400,
+    28
+   ],
+   "container": [
+    0,
+    0,
+    1920,
+    1080
+   ],
+   "chars": 24,
+   "color": "#4a4a68"
+  }
+ ],
+ "blocks": [
+  {
+   "box": [
+    160,
+    320,
+    760,
+    560
+   ],
+   "group": "#content"
+  },
+  {
+   "box": [
+    1040,
+    320,
+    720,
+    560
+   ],
+   "group": "#content"
+  },
+  {
+   "box": [
+    160,
+    320,
+    760,
+    80
+   ],
+   "group": "#left"
+  },
+  {
+   "box": [
+    160,
+    440,
+    760,
+    80
+   ],
+   "group": "#left"
+  }
+ ],
+ "images": [
+  {
+   "src": "assets/chart.png",
+   "box": [
+    1040,
+    320,
+    720,
+    560
+   ],
+   "loaded": true
+  },
+  {
+   "src": "assets/backdrop.jpg",
+   "box": [
+    0,
+    0,
+    1920,
+    1080
+   ],
+   "loaded": true
+  }
+ ],
+ "colors": [
+  {
+   "color": "#1a1a2e",
+   "use": "text",
+   "weight": 120
+  },
+  {
+   "color": "#4a4a68",
+   "use": "text",
+   "weight": 47
+  },
+  {
+   "color": "#ffffff",
+   "use": "fill",
+   "weight": 2073600
+  }
+ ]
+}
