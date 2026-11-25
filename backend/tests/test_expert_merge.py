@@ -1,14 +1,14 @@
 """S6-4 expert merge, 12 -> 9 (design 2026-10-24-swarmai-usable-by-anyone.md §3.5.1).
 
 What is tested:
-- the expert set is exactly the nine merged experts; red-team, spec-compliance,
+- the code expert set is exactly the nine merged experts; red-team, spec-compliance,
   code-quality and ux-test are gone, ``ux`` exists;
 - ``reviewers()`` never returns red-team: a >=50-line risky change gets correctness and
   security only, and a required retired id maps to the expert that took its job;
 - security has a "High-risk change" section worded as confirming protections hold, with
   no attack / forge instruction (a review brief worded that way can make the model
   decline and return nothing);
-- the generated catalog lists every remaining expert and none of the deleted ones;
+- the generated catalog lists every remaining code expert and none of the deleted ones;
 - ``spawn_as`` is gone from every frontmatter and from the expert model and API.
 """
 from __future__ import annotations
@@ -30,8 +30,15 @@ def _ids(rows):
     return [row["id"] for row in rows]
 
 
+def _code_ids() -> set[str]:
+    return {eid for eid, info in ExpertManager(EXPERTS).scan_experts().items()
+            if info.domain == "code"}
+
+
 def test_the_expert_set_is_the_nine_merged_experts():
-    assert set(ExpertManager(EXPERTS).scan_experts()) == MERGED
+    """The code review experts are the nine merged ones; experts of other domains
+    (content) are a separate set and do not count here."""
+    assert _code_ids() == MERGED
 
 
 def test_reviewers_never_dispatch_red_team():
@@ -56,7 +63,7 @@ def test_security_has_a_high_risk_section_that_confirms_protections():
 
 def test_catalog_lists_exactly_the_remaining_experts():
     text = (BACKEND / "skills" / "s_expert-review" / "CATALOG.md").read_text(encoding="utf-8")
-    listed = set(re.findall(r"^\| `([a-z-]+)` \|", text, re.M))
+    listed = set(re.findall(r"^\| `([a-z-]+)` \|.*`\.\./\.\./experts/code/", text, re.M))
     assert listed == MERGED
 
 

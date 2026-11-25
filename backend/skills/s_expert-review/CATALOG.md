@@ -7,6 +7,9 @@ Prompt paths are relative to this skill's base directory.
 |---|---|---|---|
 | `api-contract` | API 契约评审官 / API-Contract Auditor | 接口、请求/响应模型、前后端契约一致性 | `../../experts/code/api-contract.md` |
 | `concurrency` | 并发安全评审官 / Concurrency Auditor | 竞态、锁、共享可变状态、async 阻塞 | `../../experts/code/concurrency.md` |
+| `content-accuracy` | 事实与口径评审官 / Content Accuracy Auditor | 事实、数字与定位:对照项目知识、引用来源和本人原话;近似数不得变成精确数 | `../../experts/content/content-accuracy.md` |
+| `content-copy` | 文案评审官 / Content Copy Auditor | 文案:受众是否合适、AI 套话与空话、平台习惯(小红书、朋友圈、X、LinkedIn 等)、长度 | `../../experts/content/content-copy.md` |
+| `content-visual` | 视觉手艺评审官 / Content Visual Auditor | deck / 海报 / 长图的视觉手艺:读拼图和 measure.json,按设计判断规则与手艺检查项 | `../../experts/content/content-visual.md` |
 | `correctness` | 正确性评审官 / Correctness Auditor | 逻辑、边界条件、错误处理 | `../../experts/code/correctness.md` |
 | `integration` | 集成评审官 / Integration Auditor | 新代码是否真接进系统(非孤岛) | `../../experts/code/integration.md` |
 | `operational` | 运维评审官 / Operational Auditor | 后台任务、重试、超时、故障恢复、日志 | `../../experts/code/operational.md` |

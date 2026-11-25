@@ -22,6 +22,16 @@ Read the diff, then pick from CATALOG.md:
 | UI interaction | `ux` |
 | A tiny change or docs only | usually nobody |
 
+A content work (a deck, poster, long page or report, or platform copy; usually from the
+content engine `s_pollinate`) is reviewed by the content experts instead. They read the
+work, not a code diff:
+
+| The work | Call |
+|---|---|
+| States facts, numbers, quotes or positioning | `content-accuracy` |
+| Is rendered (deck, poster, page) | `content-visual` |
+| Has copy for readers on a platform, or slide text | `content-copy` |
+
 A repository's own guidance can ask for more (its AGENTS.md or `.swarmai/review.md`,
 injected when you start working there): follow it in that repository. If the user said
 not to review, do not.
@@ -59,6 +69,17 @@ One sub-agent per expert, in parallel, with the Agent tool:
   look things up there with `cognition find --project <P> --query "<words>"` when a finding
   needs it. An expert is a sub-agent: it does not get your system prompt, so this is its
   only way to know the project's domain knowledge exists.
+
+For a content expert, skip the two code commands above (`core.code_intel.changed` and
+the snapshot). Instead give: the work directory, its source file (`src/deck.html` with one
+`<section data-slide-id=...>` per slide, `src/index.html` or `src/copy.md`), the brief
+(audience, platform, language), the sources the work cites and the person's own words on
+the subject; for `content-visual` also the `review/` images (contact sheet and full-size
+frames) and the version's `measure.json` and `checks.json`. Ask for findings with
+severity, the slide id (or `main`, or the copy section), the exact text or measured value,
+and what is wrong. When you record the review (step 4), give the git repository that holds
+the work as `"repo"` (no snapshot), its source file as `file`, and put the slide id in the
+claim.
 
 Example prompt:
 

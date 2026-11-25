@@ -24,9 +24,15 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 import lint_experts  # noqa: E402
 
 
-def _write_expert(tmp_path: Path, name: str, fields: dict) -> Path:
+def _write_expert(tmp_path: Path, name: str, fields: dict, *, where: str | None = None) -> Path:
+    """Write an expert where a real one lives: ``<domain>/<expert id>.md``.
+
+    *where* overrides that place (``"<dir>/<file stem>"``) to build a misplaced file.
+    """
     fm = "---\n" + "".join(f"{k}: {v}\n" for k, v in fields.items()) + "---\n\nbody\n"
-    p = tmp_path / f"{name}.md"
+    rel = where or f"{fields.get('domain') or 'nodomain'}/{fields.get('expert') or name}"
+    p = tmp_path / name / f"{rel}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(fm)
     return p
 
@@ -83,6 +89,34 @@ def test_core_stance_domain_rule_relaxed_but_scope_still_required(tmp_path):
         "domain": "_core", "visibility": "internal",
     })
     assert any("scope" in f for f in lint_experts.lint_expert(bad))
+
+
+def test_content_domain_expert_passes(tmp_path):
+    """An expert of another domain (content) is admitted by the same checks."""
+    fields = dict(_GOOD, expert="content-x", domain="content")
+    assert lint_experts.lint_expert(_write_expert(tmp_path, "content", fields)) == []
+
+
+def test_expert_id_must_match_file_name(tmp_path):
+    """MUTATION PROOF: the catalog points at experts/<domain>/<id>.md, so an id that
+    differs from the file name is rejected (removing the identity check turns it GREEN)."""
+    p = _write_expert(tmp_path, "renamed", _GOOD, where="code/other-name")
+    findings = lint_experts.lint_expert(p)
+    assert any("does not match the file name" in f for f in findings), findings
+
+
+def test_domain_must_match_directory(tmp_path):
+    """MUTATION PROOF: a content expert filed under code/ (or the reverse) is rejected."""
+    fields = dict(_GOOD, expert="content-x", domain="content")
+    p = _write_expert(tmp_path, "misfiled", fields, where="code/content-x")
+    findings = lint_experts.lint_expert(p)
+    assert any("does not match its directory" in f for f in findings), findings
+
+
+def test_missing_expert_id_is_rejected(tmp_path):
+    fields = {k: v for k, v in _GOOD.items() if k != "expert"}
+    p = _write_expert(tmp_path, "noid", fields, where="code/noid")
+    assert any("'expert'" in f for f in lint_experts.lint_expert(p))
 
 
 def test_no_frontmatter_is_rejected(tmp_path):

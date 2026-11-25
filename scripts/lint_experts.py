@@ -10,7 +10,11 @@ must pass two admission criteria (design 2026-10-16 §D3) — fail CLOSED on any
      ``memory_store`` / persistent state (that would be a crewmate, not an expert).
 
 Also requires ``scope`` (the demo介绍词 + what the reviewer covers), which the
-registry and the UI both read.
+registry and the UI both read, and an identity that matches the file's place: the
+``expert`` id equals the file name and ``domain`` equals the directory
+(``backend/experts/<domain>/<expert>.md``). The generated expert catalog names each
+prompt by that path, so a mismatch would list a prompt file that does not exist.
+Experts of every domain (``code``, ``content``, ...) are held to the same checks.
 
 Mirrors ``scripts/lint_skills.py``: reuses ``core.skill_manager.parse_frontmatter``
 (the same parser the runtime + registry use, so the linter can never disagree with
@@ -117,6 +121,32 @@ def corpus_files() -> list[Path]:
     return out
 
 
+def _identity_findings(path: Path, meta: dict) -> list[str]:
+    """The expert's id and domain must match where its file lives.
+
+    The catalog (``backend/scripts/gen_expert_catalog.py``) and the registry key an
+    expert by its ``expert`` id and point at ``experts/<domain>/<id>.md``; a file whose
+    id or domain differs from its own name or directory would be listed under a path
+    that does not exist. An empty id or domain is reported by the required-field check.
+    """
+    findings: list[str] = []
+    expert_id = str(meta.get("expert", "") or "").strip()
+    domain = str(meta.get("domain", "") or "").strip()
+    if not expert_id:
+        findings.append(f"{path}: missing required field 'expert' (the expert's id)")
+    elif expert_id != path.stem:
+        findings.append(
+            f"{path}: expert id '{expert_id}' does not match the file name "
+            f"'{path.stem}.md' — the catalog would point at a file that does not exist"
+        )
+    if domain and domain != path.parent.name:
+        findings.append(
+            f"{path}: domain '{domain}' does not match its directory "
+            f"'{path.parent.name}/' — an expert lives in backend/experts/<domain>/"
+        )
+    return findings
+
+
 def lint_expert(path: Path) -> list[str]:
     """Return a finding per admission violation in one expert file (empty = clean)."""
     try:
@@ -143,6 +173,9 @@ def lint_expert(path: Path) -> list[str]:
                 f"{path}: missing required field '{fld}' (D3 admission: an expert "
                 f"must declare {', '.join(REQUIRED_FIELDS)})"
             )
+
+    if not is_core:
+        findings.extend(_identity_findings(path, meta))
 
     for bad in FORBIDDEN_MEMORY_KEYS:
         if bad in meta:
