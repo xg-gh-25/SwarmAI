@@ -290,24 +290,50 @@ def _ssh_cmd(host: str, remote: str) -> list[str]:
 
 
 async def _run(host: str, remote: str, data: Optional[bytes] = None, timeout: float = SSH_TIMEOUT_S,
-               step: str = "") -> str:
+               step: str = "", tries: int = ssh_tunnel.CONNECT_TRIES) -> str:
     """Run *remote* (a fixed command line, every value in it quoted) on the machine with
-    *data* on stdin; its stdout. SshInstallError with the last line it printed on failure,
-    or when it ran longer than *timeout* (it is then killed)."""
-    proc = await asyncio.create_subprocess_exec(*_ssh_cmd(host, remote), stdin=asyncio.subprocess.PIPE,
-                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(data or b""), timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise SshInstallError(f"{step}: did not finish within {timeout:.0f}s") from None
-    if proc.returncode != 0:
-        lines = [ln for ln in (err or out).decode(errors="replace").splitlines() if ln.strip()
+    *data* on stdin; its stdout. A connection that failed while it was being set up is tried
+    again, up to *tries* attempts: ssh's own connection-phase message
+    (``ssh_tunnel.connect_failed``) and no BEGUN marker on stdout, which the machine prints
+    before the command, so a command whose marker arrived is never run twice whatever ssh
+    printed after (the marker can still be lost on a link that stalls just after the command
+    began, so a step sent here must be safe to run twice: SWAP_SH's attempt label).
+    SshInstallError with the last line it printed on failure (the command failed, ssh refused
+    the key or the host, or the last attempt could not connect), or when it ran longer than
+    *timeout* (it is then killed, and not run again)."""
+    for attempt in range(1, max(1, tries) + 1):
+        proc = await asyncio.create_subprocess_exec(*_ssh_cmd(host, f"printf '{BEGUN}\\n'; {remote}"),
+                                                    stdin=asyncio.subprocess.PIPE,
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(data or b""), timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise SshInstallError(f"{step}: did not finish within {timeout:.0f}s") from None
+        # the marker's line, wherever it is (a login script may print before it), is taken off
+        mark = out.find(BEGUN.encode() + b"\n")
+        began = mark >= 0
+        if began:
+            out = out[:mark] + out[mark + len(BEGUN) + 1:]
+        if proc.returncode == 0:
+            return out.decode(errors="replace")
+        text = (err or out).decode(errors="replace")
+        lines = [ln for ln in text.splitlines() if ln.strip()
                  and "post-quantum" not in ln and "store now, decrypt later" not in ln and "pq.html" not in ln]
         why = lines[-1].strip()[:300] if lines else f"exit code {proc.returncode}"
+        if attempt < tries and not began \
+                and ssh_tunnel.connect_failed(proc.returncode, (err or b"").decode(errors="replace")):
+            logger.info("ssh_provisioner: %s could not connect to %s (%s): trying again", step, host, why[:160])
+            await asyncio.sleep(ssh_tunnel.CONNECT_RETRY_S)
+            continue
         raise SshInstallError(f"{step}: {why}")
-    return out.decode(errors="replace")
+    raise SshInstallError(f"{step}: could not connect")    # not reached: the loop returns or raises
+
+
+#: what the machine prints before every command _run sends (its first stdout line, taken off
+#: the output): a connection that printed it had started the command
+BEGUN = "__swarmai_begun__"
 
 
 def _bash(script: str, *args: str) -> str:
@@ -460,23 +486,34 @@ for m in "$@"; do
 done
 # shellcheck disable=SC2086
 docker run -d --name swarmai-hive --restart unless-stopped --network host -u "$(id -u):$(id -g)" \
-  -v "$HOME:$HOME" $mounts --env-file "$env" -e HOME="$HOME" \
+  -v "$HOME:$HOME" $mounts --env-file "$env" -e HOME="$HOME" ${attempt:+--label swarmai.attempt=$attempt} \
   "swarmai-hive-ssh:$ver" >/dev/null
 '''
 
 START_SH = r'''
 set -eu
-ver="$1"; shift
+ver="$1"; shift; attempt=""
 ''' + _ENV_IN + r'''
 docker rm -f swarmai-hive >/dev/null 2>&1 || true
 ''' + _RUN_HIVE + r'''
 echo started
 '''
 
+# Arguments: the version, the attempt (an id update() makes for each call) and the mounts. Safe
+# to run twice within one call: _run sends a command again only when ssh's connection failed
+# before the machine's start marker arrived, and on a link that stalls just after the command
+# began that marker can be lost. When this attempt's container already runs (labelled with the
+# attempt, the old one kept as swarmai-hive-old), the second run changes nothing, so the
+# container to go back to is never removed. Another update() is another attempt: it swaps.
 SWAP_SH = r'''
 set -eu
-ver="$1"; shift
+ver="$1"; attempt="$2"; shift 2
 ''' + _ENV_IN + r'''
+if docker inspect swarmai-hive-old >/dev/null 2>&1 \
+    && [ "$(docker inspect -f '{{index .Config.Labels "swarmai.attempt"}}' swarmai-hive 2>/dev/null)" = "$attempt" ] \
+    && [ "$(docker inspect -f '{{.State.Running}}' swarmai-hive 2>/dev/null)" = "true" ]; then
+  echo swapped; exit 0
+fi
 docker rm -f swarmai-hive-old >/dev/null 2>&1 || true
 if docker inspect swarmai-hive >/dev/null 2>&1; then
   docker stop swarmai-hive >/dev/null; docker rename swarmai-hive swarmai-hive-old
@@ -926,7 +963,8 @@ def _arn(out: str) -> str:
 
 async def _retry_identity(host: str, tag: str, aws_profile: str) -> str:
     try:
-        return await _run(host, _bash(IDENTITY_SH, tag, aws_profile), timeout=120, step="profile check")
+        # one attempt each: _check_identity's own loop tries again
+        return await _run(host, _bash(IDENTITY_SH, tag, aws_profile), timeout=120, step="profile check", tries=1)
     except SshInstallError as e:
         logger.info("ssh_provisioner: profile check not yet (%s)", e)
         return ""
@@ -1075,7 +1113,7 @@ async def update(machine_id: str, version: str) -> None:
             raise SshInstallError("update: the machine has no password recorded; retry its install")
         cfg["_home"] = home
         pass_hash = await asyncio.to_thread(_hash, row["auth_password"])
-        await _run(host, _bash(SWAP_SH, tag, *cfg["mounts"]), env_file(row, cfg, pass_hash, region),
+        await _run(host, _bash(SWAP_SH, tag, secrets.token_hex(8), *cfg["mounts"]), env_file(row, cfg, pass_hash, region),
                    timeout=180, step="update")
         swapped = True
         await _health(machine_id, version=version)

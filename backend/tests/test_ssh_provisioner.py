@@ -61,7 +61,7 @@ class Machine:
         self.whoami = None
         self.hive = ""
 
-    async def run(self, host, remote, data=None, timeout=60, step=""):
+    async def run(self, host, remote, data=None, timeout=60, step="", tries=3):
         self.calls.append((step, remote, data or b""))
         if step == self.fail or (self.fail and step.startswith(self.fail)):
             raise sp.SshInstallError(f"{step}: it broke")
@@ -268,6 +268,10 @@ def test_update_rolls_back_on_failed_health(world, monkeypatch):
     asyncio.run(sp.update(mid, "2.5.6"))
     assert store.status_of(world["db"], mid)[:3] == ("running", None, "2.5.6")
     assert m.steps()[-3:] == ["update", "identity check", "update"] and "swarmai-hive-old" in m.calls[-1][1]
+    # each update() is its own attempt: the second swap is never taken for a repeat of the first
+    swaps = [c[1] for c in m.calls if c[0] == "update" and c[2]]
+    ids = [s.split(f" bash {sp._tag('2.5.6')} ", 1)[1].split()[0] for s in swaps]
+    assert len(ids) == 2 and ids[0] != ids[1], ids
 
     # an idle machine behind the Host's version is updated by itself, once per version
     from core import hive_idle, swarm_out
@@ -340,8 +344,10 @@ def test_container_mounts_and_env_from_stdin(tmp_path):
     Host's (stdin), kept outside the home only while docker reads it, and nothing of it
     stays on the machine: on an install and on an update alike."""
     home = str(tmp_path / "home")
-    for script in (sp.START_SH, sp.SWAP_SH):
-        argv, seen, gone = _docker_args(tmp_path, script, b"SWARMAI_MODE=hive\n", VERSION, "/apollo:ro", "/workplace")
+    for script, attempt in ((sp.START_SH, ()), (sp.SWAP_SH, ("a1b2c3",))):
+        argv, seen, gone = _docker_args(tmp_path, script, b"SWARMAI_MODE=hive\n", VERSION, *attempt, "/apollo:ro", "/workplace")
+        labels = [argv[i + 1] for i, a in enumerate(argv) if a == "--label"]
+        assert labels == [f"swarmai.attempt={a}" for a in attempt], labels
         vols = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
         assert vols == [f"{home}:{home}", "/apollo:/apollo:ro", "/workplace:/workplace"], vols
         used = argv[argv.index("--env-file") + 1]
@@ -361,7 +367,7 @@ def test_machine_facts_and_region_are_checked(world):
             super().__init__()
             self.facts = facts
 
-        async def run(self, host, remote, data=None, timeout=60, step=""):
+        async def run(self, host, remote, data=None, timeout=60, step="", tries=3):
             if step == "preflight" and self.facts is not None:
                 self.calls.append((step, remote, data or b""))
                 return self.facts

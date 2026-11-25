@@ -44,7 +44,7 @@ class Broken(Found):
         super().__init__()
         self.preflight_error, self.extra = preflight_error, facts
 
-    async def run(self, host, remote, data=None, timeout=60, step=""):
+    async def run(self, host, remote, data=None, timeout=60, step="", tries=3):
         if step == "preflight" and self.preflight_error:
             raise sp.SshInstallError(f"preflight: {self.preflight_error}")
         out = await super().run(host, remote, data, timeout, step)

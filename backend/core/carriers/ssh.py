@@ -193,9 +193,10 @@ class SshLocation:
                 "_base_url": f"http://127.0.0.1:{cfg['local_port']}"}
 
     async def hive(self, wait_s: float = ssh_tunnel.READY_TIMEOUT_S) -> dict[str, Any]:
-        """The machine's record after making sure its tunnel runs (built when it does not,
-        within *wait_s*). SwarmOutError when it is not running or not usable, or the tunnel
-        could not be built."""
+        """The machine's record after making sure its tunnel runs (built when it does not:
+        each start of the tunnel waits up to *wait_s*, and one that drops while connecting is
+        started again, up to ssh_tunnel.CONNECT_TRIES starts). SwarmOutError when it is not
+        running or not usable, or the tunnel could not be built."""
         from core import swarm_out
         row, acct, cfg = await self._row()
         rec = self._record(row, acct, cfg)

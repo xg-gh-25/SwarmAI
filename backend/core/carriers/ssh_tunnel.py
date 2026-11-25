@@ -60,6 +60,31 @@ class TunnelError(Exception):
     """The tunnel could not be built or is not usable; the message is safe to show."""
 
 
+#: how often a connection that failed while it was being set up is tried (hive/ssh_provisioner
+#: and ``ensure``), and how long apart: a proxy in front of ssh (a ProxyCommand) can drop a
+#: handshake now and then, and a machine that is down still fails after the last try
+CONNECT_TRIES = 3
+CONNECT_RETRY_S = 3.0
+#: ssh's own messages for a connection that failed before it logged in, so nothing ran on the
+#: machine: only these forms, a command's own "connection refused" or a drop mid-command
+#: is not one (the command may have run)
+_CONNECT_PHASE = (
+    re.compile(r"^Connection timed out during banner exchange$"),
+    re.compile(r"^Connection to \S+ port \d+ timed out$"),
+    re.compile(r"^kex_exchange_identification: "),
+    re.compile(r"^ssh: connect to host \S+ port \d+: "
+               r"(?:Connection refused|Operation timed out|Connection timed out|No route to host)$"),
+)
+
+
+def connect_failed(returncode: Any, stderr: str) -> bool:
+    """Whether ssh exited (255, its own code) because the connection failed while it was
+    being set up: then nothing ran on the machine and the same command may be run again."""
+    if returncode != 255:
+        return False
+    return any(rx.match(ln.strip()) for ln in str(stderr or "").splitlines() for rx in _CONNECT_PHASE)
+
+
 def valid_host(host: Any) -> bool:
     return isinstance(host, str) and not host.startswith("-") and bool(HOST_RE.fullmatch(host))
 
@@ -107,6 +132,14 @@ def _pid_path(location_id: str) -> Path:
 
 def _log_path(location_id: str) -> Path:
     return _dir() / f"{_safe_id(location_id)}.log"
+
+
+def _log_text(location_id: str) -> str:
+    """What the tunnel's current ssh wrote (the log is rewritten at each start)."""
+    try:
+        return _log_path(location_id).read_text(errors="replace")
+    except OSError:
+        return ""
 
 
 def _last_line(location_id: str) -> str:
@@ -261,9 +294,10 @@ def _start(location_id: str, cmd: list[str], local_port: int) -> subprocess.Pope
 async def ensure(location_id: str, host: str, local_port: int, remote_port: int,
                  wait_s: float = READY_TIMEOUT_S) -> str:
     """The machine's Hive base URL, after making sure its tunnel runs: the live one, or a
-    new one whose forward answered within *wait_s*. One machine has at most one tunnel:
-    concurrent callers wait for the same build. TunnelError, with ssh's last line, when it
-    could not be built."""
+    new one whose forward answered within *wait_s*. A tunnel whose ssh exits while the
+    connection is being set up (``connect_failed``) is started again, up to CONNECT_TRIES
+    starts, each with its own wait. One machine has at most one tunnel: concurrent callers
+    wait for the same build. TunnelError, with ssh's last line, when it could not be built."""
     cmd = command(host, local_port, remote_port)
     base = f"http://127.0.0.1:{local_port}"
     async with _lock(str(location_id)):
@@ -273,21 +307,28 @@ async def ensure(location_id: str, host: str, local_port: int, remote_port: int,
             return base
         if got is not None:
             await asyncio.to_thread(stop, location_id)
-        proc = await asyncio.to_thread(_start, str(location_id), cmd, local_port)
-        end = time.monotonic() + wait_s
-        while time.monotonic() < end:
-            if proc.poll() is not None:
-                why = _last_line(location_id) or f"ssh exited with code {proc.returncode}"
-                _LIVE.pop(str(location_id), None)
-                raise TunnelError(f"the SSH tunnel to {host} did not start: {why}")
-            if await asyncio.to_thread(_ready, proc, local_port, 0.5):
-                logger.info("ssh_tunnel: tunnel to %s up on 127.0.0.1:%s", host, local_port)
-                return base
-            await asyncio.sleep(_POLL_S)
-        why = _last_line(location_id)
-        await asyncio.to_thread(stop, location_id)
-        raise TunnelError(f"the SSH tunnel to {host} did not answer within {wait_s:.0f}s"
-                          + (f": {why}" if why else ""))
+        for start in range(1, CONNECT_TRIES + 1):
+            proc = await asyncio.to_thread(_start, str(location_id), cmd, local_port)
+            end = time.monotonic() + wait_s
+            while time.monotonic() < end and proc.poll() is None:
+                if await asyncio.to_thread(_ready, proc, local_port, 0.5):
+                    logger.info("ssh_tunnel: tunnel to %s up on 127.0.0.1:%s", host, local_port)
+                    return base
+                await asyncio.sleep(_POLL_S)
+            if proc.poll() is None:
+                why = _last_line(location_id)
+                await asyncio.to_thread(stop, location_id)
+                raise TunnelError(f"the SSH tunnel to {host} did not answer within {wait_s:.0f}s"
+                                  + (f": {why}" if why else ""))
+            why = _last_line(location_id) or f"ssh exited with code {proc.returncode}"
+            _LIVE.pop(str(location_id), None)
+            if start < CONNECT_TRIES and connect_failed(proc.returncode, _log_text(location_id)):
+                logger.info("ssh_tunnel: the tunnel to %s dropped while connecting (%s): starting it again",
+                            host, why[:160])
+                await asyncio.sleep(CONNECT_RETRY_S)
+                continue
+            raise TunnelError(f"the SSH tunnel to {host} did not start: {why}")
+        raise TunnelError(f"the SSH tunnel to {host} did not start")   # not reached: the loop returns or raises
 
 
 def ensure_soon(location_id: str, host: str, local_port: int, remote_port: int) -> None:

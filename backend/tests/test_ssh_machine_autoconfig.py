@@ -31,7 +31,7 @@ class Found(Machine):
         super().__init__(fail)
         self.topdirs = topdirs
 
-    async def run(self, host, remote, data=None, timeout=60, step=""):
+    async def run(self, host, remote, data=None, timeout=60, step="", tries=3):
         if step == "preflight":
             self.calls.append((step, remote, data or b""))
             return ("uid=1001\ngid=100\nuser=alice\nhome=/home/alice\narch=x86_64\ncores=4\nmem_gb=15\n"
@@ -118,14 +118,15 @@ def test_update_finds_mounts_again(world):  # noqa: F811
     assert store.status_of(world["db"], mid)[:3] == ("running", None, "2.5.6")
     assert _config(world["db"], mid)["mounts"] == ["/apollo:ro", "/data", "/workplace"]
     swap = [c for c in m.calls if c[0] == "update" and "swarmai-hive-old" in c[1] and "docker run" in c[1]][-1][1]
-    assert swap.endswith(f"bash {sp._tag('2.5.6')} /apollo:ro /data /workplace")
+    import re
+    assert re.search(rf"bash {re.escape(sp._tag('2.5.6'))} [0-9a-f]{{16}} /apollo:ro /data /workplace$", swap), swap
 
 
 def test_a_switch_turned_while_installing_is_kept(world):  # noqa: F811
     """The card's private-network switch, turned while the image builds, is not written back
     over by the install's own settings."""
     class Turned(Found):
-        async def run(self, host, remote, data=None, timeout=60, step=""):
+        async def run(self, host, remote, data=None, timeout=60, step="", tries=3):
             if step == "image":
                 with sqlite3.connect(world["db"]) as c:
                     hid = c.execute("SELECT id FROM hive_instances WHERE carrier = 'ssh'").fetchone()[0]
