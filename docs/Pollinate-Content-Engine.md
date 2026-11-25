@@ -264,6 +264,7 @@ thresholds are in `craft_checks.py` (`DEFAULTS`), each with a comment on why it 
 | `density` | characters per slide stay under a cap that scales with the canvas (a CJK character counts double) | "too much text" |
 | `overflow`, `overlap`, `safe_area` | text leaves its box, elements collide, content leaves the safe area | earlier poster checks |
 | `image` | an image did not load | "the portraits are gone" |
+| `brand` | posters only: the watermark, link text and QR image the person's brand file sets are on the poster (text in the visible text, the QR matched by its bytes) | the earlier poster brand checks |
 | `reference` | type scale, margins and colors move too far from a reference deck | "match the style of our earlier deck" |
 
 The renderer adds checks of its own: a slide that is blank in `deck.html` with JavaScript
@@ -355,8 +356,10 @@ for later cuts; the `reference` check lists where type scale, margins or colors 
 
 - **Brand is data.** The default brand is neutral: a plain style and no logo.
   `brand_config.py` merges the shipped `brand/identity.yaml` with the user's
-  `~/.swarm-ai/pollinate-brand.yaml`; every visual output carries each configured element
-  (watermark, link, QR, footer) and leaves out the unset ones.
+  `~/.swarm-ai/pollinate-brand.yaml`. A poster carries each configured element (watermark,
+  link, QR, footer) and leaves out the unset ones; `cut` checks the watermark, link text and
+  QR. A deck or page carries the signature only when it is the person's own public content;
+  a deck made for work or a customer carries none, and `cut` does not check it.
 - **Content principles** (`brand/content_principles.md`): value, not output counts; what is
   true, not "what I built"; one thesis; effects over mechanisms; each piece stands alone;
   no internal terms in the body.
