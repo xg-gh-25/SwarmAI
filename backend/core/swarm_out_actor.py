@@ -34,7 +34,8 @@ agent the routes refuse what is the person's to decide:
   counts it under the run's lock before it is sent): after that the agent takes the
   task over or discards it;
 - landing a run's commits when a check the Brain declared for it errored on its last
-  run (``land_blocker``): it re-runs the task with the failure to fix or takes it over;
+  run (``land_blocker``): it re-runs the task with the failure to fix or takes it over.
+  A check that failed on the run's base too (``pre_existing``) does not stop it;
 - discarding while something would be lost: commits not landed that are not on this
   host either (``return-prepare`` takes them into ``refs/hive/...``: once every tip the
   result names now is there, discarding loses nothing; when it refused after it fetched the tip, the
@@ -430,7 +431,11 @@ def land_blocker(dispatch_id: str) -> Optional[str]:
     declared for the run whose latest run on the result errored (core/swarm_out_results
     ``checks``: the Hive's own exit code). A change whose own check last failed is not
     landed by an agent: it re-runs the task with the failure to fix, takes it over, or
-    the person lands it. ``not_seen`` and ``unknown`` do not refuse: the Host found no
+    the person lands it. ``pre_existing`` does not refuse: the check failed on the
+    commit the task started from too (the Hive ran it there, scripts/task_checks), so the
+    failure is not the change's; the card still shows it. A check that failed on the
+    change and passed on the base, or has no base result, is ``errored`` and refuses.
+    ``not_seen`` and ``unknown`` do not refuse: the Host found no
     call that runs the check, which is not "it did not run" (a check run through a script
     is not seen). A result this host cannot read refuses: the agent does not land what
     it cannot see the checks of; it waits for the next refresh, or the person lands it."""

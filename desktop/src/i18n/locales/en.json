@@ -1459,6 +1459,7 @@
     "check": {
       "ran": "ran",
       "errored": "errored",
+      "preExisting": "already failing on the base",
       "unknown": "ran with no result",
       "notSeen": "not seen",
       "line": "Checks: {{list}}",
@@ -1848,6 +1849,7 @@
         "filesOnHive_other": "{{count}} files written on the Hive",
         "checks_not_seen": "Not seen: {{list}}",
         "checks_errored": "Errored: {{list}}",
+        "checks_pre_existing": "Already failing on the base: {{list}}",
         "checks_unknown": "No result: {{list}}",
         "inferred": "inferred from command text",
         "fromRecord": "as recorded on the Hive"

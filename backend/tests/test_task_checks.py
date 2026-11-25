@@ -546,3 +546,169 @@ def test_a_handler_raising_while_signals_are_held_releases_them(monkeypatch):
             pass
     monkeypatch.setattr(signal, "pthread_sigmask", real)
     assert real(signal.SIG_BLOCK, ()) == before
+
+
+# ── a failed check run once more on the task's base (base_exit / base_error) ──────
+# Questions: (6) is a check that fails on the change and on the base recorded with a
+# non-zero base_exit, and one that fails only on the change with base_exit 0; (7) does a
+# passing check make no base run at all; (8) when the base cannot be made, is that
+# recorded and the check left reading as failed; (9) does the base get the order's own
+# setup lines (not the change's setup output), and a failing base setup line make the
+# base unavailable; (10) does a stopping signal during the base run still stop the call.
+
+def _ended(ws, cid):
+    return [x for x in _record(ws) if x.get("id") == cid and "exit" in x]
+
+
+def _clone(world):
+    return world["ws"] / hw.repo_rel(W1, "lib")
+
+
+def _no_base_dirs(ws):
+    return not [d for d in hw.checks_dir(ws, W1).iterdir() if d.name.startswith(task_checks.BASE_DIR)]
+
+
+def test_a_check_failing_on_the_base_too_records_base_exit(world, order):
+    order(_checks())
+    assert task_checks.main(["run", W1, "bad"]) == 1
+    lines = [x for x in _record(world["ws"]) if x.get("id") == "bad"]
+    assert ["exit" in x for x in lines] == [False, True, True]       # started, ended, ended on the base
+    assert "base_exit" not in lines[1] and lines[2]["exit"] == 3 and lines[2]["base_exit"] == 3
+    assert (world["ws"] / lines[2]["base_log"]).is_file()
+    assert _no_base_dirs(world["ws"])                                     # removed after
+    from core.swarm_out_results import _checks as host_checks
+    got = host_checks([], {"validations": [{"id": "bad", "command": "exit 3"}]}, records=_record(world["ws"]))
+    assert got == [{"id": "bad", "status": "pre_existing"}]
+
+
+def test_a_check_failing_only_on_the_change_records_base_exit_0(world, order):
+    order(_checks(validations=[{"id": "clean", "command": "test ! -f broken", "repo": "lib", "cwd": ""}]))
+    (_clone(world) / "broken").write_text("the change")                   # not on the base
+    assert task_checks.main(["run", W1, "clean"]) == 1
+    last = _ended(world["ws"], "clean")[-1]
+    assert (last["exit"], last["base_exit"]) == (1, 0)
+    from core.swarm_out_results import _checks as host_checks
+    got = host_checks([], {"validations": [{"id": "clean", "command": "test ! -f broken"}]},
+                  records=_record(world["ws"]))
+    assert got == [{"id": "clean", "status": "errored"}]
+
+
+def test_a_passing_check_makes_no_base_run(world, order, monkeypatch):
+    order(_checks())
+
+    def no_base(*a, **k):
+        raise AssertionError("a passing check made a base clone")
+    monkeypatch.setattr(hw, "base_clone", no_base)
+    assert task_checks.main(["run", W1, "ok"]) == 0
+    assert [x for x in _record(world["ws"]) if "exit" in x] == _ended(world["ws"], "ok")
+    assert len(_ended(world["ws"], "ok")) == 1
+    assert not any(k.startswith("base") for x in _record(world["ws"]) for k in x)
+    assert _no_base_dirs(world["ws"])
+
+
+@pytest.mark.parametrize("how", ["no_sha", "clone_fails"])
+def test_a_base_that_cannot_be_made_keeps_the_check_errored(world, order, monkeypatch, how):
+    got = order(_checks())
+    if how == "no_sha":
+        kept = hw.load(world["ws"], W1)
+        kept["repos"][0].pop("sha")
+        hw._write_order(kept)
+    else:
+        real = hw._clone_into
+
+        def broken(m, r, target, work_id, **kw):
+            real(m, r, target, work_id, **kw)
+            raise hw.WorkError(hw.ERR_WORKTREE)            # made halfway, then failed
+        monkeypatch.setattr(hw, "_clone_into", broken)
+    assert got["repos"][0]["sha"]
+    assert task_checks.main(["run", W1, "bad", "bad"]) == 1          # two failures, one base attempt
+    ended = _ended(world["ws"], "bad")
+    assert len(ended) == 4 and all("base_exit" not in x for x in ended)
+    want = hw.ERR_NO_BASE if how == "no_sha" else hw.ERR_BASE_CLONE
+    assert [want in x["base_error"] for x in ended[1::2]] == [True, True]
+    assert _no_base_dirs(world["ws"])
+    from core.swarm_out_results import _checks as host_checks
+    assert host_checks([], {"validations": [{"id": "bad", "command": "exit 3"}]},
+                   records=_record(world["ws"])) == [{"id": "bad", "status": "errored"}]
+
+
+def test_the_base_run_gets_its_own_setup(world, order):
+    # the check needs what setup leaves in the clone; the change adds `broken`
+    order(_checks(setup=[{"command": "touch .setup-ran", "repo": "lib", "cwd": ""}],
+                  validations=[{"id": "needs-setup", "command": "test -f .setup-ran && test ! -f broken",
+                                "repo": "lib", "cwd": ""}]))
+    assert task_checks.main(["setup", W1]) == 0
+    (_clone(world) / "broken").write_text("the change")
+    assert task_checks.main(["run", W1, "needs-setup"]) == 1
+    # set up there too, the base passes: the failure is the change's, never "already failing"
+    assert _ended(world["ws"], "needs-setup")[-1]["base_exit"] == 0
+    # the base's setup is not the task's: SETUP_FILE and env.json hold only the task's own
+    cdir = hw.checks_dir(world["ws"], W1)
+    assert len((cdir / task_checks.SETUP_FILE).read_text().splitlines()) == 1
+    assert (cdir / "base-setup-1.log").is_file()
+
+
+def test_a_setup_line_failing_on_the_base_makes_no_base_result(world, order):
+    order(_checks(setup=[{"command": "test -f only-in-the-change", "repo": "lib", "cwd": ""}]))
+    (_clone(world) / "only-in-the-change").write_text("x")
+    assert task_checks.main(["setup", W1]) == 0
+    assert task_checks.main(["run", W1, "bad"]) == 1
+    last = _ended(world["ws"], "bad")[-1]
+    assert "base_exit" not in last and "setup line 1 exited 1 on the base" in last["base_error"]
+
+
+def test_a_stop_during_the_base_run_stops_the_call_and_reads_as_failed(world, order, monkeypatch):
+    order(_checks())
+
+    def stopped(self):
+        raise SystemExit(128 + 15)                          # what _stop_child raises on SIGTERM
+    monkeypatch.setattr(task_checks._Base, "_make", stopped)
+    with pytest.raises(SystemExit) as e:
+        task_checks.main(["run", W1, "bad", "ok"])
+    assert e.value.code == 143
+    ended = _ended(world["ws"], "bad")
+    assert len(ended) == 1 and "base_exit" not in ended[0] and "base_error" not in ended[0]
+    assert _ended(world["ws"], "ok") == []                  # the call stopped: nothing after it ran
+
+
+def test_a_check_failing_on_the_base_another_way_stays_errored(world, order):
+    # on the change it fails (1); on the base the file it needs is missing (4, as a runner
+    # says "no such test"): not the same failure
+    order(_checks(validations=[{"id": "t", "command": "if [ -f broken ]; then exit 1; else exit 4; fi",
+                                "repo": "lib", "cwd": ""}]))
+    (_clone(world) / "broken").write_text("the change")
+    assert task_checks.main(["run", W1, "t"]) == 1
+    last = _ended(world["ws"], "t")[-1]
+    assert (last["exit"], last["base_exit"]) == (1, 4)
+    from core.swarm_out_results import _checks as host_checks
+    assert host_checks([], {"validations": [{"id": "t", "command": "x"}]},
+                       records=_record(world["ws"])) == [{"id": "t", "status": "errored"}]
+
+
+def test_two_calls_at_once_keep_their_own_base(world, order):
+    order(_checks())
+    ws = world["ws"]
+    kept = hw.load(ws, W1)
+    cdir = hw.checks_dir(ws, W1)
+    cdir.mkdir(parents=True, exist_ok=True)
+    item = kept["checks"]["validations"][1]                   # bad: exit 3
+    one, two = task_checks._Base(ws, kept, cdir), task_checks._Base(ws, kept, cdir)
+    assert one.run(item, "bad")["base_exit"] == 3
+    assert two.run(item, "bad")["base_exit"] == 3            # made while the first is still there
+    assert one.root != two.root and one.root.is_dir() and two.root.is_dir()
+    one.remove()
+    assert not one.root.exists() and (two.root / "lib").is_dir()   # the other call's base stays
+    two.remove()
+    assert _no_base_dirs(ws)
+
+
+def test_a_base_the_file_system_refuses_is_recorded_and_the_call_goes_on(world, order, monkeypatch):
+    import tempfile
+    order(_checks())
+
+    def full(*a, **k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(tempfile, "mkdtemp", full)
+    assert task_checks.main(["run", W1, "bad", "ok"]) == 1
+    assert "could not be made" in _ended(world["ws"], "bad")[-1]["base_error"]
+    assert [x["exit"] for x in _ended(world["ws"], "ok")] == [0]      # the next check still ran

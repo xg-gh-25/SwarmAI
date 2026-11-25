@@ -860,26 +860,17 @@ def _pull_s3_locked(row: dict, dispatch_id: str, round: int, s3: Any, bucket: st
 def _check_lines(body: Any, work_id: str) -> Optional[list[dict]]:
     """The check record of the work order *work_id* in a round's checks.json
     (``{"at", "orders": [{"work_id", "checks"}, ...]}``, core/hive_agentcore
-    ``_checks_body``), as ``swarm_out_results`` keeps check records (same cleaning as its
-    HTTP read); None when the body lists no such order. The order is picked by its id,
+    ``_checks_body``), as ``swarm_out_results`` keeps check records (its ``check_lines``,
+    the same cleaning as its HTTP read); None when the body lists no such order. The order is picked by its id,
     the one the Host sent it under (the dispatch id), never by its place in the list."""
-    from core.swarm_out_results import MAX_CHECK_LINES
+    from core.swarm_out_results import check_lines
     orders = body.get("orders") if isinstance(body, dict) else None
     mine = [o for o in orders if isinstance(o, dict) and o.get("work_id") == work_id] \
         if isinstance(orders, list) else []
     lines = mine[-1].get("checks") if mine else None
     if not isinstance(lines, list):
         return None
-    keep = []
-    for x in lines[-MAX_CHECK_LINES:]:
-        if not isinstance(x, dict) or not isinstance(x.get("id"), str) or len(x["id"]) > 100:
-            continue
-        code = x.get("exit")
-        keep.append({"id": x["id"],
-                     "exit": code if isinstance(code, int) and not isinstance(code, bool) else None,
-                     "started_at": x.get("started_at") if isinstance(x.get("started_at"), str) else None,
-                     "ended_at": x.get("ended_at") if isinstance(x.get("ended_at"), str) else None})
-    return keep
+    return check_lines(lines)
 
 
 # ── the location ─────────────────────────────────────────────────────────────────

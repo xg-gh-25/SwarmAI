@@ -100,6 +100,26 @@ describe('the review strip names each check by what the Host saw', () => {
     expect(line?.text).not.toContain('没跑');
   });
 
+  it('pre_existing reads as already failing on the base', async () => {
+    const { machineChecks } = await import('./runReview');
+    const { checkStatus } = await import('./live');
+    expect(checkStatus('pre_existing')).toBe('pre_existing');
+    const checks = [{ id: 'bvt', status: 'pre_existing' as const }, { id: 'types', status: 'errored' as const }];
+    // the card's checks line: its own word, distinct from errored
+    expect(checksLine(res({ checks }))).toBe('校验：bvt 基线上就已失败 · types 报错了');
+    // the review strip: named apart, and never green while one is there
+    const line = machineChecks({ result: res({ ended: 'completed', checks }) } as never).find((c) => c.key === 'checks');
+    expect(line?.ok).toBe(false);
+    expect(line?.text).toContain('基线上就已失败：bvt');
+    expect(line?.text).toContain('报错：types');
+    expect(line?.text).not.toContain('报错：bvt');
+    const only = machineChecks({ result: res({ ended: 'completed', checks: [checks[0]] }) } as never).find((c) => c.key === 'checks');
+    expect(only?.ok).toBe(false);
+    const en = (await import('../../i18n/locales/en.json')).default as Record<string, any>;
+    expect(en.swarmOut.check.preExisting).toBe('already failing on the base');
+    expect(en.swarmOut.review.check.checks_pre_existing).toContain('Already failing on the base');
+  });
+
   it('has no "not run" word left in either language', async () => {
     const en = (await import('../../i18n/locales/en.json')).default as Record<string, any>;
     const zh = (await import('../../i18n/locales/zh.json')).default as Record<string, any>;

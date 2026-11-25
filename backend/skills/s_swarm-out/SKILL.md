@@ -262,6 +262,12 @@ numbered text options ("reply with a number"). Only this question.
      touch, then `return-land` with the `key` and `tip` prepare printed and a summary file
      in your own words: what the change does and why, as a commit body (it becomes the
      landed commit's message; the Hive's own commit messages are never copied into it).
+     A check that `errored` refuses an agent landing; one that reads `pre_existing`
+     failed on the commit the run started from too, with the same exit code (its Hive
+     ran it there), so it does not. An exit code cannot show the change added no new
+     failure inside that check: run its failing part on this machine's checkout with the
+     change and without it, land only when the change adds no failure, and say in the
+     summary which check already failed on the base.
      When the change is about speed or size, or reads a store whose size differs from
      machine to machine (an index, a database, a corpus), also run the changed path on
      this machine's own data before landing: a Hive's data is smaller, so its timings and

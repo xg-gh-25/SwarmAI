@@ -272,10 +272,12 @@ export interface SwarmOutAgent {
 }
 
 /** ran: the run's test record or a Bash call ran the check's command and did not error;
- *  errored: its last such run errored; unknown: that run has no recorded result;
+ *  errored: its last such run errored; pre_existing: it errored, and run once more on
+ *  the commit the task started from it errored there too (already failing on the base:
+ *  it does not stop an agent landing); unknown: that run has no recorded result;
  *  not_seen: the Host found no record that ran it (a check run in a loop or a script is
  *  not seen: it is never "not run"). Never "passed". */
-export type SwarmOutCheckStatus = 'ran' | 'errored' | 'unknown' | 'not_seen';
+export type SwarmOutCheckStatus = 'ran' | 'errored' | 'pre_existing' | 'unknown' | 'not_seen';
 
 export type SwarmOutExecutionDiff = 'made_a_run' | 'no_run' | 'other_profile' | 'other_run';
 

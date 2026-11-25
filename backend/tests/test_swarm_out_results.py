@@ -934,3 +934,43 @@ def test_public_carries_turn_spans_active_partial_and_final_at():
     assert pub["active_partial"] is True and pub["final_at"] == "2026-10-28T02:00:00Z"
     # a final_at kept for another end is not this result's
     assert res.public({"result": full, "final_at": "2026-10-28T02:00:00Z", "final_of": "other"})["final_at"] is None
+
+
+# ── a check that failed on the task's base too (scripts/task_checks base_exit) ──────
+
+def test_checks_from_record_read_a_failure_on_the_base_as_pre_existing():
+    ids = ["both", "change", "old", "passed", "bool", "other-way", "no-base", "cut", "again", "open"]
+    agent = {"validations": [{"id": i, "command": f"run {i}"} for i in ids]}
+    records = [
+        {"id": "both", "exit": 2}, {"id": "both", "exit": 2, "base_exit": 2},
+        {"id": "change", "exit": 1}, {"id": "change", "exit": 1, "base_exit": 0},
+        {"id": "old", "exit": 5},                                   # a record from before base runs
+        {"id": "passed", "exit": 0},
+        {"id": "bool", "exit": 1, "base_exit": True},
+        {"id": "other-way", "exit": 1, "base_exit": 4},            # failed there another way
+        {"id": "no-base", "exit": 1, "base_error": "no commit"},
+        # failed on both, then run again and cut off during its base run: its own failure stands
+        {"id": "cut", "exit": 1, "base_exit": 1}, {"id": "cut", "started_at": "t"}, {"id": "cut", "exit": 1},
+        # failed on both, then passed: ran
+        {"id": "again", "exit": 1, "base_exit": 1}, {"id": "again", "exit": 0},
+        {"id": "open", "started_at": "t"},
+    ]
+    got = {c["id"]: c["status"] for c in res._checks([], agent, records=records)}
+    assert got == {"both": "pre_existing", "change": "errored", "old": "errored", "passed": "ran",
+                   "bool": "errored", "other-way": "errored", "no-base": "errored", "cut": "errored", "again": "ran",
+                   "open": "unknown"}
+    # every status from before reads as it did; the new one is kept, not read as not_seen
+    assert [res.check_status(s) for s in ("ran", "errored", "unknown", "not_seen", "not_run", "pre_existing")] \
+        == ["ran", "errored", "unknown", "not_seen", "not_seen", "pre_existing"]
+    pub = res._public_agent({"checks": [{"id": "smoke-import", "status": "pre_existing"}]},
+                            {**_AGENT, "brain": "SwarmAI"})
+    assert {c["id"]: c["status"] for c in pub["checks"]}["smoke-import"] == "pre_existing"
+
+
+def test_a_kept_check_line_carries_base_exit_and_an_old_line_is_kept_as_before():
+    old = {"id": "t", "exit": 1, "started_at": "a", "ended_at": "b", "log": "x.log"}
+    assert res.check_line(old) == {"id": "t", "exit": 1, "started_at": "a", "ended_at": "b"}
+    assert res.check_line({**old, "base_exit": 2, "base_log": "y"})["base_exit"] == 2
+    for bad in (True, "2", None, 2.0):
+        assert "base_exit" not in res.check_line({**old, "base_exit": bad})
+    assert res.check_lines([old, "junk", {"id": 3}]) == [res.check_line(old)]

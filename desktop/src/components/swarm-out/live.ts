@@ -48,12 +48,12 @@ export function brainLabel(r: SwarmOutRun): string {
   return b === 'General' ? i18n.t('swarmOut.brain.general') : b;
 }
 
-const CHECK_KEYS: Record<SwarmOutCheckStatus, string> = { ran: 'ran', errored: 'errored', unknown: 'unknown', not_seen: 'notSeen' };
+const CHECK_KEYS: Record<SwarmOutCheckStatus, string> = { ran: 'ran', errored: 'errored', pre_existing: 'preExisting', unknown: 'unknown', not_seen: 'notSeen' };
 
 /** A check status as it is shown: a value from before `not_seen` (`not_run`) or any value
  *  outside the set reads as not seen. Every reader of a check's status goes through it. */
 export function checkStatus(s: string | null | undefined): SwarmOutCheckStatus {
-  return s === 'ran' || s === 'errored' || s === 'unknown' || s === 'not_seen' ? s : 'not_seen';
+  return s === 'ran' || s === 'errored' || s === 'pre_existing' || s === 'unknown' || s === 'not_seen' ? s : 'not_seen';
 }
 const checkWord = (s: string): string => i18n.t(`swarmOut.check.${CHECK_KEYS[checkStatus(s)]}`);
 

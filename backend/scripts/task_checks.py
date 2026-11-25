@@ -31,13 +31,25 @@ refused and nothing runs. Each check writes two lines to the record: one when it
 and one with its exit code when it ends, so a check cut off (the agent's own time limit,
 SIGTERM) reads as started and not ended. The exit is 0 when every check exited 0.
 
+A check that exits non-zero is run once more on the commit the task started from (the
+order's ``sha`` of each repository): ``_Base`` clones every repository of the order at
+that commit (core/hive_workspace ``base_clone``), runs the order's setup lines there,
+then the same command in the same directory, and appends a third line, the check's end
+line with ``base_exit`` (that run's exit) or ``base_error`` (why the base could not be
+made or the check not run there). The Host reads a check that failed on both with the
+same exit code as ``pre_existing`` (core/swarm_out_results ``_checks``). The base clones
+are made at the first failed check of a call, in a directory of that call's own, and
+removed when the call ends. A check that passes makes
+no base run. The end line without the base result is written first, so a call stopped
+during the base run leaves the check reading as failed, as before there was a base run.
+
 A record is the Hive's word, not proof: the Hive's agent runs as the same OS user and
 could write the record itself (core/hive_workspace module doc: no file on a Hive is out
 of its reach). It removes the accidental misreport (a check run in a loop the Host
 cannot read, a reply that says a failed check passed), not a deliberate forgery.
 
-Only the commands of the order run, as the Host declared them: nothing here builds a
-command from anything else. The record and the logs live in
+Only the commands of the order run, as the Host declared them (on the base too: its
+setup lines and the check's command): nothing here builds a command from anything else. The record and the logs live in
 ``Hive/work/<work_id>/checks/``, which the release removes with the task. There is no
 time limit here: the agent caps each call. The check runs in a process group of its
 own (never this process's: that group is the caller's, which on a Hive can hold the agent
@@ -70,6 +82,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -112,20 +125,27 @@ def _order(ws: Path, work_id: str) -> dict[str, Any]:
     return order
 
 
-def _dir(ws: Path, order: dict[str, Any], repo: str, cwd: str) -> Path:
+class _BadDir(SystemExit):
+    """A directory a line cannot run in (``_dir``): exits the command with its message,
+    and is told apart from the SystemExit a stopping signal raises (``_stop_child``)."""
+
+
+def _dir(ws: Path, order: dict[str, Any], repo: str, cwd: str, base: Optional[str] = None) -> Path:
     """Where a line runs: the order's clone of *repo*, then *cwd* inside it. Both come
     from the order the daemon wrote (core/hive_workspace ``_parse_checks``); this
-    checks again that the path stays plain and inside the clone."""
+    checks again that the path stays plain and inside the clone. *base*: the directory
+    (relative to the workspace) holding the base clones (``_Base``), whose clone of
+    *repo* is used instead."""
     from core import hive_workspace
     match = [r for r in order.get("repos") or [] if isinstance(r, dict) and r.get("name") == repo]
     if not match or not isinstance(match[0].get("dir"), str):
-        raise SystemExit(f"task_checks: repository {repo!r} is not in work order {order['work_id']}")
-    rel = match[0]["dir"] + (f"/{cwd}" if cwd else "")
+        raise _BadDir(f"task_checks: repository {repo!r} is not in work order {order['work_id']}")
+    rel = (f"{base}/{repo}" if base else match[0]["dir"]) + (f"/{cwd}" if cwd else "")
     if not hive_workspace._plain_rel(cwd) or not hive_workspace._plain(ws, rel):
-        raise SystemExit(f"task_checks: {rel} is not a plain directory of the work order")
+        raise _BadDir(f"task_checks: {rel} is not a plain directory of the work order")
     d = ws / rel
     if not d.is_dir():
-        raise SystemExit(f"task_checks: {rel} does not exist")
+        raise _BadDir(f"task_checks: {rel} does not exist")
     return d
 
 
@@ -391,34 +411,128 @@ def _tail(log: Path) -> str:
         return ""
 
 
+def _setup_lines(ws: Path, order: dict[str, Any], files: Path, prefix: str,
+                 base: Optional[str] = None, recorded: bool = True) -> tuple[int, int, dict[str, Any]]:
+    """Run the order's setup lines in order, each in its directory (of the base clones
+    when *base* is given, ``_dir``), and stop at the first that fails: (its exit or 0,
+    its line number or 0, the PATH and environment collected). Each line's
+    ``$GITHUB_PATH`` / ``$GITHUB_ENV`` files and log are ``<prefix><n>.*`` in *files*.
+    *recorded*: write each line to ``SETUP_FILE`` and the state to ``ENV_FILE`` (the
+    task's own setup, which the checks run with; never the base's)."""
+    state = {"path": [str(PACKAGE_BIN)] if PACKAGE_BIN.is_dir() else [], "env": {}}
+    for n, item in enumerate(order["checks"].get("setup") or [], 1):
+        cwd = _dir(ws, order, item["repo"], item.get("cwd") or "", base)
+        gh_path, gh_env = files / f"{prefix}{n}.path", files / f"{prefix}{n}.env"
+        gh_path.write_text("")
+        gh_env.write_text("")
+        log = files / f"{prefix}{n}.log"
+        started = _now()
+        code = _run_one(item["command"], cwd,
+                        _env_for(state, {"GITHUB_PATH": str(gh_path), "GITHUB_ENV": str(gh_env)}), log)
+        if recorded:
+            _append(files / SETUP_FILE, {"line": n, "exit": code, "started_at": started, "ended_at": _now(),
+                                         "log": str(log.relative_to(ws))})
+        if code != 0:
+            return code, n, state
+        state["path"] = [*reversed(_read_github_path(gh_path, cwd)), *state["path"]]
+        state["env"].update(_read_github_env(gh_env))
+        if recorded:
+            (files / ENV_FILE).write_text(json.dumps(state), encoding="utf-8")
+        print(f"{'base ' if base else ''}setup line {n}: ok")
+    return 0, 0, state
+
+
 def setup(work_id: str) -> int:
     ws = _workspace()
     order = _order(ws, work_id)
     cdir = _checks_dir(ws, work_id)
-    state = {"path": [str(PACKAGE_BIN)] if PACKAGE_BIN.is_dir() else [], "env": {}}
-    lines = order["checks"].get("setup") or []
-    for n, item in enumerate(lines, 1):
-        cwd = _dir(ws, order, item["repo"], item.get("cwd") or "")
-        gh_path, gh_env = cdir / f"setup-{n}.path", cdir / f"setup-{n}.env"
-        gh_path.write_text("")
-        gh_env.write_text("")
+    code, n, state = _setup_lines(ws, order, cdir, "setup-")
+    if code != 0:
         log = cdir / f"setup-{n}.log"
-        started = _now()
-        code = _run_one(item["command"], cwd,
-                        _env_for(state, {"GITHUB_PATH": str(gh_path), "GITHUB_ENV": str(gh_env)}), log)
-        _append(cdir / SETUP_FILE, {"line": n, "exit": code, "started_at": started, "ended_at": _now(),
-                                    "log": str(log.relative_to(ws))})
-        if code != 0:
-            print(f"setup line {n} exited {code} (log {log.relative_to(ws)}):\n{_tail(log)}")
-            return code
-        state["path"] = [*reversed(_read_github_path(gh_path, cwd)), *state["path"]]
-        state["env"].update(_read_github_env(gh_env))
-        (cdir / ENV_FILE).write_text(json.dumps(state), encoding="utf-8")
-        print(f"setup line {n}: ok")
-    if not lines:
+        print(f"setup line {n} exited {code} (log {log.relative_to(ws)}):\n{_tail(log)}")
+        return code
+    if not order["checks"].get("setup"):
         print("no setup lines")
     (cdir / ENV_FILE).write_text(json.dumps(state), encoding="utf-8")
     return 0
+
+
+#: the prefix of the directory a ``run`` call keeps its base clones in (``_Base``),
+#: inside the checks directory: one of its own per call, so calls run at the same time
+#: never remove or reuse each other's
+BASE_DIR = "base-"
+
+
+class _Base:
+    """The base a failed check is run on once more: a clone of each repository of the
+    order at the commit the order says it started from (core/hive_workspace
+    ``base_clone``), with the order's own setup lines run there, as on the task's clones
+    (the base's own lockfiles; nothing borrowed from the change's setup, whose output
+    lives in the change's clones). Made at the first failed check of a ``run`` call,
+    used for every failed check of that call, removed when the call ends (``remove``).
+    When it cannot be made, ``error`` says why and no check runs on it."""
+
+    def __init__(self, ws: Path, order: dict[str, Any], cdir: Path) -> None:
+        self.ws, self.order, self.cdir = ws, order, cdir
+        self.root: Optional[Path] = None
+        self.rel = ""
+        self.made = False
+        self.error: Optional[str] = None
+        self.state: dict[str, Any] = {"path": [], "env": {}}
+
+    def _make(self) -> None:
+        import tempfile
+        from core import hive_workspace
+        self.made = True
+        # this call's own (a call stopped by SIGKILL leaves one: the release removes it)
+        self.root = Path(tempfile.mkdtemp(prefix=BASE_DIR, dir=self.cdir))
+        self.rel = str(self.root.relative_to(self.ws))
+        if not hive_workspace._plain(self.ws, self.rel):
+            raise _NoBase("the base directory is not a plain directory of the work order")
+        for r in self.order.get("repos") or []:
+            name = r.get("name") if isinstance(r, dict) else None
+            try:
+                hive_workspace.base_clone(self.ws, self.order, name, self.root / str(name))
+            except hive_workspace.WorkError as exc:
+                raise _NoBase(f"{name}: {exc}") from None
+        # its logs beside the checks' own (``base-setup-<n>.log``), kept after the clones go
+        code, n, self.state = _setup_lines(self.ws, self.order, self.cdir, "base-setup-", base=self.rel,
+                                           recorded=False)
+        if code != 0:
+            raise _NoBase(f"setup line {n} exited {code} on the base (log "
+                          f"{(self.cdir / f'base-setup-{n}.log').relative_to(self.ws)})")
+
+    def run(self, item: dict[str, Any], cid: str) -> dict[str, Any]:
+        """``{"base_exit", "base_log"}`` of *item* run on the base, or ``{"base_error"}``."""
+        try:
+            if not self.made:
+                try:
+                    self._make()
+                except _BadDir as exc:                    # a setup line's directory the base lacks
+                    raise _NoBase(str(exc)) from None
+            if self.error:
+                raise _NoBase(self.error)
+            try:
+                cwd = _dir(self.ws, self.order, item["repo"], item.get("cwd") or "", self.rel)
+            except _BadDir as exc:
+                return {"base_error": str(exc)}       # this check's directory only
+            log = self.cdir / f"{cid}.base.log"
+            code = _run_one(item["command"], cwd, _env_for(self.state), log)
+            return {"base_exit": code, "base_log": str(log.relative_to(self.ws))}
+        except OSError as exc:              # a directory or clone the file system refused
+            self.error = f"the base could not be made ({type(exc).__name__})"
+            return {"base_error": self.error}
+        except _NoBase as exc:
+            self.error = str(exc)
+            return {"base_error": self.error}
+
+    def remove(self) -> None:
+        if self.root is not None:
+            shutil.rmtree(self.root, ignore_errors=True)
+
+
+class _NoBase(Exception):
+    """The base cannot be made (``_Base``)."""
 
 
 def run(work_id: str, ids: list[str]) -> int:
@@ -434,21 +548,42 @@ def run(work_id: str, ids: list[str]) -> int:
         return 2
     cdir = _checks_dir(ws, work_id)
     state = _load_env(cdir)
+    base = _Base(ws, order, cdir)
     worst = 0
-    for cid in ids or list(by_id):
-        item = by_id[cid]
-        cwd = _dir(ws, order, item["repo"], item.get("cwd") or "")
-        log = cdir / f"{cid}.log"
-        started = _now()
-        record = cdir / hive_workspace.CHECKS_FILE
-        _append(record, {"id": cid, "started_at": started})
-        code = _run_one(item["command"], cwd, _env_for(state), log)
-        _append(record, {"id": cid, "exit": code, "started_at": started, "ended_at": _now(),
-                         "log": str(log.relative_to(ws))})
-        print(f"{cid}: exit {code} (log {log.relative_to(ws)})")
-        if code != 0:
+    try:
+        for cid in ids or list(by_id):
+            item = by_id[cid]
+            cwd = _dir(ws, order, item["repo"], item.get("cwd") or "")
+            log = cdir / f"{cid}.log"
+            started = _now()
+            record = cdir / hive_workspace.CHECKS_FILE
+            _append(record, {"id": cid, "started_at": started})
+            code = _run_one(item["command"], cwd, _env_for(state), log)
+            ended = {"id": cid, "exit": code, "started_at": started, "ended_at": _now(),
+                     "log": str(log.relative_to(ws))}
+            # written before the base run: a call stopped during it leaves this line last,
+            # which reads as the check's own failure (errored), as before the base run existed
+            _append(record, ended)
+            print(f"{cid}: exit {code} (log {log.relative_to(ws)})")
+            if code == 0:
+                continue
             print(_tail(log))
             worst = 1
+            print(f"{cid}: running it once more on the commit the task started from "
+                  "(with the setup lines first), to tell a failure the base already has from "
+                  "one this change caused")
+            got = base.run(item, cid)
+            _append(record, {**ended, **got})
+            if "base_exit" in got:
+                print(f"{cid}: on the base, exit {got['base_exit']} (log {got['base_log']}): "
+                      + ("it fails there too, with the same exit (already failing on the base)"
+                         if got["base_exit"] == code else
+                         "it passes there, so this change makes it fail" if got["base_exit"] == 0 else
+                         "it fails there another way, so it reads as this change's failure"))
+            else:
+                print(f"{cid}: not run on the base ({got['base_error']}); it reads as failed")
+    finally:
+        base.remove()
     return worst
 
 

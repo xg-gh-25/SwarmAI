@@ -333,11 +333,13 @@ def _task_clone(m: Path, r: dict[str, Any], ws: Path, work_id: str) -> None:
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def _clone_into(m: Path, r: dict[str, Any], target: Path, work_id: str) -> None:
+def _clone_into(m: Path, r: dict[str, Any], target: Path, work_id: str, detached: bool = False) -> None:
     """A writable clone also gets SwarmAI's own commit identity in its config: a Hive has
     no git user, so the agent's ``git commit`` (and a pipeline landing that uses the
     repository's own identity) would otherwise fail or borrow an author. The Host lands
-    the work under its own author either way (``hive_return``)."""
+    the work under its own author either way (``hive_return``). *detached*: check the
+    commit out detached even when writable (``base_clone``: its source, the task's clone,
+    already has the task's branch, which the clone takes along)."""
     if not _ok(_git(None, "clone", "--no-checkout", "--no-tags", "--reference", str(m), "--",
                     str(m), str(target))):
         raise WorkError(ERR_WORKTREE)
@@ -347,7 +349,7 @@ def _clone_into(m: Path, r: dict[str, Any], target: Path, work_id: str) -> None:
     steps = [*ident,
              ("remote", "set-url", "origin", r["url"]),
              ("fetch", "--no-tags", "--quiet", str(m), "+refs/remotes/origin/*:refs/remotes/origin/*"),
-             ("checkout", "-q", "-b", branch(work_id), r["sha"]) if r["access"] == "write"
+             ("checkout", "-q", "-b", branch(work_id), r["sha"]) if r["access"] == "write" and not detached
              else ("checkout", "-q", "--detach", r["sha"])]
     for args in steps:
         if not _ok(_git(target, *args)):
@@ -527,6 +529,36 @@ MAX_RECORD_LINES = 500
 
 def checks_dir(workspace: Path, work_id: str) -> Path:
     return work_dir(workspace, work_id) / CHECKS_DIR
+
+
+#: why a base clone could not be made (``base_clone``), as scripts/task_checks records it
+ERR_NO_BASE = "the work order names no commit this repository started from"
+ERR_BASE_CLONE = "the base commit could not be checked out"
+
+
+def base_clone(workspace: Path, order: dict[str, Any], name: str, target: Path) -> None:
+    """A clone of the order's repository *name* at the commit the order says it started
+    from (its ``sha``), in *target* (which must not exist), for scripts/task_checks to run
+    a failed check on the base. Made from the task's own clone with the steps that made
+    that clone (``_clone_into``: the same commit identity, origin URL and remote-tracking
+    branches), so the only difference is the code; no network, no mirror. WorkError
+    (``ERR_NO_BASE`` / ``ERR_BASE_CLONE``) when it cannot be made; *target* is then
+    removed."""
+    ws = Path(workspace)
+    match = [r for r in order.get("repos") or [] if isinstance(r, dict) and r.get("name") == name]
+    r = match[0] if match else None
+    if r is None or not isinstance(r.get("sha"), str) or not _SHA_RE.fullmatch(r["sha"]) \
+            or not isinstance(r.get("url"), str) or r.get("access") not in ACCESS \
+            or not isinstance(r.get("dir"), str) or not _plain(ws, r["dir"]):
+        raise WorkError(ERR_NO_BASE)
+    src = ws / r["dir"]
+    if not src.is_dir() or target.exists():
+        raise WorkError(ERR_BASE_CLONE)
+    try:
+        _clone_into(src, r, target, order["work_id"], detached=True)
+    except WorkError:
+        shutil.rmtree(target, ignore_errors=True)
+        raise WorkError(ERR_BASE_CLONE) from None
 
 
 def checks_record(workspace: Path, work_id: str) -> list[dict[str, Any]]:

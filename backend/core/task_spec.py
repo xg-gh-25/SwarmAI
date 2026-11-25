@@ -474,7 +474,10 @@ def segment(spec: dict[str, Any], run_id: Optional[str] = None,
             lines.append(f"Before you finish, run each check through `{run} run {work_id} <id>` (one id "
                          "per call, under a wall-clock cap): it runs the command below and records its "
                          "exit code, which is what the card shows. Running the command yourself is not "
-                         "recorded.")
+                         "recorded. A check that fails is run once more on the commit the task "
+                         "started from (setup first), so its card can say it already failed "
+                         "there: give that call a cap of about twice the check's time plus the "
+                         "setup's.")
             lines += [f"- {v['id']}: `{v['command']}`" + (f" (in {v['repo']}/{v['cwd']})" if v.get("repo") else "")
                       for v in spec["validations"]]
     elif spec["setup"]:

@@ -21,7 +21,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 from pathlib import Path
+from typing import Optional
 from unittest import mock
 
 import httpx
@@ -38,12 +40,29 @@ from tests.test_task_spec import DEF, ws  # noqa: F401 — the Brain fixture
 OTHER = "so_" + "b" * 12           # another work order on the same Hive
 
 
-def _hive_runs(hive_ws: Path, work_id: str, commands: dict[str, str], run: list[str], monkeypatch) -> None:
+def _hive_runs(hive_ws: Path, work_id: str, commands: dict[str, str], run: list[str], monkeypatch,
+               changed: Optional[list[str]] = None) -> None:
     """The Hive side: a work order with these checks by id (as core/hive_workspace keeps
-    it), and the real ``task_checks run`` of each id in *run*."""
+    it), and the real ``task_checks run`` of each id in *run*. *changed*: the task's
+    clone is a real git repository at a base commit the order names (``sha``), with
+    these files written over it by the change, so task_checks runs a failed check on
+    that base too; without it the order names no base."""
     rel = hw.repo_rel(work_id, "lib")
     (hive_ws / rel).mkdir(parents=True)
-    order = {"work_id": work_id, "repos": [{"name": "lib", "dir": rel}],
+    repo = {"name": "lib", "dir": rel}
+    if changed is not None:
+        d = hive_ws / rel
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run([*git, "init", "-q", "-b", "main", str(d)], check=True)
+        (d / "base.txt").write_text("base")
+        subprocess.run([*git, "-C", str(d), "add", "base.txt"], check=True)
+        subprocess.run([*git, "-C", str(d), "commit", "-qm", "base"], check=True)
+        sha = subprocess.run(["git", "-C", str(d), "rev-parse", "HEAD"], check=True,
+                             capture_output=True, text=True).stdout.strip()
+        repo.update(sha=sha, url="https://example.com/o/lib.git", access="write")
+        for name in changed:
+            (d / name).write_text("the change")
+    order = {"work_id": work_id, "repos": [repo],
              "checks": {"setup": [], "validations": [
                  {"id": i, "command": c, "repo": "lib", "cwd": ""} for i, c in commands.items()]}}
     path = hw._order_path(work_id)
@@ -74,8 +93,14 @@ def _two_checks(world):  # noqa: F811 — the imported fixture
     (world.ws / "Projects" / "Lib" / "project-agent.yaml").write_text(yaml.safe_dump(doc, allow_unicode=True))
 
 
-@pytest.mark.parametrize("command,status", [("true", "ran"), ("exit 3", "errored")])
-def test_agentcore_round_shows_the_checks_task_checks_recorded(world, monkeypatch, command, status):  # noqa: F811
+@pytest.mark.parametrize("command,changed,status,lines", [
+    ("true", None, "ran", 2),
+    ("exit 3", None, "errored", 3),                   # no base in the order: a base_error line
+    ("exit 3", [], "pre_existing", 3),                # fails on the base too
+    ("test ! -f broken", ["broken"], "errored", 3),   # fails only on the change
+])
+def test_agentcore_round_shows_the_checks_task_checks_recorded(world, monkeypatch, command, changed,  # noqa: F811
+                                                               status, lines):
     _two_checks(world)
     out_ = _dispatch(world)
     did = out_["dispatch_id"]
@@ -86,12 +111,14 @@ def test_agentcore_round_shows_the_checks_task_checks_recorded(world, monkeypatc
     # the round's microVM: its agent ran ``tests`` through task_checks, never ``lint``;
     # the bridge wrote checks.json as it does on each pass
     hive_ws = world.tmp / "hive-ws"
-    _hive_runs(hive_ws, did, {"tests": command, "lint": "true"}, ["tests"], monkeypatch)
+    _hive_runs(hive_ws, did, {"tests": command, "lint": "true"}, ["tests"], monkeypatch, changed)
     world.s3.put(f"bridge/{sid}/checks.json", hive_agentcore._checks_body(hive_ws))
     _close_round(world, sid, "chat-round-1")
     rec = asyncio.run(res.fetch(row))
     assert rec["fetch_error"] is None
-    assert [x["id"] for x in rec["check_records"]] == ["tests", "tests"]          # started, ended
+    # started, ended (and, for a failure, ended with the base run's result)
+    assert [x["id"] for x in rec["check_records"]] == ["tests"] * lines
+    assert ("base_exit" in rec["check_records"][-1]) is (changed is not None)
     assert _card(rec, row) == {"checks": {"tests": status, "lint": "not_seen"},
                                "from_record": True, "inferred": False}
 
@@ -180,6 +207,29 @@ def test_ec2_hive_shows_the_checks_task_checks_recorded(ec2, monkeypatch):
     assert f"/api/hive/work/{DID}/checks" in seen and rec["fetch_error"] is None
     assert _card(rec, row) == {"checks": {"tests": "ran", "lint": "errored", "types": "not_seen"},
                                "from_record": True, "inferred": False}
+
+
+def test_ec2_hive_shows_a_check_failing_on_the_base_as_pre_existing(ec2, monkeypatch):
+    """The whole path with a base: the Hive's task_checks runs each failed check once more
+    on the order's base commit, its route serves the record, the Host keeps ``base_exit``
+    and the card reads a check failing on both as ``pre_existing``, one failing only on
+    the change as ``errored``; the agent's landing is refused only for the second."""
+    from core import swarm_out_actor
+    hive_ws, seen = ec2
+    _hive_runs(hive_ws, DID, {"tests": "exit 4", "lint": "test ! -f broken", "types": "true"},
+               ["tests", "lint", "types"], monkeypatch, changed=["broken"])
+    row = _ec2_row()
+    rec = asyncio.run(res.fetch(row))
+    assert rec["fetch_error"] is None
+    assert [(x["id"], x.get("base_exit")) for x in rec["check_records"] if x["exit"] is not None] == \
+        [("tests", None), ("tests", 4), ("lint", None), ("lint", 0), ("types", None)]
+    assert _card(rec, row) == {"checks": {"tests": "pre_existing", "lint": "errored", "types": "ran"},
+                               "from_record": True, "inferred": False}
+    pub = res.public(rec, agent=row["project_agent"])
+    monkeypatch.setattr(res, "load", lambda d: {"result": pub})
+    assert "(lint)" in swarm_out_actor.land_blocker(DID)
+    pub["checks"] = [c for c in pub["checks"] if c["id"] != "lint"]
+    assert swarm_out_actor.land_blocker(DID) is None
 
 
 def test_a_dispatch_without_checks_by_id_reads_no_record(ec2, monkeypatch):

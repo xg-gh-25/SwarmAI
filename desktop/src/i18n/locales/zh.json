@@ -1459,6 +1459,7 @@
     "check": {
       "ran": "跑了",
       "errored": "报错了",
+      "preExisting": "基线上就已失败",
       "unknown": "跑了但没有结果",
       "notSeen": "没看到",
       "line": "校验：{{list}}",
@@ -1848,6 +1849,7 @@
         "filesOnHive_other": "Hive 上写了 {{count}} 个文件",
         "checks_not_seen": "没看到：{{list}}",
         "checks_errored": "报错：{{list}}",
+        "checks_pre_existing": "基线上就已失败：{{list}}",
         "checks_unknown": "跑了但没有结果：{{list}}",
         "inferred": "按命令文本推断",
         "fromRecord": "Hive 自己的记录"

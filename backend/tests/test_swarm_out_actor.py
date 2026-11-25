@@ -423,3 +423,24 @@ def test_an_agent_does_not_land_over_an_errored_check(client, monkeypatch):
         assert r.status_code == 403 and "cannot be read" in r.json()["detail"]
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land",
                   json={"by": "person", "key": "k", "tip": "t"}).status_code == 200
+
+
+# ── landing over a check that failed (land_blocker) ─────────────────────────────
+
+@pytest.mark.parametrize("statuses,refused", [
+    (["errored"], ["bvt"]),
+    (["pre_existing"], []),                 # failed on the run's base too: not the change's
+    (["pre_existing", "errored"], ["lint"]),
+    (["ran", "not_seen", "unknown"], []),
+    (["not_run"], []),                      # a status from before not_seen reads as not_seen
+])
+def test_land_blocker_by_check_status(monkeypatch, statuses, refused):
+    from core import swarm_out_results
+    ids = ["bvt", "lint", "types"]
+    kept = {"result": {"checks": [{"id": i, "status": s} for i, s in zip(ids, statuses)]}}
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: kept)
+    why = act.land_blocker(DID)
+    if not refused:
+        assert why is None
+    else:
+        assert why is not None and "errored" in why and f"({', '.join(refused)})" in why

@@ -164,7 +164,13 @@ def _is_turn_start(row: dict) -> bool:
 #: with no result, or saw no record of it (``not_seen``). Never "not run": a check run in
 #: a shell loop, a script or a target is not seen, and a Host that says "not run" for it
 #: says something false (design 2026-10-31-swarm-out-agent-owns-its-runs §2.7).
-_CHECK_STATUSES = ("ran", "errored", "unknown", "not_seen")
+#: ``pre_existing``: it errored, and the Hive's record says the same check, run once more
+#: on the commit the task started from, errored there too with the same exit code
+#: (scripts/task_checks ``base_exit``): a failure the base already had, which does not
+#: stop an agent landing (core/swarm_out_actor ``land_blocker``) and is shown apart from
+#: ``errored``. An exit code cannot say the change added no new failure inside a check
+#: already failing: the agent that lands it checks that on its own machine (s_swarm-out).
+_CHECK_STATUSES = ("ran", "errored", "pre_existing", "unknown", "not_seen")
 
 
 def check_status(v: Any) -> str:
@@ -214,8 +220,12 @@ def _checks(blocks: list[dict], agent: Optional[dict],
 
     With ``records`` (the Hive's check record, one line per check that
     ``scripts/task_checks`` ran, by id: ``{id, exit, ...}``) each check's status is the
-    record's: ``ran`` for exit 0, ``errored`` for any other exit, ``unknown`` for a check
-    started and never ended, ``not_seen`` for a check with no line. The record is written
+    record's: ``ran`` for exit 0, ``errored`` for any other exit, ``pre_existing`` for one
+    whose line also holds a ``base_exit`` equal to its exit (task_checks ran it on the
+    task's base and it failed there too, the same way as far as an exit code says; a
+    ``base_exit`` of 0, another code such as a runner's "no such test" or a shell's
+    "command not found", or none, stays ``errored``),
+    ``unknown`` for a check started and never ended, ``not_seen`` for a check with no line. The record is written
     by the program that ran the check, so how the session's Bash calls were written and
     what the agent's reply claims no longer decide the status. It is the Hive's record,
     not proof: the Hive's agent runs as the same OS user and could write that file (on a
@@ -246,9 +256,12 @@ def _checks(blocks: list[dict], agent: Optional[dict],
         for v in wanted:
             line = last.get(v["id"])
             code = line.get("exit") if line else None
+            base = line.get("base_exit") if line else None
             status = ("not_seen" if line is None
                       else "unknown" if not isinstance(code, int) or isinstance(code, bool)
-                      else "ran" if code == 0 else "errored")
+                      else "ran" if code == 0
+                      else "pre_existing" if isinstance(base, int) and not isinstance(base, bool) and base == code
+                      else "errored")
             out.append({"id": v["id"], "status": status})
         return out
     reported = [("\n".join(_norm(x) for x in str(t.get("command")).splitlines()), t.get("result"))
@@ -972,6 +985,31 @@ def round_end_of(row: dict, kept: Optional[dict]) -> Optional[dict]:
 MAX_CHECK_LINES = 500
 
 
+def check_line(x: Any) -> Optional[dict]:
+    """One line of a Hive's check record (scripts/task_checks) as the Host keeps it, or
+    None for a line that is not one: only the fields the Host reads, each of its type.
+    Every carrier's reader keeps lines through it (EC2's ``_take_check_records``,
+    core/carriers/agentcore ``_check_lines``), so both doors keep the same shape.
+    ``base_exit`` (the check's exit on the task's base, scripts/task_checks) is kept only
+    when the line has one that is a whole number: a line without it is kept exactly as
+    before it existed, so a kept record compares equal to a fresh read of the same one."""
+    if not isinstance(x, dict) or not isinstance(x.get("id"), str) or len(x["id"]) > 100:
+        return None
+    code, base = x.get("exit"), x.get("base_exit")
+    out = {"id": x["id"],
+           "exit": code if isinstance(code, int) and not isinstance(code, bool) else None,
+           "started_at": x.get("started_at") if isinstance(x.get("started_at"), str) else None,
+           "ended_at": x.get("ended_at") if isinstance(x.get("ended_at"), str) else None}
+    if isinstance(base, int) and not isinstance(base, bool):
+        out["base_exit"] = base
+    return out
+
+
+def check_lines(lines: list) -> list[dict]:
+    """The last MAX_CHECK_LINES lines of a check record, each through ``check_line``."""
+    return [k for k in (check_line(x) for x in lines[-MAX_CHECK_LINES:]) if k is not None]
+
+
 def _records_of(row: dict, rec: dict) -> Optional[list[dict]]:
     """The check record to read the checks from: the one kept for a task sent with
     checks by id (an empty list when the Hive ran none yet), else None (the statuses are
@@ -1004,16 +1042,7 @@ async def _take_check_records(row: dict, inst: Any, rec: dict) -> None:
     lines = body.get("checks") if isinstance(body, dict) else None
     if not isinstance(lines, list):
         return
-    keep = []
-    for x in lines[-MAX_CHECK_LINES:]:
-        if not isinstance(x, dict) or not isinstance(x.get("id"), str) or len(x["id"]) > 100:
-            continue
-        code = x.get("exit")
-        keep.append({"id": x["id"],
-                     "exit": code if isinstance(code, int) and not isinstance(code, bool) else None,
-                     "started_at": x.get("started_at") if isinstance(x.get("started_at"), str) else None,
-                     "ended_at": x.get("ended_at") if isinstance(x.get("ended_at"), str) else None})
-    rec["check_records"] = keep
+    rec["check_records"] = check_lines(lines)
 
 
 def _note_no_record(rec: dict) -> None:

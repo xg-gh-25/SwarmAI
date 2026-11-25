@@ -344,9 +344,10 @@ export function machineChecks(r: SwarmOutRun, full?: SwarmOutResult | null): { k
   out.push({ key: 'ended', ok: res.ended === 'completed', text: res.ended === 'completed' ? t('ended') : t('notEnded', { how: res.ended }) });
   const checks = res.checks ?? [];
   if (checks.length) {
-    // by what the Host can say of each: not seen, errored, ran with no result
+    // by what the Host can say of each: not seen, errored, already failing on the base,
+    // ran with no result
     const of = (st: string) => checks.filter((c) => checkStatus(c.status) === st).map((c) => c.id).join(', ');
-    const missed = (['not_seen', 'errored', 'unknown'] as const)
+    const missed = (['not_seen', 'errored', 'pre_existing', 'unknown'] as const)
       .map((st) => [st, of(st)] as const).filter(([, list]) => list)
       .map(([st, list]) => i18n.t(`swarmOut.review.check.checks_${st}`, { list }));
     out.push({ key: 'checks', ok: missed.length === 0, text: missed.length === 0 ? t('checksRan') : missed.join(' · ') });
