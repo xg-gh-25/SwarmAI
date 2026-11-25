@@ -47,13 +47,13 @@
 
   <!-- Title -->
   <text x="480" y="42" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">MULTI-TAB PARALLEL SESSIONS</text>
-  <text x="480" y="60" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">SessionRouter + SessionUnit + LifecycleManager + SessionRegistry</text>
+  <text x="480" y="60" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">SessionRouter · SessionUnit · LifecycleManager · SessionRegistry · StreamingOrchestrator · RetryManager · SessionHealing</text>
 
   <!-- ============ SESSION ROUTER (top) ============ -->
   <rect x="300" y="78" width="360" height="50" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.5" opacity="0.95"/>
   <rect x="300" y="78" width="360" height="50" rx="10" fill="url(#gold)" opacity="0.06"/>
   <text x="480" y="100" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">SessionRouter</text>
-  <text x="480" y="118" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Slot acquisition | IDLE eviction | Queue timeout (60s) | MAX_CONCURRENT=2</text>
+  <text x="480" y="118" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Slot acquisition | IDLE eviction | Queue timeout | RAM-gated spawn admission</text>
 
   <!-- ============ SESSION UNITS (3 tabs + channel) ============ -->
   <!-- Tab 1: STREAMING -->
@@ -102,7 +102,7 @@
   <text x="360" y="238" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Subprocess alive but paused</text>
   <text x="360" y="254" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Ready for next message</text>
   <text x="360" y="270" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Evictable if slots needed</text>
-  <text x="360" y="290" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">12hr TTL before auto-cleanup</text>
+  <text x="360" y="290" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">24hr idle TTL before auto-cleanup</text>
 
   <path d="M 440,128 L 360,160" stroke="#f59e0b" stroke-width="1" opacity="0.3"/>
 
@@ -121,20 +121,19 @@
   <circle cx="720" cy="180" r="5" fill="#8b5cf6"/>
   <text x="732" y="184" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Channel — DEDICATED</text>
 
-  <text x="815" y="210" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1 reserved slot (always)</text>
-  <text x="815" y="242" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Claude --resume for continuity</text>
+  <text x="815" y="210" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1 dedicated slot, serialized</text>
+  <text x="815" y="242" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">A session per conversation (--resume)</text>
 
   <!-- Channel adapters -->
   <rect x="715" y="260" width="60" height="22" rx="4" fill="#ec4899" fill-opacity="0.1" stroke="#ec4899" stroke-width="0.5"/>
   <text x="745" y="275" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="9">Slack</text>
 
-  <rect x="785" y="260" width="60" height="22" rx="4" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.5"/>
 
-  <rect x="855" y="260" width="60" height="22" rx="4" fill="#334155" fill-opacity="0.3" stroke="#334155" stroke-width="0.5" stroke-dasharray="3 2"/>
-  <text x="885" y="275" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="8">Future</text>
+  <rect x="785" y="260" width="60" height="22" rx="4" fill="#334155" fill-opacity="0.3" stroke="#334155" stroke-width="0.5" stroke-dasharray="3 2"/>
+  <text x="815" y="275" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Future</text>
 
   <text x="815" y="310" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Channels never starve chat</text>
-  <text x="815" y="326" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Chat never starves channels</text>
+  <text x="815" y="326" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Owner's own messages: chat pool</text>
 
   <path d="M 580,128 L 815,160" stroke="#8b5cf6" stroke-width="1" opacity="0.3"/>
 
@@ -142,7 +141,7 @@
   <rect x="40" y="365" width="430" height="50" rx="10" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>
   <rect x="40" y="365" width="430" height="50" rx="10" fill="url(#cyan)" opacity="0.04"/>
   <text x="255" y="388" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">LifecycleManager</text>
-  <text x="255" y="404" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">60s health loop | 12hr TTL kill | Dead->Cold cleanup | Startup orphan reaper</text>
+  <text x="255" y="404" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">60s loop | 24hr idle TTL | DEAD-&gt;COLD | orphan reaper | RSS restart at 3.5GB</text>
 
   <!-- Session Registry -->
   <rect x="490" y="365" width="200" height="50" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
@@ -153,7 +152,7 @@
   <!-- 5-state machine legend -->
   <rect x="710" y="365" width="220" height="50" rx="10" fill="#1e1e36" stroke="#334155" stroke-width="0.8" opacity="0.95"/>
   <text x="820" y="382" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">5-State Machine</text>
-  <g transform="translate(720, 392)">
+  <g transform="translate(713, 392)">
     <rect x="0" y="0" width="34" height="14" rx="3" fill="#334155"/>
     <text x="17" y="11" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="7">COLD</text>
     <rect x="40" y="0" width="54" height="14" rx="3" fill="#10b981" fill-opacity="0.2"/>

@@ -97,9 +97,9 @@
     <circle cx="28" cy="28" r="14" fill="#8b5cf6" opacity="0.15"/>
     <polygon points="28,16 31,25 40,25 33,30 35,39 28,34 21,39 23,30 16,25 25,25" fill="#c4b5fd" opacity="0.8"/>
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#c4b5fd" letter-spacing="0.5">Self-Evolution</text>
-    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Observe → Measure → Optimize</text>
-    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">12-module closed loop</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Auto-deploy with backup</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Corrections recorded</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">3 sessions → a proposal</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">The person decides</text>
     <!-- Status dot -->
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
@@ -112,9 +112,9 @@
     <circle cx="28" cy="28" r="9" fill="none" stroke="#93c5fd" stroke-width="1.5" opacity="0.8"/>
     <path d="M 22,28 Q 28,20 34,28 Q 28,36 22,28" fill="#93c5fd" opacity="0.5"/>
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#93c5fd" letter-spacing="0.5">Self-Memory</text>
-    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">3-layer distill + hybrid recall</text>
-    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">SessionRecall + MemoryGuard</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Git-verified, vector search</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">CDF: five sources</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Code checks every write</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Keyword FTS5/BM25 recall</text>
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
 
@@ -128,8 +128,8 @@
     <circle cx="28" cy="28" r="2" fill="#fcd34d" opacity="0.8"/>
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#fcd34d" letter-spacing="0.5">Self-Context</text>
     <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">11-file priority chain</text>
-    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Token budget mgmt</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">L0/L1 smart caching</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Model-scaled budget</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">L0/L1 caching, no slicing</text>
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
 
@@ -143,7 +143,7 @@
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#fca5a5" letter-spacing="0.5">Self-Health</text>
     <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Service monitoring</text>
     <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Auto-restart on crash</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Resource diag + proactive restart</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Proactive RSS restart</text>
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
 
@@ -159,9 +159,9 @@
       <line x1="19" y1="28" x2="22" y2="28"/><line x1="34" y1="28" x2="37" y2="28"/>
     </g>
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#67e8f9" letter-spacing="0.5">Self-Jobs</text>
-    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Scheduled automation</text>
-    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Sidecar services</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Signal pipeline</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">In-process scheduler</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">System + user jobs</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Managed side services</text>
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
 
@@ -173,9 +173,9 @@
     <circle cx="26" cy="26" r="6" fill="none" stroke="#6ee7b7" stroke-width="1.5" opacity="0.8"/>
     <line x1="30" y1="30" x2="36" y2="36" stroke="#6ee7b7" stroke-width="2" opacity="0.8" stroke-linecap="round"/>
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#6ee7b7" letter-spacing="0.5">Self-Harness</text>
-    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Validate context files</text>
-    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Detect DDD staleness</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Auto-refresh indexes</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Refresh search indexes</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Validate context files</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Detect DDD staleness</text>
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
 
@@ -202,24 +202,26 @@
   <g transform="translate(80, 520)">
     <!-- Track line -->
     <line x1="0" y1="22" x2="800" y2="22" stroke="#334155" stroke-width="2"/>
+    <!-- Progress fill (L0 to L4 — full) -->
+    <line x1="0" y1="22" x2="760" y2="22" stroke="#f59e0b" stroke-width="2.5" opacity="0.6"/>
 
     <!-- L0 -->
-    <circle cx="40" cy="22" r="8" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+    <circle cx="40" cy="22" r="8" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
     <text x="40" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L0</text>
     <text x="40" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Reactive</text>
 
     <!-- L1 -->
-    <circle cx="240" cy="22" r="8" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+    <circle cx="240" cy="22" r="8" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
     <text x="240" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L1</text>
     <text x="240" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Self-Maintaining</text>
 
     <!-- L2 -->
-    <circle cx="420" cy="22" r="8" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+    <circle cx="420" cy="22" r="8" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
     <text x="420" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L2</text>
     <text x="420" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Self-Improving</text>
 
     <!-- L3 -->
-    <circle cx="580" cy="22" r="8" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+    <circle cx="580" cy="22" r="8" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
     <text x="580" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L3</text>
     <text x="580" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Self-Governing</text>
 
@@ -229,11 +231,9 @@
     <text x="760" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="600" fill="#fbbf24">Autonomous</text>
     <text x="760" y="64" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#94a3b8">(current)</text>
 
-    <!-- Progress fill (L0 to L4 — full) -->
-    <line x1="0" y1="22" x2="760" y2="22" stroke="#f59e0b" stroke-width="2.5" opacity="0.6"/>
 
     <!-- Label -->
-    <text x="400" y="82" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#64748b" letter-spacing="2">GROWTH TRAJECTORY</text>
+    <text x="400" y="-6" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#64748b" letter-spacing="2">GROWTH TRAJECTORY</text>
   </g>
 
   <!-- ==================== LEGEND ==================== -->
