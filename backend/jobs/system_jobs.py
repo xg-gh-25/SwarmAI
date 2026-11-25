@@ -238,7 +238,7 @@ SYSTEM_JOBS: list[Job] = [
         id="brain-mistake-audit",
         name="Brain Mistake Audit",
         type="brain_mistake_audit",
-        schedule="0 2 1 * *",           # 1st of the month UTC 02:00 = ICT 10:00
+        schedule="0 6 1 * *",           # 1st of the month UTC 06:00 = ICT 14:00 (afternoon window)
         enabled=True,
         category="system",
         config={},
