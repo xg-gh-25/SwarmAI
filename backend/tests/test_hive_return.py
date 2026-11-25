@@ -1204,3 +1204,67 @@ def test_prepared_and_landed_commits_still_let_an_agent_discard(world, monkeypat
     git(world["host"], "update-ref", st["ref"], st["tip"])
     assert hive_return.land(DID, st["key"], st["tip"])["landed"]
     assert act.discard_blocker(row) is None                              # landed
+
+
+def test_an_earlier_turns_prepared_commits_do_not_let_an_agent_discard_a_later_turn(world, monkeypatch):
+    """Turn 1 was taken back; the run was re-run and turn 2 sealed new commits nobody took
+    back: the Hive workspace holds turn 2's only copy. Taking turn 2 back opens the way."""
+    from core import hive_return, swarm_out_actor as act
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], "src/a.py", "a = 2\n", "turn 1")
+    _hive_bundle(world)
+    asyncio.run(hive_return.prepare(DID, URL))
+    _bundle_file(world).unlink()                         # only the take-back says "here"
+    assert act.discard_blocker(_discard_row(world)) is None
+    _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
+    _hive_bundle(world)                                  # sealed, not taken back
+    row = _discard_row(world)
+    assert not act.commits_here(DID, row["result"])
+    assert "not landed" in (act.discard_blocker(row) or "")
+    asyncio.run(hive_return.prepare(DID, URL))           # turn 2 taken back
+    _bundle_file(world).unlink()
+    assert act.discard_blocker(row) is None
+
+
+def test_an_earlier_turns_landed_commits_do_not_let_an_agent_discard_a_later_turn(world, monkeypatch):
+    """Turn 1 landed; turn 2 sealed new commits and nobody took them back. The landed turn
+    itself keeps its way out while it is the result's (re-preparing it is refused)."""
+    from core import hive_return, swarm_out_actor as act
+    _no_network(monkeypatch, world)
+    _commit(world["hive"], "src/a.py", "a = 2\n", "turn 1")
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    _bundle_file(world).unlink()                         # only the take-back says "here"
+    assert hive_return.land(DID, st["key"], st["tip"])["landed"]
+    _hive_bundle(world)                                  # a re-run with no new commit
+    assert act.discard_blocker(_discard_row(world)) is None
+    with pytest.raises(hive_return.ReturnError, match="already landed"):
+        asyncio.run(hive_return.prepare(DID, URL))
+    _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
+    _hive_bundle(world)
+    row = _discard_row(world)
+    assert "not landed" in (act.discard_blocker(row) or "")
+    asyncio.run(hive_return.prepare(DID, URL))
+    _bundle_file(world).unlink()
+    assert act.discard_blocker(row) is None
+
+
+def test_a_mapped_base_take_back_lets_an_agent_discard_only_its_own_turn(world, monkeypatch):
+    """With a mapped base the state's tip is the replayed commit and the result's head the
+    Hive's: prepared and landed still let an agent discard; a later turn sealed and not
+    taken back does not. The kept bundle file is removed, so only the take-back says so
+    (``kept_here`` would find the Hive's tip at the ``-hive`` ref)."""
+    from core import hive_return, swarm_out_actor as act
+    _no_network(monkeypatch, world)
+    _rewritten(world)
+    _hive_bundle(world)
+    st = asyncio.run(hive_return.prepare(DID, URL))
+    assert st["tip"] != st["hive_tip"]
+    _bundle_file(world).unlink()
+    assert not hive_return.kept_here(DID, DIR)
+    assert act.discard_blocker(_discard_row(world)) is None             # prepared
+    assert hive_return.land(DID, st["key"], st["tip"])["landed"]
+    assert act.discard_blocker(_discard_row(world)) is None             # landed
+    _commit(world["hive"], "src/c.py", "c = 1\n", "turn 2")
+    _hive_bundle(world)
+    assert "not landed" in (act.discard_blocker(_discard_row(world)) or "")

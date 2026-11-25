@@ -36,8 +36,8 @@ agent the routes refuse what is the person's to decide:
 - landing a run's commits when a check the Brain declared for it errored on its last
   run (``land_blocker``): it re-runs the task with the failure to fix or takes it over;
 - discarding while something would be lost: commits not landed that are not on this
-  host either (``return-prepare`` takes them into ``refs/hive/...``: once every returned
-  tip is there, discarding loses nothing; when it refused after it fetched the tip, the
+  host either (``return-prepare`` takes them into ``refs/hive/...``: once every tip the
+  result names now is there, discarding loses nothing; when it refused after it fetched the tip, the
   verified bundle it kept and that tip hold them here, ``commits_here``), a file not
   placed in the Brain, lessons not in, the run running, waiting or its Hive not answering, or its result not final
   (``discard_blocker``). A run whose Hive never started its session (``not_started``)
@@ -494,12 +494,14 @@ def discard_blocker(row: Optional[dict[str, Any]]) -> Optional[str]:
 
 
 def commits_here(dispatch_id: str, res: Any) -> bool:
-    """Every repository that brought commits back has them on this host: its bundle was
-    taken back (core/hive_return.prepare) and its ``refs/hive/<dispatch>/<key>`` ref
-    still names the tip, or taking it back was refused after its tip was fetched and the
-    bundle the result names is kept here, verifies in the checkout and has its tip there
-    (core/hive_return.kept_here). A repository whose commits were never sealed into a
-    bundle, or whose bundle never reached this host, has them only on the Hive."""
+    """Every repository that brought commits back has them on this host: the commits the
+    run's result names now were taken back (core/hive_return.prepare, ``_taken_back``) and
+    its ``refs/hive/<dispatch>/<key>`` ref still names the tip, or taking them back was
+    refused after their tip was fetched and the bundle the result names is kept here,
+    verifies in the checkout and has its tip there (core/hive_return.kept_here). A
+    repository whose commits were never sealed into a bundle, whose bundle never reached
+    this host, or whose take-back is of an earlier turn than the result's, has them only
+    on the Hive."""
     from core import hive_return
     repos = [r for r in (((res or {}).get("work") or {}).get("repos") or []) if isinstance(r, dict)]
     checked = 0
@@ -517,9 +519,16 @@ def commits_here(dispatch_id: str, res: Any) -> bool:
 
 
 def _taken_back(dispatch_id: str, rdir: str) -> bool:
-    """The repository's take-back is ``prepared`` or ``landed`` and its ref still names
-    the tip it recorded."""
-    from core import hive_bundle, hive_return
+    """The repository's take-back is ``prepared`` or ``landed``, it is of the commits the
+    run's kept result names now, and its ref still names the tip it recorded. The state
+    does not say which turn's bundle it took, so the Hive commit it took (``hive_tip``
+    when its base was mapped and ``tip`` is the replayed copy, else ``tip``; ``land``
+    keeps both) is compared with the head the result names for the repository: a re-run
+    whose later turn sealed new commits that nobody took back is not "here" from the
+    earlier turn's take-back. The result is the one ``prepare`` takes the bundle from
+    (core/swarm_out_results), not the caller's copy, so states written before this
+    check count the same way."""
+    from core import hive_bundle, hive_return, swarm_out_results
     import subprocess
     try:
         st = hive_return.load(dispatch_id, hive_bundle.key(rdir)) or {}
@@ -527,9 +536,23 @@ def _taken_back(dispatch_id: str, rdir: str) -> bool:
         return False
     if st.get("status") not in ("prepared", "landed") or not st.get("repo") or not st.get("ref"):
         return False
+    took = st.get("hive_tip") or st.get("tip")
+    if not isinstance(took, str) or not took or took != _result_head(swarm_out_results.load(dispatch_id), rdir):
+        return False                 # an earlier turn's commits, or the result names none
     try:
         out = subprocess.run(["git", "-C", str(st["repo"]), "rev-parse", "--verify", "--quiet",
                               f"{st['ref']}^{{commit}}"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return False
     return out.returncode == 0 and out.stdout.strip() == st.get("tip")
+
+
+def _result_head(rec: Any, rdir: str) -> Optional[str]:
+    """The head commit the kept result *rec* names for the repository declared as *rdir*,
+    else None (no result, no such repository, or more than one entry for it)."""
+    res = rec.get("result") if isinstance(rec, dict) else None
+    work = res.get("work") if isinstance(res, dict) else None
+    repos = work.get("repos") if isinstance(work, dict) else None
+    heads = [r.get("head") for r in repos or [] if isinstance(r, dict) and r.get("dir") == rdir] \
+        if isinstance(repos, list) else []
+    return heads[0] if len(heads) == 1 and isinstance(heads[0], str) and heads[0] else None

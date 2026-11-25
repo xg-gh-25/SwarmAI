@@ -308,8 +308,15 @@ def test_agent_discard_needs_local_commits(env, tmp_path, monkeypatch):
            "work": {"repos": [{"dir": "Hive/work/x/repos/a", "bundle": {"available": True}}]}}
     row = {"dispatch_id": DID, "state": "stopped", "result": res,
            "settle": {"why_not": ["verdict", "code"]}}
+    kept = {"head": tip}       # the head the run's kept result names (what was taken back)
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"result": {
+        **res, "work": {"repos": [{"dir": "Hive/work/x/repos/a", "head": kept["head"],
+                                   "bundle": {"available": True}}]}}})
     returns[(DID, key)] = {"status": "prepared", "repo": str(repo), "ref": f"refs/hive/{DID}/k", "tip": tip}
     assert act.discard_blocker(row) is None
+    kept["head"] = "f" * 40                                   # a later turn, not taken back
+    assert "not landed" in (act.discard_blocker(row) or "")
+    kept["head"] = tip
     _git(repo, "update-ref", "-d", f"refs/hive/{DID}/k")
     assert "not landed" in (act.discard_blocker(row) or "")
     returns.pop((DID, key))                                   # never taken back
