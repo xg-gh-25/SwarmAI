@@ -1,13 +1,15 @@
 ---
 title: "Goal Loop — Iterative Convergence for Open-Ended Objectives"
 created: 2026-05-14
-updated: 2026-05-14
+updated: 2026-11-25
 tags: [architecture, pipeline, goal-loop, quality-convergence, autonomous-delivery]
 project: SwarmAI
-status: PE-review
+status: superseded
 ---
 
 # Goal Loop — Iterative Convergence for Open-Ended Objectives
+
+> **Historical design (superseded).** This describes SwarmAI as designed on 2026-05-14. The goal profile was removed from the pipeline on 2026-10-26: a large requirement is now one full run whose PLAN lists every part as a task, and parts that share no files and are useful on their own are separate runs. The Quality Convergence Loop, the push-ready gate and the adversarial stage this design builds on no longer exist either. For the current system see [Autonomous Pipeline HLD](Autonomous-Pipeline-HLD.md).
 
 ---
 

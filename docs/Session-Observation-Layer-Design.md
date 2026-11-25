@@ -1,9 +1,9 @@
 ---
 title: "Session Observation Layer — Technical Design Document"
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-11-25
 author: XG (architecture), Swarm (synthesis)
-status: shipped
+status: superseded
 audience: AWS Internal PEs, Technical Architects
 tags: [observation, hooks, ring-buffer, session-recovery, ddd-cultivation, self-improving-loop]
 toc: true
@@ -14,6 +14,8 @@ fontsize: 11pt
 ---
 
 # Session Observation Layer
+
+> **Historical design (superseded).** This describes SwarmAI as designed on 2026-05-29. The ring and its two hooks still run, but today they feed only the note SwarmAI adds after a context compaction (the most recent steps) and a trigger for the DDD staleness check. The crash checkpoint no longer carries observations, and the DDD Auto-Approval Gate and the ObservationMiner were removed: knowledge now enters through CDF with no approval queue. For the current system see [DDD Platform Overview](DDD-Platform-Overview.md).
 
 ## Executive Summary
 

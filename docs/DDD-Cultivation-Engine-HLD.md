@@ -1,18 +1,21 @@
 ---
 title: "DDD — High-Level Design (Domain Expertise as Infrastructure)"
 created: 2026-05-12
-updated: 2026-07-20
+updated: 2026-11-25
 tags: [architecture, ddd, agent-brain, cultivation, recall, knowledge-lifecycle, ontology, kem, autonomous-delivery]
 project: SwarmAI
-status: PE-review
+status: superseded
 ---
 
 # DDD — High-Level Design
+
+> **Historical design (superseded).** This describes SwarmAI as designed on 2026-05-12 and restructured on 2026-07-20. Knowledge now enters through CDF from five sources with no approval queue, and nothing leaves a document on a timer; health scores, maturity stages, the Entity Index, progressive loading and per-entry decay were retired. With each message a keyword search over the active project's DDD points the agent to matching entries, and a bound repo's code graph is a separate SQLite store, not part of the DDD. What still holds: a DDD is a project's brain in one fixed six-section folder, with PRODUCT, TECH, IMPROVEMENT and PROJECT at its heart (§3 and §4, apart from the code-intel parts), and the distribution model of §16. For the current system see [DDD Platform Overview](DDD-Platform-Overview.md) and the [DDD distribution design](2026-07-20-ddd-dual-target-distribution-design.md).
 
 ### Change Log
 
 | Date | Change | Sections |
 |------|--------|----------|
+| 2026-11-25 | Marked superseded: a historical design. The banner under the title says what changed and what still holds | — |
 | 2026-07-20 | Restructured into the complete 15-section DDD HLD (was the Cultivation-Engine HLD); added the Product Domain Brain definition, the six-section structure, and the overall-architecture diagram | §3, §4, Fig 2 |
 | 2026-05-12 | Initial Cultivation-Engine HLD (three-layer living-docs architecture, recall, cultivation) | §5–§9 |
 

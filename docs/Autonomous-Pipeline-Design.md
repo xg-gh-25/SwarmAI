@@ -1,7 +1,7 @@
 ---
 title: "Autonomous Pipeline — Coding as Black Box"
 created: 2026-05-12
-updated: 2026-10-23
+updated: 2026-11-25
 tags: [architecture, pipeline, autonomous-delivery, quality-convergence, adversarial-review, tdd, ddd]
 project: SwarmAI
 status: superseded
@@ -9,11 +9,7 @@ status: superseded
 
 # Autonomous Pipeline — Coding as Black Box
 
-> **Retired 2026-10-23.** This describes the OLD pipeline (artifact_cli run commands,
-> `stage-start`, run.json-only runs). It was retired with no compatibility; the live
-> pipeline is Pipeline v1 (`backend/scripts/pipeline_v1.py`, `core/run_protocol/`),
-> specified by the v13 design and `docs/design/pipeline-v1-remaining-design.md`. Kept as
-> history only: no command or mechanism below exists any more.
+> **Historical design (superseded).** This describes SwarmAI as designed on 2026-05-12 and last refreshed on 2026-08-31. That pipeline was retired on 2026-10-23 with no compatibility, and no command or mechanism below exists any more. Today's pipeline runs at most eight stages, with no ADVERSARIAL stage, no Quality Convergence Loop, no push-ready gate, no decision classification and no goal profile; it lands one local commit and never pushes. For the current system see [Autonomous Pipeline HLD](Autonomous-Pipeline-HLD.md) and [DDD Platform Overview](DDD-Platform-Overview.md).
 
 > **Last refresh — 2026-08-31 (drift-calibration pass):** Re-verified every concrete
 > claim against live source and corrected the drift that had accumulated since the

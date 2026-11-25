@@ -1,7 +1,7 @@
 ---
 title: "DDD → Dual-Target Distribution: Capabilities Package + Open-Plugin"
 created: 2026-07-20
-updated: 2026-07-23
+updated: 2026-11-25
 status: design (public)
 tags: [ddd, distribution, open-plugins-standard, capabilities-package, auto-install, kiro, claude-code, cursor]
 ---
@@ -63,15 +63,16 @@ correctness gate.
 4. **Isolated-host execution** — the portable engine runs on a host with **no
    SwarmAI backend, no DB** (stdlib + git only). Proven by execution, not by grep
    (verified 2026-07-23 for `s_repo-to-ddd`: `env -i`, PYTHONPATH stripped, system
-   `python3` → valid `code-intel.json`).
+   `python3`).
 5. **Publish gate fails CLOSED** — an absent / malformed / typo'd `distribution`
    block (e.g. `visibility:"externl"`) aborts publish non-zero and treats it as
    `targets:[], visibility:internal`. A coded assertion in the publish path, not
    manual discipline.
 6. **No secret / internal-string leak on external publish** — a content-scan gate
-   (secrets + internal-hostname denylist + internal-MCP detector) runs over
-   `skills/**/scripts/**`, `.mcp.json`, `agents/*`, `context/*` before ANY external
-   push; a planted secret or an internal endpoint each aborts the publish.
+   (secrets, home-machine paths, internal-organization strings) runs over the whole
+   emitted tree before ANY external push; a planted secret or an internal endpoint
+   each aborts the publish. The scan never strips or rewrites: any finding blocks
+   the publish.
 
 ---
 
@@ -105,7 +106,8 @@ The scope of what can leave SwarmAI is a property **the DDD declares in its own
    without ever publishing it publicly. **Emit ≠ publish.**
 2. **`internal`→`external` visibility change is ALWAYS human-gated** — routed
    through the same irreversible-external-op approval as a repo visibility flip
-   (the C041 gate). The packager NEVER flips visibility on inference.
+   (the human-approval gate for irreversible external actions). The packager NEVER
+   flips visibility on inference.
 3. **`targets:[]` is valid and complete** — a non-distributed DDD is not a degraded
    DDD (mirrors the 0-asset pure-knowledge brain: structurally whole).
 4. **Default for a new DDD = `targets:[]`, `visibility:internal`** — distribution is
@@ -114,7 +116,7 @@ The scope of what can leave SwarmAI is a property **the DDD declares in its own
    The `distribution` block is authoritative. At package time the human may choose a
    SUBSET of declared `targets` ("just internal today") and may NEVER add an
    undeclared target nor escalate `visibility`. To distribute more widely, the owner
-   first EDITS the declaration — a separate, C041-gated change — not an approval at
+   first EDITS the declaration — a separate, human-approved change — not an approval at
    package time. Malformed/absent block → ceiling is `[]` → nothing publishes.
 
 ---
@@ -186,25 +188,24 @@ gate.
 
 ## 4. Class-A / class-B skill split at distribution
 
-The two-skill-class distinction (see `DDD-Platform-Overview.md` and AGENTS.md R31)
-becomes a packaging decision, enforced by the packager reading skill provenance from
-the real `aim.json` — **not by discipline**:
+The two-skill-class distinction (see `DDD-Platform-Overview.md`)
+becomes a packaging decision, enforced by the packager reading the DDD's own skill
+folders and `aim.json` — **not by discipline**:
 
-| Class | Source (`aim.json`) | In the emitted package |
+| Class | Source | In the emitted package |
 |-------|---------------------|------------------------|
-| **B. Domain** (e.g. `s_cmhk-*`) | `plugins.domain_skills` | **ALWAYS INCLUDE** — they ARE the DDD's capabilities. |
-| **A. Enablement** (e.g. `s_ddd-*`, `s_repo-to-ddd`) | `plugins.native_skills` | **DEFAULT EXCLUDE.** A host with its own equivalents would double-load. Emit into an **optional variant** (`<ddd>-with-enablement`) for **bare hosts that lack them**. |
+| **B. Domain** (the DDD's own skills) | every skill folder under `4-capabilities/` that is not enablement | **ALWAYS INCLUDE** — they ARE the DDD's capabilities. |
+| **A. Enablement** (e.g. `s_ddd-*`, `s_repo-to-ddd`) | `plugins.native_skills` in `aim.json`, plus the `s_ddd-*` / `s_repo-to-ddd` names | **DEFAULT EXCLUDE.** A host with its own equivalents would double-load. Emit into an **optional variant** (`<ddd>-with-enablement`) for **bare hosts that lack them**. |
 
-Default emit glob = `domain_skills` only. The `--with-enablement` variant ships the
+Default emit = domain skills only. The `--with-enablement` variant ships the
 enablement engine as a **portable copy** for bare hosts (built + isolated-host
 verified 2026-07-23; see the `s_repo-to-ddd` case).
 
 **Why a portable copy, not a shared engine:** the enablement engine (e.g.
 `s_repo-to-ddd`) is written **stdlib-only** precisely so it can travel to a host with
-no SwarmAI backend. This is deliberately NOT the same as SwarmAI's resident,
-DB-backed code-intel engine — the two are separate implementations by design (see
-`Projects/SwarmAI/TECH.md` § Code Intelligence). Nothing DB-coupled ever crosses the
-host boundary.
+no SwarmAI backend. This is deliberately NOT the same as SwarmAI's own code
+graph (a SQLite store for each bound repo) — the two are separate implementations
+by design. Nothing DB-coupled ever crosses the host boundary.
 
 ---
 
@@ -217,10 +218,11 @@ A fail-closed content-scan gate runs over the emitted tree BEFORE any external p
   public package (a planted internal endpoint ABORTS the publish)
 - **host-path leak** — no absolute builder-machine paths (`$HOME/.swarm-ai/...`);
   portable skills resolve from `${SWARM_WORKSPACE:-$PWD}`, never a hardcoded root
-- **internal-MCP detector** — MCP servers scoped to internal auth are stripped/flagged
 
 Emit-only blocks on secrets + host-paths; **external publish** additionally blocks on
-internal-strings. This is the gate §0.2's declaration cannot cover — declaration
+internal-strings (a host path inside the `deliverables/` folder of decks and diagrams
+is only a warning on emit). The scan only reports and the packager refuses the
+package; nothing is stripped or rewritten. This is the gate §0.2's declaration cannot cover — declaration
 governs *reach*, this governs *content*.
 
 ---
@@ -244,5 +246,5 @@ governs *reach*, this governs *content*.
 - **`AI-Ready-Repo-Engine-Design.md`** — the `s_repo-to-ddd` engine that generates a
   DDD *from* a code repo; it is the flagship enablement skill this distribution path
   ships to bare hosts.
-- **AGENTS.md R31** — the DDD paradigm (universal brain + 0..N governed assets) + the
-  two-skill-class governance this distribution split enforces.
+- **AGENTS.md** ("What SwarmAI Is") — the DDD paradigm: one six-section brain
+  structure for every domain, governing 0..N assets.

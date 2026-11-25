@@ -1,9 +1,9 @@
 ---
 title: "Self-Evolution Harness — Technical Design Document"
 created: 2026-04-15
-updated: 2026-07-17
+updated: 2026-11-25
 author: XG (architecture), Swarm (synthesis)
-status: PE-review-ready
+status: superseded
 audience: AWS Internal PEs, Technical Architects
 tags: [harness, self-evolution, context-engineering, hooks, proactive-intelligence, skills, safety]
 toc: true
@@ -14,6 +14,8 @@ fontsize: 11pt
 ---
 
 # Self-Evolution Harness
+
+> **Historical design (superseded).** This describes SwarmAI as designed on 2026-04-15 and last updated on 2026-07-17. The eleven context files are now SWARMAI, IDENTITY, SOUL, SELF, AGENT, USER, STEERING, TOOLS, MEMORY, EVOLUTION and TIMELINE. Knowledge enters through CDF, each unit going straight to one place, with no distillation pipeline and no approval queue. Corrections are recorded in EVOLUTION.md; a pattern seen three times becomes a proposal the person decides, and SOUL, AGENT and STEERING are never written automatically. The hook set, the MINE→ASSESS→ACT→AUDIT pipeline and the L0–L4 session briefing described here are gone. For the current system see [DDD Platform Overview](DDD-Platform-Overview.md).
 
 ## Executive Summary
 

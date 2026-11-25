@@ -1,13 +1,15 @@
 ---
 title: "DDD Runtime Activation — Closing the Design-to-Production Gap"
 created: 2026-06-10
-updated: 2026-06-10
+updated: 2026-11-25
 tags: [ddd, runtime, activation, knowledge-injection, decay, pipeline]
 project: SwarmAI
-status: draft
+status: superseded
 ---
 
 # DDD Runtime Activation — Closing the Design-to-Production Gap
+
+> **Historical design (superseded).** This describes SwarmAI as designed on 2026-06-10. None of these five fixes is how SwarmAI works today: knowledge now enters through CDF with no approval queue, nothing leaves a document on a timer, and health scores, trust annotations, maturity stages and progressive loading were retired. For the current system see [DDD Platform Overview](DDD-Platform-Overview.md) and [Autonomous Pipeline HLD](Autonomous-Pipeline-HLD.md).
 
 ## Problem Statement
 
