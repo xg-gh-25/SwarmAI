@@ -550,7 +550,10 @@ def _known_vars(command: str) -> "tuple[dict[str, str], ...]":
     progs = [_unwrap_program(seg) for seg in segments] + [_command_words(seg) for seg in segments]
     assigned, other = _name_occurrences(text)
     for prog in progs:                    # builtin / command / noglob already unwrapped
-        if prog and any(c in prog[0] for c in "{}[]*?"):
+        # `[` (test) and `[[` (the conditional keyword) are the program itself, not a glob:
+        # neither binds a variable an argument names (`[[ =~ ]]` sets only BASH_REMATCH,
+        # one of _SPECIAL_VARS)
+        if prog and prog[0] not in ("[", "[[") and any(c in prog[0] for c in "{}[]*?"):
             return empty                  # `{source,./x.sh}` / `sourc[e]`: the program is expanded
         if prog and "$" in prog[0]:
             # a program named by a variable runs the environment's program only when the

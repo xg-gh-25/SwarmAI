@@ -730,3 +730,19 @@ async def test_every_external_prompt_leaves_one_row(tmp_path, monkeypatch, answe
     assert row["rule"] == "external_tool"
     assert row["match"] == "mcp__slack__post_message"
     assert row["prompted"] is True
+
+
+@pytest.mark.parametrize("cmd", [
+    "W=/tmp/a; [[ -d $W ]] && rm -rf $W",
+    'W=/tmp/a; [ -d "$W" ] && rm -rf "$W"',
+    "W=/tmp/a; if [[ -d $W ]]; then rm -rf $W; fi",
+])
+def test_a_test_bracket_keeps_the_pinned_variable(cmd):
+    # `[` and `[[` are the program word, not a glob over a program name: a variable the
+    # command pins is still substituted after them
+    assert sh._dangerous_rm_segment(cmd, cwd="/home/x") is None
+
+
+def test_a_test_bracket_keeps_the_discard_directory_known():
+    cmd = "W=/x/proj; [[ -d $W ]] && git -C $W reset -q --hard main"
+    assert sh._discard_dirs(cmd, "/home/x") == ["/x/proj"]
