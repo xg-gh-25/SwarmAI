@@ -280,6 +280,14 @@ def test_the_script_checks_the_same_pattern_as_the_host():
     assert m and m.group(1) == pa.TOOL_RE.pattern
 
 
+def _gnu_stat() -> bool:
+    try:
+        return subprocess.run(["stat", "-c", "%a", "/"], capture_output=True, text=True).returncode == 0
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _gnu_stat(), reason="task-tools reads the shared folder's mode with GNU stat (Amazon Linux)")
 def test_tools_go_to_the_shared_location(kit):
     """With the shared replay location writable (a Hive), mise installs its tools there and
     the task's python venv is made there, under the work order's id, so a replay running as

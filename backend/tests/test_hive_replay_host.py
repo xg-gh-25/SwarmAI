@@ -127,6 +127,16 @@ def _gnu_tar() -> bool:
         return False
 
 
+def _gnu_find() -> bool:
+    try:
+        return "GNU findutils" in subprocess.run(["find", "--version"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+
+
+_GNU_FIND = pytest.mark.skipif(not _gnu_find(), reason="the tightening step uses GNU find (Amazon Linux)")
+
+
 @pytest.mark.skipif(not _gnu_tar(), reason="the update step uses GNU tar (Amazon Linux)")
 def test_the_update_runs_the_packages_script_not_the_synced_tree(tmp_path):
     """The Hive user owns /opt/swarmai: a replay-host.sh changed there is never what root
@@ -418,6 +428,7 @@ def test_the_shared_location_is_root_made_and_hive_user_writable_only(tmp_path):
     assert "SWARM_REPLAY_SHARED_DIR-" + str(SHARED_DIR) + "}" in task_tools
 
 
+@_GNU_FIND
 def test_the_tree_is_tightened_once_without_following_a_link(tmp_path):
     """The update makes the Hive user's existing ~/.swarm-ai and ~/.claude private once:
     group and other bits removed, the owner's kept (a script stays runnable), run as the Hive
@@ -461,6 +472,7 @@ def test_the_tree_is_tightened_once_without_following_a_link(tmp_path):
     assert r.returncode == 0 and _mode(db) == 0o644
 
 
+@_GNU_FIND
 @pytest.mark.skipif(os.geteuid() == 0, reason="root passes every folder")
 def test_a_failed_walk_still_tightens_the_next_folder(tmp_path):
     """A folder the walk cannot enter (or a file gone before its chmod) does not stop the
@@ -485,6 +497,7 @@ def test_a_failed_walk_still_tightens_the_next_folder(tmp_path):
     assert (tmp_path / "state" / "home-private.v1").is_file()
 
 
+@_GNU_FIND
 def test_no_marker_while_something_is_left_open(tmp_path):
     """When the walk could not close a file (here every chmod fails), the marker is not
     written: the step warns and the next update walks again."""
