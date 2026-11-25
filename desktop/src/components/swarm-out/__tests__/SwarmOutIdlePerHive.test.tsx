@@ -42,7 +42,7 @@ vi.mock('../../../services/settings', () => ({
 vi.mock('../../../services/tauri', () => ({ isDesktop: () => false }));
 vi.mock('../../awsAccount/ConnectAccount', () => ({ default: () => null }));
 
-import { SwarmOutSettings } from '../SwarmOutSettings';
+import { SwarmOutSettings, forgetSettingsForTests } from '../SwarmOutSettings';
 
 const hive = (id: string, over: Record<string, unknown>) => ({
   id, name: id, ownerName: null, hiveType: 'my', accountRef: 'swarmai', region: 'us-east-1', instanceType: 'm7g.xlarge',
@@ -65,6 +65,7 @@ const rowOf = async (name: string) => {
 };
 
 beforeEach(async () => {
+  forgetSettingsForTests();                 // each case starts from an empty tab
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.get.mockResolvedValue({ state: 'connected', account: { account_id: '533267412361', region: 'us-east-1' },
     hive: { state: 'ready', desired: 4, counted: 4, instance_type: 'm7g.xlarge', region: 'us-east-1', prices: {} } });

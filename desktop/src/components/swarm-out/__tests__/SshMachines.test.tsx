@@ -24,7 +24,7 @@ vi.mock('../../../services/hive', async (orig) => ({
 }));
 vi.mock('../../settings/HiveBrains', () => ({ HiveBrains: () => null }));
 
-import { SshMachinesSection } from '../SwarmOutSettings';
+import { SshMachinesSection, forgetSettingsForTests } from '../SwarmOutSettings';
 
 const now = Date.now() / 1000;
 const base = {
@@ -44,6 +44,7 @@ const MACHINES = [
 ];
 
 beforeEach(() => {
+  forgetSettingsForTests();                 // each case starts from an empty tab
   Object.values(mocks).forEach((m) => m.mockReset());
   mocks.list.mockResolvedValue(MACHINES);
   mocks.add.mockResolvedValue(undefined);

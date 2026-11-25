@@ -57,7 +57,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { SwarmOutDashboard, NOTE_SEEN_KEY } from '../SwarmOutDashboard';
-import { SwarmOutSettings } from '../SwarmOutSettings';
+import { SwarmOutSettings, forgetSettingsForTests } from '../SwarmOutSettings';
 import { OVERLAY_IDS } from '../../layout/overlayIds';
 import { NAV } from '../../layout/navTable';
 
@@ -82,6 +82,7 @@ const INSTANCE = { id: 'h1', name: 'demo', ownerName: null, hiveType: 'my', acco
   authPassword: null, status: 'stopped', version: '2.5.5', errorMessage: null, createdAt: 't', updatedAt: 't' };
 
 beforeEach(() => {
+  forgetSettingsForTests();                 // each case starts from an empty tab
   for (const m of Object.values(mocks)) m.mockReset();
   mocks.runs.mockResolvedValue({ runs: [], asks: [], errors: [] });
   mocks.fleet.mockResolvedValue(FLEET);

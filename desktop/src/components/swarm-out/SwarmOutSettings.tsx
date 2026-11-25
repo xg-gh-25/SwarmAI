@@ -59,6 +59,19 @@ const IDLE_CHOICES = [...IDLE_MINUTES, 0];
 const DEFAULT_TYPE = 'm7g.xlarge';
 const CHANGING = ['pending', 'provisioning', 'installing', 'deleting', 'updating', 'starting', 'stopping'];
 
+/** What the tab read last: a reopened tab (the dashboard mounts each view anew) starts from it
+ *  and refreshes underneath, and every read replaces its own part. Only this file reads it. */
+type Read = { account?: boolean; hives?: boolean; elastic?: boolean };
+const last: {
+  view: AwsAccountView | null; elastic: ElasticStatus | null; instances: HiveInstance[] | null;
+  accounts: HiveAccount[] | null; idle: number | null; read: Read; machines: SshMachine[] | null;
+} = { view: null, elastic: null, instances: null, accounts: null, idle: null, read: {}, machines: null };
+
+/** Tests start each case from an empty tab. */
+export function forgetSettingsForTests(): void {
+  Object.assign(last, { view: null, elastic: null, instances: null, accounts: null, idle: null, read: {}, machines: null });
+}
+
 /** A card's head: a small mark, the title (and its kind), one line under it, an action. */
 function Head({ mark, markStyle, title, kind, lead, children }: {
   mark: string; markStyle: React.CSSProperties; title: string; kind?: React.ReactNode; lead?: React.ReactNode; children?: React.ReactNode;
@@ -101,8 +114,10 @@ const Dot = ({ tone }: { tone: Tone }) => (
 const regionName = (id: string | null | undefined) => AWS_REGION_OPTIONS.find((r) => r.id === id)?.name ?? null;
 
 /** ① The AWS account the tasks run in. */
-function AccountCardView({ view, elastic, onView, failed }: {
+function AccountCardView({ view, elastic, elasticRead, onView, failed }: {
   view: AwsAccountView | null; elastic: ElasticStatus | null; onView: (v: AwsAccountView) => void;
+  /** whether the Elastic Workers status answered (undefined: not yet) */
+  elasticRead: boolean | undefined;
   /** the account could not be read (the card says so; nothing is offered on a guess) */
   failed: boolean;
 }) {
@@ -159,7 +174,8 @@ function AccountCardView({ view, elastic, onView, failed }: {
             </span>
             <span className="inline-flex items-center gap-1.5" data-testid="so-cap-elastic">
               <Dot tone={elasticTone} />{t('swarmOut.setup.capElastic')}
-              {!e && <span className={dim}>· {t('swarmOut.setup.elasticOff')}</span>}
+              {!e && <span className={dim}>· {elastic === null ? (elasticRead === false ? t('swarmOut.settings.elasticUnreadable') : t('swarmOut.loading'))
+                : t('swarmOut.setup.elasticOff')}</span>}
             </span>
           </span>
         </Row>
@@ -212,12 +228,13 @@ const clock = (s: number) => {
 /** ③ SSH machines: machines of the person's own, reached over SSH (a Cloud Desktop), each
  *  running a Hive in a container that the Host installed. A row says whether it takes tasks
  *  now and, when not, the one thing to do (renew its certificate, look at ssh's error); it
- *  opens to its host, Brains, the "tasks that need no private network" switch, retry and
- *  delete. "+ add" asks for the SSH host and the AWS profile on the machine, and says that
- *  tasks there run with the person's identity. */
+ *  opens to its host, its own AWS identity, Brains, the "tasks that need no private network"
+ *  switch, retry and delete. "+ add" asks only for the SSH host, and says that tasks there run
+ *  with the person's identity. It starts from what it read last; a running machine not probed
+ *  yet reads as checking and is asked again every few seconds until its probe answers. */
 export function SshMachinesSection({ onError }: { onError: (message: string | null) => void }) {
   const { t } = useTranslation();
-  const [machines, setMachines] = useState<SshMachine[] | null>(null);
+  const [machines, setMachines] = useState<SshMachine[] | null>(last.machines);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -227,16 +244,18 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
   const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async () => {
-    try { setMachines(await hiveService.listSsh()); setFailed(false); } catch { setFailed(true); }
+    try { const got = await hiveService.listSsh(); last.machines = got; setMachines(got); setFailed(false); } catch { setFailed(true); }
     setNow(Date.now());
   }, []);
   useEffect(() => { void load(); }, [load]);
   const changing = (machines ?? []).some((m) => CHANGING.includes(m.status) || (m.status === 'running' && m.reachable === false));
+  // a running machine whose probe has not answered yet: its answer comes within seconds
+  const unknown = (machines ?? []).some((m) => m.status === 'running' && m.reachable == null);
   useEffect(() => {
-    if (!changing) return undefined;
-    const timer = setInterval(() => { void load(); }, 10000);
+    if (!changing && !unknown) return undefined;
+    const timer = setInterval(() => { void load(); }, unknown ? 3000 : 10000);
     return () => clearInterval(timer);
-  }, [changing, load]);
+  }, [changing, unknown, load]);
 
   const act = async (run: () => Promise<unknown>) => {
     setBusy(true); onError(null);
@@ -377,13 +396,17 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
   onConnected?: (view: AwsAccountView) => void;
 }) {
   const { t } = useTranslation();
-  const [view, setView] = useState<AwsAccountView | null>(null);
-  const [elastic, setElastic] = useState<ElasticStatus | null>(null);
-  const [instances, setInstances] = useState<HiveInstance[]>([]);
-  // what the first load could read: null until it answered (no "none" on a guess)
-  const [read, setRead] = useState<{ account: boolean; hives: boolean } | null>(null);
-  const [accounts, setAccounts] = useState<HiveAccount[]>([]);
-  const [idle, setIdle] = useState<number | null>(null);
+  const [view, setView] = useState<AwsAccountView | null>(last.view);
+  const [elastic, setElastic] = useState<ElasticStatus | null>(last.elastic);
+  const [instances, setInstances] = useState<HiveInstance[]>(last.instances ?? []);
+  // what each request could read: a part is missing until it answered (no "none" on a guess)
+  const [read, setRead] = useState<Read>(last.read);
+  const [accounts, setAccounts] = useState<HiveAccount[]>(last.accounts ?? []);
+  const [idle, setIdle] = useState<number | null>(last.idle);
+  // every write of the account view and the idle default goes through these: the copy a
+  // reopened tab starts from never falls behind what is shown
+  const keepView = (v: AwsAccountView) => { last.view = v; setView(v); };
+  const keepIdle = (n: number) => { last.idle = n; setIdle(n); };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -393,19 +416,23 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
   const [deployLegacy, setDeployLegacy] = useState(false);
   const [chosen, setChosen] = useState('');
 
+  // each request fills its own part as it answers: a slow one (the Elastic Workers status is
+  // read live from AWS) never holds the others
   const load = useCallback(async () => {
-    const [v, e, list, accts, cfg] = await Promise.allSettled([
-      awsAccountService.get(), awsAccountService.elasticStatus(), hiveService.listInstances(),
-      hiveService.listAccounts(), settingsService.getAPIConfiguration()]);
-    if (v.status === 'fulfilled') setView(v.value);
-    if (e.status === 'fulfilled') setElastic(e.value);
-    if (list.status === 'fulfilled') setInstances(list.value);
-    setRead({ account: v.status === 'fulfilled', hives: list.status === 'fulfilled' });
-    if (accts.status === 'fulfilled') setAccounts(accts.value);
-    if (cfg.status === 'fulfilled') {
-      const m = cfg.value.hiveIdleStopMinutes;
-      setIdle(typeof m === 'number' ? m : 120);
-    }
+    const mark = (part: keyof Read, ok: boolean) => { last.read = { ...last.read, [part]: ok }; setRead(last.read); };
+    await Promise.allSettled([
+      awsAccountService.get().then((v) => { keepView(v); mark('account', true); },
+        () => mark('account', false)),
+      awsAccountService.elasticStatus().then((e) => { last.elastic = e; setElastic(e); mark('elastic', true); },
+        () => mark('elastic', false)),
+      hiveService.listInstances().then((list) => { last.instances = list; setInstances(list); mark('hives', true); },
+        () => mark('hives', false)),
+      hiveService.listAccounts().then((a) => { last.accounts = a; setAccounts(a); }),
+      settingsService.getAPIConfiguration().then((cfg) => {
+        const m = cfg.hiveIdleStopMinutes;
+        keepIdle(typeof m === 'number' ? m : 120);
+      }),
+    ]);
   }, []);
   useEffect(() => { void load(); }, [load]);
   // the account chosen before (several accounts): shown, never blank once saved
@@ -444,7 +471,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
   const desired = fleetStatus?.desired ?? null;
   const counted = fleetStatus?.counted ?? 0;
   const short = fleetStatus?.state === 'short' && (fleetStatus.short ?? 0) > 0 ? fleetStatus.short ?? 0 : 0;
-  const connected = (v: AwsAccountView) => { setView(v); onConnected?.(v); void load(); };
+  const connected = (v: AwsAccountView) => { keepView(v); onConnected?.(v); void load(); };
   const minutesWord = (m: number) => (m === 0 ? t('swarmOut.settings.never') : t('swarmOut.settings.minutes', { count: m }));
 
   return (
@@ -457,7 +484,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
           <button type="button" className={`text-small ${muted} hover:underline`} onClick={() => setError(null)}>{t('swarmOut.setup.dismiss')}</button>
         </div>
       )}
-      <AccountCardView view={view} elastic={elastic} onView={connected} failed={read?.account === false} />
+      <AccountCardView view={view} elastic={elastic} elasticRead={read.elastic} onView={connected} failed={read.account === false} />
 
       <section className={card} data-testid="so-set-elastic">
         <Head mark="AC" markStyle={{ color: 'var(--color-zone-work)', background: 'color-mix(in srgb, var(--color-zone-work) 14%, transparent)' }}
@@ -472,6 +499,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
           <span className="inline-flex items-center gap-1.5" data-testid="so-elastic-state">
             <Dot tone={e?.status === 'ready' ? 'ok' : e?.status === 'failed' ? 'error' : e || standbyOn ? 'attention' : 'unknown'} />
             {e ? t(`swarmOut.settings.elasticStatus.${e.status}`, { defaultValue: e.status })
+              : !elastic ? (read.elastic === false ? t('swarmOut.settings.elasticUnreadable') : t('swarmOut.loading'))
               : standbyOn ? t('swarmOut.settings.preparing') : t('swarmOut.settings.off')}
           </span>
           {e?.status === 'failed' && e.error_message && <span className="block text-small break-words" style={{ color: TONE_VAR.error }}>{e.error_message}</span>}
@@ -514,7 +542,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
         <div data-testid="so-hive-list">
           {ec2.length === 0 && (
             <div className={`px-[18px] py-3 border-t border-[var(--color-border)] text-body ${muted}`} data-testid="so-hives-none">
-              {!read ? t('swarmOut.loading') : read.hives ? t('swarmOut.setup.noHives') : t('swarmOut.setup.hivesUnreadable')}
+              {read.hives === undefined ? t('swarmOut.loading') : read.hives ? t('swarmOut.setup.noHives') : t('swarmOut.setup.hivesUnreadable')}
             </div>
           )}
           {ec2.map((h) => {
@@ -623,7 +651,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
           )}
           <div className="flex flex-wrap items-center gap-3 px-[18px] py-3 border-t border-[var(--color-border)] text-body">
             {short > 0 ? null : !adding ? (
-              <button type="button" className={`font-semibold ${link}`} disabled={busy} data-testid="so-hive-add"
+              <button type="button" className={`font-semibold ${link}`} disabled={busy || read.account === undefined} data-testid="so-hive-add"
                 onClick={() => (swarmaiMode ? setAdding(true) : setDeployLegacy(true))}>+ {t('swarmOut.settings.addOne')}</button>
             ) : (
               <>
@@ -638,7 +666,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
           </div>
           {/* what is missing for building one (a permission, a default VPC to create) */}
           {fleetStatus?.state === 'cannot_build' && fleetStatus.capability && (
-            <div className="px-[18px] pb-3" data-testid="so-hive-cannot"><CapabilityLine cap={fleetStatus.capability} checking={false} onView={setView} /></div>
+            <div className="px-[18px] pb-3" data-testid="so-hive-cannot"><CapabilityLine cap={fleetStatus.capability} checking={false} onView={keepView} /></div>
           )}
         </div>
       </section>
@@ -657,7 +685,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
         <Row label={t('swarmOut.settings.idleDefault')}>
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
             <select className={select} value={idle ?? 120} disabled={busy || idle === null} data-testid="so-idle"
-              onChange={(ev) => { const n = Number(ev.target.value); void act(async () => { await settingsService.updateAPIConfiguration({ hiveIdleStopMinutes: n }); setIdle(n); }); }}>
+              onChange={(ev) => { const n = Number(ev.target.value); void act(async () => { await settingsService.updateAPIConfiguration({ hiveIdleStopMinutes: n }); keepIdle(n); }); }}>
               {IDLE_CHOICES.map((m) => <option key={m} value={m}>{minutesWord(m)}</option>)}
             </select>
             <span className={`text-small ${dim}`}>{t('swarmOut.settings.idleDefaultNote')}</span>

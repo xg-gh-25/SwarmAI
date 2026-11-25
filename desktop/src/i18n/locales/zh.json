@@ -2117,6 +2117,7 @@
       "ok": "知道了"
     },
     "settings": {
+      "elasticUnreadable": "读不到它的状态",
       "elasticLead": "每个任务开一台新的云上机器，做完就销毁。没有任务时不花钱。",
       "standby": "待命",
       "on": "开",

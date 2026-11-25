@@ -228,7 +228,14 @@ class SshLocation:
         answer properly within PROBE_TIMEOUT_S. A probe (the fleet, placement's offers) only
         looks: a tunnel that is not up is started in the background and this answers None,
         so a dead machine never holds a probe for the tunnel's wait. *build*: wait for the
-        tunnel first (a caller about to use the machine)."""
+        tunnel first (a caller about to use the machine). Every answer is kept with its time
+        (``last_admission``): the settings list shows it without probing again."""
+        self._starting = False
+        got = await self._admission(build)
+        _LAST[self.id] = (_now(), got, self._starting)
+        return got
+
+    async def _admission(self, build: bool) -> Optional[dict[str, Any]]:
         from core import swarm_out
         try:
             row, acct, cfg = await self._row()
@@ -237,6 +244,7 @@ class SshLocation:
                 await ssh_tunnel.ensure(self.id, cfg["ssh_host"], cfg["local_port"], cfg["remote_port"])
             elif not await asyncio.to_thread(ssh_tunnel.alive, self.id, cfg["local_port"]):
                 ssh_tunnel.ensure_soon(self.id, cfg["ssh_host"], cfg["local_port"], cfg["remote_port"])
+                self._starting = True               # not an answer yet: its tunnel is being built
                 return None
             async with swarm_out._client(rec, swarm_out.PROBE_TIMEOUT_S) as client:
                 r = await client.get("/api/chat/sessions/admission-state")
@@ -475,6 +483,38 @@ class SshCarrier:
             task.add_done_callback(_UPDATES.discard)
             started.append(name)
         return started
+
+
+#: machine id -> (when, its last admission state, whether its tunnel was only being started),
+#: from every probe; a state of None with the tunnel answering means it did not answer
+_LAST: dict[str, tuple[float, Optional[dict[str, Any]], bool]] = {}
+#: a last answer older than this is refreshed in the background (the fleet polls every 30 s)
+PROBE_FRESH_S = 30.0
+#: ... and a probe that found no answer, or a tunnel still being started, after this
+PROBE_RETRY_S = 5.0
+#: the last background probe started by ``probe_soon`` for each machine
+_PROBING: dict[str, asyncio.Task] = {}
+
+
+def last_admission(location_id: str) -> Optional[tuple[float, Optional[dict[str, Any]], bool]]:
+    """(when, the admission state, whether the tunnel was only being started) of the
+    machine's last probe, or None when this Host never probed it."""
+    return _LAST.get(str(location_id))
+
+
+def probe_soon(location_id: str, name: str) -> None:
+    """Probe the machine in the background (at most one probe of it at a time); its result is
+    the next ``last_admission``."""
+    running = _PROBING.get(str(location_id))
+    if running is not None and not running.done():
+        return
+
+    async def go() -> None:
+        try:
+            await SshLocation(str(location_id), name).admission(build=False)
+        except Exception as e:  # noqa: BLE001 — admission records what it can; the next read retries
+            logger.info("carriers.ssh: background probe of %s failed (%s)", name, type(e).__name__)
+    _PROBING[str(location_id)] = asyncio.get_running_loop().create_task(go(), name=f"ssh-probe-{location_id}")
 
 
 #: (machine id, version) whose automatic update was tried (once per version, as hive_idle)

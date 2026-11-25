@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -1322,8 +1323,12 @@ async def _ssh_rows() -> list[dict]:
 @router.get("/ssh")
 async def ssh_machines():
     """The SSH machines with their settings and what each says now: its SSH certificate's end,
-    whether its tunnel answers, and ssh's last error when it does not. A machine whose tunnel
-    is not up is not waited for: its tunnel is built in the background."""
+    whether its Hive answers, and ssh's last error when it does not, from the machine's last
+    probe (the fleet probes every machine; ``ssh_carrier.last_admission``). Nothing here waits
+    on a machine: one never probed, or whose last answer is older than PROBE_FRESH_S (a missing
+    answer, or a tunnel still starting: PROBE_RETRY_S), is probed again in the background. A
+    machine never probed, or whose tunnel was still starting, is not known yet (reachable
+    None)."""
     _require_desktop()
     from core.carriers import ssh as ssh_carrier
     from core.carriers import ssh_tunnel
@@ -1338,16 +1343,15 @@ async def ssh_machines():
         item["config"] = {k: cfg.get(k) for k in _SSH_SHOWN}
         item.update(reachable=None, cert_valid_until=None, tunnel_error="")
         if r.get("status") == "running":
-            loc = ssh_carrier.SshLocation(r["id"], r["name"])
-            probe = await loc.admission(build=False)
-            if probe is None:
-                try:
-                    c = ssh_carrier.config(r)
-                    ssh_tunnel.ensure_soon(r["id"], c["ssh_host"], c["local_port"], c["remote_port"])
-                except ValueError:
-                    pass
-                item["tunnel_error"] = ssh_tunnel.last_error(r["id"])
-            item.update(reachable=probe is not None, cert_valid_until=(probe or {}).get("cert_valid_until"))
+            got = ssh_carrier.last_admission(r["id"])
+            fresh = ssh_carrier.PROBE_FRESH_S if got is not None and got[1] is not None else ssh_carrier.PROBE_RETRY_S
+            if got is None or time.time() - got[0] > fresh:
+                ssh_carrier.probe_soon(r["id"], r["name"])
+            if got is not None and not got[2]:
+                probe = got[1]
+                if probe is None:
+                    item["tunnel_error"] = ssh_tunnel.last_error(r["id"])
+                item.update(reachable=probe is not None, cert_valid_until=(probe or {}).get("cert_valid_until"))
         out.append(item)
     return {"machines": out}
 

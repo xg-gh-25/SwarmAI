@@ -2117,6 +2117,7 @@
       "ok": "Got it"
     },
     "settings": {
+      "elasticUnreadable": "Could not read its status",
       "elasticLead": "Each task gets a fresh cloud machine that is gone when the task ends. No tasks, no cost.",
       "standby": "Standby",
       "on": "On",
