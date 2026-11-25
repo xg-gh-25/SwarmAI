@@ -38,7 +38,7 @@ engines:
 
   - name: "Background Job System"
     path: "backend/jobs/scheduler.py"
-    description: "Cron + event-triggered jobs — headless Claude CLI agent tasks, deterministic scripts, signal fetch and digest"
+    description: "In-process scheduler of the background service — headless agent tasks, deterministic scripts, the weekly commit reader and other system jobs"
 
   # Star Attribution Tracking (track.py) moved to the GitHub_Community DDD package
   # alongside the rest of s_github_community — see the note above.

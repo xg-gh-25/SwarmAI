@@ -16,18 +16,18 @@ updated: 2026-11-02
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 5964+ | `git log --oneline | wc -l` |
-| Duration | ~253 days | First commit to latest (1 human contributor) |
-| Backend core modules | 377 Python files, 172641 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
-| Total backend LOC | 291126 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
-| Test files | 981 | `find backend/tests -name "*.py" | wc -l` |
-| Skills (agent capabilities) | 41 | `ls -d backend/skills/s_* | wc -l` |
+| Total commits | 6450+ | `git log --oneline | wc -l` |
+| Duration | ~276 days | First commit to latest (1 human contributor) |
+| Backend core modules | 474 Python files, 214973 LOC | `git ls-files '*.py' | grep '^backend/core/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{if(n>0) print n}'` |
+| Total backend LOC | 339723 | `git ls-files '*.py' | grep '^backend/' | grep -v '/tests/' | xargs wc -l | awk '$2!="total"{n+=$1} END{print n}'` |
+| Test files | 1160 | `find backend/tests -name "*.py" | wc -l` |
+| Skills (agent capabilities) | 42 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 9 | `ls backend/hooks/*.py | wc -l` |
-| React components | 452 | `find desktop/src -name "*.tsx" | wc -l` |
+| React components | 498 | `find desktop/src -name "*.tsx" | wc -l` |
 | Pipeline spec depth | 61 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
-| Largest state machine | 5797 lines | `wc -l backend/core/session_unit.py` |
-| Context system | 1515 lines | `wc -l backend/core/context_directory_loader.py` |
+| Largest state machine | 6422 lines | `wc -l backend/core/session_unit.py` |
+| Context system | 1592 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
-| Background jobs | 18 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
-| Code graph | 41,561 symbols, 106,746 edges | `code_intel.db` (code_nodes / code_edges tables) |
+| Background jobs | 16 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
+| Code graph | 50,951 symbols, 132,334 edges | `code_intel.db` (code_nodes / code_edges tables) |
 <!-- METRICS_END -->

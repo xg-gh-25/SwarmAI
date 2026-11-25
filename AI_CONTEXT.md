@@ -87,7 +87,7 @@ Most agent harnesses optimize for **one session**. SwarmAI optimizes for **compo
 | Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | Deterministic graph traversal for code context retrieval |
 | Session Resume Enrichment | `backend/core/context_injector.py` | Five-layer resume context (checkpoint, git state, conclusions, key tool results, recent conversation) within a model-aware token budget |
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | Socket Mode bot with HTTP polling fallback — responds on the owner's behalf to allowlisted users |
-| Background Job System | `backend/jobs/scheduler.py` | Cron + event-triggered jobs — headless Claude CLI agent tasks, deterministic scripts, maintenance |
+| Background Job System | `backend/jobs/scheduler.py` | In-process scheduler of the background service — headless agent tasks, deterministic scripts, the weekly commit reader and other system jobs |
 | AI Docs Auto-Refresh | `backend/scripts/refresh_ai_docs.py` | Regenerates the METRICS block (docs/CODEBASE_METRICS.md) and CAPABILITIES block (AGENTS.md + AI_CONTEXT.md) — run by hand, by prod.sh preflight, and by the post-session context health check at most once a day |
 <!-- CAPABILITIES_END -->
 

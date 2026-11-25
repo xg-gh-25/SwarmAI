@@ -161,7 +161,7 @@ system prompt on every session start, in priority order (the source of truth is
 - **P3 (AGENT):** behavioral rules. System default, truncatable.
 - **P4–P6 (USER, STEERING, TOOLS):** user-customized, copy-only-if-missing (0o644).
 - **P7–P8 (MEMORY, EVOLUTION):** agent-owned cross-session cognition, copy-only-if-missing (0o644).
-- **P9 (TIMELINE):** private append-only episodic memory, copy-only-if-missing (0o644);
+- **P10 (TIMELINE):** private append-only episodic memory, copy-only-if-missing (0o644);
   whole-unit selection within a 1.5K-token budget.
 
 Key behaviors:
@@ -169,8 +169,8 @@ Key behaviors:
   (system files overwrite; user/agent files preserve).
 - Dynamic token budget: **150K for ≥500K** models, 50K for ≥200K, 30K for ≥64K, instance
   default for <64K (L0 compact path). Generic assembly never slices text. MEMORY and
-  EVOLUTION instead select complete units within deterministic 24K/8K caps without changing
-  either source file; meta-cognitive units remain whole, and omitted units remain recallable.
+  EVOLUTION are injected whole through the CDF selector (no budget, no score); over budget
+  the loader warns, it never cuts.
 - Selection is independent of the user query. It is recomputed only when the file hash changes
   or at a UTC day boundary, persisted in `ingestion.db`, and included in the L1 cache header.
   Within a day, identical source bytes produce identical fixed-layer prompt bytes.
@@ -450,7 +450,7 @@ See `Projects/SwarmAI/2-understanding/TECH.md` → "Output Format Protocol" for 
 | Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | Deterministic graph traversal for code context retrieval |
 | Session Resume Enrichment | `backend/core/context_injector.py` | Five-layer resume context (checkpoint, git state, conclusions, key tool results, recent conversation) within a model-aware token budget |
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | Socket Mode bot with HTTP polling fallback — responds on the owner's behalf to allowlisted users |
-| Background Job System | `backend/jobs/scheduler.py` | Cron + event-triggered jobs — headless Claude CLI agent tasks, deterministic scripts, signal fetch and digest |
+| Background Job System | `backend/jobs/scheduler.py` | In-process scheduler of the background service — headless agent tasks, deterministic scripts, the weekly commit reader and other system jobs |
 | AI Docs Auto-Refresh | `backend/scripts/refresh_ai_docs.py` | Regenerates the METRICS block (docs/CODEBASE_METRICS.md) and CAPABILITIES block (AGENTS.md + AI_CONTEXT.md) — run by hand, by prod.sh preflight, and by the post-session context health check at most once a day |
 <!-- CAPABILITIES_END -->
 

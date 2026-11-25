@@ -11,9 +11,7 @@ source_of_truth: true
 ---
 
 <!-- SOURCE OF TRUTH:
-  This .md file is the canonical content. assets/SwarmAI-Architecture-Design-Doc.html and
-  the figures in assets/ are older renderings: they are not regenerated from this file,
-  and where they differ from the text, the text is current.
+  This .md file is the canonical content. The figures in assets/ are drawn to match it.
 -->
 
 # SWARMAI — Agentic OS Architecture

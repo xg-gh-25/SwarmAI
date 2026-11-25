@@ -1,10 +1,8 @@
 ---
 title: "Memory Management — Technical Design Document"
 created: 2026-04-15
-updated: 2026-07-17
-author: XG (architecture), Swarm (synthesis)
-status: PE-review-ready
-audience: AWS Internal PEs, Technical Architects
+updated: 2026-11-25
+status: superseded
 tags: [memory, recall, keyword-fts5, bm25, transcript-indexing, temporal-validity, knowledge-store]
 toc: true
 toc-depth: 3
@@ -14,6 +12,8 @@ fontsize: 11pt
 ---
 
 # Memory Management
+
+> **Historical design (superseded).** This describes SwarmAI's memory as designed in April–July 2026. Recall is still keyword search (FTS5/BM25) over the context files, the Library and past sessions, but the write side has changed: knowledge now enters through CDF (five sources, the producing agent declares where a unit goes, code checks facts, no approval queue), MEMORY.md and EVOLUTION.md are injected whole with no section caps or graduation, and nothing leaves on a timer. The transcript indexer and the embedding client named here are gone. For the current system see [DDD Platform Overview](DDD-Platform-Overview.md) and [SwarmAI Architecture Design](SwarmAI-Architecture-Design.md).
 
 > **Recall is pure-filesystem since 2026-06-28** (commit `6540970e`). The vector/Bedrock-Titan leg was physically removed from *all* recall paths — recall is now keyword/FTS5/BM25 (+ AST code-graph) only. The synonym/paraphrase blind spot is covered by agentic re-search, not by embeddings. Vestigial vector scaffolding (`embedding_client.py`, `knowledge_vec`/`transcript_vec` tables, `vector_search()`) still exists in the tree but is never populated or queried at runtime (`embed_fn=None` on every path). Sections below reflect this live reality.
 

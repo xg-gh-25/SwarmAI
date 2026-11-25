@@ -11,16 +11,8 @@ These describe SwarmAI as it works today. Where a document and the code disagree
 | [DDD Platform Overview](DDD-Platform-Overview.md) | **Start here.** One knowledge layer that several delivery engines read and write. What a project's brain (DDD) is, how knowledge gets in through CDF (five sources, no approval queue), and how the pipeline and Pollinate use it. |
 | [Autonomous Pipeline HLD](Autonomous-Pipeline-HLD.md) | The pipeline for risky changes or when asked: up to eight stages from EVALUATE to REFLECT, independent expert review, tests on the reviewed code, and one local commit that the person reads and pushes. |
 | [Pollinate](Pollinate-Content-Engine.md) | Content you revise many times: decks (HTML, PDF, PPTX), posters, pages, copy. A work and its versions, a declared revision scope with a guard that keeps hand edits, measured craft checks; the person publishes. |
+| [SwarmAI Architecture Design](SwarmAI-Architecture-Design.md) | The layers of SwarmAI and how they fit together: the 11 context files, the session lifecycle, CDF and recall, the daemon-first backend, the in-process scheduler, the security hooks. |
 | [DDD Distribution](2026-07-20-ddd-dual-target-distribution-design.md) | How a grown DDD is packaged as an organization's internal capabilities package or an Open-Plugins plugin, never beyond the reach its manifest declares, with a content scan that blocks secrets, machine paths and internal names. |
-
-## Older Overviews
-
-Written April--July 2026 for a principal-engineer review. Parts of them are out of date: where they disagree with the current designs above, the current designs are right.
-
-| Document | Description |
-|----------|-------------|
-| [SwarmAI Architecture Design](SwarmAI-Architecture-Design.md) | The layers of SwarmAI and how they fit together: the 11-file context chain, the session lifecycle, the daemon-first backend, OOM resilience. |
-| [Memory Management](Memory-Management-Design.md) | How the agent remembers and recalls across sessions: pure-filesystem keyword search (FTS5/BM25) over its context files, the Library and past sessions. |
 
 ## Historical Designs (superseded)
 
@@ -33,6 +25,7 @@ Kept as a record of how SwarmAI was designed at the time. Each one starts with a
 | [DDD Runtime Activation](2026-06-10-ddd-runtime-activation-design.md) (superseded) | Five fixes meant to wire health scores, trust annotations and maturity promotion into sessions. All of these mechanisms were retired. |
 | [Autonomous Pipeline Design](Autonomous-Pipeline-Design.md) (superseded) | The pipeline retired on 2026-10-23: nine stages, adversarial review, the Quality Convergence Loop and a push-ready gate. |
 | [Goal Loop Design](Goal-Loop-Design.md) (superseded) | Iterative cycles toward a Definition of Done. The goal profile was removed from the pipeline on 2026-10-26. |
+| [Memory Management](Memory-Management-Design.md) (superseded) | Memory as designed in April--July 2026: four memory levels, section caps and graduation, the transcript indexer. Recall by keyword search still holds; the write side is now CDF. |
 | [Session Observation Layer](Session-Observation-Layer-Design.md) (superseded) | The per-session ring of tool calls. The ring still runs; most of the consumers described here were removed. |
 
 ## PDFs
