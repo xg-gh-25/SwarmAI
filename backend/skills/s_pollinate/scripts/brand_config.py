@@ -7,8 +7,9 @@ output writes ``~/.swarm-ai/pollinate-brand.yaml`` with any subset of the same k
 deep-merged over the defaults (mappings merge, every other value replaces). The env var
 ``POLLINATE_BRAND_FILE`` points at a different user file.
 
-``signature`` is the part every output carries; ``work.py cut`` checks the watermark, the
-link text and the QR on decks, posters and pages (craft_checks.check_signature). Every
+``signature`` is the part a poster (and the person's own public content) carries;
+``work.py cut`` checks the watermark, the link text and the QR on posters
+(craft_checks.check_signature). Every
 field is optional; an unset field is simply not drawn and not required:
 
     signature:

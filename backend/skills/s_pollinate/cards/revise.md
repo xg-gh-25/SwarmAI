@@ -20,7 +20,7 @@ Read `work.json` (the slide order) and the current source. Turn each request int
 | "merge slides 3 and 4" | both ids, plus `--remove` for the one that goes away |
 | "add a slide about pricing after slide 5" | `--add 1` (and the neighbor only if you must change it) |
 | "the subtitle must not wrap; check the other slides too" | every slide that has a subtitle |
-| "change the footer on all slides" (a shared file) | the slides, and the word `shared` in `--note` |
+| "change the footer on all slides" (a shared file) | the slides, and `--shared` on `open` |
 | "I adjusted slide 2, have a look" | nothing to change yet: `open` saves their edit; read it, then answer |
 
 If one request could mean two different sets of slides, ask once. Otherwise decide and say it.

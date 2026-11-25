@@ -136,7 +136,7 @@ On `open`, hand edits are saved first. On `cut`, each slide outside the scope is
 with the base version. A slide that was **modified, deleted or moved** is a violation, and
 the message names the slide, the text block or the image. Deleting a slide in the scope is
 fine (declare it with `--remove`). A change to a `_shared` file (shared.css, assets/) is a
-violation unless the open `--note` contains the word `shared`. In a PPTX export, the
+violation unless the revision was opened with `--shared` (a word in `--note` does not count). In a PPTX export, the
 template slides (cover, base slides with a footer) also count as outside the scope.
 
 The guard answers the complaints that made it: "you reverted my change", "you deleted my
@@ -157,7 +157,7 @@ complaint:
 | `overflow`, `overlap`, `safe_area` | text leaves its box, elements collide, content leaves the safe area | earlier poster checks |
 | `reference` | distance from a reference deck's type scale, margins and colors | "match the style of our earlier deck" |
 | `image` | every image loaded | a missing picture |
-| `brand` | each element the person's brand signature sets is on the work: the watermark and the link text in the visible text, the QR image (by its bytes) loaded and visible; for a deck, on any slide (reported on the last one) | the old poster brand checks |
+| `brand` | posters only: each element the person's brand signature sets is on the poster: the watermark and the link text in the visible text, the QR image (by its bytes) loaded and visible | the old poster brand checks |
 
 Mark one-line titles with `data-nowrap` (or `white-space: nowrap`), and set `data-role`
 (title, subtitle, body, label, caption) where the guess from tags and classes would be wrong.
@@ -208,12 +208,14 @@ Never publish, post or send. Publishing is always the person's click.
   (the shipped `brand/identity.yaml` with the user's `~/.swarm-ai/pollinate-brand.yaml` on
   top; `POLLINATE_BRAND_FILE` points at another file). `--signature` prints only the
   signature: watermark, link, link text, QR images (`dark_on_light`, `light_on_dark`) and
-  footer. Every visual output (deck, poster, page) carries each configured element; an
-  unset element is not drawn. `cut` checks the watermark, the link text and the QR (the
-  `brand` check, § 6); no brand file, or one that sets no signature, means no check. The
-  footer lines and the QR size are not measured; look at them yourself. For a work that
-  should not carry the brand (made for someone else, say), put
-  `"craft": {"levels": {"brand": "warn"}}` in its `work.json`. Use the configured colors
+  footer. A poster carries each configured element; an unset element is not drawn. On a
+  poster `cut` checks the watermark, the link text and the QR (the `brand` check, § 6); no
+  brand file, or one that sets no signature, means no check. The footer lines and the QR
+  size are not measured; look at them yourself. For a poster that should not carry the
+  brand (made for someone else, say), put `"craft": {"levels": {"brand": "warn"}}` in its
+  `work.json`. A deck or page carries the signature only when it is the person's own public
+  content (a social post, a public talk); a deck for work, a customer or another team does
+  not, and `cut` does not check it there. Use the configured colors
   and fonts exactly.
 - **Content principles** (`brand/content_principles.md`) apply to anything public: value,
   not output counts (no lines of code, commits or "N days" as the claim); what is true, not

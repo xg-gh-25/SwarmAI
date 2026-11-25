@@ -183,3 +183,18 @@ def test_cut_checks_the_brand_signature(real_craft, capsys):
                      '<p style="margin:24px 120px 0;font-size:24px">Made with Example Studio</p>')
     code, out = run(["cut", "--dir", str(_poster(tmp / "signed", capsys, signed))], capsys)
     assert [f for f in out["failed_checks"] if f["check"] == "brand"] == [], out
+
+
+def test_a_deck_is_not_brand_checked(real_craft, capsys):
+    """A deck is often made for work or a customer; only posters must carry the signature."""
+    need_browser()
+    tmp = real_craft["tmp"]
+    (tmp / "pollinate-brand.yaml").write_text(
+        'signature:\n  watermark: "Made with Example Studio"\n  link: "https://example.com/me"\n',
+        encoding="utf-8")
+    d = _deck(tmp / "w", [FULL.format(attr="", title="Full")])
+    code, out = _adopt_and_cut(d, capsys, "--formats", "html,png")
+    assert code == 0, out
+    import json
+    found = json.loads((d / ".versions" / "v002" / "checks.json").read_text())["findings"]
+    assert [f for f in found if f["check"] == "brand"] == []

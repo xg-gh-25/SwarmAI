@@ -60,7 +60,7 @@ SCHEMA = 1
 KINDS = ("deck", "poster", "page", "copy")
 # Kinds whose rendered output carries the person's brand signature (kinds/*.md): a deck on
 # its closing slide, a poster and a page in the footer. Copy is text for a platform post.
-SIGNED_KINDS = ("deck", "poster", "page")
+SIGNED_KINDS = ("poster",)   # the old brand gate judged posters only; a deck or page is often made for work
 DEFAULT_SRC = {"deck": "src/deck.html", "poster": "src/index.html",
                "page": "src/index.html", "copy": "src/copy.md"}
 DEFAULT_SIZE = {"deck": "1920x1080", "poster": "1080x1350", "page": "1200x800", "copy": "1080x1080"}

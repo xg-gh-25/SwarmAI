@@ -45,7 +45,7 @@ Start from `templates/html-deck/shared/html-template.md`. Then:
    `shared/viewport-base.css`, then the design system's CSS, then what you need from
    `shared/animation-patterns.md`). Style one slide inside its own section. Keep the
    `<head>` small: the font link and the link to `shared.css`. A change in `shared.css`
-   touches every slide, so in a revise it needs the word `shared` in the open note.
+   touches every slide, so in a revise it needs `--shared` on `open`.
 3. **Fonts.** Keep the design system's own font `<link>` (it carries the real italic and
    CJK faces); the renderer caches it locally. Check that every Latin family the CSS names
    is in the link; if one is missing, add `&family=<Name+With+Plus>:wght@<weights>` to it,
@@ -55,10 +55,11 @@ Start from `templates/html-deck/shared/html-template.md`. Then:
    uses `background-color` plus `background-image`, never the `background` shorthand.
 5. **Script.** At the end of `<body>`, inline the full `shared/deck-stage.js` in a
    `<script>` (no external `src`).
-6. **Brand.** Add the configured signature (INSTRUCTIONS.md § 8): link text and QR on
-   the closing slide, the watermark small at the bottom. Use `light_on_dark` QR on dark
-   slides and `dark_on_light` on light ones. `cut` fails when a configured element is on
-   no slide (the `brand` check; it reports on the last slide).
+6. **Brand.** Only for the person's own public content (a public talk, a deck shared as a
+   post): add the configured signature (INSTRUCTIONS.md § 8), link text and QR on the
+   closing slide, the watermark small at the bottom, `light_on_dark` QR on dark slides and
+   `dark_on_light` on light ones. A deck for work, a customer or another team carries no
+   signature. `cut` does not check it on a deck.
 
 ## Slide craft
 
