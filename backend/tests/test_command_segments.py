@@ -55,7 +55,13 @@ def test_store_reads_and_new_files_are_not_destroys(tmp_path):
         assert _targets_irreplaceable_store(cmd) is False, cmd
 
 
-def test_copy_that_overwrites_a_store_file_is_a_destroy(tmp_path):
+def test_copy_that_overwrites_a_store_file_is_a_destroy(tmp_path, monkeypatch):
+    # tmp_path stands for a real workspace here: a store under an OS temp dir is
+    # scratch (design 2026-11-25-approval-prompt-false-positives-r2 §F), so the temp
+    # prefixes are switched off for this test
+    from core import security_hooks
+    monkeypatch.setattr(security_hooks, "_SAFE_RM_PREFIXES", ())
+    monkeypatch.setattr(security_hooks, "_SAFE_RM_EXACT", frozenset())
     lib = tmp_path / "Knowledge" / "Library"
     lib.mkdir(parents=True)
     (lib / "existing.html").write_text("x")

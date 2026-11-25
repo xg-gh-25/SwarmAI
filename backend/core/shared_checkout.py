@@ -26,7 +26,8 @@ State (the repos already noted) lives in the session's own hook context
 
 The same facts decide dangerous_command_gate's discard rule (a command that would
 destroy uncommitted work another session wrote): ``sibling_uncommitted(strict=True)``
-reads git fresh and raises GitUnknown instead of reporting "nothing".
+reads git fresh and raises GitUnknown instead of reporting "nothing" (except for a repo
+that is no longer a git work tree, which holds nothing to lose).
 
 Public: ``create_shared_checkout_hook``, ``sibling_uncommitted``, ``sibling_repos``,
 ``GitUnknown``.
@@ -108,13 +109,44 @@ class GitUnknown(Exception):
     """git could not say which files are uncommitted (sibling_uncommitted strict=True)."""
 
 
+def _is_work_tree(root: str) -> bool:
+    """Is *root* still a git work tree? False only on proof it is not: the directory is
+    gone, it has no ``.git``, or its ``.git`` file names a gitdir that no longer exists
+    (a removed linked worktree whose directory was left behind). Anything this cannot
+    read counts as a work tree, so git's failure there stays "cannot tell"."""
+    if not os.path.isdir(root):
+        return False
+    dotgit = os.path.join(root, ".git")
+    if os.path.isdir(dotgit):
+        return True
+    if not os.path.lexists(dotgit):
+        return False
+    try:
+        with open(dotgit, encoding="utf-8") as fh:
+            text = fh.read(4096).strip()
+    except (OSError, UnicodeDecodeError):
+        return True
+    if not text.startswith("gitdir:"):
+        return True
+    gitdir = text[len("gitdir:"):].strip()
+    if not gitdir:
+        return True
+    if not os.path.isabs(gitdir):
+        gitdir = os.path.join(root, gitdir)
+    return os.path.isdir(gitdir)
+
+
 def sibling_uncommitted(root: str, mine: "dict | None",
                         strict: bool = False) -> "list[tuple[str, list[str]]]":
     """[(other session id, its uncommitted files under *root*, repo-relative)], sorted.
 
     When git cannot tell: [] by default (the note fails open); with *strict* (the
     dangerous_command_gate's discard rule) GitUnknown is raised, and the cache is not
-    used, so a sibling's edit since the last check is seen."""
+    used, so a sibling's edit since the last check is seen. A *root* that is no longer
+    a git work tree (a sibling's session worktree removed since it wrote there; its root
+    can still come from repo_guidance's cache) holds no uncommitted changes: [] in both
+    modes, checked only after git failed, so a live tree pays nothing and a real failure
+    or timeout on it still raises."""
     root = os.path.realpath(root)
     prefix = root + os.sep
     per_session: dict[str, list[str]] = {}
@@ -129,7 +161,7 @@ def sibling_uncommitted(root: str, mine: "dict | None",
     dirty = _git_dirty(root, sorted({r for rels in per_session.values() for r in rels}),
                        fresh=strict)
     if dirty is None:
-        if strict:
+        if strict and _is_work_tree(root):
             raise GitUnknown(root)
         return []
     out = []

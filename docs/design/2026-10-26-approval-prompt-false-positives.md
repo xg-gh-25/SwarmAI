@@ -196,5 +196,6 @@ permission approve request，我感觉那些都不是 dangerous command 啊，�
 
 ## 修订
 
+- 后续：`docs/design/2026-11-25-approval-prompt-false-positives-r2.md`（变量解析扩展到任意字面量、已删仓库读作干净、Python 正文按 AST 判断等）。
 - r2（2026-10-26）：A、B、C 已实现，见 §6。§2 挪回 §1 之后。
 - r1（2026-10-26）：初稿。依据 `run_872ffe42` 的调研：daemon 日志里的 15 次弹窗加上存档里的完整命令，用当时 main 的 gate 重判。

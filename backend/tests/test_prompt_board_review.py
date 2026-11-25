@@ -108,7 +108,13 @@ def test_heredoc_fed_to_a_non_shell_is_data():
     assert _targets_irreplaceable_store(cmd) is False
 
 
-def test_every_tee_output_is_checked(tmp_path):
+def test_every_tee_output_is_checked(tmp_path, monkeypatch):
+    # tmp_path stands for a real workspace: a store under an OS temp dir is scratch
+    # (design 2026-11-25-approval-prompt-false-positives-r2 §F), so the temp
+    # prefixes are switched off here
+    from core import security_hooks
+    monkeypatch.setattr(security_hooks, "_SAFE_RM_PREFIXES", ())
+    monkeypatch.setattr(security_hooks, "_SAFE_RM_EXACT", frozenset())
     store = tmp_path / "Projects" / "critical"
     store.mkdir(parents=True)
     (store / "data.db").write_text("x")

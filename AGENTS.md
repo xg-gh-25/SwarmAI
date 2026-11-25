@@ -230,8 +230,11 @@ implementations in `security_hooks.py`). By category:
    `dangerous_command_gate` asks before a git command that discards uncommitted changes
    (`reset --hard`, `checkout --`, `restore`, `clean -f`, `worktree remove --force`) only when
    another live session wrote files there that are still uncommitted
-   (`shared_checkout.sibling_uncommitted`); ref moves (rebase, amend, `branch -f`) are never
-   asked — the reflog keeps the commits (design §3.8 r17). `ask_question_gate` blocks for
+   (`shared_checkout.sibling_uncommitted`; a repo that no longer exists holds nothing);
+   ref moves (rebase, amend, `branch -f`, `checkout --detach`) are never asked — the
+   reflog keeps the commits (design §3.8 r17). A path the command itself pins in a
+   variable (`W=/abs; git -C $W …`, `S=/tmp/x; rm -rf "$S"`) is judged as written out
+   (design `docs/design/2026-11-25-approval-prompt-false-positives-r2.md`). `ask_question_gate` blocks for
    AskUserQuestion answers; a person's pick (not the channel gateway's unattended one) on a
    Pipeline v1 decision card is recorded there as the run's `human_answer` — the agent's CLI
    has no answer command (`docs/design/pipeline-v1-human-loop.md`).

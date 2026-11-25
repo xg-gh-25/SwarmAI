@@ -165,12 +165,467 @@ def _is_dangerous_rm(command: str, _depth: int = 0, cwd: str = "") -> bool:
 
 
 # `N=$(mktemp -d)` written as one word (quoted: `N="$(mktemp -d)"`), with an optional
-# `-t <template>` that names no directory.
-_MKTEMP_WORD_RE = re.compile(r"^([A-Za-z_]\w*)=\$\(mktemp -d(?: -t [^\s/)~$]+)?\)$")
+# `-t <template>` that names no directory and an optional fixed `/sub` suffix.
+_MKTEMP_WORD_RE = re.compile(
+    r"^([A-Za-z_]\w*)=\$\(mktemp -d(?: -t [^\s/)~$]+)?\)(/[^\s$`~]*)?$")
+_MKTEMP_INNER = re.compile(r"^mktemp -d(?: -t [^\s/)~$]+)?$")
 # `$N`, `${N}`, optionally followed by `/sub/path`.
 _VAR_OPERAND_RE = re.compile(r"^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(/.*)?$")
-_VAR_BINDERS = frozenset({"export", "read", "unset", "declare", "local", "typeset",
-                          "readonly", "for", "select", "getopts", "mapfile", "readarray"})
+#: the builtins of bash and zsh (with zsh's module builtins): an external program cannot
+#: change this shell's variables, a builtin may bind one an argument names, so a builtin
+#: handed an expansion (`printf -v "$X"`, `zformat -a $X`) makes every variable unknown
+#: unless it is one of _SAFE_BUILTINS (allowlist: an unlisted builtin fails closed)
+_SHELL_BUILTINS = frozenset({
+    ":", ".", "[", "alias", "autoload", "bg", "bind", "bindkey", "break", "builtin", "bye",
+    "caller", "cd", "chdir", "command", "compadd", "comparguments", "compcall",
+    "compctl", "compdescribe", "compfiles", "compgen", "complete", "compopt",
+    "compgroups", "compquote", "comptags", "comptry", "compvalues", "continue",
+    "coproc", "declare", "dirs", "disable", "disown", "echo", "echotc", "echoti",
+    "emulate", "enable", "eval", "exec", "exit", "export", "false", "fc", "fg", "float",
+    "functions", "getcap", "getln", "getopts", "hash", "help", "history", "integer",
+    "jobs", "kill", "let", "limit", "local", "log", "logout", "mapfile", "noglob",
+    "nocorrect", "pcre_compile", "pcre_match", "pcre_study", "popd", "print", "printf",
+    "private", "pushd", "pushln", "pwd", "r", "read", "readarray", "readonly", "rehash",
+    "return", "sched", "set", "setcap", "setopt", "shift", "shopt", "source", "stat",
+    "strftime", "suspend", "sysopen", "sysread", "sysseek", "syserror", "syswrite",
+    "test", "times", "trap", "true", "ttyctl", "type", "typeset", "ulimit", "umask",
+    "unalias", "unfunction", "unhash", "unlimit", "unset", "unsetopt", "vared", "wait",
+    "whence", "where", "which", "zcompile", "zcurses", "zdelattr", "zformat", "zftp",
+    "zgdbmpath", "zgetattr", "zle", "zlistattr", "zmodload", "zparseopts", "zprof",
+    "zpty", "zregexparse", "zselect", "zsetattr", "zsocket", "zstat", "zstyle",
+    "zsystem", "ztcp", "ztie", "zuntie", "select", "for"})
+#: builtins that never bind a variable an argument names; printf / print / set / wait /
+#: stat only without the option that does (-v / -A / -p / -A or -H)
+_SAFE_BUILTINS = frozenset({
+    ":", "[", "test", "echo", "cd", "chdir", "pushd", "popd", "dirs", "pwd", "true",
+    "false", "exit", "return", "bye", "logout", "shift", "kill", "bg", "fg", "jobs",
+    "disown", "times", "type", "whence", "where", "which", "hash", "rehash", "umask",
+    "ulimit", "limit", "unlimit", "alias", "unalias", "setopt", "unsetopt", "shopt",
+    "emulate", "break", "continue", "help", "history"})
+#: the option letters with which these builtins bind a name (in any option cluster)
+_BINDING_OPTIONS = {"printf": "v", "print": "v", "set": "A", "wait": "p", "stat": "AH"}
+
+
+_DECLARATION_BUILTINS = frozenset({"export", "declare", "local", "readonly", "typeset",
+                                   "integer", "float", "private"})
+
+
+def _binds_by_expansion(prog: list[str]) -> bool:
+    """Can builtin *prog* bind a variable whose name comes from an expansion?"""
+    if not prog or prog[0] not in _SHELL_BUILTINS or not any("$" in t for t in prog[1:]):
+        return False
+    if prog[0] in _SAFE_BUILTINS:
+        return False
+    if prog[0] in _DECLARATION_BUILTINS:
+        # `export PATH="$P:$PATH"` binds PATH: only a computed name (`export "$X=/"`) counts
+        return any("$" in (t if t.startswith(("-", "+")) else t.split("=", 1)[0])
+                   for t in prog[1:])
+    letters = _BINDING_OPTIONS.get(prog[0])
+    if letters is not None:
+        # an option word that is itself an expansion (`printf -$X "$Y"`) may be the one
+        return any(t[:1] in "-+" and not t.startswith("--")
+                   and (any(ch in letters for ch in t[1:]) or "$" in t) for t in prog[1:])
+    return True
+#: a reference to a variable inside a word: `$N` or `${N}` (nothing else is substituted)
+_VAR_REF_RE = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
+#: a word that assigns: NAME=, NAME+=, NAME[i]=
+_ASSIGN_WORD_RE = re.compile(r"^([A-Za-z_]\w*)(\[[^\]]*\])?(\+?)=(.*)$", re.S)
+#: the characters a literal value may hold: no quote, space, glob, brace, $, backtick,
+#: backslash, ~ (handled apart) or shell operator, so substituting it is exactly what
+#: the shell would produce, with no word splitting or globbing
+_LITERAL_VALUE_RE = re.compile(r"[A-Za-z0-9_./@%+:,=-]+")
+#: value marker: the variable holds a fresh `mktemp -d` directory (+ the suffix after it)
+_TEMP_DIR_VALUE = "\0mktemp-d"
+#: variables the shell itself sets or reads specially: never taken as plain literals
+_SPECIAL_VARS = frozenset({
+    "PWD", "OLDPWD", "REPLY", "OPTARG", "OPTIND", "RANDOM", "SRANDOM", "SECONDS",
+    "LINENO", "BASHPID", "PPID", "UID", "EUID", "IFS", "PIPESTATUS", "FUNCNAME",
+    "MAPFILE", "DIRSTACK", "HISTCMD", "EPOCHSECONDS", "EPOCHREALTIME", "BASH_REMATCH",
+    "COPROC", "CDPATH", "status", "argv", "pipestatus", "path", "cdpath", "fpath",
+    "MATCH", "MBEGIN", "MEND", "match", "mbegin", "mend", "reply", "BASH_ARGV",
+    "BASH_ARGC", "BASH_COMMAND", "BASH_SOURCE", "ZSH_ARGZERO", "ZSH_SUBSHELL",
+    "TRY_BLOCK_ERROR", "TRY_BLOCK_INTERRUPT", "ERRNO", "TTYIDLE", "SHLVL", "GID",
+    "EGID", "USERNAME", "LOGNAME", "HISTCHARS", "histchars", "psvar", "manpath",
+    "module_path", "mailpath", "watch", "fignore", "funcstack", "functrace",
+    "funcfiletrace", "funcsourcetrace", "zsh_eval_context", "_"})
+#: words that open a compound command: an assignment inside one is not unconditional
+_BLOCK_OPENERS = frozenset({"if", "while", "until", "for", "select", "case", "{"})
+_BLOCK_CLOSERS = frozenset({"fi", "done", "esac", "}"})
+
+
+def _after_exec(tokens: list[str]) -> list[str]:
+    """*tokens* (``exec …``) from the command exec runs: its options ``-c`` / ``-l`` /
+    ``-a NAME`` skipped, clustered too (``-ca NAME``, ``-la NAME``, ``-aNAME``), and
+    ``--``. Any other option makes exec fail (bash and zsh take only these), so nothing
+    after it runs."""
+    i = 1
+    while i < len(tokens) and tokens[i].startswith("-") and tokens[i] != "-":
+        w = tokens[i]
+        if w == "--":
+            return tokens[i + 1:]
+        m = re.fullmatch(r"-([cl]*)(a?)(.*)", w)
+        if not m or (m.group(3) and not m.group(2)):
+            return []
+        i += 2 if m.group(2) and not m.group(3) else 1
+    return tokens[i:]
+
+
+#: the short options of the command wrappers that take a value: in a cluster
+#: (`env -iu NAME`, `doas -nu root`) the value is the rest of the cluster or the next word
+_WRAPPER_VALUE_LETTERS = {"env": "uCSaP", "nice": "n", "time": "of", "command": "",
+                          "nohup": "", "sudo": "ugCDhprtUTRac", "doas": "uCa"}
+#: the long options of the command wrappers that take a value (the next word)
+_WRAPPER_VALUE_OPTS = {
+    "env": frozenset({"-u", "--unset", "-C", "--chdir"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "time": frozenset({"-o", "--output", "-f", "--format"}),
+    "command": frozenset(),
+    "nohup": frozenset(),
+    "sudo": frozenset({"-u", "--user", "-g", "--group", "-C", "--close-from", "-D",
+                       "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t",
+                       "--type", "-U", "--other-user", "-T", "--command-timeout", "-R",
+                       "--chroot"}),
+    "doas": frozenset({"-u", "-C"}),
+}
+
+
+def _strip_wrappers(tokens: list[str]) -> list[str]:
+    """*tokens* without leading env assignments and command wrappers, each with its own
+    options (``env -i``, ``env -iu NAME``, ``nice -n 5``, ``command -p``, ``time -p``,
+    ``sudo -u root``, ``doas -nu root``, ``timeout -k 5 60``); ``env -S STRING`` gives
+    STRING's words as env's own. _skip_leading_wrappers skips a wrapper word but leaves its
+    options in front of the command."""
+    while tokens:
+        t = tokens[0]
+        if "=" in t and t.split("=", 1)[0].replace("_", "").isalnum() and not t.startswith("-"):
+            tokens = tokens[1:]
+            continue
+        if t in _WRAPPERS_DURATION:
+            i = 1
+            while i < len(tokens) and tokens[i].startswith("-"):
+                i += 2 if tokens[i] in _TIMEOUT_VALUE_OPTS and i + 1 < len(tokens) else 1
+            if i < len(tokens) and tokens[i] not in _WRAPPER_VALUE_OPTS \
+                    and tokens[i] not in _WRAPPERS_DURATION:
+                i += 1          # the duration
+            tokens = tokens[i:]
+            continue
+        if t not in _WRAPPER_VALUE_OPTS:
+            return tokens
+        values = _WRAPPER_VALUE_OPTS[t]
+        i = 1
+        while i < len(tokens) and tokens[i].startswith("-") and tokens[i] != "-":
+            o = tokens[i]
+            if o == "--":
+                i += 1
+                break
+            if o.startswith("--"):
+                if t == "env" and (o == "--split-string" or o.startswith("--split-string=")):
+                    glued = o.split("=", 1)[1] if "=" in o else ""
+                    return _env_split_string(glued, tokens, i)
+                i += 2 if o in values else 1
+                continue
+            # a short cluster: the first value-taking letter takes the rest or the next word
+            letters = o[1:]
+            k = next((j for j, ch in enumerate(letters) if ch in _WRAPPER_VALUE_LETTERS[t]), -1)
+            if k < 0:
+                i += 1
+                continue
+            if t == "env" and letters[k] == "S":
+                return _env_split_string(letters[k + 1:], tokens, i)
+            i += 1 if letters[k + 1:] else 2
+        tokens = tokens[i:]
+    return tokens
+
+
+def _env_split_string(glued: str, tokens: list[str], i: int) -> list[str]:
+    """``env … -S STRING rest``: env runs STRING split into words (its own options
+    first, so they are read as env's), then *rest*."""
+    line = glued if glued else (tokens[i + 1] if i + 1 < len(tokens) else "")
+    rest = tokens[i + 1:] if glued else tokens[i + 2:]
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        words = [line]
+    return _strip_wrappers(["env"] + words + rest)
+
+
+def _command_words(tokens: list[str]) -> list[str]:
+    """*tokens* from the program that runs: leading shell keywords (``do``, ``then``,
+    ``else``, ``{``, ``!``), ``exec [-cl] [-a NAME]``, the precommand modifiers
+    (``builtin`` / ``noglob`` / ``nocorrect`` / ``-``, as _unwrap_program skips them) and
+    env assignments and wrappers with their own options (_strip_wrappers) skipped in any
+    order, so ``for x in a; do sudo rm -rf /; done``, ``exec rm -rf /``,
+    ``noglob rm -rf /`` and ``nice -n 5 rm -rf /`` are judged as ``rm -rf /``."""
+    while True:
+        out = _strip_wrappers(tokens)
+        while out and (out[0] in _SHELL_KEYWORDS or out[0] in _PRECOMMAND_MODIFIERS):
+            out = _after_exec(out) if out[0] == "exec" else out[1:]
+        if out == tokens:
+            return out
+        tokens = out
+
+
+def _literal_refs(text: str) -> "set[str]":
+    """Names whose ``$NAME`` / ``${NAME}`` appears in *text* as literal text, not as a
+    reference: inside single quotes (or ``$'...'``) or after a backslash. shlex drops the
+    quoting, so such a name is never substituted."""
+    names: set[str] = set()
+    quote = ""
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+            elif c == "$":
+                m = _VAR_REF_RE.match(text, i)
+                if m:
+                    names.add(m.group(1) or m.group(2))
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if text[i + 1] == "$":
+                m = _VAR_REF_RE.match(text, i + 1)
+                if m:
+                    names.add(m.group(1) or m.group(2))
+            i += 2
+            continue
+        if quote == '"':
+            if c == '"':
+                quote = ""
+        elif c == "'":
+            quote = "'"
+        elif c == '"':
+            quote = '"'
+        i += 1
+    return names
+
+
+def _literal_value(name: str, value: str, text: str) -> "str | None":
+    """*value* when it is a literal the shell keeps as one word: a path or word of
+    _LITERAL_VALUE_RE characters, or an unquoted ``~/...`` (expanded, as the assignment
+    does), with no ``..`` component and not starting with ``-``; else None."""
+    if not value or value.startswith("-"):
+        return None
+    if value.startswith("~"):
+        # only an unquoted `NAME=~/` expands (shlex dropped the quotes of `NAME="~/x"`)
+        if not value.startswith("~/") or not re.search(
+                r"(?<![\w$])" + re.escape(name) + r"=~/", text):
+            return None
+        rest = value[2:]
+        if rest and not _LITERAL_VALUE_RE.fullmatch(rest):
+            return None
+        value = os.path.expanduser(value)
+        if value.startswith("~"):
+            return None
+    elif not _LITERAL_VALUE_RE.fullmatch(value):
+        return None
+    if ".." in value.split("/"):
+        return None
+    return value
+
+
+def _mktemp_value(name: str, segments: "list[list[str]]", seps: "list[str]", i: int,
+                  text: str) -> "str | None":
+    """_TEMP_DIR_VALUE (+ a fixed suffix) when segment *i* assigns *name* from
+    ``$(mktemp -d)``, else None. Two shapes: one word ``N=$(mktemp -d)[/sub]``, or the
+    tokens the segmenter makes of the unquoted form (``N=$`` / ``( mktemp -d )`` /
+    ``/sub``), which must then be followed by ``;`` / ``&&`` / ``||`` / a newline or the
+    end, and whose suffix must be glued to the ``)`` in the text (``N=$(mktemp -d) /x``
+    is an env prefix of the command ``/x``, not a shell variable)."""
+    seg = segments[i]
+    if len(seg) != 1:
+        return None
+    m = _MKTEMP_WORD_RE.match(seg[0])
+    if m:
+        suffix = m.group(2) or ""
+        return None if ".." in suffix.split("/") else _TEMP_DIR_VALUE + suffix
+    if seg[0] != name + "=$" or i + 1 >= len(segments) or seps[i + 1] != "(":
+        return None
+    if not _MKTEMP_INNER.match(" ".join(segments[i + 1])):
+        return None
+    after = seps[i + 2] if i + 2 < len(seps) else ")"
+    if not after.startswith(")"):
+        return None
+    ends = (";", "&&", "||")
+    if i + 2 >= len(segments) or after[1:].startswith(ends):
+        return _TEMP_DIR_VALUE
+    nxt = segments[i + 2]
+    if after != ")" or len(nxt) != 1 or not re.fullmatch(r"/[^\s$`~]*", nxt[0]) \
+            or ".." in nxt[0].split("/"):
+        return None
+    if i + 3 < len(segments) and not seps[i + 3].startswith(ends):
+        return None
+    glued = (r"(?<![\w$])" + re.escape(name) + r"=\$\(\s*mktemp -d(?: -t [^\s/)~$]+)?\s*\)"
+             + re.escape(nxt[0]) + r"(?=[\s;&|]|$)")
+    return _TEMP_DIR_VALUE + nxt[0] if re.search(glued, text) else None
+
+
+#: what may follow a plain ``$NAME`` / ``${NAME}`` reference: the end of its word
+_REF_END_CHARS = frozenset(" \t\n;&|<>\"')/")
+_ASSIGN_PREV_CHARS = frozenset(" \t\n;&|(")
+
+
+def _name_occurrences(text: str) -> "tuple[dict[str, int], set[str]]":
+    """Every appearance of each identifier in *text*, sorted into (assignments, names
+    seen in any other form). Allowed forms only: ``NAME=`` at the start of a word, and
+    a reference ``$NAME`` / ``${NAME}`` that ends its word or is followed by ``/``.
+    Anything else (a bare word such as ``read NAME`` or ``set -A NAME``, an option
+    cluster ending in it such as ``printf -vNAME``, ``{NAME}>``, ``${NAME::=x}``,
+    ``NAME+=``, ``(( NAME = 1 ))``, a zsh subscript, modifier or qualifier after a
+    reference) marks the name as "other": an allowlist, so a binder nobody listed
+    still makes the name unknown."""
+    assigned: dict[str, int] = {}
+    other: set[str] = set()
+    n = len(text)
+    for m in re.finditer(r"[A-Za-z_]\w*", text):
+        start, end = m.span()
+        name = m.group()
+        prev = text[start - 1] if start else ""
+        if prev and (prev.isalnum() or prev == "_"):
+            continue                       # the tail of a word such as `2W`
+        nxt = text[end] if end < n else ""
+        if prev == "-":
+            # an option cluster (`-vW`, `--W`): any tail of it may be an option's NAME
+            other.update(name[k:] for k in range(len(name)))
+            continue
+        if prev == "$":
+            if nxt and nxt not in _REF_END_CHARS:
+                other.add(name)
+            continue
+        if prev == "{" and start >= 2 and text[start - 2] == "$":
+            after = text[end + 1] if end + 1 < n else ""
+            if nxt != "}" or (after and after not in _REF_END_CHARS):
+                other.add(name)
+            continue
+        if nxt == "=" and text[end + 1:end + 2] != "=" and (not prev or prev in _ASSIGN_PREV_CHARS):
+            assigned[name] = assigned.get(name, 0) + 1
+            continue
+        other.add(name)
+    return assigned, other
+
+
+@functools.lru_cache(maxsize=64)
+def _known_vars(command: str) -> "tuple[dict[str, str], ...]":
+    """Per segment of *command* (_gate_shell_segments), the shell
+    variables whose value the command itself fixes there: NAME → its literal value, or
+    _TEMP_DIR_VALUE (+ suffix) for ``NAME=$(mktemp -d)[/sub]``. The one resolver the
+    discard directory walk, the recursive-rm check and the store check share.
+
+    Known only on proof (anything else stays unknown, so the caller keeps its
+    fail-closed verdict):
+    - NAME is assigned exactly once in the WHOLE command (so a loop cannot rebind it
+      after the use), and appears nowhere except in that assignment and in plain references
+      (_name_occurrences: an allowlist of forms, so ``builtin read N``, zsh
+      ``print -v N`` / ``set -A N`` / ``${N::=x}``, ``exec {N}>f``, ``printf -vN`` or a
+      binder nobody listed all make it unknown); a builtin handed an expansion that is
+      not one of _SAFE_BUILTINS (``printf -v "$X"``, ``zformat -a $X``) makes every
+      variable unknown (_binds_by_expansion; an external program cannot bind one);
+    - that binding is a standalone assignment at the top level: not inside ``( )`` or
+      a compound command (if / while / for / case / ``{ }``), preceded by the start or
+      ``;`` (never ``&&`` / ``||``: it may not run) and not piped or backgrounded;
+    - it comes before the use (each segment sees only earlier assignments);
+    - the value is a literal (_literal_value) or a mktemp directory (_mktemp_value);
+    - no reference to NAME is single-quoted or escaped (literal text), NAME is not one
+      the shell sets itself (_SPECIAL_VARS), and the command has no backtick, no IFS,
+      no ``$'…'`` / ``$"…"`` quoting (a name spelled by escapes), no zsh parameter flags
+      (``${(P)X::=…}``), no ``source`` / ``.`` / ``eval`` / ``trap`` / ``sched`` /
+      ``autoload`` / ``fc`` and no ``declare -n`` (each can change any variable unseen).
+
+    Cached per command text (the rm, store and discard checks each ask for the same
+    command); the dicts are shared, read them only."""
+    seps: list[str] = []
+    segments = _gate_shell_segments(command, seps) or []
+    n = len(segments)
+    empty: "tuple[dict[str, str], ...]" = ({},) * n
+    text = _normalize_newlines_quote_aware(command)
+    # a backtick, IFS, ANSI-C / locale quoting (`$'\x57'` spells a name without its
+    # letters) and zsh parameter flags (`${(P)X::=/}` assigns through a computed name):
+    # any variable may change unseen
+    if "`" in command or re.search(r"\bIFS\b", text) or "$'" in text or '$"' in text \
+            or "${(" in text:
+        return empty
+    # the program read both ways: the shared normalizer, and with wrapper options
+    # skipped (`command -p source x`)
+    progs = [_unwrap_program(seg) for seg in segments] + [_command_words(seg) for seg in segments]
+    assigned, other = _name_occurrences(text)
+    for prog in progs:                    # builtin / command / noglob already unwrapped
+        if prog and any(c in prog[0] for c in "{}[]*?"):
+            return empty                  # `{source,./x.sh}` / `sourc[e]`: the program is expanded
+        if prog and "$" in prog[0]:
+            # a program named by a variable runs the environment's program only when the
+            # variable is a plain reference (`"$SWARM_BACKEND_BIN" …`) the command never
+            # binds; `${C:-source}` or a name the command assigns may be `source`
+            m = re.fullmatch(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(/[^$`]*)?", prog[0])
+            name = m and (m.group(1) or m.group(2))
+            if not name or name in assigned or name in other:
+                return empty
+        if prog and prog[0] in ("source", ".", "eval", "trap", "sched", "autoload", "fc", "r"):
+            return empty                  # code run from a string or a file (trap … DEBUG runs first)
+        if _binds_by_expansion(prog):
+            return empty                  # `printf -v "$X"`: which name is bound is not seen
+        if prog and prog[0] in ("declare", "typeset", "local") and any(
+                t.startswith("-") and "n" in t[1:] for t in prog[1:]):
+            return empty                  # a nameref binds whatever name it is given
+    quoted = _literal_refs(text)
+    out: "list[dict[str, str]]" = []
+    known: dict[str, str] = {}
+    snap: dict[str, str] = {}
+    paren = 0
+    block = 0
+    for i, (seg, sep) in enumerate(zip(segments, seps)):
+        for ch in sep:
+            paren = paren + 1 if ch == "(" else max(0, paren - 1) if ch == ")" else paren
+        if snap != known:
+            snap = dict(known)
+        out.append(snap)
+        first = seg[0] if seg else ""
+        if first in _BLOCK_CLOSERS:
+            block = max(0, block - 1)
+        if first in _BLOCK_OPENERS:
+            block += 1
+            continue
+        nxt = seps[i + 1] if i + 1 < n else ""
+        if paren or block or not (sep == "" or sep.endswith(";")) \
+                or (nxt.startswith("|") and not nxt.startswith("||")) \
+                or (nxt.startswith("&") and not nxt.startswith("&&")) \
+                or not all(_ASSIGN_WORD_RE.match(t) for t in seg):
+            continue
+        for tok in seg:
+            name, sub, plus, value = _ASSIGN_WORD_RE.match(tok).groups()
+            if sub or plus or name in _SPECIAL_VARS or name in quoted:
+                continue
+            # every appearance of the name in the text is the one assignment or a plain
+            # reference: any other (`read W`, `print -v W`, `set -A W`, `-vW`,
+            # `${W::=/}`, `exec {W}>f`, `(( W = 1 ))`, `$W[1]`, `$W(:h)`) may bind or
+            # reshape it, whatever the shell
+            if assigned.get(name) != 1 or name in other:
+                continue
+            v = _literal_value(name, value, text) or _mktemp_value(name, segments, seps, i, text)
+            if v:
+                known[name] = v
+    return tuple(out)
+
+
+def _subst_vars(word: str, known: "dict[str, str]") -> str:
+    """*word* with every ``$NAME`` / ``${NAME}`` of a known literal variable replaced by
+    its value, where the reference ends the word or a ``/`` follows it (zsh reads
+    ``$W[1]`` as W's first character and ``$W:h`` as its dirname, so anything else after
+    it stays a reference). A mktemp directory is not a path and stays a reference."""
+    if "$" not in word or not known:
+        return word
+
+    def rep(m: "re.Match[str]") -> str:
+        v = known.get(m.group(1) or m.group(2))
+        if v is None or v.startswith(_TEMP_DIR_VALUE) \
+                or (m.end() < len(word) and word[m.end()] != "/"):
+            return m.group(0)
+        return v
+    return _VAR_REF_RE.sub(rep, word)
+
+
+def _subst_seg(seg: list[str], known: "dict[str, str]") -> list[str]:
+    return [_subst_vars(t, known) for t in seg] if known else seg
 
 
 def _plain_abs_dir(path: str) -> str:
@@ -198,30 +653,6 @@ def _rm_cd_target(seg: list[str]) -> "str | None":
     return _plain_abs_dir(args[0])
 
 
-def _mktemp_assignment(segments: "list[list[str]]", seps: "list[str]", i: int) -> "str | None":
-    """The variable segment *i* assigns from ``$(mktemp -d)`` as a shell variable, else
-    None. Two shapes: one word ``N=$(mktemp -d)``, or the tokens the segmenter makes of
-    the unquoted form (``N=$`` / ``( mktemp -d )``), which must then be followed by
-    ``;`` / ``&&`` / ``||`` / a newline or the end (an env prefix ``N=$(…) cmd`` is not
-    a shell variable)."""
-    seg = segments[i]
-    if len(seg) == 1:
-        m = _MKTEMP_WORD_RE.match(seg[0])
-        if m:
-            return m.group(1)
-        m = re.match(r"^([A-Za-z_]\w*)=\$$", seg[0])
-        if m and i + 1 < len(segments) and seps[i + 1] == "(":
-            inner = segments[i + 1]
-            ok = inner == ["mktemp", "-d"] or (
-                len(inner) == 4 and inner[:3] == ["mktemp", "-d", "-t"]
-                and not any(c in inner[3] for c in "/~$"))
-            after = seps[i + 2] if i + 2 < len(seps) else ")"
-            if ok and after.startswith(")") and (
-                    i + 2 >= len(segments) or after[1:].startswith((";", "&&", "||"))):
-                return m.group(1)
-    return None
-
-
 def _dangerous_rm_segment(command: str, _depth: int = 0, cwd: str = "") -> "str | None":
     """The recursive ``rm`` of *command* that is dangerous (its words joined), or None.
     Fail-closed.
@@ -235,23 +666,24 @@ def _dangerous_rm_segment(command: str, _depth: int = 0, cwd: str = "") -> "str 
       ``-r -f`` / ``-fr`` etc.) are candidates. Plain ``rm file`` is not the
       catastrophic pattern and is left to normal flow.
     - Dangerous UNLESS *every* path operand resolves under a known-safe temp
-      prefix. Any operand that is a root/home/unknown/relative/glob target →
-      dangerous (fail closed). Zero path operands → dangerous (e.g. ``rm -rf *``
-      where the shell would expand cwd).
+      prefix or names a regenerable tool cache (_is_cache_operand). Any operand that
+      is a root/home/unknown/relative/glob target → dangerous (fail closed). Zero
+      path operands → dangerous (e.g. ``rm -rf *`` where the shell would expand cwd).
     - Non-rm commands always return False (other patterns judge those).
 
-    Judged per simple command (``_gate_shell_segments``): an rm chained with
-    other commands (``rm -rf <tmp dir> && mkdir ...``) is judged on its own
-    operands, not on the words of the commands after it.
+    Judged per simple command (``_gate_shell_segments``, which drops a redirect with
+    its fd number, so ``rm -rf /tmp/x 2>/dev/null`` has one operand): an rm chained
+    with other commands (``rm -rf <tmp dir> && mkdir ...``) or inside a compound
+    command (``do rm -rf …``) is judged on its own operands.
 
-    What the command itself says is used to resolve a target (design
-    2026-10-26-approval-prompt-false-positives §3.1): a relative operand is
-    joined to the last ``cd <absolute path>`` followed by ``&&`` (a cd inside a
-    subshell does not leak out of it), else to *cwd* (the hook input's) when that is
-    absolute; any other directory change makes it unknown. ``$N`` / ``${N}`` (plus a
-    sub path) counts as a temp directory only when the only assignment of ``N`` before
-    it, at the top level, is ``N=$(mktemp -d)`` and nothing else binds ``N``
-    (``export`` / ``read`` / ``for`` / a second assignment …).
+    What the command itself says is used to resolve a target (designs
+    2026-10-26-approval-prompt-false-positives §3.1, 2026-11-25-…-r2): a relative
+    operand is joined to the last ``cd <absolute path>`` followed by ``&&`` (a cd inside
+    a subshell does not leak out of it), else to *cwd* (the hook input's) when that is
+    absolute; any other directory change makes it unknown. A variable the command pins
+    (_known_vars: one unconditional top-level assignment, never rebound) is substituted:
+    ``S=/tmp/x; rm -rf "$S"`` is ``rm -rf /tmp/x``, and ``$N`` / ``${N}`` (plus a sub
+    path) of ``N=$(mktemp -d)[/sub]`` is a temp directory.
     """
     seps: list[str] = []
     segments = _gate_shell_segments(command, seps)
@@ -263,8 +695,7 @@ def _dangerous_rm_segment(command: str, _depth: int = 0, cwd: str = "") -> "str 
     cur = _plain_abs_dir(cwd)
     stack: list[str] = []
     pending: "str | None" = None
-    depth = 0
-    temp_vars: dict[str, bool] = {}    # name → still only the one mktemp assignment
+    known_at = _known_vars(command)
     for i, (seg, sep) in enumerate(zip(segments, seps)):
         k = 0
         while k < len(sep):
@@ -272,31 +703,21 @@ def _dangerous_rm_segment(command: str, _depth: int = 0, cwd: str = "") -> "str 
             k += len(op)
             if op == "(":
                 stack.append(cur)
-                depth += 1
             elif op == ")":
                 cur = stack.pop() if stack else ""
-                depth = max(0, depth - 1)
             elif pending is not None:
                 cur = pending if op == "&&" else ""
             pending = None
-        made = _mktemp_assignment(segments, seps, i)
-        prog = _unwrap_program(seg)
-        for tok in seg:
-            m = re.match(r"^([A-Za-z_]\w*)=", tok)
-            if m and not (made == m.group(1) and depth == 0 and m.group(1) not in temp_vars):
-                temp_vars[m.group(1)] = False
-        if prog and prog[0] in _VAR_BINDERS:
-            for tok in prog[1:]:
-                name = tok.split("=", 1)[0]
-                if re.match(r"^[A-Za-z_]\w*$", name):
-                    temp_vars[name] = False
-        if made and depth == 0 and made not in temp_vars:
-            temp_vars[made] = True
-        tokens = _skip_leading_wrappers(seg)
-        if _rm_segment_is_dangerous(tokens, cur,
-                                    frozenset(n for n, ok in temp_vars.items() if ok)):
+        known = known_at[i]
+        tokens = _command_words(seg)
+        if _rm_segment_is_dangerous(tokens, cur, known):
             return " ".join(seg)
-        pending = _rm_cd_target(seg)
+        if tokens and tokens[0] == "rm" and i + 1 < len(seps) \
+                and seps[i + 1].startswith("("):
+            # `rm x(…)`: no shell runs that as written except zsh, where `(…)` after a
+            # word is a glob qualifier (`/tmp/a/b(:h:h:h)` is `/`): not provable
+            return " ".join(seg)
+        pending = _rm_cd_target(_subst_seg(seg, known))
     # A script handed to another shell (`sh -c '...'`, `bash <<EOF`) is judged too.
     if _depth < 2:
         for s in _inner_shell_scripts(command, segments):
@@ -306,13 +727,53 @@ def _dangerous_rm_segment(command: str, _depth: int = 0, cwd: str = "") -> "str 
     return None
 
 
+#: directories a tool regenerates on its next run: deleting one loses nothing
+_CACHE_DIR_NAMES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+
+
+def _is_cache_operand(op: str, cur: str) -> bool:
+    """Is rm operand *op* (variables already substituted) a regenerable tool cache?
+    Its last path component is one of _CACHE_DIR_NAMES, or a glob of files directly
+    inside a ``__pycache__`` directory; no ``$``, backtick or ``..`` anywhere, no
+    trailing ``/`` (rm then follows a symlink). Where it can be found on disk (absolute,
+    or relative to a known *cur*), its real path must be so named too: a cache-named
+    symlink to somewhere else is not a cache. A glob that cannot be checked on disk is
+    not taken."""
+    if not op or op.endswith("/") or any(c in op for c in "$`"):
+        return False
+    parts = op.split("/")
+    if ".." in parts:
+        return False
+    last = parts[-1]
+    in_pycache = (len(parts) >= 2 and parts[-2] == "__pycache__"
+                  and any(c in last for c in "*?[") and not last.startswith("."))
+    if last not in _CACHE_DIR_NAMES and not in_pycache:
+        return False
+    path = os.path.expanduser(op)
+    if path.startswith("~"):
+        return False
+    if not os.path.isabs(path):
+        if not cur:
+            return not in_pycache
+        path = os.path.join(cur, path)
+    if in_pycache:
+        parent = os.path.dirname(path)
+        if any(c in parent for c in "*?[{"):
+            return False
+        return os.path.basename(os.path.realpath(parent)) == "__pycache__"
+    if any(c in path for c in "*?[{"):
+        return True         # a glob over the parents: every match ends in the cache name
+    return os.path.basename(os.path.realpath(path)) in _CACHE_DIR_NAMES
+
+
 def _rm_segment_is_dangerous(tokens: list[str], cur: str = "",
-                             temp_vars: "frozenset[str]" = frozenset()) -> bool:
+                             known: "dict[str, str] | None" = None) -> bool:
     """``_is_dangerous_rm`` for ONE simple command (already segmented). *cur* is the
-    directory it runs in ("" = unknown); *temp_vars* the variables known to hold a
-    fresh ``mktemp -d`` directory."""
+    directory it runs in ("" = unknown); *known* the variables the command pins
+    (_known_vars), a literal substituted, a mktemp directory a temp directory."""
     if not tokens or tokens[0] != "rm":
         return False
+    known = known or {}
 
     flags: set[str] = set()
     operands: list[str] = []
@@ -339,10 +800,13 @@ def _rm_segment_is_dangerous(tokens: list[str], cur: str = "",
 
     for op in operands:
         var = _VAR_OPERAND_RE.match(op)
-        if var and (var.group(1) or var.group(2)) in temp_vars:
-            rest = var.group(3) or ""
+        if var and known.get(var.group(1) or var.group(2), "").startswith(_TEMP_DIR_VALUE):
+            rest = known[var.group(1) or var.group(2)][len(_TEMP_DIR_VALUE):] + (var.group(3) or "")
             if ".." not in rest.split("/") and not any(c in rest for c in "$~`"):
                 continue
+        op = _subst_vars(op, known)
+        if _is_cache_operand(op, cur):
+            continue
         # Fail closed on any path-traversal or env/glob token — a ".." segment
         # can escape a safe prefix (rm -rf /tmp/../etc), and $VARS/globs are
         # unexpanded here so their real target is unknown.
@@ -1002,7 +1466,10 @@ def _inner_shell_scripts(command: str, segments: "list[list[str]]") -> list[str]
     scripts: list[str] = []
     reads_stdin = False
     for seg in segments:
-        seg = _skip_leading_wrappers(seg)
+        # the same prefix stripping as the direct rm / store check (keywords, exec and its
+        # options, precommand modifiers, wrappers): `for …; do sh -c '…'; done`,
+        # `exec sh -c '…'` and `noglob bash <<EOF` hand their script to a shell too
+        seg = _command_words(seg)
         if not seg or os.path.basename(seg[0]) not in _SHELL_INTERPRETERS:
             continue
         parts = _shell_c_parts(seg[1:])
@@ -1049,6 +1516,17 @@ def _heredoc_bodies(command: str) -> list[str]:
     return bodies
 
 
+def _under_temp_dir(path: str) -> bool:
+    """Is *path* an absolute path written out in full (no ``$``, glob, ``~``, ``..``)
+    whose real path (symlinks resolved, so a link out of /tmp does not count) lies under
+    an OS temp directory (_SAFE_RM_PREFIXES / _SAFE_RM_EXACT)?"""
+    norm = _plain_abs_dir(path)
+    if not norm:
+        return False
+    real = os.path.realpath(norm)
+    return real in _SAFE_RM_EXACT or real.startswith(_SAFE_RM_PREFIXES)
+
+
 def _copy_overwrites(dest: str, sources: list[str]) -> bool:
     """Would ``cp``/``tee`` into *dest* overwrite an existing file? Fail-closed:
     an unexpanded ``$VAR`` or glob counts as an overwrite."""
@@ -1086,25 +1564,36 @@ def _targets_irreplaceable_store(command: str, _depth: int = 0) -> bool:
     Reuses ``data_safety.classify_store`` as the SINGLE classification authority
     (P8): a REPLACEABLE artifact (L1 cache, FTS index) is NOT gated.
 
+    A variable the command pins (_known_vars: one unconditional top-level literal
+    assignment, never rebound) is substituted first, so ``W=/tmp/x; cp a $W/Projects/``
+    is judged on ``/tmp/x/Projects/``. An operand that is an absolute path written out
+    in full whose real path lies under an OS temp directory (the prefixes the recursive
+    rm rule trusts) is scratch, not a governed store (a copy of a DDD into /tmp).
+
     ACCEPTED RESIDUALS (documented, not hidden — same posture as the sibling
-    predicates): a ``$VAR``-prefixed operand whose var holds the store segment,
-    a symlink INTO a store, and a store-destroy hidden in a subshell / pipeline /
-    ``sh -c`` (``tokens[0]`` is ``sh``) EVADE this predicate — they need a real
-    shell parser. This is a defense-in-depth layer atop ``_is_dangerous_rm`` +
+    predicates): a ``$VAR``-prefixed operand whose var holds the store segment and
+    is NOT pinned by the command (``W=$(pwd)``, an inherited variable), a symlink
+    INTO a store from outside a temp dir, and a store-destroy hidden in a pipeline /
+    ``sh -c`` (``tokens[0]`` is ``sh``) EVADE this predicate — they need a real shell
+    parser. This is a defense-in-depth layer atop ``_is_dangerous_rm`` +
     ``dangerous_command_gate``; the PRIMARY incident vectors (boot DB corruption,
     HTTP project-delete) are covered structurally by ``isolate_store`` / trash-move,
     not by this text gate. Redirection truncation (``> store``) is also not seen
     (no verb token). Unparseable → False (fallback regex path covers that class).
 
     Judged per simple command (``_gate_shell_segments``, which also opens
-    subshells and ``$(...)``): before, the whole line was one command, so a
-    store-destroy after ``cd x &&`` was missed (``tokens[0]`` was ``cd``) and a
-    read followed by other commands was judged on their words.
+    subshells and ``$(...)``; leading keywords such as ``then`` / ``do`` skipped):
+    before, the whole line was one command, so a store-destroy after ``cd x &&`` was
+    missed (``tokens[0]`` was ``cd``) and a read followed by other commands was judged
+    on their words.
     """
-    segments = _gate_shell_segments(command)
+    seps: list[str] = []
+    segments = _gate_shell_segments(command, seps)
     if segments is None:
         return False
-    if any(_store_segment_destroys(_skip_leading_wrappers(seg)) for seg in segments):
+    known_at = _known_vars(command)
+    if any(_store_segment_destroys(_command_words(_subst_seg(seg, known_at[i])))
+           for i, seg in enumerate(segments)):
         return True
     return _depth < 2 and any(
         _targets_irreplaceable_store(s, _depth + 1)
@@ -1180,10 +1669,11 @@ def _store_segment_destroys(tokens: list[str]) -> bool:
     # wrong fix.
     #   • cp / tee : destroy only the DESTINATION. `-t DEST` if present, else the LAST
     #     operand (cp/tee copy sources → dest). Source operands are reads → not gated.
+    #   • mv       : every SOURCE is gated (mv RELOCATES the store away = destruction of
+    #     the original location); the destination, like cp's, only when it overwrites.
     #   • dd       : destroys only `of=<path>`. `if=<store>` is a read → not gated.
-    #   • rm/mv/truncate/shred/find : every path operand is a target (mv RELOCATES the
-    #     store away = destruction of the original location too), so gate them all.
-    _DEST_ONLY = {"cp"}
+    #   • rm/truncate/shred/find : every path operand is a target, so gate them all.
+    _DEST_ONLY = {"cp", "mv"}
     if verb == "tee":
         # Every operand of tee is an output it truncates (`-a` appends: no destroy).
         appends = any(t == "--append" or (t.startswith("-") and not t.startswith("--")
@@ -1196,10 +1686,13 @@ def _store_segment_destroys(tokens: list[str]) -> bool:
             gated_operands = [operands[-1]]  # last = destination
         else:
             gated_operands = []
-        # A copy destroys only what it OVERWRITES: a new file in a store (a backup
-        # into Knowledge/Library, a report into a project) is not a destroy.
+        # A copy (or move) destroys only what it OVERWRITES where it lands: a new file
+        # in a store (a backup into Knowledge/Library, a report into a project) is not
+        # a destroy.
         sources = operands if t_dest is not None else operands[:-1]
         gated_operands = [d for d in gated_operands if _copy_overwrites(d, sources)]
+        if verb == "mv":
+            gated_operands += sources
     elif verb == "dd":
         # dd names its destructive target ONLY via of=; if= is a read source.
         gated_operands = []
@@ -1207,8 +1700,7 @@ def _store_segment_destroys(tokens: list[str]) -> bool:
             if tok.startswith("of="):
                 gated_operands.append(tok.split("=", 1)[1])
     else:
-        # rm / mv / truncate / shred / find → every path operand is destroyed/relocated.
-        # (mv also honors -t DEST as a target — include it.)
+        # rm / truncate / shred / find → every path operand is destroyed.
         gated_operands = list(operands)
         if t_dest is not None:
             gated_operands.append(t_dest)
@@ -1219,6 +1711,8 @@ def _store_segment_destroys(tokens: list[str]) -> bool:
         # here that names its target this way).
         if "=" in op and op.split("=", 1)[0].isalpha():
             op = op.split("=", 1)[1]
+        if _under_temp_dir(op):
+            continue        # scratch: a store copied into /tmp is not the store
         # Only a path that names a known irreplaceable store counts. classify_store
         # is fail-closed (unknown → IRREPLACEABLE), but we must NOT gate every rm of
         # an unknown scratch path — so restrict to operands that actually reference
@@ -1283,11 +1777,15 @@ def _discards_work(command: str) -> bool:
     stash is not a file another session wrote, so the gate's fact cannot speak for it.
 
     Without a directory this cannot see ``git checkout <path>`` (one operand that
-    names a file); _discard_dirs does. A heredoc / here-string body is judged by what
-    reads it (_executed_bodies). Unparseable input → the discard signature searched in
-    the text with its terminated heredoc bodies removed (fail closed). Non-git → False.
+    names a file); _discard_dirs does. ``checkout --detach <x>`` is a branch move. A
+    heredoc / here-string body is judged by what reads it (_executed_bodies): a shell
+    body like a command line; a Python body (and ``python -c CODE``) only by the git
+    calls it makes, so prose naming git words in a string or comment is data
+    (_body_discards, design 2026-11-25-approval-prompt-false-positives-r2 §E).
+    Unparseable input → the discard signature searched in the text with its terminated
+    heredoc bodies removed (fail closed). Non-git → False.
     """
-    return _judge_with_bodies(command, _segment_discards, _DISCARD_SIG_RE, 0)
+    return _judge_with_bodies(command, _segment_discards, _DISCARD_SIG_RE, 0, _body_discards)
 
 
 def _segment_is_commit_amend(seg: list[str]) -> bool:
@@ -1407,11 +1905,14 @@ def _executed_bodies(command: str, segments: "list[list[str]]") -> "list[tuple[s
     return [(k, b) for b in _stdin_bodies(command) for k in sorted(kinds)]
 
 
-def _judge_with_bodies(command: str, seg_pred, sig_re, depth: int) -> bool:
+def _judge_with_bodies(command: str, seg_pred, sig_re, depth: int,
+                       body_pred=None) -> bool:
     """True when *seg_pred* holds for a segment of *command*, or for a segment of a
-    heredoc body a shell runs, or *sig_re* matches a body an interpreter runs and that
-    code can execute something (_code_can_execute; non-python interpreters count as
-    able). Unparseable → *sig_re* on the text with terminated heredoc bodies removed."""
+    heredoc body a shell runs, or a body an interpreter runs holds it: *body_pred*
+    (kind, body) when given, which then also judges ``python -c CODE``; else *sig_re*
+    matches the body and that code can execute something (_code_can_execute;
+    non-python interpreters count as able). Unparseable → *sig_re* on the text with
+    terminated heredoc bodies removed."""
     segments = _gate_shell_segments(command)
     if segments is None:
         return bool(sig_re.search(_normalize_newlines_quote_aware(command)))
@@ -1419,16 +1920,275 @@ def _judge_with_bodies(command: str, seg_pred, sig_re, depth: int) -> bool:
         return True
     # `sh -c STRING` and `eval STRING` run their argument as a command line
     if depth < _BODY_DEPTH and any(
-            _judge_with_bodies(s, seg_pred, sig_re, depth + 1)
+            _judge_with_bodies(s, seg_pred, sig_re, depth + 1, body_pred)
             for s in _nested_command_lines(command, segments)):
         return True
     for kind, body in _executed_bodies(command, segments):
         if kind == "shell":
-            if depth >= _BODY_DEPTH or _judge_with_bodies(body, seg_pred, sig_re, depth + 1):
+            if depth >= _BODY_DEPTH or _judge_with_bodies(body, seg_pred, sig_re, depth + 1,
+                                                          body_pred):
+                return True
+        elif body_pred is not None:
+            if body_pred(kind, body):
                 return True
         elif sig_re.search(body) and (kind != "python" or _code_can_execute(body)):
             return True
+    if body_pred is not None:
+        for seg in segments:
+            code = _python_c_code(seg)
+            if code is not None and body_pred("python", code):
+                return True
     return False
+
+
+def _python_c_code(seg: list[str]) -> "str | None":
+    """The CODE of a ``python [opts] -c CODE`` segment (wrappers unwrapped), else None."""
+    prog = _unwrap_program(seg)
+    if not prog or not _PY_INTERPRETER_RE.search(prog[0]):
+        return None
+    i = 1
+    while i < len(prog):
+        a = prog[i]
+        if a == "-c":
+            return prog[i + 1] if i + 1 < len(prog) else None
+        if a in ("-W", "-X"):
+            i += 2
+            continue
+        if not a.startswith("-") or a in ("-", "-m"):
+            return None
+        i += 1
+    return None
+
+
+#: python callables that start a process (or run a shell line), by their last name:
+#: ``subprocess.run``, ``os.system``, ``asyncio.create_subprocess_shell``, ``pty.spawn``…
+_PY_PROCESS_CALLS = frozenset({
+    "run", "call", "check_call", "check_output", "Popen", "getoutput", "getstatusoutput",
+    "system", "popen", "spawn", "startfile", "posix_spawn", "posix_spawnp",
+    "create_subprocess_exec", "create_subprocess_shell",
+    "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe",
+    "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"})
+#: the variadic forms: os.execlp(file, arg0, arg1, …) / os.spawnlp(mode, file, arg0, …)
+_PY_VARIADIC_CALLS = frozenset({"execl", "execle", "execlp", "execlpe",
+                                "spawnl", "spawnle", "spawnlp", "spawnlpe"})
+#: keyword arguments that carry the command of a process call
+_PY_COMMAND_KWARGS = frozenset({"args", "cmd", "command", "argv"})
+#: modules a cleared Python body may import: they cannot run code or a command by
+#: themselves (process calls of os / subprocess are judged by name; any other call of
+#: theirs must still be in _PY_DATA_CALLS). Allowlist: pickle, shelve, marshal,
+#: webbrowser, importlib, runpy, timeit, cProfile, threading, multiprocessing, asyncio,
+#: ctypes, any non-standard module … keep the signature rule
+_PY_DATA_MODULES = frozenset({
+    "re", "json", "pathlib", "os", "os.path", "sys", "subprocess", "shlex", "textwrap",
+    "difflib", "collections", "itertools", "functools", "string", "typing", "math",
+    "datetime", "time", "hashlib", "base64", "unicodedata", "dataclasses", "enum",
+    "copy", "pprint", "fnmatch", "glob", "tomllib", "csv", "io", "ast", "tempfile",
+    "shutil", "statistics", "random", "uuid", "decimal", "fractions", "heapq", "bisect",
+    "struct", "zlib", "errno", "stat", "warnings", "contextlib", "traceback",
+    "__future__", "urllib.parse", "html", "keyword", "token", "tokenize", "operator"})
+#: callables (by their last name) known to only compute or move data: a Python body is
+#: cleared only when every call in it is one of these, a process call whose command is a
+#: literal, or a function / class the body defines itself (allowlist: anything else
+#: keeps the signature rule)
+_PY_DATA_CALLS = frozenset({
+    "print", "len", "str", "int", "float", "bool", "bytes", "list", "dict", "set",
+    "tuple", "frozenset", "sorted", "reversed", "enumerate", "range", "zip", "min", "max",
+    "sum", "any", "all", "abs", "round", "isinstance", "issubclass", "hasattr", "repr",
+    "format", "ord", "chr", "hex", "oct", "bin", "divmod", "pow", "hash", "id", "type",
+    "iter", "next", "map", "filter", "open", "input", "Path", "PurePath", "PosixPath",
+    "read_text", "write_text", "read_bytes", "write_bytes", "read", "write", "readline",
+    "readlines", "writelines", "close", "flush", "seek", "tell", "exists", "is_file",
+    "is_dir", "mkdir", "makedirs", "joinpath", "with_suffix", "with_name", "relative_to",
+    "resolve", "absolute", "glob", "rglob", "iterdir", "touch", "as_posix", "expanduser",
+    "replace", "split", "rsplit", "splitlines", "join", "strip", "lstrip", "rstrip",
+    "startswith", "endswith", "find", "rfind", "index", "rindex", "count", "lower",
+    "upper", "title", "capitalize", "casefold", "swapcase", "partition", "rpartition",
+    "encode", "decode", "format_map", "zfill", "ljust", "rjust", "center", "expandtabs",
+    "removeprefix", "removesuffix", "isdigit", "isalpha", "isalnum", "isspace",
+    "isidentifier", "islower", "isupper", "translate", "maketrans", "append", "extend",
+    "insert", "pop", "remove", "clear", "copy", "deepcopy", "update", "get",
+    "setdefault", "keys", "values", "items", "add", "discard", "sort", "union",
+    "intersection", "difference", "issubset", "issuperset", "sub", "subn", "match",
+    "fullmatch", "search", "findall", "finditer", "compile", "escape", "group", "groups",
+    "groupdict", "span", "start", "end", "loads", "dumps", "load", "dump", "dedent",
+    "indent", "fill", "wrap", "shorten", "exit", "basename", "dirname", "abspath",
+    "realpath", "normpath", "isfile", "isdir", "isabs", "splitext", "getcwd", "relpath",
+    "commonpath", "getsize", "getmtime", "now", "today", "strftime", "strptime",
+    "isoformat", "fromisoformat", "timestamp", "time", "sleep", "monotonic",
+    "perf_counter", "Counter", "defaultdict", "OrderedDict", "namedtuple", "deque",
+    "most_common", "dataclass", "field", "asdict", "chain", "groupby", "islice",
+    "product", "permutations", "combinations", "accumulate", "reduce", "partial",
+    "lru_cache", "wraps", "unified_diff", "ndiff", "SequenceMatcher", "get_close_matches",
+    "fnmatch", "parse", "unparse", "walk", "literal_eval", "dump", "NodeVisitor",
+    "visit", "generic_visit", "iter_child_nodes", "get_docstring", "sha256", "sha1",
+    "md5", "hexdigest", "digest", "b64encode", "b64decode", "quote", "unquote",
+    "urlparse", "reader", "writer", "DictReader", "DictWriter", "writerow", "writerows",
+    "StringIO", "BytesIO", "getvalue", "TemporaryDirectory", "NamedTemporaryFile",
+    "mkdtemp", "mkstemp", "gettempdir", "rename", "unlink", "rmdir", "copyfile",
+    "copy2", "copytree", "move", "listdir", "scandir", "stat", "chmod", "environ",
+    "getenv", "setattr", "getpid", "super", "object", "property", "staticmethod",
+    "classmethod", "Exception", "ValueError", "KeyError", "TypeError", "RuntimeError",
+    "AssertionError", "SystemExit", "FileNotFoundError", "OSError", "warn",
+    "splitext", "lineno"})
+_PY_UNKNOWN_WORD = "$_X"
+
+
+def _py_last_name(node) -> str:
+    import ast
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _py_text(node) -> "str | None":
+    """A string literal's text, or an f-string's with each ``{…}`` as ``$_X`` (a word the
+    shell judges as unknown); None for anything else."""
+    import ast
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) and isinstance(v.value, str)
+                       else _PY_UNKNOWN_WORD for v in node.values)
+    return None
+
+
+def _py_argv_line(node) -> "str | None":
+    """The shell line of a list / tuple literal whose first element is a string
+    (``['git', '-C', d, 'reset', '--hard']`` → ``git -C $_X reset --hard``), else None."""
+    import ast
+    if not isinstance(node, (ast.List, ast.Tuple)) or not node.elts:
+        return None
+    first = node.elts[0]
+    if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+        return None
+    words = []
+    for e in node.elts:
+        t = _py_text(e)
+        words.append(_PY_UNKNOWN_WORD if t is None or _PY_UNKNOWN_WORD in t
+                     else shlex.quote(t))
+    return " ".join(words)
+
+
+@functools.lru_cache(maxsize=32)
+def _python_discards(code: str) -> "bool | None":
+    """Does Python *code* run a git discard? Only a call git would run counts: an argv
+    list / tuple literal (anywhere) whose shell line _discards_work judges a discard, or
+    a string / f-string handed to a process call (_PY_PROCESS_CALLS by its last name, or
+    a name imported as one) whose text _discards_work judges a discard. Prose in other
+    string literals and in comments is data. False only when every call is visible and
+    known: a process call with a literal command, a callee of _PY_DATA_CALLS, or a
+    function / class the code defines (allowlist). None (cannot tell, the caller keeps
+    its signature rule) otherwise: a process call runs a shell, an interpreter or a path
+    (it may read the command from stdin or a file the body wrote) or is handed ``input=``;
+    the code does not parse, imports a module not in
+    _PY_DATA_MODULES, uses dynamic execution (_DYNAMIC_RE), uses a process function as a
+    value (passed, stored, partially applied), calls any other callee (a computed one
+    such as ``vars(os)['system'](…)`` or ``attrgetter('system')(os)(…)``, a variable, an
+    unlisted function), or hands a process call a command that is not a literal."""
+    import ast
+    if _DYNAMIC_RE.search(code):
+        return None
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+    calls = set(_PY_PROCESS_CALLS)
+    nodes = list(ast.walk(tree))
+    defined = {n.name for n in nodes
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    for node in nodes:
+        # a module outside _PY_DATA_MODULES may run anything (on import, or through a
+        # data-looking call such as pickle.loads or webbrowser.get(...).open)
+        if isinstance(node, ast.Import) and any(
+                a.name not in _PY_DATA_MODULES for a in node.names):
+            return None
+        if isinstance(node, ast.ImportFrom):
+            if node.level or (node.module or "") not in _PY_DATA_MODULES:
+                return None
+            for alias in node.names:
+                if alias.name in _PY_PROCESS_CALLS:
+                    calls.add(alias.asname or alias.name)
+    # a process function used as a value (`partial(subprocess.run, …)`,
+    # `map(os.system, …)`, `Thread(target=os.system)`, `r = subprocess.run`): what it
+    # runs is not seen → cannot tell
+    called = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
+    if any(isinstance(n, (ast.Name, ast.Attribute)) and _py_last_name(n) in calls
+           and id(n) not in called for n in nodes):
+        return None
+    unknown = False
+    for node in nodes:
+        line = _py_argv_line(node)
+        if line is not None and "git" in line and _discards_work(line):
+            return True
+        if not isinstance(node, ast.Call):
+            continue
+        fn = _py_last_name(node.func)
+        if fn not in calls:
+            if fn not in _PY_DATA_CALLS and fn not in defined:
+                unknown = True     # a callee not known to only move data
+            continue
+        if fn in _PY_VARIADIC_CALLS:
+            # execlp(file, arg0, …) / spawnlp(mode, file, arg0, …): the argv starts at arg0
+            words = [_py_text(a) for a in node.args[1 if fn.startswith("exec") else 2:]]
+            if not words or any(w is None for w in words):
+                unknown = True
+            elif _discards_work(" ".join(shlex.quote(w) for w in words)):
+                return True
+            continue
+        exprs = node.args[:1] + [k.value for k in node.keywords
+                                 if k.arg in _PY_COMMAND_KWARGS or k.arg is None]
+        if any(k.arg in ("input", "stdin") for k in node.keywords):
+            unknown = True         # the command reads what the code hands it on stdin
+        for e in exprs:
+            text = _py_text(e)
+            line = text if text is not None else _py_argv_line(e)
+            if line is None:
+                unknown = True     # a variable, a call, a list not starting with a literal
+                continue
+            if "git" in line and _discards_work(line):
+                return True
+            if _py_runs_a_script(line):
+                unknown = True     # a shell or interpreter reading stdin / a file, or a path
+    return None if unknown else False
+
+
+_PY_SCRIPT_RUNNERS_RE = re.compile(r"^(?:python[\d.]*|perl|ruby|node|php|deno|bun|env)$")
+
+
+def _py_runs_a_script(line: str) -> bool:
+    """Does the literal command *line* of a process call run code it is not shown: a
+    shell or interpreter (it reads stdin or a script file the body may have written;
+    ``-c`` code was judged as part of the line), or a program named by a path?"""
+    try:
+        words = _command_words(shlex.split(line))
+    except ValueError:
+        return True
+    if not words:
+        return False
+    prog = words[0]
+    return "/" in prog or os.path.basename(prog) in _SHELL_INTERPRETERS \
+        or bool(_PY_SCRIPT_RUNNERS_RE.match(os.path.basename(prog)))
+
+
+def _body_discards(kind: str, body: str) -> bool:
+    """Does a script body an interpreter runs (kind 'python' / 'code') discard work?
+    Python: only when the code can execute something, the call-shape signature
+    (_DISCARD_SIG_RE) is in it, and the parsed code makes such a git call
+    (_python_discards); when the code cannot be told, the signature alone. So a body
+    without the signature is never a discard (and is not parsed); for a body with it,
+    only a parse that shows no git call clears it (measured: a 38 KB edit script that
+    matches costs about 22 ms more to judge, once per gate call: the parse is cached).
+    Other interpreters: the signature."""
+    if not _DISCARD_SIG_RE.search(body):
+        return False
+    if kind != "python":
+        return True
+    if not _code_can_execute(body):
+        return False
+    verdict = _python_discards(body)
+    return True if verdict is None else verdict
 
 
 def _nested_command_lines(command: str, segments: "list[list[str]]") -> list[str]:
@@ -1449,11 +2209,14 @@ _GIT_RETARGET_RE = re.compile(r"\bGIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE)\b"
 def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
     """The directory each working-tree discard of *command* (_segment_discard_target)
     runs in, following ``cd X &&`` chains and ``git -C``; ``worktree remove`` gives the
-    worktree it removes. "" = that discard's directory is unknown; [] = no discard.
+    worktree it removes. A variable the command pins to a literal path (_known_vars:
+    ``W=/abs; git -C $W …``, ``cd $W && …``) is substituted first, so its directory is
+    known. "" = that discard's directory is unknown; [] = no discard.
     None (cannot tell) when the command does not parse; when a heredoc body a shell runs
-    may hold a discard, or a script body that may hold one names where git runs (cwd=,
-    chdir, -C; a script that does not is judged in the directory of the interpreter
-    reading it); when it names GIT_DIR / GIT_WORK_TREE /
+    may hold a discard, or a script body (a Python heredoc or ``python -c``, judged by
+    _body_discards: prose naming git is not a discard) that holds one names where git
+    runs (cwd=, chdir, -C; a script that does not is judged in the directory of the
+    interpreter reading it); when it names GIT_DIR / GIT_WORK_TREE /
     GIT_COMMON_DIR / GIT_INDEX_FILE (git retargeted through the environment); or when
     it has a backtick or an ``eval`` / ``source`` / ``.`` (a directory change not
     followed)."""
@@ -1467,19 +2230,22 @@ def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
         return None
     script_discard = False
     for kind, body in _executed_bodies(command, segments):
-        if _DISCARD_SIG_RE.search(body) and (kind != "python" or _code_can_execute(body)):
-            # a shell body may cd; a script that names where git runs is not followed
-            if kind == "shell" or _SCRIPT_RETARGET_RE.search(body):
-                return None
+        if kind == "shell":
+            if _DISCARD_SIG_RE.search(body):
+                return None             # a shell body may cd: not followed
+        elif _body_discards(kind, body):
+            if _SCRIPT_RETARGET_RE.search(body):
+                return None             # a script that names where git runs
             script_discard = True   # runs where the interpreter reading it runs (§3.2 B2)
     # a discard inside `sh -c '…'`: where it runs is not followed into the string
     if any(_discards_work(s) for s in _nested_command_lines(command, segments)):
         return None
+    known_at = _known_vars(command)
     out: list[str] = []
     cur = cwd or ""
     stack: list[str] = []
     pending: "str | None" = None
-    for seg, sep in zip(segments, seps):
+    for i, (seg, sep) in enumerate(zip(segments, seps)):
         k = 0
         while k < len(sep):
             op = sep[k:k + 2] if sep[k:k + 2] in ("&&", "||") else sep[k]
@@ -1493,11 +2259,17 @@ def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
                 # the old directory
                 cur = pending if op == "&&" else ""
             pending = None
+        seg = _subst_seg(seg, known_at[i])
         target = _segment_discard_target(seg, cur)
         if target is not None:
             out.append(target)
         if script_discard and _reads_script_from_stdin(_unwrap_program(seg)) in (
                 "python", "code"):
+            out.append(cur)
+        code = _python_c_code(seg)
+        if code is not None and _body_discards("python", code):
+            if _SCRIPT_RETARGET_RE.search(code):
+                return None
             out.append(cur)
         pending = _cd_segment_target(seg, cur)
     return out
@@ -1587,7 +2359,9 @@ def _checkout_discards(rest: "list[str]", d: "str | None") -> bool:
     """Does ``git checkout <rest>`` overwrite working-tree files? ``-f`` / ``-p`` /
     paths after ``--`` / ``.`` / a tree-ish followed by paths do. One operand is a branch
     switch (git carries local changes or refuses) unless it names an existing path in
-    *d*; with *d* unknown (None) it cannot be told apart, so it counts."""
+    *d*; with *d* unknown (None) it cannot be told apart, so it counts. ``--detach <x>``
+    (like ``-b`` / ``-B`` / ``--orphan``) is a branch move whatever *d* is, unless
+    ``-f`` / ``-p`` or paths come with it."""
     i = rest.index("--") if "--" in rest else len(rest)
     if rest[i + 1:]:
         return True
@@ -1601,6 +2375,10 @@ def _checkout_discards(rest: "list[str]", d: "str | None") -> bool:
         if a in ("-b", "-B", "--orphan"):
             creates = True
             k += 2
+            continue
+        if a == "--detach":
+            creates = True     # a branch move to a commit: local changes are carried
+            k += 1
             continue
         if a.startswith("-"):
             if not a.startswith("--") and ("f" in a[1:] or "p" in a[1:]):
@@ -1660,8 +2438,10 @@ def _foreign_uncommitted(dirs: "list[str] | None", mine: "dict | None",
     destroy of other sessions' work: "" when nothing, else a short description for the
     approval card. The facts are shared_checkout's: files another session wrote
     (its file tracker) that git still reports as uncommitted, read fresh. An unknown
-    directory is judged against every repo another session wrote in. Raises
-    shared_checkout.GitUnknown when git cannot tell, or when *deadline* (a
+    directory is judged against every repo another session wrote in. A repo that is
+    no longer a git work tree (a sibling's session worktree removed since it wrote
+    there) holds nothing to lose and reads clean (sibling_uncommitted). Raises
+    shared_checkout.GitUnknown when git cannot tell on a live work tree, or when *deadline* (a
     time.monotonic() value) passes before every repo was read: the gate has given up
     by then, so no more git is started. Runs git: call off the event loop."""
     import time
@@ -2179,10 +2959,10 @@ def _reason_text(hit: dict) -> str:
 
 
 def _log_prompt(hit: dict, decision: str, input_data: Any, session_id: Any,
-                reason: str) -> None:
-    """One gate_decisions.jsonl row for a prompt (§3.3 C2), written on the
-    ``pipeline_signal`` pool after the decision: never on the event loop, and a
-    failure never touches the command."""
+                reason: str, gate: str = "dangerous_command_gate") -> None:
+    """One gate_decisions.jsonl row for a prompt of *gate* (§3.3 C2; external_approval_gate
+    too, design 2026-11-25-…-r2 §G), written on the ``pipeline_signal`` pool after the
+    decision: never on the event loop, and a failure never touches the call."""
     from . import gate_decision_log
     gate_decision_log.mark_self_logged(input_data)
     data = dict(input_data) if isinstance(input_data, dict) else {}
@@ -2191,8 +2971,7 @@ def _log_prompt(hit: dict, decision: str, input_data: Any, session_id: Any,
     try:
         from core import executors
         executors.get_pool("pipeline_signal").submit(
-            gate_decision_log.record_decision, "dangerous_command_gate", decision, data,
-            reason, extra)
+            gate_decision_log.record_decision, gate, decision, data, reason, extra)
     except Exception:  # noqa: BLE001 — logging never blocks a decided command
         logger.debug("prompt log not written", exc_info=True)
 
@@ -2262,7 +3041,8 @@ def create_dangerous_command_gate(
         # only when it would destroy files ANOTHER session wrote that are still
         # uncommitted (shared_checkout's facts). Ref moves (rebase, amend, branch -f,
         # update-ref) are never asked here: the reflog keeps the old commits. Git
-        # failing or timing out → asked (the one case the facts cannot clear).
+        # failing or timing out on a live work tree → asked (the one case the facts
+        # cannot clear); a repo that is gone (a removed session worktree) reads clean.
         discard_reason = ""
         if not is_dangerous:
             dirs = _discard_dirs(text, cwd)
@@ -2568,6 +3348,10 @@ def create_external_approval_gate(
         })
         permission_mgr.remove_pending_request(request_id)
         decided_by = permission_mgr.pop_decided_by(request_id)
+        # one row per prompt, so this gate's prompt volume can be measured (r2 §G)
+        _log_prompt({"rule": "external_tool", "match": tool_name},
+                    decision if decision in ("approve", "timeout") else "deny",
+                    input_data, actual_session_id, reason, gate="external_approval_gate")
 
         if decision == "approve":
             if decided_by == "person":
@@ -4109,6 +4893,8 @@ _GATE_SEPARATOR_CHARS = frozenset(";|()")
 _PY_INTERP_RE = re.compile(r"^python[\d.]*$")
 _SHELL_KEYWORDS = frozenset({"!", "{", "}", "then", "do", "else", "elif", "if",
                              "while", "until", "exec"})
+#: words that run the next word as the command (bash `builtin`, zsh precommand modifiers)
+_PRECOMMAND_MODIFIERS = frozenset({"builtin", "noglob", "nocorrect", "-"})
 # Shells whose `-c STRING` is classified like the outer command (csh / tcsh / fish
 # take -c too; their builtins unsetenv / setenv / `set -e` are covered by
 # session_link_gate).
@@ -4146,12 +4932,30 @@ def _gate_shell_segments(
     `` `cmd` `` substitution is scanned as its own segment. A POSIX shlex with
     punctuation_chars splits `;` `&&` `||` `|` `(` `)` off words the way bash does,
     so `$(pytest)` and `a;pytest` expose pytest as a command word. Redirect operators
-    (`>`, `2>`, `>&`, `<<`) are dropped together with their target.
+    (`>`, `2>`, `>&`, `<<`) are dropped together with their target, and so is the file
+    descriptor number written against one (`2>/dev/null`, `2>&1`): it is part of the
+    operator, never a word of the command (`echo 2 > f` keeps its `2`).
 
     When *seps* is a list it receives, per returned segment, the concatenated
     separator tokens that PRECEDE it ("" for the first; e.g. ");" or "&&(") — the
-    cd/pushd chain tracking reads them."""
-    normalized = _normalize_newlines_quote_aware(command).replace("`", " ; ")
+    cd/pushd chain tracking reads them.
+
+    Each predicate of a gate splits the same command again, so the split is cached per
+    command text (_split_segments); every call gets its own lists."""
+    split = _split_segments(command)
+    if split is None:
+        return None
+    if seps is not None:
+        seps.extend(split[1])
+    return [list(seg) for seg in split[0]]
+
+
+@functools.lru_cache(maxsize=32)
+def _split_segments(command: str) -> "tuple[tuple[tuple[str, ...], ...], tuple[str, ...]] | None":
+    """_gate_shell_segments' split, as tuples: (segments, the separators before each)."""
+    seps: list[str] = []
+    normalized = _drop_redirect_fds(
+        _normalize_newlines_quote_aware(command).replace("`", " ; "))
     try:
         lex = shlex.shlex(normalized, posix=True, punctuation_chars=_GATE_PUNCT_CHARS)
         lex.whitespace_split = True
@@ -4168,8 +4972,7 @@ def _gate_shell_segments(
             if set(tok) & _GATE_SEPARATOR_CHARS or tok in ("&", "&&"):
                 if cur:
                     segments.append(cur)
-                    if seps is not None:
-                        seps.append(pending_sep)
+                    seps.append(pending_sep)
                     pending_sep = ""
                 cur = []
                 pending_sep += tok
@@ -4181,9 +4984,51 @@ def _gate_shell_segments(
         i += 1
     if cur:
         segments.append(cur)
-        if seps is not None:
-            seps.append(pending_sep)
-    return segments
+        seps.append(pending_sep)
+    return tuple(tuple(seg) for seg in segments), tuple(seps)
+
+
+def _drop_redirect_fds(text: str) -> str:
+    """*text* without the file-descriptor numbers glued to a redirect operator: an
+    unquoted run of digits that starts a word and is followed at once by ``<`` or ``>``
+    (``2>/dev/null``, ``1>>log``, ``0<in``). shlex would otherwise split ``2`` off as a
+    word of its own and every predicate would read it as an operand."""
+    if "<" not in text and ">" not in text:
+        return text
+    out: list[str] = []
+    quote = ""
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and quote == '"' and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = ""
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+        elif c.isdigit() and (i == 0 or text[i - 1] in " \t\n;&|()<>"):
+            j = i
+            while j < n and text[j].isdigit():
+                j += 1
+            if j < n and text[j] in "<>":
+                i = j
+                continue
+            out.append(text[i:j])
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _skip_dash_opts(tokens: list[str], i: int, value_opts: "frozenset[str]") -> int:
@@ -4211,7 +5056,10 @@ def _unwrap_program(tokens: list[str]) -> list[str]:
         tokens = _skip_leading_wrappers(tokens)
         if not tokens:
             return tokens
-        if tokens[0] in _SHELL_KEYWORDS:
+        if tokens[0] == "exec":
+            tokens = _after_exec(tokens)  # `exec -ca NAME git …` runs git
+            continue
+        if tokens[0] in _SHELL_KEYWORDS or tokens[0] in _PRECOMMAND_MODIFIERS:
             tokens = tokens[1:]
             continue
         if tokens[0] == "function":

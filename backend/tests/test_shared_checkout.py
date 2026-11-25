@@ -246,3 +246,46 @@ def test_land_and_remove_only_touch_session_worktrees(tmp_path):
     repo = _repo(tmp_path / "proj")
     rc, out = _cli("remove", str(repo))
     assert rc == 1 and "not a session worktree" in out["error"]
+
+
+# ── a repo that is no longer a git work tree holds nothing to lose (design
+#    2026-11-25-approval-prompt-false-positives-r2 §A): sibling sessions create and
+#    remove session worktrees all day, and their written paths outlive them ──────────
+def _sibling_wrote(router, path):
+    router("sess-sib")["_files_written"] = {str(path)}
+
+
+def test_strict_check_of_a_removed_worktree_reads_clean(tmp_path, router):
+    main = _repo(tmp_path / "repo").resolve()
+    wt = tmp_path.resolve() / "session-worktrees" / "wt"
+    _g(main, "worktree", "add", "-q", "-b", "x", str(wt), "main")
+    me = router("sess-me")
+    (wt / "a.py").write_text("edited\n")
+    _sibling_wrote(router, wt / "a.py")
+    assert sc.sibling_uncommitted(str(wt), me, strict=True) == [("sess-sib", ["a.py"])]
+    _g(main, "worktree", "remove", "--force", str(wt))
+    assert sc.sibling_uncommitted(str(wt), me, strict=True) == []
+
+
+@pytest.mark.parametrize("dotgit", [None, "gitdir: /nonexistent-swarm-test/.git/worktrees/x\n"])
+def test_strict_check_of_a_directory_that_is_no_work_tree_reads_clean(tmp_path, router,
+                                                                       dotgit):
+    d = tmp_path.resolve() / "left-behind"
+    d.mkdir()
+    if dotgit is not None:
+        (d / ".git").write_text(dotgit)
+    (d / "a.py").write_text("x\n")
+    me = router("sess-me")
+    _sibling_wrote(router, d / "a.py")
+    assert sc.sibling_uncommitted(str(d), me, strict=True) == []
+
+
+def test_strict_git_failure_on_a_live_work_tree_still_raises(tmp_path, router, monkeypatch):
+    main = _repo(tmp_path / "repo").resolve()
+    me = router("sess-me")
+    (main / "a.py").write_text("edited\n")
+    _sibling_wrote(router, main / "a.py")
+    monkeypatch.setattr(sc, "_git_status", lambda root, rels: None)
+    with pytest.raises(sc.GitUnknown):
+        sc.sibling_uncommitted(str(main), me, strict=True)
+    assert sc.sibling_uncommitted(str(main), me) == []     # the note still fails open

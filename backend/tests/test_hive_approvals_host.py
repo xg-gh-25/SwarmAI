@@ -714,7 +714,9 @@ def test_a_land_approval_the_host_gave_is_recorded_as_the_hosts(monkeypatch):
     # wrapped or composed: the person's, whatever the rule-by-rule checks see
     ("sudo apt-get install jq", ac.UNKNOWN),
     ("sudo -H gh repo delete o/r --yes", ac.UNKNOWN),
-    ("sudo -u x rm -rf .context", ac.UNKNOWN),
+    # the store rule sees through `sudo -u x` (its options are skipped): the class is
+    # that rule's, the person's as for `sudo rm -rf .context` above
+    ("sudo -u x rm -rf .context", ac.DESTRUCTIVE_DATA),
     ("sudo -u root git push --force origin main", ac.UNKNOWN),
     ("sudo -- git push --force", ac.UNKNOWN),
     ("kill -9 1; sudo -E git push --force origin main", ac.UNKNOWN),
