@@ -368,3 +368,128 @@ def test_template_custom_show_loses_only_dropped_slides(tmp_path):
     refs = [e.get(f"{{{r}}}id") for e in got.part._element.iter(f"{{{p}}}sld")]
     assert len(refs) == 1
     assert got.part.related_part(refs[0]) is got.slides[0].part
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def assert_links_resolve(prs) -> None:
+    """Every relationship id a slide's XML names exists in that slide's relationships."""
+    r = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    for n, slide in enumerate(prs.slides, start=1):
+        rels = slide.part.rels
+        for el in slide._element.iter():
+            for k, v in el.attrib.items():
+                if k.startswith(r):
+                    assert v in rels, f"slide {n}: {k} -> {v} has no relationship"
+
+
+def slide_parts_in_package(prs) -> set:
+    return {p for p in prs.part.package.iter_parts()
+            if str(p.partname).startswith("/ppt/slides/slide")}
+
+
+def run_template(tmp_path, tpl, n_pages=2, extra=()):
+    make_pngs(tmp_path / "slides", n_pages)
+    out = tmp_path / "deck.pptx"
+    code = ex.main(["--slides", str(tmp_path / "slides"), "--out", str(out),
+                    "--template", str(tpl), "--keep-head", "2", "--base-index", "3",
+                    "--keep-tail", "2", *extra])
+    return code, out
+
+
+def test_base_sample_text_in_body_placeholder_is_replaced(tmp_path, capsys):
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path, base_layout=1)
+    prs = Presentation(str(tpl))
+    body = [p for p in prs.slides[2].placeholders if p.placeholder_format.idx == 1][0]
+    body.text = "Sample body text"
+    body_box = box(body)
+    prs.save(str(tpl))
+    code, out = run_template(tmp_path, tpl)
+    assert code == 0
+    assert "sample content" in capsys.readouterr().out
+    for slide in list(Presentation(str(out)).slides)[2:4]:
+        assert "Sample body text" not in texts(slide)
+        assert not list(slide.placeholders)
+        page = [p for p in pictures(slide) if p.name != "Base Logo"]
+        assert len(page) == 1 and inside(box(page[0]), body_box)
+
+
+def test_links_to_dropped_slides(tmp_path, capsys):
+    """A kept slide that links to a dropped one stays unchanged (with a note); the
+    base's link to a dropped slide is not copied; its link to a kept slide is."""
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path)
+    prs = Presentation(str(tpl))
+    s = list(prs.slides)
+    s[0].shapes[0].click_action.target_slide = s[2]          # cover -> base (dropped)
+    to_self = s[2].shapes.add_textbox(Inches(1), Inches(1), Inches(1), Inches(0.3))
+    to_self.click_action.target_slide = s[2]                  # base -> itself (dropped)
+    to_end = s[2].shapes.add_textbox(Inches(3), Inches(1), Inches(1), Inches(0.3))
+    to_end.name = "To End"
+    to_end.click_action.target_slide = s[4]                   # base -> tail (kept)
+    prs.save(str(tpl))
+
+    code, out = run_template(tmp_path, tpl)
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "kept template slide 1 links to template slide 3" in printed
+    got = Presentation(str(out))
+    o = list(got.slides)
+    t = list(Presentation(str(tpl)).slides)
+    assert signature(o[0]) == signature(t[0])
+    assert_links_resolve(got)
+    for slide in o[2:4]:
+        targets = [r.target_part for r in slide.part.rels.values() if r.reltype.endswith("/slide")]
+        assert targets == [o[-1].part]
+        link = {sh.name: sh for sh in slide.shapes}["To End"].click_action
+        assert link.target_slide.part is o[-1].part
+
+
+def test_chart_on_base_is_not_shared(tmp_path, capsys):
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path)
+    prs = Presentation(str(tpl))
+    data = CategoryChartData()
+    data.categories = ["a", "b"]
+    data.add_series("s", (1, 2))
+    prs.slides[2].shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1),
+                                   Inches(3), Inches(2), data)
+    prs.save(str(tpl))
+    code, out = run_template(tmp_path, tpl)
+    assert code == 0
+    assert "chart part" in capsys.readouterr().out
+    got = Presentation(str(out))
+    assert_links_resolve(got)
+    for slide in list(got.slides)[2:4]:
+        assert not any(sh.has_chart for sh in slide.shapes)
+        assert not [r for r in slide.part.rels.values() if r.reltype.endswith("/chart")]
+        assert "Footer Box" in {sh.name for sh in slide.shapes}
+
+
+def test_main_template_result_has_whole_links_and_no_dropped_slide(tmp_path):
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path)
+    code, out = run_template(tmp_path, tpl, n_pages=3)
+    assert code == 0
+    got = Presentation(str(out))
+    assert_links_resolve(got)
+    assert slide_parts_in_package(got) == {sl.part for sl in got.slides}
+
+
+def test_environment_errors_exit_2_and_leave_no_temp_file(tmp_path, capsys):
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path)
+    make_pngs(tmp_path / "slides", 1)
+    folder = tmp_path / "is_a_folder.pptx"
+    folder.mkdir()
+    assert ex.main(["--slides", str(tmp_path / "slides"), "--out", str(folder)]) == 2
+    # every slide kept as head and no --base-index: say what is missing
+    assert ex.main(["--slides", str(tmp_path / "slides"), "--out", str(tmp_path / "o.pptx"),
+                    "--template", str(tpl), "--keep-head", "5"]) == 2
+    assert "give --base-index" in capsys.readouterr().err
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]

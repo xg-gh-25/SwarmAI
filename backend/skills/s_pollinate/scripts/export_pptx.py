@@ -19,8 +19,10 @@ With a template (``--template T.pptx``):
   * the other template slides (between head and tail, the base included) are not
     in the result; PowerPoint sections and custom shows are updated to match, and
     the template file itself is never written.
-  * a chart, video or embedded object on the base slide is shared by all content
-    slides (the result notes this).
+  * charts, media, embedded objects and comments on the base slide, and links from
+    it to slides that leave the deck, are not copied (each slide must own its own;
+    the result notes it). Kept template slides are never changed, even when they
+    link to a slide that leaves the deck (the result notes that too).
 
 After writing, the script opens the result again and checks it: slide count, kept
 slides unchanged, one picture per content page, no empty placeholder left, sections
@@ -39,6 +41,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -75,8 +78,8 @@ CONTENT_PH = {
 }
 # Relationships of a slide that belong to that slide alone and are not copied.
 SKIP_RELS = {RT.SLIDE_LAYOUT, RT.NOTES_SLIDE}
-# Relationships that copies can share safely; anything else (a chart, a video, an
-# embedded object) is shared too, but the result says so.
+# Relationships a copy of the base slide shares with it. Anything else (a chart,
+# media, an embedded object, comments) belongs to one slide and is not copied.
 SHARED_OK_RELS = SKIP_RELS | {RT.IMAGE, RT.HYPERLINK, RT.SLIDE, RT.TAGS}
 
 
@@ -219,7 +222,8 @@ def _shows_master_shapes(*cslds_owners) -> bool:
 def content_area(base, slide_w: int, slide_h: int, notes: list[str]) -> tuple[Box, object | None]:
     """Where the picture goes on a copy of ``base``, and the placeholder it replaces.
 
-    1. The largest empty content placeholder on the base slide.
+    1. The largest content placeholder (body, object, picture, ...) on the base
+       slide; sample content in it is replaced by the picture.
     2. Else the slide without the header and footer shapes: every visible shape of
        the slide, its layout and (when shown) its master counts, except very large
        ones (backgrounds and side bars). A shape whose centre is in the upper half
@@ -227,13 +231,15 @@ def content_area(base, slide_w: int, slide_h: int, notes: list[str]) -> tuple[Bo
     """
     candidates = []
     for shape in base.shapes:
-        if shape.is_placeholder and _is_empty_placeholder(shape) \
-                and _ph_type(shape) in CONTENT_PH:
+        if shape.is_placeholder and _ph_type(shape) in CONTENT_PH:
             b = _box(shape)
             if b and b.w > 0 and b.h > 0:
                 candidates.append((b.w * b.h, b, shape))
     if candidates:
         _, b, shape = max(candidates, key=lambda c: c[0])
+        if not _is_empty_placeholder(shape):
+            notes.append(f"the content placeholder '{shape.name}' on the base slide has "
+                         "sample content; the picture replaces it on every page")
         return b, shape
 
     chrome = [s for s in base.shapes if not _is_empty_placeholder(s)]
@@ -266,12 +272,53 @@ def _remap_rids(element, mapping: dict[str, str]) -> None:
                 el.set(key, mapping[value])
 
 
-def copy_slide(prs, base):
-    """Append a new slide that looks like ``base``: same layout, background, shapes."""
+def _drop_skipped(csld, skipped: set[str]) -> None:
+    """Remove what refers to a relationship the copy does not get.
+
+    A hyperlink element is removed on its own (the shape stays); any other element
+    (a chart frame, a video, an embedded object) takes its whole top-level shape.
+    """
+    hlinks = {f"{{{A_NS}}}hlinkClick", f"{{{A_NS}}}hlinkHover"}
+    hits = [el for el in csld.iter()
+            if any(k.startswith(f"{{{R_NS}}}") and v in skipped for k, v in el.attrib.items())]
+    tree, bg = csld.spTree, csld.find(f"{{{P_NS}}}bg")
+    for el in hits:
+        if el.tag in hlinks:
+            target = el
+        else:
+            target = el
+            while target.getparent() is not None and target.getparent() is not tree \
+                    and target is not bg:
+                target = target.getparent()
+        parent = target.getparent()
+        if parent is not None:
+            parent.remove(target)
+
+
+def copy_slide(prs, base, dropped_parts: set, notes: set[str]):
+    """Append a new slide that looks like ``base``: same layout, background, shapes.
+
+    Images, hyperlinks and links to kept slides are shared with the base. Charts,
+    media, embedded objects and comments belong to one slide, and links to slides
+    that leave the deck would keep those slides in the file, so copies do not get
+    them (``notes`` says what was left out).
+    """
     new = prs.slides.add_slide(base.slide_layout)
-    mapping = {}
+    mapping, skipped = {}, set()
     for rid, rel in base.part.rels.items():
         if rel.reltype in SKIP_RELS:
+            continue
+        if rel.reltype == RT.SLIDE and not rel.is_external \
+                and rel.target_part in dropped_parts:
+            skipped.add(rid)
+            notes.add("a link on the base slide points to a slide that is not in the "
+                      "result; content slides do not get that link")
+            continue
+        if rel.reltype not in SHARED_OK_RELS:
+            skipped.add(rid)
+            kind = rel.reltype.rsplit("/", 1)[-1]
+            notes.add(f"the base slide holds a {kind} part; content slides do not get it "
+                      "(each slide must own its own)")
             continue
         if rel.is_external:
             mapping[rid] = new.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
@@ -307,6 +354,8 @@ def copy_slide(prs, base):
             dst_tree.addprevious(dup)
         else:
             dst_csld.append(dup)
+    if skipped:
+        _drop_skipped(dst_csld, skipped)
 
     for tag in ("clrMapOvr",):
         src = base._element.find(f"{{{P_NS}}}{tag}")
@@ -319,7 +368,7 @@ def copy_slide(prs, base):
     return new
 
 
-def build_templated(pictures: list[Path], template: Path, head: int, base_index: int,
+def build_templated(pictures: list[Path], template: Path, head: int, base_index: int | None,
                     tail: int, notes: list[str]):
     try:
         prs = Presentation(str(template))
@@ -334,6 +383,11 @@ def build_templated(pictures: list[Path], template: Path, head: int, base_index:
     if head + tail > total:
         raise UsageError(f"--keep-head {head} + --keep-tail {tail} is more than the "
                          f"template's {total} slides")
+    if base_index is None:
+        if head >= total:
+            raise UsageError("every template slide is kept as head, so give "
+                             "--base-index to say which slide to copy for the pages")
+        base_index = head + 1
     if not 1 <= base_index <= total:
         raise UsageError(f"--base-index {base_index} is outside the template's "
                          f"slides 1..{total}")
@@ -341,20 +395,32 @@ def build_templated(pictures: list[Path], template: Path, head: int, base_index:
     base = prs.slides[base_index - 1]
 
     area, used_ph = content_area(base, sw, sh, notes)
-    if any(r.reltype not in SHARED_OK_RELS for r in base.part.rels.values()):
-        notes.append(f"template slide {base_index} holds a chart, media or embedded "
-                     "object; every content slide shares that one object")
-    used_idx = list(base.shapes).index(used_ph) if used_ph is not None else None
+    # the copy has the base's shape ids, so the placeholder is found by its id
+    used_id = used_ph.shape_id if used_ph is not None else None
+    template_slides = list(prs.slides)
+    kept_idx = list(range(head)) + list(range(total - tail, total))
+    dropped_parts = {template_slides[i].part for i in range(total) if i not in kept_idx}
 
+    copy_notes: set[str] = set()
     for pic in pictures:
         iw, ih = image_size(pic)
-        slide = copy_slide(prs, base)
-        shapes = list(slide.shapes)
-        for i, shape in enumerate(shapes):
-            if i == used_idx or _is_empty_placeholder(shape):
+        slide = copy_slide(prs, base, dropped_parts, copy_notes)
+        for shape in list(slide.shapes):
+            if shape.shape_id == used_id or _is_empty_placeholder(shape):
                 shape._element.getparent().remove(shape._element)
         b = fit(iw, ih, area)
         slide.shapes.add_picture(str(pic), Emu(b.x), Emu(b.y), Emu(b.w), Emu(b.h))
+
+    notes.extend(sorted(copy_notes))
+    position = {sl.part: i + 1 for i, sl in enumerate(template_slides)}
+    for i in kept_idx:
+        for rel in template_slides[i].part.rels.values():
+            if rel.reltype == RT.SLIDE and not rel.is_external \
+                    and rel.target_part in dropped_parts:
+                notes.append(f"kept template slide {i + 1} links to template slide "
+                             f"{position[rel.target_part]}, which is not in the result; "
+                             "the kept slide is not changed, so that link and its "
+                             "target stay in the file")
 
     id_list = prs.slides._sldIdLst
     entries = list(id_list)
@@ -472,6 +538,19 @@ def verify(out: Path, pictures: list[Path], template: Path | None, head: int, ta
 # ---------------------------------------------------------------- main
 
 
+def save_atomic(prs, out: Path) -> None:
+    """Write to a temporary file next to ``out``, then move it into place, so a
+    failed save never leaves a half-written deck."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
+    try:
+        prs.save(str(tmp))
+        os.replace(tmp, out)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Export slide pictures (NN-<id>.png) to a PPTX, optionally on a template.")
@@ -510,16 +589,24 @@ def main(argv: list[str] | None = None) -> int:
                              "size is kept")
             head = args.keep_head or 0
             tail = args.keep_tail or 0
-            base_index = args.base_index if args.base_index is not None else head + 1
-            prs, area = build_templated(pictures, args.template, head, base_index,
+            prs, area = build_templated(pictures, args.template, head, args.base_index,
                                         tail, notes)
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        prs.save(str(args.out))
+        save_atomic(prs, args.out)
     except UsageError as exc:
         print(f"export_pptx: {exc}", file=sys.stderr)
         return 2
+    except OSError as exc:
+        print(f"export_pptx: cannot write {args.out}: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - 1 means "the result failed its check"
+        print(f"export_pptx: unexpected error ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
+        return 2
 
-    problems = verify(args.out, pictures, args.template, head, tail, area)
+    try:
+        problems = verify(args.out, pictures, args.template, head, tail, area)
+    except Exception as exc:  # noqa: BLE001 - an unreadable result is a failed check
+        problems = [f"cannot read the written file back: {type(exc).__name__}: {exc}"]
     result = {"ok": not problems, "out": str(args.out), "pages": len(pictures),
               "slides": len(pictures) + head + tail, "template": str(args.template)
               if args.template else None, "notes": notes, "problems": problems}
