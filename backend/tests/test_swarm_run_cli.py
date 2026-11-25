@@ -605,3 +605,15 @@ def test_a_runs_review_snapshot_needs_no_git_identity_either(tmp_path):
     (repo / "a.txt").write_text("b\n")
     snap = rw.snapshot_commit(repo, "run_0123456789ab", "r1")
     assert _g(repo, "log", "-1", "--format=%an <%ae>", snap["sha"]) == "swarm-run <run@swarm.local>"
+
+
+def test_watched_reads_the_child_dispatch_call_only():
+    # the Swarm Run card follows a real `pipeline-v1 child … dispatch` call, read through
+    # core/pipeline_command, never a mention of the words
+    from core.swarm_run_card import watched
+    base = '"$SWARM_BACKEND_BIN" pipeline-v1 child'
+    assert watched(f"{base} --project P --run-id run_12345678 dispatch W1")
+    assert watched(f"cd /tmp && {base} dispatch W1 2>&1 | tail -1")
+    assert not watched(f"{base} --project P --run-id run_12345678 status")
+    assert not watched("echo 'pipeline-v1 child --project P dispatch W1'")
+    assert not watched(f"cat > /tmp/n.md <<'EOF'\n{base} dispatch W1\nEOF")

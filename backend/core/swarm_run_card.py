@@ -24,16 +24,28 @@ import shlex
 from typing import Any, Optional
 
 BLOCK_TYPE = "swarm_run"
-_CHILD_DISPATCH_RE = re.compile(r"\bpipeline-v1\s+child\b(?:\s+--?\S+(?:\s+[^-\s]\S*)?)*\s+dispatch\b")
 _RUN_RE = re.compile(r"run_[0-9a-f]{8,32}")
 _SKEW_S = 5.0
 
 
 def watched(command: Any) -> bool:
+    """Does *command* run ``pipeline-v1 child [options] dispatch …``? Recognised by
+    core/pipeline_command, the one place that reads pipeline calls."""
     if not isinstance(command, str):
         return False
+    from core import pipeline_command
     from core.swarm_out_card import _without_heredoc_bodies
-    return bool(_CHILD_DISPATCH_RE.search(_without_heredoc_bodies(command)))
+    text = _without_heredoc_bodies(command)
+    if not pipeline_command.mentions(text):
+        return False
+    for call in pipeline_command.calls(text)[0]:
+        argv = call.get("argv") or []
+        if call["tool"] != "pipeline_v1" or call["sub"] != "child":
+            continue
+        rest = argv[argv.index("child") + 1:]
+        if "dispatch" in rest and (rest[0] == "dispatch" or rest[0].startswith("-")):
+            return True
+    return False
 
 
 def _run_id(command: str) -> Optional[str]:
