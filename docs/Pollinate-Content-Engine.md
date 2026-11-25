@@ -142,9 +142,9 @@ a work, so the next "change the title" is a normal revision.
 |---|---|
 | `init --dir D --kind K --title T [--style S] [--size WxH]` | Creates the folder, `work.json`, an empty source and `.gitignore`; registers the work |
 | `adopt --dir D --kind K [--src FILE]` | Registers an existing work in place; adds missing slide ids; stores `v001` (`by: user`) |
-| `open --dir D --scope ids [--add N] [--remove ids] [--shared] [--note "…"]` | Absorbs hand edits first, then records the declared scope |
+| `open --dir D --scope ids [--add N] [--remove ids] [--shared] [--mine] [--note "…"]` | Absorbs hand edits first, then records the declared scope; `--mine` keeps edits the agent made before opening as its own, refused if any falls outside the scope |
 | `cut --dir D [--formats html,pdf,png,pptx] [--template T.pptx …] [--reference R]` | Render → measure → craft checks → (PPTX) → guard → new version |
-| `render --dir D [--formats …] [--version V --out D]` | Renders without making a version |
+| `render --dir D [--formats …] [--version V --out D]` | Renders without making a version; refused while the source differs from the current version and no revision is open |
 | `list` | Prints the registry |
 
 `K` is `deck`, `poster`, `page` or `copy`. Every script uses the same exit codes: **0**
@@ -167,6 +167,14 @@ subtitle must not wrap, check the other slides too" is every slide with a subtit
 version, `open` stores them as `vNNN-user` (`by: user`) and uses that as the base. It also
 says so, because the script cannot prove who made the edit, only that it was on disk and
 not in a version. The agent never redoes or "cleans up" anything in it.
+
+The agent's own edits cannot slip in this way unseen. With no revision open, `render`
+refuses a source that differs from the current version, so an edit made before `open` can
+be neither looked at nor delivered. When the edit is the agent's, it opens with `--mine`:
+the edit stays in this revision as the agent's work, and `open` refuses if the guard finds
+any of it outside the scope (otherwise a wrong `--mine` could make the guard demand that a
+person's edit be undone). An agent edit made with no render in between is still stored as
+the person's version: the scripts do not see who wrote a file.
 
 **3. Edit only the scope.** The agent reads the source fresh from disk after `open` and
 keeps every other `<section>` byte for byte, with its images, portraits and notes.
@@ -383,7 +391,7 @@ from the request and does not ask which one:
 | a change to something that exists | revise loop |
 | to read or edit a .pptx file itself | `s_pptx`, not Pollinate |
 | a Word or Excel file | `s_docx` or `s_xlsx` |
-| a video | not in this version; the agent says so and offers a deck or poster |
+| a video | not Pollinate: an installed video skill takes it; with none, the agent says so and offers a deck or poster |
 
 **In the desktop app.** The Pollinate overlay (WORK zone) shows the registered works first
 (`GET /api/pollinate/works`): one card per work with its cover thumbnail, title, kind,
@@ -411,7 +419,7 @@ through chat.
 | **Review is capped and has no veto** | Unbounded review rounds cost more than they find; the decision stays with the scripts and the person. |
 | **Pinned browser, network blocked** | The same source must render the same way every time, offline, with the fonts it was designed with. |
 
-**Not in this version:** video, a work wall with version history in the overlay, starting a
+**Not in this version:** video as a Pollinate kind (an installed video skill takes video requests), a work wall with version history in the overlay, starting a
 work from the app's top input box, one shared visual style across kinds, and a Pipeline
 mode for multi-kind content packages. These are candidates, to be decided from real use.
 

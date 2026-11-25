@@ -24,7 +24,7 @@ Read the request, then pick one path. Do not ask which path to use.
 | A long image (长图) or a report (报告, dashboard, scorecard) | Work flow | cards/brief.md, kinds/page.md |
 | Several kinds from one message (a deck plus a 小红书 post) | Work flow, one work per kind | cards/brief.md, then each kind page |
 | A change to something that exists ("改这份 deck", "revise this deck", "第 3 页字太小") | Revise loop | cards/revise.md |
-| A video | Not in this version. Video comes in phase 2; say so and offer a deck or poster instead. | — |
+| A video | Not Pollinate. If an installed skill makes videos (its description says so), hand the request to it; with none, say video is not available yet and offer a deck or poster | that skill's SKILL.md |
 | Read or edit a .pptx file itself (fix a typo inside a .pptx) | Not Pollinate: use s_pptx | — |
 | A Word or Excel file | Not Pollinate: use s_docx or s_xlsx | — |
 
@@ -84,9 +84,9 @@ where `$SKILL_DIR` is this skill's base directory (shown when the skill loads).
 |---|---|
 | `work.py init --dir D --kind K --title T [--style S] [--size 1920x1080]` | Creates the folder, `work.json` and an empty source file, and registers the work |
 | `work.py adopt --dir D --kind K [--src <existing html>]` | Registers an existing work in place; adds missing slide ids; makes v001 (`by: user`) |
-| `work.py open --dir D --scope id,id [--add N] [--remove id,id] [--note "…"]` | Absorbs hand edits first: if the files on disk differ from the current version, saves them as `vNNN-user` (`by: user`) and uses that as the base; records the open scope |
+| `work.py open --dir D --scope id,id [--add N] [--remove id,id] [--note "…"] [--shared] [--mine]` | Absorbs hand edits first: if the files on disk differ from the current version, saves them as `vNNN-user` (`by: user`) and uses that as the base; records the open scope. `--mine`: the edits on disk are yours (made before you opened); they stay in this revision, and open refuses if any falls outside the scope |
 | `work.py cut --dir D [--formats html,pdf,png,pptx] [--template T.pptx --keep-head N --base-index I --keep-tail M] [--reference R]` | Render → measure → craft checks → guard → write a new version; updates `current` only if all pass; clears the open scope |
-| `work.py render --dir D [--formats …]` | Renders the current source to `out/` only; no new version |
+| `work.py render --dir D [--formats …]` | Renders the current source to `out/` only; no new version. Refused (exit 2) when the source differs from the current version and no revision is open: open first |
 | `work.py list` | Prints the registry |
 
 `K` is `deck`, `poster`, `page` or `copy`. Exit codes for every script: **0** passed,
@@ -126,6 +126,9 @@ a .pptx template are `cut --reference` and `cut --template`, kinds/deck.md); `re
 2. **Edit only that scope.** Read the files fresh from disk. Do not touch other slides, not
    even to "tidy" them. If the same problem is on other slides ("check the other slides
    for the same issue"), put those slides in the scope too.
+   If you already edited before opening, say so with `--mine`: those edits are yours, not
+   the person's, and they must fit the scope. Never leave your own edit to be stored as
+   the person's version.
 3. **Cut.** `work.py cut --dir D`. If the guard fails, you changed something outside the
    scope: undo that change. Do not widen the scope to make the guard pass, unless the
    person asked for that change.

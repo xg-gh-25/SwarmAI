@@ -1,8 +1,10 @@
 # Card: cut a version
 
 A version is what you hand over. Cut one when you are ready to show the person, not after
-every edit. While you work, `work.py render --dir D` gives you outputs to look at without
-making a version.
+every edit. While a revision is open (or before the first version), `work.py render --dir D`
+gives you outputs to look at without making a version. With no revision open, render
+refuses a source that differs from the current version: open first (`--mine` if you made
+the edits).
 
 ## Run it
 

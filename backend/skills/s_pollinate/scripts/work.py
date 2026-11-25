@@ -15,11 +15,14 @@ Commands (design section 13.2):
           (nothing else in the file changes) and store v001 (by the person)
   open    start a revision: when the source on disk differs from the current
           version (the person edited it), store it first as ``<current>-user``;
-          then record the declared scope (``--scope``, ``--add``, ``--remove``)
+          then record the declared scope (``--scope``, ``--add``, ``--remove``).
+          ``--mine`` says those edits are the agent's own: they stay in this
+          revision instead, and only if the guard finds them inside the scope
   cut     render, measure, run the craft checks, run the guard, export PPTX and
           store a new version; ``current`` moves only when everything passes
-  render  render the source on disk into out/ (no version); ``--version V --out D``
-          renders an old version into D
+  render  render the source on disk into out/ (no version); refused when the source
+          differs from the current version and no revision is open (open first).
+          ``--version V --out D`` renders an old version into D
   list    print the registry
 
 The guard (design section 13.4) compares the new source with the base version
@@ -783,7 +786,7 @@ def cmd_open(args) -> int:
                    "shared": _shared_allowed(args), "at": now_iso()})
         _check_ids(meta, scope + remove, meta.get("slides") or [])
         save_meta(wdir, meta)
-        _print({"open": op, "user_version": None,
+        _print({"open": op, "user_version": None, "changed_by_user": [], "changed_by_agent": [],
                 "note": "a revision was already open; scope updated, base kept"})
         return 0
     _assign_ids(wdir, meta)
@@ -791,11 +794,35 @@ def cmd_open(args) -> int:
     current = version_entry(meta, meta.get("current"))
     files = collect_files(wdir, meta, keep=(current or {}).get("hashes", {}).get(SHARED, {}))
     state = compute_state(meta, files, rel)
-    _check_ids(meta, scope + remove, state["slides"])
+    mine = bool(getattr(args, "mine", False))
+    # With --mine the edits on disk belong to this revision, so a slide the agent already
+    # deleted is still a current slide that --remove (or --scope) may name.
+    known = state["slides"] + ([s for s in current.get("slides", []) if s not in state["slides"]]
+                               if mine and current else [])
+    _check_ids(meta, scope + remove, known)
     user_vid, changed = None, []
     if current is not None:
         changed = _differs(state, current)
-        if changed:
+        if changed and mine:
+            # The agent says the edits on disk are its own (made before it opened). They are
+            # not stored as the person's version: they stay on disk on top of current and
+            # must already fit the declared scope, by the same guard cut runs. Refusing here,
+            # not at cut, matters: a failed guard tells the agent to undo the change, and a
+            # wrong --mine would then undo an edit the person made.
+            proposed = {"scope": scope, "add": args.add or 0, "remove": remove,
+                        "note": args.note or "", "shared": _shared_allowed(args)}
+            g = guard(current, _base_raws(wdir, current), state, proposed)
+            if not g["ok"]:
+                details = "; ".join(f"{v['slide']} {v['kind']}: {v['detail']}" for v in g["violations"])
+                raise UsageError(
+                    f"--mine: changes on disk since {current['id']} fall outside the declared scope "
+                    f"({details}). If you made them, put those slides in --scope (or --remove, or "
+                    f"--shared for shared files). If the person made them, open without --mine: they "
+                    f"are stored as the person's version.")
+            print(f"note: {', '.join(changed)} changed on disk since {current['id']} and are kept as "
+                  f"this revision's own edits (--mine); cut checks them against the scope.",
+                  file=sys.stderr)
+        elif changed:
             user_vid = user_version_id(meta, wdir)
             stage = stage_snapshot(wdir, user_vid, files)
             seal_snapshot(wdir, stage, user_vid, {})
@@ -807,15 +834,54 @@ def cmd_open(args) -> int:
             meta["current"] = user_vid
             meta["slides"] = state["slides"]
             print(f"note: {', '.join(changed)} changed on disk since {current['id']} and were stored as "
-                  f"the person's version {user_vid}. If you made these edits yourself, tell the person.",
+                  f"the person's version {user_vid}. If you made these edits yourself, tell the person "
+                  f"(open --mine keeps your own edits as yours and checks them against the scope).",
                   file=sys.stderr)
     meta["open"] = {"scope": scope, "add": args.add or 0, "remove": remove, "note": args.note or "",
                     "shared": _shared_allowed(args), "at": now_iso(), "base": meta.get("current")}
     save_meta(wdir, meta)
     register(wdir, meta)
-    _print({"open": meta["open"], "user_version": user_vid, "changed_by_user": changed,
+    _print({"open": meta["open"], "user_version": user_vid,
+            "changed_by_user": [] if mine else changed, "changed_by_agent": changed if mine else [],
             "slides": state["slides"]})
     return 0
+
+
+def _unversioned_changes(wdir: Path, meta: dict):
+    """(changed, deleted): what differs on disk from the current version while no revision
+    is open, and which of those slides are gone from disk.
+
+    Empty when a revision is open (its edits are the revision's), when there is no current
+    version yet (the first source is being written), or when the disk matches current.
+    """
+    if meta.get("open") or not meta.get("current"):
+        return [], []
+    current = version_entry(meta, meta["current"])
+    if current is None:
+        return [], []
+    root, rel, _ = src_layout(wdir, meta)
+    files = collect_files(wdir, meta, keep=current.get("hashes", {}).get(SHARED, {}))
+    try:
+        state = compute_state(meta, files, rel)
+    except UsageError:
+        return [NO_ID], []
+    changed = _differs(state, current)
+    return changed, [s for s in changed if s in current.get("slides", []) and s not in state["slides"]]
+
+
+NO_ID = "sections without an id"
+
+
+def _open_hint(d: str, changed: list, deleted: list) -> str:
+    """The open --mine command that fits these changes: edited slides in --scope, deleted
+    ones in --remove, --shared for shared files."""
+    edited = [c for c in changed if c not in (SHARED, "order", NO_ID) and c not in deleted]
+    parts = [f"work.py open --dir {d} --scope {','.join(edited) or '<ids>'}"]
+    if deleted:
+        parts.append(f"--remove {','.join(deleted)}")
+    if SHARED in changed:
+        parts.append("--shared")
+    return " ".join(parts + ["--mine"])
 
 
 def _shared_allowed(args) -> bool:
@@ -1186,6 +1252,16 @@ def cmd_render(args) -> int:
     else:
         if args.out:
             raise UsageError("--out is only for --version")
+        # Edits made with no revision open never reach out/: shown or delivered from there, they
+        # would skip the guard, and the next open would store them as the person's version.
+        changed, deleted = _unversioned_changes(wdir, meta)
+        if changed:
+            raise UsageError(
+                f"{', '.join(changed)} changed on disk since {meta['current']} and no revision is open. "
+                f"If you made these edits: {_open_hint(args.dir, changed, deleted)} "
+                f"(cut then checks them against the scope). If the person made them: work.py open "
+                f"--dir {args.dir} --scope <ids you will change> (stores theirs as their version). "
+                f"Then render again.")
         src_root, out, review = root, wdir / "out", wdir / "review"
     craft = _load_craft()
     res = work_render.render(src_root, rel, meta["kind"], meta["size"], out, review, formats,
@@ -1229,6 +1305,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", help="what this revision does")
     p.add_argument("--shared", action="store_true",
                    help="allow changes to shared files and to the deck outside its slides")
+    p.add_argument("--mine", action="store_true",
+                   help="the changes already on disk are the agent's own: keep them in this revision "
+                        "(they must fit the scope) instead of storing them as the person's version")
     p = sub.add_parser("cut", help="render, check, guard and store a new version")
     p.add_argument("--dir", required=True)
     p.add_argument("--formats", help="comma separated: html,pdf,png,pptx")

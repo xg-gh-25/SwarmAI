@@ -35,6 +35,13 @@ If the files on disk differ from the current version, `open` first saves them as
 `vNNN-user` version and uses it as the base. That is the person's hand edit. Never redo or
 "clean up" anything in it.
 
+If those edits are yours (you changed the source before opening), add `--mine`: they stay
+in this revision as your work instead of becoming the person's version. `open --mine`
+refuses when any of them falls outside `--scope`. If a slide it names was the person's
+while your own edits are also on disk, do not sort them by guessing: undo your own edits
+(you know what you changed), open without `--mine` so theirs is stored as their version,
+then redo yours inside the revision.
+
 ## 4. Edit only the scope
 
 - Read the source fresh from disk after `open`; never write from a copy you held earlier.
