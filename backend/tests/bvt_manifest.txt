@@ -113,3 +113,4 @@ test_unattended_gate.py  # an automatic Needs You run: Bash passes only backend 
 test_attention_auto.py  # Swarm's own Needs You items run once each, one at a time; a run that did not work goes back to the person
 test_mount_freshness.py  # a Library mount is re-indexed when its files change, not twice at once, not on lock files or backups
 test_mount_markup_text.py  # a docs mount indexes an HTML/SVG page as the text it shows, slides rendered from script included
+test_mount_document_text.py  # a docs mount indexes pptx (grouped text, tables, notes), docx and pdf as text, untrusted input guarded

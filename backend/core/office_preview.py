@@ -96,8 +96,19 @@ def preview_xlsx(path: Path) -> dict:
         formulas.close()
 
 
+def _shapes(shapes, group_type):
+    """Every shape on a slide, the shapes inside a group (at any depth) included: a
+    designed deck keeps most of its text in grouped boxes."""
+    for shape in shapes:
+        if shape.shape_type == group_type:
+            yield from _shapes(shape.shapes, group_type)
+        else:
+            yield shape
+
+
 def preview_pptx(path: Path) -> dict:
-    """Per slide: title, text lines, tables, speaker notes, picture count."""
+    """Per slide: title, text lines, tables, speaker notes, picture count (shapes
+    inside groups included)."""
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -110,7 +121,7 @@ def preview_pptx(path: Path) -> dict:
         body: list[str] = []
         tables: list[list[list[str]]] = []
         images = 0
-        for shape in slide.shapes:
+        for shape in _shapes(slide.shapes, MSO_SHAPE_TYPE.GROUP):
             if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                 images += 1
             if getattr(shape, "has_table", False) and shape.has_table:

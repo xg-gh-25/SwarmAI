@@ -133,7 +133,7 @@ def test_an_untrusted_hit_is_named_inside_its_fence_without_its_title():
     assert len(notes) == 1 and notes[0]["source"] == repo["source"]
     assert "Ignore previous" not in notes[0]["content"]
     body = render_recall_body(BucketedRecall(query="q", buckets={"library": out}))
-    fenced = body.split("### Repo Documents — UNTRUSTED", 1)[1]
+    fenced = body.split("### Read-in Documents — UNTRUSTED", 1)[1]
     assert "1 more matching entry not shown" in fenced
 
 

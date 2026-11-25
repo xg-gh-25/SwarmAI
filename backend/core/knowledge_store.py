@@ -821,7 +821,9 @@ def index_text_items(store: "KnowledgeStore", key_prefix: str, items) -> dict:
     key under *key_prefix* not seen this pass is removed (the file is gone). A file
     whose text yields no chunk is not "seen", so its old chunks are removed too.
 
-    *items* may be a generator: one file's text is held at a time. Returns
+    A text of ``None`` keeps the file's chunks as they are (the caller knows it is
+    unchanged and reading it again costs). *items* may be a generator: one file's text
+    is held at a time. Returns
     ``{"written": chunks written, "files": content-bearing files, "removed": files
     pruned}``.
     """
@@ -831,6 +833,11 @@ def index_text_items(store: "KnowledgeStore", key_prefix: str, items) -> dict:
     seen: set[str] = set()
     for rel, content in items:
         source_file = f"{key_prefix}{rel}"
+        if content is None:
+            # the caller knows the file is unchanged: its chunks stand, if it has any
+            if store.get_existing_hashes(source_file):
+                seen.add(source_file)
+            continue
         chunks = chunk_markdown(content or "", source_file)
         if not chunks:
             continue

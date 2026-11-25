@@ -22,11 +22,13 @@ still valid; recall reads the LIVE source on a hit.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
 import threading
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -67,7 +69,9 @@ def _add_column(conn: sqlite3.Connection, name: str, decl: str) -> None:
 # (the files already on disk are what the change is for). 1: every UTF-8 text file.
 # 2: Office lock files and backup copies are not read (_not_content).
 # 3: an HTML or SVG file is indexed as the text it shows (_markup_text).
-DOCS_INDEX_VERSION = 3
+# 4: a pptx, docx or pdf is indexed as its text (_document_text); h1 splits a page
+#    like h2; a long text with no heading is cut into parts (_in_parts).
+DOCS_INDEX_VERSION = 4
 
 # A backup copy's suffix: x.bak, x.bak2, x.html.bak-1788432226, x.html.bak-title.
 _BACKUP_SUFFIX = re.compile(r"\.bak(?:\d*|[-_.][^/]*)$", re.IGNORECASE)
@@ -117,7 +121,7 @@ _ENCODED_RUN = re.compile(r"[A-Za-z0-9+/=_-]{200,}")
 def _markup_text(markup: str, *, scripts: bool = True) -> str:
     """The text an HTML or SVG page shows, as markdown-ish plain text.
 
-    Kept: the title (a ``#`` line), text nodes, and h2/h3 as ``##`` / ``###`` lines,
+    Kept: the title (a ``#`` line), text nodes, and h1/h2 as ``##``, h3 as ``###`` lines,
     so ``chunk_markdown`` splits a deck at its slide headings; block elements end a
     line. Dropped: tags and attributes, comments, and what is never shown as text
     (``script``, ``style``, ``noscript``, ``template``, the ``head`` apart from its
@@ -132,7 +136,7 @@ def _markup_text(markup: str, *, scripts: bool = True) -> str:
     hidden = {"script", "style", "noscript", "template", "head"}
     blocks = {"p", "div", "li", "ul", "ol", "tr", "td", "th", "table", "section",
               "article", "header", "footer", "nav", "aside", "main", "br", "hr",
-              "blockquote", "pre", "figure", "figcaption", "dt", "dd", "h1", "h4",
+              "blockquote", "pre", "figure", "figcaption", "dt", "dd", "h4",
               "h5", "h6", "text", "tspan", "g"}
 
     class _Text(HTMLParser):
@@ -156,8 +160,8 @@ def _markup_text(markup: str, *, scripts: bool = True) -> str:
                 self.skip += 1
             elif tag in hidden:
                 self.skip += 1
-            elif tag in ("h2", "h3"):
-                self.out.append("\n\n" + "#" * int(tag[1]) + " ")
+            elif tag in ("h1", "h2", "h3"):
+                self.out.append("\n\n" + "#" * max(2, int(tag[1])) + " ")
             elif tag in blocks:
                 self.out.append("\n")
 
@@ -173,7 +177,7 @@ def _markup_text(markup: str, *, scripts: bool = True) -> str:
                 self.skip = max(0, self.skip - 1)
             elif tag in hidden:
                 self.skip = max(0, self.skip - 1)
-            elif tag in ("h2", "h3"):
+            elif tag in ("h1", "h2", "h3"):
                 self.out.append("\n\n")
             elif tag in blocks:
                 self.out.append("\n")
@@ -190,8 +194,8 @@ def _markup_text(markup: str, *, scripts: bool = True) -> str:
     try:
         parser.feed(markup)
         parser.close()
-    except Exception:  # noqa: BLE001 — a malformed page gives what was read so far
-        pass
+    except Exception as exc:  # noqa: BLE001 — a malformed page gives what was read so far
+        logger.debug("markup not fully parsed: %s", exc)
     text = "".join(parser.out)
     if scripts:
         for piece in parser.framed + _script_markup("".join(parser.scripts)):
@@ -205,6 +209,169 @@ def _markup_text(markup: str, *, scripts: bool = True) -> str:
         return ""
     title = " ".join("".join(parser.title).split())
     return (f"# {title}\n\n" if title else "") + body.strip() + "\n"
+
+
+# Documents whose text sits inside a binary container: read through their parsers.
+_DOCUMENT_SUFFIXES = (".pptx", ".docx", ".pdf")
+_DOCUMENT_MAX_BYTES = 200 * 1024 * 1024   # a bigger file is not opened
+_PDF_MAX_PAGES = 500                       # a longer PDF is read up to here
+_DOCX_XML_MAX_BYTES = 30 * 1024 * 1024     # a docx's text part bigger than this is not parsed
+_DOCUMENT_SECONDS = 60                     # a document not read within this is given up
+
+
+def _document_text(path: Path) -> str:
+    """The text of a pptx, docx or pdf (``_read_document``), read in a short-lived
+    process of its own: a mounted file is untrusted, and a parser that a hostile file
+    keeps busy, crashes (a segfault) or blows up in memory then takes only that process
+    with it. One that does not answer within ``_DOCUMENT_SECONDS`` is killed. Any
+    failure is "no text" (""), logged, never an exception."""
+    import subprocess
+    from utils.backend_bin import py_command
+    try:
+        out = subprocess.run(py_command("-m", "core.library_mounts", "read-document", str(path)),
+                             stdin=subprocess.DEVNULL, capture_output=True,
+                             timeout=_DOCUMENT_SECONDS, check=False)
+    except subprocess.TimeoutExpired:
+        logger.warning("mount document %s: not read within %ss", path.name, _DOCUMENT_SECONDS)
+        return ""
+    except OSError as exc:
+        logger.warning("mount document %s: reader not started: %s", path.name, exc)
+        return ""
+    if out.returncode != 0:
+        logger.warning("mount document %s: reader ended with %s", path.name, out.returncode)
+        return ""
+    return out.stdout.decode("utf-8", errors="replace")
+
+
+def _read_document(path: Path) -> str:
+    """The text of a pptx (``## Slide N · title`` per slide, its text, tables and speaker
+    notes), a docx (through its HTML, so its headings split it) or a pdf (``## Page N``
+    per page), in this process; "" when it holds none or cannot be read. Every file is
+    untrusted: an Office file passes the zip-bomb guard before its parser opens it,
+    nothing executes macros, a file over ``_DOCUMENT_MAX_BYTES`` is not opened, a PDF
+    is read up to ``_PDF_MAX_PAGES``, and a parser error means "no text"."""
+    suffix = path.suffix.lower()
+    try:
+        if path.stat().st_size > _DOCUMENT_MAX_BYTES:
+            return ""
+        if suffix in (".pptx", ".docx"):
+            from core.office_preview import check_zip
+            check_zip(path)
+        if suffix == ".pptx":
+            return _pptx_text(path)
+        if suffix == ".docx":
+            return _docx_text(path)
+        if suffix == ".pdf":
+            return _pdf_text(path)
+    except Exception as exc:  # noqa: BLE001 — an unreadable document is one with no text
+        logger.debug("mount document %s not read: %s", path.name, exc)
+    return ""
+
+
+def _docx_text(path: Path) -> str:
+    """A docx's text through mammoth's HTML. Its main part is parsed into a DOM many
+    times its size, so a part over ``_DOCX_XML_MAX_BYTES`` (a small zip can unpack to
+    hundreds of MB) is not parsed; images are not read (mammoth would inline each as
+    base64 only for the text step to throw away)."""
+    import mammoth
+    with zipfile.ZipFile(path) as zf:
+        try:
+            if zf.getinfo("word/document.xml").file_size > _DOCX_XML_MAX_BYTES:
+                return ""
+        except KeyError:
+            return ""
+    with open(path, "rb") as fh:
+        html = mammoth.convert_to_html(
+            fh, convert_image=mammoth.images.img_element(lambda _image: {})).value
+    return _markup_text(html, scripts=False)
+
+
+# A text with no ## / ### heading is one chunk however long it is; past this size it is
+# cut into parts at paragraph (or line) ends, so recall returns the part that matched
+# rather than a whole report.
+_PART_CHARS = 3000
+_SECTION_LINE = re.compile(r"^#{2,3} ", re.MULTILINE)
+
+
+def _in_parts(text: str) -> str:
+    """*text* as is when it has a section heading or is short; else cut into
+    ``## Part N`` sections of about ``_PART_CHARS`` (a title line stays on top)."""
+    if len(text) <= _PART_CHARS or _SECTION_LINE.search(text):
+        return text
+    title, body = "", text
+    if text.startswith("# "):
+        title, _, body = text.partition("\n")
+        title += "\n\n"
+    blocks = [b for b in re.split(r"\n\s*\n", body) if b.strip()]
+    if len(blocks) == 1:
+        blocks = body.splitlines()
+    parts: list[str] = []
+    cur = ""
+    for block in blocks:
+        if cur and len(cur) + len(block) > _PART_CHARS:
+            parts.append(cur)
+            cur = ""
+        cur += block.strip() + "\n"
+    if cur.strip():
+        parts.append(cur)
+    return title + "\n".join(f"## Part {i}\n{p}" for i, p in enumerate(parts, 1))
+
+
+def _pptx_text(path: Path) -> str:
+    from core.office_preview import preview_pptx
+    parts: list[str] = []
+    for slide in preview_pptx(path)["slides"]:
+        lines = list(slide["body"])
+        for table in slide["tables"]:
+            lines += [" | ".join(c.strip() for c in row if c.strip()) for row in table]
+        if slide["notes"]:
+            lines.append(slide["notes"])
+        lines = [line for line in lines if line.strip()]
+        if not lines and not slide["title"]:
+            continue
+        head = f"## Slide {slide['index']}" + (f" · {slide['title']}" if slide["title"] else "")
+        parts.append(head + "\n" + "\n".join(lines))
+    return "\n\n".join(parts) + ("\n" if parts else "")
+
+
+def _pdf_text(path: Path) -> str:
+    import unicodedata
+    from pypdf import PdfReader
+    # pypdf logs every repaired cross-reference of a damaged file as a warning
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
+    reader = PdfReader(str(path))
+    if reader.is_encrypted and not reader.decrypt(""):
+        return ""          # protected: no text without its password
+    parts: list[str] = []
+    for i, page in enumerate(reader.pages[:_PDF_MAX_PAGES], start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:  # noqa: BLE001 — one bad page does not lose the others
+            logger.debug("mount pdf %s page %d not read: %s", path.name, i, exc)
+            continue
+        # NFKC: a PDF's CJK often comes out as compatibility forms (U+2F00 "⼀" for
+        # "一"), which no query typed by a person matches
+        text = unicodedata.normalize("NFKC", text)
+        text = "\n".join(" ".join(line.split()) for line in text.splitlines() if line.strip())
+        if text:
+            parts.append(f"## Page {i}\n{text}")
+    return "\n\n".join(parts) + ("\n" if parts else "")
+
+
+def _mtime(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _read_json(path: Path) -> dict:
+    """A small JSON object on disk, {} when it is missing or unreadable."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _not_content(name: str) -> bool:
@@ -959,12 +1126,28 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
             walked += 1
             if walked > _DOCS_SCAN_CAP:
                 break
+            if p.suffix.lower() in _DOCUMENT_SUFFIXES:
+                rel = p.relative_to(src).as_posix()
+                stamp = _mtime(p)
+                before = known.get(rel) or {}
+                if before.get("mtime") == stamp:
+                    # read before and unchanged since: its chunks stand (None keeps
+                    # them), or it gave no text (nothing to read again, a document that
+                    # timed out or crashed its reader included)
+                    documents[rel] = before
+                    if before.get("text"):
+                        yield rel, None
+                    continue
+                text = _in_parts(_document_text(p))
+                documents[rel] = {"mtime": stamp, "text": bool(text.strip())}
+                yield rel, text
+                continue
             try:
                 content = p.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue  # binary or unreadable → skip (content-decodability is the gate)
             if p.suffix.lower() in _MARKUP_SUFFIXES:
-                content = _markup_text(content)   # the text it shows, not its source
+                content = _in_parts(_markup_text(content))   # the text it shows, not its source
             yield p.relative_to(src).as_posix(), content
 
     from core.code_intel.build import write_lock
@@ -976,6 +1159,14 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
         if row is None or row["kind"] != "docs":
             return {"status": "skipped_non_docs", "chunks": 0}
         started = _index_started_stamp()
+        # Each document is read in a process of its own (seconds each), so one read
+        # before is not read again while its mtime is unchanged: documents.json holds
+        # each one's mtime and whether it gave text. A different DOCS_INDEX_VERSION
+        # reads them all again.
+        documents_path = _mounts_dir() / mount_id / "documents.json"
+        known = (_read_json(documents_path)
+                 if row["index_version"] == DOCS_INDEX_VERSION else {})
+        documents: dict = {}
         with open_vec_db() as conn:
             if conn is None:  # nothing read, nothing recorded: the next sweep tries again
                 return {"status": "store_unavailable", "chunks": 0}
@@ -986,6 +1177,8 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
             # as indexed (honesty, run_139d7652 badge invariant) — and keys of files that
             # vanished since the last index are pruned.
             stats = index_text_items(kstore, key_prefix, _items())
+        documents_path.parent.mkdir(parents=True, exist_ok=True)
+        documents_path.write_text(json.dumps(documents), encoding="utf-8")
     total_chunks, seen_keys = stats["written"], stats["files"]
 
     if total_chunks > 0 or seen_keys:
@@ -1045,9 +1238,13 @@ def main(argv: list[str] | None = None) -> int:
     import sqlite3
     import sys
     args = sys.argv[1:] if argv is None else argv
+    if len(args) == 2 and args[0] == "read-document":
+        # one untrusted document's text on stdout (_document_text runs this)
+        sys.stdout.write(_read_document(Path(args[1])))
+        return 0
     if len(args) != 2 or args[0] not in ("index-code", "index-docs"):
-        print("usage: python -m core.library_mounts index-code|index-docs <mount id>",
-              file=sys.stderr)
+        print("usage: python -m core.library_mounts index-code|index-docs <mount id>"
+              " | read-document <path>", file=sys.stderr)
         return 2
     from jobs.paths import DB_PATH
     conn = sqlite3.connect(str(DB_PATH))
@@ -1061,12 +1258,12 @@ def main(argv: list[str] | None = None) -> int:
         with write_lock(_queue_lock_path(args[1]), wait=False) as queued:
             if not queued:
                 result = {"status": "already_queued"}
-            elif args[0] == "index-docs":
-                result = index_docs_mount(store, args[1])
             else:
-                # one full parse at a time across the machine, as the build children
+                # one index at a time across the machine, as the build children: a
+                # deploy that bumps a version re-indexes every mount at once
+                index = index_docs_mount if args[0] == "index-docs" else index_code_mount
                 with rebuild_turn() as turn:
-                    result = index_code_mount(store, args[1]) if turn else {"status": "no_turn"}
+                    result = index(store, args[1]) if turn else {"status": "no_turn"}
     finally:
         conn.close()
     print(json.dumps({"mount": args[1], **result}))

@@ -40,16 +40,16 @@ def client(tmp_path, monkeypatch):
     import core.vec_db as vdb
     monkeypatch.setattr(vdb, "_DEFAULT_DB_PATH", db_path, raising=False)
 
-    # A code mount is indexed by a child process (the daemon never parses); here the
+    # A mount is indexed by a child process (the daemon never parses); here the
     # child's entrypoint runs in this process, in place of the spawn, so the full loop
-    # mount → graph → search is still driven for real.
+    # mount → index → search is still driven for real.
     import core.code_intel.build as build
     import core.library_mounts as lm
     children = []
 
     def run_child(args):
         children.append(args)
-        assert args[:3] == ["-m", "core.library_mounts", "index-code"], args
+        assert args[:2] == ["-m", "core.library_mounts"] and args[2] in ("index-code", "index-docs"), args
         assert lm.main(args[2:]) == 0
     monkeypatch.setattr(build, "spawn_child", run_child)
 
@@ -86,19 +86,20 @@ def test_post_mount_code_registers_and_indexes(client, tmp_path):
 
 
 def test_post_mount_docs_indexes_content_at_mount_time(client, tmp_path):
-    """AC1+AC2 (B1, run_3f837bdd): a docs dir is CHUNKED into FTS5 at mount time —
-    no chat handoff, no briefing. Returns indexed + a chunk count. (Rewritten from
-    the old test_post_mount_docs_returns_chat_handoff — that fixture encoded the
-    now-deleted briefing-handoff behavior, so it was the bug, not the fix.)"""
+    """AC1+AC2 (B1, run_3f837bdd): a docs dir is CHUNKED into FTS5 at mount time by
+    its index child — no chat handoff, no briefing. The answer says indexing; the
+    child (run here in place of the spawn) stamps the mount once its chunks land."""
     d = tmp_path / "docs"; d.mkdir()
     (d / "note.md").write_text("# Widget plan\n\nShip the widget scoring engine in Q3.\n")
     resp = client.post(f"/api/library/mounts?path={d}")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["kind"] == "docs"
-    assert body["status"] == "indexed"
-    assert body["chunks"] > 0
+    assert body["status"] == "indexing"
     assert "next" not in body  # no chat handoff anymore
+    assert client.children[-1] == ["-m", "core.library_mounts", "index-docs", body["id"]]
+    listed = client.get("/api/library/mounts").json()["mounts"]
+    assert [m["last_synced"] is not None for m in listed if m["id"] == body["id"]] == [True]
 
 
 def test_mounted_docs_surfaces_in_search(client, tmp_path):
@@ -109,7 +110,8 @@ def test_mounted_docs_surfaces_in_search(client, tmp_path):
     (d / "raw.txt").write_text("plaintext note: flywheel metrics dashboard\n")
     r = client.post(f"/api/library/mounts?path={d}&scope=SwarmAI")
     assert r.status_code == 200, r.text
-    assert r.json()["status"] == "indexed"
+    assert r.json()["status"] == "indexing"
+    assert client.children and client.children[-1][2] == "index-docs"
     resp = client.get("/api/library/search?q=flywheel&scope=SwarmAI")
     assert resp.status_code == 200, resp.text
     body = resp.json()

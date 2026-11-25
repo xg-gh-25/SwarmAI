@@ -4719,6 +4719,7 @@
       "mountDialogTitle": "Add a folder to mount",
       "mountedCodeIndexing": "Mounted (code). Indexing it in the background; recall reaches it once it says indexed.",
       "mountedCodeEmpty": "Mounted (code), but no parseable source was found: recall can't reach it.",
+      "mountedDocsIndexing": "Mounted (docs). Indexing its files in the background; recall reaches them once it says indexed.",
       "mountedDocsEmpty": "Mounted (docs), but no text content was found: recall can't reach it.",
       "mountFailed": "Mount failed. See the logs.",
       "mountViaChat": "Say \"mount <path>\" in chat to add a folder.",

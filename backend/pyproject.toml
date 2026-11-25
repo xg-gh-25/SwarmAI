@@ -68,6 +68,8 @@ dependencies = [
     "watchfiles>=1.0.0",
     # Explorer delete → the OS trash (macOS Trash, Windows Recycle Bin, freedesktop trash)
     "send2trash>=1.8.3",
+    # Library docs mounts: the text of a mounted PDF (core.library_mounts._pdf_text); pure Python, BSD-3
+    "pypdf>=7.1,<8",
 ]
 
 [project.optional-dependencies]

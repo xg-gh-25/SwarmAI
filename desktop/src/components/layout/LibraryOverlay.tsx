@@ -68,16 +68,16 @@ const SHOWN_DAYS = 3;
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 const FOCUS = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]';
 const PANEL_ID = 'library-tab-panel';
-// after "Add folder" answers that a code mount is indexing in the background, the
+// after "Add folder" answers that a mount is indexing in the background, the
 // mounts list is re-read this often until it is indexed, for at most MOUNT_WATCH_MS
 const MOUNT_POLL_MS = 3000;
 const MOUNT_WATCH_MS = 10 * 60 * 1000;
 
-/** How often to re-read the mounts: while a watch is on and a code mount still has no
+/** How often to re-read the mounts: while a watch is on and a mount still has no
  *  index, every MOUNT_POLL_MS; otherwise not (false). */
 function mountPollMs(data: MountsList | undefined, watchUntil: number, now: number): number | false {
   if (now >= watchUntil || !data) return false;
-  const waiting = data.mounts.some((m) => m.kind === 'code' && m.enabled && !m.last_synced && m.health !== 'missing');
+  const waiting = data.mounts.some((m) => (m.kind === 'code' || m.kind === 'docs') && m.enabled && !m.last_synced && m.health !== 'missing');
   return waiting ? MOUNT_POLL_MS : false;
 }
 
@@ -407,8 +407,8 @@ function MountRowView({ m }: { m: MountRow }) {
 }
 
 // "+ Add folder": native folder picker (Tauri dialog plugin) → POST /library/mounts
-// (axios baseURL adds /api), which judges the kind, registers and indexes it. A large
-// code folder is indexed in the background (status 'indexing'): `onIndexing` starts
+// (axios baseURL adds /api), which judges the kind and registers it; its index is
+// built in the background (status 'indexing'): `onIndexing` starts
 // the mounts re-read, so its row turns "indexed" when the index lands.
 function AddFolderButton({ onIndexing }: { onIndexing: () => void }) {
   const { t } = useTranslation();
@@ -426,12 +426,13 @@ function AddFolderButton({ onIndexing }: { onIndexing: () => void }) {
             `/library/mounts?path=${encodeURIComponent(picked)}`,
           );
           const d = res.data;
-          if (d.kind === 'code' && d.status === 'indexing') onIndexing();
+          if (d.status === 'indexing') onIndexing();
           // a mount with nothing parseable is not reachable by recall: the toast says so
           toast(d.kind === 'code'
             ? (d.status === 'indexing' ? t('ui.LibraryOverlay.mountedCodeIndexing')
               : (d.symbols ?? 0) === 0 ? t('ui.LibraryOverlay.mountedCodeEmpty')
               : t('ui.LibraryOverlay.mountedCode', { count: d.symbols ?? 0 }))
+            : d.status === 'indexing' ? t('ui.LibraryOverlay.mountedDocsIndexing')
             : (d.chunks ?? 0) > 0 ? t('ui.LibraryOverlay.mountedDocs', { count: d.chunks ?? 0 })
             : t('ui.LibraryOverlay.mountedDocsEmpty'));
           void qc.invalidateQueries({ queryKey: ['library-mounts'] });

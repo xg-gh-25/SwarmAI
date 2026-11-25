@@ -4719,6 +4719,7 @@
       "mountDialogTitle": "选择要挂载的文件夹",
       "mountedCodeIndexing": "已挂载（代码），正在后台建索引；显示“已索引”后 recall 就能找到它。",
       "mountedCodeEmpty": "已挂载（代码），但没有找到能解析的源码，recall 找不到它。",
+      "mountedDocsIndexing": "已挂载（文档），正在后台建索引；显示“已索引”后 recall 就能找到它。",
       "mountedDocsEmpty": "已挂载（文档），但没有找到文本内容，recall 找不到它。",
       "mountFailed": "挂载失败，请查看日志。",
       "mountViaChat": "在聊天中说 \"mount <path>\" 来添加文件夹。",

@@ -492,7 +492,8 @@ def library_get(*, unit_id: Optional[str] = None, source: Optional[str] = None,
     if not DB_PATH.is_file():
         return []
     from core.knowledge_store import BIND_KEY_PREFIX
-    from core.recall_multi import _knowledge_shape_text, _knowledge_text, is_external_source
+    from core.recall_multi import (_knowledge_shape_text, _knowledge_text, is_external_source,
+                                   is_repo_doc_source)
     from core.run_protocol.run_knowledge import item_id
     from core.app_role import is_worker
     from core.vec_db import open_vec_db
@@ -521,7 +522,7 @@ def library_get(*, unit_id: Optional[str] = None, source: Optional[str] = None,
             continue
         seen.add(uid)
         hit = {"id": uid, "source": src, "heading": head or "", "text": whole}
-        if is_external_source(src):
+        if is_external_source(src) or is_repo_doc_source(src):   # as find marks it
             hit["external"] = True
         out.append(hit)
     return out

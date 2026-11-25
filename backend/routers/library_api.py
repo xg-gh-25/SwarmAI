@@ -160,12 +160,12 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
     """Register an external directory as a mount AND index it by kind.
 
     The +Add Folder button lands here. Judges the kind (a repo marker → code, else
-    docs), registers it in library_mounts, then indexes INLINE — recall-reachable at
-    mount time, no chat/LLM (B1, run_3f837bdd):
-      - code → index_code_mount in a child process (per-mount code_intel graph);
-        the response says ``indexing`` and the mount's last_synced follows
-      - docs → index_docs_mount (chunks the dir's UTF-8 text into the shared
-        Knowledge FTS5; returns chunk count)
+    docs), registers it in library_mounts, then starts its index in a child process —
+    recall-reachable once it lands, no chat/LLM (B1, run_3f837bdd); the response says
+    ``indexing`` and the mount's last_synced follows:
+      - code → index_code_mount (per-mount code_intel graph)
+      - docs → index_docs_mount (the dir's text, pptx/docx/pdf included, chunked into
+        the shared Knowledge FTS5)
     Never copies the directory's bytes into the registry (the FTS5 chunks ARE the
     searchable index, mirroring how Knowledge/ itself is indexed). 400 if not a dir.
 
@@ -196,7 +196,7 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
         import sqlite3
         from jobs.paths import DB_PATH
         from core.library_mounts import (
-            LibraryMounts, judge_mount_kind, index_docs_mount,
+            LibraryMounts, judge_mount_kind,
         )
         kind = judge_mount_kind(str(src))
         conn = sqlite3.connect(str(DB_PATH))
@@ -205,24 +205,21 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
             store = LibraryMounts(conn)
             store.ensure_table()
             mid = store.add_mount(scope=scope, path=str(src), kind=kind)
-            if kind == "code":
-                # Parsed in a child process: the daemon never parses a repo (design
-                # 2026-10-29-code-intel-unification §0.2). The mount's last_synced is
-                # stamped by the child once the graph holds symbols.
-                from core.code_intel.build import spawn_child
-                spawn_child(["-m", "core.library_mounts", "index-code", mid])
-                return {"id": mid, "kind": kind, "status": "indexing", "symbols": 0}
-            # docs → chunk its text content into the shared Knowledge FTS5 INLINE
-            # (B1, run_3f837bdd): recall-reachable at mount time, no chat/LLM/briefing.
-            result = index_docs_mount(store, mid)
-            return {"id": mid, "kind": kind, "status": result.get("status"),
-                    "chunks": result.get("chunks", 0)}
+            # Indexed in a child process: the daemon never parses a repo (design
+            # 2026-10-29-code-intel-unification §0.2), nor a mounted document, which
+            # is untrusted (pptx / docx / pdf go through their parsers): a parse that
+            # hangs or crashes must not take a daemon thread with it, and the child
+            # has a per-document time limit. The mount's last_synced is stamped by the
+            # child once its index holds something.
+            from core.code_intel.build import spawn_child
+            spawn_child(["-m", "core.library_mounts", f"index-{kind}", mid])
+            return {"id": mid, "kind": kind, "status": "indexing", "symbols": 0, "chunks": 0}
         finally:
             conn.close()
 
     try:
-        # a docs mount chunks and indexes its files inline (up to the walk's file cap):
-        # an action, not a read, so never on a 'nav' thread every overlay read waits on
+        # registering and the kind judge's walk are an action, not a read: never on a
+        # 'nav' thread every overlay read waits on
         return await executors.run_nav_action(_work)
     except HTTPException:
         raise

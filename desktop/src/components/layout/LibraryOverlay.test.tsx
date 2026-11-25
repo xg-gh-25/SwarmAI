@@ -467,6 +467,37 @@ describe('LibraryOverlay — a code folder indexed in the background', () => {
   });
 });
 
+describe('LibraryOverlay — a docs folder indexed in the background', () => {
+  const one = (synced: string | null) => ({
+    count: 1, registry_ready: true,
+    mounts: [{ id: 'decks', path: '/x/decks', kind: 'docs', health: 'fresh', enabled: true, last_synced: synced }],
+  });
+
+  it('after Add folder answers "indexing" for docs, it says so and re-reads until the row is indexed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const toasts: string[] = [];
+    const onToast = (e: Event) => toasts.push((e as CustomEvent).detail.message);
+    document.addEventListener('swarm:toast', onToast);
+    try {
+      let reads = 0;
+      mockApi({ mounts: () => (++reads <= 2 ? one(null) : one('2026-11-25 10:00:00')) });
+      (openDialog as ReturnType<typeof vi.fn>).mockResolvedValue('/x/decks');
+      (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { kind: 'docs', status: 'indexing', chunks: 0 } });
+      renderOverlay();
+      await openTab('browse');
+      await screen.findByTestId('library-mount-decks');
+      act(() => { screen.getByTestId('library-add-folder').click(); });
+      await waitFor(() => expect(reads).toBe(2));
+      expect(toasts.at(-1)).toMatch(/Indexing its files in the background/);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3500); });
+      await waitFor(() => expect(screen.getByTestId('library-mount-decks').getAttribute('data-indexed')).toBe('true'));
+    } finally {
+      document.removeEventListener('swarm:toast', onToast);
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('LibraryOverlay — How it works', () => {
   it('the four steps carry live numbers: written by source, stored size, mounts', async () => {
     mockApi({ mounts: { count: 1, registry_ready: true, mounts: [] } });
