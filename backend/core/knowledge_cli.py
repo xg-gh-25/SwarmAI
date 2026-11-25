@@ -103,25 +103,20 @@ def _find(args: argparse.Namespace) -> int:
     if args.where not in ("ddd", "library"):
         return _find_stores(args)
     if args.where == "library":
+        # the same search find_store runs for every other caller, so a read-in document
+        # or a fetched page is marked external here too (render_hit / _hit_json)
         from core import cognition
-        from core.run_protocol.run_knowledge import _library_leg
-        rows = cognition.worker_library(_library_leg(args.query))
-        shown = [r for r in rows if r["id"]]
-        notes = [r["text"] for r in rows if not r["id"]]
+        got = cognition.find_store("library", args.query)
+        shown, notes = got.units, got.notes
         if args.json:
-            _out(json.dumps({"units": [{"id": r["id"], "path": r["source"], "line": None,
-                                        "heading": r.get("heading") or "",
-                                        "section": "", "store": "library",
-                                        "title": addressing.Unit.first_line(r["text"]),
-                                        "text": r["text"]} for r in shown],
+            _out(json.dumps({"units": [_hit_json("library", r) for r in shown],
                              "omitted": [{"note": n} for n in notes], "skipped": []},
                             ensure_ascii=False))
             return 0
-        if not rows:
+        if not shown and not notes:
             _out(f"Library: nothing matches {args.query!r}.")
             return 0
-        _out("\n\n".join([f"- `{r['id']}` · {cognition.library_location(r)}\n" + addressing.fence(r["text"])
-                          for r in shown]
+        _out("\n\n".join([cognition.render_hit("library", r, _render) for r in shown]
                          + [addressing.fence(n) for n in notes]))
         return 0
     if not args.project:

@@ -381,3 +381,22 @@ def test_a_repo_document_is_never_read_through_the_library(ws, capsys):
 def test_a_heading_that_would_not_read_back_is_not_printed(heading):
     from core import cognition
     assert cognition.library_location({"source": "Notes/n.md", "heading": heading}) == "Notes/n.md"
+
+
+def test_find_in_library_marks_a_mounted_file_external(ws, capsys):
+    """A file from a mounted folder is read-in text: `find --in library` says so in its
+    text and its JSON, as a search of several stores and `get` do."""
+    from core.knowledge_store import KnowledgeStore, index_text_items
+    from core.vec_db import open_vec_db
+    with open_vec_db() as conn:
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        index_text_items(store, "mount:m1/", iter([(
+            "vendor.md", "# Vendor\n\n## Wallaby notes\nWallaby wallaby hop schedule for the wallaby yard.\n")]))
+    code, out = _cli(["find", "--in", "library", "--query", "wallaby hop schedule"], capsys)
+    assert code == 0
+    line = next(l for l in out.splitlines() if "mount:m1/vendor.md" in l)
+    assert line.endswith("(external)"), out
+    code, out = _cli(["find", "--in", "library", "--query", "wallaby hop schedule", "--json"], capsys)
+    row = next(u for u in json.loads(out)["units"] if u["path"].startswith("mount:m1/"))
+    assert row.get("external") is True
