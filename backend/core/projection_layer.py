@@ -88,8 +88,8 @@ _FRESHNESS_SKIP_DIRS = {"node_modules", "__pycache__", ".git"}
 # Without this the two were ASYMMETRIC: freshness ignored node_modules, so an
 # existing projection lacking it was judged "fresh" and never re-copied — but a
 # projection into an EMPTY dir (no dst yet) took the full copytree and dragged the
-# whole tree along. `backend/skills/s_pollinate/templates/remotion/node_modules`
-# alone is ~600MB (incl. a ~150MB chrome-headless-shell), so every projection into
+# whole tree along. The (since removed) `s_pollinate/templates/remotion/node_modules`
+# alone was ~600MB (incl. a ~150MB chrome-headless-shell), so every projection into
 # a fresh app-data dir cost ~600MB of real bytes — per pytest test, once conftest
 # began handing each test its own empty SWARM_DATA_DIR (2.8GB from a 6-file run,
 # then ENOSPC).

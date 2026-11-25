@@ -220,8 +220,7 @@ Total divider height including surrounding space: **120px** (5× base).
 > (shipped neutral defaults in `brand/identity.yaml`, the user's
 > `~/.swarm-ai/pollinate-brand.yaml` on top). Every element is optional: draw the ones
 > that are set, leave out the ones that are `null`. Never invent a brand, a link or a QR
-> code the user did not configure. The L7 gate (`scripts/convergence_gate.py`) checks
-> the configured watermark, QR image and link text.
+> code the user did not configure.
 
 ### Watermark (when `signature.watermark` is set)
 

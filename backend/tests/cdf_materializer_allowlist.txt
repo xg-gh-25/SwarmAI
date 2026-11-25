@@ -157,9 +157,6 @@ scripts/swarm_select_tests.py:_write_json  # exempt: test selector cache
 scripts/update_convergence.py:append_to_convergence  # exempt: release tool; appends to docs/CONVERGENCE.md in the repo
 skills/s_loops-health/scripts/loops_health_check.py:SelfLoopsHealthEngine._record_history  # exempt: loops health history JSON
 skills/s_loops-health/scripts/loops_health_check.py:main  # exempt: loops health report output
-skills/s_pollinate/scripts/publish_to_pages.py:copy_content  # exempt: pages publish repo
-skills/s_pollinate/scripts/publish_to_pages.py:generate_index  # exempt: pages publish repo
-skills/s_pollinate/scripts/publish_to_pages.py:save_manifest  # exempt: pages publish manifest
 skills/s_pollinate/scripts/render_style_thumbnails.py:main  # exempt: style thumbnail output
 skills/s_project-manager/scripts/verify_ddd_complete.py:record_setup_state  # exempt: .artifacts/setup.json
 templates/ddd-skills/s_ddd-persist/scripts/locked_write.py:locked_field_modify  # exempt: runs only on hosts without SwarmAI; refuses when SWARM_BACKEND_BIN is set (CDF writes DDD docs there)

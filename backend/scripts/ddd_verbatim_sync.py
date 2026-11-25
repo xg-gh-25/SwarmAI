@@ -7,7 +7,7 @@ KINDS of files that look alike but must be treated oppositely:
   • VERBATIM copies of a ``backend/`` source-of-truth (a script/asset that a DDD
     skill reuses unchanged). These MUST stay byte-identical — if the source is
     fixed, the copy has to be re-synced, or the DDD ships a stale generation.
-    (This is exactly how ``export-pdf.sh`` silently drifted a full generation
+    (This is exactly how the since-removed ``export-pdf.sh`` silently drifted a full generation
     behind for months — run_ff9db326.)
 
   • ADAPTED portability forks (e.g. ``_ddd_paths.py``, ``artifact_cli.py``,

@@ -8,11 +8,7 @@ loses data elsewhere.
 """
 from __future__ import annotations
 
-import importlib.util
-import os
 import re
-import stat
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -22,18 +18,10 @@ REPO = BACKEND.parent
 SKILLS = BACKEND / "skills"
 POLLINATE = SKILLS / "s_pollinate"
 PROJECT_MANAGER = SKILLS / "s_project-manager" / "SKILL.md"
-CJK = re.compile(r"[一-鿿]")
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def _load(path: Path):
-    spec = importlib.util.spec_from_file_location(path.stem, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _section(text: str, heading: str) -> str:
@@ -90,10 +78,8 @@ def test_project_manager_keeps_the_internal_capability_and_points_to_host_skills
 # ── 3. s_pollinate ───────────────────────────────────────────────────────────
 
 _POLLINATE_FILES = [
-    "brand/identity.yaml", "channels/bilibili.yaml", "channels/youtube.yaml",
-    "references/platform-specs.md", "INSTRUCTIONS.md", "scripts/generate_shorts.py",
-    "scripts/check_rpv.py", "kinds/deck.md", "scripts/format_recommend.py",
-    "scripts/publish_dashboard.py",
+    "brand/identity.yaml", "references/platform-specs.md", "INSTRUCTIONS.md",
+    "kinds/deck.md", "kinds/copy.md", "kinds/poster.md",
 ]
 
 
@@ -103,90 +89,6 @@ def test_pollinate_examples_are_neutral(rel):
     assert not re.search(r"(?i)aidlc", text), rel           # the owner's own content topic
     assert not re.search(r"\b(?:Rob|Bo)\b|\brob\b", text), rel  # colleagues' names
     assert "pollinate-v2-launch" not in text and "LPM" not in text, rel
-
-
-def test_pollinate_usage_examples_use_a_topic_placeholder():
-    for rel in ("scripts/generate_shorts.py", "scripts/check_rpv.py", "scripts/publish_dashboard.py"):
-        assert "content/<topic>/" in _read(POLLINATE / rel), rel
-
-
-def test_format_recommend_labels_are_english_and_name_no_one():
-    fr = _load(POLLINATE / "scripts" / "format_recommend.py")
-    for table in (fr.AUDIENCES, fr.OUTCOMES, fr.CONTEXTS):
-        for key, value in table.items():
-            assert not CJK.search(value["label"]), key
-    signals = fr.AUDIENCES["leadership"]["signals"]
-    assert "rob" not in signals and "bo" not in signals
-
-
-def test_format_recommend_no_longer_reads_leadership_into_common_words():
-    """Signals match by substring: the names "rob"/"bo" made "problem", "robot", "about"
-    and "both" read as a leadership audience."""
-    fr = _load(POLLINATE / "scripts" / "format_recommend.py")
-    text = "a robot talk about both problems for the developer community"
-    assert fr.match_signals(text, fr.AUDIENCES) == ["developer_community"]
-    assert "leadership" in fr.match_signals("给老板看", fr.AUDIENCES)
-
-
-@pytest.fixture
-def content_dir(tmp_path):
-    d = tmp_path / "topic"
-    (d / "deliver" / "xiaohongshu").mkdir(parents=True)
-    (d / "deliver" / "github").mkdir(parents=True)
-    for name in ("poster_3x4.png", "caption.txt", "qr_xhs.png"):
-        (d / "deliver" / "xiaohongshu" / name).write_bytes(b"x")
-    (d / "deliver" / "github" / "readme.md").write_text("x", encoding="utf-8")
-    return d
-
-
-def test_publish_dashboard_is_english_by_default(content_dir):
-    pd = _load(POLLINATE / "scripts" / "publish_dashboard.py")
-    assets = pd.scan_deliver(str(content_dir))
-    md = pd.generate_markdown(str(content_dir), assets, {})
-    assert not CJK.search(md), md
-    assert "1. AirDrop `poster_3x4.png` to your phone" in md   # the main image, not the QR
-    assert "| Post caption | Copy |" in md
-    html = pd.generate_html(str(content_dir), assets, {})
-    assert '<html lang="en">' in html
-    body = html[html.index("<body>"):html.index("<script>")]
-    assert not CJK.search(body)
-
-
-def test_publish_dashboard_renders_chinese_on_request(content_dir):
-    pd = _load(POLLINATE / "scripts" / "publish_dashboard.py")
-    assets = pd.scan_deliver(str(content_dir), "zh")
-    md = pd.generate_markdown(str(content_dir), assets, {}, "zh")
-    assert "| 渠道 | 内容 | 格式 | 大小 | 文件 |" in md
-    assert "1. AirDrop `poster_3x4.png` 到手机" in md
-    assert '<html lang="zh-CN">' in pd.generate_html(str(content_dir), assets, {}, "zh")
-
-
-def _opener_block() -> str:
-    script = _read(POLLINATE / "templates" / "html-deck" / "shared" / "export-pdf.sh")
-    start = script.index("# Open the PDF automatically")
-    end = script.index("\nfi\n", start) + len("\nfi\n")
-    return script[start:end]
-
-
-def _fake(bin_dir: Path, name: str, body: str) -> None:
-    path = bin_dir / name
-    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
-
-
-@pytest.mark.skipif(os.name == "nt", reason="the exporter is a bash script")
-@pytest.mark.parametrize("system, expected", [("Linux", "xdg-open"), ("Darwin", "open")])
-def test_export_pdf_uses_open_only_on_macos(tmp_path, system, expected):
-    """On Debian/Ubuntu `open` is openvt; the exporter must pick xdg-open there."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "called"
-    _fake(bin_dir, "uname", f"echo {system}")
-    _fake(bin_dir, "open", f'echo open >> "{log}"')
-    _fake(bin_dir, "xdg-open", f'echo xdg-open >> "{log}"')
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "OUTPUT_PDF": str(tmp_path / "x.pdf")}
-    subprocess.run(["bash", "-c", _opener_block()], env=env, check=True, timeout=30)
-    assert log.read_text().split() == [expected]
 
 
 # ── 4. the seeded SwarmAI brain describes every platform ────────────────────

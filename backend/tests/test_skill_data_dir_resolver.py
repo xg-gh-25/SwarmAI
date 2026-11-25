@@ -68,7 +68,7 @@ def test_no_skill_script_resolves_the_data_dir_itself():
 
 def test_skill_scripts_using_the_resolver_carry_it_verbatim():
     users = [p for p in _skill_scripts() if "_app_data_dir(" in p.read_text(encoding="utf-8")]
-    assert len(users) >= 9, users        # notify, library, todo_db, six Pollinate
+    assert len(users) >= 4, users        # notify, library, todo_db, Pollinate brand_config
     for p in users:
         defs = [n for n in ast.walk(ast.parse(p.read_text(encoding="utf-8")))
                 if isinstance(n, ast.FunctionDef) and n.name == "_app_data_dir"]
@@ -99,5 +99,3 @@ def test_writers_follow_swarm_data_dir(monkeypatch, tmp_path):
     assert _load("skills/s_radar-todo/scripts/todo_db.py").DB_PATH == tmp_path / "data.db"
     assert _load("skills/s_notify/notify.py").DEFAULT_CONFIG_PATH == \
         str(tmp_path / "notify-channels.yaml")
-    assert _load("skills/s_pollinate/scripts/publish_meta.py").ACCOUNTS_PATH == \
-        str(tmp_path / "pollinate-accounts.yaml")
