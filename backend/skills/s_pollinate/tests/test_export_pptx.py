@@ -493,3 +493,64 @@ def test_environment_errors_exit_2_and_leave_no_temp_file(tmp_path, capsys):
                     "--template", str(tpl), "--keep-head", "5"]) == 2
     assert "give --base-index" in capsys.readouterr().err
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_logo_with_effect_layer_stays_on_every_page(tmp_path):
+    """A picture with an extra image layer (PowerPoint's artistic effects keep it in
+    an 'hdphoto' part) is still copied: unknown relationship kinds are shared."""
+    from pptx.opc.package import Part
+    from pptx.opc.packuri import PackURI
+
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path)
+    prs = Presentation(str(tpl))
+    base = prs.slides[2]
+    logo = {s.name: s for s in base.shapes}["Base Logo"]
+    layer = Part(PackURI("/ppt/media/hdphoto1.wdp"), "image/vnd.ms-photo", prs.part.package,
+                 b"layer")
+    rid = base.part.relate_to(
+        layer, "http://schemas.microsoft.com/office/2007/relationships/hdphoto")
+    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    blip = logo._element.find(f".//{{{a}}}blip")
+    blip.append(etree.fromstring(
+        f'<a:extLst xmlns:a="{a}"><a:ext uri="{{BEBA8EAE-BF5A-486C-A8C5-ECC9F3942E4B}}">'
+        '<a14:imgProps xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main">'
+        f'<a14:imgLayer xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/'
+        f'relationships" r:embed="{rid}"/></a14:imgProps></a:ext></a:extLst>'))
+    prs.save(str(tpl))
+    code, out = run_template(tmp_path, tpl)
+    assert code == 0
+    got = Presentation(str(out))
+    assert_links_resolve(got)
+    for slide in list(got.slides)[2:4]:
+        assert "Base Logo" in {s.name for s in slide.shapes}
+
+
+def test_other_filled_placeholders_are_named_in_a_note(tmp_path, capsys):
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path, base_layout=3)  # Two Content
+    prs = Presentation(str(tpl))
+    bodies = [p for p in prs.slides[2].placeholders if p.placeholder_format.idx in (1, 2)]
+    bodies[1].text = "Right side sample"
+    prs.save(str(tpl))
+    code, _ = run_template(tmp_path, tpl)
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "stay on every page" in printed and bodies[1].name in printed
+
+
+def test_used_placeholder_found_by_idx_not_shape_id(tmp_path):
+    """A logo that shares its shape id with the content placeholder (some tools
+    write such files) is not removed with the placeholder."""
+    tpl = tmp_path / "brand.pptx"
+    build_template(tpl, tmp_path, base_layout=1)
+    prs = Presentation(str(tpl))
+    base = prs.slides[2]
+    body = [p for p in base.placeholders if p.placeholder_format.idx == 1][0]
+    logo = {s.name: s for s in base.shapes}["Base Logo"]
+    logo._element.nvPicPr.cNvPr.set("id", str(body.shape_id))
+    prs.save(str(tpl))
+    code, out = run_template(tmp_path, tpl)
+    assert code == 0
+    for slide in list(Presentation(str(out)).slides)[2:4]:
+        assert "Base Logo" in {s.name for s in slide.shapes}

@@ -19,9 +19,9 @@ With a template (``--template T.pptx``):
   * the other template slides (between head and tail, the base included) are not
     in the result; PowerPoint sections and custom shows are updated to match, and
     the template file itself is never written.
-  * charts, media, embedded objects and comments on the base slide, and links from
-    it to slides that leave the deck, are not copied (each slide must own its own;
-    the result notes it). Kept template slides are never changed, even when they
+  * charts, embedded objects, SmartArt and comments on the base slide, and links
+    from it to slides that leave the deck, are not copied (each slide must own its
+    own; the result notes it). Kept template slides are never changed, even when they
     link to a slide that leaves the deck (the result notes that too).
 
 After writing, the script opens the result again and checks it: slide count, kept
@@ -78,9 +78,16 @@ CONTENT_PH = {
 }
 # Relationships of a slide that belong to that slide alone and are not copied.
 SKIP_RELS = {RT.SLIDE_LAYOUT, RT.NOTES_SLIDE}
-# Relationships a copy of the base slide shares with it. Anything else (a chart,
-# media, an embedded object, comments) belongs to one slide and is not copied.
-SHARED_OK_RELS = SKIP_RELS | {RT.IMAGE, RT.HYPERLINK, RT.SLIDE, RT.TAGS}
+# Parts that belong to one slide: a copy of the base does not get them, and the
+# shape that shows them is left out. Everything else (images and their effect
+# layers, media, hyperlinks, tags, ...) is shared by the copies, so no logo or
+# footer is lost to a relationship kind this list does not know.
+PER_SLIDE_RELS = {
+    RT.CHART, RT.COMMENTS, RT.OLE_OBJECT, RT.PACKAGE,
+    RT.DIAGRAM_DATA, RT.DIAGRAM_LAYOUT, RT.DIAGRAM_QUICK_STYLE, RT.DIAGRAM_COLORS,
+    "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing",
+    "http://schemas.microsoft.com/office/2018/10/relationships/comments",
+}
 
 
 class UsageError(Exception):
@@ -240,6 +247,11 @@ def content_area(base, slide_w: int, slide_h: int, notes: list[str]) -> tuple[Bo
         if not _is_empty_placeholder(shape):
             notes.append(f"the content placeholder '{shape.name}' on the base slide has "
                          "sample content; the picture replaces it on every page")
+        others = [c[2].name for c in candidates
+                  if c[2] is not shape and not _is_empty_placeholder(c[2])]
+        if others:
+            notes.append("these placeholders on the base slide have content and stay on "
+                         "every page: " + ", ".join(others))
         return b, shape
 
     chrome = [s for s in base.shapes if not _is_empty_placeholder(s)]
@@ -276,19 +288,16 @@ def _drop_skipped(csld, skipped: set[str]) -> None:
     """Remove what refers to a relationship the copy does not get.
 
     A hyperlink element is removed on its own (the shape stays); any other element
-    (a chart frame, a video, an embedded object) takes its whole top-level shape.
+    (a chart, an embedded object, SmartArt) takes its whole top-level shape.
     """
     hlinks = {f"{{{A_NS}}}hlinkClick", f"{{{A_NS}}}hlinkHover"}
     hits = [el for el in csld.iter()
             if any(k.startswith(f"{{{R_NS}}}") and v in skipped for k, v in el.attrib.items())]
-    tree, bg = csld.spTree, csld.find(f"{{{P_NS}}}bg")
+    tree = csld.spTree
     for el in hits:
-        if el.tag in hlinks:
-            target = el
-        else:
-            target = el
-            while target.getparent() is not None and target.getparent() is not tree \
-                    and target is not bg:
+        target = el
+        if el.tag not in hlinks:
+            while target.getparent() is not None and target.getparent() is not tree:
                 target = target.getparent()
         parent = target.getparent()
         if parent is not None:
@@ -298,10 +307,10 @@ def _drop_skipped(csld, skipped: set[str]) -> None:
 def copy_slide(prs, base, dropped_parts: set, notes: set[str]):
     """Append a new slide that looks like ``base``: same layout, background, shapes.
 
-    Images, hyperlinks and links to kept slides are shared with the base. Charts,
-    media, embedded objects and comments belong to one slide, and links to slides
-    that leave the deck would keep those slides in the file, so copies do not get
-    them (``notes`` says what was left out).
+    The copy shares the base's parts, except the per-slide ones (charts, comments,
+    embedded objects, SmartArt: ``PER_SLIDE_RELS``) and links to slides that leave
+    the deck, which would keep those slides in the file. Copies do not get those;
+    ``notes`` says what was left out.
     """
     new = prs.slides.add_slide(base.slide_layout)
     mapping, skipped = {}, set()
@@ -314,7 +323,7 @@ def copy_slide(prs, base, dropped_parts: set, notes: set[str]):
             notes.add("a link on the base slide points to a slide that is not in the "
                       "result; content slides do not get that link")
             continue
-        if rel.reltype not in SHARED_OK_RELS:
+        if rel.reltype in PER_SLIDE_RELS:
             skipped.add(rid)
             kind = rel.reltype.rsplit("/", 1)[-1]
             notes.add(f"the base slide holds a {kind} part; content slides do not get it "
@@ -395,8 +404,9 @@ def build_templated(pictures: list[Path], template: Path, head: int, base_index:
     base = prs.slides[base_index - 1]
 
     area, used_ph = content_area(base, sw, sh, notes)
-    # the copy has the base's shape ids, so the placeholder is found by its id
-    used_id = used_ph.shape_id if used_ph is not None else None
+    # the copy has the base's XML, so the placeholder is found by its placeholder
+    # idx (unique on a slide), not by position or shape id
+    used_idx = used_ph.placeholder_format.idx if used_ph is not None else None
     template_slides = list(prs.slides)
     kept_idx = list(range(head)) + list(range(total - tail, total))
     dropped_parts = {template_slides[i].part for i in range(total) if i not in kept_idx}
@@ -406,7 +416,9 @@ def build_templated(pictures: list[Path], template: Path, head: int, base_index:
         iw, ih = image_size(pic)
         slide = copy_slide(prs, base, dropped_parts, copy_notes)
         for shape in list(slide.shapes):
-            if shape.shape_id == used_id or _is_empty_placeholder(shape):
+            if _is_empty_placeholder(shape) or (
+                    used_idx is not None and shape.is_placeholder
+                    and shape.placeholder_format.idx == used_idx):
                 shape._element.getparent().remove(shape._element)
         b = fit(iw, ih, area)
         slide.shapes.add_picture(str(pic), Emu(b.x), Emu(b.y), Emu(b.w), Emu(b.h))
@@ -595,8 +607,8 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError as exc:
         print(f"export_pptx: {exc}", file=sys.stderr)
         return 2
-    except OSError as exc:
-        print(f"export_pptx: cannot write {args.out}: {exc}", file=sys.stderr)
+    except OSError as exc:  # the exception names the file it could not read or write
+        print(f"export_pptx: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001 - 1 means "the result failed its check"
         print(f"export_pptx: unexpected error ({type(exc).__name__}: {exc})",
