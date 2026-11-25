@@ -23,6 +23,7 @@ still valid; recall reads the LIVE source on a hit.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import uuid
@@ -51,14 +52,33 @@ GLOBAL_SCOPE = "GLOBAL"
 VALID_HEALTH = ("fresh", "stale", "missing")
 
 
-def _add_empty_index_column(conn: sqlite3.Connection) -> None:
-    """Add ``indexed_empty_at``; another process (the API, a sweep, a child) may have
-    added it between our check and this ALTER on the first start after an upgrade."""
+def _add_column(conn: sqlite3.Connection, name: str, decl: str) -> None:
+    """Add column *name*; another process (the API, a sweep, a child) may have added it
+    between our check and this ALTER on the first start after an upgrade."""
     try:
-        conn.execute("ALTER TABLE library_mounts ADD COLUMN indexed_empty_at TEXT")
+        conn.execute(f"ALTER TABLE library_mounts ADD COLUMN {name} {decl}")
     except sqlite3.OperationalError as exc:
         if "duplicate column" not in str(exc).lower():
             raise
+
+
+# What a docs index writes; bump it with any change to which files it reads or how,
+# and every docs mount indexed by a lower version is re-indexed by the next sweep
+# (the files already on disk are what the change is for). 1: every UTF-8 text file.
+# 2: Office lock files and backup copies are not read (_not_content).
+DOCS_INDEX_VERSION = 2
+
+# A backup copy's suffix: x.bak, x.bak2, x.html.bak-1788432226, x.html.bak-title.
+_BACKUP_SUFFIX = re.compile(r"\.bak(?:\d*|[-_.][^/]*)$", re.IGNORECASE)
+
+
+def _not_content(name: str) -> bool:
+    """A file name no index reads, as content or as a change: a dot entry, an Office
+    lock file (``~$deck.pptx``, written while the deck is open), an editor backup
+    (``notes.md~``) or a backup copy (``deck.html.bak-1788432226``). A backup repeats
+    its original, so in recall it crowds the current version out with older text."""
+    return (name.startswith((".", "~$")) or name.endswith("~")
+            or _BACKUP_SUFFIX.search(name) is not None)
 
 
 def _index_started_stamp() -> str:
@@ -105,9 +125,11 @@ class LibraryMounts:
         # When the last index found no content (indexed_empty). A source unchanged
         # since then is not stale: without this an emptied mount would read stale on
         # every sweep and be re-indexed forever. Added to tables made before it.
+        # index_version: the DOCS_INDEX_VERSION a docs index was written with.
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(library_mounts)")}
-        if "indexed_empty_at" not in cols:
-            _add_empty_index_column(self._conn)
+        for name, decl in (("indexed_empty_at", "TEXT"), ("index_version", "INTEGER")):
+            if name not in cols:
+                _add_column(self._conn, name, decl)
         self._conn.commit()
 
     # ── CRUD ──────────────────────────────────────────────────────────────
@@ -179,20 +201,23 @@ class LibraryMounts:
         return cur.rowcount > 0
 
     def mark_synced(self, mount_id: str, index_ref: Optional[str] = None,
-                    synced_at: Optional[str] = None) -> bool:
+                    synced_at: Optional[str] = None,
+                    index_version: Optional[int] = None) -> bool:
         """Record a successful index: stamp last_synced (``synced_at``, the moment the
         indexer started reading, or now) + index_ref, and set health fresh. Called by
         the indexer after a graph is built."""
         cur = self._conn.execute(
             "UPDATE library_mounts SET last_synced = COALESCE(?, datetime('now')), "
-            "index_ref = COALESCE(?, index_ref), health = 'fresh' WHERE id = ?",
-            (synced_at, index_ref, mount_id),
+            "index_ref = COALESCE(?, index_ref), index_version = COALESCE(?, index_version), "
+            "health = 'fresh' WHERE id = ?",
+            (synced_at, index_ref, index_version, mount_id),
         )
         self._conn.commit()
         return cur.rowcount > 0
 
     def mark_indexed_empty(self, mount_id: str, *, at: Optional[str] = None,
-                           recall_lost: bool = False) -> None:
+                           recall_lost: bool = False,
+                           index_version: Optional[int] = None) -> None:
         """Record that an index found no content (``at``: when it started), so the
         unchanged source reads fresh and is not re-indexed on every sweep.
         ``recall_lost``: the index removed what recall reached (a docs re-index prunes
@@ -200,8 +225,9 @@ class LibraryMounts:
         empty code parse keeps the previous graph and its stamp."""
         self._conn.execute(
             "UPDATE library_mounts SET indexed_empty_at = COALESCE(?, datetime('now')), "
-            "health = 'fresh'" + (", last_synced = NULL" if recall_lost else "") + " WHERE id = ?",
-            (at, mount_id),
+            "index_version = COALESCE(?, index_version), health = 'fresh'"
+            + (", last_synced = NULL" if recall_lost else "") + " WHERE id = ?",
+            (at, index_version, mount_id),
         )
         self._conn.commit()
 
@@ -316,9 +342,10 @@ def _source_max_mtime(root: Path) -> float:
     """Newest mtime across the source (a file → its mtime; a dir → the max over
     its tree, directories included, so a created or deleted entry counts as a change).
 
-    Vendored/build dirs are not walked and dot-entries not read: no indexer reads
-    them, and counting them made a mount read stale on every ``git fetch`` or Finder
-    ``.DS_Store`` rewrite, which now starts a re-index. (Creating one still moves its
+    Vendored/build dirs are not walked, and dot-entries, lock files and backup copies
+    (``_not_content``) not read: no indexer reads them, and counting them made a mount
+    read stale on every ``git fetch``, Finder ``.DS_Store`` rewrite or deck opened in
+    PowerPoint, which now starts a re-index. (Creating one still moves its
     directory's mtime: one extra re-index, not a loop.) An mtime in the future (clock
     skew, an extracted archive) is skipped: it would read stale on every sweep. A walk
     error falls back to what was read so far, so a permission hiccup never crashes the
@@ -336,7 +363,7 @@ def _source_max_mtime(root: Path) -> float:
         return 0.0
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda _e: None):
         dirnames[:] = [d for d in dirnames if d not in _JUDGE_SKIP_DIRS and not d.startswith(".")]
-        for name in dirnames + [f for f in filenames if not f.startswith(".")]:
+        for name in dirnames + [f for f in filenames if not _not_content(f)]:
             try:
                 m = os.stat(os.path.join(dirpath, name)).st_mtime
             except OSError:
@@ -382,9 +409,10 @@ def refresh_all_mounts(store: "LibraryMounts", scope: Optional[str] = None, *,
 
 def _keep_current(store: "LibraryMounts", row, health: str, summary: dict) -> None:
     """Re-judge one mount's kind and start a re-index child when its index is behind:
-    the source changed since the last index (``stale``), the kind changed, or (code)
-    the graph was written by an older parser — after a deploy that changes the
-    parser nobody re-mounts (design 2026-10-29-code-intel-auto D3)."""
+    the source changed since the last index (``stale``), the kind changed, or the index
+    was written by an older parser (code) or an older DOCS_INDEX_VERSION (docs) —
+    after a deploy that changes either nobody re-mounts (design
+    2026-10-29-code-intel-auto D3)."""
     from core.code_intel.build import db_parser_outdated, spawn_child
     mid, kind = row["id"], row["kind"]
     if kind not in ("code", "docs"):
@@ -410,6 +438,8 @@ def _keep_current(store: "LibraryMounts", row, health: str, summary: dict) -> No
         summary["rejudged"] = summary.get("rejudged", 0) + 1
         kind, need = judged, True
     if kind == "code" and db_parser_outdated(_mount_db_path(mid)):
+        need = True
+    if kind == "docs" and (row["index_version"] or 0) < DOCS_INDEX_VERSION:
         need = True
     if not need or _index_running(mid, kind):
         return
@@ -760,7 +790,8 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
     - delta-sync per file (get_existing_hashes / remove_stale_chunks) so a re-index
       is cheap and idempotent; stale files' chunks are pruned via remove_mount_chunks
       for keys no longer present.
-    - bounded walk (skip vendored dirs + dotfiles, cap files) so a huge dir can't hang.
+    - bounded walk (skip vendored dirs, dotfiles, lock files and backup copies —
+      ``_not_content`` — and cap files) so a huge dir can't hang.
     - mark_synced ONLY when chunks were written (honesty, run_139d7652): an
       empty/all-binary dir returns 'indexed_empty' WITHOUT stamping last_synced, so
       the UI badge reads it as not-recall-reachable.
@@ -786,7 +817,7 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
         for p in sorted(src.rglob("*")):
             if any(part in _DOCS_SKIP_DIRS for part in p.relative_to(src).parts):
                 continue
-            if p.name.startswith("."):
+            if _not_content(p.name):
                 continue
             if not p.is_file():
                 continue
@@ -824,12 +855,14 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
         # Content-bearing files exist (seen_keys) — even if a delta re-index added 0
         # NEW chunks, the mount is recall-reachable, so stamp it. An empty/all-binary/
         # all-whitespace dir has empty seen_keys → falls through to indexed_empty.
-        store.mark_synced(mount_id, index_ref=key_prefix, synced_at=started)
+        store.mark_synced(mount_id, index_ref=key_prefix, synced_at=started,
+                          index_version=DOCS_INDEX_VERSION)
         return {"status": "indexed", "chunks": total_chunks}
     # No text content at all (empty or all-binary) → recall reaches nothing (its old
     # chunks were just pruned); recorded, so the sweep re-indexes it only after the
     # next change.
-    store.mark_indexed_empty(mount_id, at=started, recall_lost=True)
+    store.mark_indexed_empty(mount_id, at=started, recall_lost=True,
+                             index_version=DOCS_INDEX_VERSION)
     return {"status": "indexed_empty", "chunks": 0}
 
 

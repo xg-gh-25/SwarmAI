@@ -129,9 +129,15 @@ def _docs(tmp_path: Path, name: str = "notes") -> Path:
     return d
 
 
+def _current(store, mid):
+    """An index of today's docs version has landed."""
+    import core.library_mounts as lm
+    store.mark_synced(mid, index_version=lm.DOCS_INDEX_VERSION)
+
+
 def test_sweep_reindexes_a_changed_docs_mount(tmp_path, store, spawned):
     d = _docs(tmp_path)
-    mid = store.add_mount(scope="S", path=str(d), kind="docs"); store.mark_synced(mid)
+    mid = store.add_mount(scope="S", path=str(d), kind="docs"); _current(store, mid)
     summary = refresh_all_mounts(store, reindex=True)
     assert spawned == [] and "reindexing" not in summary       # unchanged: nothing to do
     _touch_after(d / "a.md")
@@ -211,7 +217,7 @@ def test_sweep_switches_a_mount_whose_kind_judges_differently(tmp_path, store, s
 def test_an_empty_index_is_not_retried_until_the_source_changes(tmp_path, store, spawned):
     d = tmp_path / "bin"; d.mkdir()
     f = d / "x.bin"; f.write_bytes(b"\xff\xfe\x00")
-    mid = store.add_mount(scope="S", path=str(d), kind="docs"); store.mark_synced(mid)
+    mid = store.add_mount(scope="S", path=str(d), kind="docs"); _current(store, mid)
     _touch_after(f)
     refresh_all_mounts(store, reindex=True)
     assert len(spawned) == 1                                   # changed: re-indexed
@@ -437,5 +443,67 @@ def test_the_column_added_twice_does_not_raise():
     import core.library_mounts as lm
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE library_mounts (id TEXT)")
-    lm._add_empty_index_column(conn)
-    lm._add_empty_index_column(conn)          # another process won the race
+    lm._add_column(conn, "indexed_empty_at", "TEXT")
+    lm._add_column(conn, "indexed_empty_at", "TEXT")          # another process won the race
+
+
+
+# ── backup copies and lock files are not content; an older docs index is redone ──
+
+@pytest.mark.parametrize("name", [
+    ".DS_Store", "~$deck.pptx", "notes.md~", "deck.html.bak", "deck.bak2",
+    "deck.html.bak-1788432226", "deck.html.bak-title", "x.BAK"])
+def test_names_no_index_reads(name):
+    from core.library_mounts import _not_content
+    assert _not_content(name)
+
+
+@pytest.mark.parametrize("name", ["deck.html", "bakery.md", "notes.backup.md", "x.bake", "a~b.md"])
+def test_names_that_are_content(name):
+    from core.library_mounts import _not_content
+    assert not _not_content(name)
+
+
+def test_index_docs_skips_backups_and_lock_files(tmp_path, store, monkeypatch):
+    import core.library_mounts as lm
+    monkeypatch.setattr(lm, "_mounts_dir", lambda: tmp_path / "mounts")
+    vec = _vec(monkeypatch)
+    d = _docs(tmp_path)
+    (d / "deck.html").write_text("<p>current deck</p>\n")
+    (d / "deck.html.bak-1788432226").write_text("<p>old deck</p>\n")
+    (d / "~$deck.pptx").write_text("lock owner\n")
+    mid = store.add_mount(scope="S", path=str(d), kind="docs")
+    assert lm.index_docs_mount(store, mid)["status"] == "indexed"
+    files = {r[0] for r in vec.execute("SELECT DISTINCT source_file FROM knowledge_chunks")}
+    assert files == {f"mount:{mid}/a.md", f"mount:{mid}/deck.html"}
+    assert store.get_mount(mid)["index_version"] == lm.DOCS_INDEX_VERSION
+
+
+def test_a_docs_index_of_an_older_version_is_redone(tmp_path, store, spawned):
+    d = _docs(tmp_path)
+    mid = store.add_mount(scope="S", path=str(d), kind="docs"); store.mark_synced(mid)  # no version
+    refresh_all_mounts(store, reindex=True)
+    assert spawned == [["-m", "core.library_mounts", "index-docs", mid]]
+    spawned.clear()
+    _current(store, mid)
+    refresh_all_mounts(store, reindex=True)
+    assert spawned == []
+
+
+def test_an_empty_docs_index_records_its_version(tmp_path, store, monkeypatch):
+    import core.library_mounts as lm
+    monkeypatch.setattr(lm, "_mounts_dir", lambda: tmp_path / "mounts")
+    _vec(monkeypatch)
+    d = tmp_path / "bin"; d.mkdir(); (d / "x.bin").write_bytes(b"\xff\xfe\x00")
+    mid = store.add_mount(scope="S", path=str(d), kind="docs")
+    assert lm.index_docs_mount(store, mid)["status"] == "indexed_empty"
+    assert store.get_mount(mid)["index_version"] == lm.DOCS_INDEX_VERSION
+
+
+def test_rewriting_a_backup_does_not_make_a_mount_stale(tmp_path, store):
+    d = _docs(tmp_path)
+    (d / "deck.html.bak-1").write_text("x")
+    mid = store.add_mount(scope="S", path=str(d), kind="docs"); store.mark_synced(mid)
+    future = time.time() + 5
+    os.utime(d / "deck.html.bak-1", (future, future))
+    assert store.check_health(mid) == "fresh"
