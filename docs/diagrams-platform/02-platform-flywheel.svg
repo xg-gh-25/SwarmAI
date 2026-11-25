@@ -32,8 +32,8 @@
 
   <!-- Arrow: DDD → Engines (READS) -->
   <path d="M 490 220 Q 550 160 580 130" fill="none" stroke="#7ee787" stroke-width="1.2" marker-end="url(#arrG)"/>
-  <text x="555" y="160" fill="#7ee787" font-size="8" font-weight="bold">READS</text>
-  <text x="555" y="172" fill="#e6edf3" font-size="7" fill-opacity="0.7">domain context</text>
+  <text x="510" y="177" text-anchor="end" fill="#7ee787" font-size="8" font-weight="bold">READS</text>
+  <text x="510" y="188" text-anchor="end" fill="#e6edf3" font-size="7" fill-opacity="0.7">domain context</text>
 
   <!-- ================================================================== -->
   <!-- BOTTOM-RIGHT: REFLECT (engine output → channels) -->

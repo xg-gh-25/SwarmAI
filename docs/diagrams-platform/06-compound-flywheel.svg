@@ -78,7 +78,7 @@
 
   <!-- Feedback: Engines -> Channel 3 (via REFLECT) -->
   <path d="M550,220 Q520,220 500,180 Q480,140 400,100 Q320,60 180,155" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr6p)"/>
-  <path d="M550,320 Q520,340 500,360 Q460,380 350,370 Q240,360 180,310" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr6p)"/>
+  <path d="M550,320 Q520,335 500,348 Q460,362 350,356 Q240,350 180,310" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr6p)"/>
 
   <!-- Cross-engine flow -->
   <rect x="560" y="237" width="150" height="18" rx="4" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
@@ -89,19 +89,19 @@
   <text x="275" y="395" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">Compound Effect Over Time</text>
 
   <!-- Timeline -->
-  <line x1="80" y1="430" x2="470" y2="430" stroke="#555" stroke-width="1"/>
-  <text x="80" y="445" fill="#8b8ba0" font-size="8">Session 1</text>
-  <text x="200" y="445" fill="#8b8ba0" font-size="8">Session 10</text>
-  <text x="340" y="445" fill="#8b8ba0" font-size="8">Session 50</text>
-  <text x="440" y="445" fill="#8b8ba0" font-size="8">Session 100</text>
+  <line x1="80" y1="432" x2="470" y2="432" stroke="#555" stroke-width="1"/>
+  <text x="80" y="446" fill="#8b8ba0" font-size="8">Session 1</text>
+  <text x="200" y="446" fill="#8b8ba0" font-size="8">Session 10</text>
+  <text x="340" y="446" fill="#8b8ba0" font-size="8">Session 50</text>
+  <text x="440" y="446" fill="#8b8ba0" font-size="8">Session 100</text>
 
   <!-- Growth curve -->
-  <path d="M80,425 Q150,420 200,410 Q280,395 340,370 Q400,340 470,300" fill="none" stroke="#7ee787" stroke-width="2"/>
-  <text x="480" y="303" fill="#7ee787" font-size="8">DDD richness</text>
+  <path d="M80,428 Q260,426 360,416 Q430,409 470,402" fill="none" stroke="#7ee787" stroke-width="2"/>
+  <text x="468" y="397" text-anchor="end" fill="#7ee787" font-size="8">DDD richness</text>
 
   <!-- Regular AI line (flat) -->
-  <line x1="80" y1="425" x2="470" y2="425" stroke="#f78166" stroke-width="1" stroke-dasharray="4,2"/>
-  <text x="480" y="428" fill="#f78166" font-size="8">Regular AI (flat)</text>
+  <line x1="80" y1="428" x2="470" y2="428" stroke="#f78166" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="468" y="424" text-anchor="end" fill="#f78166" font-size="8">Regular AI (flat)</text>
 
   <!-- Key examples -->
   <text x="80" y="470" fill="#e6edf3" font-size="9">Pipeline discovers new pattern -> TECH.md -> Pollinate's brief finds it</text>
