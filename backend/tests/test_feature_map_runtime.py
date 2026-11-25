@@ -155,3 +155,18 @@ def test_no_check_off_linux_or_without_ldd(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_platform", lambda: ("linux", "arm64"))
     monkeypatch.setattr(runtime.shutil, "which", lambda *_a, **_k: None)
     assert runtime.missing_libraries(rt) == []
+
+
+def test_the_runtime_lives_in_the_shared_location(tmp_path, app_data, monkeypatch):  # noqa: F811
+    """On a machine that has the shared replay location (a Hive: hive/replay-host.sh makes
+    it), the pinned runtime is installed there, outside the Hive user's home, so the replay
+    user runs it without any way into that home; elsewhere it stays in the app data folder."""
+    pin = f"node-{runtime.NODE_VERSION}-pw-{runtime.PLAYWRIGHT_VERSION}"
+    assert runtime.runtime_dir() == app_data / "feature_map" / "runtime" / pin   # the suite's pin: none
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o750)
+    shared.chmod(0o750)
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(shared))
+    assert runtime.runtime_dir() == shared / "runtime" / pin
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(tmp_path / "absent"))
+    assert runtime.runtime_dir() == app_data / "feature_map" / "runtime" / pin

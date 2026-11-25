@@ -12,9 +12,19 @@
 #      (without them it starts but every glyph is blank, so screenshots show nothing), and
 #      nftables for step 4. dnf runs only when one of them is missing.
 #   2. The replay user (swarm-replay): a system user with its own home (its package caches), the
-#      user every process of a replay runs as. It gets traverse (x, not list) on the Hive user's
-#      home, so the tools that user runs (task venvs, the pinned runtime in the app data folder)
-#      run for replay too; it cannot write any of the Hive user's files.
+#      user every process of a replay runs as. The code it runs is the repo under test, so it has
+#      no way into the Hive user's home (the person's conversations, memory, stored secrets): the
+#      home is 0700 with no ACL entry for it (an older version gave it traverse there, which
+#      exposed everything world-readable below; that entry is removed). What a replay runs, the
+#      pinned runtime and the task tools, lives in the shared location instead:
+#      /var/lib/swarmai/replay, made here by root inside root's /var/lib/swarmai (so the Hive
+#      user cannot swap it for a link), owned by the Hive user with the replay user's group, 0750:
+#      the Hive user writes it, the replay user reads it, nobody else enters
+#      (backend/core/feature_map/replay_user.py SHARED_DIR, hive/bin/task-tools).
+#      Once (a marker in /var/lib/swarmai), the Hive user's existing ~/.swarm-ai and ~/.claude are
+#      made private: group and other bits removed, the owner's kept, run as the Hive user so a
+#      link in the tree can never make root change another file; the service's UMask=0077
+#      (hive/swarmai-hive.service) keeps what it writes later private.
 #   3. sudoers: the Hive user may run commands as swarm-replay (never as root), without a
 #      password, without a pty or a PAM session; the file is checked with visudo before it is put
 #      in place.
@@ -34,7 +44,8 @@
 #        replay-host.sh render-sudoers <user>   print the sudoers drop-in for the Hive user
 #        replay-host.sh render-unit <nft>       print the systemd unit that loads the ruleset
 #        replay-host.sh packages                print the package set
-# Environment: SWARM_USER (the Hive user, default swarm), REPLAY_HOST_DNF_DEADLINE_S (default 200).
+# Environment: SWARM_USER (the Hive user, default swarm), REPLAY_HOST_DNF_DEADLINE_S (default 200),
+# REPLAY_HOST_STATE_DIR (root's state folder, default /var/lib/swarmai; the tests use a temp one).
 
 set -uo pipefail
 
@@ -45,6 +56,9 @@ DNF_DEADLINE_S="${REPLAY_HOST_DNF_DEADLINE_S:-200}"
 NFT_FILE="/etc/swarmai/replay-imds.nft"
 NFT_UNIT="/etc/systemd/system/swarmai-replay-imds.service"
 SUDOERS_FILE="/etc/sudoers.d/swarmai-replay"
+STATE_DIR="${REPLAY_HOST_STATE_DIR:-/var/lib/swarmai}"
+SHARED_DIR="$STATE_DIR/replay"
+PRIVATE_MARK="$STATE_DIR/home-private.v1"
 
 # The shell's libraries, by the soname ldd reported missing: libatk-1.0 (atk), libatspi
 # (at-spi2-core), libasound (alsa-lib), libX11, libxcb, libXcomposite, libXdamage, libXext,
@@ -132,15 +146,65 @@ ensure_user() {
     fi
     install -d -o "$REPLAY_USER" -g "$REPLAY_USER" -m 0700 "$REPLAY_HOME" \
         || { warn "$REPLAY_HOME could not be made"; return 1; }
-    local home
-    home="$(getent passwd "$OWNER" | cut -d: -f6)"
-    if [ -z "$home" ] || [ ! -d "$home" ]; then
+    echo "replay host: user $REPLAY_USER ($(id -u "$REPLAY_USER"))"
+}
+
+owner_home() {
+    # OWNER_HOME: the Hive user's home, a real folder (root never changes anything through a link)
+    OWNER_HOME="$(getent passwd "$OWNER" | cut -d: -f6)"
+    if [ -z "$OWNER_HOME" ] || [ ! -d "$OWNER_HOME" ]; then
         warn "the Hive user $OWNER has no home"
         return 1
     fi
-    setfacl -m "u:${REPLAY_USER}:x" "$home" \
-        || { warn "setfacl on $home failed (the replay user cannot reach the tools there)"; return 1; }
-    echo "replay host: user $REPLAY_USER ($(id -u "$REPLAY_USER")), traverse on $home"
+    if [ -L "$OWNER_HOME" ]; then
+        warn "the Hive user's home $OWNER_HOME is a symbolic link; nothing is changed through it"
+        return 1
+    fi
+}
+
+shared_location() {
+    if [ -L "$STATE_DIR" ] || [ -L "$SHARED_DIR" ]; then
+        warn "$STATE_DIR or $SHARED_DIR is a symbolic link; not used"
+        return 1
+    fi
+    install -d -o root -g root -m 0755 "$STATE_DIR" \
+        && install -d -o "$OWNER" -g "$REPLAY_USER" -m 0750 "$SHARED_DIR" \
+        || { warn "$SHARED_DIR could not be made (the runtime and the task tools stay out of the replay user's reach)"; return 1; }
+    echo "replay host: $SHARED_DIR holds the pinned runtime and the task tools ($OWNER writes, $REPLAY_USER reads)"
+}
+
+private_home() {
+    owner_home || return 1
+    local home="$OWNER_HOME"
+    if id -u "$REPLAY_USER" >/dev/null 2>&1 && command -v setfacl >/dev/null 2>&1; then
+        setfacl -x "u:${REPLAY_USER}" "$home" \
+            || { warn "the replay user's ACL entry on $home could not be removed"; return 1; }
+    fi
+    chmod 0700 "$home" || { warn "$home could not be made 0700"; return 1; }
+    echo "replay host: $home is 0700, with no way in for $REPLAY_USER"
+}
+
+tighten_data() {
+    # once: the Hive user's existing data, created before the service's UMask=0077. Every
+    # folder is walked even when one chmod fails (a file removed meanwhile); what decides is
+    # a second walk: the marker is written only when nothing of the Hive user's is left open.
+    [ -f "$PRIVATE_MARK" ] && return 0
+    owner_home || return 1
+    local home="$OWNER_HOME" dir uid left=""
+    uid="$(id -u "$OWNER")" || { warn "no uid for $OWNER"; return 1; }
+    for dir in "$home/.swarm-ai" "$home/.claude"; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        runuser -u "$OWNER" -- find -P "$dir" -xdev -ignore_readdir_race -uid "$uid" ! -type l \
+            -perm /077 -exec chmod go= {} + 2>/dev/null
+        left="$left$(runuser -u "$OWNER" -- find -P "$dir" -xdev -ignore_readdir_race -uid "$uid" \
+            ! -type l -perm /077 -print -quit 2>/dev/null)"
+    done
+    if [ -n "$left" ]; then
+        warn "$left (and maybe more) is still readable by others; tried again at the next update"
+        return 1
+    fi
+    : > "$PRIVATE_MARK" || { warn "$PRIVATE_MARK could not be written"; return 1; }
+    echo "replay host: $home/.swarm-ai and $home/.claude made private (once)"
 }
 
 install_sudoers() {
@@ -195,6 +259,9 @@ fi
 status=0
 install_packages || status=1
 ensure_user || status=1
+shared_location || status=1
+private_home || status=1
+tighten_data || status=1
 install_sudoers || status=1
 if [ "${1:-setup}" = image ]; then
     echo "replay host: no firewall rule in an image (it is loaded as root at boot, and an image has no root at run time)"

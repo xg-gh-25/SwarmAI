@@ -307,13 +307,23 @@ machine (a lock its CLI process holds); every process of that user is stopped be
 replay starts (replay is refused if one survives) and again when its sandbox closes, so
 nothing a replay started outlives it, also a process that cleared its environment. The host sets the user up as root:
 `hive/replay-host.sh`, run by a Hive's first boot and every update, creates it (its own
-home holds its package caches; traverse-only on the Hive user's home, so the tools that
-user runs run for replay too), lets only the Hive user run commands as it (a visudo-checked
+home holds its package caches), lets only the Hive user run commands as it (a visudo-checked
 sudoers drop-in, no pty, no PAM session), and loads at every boot an nftables table that
-rejects that uid's traffic to the two metadata addresses. The replay user can read what the
-Hive user's home leaves readable to other users (the traverse it needs for the task's tools
-and the pinned runtime) and write none of it: before this boundary the replayed app ran as
-the Hive user itself. A separate uid is what holds: a
+rejects that uid's traffic to the two metadata addresses. The replay user has no way into
+the Hive user's home (0700, no ACL entry for it; an older version gave it traverse there,
+which let it read everything world-readable below, data.db included): what a replay runs,
+the pinned runtime and the task tools (`hive/bin/task-tools`), lives in a shared location
+outside the home, `/var/lib/swarmai/replay`, made by root in root's `/var/lib/swarmai`,
+owned by the Hive user with the replay user's group (0750, no access for others; the
+engine uses no other folder). It holds tools only: every replay can read every task's tools
+there, another task's venv included (accepted: they are tools, not the person's data, and
+the old traverse exposed them too). The engine makes what the Hive user wrote there
+readable for that user before each probe (the service runs with `UMask=0077`), gives it a
+PATH without folders inside the home, and refuses the replay (`not_run`) when the probe as
+that user can open the app data folder's `data.db`, list or pass through that folder, or
+pass through the Hive user's home. The update also makes the existing `~/.swarm-ai` and `~/.claude` private once,
+as the Hive user. Before this boundary the replayed app ran as the Hive user itself. A
+separate uid is what holds: a
 network namespace without network breaks prepare and the app's own calls, and a process
 that stays the Hive user can ptrace the backend or rewrite the code it runs; a group
 (`newgrp`) or a delegated cgroup can be left by the process itself. One start of the

@@ -2,7 +2,10 @@
 
 Installed by the product on first use into the app data folder, never relying on a Node
 or a browser the person happens to have (Node is optional on the desktop). One
-versioned folder per pin: ``<app data>/feature_map/runtime/node-<v>-pw-<v>/``.
+versioned folder per pin: ``<app data>/feature_map/runtime/node-<v>-pw-<v>/``; on a
+machine with the replay user's shared location (a Hive: ``replay_user.shared_dir``) it is
+``<shared>/runtime/node-<v>-pw-<v>/`` instead, outside the Hive user's home, which the
+replay user has no way into.
 
 - **Node**: the official archive for the platform, checked against the SHA-256 constant
   below (from nodejs.org SHASUMS256 of the pinned version). Same pattern as the Hive's
@@ -98,8 +101,10 @@ def _platform() -> tuple[str, str]:
 
 def runtime_dir() -> Path:
     from config import get_app_data_dir
-    return (Path(get_app_data_dir()) / "feature_map" / "runtime"
-            / f"node-{NODE_VERSION}-pw-{PLAYWRIGHT_VERSION}")
+    from core.feature_map.replay_user import shared_dir
+    shared = shared_dir()
+    base = shared if shared is not None else Path(get_app_data_dir()) / "feature_map"
+    return base / "runtime" / f"node-{NODE_VERSION}-pw-{PLAYWRIGHT_VERSION}"
 
 
 def _layout(folder: Path) -> Runtime:

@@ -9,7 +9,19 @@ command walks, Playwright and its browser) runs as a separate unprivileged user,
 sets that up as root (``hive/replay-host.sh`` on a Hive: the user, an nftables rule matching
 its uid, and a sudoers rule letting the Hive user run commands as it); this module only uses
 it, and checks it first: a probe run as that user must fail to connect to the metadata
-service, or replay is ``not_run: runtime unavailable`` and nothing of the repo starts.
+service, and must fail to open the person's data (``private_paths``: the app data folder's
+``data.db``, and listing that folder), or replay is ``not_run: runtime unavailable`` and
+nothing of the repo starts.
+
+The replay user has no way into the Hive user's home (the replayed code is the repo under
+test, and the home holds the person's conversations, memory and stored secrets). So nothing
+a replay runs lives there: on such a machine the pinned runtime and the task tools are in
+the shared location (``shared_dir``, ``SHARED_DIR``), which the host makes as root (the Hive
+user writes it, the replay user's group reads it), and the PATH a replay process gets holds
+no folder inside the home (``outside_home``). It holds tools only, never the person's data:
+a replay can read every task's tools there, another task's venv included. What the Hive
+user writes there with its 0077 umask is made readable for the replay user (``publish``)
+before every probe.
 
 Which machines need it (``needs_replay_user``) is decided from fixed facts first, never from
 a probe that could fail open: a Hive (``SWARMAI_MODE=hive``) and a Linux machine where the
@@ -35,8 +47,8 @@ may not signal it). Files the replay user wrote are removed as that user first
 (``remove_tree``); a start state's folder and its fixture are made as that user (``mkdir``,
 ``copy``), because by then a process of that user may have put links in the sandbox.
 
-Exports: REPLAY_USER, ReplayUser, Unavailable, current, imds_answers, needs_replay_user,
-remove_tree, resolve.
+Exports: REPLAY_USER, SHARED_DIR, ReplayUser, Unavailable, current, imds_answers,
+needs_replay_user, outside_home, private_paths, publish, remove_tree, resolve, shared_dir.
 """
 from __future__ import annotations
 
@@ -44,6 +56,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -71,6 +84,15 @@ NO_NETWORK_RULE = (f"the network rule that keeps {REPLAY_USER} off the instance 
                    "hive/replay-host.sh loads the rule as root with nftables at boot; a machine "
                    "without nftables, without CAP_NET_ADMIN or without root at run time, such as a "
                    "container image, has none)")
+#: where the pinned runtime and the task tools live on a machine that uses the replay user,
+#: outside the Hive user's home: hive/replay-host.sh makes it as root (its SHARED_DIR), owned
+#: by the Hive user with the replay user's group. SWARM_REPLAY_SHARED_DIR names another
+#: folder; set but empty, there is none (the test suite's setting).
+SHARED_DIR = Path("/var/lib/swarmai/replay")
+#: why a replay user that can read the person's data cannot be used
+NO_PRIVATE_DATA = (f"{REPLAY_USER} can read the Hive user's data, and the replayed code must "
+                   "not: hive/replay-host.sh (run as root by every Hive update) removes its way "
+                   "into the Hive user's home and makes that home 0700")
 
 
 class Unavailable(RuntimeError):
@@ -100,6 +122,97 @@ def _user_exists() -> bool:
         return True
     except KeyError:
         return False
+
+
+def shared_dir() -> Path | None:
+    """The shared location for the runtime and the task tools when this machine has it: a
+    real folder (not a link) this user can write that keeps everyone else out (no access
+    for others: what ``publish`` opens below it is reached only through its group or ACL);
+    else None."""
+    raw = os.environ.get("SWARM_REPLAY_SHARED_DIR")
+    if raw == "":
+        return None
+    path = Path(raw) if raw else SHARED_DIR
+    try:
+        st = path.lstat()
+        if not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o007 or not os.access(path, os.W_OK):
+            return None
+    except OSError:
+        return None
+    return path
+
+
+def publish(root: Path) -> None:
+    """Make every folder and file this user owns below *root* readable by others (folders
+    and files with the owner's execute bit runnable too), so the replay user, which reads
+    *root* through its group, can use what this user wrote with a 0077 umask. *root* keeps
+    its own mode; links are neither changed nor followed, nor is what another user owns."""
+    me = os.getuid()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in (*dirnames, *filenames):
+            path = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            if st.st_uid != me or stat.S_ISLNK(st.st_mode):
+                continue
+            mode = stat.S_IMODE(st.st_mode)
+            if stat.S_ISDIR(st.st_mode):
+                want = mode | 0o055
+            elif stat.S_ISREG(st.st_mode):
+                want = mode | 0o044 | (0o011 if mode & stat.S_IXUSR else 0)
+            else:
+                continue
+            if want != mode:
+                try:
+                    os.chmod(path, want)
+                except OSError:
+                    pass
+
+
+def private_paths() -> list[Path]:
+    """The person's data the replay user must not reach: ``data.db`` and the app data
+    folder itself, for the folder in effect and the default one (a SWARM_DATA_DIR override
+    never hides the real store), and the Hive user's home (the boundary itself: a folder
+    counts as reached when it can be listed or passed through)."""
+    from config import default_app_data_dir, get_app_data_dir
+    out: list[Path] = []
+    for folder in (Path(get_app_data_dir()), Path(default_app_data_dir())):
+        for path in (folder / "data.db", folder):
+            if path not in out:
+                out.append(path)
+    if pwd is not None:
+        try:
+            home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        except KeyError:
+            home = None
+        if home is not None and str(home) != os.sep and home not in out:
+            out.append(home)
+    return out
+
+
+def outside_home(path_value: str) -> str:
+    """*path_value* (a PATH) without the folders inside the Hive user's home (its passwd
+    home and $HOME, links resolved): the replay user cannot run anything there, and a
+    program found there by the Hive user would not start as the replay user."""
+    homes = set()
+    if pwd is not None:
+        try:
+            homes.add(os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir))
+        except KeyError:
+            pass
+    homes.add(os.path.realpath(str(Path.home())))
+    homes.discard(os.sep)                # a home of "/" would take every folder away
+    keep = []
+    for entry in path_value.split(os.pathsep):
+        if not entry:
+            continue
+        real = os.path.realpath(entry)
+        if any(real == h or real.startswith(h.rstrip(os.sep) + os.sep) for h in homes):
+            continue
+        keep.append(entry)
+    return os.pathsep.join(keep)
 
 
 def needs_replay_user() -> bool:
@@ -179,9 +292,11 @@ class ReplayUser:
 
     def probe(self, paths: Iterable[Path | str] = ()) -> list[str]:
         """Why this user cannot be used ([] = it can): sudo refused, the metadata service
-        answers it, or a path it must read or run is out of its reach."""
+        answers it, a path it must read or run is out of its reach, or it can read the
+        person's data (``private_paths``)."""
         try:
-            proc = self._helper("probe", *[str(p) for p in paths])
+            proc = self._helper("probe", *[str(p) for p in paths], "--private",
+                                *[str(p) for p in private_paths()])
         except subprocess.TimeoutExpired:
             return [f"sudo -u {self.name} did not answer in {_HELPER_TIMEOUT_S}s"]
         except OSError as exc:
@@ -275,7 +390,8 @@ def resolve(paths: Iterable[Path | str] = (), *, lock_wait_s: float = LOCK_WAIT_
     """Who the sandbox runs as: None when this machine does not need the replay user (the
     person, as before); else the replay user, once this process holds the machine's
     replay-user lock, no process of that user is left, and a probe as that user found the
-    metadata service closed and *paths* within reach. Raises ``Unavailable`` when the
+    metadata service closed, *paths* within reach and the person's data out of it (the
+    shared location published first). Raises ``Unavailable`` when the
     replay user is needed and cannot be used. Only a usable replay user is remembered."""
     global _current
     user = _current
@@ -308,8 +424,13 @@ def resolve(paths: Iterable[Path | str] = (), *, lock_wait_s: float = LOCK_WAIT_
     if left:
         raise Unavailable(f"{left} process(es) of {REPLAY_USER} outlived an earlier replay "
                           "and could not be stopped")
+    shared = shared_dir()
+    if shared is not None:
+        publish(shared)                 # what the Hive user wrote there, readable for this user
     problems = user.probe(paths)
     if problems:
+        if any("only the person may read" in p for p in problems):
+            problems = [NO_PRIVATE_DATA, *problems]
         if any("metadata service answers" in p for p in problems):
             # the user is there but the boundary is not: say which rule, and who loads it
             problems = [NO_NETWORK_RULE, *problems]

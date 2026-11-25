@@ -11,7 +11,7 @@ FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
 # Step 1 of user_data.py, plus what the image lacks that an EC2 AMI has (sudo and acl:
 # Feature Map replay starts its processes as the replay user with sudo, and gives that user
-# traverse on the Hive user's home with setfacl; hive/replay-host.sh below).
+# its sandbox folder with setfacl; hive/replay-host.sh below).
 RUN dnf install -y python3.12 python3.12-pip python3.12-devel nodejs20 npm git gcc make \
         tar gzip shadow-utils procps-ng util-linux sudo acl \
     && dnf clean all && rm -rf /var/cache/dnf
@@ -29,7 +29,9 @@ RUN --mount=type=bind,source=swarmai-hive.tar.gz,target=/tmp/hive.tar.gz \
 # The host side of Feature Map replay, as an EC2 Hive's first boot and every update run it:
 # hive/replay-host.sh taken from the package itself (as the update takes it, never from a tree
 # the Hive user owns), run as root (no USER yet) in its image mode: the pinned Chromium's
-# system libraries and fonts, the swarm-replay user and the sudoers rule for the Hive user.
+# system libraries and fonts, the swarm-replay user, the shared location for the runtime and
+# the task tools (outside the Hive user's home, which is 0700 with no way in for that user),
+# and the sudoers rule for the Hive user.
 # Its firewall rule (no metadata service for that user) needs root and nftables at run time,
 # which this image does not have: the container runs as the Hive user, with no systemd. So
 # replay here finds the unit that loads that rule inactive and reports its walks not_run with

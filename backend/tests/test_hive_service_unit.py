@@ -41,3 +41,10 @@ def test_the_service_may_use_the_whole_machine():
     assert svc.get("MemoryMax", "infinity") == "infinity"
     for key in ("MemoryHigh", "CPUQuota", "MemorySwapMax"):
         assert key not in svc, f"{key}: a Hive's machine is there for its runs"
+
+
+def test_the_service_creates_private_files():
+    """The Hive's own data and workspace are created readable by the Hive user only,
+    whatever the mode of its home: the replay user (hive/replay-host.sh) must never read
+    them."""
+    assert _service().get("UMask") == "0077"

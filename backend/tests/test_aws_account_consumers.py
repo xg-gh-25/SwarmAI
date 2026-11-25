@@ -362,3 +362,21 @@ def test_model_names_are_translated_for_bedrock_whatever_the_old_flag_says():
     chat = PromptBuilder(config=c).resolve_model({})
     job = mr.resolve_job_model({"default_model": "claude-sonnet-4-6", "use_bedrock": False})
     assert chat.startswith("us.anthropic.") and job.startswith("us.anthropic."), (chat, job)
+
+
+def test_jobs_find_node_22_in_the_shared_location_too(cfg, tmp_path, monkeypatch):
+    """On a Hive, hive/bin/task-tools installs mise's tools into the replay user's shared
+    location (core/feature_map/replay_user.shared_dir), not the home: a job's MCP servers
+    still get the newest Node >= 22 from there."""
+    from jobs import executor
+    monkeypatch.setattr(executor, "_get_aws_credentials", lambda: {})
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home" / ".local/share/mise/installs/node/20.1.0/bin").mkdir(parents=True)
+    shared = tmp_path / "shared"
+    node = shared / "mise" / "installs" / "node" / "22.21.1" / "bin"
+    node.mkdir(parents=True)
+    shared.chmod(0o750)
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(shared))
+    assert executor._build_cli_env({})["PATH"].split(":")[0] == str(node)
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", "")
+    assert not executor._build_cli_env({})["PATH"].startswith(str(shared))

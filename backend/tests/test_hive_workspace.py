@@ -215,6 +215,20 @@ def test_release_waits_for_the_session_and_removes_only_the_order(world, tmp_pat
     assert (outside / W2).is_dir()
 
 
+def test_release_removes_the_tasks_shared_tools(world, tmp_path, monkeypatch):
+    """A task's python venv lives in the shared replay location on a Hive (hive/bin/task-tools):
+    releasing the order removes it with the order's clones, and only it."""
+    shared = tmp_path / "shared"
+    for wid in (W1, W2):
+        (shared / "work" / wid / "python" / "bin").mkdir(parents=True)
+    shared.chmod(0o750)
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(shared))
+    hw.prepare(world["ws"], W1, [])
+    assert hw.release(world["ws"], W1, lambda sid: False) is True
+    assert not (shared / "work" / W1).exists()
+    assert (shared / "work" / W2 / "python" / "bin").is_dir()
+
+
 def test_the_sweep_releases_an_idle_order_and_keeps_one_in_use(world):
     sha = _ship(world)
     hw.prepare(world["ws"], W1, [])

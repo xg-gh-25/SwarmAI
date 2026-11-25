@@ -13,6 +13,10 @@ User=swarm
 Group=swarm
 WorkingDirectory=/opt/swarmai/backend
 ExecStart=/opt/swarmai/hive/swarmai-hive.sh
+# Everything the Hive writes (its data, workspace, logs, every task's files) is readable by
+# the Hive user only, whatever the mode of its home: the Feature Map replay user runs untrusted
+# code and must never read it (hive/replay-host.sh). An update installs this unit when it differs.
+UMask=0077
 Restart=always
 RestartSec=10
 TimeoutStartSec=120

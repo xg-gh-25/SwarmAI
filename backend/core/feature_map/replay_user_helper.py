@@ -22,10 +22,12 @@ Hive user cannot do for processes and files that user owns. Standard library onl
     replay_user_helper.py copy <src> <dest>
         Copy the file or folder <src> to <dest>, links as links, a folder merged into an
         existing one (exit 1 with the reason on stderr when it fails).
-    replay_user_helper.py probe [<path> ...]
+    replay_user_helper.py probe [<path> ...] [--private <path> ...]
         Exit 0 when a TCP connection to the instance metadata service (169.254.169.254:80,
-        [fd00:ec2::254]:80) fails and every <path> is readable (and runnable when it has an
-        execute bit); else exit 3, the reasons on stdout as JSON.
+        [fd00:ec2::254]:80) fails, every <path> is readable (and runnable when it has an
+        execute bit) and no private <path> (the person's data: a file opened, a folder
+        listed, or passed through) can be reached; else exit 3, the reasons on stdout as
+        JSON.
 """
 import json
 import os
@@ -185,7 +187,21 @@ def _copy(src, dest):
         sys.exit(1)
 
 
-def _probe(paths):
+def _private_open(path):
+    """Whether this user can reach *path*: open it for reading (a folder: list it), or pass
+    through it when it is a folder. Never blocks on a FIFO; anything refused or missing
+    counts as private."""
+    try:
+        if os.path.isdir(path) and os.access(path, os.X_OK):
+            return True
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return False
+    os.close(fd)
+    return True
+
+
+def _probe(paths, private=()):
     problems = []
     for host, port in METADATA:
         try:
@@ -203,6 +219,9 @@ def _probe(paths):
             problems.append("cannot read %s" % path)
         elif stat.S_ISREG(st.st_mode) and st.st_mode & stat.S_IXUSR and not os.access(path, os.X_OK):
             problems.append("cannot run %s" % path)
+    for path in private:
+        if _private_open(path):
+            problems.append("this user can read %s, which only the person may read" % path)
     print(json.dumps({"uid": os.getuid(), "problems": problems}))
     sys.exit(3 if problems else 0)
 
@@ -221,7 +240,9 @@ def main(argv):
     elif len(argv) == 3 and argv[0] == "copy":
         _copy(argv[1], argv[2])
     elif argv and argv[0] == "probe":
-        _probe(argv[1:])
+        rest = argv[1:]
+        cut = rest.index("--private") if "--private" in rest else len(rest)
+        _probe(rest[:cut], rest[cut + 1:])
     else:
         sys.stderr.write(__doc__)
         sys.exit(2)

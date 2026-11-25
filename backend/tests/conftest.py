@@ -73,6 +73,9 @@ for _k in [k for k in _os.environ if k.startswith(("SWARM_", "SWARMAI_"))]:
 # that boots the app (30 files build their own TestClient) would reach the LIVE
 # daemon's processes. Off for the whole suite (2026-10-20 13:22).
 _os.environ["SWARMAI_NO_CLI_SWEEP"] = "1"
+# No test uses the machine's shared replay location (/var/lib/swarmai/replay on a Hive,
+# core/feature_map/replay_user.shared_dir): empty means none; a test that needs one sets it.
+_os.environ["SWARM_REPLAY_SHARED_DIR"] = ""
 
 import atexit
 

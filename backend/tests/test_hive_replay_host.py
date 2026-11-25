@@ -265,8 +265,8 @@ def test_the_user_and_its_home_access():
     text = SCRIPT.read_text()
     assert 'useradd --system --user-group --home-dir "$REPLAY_HOME" --create-home' in text
     assert "--shell /sbin/nologin" in text
-    # traverse only, never list or write, on the Hive user's home
-    assert 'setfacl -m "u:${REPLAY_USER}:x" "$home"' in text
+    # no access of any kind on the Hive user's home: what a replay runs lives outside it
+    assert not re.search(r"setfacl[^\n]*-m[^\n]*\$home", text)
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="checks the non-root refusal")
@@ -302,24 +302,34 @@ def test_smoke_launches_the_browser_and_ci_installs_its_dependencies():
     assert "PLAYWRIGHT_VERSION" in run and "install-deps chromium" in run
 
 
-def _stub_host(tmp_path: Path, missing_user: bool = False) -> tuple[dict, Path]:
+def _stub_host(tmp_path: Path, missing_user: bool = False, home: Path | None = None) -> tuple[dict, Path]:
     """A PATH whose system commands only log (root's id, rpm, dnf, useradd, install,
-    getent, setfacl, visudo, systemctl, nft), so the script's steps run without root."""
+    getent, setfacl, visudo, systemctl, nft), so the script's steps run without root;
+    runuser logs and runs its command as this same user. The state folder (root's
+    /var/lib/swarmai on a Hive) is a temp one."""
     bin_ = tmp_path / "stubs"
     bin_.mkdir(parents=True)
     log = tmp_path / "calls.log"
-    home = tmp_path / "home-swarm"
-    home.mkdir()
+    if home is None:
+        home = tmp_path / "home-swarm"
+        home.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
     stubs = {
         "id": 'if [ "$1" = -u ] && [ -z "$2" ]; then echo 0; exit 0; fi\n'
+              # the Hive user owns the test's files: it is this user here
+              + 'if [ "$1" = -u ] && [ "$2" = swarm ]; then exec /usr/bin/id -u; fi\n'
               + ('echo "id: no such user" >&2; exit 1\n' if missing_user else 'echo 990\n'),
         "getent": f'echo "swarm:x:1000:1000::{home}:/bin/bash"\n',
         "useradd": "exit 1\n" if missing_user else "exit 0\n",
+        "runuser": '[ "$1" = -u ] && [ "$3" = -- ] || exit 9\nshift 3\nexec "$@"\n',
     }
-    for name in ("id", "rpm", "dnf", "useradd", "install", "getent", "setfacl", "visudo", "systemctl", "nft"):
+    for name in ("id", "rpm", "dnf", "useradd", "install", "getent", "setfacl", "visudo", "systemctl", "nft",
+                 "runuser"):
         (bin_ / name).write_text(f'#!/bin/sh\necho "{name} $*" >> "{log}"\n' + stubs.get(name, "exit 0\n"))
         (bin_ / name).chmod(0o755)
-    return {"PATH": f"{bin_}:/usr/bin:/bin", "SWARM_USER": "swarm", "HOME": str(tmp_path)}, log
+    return {"PATH": f"{bin_}:/usr/bin:/bin", "SWARM_USER": "swarm", "HOME": str(tmp_path),
+            "REPLAY_HOST_STATE_DIR": str(state)}, log
 
 
 def test_the_image_mode_sets_up_everything_but_the_firewall(tmp_path):
@@ -331,7 +341,9 @@ def test_the_image_mode_sets_up_everything_but_the_firewall(tmp_path):
     r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=30, env=env)
     assert r.returncode == 0, r.stdout + r.stderr
     calls = log.read_text()
-    assert "rpm -q" in calls and "setfacl -m u:swarm-replay:x" in calls and "visudo -cf" in calls
+    assert "rpm -q" in calls and "visudo -cf" in calls
+    assert "setfacl -m" not in calls and "setfacl -x u:swarm-replay" in calls    # no way into the home
+    assert f"install -d -o swarm -g swarm-replay -m 0750 {tmp_path / 'state' / 'replay'}" in calls
     assert "systemctl" not in calls and "nft " not in calls
     assert "no firewall rule in an image" in r.stdout
     # (the default mode loads the firewall: test_the_ruleset_loads_at_every_boot_before_the_hive;
@@ -340,3 +352,150 @@ def test_the_image_mode_sets_up_everything_but_the_firewall(tmp_path):
     env, log = _stub_host(tmp_path / "x", missing_user=True)
     r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=30, env=env)
     assert r.returncode != 0 and "useradd swarm-replay failed" in r.stdout
+
+
+def _mode(p: Path) -> int:
+    return p.lstat().st_mode & 0o7777
+
+
+def test_no_home_traverse_and_an_old_one_is_removed(tmp_path):
+    """The replay user gets no ACL entry on the Hive user's home: the entry an older version
+    set (traverse) is removed and the home made 0700, once the replay user exists. Run here in
+    image mode (setup mode also loads the firewall, which writes /etc); both modes run the same
+    steps before it."""
+    env, log = _stub_host(tmp_path)
+    home = tmp_path / "home-swarm"
+    home.chmod(0o711)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = log.read_text().splitlines()
+    assert f"setfacl -x u:swarm-replay {home}" in calls, calls
+    assert not any(c.startswith("setfacl -m") for c in calls), calls
+    made = "install -d -o swarm-replay -g swarm-replay -m 0700 /var/lib/swarm-replay"
+    assert calls.index(made) < calls.index(f"setfacl -x u:swarm-replay {home}")
+    assert _mode(home) == 0o700, (oct(_mode(home)), r.stdout)
+    assert "traverse on" not in r.stdout
+    text = SCRIPT.read_text()
+    main = text[text.index('status=0\ninstall_packages'):]
+    assert main.index("private_home") < main.index('if [ "${1:-setup}" = image ]')
+
+
+def test_a_linked_home_is_left_alone(tmp_path):
+    """root never changes the mode or ACL through a link it found where the home should be."""
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    target.chmod(0o755)
+    link = tmp_path / "home-link"
+    link.symlink_to(target)
+    env, log = _stub_host(tmp_path, home=link)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode != 0 and "symbolic link" in r.stdout, r.stdout
+    assert _mode(target) == 0o755
+    assert str(link) not in "".join(ln for ln in log.read_text().splitlines() if ln.startswith(("setfacl", "runuser")))
+
+
+def test_the_shared_location_is_root_made_and_hive_user_writable_only(tmp_path):
+    """The pinned runtime and the task tools live in <state>/replay, outside the Hive user's
+    home: made by root in a root-owned folder (so the Hive user cannot swap it for a link),
+    owned by the Hive user with the replay user's group, 0750: only the Hive user writes it,
+    the replay user reads it, nobody else enters."""
+    env, log = _stub_host(tmp_path)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = log.read_text().splitlines()
+    state = tmp_path / "state"
+    parent = f"install -d -o root -g root -m 0755 {state}"
+    child = f"install -d -o swarm -g swarm-replay -m 0750 {state / 'replay'}"
+    assert parent in calls and child in calls and calls.index(parent) < calls.index(child)
+    assert calls.index("install -d -o swarm-replay -g swarm-replay -m 0700 /var/lib/swarm-replay") \
+        < calls.index(child)                       # the replay user's group exists by then
+    text = SCRIPT.read_text()
+    assert 'STATE_DIR="${REPLAY_HOST_STATE_DIR:-/var/lib/swarmai}"' in text
+    from core.feature_map.replay_user import SHARED_DIR
+    assert str(SHARED_DIR) == "/var/lib/swarmai/replay"
+    assert 'SHARED_DIR="$STATE_DIR/replay"' in text
+    task_tools = (REPO / "hive" / "bin" / "task-tools").read_text()
+    assert "SWARM_REPLAY_SHARED_DIR-" + str(SHARED_DIR) + "}" in task_tools
+
+
+def test_the_tree_is_tightened_once_without_following_a_link(tmp_path):
+    """The update makes the Hive user's existing ~/.swarm-ai and ~/.claude private once:
+    group and other bits removed, the owner's kept (a script stays runnable), run as the Hive
+    user (runuser), never through a link: a link's target outside keeps its mode. Done once
+    (a root-owned marker), so a later update does not walk the tree again."""
+    env, log = _stub_host(tmp_path)
+    home = tmp_path / "home-swarm"
+    data = home / ".swarm-ai"
+    (data / "SwarmWS" / ".context").mkdir(parents=True)
+    for d in (data, data / "SwarmWS", data / "SwarmWS" / ".context"):
+        d.chmod(0o755)
+    db = data / "data.db"
+    db.write_text("rows")
+    db.chmod(0o644)
+    script = data / "SwarmWS" / "hook.sh"
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    claude = home / ".claude" / "shell-snapshots"
+    claude.mkdir(parents=True)
+    (claude / "snap.sh").write_text("export A=1\n")
+    (claude / "snap.sh").chmod(0o644)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside.chmod(0o755)
+    (outside / "f").write_text("x")
+    (outside / "f").chmod(0o644)
+    (data / "link-file").symlink_to(outside / "f")
+    (data / "link-dir").symlink_to(outside)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _mode(data) == _mode(data / "SwarmWS") == _mode(data / "SwarmWS" / ".context") == 0o700
+    assert _mode(db) == 0o600 and _mode(script) == 0o700
+    assert _mode(claude) == 0o700 and _mode(claude / "snap.sh") == 0o600
+    assert _mode(outside) == 0o755 and _mode(outside / "f") == 0o644
+    calls = log.read_text().splitlines()
+    assert any(c.startswith(f"runuser -u swarm -- find -P {data} ") for c in calls), calls
+    assert (tmp_path / "state" / "home-private.v1").is_file()
+    # once: a file made 0644 later is not walked again
+    db.chmod(0o644)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 0 and _mode(db) == 0o644
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root passes every folder")
+def test_a_failed_walk_still_tightens_the_next_folder(tmp_path):
+    """A folder the walk cannot enter (or a file gone before its chmod) does not stop the
+    tightening of the other folders; the marker is written only when nothing of the Hive
+    user's is left open (here: the shut folder is private already)."""
+    env, _log = _stub_host(tmp_path)
+    home = tmp_path / "home-swarm"
+    shut = home / ".swarm-ai" / "shut"
+    shut.mkdir(parents=True)
+    (home / ".swarm-ai").chmod(0o755)
+    snap = home / ".claude" / "snap.sh"
+    snap.parent.mkdir()
+    snap.write_text("export A=1\n")
+    snap.chmod(0o644)
+    shut.chmod(0o000)
+    try:
+        r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=60, env=env)
+    finally:
+        shut.chmod(0o700)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _mode(snap) == 0o600 and _mode(home / ".swarm-ai") == 0o700
+    assert (tmp_path / "state" / "home-private.v1").is_file()
+
+
+def test_no_marker_while_something_is_left_open(tmp_path):
+    """When the walk could not close a file (here every chmod fails), the marker is not
+    written: the step warns and the next update walks again."""
+    env, _log = _stub_host(tmp_path)
+    stubs = Path(env["PATH"].split(":")[0])
+    (stubs / "chmod").write_text("#!/bin/sh\nexit 1\n")
+    (stubs / "chmod").chmod(0o755)
+    data = tmp_path / "home-swarm" / ".swarm-ai"
+    data.mkdir()
+    (data / "data.db").write_text("rows")
+    (data / "data.db").chmod(0o644)
+    r = subprocess.run(["bash", str(SCRIPT), "image"], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode != 0 and "still readable by others" in r.stdout, r.stdout
+    assert not (tmp_path / "state" / "home-private.v1").exists()

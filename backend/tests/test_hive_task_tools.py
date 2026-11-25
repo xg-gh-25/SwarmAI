@@ -278,3 +278,34 @@ def test_a_fetched_mise_with_another_hash_is_not_kept(tmp_path, machine, fetched
 def test_the_script_checks_the_same_pattern_as_the_host():
     m = re.search(r"^TOOL_RE='\^(.*)\$'$", SCRIPT.read_text(), re.M)
     assert m and m.group(1) == pa.TOOL_RE.pattern
+
+
+def test_tools_go_to_the_shared_location(kit):
+    """With the shared replay location writable (a Hive), mise installs its tools there and
+    the task's python venv is made there, under the work order's id, so a replay running as
+    the replay user finds them without any way into the Hive user's home. Without it, mise
+    keeps its data in the home and the venv stays in the checks directory."""
+    shared = kit["tmp"] / "shared"
+    shared.mkdir()
+    shared.chmod(0o755)                                  # open to everyone: not used
+    r = kit["run"]("node@22", SWARM_REPLAY_SHARED_DIR=str(shared))
+    assert r.returncode == 0 and not (shared / "mise").exists()
+    assert kit["calls"]()[-1]["mise"]["MISE_DATA_DIR"].endswith("/.local/share/mise")
+    shared.chmod(0o750)
+    (kit["checks"] / "setup-1.path").write_text("")
+    (kit["checks"] / "calls-before").write_text(str(len(kit["calls"]())))
+    r = kit["run"]("node@22", "python@3.11", SWARM_REPLAY_SHARED_DIR=str(shared))
+    assert r.returncode == 0, r.stderr
+    calls = kit["calls"]()[int((kit["checks"] / "calls-before").read_text()):]
+    assert {c["mise"]["MISE_DATA_DIR"] for c in calls} == {str(shared / "mise")}
+    from scripts.task_checks import _read_github_path
+    got = list(reversed(_read_github_path(kit["checks"] / "setup-1.path", kit["checks"])))
+    venv = shared / "work" / "work" / "python"          # the checks directory is work/checks
+    assert Path(got[0]).resolve() == (venv / "bin").resolve()
+    assert (venv / "bin" / "python").exists()
+    assert not (kit["checks"] / "python").exists()
+    # no shared location: the home, as before
+    (kit["checks"] / "setup-1.path").write_text("")
+    r = kit["run"]("node@22", SWARM_REPLAY_SHARED_DIR="")
+    assert r.returncode == 0, r.stderr
+    assert kit["calls"]()[-1]["mise"]["MISE_DATA_DIR"].endswith("/.local/share/mise")

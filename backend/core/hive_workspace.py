@@ -384,9 +384,14 @@ def _rm_tree(root: Path, rel: str) -> None:
 
 
 def _remove(ws: Path, work_id: str) -> None:
-    """Remove this order's directories and its files; nothing else."""
+    """Remove this order's directories and its files (with its python venv in the replay
+    user's shared location, where hive/bin/task-tools makes it on a Hive); nothing else."""
     _rm_tree(ws, "/".join((*WORK_ROOT, work_id)))
     _rm_tree(ws, outputs_rel(work_id))
+    from core.feature_map.replay_user import shared_dir
+    shared = shared_dir()
+    if shared is not None and WORK_ID_RE.fullmatch(work_id):
+        _rm_tree(shared, f"work/{work_id}")
     for suffix in (".json", ".claim"):
         try:
             _order_path(work_id, suffix).unlink(missing_ok=True)

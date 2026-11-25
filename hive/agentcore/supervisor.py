@@ -365,10 +365,15 @@ def start(body: dict, platform_sid: str | None = None) -> dict:
 
 def _launch(env: dict):
     """Start the backend in a process group of its own (its output appended to
-    BACKEND_LOG), so it and everything it started can be stopped together; raises OSError."""
-    os.makedirs(LOG_DIR, exist_ok=True)
-    with open(BACKEND_LOG, "ab") as log:
-        return subprocess.Popen(backend_command(), cwd=BACKEND_DIR, env=env,
+    BACKEND_LOG), so it and everything it started can be stopped together; raises OSError.
+    With umask 0077, as the EC2 Hive's unit (UMask=0077, hive/swarmai-hive.service): what
+    the Hive writes is readable by the Hive user only, never by the Feature Map replay user."""
+    os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
+    os.chmod(LOG_DIR, 0o700)                        # also one an earlier start made
+    fd = os.open(BACKEND_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "ab") as log:
+        return subprocess.Popen(backend_command(), cwd=BACKEND_DIR, env=env, umask=0o077,
                                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
 

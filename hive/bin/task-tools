@@ -8,9 +8,9 @@
 # `tools` (core/task_spec), and scripts/task_checks runs it like any setup line, with
 # $GITHUB_PATH / $GITHUB_ENV. For each tool it runs `mise install`, then appends the tools' directories to
 # $GITHUB_PATH and their variables to $GITHUB_ENV, which task_checks puts in effect for
-# every later setup line and check. For python it also makes a venv in the task's own
-# checks directory, so a `pip install` stays inside the task (what setup-python gives a
-# job on its own VM).
+# every later setup line and check. For python it also makes a venv of the task's own (in
+# its checks directory, or the shared location below), so a `pip install` stays inside the
+# task (what setup-python gives a job on its own VM).
 #
 # mise runs with a clean environment: no inherited MISE_* variable, its config files
 # pointed at empty ones, no config file name it would look for, no plugin backends, and
@@ -18,6 +18,12 @@
 # nor a file another task left can add hooks, tasks or tools: the only input is the
 # arguments, checked against the pattern below (the same as core/project_agent TOOL_RE).
 # Tools install once into the user's mise data directory and are shared by later tasks.
+#
+# On a machine with the replay user's shared location (a Hive: /var/lib/swarmai/replay,
+# made by hive/replay-host.sh as root; SWARM_REPLAY_SHARED_DIR names another, empty: none)
+# the tools go there instead (<shared>/mise) and so does the task's venv
+# (<shared>/work/<work id>/python, removed with the task by core/hive_workspace), because a
+# Feature Map replay runs them as the replay user, which has no way into the Hive user's home.
 #
 # mise itself is one pinned release, fetched on first use into the user's data
 # directory, and its sha256 is checked against the one below every time it is used (a
@@ -73,6 +79,21 @@ fi
 
 work="$(cd "$(dirname "$GITHUB_PATH")" && pwd)"      # the task's checks directory
 cd "$work"                                          # never the repository (see above)
+
+# the replay user's shared location, when this user can write it (a real folder, not a link)
+shared="${SWARM_REPLAY_SHARED_DIR-/var/lib/swarmai/replay}"
+# (and keeps everyone else out: no access for others, as core/feature_map/replay_user.shared_dir)
+if [ -z "$shared" ] || [ -L "$shared" ] || [ ! -d "$shared" ] || [ ! -w "$shared" ] \
+        || [ "$(( 8#$(stat -c %a "$shared") & 7 ))" -ne 0 ]; then
+    shared=""
+fi
+mise_data="${shared:+$shared/mise}"
+mise_data="${mise_data:-$home/.local/share/mise}"
+work_id="$(basename "$(dirname "$work")")"          # Hive/work/<work id>/checks
+venv_root="$work"
+if [ -n "$shared" ] && [[ "$work_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    venv_root="$shared/work/$work_id"
+fi
 empty="$work/mise-empty"
 mkdir -p "$empty/config"
 : > "$empty/config.toml"
@@ -82,7 +103,7 @@ run_mise() {
         PATH="/usr/local/bin:/usr/bin:/bin" HOME="$home" LANG="C.UTF-8" \
         ${HTTPS_PROXY:+HTTPS_PROXY="$HTTPS_PROXY"} ${HTTP_PROXY:+HTTP_PROXY="$HTTP_PROXY"} \
         ${NO_PROXY:+NO_PROXY="$NO_PROXY"} \
-        MISE_DATA_DIR="$home/.local/share/mise" MISE_CACHE_DIR="$home/.cache/mise" \
+        MISE_DATA_DIR="$mise_data" MISE_CACHE_DIR="$home/.cache/mise" \
         MISE_STATE_DIR="$home/.local/state/mise" \
         MISE_CONFIG_DIR="$empty/config" MISE_GLOBAL_CONFIG_FILE="$empty/config.toml" \
         MISE_SYSTEM_CONFIG_FILE="$empty/config.toml" \
@@ -103,7 +124,8 @@ venv=""
 for spec in "$@"; do
     case "$spec" in python@*)
         py="$(run_mise where "$spec")/bin/python3"
-        venv="$work/python"
+        venv="$venv_root/python"
+        mkdir -p "$venv_root"
         [ -x "$venv/bin/python" ] || "$py" -I -m venv "$venv"
         ;;
     esac

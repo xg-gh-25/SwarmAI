@@ -31,7 +31,8 @@ The repo's commands do not decide it:
   whose traffic to the metadata service the host's firewall rejects: the folder is given to
   that user (ACL), each start goes through sudo with a spawn tag, stopping a start stops
   every process with its tag as that user, closing stops every process of that user, and
-  the package caches are that user's own. Once a process of that user has run, the
+  the package caches are that user's own, and its PATH holds no folder inside the Hive
+  user's home (``replay_user.outside_home``). Once a process of that user has run, the
   person's process writes nothing in the folder by a name that process could have set up
   (a link there would turn the write into one anywhere the person can write): what it
   writes there is a new file (``write_new``: a random name, exclusive create, links not
@@ -72,7 +73,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from core.feature_map.files import FeatureMap, Target
-from core.feature_map.replay_user import ReplayUser
+from core.feature_map.replay_user import ReplayUser, outside_home
 
 STEP_TIMEOUT_S = 1200          # a hang guard per prepare/setup command, never a budget
 PORT_CLOSE_S = 10              # how long a stopped service's port may take to close
@@ -453,9 +454,14 @@ class Sandbox:
         return out
 
     def env(self, target: Target) -> dict[str, str]:
-        return allowed_env(self.dir, self.real_home,
-                           {k: self.expand(v) for k, v in target.env.items()},
-                           own_caches=self.user is None)
+        env = allowed_env(self.dir, self.real_home,
+                          {k: self.expand(v) for k, v in target.env.items()},
+                          own_caches=self.user is None)
+        if self.user is not None:
+            # the replay user has no way into the Hive user's home: its tools are elsewhere
+            # (replay_user.shared_dir), and one found in the home would not start
+            env["PATH"] = outside_home(env.get("PATH", ""))
+        return env
 
     def _cwd(self, target: Target) -> Path:
         return self.checkout / target.root if target.root else self.checkout

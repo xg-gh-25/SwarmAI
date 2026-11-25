@@ -231,6 +231,27 @@ def test_a_backend_that_cannot_launch_is_reported_and_never_relaunched(sup, monk
     assert sup.ping()["status"] == "Healthy"
 
 
+def test_the_backend_starts_with_a_private_umask(sup, monkeypatch):
+    """The image has no systemd unit to carry UMask=0077 (hive/swarmai-hive.service): the
+    supervisor starts the backend with that umask, and its log readable by the Hive user only,
+    so the Hive's data and workspace are private whatever the home's mode."""
+    seen = {}
+
+    def popen(argv, **kw):
+        seen.update(kw)
+        return types.SimpleNamespace(pid=4242)
+    monkeypatch.setattr(sup.subprocess, "Popen", popen)
+    os.makedirs(sup.LOG_DIR, mode=0o755)
+    os.chmod(sup.LOG_DIR, 0o755)
+    with open(sup.BACKEND_LOG, "w") as fh:          # an earlier start's, from before the umask
+        fh.write("old\n")
+    os.chmod(sup.BACKEND_LOG, 0o644)
+    sup._launch({})
+    assert seen.get("umask") == 0o077
+    assert os.stat(sup.BACKEND_LOG).st_mode & 0o077 == 0
+    assert os.stat(sup.LOG_DIR).st_mode & 0o077 == 0
+
+
 def test_ping_is_busy_during_a_start(sup, monkeypatch):
     release = threading.Event()
     in_start = threading.Event()

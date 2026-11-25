@@ -1593,20 +1593,23 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
         env.pop("AWS_PROFILE", None)
 
     # MCP servers (aws-outlook-mcp, etc.) require Node >= 22 but mise
-    # defaults to Node 20. Find the newest Node >= 22 and prepend to PATH.
-    mise_node_dir = Path.home() / ".local/share/mise/installs/node"
-    if mise_node_dir.is_dir():
-        node22_dirs = sorted(
-            [d for d in mise_node_dir.iterdir()
-             if d.is_dir() and d.name.split(".")[0].isdigit()
-             and int(d.name.split(".")[0]) >= 22],
-            key=lambda d: d.name,
-            reverse=True,
-        )
-        if node22_dirs:
-            node_bin = node22_dirs[0] / "bin"
-            if node_bin.is_dir():
-                env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
+    # defaults to Node 20. Find the newest Node >= 22 and prepend to PATH: in the
+    # person's mise, or (a Hive) the one hive/bin/task-tools installs into the replay
+    # user's shared location.
+    from core.feature_map.replay_user import shared_dir
+    shared = shared_dir()
+    node22_dirs = []
+    for mise_node_dir in (Path.home() / ".local/share/mise/installs/node",
+                          *([shared / "mise" / "installs" / "node"] if shared else [])):
+        if mise_node_dir.is_dir():
+            node22_dirs += [d for d in mise_node_dir.iterdir()
+                            if d.is_dir() and d.name.split(".")[0].isdigit()
+                            and int(d.name.split(".")[0]) >= 22]
+    node22_dirs.sort(key=lambda d: d.name, reverse=True)
+    if node22_dirs:
+        node_bin = node22_dirs[0] / "bin"
+        if node_bin.is_dir():
+            env["PATH"] = f"{node_bin}:{env.get('PATH', '')}"
 
     # Strip ALL proxy vars — Claude CLI manages its own proxy internally.
     # External proxy vars (especially Claude's own localhost proxy re-inherited

@@ -711,3 +711,238 @@ def test_no_evidence_is_copied_out_while_a_replay_users_process_survives(tmp_pat
         assert results[0]["evidence"] == [] and "evidence dropped" in results[0]["error"]
     finally:
         replay_user.remove_tree(sbdir)
+
+
+# ── the Hive user's data stays out of the replay user's reach ──────────────────────────
+
+
+def _helper_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fm_helper_private", replay_user.HELPER)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    return helper
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_the_helper_probe_reports_readable_private_paths(tmp_path, monkeypatch, capsys):
+    """`probe ... --private <path> ...`: each private path this user can open (a file) or
+    list (a folder) is a problem; one it cannot reach, or that is not there, is not."""
+    helper = _helper_module()
+    monkeypatch.setattr(helper, "METADATA", (("127.0.0.1", 1),))
+    data = tmp_path / "appdata"
+    data.mkdir()
+    db = data / "data.db"
+    db.write_text("rows")
+    shut = tmp_path / "shut.db"
+    shut.write_text("rows")
+    shut.chmod(0o000)
+    try:
+        with pytest.raises(SystemExit) as end:
+            helper.main(["probe", sys.executable, "--private", str(db), str(data), str(shut),
+                         str(tmp_path / "missing.db")])
+    finally:
+        shut.chmod(0o600)
+    out = json.loads(capsys.readouterr().out)
+    assert end.value.code == 3
+    readable = [p for p in out["problems"] if "only the person may read" in p]
+    assert sorted(readable) == sorted(f"this user can read {p}, which only the person may read"
+                                      for p in (db, data)), out
+    # a folder it can pass through (not list) is reached too: a file below could be read
+    passable = tmp_path / "home"
+    passable.mkdir()
+    passable.chmod(0o311)
+    try:
+        with pytest.raises(SystemExit) as end:
+            helper.main(["probe", "--private", str(passable)])
+    finally:
+        passable.chmod(0o700)
+    assert end.value.code == 3 and str(passable) in capsys.readouterr().out
+    assert not any("shut.db" in p or "missing.db" in p for p in out["problems"])
+    assert not any(sys.executable in p for p in out["problems"])     # a path to run is still checked as before
+    # nothing private readable: the probe passes
+    db.chmod(0o000)
+    data.chmod(0o000)
+    try:
+        with pytest.raises(SystemExit) as end:
+            helper.main(["probe", sys.executable, "--private", str(db), str(data)])
+    finally:
+        data.chmod(0o700)
+        db.chmod(0o600)
+    assert end.value.code == 0, capsys.readouterr().out
+
+
+def test_the_private_paths_are_the_app_data_and_its_database(tmp_path, monkeypatch):
+    """Both the app data folder in effect and the default one: a SWARM_DATA_DIR override must
+    not hide the person's real store from the probe."""
+    import config
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "appdata"))
+    monkeypatch.setattr(config, "default_app_data_dir", lambda: tmp_path / "home" / ".swarm-ai")
+    monkeypatch.setattr(replay_user.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(tmp_path / "home")))
+    # ... and the Hive user's home itself: the boundary, whichever file below is exposed
+    assert replay_user.private_paths() == [tmp_path / "appdata" / "data.db", tmp_path / "appdata",
+                                           tmp_path / "home" / ".swarm-ai" / "data.db",
+                                           tmp_path / "home" / ".swarm-ai", tmp_path / "home"]
+
+
+def _helper_without_metadata(tmp_path: Path) -> Path:
+    """The real helper, with the metadata addresses pointed at a closed port (this machine's
+    own metadata service may answer: it is not what these tests are about)."""
+    text = replay_user.HELPER.read_text()
+    assert 'METADATA = (("169.254.169.254", 80), ("fd00:ec2::254", 80))' in text
+    copy = tmp_path / "helper" / "replay_user_helper.py"
+    copy.parent.mkdir()
+    copy.write_text(text.replace('METADATA = (("169.254.169.254", 80), ("fd00:ec2::254", 80))',
+                                 'METADATA = (("127.0.0.1", 1),)'))
+    return copy
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every file")
+def test_a_replay_user_that_can_read_the_data_is_not_run(tmp_path, fresh, monkeypatch):
+    """The probe runs as the replay user (here: a fake sudo, the same user) and opens the app
+    data folder's data.db and lists the folder: when it can, every walk is not_run with that
+    path named and nothing of the repo starts; when it cannot, the replay user is used."""
+    import config
+    fake, _log = _fake_sudo(tmp_path)
+    me = pwd.getpwuid(os.getuid())
+    appdata = tmp_path / "appdata"
+    (appdata / "feature_map").mkdir(parents=True)
+    db = appdata / "data.db"
+    db.write_text("the person's messages")
+    monkeypatch.setattr(config, "default_app_data_dir", lambda: appdata)
+    home = tmp_path / "hive-home"
+    home.mkdir()
+    monkeypatch.setattr(replay_user.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(home)))
+    monkeypatch.setattr(replay_user, "HELPER", _helper_without_metadata(tmp_path))
+    monkeypatch.setattr(replay_user, "needs_replay_user", lambda: True)
+    monkeypatch.setattr(replay_user, "REPLAY_USER", me.pw_name)
+    monkeypatch.setattr(replay_user, "_find_sudo", lambda: str(fake))
+    monkeypatch.setattr(replay_user.ReplayUser, "kill_all", lambda self: 0)
+    started = tmp_path / "started"
+    root = make_repo(tmp_path / "r", specs={}, target=TARGET.replace(
+        "prepare:\n", f"prepare:\n  - [touch, {started}]\n"), features=WALKS)
+    fmap = files.load_folder(root / ".swarmai/features")
+    results, sbdir = replay(fmap, root, Selection(list(fmap.features)))
+    assert sbdir is None and not started.exists(), "a repo command ran while the data was readable"
+    assert [(r["result"], r["reason"]) for r in results] == [("not_run", "runtime unavailable")]
+    assert str(db) in results[0]["error"] and "hive/replay-host.sh" in results[0]["error"], results
+    assert replay_user.current() is None
+    # the replay user can neither open data.db nor reach the folder or the home: it is used
+    db.chmod(0o000)
+    appdata.chmod(0o000)
+    home.chmod(0o000)
+    try:
+        assert replay_user.resolve(lock_wait_s=5) is not None
+    finally:
+        home.chmod(0o700)
+        appdata.chmod(0o700)
+        db.chmod(0o600)
+
+
+def test_publish_makes_the_shared_tree_readable_without_following_links(tmp_path):
+    """What the Hive user wrote under the shared location with a 0077 umask becomes readable
+    (and runnable where the owner may run it) by the replay user; the location itself keeps
+    its mode, and a link is never followed (its target outside keeps its mode)."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o750)
+    tool = shared / "work" / "w" / "bin"
+    tool.mkdir(parents=True)
+    for d in (shared / "work", shared / "work" / "w", tool):
+        d.chmod(0o700)
+    exe = tool / "uv"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o700)
+    data = tool / "data.txt"
+    data.write_text("x")
+    data.chmod(0o600)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret"
+    secret.write_text("the person's")
+    secret.chmod(0o600)
+    (tool / "link").symlink_to(secret)
+    (shared / "linked-dir").symlink_to(outside)
+    replay_user.publish(shared)
+    mode = lambda p: p.stat().st_mode & 0o777    # noqa: E731
+    assert mode(shared) == 0o750
+    assert mode(shared / "work") == mode(tool) == 0o755
+    assert mode(exe) == 0o755 and mode(data) == 0o644
+    assert mode(secret) == 0o600                  # reached only through links: untouched
+    outside.chmod(0o700)
+    replay_user.publish(shared)
+    assert mode(outside) == 0o700
+
+
+def test_shared_dir_is_the_override_or_the_fixed_place_and_only_when_writable(tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", "")
+    assert replay_user.shared_dir() is None                  # empty: none (the test suite's pin)
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(tmp_path / "absent"))
+    assert replay_user.shared_dir() is None
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared").chmod(0o755)
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(tmp_path / "shared"))
+    assert replay_user.shared_dir() is None             # open to everyone: not a confined location
+    (tmp_path / "shared").chmod(0o750)
+    assert replay_user.shared_dir() == tmp_path / "shared"
+    (tmp_path / "link").symlink_to(tmp_path / "shared")
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(tmp_path / "link"))
+    assert replay_user.shared_dir() is None
+    monkeypatch.delenv("SWARM_REPLAY_SHARED_DIR")
+    assert replay_user.SHARED_DIR == Path("/var/lib/swarmai/replay")
+
+
+def test_a_replay_runs_with_the_runtime_and_tools_in_the_shared_location(tmp_path, fresh, monkeypatch):
+    """The replay user's PATH holds no folder inside the Hive user's home, so a tool found
+    there for the Hive user is not what runs: the one in the shared location is, published
+    for the replay user by resolve before anything starts."""
+    user = _setup_user(tmp_path, monkeypatch)
+    monkeypatch.setattr(replay_user.ReplayUser, "kill_all", lambda self: 0)
+    home = tmp_path / "hive-home"
+    (home / "bin").mkdir(parents=True)
+    (home / "bin" / "fmtool").write_text('#!/bin/sh\necho home > "$OUT"\n')
+    (home / "bin" / "fmtool").chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    shared = tmp_path / "shared"
+    tools = shared / "work" / "so_x" / "python" / "bin"
+    tools.mkdir(parents=True)
+    shared.chmod(0o750)
+    (tools / "fmtool").write_text('#!/bin/sh\necho shared > "$OUT"\n')
+    (tools / "fmtool").chmod(0o700)                   # as a 0077 umask leaves it
+    monkeypatch.setenv("SWARM_REPLAY_SHARED_DIR", str(shared))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(home / "bin"), str(tools), "/usr/bin", "/bin"]))
+    walks = ("schema: 1\nfeatures:\n"
+             "  - {id: cmd-a1, title: Tool, target: web, run: [fmtool]}\n")
+    root = make_repo(tmp_path / "r", specs={}, target=TARGET, features=walks)
+    fmap = files.load_folder(root / ".swarmai/features")
+    results, sbdir = replay(fmap, root, Selection(list(fmap.features)))
+    try:
+        assert [r["result"] for r in results] == ["pass"], results
+        assert (Path(sbdir) / "walk.out").read_text().strip() == "shared"
+        assert (tools / "fmtool").stat().st_mode & 0o055 == 0o055
+        assert user.home != home
+    finally:
+        replay_user.remove_tree(sbdir)
+
+
+def test_the_replay_users_path_leaves_out_the_hive_home(tmp_path, monkeypatch):
+    fake, _log = _fake_sudo(tmp_path)
+    user = _user(tmp_path, fake)
+    home = tmp_path / "hive-home"
+    (home / "bin").mkdir(parents=True)
+    (tmp_path / "into-home").symlink_to(home / "bin")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(home / "bin"), str(tmp_path / "into-home"),
+                                                "/opt/tools/bin", "/usr/bin"]))
+    sb_dir = tmp_path / "sb"
+    sb_dir.mkdir()
+    sb = sandbox.Sandbox(tmp_path, user=user)
+    sb.dir = sb_dir
+    assert sb.env(SimpleNamespace(env={}))["PATH"] == os.pathsep.join(["/opt/tools/bin", "/usr/bin"])
+    monkeypatch.setenv("HOME", "/")                  # a home of "/" never empties PATH
+    monkeypatch.setattr(replay_user.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir="/"))
+    assert replay_user.outside_home("/opt/tools/bin:/usr/bin") == "/opt/tools/bin:/usr/bin"
+    monkeypatch.setenv("HOME", str(home))
+    person = sandbox.Sandbox(tmp_path)               # the person's own replay: PATH as it is
+    person.dir = sb_dir
+    assert str(home / "bin") in person.env(SimpleNamespace(env={}))["PATH"]
