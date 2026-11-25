@@ -15,7 +15,10 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 
 let resolveAssets: (v: unknown) => void = () => {};
 vi.mock('../../services/pollinate', () => ({
-  pollinateService: { fetchAssets: () => new Promise((r) => { resolveAssets = r; }) },
+  pollinateService: {
+    fetchAssets: () => new Promise((r) => { resolveAssets = r; }),
+    fetchWorks: () => Promise.resolve({ works: [], skipped: 0 }),
+  },
 }));
 
 import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
@@ -25,8 +28,10 @@ import { overlayQuery } from './overlayQueries';
 import { overlayTiming, type OverlayTimingRow } from './overlayTiming';
 
 function Content() {
+  // Both opening queries, as the real Pollinate overlay reads them (NAV_PREFETCH).
+  const works = useQuery(overlayQuery.pollinateWorks());
   const q = useQuery(overlayQuery.pollinate());
-  return <div data-testid="timing-content">{q.data ? 'data' : 'waiting'}</div>;
+  return <div data-testid="timing-content">{q.data && works.data ? 'data' : 'waiting'}</div>;
 }
 registerOverlay({ id: 'pollinate', render: () => <Content /> });
 

@@ -1,4 +1,8 @@
-"""Pydantic response models for the Pollinate Content-Asset Gallery.
+"""Pydantic response models for the Pollinate overlay: the registered works
+(`GET /api/pollinate/works`, Pollinate v2) and the older run gallery
+(`GET /api/pollinate/assets`).
+
+The run gallery:
 
 Sibling of `schemas/pipeline_run.py`, but ASSET-CENTRIC: the first-class object is a
 produced media asset (a file under a run's `deliver/` tree), not the run. A pollinate
@@ -12,9 +16,8 @@ Knowledge/Designs/2026-08-02-pollinate-content-asset-gallery-navcard-design.md
 from __future__ import annotations
 
 from typing import Optional
-from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class PollinateAsset(BaseModel):
@@ -27,55 +30,9 @@ class PollinateAsset(BaseModel):
     is_image: bool = Field(description="True → renderable via <img src=/api/workspace/file/raw>")
     publish_status: str = Field(
         default="ready",
-        description="ready (default/unknown) | ready-to-publish (kit present) | published",
+        description="ready (default/unknown) | ready-to-publish | published — from a "
+        "publish-kit.md frontmatter only",
     )
-    asset_id: str = Field(
-        default="",
-        description="Stable LOGICAL id = sha1(platform/format/file_name). The key the "
-        "publish-state sidecar uses + the frontend passes to POST /publish. Stable across "
-        "the deliver↔tracks root-flip (a physical-path key would orphan the mark).",
-    )
-    posted_url: Optional[str] = Field(
-        default=None, description="The public URL where this asset was posted (set when published)."
-    )
-
-
-class PublishRequest(BaseModel):
-    """`POST /api/pollinate/{run_name}/publish` body — mark one asset published/unpublished."""
-
-    asset_id: str = Field(description="The asset's stable logical id (40-hex sha1).")
-    published: bool = Field(description="True = mark published; False = revert to ready.")
-    posted_url: Optional[str] = Field(
-        default=None, max_length=2048, description="Optional public URL of the post (http/https only)."
-    )
-
-    @field_validator("posted_url")
-    @classmethod
-    def _validate_posted_url(cls, v: Optional[str]) -> Optional[str]:
-        """Reject a non-http(s) URL. posted_url is stored verbatim and later rendered as an
-        <a href> in the overlay — an un-scheme-checked value permits a stored javascript:/data:
-        XSS (there is no CSP). Allow only http/https; empty → None. (Security-gate, 422 on fail.)"""
-        if v is None:
-            return None
-        v = v.strip()
-        if not v:
-            return None
-        parts = urlsplit(v)
-        # Require BOTH an http(s) scheme AND a network location (netloc) — i.e. the full
-        # `http(s)://host` form. Checking scheme alone would accept `https:x` / `http:foo`
-        # (no `//`), which the frontend render guard (/^https?:\/\//) rejects → a stored value
-        # the UI silently won't render. Requiring netloc makes backend + frontend agree.
-        if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
-            raise ValueError("posted_url must be a full http:// or https:// URL")
-        return v
-
-
-class PublishResponse(BaseModel):
-    """`POST /api/pollinate/{run_name}/publish` result — the asset's new publish state."""
-
-    asset_id: str
-    publish_status: str = Field(description="'published' or 'ready' after the write.")
-    posted_url: Optional[str] = None
 
 
 class PollinateContentCard(BaseModel):
@@ -128,13 +85,34 @@ class PollinateAssetsResponse(BaseModel):
     cards: list[PollinateContentCard] = Field(default_factory=list)
 
 
-class PollinateTopicDetail(BaseModel):
-    """`GET /api/pollinate/{run_name}` — one content topic's full detail."""
+class PollinateWork(BaseModel):
+    """One registered work (a folder with a work.json, design §13.1).
 
-    run: str
-    topic: str
-    domain: Optional[str] = None
-    status: str = "unknown"
-    created_at: Optional[str] = None
-    content_package: Optional[str] = Field(default=None, description="content_package.md body if present")
-    assets: list[PollinateAsset] = Field(default_factory=list)
+    Paths are workspace-relative when the work is inside the workspace (what
+    /api/workspace/file/raw and the Canvas open take), absolute otherwise."""
+
+    path: str = Field(description="the work folder")
+    in_workspace: bool = Field(description="False → Canvas cannot open it; paths are absolute")
+    kind: str = Field(description="deck | poster | page | copy (or what work.json says)")
+    title: str
+    current: Optional[str] = Field(
+        default=None, description="current version id, e.g. v003 — the last version that passed")
+    latest: Optional[str] = Field(
+        default=None, description="the newest version id (the last cut, passed or not)")
+    status: Optional[str] = Field(
+        default=None,
+        description="ok | failed — the NEWEST version's check result (a failed cut leaves "
+        "`current` on the last passing version); None when unknown")
+    updated: Optional[str] = Field(default=None, description="ISO time of the last change")
+    thumbnail: Optional[str] = Field(
+        default=None, description="out/slides/01-*.png, out/poster.png or out/page.png when present")
+    main_output: Optional[str] = Field(
+        default=None, description="the file to open: out/deck.html, out/poster.png, … when present")
+
+
+class PollinateWorksResponse(BaseModel):
+    """`GET /api/pollinate/works` — registered works, newest first."""
+
+    works: list[PollinateWork] = Field(default_factory=list)
+    skipped: int = Field(
+        default=0, description="registry entries left out because a file was missing or broken")

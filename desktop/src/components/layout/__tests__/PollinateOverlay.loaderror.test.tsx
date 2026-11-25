@@ -18,11 +18,18 @@ const renderQ = (ui: React.ReactElement) =>
 
 vi.mock('../../../services/pollinate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../services/pollinate')>();
-  // Faithful mock: mirror the REAL pollinateService surface (fetchAssets +
-  // fetchAssetBody + fetchTopicDetail) so it can't drift out of sync with the
-  // service. These tests only trigger fetchAssets (the drawer never opens), but
-  // an incomplete mock is a latent AttributeError for any future drawer test.
-  return { ...actual, pollinateService: { fetchAssets: vi.fn(), fetchAssetBody: vi.fn(), fetchTopicDetail: vi.fn() } };
+  // Faithful mock: mirror the REAL pollinateService surface (fetchWorks + fetchAssets +
+  // fetchAssetBody) so it can't drift out of sync with the service. These tests only
+  // fail fetchAssets (the drawer never opens), but an incomplete mock is a latent
+  // AttributeError for any future drawer test.
+  return {
+    ...actual,
+    pollinateService: {
+      fetchWorks: vi.fn().mockResolvedValue({ works: [], skipped: 0 }),
+      fetchAssets: vi.fn(),
+      fetchAssetBody: vi.fn(),
+    },
+  };
 });
 
 function openOverlay() {
@@ -30,7 +37,10 @@ function openOverlay() {
 }
 
 describe('PollinateOverlay load-error classification', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (pollinateService.fetchWorks as ReturnType<typeof vi.fn>).mockResolvedValue({ works: [], skipped: 0 });
+  });
 
   it('4xx → client-error message, NOT backend-unavailable', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});

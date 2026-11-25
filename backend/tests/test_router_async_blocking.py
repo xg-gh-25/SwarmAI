@@ -196,24 +196,51 @@ def _blocking_call_name(call: ast.Call) -> str | None:
     return None
 
 
+# Off-loop dispatchers: a call lexically inside one of these calls' arguments runs on a
+# worker thread, not on the loop (see the long note in _find_violations).
+# `executors.run_nav` / `run_nav_action` are the Left Nav pools' spelling of run_in; they
+# were missing, so `run_nav(lambda: p.read_text())` would have been a false positive.
+_DISPATCH_ATTRS = frozenset({
+    "to_thread", "run_sync", "run_in", "run_in_executor", "run_nav", "run_nav_action",
+})
+
+
+def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    """child -> parent map (ast has no parent pointers)."""
+    parent: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+    return parent
+
+
+def _ancestors(parent: dict[ast.AST, ast.AST], node: ast.AST):
+    cur = parent.get(node)
+    while cur is not None:
+        yield cur
+        cur = parent.get(cur)
+
+
+def _in_dispatch(parent: dict[ast.AST, ast.AST], node: ast.AST) -> bool:
+    """True when ``node`` sits lexically inside the arguments of an off-loop dispatch."""
+    return any(
+        isinstance(a, ast.Call)
+        and isinstance(a.func, ast.Attribute)
+        and a.func.attr in _DISPATCH_ATTRS
+        for a in _ancestors(parent, node)
+    )
+
+
 def _find_violations(source: str, filename: str = "<src>") -> list[tuple[str, int, str, str]]:
     """Return (filename, lineno, primitive, enclosing_async_fn) for every blocking
     primitive called DIRECTLY in an ``async def`` body (not in a sync helper, not
     lexically inside ``asyncio.to_thread(...)``).
     """
     tree = ast.parse(source, filename=filename)
-
-    # child -> parent map (ast has no parent pointers)
-    parent: dict[ast.AST, ast.AST] = {}
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            parent[child] = node
+    parent = _parent_map(tree)
 
     def ancestors(node: ast.AST):
-        cur = parent.get(node)
-        while cur is not None:
-            yield cur
-            cur = parent.get(cur)
+        return _ancestors(parent, node)
 
     violations: list[tuple[str, int, str, str]] = []
     for node in ast.walk(tree):
@@ -253,14 +280,9 @@ def _find_violations(source: str, filename: str = "<src>") -> list[tuple[str, in
         # work there on purpose). Missing them made correctly-dispatched calls
         # count as blocking: plugin_manager's three hang-guarded git calls moved
         # INTO run_in and the ratchet went red for code that had just been fixed.
-        _DISPATCH_ATTRS = {"to_thread", "run_sync", "run_in", "run_in_executor"}
-        in_to_thread = any(
-            isinstance(a, ast.Call)
-            and isinstance(a.func, ast.Attribute)
-            and a.func.attr in _DISPATCH_ATTRS
-            for a in anc
-        )
-        if in_to_thread:
+        # The set itself is module-level (_DISPATCH_ATTRS) so the helper scan below
+        # exempts exactly the same dispatchers.
+        if _in_dispatch(parent, node):
             continue
 
         violations.append((filename, node.lineno, primitive, enclosing_fn.name))
@@ -268,7 +290,93 @@ def _find_violations(source: str, filename: str = "<src>") -> list[tuple[str, in
     return violations
 
 
-def _scan_dirs(scopes) -> list[tuple[str, int, str, str]]:
+def _find_helper_violations(source: str, filename: str = "<src>") -> list[tuple[str, int, str, str]]:
+    """Blocking calls an ``async def`` makes THROUGH a sync helper of the same module.
+
+    ``_find_violations`` sees only a primitive written directly in the async body. A
+    handler that calls ``_build_card(d)`` — a sync helper that walks a folder — blocks
+    the loop just the same, and that scan stayed green on it: ``pollinate_assets`` did
+    its whole folder walk on the loop while this file listed pollinate.py as clean.
+
+    Rule: an async def that CALLS (``name(...)``, not passes ``name``) a sync ``def`` of
+    the same module, outside an off-loop dispatch, is a violation when that helper — or
+    a helper it calls, transitively — makes a blocking call outside a dispatch. Returns
+    (filename, lineno of the call in the async def, "helper()->...->primitive",
+    async fn). The sanctioned shapes stay clean: ``await run_nav(helper)`` passes the
+    name (an ``ast.Name``, no call), and ``to_thread(lambda: helper())`` is inside a
+    dispatch.
+
+    Deliberately under-matches (same principle as the denylists above):
+    * only bare-name calls to module-level or nested ``def``s — not methods
+      (``self._x()``), not imported functions (the recall_* names are denylisted by
+      identity instead);
+    * a helper passed as a callback (``sorted(xs, key=helper)``) is not followed: the
+      receiver may run it on the loop or in a pool (``BackgroundTasks.add_task``), and
+      this scanner cannot tell which.
+    """
+    tree = ast.parse(source, filename=filename)
+    parent = _parent_map(tree)
+
+    def enclosing_fn(node: ast.AST):
+        return next(
+            (a for a in _ancestors(parent, node)
+             if isinstance(a, (ast.AsyncFunctionDef, ast.FunctionDef))),
+            None,
+        )
+
+    helpers: dict[str, list[ast.FunctionDef]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and not isinstance(parent.get(node), ast.ClassDef):
+            helpers.setdefault(node.name, []).append(node)
+
+    direct: dict[ast.FunctionDef, str] = {}        # helper -> first blocking primitive
+    calls: dict[ast.FunctionDef, list[str]] = {}   # helper -> helper names it calls
+    async_calls: list[tuple[ast.Call, ast.AsyncFunctionDef, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = enclosing_fn(node)
+        if fn is None or _in_dispatch(parent, node):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) and node.func.id in helpers else None
+        if isinstance(fn, ast.FunctionDef):
+            prim = _blocking_call_name(node)
+            if prim is not None:
+                direct.setdefault(fn, prim)
+            if name is not None:
+                calls.setdefault(fn, []).append(name)
+        elif name is not None:
+            async_calls.append((node, fn, name))
+
+    # Which helpers reach a blocking call: a fixed point over the call graph. Start
+    # from the helpers that block directly; each pass marks a helper that calls a
+    # marked one. It stops when a pass marks nothing, after at most one pass per
+    # helper — no recursion, so cycles and shared callees need no special case and the
+    # cost stays polynomial whatever the graph's shape (a memoized walk was exponential
+    # once a recursive helper sat below shared helpers).
+    blocks: dict[ast.FunctionDef, str] = dict(direct)
+    changed = True
+    while changed:
+        changed = False
+        for fn, names in calls.items():
+            if fn in blocks:
+                continue
+            for name in names:
+                hit = next((d for d in helpers[name] if d in blocks), None)
+                if hit is not None:
+                    blocks[fn] = f"{name}()->{blocks[hit]}"
+                    changed = True
+                    break
+
+    out: list[tuple[str, int, str, str]] = []
+    for node, fn, name in async_calls:
+        hit = next((d for d in helpers[name] if d in blocks), None)
+        if hit is not None:
+            out.append((filename, node.lineno, f"{name}()->{blocks[hit]}", fn.name))
+    return out
+
+
+def _scan_dirs(scopes, finder=None) -> list[tuple[str, int, str, str]]:
     """Scan every ``*.py`` under each scope for violations.
 
     ``rglob`` (not ``glob``) so a package subdir cannot hide a violation —
@@ -284,7 +392,7 @@ def _scan_dirs(scopes) -> list[tuple[str, int, str, str]]:
             if "__pycache__" in path.parts:
                 continue
             label = f"{scope.name}/{path.relative_to(scope).as_posix()}"
-            out.extend(_find_violations(path.read_text(encoding="utf-8"), filename=label))
+            out.extend((finder or _find_violations)(path.read_text(encoding="utf-8"), filename=label))
     return out
 
 
@@ -294,10 +402,23 @@ def _scan_routers() -> list[tuple[str, int, str, str]]:
     return _scan_dirs(STRICT_DIRS)
 
 
+def _scan_strict_helpers() -> list[tuple[str, int, str, str]]:
+    """Helper-level findings (``_find_helper_violations``) in the STRICT tier."""
+    return _scan_dirs(STRICT_DIRS, finder=_find_helper_violations)
+
+
 def _scan_baselined() -> dict[str, int]:
-    """The BASELINED tier (core/) as {dir-qualified file: violation count}."""
+    """Everything the ratchet freezes, as {dir-qualified file: finding count}:
+      * core/            — DIRECT findings (``_find_violations``);
+      * routers/ channels/ — HELPER-level findings (``_find_helper_violations``). Their
+        direct findings stay at zero tolerance in test_no_blocking_io_in_async_handlers.
+    The keys never collide (each is prefixed by its own scope dir), so one baseline file
+    holds both. core/ helper-level findings are not counted yet: core/ is already a
+    frozen cleanup backlog, and counting them would only make that backlog bigger
+    without a fix. Measure them with ``_scan_dirs(BASELINED_DIRS, _find_helper_violations)``.
+    """
     counts: dict[str, int] = {}
-    for f, _ln, _prim, _fn in _scan_dirs(BASELINED_DIRS):
+    for f, _ln, _prim, _fn in _scan_dirs(BASELINED_DIRS) + _scan_strict_helpers():
         counts[f] = counts.get(f, 0) + 1
     return counts
 
@@ -336,6 +457,12 @@ def test_no_blocking_io_in_async_handlers():
 # silent_except_baseline.json): line numbers shift on every edit, so identity would be
 # git-brittle. A net-zero churn within one file passes — the job is to stop GROWTH, not
 # to forbid refactoring.
+#
+# The same ratchet also freezes HELPER-level findings in routers/ + channels/ (a handler
+# that calls a same-module sync helper which blocks — _find_helper_violations). When the
+# helper scan was added, other routers already had such calls (mcp, workspace,
+# workspace_api, library_api); they are recorded per file in the baseline, so a NEW one
+# anywhere in routers/ or channels/ is RED while the existing ones get fixed separately.
 #
 # There is deliberately NO per-call escape hatch (no `# noqa`): a bypassable annotation
 # is the C041 whitelist trap. The sanctioned moves are (a) dispatch the call off-loop,
@@ -479,6 +606,110 @@ def test_scanner_passes_sanctioned_to_thread_patterns():
     assert v == [], f"scanner FALSE-POSITIVED on the sanctioned to_thread pattern: {v}"
 
 
+def test_scanner_catches_blocking_inside_helper():
+    """Non-vacuity for the helper scan: the old GET /pollinate/assets shape — an async
+    handler calling a sync helper that (through another helper) walks a folder — must be
+    flagged, naming the chain. A direct-only scan reported this handler clean."""
+    bad = (
+        "from pathlib import Path\n"
+        "def _list_dirs(root):\n"
+        "    return [d for d in root.iterdir() if d.is_dir()]\n"
+        "def _read_meta(d):\n"
+        "    return (d / 'run.json').read_text()\n"
+        "def _build_card(d):\n"
+        "    return {'meta': _read_meta(d)}\n"
+        "async def assets():\n"
+        "    return [_build_card(d) for d in _list_dirs(Path('/tmp'))]\n"
+    )
+    v = _find_helper_violations(bad, filename="<helper>")
+    found = {(prim, fn) for _, _, prim, fn in v}
+    assert ("_list_dirs()->iterdir", "assets") in found, v
+    assert ("_build_card()->_read_meta()->read_text", "assets") in found, v
+    # The direct scan alone is blind to it — that is the hole this closes.
+    assert _find_violations(bad, filename="<helper>") == []
+
+
+def test_helper_scan_passes_dispatched_helpers():
+    """The sanctioned shapes stay clean: the helper passed by NAME to a dispatcher (no
+    call on the loop), called inside a dispatch lambda, a helper that does nothing
+    blocking, a method call, and recursion between helpers that never block."""
+    good = (
+        "import asyncio\n"
+        "from core import executors\n"
+        "from pathlib import Path\n"
+        "def _walk():\n"
+        "    return list(Path('/tmp').iterdir())\n"
+        "def _pure(x):\n"
+        "    return x + 1\n"
+        "def _ping(n):\n"
+        "    return _pong(n - 1) if n else 0\n"
+        "def _pong(n):\n"
+        "    return _ping(n)\n"
+        "class Store:\n"
+        "    def load(self):\n"
+        "        return Path('/tmp/x').read_text()\n"
+        "async def via_run_nav():\n"
+        "    return await executors.run_nav(_walk)\n"
+        "async def via_lambda():\n"
+        "    return await asyncio.to_thread(lambda: _walk())\n"
+        "async def via_run_nav_lambda():\n"
+        "    return await executors.run_nav(lambda: _walk())\n"
+        "async def pure_and_recursive(store):\n"
+        "    store.load()\n"  # a method, not followed (under-match by design)
+        "    return _pure(1) + _ping(3)\n"
+    )
+    assert _find_helper_violations(good, filename="<ok>") == []
+    assert _find_violations(good, filename="<ok>") == []
+
+
+def test_helper_scan_follows_a_blocking_cycle():
+    """Mutual recursion must not hide a blocking call reached inside the cycle."""
+    src = (
+        "from pathlib import Path\n"
+        "def _a(n):\n"
+        "    return _b(n)\n"
+        "def _b(n):\n"
+        "    if n:\n"
+        "        return _a(n - 1)\n"
+        "    return Path('/tmp/x').read_bytes()\n"
+        "async def handler():\n"
+        "    return _a(3)\n"
+    )
+    v = _find_helper_violations(src, filename="<cycle>")
+    assert [(p, fn) for _, _, p, fn in v] == [("_a()->_b()->read_bytes", "handler")]
+
+
+def test_helper_scan_does_not_explode_on_shared_helpers():
+    """A helper reached through many paths costs the same as one reached once. A
+    40-level chain where each helper calls the next two has about 10^8 paths; a scan that
+    walked paths would never finish (the --timeout catches it). Checked twice: without
+    a loop, and with the last helper calling itself (the recursive-walker shape, which
+    defeated a memoized walk)."""
+    import time
+    depth = 40
+    lines = ["from pathlib import Path"]
+    for i in range(depth):
+        lines.append(f"def _h{i}():")
+        lines.append(f"    return _h{i + 1}() + _h{i + 2}()")
+    lines += [f"def _h{depth}():", "    return 0", f"def _h{depth + 1}():", "    return 1"]
+    lines += ["async def handler():", "    return _h0()"]
+    acyclic = "\n".join(lines) + "\n"
+    recursive = acyclic.replace(f"def _h{depth}():\n    return 0",
+                                f"def _h{depth}(n=0):\n    return _h{depth}(n - 1) if n else 0")
+    assert recursive != acyclic
+    for clean in (acyclic, recursive):
+        t0 = time.monotonic()
+        assert _find_helper_violations(clean, filename="<wide>") == []
+        assert time.monotonic() - t0 < 5.0
+        # ...and a blocking call at the far end of the same graph is still found.
+        blocking = clean.replace(f"def _h{depth + 1}():\n    return 1",
+                                 f"def _h{depth + 1}():\n    return Path('/tmp/x').read_text()")
+        t0 = time.monotonic()
+        v = _find_helper_violations(blocking, filename="<wide>")
+        assert time.monotonic() - t0 < 5.0
+        assert len(v) == 1 and v[0][2].endswith("read_text") and v[0][3] == "handler"
+
+
 # ---------------------------------------------------------------------------
 # AC7 (run_a1f4c2d8) — the anyio exemption must not become a BLANKET pass.
 #
@@ -536,6 +767,9 @@ def test_previously_fixed_routers_stay_clean():
     #    sqlite3.connect on the loop (a known out-of-scope class, see _BLOCKING_DOTTED
     #    note). It is clean for the FS family but not loop-block-free, so it does not
     #    belong in a "fully clean" guard.
+    # "Clean" counts helper-level calls too (_find_helper_violations): pollinate.py sat
+    # in this list while GET /assets walked its folder on the loop through _build_card
+    # and _list_run_dirs — a direct-only scan could not see it.
     already_fixed = ["eval.py", "jobs.py", "memory.py",
                      "pollinate.py", "tasks.py"]
     dirty = []
@@ -543,7 +777,8 @@ def test_previously_fixed_routers_stay_clean():
         path = ROUTERS_DIR / name
         if not path.exists():
             continue
-        v = _find_violations(path.read_text(encoding="utf-8"), filename=name)
+        src = path.read_text(encoding="utf-8")
+        v = _find_violations(src, filename=name) + _find_helper_violations(src, filename=name)
         if v:
             dirty.append((name, v))
     assert not dirty, f"a previously-fixed router regressed: {dirty}"
@@ -638,9 +873,13 @@ def test_baselined_scan_actually_reaches_core():
         "_find_violations stopped matching — either way the ratchet is inert and every "
         "future violation would pass as 'within baseline'."
     )
+    assert any(k.startswith("core/") for k in counts), (
+        "the baselined scan holds no core/ file — the core/ ratchet is inert"
+    )
     # Keys must be dir-qualified, or a baseline written today would not match tomorrow's
     # scan of a same-named module in another scope.
-    assert all(k.startswith("core/") for k in counts), (
+    prefixes = tuple(f"{d.name}/" for d in (*BASELINED_DIRS, *STRICT_DIRS))
+    assert all(k.startswith(prefixes) for k in counts), (
         f"baseline keys lost their dir qualifier: {sorted(counts)[:3]}"
     )
 
@@ -686,8 +925,8 @@ def _update_baseline() -> None:
     BASELINE_PATH.write_text(
         json.dumps(ordered, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     total = sum(ordered.values())
-    print(f"wrote {BASELINE_PATH} — {len(ordered)} files, "
-          f"{total} async-blocking call(s) in core/")
+    print(f"wrote {BASELINE_PATH} — {len(ordered)} files, {total} frozen finding(s) "
+          f"(core/ direct + routers/channels via helpers)")
 
 
 if __name__ == "__main__":
@@ -699,6 +938,8 @@ if __name__ == "__main__":
         print(f"STRICT (routers+channels): {len(strict)} violation(s)")
         for f, ln, prim, fn in strict:
             print(f"  {f}:{ln}  {prim}()  in async {fn}")
+        for f, ln, prim, fn in _scan_strict_helpers():
+            print(f"  helper  {f}:{ln}  {prim}  in async {fn}")
         cur = _scan_baselined()
         print(json.dumps({k: cur[k] for k in sorted(cur)}, indent=2))
-        print(f"BASELINED (core/): {sum(cur.values())} across {len(cur)} files")
+        print(f"BASELINED: {sum(cur.values())} across {len(cur)} files")

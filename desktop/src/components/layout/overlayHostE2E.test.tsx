@@ -56,7 +56,10 @@ vi.mock('../../services/pipelines', () => ({
   },
 }));
 vi.mock('../../services/pollinate', () => ({
-  pollinateService: { fetchAssets: vi.fn().mockResolvedValue({ cards: [], overall: null }) },
+  pollinateService: {
+    fetchAssets: vi.fn().mockResolvedValue({ cards: [], overall: null }),
+    fetchWorks: vi.fn().mockResolvedValue({ works: [], skipped: 0 }),
+  },
   assetThumbUrl: (p: string) => p,
 }));
 // C&M / Library / Eval hit api.get; make it reject-safe (surface shows an error/empty,

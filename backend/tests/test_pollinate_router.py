@@ -1,6 +1,11 @@
-"""Tests for the /api/pollinate endpoint (Content-Asset Gallery).
+"""Tests for the /api/pollinate router: GET /works (registered works, Pollinate v2)
+and GET /assets (the older run gallery).
 
-Covers the Gate-1 findings that shaped the design (each asserts a real data reality):
+/works: every field read from the registry and work.json; broken files skipped and
+counted, never a 500; works outside the workspace; both handlers run their file work
+on the nav pool, not on the event loop. The old detail and publish routes are gone.
+
+/assets covers the Gate-1 findings that shaped the design (each asserts a real data reality):
 - BLOCK-1: deliver/ walk is the source of truth — a run with NO run.json still yields a
   card from its deliver/ tree; a run whose run.json.formats/platforms is None but whose
   deliver/ has real files still surfaces those assets; the bare `deliver/{file}` layout
@@ -10,8 +15,6 @@ Covers the Gate-1 findings that shaped the design (each asserts a real data real
   miss it).
 - HIGH: publish_status defaults to 'ready' when no publish-kit/frontmatter; only a
   `status: ready-to-publish` frontmatter upgrades it; 'published' is never fabricated.
-- Route ordering: GET /assets is not shadowed by GET /{run_name}.
-- Traversal guard: `..`/absolute path param → 404, no escape.
 """
 
 import json
@@ -281,7 +284,6 @@ def test_overall_rollup_counts(client, workspace):
     assert "xiaohongshu" in o["platform_dist"]
 
 
-# ---------- detail endpoint + route ordering ----------
 
 def test_overall_exposes_known_channels(client, workspace):
     """overall.known_channels carries the server SSOT channel universe so the frontend
@@ -292,49 +294,6 @@ def test_overall_exposes_known_channels(client, workspace):
     assert "xiaohongshu" in kc and "youtube" in kc  # incl a channel with 0 assets
     assert kc == sorted(kc)  # stable order
 
-
-def test_detail_endpoint_returns_topic(client, workspace):
-    _mk_run(workspace, "2026-05-03-detail",
-            run_json={"topic": "detail topic", "status": "completed", "domain": "ai_architecture"},
-            deliver={"xiaohongshu": ["poster.png"]})
-    (workspace / "Knowledge" / "Pollinate" / "2026-05-03-detail" / "content_package.md").write_text(
-        "the message", encoding="utf-8")
-    r = client.get("/api/pollinate/2026-05-03-detail")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["topic"] == "detail topic"
-    assert body["content_package"] == "the message"
-    assert len(body["assets"]) == 1
-
-
-def test_assets_route_not_shadowed_by_run_name(client, workspace):
-    """GET /assets must resolve to the gallery, NOT be captured by /{run_name}."""
-    r = client.get("/api/pollinate/assets")
-    assert r.status_code == 200
-    assert "overall" in r.json()  # the assets response shape, not a topic detail
-
-
-# ---------- traversal guard ----------
-
-def test_traversal_dotdot_denied(client, workspace):
-    r = client.get("/api/pollinate/..%2f..%2fetc")
-    assert r.status_code == 404
-
-
-def test_traversal_via_encoded_path_denied(client, workspace):
-    # A run_name with a slash / dotdot must never escape the Pollinate root.
-    r = client.get("/api/pollinate/..")
-    assert r.status_code == 404
-
-
-def test_unknown_run_name_404(client, workspace):
-    r = client.get("/api/pollinate/2026-99-99-does-not-exist")
-    assert r.status_code == 404
-
-
-# ================= run_a712b0be: P2-P5 read-layer normalization =================
-
-# ---------- P5: noise filter (build toolchain + QR attachments) ----------
 
 def test_is_noise_asset_unit():
     from routers.pollinate import _is_noise_asset
@@ -548,160 +507,6 @@ def test_podcast_shorts_layout_is_a_real_card_not_scratch(client, workspace):
     assert card["status"] == "completed"
 
 
-# ================= run_b290eb6f: P1 publish-state write-back =================
-
-def _find_asset(cards, run, file_name):
-    card = next(c for c in cards if c["run"] == run)
-    return next(a for a in card["assets"] if a["file_name"] == file_name)
-
-
-# ---------- stable logical id ----------
-
-def test_asset_id_is_logical_and_stable_across_root_flip():
-    """The stable id = sha1(platform/format/file_name), NOT the physical path — so the SAME
-    logical asset yields the SAME id whether walked from deliver/{platform}/ or tracks/{format}/
-    (the deliver<->tracks root-flip must not orphan a published mark)."""
-    from routers.pollinate import _asset_id
-    # deliver/xiaohongshu/poster.png → platform=xiaohongshu, format=poster
-    # a DIFFERENT logical asset (tracks/poster/poster.png → platform='', format=poster) is
-    # intentionally a different id; the STABILITY guarantee is: same (platform,format,name)
-    # → same id regardless of how many times/where we walk it.
-    a = _asset_id("xiaohongshu", "poster", "slide.png")
-    b = _asset_id("xiaohongshu", "poster", "slide.png")
-    assert a == b and len(a) == 40 and all(c in "0123456789abcdef" for c in a)
-
-
-def test_assets_carry_asset_id(client, workspace):
-    _mk_run(workspace, "2026-05-03-ids", deliver={"xiaohongshu": ["poster_3x4.png"]})
-    r = client.get("/api/pollinate/assets")
-    a = _find_asset(r.json()["cards"], "2026-05-03-ids", "poster_3x4.png")
-    assert len(a["asset_id"]) == 40
-    assert a["publish_status"] == "ready"
-    assert a["posted_url"] is None
-
-
-# ---------- write->read loop (Layer 4 core) ----------
-
-def test_mark_published_write_then_read_both_endpoints(client, workspace):
-    """POST /publish marks an asset; a subsequent GET shows it published in BOTH the
-    /assets rollup AND the /{run} detail — the real write->read loop, no mock."""
-    _mk_run(workspace, "2026-05-03-pub",
-            run_json={"topic": "t", "status": "completed", "created_at": "2026-05-03T00:00:00"},
-            deliver={"xiaohongshu": ["poster_3x4.png"]})
-    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-pub", "poster_3x4.png")
-    aid = a["asset_id"]
-    # write
-    resp = client.post("/api/pollinate/2026-05-03-pub/publish",
-                       json={"asset_id": aid, "published": True, "posted_url": "https://xhs.com/p/1"})
-    assert resp.status_code == 200
-    assert resp.json()["publish_status"] == "published"
-    # read: /assets rollup
-    j = client.get("/api/pollinate/assets").json()
-    a2 = _find_asset(j["cards"], "2026-05-03-pub", "poster_3x4.png")
-    assert a2["publish_status"] == "published"
-    assert a2["posted_url"] == "https://xhs.com/p/1"
-    assert j["overall"]["published"] == 1
-    # read: /{run} detail
-    d = client.get("/api/pollinate/2026-05-03-pub").json()
-    da = next(x for x in d["assets"] if x["file_name"] == "poster_3x4.png")
-    assert da["publish_status"] == "published"
-
-
-def test_unpublish_reverts_to_ready(client, workspace):
-    _mk_run(workspace, "2026-05-03-unpub", deliver={"xiaohongshu": ["poster_3x4.png"]})
-    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-unpub", "poster_3x4.png")["asset_id"]
-    client.post("/api/pollinate/2026-05-03-unpub/publish", json={"asset_id": aid, "published": True})
-    client.post("/api/pollinate/2026-05-03-unpub/publish", json={"asset_id": aid, "published": False})
-    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-unpub", "poster_3x4.png")
-    assert a["publish_status"] == "ready"
-    assert a["posted_url"] is None
-
-
-def test_sidecar_published_overrides_kit_ready_to_publish(client, workspace):
-    """Precedence: sidecar 'published' (authority) beats a kit 'ready-to-publish'."""
-    _mk_run(workspace, "2026-05-03-prec",
-            deliver={"xiaohongshu": ["poster_3x4.png"]},
-            publish_kits={"xiaohongshu": "ready-to-publish"})
-    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-prec", "poster_3x4.png")
-    assert a["publish_status"] == "ready-to-publish"  # kit fallback before publish
-    client.post("/api/pollinate/2026-05-03-prec/publish", json={"asset_id": a["asset_id"], "published": True})
-    a2 = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-prec", "poster_3x4.png")
-    assert a2["publish_status"] == "published"  # sidecar wins
-
-
-# ---------- traversal + validation on the write endpoint ----------
-
-def test_publish_endpoint_rejects_traversal_run_name(client, workspace):
-    aid = "a" * 40
-    # '..' matches _RUN_NAME_RE but must fail the containment check → 404
-    assert client.post("/api/pollinate/..%2f..%2fetc/publish", json={"asset_id": aid, "published": True}).status_code == 404
-    assert client.post("/api/pollinate/2026-99-99-nope/publish", json={"asset_id": aid, "published": True}).status_code == 404
-
-
-def test_publish_endpoint_rejects_bad_asset_id(client, workspace):
-    _mk_run(workspace, "2026-05-03-badid", deliver={"xiaohongshu": ["poster_3x4.png"]})
-    # non-40-hex asset_id (a path-shaped id) → 422, never written
-    for bad in ["../../etc/passwd", "nothex", "A" * 40, "abc"]:
-        r = client.post("/api/pollinate/2026-05-03-badid/publish", json={"asset_id": bad, "published": True})
-        assert r.status_code == 422, bad
-
-
-# ---------- guarded loader: malformed sidecar never 500s ----------
-
-def test_malformed_sidecar_degrades_to_ready(client, workspace):
-    d = _mk_run(workspace, "2026-05-03-bad", deliver={"xiaohongshu": ["poster_3x4.png"]})
-    (d / "publish-state.json").write_text("{ this is not valid json", encoding="utf-8")
-    # both endpoints must 200, asset falls back to 'ready'
-    r = client.get("/api/pollinate/assets")
-    assert r.status_code == 200
-    a = _find_asset(r.json()["cards"], "2026-05-03-bad", "poster_3x4.png")
-    assert a["publish_status"] == "ready"
-    assert client.get("/api/pollinate/2026-05-03-bad").status_code == 200
-
-
-def test_publish_rejects_non_http_posted_url(client, workspace):
-    """Security: posted_url is rendered as an <a href> — a javascript:/data: URL is stored-XSS.
-    The backend must reject any non-http(s) scheme with 422."""
-    _mk_run(workspace, "2026-05-03-xss", deliver={"xiaohongshu": ["poster_3x4.png"]})
-    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-xss", "poster_3x4.png")["asset_id"]
-    for bad in ["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "file:///etc/passwd",
-                "vbscript:x", "  javascript:alert(1)", "JavaScript:alert(1)",
-                "https:x", "http:foo", "//evil.com"]:  # incl no-netloc forms the frontend won't render
-        r = client.post("/api/pollinate/2026-05-03-xss/publish",
-                       json={"asset_id": aid, "published": True, "posted_url": bad})
-        # Pydantic body-validation failure → 400 in this app (middleware maps it); the point
-        # is it is REJECTED (never persisted), not the exact 4xx code.
-        assert r.status_code == 400, bad
-    # http/https accepted
-    for ok in ["https://xhs.com/p/1", "http://example.com"]:
-        r = client.post("/api/pollinate/2026-05-03-xss/publish",
-                       json={"asset_id": aid, "published": True, "posted_url": ok})
-        assert r.status_code == 200, ok
-
-
-def test_unpublish_recomputes_kit_fallback(client, workspace):
-    """After un-publish, an asset WITH a kit 'ready-to-publish' must read back as
-    'ready-to-publish' (not a hardcoded 'ready') on the next GET — the read path recomputes."""
-    _mk_run(workspace, "2026-05-03-kitrevert",
-            deliver={"xiaohongshu": ["poster_3x4.png"]},
-            publish_kits={"xiaohongshu": "ready-to-publish"})
-    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-kitrevert", "poster_3x4.png")["asset_id"]
-    client.post("/api/pollinate/2026-05-03-kitrevert/publish", json={"asset_id": aid, "published": True})
-    client.post("/api/pollinate/2026-05-03-kitrevert/publish", json={"asset_id": aid, "published": False})
-    a = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-kitrevert", "poster_3x4.png")
-    assert a["publish_status"] == "ready-to-publish"  # kit fallback restored, not 'ready'
-
-
-def test_write_is_atomic_no_temp_left(client, workspace):
-    """After a publish write, no leftover temp file (mkstemp+os.replace+finally-unlink)."""
-    d = _mk_run(workspace, "2026-05-03-atomic", deliver={"xiaohongshu": ["poster_3x4.png"]})
-    aid = _find_asset(client.get("/api/pollinate/assets").json()["cards"], "2026-05-03-atomic", "poster_3x4.png")["asset_id"]
-    client.post("/api/pollinate/2026-05-03-atomic/publish", json={"asset_id": aid, "published": True})
-    assert (d / "publish-state.json").is_file()
-    leftover = [p.name for p in d.iterdir() if p.name.startswith(".publish-state.")]
-    assert leftover == [], f"temp file left behind: {leftover}"
-
-
 def test_is_scratch_dir_spares_topic_markers(workspace):
     """_is_scratch_dir must NOT flag a dir carrying content_package.md/REPORT.md or a media
     subdir, even with no run.json/deliver/tracks."""
@@ -718,3 +523,211 @@ def test_is_scratch_dir_spares_topic_markers(workspace):
     # truly loose images, no marker/subdir → still scratch
     s = P / "posters2"; s.mkdir(parents=True); (s / "x.png").write_bytes(b"\x89PNG\r\n")
     assert _is_scratch_dir(s) is True
+
+
+# ================= Pollinate v2 (design 2026-11-25 §9, §10, §13.1) =================
+
+import threading  # noqa: E402 — used only by the tests below
+
+
+def _write_work(work_dir: Path, *, kind="deck", title="T", current="v001",
+                versions=(("v001", "ok", "2026-11-20T10:00:00Z"),), files=()) -> Path:
+    """A work folder with a work.json (the §13.1 shape) and the given output files.
+    `versions` is (id, status, at) in the order the writer appended them; as work.py
+    cut does (§13.2), `current` names the last version that passed."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    meta = {"schema": 1, "kind": kind, "title": title, "style": None,
+            "size": {"w": 1920, "h": 1080}, "src": "src/deck.html", "slides": ["s-7f3a"],
+            "current": current,
+            "versions": [{"id": vid, "at": vat, "by": "agent", "status": vst,
+                          "hashes": {}, "outputs": {}} for vid, vst, vat in versions]}
+    (work_dir / "work.json").write_text(json.dumps(meta), encoding="utf-8")
+    for rel in files:
+        f = work_dir / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x")
+    return work_dir
+
+
+def _write_registry(ws: Path, entries) -> None:
+    reg = ws / ".pollinate" / "works.json"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps({"schema": 1, "works": entries}), encoding="utf-8")
+
+
+def test_works_lists_registered_works(client, workspace):
+    # the realistic failed case: the newest cut (v003) failed, current stays on v002
+    deck = _write_work(workspace / "Projects" / "AIDLC" / "assets" / "ai-deck", kind="deck",
+                       title="AI deck", current="v002",
+                       versions=(("v001", "ok", "2026-11-20T00:00:00Z"), ("v002", "ok", "2026-11-21T00:00:00Z"),
+                                 ("v003", "failed", "2026-11-25T07:59:00Z")),
+                       files=["out/deck.html", "out/deck.pdf",
+                              "out/slides/01-s-7f3a.png", "out/slides/02-s-91c0.png"])
+    poster = _write_work(workspace / "Knowledge" / "Pollinate" / "2026-11-24-launch", kind="poster",
+                         title="Launch poster", current="v001",
+                         files=["out/poster.png"])
+    page = _write_work(workspace / "Knowledge" / "Pollinate" / "2026-11-01-report", kind="page",
+                       title="Report", current=None, versions=(), files=[])
+    _write_registry(workspace, [
+        {"path": str(poster), "kind": "poster", "title": "x", "updated": "2026-11-24T09:00:00Z"},
+        {"path": str(deck), "kind": "deck", "title": "x", "updated": "2026-11-25T08:00:00Z"},
+        {"path": str(page), "kind": "page", "title": "x"},  # no date anywhere → last
+    ])
+    r = client.get("/api/pollinate/works")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["skipped"] == 0
+    assert [w["title"] for w in body["works"]] == ["AI deck", "Launch poster", "Report"]
+    d, p, g = body["works"]
+    assert d == {
+        "path": "Projects/AIDLC/assets/ai-deck", "in_workspace": True, "kind": "deck",
+        "title": "AI deck", "current": "v002", "latest": "v003", "status": "failed",
+        "updated": "2026-11-25T08:00:00Z",
+        "thumbnail": "Projects/AIDLC/assets/ai-deck/out/slides/01-s-7f3a.png",
+        "main_output": "Projects/AIDLC/assets/ai-deck/out/deck.html",
+    }
+    assert p["status"] == "ok" and p["current"] == "v001" and p["latest"] == "v001"
+    assert p["thumbnail"] == p["main_output"] == "Knowledge/Pollinate/2026-11-24-launch/out/poster.png"
+    # a work never cut: no version, no outputs → nulls, still listed
+    assert g["current"] is None and g["latest"] is None and g["status"] is None
+    assert g["updated"] is None
+    assert g["thumbnail"] is None and g["main_output"] is None
+
+
+def test_works_main_output_falls_back_and_updated_from_version(client, workspace):
+    """A deck with only a PDF opens the PDF; with no registry date, updated is the current
+    version's time."""
+    deck = _write_work(workspace / "w" / "pdf-only", kind="deck",
+                       versions=(("v001", "ok", "2026-11-02T00:00:00Z"),), files=["out/deck.pdf"])
+    _write_registry(workspace, [{"path": str(deck), "kind": "deck", "title": "t"}])
+    w = client.get("/api/pollinate/works").json()["works"][0]
+    assert w["main_output"] == "w/pdf-only/out/deck.pdf"
+    assert w["thumbnail"] is None
+    assert w["updated"] == "2026-11-02T00:00:00Z"
+
+
+def test_works_status_is_the_newest_versions(client, workspace):
+    """current only moves on a passing cut (§13.2), so the mark must come from the newest
+    version: a passing cut after a failed one clears it; a first cut that failed sets it
+    with no current yet; a newest version with no check result (a -user version made
+    by work.py open) gives no status."""
+    cases = {
+        "fixed": dict(current="v003", versions=(("v002", "failed", "2026-11-02T00:00:00Z"),
+                                                ("v003", "ok", "2026-11-03T00:00:00Z"))),
+        "first-failed": dict(current=None, versions=(("v001", "failed", "2026-11-04T00:00:00Z"),)),
+        "user-opened": dict(current="v001", versions=(("v001", "ok", "2026-11-05T00:00:00Z"),
+                                                      ("v001-user", None, "2026-11-06T00:00:00Z"))),
+    }
+    _write_registry(workspace, [
+        {"path": str(_write_work(workspace / "w" / name, **kw))} for name, kw in cases.items()])
+    rows = {w["path"]: w for w in client.get("/api/pollinate/works").json()["works"]}
+    assert (rows["w/fixed"]["status"], rows["w/fixed"]["latest"]) == ("ok", "v003")
+    assert (rows["w/first-failed"]["status"], rows["w/first-failed"]["current"],
+            rows["w/first-failed"]["latest"]) == ("failed", None, "v001")
+    assert (rows["w/user-opened"]["status"], rows["w/user-opened"]["latest"]) == (None, "v001-user")
+
+
+def test_works_skips_and_counts_broken_entries(client, workspace):
+    good = _write_work(workspace / "w" / "good", kind="poster", files=["out/poster.png"])
+    no_json = workspace / "w" / "no-json"
+    no_json.mkdir(parents=True)
+    bad_json = workspace / "w" / "bad-json"
+    bad_json.mkdir(parents=True)
+    (bad_json / "work.json").write_text("{ not json", encoding="utf-8")
+    list_json = workspace / "w" / "list-json"
+    list_json.mkdir(parents=True)
+    (list_json / "work.json").write_text("[1, 2]", encoding="utf-8")
+    _write_registry(workspace, [
+        {"path": str(workspace / "w" / "missing")},   # folder gone
+        {"path": str(no_json)},                       # no work.json
+        {"path": str(bad_json)},                      # not JSON
+        {"path": str(list_json)},                     # JSON, not an object
+        {"path": "w/good"},                           # relative: §13.1 wants absolute
+        "not-an-object",
+        {"kind": "deck"},                             # no path
+        {"path": str(good), "kind": "poster", "title": "Good"},
+        {"path": str(good), "kind": "poster", "title": "Good"},  # registered twice → one row
+    ])
+    r = client.get("/api/pollinate/works")
+    assert r.status_code == 200
+    body = r.json()
+    assert [w["path"] for w in body["works"]] == ["w/good"]
+    assert body["skipped"] == 7
+
+
+def test_works_broken_registry_is_not_a_500(client, workspace):
+    # no registry at all → empty, nothing skipped
+    assert client.get("/api/pollinate/works").json() == {"works": [], "skipped": 0}
+    reg = workspace / ".pollinate" / "works.json"
+    reg.parent.mkdir(parents=True)
+    reg.write_text("{ broken", encoding="utf-8")
+    r = client.get("/api/pollinate/works")
+    assert r.status_code == 200 and r.json() == {"works": [], "skipped": 1}
+    reg.write_text(json.dumps({"schema": 1, "works": {"not": "a list"}}), encoding="utf-8")
+    assert client.get("/api/pollinate/works").json() == {"works": [], "skipped": 1}
+
+
+def test_works_registry_too_large_is_skipped(client, workspace):
+    from routers import pollinate as mod
+    reg = workspace / ".pollinate" / "works.json"
+    reg.parent.mkdir(parents=True)
+    reg.write_text(json.dumps({"works": [], "pad": "x" * 64}), encoding="utf-8")
+    with patch.object(mod, "_MAX_JSON_BYTES", 32):
+        assert client.get("/api/pollinate/works").json() == {"works": [], "skipped": 1}
+
+
+def test_works_outside_workspace(client, workspace, tmp_path_factory):
+    outside = _write_work(tmp_path_factory.mktemp("desktop") / "AI-Native" / "deck", kind="deck",
+                          files=["out/deck.html", "out/slides/01-s-7f3a.png"])
+    _write_registry(workspace, [{"path": str(outside), "kind": "deck", "title": "Out"}])
+    w = client.get("/api/pollinate/works").json()["works"][0]
+    assert w["in_workspace"] is False
+    assert w["path"] == str(outside.resolve())
+    assert w["main_output"] == str(outside.resolve() / "out" / "deck.html")
+
+
+def _thread_recorder(monkeypatch, target: str) -> list[str]:
+    """Wrap routers.pollinate.<target> to record which thread ran it."""
+    from routers import pollinate as mod
+    seen: list[str] = []
+    real = getattr(mod, target)
+
+    def wrapped(*a, **kw):
+        seen.append(threading.current_thread().name)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(mod, target, wrapped)
+    return seen
+
+
+def test_assets_runs_through_run_nav(client, workspace, monkeypatch):
+    """The folder walk of /assets runs on the nav pool (a 'swarm-nav' thread), not on the
+    thread that runs the event loop — and the payload is unchanged."""
+    _mk_run(workspace, "2026-05-03-a", run_json={"topic": "t", "status": "completed"},
+            deliver={"xiaohongshu": ["poster.png"]})
+    seen = _thread_recorder(monkeypatch, "_list_run_dirs")
+    r = client.get("/api/pollinate/assets")
+    assert r.status_code == 200
+    assert [c["run"] for c in r.json()["cards"]] == ["2026-05-03-a"]
+    assert seen and all(name.startswith("swarm-nav") for name in seen), seen
+
+
+def test_works_runs_through_run_nav(client, workspace, monkeypatch):
+    good = _write_work(workspace / "w" / "good", kind="poster", files=["out/poster.png"])
+    _write_registry(workspace, [{"path": str(good)}])
+    seen = _thread_recorder(monkeypatch, "_work_row")
+    assert len(client.get("/api/pollinate/works").json()["works"]) == 1
+    assert seen and all(name.startswith("swarm-nav") for name in seen), seen
+
+
+def test_detail_and_publish_routes_are_gone(client, workspace):
+    """GET /{run_name} (no caller) and POST /{run_name}/publish (never used) are deleted."""
+    _mk_run(workspace, "2026-05-03-gone", run_json={"topic": "t"}, deliver={"xiaohongshu": ["p.png"]})
+    assert client.get("/api/pollinate/2026-05-03-gone").status_code == 404
+    r = client.post("/api/pollinate/2026-05-03-gone/publish", json={"asset_id": "a" * 40, "published": True})
+    assert r.status_code in (404, 405)
+    from routers.pollinate import router
+    assert sorted(getattr(rt, "path", "") for rt in router.routes) == ["/assets", "/works"]
+    # the publish-state sidecar no longer shapes an asset
+    a = client.get("/api/pollinate/assets").json()["cards"][0]["assets"][0]
+    assert "asset_id" not in a and "posted_url" not in a

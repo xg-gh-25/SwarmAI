@@ -1,18 +1,19 @@
 /**
- * Pollinate Content-Asset Gallery API service.
+ * Pollinate API service: the overlay's two reads.
  *
- * ASSET-CENTRIC (sibling of pipelines.ts, but the first-class object is a produced
- * media asset, not a run). Fetches the newest-first content cards + overall rollup
- * from GET /api/pollinate/assets, and one topic's detail from GET /api/pollinate/{run}.
+ * - GET /api/pollinate/works — the registered works (Pollinate v2): one row per work,
+ *   newest first, with its thumbnail and the main output to open in Canvas.
+ * - GET /api/pollinate/assets — the older run gallery: newest-first content cards +
+ *   overall rollup (ASSET-CENTRIC: the first-class object is a produced media asset).
  *
  * Thumbnails: the frontend points <img> at the EXISTING GET /api/workspace/file/raw
  * (workspace-sandboxed FileResponse) — see assetThumbUrl(). No media bytes flow
  * through this service.
  *
  * Exports:
- * - pollinateService — { fetchAssets(), fetchTopicDetail(run) }
+ * - pollinateService — { fetchWorks(), fetchAssets(), fetchAssetBody(path) }
  * - assetThumbUrl(path) — absolute /api/workspace/file/raw URL for an <img src>
- * - camelCase types: PollinateAsset, PollinateContentCard, PollinateOverall, ...
+ * - camelCase types: PollinateWork, PollinateAsset, PollinateContentCard, PollinateOverall, ...
  */
 
 import api from './api';
@@ -24,11 +25,8 @@ export interface PollinateAsset {
   filePath: string;
   fileName: string;
   isImage: boolean;
+  /** From a publish-kit.md frontmatter; 'ready' when none says otherwise. */
   publishStatus: 'ready' | 'ready-to-publish' | 'published';
-  /** Stable logical id (sha1 of platform/format/fileName) — the key for POST /publish. */
-  assetId: string;
-  /** Public URL where the asset was posted (set once marked published). */
-  postedUrl: string | null;
 }
 
 export interface PollinateContentCard {
@@ -64,14 +62,46 @@ export interface PollinateAssetsResponse {
   cards: PollinateContentCard[];
 }
 
-export interface PollinateTopicDetail {
-  run: string;
-  topic: string;
-  domain: string | null;
-  status: string;
-  createdAt: string | null;
-  contentPackage: string | null;
-  assets: PollinateAsset[];
+/** One registered work (a folder with a work.json). Paths are workspace-relative when
+ *  `inWorkspace`, absolute otherwise (Canvas and the raw-file endpoint cannot open those). */
+export interface PollinateWork {
+  path: string;
+  inWorkspace: boolean;
+  kind: string;
+  title: string;
+  /** Current version id (e.g. "v003"): the last version that passed; null before one did. */
+  current: string | null;
+  /** The newest version id (the last cut, passed or not). */
+  latest: string | null;
+  /** The NEWEST version's check result (a failed cut leaves `current` on the last
+   *  passing version); null when unknown. */
+  status: 'ok' | 'failed' | null;
+  updated: string | null;
+  thumbnail: string | null;
+  /** The file to open in Canvas; null when nothing is rendered yet. */
+  mainOutput: string | null;
+}
+
+export interface PollinateWorksResponse {
+  works: PollinateWork[];
+  /** Registry entries left out because a file was missing or broken. */
+  skipped: number;
+}
+
+function workToCamel(w: Record<string, unknown>): PollinateWork {
+  const status = w.status === 'ok' || w.status === 'failed' ? w.status : null;
+  return {
+    path: (w.path as string) ?? '',
+    inWorkspace: Boolean(w.in_workspace),
+    kind: (w.kind as string) ?? 'unknown',
+    title: (w.title as string) ?? ((w.path as string) ?? ''),
+    current: (w.current as string | null) ?? null,
+    latest: (w.latest as string | null) ?? null,
+    status,
+    updated: (w.updated as string | null) ?? null,
+    thumbnail: (w.thumbnail as string | null) ?? null,
+    mainOutput: (w.main_output as string | null) ?? null,
+  };
 }
 
 function assetToCamel(a: Record<string, unknown>): PollinateAsset {
@@ -82,8 +112,6 @@ function assetToCamel(a: Record<string, unknown>): PollinateAsset {
     fileName: (a.file_name as string) ?? '',
     isImage: Boolean(a.is_image),
     publishStatus: (a.publish_status as PollinateAsset['publishStatus']) ?? 'ready',
-    assetId: (a.asset_id as string) ?? '',
-    postedUrl: (a.posted_url as string | null) ?? null,
   };
 }
 
@@ -125,6 +153,15 @@ export function assetThumbUrl(relativePath: string): string {
 }
 
 export const pollinateService = {
+  async fetchWorks(): Promise<PollinateWorksResponse> {
+    const { data } = await api.get('/pollinate/works');
+    const d = data as Record<string, unknown>;
+    return {
+      works: Array.isArray(d.works) ? (d.works as Record<string, unknown>[]).map(workToCamel) : [],
+      skipped: typeof d.skipped === 'number' ? d.skipped : 0,
+    };
+  },
+
   async fetchAssets(): Promise<PollinateAssetsResponse> {
     const { data } = await api.get('/pollinate/assets');
     const d = data as Record<string, unknown>;
@@ -143,46 +180,6 @@ export const pollinateService = {
       const d = data as Record<string, unknown>;
       if (d.encoding === 'utf-8' && typeof d.content === 'string') return d.content;
       return null; // binary/other → not renderable as caption text
-    } catch {
-      return null;
-    }
-  },
-
-  async fetchTopicDetail(run: string): Promise<PollinateTopicDetail | null> {
-    try {
-      const { data } = await api.get(`/pollinate/${encodeURIComponent(run)}`);
-      const d = data as Record<string, unknown>;
-      return {
-        run: d.run as string,
-        topic: (d.topic as string) ?? (d.run as string),
-        domain: (d.domain as string | null) ?? null,
-        status: (d.status as string) ?? 'unknown',
-        createdAt: (d.created_at as string | null) ?? null,
-        contentPackage: (d.content_package as string | null) ?? null,
-        assets: Array.isArray(d.assets) ? (d.assets as Record<string, unknown>[]).map(assetToCamel) : [],
-      };
-    } catch {
-      return null;
-    }
-  },
-
-  /** Mark ONE asset published/unpublished (P1 write path). Persists to the run's
-   *  publish-state.json sidecar. Returns the new publish_status, or null on failure
-   *  (caller keeps the old UI state). */
-  async markPublished(
-    run: string, assetId: string, published: boolean, postedUrl?: string | null,
-  ): Promise<{ publishStatus: PollinateAsset['publishStatus']; postedUrl: string | null } | null> {
-    try {
-      const { data } = await api.post(`/pollinate/${encodeURIComponent(run)}/publish`, {
-        asset_id: assetId,
-        published,
-        posted_url: postedUrl || null,
-      });
-      const d = data as Record<string, unknown>;
-      return {
-        publishStatus: (d.publish_status as PollinateAsset['publishStatus']) ?? 'ready',
-        postedUrl: (d.posted_url as string | null) ?? null,
-      };
     } catch {
       return null;
     }

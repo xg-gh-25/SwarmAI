@@ -1,9 +1,19 @@
-"""Pollinate Content-Asset Gallery — router (sibling of routers/pipelines.py).
+"""Pollinate — router for the overlay's two reads (sibling of routers/pipelines.py).
 
-Mostly-read gallery + ONE write path (mark-published, P1 run_b290eb6f):
-  GET  /api/pollinate/assets              — newest-first content cards + overall rollup
-  GET  /api/pollinate/{run_name}          — one content topic's full detail
-  POST /api/pollinate/{run_name}/publish  — mark an asset published/unpublished (sidecar write)
+Read-only:
+  GET /api/pollinate/works   — the registered works (Pollinate v2): one row per work in
+                               <workspace>/.pollinate/works.json, read from its work.json
+  GET /api/pollinate/assets  — the older run gallery: newest-first content cards + rollup
+
+Both handlers do all their file reads in ONE sync helper dispatched with
+``executors.run_nav`` — never on the event loop (tests/test_router_async_blocking.py
+also follows calls into same-module helpers, so a blocking helper called from a
+handler is caught).
+
+/works: a missing registry is an empty list; a broken registry, entry, folder or
+work.json is left out and counted in ``skipped`` — never a 500.
+
+/assets — the run gallery:
 
 ASSET-CENTRIC (Gate-1 BLOCKs baked in):
   * The `deliver/` DIR WALK is the source of truth for what was produced — NOT
@@ -17,10 +27,10 @@ ASSET-CENTRIC (Gate-1 BLOCKs baked in):
     stage='...'/status='completed', but pollinate stages use name='REFLECT'(UPPERCASE)/
     status in {done,completed}, so the pipeline helper's stage branch never fires. Reusing
     it would mis-gate the metadata cache on review/running-but-done runs.
-  * publish_status precedence: sidecar 'published' (the P1 publish-state.json, user-marked
-    via POST /publish — the AUTHORITY) > 'ready-to-publish' (a publish-kit.md frontmatter
-    says so) > 'ready' (default/unknown). Before P1 'published' was never reachable; it is
-    now set ONLY by an explicit user mark-published write, never fabricated from content.
+  * publish_status comes from a publish-kit.md frontmatter only: 'published' /
+    'ready-to-publish' when it says so, else 'ready' (default/unknown). It is never
+    fabricated from content. (The manual mark-published write path was deleted with
+    Pollinate v2: it was never used.)
 
 Thumbnails are served by the EXISTING GET /api/workspace/file/raw (FileResponse,
 workspace-sandboxed) — no new media endpoint. The frontend points <img> at it.
@@ -28,15 +38,13 @@ workspace-sandboxed) — no new media endpoint. The frontend points <img> at it.
 
 from __future__ import annotations
 
-from core import executors
-import hashlib
 import json
 import logging
-import os
 import re as _re
-import tempfile
 from pathlib import Path
 from typing import Optional
+
+from core import executors
 
 from fastapi import APIRouter
 
@@ -46,9 +54,8 @@ from schemas.pollinate import (
     PollinateAssetsResponse,
     PollinateContentCard,
     PollinateOverall,
-    PollinateTopicDetail,
-    PublishRequest,
-    PublishResponse,
+    PollinateWork,
+    PollinateWorksResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,16 +69,6 @@ _POLLINATE_ROOT = "Knowledge/Pollinate"
 # The corpus is tens of items today; this cap is a pre-mortem guard against a
 # thousand-run future (mirrors pipelines' newest-N materialize).
 _ASSET_MATERIALIZE_CAP = 60
-
-# run_name is a user-controlled path param → reject traversal BEFORE touching the FS.
-# Real dir names are `2026-05-03-memory-is-the-moat` (digits/letters/hyphens); the dot
-# is admitted for safety but no real dir uses one. Looser than pipelines' `run_...`
-# regex because pollinate dirs are date-name slugs, not run_<hex> ids.
-_RUN_NAME_RE = _re.compile(r"^[A-Za-z0-9._-]+$")
-
-# The publish endpoint's asset_id is a sha1 hexdigest. Constraining it to 40-hex means a
-# crafted asset_id can NEVER encode a path — it is a pure sidecar-JSON key, never a filename.
-_ASSET_ID_RE = _re.compile(r"^[0-9a-f]{40}$")
 
 # Image extensions that <img src=/api/workspace/file/raw> can render inline.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
@@ -256,74 +253,6 @@ def _publish_status_for(deliver_dir: Path, platform: str) -> str:
     return "ready"
 
 
-# --- P1 publish-state sidecar (run_b290eb6f) -------------------------------------------
-# A per-run publish-state.json is the AUTHORITY for user-marked 'published' state. It is
-# keyed on the asset's STABLE LOGICAL id (below), NOT its physical path — a path key would
-# orphan the mark when the deliver↔tracks root-flip changes an asset's parent dir.
-_PUBLISH_STATE_FILE = "publish-state.json"
-
-
-def _asset_id(platform: str, fmt: str, file_name: str) -> str:
-    """Stable logical id for an asset = sha1(platform/format/file_name).
-
-    ⚠️ CONTRACT: this id is a function of the CLASSIFIER output (platform + _classify_format
-    /_TRACKS_CONTENT_FORMATS), NOT the physical path — that is deliberate (it survives the
-    deliver↔tracks root-flip). The flip side: editing _classify_format or the platform/format
-    labelling will re-hash existing assets and ORPHAN their stored publish-state entries.
-    Treat the (platform, format, file_name) → id mapping as a stable contract.
-    """
-    return hashlib.sha1(
-        f"{platform}/{fmt}/{file_name}".encode("utf-8"), usedforsecurity=False
-    ).hexdigest()
-
-
-def _publish_state_path(run_dir: Path) -> Path:
-    return run_dir / _PUBLISH_STATE_FILE
-
-
-def _load_publish_state(run_dir: Path) -> dict:
-    """Read the per-run publish-state sidecar. GUARDED (mirrors _read_run_json): a missing,
-    malformed, or half-written file degrades to {} — the gallery/detail must NEVER 500 on a
-    bad sidecar (the detail endpoint has no per-card try/except, so the loader itself is safe).
-    Returns {asset_id: {"published": bool, "posted_url": str|None}}."""
-    p = _publish_state_path(run_dir)
-    try:
-        if p.is_file():
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except (OSError, ValueError):
-        return {}
-    return {}
-
-
-def _write_publish_state(run_dir: Path, state: dict) -> None:
-    """Atomically write the sidecar (tempfile + os.replace — the codebase idiom, ddd_brain
-    _write_watermark). CONCURRENCY POSTURE: single-user, low-frequency (the overlay is a
-    manual mark-as-posted toggle) → last-write-wins is ACCEPTED; no flock. The atomic replace
-    guarantees a reader never sees a half-written file, only never-lost-update across a rare
-    concurrent double-POST — an accepted trade-off at this scale, documented deliberately."""
-    tmp_fd, tmp_name = tempfile.mkstemp(dir=str(run_dir), prefix=".publish-state.", suffix=".tmp")
-    try:
-        # Guard the raw fd: mkstemp returns an OPEN descriptor; os.fdopen ADOPTS it (and its
-        # context-manager closes it). But if fdopen itself raises before adopting, the raw fd
-        # would leak — close it explicitly on that narrow path (textbook mkstemp+fdopen pitfall).
-        try:
-            fh = os.fdopen(tmp_fd, "w", encoding="utf-8")
-        except BaseException:
-            os.close(tmp_fd)
-            raise
-        with fh:
-            json.dump(state, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp_name, str(_publish_state_path(run_dir)))
-    finally:
-        try:
-            if os.path.exists(tmp_name):
-                os.unlink(tmp_name)
-        except OSError:
-            pass
-
-
 def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
     """Enumerate produced assets from the deliver/ tree — the SOURCE OF TRUTH.
 
@@ -336,8 +265,6 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
     assets: list[PollinateAsset] = []
     swarmws = _get_swarmws()
     deliver = run_dir / "deliver"
-    # Load the publish-state sidecar ONCE per run (not per-asset) — closed over in _add.
-    publish_state = _load_publish_state(run_dir)
 
     def _rel(p: Path) -> str:
         try:
@@ -357,15 +284,7 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
         # but a deck's outline.md / speaker_notes.md read honestly as 'deck', not 'other').
         if fmt == "other" and format_hint in _TRACKS_CONTENT_FORMATS:
             fmt = format_hint
-        aid = _asset_id(platform, fmt, f.name)
-        # Precedence: sidecar 'published' (AUTHORITY) > kit 'ready-to-publish' > 'ready'.
         status = _publish_status_for(deliver, platform) if deliver.is_dir() else "ready"
-        posted_url = None
-        entry = publish_state.get(aid)
-        if isinstance(entry, dict) and entry.get("published"):
-            status = "published"
-            pu = entry.get("posted_url")
-            posted_url = pu if isinstance(pu, str) and pu else None
         assets.append(
             PollinateAsset(
                 platform=platform,
@@ -374,8 +293,6 @@ def _walk_assets(run_dir: Path) -> list[PollinateAsset]:
                 file_name=f.name,
                 is_image=ext in _IMAGE_EXTS,
                 publish_status=status,
-                asset_id=aid,
-                posted_url=posted_url,
             )
         )
 
@@ -554,11 +471,9 @@ def _list_run_dirs() -> list[Path]:
     return [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
 
 
-@router.get("/assets", response_model=PollinateAssetsResponse)
-async def pollinate_assets() -> PollinateAssetsResponse:
-    """Newest-first content cards + overall rollup. Always 200 (a bad run dir is
-    skipped, never 500s the gallery). The newest N cards materialize their assets;
-    the overall counts reflect ALL cards."""
+def _build_assets_response() -> PollinateAssetsResponse:
+    """Build the whole /assets payload: the folder walk, every run.json read and every
+    asset listing. Sync on purpose — the handler runs it on the nav pool."""
     run_dirs = _list_run_dirs()
 
     # Sort newest-first by created_at, falling back to the YYYY-MM-DD dir-name prefix.
@@ -632,96 +547,182 @@ async def pollinate_assets() -> PollinateAssetsResponse:
     return PollinateAssetsResponse(overall=overall, cards=cards)
 
 
-def _resolve_run_dir(run_name: str) -> Optional[Path]:
-    """Validate a user-supplied run_name and resolve it to a contained run dir, or None.
-
-    ⚠️ _RUN_NAME_RE ALONE IS NOT A TRAVERSAL GUARD — it admits '.'/'..'. The real guard is
-    the resolve() + relative_to(root) containment check below. Both the read (detail) and the
-    write (publish) endpoints route through here so the guard can't drift between them."""
-    if not run_name or not _RUN_NAME_RE.match(run_name):
-        return None
-    root = _get_swarmws() / _POLLINATE_ROOT
-    run_dir = (root / run_name).resolve()
-    try:
-        run_dir.relative_to(root.resolve())
-    except ValueError:
-        return None
-    if not run_dir.is_dir():
-        return None
-    return run_dir
+@router.get("/assets", response_model=PollinateAssetsResponse)
+async def pollinate_assets() -> PollinateAssetsResponse:
+    """Newest-first content cards + overall rollup. Always 200 (a bad run dir is
+    skipped, never 500s the gallery). The newest N cards materialize their assets;
+    the overall counts reflect ALL cards. All file work runs off the event loop."""
+    return await executors.run_nav(_build_assets_response)
 
 
-@router.get("/{run_name}", response_model=PollinateTopicDetail)
-async def pollinate_topic_detail(run_name: str):
-    """One content topic's full detail. run_name validated + containment-checked
-    against the Pollinate root before any FS read (traversal guard)."""
-    from fastapi.responses import JSONResponse
+# --- Works (Pollinate v2, design 2026-11-25-pollinate-v2-design.md §13.1) -------------
+# The registry lists work folders by absolute path; each folder holds a work.json. This
+# endpoint only READS them: work.py (the s_pollinate skill) is their one writer.
+_WORKS_REGISTRY = (".pollinate", "works.json")
 
-    run_dir = _resolve_run_dir(run_name)
-    if run_dir is None:
-        return JSONResponse(status_code=404, content={"detail": "not found"})
+# A registry or work.json larger than this is not a real one (a few KB each): skip it
+# instead of reading a huge file into memory.
+_MAX_JSON_BYTES = 2 * 1024 * 1024
 
-    # 3 blocking FS ops (run.json read + asset dir walk + content_package.md read) —
-    # run them together in ONE worker thread off the event loop (run_b2d3ece0).
-    def _read_detail():
-        run = _read_run_json(run_dir)
-        assets = _walk_assets(run_dir)
-        content_package = None
-        cp = run_dir / "content_package.md"
+# What Canvas opens for each kind, first existing file wins (work-relative paths).
+# §13.2 fixes the out/ names; Canvas renders HTML, so a deck or page opens as HTML when
+# it exists. copy has no out/ file: its source is the output.
+_MAIN_OUTPUTS: dict[str, tuple[str, ...]] = {
+    "deck": ("out/deck.html", "out/deck.pdf"),
+    "poster": ("out/poster.png",),
+    "page": ("out/page.html", "out/page.png"),
+    "copy": ("src/copy.md",),
+}
+# The cover image per kind (a deck's first slide is found by glob: out/slides/01-<id>.png).
+_THUMBNAILS: dict[str, str] = {"poster": "out/poster.png", "page": "out/page.png"}
+
+
+def _read_json_capped(p: Path) -> object:
+    """Parse a small JSON file. Raises OSError / ValueError when it is missing,
+    unreadable, too large or not JSON (the caller skips it)."""
+    with p.open("rb") as fh:
+        raw = fh.read(_MAX_JSON_BYTES + 1)
+    if len(raw) > _MAX_JSON_BYTES:
+        raise ValueError(f"{p.name} is larger than {_MAX_JSON_BYTES} bytes")
+    return json.loads(raw.decode("utf-8"))
+
+
+def _first_file(work_dir: Path, rels: tuple[str, ...]) -> Optional[Path]:
+    for rel in rels:
+        f = work_dir / rel
+        if f.is_file():
+            return f
+    return None
+
+
+def _work_thumbnail(work_dir: Path, kind: str) -> Optional[Path]:
+    if kind == "deck":
+        slides = work_dir / "out" / "slides"
         try:
-            if cp.is_file():
-                content_package = cp.read_text(encoding="utf-8", errors="replace")
+            hits = sorted(f for f in slides.glob("01-*.png") if f.is_file()) if slides.is_dir() else []
         except OSError:
-            content_package = None
-        return run, assets, content_package
+            hits = []
+        return hits[0] if hits else None
+    rel = _THUMBNAILS.get(kind)
+    return _first_file(work_dir, (rel,)) if rel else None
 
-    run, assets, content_package = await executors.run_nav(_read_detail)
-    topic = run_name
-    domain = None
-    status = "unknown"
-    created_at = None
-    if run:
-        topic = run.get("topic") or run.get("message") or run_name
-        domain = run.get("domain")
-        status = run.get("status") or "unknown"
-        created_at = run.get("created_at") or run.get("updated_at")
 
-    return PollinateTopicDetail(
-        run=run_name,
-        topic=topic,
-        domain=domain,
+def _str_or_none(v: object) -> Optional[str]:
+    return v if isinstance(v, str) and v else None
+
+
+def _work_row(entry: object, ws_root: Path) -> Optional[PollinateWork]:
+    """One registry entry → its row, or None when the entry, its folder or its work.json
+    is missing or broken (the caller counts it as skipped)."""
+    if not isinstance(entry, dict):
+        return None
+    raw_path = entry.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        return None
+    work_dir = Path(raw_path)
+    if not work_dir.is_absolute():
+        return None  # §13.1: the registry stores absolute paths
+    try:
+        work_dir = work_dir.resolve()
+        if not work_dir.is_dir():
+            return None
+        meta = _read_json_capped(work_dir / "work.json")
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+
+    kind = _str_or_none(meta.get("kind")) or _str_or_none(entry.get("kind")) or "unknown"
+    title = _str_or_none(meta.get("title")) or _str_or_none(entry.get("title")) or work_dir.name
+    current = _str_or_none(meta.get("current"))
+    # The status is the NEWEST version's, not current's: `work.py cut` moves `current`
+    # only when every check passes (§13.2), so current is always a passing version and
+    # a failed cut is the newer entry after it. The newest is the last entry of
+    # `versions` (the writer appends; list order, not clocks).
+    latest = None
+    status = None
+    version_at = None
+    versions = meta.get("versions")
+    if isinstance(versions, list):
+        newest = next((v for v in reversed(versions)
+                       if isinstance(v, dict) and _str_or_none(v.get("id"))), None)
+        if newest is not None:
+            latest = newest["id"]
+            st = newest.get("status")
+            status = st if st in ("ok", "failed") else None
+            version_at = _str_or_none(newest.get("at"))
+    updated = _str_or_none(entry.get("updated")) or version_at
+
+    try:
+        rel_dir = work_dir.relative_to(ws_root)
+        in_workspace = True
+    except ValueError:
+        rel_dir = None
+        in_workspace = False
+
+    def shown(p: Optional[Path]) -> Optional[str]:
+        """Workspace-relative for a work in the workspace (what /workspace/file/raw and
+        swarm:open-file take), absolute otherwise."""
+        if p is None:
+            return None
+        if in_workspace:
+            return p.relative_to(ws_root).as_posix()
+        return str(p)
+
+    return PollinateWork(
+        path=rel_dir.as_posix() if rel_dir is not None else str(work_dir),
+        in_workspace=in_workspace,
+        kind=kind,
+        title=title,
+        current=current,
+        latest=latest,
         status=status,
-        created_at=created_at,
-        content_package=content_package,
-        assets=assets,
+        updated=updated,
+        thumbnail=shown(_work_thumbnail(work_dir, kind)),
+        main_output=shown(_first_file(work_dir, _MAIN_OUTPUTS.get(kind, ()))),
     )
 
 
-@router.post("/{run_name}/publish", response_model=PublishResponse)
-async def pollinate_mark_published(run_name: str, req: PublishRequest):
-    """Mark ONE asset published/unpublished — the sole write path (P1). Persists to the
-    per-run publish-state.json sidecar (atomic), keyed on the asset's stable logical id.
-    Traversal-guarded: run_name via _resolve_run_dir containment, asset_id via 40-hex."""
-    from fastapi.responses import JSONResponse
-
-    run_dir = _resolve_run_dir(run_name)
-    if run_dir is None:
-        return JSONResponse(status_code=404, content={"detail": "not found"})
-    if not _ASSET_ID_RE.match(req.asset_id or ""):
-        return JSONResponse(status_code=422, content={"detail": "invalid asset_id (expect 40-hex sha1)"})
-
-    state = _load_publish_state(run_dir)
-    if req.published:
-        state[req.asset_id] = {"published": True, "posted_url": req.posted_url or None}
-        new_status, posted = "published", (req.posted_url or None)
-    else:
-        # Un-publish → drop the entry so the asset falls back to its kit/default status.
-        state.pop(req.asset_id, None)
-        new_status, posted = "ready", None
+def _read_works() -> PollinateWorksResponse:
+    """Read the works registry and every listed work.json. Sync on purpose — the
+    handler runs it on the nav pool."""
+    ws_root = _get_swarmws().resolve()
+    registry = ws_root.joinpath(*_WORKS_REGISTRY)
+    if not registry.is_file():
+        return PollinateWorksResponse()  # no work registered yet
     try:
-        _write_publish_state(run_dir, state)
-    except OSError as e:
-        logger.warning("pollinate: publish-state write failed for %s: %s", run_dir.name, e)
-        return JSONResponse(status_code=500, content={"detail": "failed to persist publish state"})
+        reg = _read_json_capped(registry)
+    except (OSError, ValueError) as e:
+        logger.warning("pollinate: works registry unreadable: %s", e)
+        return PollinateWorksResponse(skipped=1)
+    entries = reg.get("works") if isinstance(reg, dict) else None
+    if not isinstance(entries, list):
+        logger.warning("pollinate: works registry has no works list")
+        return PollinateWorksResponse(skipped=1)
 
-    return PublishResponse(asset_id=req.asset_id, publish_status=new_status, posted_url=posted)
+    works: list[PollinateWork] = []
+    seen: set[str] = set()
+    skipped = 0
+    for entry in entries:
+        try:
+            row = _work_row(entry, ws_root)
+        except Exception:  # noqa: BLE001 — one bad work must not sink the list
+            logger.warning("pollinate: failed to read a registered work", exc_info=True)
+            row = None
+        if row is None:
+            skipped += 1
+            continue
+        if row.path in seen:
+            continue  # registered twice: one row
+        seen.add(row.path)
+        works.append(row)
+    # Newest first; a work with no date goes last.
+    works.sort(key=lambda w: (w.updated is not None, w.updated or ""), reverse=True)
+    return PollinateWorksResponse(works=works, skipped=skipped)
+
+
+@router.get("/works", response_model=PollinateWorksResponse)
+async def pollinate_works() -> PollinateWorksResponse:
+    """The registered works, newest first. Always 200: a broken registry, entry, folder
+    or work.json is left out and counted in ``skipped``. Runs off the event loop."""
+    return await executors.run_nav(_read_works)

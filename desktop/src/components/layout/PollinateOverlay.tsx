@@ -1,24 +1,24 @@
 /**
- * PollinateOverlay — the WORK-zone "Pollinate" content-asset gallery. A structural
- * sibling of PipelineOverlay (fullscreen Modal + fetch-once + absolute detail drawer),
- * but ASSET-CENTRIC: the first-class object is a produced media asset (poster / video
- * / narrative / readme) + where it's headed, NOT a run. The primary axis is
- * newest-first — the user comes to REVIEW what Swarm just made and go publish it.
+ * PollinateOverlay — the WORK-zone "Pollinate" surface. A structural sibling of
+ * PipelineOverlay (fullscreen Modal + fetch-once + absolute detail drawer).
  *
  * Two views (Gallery | Insights toggle, JobsRunsOverlay pattern):
- *  - Gallery: newest-first content cards (newest expanded), each an asset grid of
- *    platform×format cells (image thumbnails via /api/workspace/file/raw); a
- *    client-side search/filter/sort toolbar; an asset detail drawer (inline big image
- *    + copy-caption + open-account for manual publish).
- *  - Insights: 5 client-side rollups (by-type / by-channel / by-domain / production
- *    trend / publish funnel), all from the SAME fetched payload. NO token panel —
- *    pollinate can't attribute per-run tokens today (design §4b, ToDo 4053103d).
+ *  - Gallery: first the WORKS (Pollinate v2, GET /pollinate/works): one card per
+ *    registered work — cover thumbnail, title, version — whose one action is "Open in
+ *    Canvas" for its main output; a card is marked only when its newest version
+ *    failed its checks (a failed cut leaves `current` on the last passing version). Below them, "Earlier runs": the older run gallery
+ *    (GET /pollinate/assets) — newest-first content cards (newest expanded), each an
+ *    asset grid with thumbnails via /api/workspace/file/raw, a client-side
+ *    search/filter/sort toolbar, and an asset detail drawer (big image + copy-caption
+ *    + open-account).
+ *  - Insights: the run rollup strip + 5 client-side rollups (by-type / by-channel /
+ *    by-domain / production trend / publish funnel), all from the SAME run payload.
+ *    NO token panel — pollinate can't attribute per-run tokens today.
  *
  * NO LIVE POLLING — fetch-once on open (retro surface; a running pollinate lives in
  * its chat tab). Local state only — never MessageStore / active-tab mutation (OT01).
  * WRITES GO THROUGH CHAT (Gate-1 #7): "Produce for {platform}" / "Resume" inject a
- * chat prompt via onDispatch. Publish is manual-assist (copy caption + open account) —
- * auto-distribution is a parked ToDo (85f7f5d1).
+ * chat prompt via onDispatch. The overlay writes nothing itself.
  *
  * @exports PollinateOverlay
  */
@@ -33,6 +33,8 @@ import {
   type PollinateAssetsResponse,
   type PollinateContentCard,
   type PollinateAsset,
+  type PollinateWork,
+  type PollinateWorksResponse,
 } from '../../services/pollinate';
 import { WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 import { OverlayError } from './OverlayState';
@@ -65,6 +67,14 @@ function fmtDate(iso: string | null): string {
   if (isNaN(d.getTime())) return iso.slice(0, 10);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Open a workspace file in the current tab's Canvas: close the overlay first so the
+ *  Canvas is not rendered under it, then the same swarm:open-file event the other
+ *  overlays send (handled by the chat page's Canvas host). */
+function openInCanvas(path: string, close: () => void): void {
+  close();
+  document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path } }));
 }
 
 function stateDot(s: string): string {
@@ -134,18 +144,19 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
   const loading = assetsQ.isFetching;
   const loadErr: unknown = assetsQ.isError && !assetsQ.data ? assetsQ.error : null;
   const reload = useCallback(() => { void invalidateOverlay(qc, 'pollinate'); }, [qc]);
+  // The registered works — their own query, so a failure here never hides the runs.
+  const worksQ = useQuery(overlayQuery.pollinateWorks());
+  const works: PollinateWorksResponse | null = worksQ.data ?? null;
+  const worksErr: unknown = worksQ.isError && !worksQ.data ? worksQ.error : null;
 
-  // Keep the OPEN drawer in sync with the authoritative re-fetched data (GUI101 write→read).
-  // After a mark/unpublish → reload → the query refetches, re-derive `selected.asset`
-  // from the fresh list by assetId. This is what makes UNPUBLISH correct: the POST response
-  // says 'ready', but the backend may recompute a kit 'ready-to-publish' — trusting the
-  // re-fetched value (not the response) keeps the drawer and gallery card consistent.
+  // Keep the OPEN drawer in sync with re-fetched data (a Retry refetches): re-derive
+  // `selected` from the fresh list by run + file path.
   useEffect(() => {
     if (!data) return;
     setSelected((prev) => {
       if (!prev) return prev;
       const card = data.cards.find((c) => c.run === prev.card.run);
-      const asset = card?.assets.find((a) => a.assetId === prev.asset.assetId);
+      const asset = card?.assets.find((a) => a.filePath === prev.asset.filePath);
       if (!card || !asset) return prev; // asset vanished (e.g. filtered) → keep last known
       return { card, asset };
     });
@@ -223,8 +234,9 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
           ))}
         />
 
-        {/* Overall strip (both views) */}
-        {o && (
+        {/* Run rollup strip — Insights only: it counts the earlier runs, not the works
+            the gallery leads with (one signal per surface). */}
+        {view === 'insights' && o && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 px-4 py-2 border-b border-[var(--color-border)]" data-testid="pollinate-overall">
             <Stat label={t('ui.PollinateOverlay.statTopics')} value={String(o.cardCount)} />
             <Stat label={t('ui.PollinateOverlay.statAssets')} value={String(o.assetCount)} />
@@ -236,8 +248,18 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
         )}
 
         {view === 'gallery' ? (
-          <>
-            {/* Toolbar: search + filters + sort (client-side) */}
+          <div className="flex-1 min-h-0 overflow-y-auto" data-testid="pollinate-gallery">
+            <WorksSection
+              data={works}
+              loading={worksQ.isFetching}
+              error={worksErr}
+              onRetry={reload}
+              onOpen={(path) => openInCanvas(path, close)}
+            />
+            <div className="px-4 pt-4 pb-1 text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
+              {t('ui.PollinateOverlay.earlierRuns')}
+            </div>
+            {/* Toolbar: search + filters + sort (client-side, over the runs) */}
             <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)] flex-wrap">
               <input
                 value={query}
@@ -290,7 +312,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
             )}
 
             {/* Body: content cards (newest-first, newest expanded) */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
+            <div className="px-4 py-3 space-y-3">
               {/* Fetch failure (B3) — distinct from "no content", with Retry. */}
               {!!loadErr && !loading && (
                 <OverlayError
@@ -319,7 +341,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                 />
               ))}
             </div>
-          </>
+          </div>
         ) : (
           <InsightsView data={data} loading={loading} />
         )}
@@ -336,23 +358,128 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               dispatchToChat(`Open my ${platform} account so I can publish "${selected.card.topic}".`)}
             onProduce={(platform) =>
               dispatchToChat(`Resume pollinate for "${selected.card.topic}" and produce the ${platform} asset (run dir ${selected.card.run}).`)}
-            onMarkPublished={async (published, postedUrl) => {
-              const res = await pollinateService.markPublished(
-                selected.card.run, selected.asset.assetId, published, postedUrl,
-              );
-              if (!res) return false;
-              // Close the write→read loop on the OPEN drawer (GUI101): re-fetch alone won't
-              // update `selected` (a by-value snapshot), so optimistically patch it from the
-              // response, THEN reload so the gallery rollup/counts refresh too.
-              setSelected((prev) => prev && {
-                ...prev,
-                asset: { ...prev.asset, publishStatus: res.publishStatus, postedUrl: res.postedUrl },
-              });
-              reload();
-              return true;
-            }}
           />
         )}
+    </div>
+  );
+}
+
+/** The kind's placeholder icon when a work has no cover image (yet). */
+function kindIcon(kind: string): string {
+  if (kind === 'deck') return 'slideshow';
+  if (kind === 'poster') return 'image';
+  if (kind === 'page') return 'article';
+  if (kind === 'copy') return 'notes';
+  return 'draft';
+}
+
+/** The works section: one card per registered work. A card answers one decision —
+ *  "open this work to review it" — so its one action is Open in Canvas; the only
+ *  thing that stands out is the mark on a work whose newest version failed its
+ *  checks. Kind, version and date stay muted. */
+function WorksSection({ data, loading, error, onRetry, onOpen }: {
+  data: PollinateWorksResponse | null;
+  loading: boolean;
+  error: unknown;
+  onRetry: () => void;
+  onOpen: (path: string) => void;
+}) {
+  const { t } = useTranslation();
+  const works = data?.works ?? [];
+  return (
+    <section className="px-4 pt-3" data-testid="pollinate-works">
+      <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-2">
+        {t('ui.PollinateOverlay.works')}
+      </div>
+      {!!error && !loading && (
+        <OverlayError
+          testid="pollinate-works-error"
+          retryTestid="pollinate-works-retry"
+          message={classifyLoadError(error, 'works')}
+          onRetry={onRetry}
+          className="max-w-sm"
+        />
+      )}
+      {!error && !data && loading && (
+        <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.loading')}</div>
+      )}
+      {!error && data && works.length === 0 && (
+        <div className="text-small text-[var(--color-text-faint)]" data-testid="pollinate-works-empty">
+          {t('ui.PollinateOverlay.worksEmpty')}
+        </div>
+      )}
+      {works.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {works.map((w) => <WorkCard key={w.path} work={w} onOpen={onOpen} />)}
+        </div>
+      )}
+      {(data?.skipped ?? 0) > 0 && (
+        <div className="mt-2 text-meta text-[var(--color-text-faint)]" data-testid="pollinate-works-skipped">
+          {t('ui.PollinateOverlay.worksSkipped', { count: data?.skipped ?? 0 })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WorkCard({ work, onOpen }: { work: PollinateWork; onOpen: (path: string) => void }) {
+  const { t } = useTranslation();
+  // Canvas and the raw-file endpoint open workspace files only (design §4).
+  const openPath = work.inWorkspace ? work.mainOutput : null;
+  const thumb = work.inWorkspace ? work.thumbnail : null;
+  const failed = work.status === 'failed';
+  const cover = thumb ? (
+    <ImgWithFallback src={assetThumbUrl(thumb)} alt={work.title} lazy className="w-full h-full object-cover" />
+  ) : (
+    <span className="material-symbols-outlined icon-xl text-[var(--color-text-faint)]">{kindIcon(work.kind)}</span>
+  );
+  return (
+    <div className="flex flex-col gap-1.5 min-w-0" data-testid={`pollinate-work-${work.path}`}>
+      {openPath ? (
+        <button
+          type="button"
+          onClick={() => onOpen(openPath)}
+          title={t('ui.PollinateOverlay.openInCanvas')}
+          className="aspect-[16/10] rounded-md overflow-hidden bg-[var(--color-bg)] flex items-center justify-center hover:ring-1 hover:ring-primary transition-shadow"
+        >
+          {cover}
+        </button>
+      ) : (
+        <div className="aspect-[16/10] rounded-md overflow-hidden bg-[var(--color-bg)] flex items-center justify-center">
+          {cover}
+        </div>
+      )}
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className="text-body text-[var(--color-text)] truncate flex-1 min-w-0" title={work.title}>{work.title}</span>
+        {failed && (
+          <span
+            className="shrink-0 inline-flex items-center gap-0.5 text-meta text-[var(--color-status-error)]"
+            data-testid="pollinate-work-failed"
+            title={work.latest ?? undefined}
+          >
+            <span className="material-symbols-outlined icon-xs">error</span>
+            {t('ui.PollinateOverlay.checksFailed')}
+          </span>
+        )}
+      </div>
+      <div className="text-meta tabular-nums text-[var(--color-text-faint)] truncate">
+        {work.kind} · {work.current ?? '—'} · {fmtDate(work.updated)}
+      </div>
+      {openPath ? (
+        <button
+          type="button"
+          onClick={() => onOpen(openPath)}
+          data-testid={`pollinate-work-open-${work.path}`}
+          className="self-start btn-sm btn-soft"
+        >
+          <span className="material-symbols-outlined icon-xs">open_in_new</span>
+          {t('ui.PollinateOverlay.openInCanvas')}
+        </button>
+      ) : (
+        <span className="text-meta text-[var(--color-text-faint)] truncate" title={work.path}>
+          {work.inWorkspace ? t('ui.PollinateOverlay.notRendered') : t('ui.PollinateOverlay.outsideWorkspace')}
+        </span>
+      )}
     </div>
   );
 }
@@ -489,7 +616,7 @@ function resolveCaptionAsset(card: PollinateContentCard, asset: PollinateAsset):
   return siblings.find((a) => !isPublishKit(a)) ?? siblings[0] ?? null;
 }
 
-function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpenAccount, onProduce, onMarkPublished }: {
+function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpenAccount, onProduce }: {
   card: PollinateContentCard;
   asset: PollinateAsset;
   knownChannels: string[];
@@ -497,16 +624,12 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   onClose: () => void;
   onOpenAccount: (platform: string) => void;
   onProduce: (platform: string) => void;
-  onMarkPublished: (published: boolean, postedUrl?: string | null) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [copyErr, setCopyErr] = useState(false); // B7: clipboard-blocked was silent
   const [body, setBody] = useState<string | null>(null);
   const [bodyLoading, setBodyLoading] = useState(false);
-  const [urlInput, setUrlInput] = useState('');
-  const [marking, setMarking] = useState(false);
-  const [markErr, setMarkErr] = useState(false);
 
   const captionAsset = resolveCaptionAsset(card, asset);
   const captionPath = captionAsset?.filePath ?? null;
@@ -596,7 +719,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
           </div>
         )}
 
-        {/* Publish state + manual-assist actions */}
+        {/* Publish state (from the run's publish kit) */}
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${stateDot(asset.publishStatus)}`} />
           <span className="text-meta text-[var(--color-text-muted)]">
@@ -604,48 +727,8 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               : asset.publishStatus === 'ready-to-publish' ? t('ui.PollinateOverlay.stateReadyToPublish')
               : t('ui.PollinateOverlay.stateReady')}
           </span>
-          {asset.publishStatus === 'published' && asset.postedUrl && /^https?:\/\//i.test(asset.postedUrl) && (
-            // Defense-in-depth: only render an http(s) href (the backend already rejects
-            // non-http(s) posted_url, but React does NOT sanitize href — a javascript:/data:
-            // value would execute on click. Guard here too so a legacy sidecar value is inert).
-            <a
-              href={asset.postedUrl} target="_blank" rel="noreferrer"
-              data-testid="pollinate-posted-url"
-              className="text-meta text-primary hover:underline truncate max-w-[180px]"
-            >{asset.postedUrl}</a>
-          )}
         </div>
 
-        {/* Mark-published affordance (P1 write path). The system learns it was posted. */}
-        {asset.publishStatus === 'published' ? (
-          <button
-            onClick={async () => { setMarking(true); setMarkErr(false); const ok = await onMarkPublished(false); setMarking(false); if (!ok) setMarkErr(true); }}
-            disabled={marking}
-            data-testid="pollinate-unpublish-btn"
-            className="self-start btn-sm btn-ghost disabled:opacity-50"
-          >
-            <span className="material-symbols-outlined icon-xs">undo</span>
-            {markErr ? t('ui.PollinateOverlay.failedRetry') : t('ui.PollinateOverlay.markUnpublished')}
-          </button>
-        ) : (
-          <div className="flex gap-2 items-center flex-wrap">
-            <input
-              type="url" value={urlInput} onChange={(e) => setUrlInput(e.target.value)}
-              placeholder={t('ui.PollinateOverlay.postedUrl')}
-              data-testid="pollinate-posted-url-input"
-              className="flex-1 min-w-[140px] px-2 py-1 text-meta rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-muted)]"
-            />
-            <button
-              onClick={async () => { setMarking(true); setMarkErr(false); const ok = await onMarkPublished(true, urlInput.trim() || null); setMarking(false); if (ok) setUrlInput(''); else setMarkErr(true); }}
-              disabled={marking}
-              data-testid="pollinate-mark-published-btn"
-              className="btn-sm btn-success transition-colors disabled:opacity-50"
-            >
-              <span className="material-symbols-outlined icon-xs">{markErr ? 'error' : 'check_circle'}</span>
-              {marking ? t('ui.PollinateOverlay.marking') : markErr ? t('ui.PollinateOverlay.failedRetry') : t('ui.PollinateOverlay.markPublished')}
-            </button>
-          </div>
-        )}
         <div className="flex gap-2 flex-wrap">
           <button
             onClick={doCopy}
