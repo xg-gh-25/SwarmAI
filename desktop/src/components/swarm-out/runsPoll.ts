@@ -16,7 +16,9 @@
  *    still in flight;
  *  - a failed poll keeps the last answer (an unreachable daemon is not "nothing") and
  *    says so (``failed``);
- *  - when the last subscriber leaves, the poll stops and its answer is dropped.
+ *  - when the last subscriber leaves, the poll stops; its last answer stays, so a reader
+ *    that comes back (the Swarm Out tab opened again) shows it at once instead of an
+ *    empty header and a list that jumps, while its first subscribe asks again.
  *
  * No i18n and nothing about how a run is worded: a chat message (DispatchCard) and a
  * tab label load this module without the panel's locale-bound modules.
@@ -87,7 +89,6 @@ function sharedPoll<T>(fetch: () => Promise<T>): Store<T> {
           timer = null;
           seq += 1;          // an answer still in flight is for nobody
           inflight = false;
-          state = EMPTY;
         }
       };
     },

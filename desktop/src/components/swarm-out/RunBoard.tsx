@@ -29,9 +29,9 @@
  * The answer comes from Swarm Out's one shared runs poll (live.useRuns), or from the
  * caller (``source``) that already reads it.
  *
- * Motion (index.css "Swarm Out board"): a live dot's ring, the flowing segment at the
- * current station, a card that needs the person breathing, a card or row that arrives
- * after the first load sliding in. Everything a Hive wrote is plain text.
+ * Motion (index.css "Swarm Out board"): a running card's dot breathes slowly (nothing else
+ * loops), a card that needs the person glows a few times, a card or row that arrives
+ * after the first load slides in. Everything a Hive wrote is plain text.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -192,7 +192,7 @@ function Track({ r, kind, at }: { r: SwarmOutRun; kind: ChipKind; at: typeof DIS
               <span aria-hidden className={`absolute top-[5px] left-[14px] right-[2px] h-[2px] rounded-sm ${here ? 'so-flow' : ''}`}
                 style={{ background: passed ? `color-mix(in srgb, ${c} 45%, transparent)` : 'var(--color-border)' }} />
             )}
-            <span aria-hidden className={`absolute top-0 left-0 w-3 h-3 rounded-full ${here ? 'so-node-here' : ''}`}
+            <span aria-hidden className="absolute top-0 left-0 w-3 h-3 rounded-full"
               style={here ? { background: c, boxShadow: `0 0 0 4px color-mix(in srgb, ${c} 20%, transparent)` }
                 : passed ? { background: `color-mix(in srgb, ${c} 55%, transparent)` }
                   : { background: 'var(--color-bg)', boxShadow: 'inset 0 0 0 2px var(--color-border)' }} />
@@ -301,7 +301,7 @@ function RunningCard({ r, asks, fleet, now, fresh, needsYou, follows, onOpen, on
         <div className="mt-3 pt-2.5 border-t border-dashed border-[var(--color-border)] flex gap-2 items-baseline font-mono text-meta min-w-0 text-[var(--color-text-muted)]"
           data-testid="so-now" title={nowLine.object ?? nowLine.text ?? undefined}>
           {nowLine.tool && <b className="font-semibold text-[var(--color-text-secondary)] min-w-[36px]">{nowLine.tool}</b>}
-          <span className="truncate">{nowLine.tool ? nowLine.object ?? '' : nowLine.text}<i className="so-caret" aria-hidden /></span>
+          <span className="truncate">{nowLine.tool ? nowLine.object ?? '' : nowLine.text}</span>
         </div>
       ) : null}
     </div>

@@ -120,7 +120,7 @@ function Stations({ tr }: { tr: Track }) {
               <span aria-hidden className={`absolute top-[5px] left-[14px] right-[2px] h-[2px] rounded-sm ${here && (tr.kind === 'run' || tr.kind === 'judge') ? 'so-flow' : ''}`}
                 style={{ ['--so-c' as string]: c, background: idx >= 0 && i < idx ? `color-mix(in srgb, ${tone} 45%, transparent)` : 'var(--color-border)' }} />
             )}
-            <span aria-hidden className={`absolute top-0 left-0 w-3 h-3 rounded-full ${here ? 'so-node-here' : ''}`}
+            <span aria-hidden className="absolute top-0 left-0 w-3 h-3 rounded-full"
               style={here ? { ['--so-c' as string]: c, background: c, boxShadow: `0 0 0 4px color-mix(in srgb, ${c} 20%, transparent)` }
                 : passed ? { background: `color-mix(in srgb, ${tone} 55%, transparent)` }
                   : { background: 'var(--color-bg)', boxShadow: 'inset 0 0 0 2px var(--color-border)' }} />
@@ -206,7 +206,7 @@ function RunCard({ tr, now, onOpen, onOpenSession, child }: {
         <div className="mt-3 pt-2.5 border-t border-dashed border-[var(--color-border)] flex gap-2 items-baseline font-mono text-meta min-w-0 text-[var(--color-text-muted)]"
           data-testid="pipeline-now" title={live.object ?? live.text ?? undefined}>
           {live.tool && <b className="font-semibold text-[var(--color-text-secondary)] min-w-[36px]">{live.tool}</b>}
-          <span className="truncate">{live.tool ? live.object ?? '' : live.text}<i className="so-caret" aria-hidden /></span>
+          <span className="truncate">{live.tool ? live.object ?? '' : live.text}</span>
         </div>
       ) : null}
     </div>

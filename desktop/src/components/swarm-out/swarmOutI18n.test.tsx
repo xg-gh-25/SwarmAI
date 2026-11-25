@@ -13,6 +13,7 @@
  *    saturated; the ready-Hive number green with room and amber when every Hive is full?
  */
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
+import { _resetSharedPolls } from './runsPoll';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutFleet, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
@@ -128,6 +129,7 @@ const FLEET: SwarmOutFleet = {
 };
 
 beforeEach(() => {
+  _resetSharedPolls();   // the shared poll keeps its last answer between readers
   vi.mocked(swarmOutService.runs).mockResolvedValue(RUNS);
   vi.mocked(swarmOutService.fleet).mockResolvedValue(FLEET);
   vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: 'rich', record: {

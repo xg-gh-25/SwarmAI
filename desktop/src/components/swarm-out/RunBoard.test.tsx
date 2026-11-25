@@ -7,6 +7,7 @@
  * only on Submit; is Hive-written text shown as text (no HTML rendered).
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { _resetSharedPolls } from './runsPoll';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RunBoard as LiveDispatches } from './RunBoard';
 import { swarmOutService } from '../../services/swarmOut';
@@ -37,6 +38,7 @@ const question = {
 };
 
 beforeEach(() => {
+  _resetSharedPolls();   // the shared poll keeps its last answer between readers
   runs.mockReset();
   answer.mockClear();
 });

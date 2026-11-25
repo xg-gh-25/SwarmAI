@@ -13,6 +13,7 @@
 // Local-day bucketing is only tested if local time is not UTC.
 process.env.TZ = 'Asia/Shanghai';
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { _resetSharedPolls } from './runsPoll';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
@@ -67,6 +68,7 @@ const RUNS: SwarmOutRuns = {
 };
 
 beforeEach(() => {
+  _resetSharedPolls();   // the shared poll keeps its last answer between readers
   vi.mocked(swarmOutService.runs).mockResolvedValue(RUNS);
   vi.mocked(swarmOutService.fleet).mockResolvedValue(FLEET);
   mockAccount.mockReset();

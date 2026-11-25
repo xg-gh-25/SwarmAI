@@ -1989,14 +1989,16 @@ body {
 @keyframes pipeline-line-flow { from { background-position: 0 0; } to { background-position: 14px 0; } }
 @media (prefers-reduced-motion: reduce) { .pipeline-line-flow { animation: none; } }
 
-/* Swarm Out board (components/swarm-out/RunBoard, HistoryView, SwarmOutSettings; design
-   Knowledge/Mockups/2026-11-23-swarm-out-dashboard-redesign-v6.html). Motion only says
-   what changed: a live dot's ring, the flowing segment at a run's current station, the
-   ring on that station, a task that needs the person breathing, a new card or row
-   arriving, a number that changed. Only a card that opens something (so-card--click)
-   lifts on hover. Every one stops under reduced motion. */
-@keyframes so-ring { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(3); opacity: 0; } }
-@keyframes so-flow { 0% { background-position: -60% 0; } 100% { background-position: 160% 0; } }
+/* Swarm Out board (components/swarm-out/RunBoard, HistoryView, SwarmOutSettings; the
+   Pipeline, Needs You and C&M cards reuse these classes). Motion only says what changed:
+   a new card or row arriving, a number that changed, a task that needs the person (a few
+   breaths, then a still amber edge). Something in progress has one quiet sign: its dot
+   breathes slowly; nothing else loops (a dashboard open all day must stay calm, and a
+   ring, a flowing bar and a blinking caret on every running card read as constant
+   refreshing). The current station is marked by its colour and halo, the segment after it
+   by a still partial fill. Only a card that opens something (so-card--click) lifts on
+   hover. Every one stops under reduced motion. */
+@keyframes so-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 @keyframes so-glow {
   0%, 100% { box-shadow: 0 1px 2px rgb(15 23 42 / .06), 0 0 0 0 transparent; }
   50% { box-shadow: 0 1px 2px rgb(15 23 42 / .06), 0 0 0 4px color-mix(in srgb, var(--color-status-warning) 16%, transparent); }
@@ -2010,26 +2012,22 @@ body {
 @keyframes so-pop { 0% { transform: scale(.6); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
 @keyframes so-bump { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
 @keyframes so-view-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@keyframes so-blink { 50% { opacity: 0; } }
-.so-live { position: relative; }
-.so-live::after { content: ""; position: absolute; inset: 0; border-radius: 9999px; background: inherit; animation: so-ring 1.8s ease-out infinite; }
+.so-live { animation: so-breathe 2.8s ease-in-out infinite; }
 .so-card { transition: box-shadow .18s ease, transform .18s ease, border-color .3s ease; box-shadow: 0 1px 2px rgb(15 23 42 / .06), 0 2px 8px rgb(15 23 42 / .04); }
 .so-card--click:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgb(15 23 42 / .10); }
 :root.dark .so-card { box-shadow: 0 1px 2px rgb(0 0 0 / .3); }
 :root.dark .so-card--click:hover { box-shadow: 0 6px 20px rgb(0 0 0 / .45); }
-.so-card--you { animation: so-glow 2.6s ease-in-out infinite; }
+.so-card--you { animation: so-glow 2.6s ease-in-out 3; }
 .so-card--you::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--color-status-warning); }
 .so-card .so-hover { opacity: 0; transition: opacity .15s ease; }
 .so-card:hover .so-hover, .so-card:focus-within .so-hover { opacity: 1; }
 .so-flow { position: relative; overflow: hidden; }
-.so-flow::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0, var(--so-c) 50%, transparent 100%); background-size: 50% 100%; background-repeat: no-repeat; animation: so-flow 1.6s linear infinite; }
-.so-node-here::after { content: ""; position: absolute; inset: 0; border-radius: 9999px; background: var(--so-c); animation: so-ring 1.8s ease-out infinite; }
+.so-flow::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, var(--so-c) 0 40%, transparent 40%); opacity: .7; }
 .so-enter { animation: so-enter .32s cubic-bezier(.2, .8, .2, 1) both; }
 .so-fresh { animation: so-fresh 1.6s ease; }
 .so-pop { animation: so-pop .35s cubic-bezier(.3, 1.6, .5, 1); }
 .so-bump { animation: so-bump .3s cubic-bezier(.3, 1.6, .5, 1); }
 .so-view-in { animation: so-view-in .22s ease; }
-.so-caret { display: inline-block; width: 6px; height: 11px; margin-left: 2px; vertical-align: -1px; background: var(--color-text-muted); animation: so-blink 1s steps(1) infinite; }
 .so-grow { transform-origin: bottom; transition: transform .5s cubic-bezier(.2, .8, .2, 1); }
 .so-width { transition: width .5s cubic-bezier(.2, .8, .2, 1); }
 .so-expand { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .26s ease; }
@@ -2041,8 +2039,8 @@ body {
 .so-switch[aria-checked="true"]::after { transform: translateX(16px); }
 .so-switch:disabled { opacity: .5; }
 @media (prefers-reduced-motion: reduce) {
-  .so-live::after, .so-flow::after, .so-node-here::after, .so-card--you, .so-enter, .so-fresh, .so-pop, .so-bump,
-  .so-view-in, .so-caret { animation: none; }
+  .so-live, .so-card--you, .so-enter, .so-fresh, .so-pop, .so-bump,
+  .so-view-in { animation: none; }
   .so-card, .so-card--click:hover, .so-grow, .so-width, .so-expand, .so-switch, .so-switch::after, .so-card .so-hover { transition: none; transform: none; }
 }
 

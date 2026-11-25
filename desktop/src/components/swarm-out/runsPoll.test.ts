@@ -4,7 +4,7 @@
  * Questions: do two readers mounted together make one request, and one more per
  * interval; does a reader arriving later ask again only when the answer is old; does a
  * failed poll keep the last answer and say so; does reload's answer win over an older
- * one still in flight; is the answer dropped when the last reader leaves; does
+ * one still in flight; does the poll stop when the last reader leaves, its answer kept for the next one; does
  * sessionScope keep exactly the session's runs and their asks.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -84,15 +84,20 @@ describe('the shared runs poll', () => {
     expect(h.result.current.data?.runs[0].title).toBe('new');
   });
 
-  it('drops the answer and stops when the last reader leaves', async () => {
+  it('stops when the last reader leaves and keeps its answer for the next', async () => {
     runs.mockResolvedValue(answer('a'));
     const h = renderHook(() => useSharedRuns());
     await flush();
     h.unmount();
     await act(async () => { vi.advanceTimersByTime(POLL_MS * 3); });
     expect(runs).toHaveBeenCalledTimes(1);
-    const again = renderHook(() => useSharedRuns(false));
-    expect(again.result.current.data).toBeNull();
+    // a reader coming back sees the last answer at once, and asks again
+    runs.mockResolvedValue(answer('b'));
+    const again = renderHook(() => useSharedRuns());
+    expect(again.result.current.data?.runs[0].title).toBe('a');
+    expect(runs).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(again.result.current.data?.runs[0].title).toBe('b');
   });
 });
 
