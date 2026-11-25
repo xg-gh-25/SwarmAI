@@ -57,6 +57,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -189,9 +190,15 @@ def http_get(url: str) -> bytes:
     return data
 
 
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
+
+
 def font_cache_dir() -> Path:
     env = os.environ.get("POLLINATE_FONT_CACHE")
-    return Path(env) if env else Path.home() / ".swarm-ai" / "cache" / "fonts"
+    return Path(env) if env else _app_data_dir() / "cache" / "fonts"
 
 
 def _cache_key(url: str) -> str:
@@ -569,6 +576,14 @@ BUILTIN_PROBE_JS = r"""
 }
 """
 
+# deck.html opened with JavaScript off (a shared file in a mail or chat preview): a deck
+# runtime's entrance effects keep content at opacity 0 until a script marks the slide
+# active (the shipped <deck-stage> designs key ``.reveal`` on ``data-deck-active``), so the
+# slide shows empty. Only without JavaScript, everything a slide holds is made visible;
+# with JavaScript on this changes nothing, so the presented deck keeps its effects.
+_NOSCRIPT_CSS = ("<noscript><style>section, section *"
+                 "{opacity:1!important;visibility:visible!important}</style></noscript>")
+
 _MARK_SLIDES_JS = r"""
 () => {
   const all = Array.from(document.querySelectorAll('section')).filter(
@@ -637,7 +652,22 @@ def _print_css(w: int, h: int) -> str:
 
 _CAPTURE_CSS = (
     "body[data-pollinate-capture] section:not(section section):not([data-pollinate-current])"
-    "{display:none!important}")
+    "{display:none!important}"
+    # A deck runtime may hide inactive slides with visibility/opacity instead of display
+    # (the shipped <deck-stage> does: visibility:hidden + opacity:0). The slide being
+    # captured is shown whatever its runtime thinks the active slide is.
+    "body[data-pollinate-capture] [data-pollinate-current]"
+    "{visibility:visible!important;opacity:1!important}")
+
+# Mark the slide being captured. Besides our own attribute it gets ``data-deck-active``, the
+# active-slide attribute of the shipped <deck-stage> runtime, which design-system CSS keys
+# entrance effects on (``section[data-deck-active] .reveal``); and every <deck-stage> gets
+# ``noscale``, its documented switch to render at the authored size for capture.
+_MARK_CURRENT_JS = (
+    "(i) => { document.querySelectorAll('deck-stage').forEach(d => d.setAttribute('noscale', ''));"
+    " document.querySelectorAll('[data-pollinate-index]').forEach(s => {"
+    " const on = s.getAttribute('data-pollinate-index') === String(i);"
+    " s.toggleAttribute('data-pollinate-current', on); s.toggleAttribute('data-deck-active', on); }); }")
 
 
 def _insert_head(text: str, snippet: str) -> str:
@@ -950,7 +980,7 @@ def render(src_root: Path, source_rel: str, kind: str, size: dict, out_dir: Path
 
     text = Inliner(src_root, findings).html(read_text(source), source.parent)
     if kind == "deck":
-        text = _insert_head(text, _print_css(w, h))
+        text = _insert_head(text, _print_css(w, h) + _NOSCRIPT_CSS)
         doc = out_dir / "deck.html"
     elif kind == "page":
         doc = out_dir / "page.html"
@@ -1033,10 +1063,7 @@ def _capture_deck(page, w, h, out_dir, doc, formats, findings, outputs, measures
     shas = {}
     page.evaluate("() => document.body.setAttribute('data-pollinate-capture', '')")
     for i, sid in enumerate(ids):
-        page.evaluate(
-            "(i) => document.querySelectorAll('[data-pollinate-index]').forEach("
-            "s => s.toggleAttribute('data-pollinate-current', s.getAttribute('data-pollinate-index') === String(i)))",
-            i)
+        page.evaluate(_MARK_CURRENT_JS, i)
         page.evaluate(_SETTLE_JS)
         sel = f'[data-pollinate-index="{i}"]'
         box = page.bounding_box(sel)
@@ -1067,6 +1094,26 @@ def _capture_deck(page, w, h, out_dir, doc, formats, findings, outputs, measures
         outputs["html"] = sha256_file(doc)
 
 
+_BLANK_LOOKS = 4          # screenshots of a slide before it counts as blank
+_BLANK_PAUSE_S = 0.5      # between them: a frame scrolled into view paints a moment later
+
+
+def _stays_blank(page, sel: str, i: int) -> bool:
+    """True when the slide is blank in every look.
+
+    The first screenshot after scrolling a slide into view can be taken before an embedded
+    frame on it (a ``data:`` iframe, say) has painted: measured on a real deck, a slide was
+    blank in the first look and complete one second later. A slide that is really blank
+    stays blank in every look.
+    """
+    for look in range(_BLANK_LOOKS):
+        if look:
+            time.sleep(_BLANK_PAUSE_S)
+        if not _is_blank(page.screenshot(sel, i)):
+            return False
+    return True
+
+
 def _check_js_off(browser, w, h, doc, doc_url, findings):
     """Open deck.html with JavaScript disabled; every slide must show something."""
     page = browser.open(w, h, doc_url, {doc_url}, js=False)
@@ -1075,8 +1122,7 @@ def _check_js_off(browser, w, h, doc, doc_url, findings):
         for i in range(page.count(sel)):
             sid = page.get_attribute(sel, i, "data-slide-id") or f"page {i + 1}"
             box = page.bounding_box(sel, i)
-            if (not box or box["width"] < 1 or box["height"] < 1
-                    or _is_blank(page.screenshot(sel, i))):
+            if not box or box["width"] < 1 or box["height"] < 1 or _stays_blank(page, sel, i):
                 findings.append(_finding(
                     "js_off_blank", "fail",
                     "this slide is blank in deck.html when JavaScript is off; "

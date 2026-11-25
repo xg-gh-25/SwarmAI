@@ -3,7 +3,7 @@
 
 A work is any folder with a ``work.json`` (design section 13.1). It is
 registered in place in ``<workspace>/.pollinate/works.json`` (workspace =
-``$SWARM_WORKSPACE`` or ``~/.swarm-ai/SwarmWS``). A deck's source is one HTML
+the SwarmWS root, as backend config resolves it). A deck's source is one HTML
 file; each slide is a top-level ``<section data-slide-id="s-xxxx">``. A poster
 or page is one HTML file (the whole page has id ``main``); copy is a Markdown
 file.
@@ -425,9 +425,19 @@ def ensure_gitignore(wdir: Path) -> None:
 
 # ── registry ───────────────────────────────────────────────────────────────
 
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
+
+
 def workspace_dir() -> Path:
-    env = os.environ.get("SWARM_WORKSPACE")
-    return Path(env).expanduser() if env else Path.home() / ".swarm-ai" / "SwarmWS"
+    return _swarmws()
 
 
 def registry_path() -> Path:
@@ -846,6 +856,85 @@ def _base_raws(wdir: Path, base) -> dict:
         return {}
 
 
+NEVER_CARRIED = {"craft"}    # the checks could not judge the slide: not something it already had
+
+
+def _fail_counts(findings: list) -> dict:
+    """(slide, check) -> how many fail-level findings (carried ones count as fails)."""
+    counts: dict = {}
+    for f in findings or []:
+        if f.get("slide") and (f.get("level") == "fail" or f.get("carried")):
+            key = (f["slide"], f.get("check"))
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _base_counts(wdir: Path, base):
+    """The base version's fail counts from its checks.json; None when it has none (a
+    version the person made: the adopted one, or one that absorbed their hand edits)."""
+    try:
+        found = json.loads((Path(wdir) / ".versions" / base["id"] / "checks.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return _fail_counts(found.get("findings"))
+
+
+def _same_slides(base, state: dict) -> set:
+    """Slides whose hash equals the base version's, when no shared file changed."""
+    old = base.get("hashes", {})
+    if old.get(SHARED) != state["hashes"].get(SHARED):
+        return set()
+    return {sid for sid in state["slides"] if sid in old and old[sid] == state["hashes"].get(sid)}
+
+
+def _needs_base_counts(findings: list, base, state: dict) -> bool:
+    same = _same_slides(base, state)
+    return any(f.get("level") == "fail" and f.get("slide") and f["slide"] not in same
+               and f.get("check") not in NEVER_CARRIED for f in findings)
+
+
+def _carry_over_unchanged(findings: list, base, state: dict, before: dict) -> None:
+    """A finding the base version already had is kept as a warning, not a new failure.
+
+    A version fails only for what it made worse. The person's own deck (an adopted v10,
+    say) has issues they accepted; revising slide 3 must not fail because slide 20 always
+    had 14px labels, nor because slide 3 itself already had a small eyebrow before the
+    edit. Two cases carry a fail over:
+    - the slide is unchanged: its hash equals the base version's and no shared file (CSS,
+      the deck frame, assets) changed;
+    - the slide changed but did not get worse: ``before`` (the base version's fail counts)
+      has at least as many findings of the same check on that slide (counted, because a
+      finding has no id that survives an edit of its text).
+    A check that gained findings on a slide keeps all of them as failures. With no base
+    (the first cut after init) every slide is new. Deck-level findings (no slide id) and
+    checks that could not judge a slide keep their level.
+    """
+    if not base:
+        return
+    same = _same_slides(base, state)
+    now = _fail_counts([f for f in findings if f.get("level") == "fail"])
+    for f in findings:
+        if f.get("level") != "fail" or not f.get("slide") or f.get("check") in NEVER_CARRIED:
+            continue
+        key = (f["slide"], f.get("check"))
+        if f["slide"] in same:
+            note = "(unchanged slide, already so before this version)"
+        elif now[key] <= before.get(key, 0):
+            note = "(already so before this version)"
+        else:
+            continue
+        f["level"] = "warn"
+        f["carried"] = True
+        f["msg"] = f"{note} {f.get('msg', '')}"
+
+
+def _python_argv() -> list[str]:
+    """How to run another Python script: the packaged SwarmAI program runs scripts through
+    its ``py`` command (``sys.executable`` is the program itself, not a Python); a plain
+    interpreter runs them directly."""
+    return [sys.executable, "py"] if getattr(sys, "frozen", False) else [sys.executable]
+
+
 def _export_pptx(meta: dict, slides_dir: Path, dest: Path, findings: list, outputs: dict) -> None:
     script = Path(__file__).resolve().parent / "export_pptx.py"
     if not script.is_file():
@@ -853,7 +942,7 @@ def _export_pptx(meta: dict, slides_dir: Path, dest: Path, findings: list, outpu
                          "msg": "export_pptx.py is not installed; deck.pptx was not made", "where": ""})
         return
     size = meta["size"]
-    cmd = [sys.executable, str(script), "--slides", str(slides_dir), "--out", str(dest),
+    cmd = [*_python_argv(), str(script), "--slides", str(slides_dir), "--out", str(dest),
            "--size", f"{size['w']}x{size['h']}"]
     opts = meta.get("pptx") or {}
     if opts.get("template"):
@@ -889,6 +978,41 @@ def _replace_dir(dest: Path, src: Path) -> None:
         os.replace(item, target)
 
 
+def _judge(res: dict, meta: dict, craft, reference) -> list:
+    """The render's own findings plus the craft checks on every measured slide."""
+    findings = list(res["findings"])
+    for m in res["measure"]:
+        if craft:
+            try:
+                found = craft.evaluate(m, meta["size"], meta.get("craft"), reference)
+            except ValueError as exc:
+                found = [{"slide": m.get("slide", "") if isinstance(m, dict) else "", "check": "craft",
+                          "level": "fail", "msg": f"craft_checks could not judge this slide: {exc}",
+                          "where": ""}]
+        else:
+            found = work_render.builtin_evaluate(m, meta["size"])
+        findings.extend(found or [])
+    return findings
+
+
+def _judge_base(wdir: Path, base: dict, meta: dict, craft, reference, formats: list, out: Path) -> dict:
+    """Fail counts of a base version that has no checks.json, by rendering its snapshot.
+
+    Only a version the person made lacks checks (the adopted one, or one that absorbed
+    their hand edits); the first edit of a slide on it is judged against what that slide
+    already had. A base that cannot be rendered counts as clean, so nothing is carried.
+    """
+    src = Path(wdir) / ".versions" / base["id"] / "src"
+    try:
+        res = work_render.render(src, base.get("source", ""), meta["kind"], meta["size"], out, None,
+                                 ["png"] + (["html"] if "html" in formats else []),
+                                 probe_js=craft.PROBE_JS if craft else None,
+                                 extra_sizes=None)
+    except work_render.RenderError:
+        return {}
+    return _fail_counts(_judge(res, meta, craft, reference))
+
+
 def cmd_cut(args) -> int:
     wdir = work_dir_of(args.dir)
     meta = load_meta(wdir)
@@ -916,18 +1040,12 @@ def cmd_cut(args) -> int:
         except work_render.RenderEnvError:
             shutil.rmtree(stage, ignore_errors=True)
             raise
-        findings = list(res["findings"])
-        for m in res["measure"]:
-            if craft:
-                try:
-                    found = craft.evaluate(m, meta["size"], meta.get("craft"), reference)
-                except ValueError as exc:
-                    found = [{"slide": m.get("slide", "") if isinstance(m, dict) else "", "check": "craft",
-                              "level": "fail", "msg": f"craft_checks could not judge this slide: {exc}",
-                              "where": ""}]
-            else:
-                found = work_render.builtin_evaluate(m, meta["size"])
-            findings.extend(found or [])
+        findings = _judge(res, meta, craft, reference)
+        if base:
+            before = _base_counts(wdir, base)
+            if before is None and _needs_base_counts(findings, base, state):
+                before = _judge_base(wdir, base, meta, craft, reference, formats, tmp / "base")
+            _carry_over_unchanged(findings, base, state, before or {})
         outputs = res["outputs"]
         if meta["kind"] == "deck" and "pptx" in formats:
             _export_pptx(meta, tmp / "out" / "slides", tmp / "out" / "deck.pptx", findings, outputs)

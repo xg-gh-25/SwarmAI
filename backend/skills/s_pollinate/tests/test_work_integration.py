@@ -2,7 +2,9 @@
 
 The mechanism tests pin the built-in probe (test_work_common.env); these tests use the
 real modules, so they prove the hooks of design 13.3 and 13.5 are joined:
-- a slide the real fill check calls too empty fails the cut, and current does not move;
+- a slide the revision adds that the real fill check calls too empty fails the cut, and
+  current does not move (a slide the person's adopted deck already had is carried as a
+  warning, see test_work_smoke_fixes);
 - the same slide marked data-layout="cover" passes the fill check;
 - a craft check that cannot read a measure becomes a failed check, not a crash;
 - cut --formats pptx makes out/deck.pptx with one slide per page;
@@ -63,8 +65,13 @@ def real_craft(env, monkeypatch):
 
 def test_real_fill_check_fails_an_empty_slide_and_keeps_current(real_craft, capsys):
     need_browser()
-    d = _deck(real_craft["tmp"] / "w", [FULL.format(attr="", title="Full"), EMPTY.format(attr="", title="Empty")])
-    code, out = _adopt_and_cut(d, capsys, "--formats", "html,png")
+    d = _deck(real_craft["tmp"] / "w", [FULL.format(attr="", title="Full")])
+    code, out = run(["adopt", "--dir", str(d), "--kind", "deck", "--size", "1920x1080"], capsys)
+    assert code == 0, out
+    run(["open", "--dir", str(d), "--scope", "", "--add", "1"], capsys)
+    p = d / "src" / "deck.html"     # the revision adds an empty slide
+    p.write_text(p.read_text().replace("</body>", EMPTY.format(attr="", title="Empty") + "</body>"))
+    code, out = run(["cut", "--dir", str(d), "--formats", "html,png"], capsys)
     assert code == 1
     assert "fill" in {f["check"] for f in out["failed_checks"]}
     assert meta(d)["current"] == "v001"        # the adopted version, not the failed cut

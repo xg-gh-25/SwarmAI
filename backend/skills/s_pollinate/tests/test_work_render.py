@@ -152,10 +152,12 @@ def test_builtin_probe_reports_overflow(env, capsys, monkeypatch):
     (d / "src").mkdir(parents=True)
     (d / "src" / "deck.html").write_text(
         '<html><head><style>section{width:320px;height:180px;position:relative}'
-        'p{position:absolute;left:300px;top:10px;white-space:nowrap;margin:0}</style></head><body>'
-        '<section><p>This line runs off the right edge</p></section></body></html>')
+        'p{position:absolute;left:10px;top:10px;white-space:nowrap;margin:0}</style></head><body>'
+        '<section><p>Fits</p></section></body></html>')
     run(["adopt", "--dir", str(d), "--kind", "deck", "--size", "320x180"], capsys)
-    run(["open", "--dir", str(d), "--scope", ""], capsys)
+    run(["open", "--dir", str(d), "--scope", meta(d)["slides"][0]], capsys)
+    p = d / "src" / "deck.html"     # the edit adds the defect: the adopted slide fit
+    p.write_text(p.read_text().replace("left:10px", "left:300px").replace("Fits", "This line runs off the right edge"))
     code, out = run(["cut", "--dir", str(d), "--formats", "png"], capsys)
     assert json.loads((d / ".versions" / "v002" / "checks.json").read_text())["probe"] == "builtin"
     assert code == 1
@@ -192,17 +194,23 @@ def test_cli_reports_runtime_unavailable(monkeypatch, tmp_path, capsys):
 
 
 def test_slides_hidden_until_script_fail_js_off_check(env, capsys):
-    """A deck that shows its slides only after a script runs is blank with JavaScript off."""
+    """A deck that shows its slides only after a script runs is blank with JavaScript off.
+
+    deck.html carries a noscript rule that undoes visibility and opacity hiding, so the case
+    that stays blank is content removed from layout (display:none) until a script runs.
+    """
     need_browser()
     d = env["tmp"] / "jsdeck"
     (d / "src").mkdir(parents=True)
     (d / "src" / "deck.html").write_text(
         '<html><head><style>section{width:320px;height:180px;background:#fff}'
-        'section h2{visibility:hidden}.ready section h2{visibility:visible}</style></head>'
-        '<body><section><h2>Hidden</h2></section>'
-        '<script>document.body.classList.add("ready")</script></body></html>')
+        '</style></head><body><section><h2>Shown</h2></section></body></html>')
     run(["adopt", "--dir", str(d), "--kind", "deck", "--size", "320x180"], capsys)
-    run(["open", "--dir", str(d), "--scope", ""], capsys)
+    run(["open", "--dir", str(d), "--scope", meta(d)["slides"][0], "--shared"], capsys)
+    p = d / "src" / "deck.html"     # the revision hides the slide until a script runs
+    p.write_text(p.read_text()
+                 .replace("</style>", "section h2{display:none}.ready section h2{display:block}</style>")
+                 .replace("</body>", '<script>document.body.classList.add("ready")</script></body>'))
     code, out = run(["cut", "--dir", str(d), "--formats", "html,png"], capsys)
     assert code == 1
     assert [f["check"] for f in out["failed_checks"]] == ["js_off_blank"]
@@ -227,3 +235,22 @@ def test_script_cannot_load_local_files(env, capsys, tmp_path):
     assert [f["where"] for f in out["failed_checks"] if f["check"] == "blocked_request"] == [secret.as_uri()]
     png = next((d / "review").glob("failed-*/slides/*.png"))
     assert Image.open(png).convert("RGB").getpixel((160, 90)) != (255, 0, 0)
+
+
+def test_slides_hidden_by_visibility_until_script_show_with_javascript_off(env, capsys):
+    """visibility/opacity hiding until a script runs is undone by deck.html's noscript rule."""
+    need_browser()
+    d = env["tmp"] / "visdeck"
+    (d / "src").mkdir(parents=True)
+    (d / "src" / "deck.html").write_text(
+        '<html><head><style>section{width:320px;height:180px;background:#fff;font-size:40px}'
+        '</style></head><body><section><h2>Shown</h2></section></body></html>')
+    run(["adopt", "--dir", str(d), "--kind", "deck", "--size", "320x180"], capsys)
+    run(["open", "--dir", str(d), "--scope", meta(d)["slides"][0], "--shared"], capsys)
+    p = d / "src" / "deck.html"     # the revision hides the heading until a script runs
+    p.write_text(p.read_text()
+                 .replace("</style>", "section h2{visibility:hidden;opacity:0}"
+                          ".ready section h2{visibility:visible;opacity:1}</style>")
+                 .replace("</body>", '<script>document.body.classList.add("ready")</script></body>'))
+    code, out = run(["cut", "--dir", str(d), "--formats", "html,png"], capsys)
+    assert code == 0, out
