@@ -6,6 +6,13 @@ Design: ``docs/design/2026-11-20-inbox.md`` §4. Two backends, picked by ``Sourc
   its server family. The ``aws-outlook-mcp`` mapping ships here (``OutlookMcpSource``):
   ``email_folders`` lists the inbox since the cursor's day, ``email_read`` fetches whole
   conversations, and every conversation is **split into one message per message id**.
+  The server reports an Outlook failure inside a normal answer (``success: false``):
+  ``_call`` raises it with the server's text (an expired login is ``SourceAuthError``,
+  anything else ``ServerError``). In a pull, one conversation that cannot be read is
+  skipped: after a passing failure the cursor is held so the next pull reads it again; a
+  deleted one (``ServerError.gone``) or one in an unknown shape is skipped for good. A
+  failed ``email_reply`` is ``SendFailed`` only when it proves nothing went out (a refused
+  login, a missing message); otherwise its outcome is unknown.
   ``email_reply`` answers one message (never reply-all, never extra recipients).
   ``can_send`` is true only when the server's ``tools/list`` offers ``email_reply`` *and*
   its environment sets ``OUTLOOK_MCP_ENABLE_WRITES`` to a true value (the switch that
@@ -297,6 +304,46 @@ def split_conversations(data: Any, conversation: str = "") -> list[MailRecord]:
     return out
 
 
+# Server error codes that say the item is not there (deleted, or an id that never was):
+# asking again gives the same answer, so nothing waits for them.
+_GONE_CODES = frozenset({"ErrorItemNotFound", "ErrorInvalidIdMalformed", "ErrorInvalidIdEmpty",
+                         "ErrorInvalidIdNotAnItemAttachmentId", "ErrorInvalidIdXml"})
+
+
+class ServerError(SourceUnavailable):
+    """The server answered ``success: false``. ``gone``: the item is not there, and asking
+    again gives the same answer."""
+
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.gone = code in _GONE_CODES
+
+
+def server_error(data: Any) -> Optional[tuple[str, str]]:
+    """``(text, code)`` of the server's own failure when an answer says ``success: false``
+    (the aws-outlook-mcp shape: ``{"success": false, "error": {"message": ..., "code": ...}}``),
+    else None."""
+    if not isinstance(data, dict) or data.get("success") is not False:
+        return None
+    err = data.get("error")
+    if isinstance(err, dict):
+        code = str(err.get("code") or "")
+        text = str(err.get("message") or code)
+    else:
+        code, text = "", str(err or "")
+    return (text or "the server reported a failure")[:500], code[:80]
+
+
+def empty_conversation(data: Any) -> bool:
+    """A successful answer that holds no message (a conversation whose mail is gone)."""
+    if not isinstance(data, dict) or data.get("success") is not True:
+        return False
+    content = data.get("content")
+    emails = content.get("emails") if isinstance(content, dict) else None
+    return isinstance(emails, list) and not emails
+
+
 def conversation_ids(data: Any) -> list[str]:
     """Conversation ids in a listing, in order, each once."""
     seen: list[str] = []
@@ -346,7 +393,12 @@ class _MailSource:
 
     async def whoami(self) -> Identity:
         if self._me is None:
-            addresses = [a for a in await self._own_addresses() if a]
+            try:
+                addresses = [a for a in await self._own_addresses() if a]
+            except SourceUnavailable:
+                if not self._extra_addresses:
+                    raise
+                addresses = []    # the configured addresses still say who the person is
             primary = addresses[0] if addresses else (self._extra_addresses[0] if self._extra_addresses else "")
             ids = frozenset(a.lower() for a in addresses + self._extra_addresses)
             if not ids:
@@ -543,6 +595,12 @@ class OutlookMcpSource(_MailSource):
             detail = f"{exc}\n{getattr(client, 'stderr_tail', '')}"
             raise self._auth_error(detail) or SourceUnavailable(f"{tool}: {exc}") from exc
         data = parse_tool_result(result)
+        error = server_error(data if data is not None else result)
+        if error is not None:
+            # the server reports an Outlook failure inside a normal answer: its text is
+            # the cause (an expired login, a busy server, a deleted item), never an empty mailbox
+            text, code = error
+            raise self._auth_error(text) or ServerError(f"{tool}: {text}", code)
         if isinstance(data, str):
             raise SourceUnavailable(f"{tool}: the answer is not in a shape the {self.FAMILY} mapping reads")
         return data
@@ -562,7 +620,10 @@ class OutlookMcpSource(_MailSource):
             per_conv.append({r.from_addr.lower() for r in records if r.from_addr})
         else:
             for cid in conversation_ids(listing)[:3]:
-                read = split_conversations(await self._call("email_read", {"conversationId": cid}), cid)
+                try:   # one unreadable sent conversation leaves the other two to decide
+                    read = split_conversations(await self._call("email_read", {"conversationId": cid}), cid)
+                except SourceUnavailable:
+                    continue
                 senders = {r.from_addr.lower() for r in read if r.from_addr}
                 if senders:
                     per_conv.append(senders)
@@ -615,11 +676,45 @@ class OutlookMcpSource(_MailSource):
             # One conversation per read: the messages in an email_read answer carry no
             # conversationId of their own, so a read of several could not tell which
             # message belongs to which thread (and a reply needs its thread).
+            # One conversation that cannot be read does not fail the pull; the others land.
+            # - a passing server failure (busy, throttled, a network error): skipped, and the
+            #   cursor is held so the next pull reads it again;
+            # - a conversation that is gone, or an answer in a shape this mapping does not
+            #   read: the same every time, so it is skipped without holding the cursor
+            #   (holding would hold it forever);
+            # the pull fails when the failures say the source itself is down: every
+            # conversation it tried to read failed and none was read, or every one answered
+            # in an unknown shape (the mapping no longer fits the server).
+            from channels.egress_redactor import redact_text
+            retry: list[str] = []
+            gone = unknown_shape = 0
             for cid in ids:
-                found = split_conversations(await self._call("email_read", {"conversationId": cid, "format": "text"}), cid)
-                if not found:
-                    raise SourceUnavailable("email_read answered in a shape this mapping does not read")
+                try:
+                    answer = await self._call("email_read", {"conversationId": cid, "format": "text"})
+                except ServerError as exc:
+                    if exc.gone:
+                        gone += 1
+                    else:
+                        retry.append(str(exc))
+                    continue
+                except SourceUnavailable as exc:
+                    retry.append(str(exc))
+                    continue
+                found = split_conversations(answer, cid)
+                if not found and not empty_conversation(answer):
+                    unknown_shape += 1
                 records.extend(found)
+            if unknown_shape:
+                logger.warning("mail source %s: %d conversations answered in a shape this mapping does not read; skipped",
+                               self.config.id, unknown_shape)
+            if retry:
+                complete = False
+                logger.warning("mail source %s: %d of %d conversations not read this pull, read again next pull (%s)",
+                               self.config.id, len(retry), len(ids), redact_text(retry[-1])[:200])
+            if retry and not records and len(retry) + gone + unknown_shape == len(ids):
+                raise SourceUnavailable(retry[-1])
+            if ids and unknown_shape == len(ids):
+                raise SourceUnavailable("email_read answered in a shape this mapping does not read")
             if not ids:
                 records.extend(split_conversations(listing))
         except BudgetExhausted:
@@ -634,7 +729,13 @@ class OutlookMcpSource(_MailSource):
         cid = str(ref.data.get("conversation_id") or "")
         if not cid:
             return []
-        return split_conversations(await self._call("email_read", {"conversationId": cid, "format": "text"}), cid)
+        try:
+            answer = await self._call("email_read", {"conversationId": cid, "format": "text"})
+        except ServerError as exc:
+            if exc.gone:
+                return []          # the thread is gone: nothing to reply to, not an outage
+            raise
+        return split_conversations(answer, cid)
 
     async def _sent_candidates(self, ref: ThreadRef, after: datetime, text: str) -> list[MailRecord]:
         records = await self._thread_records(ref)
@@ -679,6 +780,17 @@ class OutlookMcpSource(_MailSource):
                 auth = self._auth_error(str(exc))
                 raise SendFailed(str(exc), fix=auth.fix if auth else "") from exc
         data = parse_tool_result(result)
+        error = server_error(data if data is not None else result)
+        if error is not None:
+            # The server said the reply failed: never recorded as sent. Only a refused login
+            # or a missing message proves nothing went out (failed, may be sent again); any
+            # other failure may have come after the mail left, so it is unknown and the next
+            # pull's find_sent settles it.
+            text, code = error
+            auth = self._auth_error(text)
+            if auth is not None or code in _GONE_CODES:
+                raise SendFailed(f"email_reply: {text}", fix=auth.fix if auth else "")
+            raise ServerError(f"email_reply: {text}", code)
         msg_id = ""
         if isinstance(data, dict):
             msg_id = str(_get(data, "internetMessageId", "messageId", "itemId", "id") or "")

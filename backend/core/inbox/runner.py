@@ -331,7 +331,7 @@ async def pull_source(row: dict, at: Optional[datetime] = None) -> str:
                                      fix=str(exc.fix or "")[:300], last_error=_err(exc))
         return SourceHealth.AUTH_FAILED.value
     except Exception as exc:  # noqa: BLE001 — retried at the next interval
-        logger.warning("inbox: pull of source %s failed: %s", sid, type(exc).__name__)
+        logger.warning("inbox: pull of source %s failed: %s", sid, _err(exc))
         await db.inbox_update_source(sid, store.ts(store.now()), health=SourceHealth.ERROR.value,
                                      fix="", last_error=_err(exc))
         return SourceHealth.ERROR.value

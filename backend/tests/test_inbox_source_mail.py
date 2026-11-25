@@ -13,7 +13,7 @@ import pytest
 
 from core.inbox.models import ReplyTarget, Thread, ThreadRef
 from core.inbox.sources.base import SendFailed, SourceAuthError, SourceConfig
-from core.inbox.sources.common import ReadToolRefused
+from core.inbox.sources.common import ReadToolRefused, SourceUnavailable
 from core.inbox.sources.mail import ImapSmtpSource, OutlookMcpSource, create, split_conversations
 from tests.inbox_source_fakes import FakeImap, FakeMcp, FakeSmtp, mcp_error, rfc822
 
@@ -521,3 +521,119 @@ def test_a_gbk_body_with_symbols_and_user_defined_characters_is_decoded():
         {"itemId": "I", "from": _addr("A", "a@corp.example"), "receivedDateTime": "2026-11-20T01:00:00Z",
          "body": raw.decode("latin-1")}]})
     assert records[0].body.startswith(text)
+
+
+# ── in-band server errors (aws-outlook-mcp answers success:false inside a normal reply) ──
+
+def _busy() -> dict:
+    return {"success": False, "error": {"message": "Outlook operation failed: ErrorServerBusy: try later",
+                                        "code": "ErrorServerBusy"}}
+
+
+def _three_inbox(read_in2):
+    sent = {"success": True, "content": {"emails": [
+        {"conversationId": c, "topic": "t", "senders": ["Me"], "items": []} for c in ("S1", "S2", "S3")]}}
+    inbox = {"success": True, "content": {"emails": [
+        {"conversationId": c, "topic": "t", "senders": ["Priya"], "items": []} for c in ("IN1", "IN2", "IN3")]}}
+    reads = {"S1": _live_read("S1", [("Me", ME), ("Priya", "priya@corp.example")]),
+             "S2": _live_read("S2", [("Me", ME)]),
+             "S3": _live_read("S3", [("Lee", "lee@corp.example"), ("Me", ME)]),
+             "IN1": _live_read("IN1", [("Priya", "priya@corp.example")]),
+             "IN3": _live_read("IN3", [("Lee", "lee@corp.example")])}
+    return _outlook(email_folders=lambda a: sent if a.get("folder") == "sentitems" else inbox,
+                    email_read=lambda a: read_in2 if a["conversationId"] == "IN2" else reads[a["conversationId"]])
+
+
+async def test_one_unreadable_conversation_does_not_fail_the_pull(caplog):
+    src = OutlookMcpSource(_cfg(), client=_three_inbox(_busy()))
+    with caplog.at_level("WARNING"):
+        result = await src.pull("2026-11-19T00:00:00+00:00")
+    convs = sorted(m.thread.data["conversation_id"] for m in result.messages)
+    assert convs == ["IN1", "IN3"], "the readable conversations land"
+    assert result.cursor is None, "the cursor is held so the skipped one is read again"
+    assert "ErrorServerBusy" in caplog.text
+
+
+async def test_an_empty_conversation_is_not_a_failure():
+    empty = {"success": True, "content": {"emails": []}}
+    result = await OutlookMcpSource(_cfg(), client=_three_inbox(empty)).pull("2026-11-19T00:00:00+00:00")
+    assert len(result.messages) == 2 and result.cursor is not None
+
+
+async def test_every_conversation_unreadable_fails_with_the_server_text():
+    src = OutlookMcpSource(_cfg(), client=_outlook(
+        email_folders=lambda a: {"success": True, "content": {"emails": [
+            {"conversationId": "IN1", "topic": "t", "senders": ["P"], "items": []}]}}
+        if a.get("folder") != "sentitems" else _live_outlook().handlers["email_folders"](a),
+        email_read=lambda a: _busy() if a["conversationId"] == "IN1" else _live_outlook().handlers["email_read"](a)))
+    with pytest.raises(SourceUnavailable, match="ErrorServerBusy"):
+        await src.pull("2026-11-19T00:00:00+00:00")
+
+
+async def test_an_in_band_login_failure_is_source_auth_error():
+    expired = {"success": False, "error": {"message": "Request failed with status code 401", "code": "401"}}
+    src = OutlookMcpSource(_cfg(), client=_outlook(email_folders=lambda a: expired))
+    with pytest.raises(SourceAuthError):
+        await src.whoami()
+
+
+_REF = ThreadRef("mail", {"conversation_id": "CONV-1", "message_id": "<m1@corp.example>"})
+
+
+async def test_a_failed_reply_is_never_sent_and_only_proven_failures_are_failed():
+    from core.inbox.sources.mail import ServerError
+    # busy: it may have gone out before the failure, so it is not SendFailed (send.py
+    # records it unknown and the next pull's find_sent settles it)
+    with pytest.raises(ServerError) as info:
+        await OutlookMcpSource(_cfg(), client=_outlook(email_reply=lambda a: _busy())).reply(_REF, "x")
+    assert not isinstance(info.value, SendFailed) and "ErrorServerBusy" in str(info.value)
+    gone = {"success": False, "error": {"message": "not found", "code": "ErrorItemNotFound"}}
+    with pytest.raises(SendFailed):
+        await OutlookMcpSource(_cfg(), client=_outlook(email_reply=lambda a: gone)).reply(_REF, "x")
+    expired = {"success": False, "error": {"message": "Request failed with status code 401", "code": "401"}}
+    with pytest.raises(SendFailed) as info:
+        await OutlookMcpSource(_cfg(), client=_outlook(email_reply=lambda a: expired)).reply(_REF, "x")
+    assert info.value.fix
+
+
+async def test_a_deleted_conversation_is_skipped_without_holding_the_cursor():
+    gone = {"success": False, "error": {"message": "not found", "code": "ErrorItemNotFound"}}
+    result = await OutlookMcpSource(_cfg(), client=_three_inbox(gone)).pull("2026-11-19T00:00:00+00:00")
+    assert len(result.messages) == 2 and result.cursor is not None, "holding would hold it forever"
+
+
+async def test_every_conversation_in_an_unknown_shape_fails_the_pull():
+    strange = {"success": True, "content": {"weird": [1, 2]}}
+    src = OutlookMcpSource(_cfg(), client=_outlook(
+        email_folders=lambda a: {"success": True, "content": {"emails": [
+            {"conversationId": "IN1", "topic": "t", "senders": ["P"], "items": []}]}}
+        if a.get("folder") != "sentitems" else _live_outlook().handlers["email_folders"](a),
+        email_read=lambda a: strange if a["conversationId"] == "IN1" else _live_outlook().handlers["email_read"](a)))
+    with pytest.raises(SourceUnavailable, match="shape"):
+        await src.pull("2026-11-19T00:00:00+00:00")
+
+
+async def test_whoami_skips_one_unreadable_sent_conversation():
+    mcp = _live_outlook()
+    reads = mcp.handlers["email_read"]
+    mcp.handlers["email_read"] = lambda a: _busy() if a["conversationId"] == "S3" else reads(a)
+    me = await OutlookMcpSource(_cfg(), client=mcp).whoami()
+    assert ME in me.ids
+
+
+async def test_whoami_falls_back_to_the_configured_addresses():
+    mcp = _live_outlook()
+    listing = mcp.handlers["email_folders"]
+    mcp.handlers["email_folders"] = lambda a: _busy() if a.get("folder") == "sentitems" else listing(a)
+    me = await OutlookMcpSource(_cfg(extra_addresses=["me@corp.example"]), client=mcp).whoami()
+    assert me.ids == frozenset({"me@corp.example"})
+    bare = _live_outlook()
+    bare.handlers["email_folders"] = lambda a: _busy()
+    with pytest.raises(SourceUnavailable):           # nothing else says who the person is
+        await OutlookMcpSource(_cfg(), client=bare).whoami()
+
+
+async def test_a_deleted_thread_has_no_target_not_an_outage():
+    gone = {"success": False, "error": {"message": "not found", "code": "ErrorItemNotFound"}}
+    thread = await OutlookMcpSource(_cfg(), client=_outlook(email_read=lambda a: gone)).thread(_REF)
+    assert thread.target is None and thread.messages == ()
