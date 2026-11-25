@@ -111,3 +111,5 @@ test_aws_account_integrity.py  # no module outside the AWS account layer imports
 test_uv_lock_index.py  # uv.lock records pypi.org for every package, not a machine's mirror (repo files only)
 test_unattended_gate.py  # an automatic Needs You run: Bash passes only backend commands bound to its item; no UI tool, no denied tool
 test_attention_auto.py  # Swarm's own Needs You items run once each, one at a time; a run that did not work goes back to the person
+test_mount_freshness.py  # a Library mount is re-indexed when its files change, not twice at once, not on lock files or backups
+test_mount_markup_text.py  # a docs mount indexes an HTML/SVG page as the text it shows, slides rendered from script included

@@ -66,10 +66,145 @@ def _add_column(conn: sqlite3.Connection, name: str, decl: str) -> None:
 # and every docs mount indexed by a lower version is re-indexed by the next sweep
 # (the files already on disk are what the change is for). 1: every UTF-8 text file.
 # 2: Office lock files and backup copies are not read (_not_content).
-DOCS_INDEX_VERSION = 2
+# 3: an HTML or SVG file is indexed as the text it shows (_markup_text).
+DOCS_INDEX_VERSION = 3
 
 # A backup copy's suffix: x.bak, x.bak2, x.html.bak-1788432226, x.html.bak-title.
 _BACKUP_SUFFIX = re.compile(r"\.bak(?:\d*|[-_.][^/]*)$", re.IGNORECASE)
+
+
+# Markup indexed as the text a reader sees, not its source: a slide deck written as
+# HTML is mostly CSS and script, which filled its chunks and kept recall's relevance
+# check (the query's words in the hit text) from finding the slides' own words.
+_MARKUP_SUFFIXES = (".html", ".htm", ".xhtml", ".svg")
+
+
+# A string literal in a script (double, single or back quotes) long enough to hold a
+# piece of markup; and the sign that it does (an opening tag).
+_SCRIPT_STRINGS = (('"', re.compile(r'"((?:[^"\\\n]|\\.){20,})"')),
+                   ("'", re.compile(r"'((?:[^'\\\n]|\\.){20,})'")),
+                   ("`", re.compile(r"`([^`]{20,})`")))
+_OPENING_TAG = re.compile(r"<[a-zA-Z][a-zA-Z0-9]*[\s>/]")
+
+
+def _script_markup(script: str) -> list[str]:
+    """The markup a script carries in its string literals (a deck that builds its
+    slides from ``const SLIDES = [{"html": "<div>..."}]``): each literal decoded (its
+    escapes, as JS reads them) and kept only when it starts with a tag. Plain strings
+    (names, CSS) are not, and neither is code that happens to sit between two
+    unrelated quotes (a minified bundle has thousands of such matches)."""
+    import json
+    found: list[str] = []
+    for quote, pattern in _SCRIPT_STRINGS:
+        for m in pattern.finditer(script):
+            lit = m.group(1)
+            if quote != "`":
+                body = lit.replace("\\'", "'").replace('"', '\\"') if quote == "'" else lit
+                try:
+                    lit = json.loads('"' + body + '"')
+                except ValueError:
+                    pass
+            if _OPENING_TAG.match(lit.lstrip()):
+                found.append(lit)
+    return found
+
+
+# Encoded data pasted into a page as text (a base64 image in a saved mail): no
+# reader reads it, and one such run filled most of a 4 MB "text".
+_ENCODED_RUN = re.compile(r"[A-Za-z0-9+/=_-]{200,}")
+
+
+def _markup_text(markup: str, *, scripts: bool = True) -> str:
+    """The text an HTML or SVG page shows, as markdown-ish plain text.
+
+    Kept: the title (a ``#`` line), text nodes, and h2/h3 as ``##`` / ``###`` lines,
+    so ``chunk_markdown`` splits a deck at its slide headings; block elements end a
+    line. Dropped: tags and attributes, comments, and what is never shown as text
+    (``script``, ``style``, ``noscript``, ``template``, the ``head`` apart from its
+    title). Entities are decoded. A script's code is dropped, but markup it carries
+    in its string literals (a deck that renders its slides from script), and a page
+    held in an ``iframe``'s ``srcdoc`` (a deck of framed slides), are read the same
+    way and appended (``scripts``; one level, a nested page's own are not read).
+    Runs of encoded data (base64) are dropped. A page with no visible text gives ""
+    (not indexed)."""
+    from html.parser import HTMLParser
+
+    hidden = {"script", "style", "noscript", "template", "head"}
+    blocks = {"p", "div", "li", "ul", "ol", "tr", "td", "th", "table", "section",
+              "article", "header", "footer", "nav", "aside", "main", "br", "hr",
+              "blockquote", "pre", "figure", "figcaption", "dt", "dd", "h1", "h4",
+              "h5", "h6", "text", "tspan", "g"}
+
+    class _Text(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.out: list[str] = []
+            self.title: list[str] = []
+            self.skip = 0          # depth inside hidden elements
+            self.in_title = False
+            self.in_script = False
+            self.scripts: list[str] = []
+            self.framed: list[str] = []     # srcdoc pages
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "iframe":
+                self.framed += [v for k, v in attrs if k == "srcdoc" and v]
+            if tag == "title":
+                self.in_title = True
+            elif tag == "script":
+                self.in_script = True
+                self.skip += 1
+            elif tag in hidden:
+                self.skip += 1
+            elif tag in ("h2", "h3"):
+                self.out.append("\n\n" + "#" * int(tag[1]) + " ")
+            elif tag in blocks:
+                self.out.append("\n")
+
+        def handle_startendtag(self, tag, attrs):
+            if tag in blocks:
+                self.out.append("\n")
+
+        def handle_endtag(self, tag):
+            if tag == "title":
+                self.in_title = False
+            elif tag == "script":
+                self.in_script = False
+                self.skip = max(0, self.skip - 1)
+            elif tag in hidden:
+                self.skip = max(0, self.skip - 1)
+            elif tag in ("h2", "h3"):
+                self.out.append("\n\n")
+            elif tag in blocks:
+                self.out.append("\n")
+
+        def handle_data(self, data):
+            if self.in_script:
+                self.scripts.append(data)
+            elif self.in_title:
+                self.title.append(data)
+            elif not self.skip:
+                self.out.append(data)
+
+    parser = _Text()
+    try:
+        parser.feed(markup)
+        parser.close()
+    except Exception:  # noqa: BLE001 — a malformed page gives what was read so far
+        pass
+    text = "".join(parser.out)
+    if scripts:
+        for piece in parser.framed + _script_markup("".join(parser.scripts)):
+            text += "\n" + _markup_text(piece, scripts=False)
+    text = _ENCODED_RUN.sub(" ", text)
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    body = "\n".join(line for line in lines if line)
+    body = re.sub(r"^(#{2,3}) *$\n?", "", body, flags=re.MULTILINE)  # a heading with no text
+    body = re.sub(r"\n(#{2,3} )", r"\n\n\1", body)
+    if not body.strip():
+        return ""
+    title = " ".join("".join(parser.title).split())
+    return (f"# {title}\n\n" if title else "") + body.strip() + "\n"
 
 
 def _not_content(name: str) -> bool:
@@ -828,6 +963,8 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
                 content = p.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue  # binary or unreadable → skip (content-decodability is the gate)
+            if p.suffix.lower() in _MARKUP_SUFFIXES:
+                content = _markup_text(content)   # the text it shows, not its source
             yield p.relative_to(src).as_posix(), content
 
     from core.code_intel.build import write_lock
