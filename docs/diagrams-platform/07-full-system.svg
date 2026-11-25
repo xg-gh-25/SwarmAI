@@ -157,11 +157,11 @@
   <!-- Pollinate -->
   <rect x="500" y="80" width="270" height="115" rx="8" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="1.5"/>
   <text x="635" y="100" text-anchor="middle" fill="#d2a8ff" font-size="10" font-weight="bold">Super Marketer (Pollinate)</text>
-  <text x="635" y="116" text-anchor="middle" fill="#e6edf3" font-size="8">8 Stages: EVALUATE -> REFLECT</text>
-  <text x="635" y="132" text-anchor="middle" fill="#e6edf3" font-size="8">5-Gate Brand Conformance</text>
-  <text x="635" y="148" text-anchor="middle" fill="#e6edf3" font-size="8">Multi-format output (poster, video, etc.)</text>
-  <text x="635" y="164" text-anchor="middle" fill="#e6edf3" font-size="8">Message-first, format-follows</text>
-  <text x="635" y="182" text-anchor="middle" fill="#7ee787" font-size="8">Output: Brand-correct content</text>
+  <text x="635" y="116" text-anchor="middle" fill="#e6edf3" font-size="8">A work and its versions (stable slide ids)</text>
+  <text x="635" y="132" text-anchor="middle" fill="#e6edf3" font-size="8">Declared revision scope + deterministic guard</text>
+  <text x="635" y="148" text-anchor="middle" fill="#e6edf3" font-size="8">Decks, posters, pages, platform copy</text>
+  <text x="635" y="164" text-anchor="middle" fill="#e6edf3" font-size="8">Experts find, scripts decide (work.py cut)</text>
+  <text x="635" y="182" text-anchor="middle" fill="#7ee787" font-size="8">Output: checked versions; the person publishes</text>
 
   <!-- Future engines -->
   <rect x="215" y="210" width="130" height="50" rx="8" fill="#1e1e3a" stroke="#d2a8ff" stroke-width="1" stroke-dasharray="4,2"/>

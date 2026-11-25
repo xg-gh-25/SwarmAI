@@ -1,7 +1,7 @@
 ---
 title: "DDD — One Knowledge Layer, Multiple AI Delivery Engines"
 created: 2026-05-12
-updated: 2026-05-12
+updated: 2026-11-25
 tags: [architecture, ddd, platform, pipeline, pollinate, cultivation, autonomous-delivery]
 project: SwarmAI
 status: LT-review
@@ -17,7 +17,7 @@ status: LT-review
 > - **Harness** — memory, context, tools — the agent doesn't forget
 > - **DDD** — domain knowledge that self-grows — the agent doesn't repeat mistakes
 > - **Pipeline** — 9 stages + adversarial review + quality convergence — the agent doesn't ship broken code
-> - **Pollinate** — 8 stages + brand conformance gates — the agent doesn't produce off-brand content
+> - **Pollinate** — a work and its versions + a declared revision scope with a deterministic guard — the agent doesn't lose the person's edits
 > - **Cultivation** — every delivery feeds back into knowledge — the agent gets smarter every session
 >
 > A regular AI agent used 100 times has the same capability as day one.
@@ -89,7 +89,7 @@ DDD sits in the middle — consumed by engines above, fed by channels from all d
 
 ### Layer 3: Delivery Engines (Applications)
 
-Specialized workflows that transform requirements into deliverables. Each engine reads DDD to operate with domain intelligence. Each engine's REFLECT stage writes back to DDD through Channel 3.
+Specialized workflows that transform requirements into deliverables. Each engine reads DDD to operate with domain intelligence. What an engine learns goes back to DDD through Channel 3: the Pipeline's REFLECT stage writes back (3a); Pollinate has no write-back stage, and its sessions feed back through the after-session review like any session (3b).
 
 Currently: Pipeline (code) and Pollinate (content). The platform model means new engines (analysis, operations, advisory) inherit all existing domain knowledge on day one.
 
@@ -133,13 +133,13 @@ These channels are **the flywheel fuel.** Without them, DDD would be static docu
 | 1 | **Code Changes** | Git commits, PRs, refactors | Architecture drift, new patterns, deprecated approaches | TECH.md |
 | 2 | **External Learning** | Research tasks, articles, learn-content skill | New capabilities, industry approaches, emerging patterns | PRODUCT.md / TECH.md |
 | 3a | **Pipeline Delivery** | REFLECT stage from Pipeline | Lessons, failures, code patterns | IMPROVEMENT.md / TECH.md |
-| 3b | **Pollinate Delivery** | REFLECT stage from Pollinate | Messaging lessons, channel performance, audience insights | IMPROVEMENT.md / PRODUCT.md |
+| 3b | **Pollinate Delivery** | No Pollinate stage. A Pollinate session is reviewed like any other: the after-session review (CDF) records what is worth keeping | What the person said and decided in the session: corrections, decisions, facts and numbers they gave | The project's DDD (CDF picks the place) |
 | 4 | **Industry Signals** | Signal pipeline (GitHub trending, feeds, alerts) | Strategic context shifts, competitive moves, tech trends | PRODUCT.md |
 | 5 | **Conversation** | Session decisions, implicit rules expressed in chat | Team preferences, unstated conventions, decision rationale | PROJECT.md |
 | 6 | **Corrections** | User says "no, do X instead" | High-priority rule updates, misconception fixes | Any doc (highest priority) |
 | 7 | **Code Intelligence** | Static analysis, dependency graph, type inference | Structural truth about the codebase as-built | TECH.md |
 
-**Critical insight:** Pipeline and Pollinate each have their own channel (3a and 3b). But the **other 6 channels are equally important** — they feed DDD from code changes, research, signals, conversations, corrections, and code analysis. The flywheel runs on ALL 8, not just delivery engine feedback.
+**Critical insight:** Pipeline writes back through its own stage (3a); Pollinate's channel (3b) is the general session flow, not a stage of its own. And the **other 6 channels are equally important** — they feed DDD from code changes, research, signals, conversations, corrections, and code analysis. The flywheel runs on ALL 8, not just delivery engine feedback.
 
 This means DDD grows even when no engine is running. A git commit triggers Channel 1. A research session triggers Channel 2. A signal feed fires Channel 4. The system is always learning, always growing.
 
@@ -290,46 +290,44 @@ This means the human only gets interrupted for decisions that genuinely require 
 
 ## 6. Engine 2: Super Marketer — Pollinate
 
-**Vision:** Message First, Format Follows. The message is the product — formats are just delivery vehicles.
+**Vision:** Make it once, revise it many times. A deck goes through ten rounds of "change slide 3"; every round must change only what was agreed.
 
-**Goal:** Give it one sentence describing what needs to be communicated. Get brand-correct, audience-correct content across multiple formats — poster, video script, narrative, short-form, README, social posts.
+**Goal:** Ask for a deck, a poster, a long image, a report or platform copy. Get a first version that looks professional, then revisions that change only the agreed slides and never lose the person's own edits.
 
-### The 8 Stages
+What makes Pollinate different from a one-shot content generator:
 
-| Stage | Purpose | DDD Interaction |
-|-------|---------|-----------------|
-| EVALUATE | Is this worth producing? Value assessment | Reads PRODUCT for relevance to current strategy |
-| AUDIENCE | Map target personas, channels, attention patterns | Reads PRODUCT + PROJECT for audience definitions |
-| MESSAGE | Distill the core narrative — the one thing that matters | Reads PRODUCT for positioning and voice |
-| FORMAT | Select formats based on message + audience fit | Reads PROJECT for platform preferences |
-| PRODUCE | Generate content across selected formats | Reads all 4 docs for accuracy and context |
-| QUALITY | 5-gate brand conformance check | Reads PRODUCT for brand standards |
-| DELIVER | Package and stage for distribution | Reads PROJECT for delivery workflows |
-| REFLECT | What worked, what didn't, audience insights | **Writes** to IMPROVEMENT.md via Channel 3 |
+- **A work and its versions.** A work is any folder with a `work.json`, registered where it is (also outside the workspace). Every version is kept read-only in `.versions/`. Slides have stable ids (`s-7f3a`), not positions.
+- **A declared revision scope with a deterministic guard.** Before an edit, the agent names the slides that may change. A script, not a model, fails any change outside that scope.
+- **Experts find, scripts decide.** Review experts report findings; only a failed `cut` blocks a version.
+- **The person publishes.** Pollinate never posts, uploads or sends.
 
-### 5-Gate Brand Conformance
+### The Flow
 
-Parallel to Pipeline's 6-Layer Push-Ready Gate, Pollinate enforces brand quality:
+| Step | Who | What happens | DDD Interaction |
+|------|-----|--------------|-----------------|
+| Brief | Agent | Answers six questions (who, what should happen, the thesis, where, formats, sources); asks the person once, only what it cannot decide | **Reads** the project's knowledge first (`cognition find`): facts and numbers come from there and the person's sources |
+| Init / adopt | `work.py` | Makes the work, or registers an existing deck in place and adds slide ids | A new work goes under the project's folder |
+| Source | Agent | Writes the HTML (deck, poster, page) or the copy | — |
+| Cut | `work.py` | Render → measure → craft checks → guard → version | — |
+| Review | Experts | `content-accuracy`, `content-visual`, `content-copy`; at most two rounds | `content-accuracy` checks claims against the sources and project knowledge |
+| Deliver | Agent | Canvas opens the version; one copy-ready chat block with every file, thumbnail and platform text | — |
+| Publish | Person | Publishes, or asks for a change (the revise loop) | — |
 
-1. **Voice Match** — does the tone match established brand voice?
-2. **Audience Fit** — is the content calibrated for the target persona?
-3. **Visual Consistency** — do visual elements follow brand guidelines?
-4. **Message Alignment** — does the content reinforce (not contradict) existing messaging?
-5. **Platform Compliance** — does the format meet platform-specific requirements?
+There is no write-back stage. What a Pollinate session teaches reaches DDD the way any session's lessons do: through the after-session review (Channel 3b).
 
-### Multi-Format Output
+### Revision Scope and the Guard
 
-A single message becomes multiple deliverables:
-- **Poster** — visual artifact for social/display
-- **Video Script** — storyboard-ready narrative for production
-- **Narrative** — long-form writing (blog post, email, document)
-- **Short-form** — social media posts, captions, hooks
-- **README** — technical communication for developers
-- **Social** — platform-optimized snippets
+A revision starts with `work.py open --scope <slide ids>`. If the person edited the files by hand, `open` first saves their files as a user version and uses it as the base, so the agent starts from the person's file, not from its memory of it. The agent edits only the slides in the scope. At `cut`, the guard compares each slide with the base version by hash: a slide outside the scope that was modified, deleted or moved is a violation, and so is a change to a shared file unless the revision was opened with `--shared`. The fix is to undo that change, not to widen the scope.
 
-The key: the message is crafted first (stages 1-3), then expressed across formats (stages 4-6). This ensures consistency — every format tells the same story in format-appropriate language.
+### Cut: The Scripts Decide
 
-![Figure 5: Pollinate — 8 Stages + Brand Conformance](diagrams-platform/05-pollinate-compact.svg)
+Parallel to the Pipeline's Push-Ready Gate, `work.py cut` decides whether a version can ship. It renders in a pinned Chromium (every network request blocked during capture), measures every rendered slide, runs the craft checks (`font_floor`, `fill`, `align`, `nowrap`, `density`, `overflow`, `overlap`, `safe_area`, `image`, plus `brand` on posters and `reference` against a reference deck), exports PPTX on request, runs the guard, and writes the version. Exit 0 moves `current` to the new version; exit 1 keeps it, marked failed; exit 2 is a usage or setup error.
+
+**A version fails only for what it made worse.** A problem the base version already had on a slide stays a warning, so revising slide 3 does not fail because slide 20 always had small labels.
+
+Outputs: decks always in HTML, with PDF, PNG and PPTX export; posters; long images and reports; copy for 小红书, 朋友圈, 公众号, X and LinkedIn. Full design: [Pollinate — Content You Revise Many Times](Pollinate-Content-Engine.md).
+
+![Figure 5: Pollinate — a work and its versions, the cut and the revise loop](diagrams-platform/05-pollinate-compact.svg)
 
 ---
 
@@ -343,7 +341,7 @@ The key: the message is crafted first (stages 1-3), then expressed across format
 8 Channels feed DDD
     -> DDD powers engines
         -> Engines deliver outputs
-            -> Engine REFLECT feeds Channel 3
+            -> Lessons go back through Channel 3 (Pipeline REFLECT, after-session review)
                 -> DDD grows richer
                     -> Next session: ALL engines are smarter
 ```
@@ -355,17 +353,17 @@ But it's not just Channel 3. While engines run, the other 6 channels also fire:
 - User corrects something in conversation (Channel 6) mid-delivery
 - Static analysis detects structural change (Channel 7) after a refactor
 
-DDD grows from ALL directions simultaneously. The compound effect accelerates because more knowledge means better delivery means richer REFLECT output means even more knowledge.
+DDD grows from ALL directions simultaneously. The compound effect accelerates because more knowledge means better delivery means richer lessons means even more knowledge.
 
 ### Cross-Engine Compound Effects
 
 The platform model creates cross-engine intelligence that wouldn't exist in siloed tools:
 
-**Pipeline discovers capability -> TECH.md -> Pollinate markets it.** When the Pipeline builds a new feature, TECH.md captures what was built and why. Pollinate reads TECH.md and can accurately describe the capability to the audience — without anyone manually writing marketing copy about the feature.
+**Pipeline discovers capability -> DDD -> Pollinate describes it.** When the Pipeline builds a new feature, DDD captures what was built and why. Pollinate's brief looks up the project's knowledge first, so a deck or post about the feature takes its facts from there, not from the model's memory.
 
-**Pollinate finds audience pain -> PRODUCT.md -> Pipeline prioritizes fix.** When Pollinate's audience analysis surfaces a pain point, PRODUCT.md captures it. Pipeline's EVALUATE stage reads PRODUCT.md and can prioritize the fix — without a human translating user feedback into engineering requirements.
+**A Pollinate session learns something -> DDD -> Pipeline uses it.** When the person says in a Pollinate session what customers keep asking about, or decides how a feature is positioned, the after-session review can record it in the project's DDD. Pipeline's EVALUATE stage reads the same DDD — without a human carrying the point from one tool to the other.
 
-**User corrects brand voice -> PROJECT.md -> ALL engines respect it.** When a user says "we don't use that word" in a Pollinate session, Channel 6 captures it. Pipeline avoids it in commit messages. Future engines avoid it in their outputs. One correction propagates everywhere.
+**User corrects a term -> DDD -> ALL engines respect it.** When a user says "we don't use that word" in a Pollinate session, the after-session review records it as a correction (Channel 6) in the project's DDD. Pipeline avoids it in commit messages. Future engines avoid it in their outputs. One correction propagates everywhere.
 
 ### The Math of Compounding
 
@@ -397,7 +395,7 @@ Everything together — the architect's complete view:
 | **Harness** | Memory, context, tools, evolution, hooks | DDD + Engines | Never forgets, always available |
 | **DDD** | Structured domain expertise | All engines equally | Self-growing, shared, AI-optimized |
 | **8 Channels** | Continuous signal input | DDD (via Cultivation) | Zero human effort, always feeding |
-| **Engines** | Specialized delivery | End users | Domain-correct, quality-gated |
+| **Engines** | Specialized delivery | End users | Domain-correct, checked by scripts (Pipeline gate, Pollinate `cut`) |
 | **Cultivation** | Signal-to-knowledge transformation | DDD growth | Propose-approve-grow safety |
 
 ### Information Flow Summary
@@ -415,8 +413,8 @@ DDD KNOWLEDGE LAYER (structured expertise)
 DELIVERY ENGINES (Pipeline, Pollinate, Future)
     | (outputs)
     v
-DELIVERABLES (push-ready code, brand-correct content)
-    | (via REFLECT)
+DELIVERABLES (push-ready code, checked content versions)
+    | (via Pipeline REFLECT; for Pollinate, the after-session review)
     v
 CHANNEL 3 (feeds back into DDD)
 ```
@@ -469,4 +467,4 @@ Yes. DDD is files in a repository. Multiple team members contributing sessions m
 
 ---
 
-*This document is the complete vision of the DDD Platform. After reading it, you understand: what the system is (a platform turning AI engines into domain experts), why it exists (domain-blindness is the universal bottleneck), how it works (8 channels feed DDD, engines consume DDD), what powers the flywheel (cultivation from 8 automatic sources), and what the delivery engines are (Pipeline for code, Pollinate for content, future engines for everything else). One knowledge layer. Multiple delivery engines. Compound growth.*
+*This document is the complete vision of the DDD Platform. After reading it, you understand: what the system is (a platform turning AI engines into domain experts), why it exists (domain-blindness is the universal bottleneck), how it works (8 channels feed DDD, engines consume DDD), what powers the flywheel (cultivation from 8 automatic sources), and what the delivery engines are (Pipeline for code, Pollinate for decks, posters and copy that are revised many times, future engines for everything else). One knowledge layer. Multiple delivery engines. Compound growth.*

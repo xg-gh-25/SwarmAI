@@ -39,15 +39,15 @@
   <!-- BOTTOM-RIGHT: REFLECT (engine output → channels) -->
   <!-- ================================================================== -->
   <rect x="590" y="340" width="180" height="70" rx="10" fill="#1a1a2e" stroke="#d2a8ff" stroke-width="1"/>
-  <text x="680" y="362" fill="#d2a8ff" font-size="10" font-weight="bold" text-anchor="middle">REFLECT</text>
-  <text x="680" y="378" fill="#e6edf3" font-size="8" text-anchor="middle">Structured lessons</text>
-  <text x="680" y="392" fill="#e6edf3" font-size="8" text-anchor="middle">Patterns, failures, insights</text>
+  <text x="680" y="362" fill="#d2a8ff" font-size="10" font-weight="bold" text-anchor="middle">LESSONS BACK</text>
+  <text x="680" y="378" fill="#e6edf3" font-size="8" text-anchor="middle">Pipeline: REFLECT stage</text>
+  <text x="680" y="392" fill="#e6edf3" font-size="8" text-anchor="middle">Pollinate: after-session review</text>
   <text x="680" y="404" fill="#e6edf3" font-size="7" text-anchor="middle" fill-opacity="0.6">→ Ch 3a (Pipeline) / Ch 3b (Pollinate)</text>
 
   <!-- Arrow: Engines → REFLECT -->
   <path d="M 675 170 L 675 338" fill="none" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arrP)"/>
   <text x="685" y="260" fill="#d2a8ff" font-size="7.5" fill-opacity="0.8">delivers</text>
-  <text x="685" y="272" fill="#d2a8ff" font-size="7.5" fill-opacity="0.8">then reflects</text>
+  <text x="685" y="272" fill="#d2a8ff" font-size="7.5" fill-opacity="0.8">then learns</text>
 
   <!-- ================================================================== -->
   <!-- LEFT: 8 Feed Channels (producers) -->
@@ -60,7 +60,7 @@
   <text x="45" y="158" fill="#58a6ff" font-size="8">Ch 1: Code Changes</text>
   <text x="45" y="176" fill="#7ee787" font-size="8">Ch 2: External Learning</text>
   <text x="45" y="194" fill="#d2a8ff" font-size="8" font-weight="bold">Ch 3a: Pipeline REFLECT</text>
-  <text x="45" y="212" fill="#d2a8ff" font-size="8" font-weight="bold">Ch 3b: Pollinate REFLECT</text>
+  <text x="45" y="212" fill="#d2a8ff" font-size="8" font-weight="bold">Ch 3b: Pollinate sessions</text>
   <text x="45" y="230" fill="#7ee787" font-size="8">Ch 4: Industry Signals</text>
   <text x="45" y="248" fill="#f78166" font-size="8">Ch 5: Conversation</text>
   <text x="45" y="266" fill="#f78166" font-size="8" font-weight="bold">Ch 6: Corrections</text>

@@ -20,8 +20,8 @@
 
   <rect x="155" y="72" width="110" height="45" rx="6" fill="#221a30" stroke="#d2a8ff" stroke-width="1"/>
   <text x="210" y="90" fill="#d2a8ff" font-size="9" text-anchor="middle" font-weight="bold">Super Marketer</text>
-  <text x="210" y="103" fill="#e6edf3" font-size="8" text-anchor="middle">Pollinate (8 stages)</text>
-  <text x="210" y="113" fill="#e6edf3" font-size="7" text-anchor="middle">Brand-Correct Content</text>
+  <text x="210" y="103" fill="#e6edf3" font-size="8" text-anchor="middle">Pollinate (versions)</text>
+  <text x="210" y="113" fill="#e6edf3" font-size="7" text-anchor="middle">Decks, Posters, Copy</text>
 
   <rect x="275" y="72" width="110" height="45" rx="6" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.5" stroke-dasharray="4,2"/>
   <text x="330" y="90" fill="#e6edf3" font-size="9" text-anchor="middle" fill-opacity="0.5">Future Engines</text>
@@ -29,7 +29,7 @@
 
   <!-- Reads/Writes annotation -->
   <text x="210" y="135" fill="#7ee787" font-size="8" text-anchor="middle" fill-opacity="0.8">↓ READS DDD → domain-correct output</text>
-  <text x="210" y="148" fill="#f78166" font-size="8" text-anchor="middle" fill-opacity="0.8">↑ REFLECT writes back → Channels 3a/3b</text>
+  <text x="210" y="148" fill="#f78166" font-size="8" text-anchor="middle" fill-opacity="0.8">↑ lessons go back → Channels 3a/3b</text>
 
   <!-- Arrow: Engines → DDD -->
   <line x1="210" y1="155" x2="210" y2="185" stroke="#7ee787" stroke-width="1" marker-end="url(#arrGreen)"/>
@@ -114,8 +114,8 @@
   <text x="840" y="126" fill="#d2a8ff" font-size="7" text-anchor="end" fill-opacity="0.7">RICHEST</text>
 
   <rect x="452" y="148" width="408" height="34" rx="5" fill="#1a1a2e" stroke="#d2a8ff" stroke-width="0.7"/>
-  <text x="462" y="164" fill="#d2a8ff" font-size="8.5" font-weight="bold">Ch 3b: Pollinate REFLECT</text>
-  <text x="462" y="176" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Messaging lessons, channel performance → IMPROVEMENT.md / PRODUCT.md</text>
+  <text x="462" y="164" fill="#d2a8ff" font-size="8.5" font-weight="bold">Ch 3b: Pollinate sessions</text>
+  <text x="462" y="176" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">No write-back stage: the after-session review (CDF) → project DDD</text>
 
   <!-- GROUP 2: Codebase -->
   <rect x="440" y="202" width="430" height="92" rx="8" fill="#0c1520" stroke="#58a6ff" stroke-width="0.8"/>
@@ -171,7 +171,7 @@
   <text x="200" y="615" fill="#e6edf3" font-size="9" fill-opacity="0.85">Grows automatically. Health-monitored. Cross-project discoverable. Section-level loading.</text>
 
   <text x="40" y="635" fill="#d2a8ff" font-size="9">Consumers (Engines):</text>
-  <text x="200" y="635" fill="#e6edf3" font-size="9" fill-opacity="0.85">Read DDD to deliver domain-correctly. REFLECT feeds back → compound loop.</text>
+  <text x="200" y="635" fill="#e6edf3" font-size="9" fill-opacity="0.85">Read DDD to deliver domain-correctly. Lessons feed back → compound loop.</text>
 
   <text x="40" y="660" fill="#58a6ff" font-size="9">Foundation (Harness):</text>
   <text x="200" y="660" fill="#e6edf3" font-size="9" fill-opacity="0.85">Context, memory, tools, hooks. Zero new infra — DDD and engines are consumers of existing.</text>

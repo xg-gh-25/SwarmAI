@@ -65,7 +65,7 @@
   <rect x="550" y="260" width="170" height="70" rx="8" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="2"/>
   <text x="635" y="285" text-anchor="middle" fill="#d2a8ff" font-size="11" font-weight="bold">Super Marketer</text>
   <text x="635" y="302" text-anchor="middle" fill="#e6edf3" font-size="9">Pollinate</text>
-  <text x="635" y="318" text-anchor="middle" fill="#8b8ba0" font-size="8">Brand-correct content</text>
+  <text x="635" y="318" text-anchor="middle" fill="#8b8ba0" font-size="8">Decks, posters, copy</text>
 
   <rect x="550" y="360" width="170" height="50" rx="8" fill="#1e1e3a" stroke="#d2a8ff" stroke-width="1" stroke-dasharray="4,2"/>
   <text x="635" y="385" text-anchor="middle" fill="#8b8ba0" font-size="10">Future Engines</text>
@@ -104,8 +104,8 @@
   <text x="480" y="428" fill="#f78166" font-size="8">Regular AI (flat)</text>
 
   <!-- Key examples -->
-  <text x="80" y="470" fill="#e6edf3" font-size="9">Pipeline discovers new pattern -> TECH.md -> Pollinate markets capability</text>
-  <text x="80" y="488" fill="#e6edf3" font-size="9">Pollinate finds audience pain -> PRODUCT.md -> Pipeline prioritizes fix</text>
+  <text x="80" y="470" fill="#e6edf3" font-size="9">Pipeline discovers new pattern -> TECH.md -> Pollinate's brief finds it</text>
+  <text x="80" y="488" fill="#e6edf3" font-size="9">Pollinate session learns -> DDD (after-session review) -> Pipeline uses it</text>
   <text x="80" y="506" fill="#e6edf3" font-size="9">User corrects once -> All future sessions follow correction</text>
   <text x="80" y="524" fill="#7ee787" font-size="9" font-weight="bold">Each engine delivery makes EVERY engine smarter -- via shared DDD</text>
 </svg>
