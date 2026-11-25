@@ -28,8 +28,13 @@ DOCKERFILE = r"""# The SSH-machine Hive image (design docs/design/2026-11-24-swa
 # - no supervisor and no exposed port: the container runs on the machine's network and the
 #   Hive binds 127.0.0.1, reached by the Host through its SSH tunnel (core/carriers/ssh_tunnel).
 #
+# - the official IAM Roles Anywhere credential helper (/opt/swarmai/bin/aws_signing_helper, root's):
+#   the Hive's AWS profile turns the machine's own certificate into its role's credentials
+#   (design docs/design/2026-11-24-ssh-machine-roles-anywhere.md §4.2).
+#
 # Built by hive/ssh_provisioner on the machine, from a context holding only this file and
-#   swarmai-hive.tar.gz  the release package, checked against its checksums.txt by the Host.
+#   swarmai-hive.tar.gz  the release package, checked against its checksums.txt by the Host;
+#   aws_signing_helper   the helper, checked by the Host against the SHA256 in hive/ssh_identity.
 # COPY rather than a BuildKit bind mount: the machine's docker may not run BuildKit.
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
@@ -44,6 +49,9 @@ ARG HIVE_USER
 ARG HIVE_HOME
 RUN (getent group "${HIVE_GID}" >/dev/null || groupadd -g "${HIVE_GID}" hive) \
     && useradd -M -u "${HIVE_UID}" -g "${HIVE_GID}" -d "${HIVE_HOME}" -s /bin/bash "${HIVE_USER}"
+
+COPY aws_signing_helper /opt/swarmai/bin/aws_signing_helper
+RUN chown root:root /opt/swarmai/bin/aws_signing_helper && chmod 0755 /opt/swarmai/bin/aws_signing_helper
 
 COPY swarmai-hive.tar.gz /tmp/hive.tar.gz
 RUN mkdir -p /opt/swarmai \
@@ -61,6 +69,7 @@ RUN python3.12 -m venv .venv \
 
 USER ${HIVE_UID}:${HIVE_GID}
 # The environment file (hive/ssh_provisioner) sets SWARMAI_MODE=hive, SWARMAI_CARRIER=ssh,
-# SWARMAI_PORT, SWARM_DATA_DIR, the bridge identity, AWS_PROFILE and the Hive's credential.
+# SWARMAI_PORT, SWARM_DATA_DIR, the bridge identity, AWS_PROFILE (the machine's own identity,
+# through the helper above) and the Hive's credential.
 CMD ["sh", "-c", "exec /opt/swarmai/backend/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port \"${SWARMAI_PORT:-18321}\" --log-level info"]
 """

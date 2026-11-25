@@ -63,7 +63,8 @@ def add(db: Path, hid: str, name: str, carrier: str = "ec2", status: str = "runn
 
 def ssh_config(local_port: int = 28411, **over) -> dict:
     cfg = {"ssh_host": "dev-dsk-test.example.com", "remote_port": 18321, "local_port": local_port,
-           "source_profile": "swarmai", "reaches_private": True, "general_tasks": True,
+           "identity": "rolesanywhere", "aws_profile": "swarmai-hive-dev-dsk", "reaches_private": True,
+           "general_tasks": True,
            "mounts": ["/apollo:ro", "/workplace"], "cert_renew_hint": "mwinit -o"}
     cfg.update(over)
     return cfg
@@ -73,3 +74,99 @@ def status_of(db: Path, hid: str) -> tuple:
     with sqlite3.connect(db) as c:
         return c.execute("SELECT status, error_message, version, updated_at FROM hive_instances WHERE id = ?",
                          (hid,)).fetchone()
+
+
+class _NotFound(Exception):
+    pass
+
+
+class FakeAWS:
+    """The SwarmAI account as the SSH-machine identity sees it: IAM roles (their trust kept) and
+    IAM Roles Anywhere trust anchors and profiles, per region; every call recorded."""
+
+    def __init__(self):
+        self.trust: dict = {}            # role name -> trust policy
+        self.anchors: dict = {}          # id -> anchor
+        self.profiles: dict = {}         # id -> profile
+        self.calls: list = []
+        self._n = 0
+
+    def session(self, region: str):
+        aws = self
+
+        class Session:
+            def client(self, name, region_name=None):
+                return aws._iam() if name == "iam" else aws._ra(region_name or region)
+        return Session()
+
+    def _id(self) -> str:
+        self._n += 1
+        return f"{self._n:08x}-0000-4000-8000-000000000000"
+
+    def _iam(self):
+        aws = self
+
+        class Iam:
+            class exceptions:
+                NoSuchEntityException = _NotFound
+
+            def get_role(self, RoleName):
+                if RoleName not in aws.trust:
+                    raise _NotFound(RoleName)
+                return {"Role": {"Arn": f"arn:aws:iam::{ACCOUNT}:role/{RoleName}",
+                                 "AssumeRolePolicyDocument": aws.trust[RoleName]}}
+
+            def update_assume_role_policy(self, RoleName, PolicyDocument):
+                aws.calls.append(("trust", RoleName))
+                aws.trust[RoleName] = json.loads(PolicyDocument)
+        return Iam()
+
+    def _ra(self, region: str):
+        aws = self
+
+        class RolesAnywhere:
+            class exceptions:
+                ResourceNotFoundException = _NotFound
+
+            def list_trust_anchors(self, **kw):
+                return {"trustAnchors": [a for a in aws.anchors.values() if a["region"] == region]}
+
+            def create_trust_anchor(self, name, source, enabled, tags):
+                i = aws._id()
+                aws.calls.append(("create_trust_anchor", region, name))
+                a = {"trustAnchorId": i, "name": name, "source": source, "enabled": enabled, "tags": tags,
+                     "region": region, "trustAnchorArn": f"arn:aws:rolesanywhere:{region}:{ACCOUNT}:trust-anchor/{i}"}
+                aws.anchors[i] = a
+                return {"trustAnchor": a}
+
+            def update_trust_anchor(self, trustAnchorId, source):
+                aws.calls.append(("update_trust_anchor", region))
+                aws.anchors[trustAnchorId]["source"] = source
+
+            def enable_trust_anchor(self, trustAnchorId):
+                aws.anchors[trustAnchorId]["enabled"] = True
+
+            def list_profiles(self, **kw):
+                return {"profiles": [p for p in aws.profiles.values() if p["region"] == region]}
+
+            def create_profile(self, name, roleArns, durationSeconds, enabled, tags):
+                i = aws._id()
+                aws.calls.append(("create_profile", region, name))
+                p = {"profileId": i, "name": name, "roleArns": roleArns, "durationSeconds": durationSeconds,
+                     "enabled": enabled, "tags": tags, "region": region,
+                     "profileArn": f"arn:aws:rolesanywhere:{region}:{ACCOUNT}:profile/{i}"}
+                aws.profiles[i] = p
+                return {"profile": p}
+
+            def update_profile(self, profileId, roleArns, durationSeconds):
+                aws.profiles[profileId]["roleArns"] = roleArns
+
+            def enable_profile(self, profileId):
+                aws.profiles[profileId]["enabled"] = True
+
+            def delete_profile(self, profileId):
+                aws.calls.append(("delete_profile", region, profileId))
+                if profileId not in aws.profiles or aws.profiles[profileId]["region"] != region:
+                    raise _NotFound(profileId)
+                del aws.profiles[profileId]
+        return RolesAnywhere()

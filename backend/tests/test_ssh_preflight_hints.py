@@ -3,7 +3,7 @@
 
 Questions: (1) does the preflight tell docker missing, not usable by the user, and not running
 apart, run as the real script with a stub docker; (2) does each such state, an SSH failure
-of a known kind, a taken port, a full disk and no matching AWS profile end the install in
+of a known kind, a taken port and a full disk end the install in
 error with the one thing to do on the machine and "then Retry"?
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 
 from hive import ssh_provisioner as sp
 from tests import _ssh_machine_store as store
-from tests.test_ssh_machine_autoconfig import OTHER, Found, _add_host_only
+from tests.test_ssh_machine_autoconfig import Found, _add_host_only
 from tests.test_ssh_provisioner import world  # noqa: F401 — the fixture
 
 
@@ -41,7 +41,7 @@ def test_preflight_tells_docker_states_apart(tmp_path, stub, want):
 
 class Broken(Found):
     def __init__(self, preflight_error="", **facts):
-        super().__init__({"swarmai": store.ACCOUNT})
+        super().__init__()
         self.preflight_error, self.extra = preflight_error, facts
 
     async def run(self, host, remote, data=None, timeout=60, step=""):
@@ -68,9 +68,3 @@ def test_each_unmet_need_says_what_to_do(world, machine, says):  # noqa: F811
     mid = _add_host_only(world, machine)
     status, error, _, _ = store.status_of(world["db"], mid)
     assert status == "error" and says in error and error.endswith("then Retry"), error
-
-
-def test_no_profile_says_how_to_sign_in(world):  # noqa: F811
-    mid = _add_host_only(world, Found({"default": OTHER}))
-    error = store.status_of(world["db"], mid)[1]
-    assert store.ACCOUNT in error and "aws configure sso" in error and error.endswith("then Retry")

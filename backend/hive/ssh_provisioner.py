@@ -1,8 +1,9 @@
 """Install, update and remove the Hive on an SSH machine (design
 docs/design/2026-11-24-swarm-out-ssh-machine.md §5.3-§5.4, decisions D2, D4, D7).
 
-Everything runs from the Host over SSH; the person only gives the machine's SSH host and the
-AWS profile on it that reaches the SwarmAI account. A machine is a ``hive_instances`` row with
+Everything runs from the Host over SSH; the person only gives the machine's SSH host: the
+machine needs no AWS setup of its own (design docs/design/2026-11-24-ssh-machine-roles-anywhere.md).
+A machine is a ``hive_instances`` row with
 ``carrier = 'ssh'`` (core/carriers/ssh), whose ``status`` goes ``provisioning → running``, or
 ``error`` with ``error_message`` saying which step failed and why. Every step can be run again
 (``retry``): an image already built, a role or profile already there, is taken as it is.
@@ -14,27 +15,36 @@ Steps of ``add`` / ``retry`` (``_install``):
    architecture, cores and memory are read for the image and the panel.
 2. **image**: the Host takes the release package of its own version from the account's bucket,
    checks it against the ``checksums.txt`` beside it (as an EC2 Hive's first boot does), and
-   sends it with the Dockerfile (hive/ssh_image) to the machine, which builds
-   ``swarmai-hive-ssh:<version>``. The package is root's inside the image: the Hive's own gate
-   code cannot be changed by a task running as the same uid.
-3. **identity**: the person's ``source_profile`` is resolved inside the image; its role's ARN
-   is what the Hive's role trusts.
-4. **role** (D4): ``SwarmAI-Hive-<name>`` with the EC2 Hive's policy and its ``HiveName`` tag
-   (it reads release packages, writes only its own ``bridge/<name>/`` asks and closed marks,
-   reads only its own answers, calls Bedrock), trusting that role.
-5. **profile**: one new profile ``swarmai-hive-<name>`` in the machine's ``~/.aws/config``
-   (``role_arn`` + ``source_profile``), between marker lines; nothing else in the file is
-   changed. Checked inside the image: the ARN must be the Hive's role.
-6. **start**: the environment file (mode 600, sent on ssh's stdin, never on a command line)
+   sends it with the Dockerfile (hive/ssh_image) and the IAM Roles Anywhere credential helper
+   (hive/ssh_identity.helper_binary, checked against its SHA256) to the machine, which builds
+   ``swarmai-hive-ssh:<version>-h<helper version>`` (``_tag``). The package is root's inside
+   the image: the Hive's own gate code cannot be changed by a task running as the same uid.
+3. **identity** (hive/ssh_identity): the Host's CA and its trust anchor; the role (D4)
+   ``SwarmAI-Hive-<name>`` with the EC2 Hive's policy and its ``HiveName`` tag (it reads
+   release packages, writes only its own ``bridge/<name>/`` asks and closed marks, reads only
+   its own answers, calls Bedrock), trusting only a certificate of that anchor with this
+   install's CN; the machine's Roles Anywhere profile; then the machine makes a new key in
+   ``~/.swarmai-hive/identity/`` (it never leaves the machine) and the Host signs its
+   30-day certificate.
+4. **profile**: one profile ``swarmai-hive-<name>`` in the machine's ``~/.aws/config`` (a
+   ``credential_process`` running the helper with that certificate), between marker lines;
+   nothing else in the file is changed. Checked inside the image: the ARN must be the Hive's
+   role. What was set up is recorded in ``carrier_config`` (``identity``, ``anchor_arn``,
+   ``role_arn``, ``profile_arn``, ``identity_region``, ``cn``, ``not_after``, ``aws_profile``).
+5. **start**: the environment file (mode 600, sent on ssh's stdin, never on a command line)
    and the container (``--restart unless-stopped``, the machine's network, the person's
    ``$HOME`` and the configured mounts), then ``/health`` through the tunnel.
 
 ``update`` (D7) builds the new version's image, stops the old container, starts the new one and
-waits for ``/health``; when the new one does not come up, the old one is started again. While
+waits for ``/health`` and the new container's identity; when the new one does not come up, the
+old one is started again. A machine installed before its own identity (on a profile of the
+person's) moves to it in its update, and back with the old container when that fails. While
 it runs, ``updated_at`` is refreshed every minute, so ``release_stale_updates`` never takes it
-for an EC2 update stopped in the middle. ``remove`` deletes the container, the images, the role
-and the added profile, and the row; the Hive's data (``~/.swarmai-hive/data``) stays on the
-machine.
+for an EC2 update stopped in the middle. ``renew_due`` (hive_idle.check_once, every round)
+gives a machine whose certificate has less than ten days left a new key and certificate.
+``remove`` deletes the container, the images, the machine's identity and Roles Anywhere
+profile, the role and the added profile, and the row; the Hive's data
+(``~/.swarmai-hive/data``) stays on the machine.
 
 Security: every value that reaches the machine's shell is checked against a strict pattern and
 quoted (``shlex.quote``); the scripts themselves are fixed text. The Hive's password never
@@ -56,6 +66,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.carriers import ssh_tunnel
+from hive import ssh_identity
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +85,9 @@ HEALTH_TIMEOUT_S = 120
 HEARTBEAT_S = 60
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
-PROFILE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 MOUNT_RE = re.compile(r"^/[A-Za-z0-9._/-]{1,200}(:ro)?$")
 VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z.+-]{0,31}$")
-_ROLE_ARN_RE = re.compile(r"^arn:aws:sts::(\d{12}):assumed-role/([A-Za-z0-9+=,.@_-]{1,64})/")
+_ARN_RE = re.compile(r"^arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[A-Za-z0-9+=,.@_/:-]{1,200}$")
 _HINT_RE = re.compile(r"^[^\n\r`$\\]{0,120}$")
 
 
@@ -119,10 +129,11 @@ async def _set(machine_id: str, **fields: Any) -> None:
         await conn.commit()
 
 
-async def _merge_config(machine_id: str, **keys: Any) -> dict[str, Any]:
-    """Set *keys* in the machine's ``carrier_config``, reading it under the write lock: the
-    install, an update and the card's switches each change only their own keys, so a switch
-    turned while an image builds is never written back over. The merged settings."""
+async def _merge_config(machine_id: str, _drop: tuple = (), **keys: Any) -> dict[str, Any]:
+    """Set *keys* (and remove *_drop*) in the machine's ``carrier_config``, reading it under
+    the write lock: the install, an update and the card's switches each change only their own
+    keys, so a switch turned while an image builds is never written back over. The merged
+    settings."""
     import aiosqlite
     async with aiosqlite.connect(_db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
@@ -135,6 +146,8 @@ async def _merge_config(machine_id: str, **keys: Any) -> dict[str, Any]:
             raise SshInstallError("no such SSH machine")
         raw = json.loads(got[0] or "{}")
         raw.update(keys)
+        for k in _drop:
+            raw.pop(k, None)
         await conn.execute("UPDATE hive_instances SET carrier_config = ?, updated_at = datetime('now') "
                            "WHERE id = ? AND carrier = ?", (json.dumps(raw), machine_id, CARRIER))
         await conn.commit()
@@ -171,14 +184,11 @@ async def release_update_claim(machine_id: str) -> None:
 
 # -- settings ------------------------------------------------------------------------------
 
-def check_settings(ssh_host: Any, source_profile: Any = "", mounts: Any = None, cert_renew_hint: Any = "",
-                   remote_port: Any = 18321) -> None:
-    """ValueError for anything that may not reach the machine's shell or its config file. An
-    empty *source_profile* and *mounts* None mean the install finds them on the machine."""
+def check_settings(ssh_host: Any, mounts: Any = None, cert_renew_hint: Any = "", remote_port: Any = 18321) -> None:
+    """ValueError for anything that may not reach the machine's shell or its config file.
+    *mounts* None means the install finds them on the machine."""
     if not ssh_tunnel.valid_host(ssh_host):
         raise ValueError("not an SSH host (letters, digits, dots and hyphens, optionally user@)")
-    if not isinstance(source_profile, str) or (source_profile and not PROFILE_RE.fullmatch(source_profile)):
-        raise ValueError("not an AWS profile name")
     if mounts is not None and (not isinstance(mounts, (list, tuple)) or not all(_mount_ok(m) for m in mounts)):
         raise ValueError("each mount is an absolute path, optionally ending in :ro "
                          "(not the root, not a docker socket)")
@@ -193,17 +203,6 @@ def check_settings(ssh_host: Any, source_profile: Any = "", mounts: Any = None, 
 STANDARD_TOP_DIRS = frozenset({"bin", "boot", "dev", "etc", "home", "lib", "lib32", "lib64", "libx32",
                                "lost+found", "media", "mnt", "opt", "proc", "root", "run", "sbin", "snap",
                                "srv", "sys", "tmp", "usr", "var"})
-#: at most this many of the machine's profiles are asked for their identity on an install
-MAX_PROFILE_TRIES = 8
-
-
-def _found_profiles(facts: dict[str, str]) -> list[str]:
-    """The machine's AWS profile names (its preflight's ``profiles``) that may be used as the
-    source of the Hive's role: of a profile name's shape, not one SwarmAI added
-    (``swarmai-hive-*``), in name order."""
-    names = {n.strip() for n in (facts.get("profiles") or "").split(",")}
-    return sorted(n for n in names if n and PROFILE_RE.fullmatch(n) and not n.startswith("swarmai-hive-"))
-
 
 def _found_mounts(facts: dict[str, str], home: str) -> list[str]:
     """The machine's own top-level directories to mount (its preflight's ``topdirs``,
@@ -329,10 +328,7 @@ elif docker info 2>&1 | grep -qi "permission denied"; then echo "docker=denied"
 else echo "docker=stopped"; fi
 if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then echo "port=taken"; else echo "port=free"; fi
 if docker inspect swarmai-hive >/dev/null 2>&1; then echo "hive_container=yes"; else echo "hive_container=no"; fi
-# what the Host chooses from (hive/ssh_provisioner._found_profiles, _found_mounts)
-profiles="$( { sed -n -e 's/^\[profile \([^]]*\)\][[:space:]]*$/\1/p' -e 's/^\[default\][[:space:]]*$/default/p' "$home/.aws/config"
-  sed -n 's/^\[\([^]]*\)\][[:space:]]*$/\1/p' "$home/.aws/credentials"; } 2>/dev/null | sort -u | paste -sd, - )"
-echo "profiles=$profiles"
+# what the Host chooses the mounts from (hive/ssh_provisioner._found_mounts)
 dirs=""
 for d in /*; do
   [ -d "$d" ] || continue
@@ -346,6 +342,7 @@ echo "topdirs=$dirs"
 echo "home_real=$(readlink -f "$home" 2>/dev/null || echo "$home")"
 '''
 
+# every script that names the image is given its tag (``_tag``: the version and the helper's)
 BUILD_SH = r'''
 set -eu
 ver="$1"; uid="$2"; gid="$3"; user="$4"; home="$5"
@@ -365,16 +362,70 @@ docker run --rm --network host -u "$(id -u):$(id -g)" -v "$HOME:$HOME" -e HOME="
   'import boto3, json; print(json.dumps(boto3.client("sts").get_caller_identity()["Arn"]))'
 '''
 
+# the identity of the Hive running now, from inside its own container (its environment's AWS_PROFILE)
+WHOAMI_SH = r'''
+set -eu
+docker exec swarmai-hive /opt/swarmai/backend/.venv/bin/python -c \
+  'import boto3, json; print(json.dumps(boto3.client("sts").get_caller_identity()["Arn"]))'
+'''
+
+# A new key for the machine's identity, made inside the image with no network and only the
+# identity folder mounted: written next to the current one (key.pem.new, 0600) until its
+# certificate comes (CERT_SH). Only the certificate request is printed; the key never leaves.
+KEYGEN_SH = r'''
+set -eu
+ver="$1"
+dir="$HOME/.swarmai-hive/identity"; mkdir -p "$dir"; chmod 700 "$HOME/.swarmai-hive" "$dir"
+docker run --rm --network none -u "$(id -u):$(id -g)" -v "$dir:$dir" -e ID_DIR="$dir" \
+  "swarmai-hive-ssh:$ver" /opt/swarmai/backend/.venv/bin/python -c '
+import os
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+key = ec.generate_private_key(ec.SECP256R1())
+path = os.path.join(os.environ["ID_DIR"], "key.pem.new")
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.write(fd, key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                               serialization.NoEncryption()))
+os.close(fd)
+req = x509.CertificateSigningRequestBuilder().subject_name(
+    x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "swarmai-hive")])).sign(key, hashes.SHA256())
+print(req.public_bytes(serialization.Encoding.PEM).decode(), end="")
+'
+'''
+
+# The certificate the Host signed (stdin) for the key KEYGEN_SH made: both put in place. The
+# helper reads both files at each credential fetch; credentials already given stay valid.
+CERT_SH = r'''
+set -eu
+dir="$HOME/.swarmai-hive/identity"
+[ -f "$dir/key.pem.new" ] || { echo "the machine has no new key for this certificate" >&2; exit 1; }
+(umask 077; cat > "$dir/cert.pem.new")
+grep -q -- "-----BEGIN CERTIFICATE-----" "$dir/cert.pem.new" || { echo "no certificate came" >&2; exit 1; }
+chmod 600 "$dir/cert.pem.new"
+mv -f "$dir/key.pem.new" "$dir/key.pem"; mv -f "$dir/cert.pem.new" "$dir/cert.pem"
+echo cert=written
+'''
+
+# The Hive's AWS profile swarmai-hive-<id> (<id>: the machine's name, or <name>-ra while it
+# moves to its own identity): written between marker lines, replacing the block of that id;
+# nothing else in the file changes. credential_process does not expand ~: paths are absolute.
 PROFILE_SH = r'''
 set -eu
-name="$1"; role="$2"; source="$3"; region="$4"
+id="$1"; anchor="$2"; profile="$3"; role="$4"; region="$5"
 cfg="$HOME/.aws/config"; mkdir -p "$HOME/.aws"; chmod 700 "$HOME/.aws"; touch "$cfg"; chmod 600 "$cfg"
-begin="# swarmai-hive $name begin (written by SwarmAI; removed with the machine)"
-if grep -qF "$begin" "$cfg"; then echo "profile=kept"; exit 0; fi
+idd="$HOME/.swarmai-hive/identity"
+begin="# swarmai-hive $id begin"; end="# swarmai-hive $id end"
 cp -p "$cfg" "$cfg.swarmai-bak.$(date +%s)"
-printf '\n%s\n[profile swarmai-hive-%s]\nrole_arn = %s\nsource_profile = %s\nregion = %s\n# swarmai-hive %s end\n' \
-  "$begin" "$name" "$role" "$source" "$region" "$name" >> "$cfg"
-echo "profile=added"
+# the earlier block of this id out, and the blank lines it leaves at the end (one comes back
+# before the new block): written again at each renewal, the file does not grow
+awk -v b="$begin" -v e="$end" 'index($0, b) == 1 {skip = 1; next} skip && index($0, e) == 1 {skip = 0; next} !skip' \
+  "$cfg" | awk '/^$/ {n++; next} {for (; n > 0; n--) print ""; print}' > "$cfg.swarmai-tmp"
+printf '\n%s (written by SwarmAI; removed with the machine)\n[profile swarmai-hive-%s]\ncredential_process = /opt/swarmai/bin/aws_signing_helper credential-process --certificate %s/cert.pem --private-key %s/key.pem --trust-anchor-arn %s --profile-arn %s --role-arn %s\nregion = %s\n%s\n' \
+  "$begin" "$id" "$idd" "$idd" "$anchor" "$profile" "$role" "$region" "$end" >> "$cfg.swarmai-tmp"
+chmod 600 "$cfg.swarmai-tmp"; mv "$cfg.swarmai-tmp" "$cfg"
+echo profile=written
 '''
 
 UNPROFILE_SH = r'''
@@ -456,6 +507,7 @@ set -u
 docker rm -f swarmai-hive swarmai-hive-old >/dev/null 2>&1 || true
 for img in $(docker images --format '{{.Repository}}:{{.Tag}}' swarmai-hive-ssh); do docker rmi "$img" >/dev/null 2>&1 || true; done
 rm -f "$HOME/.swarmai-hive/hive.env"
+rm -rf "$HOME/.swarmai-hive/identity"
 echo removed
 '''
 
@@ -543,14 +595,27 @@ async def _package(acct: dict[str, Any], region: str, bucket: str, version: str)
     return data
 
 
-def _context(package: bytes) -> bytes:
-    """The image's build context as a tar: the Dockerfile and the checked package."""
+def _tag(version: str) -> str:
+    """The image's tag: the Hive's version and the credential helper's, so an image built before
+    the helper was in it (same Hive version) is never taken as it is (BUILD_SH keeps a tag it has)."""
+    return f"{version}-h{ssh_identity.HELPER_VERSION}"
+
+
+async def _helper(facts: dict[str, str]) -> bytes:
+    """The credential helper for the machine's architecture, checked against its SHA256."""
+    return await asyncio.to_thread(ssh_identity.helper_binary, facts.get("arch", ""))
+
+
+def _context(package: bytes, helper: bytes) -> bytes:
+    """The image's build context as a tar: the Dockerfile, the checked package and the checked
+    credential helper."""
     from hive.ssh_image import DOCKERFILE
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
-        for name, body in (("Dockerfile", DOCKERFILE.encode()), ("swarmai-hive.tar.gz", package)):
+        for name, body, mode in (("Dockerfile", DOCKERFILE.encode(), 0o644), ("swarmai-hive.tar.gz", package, 0o644),
+                                 ("aws_signing_helper", helper, 0o755)):
             info = tarfile.TarInfo(name)
-            info.size, info.mode, info.mtime = len(body), 0o644, int(time.time())
+            info.size, info.mode, info.mtime = len(body), mode, int(time.time())
             tar.addfile(info, io.BytesIO(body))
     return buf.getvalue()
 
@@ -561,21 +626,16 @@ def role_name(name: str) -> str:
     return f"SwarmAI-Hive-{name}"
 
 
-def trust_policy(role_arn: str) -> dict[str, Any]:
-    return {"Version": "2012-10-17", "Statement": [{
-        "Effect": "Allow", "Principal": {"AWS": role_arn}, "Action": ["sts:AssumeRole", "sts:TagSession"]}]}
-
-
-async def _ensure_role(acct: dict[str, Any], region: str, name: str, trusted_role_arn: str) -> str:
+async def _ensure_role(acct: dict[str, Any], region: str, name: str, trust: dict[str, Any]) -> str:
     """The Hive's role, created or brought up to date: the EC2 Hive's inline policy and
-    ``HiveName`` tag (hive/provisioner._put_hive_role_policy), trusting *trusted_role_arn*."""
+    ``HiveName`` tag (hive/provisioner._put_hive_role_policy), with the trust policy *trust*."""
     from hive.provisioner import MANAGED_TAG, _boundary_arn, _put_hive_role_policy
     session = await _session(acct, region)
     rname = role_name(name)
 
     def ensure() -> str:
         iam = session.client("iam")
-        doc = json.dumps(trust_policy(trusted_role_arn))
+        doc = json.dumps(trust)
         try:
             kwargs: dict[str, Any] = {}
             boundary = _boundary_arn(session, iam)
@@ -593,13 +653,35 @@ async def _ensure_role(acct: dict[str, Any], region: str, name: str, trusted_rol
     return await asyncio.to_thread(ensure)
 
 
-async def _iam_role_arn(acct: dict[str, Any], region: str, assumed_arn: str) -> str:
-    """The IAM role ARN (with its path) of an assumed-role session ARN."""
-    m = _ROLE_ARN_RE.match(assumed_arn)
-    if not m:
-        raise SshInstallError(f"identity: the profile is not a role session ({assumed_arn[:80]})")
+async def _role_trust(acct: dict[str, Any], region: str, name: str) -> dict[str, Any]:
+    """The trust policy the Hive's role has now ({} when there is no such role)."""
     session = await _session(acct, region)
-    return await asyncio.to_thread(lambda: session.client("iam").get_role(RoleName=m.group(2))["Role"]["Arn"])
+
+    def get() -> dict[str, Any]:
+        iam = session.client("iam")
+        try:
+            doc = iam.get_role(RoleName=role_name(name))["Role"].get("AssumeRolePolicyDocument") or {}
+        except iam.exceptions.NoSuchEntityException:
+            return {}
+        if isinstance(doc, str):
+            from urllib.parse import unquote
+            doc = json.loads(unquote(doc))
+        return doc if isinstance(doc, dict) else {}
+    return await asyncio.to_thread(get)
+
+
+async def _set_role_trust(acct: dict[str, Any], region: str, name: str, trust: dict[str, Any]) -> None:
+    session = await _session(acct, region)
+    await asyncio.to_thread(lambda: session.client("iam").update_assume_role_policy(
+        RoleName=role_name(name), PolicyDocument=json.dumps(trust)))
+
+
+def _also_roles_anywhere(trust: dict[str, Any], anchor_arn: str, cn: str) -> dict[str, Any]:
+    """*trust* as it is (the person's role a machine was installed with) and this install's
+    Roles Anywhere certificate: a moving machine's old and new container both get credentials."""
+    kept = [st for st in (trust.get("Statement") or []) if isinstance(st, dict)
+            and not str(st.get("Sid") or "").startswith("RolesAnywhere")]
+    return {"Version": "2012-10-17", "Statement": kept + [ssh_identity.roles_anywhere_statement(anchor_arn, cn)]}
 
 
 async def _delete_role(acct: dict[str, Any], region: str, name: str) -> None:
@@ -633,7 +715,7 @@ def env_file(row: dict[str, Any], cfg: dict[str, Any], pass_hash: str, region: s
         "SWARMAI_PORT": str(int(cfg["remote_port"])),
         "SWARM_DATA_DIR": f"{cfg['_home']}/.swarmai-hive/data",
         "SWARMAI_HIVE_NAME": row["name"], "SWARMAI_HIVE_BUCKET": row["s3_bucket"], "AWS_REGION": region,
-        "AWS_PROFILE": f"swarmai-hive-{row['name']}",
+        "AWS_PROFILE": cfg.get("aws_profile") or f"swarmai-hive-{row['name']}",
         "CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "SWARM_RESUME_VIA_QUERY": "true",
         "HIVE_USER": row["auth_user"], "HIVE_PASS_HASH": pass_hash,
     }
@@ -732,54 +814,105 @@ async def _install(machine_id: str) -> None:
         row["s3_bucket"] = bucket
 
     package = await _package(acct_row, region, row["s3_bucket"], version)
-    await _run(host, _bash(BUILD_SH, version, str(uid), str(gid), user, home), _context(package),
+    helper = await _helper(facts)
+    tag = _tag(version)
+    await _run(host, _bash(BUILD_SH, tag, str(uid), str(gid), user, home), _context(package, helper),
                BUILD_TIMEOUT_S, "image")
 
-    account = str(acct_row.get("account_id"))
-    if cfg["source_profile"]:
-        out = await _run(host, _bash(IDENTITY_SH, version, cfg["source_profile"]), timeout=120, step="identity")
-        source_arn = _arn(out)
-        m = _ROLE_ARN_RE.match(source_arn)
-        if not m or m.group(1) != account or m.group(2).startswith("SwarmAI-Hive-"):
-            raise SshInstallError(f"identity: profile {cfg['source_profile']} is not a role of the SwarmAI account "
-                                  f"{account} other than a Hive's own ({source_arn[:80]})")
-    else:                                      # added without one: the profile that reaches the account
-        profile, source_arn, tried = await _find_profile(host, version, _found_profiles(facts), account)
-        if not profile:
-            raise SshInstallError(f"identity: no AWS profile on the machine reaches the SwarmAI account {account} "
-                                  f"(tried: {', '.join(tried) or 'none found in ~/.aws'}); sign in on the machine "
-                                  "with a profile of that account (for example aws configure sso), then Retry")
-        cfg["source_profile"] = profile
-        await _merge_config(machine_id, source_profile=profile)
-    trusted = await _iam_role_arn(acct_row, region, str(source_arn))
-    hive_role = await _ensure_role(acct_row, region, name, trusted)
+    cn = ssh_identity.cn_for(name, machine_id)
+    ca, anchor, hive_role, profile_arn = await _identity_aws(acct_row, region, name, cn)
     await _set(machine_id, iam_role_name=role_name(name))
-    await _run(host, _bash(PROFILE_SH, name, hive_role, cfg["source_profile"], region), step="profile")
-    # IAM is eventually consistent: a new role or trust can take a few seconds to be assumable
-    got: Any = ""
-    for _ in range(6):
-        out = await _retry_identity(host, version, name)
-        try:
-            got = json.loads(out.strip().splitlines()[-1]) if out.strip() else ""
-        except ValueError:
-            got = ""
-        if isinstance(got, str) and f":assumed-role/{role_name(name)}/" in got:
-            break
-        await asyncio.sleep(5)
-    else:
-        raise SshInstallError(f"profile check: swarmai-hive-{name} does not resolve to {role_name(name)} "
-                              f"({str(got)[:80] or 'no answer'})")
+    # recorded at once: a removal deletes the profile even when a later step fails
+    await _merge_config(machine_id, profile_arn=profile_arn, identity_region=region)
+    not_after = await _new_certificate(host, tag, ca, cn)
+    aws_profile = f"swarmai-hive-{name}"
+    await _run(host, _bash(PROFILE_SH, name, anchor, profile_arn, hive_role, region), step="profile")
+    await _check_identity(host, tag, aws_profile, name)
+    await _merge_config(machine_id, identity=IDENTITY, anchor_arn=anchor, role_arn=hive_role, cn=cn,
+                        not_after=not_after, aws_profile=aws_profile, renew_error=None)
+    cfg["aws_profile"] = aws_profile
 
     password = row.get("auth_password") or secrets.token_urlsafe(24)
     user_name = row.get("auth_user") or "admin"
     await _set(machine_id, auth_user=user_name, auth_password=password)
     row.update(auth_user=user_name, auth_password=password)
     pass_hash = await asyncio.to_thread(_hash, password)
-    await _run(host, _bash(START_SH, version, *cfg["mounts"]), env_file(row, cfg, pass_hash, region),
+    await _run(host, _bash(START_SH, tag, *cfg["mounts"]), env_file(row, cfg, pass_hash, region),
                timeout=120, step="start")
     await _health(machine_id, version=version)
     await _set(machine_id, status="running", version=version, error_message=None)
     logger.info("ssh_provisioner: %s runs the Hive v%s", name, version)
+
+
+#: ``carrier_config.identity`` of a machine with its own identity (one installed on a profile of
+#: the person's has none, and moves to it in its next update)
+IDENTITY = "rolesanywhere"
+#: a just-created role can take a few seconds before Roles Anywhere accepts it in a profile
+PROFILE_TRIES = 5
+
+
+async def _identity_aws(acct: dict[str, Any], region: str, name: str, cn: str,
+                        keep_trust: bool = False) -> tuple[Any, str, str, str]:
+    """In AWS: the Host's CA and its trust anchor in *region*, the Hive's role trusting only a
+    certificate of that anchor with the CN *cn* (*keep_trust*: and what it trusts now), and the
+    machine's Roles Anywhere profile. (CA, anchor ARN, role ARN, profile ARN)."""
+    session = await _session(acct, region)
+    ca, anchor = await asyncio.to_thread(ssh_identity.anchor_for, session, str(acct.get("account_id") or ""), region)
+    trust = ssh_identity.trust_policy(anchor, cn)
+    if keep_trust:
+        trust = _also_roles_anywhere(await _role_trust(acct, region, name), anchor, cn)
+    hive_role = await _ensure_role(acct, region, name, trust)
+    for attempt in range(PROFILE_TRIES):
+        try:
+            profile_arn = await asyncio.to_thread(ssh_identity.ensure_profile, session, region,
+                                                  f"swarmai-hive-{name}", hive_role)
+            break
+        except Exception as e:  # noqa: BLE001 — only AWS's "not yet" is waited out, anything else raised
+            code = ((getattr(e, "response", None) or {}).get("Error") or {}).get("Code")
+            if code != "ValidationException" or attempt == PROFILE_TRIES - 1:
+                raise
+            await asyncio.sleep(5)
+    _check_arns(anchor, hive_role, profile_arn)
+    return ca, anchor, hive_role, profile_arn
+
+
+def _check_arns(*arns: Any) -> None:
+    """Each value written into the machine's AWS config is an ARN of a fixed shape."""
+    for arn in arns:
+        if not isinstance(arn, str) or not _ARN_RE.fullmatch(arn):
+            raise SshInstallError("identity: an ARN for the machine's AWS config has an unexpected value")
+
+
+_CSR_RE = re.compile(r"-----BEGIN CERTIFICATE REQUEST-----[A-Za-z0-9+/=\s]+-----END CERTIFICATE REQUEST-----")
+
+
+async def _new_certificate(host: str, tag: str, ca: Any, cn: str, profile: tuple = ()) -> float:
+    """A new key on the machine (KEYGEN_SH), its certificate signed here for *cn* and put next
+    to it (CERT_SH). With *profile* (PROFILE_SH's arguments: a new trust anchor), the profile
+    is written in the same script, so the files and the anchor the profile names always match.
+    The certificate's end (Unix seconds)."""
+    out = await _run(host, _bash(KEYGEN_SH, tag), timeout=120, step="identity key")
+    m = _CSR_RE.search(out)
+    if not m:
+        raise SshInstallError("identity key: the machine gave no certificate request")
+    pem, not_after = await asyncio.to_thread(ssh_identity.sign_csr, ca, m.group(0) + "\n", cn)
+    await _run(host, _bash(CERT_SH + PROFILE_SH, *profile) if profile else _bash(CERT_SH), pem.encode(),
+               step="identity certificate")
+    return not_after
+
+
+async def _check_identity(host: str, tag: str, aws_profile: str, name: str) -> None:
+    """*aws_profile* resolves, inside the image, to the Hive's role. IAM is eventually
+    consistent: a new role or trust can take a few seconds to be assumable."""
+    got: Any = ""
+    for _ in range(6):
+        out = await _retry_identity(host, tag, aws_profile)
+        got = _arn(out)
+        if f":assumed-role/{role_name(name)}/" in got:
+            return
+        await asyncio.sleep(5)
+    raise SshInstallError(f"profile check: {aws_profile} does not resolve to {role_name(name)} "
+                          f"({str(got)[:80] or 'no answer'})")
 
 
 def _arn(out: str) -> str:
@@ -791,28 +924,9 @@ def _arn(out: str) -> str:
     return got if isinstance(got, str) else ""
 
 
-async def _find_profile(host: str, version: str, profiles: list[str], account: str) -> tuple[str, str, list[str]]:
-    """The first of *profiles* (at most MAX_PROFILE_TRIES) whose identity in the container is a
-    role of *account* other than a Hive's own narrow role (``SwarmAI-Hive-*``: a new Hive's role
-    trusting it would let that Hive's tasks assume this one): (profile, its ARN, the profiles
-    tried); ('', '', tried) when none is."""
-    tried: list[str] = []
-    for profile in profiles[:MAX_PROFILE_TRIES]:
-        tried.append(profile)
-        try:
-            arn = _arn(await _run(host, _bash(IDENTITY_SH, version, profile), timeout=120, step="identity"))
-        except SshInstallError as e:           # this profile cannot sign in: the next one
-            logger.info("ssh_provisioner: profile %s gives no identity (%s)", profile, str(e)[:120])
-            continue
-        m = _ROLE_ARN_RE.match(arn)
-        if m and m.group(1) == account and not m.group(2).startswith("SwarmAI-Hive-"):
-            return profile, arn, tried
-    return "", "", tried
-
-
-async def _retry_identity(host: str, version: str, name: str) -> str:
+async def _retry_identity(host: str, tag: str, aws_profile: str) -> str:
     try:
-        return await _run(host, _bash(IDENTITY_SH, version, f"swarmai-hive-{name}"), timeout=120, step="profile check")
+        return await _run(host, _bash(IDENTITY_SH, tag, aws_profile), timeout=120, step="profile check")
     except SshInstallError as e:
         logger.info("ssh_provisioner: profile check not yet (%s)", e)
         return ""
@@ -833,7 +947,8 @@ async def _guarded(machine_id: str, coro) -> None:
     try:
         await coro
     except Exception as e:  # noqa: BLE001 — every failure ends in 'error' with why
-        why = str(e) if isinstance(e, (SshInstallError, ValueError)) else f"{type(e).__name__}: {str(e)[:200]}"
+        why = str(e) if isinstance(e, (SshInstallError, ssh_identity.IdentityError, ValueError)) \
+            else f"{type(e).__name__}: {str(e)[:200]}"
         logger.warning("ssh_provisioner: %s failed (%s)", machine_id, why)
         try:
             await _set(machine_id, status="error", error_message=why[:500])
@@ -850,19 +965,19 @@ def _keep(coro, name: str) -> None:
     task.add_done_callback(_TASKS.discard)
 
 
-async def add(ssh_host: str, source_profile: str = "", name: Optional[str] = None, mounts: Optional[tuple] = None,
+async def add(ssh_host: str, name: Optional[str] = None, mounts: Optional[tuple] = None,
               cert_renew_hint: str = "", reaches_private: bool = True, general_tasks: bool = True,
               remote_port: int = 18321) -> dict[str, Any]:
     """Record a new SSH machine (``provisioning``) and install it in the background.
     ValueError for unusable settings; LookupError when the SwarmAI account is not connected;
-    FileExistsError for a name already taken. Only *ssh_host* is needed: an empty
-    *source_profile* and *mounts* None are found on the machine by the install (and the
-    mounts again at each update); given ones are kept as given."""
+    FileExistsError for a name already taken. Only *ssh_host* is needed: *mounts* None are
+    found on the machine by the install (and again at each update); given ones are kept as
+    given. The machine's AWS identity is its own (``_identity_aws``)."""
     import uuid
 
     import aiosqlite
     from hive import accounts
-    check_settings(ssh_host, source_profile, None if mounts is None else list(mounts), cert_renew_hint, remote_port)
+    check_settings(ssh_host, None if mounts is None else list(mounts), cert_renew_hint, remote_port)
     name = name or default_name(ssh_host)
     if not NAME_RE.fullmatch(name):
         raise ValueError("a name is lower-case letters, digits and hyphens, starting with a letter")
@@ -870,7 +985,7 @@ async def add(ssh_host: str, source_profile: str = "", name: Optional[str] = Non
         raise LookupError("connect the SwarmAI account first (Settings)")
     await accounts.ensure_swarmai_row(Path(_db_path()))
     cfg = {"ssh_host": ssh_host, "remote_port": int(remote_port), "local_port": await _free_local_port(),
-           "source_profile": source_profile, "reaches_private": bool(reaches_private),
+           "reaches_private": bool(reaches_private),
            "general_tasks": bool(general_tasks), "mounts": list(mounts or ()), "mounts_auto": mounts is None,
            "cert_renew_hint": cert_renew_hint}
     now = _iso()
@@ -919,45 +1034,72 @@ async def _heartbeat(machine_id: str, stop: asyncio.Event) -> None:
 
 async def update(machine_id: str, version: str) -> None:
     """A claimed ('updating') machine to *version*: new image, container swapped, ``/health``
-    at that version; the old container restored when the new one does not come up. Ends
-    'running' (either version) or 'error' with why."""
+    at that version and the new container's identity the Hive's role; the old container
+    restored when the new one does not come up. A machine without its own identity yet
+    (installed on a profile of the person's) moves to it here (design §4.5): before the swap
+    the role trusts both, the new container uses a new profile ``swarmai-hive-<name>-ra``;
+    once the new one is kept, the role trusts only the certificate and the old profile is
+    removed. Ends 'running' (either version) or 'error' with why."""
     from core.carriers.ssh import config
     stop = asyncio.Event()
     beat = asyncio.get_running_loop().create_task(_heartbeat(machine_id, stop))
-    swapped = False
+    swapped = committed = False
     try:
         if not VERSION_RE.fullmatch(version):
             raise SshInstallError("update: unexpected version")
         row = await _row(machine_id)
         cfg = config(row)
-        facts = _parse_kv(await _run(cfg["ssh_host"], _bash(PREFLIGHT_SH, str(cfg["remote_port"])), step="preflight"))
+        host, name = cfg["ssh_host"], row["name"]
+        facts = _parse_kv(await _run(host, _bash(PREFLIGHT_SH, str(cfg["remote_port"])), step="preflight"))
         uid, gid, user, home = _who(facts)
         if cfg["mounts_auto"]:                 # a directory added to the machine since is mounted now
             cfg["mounts"] = _found_mounts(facts, home)
         acct = await _account(row["account_ref"])
         region = _region(acct)
         package = await _package(acct, region, row["s3_bucket"], version)
-        await _run(cfg["ssh_host"], _bash(BUILD_SH, version, str(uid), str(gid), user, home),
-                   _context(package), BUILD_TIMEOUT_S, "image")
+        helper = await _helper(facts)
+        tag = _tag(version)
+        await _run(host, _bash(BUILD_SH, tag, str(uid), str(gid), user, home), _context(package, helper),
+                   BUILD_TIMEOUT_S, "image")
+        moving = cfg["identity"] != IDENTITY
+        if moving:                             # the old container keeps its profile and the trust in it
+            cn = ssh_identity.cn_for(name, machine_id)
+            ca, anchor, hive_role, profile_arn = await _identity_aws(acct, region, name, cn, keep_trust=True)
+            await _merge_config(machine_id, profile_arn=profile_arn, identity_region=region)
+            not_after = await _new_certificate(host, tag, ca, cn)
+            cfg["aws_profile"] = f"swarmai-hive-{name}-ra"
+            await _run(host, _bash(PROFILE_SH, f"{name}-ra", anchor, profile_arn, hive_role, region), step="profile")
+            await _check_identity(host, tag, cfg["aws_profile"], name)
         # the environment again, from the Host (on stdin): nothing found on the machine is used
         if not row.get("auth_password"):
             raise SshInstallError("update: the machine has no password recorded; retry its install")
         cfg["_home"] = home
         pass_hash = await asyncio.to_thread(_hash, row["auth_password"])
-        await _run(cfg["ssh_host"], _bash(SWAP_SH, version, *cfg["mounts"]), env_file(row, cfg, pass_hash, region),
+        await _run(host, _bash(SWAP_SH, tag, *cfg["mounts"]), env_file(row, cfg, pass_hash, region),
                    timeout=180, step="update")
         swapped = True
         await _health(machine_id, version=version)
-        await _run(cfg["ssh_host"], _bash(COMMIT_SH, version), timeout=120, step="update")
+        got = _arn(await _run(host, _bash(WHOAMI_SH), timeout=120, step="identity check"))
+        if f":assumed-role/{role_name(name)}/" not in got:
+            raise SshInstallError(f"identity check: the new container is not {role_name(name)} ({got[:80] or 'no answer'})")
+        await _run(host, _bash(COMMIT_SH, tag), timeout=120, step="update")
+        committed = True
+        if moving:                             # the identity the running container has, recorded at once
+            await _merge_config(machine_id, identity=IDENTITY, anchor_arn=anchor, role_arn=hive_role, cn=cn,
+                                not_after=not_after, aws_profile=cfg["aws_profile"], renew_error=None,
+                                move_pending=True)
+            await _set(machine_id, version=version)
+            await _finish_move(machine_id)
         if cfg["mounts_auto"]:                 # recorded once the container with them is the one running
             await _merge_config(machine_id, mounts=cfg["mounts"])
         await _set(machine_id, status="running", version=version, error_message=None)
-        logger.info("ssh_provisioner: %s updated to v%s", row["name"], version)
+        logger.info("ssh_provisioner: %s updated to v%s", name, version)
     except Exception as e:  # noqa: BLE001 — restore what ran before, say why
         why = str(e)[:400]
-        # before the swap the old container never stopped: the machine still runs it
-        still_runs = not swapped
-        if swapped:
+        # before the swap the old container never stopped: the machine still runs it; once the
+        # new one is kept (committed) there is no old one, and the new one runs
+        still_runs = not swapped or committed
+        if swapped and not committed:
             try:
                 row = await _row(machine_id)
                 await _run(config(row)["ssh_host"], _bash(ROLLBACK_SH), timeout=120, step="rollback")
@@ -967,8 +1109,9 @@ async def update(machine_id: str, version: str) -> None:
                 why += f"; restoring the previous version failed too ({str(e2)[:120]})"
         logger.warning("ssh_provisioner: update of %s failed (%s)", machine_id, why)
         try:
+            kept = {"version": version} if committed else {}    # the new container is the one running
             await _set(machine_id, status="running" if still_runs else "error",
-                       error_message=f"update to v{version} failed: {why}"[:500])
+                       error_message=f"update to v{version} failed: {why}"[:500], **kept)
         except Exception:  # noqa: BLE001
             pass
     finally:
@@ -976,19 +1119,142 @@ async def update(machine_id: str, version: str) -> None:
         await beat
 
 
+async def _finish_move(machine_id: str) -> None:
+    """The end of a machine's move to its own identity, once its new container is kept: the
+    role trusts only the certificate, the person's profile block goes. Run again by
+    ``renew_due`` until it succeeds (``move_pending``)."""
+    from core.carriers.ssh import config
+    row = await _row(machine_id)
+    cfg = config(row)
+    acct = await _account(row["account_ref"])
+    region = cfg["identity_region"] or _region(acct)
+    await _set_role_trust(acct, region, row["name"], ssh_identity.trust_policy(cfg["anchor_arn"], cfg["cn"]))
+    await _run(cfg["ssh_host"], _bash(UNPROFILE_SH, row["name"]), step="update profile")
+    await _merge_config(machine_id, _drop=("source_profile", "move_pending"))
+
+
+# -- the machine's certificate, renewed (design §4.4) ---------------------------------------
+
+#: machines whose renewal is under way (one at a time per machine)
+_RENEWING: set[str] = set()
+
+
+def renewal_due(cfg: dict[str, Any], now: Optional[float] = None) -> bool:
+    """A machine with its own identity whose certificate has less than RENEW_BEFORE_S left
+    (or no end recorded)."""
+    if cfg.get("identity") != IDENTITY:
+        return False
+    until = cfg.get("not_after")
+    now = time.time() if now is None else now
+    return not isinstance(until, (int, float)) or until - now < ssh_identity.RENEW_BEFORE_S
+
+
+async def renew_due(now: Optional[float] = None) -> list[str]:
+    """Start the renewal of every running machine whose certificate is due (``renewal_due``),
+    and the end of a move a failed step left (``move_pending``); a machine with neither is not
+    contacted. Names of the machines started. Run by hive_idle.check_once every round,
+    whatever the versions and the Host's build."""
+    from core.carriers import ssh
+    from core.carriers.ssh import config
+    started: list[str] = []
+    for row in await ssh._rows():
+        if row.get("status") != "running" or row["id"] in _RENEWING:
+            continue
+        try:
+            cfg = config(row)
+        except ValueError:
+            continue
+        if not (cfg["move_pending"] or renewal_due(cfg, now)):
+            continue
+        _RENEWING.add(row["id"])
+        _keep(_renew_guarded(row["id"], cfg["move_pending"]), f"ssh-renew-{row['id'][:8]}")
+        started.append(str(row["name"]))
+    return started
+
+
+async def _renew_guarded(machine_id: str, finish_move: bool = False) -> None:
+    try:
+        await (_finish_move(machine_id) if finish_move else renew(machine_id))
+    except Exception as e:  # noqa: BLE001 — said on the card; tried again next round
+        why = str(e) if isinstance(e, (SshInstallError, ssh_identity.IdentityError, ValueError)) \
+            else f"{type(e).__name__}: {str(e)[:200]}"
+        logger.warning("ssh_provisioner: renewing the identity of %s failed (%s)", machine_id, why)
+        try:
+            await _merge_config(machine_id, renew_error=why[:300])
+        except Exception:  # noqa: BLE001 — the row may be gone
+            pass
+    finally:
+        _RENEWING.discard(machine_id)
+
+
+async def renew(machine_id: str) -> float:
+    """A new key and certificate for a running machine with its own identity (its container
+    keeps running: the helper reads the files at each credential fetch). A trust anchor that
+    changed (the CA rotated, or the Host's CA made again) is brought into the role's trust and
+    the profile: the role trusts both anchors until the machine resolves with the new one, then
+    only the new one. The end is recorded only once the profile resolves to the Hive's role with the
+    new certificate; until then the next round tries again. The new certificate's end."""
+    from core.carriers.ssh import config
+    row = await _row(machine_id)
+    cfg = config(row)
+    if cfg["identity"] != IDENTITY or not row.get("version"):
+        raise SshInstallError("renew: the machine has no identity of its own yet")
+    name, host = row["name"], cfg["ssh_host"]
+    acct = await _account(row["account_ref"])
+    region = cfg["identity_region"] or _region(acct)
+    cn = cfg["cn"] or ssh_identity.cn_for(name, machine_id)
+    session = await _session(acct, region)
+    account = str(acct.get("account_id") or "")
+    ca, anchor = await asyncio.to_thread(ssh_identity.anchor_for, session, account, region)
+    aws_profile = cfg["aws_profile"] or f"swarmai-hive-{name}"
+    role_arn = cfg["role_arn"] or f"arn:aws:iam::{account}:role/{role_name(name)}"
+    _check_arns(anchor, role_arn, cfg["profile_arn"])
+    moved = anchor != cfg["anchor_arn"]
+    if moved:                                  # both anchors until the machine works with the new one
+        both = ssh_identity.trust_policy(anchor, cn)
+        if cfg["anchor_arn"]:
+            both["Statement"].append(dict(ssh_identity.roles_anywhere_statement(cfg["anchor_arn"], cn),
+                                          Sid="RolesAnywherePrevious"))
+        await _set_role_trust(acct, region, name, both)
+    tag = _tag(str(row["version"]))
+    profile = (aws_profile.removeprefix("swarmai-hive-"), anchor, cfg["profile_arn"], role_arn, region) if moved else ()
+    not_after = await _new_certificate(host, tag, ca, cn, profile)
+    await _check_identity(host, tag, aws_profile, name)
+    if moved:
+        await _set_role_trust(acct, region, name, ssh_identity.trust_policy(anchor, cn))
+    await _merge_config(machine_id, not_after=not_after, anchor_arn=anchor, renew_error=None)
+    logger.info("ssh_provisioner: %s has a new identity certificate", name)
+    return not_after
+
+
 async def remove(machine_id: str) -> dict[str, Any]:
-    """Remove the Hive from the machine (container, images, environment file, the added
-    profile), its role, then its row. The Hive's data stays on the machine. A machine that
-    cannot be reached is still removed here; what was left on it is said."""
+    """Remove the Hive from the machine (container, images, environment file, its identity,
+    the added profile), its Roles Anywhere profile and its role, then its row. The trust
+    anchor and the Host's CA stay for the other machines. The Hive's data stays on the
+    machine. A machine that cannot be reached is still removed here; what was left on it is
+    said."""
     from core.carriers.ssh import config
     row = await _row(machine_id)
     left: list[str] = []
+    cfg: dict[str, Any] = {}
     try:
         cfg = config(row)
         await _run(cfg["ssh_host"], _bash(REMOVE_SH), timeout=120, step="remove")
-        await _run(cfg["ssh_host"], _bash(UNPROFILE_SH, row["name"]), step="remove profile")
+        # its own block, and the one a move writes (left by a move that did not finish)
+        ids = {row["name"], f"{row['name']}-ra", str(cfg.get("aws_profile") or "").removeprefix("swarmai-hive-")} - {""}
+        for profile_id in sorted(ids):
+            await _run(cfg["ssh_host"], _bash(UNPROFILE_SH, profile_id), step="remove profile")
     except Exception as e:  # noqa: BLE001 — unreachable: say what may be left
-        left.append(f"on the machine: the container and the swarmai-hive-{row['name']} profile ({str(e)[:160]})")
+        left.append(f"on the machine: the container, its identity and the swarmai-hive-{row['name']} profile "
+                    f"({str(e)[:160]})")
+    try:
+        acct = await _account(row["account_ref"])
+        if cfg.get("profile_arn"):
+            region = cfg.get("identity_region") or _region(acct)
+            session = await _session(acct, region)
+            await asyncio.to_thread(ssh_identity.delete_profile, session, region, cfg["profile_arn"])
+    except Exception as e:  # noqa: BLE001
+        left.append(f"in AWS: the Roles Anywhere profile swarmai-hive-{row['name']} ({str(e)[:160]})")
     try:
         acct = await _account(row["account_ref"])
         await _delete_role(acct, acct.get("default_region") or "us-east-1", row["name"])

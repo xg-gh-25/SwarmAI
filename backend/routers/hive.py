@@ -1291,10 +1291,6 @@ async def elastic_disable(location_id: str):
 
 class SshMachineAdd(BaseModel):
     ssh_host: str = Field(..., max_length=320)
-    # the AWS profile on the machine that reaches the SwarmAI account; the Hive's own role
-    # is assumed from it (hive/ssh_provisioner, D4)
-    # left out: the install finds the profile on the machine that reaches the account
-    source_profile: str = Field(default="", max_length=64)
     name: Optional[str] = Field(default=None, max_length=41)
     # left out: the machine's own top-level directories, found at each install and update
     mounts: Optional[list[str]] = Field(default=None, max_length=12)
@@ -1311,8 +1307,10 @@ class SshMachineOptions(BaseModel):
 
 
 #: the settings shown for a machine (never its Hive password)
-_SSH_SHOWN = ("ssh_host", "remote_port", "local_port", "source_profile", "reaches_private",
-              "general_tasks", "mounts", "mounts_auto", "cert_renew_hint")
+#: and its own AWS identity: ``identity`` (none until it has one), its certificate's end
+#: ``not_after`` and why its last renewal failed (``renew_error``)
+_SSH_SHOWN = ("ssh_host", "remote_port", "local_port", "reaches_private", "general_tasks", "mounts",
+              "mounts_auto", "cert_renew_hint", "identity", "not_after", "renew_error")
 
 
 async def _ssh_rows() -> list[dict]:
@@ -1373,7 +1371,7 @@ async def ssh_add(body: SshMachineAdd):
     _require_desktop()
     from hive import ssh_provisioner
     try:
-        return await ssh_provisioner.add(body.ssh_host, body.source_profile, body.name,
+        return await ssh_provisioner.add(body.ssh_host, body.name,
                                          None if body.mounts is None else tuple(body.mounts),
                                          body.cert_renew_hint, body.reaches_private, body.general_tasks,
                                          body.remote_port)

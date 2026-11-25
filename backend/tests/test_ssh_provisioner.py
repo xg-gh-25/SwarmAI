@@ -4,8 +4,9 @@ docs/design/2026-11-24-swarm-out-ssh-machine.md §5.3-§5.4, §13 invariant 11).
 The machine and AWS are replaced by recorders: every ssh call's script, arguments and stdin, and
 every role call, are kept. Questions: (1) does an install run its steps in order, send the
 Dockerfile with a package checked against its checksums.txt, give the machine only the
-password's hash (never the password, never on a command line), add one profile, check the
-assumed role and end 'running'; (2) is a package that does not match refused; (3) does a
+password's hash (never the password, never on a command line), give the machine its own
+identity (hive/ssh_identity: tests/test_ssh_identity.py asks the rest), add one profile,
+check the assumed role and end 'running'; (2) is a package that does not match refused; (3) does a
 failed step end 'error' with the step's name, and a retry run again to 'running'; (4) does an
 update whose new container does not come up start the old one again, keep a fresh heartbeat
 while it runs, and does an idle machine behind the Host get updated by itself; (5) does a
@@ -28,12 +29,37 @@ PACKAGE = b"the hive package"
 VERSION = "2.5.5"
 
 
+def _csr() -> tuple[str, str]:
+    """A key made the way the machine makes it, and its certificate request: (key PEM, CSR PEM)."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    req = x509.CertificateSigningRequestBuilder().subject_name(
+        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "swarmai-hive")])).sign(key, hashes.SHA256())
+    return pem, req.public_bytes(serialization.Encoding.PEM).decode()
+
+
+def _hive_of(profile: str) -> str:
+    """The machine a Hive profile is of: swarmai-hive-<name>, or swarmai-hive-<name>-ra."""
+    return profile[len("swarmai-hive-"):].removesuffix("-ra")
+
+
 class Machine:
-    """The machine: answers each script by what it is, records each call."""
+    """The machine: answers each script by what it is, records each call. Its keys are made
+    here (as the machine makes them) and kept here: ``keys``; the certificates it is sent:
+    ``certs``. ``whoami``: what the running container's identity is (None: its Hive's role)."""
 
     def __init__(self, fail: str = ""):
         self.calls: list[tuple[str, str, bytes]] = []
         self.fail = fail
+        self.keys: list[str] = []
+        self.certs: list[str] = []
+        self.whoami = None
+        self.hive = ""
 
     async def run(self, host, remote, data=None, timeout=60, step=""):
         self.calls.append((step, remote, data or b""))
@@ -42,12 +68,22 @@ class Machine:
         if step == "preflight":
             return ("uid=1001\ngid=100\nuser=alice\nhome=/home/alice\narch=x86_64\ncores=4\nmem_gb=15\n"
                     "disk_free_gb=42\ndocker=ok\nport=free\nhive_container=no\n")
+        if step == "identity key":
+            key, req = _csr()
+            self.keys.append(key)
+            return "WARNING: docker said something first\n" + req
+        if step == "identity certificate":
+            self.certs.append((data or b"").decode())
+            return "cert=written\n"
         if step in ("identity", "profile check"):
             profile = remote.rsplit(" ", 1)[-1].strip("'")
             if profile.startswith("swarmai-hive-"):
-                hive = profile[len("swarmai-hive-"):]
-                return json.dumps(f"arn:aws:sts::123456789012:assumed-role/SwarmAI-Hive-{hive}/botocore-session-1") + "\n"
+                self.hive = _hive_of(profile)
+                return json.dumps(f"arn:aws:sts::123456789012:assumed-role/SwarmAI-Hive-{self.hive}/botocore-session-1") + "\n"
             return json.dumps("arn:aws:sts::123456789012:assumed-role/Admin/alice-Isengard") + "\n"
+        if step == "identity check":
+            who = self.whoami or f"arn:aws:sts::123456789012:assumed-role/SwarmAI-Hive-{self.hive}/s"
+            return json.dumps(who) + "\n"
         return "ok\n"
 
     def steps(self) -> list[str]:
@@ -57,6 +93,7 @@ class Machine:
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     db = store.make(tmp_path, monkeypatch)
+    monkeypatch.setattr("config.get_app_data_dir", lambda: tmp_path / "app")
     monkeypatch.setattr("hive.accounts.swarmai_account", lambda: {"account_id": store.ACCOUNT, "region": "us-east-1"})
 
     async def ensure_row(path):
@@ -64,10 +101,16 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr("hive.accounts.ensure_swarmai_row", ensure_row)
     monkeypatch.setattr(sp, "_host_version", lambda: VERSION)
 
-    # never AWS from a test: every session is refused, the bucket is the store's
-    async def no_session(acct, region):
-        raise AssertionError("a test reached AWS")
-    monkeypatch.setattr(sp, "_session", no_session)
+    # never AWS from a test: every session is the recorder's, the bucket is the store's
+    aws = store.FakeAWS()
+
+    async def session(acct, region):
+        return aws.session(region)
+    monkeypatch.setattr(sp, "_session", session)
+
+    async def helper(facts):
+        return b"the credential helper"
+    monkeypatch.setattr(sp, "_helper", helper)
 
     async def bucket(acct, region):
         return store.BUCKET
@@ -78,17 +121,14 @@ def world(tmp_path, monkeypatch):
         return PACKAGE
     monkeypatch.setattr(sp, "_package", package)
 
-    async def iam_role_arn(acct, region, assumed):
-        roles.append(("trust", assumed))
-        return "arn:aws:iam::123456789012:role/Admin"
-
-    async def ensure_role(acct, region, name, trusted):
-        roles.append(("role", name, trusted))
+    async def ensure_role(acct, region, name, trust):
+        roles.append(("role", name, trust))
+        aws.trust[sp.role_name(name)] = trust
         return f"arn:aws:iam::123456789012:role/SwarmAI-Hive-{name}"
 
     async def delete_role(acct, region, name):
         roles.append(("delete", name))
-    monkeypatch.setattr(sp, "_iam_role_arn", iam_role_arn)
+        aws.trust.pop(sp.role_name(name), None)
     monkeypatch.setattr(sp, "_ensure_role", ensure_role)
     monkeypatch.setattr(sp, "_delete_role", delete_role)
     healthy = {"ok": True}
@@ -102,14 +142,15 @@ def world(tmp_path, monkeypatch):
     async def no_sleep(*a):
         return None
     monkeypatch.setattr(sp.asyncio, "sleep", no_sleep)
-    return {"db": db, "roles": roles, "healthy": healthy, "monkeypatch": monkeypatch}
+    return {"db": db, "roles": roles, "healthy": healthy, "monkeypatch": monkeypatch, "aws": aws,
+            "app": tmp_path / "app"}
 
 
 def _install(world, machine: Machine) -> str:
     world["monkeypatch"].setattr(sp, "_run", machine.run)
 
     async def go():
-        row = await sp.add("dev-dsk-alice-1a-0123abcd.us-west-2.amazon.com", "swarmai",
+        row = await sp.add("dev-dsk-alice-1a-0123abcd.us-west-2.amazon.com",
                            mounts=("/apollo:ro", "/workplace"), cert_renew_hint="mwinit -o")
         await asyncio.gather(*list(sp._TASKS))
         return row["id"]
@@ -121,18 +162,21 @@ def test_add_steps_and_secrets(world):
     mid = _install(world, m)
     status, error, version, _ = store.status_of(world["db"], mid)
     assert (status, error, version) == ("running", None, VERSION)
-    assert m.steps() == ["preflight", "image", "identity", "profile", "profile check", "start"]
-    # the image is built from the Dockerfile and the checked package
+    assert m.steps() == ["preflight", "image", "identity key", "identity certificate", "profile",
+                         "profile check", "start"]
+    # the image is built from the Dockerfile, the checked package and the checked helper
     image = next(c for c in m.calls if c[0] == "image")
     with tarfile.open(fileobj=io.BytesIO(image[2])) as tar:
         names = tar.getnames()
-        assert names == ["Dockerfile", "swarmai-hive.tar.gz"]
+        assert names == ["Dockerfile", "swarmai-hive.tar.gz", "aws_signing_helper"]
         assert tar.extractfile("swarmai-hive.tar.gz").read() == PACKAGE
-    # the Hive's role trusts the person's role, the profile names it
-    assert world["roles"][:2] == [("trust", "arn:aws:sts::123456789012:assumed-role/Admin/alice-Isengard"),
-                                  ("role", "dev-dsk-alice-1a-0123abcd", "arn:aws:iam::123456789012:role/Admin")]
+        assert tar.getmember("aws_signing_helper").mode == 0o755
+    # the Hive's role trusts only its own certificate; the profile is the helper's, with that role
+    (_, name, trust), = world["roles"]
+    assert name == "dev-dsk-alice-1a-0123abcd" and [st["Principal"] for st in trust["Statement"]] == \
+        [{"Service": "rolesanywhere.amazonaws.com"}]
     profile = next(c for c in m.calls if c[0] == "profile")[1]
-    assert "SwarmAI-Hive-dev-dsk-alice-1a-0123abcd" in profile and "swarmai" in profile
+    assert "SwarmAI-Hive-dev-dsk-alice-1a-0123abcd" in profile and "credential_process" in sp.PROFILE_SH
     # the password never reaches the machine; its hash does, on stdin only
     import sqlite3
     with sqlite3.connect(world["db"]) as c:
@@ -142,7 +186,7 @@ def test_add_steps_and_secrets(world):
         assert password not in remote and password.encode() not in data, step
         assert "HIVE_PASS_HASH" not in remote, step
     env = next(c for c in m.calls if c[0] == "start" and c[2])[2].decode()
-    assert "HIVE_PASS_HASH=$2b$14$" in env and "SWARMAI_CARRIER=ssh" in env and "AWS_PROFILE=swarmai-hive-dev-dsk-alice-1a-0123abcd" in env  # pragma: allowlist secret  (a test value, not a credential)
+    assert "HIVE_PASS_HASH=$2b$14$" in env and "SWARMAI_CARRIER=ssh" in env and "AWS_PROFILE=swarmai-hive-dev-dsk-alice-1a-0123abcd\n" in env  # pragma: allowlist secret  (a test value, not a credential)
     start = [c for c in m.calls if c[0] == "start"][-1][1]
     assert "/apollo:ro" in start and "/workplace" in start
 
@@ -213,6 +257,8 @@ def test_update_rolls_back_on_failed_health(world, monkeypatch):
     status, error, version, _ = store.status_of(world["db"], mid)
     assert status == "running" and version == VERSION and "started again" in error
     assert m.steps()[-4:] == ["preflight", "image", "update", "rollback"] and beats == [mid]
+    # the image of the new version carries the helper's version in its tag
+    assert f"2.5.6-h{sp.ssh_identity.HELPER_VERSION}" in [c for c in m.calls if c[0] == "image"][-1][1]
     # the swap got the environment from the Host, on stdin
     env = next(c for c in reversed(m.calls) if c[0] == "update" and c[2])[2].decode()
     assert "HIVE_PASS_HASH=$2b$14$" in env and "SWARM_DATA_DIR=/home/alice/.swarmai-hive/data" in env  # pragma: allowlist secret  (a test value, not a credential)
@@ -221,7 +267,7 @@ def test_update_rolls_back_on_failed_health(world, monkeypatch):
     asyncio.run(sp.claim_update(mid))
     asyncio.run(sp.update(mid, "2.5.6"))
     assert store.status_of(world["db"], mid)[:3] == ("running", None, "2.5.6")
-    assert m.steps()[-1] == "update" and "swarmai-hive-old" in m.calls[-1][1]
+    assert m.steps()[-3:] == ["update", "identity check", "update"] and "swarmai-hive-old" in m.calls[-1][1]
 
     # an idle machine behind the Host's version is updated by itself, once per version
     from core import hive_idle, swarm_out
@@ -254,9 +300,11 @@ def test_remove_keeps_data(world):
     mid = _install(world, m)
     out = asyncio.run(sp.remove(mid))
     assert out["deleted"] and out["left"] == [] and ".swarmai-hive/data" in out["data_kept"]
-    assert m.steps()[-2:] == ["remove", "remove profile"]
-    script = m.calls[-2][1]
-    assert "docker rm -f swarmai-hive" in script and "rm -rf" not in script and "/data" not in script
+    # its profile block and the one a move writes
+    assert m.steps()[-3:] == ["remove", "remove profile", "remove profile"]
+    assert [c[1].rsplit(" ", 1)[-1] for c in m.calls[-2:]] == ["dev-dsk-alice-1a-0123abcd", "dev-dsk-alice-1a-0123abcd-ra"]
+    script = m.calls[-3][1]
+    assert "docker rm -f swarmai-hive" in script and "/data" not in script
     assert ("delete", "dev-dsk-alice-1a-0123abcd") in world["roles"]
     import sqlite3
     with sqlite3.connect(world["db"]) as c:
@@ -338,7 +386,7 @@ def _install_named(world, machine: Machine, name: str) -> str:
     world["monkeypatch"].setattr(sp, "_run", machine.run)
 
     async def go():
-        row = await sp.add("other-box.example.com", "swarmai", name=name, cert_renew_hint="mwinit -o")
+        row = await sp.add("other-box.example.com", name=name, cert_renew_hint="mwinit -o")
         await asyncio.gather(*list(sp._TASKS))
         return row["id"]
     return asyncio.run(go())
@@ -394,10 +442,8 @@ def test_follow_host_tries_again_after_a_lost_claim(world, monkeypatch):
 
 def test_settings_refuse_what_may_not_reach_the_machine():
     """The settings an SSH machine is added with: a mount is one normal absolute path
-    (optionally ':ro'), never the root or a docker socket; the profile and the hint are of
-    their fixed shapes."""
-    ok = dict(ssh_host="dev-dsk.example.com", source_profile="swarmai", mounts=["/apollo:ro", "/workplace"],
-              cert_renew_hint="mwinit -o")
+    (optionally ':ro'), never the root or a docker socket; the hint is of its fixed shape."""
+    ok = dict(ssh_host="dev-dsk.example.com", mounts=["/apollo:ro", "/workplace"], cert_renew_hint="mwinit -o")
     sp.check_settings(**ok)
     for fine in ("/var/lib/thing", "/runner", "/tmpfs", "/tmp/cache", "/home/alice/tmp"):
         sp.check_settings(**dict(ok, mounts=[fine]))
@@ -406,10 +452,6 @@ def test_settings_refuse_what_may_not_reach_the_machine():
                 "/var/run", "/run", "/var", "/tmp", "/tmp:ro"):
         with pytest.raises(ValueError):
             sp.check_settings(**dict(ok, mounts=[bad]))
-    sp.check_settings(**dict(ok, source_profile=""))       # empty: found on the machine at install
-    for bad in ("a b", "x;id", "$(id)", "-p"):
-        with pytest.raises(ValueError):
-            sp.check_settings(**dict(ok, source_profile=bad))
     for bad in ("two\nlines", "`id`", "$(id)", "a\\b", "x" * 121):
         with pytest.raises(ValueError):
             sp.check_settings(**dict(ok, cert_renew_hint=bad))

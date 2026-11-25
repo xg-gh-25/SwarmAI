@@ -6,7 +6,10 @@ The same list makes:
   admin), plus the permissions boundary every Hive role is created with. Scoped so the
   permissions cannot be turned into an administrator: a role can only be created with
   the SwarmAI boundary, only ``AmazonSSMManagedInstanceCore`` can be attached, the trust
-  policy of a Hive role cannot be changed, a Hive role can only be passed to EC2, tags can
+  policy of a Hive role is changed only while it carries the SwarmAI boundary (an SSH
+  machine's role moves to its own certificate, hive/ssh_provisioner; what a changed trust
+  gives is still only what the boundary allows), a Hive role can only be passed to EC2 and
+  to IAM Roles Anywhere, tags can
   only be written while creating (``ec2:CreateAction``), and stop / start / terminate /
   SSM commands / console output only reach instances tagged ``swarmai:managed``.
   CloudFront distributions cannot be scoped by resource; the template says so.
@@ -16,6 +19,12 @@ The same list makes:
   runtime named ``swarmai_elastic_hive`` (created only tagged ``swarmai:managed``), the
   logs only ``/aws/bedrock-agentcore/*``. The boundary also holds what that role's own
   policy grants (its runtime logs, pulling an image from the account's ECR).
+  An SSH machine's own identity (``ssh_identity``, hive/ssh_identity): IAM Roles Anywhere
+  trust anchors and profiles are only created (tagged ``swarmai:managed``) and listed, and a
+  profile deleted only while it carries that tag. Nothing that changes, turns on or deletes
+  a trust anchor is granted: a tag can be put on someone else's anchor (IAM cannot limit
+  TagResource to SwarmAI's own resources), and changing that anchor's CA would hand over
+  every role that trusts it. What a tag on another profile allows is its deletion.
 - the "can it create" checks of ``run_hive_checks``: ``RunInstances`` and
   ``CreateSecurityGroup`` with ``DryRun=True`` (nothing is created), the IAM, S3 and
   CloudFront create actions through ``iam:SimulatePrincipalPolicy`` (a simulation that is
@@ -48,6 +57,7 @@ ROLE_PREFIX = "SwarmAI-Hive-"
 ELASTIC_ROLE_PREFIX = "SwarmAI-ElasticHive-"
 ELASTIC_RUNTIME_NAME = "swarmai_elastic_hive"
 AGENTCORE_SERVICE = "bedrock-agentcore.amazonaws.com"
+ROLES_ANYWHERE_SERVICE = "rolesanywhere.amazonaws.com"
 #: where AgentCore writes a runtime's logs
 AGENTCORE_LOG_ROOT = "/aws/bedrock-agentcore/"
 BUCKET_PREFIX = bucket_name.PREFIX
@@ -105,6 +115,12 @@ ACTIONS: dict[str, list[str]] = {
                 "iam:UpdateAssumeRolePolicy", "iam:PutRolePermissionsBoundary",
                 "logs:FilterLogEvents", "logs:DescribeLogStreams", "logs:DescribeLogGroups",
                 "ecr:DescribeImages", "servicequotas:ListServiceQuotas"],
+    # an SSH machine's own identity (hive/ssh_identity, design 2026-11-24-ssh-machine-roles-anywhere
+    # §9): the Host's trust anchors and each machine's profile, never changed once made;
+    # CreateProfile also needs iam:PassRole (to rolesanywhere), the moving role its trust
+    "ssh_identity": ["rolesanywhere:CreateTrustAnchor", "rolesanywhere:ListTrustAnchors",
+                     "rolesanywhere:CreateProfile", "rolesanywhere:ListProfiles", "rolesanywhere:DeleteProfile",
+                     "rolesanywhere:TagResource", "iam:UpdateAssumeRolePolicy", "iam:PassRole"],
     # and whether the account's boundary is the current document (run_elastic_checks)
     "checks": ["sts:GetCallerIdentity", "iam:SimulatePrincipalPolicy", "iam:GetPolicyVersion"],
 }
@@ -250,8 +266,10 @@ def template(account_id: Optional[str] = None) -> dict:
                        "StringEquals": {"iam:PermissionsBoundary": boundary_arn}}},
         {"Sid": "DetachOnlySsmCore", "Effect": "Allow", "Action": ["iam:DetachRolePolicy"],
          "Resource": role_arn, "Condition": {"ArnEquals": {"iam:PolicyARN": SSM_CORE}}},
-        {"Sid": "InlinePolicyOnlyOnBoundedRoles", "Effect": "Allow", "Action": ["iam:PutRolePolicy"],
-         "Resource": role_arn,
+        # and its trust (an SSH machine's role moves to the machine's own certificate,
+        # hive/ssh_provisioner): what a changed trust gives is still only the boundary's
+        {"Sid": "PolicyAndTrustOnlyOnBoundedRoles", "Effect": "Allow",
+         "Action": ["iam:PutRolePolicy", "iam:UpdateAssumeRolePolicy"], "Resource": role_arn,
          "Condition": {"StringEquals": {"iam:PermissionsBoundary": boundary_arn}}},
         {"Sid": "HiveRoles", "Effect": "Allow", "Resource": [role_arn, profile_arn],
          "Action": ["iam:GetRole", "iam:DeleteRole", "iam:TagRole",
@@ -264,6 +282,20 @@ def template(account_id: Optional[str] = None) -> dict:
          "Condition": {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}},
         {"Sid": "ReadBoundary", "Effect": "Allow", "Action": ["iam:GetPolicy", "iam:GetPolicyVersion"],
          "Resource": boundary_arn},
+        # an SSH machine's own identity (hive/ssh_identity): its role is passed to Roles
+        # Anywhere only; anchors and profiles are only made, tagged, and listed; a profile is
+        # deleted only while tagged. No anchor change is granted: a tag can be put on any
+        # anchor, and changing an anchor's CA would hand over the roles that trust it
+        {"Sid": "PassHiveRolesToRolesAnywhereOnly", "Effect": "Allow", "Action": ["iam:PassRole"],
+         "Resource": role_arn,
+         "Condition": {"StringEquals": {"iam:PassedToService": ROLES_ANYWHERE_SERVICE}}},
+        {"Sid": "RolesAnywhereCreateTaggedOnly", "Effect": "Allow", "Resource": "*", "Condition": tagged,
+         "Action": ["rolesanywhere:CreateTrustAnchor", "rolesanywhere:CreateProfile", "rolesanywhere:TagResource"]},
+        {"Sid": "RolesAnywhereDeleteTaggedProfiles", "Effect": "Allow", "Action": ["rolesanywhere:DeleteProfile"],
+         "Resource": [f"arn:aws:rolesanywhere:*:{acct}:profile/*"],
+         "Condition": {"StringEquals": {f"aws:ResourceTag/{MANAGED_TAG}": "true"}}},
+        {"Sid": "RolesAnywhereListsCannotBeScoped", "Effect": "Allow", "Resource": "*",
+         "Action": ["rolesanywhere:ListTrustAnchors", "rolesanywhere:ListProfiles"]},
         # Elastic Workers' execution role: made, given its policy, its boundary and (when an
         # existing one is adopted) its trust only while it carries the SwarmAI boundary, so
         # a role of that name made without it can never be taken over
@@ -312,8 +344,14 @@ def template(account_id: Optional[str] = None) -> dict:
             "CloudFront distributions cannot be scoped by resource in IAM; neither can "
             "CreateAgentRuntime (allowed only tagged swarmai:managed), ListAgentRuntimes, "
             "DescribeLogGroups and ListServiceQuotas.",
-            f"iam:UpdateAssumeRolePolicy is allowed only on the Elastic Workers role "
-            f"({ELASTIC_ROLE_PREFIX}*) while it carries {BOUNDARY_NAME}, never on a Hive role.",
+            f"iam:UpdateAssumeRolePolicy is allowed only on SwarmAI's roles ({ROLE_PREFIX}*, "
+            f"{ELASTIC_ROLE_PREFIX}*) while they carry {BOUNDARY_NAME}: an SSH machine's role "
+            "moves its trust to the machine's own certificate; a changed trust gives no more than "
+            "the boundary allows.",
+            "IAM Roles Anywhere: trust anchors and profiles are created only tagged swarmai:managed "
+            "and never changed (a new CA gets a new anchor); a profile is deleted only while it "
+            "carries the tag. IAM cannot limit TagResource to SwarmAI's own resources, so no "
+            "change to a trust anchor is granted; listing cannot be scoped.",
             f"An account whose {BOUNDARY_NAME} predates Elastic Workers updates it to this boundary "
             "document: the Elastic Workers role is created with it and needs its runtime logs.",
             "IAM cannot name the default VPC: a swarmai:managed subnet and its VPC Block Public "

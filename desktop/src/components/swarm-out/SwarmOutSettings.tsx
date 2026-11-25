@@ -300,9 +300,17 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
                 {typeof m.cert_valid_until === 'number' && !expired && (
                   <div className={muted} data-testid="so-ssh-cert">{t('swarmOut.ssh.certUntil', { time: clock(m.cert_valid_until) })}</div>
                 )}
-                <div className={muted} data-testid="so-ssh-profile">
-                  {m.config.source_profile ? t('swarmOut.ssh.profileUsed', { name: m.config.source_profile }) : t('swarmOut.ssh.profilePending')}
+                <div className={muted} data-testid="so-ssh-aws-identity"
+                  style={typeof m.config.not_after === 'number' && m.config.not_after * 1000 <= now ? { color: TONE_VAR.error } : undefined}>
+                  {m.config.identity !== 'rolesanywhere'
+                    ? (m.status === 'running' ? t('swarmOut.ssh.identityMoving') : t('swarmOut.ssh.identityPending'))
+                    : typeof m.config.not_after !== 'number' ? t('swarmOut.ssh.identityPending')
+                      : m.config.not_after * 1000 <= now ? t('swarmOut.ssh.identityExpired')
+                        : t('swarmOut.ssh.identityUntil', { time: clock(m.config.not_after) })}
                 </div>
+                {m.config.renew_error && (
+                  <div className={`${muted} break-words`} data-testid="so-ssh-renew-error">{t('swarmOut.ssh.renewFailed', { why: m.config.renew_error })}</div>
+                )}
                 <div className={`${muted} break-words`} data-testid="so-ssh-mounts">
                   {(m.config.mounts ?? []).length ? t('swarmOut.ssh.mountsUsed', { list: (m.config.mounts ?? []).join('  ') })
                     : m.config.mounts_auto && m.status !== 'running' ? t('swarmOut.ssh.mountsPending') : t('swarmOut.ssh.mountsNone')}

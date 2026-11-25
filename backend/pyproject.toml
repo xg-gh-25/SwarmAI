@@ -20,6 +20,9 @@ dependencies = [
     "aiosqlite>=0.20.0",
     # Authentication
     "PyJWT>=2.8.0",
+    # the Host's Hive CA and an SSH machine's own key (hive/ssh_identity); present transitively
+    # before, listed so the image's install never loses it
+    "cryptography>=42.0.0",
     "bcrypt>=4.0.0",
     # Rate limiting
     "slowapi>=0.1.9",

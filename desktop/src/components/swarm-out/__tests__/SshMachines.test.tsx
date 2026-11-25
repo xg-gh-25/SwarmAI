@@ -29,14 +29,18 @@ import { SshMachinesSection } from '../SwarmOutSettings';
 const now = Date.now() / 1000;
 const base = {
   version: '2.5.5', instance_type: 'x86_64 · 4 vCPU · 15 GB', error_message: null, tunnel_error: '',
-  config: { ssh_host: 'dev-dsk.example.com', source_profile: 'swarmai', reaches_private: true, general_tasks: true,
-    mounts: ['/apollo:ro', '/workplace'], mounts_auto: true, cert_renew_hint: '' },
+  config: { ssh_host: 'dev-dsk.example.com', reaches_private: true, general_tasks: true,
+    mounts: ['/apollo:ro', '/workplace'], mounts_auto: true, cert_renew_hint: '',
+    identity: 'rolesanywhere' as string | null, not_after: now + 20 * 86400 as number | null, renew_error: null as string | null },
 };
 const MACHINES = [
   { ...base, id: 'm1', name: 'ok-box', status: 'running', reachable: true, cert_valid_until: now + 3600 },
   { ...base, id: 'm2', name: 'expired-box', status: 'running', reachable: true, cert_valid_until: now - 60 },
   { ...base, id: 'm3', name: 'gone-box', status: 'running', reachable: false, cert_valid_until: null, tunnel_error: 'Permission denied (publickey).' },
-  { ...base, id: 'm4', name: 'broken-box', status: 'error', reachable: null, cert_valid_until: null, error_message: 'image: docker did not build' },
+  { ...base, id: 'm4', name: 'broken-box', status: 'error', reachable: null, cert_valid_until: null, error_message: 'image: docker did not build',
+    config: { ...base.config, identity: null, not_after: null } },
+  { ...base, id: 'm5', name: 'old-box', status: 'running', reachable: true, cert_valid_until: null,
+    config: { ...base.config, identity: null, not_after: null, renew_error: null } },
 ];
 
 beforeEach(() => {
@@ -54,7 +58,7 @@ describe('SSH machines section', () => {
   it('renders ssh machines section', async () => {
     const onError = vi.fn();
     render(<SshMachinesSection onError={onError} />);
-    await waitFor(() => expect(screen.getAllByTestId('so-ssh-row')).toHaveLength(4));
+    await waitFor(() => expect(screen.getAllByTestId('so-ssh-row')).toHaveLength(5));
     expect(row('ok-box').dataset.tone).toBe('ok');
     // an expired certificate is the one thing to do, shown without opening the row
     expect(row('expired-box').dataset.tone).toBe('error');
@@ -73,7 +77,12 @@ describe('SSH machines section', () => {
 
     // what the machine uses, found on it; its switches and delete reach the backend
     fireEvent.click(within(row('ok-box')).getByRole('button', { name: 'ok-box' }));
-    expect(within(row('ok-box')).getByTestId('so-ssh-profile').textContent).toContain('swarmai');
+    // its own AWS identity: the certificate's end, renewed by itself; a machine installed on a
+    // profile of the person's says it moves at its next update; one not installed, at install
+    expect(within(row('ok-box')).getByTestId('so-ssh-aws-identity').textContent).toMatch(/renews by itself/);
+    expect(within(row('broken-box')).getByTestId('so-ssh-aws-identity').textContent).toMatch(/set up at install/);
+    fireEvent.click(within(row('old-box')).getByRole('button', { name: 'old-box' }));
+    expect(within(row('old-box')).getByTestId('so-ssh-aws-identity').textContent).toMatch(/next update/);
     expect(within(row('ok-box')).getByTestId('so-ssh-mounts').textContent).toContain('/apollo:ro');
     expect(within(row('ok-box')).getByTestId('so-ssh-mounts').textContent).toContain('/workplace');
     fireEvent.click(within(row('ok-box')).getByTestId('so-ssh-private'));

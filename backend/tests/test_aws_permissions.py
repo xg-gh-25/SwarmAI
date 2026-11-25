@@ -5,8 +5,11 @@ Questions answered:
 1. is every AWS API the provisioner calls in the action list (a new call without a
    permission would fail half-way through a deploy for template users)?
 2. does the template stop privilege escalation: a role only with the SwarmAI boundary,
-   only the SSM core policy attachable, no trust-policy change, a role passed only to EC2,
-   tags only while creating, stop / start / terminate / SSM only on tagged instances?
+   only the SSM core policy attachable, a trust policy changed only on a role carrying the
+   boundary, a Hive role passed only to EC2 and Roles Anywhere, tags only while creating,
+   stop / start / terminate / SSM only on tagged instances, Roles Anywhere anchors and
+   profiles created only tagged and changed only while tagged; and is every call an SSH
+   machine's identity makes (hive/ssh_identity, hive/ssh_provisioner) in the list?
 3. checks: a DryRun that would succeed is "ok", refused is "missing", a simulation that
    cannot run is "could not confirm" (never ok), no default VPC is "missing", and each IAM
    action is simulated on the resource type it acts on.
@@ -125,18 +128,22 @@ def _resources(st):
     return st["Resource"] if isinstance(st["Resource"], list) else [st["Resource"]]
 
 
-def test_no_wildcard_actions_and_no_trust_policy_change():
-    """No action wildcard; a Hive role's trust policy and boundary never change: only the
-    Elastic Workers role's trust is rewritten (its adopt path), and its boundary only set
-    to the SwarmAI boundary."""
+def test_no_wildcard_actions_and_trust_changes_only_with_the_boundary():
+    """No action wildcard; a role's trust is rewritten only on SwarmAI's roles (the Elastic
+    Workers role's adopt path, an SSH machine's role moving to its own certificate) and only
+    while the role carries the SwarmAI boundary, so a changed trust gives no more than the
+    boundary; a boundary is only set on the Elastic Workers role, never removed."""
     for st in _statements():
         assert all(not a.endswith(":*") and a != "*" for a in _actions(st)), st["Sid"]
-    for action in ("iam:UpdateAssumeRolePolicy", "iam:PutRolePermissionsBoundary"):
-        st, = _with(action)
-        # and only while the role carries the SwarmAI boundary: a role of that name made
-        # without it (by someone else, or before the template) cannot be taken over
-        assert _resources(st) == [ELASTIC_ROLE], action
-        assert st["Condition"] == {"StringEquals": {"iam:PermissionsBoundary": BOUNDARY}}, action
+    trust = _with("iam:UpdateAssumeRolePolicy")
+    # only while the role carries the SwarmAI boundary: a role of that name made without it
+    # (by someone else, or before the template) cannot be taken over
+    assert sorted(r for st in trust for r in _resources(st)) == [ELASTIC_ROLE, HIVE_ROLE]
+    for st in trust:
+        assert st["Condition"] == {"StringEquals": {"iam:PermissionsBoundary": BOUNDARY}}, st["Sid"]
+    st, = _with("iam:PutRolePermissionsBoundary")
+    assert _resources(st) == [ELASTIC_ROLE]
+    assert st["Condition"] == {"StringEquals": {"iam:PermissionsBoundary": BOUNDARY}}
     assert not _with("iam:DeleteRolePermissionsBoundary")
 
 
@@ -152,10 +159,11 @@ def test_roles_only_with_the_boundary_and_only_the_ssm_core_policy():
     assert attach["Condition"]["ArnEquals"]["iam:PolicyARN"] == ap.SSM_CORE
     assert _resources(attach) == [HIVE_ROLE]
     # each role is passed only to the service that runs it
-    passes = {json.dumps(_resources(st)): st["Condition"]["StringEquals"]["iam:PassedToService"]
+    passes = {(json.dumps(_resources(st)), st["Condition"]["StringEquals"]["iam:PassedToService"])
               for st in _with("iam:PassRole")}
-    assert passes == {json.dumps([HIVE_ROLE]): "ec2.amazonaws.com",
-                      json.dumps([ELASTIC_ROLE]): "bedrock-agentcore.amazonaws.com"}
+    assert passes == {(json.dumps([HIVE_ROLE]), "ec2.amazonaws.com"),
+                      (json.dumps([HIVE_ROLE]), "rolesanywhere.amazonaws.com"),
+                      (json.dumps([ELASTIC_ROLE]), "bedrock-agentcore.amazonaws.com")}
 
 
 #: actions IAM cannot scope by resource (no resource type in the Service Authorization
@@ -176,7 +184,8 @@ def test_the_elastic_statements_are_scoped():
         for r in res:
             assert r == "*" or ":123456789012:" in r or r.startswith("arn:aws:iam::123456789012:"), (st["Sid"], r)
         if any(a.startswith("iam:") for a in acts):
-            assert res == [ELASTIC_ROLE], st["Sid"]
+            # or a Hive role's trust (an SSH machine's, test_no_wildcard_actions_and_trust_...)
+            assert res == [ELASTIC_ROLE] or (res == [HIVE_ROLE] and acts == {"iam:UpdateAssumeRolePolicy"}), st["Sid"]
     create, = _with("bedrock-agentcore:CreateAgentRuntime")
     assert create["Condition"] == {"StringEquals": {"aws:RequestTag/swarmai:managed": "true"}}
     runtime = "arn:aws:bedrock-agentcore:*:123456789012:runtime/swarmai_elastic_hive-*"
@@ -190,6 +199,58 @@ def test_the_elastic_statements_are_scoped():
         assert _resources(st) == ["arn:aws:logs:*:123456789012:log-group:/aws/bedrock-agentcore/*"], action
     st, = _with("ecr:DescribeImages")
     assert _resources(st) == ["arn:aws:ecr:*:123456789012:repository/*"]
+
+
+#: the modules whose AWS calls give an SSH machine its own identity; the name each boto3 client
+#: has there -> its IAM action prefix
+SSH_MODULES = (BACKEND / "hive" / "ssh_identity.py", BACKEND / "hive" / "ssh_provisioner.py")
+_SSH_CLIENTS = {"ra": "rolesanywhere", "iam": "iam"}
+
+
+def test_every_ssh_identity_call_is_in_the_action_list():
+    """A template user adds an SSH machine: every Roles Anywhere and IAM call its identity
+    makes is allowed, or the install fails half-way through with AccessDenied."""
+    src = "\n".join(m.read_text() for m in SSH_MODULES)
+    # a call (iam.create_role(...)), a call handed to the refusal namer (_aws(..., ra.create_profile, ...)),
+    # or a call on a client made in place (session.client("iam").update_assume_role_policy(...))
+    calls = set(re.findall(r"\b(ra|iam)\.([a-z_]+)[(,)]", src))
+    calls |= {("iam", m) for m in re.findall(r"session\.client\(\"iam\"\)\.([a-z_]+)\(", src)}
+    assert {("ra", "create_trust_anchor"), ("ra", "create_profile"), ("ra", "delete_profile"),
+            ("ra", "list_profiles"), ("iam", "update_assume_role_policy"), ("iam", "create_role"),
+            ("iam", "get_role")} <= calls, "the pattern no longer finds the SSH modules' calls"
+    listed = ap.all_actions()
+    missing = sorted({ap.action_for_method(_SSH_CLIENTS[svc], m) for svc, m in calls} - listed)
+    assert not missing, f"SSH identity calls without a permission in the list: {missing}"
+    # what AWS checks besides the call (Service Authorization Reference): tagging on create,
+    # passing the role on CreateProfile, UpdateProfile and EnableProfile
+    assert {"rolesanywhere:TagResource", "iam:PassRole"} <= set(ap.ACTIONS["ssh_identity"])
+
+
+def test_roles_anywhere_grants_no_anchor_change():
+    """IAM cannot limit TagResource to SwarmAI's own resources, so a tag can be put on any
+    trust anchor or profile: nothing a tag unlocks may change an anchor (its CA decides which
+    certificates become the roles that trust it). Anchors and profiles are created tagged and
+    listed; a profile is deleted only while tagged; nothing else."""
+    granted = {}
+    for st in _statements():
+        for a in _actions(st):
+            if a.startswith("rolesanywhere:"):
+                granted[a] = st
+    assert set(granted) == {a for a in ap.ACTIONS["ssh_identity"] if a.startswith("rolesanywhere:")} == {
+        "rolesanywhere:CreateTrustAnchor", "rolesanywhere:ListTrustAnchors", "rolesanywhere:CreateProfile",
+        "rolesanywhere:ListProfiles", "rolesanywhere:DeleteProfile", "rolesanywhere:TagResource"}
+    policy = ap.template("123456789012")["policy"]
+    anchor = "arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/00000001-0000-4000-8000-000000000000"
+    for action in ("UpdateTrustAnchor", "EnableTrustAnchor", "DeleteTrustAnchor", "DisableTrustAnchor",
+                   "ImportCrl", "UpdateProfile", "EnableProfile", "PutAttributeMapping"):
+        assert not _allows(policy, f"rolesanywhere:{action}", anchor), action
+    for action in ("rolesanywhere:CreateTrustAnchor", "rolesanywhere:CreateProfile", "rolesanywhere:TagResource"):
+        assert granted[action]["Condition"] == {"StringEquals": {"aws:RequestTag/swarmai:managed": "true"}}
+    delete = granted["rolesanywhere:DeleteProfile"]
+    assert delete["Condition"] == {"StringEquals": {"aws:ResourceTag/swarmai:managed": "true"}}
+    assert _resources(delete) == ["arn:aws:rolesanywhere:*:123456789012:profile/*"]
+    from hive import ssh_identity
+    assert ssh_identity.TAG == {"key": ap.MANAGED_TAG, "value": "true"}
 
 
 def _allows(policy: dict, action: str, resource: str) -> bool:

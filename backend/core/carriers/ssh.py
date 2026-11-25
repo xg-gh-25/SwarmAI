@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -45,6 +46,7 @@ CERT_EXPIRED, NOT_GENERAL = "cert_expired", "not_general"
 
 #: the defaults of a machine's settings (``config``)
 REMOTE_PORT = 18321
+_AWS_PROFILE_RE = re.compile(r"^swarmai-hive-[a-z][a-z0-9-]{0,44}$")
 
 
 def config(row: dict[str, Any]) -> dict[str, Any]:
@@ -58,12 +60,22 @@ def config(row: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(cfg, dict):
         raise ValueError("this SSH machine's settings cannot be read")
     out = {"ssh_host": cfg.get("ssh_host"), "remote_port": cfg.get("remote_port", REMOTE_PORT),
-           "local_port": cfg.get("local_port"), "source_profile": cfg.get("source_profile"),
+           "local_port": cfg.get("local_port"),
            "reaches_private": cfg.get("reaches_private", True) is not False,
            "general_tasks": cfg.get("general_tasks", True) is not False,
            "mounts": [m for m in (cfg.get("mounts") or []) if isinstance(m, str)],
            "mounts_auto": cfg.get("mounts_auto") is True,
            "cert_renew_hint": str(cfg.get("cert_renew_hint") or "")[:120]}
+    # its own AWS identity (hive/ssh_provisioner, design 2026-11-24-ssh-machine-roles-anywhere §4.2):
+    # none on a machine installed on a profile of the person's, until its next update
+    for key in ("identity", "anchor_arn", "role_arn", "profile_arn", "identity_region", "cn"):
+        out[key] = cfg.get(key) if isinstance(cfg.get(key), str) else None
+    # it names the profile the container uses and goes into its environment file
+    p = cfg.get("aws_profile")
+    out["aws_profile"] = p if isinstance(p, str) and _AWS_PROFILE_RE.fullmatch(p) else None
+    out["move_pending"] = cfg.get("move_pending") is True
+    v = cfg.get("not_after")
+    out["not_after"] = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
     if not ssh_tunnel.valid_host(out["ssh_host"]):
         raise ValueError("this SSH machine has no usable SSH host")
     if not ssh_tunnel.valid_port(out["local_port"]) or not ssh_tunnel.valid_port(out["remote_port"]):

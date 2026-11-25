@@ -407,6 +407,19 @@ async def _follow_other_carriers() -> list[str]:
     return started
 
 
+async def _renew_ssh_identities() -> list[str]:
+    """Every running SSH machine whose own certificate is due gets a new one
+    (hive/ssh_provisioner.renew_due; design 2026-11-24-ssh-machine-roles-anywhere §4.4): its own
+    pass, so it runs whatever the versions and the Host's build (``follow_host`` returns early
+    when no machine is behind or the Host is a development build). Never raises."""
+    try:
+        from hive import ssh_provisioner
+        return await ssh_provisioner.renew_due()
+    except Exception as e:  # noqa: BLE001 — tried again next round
+        logger.warning("hive_idle: the SSH identity renewal check failed (%s)", type(e).__name__)
+        return []
+
+
 async def check_once(now: Optional[float] = None) -> list[str]:
     """One look at every running Hive: update each idle one behind the Host's build,
     stop each other one idle for its idle time (its own, else the default; never one set
@@ -414,11 +427,13 @@ async def check_once(now: Optional[float] = None) -> list[str]:
     it started. Both are duties of the EC2 carrier (its Hives are EC2 instances this Host
     manages); without that carrier nothing more is looked at (design
     2026-11-20-swarm-out-multi-carrier §4.5). First, a carrier that updates its own
-    locations (``follow_host``) gets its look (``_follow_other_carriers``)."""
+    locations (``follow_host``) gets its look (``_follow_other_carriers``), and each SSH machine
+    whose identity certificate is due is renewed (``_renew_ssh_identities``)."""
     from core import swarm_out
     from core.carriers import registry
     from core.carriers.base import EC2, IDLE_STOP
     await _follow_other_carriers()
+    await _renew_ssh_identities()
     default_s = idle_after_s()             # None: no stop by default, the Hives still follow the Host
     if EC2 not in {c.kind for c in registry.with_duty(IDLE_STOP)}:
         return []

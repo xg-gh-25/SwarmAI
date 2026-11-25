@@ -2,9 +2,9 @@
 title: SSH 机器的 Hive 身份：IAM Roles Anywhere（方案 B）
 date: 2026-11-24
 created: 2026-11-24
-updated: 2026-11-24
+updated: 2026-11-25
 project: SwarmAI
-status: 设计 r2（零上下文审查一轮后），待 XG 看过再落地
+status: r2，已实现（偏差见 §9 末尾）
 related: docs/design/2026-11-24-swarm-out-ssh-machine.md（§5.3 安装、§7 安全）
 ---
 
@@ -51,8 +51,8 @@ Hive 自己只做三类 AWS 调用：Bedrock、自己的 S3 bridge 前缀、读�
 ### 4.1 Host 的 CA 和信任锚（每个 Host × 账户 × 区域一个）
 
 - **CA**：Host 第一次需要时生成 EC P-256 密钥和自签 CA 证书（`CA:true`，pathlen 0，**有效期 2 年**，主题 `CN=SwarmAI Hive CA <host-id>`），放在 `~/.swarm-ai/state/hive-ca/<account>-<region>/`（目录 0700、密钥 0600），用后端已有的 `cryptography`。不进备份。
-- **信任锚**：`swarmai-hives-<host-id>`，`CERTIFICATE_BUNDLE` = 这张 CA 证书，`enabled=True` 显式传。每个 Host 自己一个锚，两台 Mac 管同一账户互不影响。
-- **CA 轮换**：CA 剩不到 6 个月时生成新 CA，把它作为信任锚的第二张证书加入（每锚 2 张），各机器下次续证书时由新 CA 签、角色信任不变（条件是锚的 ARN 和 CN，不是哪张 CA）；所有机器都换过后移除旧 CA 证书。
+- **信任锚**：`swarmai-hives-<host-id>-<CA 指纹前 12 位>`，`CERTIFICATE_BUNDLE` = 这张 CA 证书，`enabled=True` 显式传。每个 Host 自己一个锚，两台 Mac 管同一账户互不影响。**锚建好后从不修改**：同名的锚装着别的 CA、或被人关掉（等于吊销），都报错，不改也不重新打开。
+- **CA 轮换**：CA 剩不到 6 个月时生成新 CA，它有自己的新锚；各机器下次续证书时由新 CA 签，角色信任和机器上的 profile 改指新锚（续期发现锚变了就这样做，Host 丢了 CA 重建时走同一条路）。旧锚留着，旧证书在到期前照常可用。（r2 原写"放进同一个锚的第二张证书"：那要 `UpdateTrustAnchor` 权限，而 IAM 限不住 `TagResource`，模板用户就能给别人的锚打上标签再换掉它的 CA，接管信任那个锚的角色。审查发现后改成锚不可变。）
 - **全部作废**：删掉信任锚，这个 Host 签过的证书一起失效。
 - 只在 SwarmAI 账户模式下做（用 Host 已有的账户会话 `ssh_provisioner._session`）。
 
@@ -107,7 +107,7 @@ preflight → image（含 aws_signing_helper）→ Host: 确保 CA + 信任锚
 ## 5. 安全
 
 - **对已有人 profile 的机器（Cloud Desktop）更窄**：今天窄角色从人的身份（XG 这里是账户 Admin）assume，同一台机器上的任务本来就能读到人的 profile；之后 Hive 只靠一张只能换这一个窄角色的证书。
-- **对没有人 profile 的机器（外部用户）是一份新的长期凭据**：机器密钥在 `~/.swarmai-hive/identity/`，容器里任务和 Hive 同一个 uid，能读到。拿到它的人在证书到期前（最多 30 天，且下次续期换新密钥后旧密钥作废）能在别处换到这台机器的窄角色：用 Bedrock、读写这台 Hive 自己的 bridge 前缀。这是接受的代价，换来"机器上不用配任何 AWS"；要再收紧就做 A5（旁路容器 + `serve`），只在机器上能取 1 小时的凭据。
+- **对没有人 profile 的机器（外部用户）是一份新的长期凭据**：机器密钥在 `~/.swarmai-hive/identity/`，容器里任务和 Hive 同一个 uid，能读到。拿到它的人在那张证书到期前（最多 30 天；续期换了新密钥也不会让旧证书提前失效，没有吊销列表）能在别处换到这台机器的窄角色：用 Bedrock、读写这台 Hive 自己的 bridge 前缀。这是接受的代价，换来"机器上不用配任何 AWS"；要再收紧就做 A5（旁路容器 + `serve`），只在机器上能取 1 小时的凭据。
 - **CA 密钥在 Host 上**：未加密文件、不受 SSO 吊销影响，能离线签证书。能得到的只有本 Host 这些机器的窄角色（每个角色只认自己的 CN 和本锚），比 Host 已持有的账户会话窄。有效期 2 年、按 §4.1 轮换；全部作废就删信任锚。不用 macOS 钥匙串：Host 也跑在 Windows 和 Linux 上。
 - 凭据工具按固定 SHA256 校验后才进镜像；校验值写在代码里、随版本升级一起改。
 
@@ -141,12 +141,16 @@ preflight → image（含 aws_signing_helper）→ Host: 确保 CA + 信任锚
 ## 9. 权限
 
 Admin 账户都有。受限权限模板（`core/aws_permissions.template`，给外部用户）要加，并在 `run_hive_checks` 里一起检查：
-- `rolesanywhere:{Create,Delete,Get,List,Update}TrustAnchor`、`{Create,Delete,Get,Update}Profile`、`TagResource`；
+- `rolesanywhere:CreateTrustAnchor`、`ListTrustAnchors`、`CreateProfile`、`ListProfiles`、`TagResource`（创建时必须带 `swarmai:managed` 标签），`DeleteProfile`（只限带这个标签的）。不给任何改锚、开关锚、删锚的权限（理由见 §4.1）；标签能打到别人的 profile 上，最多能删掉它；
 - `iam:PassRole`，只限 `SwarmAI-Hive-*`、`iam:PassedToService = rolesanywhere.amazonaws.com`；
 - `iam:UpdateAssumeRolePolicy`，只限 `SwarmAI-Hive-*`。**这放宽了模板原有的"Hive 角色的信任策略不能改"**：
   持模板权限的人能把某个 Hive 角色的信任改成别的主体。可接受，因为 Hive 角色只能带 SwarmAI 边界创建（模板已有），
   改了信任能得到的也只是边界内的权限；而迁移（§4.5 第 1、4 步）和今天 SSH 机器的重试都需要它。
 - 权限不够时安装报错，写明缺的那一项。
+
+实现时的两处偏差（2026-11-25）：
+- **不进 `run_hive_checks`**：它的结论是设置页"能建 EC2 Hive"那一行，按旧模板授权的账户会因为缺 Roles Anywhere 被误判成 EC2 Hive 不可用。改为在安装、续期时按调用命名被拒的权限（`hive/ssh_identity._aws`）。
+- **信任策略的改写并进已有语句**：`iam:UpdateAssumeRolePolicy` 和 `iam:PutRolePolicy` 同在 `SwarmAI-Hive-*`、同要求带 SwarmAI 边界，合成一条，否则模板会超出 IAM 内联策略 10,240 字符的上限。
 
 ## 10. 来源
 

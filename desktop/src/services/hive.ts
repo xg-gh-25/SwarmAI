@@ -330,13 +330,19 @@ export interface SshMachine {
   error_message: string | null;
   config: {
     ssh_host: string | null;
-    source_profile: string | null;
     reaches_private: boolean | null;
     general_tasks: boolean | null;
     mounts: string[] | null;
     /** the mounts are the machine's own top-level directories, found at each install and update */
     mounts_auto: boolean | null;
     cert_renew_hint: string | null;
+    /** 'rolesanywhere' once the machine has its own AWS identity; null before (installed on a
+     *  profile of the person's, it moves at its next update) */
+    identity: string | null;
+    /** the end of the machine's identity certificate (Unix seconds); it renews by itself */
+    not_after: number | null;
+    /** why the last renewal failed, null after one that worked */
+    renew_error: string | null;
   };
   /** null while it is not running; false: its tunnel or its Hive did not answer */
   reachable: boolean | null;
@@ -346,11 +352,10 @@ export interface SshMachine {
   tunnel_error: string;
 }
 
-/** Adding a machine: only its host is needed; the install finds the AWS profile and the
- *  mounts on the machine (a given value is kept as given). */
+/** Adding a machine: only its host is needed; the install gives it its own AWS identity and
+ *  finds the mounts on the machine (given mounts are kept as given). */
 export interface SshMachineAdd {
   ssh_host: string;
-  source_profile?: string;
   name?: string;
   mounts?: string[];
   cert_renew_hint?: string;
