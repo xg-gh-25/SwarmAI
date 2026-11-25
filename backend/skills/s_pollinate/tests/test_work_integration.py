@@ -9,10 +9,13 @@ real modules, so they prove the hooks of design 13.3 and 13.5 are joined:
 - a craft check that cannot read a measure becomes a failed check, not a crash;
 - cut --formats pptx makes out/deck.pptx with one slide per page;
 - cut --template keeps the template's head slide and stores the choice for later cuts;
-- cut --reference copies the reference measure into the work and judges against it.
+- cut --reference copies the reference measure into the work and judges against it;
+- with a brand file, a poster without the signature fails the brand check and one with
+  it (the QR copied into the work, inlined by the renderer) passes it.
 """
 from __future__ import annotations
 
+import base64
 import sys
 from pathlib import Path
 
@@ -141,3 +144,42 @@ def test_cut_reference_from_another_work(real_craft, capsys):
     assert meta(d)["reference"] == work.REFERENCE_COPY
     assert (d / work.REFERENCE_COPY).is_file()
     assert code == 0, out                      # same look as the reference: no drift
+
+
+QR_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhf"
+                          "DwAChwGA60e6kgAAAABJRU5ErkJggg==")  # a 1x1 PNG standing in for a QR
+
+
+def _poster(d: Path, capsys, body: str) -> Path:
+    code, out = run(["init", "--dir", str(d), "--kind", "poster", "--title", "P",
+                     "--size", "1080x1440"], capsys)
+    assert code == 0, out
+    (d / "src" / "assets").mkdir(parents=True, exist_ok=True)
+    (d / "src" / "assets" / "qr-dark.png").write_bytes(QR_PNG)
+    (d / "src" / "index.html").write_text(
+        '<!doctype html><html><head><meta charset="utf-8"></head>'
+        '<body style="margin:0;width:1080px;height:1440px;font:32px Helvetica">'
+        f"{body}</body></html>\n", encoding="utf-8")
+    return d
+
+
+def test_cut_checks_the_brand_signature(real_craft, capsys):
+    need_browser()
+    tmp = real_craft["tmp"]
+    qr = tmp / "brand" / "qr-dark.png"
+    qr.parent.mkdir()
+    qr.write_bytes(QR_PNG)
+    (tmp / "pollinate-brand.yaml").write_text(
+        'signature:\n  watermark: "Made with Example Studio"\n  link: "https://example.com/me"\n'
+        "  qr:\n    dark_on_light: brand/qr-dark.png\n", encoding="utf-8")
+    text = '<h1 style="margin:200px 120px 0">A plain poster</h1>'
+    code, out = run(["cut", "--dir", str(_poster(tmp / "bare", capsys, text))], capsys)
+    brand = [f for f in out["failed_checks"] if f["check"] == "brand"]
+    assert code == 1 and sorted(f["where"] for f in brand) == ["link", "qr", "watermark"], out
+    assert {f["slide"] for f in brand} == {"main"}
+
+    signed = text + ('<img src="assets/qr-dark.png" style="display:block;width:120px;height:120px;'
+                     'margin:40px 120px 0"><p style="margin:24px 120px 0">example.com/me</p>'
+                     '<p style="margin:24px 120px 0;font-size:24px">Made with Example Studio</p>')
+    code, out = run(["cut", "--dir", str(_poster(tmp / "signed", capsys, signed))], capsys)
+    assert [f for f in out["failed_checks"] if f["check"] == "brand"] == [], out

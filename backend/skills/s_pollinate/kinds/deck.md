@@ -57,7 +57,8 @@ Start from `templates/html-deck/shared/html-template.md`. Then:
    `<script>` (no external `src`).
 6. **Brand.** Add the configured signature (INSTRUCTIONS.md § 8): link text and QR on
    the closing slide, the watermark small at the bottom. Use `light_on_dark` QR on dark
-   slides and `dark_on_light` on light ones.
+   slides and `dark_on_light` on light ones. `cut` fails when a configured element is on
+   no slide (the `brand` check; it reports on the last slide).
 
 ## Slide craft
 

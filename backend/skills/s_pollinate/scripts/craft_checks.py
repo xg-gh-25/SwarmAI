@@ -18,6 +18,11 @@ What this module gives (Pollinate v2 design, section 13.3):
   [--reference ref-measure.json] [--config c.json] [--canvas 1920x1080]``.
   It prints ``{"ok", "fails", "warns", "findings"}`` as JSON. Exit 0 = no fail
   finding, 1 = at least one fail finding, 2 = usage or input error.
+* ``check_signature(measure, signature, config=None)`` — the ``brand`` check:
+  the person's brand signature (``brand_config.signature()``) is on the work.
+  It judges the work as a whole (all its slides at once), so ``work.py cut``
+  calls it once per work, next to ``evaluate``; the command line does not run
+  it.
 
 Measurement shape (one slide; all boxes are ``[x, y, w, h]`` in canvas px,
 relative to the slide's top-left corner, with any CSS scale of the slide
@@ -27,13 +32,15 @@ removed)::
      "texts":  [{"text", "role", "font_px", "lines", "nowrap",
                  "box", "container", "chars", "color"}],
      "blocks": [{"box", "group"}],
-     "images": [{"src", "box", "loaded", "role"?}],
+     "images": [{"src", "box", "loaded", "role"?, "fp"?}],
      "colors": [{"color", "use": "text|fill", "weight"}],
      "layout": "cover" | null}
 
-``color`` (per text), ``colors`` and ``layout`` (per slide) and ``role`` (per
-image, only when the author wrote ``data-role="background"``) are additions
-to the 13.3 shape. They are optional: the palette part of the reference check
+``color`` (per text), ``colors`` and ``layout`` (per slide), ``role`` (per
+image, only when the author wrote ``data-role="background"``) and ``fp`` (per
+image whose source is a base64 ``data:`` URL, which is every local image
+after the renderer inlined it: ``fingerprint`` of the image's bytes) are
+additions to the 13.3 shape. They are optional: the palette part of the reference check
 needs colors and is skipped when a measurement has none. ``layout`` is the
 slide's ``data-layout`` attribute: a slide declared with one of the
 ``sparse_layouts`` names (``cover``, ``chapter``, ``statement``, ``quote`` ...)
@@ -64,8 +71,10 @@ How the probe reads the page:
 
 The checks (design section 6) and their thresholds live in ``DEFAULTS``;
 see the comments there for each value and why it was chosen. Besides the
-nine checks of section 13.3 there is one more, ``image``: an image that did
-not load (the probe measures ``loaded``) is a fail.
+nine checks of section 13.3 there are two more: ``image``, an image that did
+not load (the probe measures ``loaded``) is a fail; and ``brand``, the
+configured brand signature (watermark, link text, QR image) must be on the
+work (``check_signature``; design section 9 keeps 品牌/水印/二维码).
 """
 from __future__ import annotations
 
@@ -81,7 +90,7 @@ from pathlib import Path
 from typing import Any
 
 CHECKS = ("font_floor", "fill", "align", "nowrap", "density",
-          "overflow", "overlap", "safe_area", "image", "reference")
+          "overflow", "overlap", "safe_area", "image", "reference", "brand")
 
 # The canvas the density cap is written for; other canvases scale by area.
 _BASE_AREA = 1920 * 1080
@@ -258,6 +267,17 @@ PROBE_JS = r"""
     return false;
   };
   const clips = (cs) => cs.overflowX !== 'visible' || cs.overflowY !== 'visible';
+  // FNV-1a (32 bit) of the bytes of a base64 data: URL, so a known file (the brand QR)
+  // is found again after the renderer inlined it. Same as craft_checks.fingerprint.
+  const fingerprint = (src) => {
+    const i = src.indexOf(';base64,');
+    if (!src.startsWith('data:') || i < 0) { return null; }
+    let bin;
+    try { bin = atob(src.slice(i + 8)); } catch (e) { return null; }
+    let h = 0x811c9dc5;
+    for (let k = 0; k < bin.length; k++) { h ^= bin.charCodeAt(k); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  };
 
   const classParts = (el) => {
     const cn = (typeof el.className === 'string') ? el.className : (el.getAttribute('class') || '');
@@ -439,6 +459,8 @@ PROBE_JS = r"""
     }
     if (src === null) { continue; }
     const img = {src: src.length > 200 ? src.slice(0, 200) : src, box: rel(r), loaded: loaded};
+    const fp = fingerprint(src);
+    if (fp) { img.fp = fp; }
     if ((el.getAttribute('data-role') || '').trim().toLowerCase() === 'background') { img.role = 'background'; }
     images.push(img);
   }
@@ -623,7 +645,8 @@ class _Slide:
             ix, iy = _inter(box, (0, 0, W, H))
             backdrop = im.get("role") == "background" or ix * iy >= bg_ratio * W * H
             self.images.append({"src": str(im.get("src", "")), "box": box, "backdrop": backdrop,
-                                "loaded": im.get("loaded", True) is not False})
+                                "loaded": im.get("loaded", True) is not False,
+                                "fp": im.get("fp") if isinstance(im.get("fp"), str) else None})
         self.colors = [c for c in (raw.get("colors") or [])
                        if isinstance(c, dict) and isinstance(c.get("color"), str)]
         layout = raw.get("layout")
@@ -1015,6 +1038,82 @@ def evaluate(measure: dict, canvas: dict | None = None, config: dict | None = No
         if ref is not None:
             findings.extend(_check_reference(sl, ref))
     return findings
+
+
+def fingerprint(data: bytes) -> str:
+    """FNV-1a (32 bit) of a file's bytes, as 8 hex digits: the probe's ``fp``."""
+    h = 0x811C9DC5
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
+
+
+def _norm(text: str) -> str:
+    return " ".join(str(text).split()).casefold()
+
+
+def check_signature(measure: Any, signature: dict | None, config: dict | None = None) -> list[dict]:
+    """The ``brand`` check: each configured signature element is on the work.
+
+    ``signature`` is ``brand_config.signature()``: an unset element is not
+    required, so with no brand configured (or ``signature`` None) there is no
+    finding. ``measure`` is every slide of the work (one for a poster or a page);
+    an element counts when it is on any slide, inside that slide's measured area:
+    * watermark and link text: in the visible text (spaces and case ignored);
+    * QR: a loaded image whose bytes are one of the configured QR files
+      (``fp``; either variant counts).
+    A missing element is reported on the last slide, which is the closing slide
+    of a deck, so work.py can carry it over like any slide finding. A QR file
+    that cannot be read is a finding with no slide (fix the brand file).
+    Not measured: the link's href (a PNG has none), the footer lines
+    (mark, name, tagline), the QR size and which variant suits the background.
+    """
+    if not signature:
+        return []
+    cfg = merge_config(config)
+    slides = []
+    for raw in _slides(measure):
+        W, H = _canvas(raw, None)
+        slides.append(_Slide(raw, W, H, cfg))
+    if not slides:
+        return []
+    last = slides[-1]
+    level = cfg["levels"]["brand"]
+
+    def on_page(sl, box):
+        ix, iy = _inter(box, (0, 0, sl.W, sl.H))
+        return ix > 0 and iy > 0
+
+    seen = _norm(" ".join(t["text"] for sl in slides for t in sl.texts if on_page(sl, t["box"])))
+    fps = {im["fp"] for sl in slides for im in sl.images
+           if im["fp"] and im["loaded"] and on_page(sl, im["box"])}
+    out = []
+
+    def missing(where: str, msg: str, slide: str | None = None) -> None:
+        out.append({"slide": last.id if slide is None else slide, "check": "brand",
+                    "level": level, "msg": msg, "where": where})
+
+    watermark = signature.get("watermark")
+    if watermark and _norm(watermark) not in seen:
+        missing("watermark", f"The brand watermark \"{watermark}\" is not on the work. Add it, "
+                             f"small, at the bottom (缺水印).")
+    link_text = signature.get("link_text")
+    if link_text and _norm(link_text) not in seen:
+        missing("link", f"The brand link \"{link_text}\" is not on the work. Show it as text in "
+                        f"the footer or on the closing slide (缺链接).")
+    qr_paths = [p for p in (signature.get("qr") or {}).values() if p]
+    wanted = {}
+    for p in qr_paths:
+        try:
+            wanted[fingerprint(Path(p).read_bytes())] = Path(p).name
+        except OSError:
+            missing("qr", f"The brand QR file {p} cannot be read, so the QR is not checked. "
+                          f"Fix the brand file (brand_config.py --signature).", slide="")
+    if wanted and not fps & set(wanted):
+        names = " or ".join(sorted(set(wanted.values())))
+        missing("qr", f"The brand QR image ({names}) is not on the work. Copy it into "
+                      f"src/assets/ and show it in the footer or on the closing slide (缺二维码).")
+    return out
 
 
 def _read_json(path: str, what: str):

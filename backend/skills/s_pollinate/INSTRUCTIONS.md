@@ -156,6 +156,8 @@ complaint:
 | `density` | words per slide stay under a limit for the canvas | "too much text" |
 | `overflow`, `overlap`, `safe_area` | text leaves its box, elements collide, content leaves the safe area | earlier poster checks |
 | `reference` | distance from a reference deck's type scale, margins and colors | "match the style of our earlier deck" |
+| `image` | every image loaded | a missing picture |
+| `brand` | each element the person's brand signature sets is on the work: the watermark and the link text in the visible text, the QR image (by its bytes) loaded and visible; for a deck, on any slide (reported on the last one) | the old poster brand checks |
 
 Mark one-line titles with `data-nowrap` (or `white-space: nowrap`), and set `data-role`
 (title, subtitle, body, label, caption) where the guess from tags and classes would be wrong.
@@ -206,8 +208,13 @@ Never publish, post or send. Publishing is always the person's click.
   (the shipped `brand/identity.yaml` with the user's `~/.swarm-ai/pollinate-brand.yaml` on
   top; `POLLINATE_BRAND_FILE` points at another file). `--signature` prints only the
   signature: watermark, link, link text, QR images (`dark_on_light`, `light_on_dark`) and
-  footer. Every visual output carries each configured element; an unset element is not
-  drawn. Use the configured colors and fonts exactly.
+  footer. Every visual output (deck, poster, page) carries each configured element; an
+  unset element is not drawn. `cut` checks the watermark, the link text and the QR (the
+  `brand` check, § 6); no brand file, or one that sets no signature, means no check. The
+  footer lines and the QR size are not measured; look at them yourself. For a work that
+  should not carry the brand (made for someone else, say), put
+  `"craft": {"levels": {"brand": "warn"}}` in its `work.json`. Use the configured colors
+  and fonts exactly.
 - **Content principles** (`brand/content_principles.md`) apply to anything public: value,
   not output counts (no lines of code, commits or "N days" as the claim); what is true, not
   "what I built" (`p2_scan.py` finds hero framing); one thesis; effects over mechanisms;

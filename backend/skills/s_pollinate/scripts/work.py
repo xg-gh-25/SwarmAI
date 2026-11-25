@@ -58,6 +58,9 @@ import work_render  # noqa: E402
 
 SCHEMA = 1
 KINDS = ("deck", "poster", "page", "copy")
+# Kinds whose rendered output carries the person's brand signature (kinds/*.md): a deck on
+# its closing slide, a poster and a page in the footer. Copy is text for a platform post.
+SIGNED_KINDS = ("deck", "poster", "page")
 DEFAULT_SRC = {"deck": "src/deck.html", "poster": "src/index.html",
                "page": "src/index.html", "copy": "src/copy.md"}
 DEFAULT_SIZE = {"deck": "1920x1080", "poster": "1080x1350", "page": "1200x800", "copy": "1080x1080"}
@@ -979,7 +982,8 @@ def _replace_dir(dest: Path, src: Path) -> None:
 
 
 def _judge(res: dict, meta: dict, craft, reference) -> list:
-    """The render's own findings plus the craft checks on every measured slide."""
+    """The render's own findings plus the craft checks on every measured slide, and the
+    brand signature check on the work as a whole."""
     findings = list(res["findings"])
     for m in res["measure"]:
         if craft:
@@ -992,7 +996,25 @@ def _judge(res: dict, meta: dict, craft, reference) -> list:
         else:
             found = work_render.builtin_evaluate(m, meta["size"])
         findings.extend(found or [])
+    if craft and hasattr(craft, "check_signature") and meta["kind"] in SIGNED_KINDS and res["measure"]:
+        findings.extend(_brand_findings(res["measure"], meta, craft))
     return findings
+
+
+def _brand_findings(measures: list, meta: dict, craft) -> list:
+    """craft_checks.check_signature with the person's brand (brand_config.py). No brand
+    file, or one that sets no signature, gives nothing; a broken one is a failed check."""
+    import brand_config
+    try:
+        sig = brand_config.signature()
+    except brand_config.BrandConfigError as exc:
+        return [{"slide": "", "check": "brand", "level": "fail",
+                 "msg": f"the brand file cannot be read: {exc}", "where": str(brand_config.user_brand_path())}]
+    try:
+        return craft.check_signature(measures, sig, meta.get("craft"))
+    except ValueError as exc:
+        return [{"slide": "", "check": "craft", "level": "fail",
+                 "msg": f"craft_checks could not judge the brand signature: {exc}", "where": ""}]
 
 
 def _judge_base(wdir: Path, base: dict, meta: dict, craft, reference, formats: list, out: Path) -> dict:

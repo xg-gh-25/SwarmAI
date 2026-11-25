@@ -5,10 +5,14 @@
   own check (design section 11, item 3). bad_reference.json is compared with
   good.json as the reference.
 * Config, canvas scaling, reference parts and the command line exit codes.
+* The brand signature check (check_signature): a signed good.json passes; each
+  missing element (watermark, link text, QR) trips only its own finding; no brand
+  pack, or the neutral shipped one, gives no finding.
 * A browser test runs PROBE_JS on tests/fixtures/craft/probe.html (through
   work_render's driver on the pinned runtime) and checks the result against the
   section 13.3 shape. It is skipped when that runtime's Chromium cannot run.
 """
+import base64
 import copy
 import json
 import subprocess
@@ -45,7 +49,8 @@ def test_good_fixture_has_no_findings():
 
 
 def test_every_check_has_a_bad_fixture():
-    assert set(BAD) == set(cc.CHECKS)
+    # brand judges the whole work, not one slide; its bad examples are in the brand tests
+    assert set(BAD) | {"brand"} == set(cc.CHECKS)
     for check in BAD:
         assert (FIX / f"bad_{check}.json").is_file(), check
 
@@ -238,6 +243,97 @@ def test_invalid_measure_raises():
         cc.evaluate({"slide": "s-1", "texts": []}, None)
 
 
+# ------------------------------------------------------------ brand signature
+
+# A 1x1 PNG: stands in for the person's QR image.
+QR_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhf"
+                          "DwAChwGA60e6kgAAAABJRU5ErkJggg==")
+WATERMARK = "Made with Example Studio"
+LINK_TEXT = "example.com/me"
+
+
+@pytest.fixture
+def sig(tmp_path):
+    """A signature in the shape of brand_config.signature(), with a QR file on disk."""
+    qr = tmp_path / "qr-dark.png"
+    qr.write_bytes(QR_PNG)
+    return {"watermark": WATERMARK, "link": "https://example.com/me", "link_text": LINK_TEXT,
+            "qr": {"dark_on_light": str(qr), "light_on_dark": None},
+            "footer": {"mark": None, "name": None, "tagline": None}}
+
+
+def signed():
+    """good.json with the watermark, the link text and the QR image on it."""
+    m = load("good.json")
+    m["texts"].append({"text": LINK_TEXT, "role": "label", "font_px": 22, "lines": 1,
+                       "nowrap": False, "box": [1040, 940, 300, 28], "container": [0, 0, 1920, 1080],
+                       "chars": 14})
+    m["texts"].append({"text": WATERMARK, "role": "label", "font_px": 22, "lines": 1,
+                       "nowrap": False, "box": [1400, 980, 380, 28], "container": [0, 0, 1920, 1080],
+                       "chars": 21})
+    m["images"].append({"src": "data:image/png;base64,iVBORw0KGgo", "box": [1680, 890, 80, 80],
+                        "loaded": True, "fp": cc.fingerprint(QR_PNG)})
+    return m
+
+
+def test_signed_work_passes(sig):
+    m = signed()
+    assert cc.evaluate(m, {"w": 1920, "h": 1080}) == []     # no other check trips on it
+    assert cc.check_signature(m, sig) == []
+
+
+@pytest.mark.parametrize("element", ["watermark", "link", "qr"])
+def test_missing_signature_element_trips_only_its_finding(sig, element):
+    m = signed()
+    if element == "watermark":
+        m["texts"] = [t for t in m["texts"] if t["text"] != WATERMARK]
+    elif element == "link":
+        m["texts"] = [t for t in m["texts"] if t["text"] != LINK_TEXT]
+    else:
+        m["images"][-1]["fp"] = cc.fingerprint(b"some other image")
+    findings = cc.check_signature(m, sig)
+    assert [f["where"] for f in findings] == [element], findings
+    f = findings[0]
+    assert set(f) == {"slide", "check", "level", "msg", "where"}
+    assert (f["slide"], f["check"], f["level"]) == (m["slide"], "brand", "fail")
+    assert "is not on the work" in f["msg"]
+
+
+def test_no_brand_pack_gives_no_finding(tmp_path):
+    import brand_config
+    bare = load("good.json")                                 # carries no signature at all
+    assert cc.check_signature(bare, None) == []
+    neutral = brand_config.signature(user_file=tmp_path / "no-brand-file.yaml")
+    assert cc.check_signature(bare, neutral) == []
+    only_link = dict(neutral, link="https://example.com/me", link_text=LINK_TEXT)
+    assert [f["where"] for f in cc.check_signature(bare, only_link)] == ["link"]   # unset = not required
+
+
+def test_signature_counts_across_a_deck_and_reports_the_last_slide(sig):
+    first, last = signed(), load("good.json")
+    last["slide"] = "s-end1"
+    assert cc.check_signature([first, last], sig) == []      # on any slide is enough
+    findings = cc.check_signature([load("good.json"), last], sig)
+    assert {f["slide"] for f in findings} == {"s-end1"}
+    assert sorted(f["where"] for f in findings) == ["link", "qr", "watermark"]
+
+
+def test_signature_must_be_seen(sig):
+    m = signed()
+    m["texts"][-1]["box"] = [-9999, 980, 380, 28]           # pushed off the page
+    m["images"][-1]["loaded"] = False                       # the QR did not load
+    assert sorted(f["where"] for f in cc.check_signature(m, sig)) == ["qr", "watermark"]
+
+
+def test_signature_level_and_unreadable_qr(sig, tmp_path):
+    m = signed()
+    del m["texts"][-1]
+    assert [f["level"] for f in cc.check_signature(m, sig, {"levels": {"brand": "warn"}})] == ["warn"]
+    broken = dict(sig, qr={"dark_on_light": str(tmp_path / "gone.png"), "light_on_dark": None})
+    f = cc.check_signature(signed(), broken)
+    assert [(x["slide"], x["where"]) for x in f] == [("", "qr")] and "cannot be read" in f[0]["msg"]
+
+
 # ------------------------------------------------------------ command line
 
 def run_cli(*args):
@@ -380,6 +476,9 @@ def test_probe_scopes_to_slide_and_scale(probe_page):
     assert by_text(m2, "Author turned nowrap off")["nowrap"] is False
     nowrap = [f for f in cc.evaluate(m2, None) if f["check"] == "nowrap"]
     assert [f["where"] for f in nowrap] == ["A title that is far too long for its narrow box"]
+    # A base64 image carries the fingerprint of its bytes, the same as Python's.
+    qr = [im for im in m2["images"] if im["src"].startswith("data:image/png;base64,")]
+    assert [im.get("fp") for im in qr] == [cc.fingerprint(QR_PNG)]
 
     # A slide scaled to half size by a deck stage is measured in canvas px.
     m3 = probe_page.evaluate(cc.PROBE_JS, "s-5e6f")

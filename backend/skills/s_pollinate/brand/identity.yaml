@@ -14,7 +14,7 @@ brand:
     compact: ""
     full: ""
 
-# What every output carries and the delivery gates check (see scripts/brand_config.py).
+# What every output carries and work.py cut checks (see scripts/brand_config.py).
 # Unset = not drawn and not required.
 signature:
   watermark: null

@@ -35,7 +35,8 @@ Start from a template in `templates/html-report/` (all use `base.css`):
   approximate number stays approximate ("about 30%"), never made exact.
 - Interaction is a bonus (tabs, sections that open). Everything important must also be
   visible in the PNG, which is rendered with the page as it first loads.
-- Brand: the configured signature in the footer.
+- Brand: the configured signature in the footer (`cut` checks the watermark, link text
+  and QR, as for a poster).
 
 ## Revise
 

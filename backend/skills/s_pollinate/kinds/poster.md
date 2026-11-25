@@ -58,13 +58,14 @@ most:
 
 ## Check before cut
 
-`cut` runs the craft checks (text size, fill, alignment, overflow, overlap, safe area).
-Also check by eye, once, on the PNG in `review/`:
+`cut` runs the craft checks (text size, fill, alignment, overflow, overlap, safe area,
+images, and the brand: the configured watermark, link text and QR image are on the
+poster). Also check by eye, once, on the PNG in `review/`:
 
 - the direction comment is there and no raw hex is in the body;
 - every container is centered;
 - no gap between blocks is larger than 72 px;
-- each configured signature element is there;
+- the footer lines (mark, name, tagline) are there and the QR is at most 120 px (not measured);
 - the PNG is the planned width and under 2 MB.
 
 ## Restyle without losing content
