@@ -646,7 +646,7 @@ def review_closed(record: Path, api, *, apply: bool, repos: "list[Path] | None" 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--workspace", default="~/.swarm-ai/SwarmWS")
+    parser.add_argument("--workspace", help="the SwarmWS root (default: as backend config resolves it)")
     parser.add_argument("--backup-root", default="~/.swarm-ai/backups")
     parser.add_argument("--record", default="~/.swarm-ai/backups/followup-migration.jsonl")
     parser.add_argument("--api", default=f"http://127.0.0.1:{os.environ.get('SWARMAI_PORT', '18321')}")
@@ -657,6 +657,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--review-closed", action="store_true",
                         help="give the person back what an earlier run closed on a model's word")
     args = parser.parse_args(argv)
+    if not args.workspace:
+        from config import get_swarmws
+        args.workspace = str(get_swarmws())
     ws = Path(args.workspace).expanduser()
     os.environ.setdefault("SWARM_WORKSPACE", str(ws))
     if args.review_closed:

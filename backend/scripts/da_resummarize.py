@@ -670,7 +670,7 @@ def restore_archives(ws: Path, apply: bool) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--workspace", default="~/.swarm-ai/SwarmWS")
+    parser.add_argument("--workspace", help="the SwarmWS root (default: as backend config resolves it)")
     parser.add_argument("--db", default="~/.swarm-ai/data.db")
     parser.add_argument("--backup-root", default="~/.swarm-ai/backups")
     parser.add_argument("--since", default="")
@@ -683,6 +683,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commits", action="store_true",
                         help="only recompute each row's commits (no model call)")
     args = parser.parse_args(argv)
+    if not args.workspace:
+        from config import get_swarmws
+        args.workspace = str(get_swarmws())
     if args.sentences:
         return asyncio.run(shorten_sentences(args))
     if args.commits:

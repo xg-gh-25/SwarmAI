@@ -41,6 +41,8 @@ ALLOWED = {
     "scripts/cdf_rehearsal_replay.py":
         "sets SWARM_WORKSPACE so config.get_swarmws() is the workspace copy being replayed",
     "scripts/eval_runner.py": "sets SWARM_WORKSPACE/SWARMWS for a check's subprocess",
+    "scripts/migrate_followups_to_todos.py":
+        "sets SWARM_WORKSPACE so the ToDo code it imports reads the workspace being migrated",
     "scripts/probe_pipeline.py": "sets SWARM_WORKSPACE/SWARMWS for a sandbox run",
     "skills/s_repo-to-ddd/scripts/ai_ready_helpers.py":
         "asks whether SWARM_WORKSPACE is explicitly set (collect output there)",
