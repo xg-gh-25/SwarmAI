@@ -58,8 +58,6 @@ Status: current • Classification: Public
 12. [Competitive Positioning](#12-competitive-positioning)
 13. [Future Roadmap](#13-future-roadmap)
 
-The figures are older illustrations. Where a figure differs from the text, the text is current.
-
 ---
 
 ## 1. Executive Summary
@@ -337,7 +335,7 @@ Profiles: full and bugfix run all eight stages; trivial skips THINK; direct runs
 Background automation runs inside the backend service (the daemon on macOS, or a Hive) — independently of chat sessions. The scheduler loop checks due jobs every hour, routes them to type-specific handlers via the executor, and persists state across restarts. The service manager runs managed side services declared in `Services/*/service.json` and restarts them if they crash.
 
 ![Figure 9: Job System](../assets/job-system.svg)
-*Figure 9: Job System — scheduler, executor routing, and side services (the figure still shows launchd scheduling and the retired signal pipeline; both are gone)*
+*Figure 9: Job System — scheduler, executor routing, and side services*
 
 | Job Type | Handler | Examples | Token Cost |
 |----------|---------|----------|------------|
