@@ -65,6 +65,10 @@ Start from `templates/html-deck/shared/html-template.md`. Then:
 - Big text. Body text on a 1920×1080 slide starts around 28 px; captions are not smaller
   than the craft check allows. When a slide is too full, split it; do not shrink the text.
 - Use the space: content should fill the safe area, not float in the middle of it.
+- Mark a slide that is meant to be sparse with `data-layout` on its `<section>`: one of `cover`, `section`,
+  `chapter`, `statement`, `quote`, `stat`, `hero`, `manifesto`, `closing`, `end`, `colophon`
+  (`craft_checks.py` DEFAULTS `sparse_layouts`). The fill check skips only those; an unmarked cover or
+  divider fails it as "too empty".
 - Mark one-line titles and subtitles with `data-nowrap`; give a block `data-role` when
   the guess from its tag would be wrong.
 - Line up sibling blocks on the same left and top edges.
