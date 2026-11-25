@@ -5433,7 +5433,7 @@
     },
     "PollinateOverlay": {
       "previewUnavailable": "Preview unavailable: {{name}}",
-      "contentAssets": "Content Assets",
+      "contentAssets": "Works and runs",
       "gallery": "Gallery",
       "insights": "Insights",
       "statTopics": "Topics",
@@ -5450,7 +5450,6 @@
       "sortNewest": "newest",
       "sortToPublish": "to-publish",
       "filterAll": "{{name}}: all",
-      "noContent": "No content yet. Ask Swarm in chat to pollinate a topic.",
       "noMatch": "No assets match your search.",
       "publishedCount": "{{count}} published",
       "readyCount": "{{count}} ready",
@@ -5489,7 +5488,9 @@
       "openInCanvas": "Open in Canvas",
       "checksFailed": "Checks failed",
       "notRendered": "Not rendered yet",
-      "outsideWorkspace": "Outside the workspace"
+      "outsideWorkspace": "Outside the workspace",
+      "checksFailedTip": "{{latest}} failed its checks; the card shows {{current}}, the last version that passed.",
+      "checksFailedTipNoCurrent": "{{latest}} failed its checks; no version has passed yet."
     },
     "BrainMapView": {
       "agentNotGenerated": "not generated yet",

@@ -256,7 +256,10 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               onRetry={reload}
               onOpen={(path) => openInCanvas(path, close)}
             />
-            <div className="px-4 pt-4 pb-1 text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
+            {/* Earlier runs: only when there are some — a person with none sees the works
+                section alone, not a second empty state under filters that do nothing. */}
+            {cards.length > 0 && (<>
+            <div className="px-4 pt-4 pb-1 text-meta uppercase tracking-wide text-[var(--color-text-faint)]" data-testid="pollinate-earlier-runs">
               {t('ui.PollinateOverlay.earlierRuns')}
             </div>
             {/* Toolbar: search + filters + sort (client-side, over the runs) */}
@@ -310,6 +313,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                 ))}
               </div>
             )}
+            </>)}
 
             {/* Body: content cards (newest-first, newest expanded) */}
             <div className="px-4 py-3 space-y-3">
@@ -323,11 +327,9 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                   className="mx-auto my-8 max-w-sm"
                 />
               )}
-              {!loading && !loadErr && filtered.length === 0 && (
+              {!loading && !loadErr && cards.length > 0 && filtered.length === 0 && (
                 <div className="text-center py-10 text-body text-[var(--color-text-faint)]">
-                  {cards.length === 0
-                    ? t('ui.PollinateOverlay.noContent')
-                    : t('ui.PollinateOverlay.noMatch')}
+                  {t('ui.PollinateOverlay.noMatch')}
                 </div>
               )}
               {filtered.map((card, idx) => (
@@ -400,7 +402,7 @@ function WorksSection({ data, loading, error, onRetry, onOpen }: {
           className="max-w-sm"
         />
       )}
-      {!error && !data && loading && (
+      {!data && loading && (
         <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.loading')}</div>
       )}
       {!error && data && works.length === 0 && (
@@ -440,7 +442,7 @@ function WorkCard({ work, onOpen }: { work: PollinateWork; onOpen: (path: string
           type="button"
           onClick={() => onOpen(openPath)}
           title={t('ui.PollinateOverlay.openInCanvas')}
-          className="aspect-[16/10] rounded-md overflow-hidden bg-[var(--color-bg)] flex items-center justify-center hover:ring-1 hover:ring-primary transition-shadow"
+          className="w-full aspect-[16/10] rounded-md overflow-hidden bg-[var(--color-bg)] flex items-center justify-center hover:ring-1 hover:ring-primary transition-shadow"
         >
           {cover}
         </button>
@@ -455,7 +457,9 @@ function WorkCard({ work, onOpen }: { work: PollinateWork; onOpen: (path: string
           <span
             className="shrink-0 inline-flex items-center gap-0.5 text-meta text-[var(--color-status-error)]"
             data-testid="pollinate-work-failed"
-            title={work.latest ?? undefined}
+            title={work.current
+              ? t('ui.PollinateOverlay.checksFailedTip', { latest: work.latest ?? '', current: work.current })
+              : t('ui.PollinateOverlay.checksFailedTipNoCurrent', { latest: work.latest ?? '' })}
           >
             <span className="material-symbols-outlined icon-xs">error</span>
             {t('ui.PollinateOverlay.checksFailed')}

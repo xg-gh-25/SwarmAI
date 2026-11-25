@@ -5433,7 +5433,7 @@
     },
     "PollinateOverlay": {
       "previewUnavailable": "无法预览：{{name}}",
-      "contentAssets": "内容资产",
+      "contentAssets": "作品与运行",
       "gallery": "作品",
       "insights": "洞察",
       "statTopics": "主题",
@@ -5450,7 +5450,6 @@
       "sortNewest": "最新",
       "sortToPublish": "待发布",
       "filterAll": "{{name}}：全部",
-      "noContent": "还没有内容。在对话里让 Swarm pollinate 一个主题。",
       "noMatch": "没有符合搜索条件的资产。",
       "publishedCount": "{{count}} 个已发布",
       "readyCount": "{{count}} 个就绪",
@@ -5489,7 +5488,9 @@
       "openInCanvas": "在 Canvas 打开",
       "checksFailed": "检查未通过",
       "notRendered": "还没有渲染",
-      "outsideWorkspace": "在工作区之外"
+      "outsideWorkspace": "在工作区之外",
+      "checksFailedTip": "{{latest}} 没有通过检查；卡片显示的是最后一个通过的版本 {{current}}。",
+      "checksFailedTipNoCurrent": "{{latest}} 没有通过检查；还没有通过的版本。"
     },
     "BrainMapView": {
       "agentNotGenerated": "还没有生成",

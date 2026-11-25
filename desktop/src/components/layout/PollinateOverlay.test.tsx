@@ -304,7 +304,9 @@ describe('PollinateOverlay', () => {
     expect(failed.querySelector('[data-testid="pollinate-work-failed"]')).not.toBeNull();
     expect(ok.querySelector('[data-testid="pollinate-work-failed"]')).toBeNull();
     expect(screen.getAllByTestId('pollinate-work-failed')).toHaveLength(1);
-    expect(screen.getByTestId('pollinate-work-failed').getAttribute('title')).toBe('v003');
+    const tip = screen.getByTestId('pollinate-work-failed').getAttribute('title') ?? '';
+    expect(tip).toContain('v003');   // the version that failed
+    expect(tip).toContain('v002');   // the one the card shows
   });
 
   it('works: a work outside the workspace has no Open in Canvas and no thumbnail', async () => {
@@ -313,6 +315,16 @@ describe('PollinateOverlay', () => {
     expect(screen.queryByTestId('pollinate-work-open-/home/me/Desktop/AI-Native/deck')).toBeNull();
     expect(card.querySelector('img')).toBeNull();
     expect(card.textContent).toContain('Outside the workspace');
+  });
+
+  it('no works and no runs: one empty state, no Earlier runs toolbar', async () => {
+    fetchWorks.mockResolvedValue({ works: [], skipped: 0 });
+    fetchAssets.mockResolvedValue({ overall: { ...ASSETS.overall, cardCount: 0 }, cards: [] });
+    renderAndOpen();
+    expect(await screen.findByTestId('pollinate-works-empty')).toBeInTheDocument();
+    await waitFor(() => expect(fetchAssets).toHaveBeenCalled());
+    expect(screen.queryByTestId('pollinate-earlier-runs')).toBeNull();
+    expect(screen.queryByTestId('pollinate-search')).toBeNull();
   });
 
   it('works: an empty registry says so; skipped entries are counted', async () => {
