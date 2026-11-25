@@ -1201,7 +1201,12 @@ def _credentials_item(cdf_failure: str, others: list[dict]) -> Optional[Attentio
 
 
 def _collect_ingestion() -> list[AttentionItem]:
-    """Unresolved CDF anomalies, one item per kind; a missing DB is silent. A model call
+    """Unresolved CDF anomalies, one item per kind, and for a poison one per reason (the
+    cause ``ingest requeue --reason`` acts on); a missing DB is silent. An item's id is
+    what the item is (``ingestion:<kind>``, ``ingestion:poison:<reason>``), never the
+    event row that is newest now, so the same problem coming back is the same item (and
+    its automatic run's record, ``core.attention_auto``, still applies). The event row
+    and its unit are the item's state, in ``dispatch.context``. A model call
     of background cognition (CDF's, or another caller's recorded in
     ``core.background_credentials``) that failed for lack of credentials is ONE item
     (``_credentials_item``), and a poison of the same cause is not shown again as a
@@ -1263,6 +1268,7 @@ def _collect_ingestion() -> list[AttentionItem]:
                                           ["ingest status"]),
                       "context": {"kind": "stalled"}},
         ))
+        seen.add("stalled")
     for row in rows:
         kind = str(row["kind"])
         if kind not in titles or kind in seen:
@@ -1271,21 +1277,32 @@ def _collect_ingestion() -> list[AttentionItem]:
             detail = json.loads(row["detail"])
         except (TypeError, ValueError):
             detail = {"detail": str(row["detail"] or "")}
-        if kind == "poison" and AWS_CREDENTIALS_REASON in str(detail.get("reason") or ""):
+        if not isinstance(detail, dict):
+            detail = {"detail": str(detail)}
+        reason = str(detail.get("reason") or "") if kind == "poison" else ""
+        lane = f"{kind}:{reason}" if reason else kind
+        if lane in seen:
+            continue
+        if kind == "poison" and AWS_CREDENTIALS_REASON in reason:
             if credentials is not None:
                 continue        # the same cause, already the one credentials item
-        seen.add(kind)
+        seen.add(lane)
         summary = _one_line(str(detail.get("summary") or detail.get("reason") or kind))
         tier = TIER_BLOCKING if kind in {"user_race", "writer_unknown"} else TIER_REVIEW
         prompt = (str(detail.get("prompt") or "")
                   if kind == "missing_section" else prompts[kind])
+        context: dict[str, Any] = {"kind": kind, "event_id": row["id"]}
+        if detail.get("unit_id"):
+            context["unit_id"] = str(detail["unit_id"])
+        if reason:
+            context["reason"] = reason
         items.append(AttentionItem(
-            id=f"ingestion:{kind}:{row['id']}", source="ingestion", tier=tier, brain=None,
+            id=f"ingestion:{lane}", source="ingestion", tier=tier, brain=None,
             title=titles[kind], summary=summary, detail=_one_line(json.dumps(detail, ensure_ascii=False), 400),
             since=_iso(row["at"]),
             dispatch={"message": _prompt(prompt, [("Recorded detail", summary)],
                                           [f"ingestion event {row['id']}"]),
-                      "context": {"kind": kind, "event_id": row["id"]}},
+                      "context": context},
         ))
     return items
 

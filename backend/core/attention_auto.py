@@ -33,12 +33,20 @@ and hands every item whose automatic run did not work back to the person
 (``handler = person``) with a note saying what was tried and where it stopped.
 
 State: one JSON file in the app data dir (``RECORDS_FILE``), written only by this
-module's loop (single writer; ``collect`` only reads it). A record is keyed by item id
-and carries the item's state fingerprint (``fingerprint``: the id and its
-``dispatch.context``, which hold kinds and ids, never text that changes by the hour). A
-record leaves once its item is gone from the queue and it is not running, so a later
-recurrence is handled again, once. While the item stays queued its record stays: a new
-state of an item whose run did not work (or came back) stays the person's.
+module's loop (single writer; ``collect`` only reads it). A record is keyed by item id,
+which names what the item is (a job, a CDF kind, a poison's reason), never one
+occurrence of it, and
+carries the item's state fingerprint (``fingerprint``: the id and its
+``dispatch.context``, which hold kinds and ids, never text that changes by the hour) and
+that context. A new state of an item whose run did not work (or came back) stays the
+person's. The item leaving the queue does not end its record: a run's own requeue
+resolves a CDF event while its cause stays, the scheduler's 24-hour reset clears a
+job's streak with no good run, and a source that fails to read shows no item at all.
+A record leaves only when its item is gone and a read shows the cause fixed
+(``_cleared``: the job ran well, the unit got through, CDF moved work through since the
+run); a later failure is then a new problem, handled again, once. A records file that
+cannot be read skips the pass, and a run's outcome that cannot be saved is kept in
+memory for the next pass, so a read error never forgets or rewrites a run.
 
 No spend check: a run's cost is recorded in the usage ledger like any session's, and
 nothing refuses or cuts a run for cost (one run at a time is a memory choice: each
@@ -129,15 +137,23 @@ def fingerprint(item: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def load_records() -> dict[str, dict]:
+def load_records(*, strict: bool = False) -> dict[str, dict]:
     """The records by item id; a missing or unreadable file is no record (a warning
-    is logged for an unreadable one)."""
+    is logged for an unreadable one). ``strict``: a file that exists but cannot be read
+    (an OS error, maybe passing) raises ``OSError`` instead, for a caller that would
+    otherwise act, and write, as if no run had ever been made. Content that is not JSON
+    is never a torn write (the file is replaced whole), so it stays no record."""
     path = _records_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except (OSError, ValueError) as exc:
+    except OSError:
+        if strict:
+            raise
+        logger.warning("attention_auto: records file %s unreadable; showing none", path)
+        return {}
+    except ValueError as exc:
         logger.warning("attention_auto: records file %s unreadable (%s); starting with none",
                        path, type(exc).__name__)
         return {}
@@ -154,6 +170,8 @@ def _save_records(records: dict[str, dict]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(records, fh, ensure_ascii=False, indent=1, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -163,15 +181,30 @@ def _save_records(records: dict[str, dict]) -> None:
         raise
 
 
+# A run's changes that could not be saved (the records file could not be read just
+# then), by item id: (fingerprint, fields). ``run_pass`` applies them first.
+_unsaved: dict[str, tuple[str, dict]] = {}
+
+
 def _update(key: str, fp: str, **fields: Any) -> None:
     """Change the record of ``key`` if it is still for state ``fp`` (no await inside:
-    the loop and its run share one event loop, so load-modify-save is atomic)."""
-    records = load_records()
+    the loop and its run share one event loop, so load-modify-save is atomic). When the
+    file cannot be read the change waits in ``_unsaved`` instead of being lost."""
+    prev = _unsaved.pop(key, None)
+    if prev is not None and prev[0] == fp:
+        fields = {**prev[1], **fields}
+    fields["at"] = _now().isoformat()
+    try:
+        records = load_records(strict=True)
+    except OSError as exc:
+        logger.warning("attention_auto: records file unreadable (%s); %s saved next pass",
+                       type(exc).__name__, key)
+        _unsaved[key] = (fp, fields)
+        return
     rec = records.get(key)
     if rec is None or rec.get("fingerprint") != fp:
         return
     rec.update(fields)
-    rec["at"] = _now().isoformat()
     _save_records(records)
 
 
@@ -216,6 +249,99 @@ def apply_records(items: list, now: Optional[datetime] = None) -> None:
             it.detail = f"{tried}\n\n{it.detail}".strip() if it.detail else tried
 
 
+# ── when a record may go ─────────────────────────────────────────────────────
+
+#: a CDF unit's end states other than being given up on (a unit that expired is never
+#: poisoned again either)
+_UNIT_DONE = ("merged", "written", "reinforced", "rejected")
+_UNIT_THROUGH = frozenset({*_UNIT_DONE, "expired_unprocessed"})
+
+
+def _job_ran_well(job_id: str) -> bool:
+    """The job's last run succeeded. Its record was made after a failed run, so this is
+    a good run since. A state file that cannot be read loads empty: not shown fixed."""
+    from jobs.scheduler import load_state
+    js = load_state().jobs.get(job_id) if job_id else None
+    return js is not None and js.last_status in ("success", "partial") \
+        and not js.consecutive_failures
+
+
+def _unit_through(unit_id: str) -> bool:
+    """CDF is through with the unit the item named: an end state other than poisoned,
+    parked for another item's cause (a missing section), or the unit no longer exists."""
+    if not unit_id:
+        return False
+    from contextlib import closing
+    from core.ingestion.api import connect_ro
+    from core.ingestion.contracts_v2 import PARKED_DEFER_REASONS
+    with closing(connect_ro()) as conn:
+        row = conn.execute("SELECT state,reason FROM ingestion_units WHERE unit_id=?",
+                           (unit_id,)).fetchone()
+    if row is None:
+        return True
+    state, reason = str(row[0]), str(row[1] or "")
+    return state in _UNIT_THROUGH or (state == "deferred" and reason in PARKED_DEFER_REASONS)
+
+
+def _cdf_moved_since(since: Any) -> bool:
+    """Cognitive Distillation has nothing stopped (``ingestion.status.stalls``) AND moved
+    work through after ``since`` (a unit ended, or a session job finished): a stall that
+    only stopped showing for a pass (an owner restarting, a run's requeue resetting the
+    ages) is not a fix."""
+    from contextlib import closing
+    from core.ingestion.api import connect_ro
+    from core.ingestion.status import stalls
+    start = _parse_time(since)
+    if start is None:
+        return False
+    import sqlite3
+    marks = ",".join("?" for _ in _UNIT_DONE)
+    queries = ((f"SELECT MAX(updated_at) FROM ingestion_units WHERE state IN ({marks})",
+                _UNIT_DONE),
+               ("SELECT MAX(finished_at) FROM ingestion_s2_jobs WHERE state='done'", ()))
+    last: list = []
+    with closing(connect_ro()) as conn:
+        if stalls(conn):
+            return False
+        for sql, args in queries:
+            try:
+                last.append(conn.execute(sql, args).fetchone()[0])
+            except sqlite3.OperationalError:  # a table an older store lacks: no evidence
+                continue
+    return any((t := _parse_time(str(v).replace("Z", "+00:00"))) is not None and t > start
+               for v in last if v)
+
+
+def _cleared(key: str, rec: dict) -> bool:
+    """Whether a read shows the cause of a gone item fixed, so its record may go. A read
+    that fails, or shows nothing fixed yet, keeps the record (see the module docstring:
+    an item leaving the queue says nothing by itself)."""
+    ctx = rec.get("context")
+    if not isinstance(ctx, dict):
+        # a record from before records kept their item's context: a job id and the
+        # stalled id never changed shape; another CDF id named one event row, which
+        # never comes back
+        if key.startswith("job:"):
+            ctx = {"kind": "job", "job_id": key.partition(":")[2]}
+        elif key == "ingestion:stalled":
+            ctx = {"kind": "stalled"}
+        else:
+            return True
+    kind = ctx.get("kind")
+    try:
+        if kind == "job":
+            return _job_ran_well(str(ctx.get("job_id") or ""))
+        if kind == "poison":
+            return _unit_through(str(ctx.get("unit_id") or ""))
+        if kind == "stalled":
+            return _cdf_moved_since(rec.get("started_at") or rec.get("at"))
+    except Exception as exc:  # noqa: BLE001 — not shown fixed: the record stays
+        logger.warning("attention_auto: could not tell whether %s is fixed (%s); kept",
+                       key, type(exc).__name__)
+        return False
+    return True  # a digest: it leaves when its freshness window ends, nothing to fix
+
+
 # ── the loop pass ────────────────────────────────────────────────────────────
 
 def _running() -> bool:
@@ -234,8 +360,10 @@ def _collect(workspace_root: Path):
 
 async def run_pass(workspace_root: Path) -> Optional[str]:
     """One look at the queue: mark lost runs interrupted, drop records whose item is
-    gone, and start the first agent item with no record for its state when no run is
-    going. Returns the id of the item it started, else None. Never on a worker Hive."""
+    gone and whose cause a read shows fixed (``_cleared``), and start the first agent
+    item with no record for its state when no run is going. Returns the id of the item
+    it started, else None. Never on a worker Hive; nothing at all when the records file
+    cannot be read."""
     global _current, _current_key
     if _is_worker():
         return None
@@ -245,15 +373,27 @@ async def run_pass(workspace_root: Path) -> Optional[str]:
     items = list(result.items)
     present = {it.id for it in items}
 
-    records = load_records()
+    try:
+        records = load_records(strict=True)
+    except OSError as exc:
+        logger.warning("attention_auto: records file unreadable (%s); this pass starts "
+                       "nothing", type(exc).__name__)
+        return None
     changed = False
+    for key, (fp, fields) in list(_unsaved.items()):
+        rec = records.get(key)
+        if rec is not None and rec.get("fingerprint") == fp:
+            rec.update(fields)
+            changed = True
+        del _unsaved[key]
     for key, rec in records.items():
         if rec.get("state") == RUNNING and not (_running() and _current_key == key):
             rec.update(state=INTERRUPTED, at=_now().isoformat(),
                        note="SwarmAI stopped while Swarm was working on this; it was not "
                             "started again.")
             changed = True
-    for key in [k for k, r in records.items() if k not in present and r.get("state") != RUNNING]:
+    for key in [k for k, r in records.items()
+                if k not in present and r.get("state") != RUNNING and _cleared(k, r)]:
         del records[key]
         changed = True
     if changed:
@@ -264,7 +404,8 @@ async def run_pass(workspace_root: Path) -> Optional[str]:
     for it in items:
         if handler_of(it) != HANDLER_AGENT:
             continue
-        kind = ((it.dispatch or {}).get("context") or {}).get("kind")
+        ctx = (it.dispatch or {}).get("context") or {}
+        kind = ctx.get("kind")
         if kind not in AUTO_KINDS:
             continue
         fp = fingerprint(it)
@@ -280,10 +421,10 @@ async def run_pass(workspace_root: Path) -> Optional[str]:
             if rec.get("state") == DONE:
                 note = ("Swarm said it fixed this, but it came back. "
                         + (f"What it said: {note}" if note else "")).strip()
-            rec.update(fingerprint=fp, state=FAILED, at=now, note=note)
+            rec.update(fingerprint=fp, state=FAILED, at=now, note=note, context=ctx)
             _save_records(records)
             continue
-        records[it.id] = {"fingerprint": fp, "state": RUNNING, "kind": kind,
+        records[it.id] = {"fingerprint": fp, "state": RUNNING, "kind": kind, "context": ctx,
                           "started_at": now, "at": now, "note": "", "session_id": None}
         _save_records(records)
         _current_key = it.id
