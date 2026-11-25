@@ -1,7 +1,7 @@
 ---
 title: "Autonomous Pipeline: High-Level Design"
 created: 2026-08-31
-updated: 2026-08-31
+updated: 2026-11-25
 tags: [architecture, pipeline, hld, autonomous-delivery, quality-gates]
 project: SwarmAI
 status: current
@@ -9,200 +9,184 @@ status: current
 
 # High-Level Design: Autonomous Pipeline
 
-**Author:** Swarm | **Date:** 2026-08-31 | **Status:** Draft
-**Scope:** SwarmAI subsystem (cross-cutting: session, DDD, skills, jobs)
-**Related:** `Autonomous-Pipeline-Design.md` (full technical reference), `s_autonomous-pipeline/INSTRUCTIONS.md` (mechanical orchestration), SwarmAI `TECH.md`
+**Author:** Swarm | **Date:** 2026-11-25 | **Status:** Current (Pipeline v1)
+**Scope:** SwarmAI subsystem (cross-cutting: session, DDD, skills, CDF)
+**Related:** `backend/skills/s_autonomous-pipeline/` (INSTRUCTIONS.md + one card per stage), `backend/core/run_protocol/` (the engine), `docs/design/pipeline-v1-remaining-design.md`, `docs/design/pipeline-v1-human-loop.md`. `Autonomous-Pipeline-Design.md` describes the retired pipeline and is kept as history only.
 
 > This HLD answers "are we building the right delivery system, and what did we give
-> up?" It is decision-shaped, not a mechanics manual. For the exhaustive stage
-> mechanics, tooling surface, and pattern checklists, read the companion technical
-> reference `Autonomous-Pipeline-Design.md`. This doc stays at the level a reviewer
-> needs to judge the architecture and its trade-offs.
+> up?" It is decision-shaped, not a mechanics manual. The exact commands and checks live
+> in the skill's stage cards and in `core/run_protocol/`; this doc stays at the level a
+> reviewer needs to judge the architecture and its trade-offs.
 
 ## 1. Overview
 
 ### 1.1 Problem Statement
 
-"AI can code" is not "AI can deliver." A model produces syntactically correct code that
-passes the tests it was given, the cheapest part of delivery. What ships broken is
-everything the construction step does not touch: integration seams, convention
-conformance, regressions, unverified cross-boundary contracts, and races on paths no test
-exercises. Running a fixed stage sequence once and hoping the output is good enough makes
-quality a coin flip: one run is excellent, the next is subtly broken, with no signal telling
-the two apart. The recurring, expensive failure is a confident wrong result that reads as
-done. The author is the least able to see it, because the same context that wrote the
-code shares its blind spots.
+"AI can code" is not "AI can deliver." A model produces code that passes the tests it was
+given, the cheapest part of delivery. What ships broken is everything the construction step
+does not touch: a misread requirement, integration seams, regressions, security holes, and
+paths no test exercises. The recurring, expensive failure is a confident wrong result that
+reads as done. The author is the least able to see it, because the same context that wrote
+the code shares its blind spots. And a model that judges its own work will, under pressure,
+say "done" when it is not.
 
 ### 1.2 Objectives / Success Criteria
 
 | # | Objective | How Measured |
 |---|-----------|--------------|
-| O1 | Every output is push-ready, mergeable without human code review | Committed change passes all 6 push-ready layers before it lands |
-| O2 | A confident-wrong result cannot ship on "looks done" | A structural gate (not prompting) blocks it. The gate cannot be skipped by downgrading the profile |
-| O3 | The failure mode is "escalate with a clear gap report," never "ship despite known issues" | Every non-converged run terminates at a checkpoint + gap report, not a silent ship |
-| O4 | Each run leaves the system smarter than the last | REFLECT writes lessons back to DDD. The next run reads richer context |
-| O5 | The right-sized process for the task, no ceremony tax on a typo, no shortcut on a feature | Profile selected at intake. Rigor rides the profile, not the agent's mood |
+| O1 | What lands is the code that was reviewed and tested | Landing checks: review saw this exact code tree, the TEST report is on this tree, the commit is the reviewed code + REPORT |
+| O2 | Model output never decides on its own whether work advances | Every stage exit and the landing are deterministic checks in `core/run_protocol/`; an expert's opinion never blocks landing |
+| O3 | A run always ends in a known state | Every loop is capped; a run ends landed, not landed with its reason, or abandoned, never silently half-done |
+| O4 | Each run leaves the system smarter than the last | REFLECT sends the run's report to CDF: delivered work, decisions, corrections, practices, gaps |
+| O5 | The right-sized process for the task | Profile chosen at create: full, bugfix, trivial, direct or research |
 
 ### 1.3 Requirements
 
 **Functional**
-- Take a one-sentence requirement and produce committed, push-ready code (or a clear DEFER/REJECT/ESCALATE verdict).
-- Handle both bounded tasks ("implement feature X") and open-ended goals ("get metric X to Y").
-- Run interactively (visible in chat) or as a background job (overnight, notify on completion).
-- Feed knowledge back to the domain brain (DDD) on every run.
+- Take one requirement and produce one landed local commit (or, for research, a report), with a REPORT the person reads.
+- Ask the person only what only a person can decide: a requirement with two or more readings, or an irreversible or high-risk design trade-off.
+- Feed knowledge back to the project's DDD on every run.
 
 **Non-functional**
-- Completable OFFLINE, no step may depend on the remote (push/CI are outside the boundary).
-- Quality is deterministic-or-escalated, never probabilistic-and-shipped.
-- Runs inside one agent session (no orchestration service, no message queue) to avoid context-transfer loss.
-- Gates are structural (code-enforced where the failure class recurred), not advisory prose a confident model rationalizes past.
+- Completable offline: no step depends on a remote. Pushing is outside the run.
+- Each run's code lives in its own git worktree per repo; the shared main checkout is never edited.
+- Runs inside one agent session, with an event-sourced record of every step, so a run can be resumed by another session.
+- Checks are code, not prose rules a confident model can rationalize past.
 
 ### 1.4 Out of Scope
 
-- Push to remote, CI verification, PR creation, user-initiated actions AFTER the pipeline's push-ready guarantee (the box guarantees push-ready. Crossing to the remote is the human's call).
-- Per-stage mechanics, exact command surface, the full runtime-pattern roster: those live in the technical reference and the stage docs.
-- Multi-agent orchestration, explicitly rejected (§3, D1).
+- Push, pull requests, CI, and production build or deploy: the person reads the REPORT and pushes.
+- Eval: stays outside the run.
+- Ordinary code changes: those are done natively, without the pipeline. The pipeline is for a risky change or when the person asks for it.
 
 ## 2. Solution Architecture
 
 ### 2.1 Approach Summary
 
-The pipeline is one agent that switches roles through a fixed stage sequence, with
-structural go/no-go gates riding inside it. Its canonical shape is **9 stages · 3 gates ·
-2 modes**. The 9 stages are the production line (EVALUATE → THINK → PLAN → BUILD → REVIEW
-→ TEST → ADVERSARIAL → DELIVER → REFLECT). The 3 gates are the moments of truth that
-decide whether work advances. The 2 modes are how execution runs: **Full** (one pass +
-a convergence loop, for a bounded task) or **Goal** (iterate BUILD+TEST toward a
-measurable Definition of Done, for an open-ended objective). Both modes run all stages
-and pass all gates, the mode changes only how the middle executes, not the rigor.
+One orchestrator agent switches roles through a fixed stage sequence. The model writes
+content and fixes code; the engine (`core/run_protocol/`) owns state, checks, evidence,
+authorization, landing and audit. Every `pipeline-v1` command returns `next`: what to do
+now, the checks that still fail, and the card for the stage just entered.
 
-The load-bearing idea is that individual stages are each sound but collectively
-insufficient: each stage only sees its own scope, so a defect that lives in the seam
-between stages survives every one of them. Two mechanisms close that gap, a fresh-context
-adversarial sub-agent (fresh eyes the author cannot supply) and a convergence loop that
-verifies the COMPLETE output against the COMPLETE standard and iterates until no gap
-remains or it escalates.
+| Profile | Stages |
+|---------|--------|
+| full, bugfix | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT |
+| trivial | EVALUATE → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT |
+| direct | BUILD → REVIEW → TEST → DELIVER → REFLECT |
+| research | EVALUATE → THINK → DELIVER → REFLECT (lands no code) |
+
+The exact sequences are `PROFILE_STAGES` in `core/run_protocol/lifecycle.py`. There is no
+skipped stage.
 
 ### 2.2 Systems and Interactions
 
-Three layers execute top-to-bottom (diagram + full narrative in the technical reference,
-Figure 1):
+- **Decision**, EVALUATE → THINK → PLAN. EVALUATE writes requirements with checkable acceptance criteria and reads the project's PRODUCT and PROJECT recall; THINK and PLAN read TECH and IMPROVEMENT recall and search the DDD further with `cognition find`. PLAN writes the design spec: tasks, exit criteria, alternatives and the chosen one.
+- **Execution**, BUILD → REVIEW → TEST. BUILD writes and tests the change in the run's worktree with the repo's own commands and ends with a validation report. It may hand self-contained parts to the person's Hives as child runs and judge what comes back. REVIEW dispatches independent experts. TEST runs the change's tests and the repo's checks on the reviewed code.
+- **Delivery**, DELIVER → REFLECT. DELIVER renders the REPORT and lands one local commit (a fast-forward of local main). REFLECT runs inside landing and sends the run's report to CDF (source S3).
 
-- **Shared decision layer**, EVALUATE → THINK → PLAN. DDD-driven judgment: should we, how, what exactly. Fronts both modes.
-- **Execution track**, Full mode runs BUILD → REVIEW → TEST once then a convergence loop. Goal mode runs GOAL_CYCLE (BUILD+TEST looped to DoD, with budget/stuck/revert safeguards, resumable across sessions via the Job System).
-- **Shared quality backend**, ADVERSARIAL → DELIVER → REFLECT. Attack, gate, compound. Gates both modes identically.
+Cross-cutting, the **DDD** is read on the way in (recall into `knowledge.md` and
+`knowledge_design.md`) and fed on the way out by REFLECT: delivered work → TIMELINE,
+decisions → PROJECT, corrections and practices → IMPROVEMENT, gaps → IMPROVEMENT "What to
+Watch For". A gap a landed run fixed is closed.
 
-Cross-cutting, the **DDD knowledge layer** (PRODUCT / TECH / IMPROVEMENT / PROJECT + code
-intelligence) is read per-stage on the way in and written back by REFLECT on the way out.
-This is the compounding loop that makes each run inform the next.
+### 2.3 The Checks (the architecture's spine)
 
-### 2.3 The Three Gates (the architecture's spine)
+A check is code a confident model cannot rationalize past. Each guards a different truth,
+and the earlier it fires the cheaper the failure it catches.
 
-A gate is a structural checkpoint a confident model cannot rationalize past, the reason
-the system refuses to ship on "looks done." Each gate guards a different kind of truth, and
-the earlier it fires the cheaper the failure it catches: a framing error caught at Gate 0
-costs one EVALUATE pass. The same error caught at Gate 2 has already paid for PLAN, BUILD,
-REVIEW, and TEST.
+| Check | Guards the truth of… | Fires | Catches |
+|-------|----------------------|-------|---------|
+| **Gate-0** | the framing | inside EVALUATE (bugfix, or a request with 2+ readings) | wrong problem, a fix that is already a no-op, unstated ambiguity, unverifiable acceptance criteria. A skeptic expert, 2 rounds max; can end the run before code |
+| **Stage checks** | each stage's document | every stage exit | missing or invalid requirements, design spec or validation report; the whole roster runs and returns every failure together |
+| **REVIEW** | the code | after BUILD, and again for any later change | correctness (always) and security (when the change is declared security-relevant); a second round rechecks every fix, a fix to behavior is proven by a test plus a mutation check |
+| **Landing checks** | what lands | inside DELIVER | review saw this exact code; fixed findings were rechecked; tests pass on this code; the commit is the reviewed code + REPORT; main has not moved (else sync and test again) |
 
-| Gate | Guards the truth of… | Fires | Catches |
-|------|----------------------|-------|---------|
-| **Gate 0** | the framing, is the problem itself understood? | inside EVALUATE → THINK | wrong problem, solution-first thinking, a "fix" that is already a no-op, unstated ambiguity |
-| **Gate 1** | the plan, is the approach sound, root not symptom? | after PLAN, before BUILD | wrong direction, missed constraints, wrong layer, hallucinated API |
-| **Gate 2** | the build, is the code actually correct? | inside DELIVER (blocking) | runtime bugs, security holes, untested paths, self-authored-code blind spots |
-
-Gate 0 and Gate 2 ride within a stage. Gate 1 is the landmark after PLAN. Gate 2 is
-mechanically enforced. It cannot be skipped by downgrading the profile to a lighter tier.
-Gate 0 was added after framing errors were observed sailing untouched all the way to Gate 2.
+An expert's opinion never blocks landing: an open HIGH finding is listed as a residual risk
+in the REPORT. A failed check is never a question for the person: it is fixed, or the run
+ends not landed with its reason.
 
 ### 2.4 Data Flows and Stores
 
-Each stage consumes upstream artifacts and produces its own, persisted and schema-validated
-at each boundary via `artifact_cli.py`: evaluation → research → design_doc → changeset →
-review → test_report → delivery, with REFLECT writing to DDD rather than producing an
-artifact. The EVALUATE artifact additionally carries the `understanding`, `ambiguity_scan`,
-and `cross_boundary` blocks that downstream gates consume (TEST Layer 4 reads
-`cross_boundary`, and REVIEW reads it too). Run state lives in `run.json`. The durable brain
-lives in the DDD markdown docs. There is no database for the pipeline itself. The artifact
-files and run.json ARE the store.
+Each run has an event-sourced audit directory (`state/pipeline_agent_audit/runs/<run>/`):
+a protected `contract.json` and an append-only event log. The run's state is derived only
+from that log (`lifecycle.fold`); nobody edits run state by hand, and a security hook denies
+writes there. The model writes only JSON documents through the CLI (`requirements.json`,
+`design_spec.json`, review fixes, `reflect.json`); markdown, including the REPORT, is
+rendered by the engine. The run audit (`run_audit.json`) scores five dimensions: Run
+Isolation, Speed, Quality, Autonomy, Token Cost. The durable knowledge lives in the DDD,
+written by CDF.
 
 ## 3. Key Decisions
 
 | # | Decision | Alternatives considered | Rationale | One-way door? |
 |---|----------|-------------------------|-----------|:-------------:|
-| D1 | **Single agent switching roles**, not multi-agent orchestration | N independent agents communicating by message | Division of labor is a tax paid for limited human bandwidth, not an optimal design. Role-switching keeps full context at zero transfer cost. A sub-agent is spawned ONLY where fresh context is the point (adversarial). Multi-agent adds handoff, state-sync, and information-loss for no gain here. | No, could add orchestration later if the SDK ships shared real-time memory |
-| D2 | **Quality convergence over one-shot perfection** | Demand flawless output from one pass | A non-deterministic model cannot guarantee one-pass perfection. The stronger contract is "iterate until verified or escalate," which removes probability from the outcome. | No |
-| D3 | **Push-ready is the boundary, push and PR are the user's** | Pipeline auto-creates a PR with auto-merge | The pipeline must be completable offline, and pushing to a public-or-private remote is a deployment decision the human owns. The box guarantees push-ready + a local commit. The human crosses to the remote. | No, reversible policy choice |
-| D4 | **Gates are structural, and the heaviest is code-enforced** | Prose rules ("always run adversarial review") | Carefulness does not scale. Gates do. Prose rules failed 11+ times (the CLASS-A self-exemption history). The fix that held was a gate `artifact_cli` refuses to complete without, at the correct profile tier. | No, but removing it would reopen the exact failure history |
-| D5 | **Profile immutable after EVALUATE** | Allow re-scoping mid-run | Otherwise a run starts `full` then downgrades to a lighter tier at DELIVER to dodge the adversarial gate, which is the precise bypass D4 exists to prevent. | No |
-| D6 | **Push-ready is binary, not scored** | A 1-10 confidence number | A number between "ship" and "don't ship" invents a false gradient (a run once scored 10/10 on 100%-broken code, the score measured process compliance, not correctness). Binary forces a real verdict + a specific gap. | No |
-| D7 | **A `refactor` work-type inverts the patch polarity** | Treat every change as patch-tolerant | For a bugfix a deferred structural fix is acceptable tech debt. For a refactor the structural change IS the acceptance criterion, so a patch means the task did not happen. Gate 1 blocks a patch when work_type=refactor. | No |
+| D1 | **One orchestrator owns the judgment**, not multi-agent orchestration | N agents communicating by message | Role-switching keeps full context at zero transfer cost. Sub-agents appear only where independence is the point (review experts, Gate-0) or for self-contained parts handed to Hives, whose results the orchestrator judges. | No |
+| D2 | **Deterministic checks decide, experts only find** | Let the reviewer's verdict block or pass | A model's verdict is not reproducible, and a blocking opinion makes runs stall on taste. Code checks facts (review saw this tree, tests pass on it); findings the experts raise are fixed or listed as residual risk. | No |
+| D3 | **Land one local commit, never push** | Open a PR, auto-merge | The run must be completable offline, and crossing to a remote is the person's decision. The person reads the REPORT and pushes. | No, reversible policy choice |
+| D4 | **Every loop is capped** | Iterate until quality converges | An uncapped loop turns a hard problem into an endless run. Gate-0 has 2 rounds, REVIEW one fixing pass + recheck (one more for an open HIGH), TEST sends the run back to REVIEW at most twice, landing fails at most three times. After that the run ends with its reason. | No |
+| D5 | **Ask the person only for a real decision** | Ask whenever unsure, or whenever a check fails | A question for a failed check hands the agent's work back. Only a requirement with 2+ readings, or an irreversible or high-risk trade-off, becomes a question: 2–3 options each, at most 2 per run. | No |
+| D6 | **Each run in its own worktree** | Edit the shared checkout | Other sessions edit the same repo at the same time. A worktree makes the run's change exactly what it reviewed and tested. | No |
 
-**Explicitly choosing NOT to do:** no standalone pipeline service (context transfer is
-expensive and lossy). No numeric quality score, no auto-push, no profile that skips
-adversarial review.
+**Explicitly choosing NOT to do:** no standalone pipeline service, no numeric quality score,
+no push verdict, no PR, no CI run inside the pipeline.
 
 ## 4. Quality Attributes
 
 ### 4.1 Determinism and Escalation
 
-Quality is either verified (all 6 push-ready layers pass, adversarial clean, completion
-audit green → push-ready) or escalated with a precise gap report. There is no "shipped
-despite known issues" state. The convergence loop is bounded (max 3 iterations). On
-non-convergence it checkpoints with what still fails, what was attempted, and a root-cause
-hypothesis, a resumable pause, not a silent failure.
+A run lands only when the landing checks pass on the exact tree it commits. If they cannot
+pass within the caps, the run ends not landed with a deterministic reason, and its work is
+kept on its `run/<id>` branch with a bundle and diff. The person can restore, resume or land
+it by hand (`run-land`), which rechecks every tree.
 
 ### 4.2 Security and Safety
 
-Security is gated at two layers: a design-level security-boundary check at PLAN (only when
-the change crosses a contract boundary), and a fresh-context security specialist at Gate 2
-that scans with confidence-gated findings + concrete exploit scenarios. Every code change
-is additionally checked against the product secure-coding baseline. The runtime-pattern
-checklist (SSOT `REVIEW_PATTERNS.md`) encodes the specific classes, identity-from-request,
-fail-open gates, unsafe deserialization, injection sinks, as mechanical checks a reviewer
-must verify or mark N/A.
+The security expert is dispatched when the change is declared security-relevant: by the
+repo's `.swarmai/review.md`, by `"risk": ["security"]` in the BUILD report, or by a design
+that names security boundaries. The correctness expert reviews every change against the
+rows of the repo's review pattern table it triggers, read at the run's base so a run cannot
+change its own review. Security hooks deny editing a run's audit directory, amending a
+commit inside an active run, and hand-committing the files a run owns. Dangerous commands,
+production actions and external sends keep their approval prompts.
 
 ### 4.3 Failure Modes and Graceful Degradation
 
 | Failure | Behavior | Recovery |
 |---------|----------|----------|
-| Convergence loop does not converge in 3 iterations | Do NOT ship | Checkpoint + gap report. Human fixes or adjusts the requirement |
-| Adversarial sub-agent spawn is rejected by the harness | Retry exactly once | Still rejected → checkpoint `gate_spawn_blocked`, then resume re-enters on a fresh subprocess (never fall back to self-review, that is the bypass the gate exists to prevent) |
-| A resolved finding was reverted between fix and delivery | L4 disk-check greps the fix on disk (not the honor-system `resolved` flag) → BLOCK | Re-apply the fix, re-verify |
-| EVALUATE framing is confidently wrong | Gate 0 skeptic refutes it (WRONG-FRAME / ALREADY-SATISFIED) | Re-observe against source, re-frame, before any code is written |
-| A cross-boundary change passes every unit test but breaks the seam | TEST Layer 4 drives the real seam + mutation-verifies it goes RED on revert | Fix the seam. A green-on-revert Layer-4 test is theater and is rejected |
-| DDD docs are stale/wrong | Pipeline follows bad guidance | REFLECT proposes a correction through the cultivation gate. Human approves |
+| EVALUATE framing is confidently wrong | Gate-0 skeptic refutes it | Re-frame before any code; or the run ends before code |
+| PLAN refused three times | PLAN marked degraded; run goes on to BUILD without a design spec | REVIEW and TEST still decide; the audit says PLAN was refused |
+| An expert's answer cannot be read | Asked once more with the parser's reasons | A second unreadable answer is not asked again; the checks decide |
+| A HIGH finding is still open after the recheck | Listed as residual risk | The person sees it in the REPORT before pushing |
+| Main moved during DELIVER | Sync; if the run's files were touched, test again | A merge conflict is resolved in the worktree; it does not use up a landing failure |
+| The session that ran it is gone | Run is paused | Another session takes over once the first is not streaming, then resumes |
+| DDD guidance is stale or wrong | The run follows bad guidance | REFLECT records a correction or a replacement for that entry through CDF |
 
 ### 4.4 Scaling and Cost
 
-Execution runs inside the user's session and competes for its context window. The
-convergence loop's iteration cap and the budget-gated checkpoint protocol bound that cost.
-Background/goal runs decouple from the session via the Job System (cron-driven cycles,
-progress file carries state across sessions). Token budget is tracked per stage for
-calibration, never used as a mid-run truncation lever.
+Execution runs inside the user's session and competes for its context window. Token use is
+measured from the run's transcripts and reported in the audit's Token Cost row, never used
+as a mid-run truncation lever. Large independent parts can run on the person's Hives as
+child runs at the same time.
 
 ## 5. Cross-cutting Impact and Rollout
 
-The pipeline is a **skill invocation** (`s_autonomous-pipeline`), not a service. It rides
-the existing agent harness: the 11-file context system supplies DDD + behavioral rules +
-user preferences. The Claude Agent SDK + MCP supply tools, MEMORY/EVOLUTION supply past
-corrections, the projection layer ships the skill, and the Job System runs it in the
-background. Nothing new to deploy, a change to the pipeline is a change to the skill's
-markdown + its shared engine (`artifact_cli.py`, `pipeline_validator.py`), and takes effect
-for the running system on the next skill re-projection.
+The pipeline is a **skill** (`s_autonomous-pipeline`) plus an engine (`core/run_protocol/`,
+driven by the `pipeline-v1` CLI), not a service. It rides the existing harness: the
+context files supply behavioral rules and user preferences, recall supplies the DDD, CDF
+takes the REFLECT report, and the desktop shows runs and decision cards. A change to the
+pipeline is a change to the stage cards or the engine, tested like any other code.
 
-Rollout is continuous and versioned in the stage docs themselves, the pipeline is its own
-first customer (this HLD's companion doc was calibrated, and this HLD was authored, through
-the narrative-writing skill, and the pipeline routinely runs on its own code). No feature flag,
-no phased cutover: the profile system is the graceful-degradation dial (a typo gets the
-`trivial` profile, a feature gets `full`), so there is no "big-bang" surface to roll out.
+Rollout is continuous: the pipeline is its own first customer. The profile system is the
+graceful-degradation dial (a small, unambiguous change gets `direct`, a feature gets
+`full`), so there is no big-bang surface to roll out.
 
 ## 6. Open Questions
 
 | # | Question | Suggested approach |
 |---|----------|--------------------|
-| Q1 | The diagrams (`diagrams-pipeline/*.svg`, Figure 1 v4) predate the RP-range and TEST-4-layer calibration, do any hard-code a now-stale count or a 3-layer TEST? | Audit each SVG against the calibrated text, re-render only those that pin a drifted number. Track as a follow-up, not a blocker (the prose is the SSOT, the figures only illustrate). |
-| Q2 | The Gate-1 and Understanding-Gate skeptic spawns are `[MUST]` (behavioral), not `[GATE·validator]` code-enforced, so the skeptic sub-agent is agent-discipline. Is that the right strength, or should more of Gate 0/1 be code-enforced like Gate 2? | Watch the recurrence data: if a framing/plan error class recurs 3× despite the prose gate, promote it to a code gate (the same ladder that produced Gate 2). Do not pre-emptively harden what has not yet failed. |
-| Q3 | This HLD and the technical reference `Autonomous-Pipeline-Design.md` now overlap in the architecture sections, will they drift apart? | Keep this HLD decision-shaped (why + trade-offs) and the reference mechanics-shaped (how). When they touch the same fact, the reference is the SSOT and this doc links to it rather than restating. Revisit if a future edit has to touch both. |
+| Q1 | The diagrams (`docs/diagrams-pipeline/*.svg`) show the retired pipeline. Redraw or delete? | Redraw one figure from `PROFILE_STAGES` and the landing checks; delete the rest. The prose and the code are the source. |
+| Q2 | Security review depends on the change being declared security-relevant. Is that strong enough? | Watch the record: if a security finding reaches main on a change that was not declared, add the missing rows to the repo's `.swarmai/review.md` rather than a built-in path rule. |
+| Q3 | Gate-0 runs only for bugfixes and ambiguous requests. Do framing errors slip through on full runs with one reading? | Count runs whose REVIEW or TEST found a framing error; widen Gate-0 only if that recurs. |
 
 ## Maps to the 5 criteria
 

@@ -1,24 +1,19 @@
 ---
 title: "SwarmAI — Agentic OS Architecture"
 subtitle: "High-Level Design Document"
-version: "2.1"
+version: "3.0"
 created: 2026-04-15
-updated: 2026-07-17
-author: "REDACTED_NAME (XG) + Swarm (AI Co-Architect)"
-status: "For PE / Tech Leadership Review"
-classification: "Internal"
+updated: 2026-11-25
+author: "Swarm (AI Co-Architect) with the SwarmAI builder"
+status: "current"
+classification: "Public"
 source_of_truth: true
-regenerate_pdf: "python3 Projects/SwarmAI/assets/generate-arch-doc.py"
 ---
 
-<!-- SOURCE OF TRUTH HIERARCHY:
-  1. This .md file = canonical content (edit this)
-  2. generate-arch-doc.py = HTML template + PDF generator (mirrors this .md)
-  3. SwarmAI-Architecture-Design-Doc.pdf = generated output (never edit directly)
-  4. TECH.md = DDD summary (shorter, cross-references this doc for details)
-  
-  When updating: edit this .md → sync changes to generate-arch-doc.py HTML → run generator → PDF updates.
-  SVG diagrams are shared by both .md (image refs) and .py (inline embeds).
+<!-- SOURCE OF TRUTH:
+  This .md file is the canonical content. assets/SwarmAI-Architecture-Design-Doc.html and
+  the figures in assets/ are older renderings: they are not regenerated from this file,
+  and where they differ from the text, the text is current.
 -->
 
 # SWARMAI — Agentic OS Architecture
@@ -30,19 +25,19 @@ regenerate_pdf: "python3 Projects/SwarmAI/assets/generate-arch-doc.py"
 | Feature | Description |
 |---------|-------------|
 | **6 Architecture Layers** | Interface → Intelligence → Harness → Session → Engine → Platform |
-| **11-File Context Chain** | P0–P10 priority system with token budgets and L0/L1 caching |
-| **3-Layer Memory Pipeline** | Session capture → distillation → curated long-term memory (git-verified) |
-| **Memory Recall** | Pure-filesystem keyword FTS5 + Okapi-BM25 (vector/Titan leg removed 2026-06-28) |
-| **90+ Skills (always + lazy tiers)** | Two-tier loading with manifest.yaml — large token reduction in skill listing |
-| **Two-Axis Evolution** | Operational (MINE→ASSESS→ACT→AUDIT, confidence-gated L0 deploy) + Cognitive (CLASS_A/B/C judgment routing → human gate) |
-| **9-Stage Autonomous Pipeline + Goal Loop** | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT; Goal Loop wraps multi-cycle convergence |
-| **Daemon-First Backend** | launchd daemon runs 24/7 — desktop app is optional UI layer |
+| **11-File Context Chain** | Priority-ordered files (SOUL and SELF share P2), model-scaled token budget, L0/L1 caching; no section is ever sliced |
+| **Knowledge Capture (CDF)** | Five sources; each unit goes straight to the one place it declares; code checks the facts before the writer adds it |
+| **Memory Recall** | Pure-filesystem keyword FTS5 + Okapi-BM25 (no vector DB) |
+| **Dozens of Skills (always + lazy tiers)** | Two-tier loading — lazy skills list a short stub and load their instructions on use |
+| **Self-Evolution** | Corrections recorded → a pattern seen in 3 sessions becomes a proposal → the person decides |
+| **Pipeline v1** | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT (full profile); deterministic checks own every stage exit and the landing |
+| **Daemon-First Backend** | On macOS a launchd daemon runs 24/7 (or a Hive on the person's own cloud) — the desktop app is an optional UI layer |
 | **OOM Resilience** | Proactive RSS-based restart at 3.5GB — prevents macOS jetsam kills |
 | **Multi-Channel Unified Brain** | Desktop + Slack — same agent, same memory, same context |
 
-Version: 2.1 • Date: April 15, 2026
-Author: REDACTED_NAME (XG) + Swarm (AI Co-Architect)
-Status: For PE / Tech Leadership Review • Classification: Internal
+Version: 3.0 • Date: November 25, 2026
+Author: Swarm (AI Co-Architect) with the SwarmAI builder
+Status: current • Classification: Public
 
 ---
 
@@ -53,17 +48,19 @@ Status: For PE / Tech Leadership Review • Classification: Internal
    - 2.1 Six-Layer Architecture • 2.2 The Compound Loop
 3. [Core Engine & Growth Trajectory](#3-core-engine--growth-trajectory)
 4. [The Harness — Core Innovation](#4-the-harness--core-innovation)
-   - 4.1 Context Engineering • 4.2 Memory Pipeline `UPDATED` • 4.3 Self-Evolution — Next-Gen Agent Intelligence `UPDATED` • 4.4 Safety & Self-Harness
-5. [Swarm Brain — Multi-Channel Architecture](#5-swarm-brain--multi-channel-architecture) `UPDATED`
+   - 4.1 Context Engineering • 4.2 Knowledge Capture & Recall • 4.3 Self-Evolution • 4.4 Safety & Self-Harness
+5. [Swarm Brain — Multi-Channel Architecture](#5-swarm-brain--multi-channel-architecture)
 6. [Session Architecture & Multi-Tab Parallel Sessions](#6-session-architecture--multi-tab-parallel-sessions)
 7. [Intelligence Layer](#7-intelligence-layer)
-   - 7.1 Autonomous Pipeline • 7.2 Job System • 7.3 Proactive Intelligence
-8. [Three-Column Command Center](#8-three-column-command-center)
-9. [Daemon-First Backend](#9-daemon-first-backend) `NEW`
-10. [OOM Resilience & Proactive Restart](#10-oom-resilience--proactive-restart) `NEW`
-11. [Key Design Decisions & Tradeoffs](#11-key-design-decisions--tradeoffs) `UPDATED`
+   - 7.1 Autonomous Pipeline • 7.2 Job System • 7.3 Inbox
+8. [Command Center Layout](#8-command-center-layout)
+9. [Daemon-First Backend](#9-daemon-first-backend)
+10. [OOM Resilience & Proactive Restart](#10-oom-resilience--proactive-restart)
+11. [Key Design Decisions & Tradeoffs](#11-key-design-decisions--tradeoffs)
 12. [Competitive Positioning](#12-competitive-positioning)
-13. [Future Roadmap](#13-future-roadmap) `UPDATED`
+13. [Future Roadmap](#13-future-roadmap)
+
+The figures are older illustrations. Where a figure differs from the text, the text is current.
 
 ---
 
@@ -73,23 +70,23 @@ SwarmAI is a desktop application that wraps Claude's Agent SDK inside a harness 
 
 The core thesis: most AI tools reset when you close them. Context is lost, decisions are forgotten, and users re-explain the same things session after session. SwarmAI solves this structurally — not through fine-tuning, but through engineered knowledge persistence.
 
-> **Key Innovation:** The "Harness" — an 11-file context priority chain, 3-layer memory distillation pipeline with pure-filesystem keyword/FTS5/BM25 recall, self-evolution registry, and post-session hooks that create a compound loop: every session makes the next one better. Every correction prevents a class of future mistakes.
+> **Key Innovation:** The "Harness" — an 11-file context priority chain, a knowledge-capture flow (CDF) that puts each unit of knowledge where it belongs, pure-filesystem keyword/FTS5/BM25 recall, a self-evolution registry, and post-session hooks that create a compound loop: every session makes the next one better. Every correction prevents a class of future mistakes.
 
-### Key Metrics (April 2026)
+### Key Metrics
+
+Counts that change every week (commits, lines of code, tests) live in [`CODEBASE_METRICS.md`](./CODEBASE_METRICS.md).
 
 | Metric | Value |
 |--------|-------|
-| Commits | 1,380+ |
-| Built-in Skills | 90+ (always-loaded + lazy-loaded via manifest.yaml) |
-| Context Files | 11 (P0–P10 priority chain) |
-| Post-Session Hooks | 8 (auto-commit, DailyActivity, distillation, evolution ×2, context-health, improvement, user-observer) |
-| Pipeline Stages | 9 (EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT) |
-| Session States | 5 (COLD → STREAMING → IDLE → WAITING_INPUT → DEAD) |
-| Core Engine Level | L4 (Autonomous) — DDD auto-refresh + auto-skill proposals + keyword/FTS5/BM25 recall |
-| Backend Mode | Daemon-first (launchd 24/7) — desktop app is optional UI layer |
+| Built-in Skills | Dozens (always-loaded + lazy-loaded) |
+| Context Files | 11 (SWARMAI, IDENTITY, SOUL, SELF, AGENT, USER, STEERING, TOOLS, MEMORY, EVOLUTION, TIMELINE) |
+| Post-Session Hooks | DailyActivity, after-session review queue, workspace auto-commit, context health, evolution report, ToDo, skill metrics, then the CDF kick |
+| Pipeline Stages | 8 in a full run (EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT); lighter profiles run fewer |
+| Session States | 5 (COLD, IDLE, STREAMING, WAITING_INPUT, DEAD) |
+| Backend Mode | Daemon-first (launchd 24/7 on macOS, systemd on a Hive) — desktop app is optional UI layer |
 | OOM Protection | Proactive RSS restart at 3.5GB — prevents jetsam kills |
-| Memory Recall | 4-level: Brain (always) + Library (keyword/FTS5/BM25) + Transcripts (FTS5) + Session (FTS5) |
-| Evolution Pipeline | Two-axis: operational (MINE→ASSESS→ACT→AUDIT, confidence-gated) + cognitive (CLASS_A/B/C → human gate) |
+| Memory Recall | Context files in every prompt + per-message keyword recall (FTS5/BM25) over the active project's DDD, the Library and past sessions |
+| Evolution | Corrections → a pattern seen in 3 sessions → proposal → the person decides |
 | Channels | Desktop + Slack (unified brain) |
 | Tech Stack | 4 languages: Rust (Tauri), TypeScript (React), Python (FastAPI), SQL (SQLite) |
 
@@ -101,17 +98,17 @@ The core thesis: most AI tools reset when you close them. Context is lost, decis
 
 SwarmAI's architecture is organized into six horizontal layers. Each layer has a clear responsibility boundary. The Harness layer (Layer 3) is the core innovation — it is what differentiates SwarmAI from a simple LLM wrapper.
 
-![Figure 1: SwarmAI Agentic OS Architecture](swarmai-architecture.svg)
+![Figure 1: SwarmAI Agentic OS Architecture](../assets/swarmai-architecture.svg)
 *Figure 1: SwarmAI Agentic OS Architecture — Six-layer design with the Harness as the core innovation*
 
 | Layer | What It Does | Key Components |
 |-------|-------------|----------------|
-| Interface | Visual workspace, multi-tab chat, dashboard, channels | SwarmWS Explorer, Chat (1–4 tabs), Radar, Gateway (Slack) |
-| Intelligence | Proactive awareness, autonomous execution, jobs | Proactive Intelligence, Signal Pipeline, Autonomous Pipeline, Job System |
-| Harness | Core: raw Claude → persistent, evolving agent | Context (11 files), Memory (3-layer + keyword/FTS5/BM25 recall), Evolution (90+ skills), Safety |
-| Session | Multi-session lifecycle, isolation, recovery | SessionRouter, SessionUnit (5-state), LifecycleManager, SessionRegistry, StreamingOrchestrator, RetryManager, SessionHealing, 7 Hooks |
-| Engine | AI model access, tool ecosystem | Claude Agent SDK, Bedrock/Anthropic, MCP Servers (7+), Skills Engine |
-| Platform | Desktop infra, all local, zero cloud | Tauri 2.0, React 19, FastAPI, SQLite, filesystem, launchd daemon (24/7) |
+| Interface | Visual workspace, multi-tab chat, navigation, channels | Chat (1–4 tabs), left navigation (Brain, Library, Inbox, ToDo, Workspace, Pipeline, Pollinate, Jobs), Gateway (Slack) |
+| Intelligence | Autonomous execution, content, inbound messages, jobs | Autonomous Pipeline, Pollinate, Inbox, Job System |
+| Harness | Core: raw Claude → persistent, evolving agent | Context (11 files), Knowledge capture (CDF) + keyword/FTS5/BM25 recall, Evolution (proposals, skills), Safety |
+| Session | Multi-session lifecycle, isolation, recovery | SessionRouter, SessionUnit (5-state), LifecycleManager, SessionRegistry, StreamingOrchestrator, RetryManager, SessionHealing, post-session hooks |
+| Engine | AI model access, tool ecosystem | Claude Agent SDK, Bedrock/Anthropic, MCP servers (a shipped catalog of optional connectors + any the user adds), Skills Engine |
+| Platform | Desktop infra, local-first | Tauri 2.0, React 19, FastAPI, SQLite, filesystem; launchd daemon (macOS), subprocess (Windows/Linux), Hive (EC2 Linux, systemd) |
 
 ### 2.2 The Compound Loop
 
@@ -120,10 +117,10 @@ The defining characteristic is the compound loop — a feedback cycle where ever
 ![Figure: Compound Learning Loop](diagrams/07-compound-loop.png)
 
 - **Session executes** — user interacts, decisions are made, code is written, files are created
-- **Hooks fire** — 8 post-session hooks capture: DailyActivity, auto-commit, distillation, evolution ×2, context-health, improvement, user-observer
-- **Memory updates** — DailyActivity accumulates; ≥3 unprocessed files trigger distillation promoting recurring themes to MEMORY.md
-- **Context enriched** — next session's system prompt assembled from updated 11-file chain with latest memory and project context
-- **Agent is smarter** — next session starts with full awareness of everything that happened and mistakes to avoid
+- **Hooks fire** — post-session hooks write the DailyActivity log, queue the after-session review, commit the workspace, check context health, update ToDos and skill metrics
+- **Knowledge is captured** — about an hour after a session goes quiet, the session's own agent records what is worth keeping; CDF checks each unit's facts and writes it to the one place it declares (STEERING/USER/TOOLS, EVOLUTION, MEMORY, a project's DDD, the Library, TIMELINE)
+- **Context enriched** — the next session's system prompt is assembled from the updated 11-file chain, and each message recalls matching entries from the active project's DDD
+- **Agent is smarter** — the next session starts with what was learned and the mistakes to avoid
 
 > **Design Principle:** Prevention over recovery. The compound loop makes errors structurally impossible over time, not handled after they occur.
 
@@ -131,19 +128,19 @@ The defining characteristic is the compound loop — a feedback cycle where ever
 
 ## 3. Core Engine & Growth Trajectory
 
-The Swarm Core Engine is the meta-architecture that ties all six flywheels together. Each flywheel feeds the others: memory informs context, context improves sessions, sessions trigger evolution, evolution builds skills, skills improve memory capture — compound growth with every interaction.
+The Swarm Core Engine is the meta-architecture that ties six flywheels together. Each flywheel feeds the others: memory informs context, context improves sessions, sessions produce corrections, corrections become proposed rules, rules improve the next session.
 
-![Figure 2: Swarm Core Engine](swarm-core-engine.svg)
-*Figure 2: Swarm Core Engine — Six interconnected flywheels and growth trajectory (L4 Autonomous — current)*
+![Figure 2: Swarm Core Engine](../assets/swarm-core-engine.svg)
+*Figure 2: Swarm Core Engine — Six interconnected flywheels and growth trajectory*
 
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
-| Self-Evolution | Observes user patterns, measures skill performance, auto-optimizes underperformers, never repeats mistakes | EVOLUTION.md, 90+ skills, SkillMetrics, EvolutionOptimizer, SessionMiner, SkillFitness, UserObserver, SkillGuard |
-| Self-Memory | 3-layer distillation + keyword/FTS5/BM25 recall, SessionRecall (FTS5 cross-session search), MemoryGuard (all writes sanitized), git-verified, weekly LLM pruning | DailyActivity, distillation hooks, MEMORY.md, SessionRecall, MemoryGuard, briefing |
-| Self-Context | 11-file P0-P10 priority chain + token budgets + caching | Context loader, prompt builder, budget tiers, freshness |
-| Self-Harness | Validates context files, detects DDD staleness, auto-refresh | ContextHealthHook (light+deep), auto-commit, integrity |
-| Self-Health | Monitors services, resources, sessions; proactive restart, auto-restart | Service manager, resource monitor, lifecycle manager, OOM governance |
-| Self-Jobs | Background automation, scheduled tasks, signal pipeline | Job scheduler, service manager, signal fetch/digest |
+| Self-Evolution | Records corrections, turns a repeated one into a proposed rule for the person, measures skill use | EVOLUTION.md, governance proposals (`core/evolution/governance_miner.py`), skill metrics, skill proposer, SkillGuard |
+| Self-Memory | Captures knowledge from five sources into the one place each unit declares; keyword recall over all of it | CDF (`core/ingestion/`), DailyActivity, MEMORY.md, TIMELINE.md, SessionRecall, MemoryGuard |
+| Self-Context | 11-file priority chain + model-scaled budget + caching | Context loader, prompt builder, budget tiers, freshness |
+| Self-Harness | Keeps search indexes fresh, validates context files, detects DDD staleness | ContextHealthHook (light every session + deep once a day), auto-commit, integrity |
+| Self-Health | Monitors services, resources, sessions; proactive restart, auto-restart | Service manager, resource monitor, lifecycle manager, session healing |
+| Self-Jobs | Background automation and scheduled tasks | Job scheduler, system jobs, user jobs |
 
 ### Growth Trajectory
 
@@ -151,9 +148,9 @@ The Swarm Core Engine is the meta-architecture that ties all six flywheels toget
 |-------|-------|-------------|--------|
 | L0 | Reactive | Responds to questions, no memory | Complete |
 | L1 | Self-Maintaining | Remembers, self-commits, captures corrections, health monitoring | Complete |
-| L2 | Self-Improving | Weekly LLM maintenance, unified jobs, feedback loops closed | Complete |
+| L2 | Self-Improving | Weekly maintenance, unified jobs, feedback loops closed | Complete |
 | L3 | Self-Governing | Session-type context, proactive gap detection, DDD auto-sync | Complete |
-| L4 | Autonomous | **Next-Gen Agent Intelligence: 12-module self-evolution loop closed.** UserObserver → SkillMetrics → SessionMiner → EvolutionOptimizer → auto-deploy with backup. Plus DDD refresh, skill proposer, keyword/FTS5/BM25 recall, MemoryGuard on all paths, proactive OOM restart. | Current (4/6 + 2 new) |
+| L4 | Autonomous | Knowledge capture with no human trigger (CDF after-session review, pipeline run reports, weekly commit reader), evolution proposals the person decides, Pipeline v1 landing reviewed and tested commits, skill proposals, keyword/FTS5/BM25 recall, MemoryGuard on writes, proactive OOM restart. | Current |
 
 ---
 
@@ -163,147 +160,128 @@ The Harness is what makes SwarmAI more than a ChatGPT wrapper. It is a structure
 
 ### 4.1 Context Engineering
 
-Most AI tools assemble a single system prompt. SwarmAI maintains an 11-file priority chain (P0–P10) that is assembled, cached, and budget-managed through a multi-stage pipeline. This is the most token-intensive subsystem and the one with the highest impact on agent quality.
+Most AI tools assemble a single system prompt. SwarmAI maintains an 11-file priority chain that is assembled, cached, and budget-checked at every session start. This is the most token-intensive subsystem and the one with the highest impact on agent quality.
 
-![Figure 3: Context Engineering](context-engineering.svg)
-*Figure 3: Context Engineering — 11-file priority chain with token budget management and L0/L1 caching*
+![Figure 3: Context Engineering](../assets/context-engineering.svg)
+*Figure 3: Context Engineering — priority chain with token budget and L0/L1 caching*
 
 #### Priority Chain
 
-| P | File | Owner | Truncation | Purpose |
-|---|------|-------|-----------|---------|
-| P0 | SWARMAI.md | System | Never | Core identity & principles |
-| P1 | IDENTITY.md | System | Never | Agent name, avatar, intro |
-| P2 | SOUL.md | System | Never | Personality & tone |
-| P3 | AGENT.md | System | Truncatable | Behavioral directives |
-| P4 | USER.md | User | Truncatable | User preferences & background |
-| P5 | STEERING.md | User | Truncatable | Session-level overrides |
-| P6 | TOOLS.md | User | Truncatable | Tool & environment config |
-| P7 | MEMORY.md | Agent | Head-trimmed | Persistent memory (newest kept) |
-| P8 | EVOLUTION.md | Agent | Head-trimmed | Self-evolution registry |
-| P9 | KNOWLEDGE.md | Auto | Truncatable | Domain knowledge index |
-| P10 | PROJECTS.md | Auto | Lowest | Active projects index |
+The source of truth is `CONTEXT_FILES` in `backend/core/context_directory_loader.py`.
+
+| P | File | Owner | Purpose |
+|---|------|-------|---------|
+| P0 | SWARMAI.md | System (read-only) | Core identity & principles |
+| P1 | IDENTITY.md | System (read-only) | Agent name, avatar, intro |
+| P2 | SOUL.md | System (read-only) | Personality & tone |
+| P2 | SELF.md | Runtime | The agent's self-portrait |
+| P3 | AGENT.md | System default | Behavioral directives |
+| P4 | USER.md | User | User preferences & background |
+| P5 | STEERING.md | User | The person's standing rules |
+| P6 | TOOLS.md | User | Tool & environment config |
+| P7 | MEMORY.md | Agent (CDF) | General facts and decisions |
+| P8 | EVOLUTION.md | Agent (CDF) | Corrections, competence, governance proposals |
+| P10 | TIMELINE.md | Agent (CDF) | Events (episodic memory), selected by whole entries within a small budget |
 
 #### Key Design Decisions
 
-- **Session-type-aware loading** — Channel DMs skip EVOLUTION.md, PROJECTS.md, DailyActivity (~30% token savings)
-- **L0/L1 cache** — L1 uses git-first freshness; L0 is AI-summarized compact version for constrained models
-- **Head-trimming** — MEMORY.md and EVOLUTION.md keep newest content; old entries trim from top
-- **Token budget** — 100K tokens for 1M context models; priority truncation removes P10 first, never touches P0–P2
-- **Resume context checkpoint** `NEW` — Structured ~600-token checkpoint (last request, files touched, git commits, agent spawns, tool activity) replaces 200K raw history dump for session recovery
+- **Session-type-aware loading** — A non-owner channel prompt drops USER, MEMORY, EVOLUTION, TOOLS and TIMELINE whole and gets only the part of STEERING the owner wrapped for it; channel sessions skip DailyActivity
+- **L0/L1 cache** — L1 uses git-first freshness; L0 is a compact version for models under 64K context
+- **No slicing** — generic assembly never cuts a section; the budget check warns instead of truncating
+- **Token budget** — 150K tokens for models with ≥500K context, 50K for ≥200K, 30K for ≥64K
+- **Resume context** — a five-layer resume context (checkpoint, git state, conclusions, key tool results, recent conversation) within a model-aware budget restores a session after a restart (`core/context_injector.py`)
 
-### 4.2 Memory Pipeline `UPDATED`
+### 4.2 Knowledge Capture & Recall
 
-The memory pipeline is now a two-part system: a **distillation pipeline** that converts raw session activity into durable, curated knowledge, and a **recall system** that ensures any memory entry — regardless of age — can be found when relevant.
+Knowledge is a two-part system: **capture** (CDF, the Cognitive Distillation Flow, in `backend/core/ingestion/`) puts each unit of knowledge in the one place it belongs, and **recall** makes sure any entry — regardless of age — can be found when relevant. There is no tiered memory pipeline and no approval queue.
 
-![Figure 4: Memory Pipeline](memory-pipeline.svg)
-*Figure 4: Memory Pipeline — Three-layer distillation + pure-filesystem keyword/FTS5/BM25 recall*
+#### Capture: Five Sources
 
-#### Distillation Pipeline
+| Source | When | What It Records |
+|--------|------|----------------|
+| After-session review (S7) | About an hour after a session the person wrote in goes quiet | Corrections, decisions, preferences, lessons, open gaps, milestones, references — by the session's own agent |
+| Pipeline run report (S3) | When a run lands (or closes) | Delivered work → TIMELINE, decisions → PROJECT, corrections/practices → IMPROVEMENT, gaps → IMPROVEMENT "What to Watch For" |
+| Commit reader (S4) | Weekly | New commits of each project's repos → that project's DDD or the General Brain |
+| Saving on purpose (S1) | When the person asks ("remember this") | Up to 3 items from the turn |
+| External content (S6) | A file dropped into the Library Inbox, or a fresh result of a Brain's job | References in the Library |
 
-| Layer | Storage | Lifecycle | Content |
-|-------|---------|-----------|---------|
-| 1. Capture | DailyActivity/YYYY-MM-DD.md | 30 days → archived | Per-session: deliverables, git commits, decisions, lessons, next steps |
-| 2. Distillation | Triggered when ≥3 files | At session start (silent) | Recurring themes promoted; noise filtered; claims verified against git log |
-| 3. Curated | MEMORY.md | Permanent (weekly maint.) | Open Threads (P0/P1/P2), Key Decisions, Lessons, COE Registry |
+The producing agent declares each unit's type, scope and place, and whether it is new, the same as an entry, adds to one, or replaces one. Code then checks facts: not empty, the cited evidence exists, no credentials or injected instructions, a declared replacement names one live entry. Files read in every session take only the person's own words (STEERING/USER/TOOLS) or the person's words or a measurement (MEMORY/EVOLUTION); anything else goes to the project's DDD or the General Brain. The writer adds the whole unit and journals it. Nothing leaves on a timer: an entry leaves a main file only by a declared replacement, a gap a landed run closed, a done tick, or the person withdrawing it.
 
-#### Recall System (4-Level)
+#### Recall
 
-| Level | Type | Storage | Search | Injection |
-|-------|------|---------|--------|-----------|
-| L1: Semantic | "I know that..." | MEMORY.md (curated, ~5K tokens) | N/A — full injection | Always in system prompt |
-| L2: Procedural | "I know how..." | EVOLUTION.md (corrections, competence) | N/A — full injection | Always in system prompt |
-| L3: Episodic | "I experienced..." | Knowledge Library (270+ files, 730K+ tokens) | Keyword FTS5 + Okapi-BM25 (vector leg removed 2026-06-28) | Pre-session + post-first-message recall |
-| L4: Verbatim | "The exact words..." | JSONL transcripts (1,500+ files, 700MB+) | FTS5 keyword search | On-demand transcript search |
+| Domain | Storage | Search | Injection |
+|--------|---------|--------|-----------|
+| Context files | `.context/` (11 files) | — | In every system prompt |
+| Active project's DDD | PRODUCT / TECH / IMPROVEMENT / PROJECT | Keyword FTS5 + BM25 | With each message, a `[DDD:<project>]` block points to matching entries by file:line; the agent searches further with `cognition find` |
+| General Brain | Knowledge Library | Keyword FTS5 + Okapi-BM25 | With a message, when relevant ("## Recalled Knowledge"); and on demand |
+| Past sessions | Session messages (SQLite) | FTS5 keyword search | With a message, when relevant; and on demand |
+| Code | A SQLite code graph beside each bound repo, refreshed hourly | Symbols, callers | On demand (`cognition find --in code --project P`) |
 
-Three-stage recall activation: (1) Pre-session — focus keywords from proactive briefing. (2) Post-first-message — re-search with user's actual query (commit `3c9f0d4`). (3) Mid-session — agent-initiated Read tool. Score threshold <0.2 suppresses injection — empty recall beats wrong recall.
+> **Design Principle:** "Power over token budget" — token saving is never the primary concern. The goal is powerful function and maximum recall. Any entry, regardless of age, can be recalled when relevant.
 
-See **Memory Management Design Doc** for complete architecture (19 pages, 15 sections).
+#### Evidence Check (Safety)
 
-> **Design Principle:** "Power over token budget" — Token saving is NEVER the primary concern. Primary goal is always powerful function and maximum recall. Any memory entry, regardless of age, can be recalled when relevant.
+Born from a real Sev-2 incident (COE C005), where an activity summary captured mid-session froze a stale claim into long-term memory: a unit is written only when the evidence it cites exists, and the files read in every session take only the person's words or a measurement. An agent's inference about the person goes to the DDD or the General Brain, not into the every-session files.
 
-#### Git Cross-Reference (Safety)
+### 4.3 Self-Evolution
 
-Born from a real Sev-2 incident (COE C005): the distillation hook verifies all implementation claims against `git log` before promoting to MEMORY.md. Without this, mid-session snapshots captured before later commits create false memories that compound across sessions.
+Self-evolution changes rules a person can `git diff`, not model weights. Its loop:
 
-### 4.3 Self-Evolution — Next-Gen Agent Intelligence
+1. **Record** — the after-session review records each correction in EVOLUTION.md ("Corrections Captured"), and marks a new correction that repeats an earlier one.
+2. **Propose** — when a correction pattern has occurred in 3 distinct sessions, and the proposed rule says what it was checked against, it becomes a pending proposal in EVOLUTION.md's Governance Candidates table (`backend/core/evolution/governance_miner.py`).
+3. **Decide** — the person accepts or rejects it. SOUL, AGENT and STEERING are never written automatically.
+4. **Measure** — for an accepted rule, the repeats of its corrections are compared before and after acceptance (`accepted_outcomes`).
 
-Self-evolution is a **closed-loop system** across 12 modules in 4 phases. The agent observes user behavior, measures skill performance, mines correction patterns from session transcripts, and automatically rewrites underperforming skills — all with safety gates and audit trails.
+**Skills** — skill use is recorded after every session (skill metrics hook). A weekly skill proposer drafts a new skill when maintenance finds a recurring capability gap; drafts wait for the person and are never deployed automatically. SkillGuard scans skills when they are discovered.
 
-![Figure 5: Next-Gen Agent Intelligence](self-evolution.svg)
-*Figure 5: Next-Gen Agent Intelligence — 12 modules across 4 phases forming a closed observe-measure-mine-optimize loop*
+**Skill tiering** — dozens of skills split into always-loaded and lazy-loaded. Lazy skills list a short stub and read INSTRUCTIONS.md on invocation. Complex skills declare scripts via `manifest.yaml`.
 
-| Phase | Modules | Purpose |
-|-------|---------|---------|
-| **1: Safety** | MemoryGuard, SkillMetrics, SectionCaps, EntryRefs | Guard all MEMORY.md writes, measure skill performance, enforce memory size limits, cross-reference entries with 1-hop loading |
-| **2: Understanding** | UserObserver, SessionRecall, SkillRegistry, SkillGuard | Detect user behavioral patterns → USER.md suggestions, FTS5 cross-session search, compact skill index in prompts, trust-level skill scanning at discovery time |
-| **3: Evolution** | SessionMiner, SkillFitness, EvolutionOptimizer, RetentionPolicies | Mine transcripts for eval examples (1500 char actions), 3-signal fitness scoring (Jaccard + bigram + containment), correction-pattern rewriting with .bak backup + deploy + audit log, lifecycle archival (90d/365d/7d) |
-| **4: E2E Hardening** | 12 fixes across 13 files | MemoryGuard on all write paths, wire dead ends, singleton caches, word-boundary recall, 1-hop ref loading |
+**EVOLUTION.md registry** tracks system growth:
 
-**The evolution cycle** — 4-phase pipeline (MINE→ASSESS→ACT→AUDIT), 7-day cadence + Thursday cron:
+| Section | Lifecycle | Examples |
+|---------|-----------|----------|
+| Corrections Captured | Permanent (never deleted) | Reported features as 'not started' when fully shipped (C005) |
+| Competence Learned | In force until replaced | SSE streaming pipeline, multi-session architecture |
+| Capabilities Built | In force until replaced | Browser agent, context monitor, workspace finder |
+| Governance Candidates | Pending until the person decides | A proposed rule with its evidence and count |
 
-```
-MINE:    SessionMiner scans 1,500+ JSONL transcripts → per-skill eval examples
-ASSESS:  SkillFitness scores → confidence: HIGH (>=0.7) | MED (0.3-0.7) | LOW (<0.3)
-ACT:     HIGH → auto-deploy (.bak backup + verify + rollback)
-         MED → surface recommendation in session briefing (Skill health section)
-         LOW → log to skill_health.json only
-AUDIT:   Verify deployment, rollback on failure, log to EVOLUTION.md
-```
-
-**Skill tiering** — 90+ skills split into always-loaded (~100 tokens each) and lazy-loaded (~25-token stubs). Lazy skills read INSTRUCTIONS.md via agent Read tool on invocation. Large token reduction in the skill listing. Complex skills declare scripts via `manifest.yaml`.
-
-**Key design: confidence gating.** With ~6% correction rate, HIGH threshold is unreachable for most skills — the pipeline safely accumulates data until evidence justifies deployment. Observation is always safe; actuation is gated.
-
-**EVOLUTION.md registry** tracks all system growth:
-
-| Category | Lifecycle | Examples |
-|----------|-----------|----------|
-| Capabilities Built | Active → archived if 0 usage for 30d | Browser agent, context monitor, workspace finder |
-| Optimizations | Permanent | Use CDP over WebSocket for persistent browser sessions |
-| Corrections | Permanent (NEVER deleted) | Reported features as 'not started' when fully shipped (C005) |
-| Competence | Cross-referenced | SSE streaming pipeline, multi-session architecture |
-| Failed Evolutions | Permanent | Approaches attempted and abandoned (with reasons) |
-
-> **Design Principle:** Corrections are the highest-value entries — proven failure modes with known patterns. Deleting a correction is equivalent to removing a safety guard. The registry is append-mostly; corrections are append-only.
->
-> **Key lesson (2026-04-10):** 206 unit tests passed across all 3 phases, yet E2E review found 3 critical wiring gaps (MemoryGuard bypass on 4 write paths, UserObserver dead-end output, 178 lines of dead code). Unit tests prove components work; only E2E trace proves they're wired. Full design: `Next-Gen-Agent-Intelligence-Design-Doc.md`.
+> **Design Principle:** Corrections are the highest-value entries — proven failure modes with known patterns. Deleting a correction is equivalent to removing a safety guard. The registry is append-mostly; corrections are append-only. The post-session evolution hook only reports idle entries; it never changes the file.
 
 ### 4.4 Safety & Self-Harness
 
-Safety is a structural property, not a feature. SwarmAI implements defense-in-depth through seven independent layers:
+Safety is a structural property, not a feature. A family of PreToolUse hooks is registered per session (`backend/core/hook_builder.py`, implementations in `security_hooks.py`):
 
 | Layer | Mechanism | Details |
 |-------|-----------|---------|
-| Tool Logger | Audit trail | Every tool invocation logged with timestamp, parameters, result |
-| Command Blocker | Pattern matching | 13 dangerous patterns blocked (rm -rf, DROP TABLE, force push, etc.) |
-| Permission Dialog | Human approval | First-time external actions require approval; approvals persist |
-| Bash Sandbox | Claude SDK sandbox | Filesystem write restrictions, network allowlists, process isolation |
-| Escalation Protocol | Confidence-gated | 3 levels: INFORM (act+tell), CONSULT (options+ask), BLOCK (stop+wait) |
-| ContextHealthHook | Integrity validation | Light (every session): file existence/format. Deep (weekly): staleness |
-| Decision Classification | Judgment framework | mechanical (auto), taste (batch), judgment (block for human) |
+| Tool Logger | Audit trail | Every tool invocation logged; never blocks |
+| Dangerous-Command Gate | Pattern matching + human approval | Risky Bash commands and off-machine side effects go through an approval dialog; approvals tracked per session |
+| File Access Sandbox | Path checks | Workspace file-path sandbox |
+| Skill Access | Allow-list | Only allowed skills can run |
+| Governance File Gate | Write interception | Writes to governed context files are intercepted |
+| Pipeline Run Integrity | Commit + audit gates | Inside a run: no `git commit --amend`, no hand-commit of the run's files, no edits to the run's audit records |
+| ContextHealthHook | Integrity validation | Light (every session): refresh search indexes. Deep (once a day): validate the 11 context files, check MEMORY.md against git, detect DDD staleness |
 
 ---
 
 ## 5. Swarm Brain — Multi-Channel Architecture
 
-Swarm is a personal assistant with one brain. Regardless of channel — desktop or Slack — it is the same Swarm, same memory, same context. Adding a new channel: write an adapter (~250 lines), register in gateway, map user identity. Zero architecture change.
+Swarm is a personal assistant with one brain. Regardless of channel — desktop or Slack — it is the same Swarm, same memory, same context. Adding a new channel: write an adapter, register it in the gateway, map user identity. Zero architecture change.
 
-![Figure 6: Swarm Brain](swarm-brain.svg)
+![Figure 6: Swarm Brain](../assets/swarm-brain.svg)
 *Figure 6: Swarm Brain — One AI, every channel, three layers of continuity*
 
 | Layer | Mechanism | Scope |
 |-------|-----------|-------|
-| L1: Shared Memory | 11 context files loaded at every prompt build | All sessions (tabs + channels) |
-| L2: Cross-Channel Session | All channels share ONE Claude conversation (--resume) | Slack + future channels |
+| L1: Shared Memory | 11 context files loaded at every prompt build (non-owner prompts get only what is safe to share) | All sessions (tabs + channels) |
+| L2: Channel Sessions | Each Slack conversation (channel, chat, thread) keeps its own session and history | Slack + future channels |
 | L3: Active Session Digest | Sibling session summaries injected into prompts | Tabs ↔ Channels (bidirectional) |
 
 #### Key Design Decisions
 
 - Chat tabs are parallel (multi-slot, per-topic) — for deep work
-- Channel session is serialized (single dedicated slot) — for quick exchanges across platforms
-- Concurrency is bounded by real available RAM (`ResourceMonitor.spawn_budget()`), not a fixed slot count — channels and chat share the RAM-gated admission path so neither starves the other
-- User identity mapping ties platform IDs (Slack W017T04E) to one unified user_key
+- Channel work is serialized in one dedicated channel slot — for quick exchanges; the owner's own messages use the chat pool
+- Concurrency is bounded by real available RAM (`ResourceMonitor.spawn_budget()`), not a fixed slot count
+- User identity mapping ties platform user IDs to one unified user key; non-owner senders must be allowlisted
 
 ---
 
@@ -311,17 +289,17 @@ Swarm is a personal assistant with one brain. Regardless of channel — desktop 
 
 Replaced a monolithic AgentManager (5,428 lines) with seven focused components during the v7 re-architecture. Driven by real need: parallel chat tabs + dedicated channel slots without resource exhaustion.
 
-![Figure 7: Multi-Tab Parallel Sessions](multi-tab-sessions.svg)
+![Figure 7: Multi-Tab Parallel Sessions](../assets/multi-tab-sessions.svg)
 *Figure 7: Multi-Tab Parallel Sessions — SessionRouter, 5-state SessionUnits, dedicated channel slot*
 
 | Component | Responsibility |
 |-----------|---------------|
-| SessionRouter | Slot acquisition & routing, IDLE eviction, queue timeout (60s). RAM-based spawn admission (see below) |
-| SessionUnit | 5-state machine (COLD→STREAMING→IDLE→WAIT→DEAD), subprocess spawn, SSE |
-| LifecycleManager | 60s health loop, 12hr TTL kill, DEAD→COLD cleanup, startup orphan reaper, **proactive RSS restart** |
+| SessionRouter | Slot acquisition & routing, IDLE eviction, queue timeout. RAM-based spawn admission (see below) |
+| SessionUnit | 5-state machine (COLD, IDLE, STREAMING, WAITING_INPUT, DEAD), subprocess spawn, SSE |
+| LifecycleManager | 60s maintenance loop, 24hr idle TTL kill, DEAD→COLD cleanup, orphan reaper, **proactive RSS restart** |
 | SessionRegistry | Module-level singletons, initialize() wires components, configure_hooks() |
 | StreamingOrchestrator | Owns the SDK streaming loop — sends query, parses SDK messages into SSE events |
-| RetryManager | Retry/recovery orchestration: 3x retry with --resume, OOM recovery, 10MB buffer-overflow recovery |
+| RetryManager | Retry/recovery orchestration: up to 3 retries with --resume, failure-aware backoff, 10MB buffer-overflow recovery |
 | SessionHealing | Invisible self-healing — HealthSensor + TaskCheckpoint + HealingLoop (checkpoint → kill → respawn → continue) |
 
 #### Key Invariants
@@ -330,92 +308,77 @@ Replaced a monolithic AgentManager (5,428 lines) with seven focused components d
 - Subprocess spawn serialized via module-level locks
 - Retry uses `--resume` to restore conversation context across crashes
 - Hooks fire via BackgroundHookExecutor — never block the request path
-- **Spawn admission is RAM-gated** `NEW`: admission is gated SOLELY by `ResourceMonitor.spawn_budget()` (real available RAM, with a concurrent-peak penalty) — NOT by a fixed tab-count ceiling. When RAM is exhausted, a request evicts an idle peer or queues until a slot frees. (`compute_max_tabs` is a frontend-only UX concern, no longer consulted for backend arbitration.)
-- **Proactive restart** `NEW`: when RSS exceeds 3.5GB, compact → kill → lazy resume (prevents jetsam OOM kills)
+- **Spawn admission is RAM-gated**: admission is gated by `ResourceMonitor.spawn_budget()` (real available RAM, with a concurrent-peak penalty) — not by a fixed tab-count ceiling. When RAM is exhausted, a request evicts an idle peer or queues until a slot frees. (`compute_max_tabs` sizes the frontend's tab limit.)
+- **Proactive restart**: when RSS exceeds 3.5GB, compact → kill → lazy resume (prevents jetsam OOM kills)
 
 ---
 
 ## 7. Intelligence Layer
 
-The Intelligence layer provides proactive awareness, autonomous execution, and background automation. While the Harness ensures the agent remembers and improves, this layer ensures it anticipates, acts, and automates.
+The Intelligence layer provides autonomous execution, content work, inbound messages and background automation. While the Harness ensures the agent remembers and improves, this layer ensures it acts and automates.
 
 ### 7.1 Autonomous Pipeline
 
-Drives the full development lifecycle from a one-sentence requirement to PR-ready delivery. Implementation of AIDLC Phase 3 (AI-Management): AI makes autonomous decisions, humans step in when needed.
+Pipeline v1 (`s_autonomous-pipeline` + `backend/core/run_protocol/`) takes one requirement to one reviewed, tested local commit. It is for a risky change or when the person asks; ordinary changes are done natively. The model writes content and fixes code; the engine owns state, checks, landing and audit. Full design: [`Autonomous-Pipeline-HLD.md`](./Autonomous-Pipeline-HLD.md).
 
-![Figure 8: Autonomous Pipeline](autonomous-pipeline.svg)
-*Figure 8: Autonomous Pipeline — 9-stage lifecycle + Goal Loop (iterative convergence) with DDD+SDD+TDD methodology and safety mechanisms*
+| Stage | Output | Check |
+|-------|--------|-------|
+| EVALUATE | Requirements with checkable acceptance criteria | Gate-0: a skeptic expert checks the framing (bugfix or ambiguous request; 2 rounds max) |
+| THINK | Alternatives compared against code and DDD knowledge | A real trade-off may go to the person as 2–3 options |
+| PLAN | Design spec: tasks, exit criteria, chosen approach | Stage checks on the spec |
+| BUILD | Code + tests in the run's own worktree, a validation report | A change exists; a report on its code tree |
+| REVIEW | Findings from independent experts (correctness always, security when declared) | Every fix rechecked in a second round |
+| TEST | The change's tests + the repo's checks on the reviewed code | No failed command |
+| DELIVER | REPORT + one local commit (fast-forward of local main) | Landing checks: review saw this exact code, tests pass on it, main has not moved |
+| REFLECT | The run's report to CDF (delivered, decisions, corrections, practices, gaps) | Never blocks landing |
 
-| Stage | Output | Gate |
-|-------|--------|------|
-| EVALUATE | ROI score, GO/DEFER/REJECT | ROI ≥ 3.5 to proceed |
-| THINK | 3 alternatives (Minimal/Ideal/Creative) | User picks approach |
-| PLAN | Design doc (SDD) + acceptance criteria | Design approval |
-| BUILD | Code + tests (TDD: RED → GREEN → VERIFY) | All tests pass |
-| REVIEW | Code quality scan + security scan | No high-severity findings |
-| TEST | Full suite, regression check | WTF Gate (halt if risky) |
-| DELIVER | PR description, decision log, report | Taste decisions batched |
-| REFLECT | Lessons → IMPROVEMENT.md | — |
-
-Methodology Stack (DDD + SDD + TDD): DDD (4 project docs) provides autonomous judgment — "should we build this?". SDD (design doc with acceptance criteria) produces specs. TDD (tests before code) verifies delivery. Key insight: when no human reviews every line, the test suite IS the quality gate.
+Profiles: full and bugfix run all eight stages; trivial skips THINK; direct runs BUILD → REFLECT; research runs EVALUATE, THINK, DELIVER, REFLECT and lands no code. An expert's opinion never blocks landing (an open HIGH is listed as residual risk), every loop is capped, and the pipeline never pushes: the person reads the REPORT and pushes.
 
 ### 7.2 Job System
 
-Background automation via macOS launchd — runs independently of chat sessions. The scheduler evaluates due jobs every hour, routes them to type-specific handlers via the executor, and persists state across restarts. The service manager handles long-running sidecars (Slack bot) with auto-restart and health monitoring.
+Background automation runs inside the backend service (the daemon on macOS, or a Hive) — independently of chat sessions. The scheduler loop checks due jobs every hour, routes them to type-specific handlers via the executor, and persists state across restarts. The service manager runs managed side services declared in `Services/*/service.json` and restarts them if they crash.
 
-![Figure 9: Job System](job-system.svg)
-*Figure 9: Job System — launchd scheduler, executor routing, and sidecar services (the figure still shows the retired signal pipeline; the Inbox now pulls the feeds)*
+![Figure 9: Job System](../assets/job-system.svg)
+*Figure 9: Job System — scheduler, executor routing, and side services (the figure still shows launchd scheduling and the retired signal pipeline; both are gone)*
 
 | Job Type | Handler | Examples | Token Cost |
 |----------|---------|----------|------------|
-| agent | Headless Claude CLI + MCP | Custom tasks | Variable |
-| script | Subprocess (deterministic) | Loops health, code-intel refresh | Zero (no LLM) |
-| maintenance | Prune + cleanup + L4 proposals | Weekly cache cleanup, DDD refresh, skill proposer | ~$0.25/week |
+| agent_task | Headless Claude CLI + MCP | Custom tasks | Variable |
+| script | Subprocess (deterministic) | Loops health, code-graph reindex | Zero (no LLM) |
+| maintenance and built-in handlers | Python handlers | Weekly maintenance, DDD refresh (the weekly commit reader), skill proposer, scheduled eval | Low |
 
-System jobs (weekly-maintenance, memory-health, loops-health, ...) are defined in code and read-only. Watched feeds (RSS, Hacker News, GitHub) are not jobs: the Inbox pulls them (`core/inbox/feeds`). User jobs live in `user-jobs.yaml` with full CRUD via job_manager.py.
+System jobs (weekly-maintenance, memory-health, ddd-refresh, code-intel-reindex, eval-scheduled, ...) are defined in code and read-only. Watched feeds are not jobs: the Inbox pulls them. User jobs live in `user-jobs.yaml` with full CRUD via `job_manager.py`.
 
-### 7.3 Proactive Intelligence
+### 7.3 Inbox
 
-1,142 lines, 106+ tests. Provides session-start briefings through five levels of analysis:
-
-| Level | Capability | How |
-|-------|-----------|-----|
-| L0 | Parsing | Extract structured data from DailyActivity, MEMORY.md, open threads |
-| L1 | Temporal awareness | Time-sensitive items, deadlines, recency weighting |
-| L2 | Scoring engine | Priority × staleness × frequency × blocking × momentum per item |
-| L3 | Cross-session learning | JSON-persisted: skip penalty for ignored, affinity bonus for accepted |
-| L4 | Signal highlights | External intelligence (HN, RSS, GitHub) with effectiveness scoring |
+The Inbox pulls the person's own messages (mail, Slack, GitHub) and watched feeds, triages them, drafts replies, and sends on a click. Feeds and trends stay in the Inbox; they reach the Brain only when the person picks "learn into Brain", saved as a reference.
 
 ---
 
-## 8. Three-Column Command Center
+## 8. Command Center Layout
 
-The interface is a single integrated system where the Chat Center orchestrates everything. Three columns are views into one unified workspace connected by drag-to-chat context injection.
+The interface is a single integrated system where Chat orchestrates everything. A left navigation opens full surfaces over the chat; drag-to-chat injects context.
 
-![Figure 10: Three-Column Command Center](three-column-layout.svg)
-*Figure 10: Three-Column Command Center — SwarmWS, Chat Center, Swarm Radar with drag-to-chat*
-
-| Column | Purpose | Key Interactions |
-|--------|---------|-----------------|
-| SwarmWS Explorer (left) | Persistent local workspace | Git-tracked + ETag polling. Agent reads/writes/commits directly. |
-| Chat Center (center) | Multi-session command surface | SSE streaming, per-tab isolation, 90+ skills, MCP tools. Controls Explorer and Radar. |
-| Swarm Radar (right) | Attention dashboard | ToDos, sessions, artifacts, jobs. Drag work packets to chat for instant context. |
+| Area | Purpose | Key Interactions |
+|------|---------|-----------------|
+| Left navigation | Chat history, artifacts and what needs you; the Brain, Library and Brain Hub; Inbox, ToDo, Workspace, Pipeline, Pollinate; Jobs, Capabilities, Usage, Eval, Settings | Each item opens its surface over the chat |
+| Chat (center) | Multi-session command surface | SSE streaming, per-tab isolation, skills, MCP tools |
+| Workspace | Persistent local workspace (SwarmWS) | Git-tracked. Agent reads/writes/commits directly |
 
 ---
 
-## 9. Daemon-First Backend `NEW`
+## 9. Daemon-First Backend
 
-A fundamental architectural shift (March 30, 2026): **Tauri now connects to a launchd-managed daemon instead of spawning a sidecar.** The backend runs independently of the desktop app, enabling 24/7 operation for Slack, background jobs, and scheduled tasks.
+A fundamental architectural shift (March 30, 2026): **on macOS, Tauri connects to a launchd-managed daemon instead of spawning a sidecar.** The backend runs independently of the desktop app, enabling 24/7 operation for Slack, background jobs, and scheduled tasks. On Windows and Linux the desktop app runs the backend as a subprocess that stops with the app; a Hive runs it on EC2 Linux under systemd.
 
-### How It Works
+### How It Works (macOS)
 
 | Step | What Happens | Detail |
 |------|-------------|--------|
-| 1. App Launch | Tauri probes for running daemon | Retry 5×2s at discovered port via psutil |
-| 2. No Daemon? | Auto-bootstrap via launchctl | `launchctl bootstrap gui/<uid> com.swarmai.backend.plist` |
-| 3. Still No? | Fallback: spawn as sidecar | Legacy mode — same as v1.0, but rare |
-| 4. App Closes | Daemon stays alive | Slack, jobs, signals continue 24/7 |
-| 5. Crash Recovery | launchd auto-restarts | KeepAlive=true, max 3 retries, exit 37 for bootstrap conflict |
+| 1. App Launch | Tauri probes for the running daemon | Fixed port 18321 |
+| 2. No Daemon? | Install and bootstrap | Deploy binary + wrapper + plist, then `launchctl bootstrap gui/<uid> <plist>` |
+| 3. App Closes | Daemon stays alive | Slack, jobs and the Inbox's pulls continue 24/7 |
+| 4. Crash Recovery | launchd auto-restarts | KeepAlive; a guardian launchd agent re-bootstraps a daemon that died deregistered |
 
 ### Key Benefits
 
@@ -428,29 +391,29 @@ A fundamental architectural shift (March 30, 2026): **Tauri now connects to a la
 
 ---
 
-## 10. OOM Resilience & Proactive Restart `NEW`
+## 10. OOM Resilience & Proactive Restart
 
-macOS jetsam kills processes that exceed memory pressure thresholds — with no warning, no cleanup, no resume. SwarmAI now **proactively** restarts sessions before jetsam acts, preserving conversation context.
+macOS jetsam kills processes that exceed memory pressure thresholds — with no warning, no cleanup, no resume. SwarmAI **proactively** restarts sessions before jetsam acts, preserving conversation context.
 
 ### The Problem
 
-Each Claude CLI subprocess + its MCP servers costs ~500MB RSS. Multiple active tabs plus context growth during long sessions push a process tree into multi-gigabyte territory, triggering jetsam exit code -9 kills. Previously: total data loss for that session.
+Each Claude CLI subprocess + its MCP servers costs hundreds of MB of RSS. Multiple active tabs plus context growth during long sessions push a process tree into multi-gigabyte territory, triggering jetsam exit code -9 kills. Previously: total data loss for that session.
 
 ### The Solution: Proactive Restart-with-Resume
 
 | Component | What | Detail |
 |-----------|------|--------|
 | Trigger B (primary) | Post-turn RSS check | After STREAMING → IDLE, check process tree RSS. If > 3.5GB: trigger restart. |
-| Trigger A (fallback) | Lifecycle maintenance loop | Every 60s, check all IDLE sessions. Catches sessions that grew but received no new messages. |
+| Trigger A (fallback) | Lifecycle maintenance loop | Every 60s, check IDLE sessions. Catches sessions that grew but received no new messages. |
 | Restart Flow | Compact → kill → lazy resume | Trigger SDK compaction, kill subprocess, mark COLD. Next message auto-respawns with `--resume`. |
-| Cooldown | 3-minute per-session cooldown | Prevents restart loops. OOM crash adds 30-120s backoff. |
-| Auto-resume | `_ensure_spawned` always checks | If COLD + existing `_sdk_session_id` → auto-inject `--resume`. Covers ALL kill-then-respawn paths. |
+| Cooldown | 3-minute per-session cooldown | Prevents restart loops. An OOM crash adds a 30-120s backoff. |
+| Auto-resume | `_ensure_spawned` always checks | If COLD + existing SDK session id → auto-inject `--resume`. Covers all kill-then-respawn paths. |
 
 ### Resource Monitoring
 
 - **Effective memory**: `total - available` (matches macOS jetsam logic, NOT `psutil.virtual_memory().used`)
 - **Pressure levels**: ok (<80%) | warning (80-90%) | critical (≥90%)
-- **Spawn budget**: Dynamic tab limit from available RAM — prevents overcommit
+- **Spawn budget**: a spawn is denied if it would push the machine past 90% memory use — prevents overcommit
 
 > **Design Principle:** "Prevent, don't handle." Proactive restart *prevents* jetsam kills structurally — it doesn't try to recover after the fact. The best error handler is the one that never fires.
 
@@ -460,17 +423,18 @@ Each Claude CLI subprocess + its MCP servers costs ~500MB RSS. Multiple active t
 
 | Decision | Choice | Alternative | Rationale |
 |----------|--------|------------|-----------|
-| Memory | 3-layer distillation + pure-filesystem keyword recall (FTS5/BM25) | Pure RAG / Vector DB | Files are git-trackable, human-readable, editable. Keyword recall + agentic re-search covers the synonym gap without embedding cost or a vector DB. |
+| Memory | Each unit to one declared place + pure-filesystem keyword recall (FTS5/BM25) | Pure RAG / Vector DB | Files are git-trackable, human-readable, editable. Keyword recall + agentic re-search covers the synonym gap without embedding cost or a vector DB. |
+| Knowledge writes | The producing agent declares; code checks facts | An approval queue, or a separate LLM judge | The agent that saw the evidence decides what a unit means; code checks only what it can check (design `docs/design/2026-10-30-cdf-agent-decides.md`). |
 | Sessions | 7-component decomposition | Monolithic AgentManager | 5,428-line God Object caused 15+ bugs (COE). Clean error boundaries. |
-| Context | 11-file priority chain + budget | Single system prompt | Priority truncation ensures identity/safety survive under pressure |
-| Channels | Shared session (serialized) | Independent per channel | 'One brain': Slack knows what desktop said. No fragmentation. |
+| Context | 11-file priority chain + budget | Single system prompt | Identity and rules come first; the budget warns instead of cutting |
+| Channels | One dedicated, serialized channel slot | A slot per channel | 'One brain': same context files everywhere; bounded memory use. |
 | Skills | SKILL.md instruction files | Compiled plugins | LLM-native: agent reads as natural language. New skill = markdown file. |
-| Data | All local (SQLite + filesystem) | Cloud database | Zero cloud dependency. Privacy by default. Works offline. |
-| Safety | Defense-in-depth (7 layers) | Single permission gate | No single layer sufficient. Redundant protection. |
-| Jobs | macOS launchd daemon | In-process cron | Survives app restarts, runs when app is closed, managed by OS. |
-| Backend | Daemon-first (launchd) | App-managed sidecar | 24/7 operation: Slack, jobs, signals run without desktop app. |
+| Data | Local (SQLite + filesystem), or the person's own Hive | Cloud database | Data stays with the person. Privacy by default. |
+| Safety | Defense-in-depth (PreToolUse gate family) | Single permission gate | No single layer sufficient. Redundant protection. |
+| Jobs | In-process scheduler inside the backend service | OS-level schedulers (launchd jobs) | One process to run and monitor; jobs run when the app is closed because the service does. |
+| Backend | Daemon-first (launchd on macOS) | App-managed sidecar | 24/7 operation: Slack and jobs run without the desktop app. |
 | OOM | Proactive RSS restart | Reactive crash recovery | Prevention > recovery. Jetsam kills lose all context; proactive restart preserves it. |
-| Agents | Single-agent role-switching | Multi-agent orchestration | Zero context transfer cost. Multi-agent coordination is a tax on limited cognition. |
+| Agents | One agent owns the judgment, role-switching | Multi-agent orchestration | Zero context transfer cost. Sub-agents only where independence is the point (review). |
 
 ---
 
@@ -480,17 +444,17 @@ SwarmAI occupies a unique position: not a code editor, not an IDE, not a CLI age
 
 | Capability | SwarmAI | Claude Code | Kiro | Cursor | OpenClaw |
 |-----------|---------|-------------|------|--------|----------|
-| Memory | 3-layer + pure-filesystem keyword recall (FTS5/BM25) | CLAUDE.md (manual) | Per-project | Per-project | Session pruning |
+| Memory | Knowledge capture to declared places + pure-filesystem keyword recall (FTS5/BM25) | CLAUDE.md (manual) | Per-project | Per-project | Session pruning |
 | Context | 11-file + budgets | Single prompt | Spec-driven | Codebase index | Standard |
 | Multi-session | 1-4 parallel tabs | 1 session | 1 session | 1 session | Per-channel |
-| Self-evolution | 90+ skills + two-axis evolution pipeline (operational v2 + cognitive v3) | No | No | No | No |
-| Autonomous pipeline | 9-stage + Goal Loop + DDD+TDD | Manual | Spec-driven | No | No |
+| Self-evolution | Corrections → proposals the person decides + skill metrics | No | No | No | No |
+| Autonomous pipeline | Pipeline v1: 8 stages, expert review, deterministic landing | Manual | Spec-driven | No | No |
 | Multi-channel | Unified brain | Terminal | IDE only | IDE only | 21+ (isolated) |
 | Scope | All knowledge work | Coding | Coding | Coding | Messaging |
 | OOM protection | Proactive RSS restart | No | No | No | No |
-| Always-on | launchd daemon 24/7 | No | No | No | Per-channel |
+| Always-on | launchd daemon or Hive, 24/7 | No | No | No | Per-channel |
 
-> **Core Differentiator:** The Harness. No competitor provides the compound loop of context engineering + memory distillation with keyword/FTS5/BM25 recall + self-evolution + safety harness that makes an AI agent genuinely improve over time.
+> **Core Differentiator:** The Harness. No competitor provides the compound loop of context engineering + knowledge capture with keyword/FTS5/BM25 recall + self-evolution + safety harness that makes an AI agent genuinely improve over time.
 
 ---
 
@@ -498,18 +462,18 @@ SwarmAI occupies a unique position: not a code editor, not an IDE, not a CLI age
 
 | Phase | Target | Key Deliverables |
 |-------|--------|-----------------|
-| DSPy/GEPA Optimizer | When eval data sufficient | ML-grade skill optimization layered on heuristic interface (>20 examples/skill) |
-| MCP Gateway | When SDK supports | Shared MCP instances across sessions (~2.8GB → ~700MB) |
-| Multi-User | Q4 2026 | Team workspace, role-based access, collaborative memory |
-| Cross-Platform | Q4 2026 | Linux support (launchd → systemd for background jobs) |
+| MCP Gateway | When SDK supports | Shared MCP instances across sessions (less memory per session) |
+| Multi-User | Open | Team workspace, role-based access, collaborative memory |
+| 24/7 on Windows/Linux desktops | Open | Today only macOS (launchd) and Hives (systemd) run the backend when the app is closed |
 
 ---
 
 **Document History:**
+- v3.0 (November 25, 2026) — Brought in line with the code: CDF knowledge capture replaces the distillation pipeline, evolution proposals replace the optimizer, Pipeline v1 replaces the 9-stage pipeline, the in-process scheduler replaces launchd jobs, the Inbox replaces the signal pipeline; retired context files and modules removed.
 - v2.2 (May 14, 2026) — Updated: 82 skills, 1,380+ commits, Goal Loop design doc added.
 - v2.1 (April 15, 2026) — Updated: 4-level memory recall, Evolution Pipeline v2 (MINE→ASSESS→ACT→AUDIT), lazy/always skill tiering, OOM threshold 1.8GB, signal fetcher service resolved.
 - v2.0 (April 8, 2026) — Major refresh: Daemon-first backend, OOM resilience, hybrid memory recall, updated metrics & competitive positioning.
 - v1.0 (March 26, 2026) — Initial release for PE/Tech Leadership review.
 
-Generated by: Swarm (Claude Opus 4.6) under supervision of REDACTED_NAME (XG).
+Generated by: Swarm, under the supervision of the SwarmAI builder.
 Repository: github.com/xg-gh-25/SwarmAI

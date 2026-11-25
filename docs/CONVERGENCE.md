@@ -98,7 +98,7 @@ How much context does a cold-resumed session start with?
 | 2026-04-02 | ~5K tokens | Structured checkpoint + recent 5 turns | Commits `3d8c1f9`→`59e55a7` |
 | 2026-05-02 | ~50-100K tokens | 5 extraction layers (conclusions, directives, tool results, git state, crash checkpoint) | Commits `2352c65`→`7bd1a23` |
 
-**Evidence:** `backend/core/session_unit.py` — `build_resume_context()` function. Budget tiers in `_compute_resume_budget()`.
+**Evidence:** `backend/core/context_injector.py` — `build_resume_context()` function. Budget tiers in `_compute_resume_budget()`.
 
 **What this means:** A resumed session in May 2026 starts with 100x more relevant context than one in March. The agent doesn't re-read files or re-discover decisions — it picks up where it left off.
 
@@ -133,7 +133,7 @@ How much context does a cold-resumed session start with?
 
 ---
 
-_Last updated: 2026-07-13 (current release v1.25.0). Updated on meaningful milestones, not on schedule._
+_Last updated: 2026-07-13 (release v1.25.0 at the time). Updated on meaningful milestones, not on schedule._
 
 ---
 
