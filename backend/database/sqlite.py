@@ -2119,7 +2119,8 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 21 — hive_instances.carrier + runtime_arn: the AgentCore carrier (2026-11-20)
 # 22 — hive_instances.idle_stop_minutes: each EC2 Hive's own idle stop (2026-11-24)
 # 23 — hive_instances.carrier_config: the SSH-machine carrier's per-machine settings (2026-11-24)
-CURRENT_SCHEMA_VERSION = 23
+# 24 — hive_instances.active_at: when an EC2 Hive last came up, for its idle stop (2026-11-25)
+CURRENT_SCHEMA_VERSION = 24
 
 #: Inbox tables (v20, core/inbox/store.py, design docs/design/2026-11-20-inbox.md §5). The
 #: person's own messages: never in a backup (core/backup_manager.L2_TABLES lists what is),
@@ -3804,6 +3805,26 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.rollback()
                 raise
             logger.info("Migration v23: hive_instances.carrier_config")
+
+        if current_version < 24 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 23:
+            # Version 24: hive_instances.active_at, when an EC2 Hive last came up (provisioned
+            # or started: hive/provisioner ``_update_instance(came_up=True)``). The idle stop
+            # (core/hive_idle) counts idle time from it, never from ``updated_at``, which every
+            # update attempt also writes (release review 2026-11-25 H1). Additive only: one
+            # nullable column, no row touched; NULL counts from this Host's own start.
+            await conn.execute("BEGIN")
+            try:
+                cols = {r[1] for r in await (await conn.execute(
+                    "PRAGMA table_info(hive_instances)")).fetchall()}
+                if cols and "active_at" not in cols:   # no table: nothing to add to
+                    await conn.execute("ALTER TABLE hive_instances ADD COLUMN active_at TEXT")
+                await conn.execute("PRAGMA user_version = 24")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v24: hive_instances.active_at")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.

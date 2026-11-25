@@ -1,6 +1,6 @@
 """A small Hive store for the SSH-machine tests (design 2026-11-24-swarm-out-ssh-machine):
 the ``hive_accounts`` / ``hive_instances`` tables with every column the migrations give them
-(through v23), one SwarmAI account row, and helpers to add an EC2 Hive, an Elastic Workers row
+(through v24), one SwarmAI account row, and helpers to add an EC2 Hive, an Elastic Workers row
 and an SSH machine. Points ``database.db`` and ``core.swarm_out`` at it."""
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ INSTANCES = """CREATE TABLE hive_instances (id TEXT PRIMARY KEY, name TEXT NOT N
   s3_bucket TEXT, ssh_key_name TEXT, auth_user TEXT DEFAULT 'admin', auth_password TEXT,
   status TEXT NOT NULL DEFAULT 'pending', version TEXT, error_message TEXT, seed_data TEXT,
   shared_content TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, custom_ami_id TEXT,
-  origin_secret TEXT, carrier TEXT NOT NULL DEFAULT 'ec2', runtime_arn TEXT, idle_stop_minutes INTEGER, carrier_config TEXT)"""
+  origin_secret TEXT, carrier TEXT NOT NULL DEFAULT 'ec2', runtime_arn TEXT, idle_stop_minutes INTEGER, carrier_config TEXT,
+  active_at TEXT)"""
 
 ACCOUNT = "123456789012"
 BUCKET = "swarmai-hive-9012-us-east-1"

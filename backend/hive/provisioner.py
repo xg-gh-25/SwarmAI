@@ -658,8 +658,11 @@ class HiveProvisioner:
 
     # ── DB helpers ─────────────────────────────────────────────────
 
-    async def _update_instance(self, instance_id: str, **fields) -> None:
-        """Update hive_instances fields in SQLite."""
+    async def _update_instance(self, instance_id: str, *, came_up: bool = False, **fields) -> None:
+        """Update hive_instances fields in SQLite. ``came_up``: the Hive was just brought up
+        (provisioned or started, now 'running'), so its ``active_at`` is set too: the idle
+        stop counts the Hive's idle time from it (core/hive_idle), never from ``updated_at``,
+        which every update attempt and every other status change also writes."""
         if not fields:
             return
         # PE-review P0-2: validate column names against allowlist
@@ -667,6 +670,8 @@ class HiveProvisioner:
         if bad_cols:
             raise ValueError(f"Invalid column names: {bad_cols}")
         sets = ", ".join(f"{k} = ?" for k in fields)
+        if came_up:
+            sets += ", active_at = datetime('now')"
         vals = list(fields.values()) + [instance_id]
         async with aiosqlite.connect(str(self.db_path)) as conn:
             await conn.execute("PRAGMA busy_timeout = 3000")
@@ -1660,7 +1665,7 @@ class HiveProvisioner:
                     logger.error("Cleanup on health timeout also failed: %s", cleanup_err)
                 return
 
-            await self._update_instance(instance_id, status="running")
+            await self._update_instance(instance_id, status="running", came_up=True)
 
             # Step 10: CloudFront (needs DNS name, not IP — CF rejects IPs)
             origin_dns = await self._get_ec2_public_dns(session, ec2_id, region)
@@ -1890,14 +1895,14 @@ class HiveProvisioner:
         if ec2_id:
             healthy = await self._wait_healthy_via_ssm(session, ec2_id, region, timeout=180)
             if healthy:
-                await self._update_instance(instance_id, status="running")
+                await self._update_instance(instance_id, status="running", came_up=True)
             else:
                 await self._update_instance(
                     instance_id, status="error",
                     error_message="Failed to become healthy after start",
                 )
         else:
-            await self._update_instance(instance_id, status="running")
+            await self._update_instance(instance_id, status="running", came_up=True)
 
     async def release_stale_updates(self, max_age_s: int = UPDATE_STALE_S,
                                     deleting_max_age_s: int = DELETING_STALE_S) -> int:

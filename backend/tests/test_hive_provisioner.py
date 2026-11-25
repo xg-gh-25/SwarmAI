@@ -1454,7 +1454,8 @@ class TestStartBehavioral:
 
             mock_ec2.start_instances.assert_called_once_with(InstanceIds=["i-abc123"])
             mock_cf.assert_called_once_with(mock_session, "EDIST123")
-            mock_update.assert_called_with("inst-1", status="running")
+            # it came up: the idle stop counts from now (active_at), core/hive_idle
+            mock_update.assert_called_with("inst-1", status="running", came_up=True)
 
     @pytest.mark.asyncio
     async def test_start_sets_error_if_health_fails(self):
@@ -1585,6 +1586,40 @@ class TestH1AtomicStopStart:
         assert rows["err-no-ec2"] == ("error", "x") and rows["run"] == ("running", None)
         assert rows["busy"] == ("starting", None)
 
+
+    @pytest.mark.asyncio
+    async def test_only_coming_up_moves_active_at(self):
+        """The idle stop's clock (core/hive_idle reads active_at): an update claim and a
+        failed update write updated_at but never active_at; a Hive that came up does."""
+        import aiosqlite
+        from hive.provisioner import HiveProvisioner
+        db = Path(tempfile.mkdtemp()) / "h.db"
+        old = "2000-01-01 00:00:00"
+        async with aiosqlite.connect(db) as c:
+            await c.execute("CREATE TABLE hive_instances (id TEXT, status TEXT, version TEXT, "
+                            "error_message TEXT, updated_at TEXT, active_at TEXT)")
+            await c.execute("INSERT INTO hive_instances VALUES ('h1', 'running', '2.5.5', NULL, ?, ?)",
+                            (old, old))
+            await c.commit()
+
+        async def read():
+            async with aiosqlite.connect(db) as c:
+                return await (await c.execute(
+                    "SELECT status, updated_at, active_at FROM hive_instances")).fetchone()
+        p = HiveProvisioner(db)
+        await p.claim_update("h1")
+        claimed = await read()
+        assert claimed[0] == "updating" and claimed[1] != old and claimed[2] == old
+        async with aiosqlite.connect(db) as c:          # the failure path writes it again
+            await c.execute("UPDATE hive_instances SET updated_at = ?", (old,))
+            await c.commit()
+        with patch.object(p, "_get_instance", new_callable=AsyncMock, side_effect=ValueError("no")):
+            with pytest.raises(ValueError):
+                await p.update("h1", "2.5.6", claimed=True)
+        status, updated_at, active_at = await read()
+        assert status == "running" and updated_at != old and active_at == old
+        await p._update_instance("h1", status="running", came_up=True)
+        assert (await read())[2] != old
 
 class TestH5CleanupTerminalStatus:
     """H5: cleanup() must set a terminal status."""

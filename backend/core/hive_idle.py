@@ -25,11 +25,17 @@ counts as busy: stopping wrongly ends work, keeping wrongly costs one more perio
 - no dispatch to it in flight (``swarm_out.dispatch_in_flight``): a dispatch has no row
   or open run until its session starts.
 
-The idle time runs from the latest of: the last look that found it busy, its row's
-``updated_at`` (a start or any other status change) and this Host's own start, so a Hive
-stopped and started between two looks, or a Host that just restarted, never counts hours
-it did not see. Then the Hive is claimed (``claim_stop``) and stopped in the background;
-when a dispatch began between the last look and the claim, the claim is given back.
+The idle time runs from the latest real activity: the last look that found it busy, its
+row's ``active_at`` (when it last came up: provisioned or started, hive/provisioner) and
+this Host's own start, so a Hive stopped and started between two looks, or a Host that just
+restarted, never counts hours it did not see. Never from ``updated_at``: every update
+attempt writes it (the claim, then the failure's own end), and an update that keeps
+failing is tried again at least hourly, so a clock read from it never reached an idle time
+over an hour and the Hive billed around the clock (release review 2026-11-25 H1). Nor from
+a finished update: it is the Host's upkeep, not use, and an update that ends with the Hive
+still on another build is tried again; the next dispatch to a Hive stopped right after one
+wakes it. Then the Hive is claimed (``claim_stop``) and stopped in the background; when a
+dispatch began between the last look and the claim, the claim is given back.
 
 **A Hive follows the Host's build** (``settings.app_version`` and the build identity,
 core/build_identity: never the latest release), so no person has to press Update. A Hive is
@@ -79,7 +85,8 @@ _RESTING = (None, "idle")
 
 #: when this Host started looking (run_loop); idle time is never counted from before it
 _HOST_UP_AT: dict[str, float] = {"at": time.time()}
-#: hive id -> the last look (wall clock) that found it busy
+#: hive id -> the last look (wall clock) that found it busy; kept while the Hive is away from
+#: 'running' (updating, stopped), dropped when the idle stop claims it
 _LAST_BUSY: dict[str, float] = {}
 #: stops started by the loop (a reference keeps each alive until it ends)
 _STOPS: set = set()
@@ -168,7 +175,7 @@ def busy_reasons(open_runs: Optional[int], sessions: Optional[dict[str, dict[str
 
 
 def _db_time(value: Any) -> float:
-    """A row's ``updated_at`` (SQLite datetime('now'), UTC) as epoch seconds; 0 when absent."""
+    """A row's ``active_at`` (SQLite datetime('now'), UTC) as epoch seconds; 0 when absent."""
     try:
         return float(calendar.timegm(time.strptime(str(value), "%Y-%m-%d %H:%M:%S")))
     except (ValueError, OverflowError):
@@ -202,9 +209,9 @@ async def _running_hives() -> list[dict[str, Any]]:
         await conn.execute("PRAGMA busy_timeout = 3000")
         only = await ec2_only(conn)
         cur = await conn.execute(
-            "SELECT id, name, updated_at, version, idle_stop_minutes FROM hive_instances "
+            "SELECT id, name, active_at, version, idle_stop_minutes FROM hive_instances "
             f"WHERE status = 'running' AND {only}")
-        return [{"id": r[0], "name": r[1], "updated_at": r[2], "version": r[3],
+        return [{"id": r[0], "name": r[1], "active_at": r[2], "version": r[3],
                  "idle_stop_minutes": r[4]}
                 for r in await cur.fetchall()]
 
@@ -438,10 +445,11 @@ async def check_once(now: Optional[float] = None) -> list[str]:
     if EC2 not in {c.kind for c in registry.with_duty(IDLE_STOP)}:
         return []
     now = time.time() if now is None else now
+    # A Hive missing from this look keeps its last busy look: one 'updating' (an update can
+    # span several looks) comes back with its last use still counted, and one stopped and
+    # started again counts from its newer ``active_at`` (the start writes it), so no entry
+    # needs dropping here; the idle stop's own claim drops it.
     hives = await _running_hives()
-    running = {h["id"] for h in hives}
-    for hid in [h for h in _LAST_BUSY if h not in running]:
-        _LAST_BUSY.pop(hid, None)          # a stopped Hive's next run starts its own count
     if not hives:
         return []
     open_runs = await asyncio.to_thread(swarm_out.open_runs_by_hive, True)
@@ -461,12 +469,15 @@ async def check_once(now: Optional[float] = None) -> list[str]:
         idle_s = own_idle_after_s(h.get("idle_stop_minutes"), default_s)
         if await _follow_host(prov, h, now) or idle_s is None:
             continue
-        since = max(_LAST_BUSY.get(h["id"], 0.0), _db_time(h.get("updated_at")), _HOST_UP_AT["at"])
+        since = max(_LAST_BUSY.get(h["id"], 0.0), _db_time(h.get("active_at")), _HOST_UP_AT["at"])
         if now - since < idle_s:
             continue
         prov = prov or _provisioner()
         if not await _claim(prov, h):
-            _LAST_BUSY[h["id"]] = now
+            # a dispatch that began meanwhile is use; a Hive that left 'running' first (an
+            # update, a person's stop or restart) is not, and keeps its last real activity
+            if swarm_out.dispatch_in_flight(h["id"], h["name"]):
+                _LAST_BUSY[h["id"]] = now
             continue
         logger.info("hive_idle: Hive %s idle for %.0f min: stopping it", h["name"], (now - since) / 60)
         _LAST_BUSY.pop(h["id"], None)

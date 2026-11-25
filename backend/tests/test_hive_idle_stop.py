@@ -4,7 +4,8 @@ Questions: (1) does the setting give 120 minutes by default, its own minutes, or
 (2) does each condition (an open run of this Host, a session at work, a run waiting for
 its lessons, a dispatch in flight) and each unreadable one keep the Hive; (3) is an idle
 Hive stopped (claim_stop, then stop as claimed) only once the idle time has passed since
-its last busy look, its last status change and the Host's own start; (4) does a run
+its last busy look, when it last came up (active_at) and the Host's own start, and never
+kept by a row change that is not activity (updated_at, which an update attempt writes); (4) does a run
 waiting for its lessons keep its Hive until they are in; (5) does a dispatch that begins
 while the claim is made keep the Hive; (6) does a dispatch's wake wait for a stop, start
 the Hive once for every caller, and say why when it ends elsewhere; (7) does a Hive's own
@@ -50,7 +51,8 @@ class _Prov:
 @pytest.fixture
 def world(monkeypatch):
     """One running Hive, idle on every count, last changed and Host up 3 h before NOW."""
-    w = {"minutes": None, "own": None, "updated_at": _db(NOW - 3 * 3600), "open_runs": {}, "sessions": {},
+    w = {"minutes": None, "own": None, "active_at": _db(NOW - 3 * 3600), "updated_at": _db(NOW - 3 * 3600),
+         "open_runs": {}, "sessions": {},
          "snapshot": {"runs": []}, "log": True, "prov": _Prov()}
     hive_idle._LAST_BUSY.clear()
     so._IN_FLIGHT.clear()
@@ -64,7 +66,8 @@ def world(monkeypatch):
     monkeypatch.setattr(app_config_manager.AppConfigManager, "instance", classmethod(lambda cls: Cfg()))
 
     async def running():
-        return [{**H, "updated_at": w["updated_at"], "idle_stop_minutes": w["own"]}]
+        return [{**H, "active_at": w["active_at"], "updated_at": w["updated_at"],
+                 "idle_stop_minutes": w["own"]}]
     monkeypatch.setattr(hive_idle, "_running_hives", running)
     monkeypatch.setattr(so, "open_runs_by_hive", lambda strict=False: w["open_runs"])
 
@@ -170,10 +173,10 @@ def test_an_idle_hive_is_stopped_after_the_idle_time(world):
     assert world["prov"].calls == [("claim", "h1"), ("stop", "h1", True)]
 
 
-@pytest.mark.parametrize("recent", ["updated_at", "host_up", "last_busy"])
+@pytest.mark.parametrize("recent", ["active_at", "host_up", "last_busy"])
 def test_an_idle_hive_is_kept_until_the_idle_time_has_passed(world, monkeypatch, recent):
-    if recent == "updated_at":
-        world["updated_at"] = _db(NOW - 1800)          # started (or changed) 30 min ago
+    if recent == "active_at":
+        world["active_at"] = _db(NOW - 1800)           # came up (provisioned, started) 30 min ago
     elif recent == "host_up":
         monkeypatch.setitem(hive_idle._HOST_UP_AT, "at", NOW - 1800)
     else:
@@ -182,14 +185,83 @@ def test_an_idle_hive_is_kept_until_the_idle_time_has_passed(world, monkeypatch,
     assert _look(NOW + 5400) == ["worker-1"]
 
 
-def test_a_stopped_hive_forgets_its_last_busy_look(world, monkeypatch):
-    hive_idle._LAST_BUSY["h1"] = NOW
+
+def test_a_row_change_that_is_not_activity_never_keeps_the_hive(world):
+    """``updated_at`` moves on every status change, an update claim and a failed update too
+    (hive/provisioner): none of them is use, so a recent one does not keep an idle Hive."""
+    world["updated_at"] = _db(NOW - 60)
+    assert _look() == ["worker-1"]
+
+
+def test_a_row_without_active_at_counts_from_the_host_start(world, monkeypatch):
+    """A row from before migration v24 (NULL active_at) came up before this Host started:
+    its idle time runs from the Host's start."""
+    world["active_at"] = None
+    monkeypatch.setitem(hive_idle._HOST_UP_AT, "at", NOW - 1800)
+    assert _look() == []
+    assert _look(NOW + 5400) == ["worker-1"]
+
+
+def test_migration_v24_adds_active_at_to_an_existing_store(tmp_path):
+    """A store from v2.5.5 (schema 19: none of the v21-v24 columns) and one at v23 gain the
+    nullable column, rows untouched."""
+    import sqlite3
+    from database.sqlite import CURRENT_SCHEMA_VERSION, SQLiteDatabase
+    for version in (19, 23):
+        db = tmp_path / f"v{version}.db"
+        asyncio.run(SQLiteDatabase(db).initialize())
+        with sqlite3.connect(db) as c:
+            c.execute("INSERT INTO hive_instances (id, name, account_ref, status, created_at, updated_at) "
+                      "VALUES ('h1', 'one', 'swarmai', 'running', '2026-11-24', '2026-11-24 10:00:00')")
+            later = ("active_at",) if version == 23 else \
+                ("active_at", "carrier_config", "idle_stop_minutes", "runtime_arn", "carrier")
+            for col in later:
+                c.execute(f"ALTER TABLE hive_instances DROP COLUMN {col}")
+            c.execute(f"PRAGMA user_version = {version}")
+        asyncio.run(SQLiteDatabase(db).initialize())
+        with sqlite3.connect(db) as c:
+            assert c.execute("PRAGMA user_version").fetchone()[0] == CURRENT_SCHEMA_VERSION >= 24
+            assert c.execute("SELECT id, status, updated_at, active_at FROM hive_instances").fetchall() \
+                == [("h1", "running", "2026-11-24 10:00:00", None)]
+
+def test_a_hive_away_from_running_keeps_its_last_busy_look(world, monkeypatch):
+    """Used until NOW, then 'updating' (absent from the running rows) for a few looks: once it
+    runs again its idle time still counts from its last use, not from when it came up hours
+    ago (a finished update writes no ``active_at``)."""
+    world["sessions"] = {"s1": {"streaming": True}}
+    assert _look() == [] and hive_idle._LAST_BUSY["h1"] == NOW
+    world["sessions"] = {}
+    real = hive_idle._running_hives
 
     async def none():
         return []
     monkeypatch.setattr(hive_idle, "_running_hives", none)
-    _look()
-    assert "h1" not in hive_idle._LAST_BUSY
+    assert _look(NOW + 300) == [] and _look(NOW + 600) == []
+    assert hive_idle._LAST_BUSY["h1"] == NOW
+    monkeypatch.setattr(hive_idle, "_running_hives", real)
+    assert _look(NOW + 900) == [] and world["prov"].calls == []
+    assert _look(NOW + 7200) == ["worker-1"]
+    assert "h1" not in hive_idle._LAST_BUSY          # the stop's claim drops it
+
+
+def test_a_hive_started_again_counts_from_its_start(world):
+    """Used, then stopped (absent from the running rows) and started again: its newer
+    active_at (start() writes it) wins over the old busy look it kept."""
+    world["sessions"] = {"s1": {"streaming": True}}
+    assert _look(NOW - 3 * 3600) == [] and hive_idle._LAST_BUSY["h1"] == NOW - 3 * 3600
+    world["sessions"] = {}
+    real = hive_idle._running_hives
+
+    async def none():
+        return []
+    hive_idle._running_hives = none
+    try:
+        assert _look(NOW - 3600) == []                 # stopped by a person
+    finally:
+        hive_idle._running_hives = real
+    world["active_at"] = _db(NOW - 1800)               # started again 30 min ago
+    assert _look() == []
+    assert _look(NOW + 5400) == ["worker-1"]
 
 
 def test_a_hive_no_longer_running_at_the_claim_is_left_alone(world):
@@ -198,6 +270,7 @@ def test_a_hive_no_longer_running_at_the_claim_is_left_alone(world):
             raise RuntimeError("Instance h1 is not in 'running' state")
     world["prov"] = Gone()
     assert _look() == []
+    assert "h1" not in hive_idle._LAST_BUSY          # leaving 'running' first is not use
 
 
 # ── (4) lessons ──
@@ -227,6 +300,7 @@ def test_a_dispatch_arriving_during_the_claim_keeps_the_hive(world):
     world["prov"] = _Prov(on_claim=lambda: so._IN_FLIGHT.update({"worker-1": 1}))
     assert _look() == []
     assert world["prov"].calls == [("claim", "h1"), ("release", "h1")]
+    assert hive_idle._LAST_BUSY["h1"] == NOW          # the dispatch is use: its count starts again
 
 
 def test_the_in_flight_marker_counts_nested_dispatches():

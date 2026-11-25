@@ -105,7 +105,8 @@ def world(monkeypatch, host):
     monkeypatch.setattr(hive_idle, "idle_after_s", lambda value=...: 7200.0)
 
     async def running():
-        return [{"updated_at": _db(NOW - 3 * 3600), **h} for h in w["hives"]]
+        return [{"active_at": _db(NOW - 3 * 3600), "updated_at": _db(NOW - 3 * 3600), **h}
+                for h in w["hives"]]
     monkeypatch.setattr(hive_idle, "_running_hives", running)
     monkeypatch.setattr(so, "open_runs_by_hive", lambda strict=False: w["open_runs"])
 
@@ -386,3 +387,46 @@ def test_the_reported_build_comes_from_the_admission_state(monkeypatch):
     monkeypatch.setattr(so, "_admission", admission)
     got = [asyncio.run(hive_idle._reported_build("h1")) for _ in range(4)]
     assert got == [hive_idle._UNREAD, hive_idle._UNREAD, (True, OTHER), (True, None)]
+
+
+# ── (5) an update that keeps failing never keeps the Hive up ──
+
+@pytest.mark.parametrize("failure", ["no_package", "ssm"])
+def test_a_hive_whose_update_keeps_failing_is_stopped_after_its_idle_time(world, monkeypatch, failure):
+    """H1 (release review 2026-11-25): every try writes the row's ``updated_at`` (the claim,
+    then the failure's own end), and the backoff tops out at an hour, so a clock that read
+    ``updated_at`` never reached a 120-minute idle time: the Hive billed around the clock.
+    Only real activity counts: here the Hive came up at NOW (``active_at``) and nothing used
+    it since, so it is stopped once its idle time has passed, whatever the tries wrote."""
+    from hive.provisioner import BuildPackageMissing
+    bi._CACHE[:] = [True, HOST_BUILD]
+    monkeypatch.setitem(hive_idle._HOST_UP_AT, "at", NOW)
+    hive = {"id": "h1", "name": "worker-1", "version": HOST if failure == "no_package" else "2.5.4",
+            "updated_at": _db(NOW), "active_at": _db(NOW)}
+    world["hives"] = [hive]
+    world["builds"]["h1"] = OTHER
+    clock = [NOW]
+
+    class Failing(_Prov):
+        async def claim_update(self, hid):
+            await super().claim_update(hid)
+            hive["updated_at"] = _db(clock[0])          # claim_update's write
+
+        async def update(self, hid, version, claimed=False):
+            self.calls.append(("update", hid, version, claimed))
+            hive["updated_at"] = _db(clock[0])          # the failure path's _update_instance
+            if failure == "no_package":
+                raise BuildPackageMissing("no package of the Host's build")
+            raise RuntimeError("SSM update failed: TimedOut")
+    world["prov"] = Failing()
+    stopped_at = None
+    for step in range(0, 6 * 3600 // hive_idle.CHECK_EVERY_S):
+        clock[0] = NOW + step * hive_idle.CHECK_EVERY_S
+        if _look(clock[0]):
+            stopped_at = clock[0]
+            break
+    tries = [c for c in world["prov"].calls if c[0] == "update"]
+    assert len(tries) >= 5                              # the update was tried again and again
+    assert stopped_at is not None, "a Hive whose update keeps failing was never idle-stopped"
+    assert NOW + 7200 <= stopped_at < NOW + 7200 + 2 * hive_idle.CHECK_EVERY_S
+    assert ("claim_stop", "h1") in world["prov"].calls
