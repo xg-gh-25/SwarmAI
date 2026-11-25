@@ -301,18 +301,6 @@ def execute_job(
                 duration_seconds=duration,
             )
 
-        elif job.type == "ddd_weekly_report":
-            from .handlers.ddd_weekly_report import run_ddd_weekly_report
-            report_result = run_ddd_weekly_report(config=job.config)
-            duration = (datetime.now(timezone.utc) - start).total_seconds()
-            result = JobResult(
-                job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status="success" if report_result.get("status") == "success" else "skipped",
-                summary=report_result.get("summary", "DDD weekly report"),
-                output_path=report_result.get("output_path"),
-                duration_seconds=duration,
-            )
-
         elif job.type == "brain_mistake_audit":
             from .handlers.brain_mistake_audit import run_brain_mistake_audit
             audit = run_brain_mistake_audit(config=job.config)

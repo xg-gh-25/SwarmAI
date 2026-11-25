@@ -108,11 +108,10 @@
   <rect x="20" y="292" width="176" height="114" rx="8" fill="url(#blue)" opacity="0.04"/>
   <text x="108" y="312" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Knowledge upkeep</text>
   <text x="108" y="330" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Weekly commit reader → CDF</text>
-  <text x="108" y="343" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Weekly DDD report</text>
-  <text x="108" y="356" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Code graph refresh (hourly)</text>
-  <text x="108" y="369" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Re-index changed Library mounts</text>
-  <text x="108" y="382" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Archive old raw logs (never deletes)</text>
-  <text x="108" y="395" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Continue stalled Brain setups</text>
+  <text x="108" y="343" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Code graph refresh (hourly)</text>
+  <text x="108" y="356" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Re-index changed Library mounts</text>
+  <text x="108" y="369" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Archive old raw logs (never deletes)</text>
+  <text x="108" y="382" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Continue stalled Brain setups</text>
   <path d="M 545,245 L 296,288" stroke="#06b6d4" stroke-width="1" opacity="0.3" marker-end="url(#arrowCyan)"/>
   <rect x="208" y="292" width="176" height="114" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2"/>
   <rect x="208" y="292" width="176" height="114" rx="8" fill="url(#purple)" opacity="0.04"/>
@@ -157,7 +156,7 @@
   <rect x="30" y="420" width="260" height="75" rx="10" fill="url(#green)" opacity="0.04"/>
   <text x="160" y="442" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Outputs</text>
   <text x="160" y="460" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">JobResults/ per-run markdown</text>
-  <text x="160" y="476" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Knowledge/Reports/ weekly DDD report</text>
+  <text x="160" y="476" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Run summaries in the Jobs view</text>
   <text x="160" y="490" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">3 failures in a row → a notification</text>
 
   <!-- ============ STATE ============ -->

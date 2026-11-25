@@ -606,6 +606,18 @@ _CHANGE_KIND = {"add": "add", "add_exception": "add", "replace": "override", "ov
                 "refine": "override"}
 
 
+def project_write_count(conn: sqlite3.Connection, project: str, since: str) -> int:
+    """How many units CDF wrote into ``Projects/<project>/`` since *since* (ISO time), from
+    the write journal. The prefix is compared exactly (SQLite LIKE ignores ASCII case, and
+    two projects may differ only in case). Read-only."""
+    prefix = f"Projects/{project}/"
+    row = conn.execute(
+        "SELECT COUNT(*) FROM ingestion_writes WHERE op_kind = 'ingestion_unit' AND step = 'done' "
+        "AND created_at >= ? AND substr(target_path, 1, ?) = ?",
+        (since, len(prefix), prefix)).fetchone()
+    return int(row[0]) if row else 0
+
+
 def brain_changes(conn: sqlite3.Connection, project: str | None = None,
                   since: str = "") -> list[dict[str, Any]]:
     """Every change made to the main cognition files since *since* (ISO time), oldest first:

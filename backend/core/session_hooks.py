@@ -487,7 +487,6 @@ class BackgroundHookExecutor:
             )
         else:
             await self._run_all_safe(item.context, item.skip_hooks)
-        self._persist_stats()
 
     async def _run_all_safe(
         self,
@@ -600,47 +599,6 @@ class BackgroundHookExecutor:
                 exc_info=True,
             )
 
-    def _persist_stats(self) -> None:
-        """Write hook stats to disk for the engine metrics dashboard.
-
-        Best-effort — failures are logged but never block hook execution.
-        Writes to ``<workspace>/hook_stats.json`` where engine_metrics reads it.
-        """
-        if not self._hook_stats:
-            return
-        try:
-            from config import get_swarmws
-
-            stats_path = get_swarmws() / "hook_stats.json"
-            if not stats_path.parent.is_dir():
-                return
-
-            total_runs = sum(s.get("total_runs", 0) for s in self._hook_stats.values())
-            total_errors = sum(s.get("total_errors", 0) for s in self._hook_stats.values())
-
-            payload = {
-                "available": True,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                "total_runs": total_runs,
-                "total_errors": total_errors,
-                "error_rate": round(total_errors / max(total_runs, 1) * 100, 1),
-                "hooks": {
-                    name: {
-                        "last_run": s.get("last_run"),
-                        "last_status": s.get("last_status", "never"),
-                        "total_runs": s.get("total_runs", 0),
-                        "total_errors": s.get("total_errors", 0),
-                        "consecutive_failures": s.get("consecutive_failures", 0),
-                        "last_error": s.get("last_error", ""),
-                    }
-                    for name, s in self._hook_stats.items()
-                },
-            }
-            stats_path.write_text(
-                json.dumps(payload, indent=2), encoding="utf-8"
-            )
-        except Exception as exc:
-            logger.debug("Failed to persist hook stats: %s", exc)
 
 
 def register_default_hooks(manager: "SessionLifecycleHookManager", *, git_lock: Any,

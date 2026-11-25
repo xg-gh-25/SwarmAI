@@ -1,7 +1,7 @@
 """governed_repo_roots: the code repos a project's bindings.yaml declares (P7, S4b-C2).
 
 One reader for "which local git repos does project P govern", used by the DDD feeds
-(engine_metrics, code_change_feed, ddd_refresh, ddd_orchestrator, ddd_self_audit) instead
+(code_change_feed, ddd_refresh, ddd_orchestrator, ddd_self_audit) instead
 of each one hunting for the SwarmAI source checkout. Both bindings.yaml shapes count:
 ``bindings[].worktree`` and ``governed_assets[kind=code-repo].source_workspace``. A path
 that is not the toplevel of a git repo on disk is left out; nothing is guessed from the

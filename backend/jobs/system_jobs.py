@@ -230,20 +230,6 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
-    # --- DDD Weekly Report (summarizes cultivation activity across all projects) ---
-    # Runs after ddd-refresh (which hands new commits to CDF). The report sums up
-    # the week's DDD changes and document stats per project (no LLM).
-    # Output: Knowledge/Reports/YYYY-MM-DD-ddd-weekly.md
-    Job(
-        id="ddd-weekly-report",
-        name="DDD Weekly Report",
-        type="ddd_weekly_report",
-        schedule="0 7 * * 1",           # Monday UTC 07:00 = ICT 15:00 (after ddd-refresh)
-        enabled=True,
-        category="system",
-        config={"window_days": 7},
-    ),
-
     # --- Brain Mistake Audit (monthly; design 2026-10-30-brain-driven §2.8) ---
     # For each real mistake of the previous month: was the knowledge in the brain
     # beforehand, was it delivered, was it stale. Read-only; writes only its report to

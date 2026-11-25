@@ -38,10 +38,9 @@ export interface DetailHealth {
    *  value is null today; typed number|null so a future score fits without a
    *  breaking change. `experimental` gates the UI chip. */
   recall: { value: number | null; experimental: boolean };
-  /** Q3 "is it growing?" — count of ddd-changelog entries STAMPED within 30d.
-   *  A MAINTENANCE signal (value≠size: an actively-cultivated brain, NOT a big
-   *  one). Undated/old rows excluded (honest under-count). Present (0 when no
-   *  changelog); OPTIONAL in the type only for pre-deploy daemon skew. */
+  /** "is it growing?" — how many units CDF wrote into this DDD in the last 30 days
+   *  (counted in the CDF write journal). A sedimentation signal, not a size. Present
+   *  (0 with no journal yet); OPTIONAL in the type only for pre-deploy daemon skew. */
   recentActivity?: number;
 }
 
@@ -71,7 +70,7 @@ export interface BrainSummary {
    *  scan). OPTIONAL for daemon-skew: an old daemon / a brain without a description in
    *  aim.json omits it → the card simply renders no briefing line. */
   description?: string;
-  /** ddd-changelog entries stamped in the last 30 days (the Hub's LEARNED total).
+  /** CDF writes into this DDD in the last 30 days (the Hub's LEARNED total).
    *  OPTIONAL for daemon skew: an old daemon omits it and the Hub shows UNKNOWN. */
   recentActivity?: number;
   /** entries CDF wrote into this Brain in the last 7 days (core/brain_knowledge).

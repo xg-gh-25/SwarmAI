@@ -43,6 +43,25 @@ def client():
 from tests._brain_workspace import hermetic_workspace  # noqa: E402,F401 — pytest fixture
 
 
+
+def _journal(rows):
+    """Write rows (project, created_at[, op_kind, step]) into a fresh CDF journal under the
+    test's SWARM_DATA_DIR (set by the autouse conftest fixture)."""
+    import uuid
+    from core.ingestion.store import connect_rw
+    conn = connect_rw()
+    try:
+        for row in rows:
+            project, at = row[0], row[1]
+            op_kind = row[2] if len(row) > 2 else "ingestion_unit"
+            step = row[3] if len(row) > 3 else "done"
+            conn.execute(
+                "INSERT INTO ingestion_writes(op_id, op_kind, target_path, step, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (uuid.uuid4().hex, op_kind, f"Projects/{project}/2-understanding/TECH.md", step, at, at))
+    finally:
+        conn.close()
+
 class TestLifecycleStageOrdering:
     """M3: REVIEW (pending human decision) must dominate DISTRIBUTE.
 
@@ -528,37 +547,28 @@ class TestUnifiedBrainStateBuilder:
         }
 
     def test_detail_includes_recent_activity(self, monkeypatch, tmp_path):
-        """Q3 'is it growing?' — detail exposes recentActivity = count of
-        ddd-changelog entries in the last 30d (value≠size). A real per-brain
-        maintenance signal, summed from the SAME changelog compute_section_health
-        already reads (near-zero cost). Absent changelog → honest 0."""
+        """Detail exposes recentActivity = CDF writes into this DDD in the last 30 days,
+        counted in the write journal (value, not size)."""
+        from datetime import datetime, timezone
         from routers import ddd_brain as m
+        now = datetime.now(timezone.utc).isoformat()
+        _journal([("P", now)] * 3)
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        h = m.build_brain_state(pd, with_noise=True)["health"]
+        assert h["recentActivity"] == 3
+    def test_recent_activity_without_a_journal_is_zero(self, monkeypatch, tmp_path):
+        """No CDF journal yet (fresh install) → recentActivity is 0, never None; and an old
+        ddd-changelog.jsonl left on disk is not read any more."""
         import json as _json
         from datetime import datetime, timezone
-
-        pd = tmp_path / "P"
-        (pd / ".artifacts").mkdir(parents=True)
-        cl = pd / ".artifacts" / "ddd-changelog.jsonl"
-        now = datetime.now(timezone.utc).isoformat()
-        cl.write_text(
-            "\n".join(
-                _json.dumps({"target_doc": "TECH.md", "target_section": "s", "timestamp": now})
-                for _ in range(3)
-            ),
-            encoding="utf-8",
-        )
-        h = m.build_brain_state(pd, with_noise=True)["health"]
-        assert "recentActivity" in h, "Q3 growing signal must be exposed"
-        assert h["recentActivity"] == 3
-
-    def test_recent_activity_absent_changelog_is_zero(self, monkeypatch, tmp_path):
-        """No changelog → recentActivity is honest 0, never fabricated, never None."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         (pd / ".artifacts").mkdir(parents=True)
+        (pd / ".artifacts" / "ddd-changelog.jsonl").write_text(
+            _json.dumps({"timestamp": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
         h = m.build_brain_state(pd, with_noise=True)["health"]
         assert h["recentActivity"] == 0
-
     def test_gallery_omits_recent_activity(self, monkeypatch, tmp_path):
         """recentActivity is not a health key on the gallery (with_noise=False): the
         cheap 3-key health base stays exact (Principle-1 / perf: gallery is minimal)."""
@@ -571,21 +581,17 @@ class TestUnifiedBrainStateBuilder:
     def test_recent_activity_is_a_sibling_on_both_densities(self, monkeypatch, tmp_path):
         """The Hub's LEARNED total reads recentActivity from the gallery: a top-level
         sibling of health (like typeCounts), the same number detail health carries."""
-        from routers import ddd_brain as m
-        import json as _json
         from datetime import datetime, timedelta, timezone
-
+        from routers import ddd_brain as m
+        now = datetime.now(timezone.utc)
+        _journal([("P", now.isoformat()), ("P", now.isoformat()),
+                  ("P", (now - timedelta(days=40)).isoformat())])
         pd = tmp_path / "P"
         (pd / ".artifacts").mkdir(parents=True)
-        now = datetime.now(timezone.utc)
-        rows = [now.isoformat(), now.isoformat(), (now - timedelta(days=40)).isoformat(), ""]
-        (pd / ".artifacts" / "ddd-changelog.jsonl").write_text(
-            "\n".join(_json.dumps({"timestamp": t}) for t in rows) + "\n[1]\n", encoding="utf-8")
         gallery = m.build_brain_state(pd, with_noise=False)
         detail = m.build_brain_state(pd, with_noise=True)
         assert gallery["recentActivity"] == 2
         assert detail["recentActivity"] == 2 == detail["health"]["recentActivity"]
-
     def test_placeholder_description_reads_as_none(self, tmp_path):
         """The create-time aim.json description describes the format, not the Brain:
         the card shows 'no description yet' instead of repeating it on every card."""
@@ -652,33 +658,26 @@ class TestUnifiedBrainStateBuilder:
         h = m.build_brain_state(pd, with_noise=False)["health"]
         assert set(h.keys()) == {"pending", "liveRun", "lastChangeRelative"}
 
-    def test_recent_activity_excludes_undated_and_old(self, monkeypatch, tmp_path):
-        """A '30d activity' number must count ONLY entries STAMPED within 30d.
-        Undated (ts missing/malformed) and >30d-old entries are NOT counted —
-        honest under-count beats dishonest inflation (adversarial review Point 1)."""
+    def test_recent_activity_counts_only_this_projects_finished_writes(self, monkeypatch, tmp_path):
+        """Only finished CDF unit writes of THIS project in the last 30 days count: not an
+        older write, not an unfinished one, not a user edit, not another project, and not a
+        project whose name differs only in case."""
+        from datetime import datetime, timedelta, timezone
         from routers import ddd_brain as m
-        import json as _json
-        from datetime import datetime, timezone, timedelta
-
+        now = datetime.now(timezone.utc)
+        _journal([
+            ("P", now.isoformat()),                                   # in
+            ("P", now.isoformat()),                                   # in
+            ("P", (now - timedelta(days=60)).isoformat()),            # old → out
+            ("P", now.isoformat(), "ingestion_unit", "planned"),      # unfinished → out
+            ("P", now.isoformat(), "user_edit"),                      # not a CDF unit → out
+            ("Q", now.isoformat()),                                   # another project → out
+            ("p", now.isoformat()),                                   # case differs → out
+        ])
         pd = tmp_path / "P"
         (pd / ".artifacts").mkdir(parents=True)
-        now = datetime.now(timezone.utc)
-        old = (now - timedelta(days=60)).isoformat()
-        lines = [
-            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": now.isoformat()}),  # in
-            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": now.isoformat()}),  # in
-            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": old}),              # old → out
-            _json.dumps({"target_doc": "T", "target_section": "s"}),                                # undated → out
-            _json.dumps({"target_doc": "T", "target_section": "s", "timestamp": "garbage"}),        # malformed → out
-        ]
-        (pd / ".artifacts" / "ddd-changelog.jsonl").write_text("\n".join(lines), encoding="utf-8")
         h = m.build_brain_state(pd, with_noise=True)["health"]
-        assert h["recentActivity"] == 2, "only the 2 in-window stamped entries count"
-
-
-class TestPerfRefactorRun43dc94f6:
-    """run_43dc94f6: shared-parse + batch-git perf refactor — output-identical guarantees."""
-
+        assert h["recentActivity"] == 2
     def test_shared_parse_grouped_keyed_by_section_member_rel(self, tmp_path):
         """_parse_knowledge_docs_grouped keys by the SAME rel string _section_members
         yields, so entryCount lookup (len(parsed[m['path']])) can never miss."""

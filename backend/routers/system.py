@@ -906,21 +906,6 @@ async def get_max_tabs() -> MaxTabsResponse:
         return MaxTabsResponse(max_tabs=floor, chat_max=floor - 1, memory_pressure="critical")
 
 
-@router.get("/engine-metrics")
-async def get_engine_metrics() -> dict:
-    """Return Core Engine growth metrics for the dashboard.
-
-    Aggregates: learning state, memory effectiveness, DDD health,
-    hook stats, session volume. All filesystem reads — no LLM, <500ms.
-    """
-    from core.engine_metrics import collect_engine_metrics
-
-    ws_path = swarm_workspace_manager.get_workspace_path()
-    if not ws_path:
-        return {"error": "Workspace not initialized"}
-    return collect_engine_metrics(ws_path)
-
-
 def _ledger_probe(resp, model_id: str) -> None:
     """The model probe's one-token call in the usage ledger (feature ``settings.model_probe``);
     never raises: accounting must not break the probe."""

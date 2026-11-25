@@ -6,7 +6,7 @@ Pipeline runs are not here: Pipeline v1 runs live in ``"$SWARM_BACKEND_BIN" pipe
 
 Usage:
     python artifact_cli.py bind --project SwarmAI
-    python artifact_cli.py ddd-health|ddd-format ...
+    python artifact_cli.py ddd-format ...
     python artifact_cli.py release-gate --poll|--status|--verify|--clear [--ref v1.2.3]
 
 Public symbols:
@@ -737,22 +737,6 @@ def cmd_ddd_skeleton_align(args, reg) -> None:
         sys.exit(1)
 
 
-def cmd_ddd_health(args, reg) -> None:
-    """5-dimensional DDD health scoring per section."""
-    project_dir = _get_workspace() / "Projects" / args.project
-    if not project_dir.is_dir():
-        print(json.dumps({"error": f"Project '{args.project}' not found"}))
-        return
-
-    from core.ddd_health import compute_section_health
-
-    # persist=False: this CLI just PRINTS the scores (a read/inspect command) —
-    # it must not write section_health.json as a side effect; the scheduled
-    # ddd_refresh job owns the snapshot. #5 fix, run_e90535ea.
-    result = compute_section_health(project_dir, persist=False)
-    print(json.dumps(result, indent=2, default=str))
-
-
 def _refuse_if_worktree_copy(script: str) -> None:
     """A copy of this tool inside a run worktree must never write the workspace that
     owns that worktree (it may be half-edited). Against another workspace (a test's
@@ -831,13 +815,10 @@ def main() -> None:
     p_align.add_argument("--project", required=True)
     p_align.add_argument("--apply", action="store_true", help="Append the missing sections (default: dry-run report)")
 
-    # ddd-health
     p_fmt = sub.add_parser("ddd-format", help="Report (or --apply: move into) the shape CDF writes a brain's 4 docs in")
     p_fmt.add_argument("--project", required=True)
     p_fmt.add_argument("--apply", action="store_true",
                        help="write: reference material to 2-understanding/knowledge/, then each doc")
-    p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
-    p_ddd_health.add_argument("--project", required=True)
 
     # release-gate (run_9fec1fb1: code-enforced CI-green gate for s_swarm-release 7b)
     p_rel_gate = sub.add_parser("release-gate", help="CI-green gate: poll CI for HEAD, write marker on green (authorizes gh release create)")
@@ -860,7 +841,6 @@ def main() -> None:
         "classify-starter": cmd_classify_starter,
         "ddd-skeleton-align": cmd_ddd_skeleton_align,
         "ddd-format": cmd_ddd_format,
-        "ddd-health": cmd_ddd_health,
         "release-gate": cmd_release_gate,
     }
     try:

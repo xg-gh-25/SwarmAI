@@ -571,7 +571,7 @@ def build_brain_state(
         # health.pending split by source: escalation | paused_run | job | ….
         # A sibling of health (the gallery's 4-key health contract holds).
         "pendingBySource": by_source,
-        # ddd-changelog entries stamped in the last 30 days. A sibling of health (like
+        # CDF writes into this DDD in the last 30 days. A sibling of health (like
         # typeCounts) so the gallery's 4-key health contract holds; detail health
         # carries the same number as health.recentActivity (one computation).
         "recentActivity": recent,
@@ -579,43 +579,25 @@ def build_brain_state(
 
 
 def _recent_activity(project_dir: Path) -> int:
-    """recentActivity — Q3 "is it growing?" (value≠size). Count of ddd-changelog
-    entries STAMPED within the last 30d. This is a SEDIMENTATION signal (is the
-    brain being actively written to?), NOT a size/entry_count (Principle-1: a
-    bigger brain is not a better one; an ACTIVELY-CULTIVATED one is). NOTE: this
-    is DOMINANTLY auto-applied cultivation, not human edits (E2E audit run_d1e933aa:
-    ~820/851 on SwarmAI carry action:"applied") — so the UI labels it "sediments",
-    never "edits", to avoid overstating human authorship. Absent changelog →
-    honest 0, never fabricated, never None.
-
-    Deliberately NOT via _build_changelog_index: that helper counts UNDATED
-    entries as in-window (ts is None → counted), which would let timestamp-less
-    legacy rows inflate a "last 30d" number. A "30d activity" figure must count ONLY
-    entries whose real timestamp is within 30d; undated rows are excluded.
-
-    One read of one jsonl per Brain, so the gallery can carry it too (Hub LEARNED).
-    """
-    count = 0
+    """recentActivity — "is it growing?" (value, not size): how many units CDF wrote into
+    this project's DDD in the last 30 days, counted in the CDF write journal (the record of
+    every write; the old ddd-changelog.jsonl has no writer any more). It is a
+    sedimentation signal, never an entry count, so the UI calls it "sediments". No journal
+    yet (a fresh install) or an unreadable one → 0, never fabricated, never None."""
+    import sqlite3
     try:
-        cl = project_dir / ".artifacts" / "ddd-changelog.jsonl"
-        if cl.is_file():
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-            for line in cl.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ts = datetime.fromisoformat(json.loads(line).get("timestamp", ""))
-                except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
-                    continue  # undated / malformed → NOT counted as recent
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                if ts >= cutoff:
-                    count += 1
-    except (OSError, ValueError):  # never 500 a brain view
+        from core.ingestion.queries import project_write_count
+        from core.ingestion.store import connect_ro
+        conn = connect_ro()
+    except (FileNotFoundError, sqlite3.Error):
         return 0
-    return count
-
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        return project_write_count(conn, project_dir.name, since)
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
 
 def _brain_detail_metrics(
     project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None,
