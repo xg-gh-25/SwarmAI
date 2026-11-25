@@ -22,12 +22,9 @@ import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 const CHEAP: BrainHealth = { pending: 1, liveRun: true, lastChangeRelative: '3h ago' };
 const CHEAP_CLEAN: BrainHealth = { pending: 0, liveRun: false, lastChangeRelative: '5d ago' };
 const METRICS: DetailHealth = {
-  trust: { 'PRODUCT.md': { identity: 'high', knowledge: 'moderate' } },
   escalationPending: 3,
   recall: { value: null, experimental: true },
   recentActivity: 12,
-  diagnostics: { 'PRODUCT.md': { sections: { identity: { composite: 88, trust: 'high' } } } },
-  computedAt: '2026-08-04T00:00:00Z',
 };
 const TYPE_COUNTS: Record<EntryType, number> = {
   principle: 2, correction: 1,           // meta = 3
@@ -148,8 +145,8 @@ describe('DddCard — full: verdict dot', () => {
     expect(v.textContent?.toLowerCase()).not.toContain('healthy');
   });
 
-  it('pending=0 → "nothing queued" verdict, and it does NOT consult trust (0% trust ≠ unhealthy)', () => {
-    const clean = { ...METRICS, escalationPending: 0, trust: null, computedAt: null };
+  it('pending=0 → "nothing queued" verdict, never "unhealthy"', () => {
+    const clean = { ...METRICS, escalationPending: 0 };
     render(<DddCard density="full" name="S" kind="knowledge" metrics={clean} health={CHEAP_CLEAN} />);
     const v = screen.getByTestId('ddd-verdict');
     expect(v.textContent?.toLowerCase()).toMatch(/nothing|无待|queued|clear/i);
@@ -188,7 +185,7 @@ describe('DddCard — full: FULL 3-layer × 7-type ontology (hero visual)', () =
     expect(screen.getByTestId('ddd-layer-operational').textContent).toContain('20');
     // metrics-dependent blocks are NOT shown yet (no metrics)
     expect(screen.queryByTestId('ddd-needs-you')).toBeNull();
-    expect(screen.queryByTestId('ddd-fact-trust')).toBeNull();
+    expect(screen.queryByTestId('ddd-fact-activity')).toBeNull();
     // a skeleton reserves the metrics-block height (prevents the jump on arrival)
     expect(screen.getByTestId('ddd-metrics-skeleton')).toBeTruthy();
   });
@@ -206,11 +203,10 @@ describe('DddCard — full: FULL 3-layer × 7-type ontology (hero visual)', () =
     expect(screen.getByTestId('dddcard-S')).toBeTruthy();
   });
 
-  it('ontologyOnly suppresses the needs-you block but KEEPS ontology + facts (run_115aa182)', () => {
+  it('ontologyOnly suppresses the needs-you block but KEEPS ontology + the activity fact', () => {
     render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} typeCounts={TYPE_COUNTS} ontologyOnly />);
     expect(screen.queryByTestId('ddd-needs-you')).toBeNull();       // suppressed (§② owns it)
     expect(screen.getByTestId('ddd-ontology')).toBeTruthy();        // ontology stays
-    expect(screen.getByTestId('ddd-fact-trust')).toBeTruthy();      // facts stay
     expect(screen.getByTestId('ddd-fact-activity')).toBeTruthy();
   });
 
@@ -238,11 +234,15 @@ describe('DddCard — full: needs-you block', () => {
 });
 
 describe('DddCard — full: facts + deletions', () => {
-  it('trust fact is a DISTRIBUTION (below/total), never a rollup verdict word', () => {
+  it('no section-trust line (the score has no producer)', () => {
+    render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} health={CHEAP} />);
+    expect(screen.queryByTestId('ddd-fact-trust')).toBeNull();
+    expect(screen.getByTestId('ddd-fact-activity').textContent).toContain('3h ago');
+  });
+
+  it('activity line without the cheap health shows a dash, not a score age', () => {
     render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} />);
-    const f = screen.getByTestId('ddd-fact-trust');
-    expect(f.textContent).toMatch(/1\/2|50%|below|≥ high/);
-    expect(f.textContent).not.toContain('moderate');  // no collapsed verdict
+    expect(screen.getByTestId('ddd-fact-activity').textContent).toContain('—');
   });
 
   it('diagnostics wall is DELETED (no per-section score dump)', () => {

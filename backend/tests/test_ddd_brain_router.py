@@ -434,9 +434,9 @@ class TestBrainDetailSections:
 
 class TestHealthBlockInBrainDetail:
     """DDD Health Metrics (run 1, backend read side): _brain_detail returns a
-    `health` block with admission-passing metrics. Every value recomputed on
-    read OR read from the stored scheduled score (trust) — the GET path
-    NEVER calls compute_section_health (the writer). Gate-1 CRITICAL guard."""
+    `health` block with admission-passing metrics, every value recomputed on
+    read. The GET path never calls compute_section_health (the writer) and carries
+    no trust score."""
 
     def test_health_block_present_with_keys(self, tmp_path):
         from routers import ddd_brain as m
@@ -445,10 +445,12 @@ class TestHealthBlockInBrainDetail:
         detail = m._brain_detail(pd)
         assert "health" in detail
         h = detail["health"]
-        for k in ("trust", "escalationPending", "recall",
-                  "diagnostics", "computedAt"):
+        for k in ("escalationPending", "recall", "recentActivity"):
             assert k in h, f"missing health key {k}: {h}"
-        assert "noise" not in h
+        # The section trust score had no producer (nothing writes section_health.json
+        # any more), so the payload no longer carries it.
+        for k in ("noise", "trust", "diagnostics", "computedAt"):
+            assert k not in h, f"retired health key {k} is back: {h}"
 
     def test_no_cultivation_health_block(self, tmp_path):
         """The legacy proposal path's outcomes sink is gone; health carries no
@@ -467,21 +469,22 @@ class TestHealthBlockInBrainDetail:
         h = m._brain_detail(pd)["health"]
         assert h["recall"] == {"value": None, "experimental": True}
 
-    def test_trust_null_and_no_write_when_no_scheduled_score(self, tmp_path):
-        """Gate-1 CRITICAL: a GET must NOT write section_health.json. When the
-        stored score is absent, trust/diagnostics are None and NO file is created
-        (compute_section_health, the writer, is never called from the read path)."""
+    def test_no_write_and_a_leftover_score_file_is_not_shown(self, tmp_path):
+        """A GET never writes section_health.json, and an old one left on disk (no job
+        writes it any more) does not come back as a trust figure."""
+        import json as _json
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         pd.mkdir()
         health_file = pd / ".artifacts" / "section_health.json"
         assert not health_file.exists()
-        h = m._brain_detail(pd)["health"]
-        assert h["trust"] is None
-        assert h["diagnostics"] is None
-        assert h["computedAt"] is None
-        # THE no-write assertion — the whole point of the Gate-1 fix:
+        m._brain_detail(pd)
         assert not health_file.exists(), "GET path wrote section_health.json — forbidden"
+        health_file.parent.mkdir()
+        health_file.write_text(_json.dumps({"computed_at": "2026-10-26T00:00:00Z",
+                                            "docs": {"TECH.md": {"sections": {"A": {"trust": "high"}}}}}))
+        h = m._brain_detail(pd)["health"]
+        assert not {"trust", "diagnostics", "computedAt"} & set(h), h
 
     def test_summary_health_unchanged(self, tmp_path):
         """_brain_summary (gallery) is NOT enriched — its health keeps exactly the
@@ -510,7 +513,7 @@ class TestUnifiedBrainStateBuilder:
         assert "build_brain_state" in inspect.getsource(m._brain_detail)
 
     def test_detail_path_is_superset_of_gallery(self, monkeypatch, tmp_path):
-        """with_noise=True adds the detail metrics (trust/escalation/recall/…)
+        """with_noise=True adds the detail metrics (escalation/recall/activity)
         ON TOP of the cheap base — one shape, superset."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
@@ -521,8 +524,7 @@ class TestUnifiedBrainStateBuilder:
             # cheap base (superset, not a different shape)
             "pending", "liveRun", "lastChangeRelative",
             # detail metrics
-            "trust", "escalationPending", "recall", "recentActivity",
-            "diagnostics", "computedAt",
+            "escalationPending", "recall", "recentActivity",
         }
 
     def test_detail_includes_recent_activity(self, monkeypatch, tmp_path):

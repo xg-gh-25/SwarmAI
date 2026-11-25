@@ -516,9 +516,9 @@ def build_brain_state(
       - with_noise=False → gallery projection: identity + sectionsPresent +
         lifecycleStage + the CHEAP health base + typeCounts. The ONE cheap parse
         pass (_gallery_entry_stats) yields the 7-type histogram;
-        it does NOT read section_health (the detail-only block).
+        it does NOT compute the detail-only block.
       - with_noise=True  → detail superset: the same base PLUS the admission-passing
-        detail metrics (trust/escalation/recall/diagnostics). The parameter keeps
+        detail metrics (escalation/recall/recent activity). The parameter keeps
         its old name; there is no noise metric (nothing decays, brain-driven §2.3).
 
     The health shape is a SUPERSET, not two different shapes: detail = base ∪ metrics.
@@ -629,14 +629,6 @@ def _brain_detail_metrics(
     build_brain_state(with_noise=True) — NEVER on the gallery projection
     (with_noise=False). This is the sole detail-only block; the base is always cheap.
 
-    - trust / diagnostics / computedAt: READ from the stored section_health.json in a
-      SINGLE parse (written by the scheduled health path). The GET path NEVER calls
-      compute_section_health — that function WRITES the file, and a disk write in a
-      read handler is forbidden (Gate-1 CRITICAL, run_d7146171). All three derive from
-      one snapshot so trust/diagnostics can't go stale relative to computedAt (Gate-2
-      HIGH: a two-read version risked a TOCTOU mismatch). Absent/corrupt score → None
-      (honest: no scheduled computation yet; never fabricated, never a write). No
-      project-composite is invented (Gate-1 MAJOR — vanity); per-doc scores verbatim.
     - escalationPending: the caller's already-computed `pending` (same source as the
       gallery — no divergence, and no SECOND _pending_count scan per open). Falls back
       to _pending_count(name) only if the caller passes None (defensive / direct call).
@@ -644,45 +636,12 @@ def _brain_detail_metrics(
       benchmark with no cheap per-DDD value; the tile is shown but labeled experimental
       (design §4), never fabricated.
     """
-    # trust / diagnostics / computedAt — READ-ONLY from the stored scheduled score.
-    # ONE read of section_health.json (Gate-2 HIGH: reading it twice risked a TOCTOU
-    # where trust came from the old file and computedAt from a mid-write new one; and
-    # Gate-2 MED: it parsed the same file twice). We parse once here and derive all
-    # three from that single snapshot. The GET path NEVER calls compute_section_health
-    # (the writer) — only this read (Gate-1 CRITICAL). Absent/corrupt → all None.
-    trust = None
-    diagnostics = None
-    computed_at = None
-    sh = project_dir / ".artifacts" / "section_health.json"
-    try:
-        if sh.is_file():
-            snapshot = json.loads(sh.read_text(encoding="utf-8"))
-            docs = snapshot.get("docs", {})
-            computed_at = snapshot.get("computed_at")
-            if docs:
-                # per-doc trust (as stored — no invented rollup, Gate-1 MAJOR)
-                trust = {
-                    doc: {
-                        sec: s.get("trust")
-                        for sec, s in doc_data.get("sections", {}).items()
-                    }
-                    for doc, doc_data in docs.items()
-                }
-                diagnostics = docs  # the 5-dim per-section scores, verbatim
-    except (OSError, ValueError, KeyError):  # bad file / shape → honest None, no write
-        trust = None
-        diagnostics = None
-        computed_at = None
-
     recent_activity = recent_activity if recent_activity is not None else _recent_activity(project_dir)
 
     return {
-        "trust": trust,
         "escalationPending": pending if pending is not None else _pending_count(project_dir.name),
         "recall": {"value": None, "experimental": True},
         "recentActivity": recent_activity,
-        "diagnostics": diagnostics,
-        "computedAt": computed_at,
     }
 
 

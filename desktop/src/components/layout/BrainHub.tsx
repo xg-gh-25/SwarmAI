@@ -667,8 +667,6 @@ const DOC_ROLE: Record<string, string> = {
  *  ride it). Live-rendered from data already loaded — no global one-pot, no file. */
 function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel; projectName: string }) {
   const { t } = useTranslation();
-  const trust = weekly.trustDistribution;
-  const scored = trust.full + trust.high + trust.moderate + trust.low;
   return (
     <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_6%,transparent)] p-3 mb-2 text-meta">
       <div className="flex items-center gap-1.5 mb-2 font-semibold text-[var(--color-primary)]">
@@ -682,12 +680,6 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
           {t('ui.BrainHub.docsTouched')} {weekly.changedDocs.length > 0
             ? <span className="font-mono text-[var(--color-text)]">{weekly.changedDocs.join(', ')}</span>
             : <span className="text-[var(--color-text-faint)]">{t('ui.BrainHub.none')}</span>}
-        </div>
-        {/* F4: trust DISTRIBUTION, never a collapsed percentage. */}
-        <div data-testid="weekly-trust-dist">
-          {t('ui.BrainHub.sectionTrust')} {scored === 0
-            ? <span className="text-[var(--color-text-faint)]">{t('ui.BrainHub.notScored')}</span>
-            : <span>{t('ui.BrainHub.trustDist', { full: trust.full, high: trust.high, moderate: trust.moderate, low: trust.low })}{trust.unscored ? ` · ${t('ui.BrainHub.unscored', { n: trust.unscored })}` : ''}</span>}
         </div>
       </div>
     </div>

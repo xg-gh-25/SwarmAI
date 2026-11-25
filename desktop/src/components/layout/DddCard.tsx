@@ -18,11 +18,11 @@
  *     "needs decision", else "nothing queued" — NEVER "healthy/unhealthy": the trust
  *     rollup backend Gate-1 refused) + FULL 3-layer × 7-type ontology (hero visual) +
  *     a "Needs you" block (non-zero actionable only; clean → "Nothing needs you") +
- *     two fact lines (trust distribution / activity). The hero ALSO drops the
+ *     one activity fact line. The hero ALSO drops the
  *     redundant presence/lifecycle/cheap widgets — its FullBody IS the signal.
  *
- * DELETED vs the prior design: the 4-question tiles + per-section diagnostics WALL
- * (drill into per-section scores via BrainView's section nav instead); AND the
+ * DELETED vs the prior design: the 4-question tiles + per-section diagnostics WALL;
+ * the section-trust line (nothing produced the score any more); AND the
  * PresenceBar / LifecycleBar / CheapHealth widgets (run_ee179ca1 — redundant ink).
  * DELIBERATELY ABSENT (Principle-1 + dead-input): entry-count / "size",
  * last-referenced / ref-count.
@@ -33,44 +33,14 @@
  * blanking the card.
  */
 import { useTranslation } from 'react-i18next';
-// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
-import i18n from 'i18next';
 import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 import { LAYERS, layerTotals } from './dddLayers';
 
 // ── Shared constants ─────────────────────────────────────────────────────────
 export type LifecycleStage = 'CREATE' | 'GROW' | 'REVIEW' | 'DISTRIBUTE';
 
-const _TRUST_ORDER = ['low', 'moderate', 'high', 'full'] as const;
-
 // The 3-layer ontology model now lives in ./dddLayers.ts (LAYERS + layerTotals,
 // imported above) — shared with the Welcome BrainPulse strip (R25).
-
-/** Count sections whose trust is BELOW `high`. A DISTRIBUTION count, NOT a
- *  collapsed rollup verdict (backend Gate-1 refused a project trust rollup). */
-function _trustBelowHigh(trust: DetailHealth['trust']): { below: number; total: number } {
-  if (!trust) return { below: 0, total: 0 };
-  let below = 0, total = 0;
-  for (const sections of Object.values(trust)) {
-    for (const level of Object.values(sections)) {
-      total += 1;
-      const idx = level ? _TRUST_ORDER.indexOf(level as (typeof _TRUST_ORDER)[number]) : -1;
-      if (idx < _TRUST_ORDER.indexOf('high')) below += 1;
-    }
-  }
-  return { below, total };
-}
-
-function _ageOf(iso: string | null): string {
-  if (!iso) return i18n.t('ui.DddCard.ageNever');
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return i18n.t('ui.DddCard.ageUnknown');
-  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-  if (mins < 60) return i18n.t('ui.DddCard.ageMinutes', { n: mins });
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return i18n.t('ui.DddCard.ageHours', { n: hrs });
-  return i18n.t('ui.DddCard.ageDays', { n: Math.round(hrs / 24) });
-}
 
 // ── Props ──────────────────────────────────────────────────────────────────
 interface CommonProps { name: string; kind: string }
@@ -321,15 +291,11 @@ function FullBody(
     );
   }
 
-  const { below, total } = _trustBelowHigh(metrics.trust);
-  const trustStale = metrics.computedAt === null;
-  const pct = total === 0 ? null : Math.round(((total - below) / total) * 100);
-
   // needs-you: only non-zero actionable items
   const needs: { n: number; label: string }[] = [];
   if (metrics.escalationPending > 0) needs.push({ n: metrics.escalationPending, label: t('ui.DddCard.needYouItem') });
 
-  const freshText = health?.lastChangeRelative ?? _ageOf(metrics.computedAt);
+  const freshText = health?.lastChangeRelative ?? '—';
 
   return (
     <div className="mt-2 flex flex-col gap-2.5">
@@ -352,17 +318,8 @@ function FullBody(
         </div>
       )}
 
-      {/* ── Two fact lines: trust distribution + activity ── */}
+      {/* ── Fact line: activity ── */}
       <div className="flex flex-col gap-1 text-meta">
-        <div data-testid="ddd-fact-trust" className="flex items-baseline gap-2">
-          <span className="text-[var(--color-text-faint)] w-[52px]">{t('ui.DddCard.trust')}</span>
-          <span className={below > 0 ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text)]'}>
-            {trustStale ? t('ui.DddCard.notComputed') : t('ui.DddCard.sectionsHigh', { pct })}
-          </span>
-          <span className="ml-auto text-meta text-[var(--color-text-faint)]">
-            {trustStale ? t('ui.DddCard.noScheduledScore') : t('ui.DddCard.scoredAgo', { age: _ageOf(metrics.computedAt) })}
-          </span>
-        </div>
         <div data-testid="ddd-fact-activity" className="flex items-baseline gap-2">
           <span className="text-[var(--color-text-faint)] w-[52px]">{t('ui.DddCard.activity')}</span>
           <span className="text-[var(--color-text)]">{t('ui.DddCard.edited', { age: freshText })}</span>
@@ -389,9 +346,8 @@ function MetricsSkeleton() {
         <div className="h-2 w-24 rounded bg-[var(--color-hover)] mb-2" />
         <div className="h-2.5 w-40 rounded bg-[var(--color-hover)]" />
       </div>
-      {/* two fact-line placeholders */}
+      {/* fact-line placeholder */}
       <div className="flex flex-col gap-1">
-        <div className="h-2.5 w-full rounded bg-[var(--color-hover)]" />
         <div className="h-2.5 w-3/4 rounded bg-[var(--color-hover)]" />
       </div>
     </div>

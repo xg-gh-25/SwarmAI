@@ -8,8 +8,7 @@
  * Correctness contracts pinned here:
  *   F2a: match the week's entries by BASENAME (`item.doc`) — member.path may be
  *        '2-understanding/TECH.md' (migrated) OR bare 'PRODUCT.md' (fallback).
- *   F4:  weeklyReportModel emits the trust DISTRIBUTION, never a collapsed
- *        trustPct rollup (backend Gate-1 refused a project-composite).
+ *   F4:  weeklyReportModel carries no section-trust figure.
  */
 import { describe, it, expect } from 'vitest';
 import type { BrainDetail, BrainKnowledge, SectionMember } from '../../services/ddd';
@@ -68,14 +67,8 @@ describe('weeklyReportModel (AC7, F4)', () => {
         members: MEMBERS, entries: [], completeNotBroken: false },
     ],
     health: {
-      trust: {
-        'TECH.md': { Architecture: 'full', Runtime: 'moderate' },
-        'PRODUCT.md': { Vision: 'high', Risks: 'low' },
-      },
       escalationPending: 1,
       recall: { value: null, experimental: true },
-      diagnostics: null,
-      computedAt: '2026-08-01T18:27:57Z',
     },
   } as unknown as BrainDetail;
 
@@ -92,17 +85,9 @@ describe('weeklyReportModel (AC7, F4)', () => {
     expect(r.changedDocs).not.toContain('IMPROVEMENT.md');
   });
 
-  it('F4: emits a trust DISTRIBUTION, never a collapsed trustPct rollup', () => {
-    const r = weeklyReportModel(DETAIL, KNOWLEDGE);
-    // distribution counts the section-level trust levels across docs
-    expect(r.trustDistribution).toEqual({ full: 1, high: 1, moderate: 1, low: 1, unscored: 0 });
-    // the refused rollup must NOT exist on the model
-    expect((r as Record<string, unknown>).trustPct).toBeUndefined();
-  });
-
-  it('null trust (unscored) → distribution is all-unscored-safe, no throw', () => {
-    const d = { ...DETAIL, health: { ...DETAIL.health!, trust: null } } as unknown as BrainDetail;
-    const r = weeklyReportModel(d, KNOWLEDGE);
-    expect(r.trustDistribution).toEqual({ full: 0, high: 0, moderate: 0, low: 0, unscored: 0 });
+  it('F4: carries no section-trust figure (the score has no producer)', () => {
+    const r = weeklyReportModel(DETAIL, KNOWLEDGE) as unknown as Record<string, unknown>;
+    expect(r.trustDistribution).toBeUndefined();
+    expect(r.trustPct).toBeUndefined();
   });
 });

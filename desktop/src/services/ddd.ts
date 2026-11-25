@@ -25,30 +25,12 @@ export interface BrainHealth {
   lastChangeRelative: string;
 }
 
-/** Per-section 5-dimensional score (the stored section_health.json shape).
- *  All scores are 0-100 ints; `trust` is a derived level string. */
-export interface SectionDiagnostic {
-  staleness?: number;
-  completeness?: number;
-  usage?: number;
-  decay?: number;
-  contradiction?: number;
-  composite?: number;
-  trust?: string;   // full | high | moderate | low
-}
-
 /** DETAIL-view health metrics (design 2026-08-04). Distinct from the gallery
  *  BrainHealth above — this is the richer per-open block the run-1 backend added
  *  to GET /ddd/brains/{name} (_brain_detail). Each field is an ADMISSION-passing
- *  metric (owner action + live/read, never a frozen verdict). trust/diagnostics
- *  are read from the scheduled section_health.json → null when not yet computed.
- *  NOTE: there is deliberately NO project-level trust rollup (backend Gate-1 MAJOR
- *  refused to invent one) — the UI reports the per-section DISTRIBUTION, never a
- *  single collapsed verdict. */
+ *  metric (owner action + live/read, never a frozen verdict). The section trust
+ *  score was removed: nothing produced it any more. */
 export interface DetailHealth {
-  /** doc → section → trust-level string, as stored (no rollup). null = no
-   *  scheduled score computed yet. */
-  trust: Record<string, Record<string, string | null>> | null;
   /** same count as `pending`: this project's Need-You items awaiting a human
    *  decision. Always present. */
   escalationPending: number;
@@ -61,11 +43,6 @@ export interface DetailHealth {
    *  one). Undated/old rows excluded (honest under-count). Present (0 when no
    *  changelog); OPTIONAL in the type only for pre-deploy daemon skew. */
   recentActivity?: number;
-  /** the 5-dim per-section scores verbatim (doc → {sections: {sec: SectionDiagnostic}}).
-   *  null when no scheduled score. Display-only diagnostic detail. */
-  diagnostics: Record<string, { sections?: Record<string, SectionDiagnostic> }> | null;
-  /** ISO timestamp of the scheduled score, or null if none. */
-  computedAt: string | null;
 }
 
 export interface BrainSummary {

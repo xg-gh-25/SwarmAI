@@ -17,10 +17,7 @@
  *      canonical basename cannot be counted. `member.path` may be the migrated
  *      '2-understanding/TECH.md' OR the un-migrated bare 'TECH.md' — basename keying
  *      handles both.
- * F4   weeklyReportModel emits a trust DISTRIBUTION (count of section-trust levels),
- *      NEVER a single collapsed trustPct. The backend explicitly refused to invent a
- *      project-level trust rollup ("no project-composite") — re-adding one in the UI
- *      layer would re-litigate that settled refusal. Report the distribution only.
+ * F4   No section-trust figure: the score had no producer any more and was removed.
  */
 import type { BrainDetail, BrainKnowledge, SectionMember } from '../../services/ddd';
 
@@ -61,20 +58,6 @@ export function docSignalMap(
   return out;
 }
 
-// ── The 4 trust levels the backend section_health emits, in severity order. ──
-const TRUST_LEVELS = ['full', 'high', 'moderate', 'low'] as const;
-type TrustLevel = (typeof TRUST_LEVELS)[number];
-
-/** Trust DISTRIBUTION — count of section-level trust levels across all docs, plus
- *  `unscored` for sections with a null/absent level. NOT a collapsed rollup (F4). */
-export interface TrustDistribution {
-  full: number;
-  high: number;
-  moderate: number;
-  low: number;
-  unscored: number;
-}
-
 /** The current-DDD-only weekly-report model (AC7). Everything is derived from data
  *  already loaded — no global one-pot, no file written. */
 export interface WeeklyReportModel {
@@ -84,8 +67,6 @@ export interface WeeklyReportModel {
   pending: number;
   /** basenames of the core docs with any signal (new) — "what moved". */
   changedDocs: string[];
-  /** section-trust distribution (F4 — never a single collapsed percentage). */
-  trustDistribution: TrustDistribution;
 }
 
 /** Find the ② knowledge section's members (the 4 canonical docs). */
@@ -96,7 +77,7 @@ function knowledgeMembers(detail: BrainDetail): SectionMember[] {
 
 /**
  * Build the current-DDD weekly-report model from the already-loaded detail + the
- * week-range knowledge. Pure; null-safe on an unloaded response or a null trust snapshot.
+ * week-range knowledge. Pure; null-safe on an unloaded response.
  */
 export function weeklyReportModel(
   detail: BrainDetail,
@@ -116,25 +97,9 @@ export function weeklyReportModel(
   // pending = the brain's escalation queue (the detail health count).
   const pending = detail.health?.escalationPending ?? 0;
 
-  // F4: trust DISTRIBUTION, never a rollup. trust is doc→section→level|null.
-  const trustDistribution: TrustDistribution = { full: 0, high: 0, moderate: 0, low: 0, unscored: 0 };
-  const trust = detail.health?.trust;
-  if (trust) {
-    for (const sections of Object.values(trust)) {
-      for (const level of Object.values(sections)) {
-        if (level && (TRUST_LEVELS as readonly string[]).includes(level)) {
-          trustDistribution[level as TrustLevel] += 1;
-        } else {
-          trustDistribution.unscored += 1;
-        }
-      }
-    }
-  }
-
   return {
     learnedWeek,
     pending,
     changedDocs,
-    trustDistribution,
   };
 }

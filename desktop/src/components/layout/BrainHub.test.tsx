@@ -190,16 +190,8 @@ const DETAIL: BrainDetail = {
   specs: ['channels.spec.md', 'pipeline.spec.md'],
   hasCodeIntel: true,
   health: {
-    trust: {
-      'TECH.md': { Architecture: 'full', Runtime: 'moderate' },
-      'PRODUCT.md': { Vision: 'high', Risks: 'low' },
-    },
     escalationPending: 2,
     recall: { value: null, experimental: true },
-    diagnostics: {
-      'TECH.md': { sections: { Architecture: { composite: 88, trust: 'full' } } },
-    },
-    computedAt: '2026-08-01T18:27:57Z',
   },
 };
 
@@ -741,9 +733,9 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
     expect(screen.queryByTestId('brainhub-weekly-panel')).toBeNull();
     fireEvent.click(screen.getByTestId('coredocs-weekly'));
     await waitFor(() => expect(screen.getByTestId('brainhub-weekly-panel')).toBeTruthy());
-    // it's the current DDD only + a trust distribution (F4), NOT a file open
+    // it's the current DDD only, NOT a file open; no section-trust line
     expect(screen.getByTestId('brainhub-weekly-panel').textContent).toContain('SwarmAI');
-    expect(screen.getByTestId('weekly-trust-dist')).toBeTruthy();
+    expect(screen.queryByTestId('weekly-trust-dist')).toBeNull();
     expect(openFile).not.toHaveBeenCalled();
     document.removeEventListener('swarm:open-file', openFile as EventListener);
   });
@@ -1008,7 +1000,7 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     const strip = screen.getByTestId('brainhub-healthstrip');
     expect(strip.querySelector('[data-testid="ddd-verdict"]')).toBeTruthy();
     expect(strip.querySelector('[data-testid="ddd-needs-you"]')).toBeNull();  // moved to §②
-    expect(strip.querySelector('[data-testid="ddd-fact-trust"]')).toBeTruthy();
+    expect(strip.querySelector('[data-testid="ddd-fact-trust"]')).toBeNull();
     expect(strip.querySelector('[data-testid="ddd-fact-activity"]')).toBeTruthy();
   });
 
@@ -1027,13 +1019,6 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     expect(screen.queryAllByTestId('ddd-needs-you')).toHaveLength(0);
     expect(screen.queryAllByTestId('brainhub-needyou')).toHaveLength(0);
     expect(screen.queryAllByTestId('brainhub-upkeep')).toHaveLength(0);
-  });
-
-  it('trust fact is a DISTRIBUTION (% ≥ high), NOT a collapsed rollup verdict word', async () => {
-    await openBrain();
-    const f = await screen.findByTestId('ddd-fact-trust');
-    expect(f.textContent).toMatch(/%|≥ high|not computed/);
-    expect(f.textContent).not.toContain('moderate');  // no rollup verdict
   });
 
   it('diagnostics WALL is deleted (no per-section score dump)', async () => {

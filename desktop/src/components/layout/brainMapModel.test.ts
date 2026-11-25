@@ -17,7 +17,7 @@ const detail = {
     { key: 'gates', members: [], entries: [], completeNotBroken: true },
     { key: 'delivery', members: [{ path: 'bindings.yaml', gitStatus: 'clean' }], entries: [], completeNotBroken: false },
   ],
-  health: { trust: null, escalationPending: 0, recall: { value: null, experimental: true }, diagnostics: null, computedAt: null, recentActivity: 4 },
+  health: { escalationPending: 0, recall: { value: null, experimental: true }, recentActivity: 4 },
 } as unknown as BrainDetail;
 describe('brainMapModel', () => {
   it('sectionCounts reads the detail: entries for Knowledge, files elsewhere, empty-but-complete Gates', () => {
