@@ -1,0 +1,10 @@
+body { margin: 0; background: #ffffff; font-family: "Liberation Sans", Arial, sans-serif; }
+section {
+  width: 960px; height: 540px; box-sizing: border-box; padding: 48px 64px;
+  position: relative; overflow: hidden; background: #f4f1ea; color: #1d2433;
+}
+section h1 { font-size: 56px; margin: 0 0 24px; }
+section p { font-size: 26px; line-height: 1.4; margin: 0 0 12px; }
+.blocks h1, .blocks p { font-family: "Pollinate Test Blocks", serif; }
+.dark { background: #1d2433; color: #f4f1ea; }
+.photo img { width: 360px; height: 240px; display: block; }

@@ -1,0 +1,1071 @@
+#!/usr/bin/env python3
+"""Pollinate works: a folder with work.json, versions, a revision guard and a renderer.
+
+A work is any folder with a ``work.json`` (design section 13.1). It is
+registered in place in ``<workspace>/.pollinate/works.json`` (workspace =
+``$SWARM_WORKSPACE`` or ``~/.swarm-ai/SwarmWS``). A deck's source is one HTML
+file; each slide is a top-level ``<section data-slide-id="s-xxxx">``. A poster
+or page is one HTML file (the whole page has id ``main``); copy is a Markdown
+file.
+
+Commands (design section 13.2):
+
+  init    make a new work: folder, work.json, empty source, .gitignore, registry entry
+  adopt   register a folder that already has a source; add missing slide ids
+          (nothing else in the file changes) and store v001 (by the person)
+  open    start a revision: when the source on disk differs from the current
+          version (the person edited it), store it first as ``<current>-user``;
+          then record the declared scope (``--scope``, ``--add``, ``--remove``)
+  cut     render, measure, run the craft checks, run the guard, export PPTX and
+          store a new version; ``current`` moves only when everything passes
+  render  render the source on disk into out/ (no version); ``--version V --out D``
+          renders an old version into D
+  list    print the registry
+
+The guard (design section 13.4) compares the new source with the base version
+of the open revision. A slide outside the scope that was changed, deleted or
+moved is a violation, and so is a change to a shared file (or to the deck
+outside its slides) unless ``open --shared`` was given. (13.4 first said a
+note containing ``shared`` allows it; a note is free text, so only an open
+record written before the flag existed is still read that way.)
+
+Every version is a read-only snapshot in ``.versions/<id>/`` (the source,
+checks.json, guard.json, measure.json). After a cut, out/ and review/ hold the
+current version's outputs (a failed cut's go to review/failed-<id>/); a plain
+``render`` writes a preview of the source on disk there. Both are ignored by git.
+
+Exit codes: 0 ok, 1 a check or the guard failed, 2 usage or environment error.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html.parser
+import json
+import os
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import work_render  # noqa: E402
+
+SCHEMA = 1
+KINDS = ("deck", "poster", "page", "copy")
+DEFAULT_SRC = {"deck": "src/deck.html", "poster": "src/index.html",
+               "page": "src/index.html", "copy": "src/copy.md"}
+DEFAULT_SIZE = {"deck": "1920x1080", "poster": "1080x1350", "page": "1200x800", "copy": "1080x1080"}
+DEFAULT_FORMATS = {"deck": ["html", "pdf", "png", "pptx"], "poster": ["png"],
+                   "page": ["png", "html"], "copy": ["md"]}
+KNOWN_FORMATS = {"html", "pdf", "png", "pptx", "md"}
+SHARED = "_shared"
+WHOLE = "main"
+ID_ATTR = "data-slide-id"
+EXISTING_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+GITIGNORE_LINES = ("out/", "review/", ".render-tmp-*/")
+SKELETON = {
+    "deck": ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+             '<title>{title}</title>\n<link rel="stylesheet" href="shared.css">\n</head>\n'
+             '<body>\n</body>\n</html>\n'),
+    "poster": ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+               '<title>{title}</title>\n</head>\n<body>\n</body>\n</html>\n'),
+    "copy": "",
+}
+SKELETON["page"] = SKELETON["poster"]
+
+
+class UsageError(Exception):
+    """Wrong arguments or a work in a state the command cannot use (exit 2)."""
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def norm_hash(text: str) -> str:
+    """Hash of a text unit: line ends made \\n, outer white space removed (13.1)."""
+    t = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return sha256(t.encode("utf-8", "surrogateescape"))
+
+
+def dec(data: bytes) -> str:
+    return data.decode("utf-8", "surrogateescape")
+
+
+def enc(text: str) -> bytes:
+    return text.encode("utf-8", "surrogateescape")
+
+
+def write_json(path: Path, data) -> None:
+    """Write JSON through a temporary file and a rename, so a crash leaves the old file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+# ── slides in the source text ──────────────────────────────────────────────
+
+class _SectionFinder(html.parser.HTMLParser):
+    """Find top-level <section> elements with their offsets in the source text."""
+
+    def __init__(self, text: str):
+        super().__init__(convert_charrefs=False)
+        self.text = text
+        self._line_starts = [0] + [m.end() for m in re.finditer("\n", text)]
+        self.depth = 0
+        self.found: list = []
+        self._cur = None
+
+    def _pos(self) -> int:
+        line, col = self.getpos()
+        return self._line_starts[line - 1] + col
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "section":
+            return
+        if self.depth == 0:
+            start = self._pos()
+            raw = self.get_starttag_text() or ""
+            self._cur = {"start": start, "tag_end": start + len(raw), "attrs": attrs,
+                         "line": self.getpos()[0]}
+        self.depth += 1
+
+    def handle_endtag(self, tag):
+        if tag != "section" or self.depth == 0:
+            return
+        self.depth -= 1
+        if self.depth == 0:
+            pos = self._pos()
+            close = self.text.find(">", pos)
+            self._cur["end"] = close + 1 if close >= 0 else len(self.text)
+            self.found.append(self._cur)
+            self._cur = None
+
+
+def parse_slides(text: str) -> list:
+    """Top-level sections in source order: [{id, start, tag_end, end, line, raw}].
+
+    ``id`` is None when the section has no data-slide-id. Raises UsageError for
+    an unclosed section, an empty or badly formed id, or a repeated id.
+    """
+    finder = _SectionFinder(text)
+    finder.feed(text)
+    finder.close()
+    if finder._cur is not None:
+        raise UsageError(f"the <section> on line {finder._cur['line']} is never closed")
+    slides, seen = [], set()
+    for f in finder.found:
+        values = [v for k, v in f["attrs"] if k == ID_ATTR]
+        sid = values[0] if values else None
+        if values and (len(values) > 1 or sid is None or not EXISTING_ID_RE.match(sid) or sid == SHARED):
+            raise UsageError(
+                f"the <section> on line {f['line']} has a bad {ID_ATTR} ({sid!r}); use letters, "
+                "digits, '-' or '_' (at most 64), or remove it so an id is added")
+        if sid in seen:
+            raise UsageError(f"{ID_ATTR}={sid!r} is used by more than one section (line {f['line']})")
+        if sid:
+            seen.add(sid)
+        slides.append({"id": sid, "start": f["start"], "tag_end": f["tag_end"], "end": f["end"],
+                       "line": f["line"], "raw": text[f["start"]:f["end"]]})
+    return slides
+
+
+def new_slide_id(used: set) -> str:
+    """A fresh id ``s-<hex>`` not in ``used`` (4 hex digits, more if crowded)."""
+    for digits in (4, 4, 4, 4, 6, 6, 8, 8, 8, 8):
+        sid = "s-" + secrets.token_hex(4)[:digits]
+        if sid not in used:
+            return sid
+    raise UsageError("could not find a free slide id")
+
+
+def add_missing_ids(text: str, used: set):
+    """Insert ``data-slide-id`` into every top-level section without one.
+
+    Only the attribute text is inserted, right after ``<section``; every other
+    byte stays as it was. Returns (new_text, [added ids]).
+    """
+    slides = parse_slides(text)
+    used = set(used) | {s["id"] for s in slides if s["id"]}
+    added = []
+    plan = []
+    for s in slides:
+        if s["id"] is None:
+            sid = new_slide_id(used)
+            used.add(sid)
+            added.append(sid)
+            plan.append((s["start"] + len("<section"), f' {ID_ATTR}="{sid}"'))
+    for pos, ins in reversed(plan):
+        text = text[:pos] + ins + text[pos:]
+    return text, added
+
+
+def frame_text(text: str, slides: list) -> str:
+    """The deck without its slides: each slide and the space around it is one marker."""
+    parts, last = [], 0
+    for s in slides:
+        parts.append(text[last:s["start"]])
+        parts.append("\0")
+        last = s["end"]
+    parts.append(text[last:])
+    joined = "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
+    joined = re.sub(r"\s*\0\s*", "\0", joined)
+    return re.sub("\0+", "\0", joined)
+
+
+# ── the work ───────────────────────────────────────────────────────────────
+
+def work_dir_of(value: str) -> Path:
+    return Path(value).expanduser().resolve()
+
+
+def load_meta(wdir: Path) -> dict:
+    path = wdir / "work.json"
+    if not path.is_file():
+        raise UsageError(f"{wdir} is not a work (no work.json); run init or adopt first")
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise UsageError(f"{path} is not valid JSON: {exc}") from None
+    if meta.get("schema") != SCHEMA or meta.get("kind") not in KINDS:
+        raise UsageError(f"{path} is not a schema {SCHEMA} work.json")
+    return meta
+
+
+def save_meta(wdir: Path, meta: dict) -> None:
+    write_json(wdir / "work.json", meta)
+
+
+def src_layout(wdir: Path, meta: dict):
+    """(src_root, source path relative to src_root, standard layout?)."""
+    src = Path(meta["src"])
+    if src.is_absolute() or ".." in src.parts:
+        raise UsageError(f"work.json src must be a path inside the work, not {meta['src']}")
+    if src.parts and src.parts[0] == "src" and len(src.parts) > 1:
+        return wdir / "src", Path(*src.parts[1:]).as_posix(), True
+    return wdir, src.as_posix(), False
+
+
+def _skip_name(name: str) -> bool:
+    return name.startswith(".")
+
+
+def collect_files(wdir: Path, meta: dict, keep=()) -> dict:
+    """The files of the current source: {key: bytes}; the source itself is one of them.
+
+    Standard layout (source under src/): every file under src/ (dot files are
+    skipped). A source elsewhere (an adopted folder): the source and the local
+    files it uses, read through its CSS too, plus every ``keep`` key (the base
+    version's shared files) that still exists, so a file a slide stops using is
+    still guarded and only a real deletion counts as one.
+    """
+    root, rel, standard = src_layout(wdir, meta)
+    source = root / rel
+    if not source.is_file():
+        raise UsageError(f"source file not found: {source}")
+    files = {rel: source.read_bytes()}
+    if standard:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if not _skip_name(d))
+            for name in sorted(filenames):
+                if _skip_name(name):
+                    continue
+                p = Path(dirpath) / name
+                if p.is_symlink() and not _inside(p.resolve(), root.resolve()):
+                    continue
+                key = p.relative_to(root).as_posix()
+                if key != rel:
+                    files[key] = p.read_bytes()
+    else:
+        skip = {(wdir / d).resolve() for d in (".versions", "out", "review")}
+        for p in sorted(work_render.local_files_of(root, source)):
+            if any(_inside(p, s) for s in skip) or not p.is_file():
+                continue
+            key = p.relative_to(root.resolve()).as_posix()
+            if key != rel:
+                files[key] = p.read_bytes()
+        for key in keep:
+            p = _safe_join(root, key)
+            if key not in files and key != rel and p is not None and p.is_file():
+                files[key] = p.read_bytes()
+    return files
+
+
+def _safe_join(root: Path, rel_path: str):
+    """root/rel_path when it is a relative path that stays inside root, else None."""
+    rp = Path(rel_path or "")
+    if not rel_path or rp.is_absolute() or ".." in rp.parts:
+        return None
+    target = (root / rp).resolve()
+    return target if _inside(target, root.resolve()) else None
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def compute_state(meta: dict, files: dict, rel: str) -> dict:
+    """Slide order and hashes (13.1) for a set of source files."""
+    text = dec(files[rel])
+    shared = {k: sha256(v) for k, v in files.items() if k != rel}
+    if meta["kind"] == "deck":
+        slides = parse_slides(text)
+        missing = [s["line"] for s in slides if not s["id"]]
+        if missing:
+            raise UsageError(f"sections on lines {missing} have no {ID_ATTR}")
+        order = [s["id"] for s in slides]
+        hashes = {s["id"]: norm_hash(s["raw"]) for s in slides}
+        shared[rel] = norm_hash(frame_text(text, slides))
+        raws = {s["id"]: s["raw"] for s in slides}
+    else:
+        order = [WHOLE]
+        hashes = {WHOLE: norm_hash(text)}
+        raws = {WHOLE: text}
+    hashes[SHARED] = dict(sorted(shared.items()))
+    return {"slides": order, "hashes": hashes, "raws": raws}
+
+
+def used_ids(meta: dict) -> set:
+    ids = set(meta.get("slides") or [])
+    for v in meta.get("versions", []):
+        ids.update(k for k in v.get("hashes", {}) if k != SHARED)
+    return ids
+
+
+def version_entry(meta: dict, vid):
+    for v in meta.get("versions", []):
+        if v["id"] == vid:
+            return v
+    return None
+
+
+def _taken_ids(meta: dict, wdir) -> set:
+    """Version ids in work.json and snapshot folders on disk (a crash may leave one)."""
+    taken = {v["id"] for v in meta.get("versions", [])}
+    vroot = Path(wdir) / ".versions" if wdir else None
+    if vroot and vroot.is_dir():
+        taken.update(p.name for p in vroot.iterdir() if not p.name.startswith("."))
+    return taken
+
+
+def next_version_id(meta: dict, wdir=None) -> str:
+    nums = [int(m.group(1)) for vid in _taken_ids(meta, wdir)
+            for m in [re.match(r"v(\d+)", vid)] if m]
+    return f"v{max(nums, default=0) + 1:03d}"
+
+
+def user_version_id(meta: dict, wdir=None) -> str:
+    cur = meta.get("current")
+    root = re.sub(r"-user\d*$", "", cur) if cur else next_version_id(meta, wdir)
+    taken = _taken_ids(meta, wdir)
+    vid, n = f"{root}-user", 1
+    while vid in taken:
+        n += 1
+        vid = f"{root}-user{n}"
+    return vid
+
+
+def _readonly_tree(path: Path) -> None:
+    for dirpath, _dirs, files in os.walk(path):
+        for name in files:
+            p = Path(dirpath) / name
+            p.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+
+def stage_snapshot(wdir: Path, vid: str, files: dict) -> Path:
+    """Write the source files of a new version into a staging folder under .versions/."""
+    vroot = wdir / ".versions"
+    if (vroot / vid).exists():
+        raise UsageError(f"version {vid} already exists; versions are never written twice")
+    vroot.mkdir(parents=True, exist_ok=True)
+    for old in vroot.glob(".staging-*"):
+        shutil.rmtree(old, ignore_errors=True)
+    stage = Path(tempfile.mkdtemp(prefix=f".staging-{vid}-", dir=vroot))
+    for key, data in files.items():
+        dest = stage / "src" / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+    return stage
+
+
+def seal_snapshot(wdir: Path, stage: Path, vid: str, extra: dict) -> None:
+    """Add the json files, make the snapshot read-only and move it to .versions/<vid>."""
+    for name, data in extra.items():
+        write_json(stage / name, data)
+    _readonly_tree(stage)
+    os.replace(stage, wdir / ".versions" / vid)
+
+
+def ensure_gitignore(wdir: Path) -> None:
+    path = wdir / ".gitignore"
+    have = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    missing = [line for line in GITIGNORE_LINES if line not in have]
+    if missing:
+        prefix = "" if not have or path.read_bytes().endswith(b"\n") else "\n"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(prefix + "\n".join(missing) + "\n")
+
+
+# ── registry ───────────────────────────────────────────────────────────────
+
+def workspace_dir() -> Path:
+    env = os.environ.get("SWARM_WORKSPACE")
+    return Path(env).expanduser() if env else Path.home() / ".swarm-ai" / "SwarmWS"
+
+
+def registry_path() -> Path:
+    return workspace_dir() / ".pollinate" / "works.json"
+
+
+def _lock(path: Path):
+    try:
+        import fcntl
+    except ImportError:  # Windows: no lock; writes are still atomic renames
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path.with_suffix(".lock"), "a")
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    return fh
+
+
+def load_registry() -> dict:
+    path = registry_path()
+    if not path.is_file():
+        return {"schema": 1, "works": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data.get("works"), list):
+            raise ValueError("no works list")
+        return data
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        keep = path.with_name(f"works.json.corrupt-{datetime.now().strftime('%Y%m%d%H%M%S')}")
+        os.replace(path, keep)
+        print(f"warning: the registry was not valid JSON; kept it as {keep} and started a new one",
+              file=sys.stderr)
+        return {"schema": 1, "works": []}
+
+
+def register(wdir: Path, meta: dict) -> None:
+    lock = _lock(registry_path())
+    try:
+        reg = load_registry()
+        works = [w for w in reg["works"] if w.get("path") != str(wdir)]
+        works.append({"path": str(wdir), "kind": meta["kind"], "title": meta.get("title", ""),
+                      "updated": now_iso()})
+        reg["works"] = works
+        reg["schema"] = 1
+        write_json(registry_path(), reg)
+    finally:
+        if lock:
+            lock.close()
+
+
+# ── guard (13.4) ───────────────────────────────────────────────────────────
+
+class _TextRuns(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.texts, self.images = [], []
+
+    def handle_data(self, data):
+        t = " ".join(data.split())
+        if t:
+            self.texts.append(t)
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("img", "image", "source", "video"):
+            for k, v in attrs:
+                if k in ("src", "href", "xlink:href") and v:
+                    self.images.append(v if not v.startswith("data:") else v[:40] + "…")
+
+
+def _runs(raw: str):
+    p = _TextRuns()
+    p.feed(raw)
+    p.close()
+    return p.texts, p.images
+
+
+def _short(t: str, n: int = 60) -> str:
+    return t if len(t) <= n else t[: n - 1] + "…"
+
+
+def change_detail(old_raw: str, new_raw: str) -> str:
+    """Say in a few words what changed in a slide: a text block, an image, or markup."""
+    if old_raw is None:
+        return "content changed"
+    ot, oi = _runs(old_raw)
+    nt, ni = _runs(new_raw)
+    for img in oi:
+        if img not in ni:
+            return f"image removed: {_short(img)}"
+    for img in ni:
+        if img not in oi:
+            return f"image added: {_short(img)}"
+    for a, b in zip(ot, nt):
+        if a != b:
+            return f"text changed: '{_short(a)}' -> '{_short(b)}'"
+    if len(ot) > len(nt):
+        return f"text removed: '{_short(ot[len(nt)])}'"
+    if len(nt) > len(ot):
+        return f"text added: '{_short(nt[len(ot)])}'"
+    return "markup or style changed (same text and images)"
+
+
+def _kept_in_order(a: list, b: list, weight) -> set:
+    """Longest common subsequence of a and b with the most weight; returns the kept ids."""
+    n, m = len(a), len(b)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            if a[i] == b[j]:
+                dp[i][j] = weight(a[i]) + dp[i + 1][j + 1]
+            else:
+                dp[i][j] = max(dp[i + 1][j], dp[i][j + 1])
+    kept, i, j = set(), 0, 0
+    while i < n and j < m:
+        if a[i] == b[j] and dp[i][j] == weight(a[i]) + dp[i + 1][j + 1]:
+            kept.add(a[i])
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return kept
+
+
+def shared_declared(note: str) -> bool:
+    """The first 13.4 form, read only for an open record that has no ``shared`` key.
+
+    A note is free text ("leave shared.css alone" contains the word), so a new
+    open never takes permission from it; ``open --shared`` is the only way.
+    """
+    return bool(re.search(r"\bshared\b", note or "", re.I))
+
+
+def guard(base, base_raws: dict, state: dict, open_: dict) -> dict:
+    """Compare the new state with the base version (13.4) and return guard.json."""
+    open_ = open_ or {}
+    scope = list(open_.get("scope") or [])
+    allowed_delete = set(scope) | set(open_.get("remove") or [])
+    result = {"base": base["id"] if base else None, "scope": scope, "added": [],
+              "removed_ok": [], "violations": [], "notes": [], "ok": True}
+    new_order = state["slides"]
+    if base is None:
+        result["added"] = list(new_order)
+        return result
+    base_order = base.get("slides") or [k for k in base["hashes"] if k != SHARED]
+    base_hashes = base["hashes"]
+    new_set, base_set = set(new_order), set(base_order)
+    viol = result["violations"]
+    result["added"] = [s for s in new_order if s not in base_set]
+    declared_add = int(open_.get("add") or 0)
+    if len(result["added"]) > declared_add:
+        result["notes"].append(
+            f"{len(result['added'])} slides were added, the open revision declared {declared_add}")
+    for pos, sid in enumerate(base_order, 1):
+        if sid in new_set:
+            continue
+        if sid in allowed_delete:
+            result["removed_ok"].append(sid)
+        else:
+            viol.append({"slide": sid, "kind": "deleted",
+                         "detail": f"page {pos} ({sid}) of {base['id']} is gone and was not in the scope"})
+    for sid in new_order:
+        if sid in base_set and sid not in scope and state["hashes"][sid] != base_hashes.get(sid):
+            viol.append({"slide": sid, "kind": "modified",
+                         "detail": change_detail(base_raws.get(sid), state["raws"][sid])})
+    common_base = [s for s in base_order if s in new_set]
+    common_new = [s for s in new_order if s in base_set]
+    kept = _kept_in_order(common_base, common_new, lambda s: 1 if s in scope else 1000)
+    for sid in common_base:
+        if sid not in kept and sid not in scope:
+            viol.append({"slide": sid, "kind": "moved",
+                         "detail": f"was page {base_order.index(sid) + 1} of {base['id']}, "
+                                   f"is now page {new_order.index(sid) + 1}"})
+    allowed = open_["shared"] if "shared" in open_ else shared_declared(open_.get("note", ""))
+    if not allowed:
+        old_shared = base_hashes.get(SHARED, {})
+        new_shared = state["hashes"][SHARED]
+        for key, h in old_shared.items():
+            if key not in new_shared:
+                viol.append({"slide": SHARED, "kind": "deleted", "detail": f"shared file deleted: {key}"})
+            elif new_shared[key] != h:
+                what = ("the deck outside its slides (head, styles, scripts) changed"
+                        if key == base.get("source") else f"shared file changed: {key}")
+                viol.append({"slide": SHARED, "kind": "modified", "detail": what})
+    result["ok"] = not viol
+    return result
+
+
+# ── commands ───────────────────────────────────────────────────────────────
+
+def _parse_ids(value) -> list:
+    return [x.strip() for x in (value or "").split(",") if x.strip()]
+
+
+def _parse_formats(value, kind: str) -> list:
+    if not value:
+        return list(DEFAULT_FORMATS[kind])
+    fmts = _parse_ids(value)
+    bad = [f for f in fmts if f not in KNOWN_FORMATS]
+    if bad:
+        raise UsageError(f"unknown formats {bad}; use {sorted(KNOWN_FORMATS)}")
+    return fmts
+
+
+def _size(value: str) -> dict:
+    try:
+        return work_render.parse_size(value)
+    except ValueError as exc:
+        raise UsageError(str(exc)) from None
+
+
+def _print(obj) -> None:
+    print(json.dumps(obj, indent=1, ensure_ascii=False))
+
+
+def cmd_init(args) -> int:
+    wdir = work_dir_of(args.dir)
+    if (wdir / "work.json").exists():
+        raise UsageError(f"{wdir} is already a work")
+    src_rel = DEFAULT_SRC[args.kind]
+    if (wdir / src_rel).exists():
+        raise UsageError(f"{wdir / src_rel} already exists; use adopt for an existing work")
+    size = _size(args.size or DEFAULT_SIZE[args.kind])
+    (wdir / "src").mkdir(parents=True, exist_ok=True)
+    (wdir / src_rel).write_text(SKELETON[args.kind].replace("{title}", _html_escape(args.title)),
+                                encoding="utf-8")
+    if args.kind == "deck" and not (wdir / "src" / "shared.css").exists():
+        (wdir / "src" / "shared.css").write_text("", encoding="utf-8")
+    meta = {"schema": SCHEMA, "kind": args.kind, "title": args.title, "style": args.style,
+            "size": size, "src": src_rel, "slides": [], "current": None, "open": None, "versions": []}
+    save_meta(wdir, meta)
+    ensure_gitignore(wdir)
+    register(wdir, meta)
+    _print({"work": str(wdir), "kind": args.kind, "src": src_rel})
+    return 0
+
+
+def _html_escape(t: str) -> str:
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _title_of(text: str, fallback: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+    return " ".join(m.group(1).split()) if m and m.group(1).strip() else fallback
+
+
+def cmd_adopt(args) -> int:
+    wdir = work_dir_of(args.dir)
+    if not wdir.is_dir():
+        raise UsageError(f"{wdir} is not a folder")
+    if (wdir / "work.json").exists():
+        raise UsageError(f"{wdir} is already a work")
+    if args.src:
+        src_path = Path(args.src).expanduser()
+        src_path = (src_path if src_path.is_absolute() else wdir / src_path).resolve()
+        if not _inside(src_path, wdir):
+            raise UsageError("--src must be a file inside the work folder")
+        src_rel = src_path.relative_to(wdir).as_posix()
+    else:
+        src_rel = DEFAULT_SRC[args.kind]
+    if not (wdir / src_rel).is_file():
+        raise UsageError(f"source file not found: {wdir / src_rel}; give it with --src")
+    meta = {"schema": SCHEMA, "kind": args.kind, "title": "", "style": args.style,
+            "size": _size(args.size or DEFAULT_SIZE[args.kind]), "src": src_rel,
+            "slides": [], "current": None, "open": None, "versions": []}
+    root, rel, _std = src_layout(wdir, meta)
+    source = root / rel
+    original = source.read_bytes()
+    added = []
+    if args.kind == "deck":
+        new_text, added = add_missing_ids(dec(original), set())
+        if added:
+            source.write_bytes(enc(new_text))
+    meta["title"] = args.title or _title_of(dec(original), wdir.name)
+    files = collect_files(wdir, meta)
+    state = compute_state(meta, files, rel)
+    vid = "v001"
+    stage = stage_snapshot(wdir, vid, files)
+    seal_snapshot(wdir, stage, vid, {})
+    meta["versions"].append(_entry(vid, "user", [], "ok", state, rel, {}, note="adopted"))
+    meta["current"] = vid
+    meta["slides"] = state["slides"]
+    save_meta(wdir, meta)
+    ensure_gitignore(wdir)
+    register(wdir, meta)
+    _print({"work": str(wdir), "version": vid, "slides": state["slides"], "ids_added": added})
+    return 0
+
+
+def _entry(vid, by, scope, status, state, rel, outputs, **extra) -> dict:
+    e = {"id": vid, "at": now_iso(), "by": by, "scope": list(scope), "status": status,
+         "slides": list(state["slides"]), "source": rel, "hashes": state["hashes"], "outputs": outputs}
+    e.update({k: v for k, v in extra.items() if v is not None})
+    return e
+
+
+def _differs(state: dict, base: dict) -> list:
+    """Ids whose content or place differs from the base (``_shared`` included)."""
+    if base is None:
+        return list(state["slides"])
+    changed = []
+    bh = base["hashes"]
+    for sid in state["slides"]:
+        if state["hashes"][sid] != bh.get(sid):
+            changed.append(sid)
+    for sid in base.get("slides", []):
+        if sid not in state["hashes"]:
+            changed.append(sid)
+    if state["hashes"][SHARED] != bh.get(SHARED, {}):
+        changed.append(SHARED)
+    if not changed and state["slides"] != base.get("slides"):
+        changed.append("order")
+    return changed
+
+
+def _assign_ids(wdir: Path, meta: dict) -> list:
+    if meta["kind"] != "deck":
+        return []
+    root, rel, _ = src_layout(wdir, meta)
+    source = root / rel
+    if not source.is_file():
+        raise UsageError(f"source file not found: {source}")
+    text = dec(source.read_bytes())
+    new_text, added = add_missing_ids(text, used_ids(meta))
+    if added:
+        source.write_bytes(enc(new_text))
+    return added
+
+
+def cmd_open(args) -> int:
+    wdir = work_dir_of(args.dir)
+    meta = load_meta(wdir)
+    if args.add is not None and args.add < 0:
+        raise UsageError("--add must be 0 or more")
+    scope, remove = _parse_ids(args.scope), _parse_ids(args.remove)
+    if meta.get("open"):
+        op = meta["open"]
+        op.update({"scope": scope, "add": args.add if args.add is not None else op.get("add", 0),
+                   "remove": remove, "note": args.note if args.note is not None else op.get("note", ""),
+                   "shared": _shared_allowed(args), "at": now_iso()})
+        _check_ids(meta, scope + remove, meta.get("slides") or [])
+        save_meta(wdir, meta)
+        _print({"open": op, "user_version": None,
+                "note": "a revision was already open; scope updated, base kept"})
+        return 0
+    _assign_ids(wdir, meta)
+    root, rel, _ = src_layout(wdir, meta)
+    current = version_entry(meta, meta.get("current"))
+    files = collect_files(wdir, meta, keep=(current or {}).get("hashes", {}).get(SHARED, {}))
+    state = compute_state(meta, files, rel)
+    _check_ids(meta, scope + remove, state["slides"])
+    user_vid, changed = None, []
+    if current is not None:
+        changed = _differs(state, current)
+        if changed:
+            user_vid = user_version_id(meta, wdir)
+            stage = stage_snapshot(wdir, user_vid, files)
+            seal_snapshot(wdir, stage, user_vid, {})
+            # Who wrote the edit is not proven, only that it was on disk and not in a
+            # version: the entry says so, and the agent is told to confirm it with the person.
+            meta["versions"].append(_entry(user_vid, "user", [c for c in changed if c != "order"],
+                                           "ok", state, rel, {}, note="edits found on disk at open",
+                                           found_on_disk=True))
+            meta["current"] = user_vid
+            meta["slides"] = state["slides"]
+            print(f"note: {', '.join(changed)} changed on disk since {current['id']} and were stored as "
+                  f"the person's version {user_vid}. If you made these edits yourself, tell the person.",
+                  file=sys.stderr)
+    meta["open"] = {"scope": scope, "add": args.add or 0, "remove": remove, "note": args.note or "",
+                    "shared": _shared_allowed(args), "at": now_iso(), "base": meta.get("current")}
+    save_meta(wdir, meta)
+    register(wdir, meta)
+    _print({"open": meta["open"], "user_version": user_vid, "changed_by_user": changed,
+            "slides": state["slides"]})
+    return 0
+
+
+def _shared_allowed(args) -> bool:
+    """Shared changes are allowed only by --shared on this open call (never guessed from the note)."""
+    return bool(args.shared)
+
+
+def _check_ids(meta: dict, ids: list, slides: list) -> None:
+    known = set(slides) | {WHOLE} if meta["kind"] != "deck" else set(slides)
+    unknown = [i for i in ids if i not in known]
+    if unknown:
+        raise UsageError(f"unknown slide ids {unknown}; the slides are {slides}")
+
+
+def _load_craft():
+    """craft_checks.py (design 13.3) when it is installed next to this script."""
+    try:
+        import craft_checks
+    except ModuleNotFoundError as exc:
+        if exc.name == "craft_checks":
+            return None
+        raise
+    if not (hasattr(craft_checks, "PROBE_JS") and hasattr(craft_checks, "evaluate")):
+        return None
+    return craft_checks
+
+
+def _base_raws(wdir: Path, base) -> dict:
+    """Slide texts of the base version, read from its snapshot (for violation details)."""
+    if not base:
+        return {}
+    path = _safe_join(wdir / ".versions" / base["id"] / "src", base.get("source", ""))
+    if path is None or not path.is_file():
+        return {}
+    text = dec(path.read_bytes())
+    if base.get("slides") == [WHOLE]:
+        return {WHOLE: text}
+    try:
+        return {s["id"]: s["raw"] for s in parse_slides(text) if s["id"]}
+    except UsageError:
+        return {}
+
+
+def _export_pptx(meta: dict, slides_dir: Path, dest: Path, findings: list, outputs: dict) -> None:
+    script = Path(__file__).resolve().parent / "export_pptx.py"
+    if not script.is_file():
+        findings.append({"slide": "", "check": "pptx", "level": "warn",
+                         "msg": "export_pptx.py is not installed; deck.pptx was not made", "where": ""})
+        return
+    size = meta["size"]
+    cmd = [sys.executable, str(script), "--slides", str(slides_dir), "--out", str(dest),
+           "--size", f"{size['w']}x{size['h']}"]
+    opts = meta.get("pptx") or {}
+    if opts.get("template"):
+        cmd += ["--template", str(opts["template"])]
+        for key, flag in (("keep_head", "--keep-head"), ("base_index", "--base-index"),
+                          ("keep_tail", "--keep-tail")):
+            if opts.get(key) is not None:
+                cmd += [flag, str(int(opts[key]))]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        findings.append({"slide": "", "check": "pptx", "level": "fail",
+                         "msg": "export_pptx.py did not finish in 10 minutes", "where": ""})
+        return
+    if proc.returncode != 0 or not dest.is_file():
+        findings.append({"slide": "", "check": "pptx", "level": "fail",
+                         "msg": f"export_pptx.py failed (exit {proc.returncode}): "
+                                f"{(proc.stderr or proc.stdout).strip()[:300]}", "where": ""})
+        return
+    outputs["pptx"] = work_render.sha256_file(dest)
+
+
+def _replace_dir(dest: Path, src: Path) -> None:
+    """Move every file of ``src`` into ``dest`` after removing what the renderer owns."""
+    dest.mkdir(parents=True, exist_ok=True)
+    work_render._clear_outputs(dest)
+    for item in src.iterdir():
+        target = dest / item.name
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+        os.replace(item, target)
+
+
+def cmd_cut(args) -> int:
+    wdir = work_dir_of(args.dir)
+    meta = load_meta(wdir)
+    formats = _parse_formats(args.formats, meta["kind"])
+    if meta.get("versions") and not meta.get("open"):
+        raise UsageError("no revision is open; run: work.py open --dir D --scope <ids> first")
+    reference = _reference(wdir, meta)
+    added_ids = _assign_ids(wdir, meta)
+    root, rel, _ = src_layout(wdir, meta)
+    open_ = meta.get("open") or {}
+    base = version_entry(meta, open_.get("base")) if open_.get("base") else None
+    files = collect_files(wdir, meta, keep=(base or {}).get("hashes", {}).get(SHARED, {}))
+    state = compute_state(meta, files, rel)
+    vid = next_version_id(meta, wdir)
+    stage = stage_snapshot(wdir, vid, files)
+    tmp = Path(tempfile.mkdtemp(prefix=".render-tmp-", dir=wdir))
+    try:
+        craft = _load_craft()
+        try:
+            res = work_render.render(stage / "src", rel, meta["kind"], meta["size"], tmp / "out",
+                                     tmp / "review", formats,
+                                     probe_js=craft.PROBE_JS if craft else None,
+                                     extra_sizes=meta.get("sizes"))
+        except work_render.RenderEnvError:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
+        findings = list(res["findings"])
+        for m in res["measure"]:
+            if craft:
+                found = craft.evaluate(m, meta["size"], meta.get("craft"), reference)
+            else:
+                found = work_render.builtin_evaluate(m, meta["size"])
+            findings.extend(found or [])
+        outputs = res["outputs"]
+        if meta["kind"] == "deck" and "pptx" in formats:
+            _export_pptx(meta, tmp / "out" / "slides", tmp / "out" / "deck.pptx", findings, outputs)
+        g = guard(base, _base_raws(wdir, base), state, open_)
+        ok = g["ok"] and not any(f.get("level") == "fail" for f in findings)
+        checks = {"ok": not any(f.get("level") == "fail" for f in findings), "probe": res["probe"],
+                  "formats": formats, "findings": findings}
+        measure = {"schema": 1, "canvas": meta["size"], "probe": res["probe"], "slides": res["measure"]}
+        seal_snapshot(wdir, stage, vid, {"checks.json": checks, "guard.json": g, "measure.json": measure})
+        status = "ok" if ok else "failed"
+        meta["versions"].append(_entry(vid, "agent", open_.get("scope", []), status, state, rel, outputs,
+                                       base=g["base"], note=open_.get("note") or None))
+        if ok:
+            meta["current"] = vid
+            meta["open"] = None
+            meta["slides"] = state["slides"]
+            _replace_dir(wdir / "out", tmp / "out")
+            _replace_dir(wdir / "review", tmp / "review")
+            for old in (wdir / "review").glob("failed-*"):
+                shutil.rmtree(old, ignore_errors=True)
+        else:
+            review = wdir / "review"
+            review.mkdir(exist_ok=True)
+            for old in review.glob("failed-*"):
+                shutil.rmtree(old, ignore_errors=True)
+            failed = review / f"failed-{vid}"
+            os.replace(tmp / "out", failed)
+            if (tmp / "review" / "sheet.jpg").is_file():
+                os.replace(tmp / "review" / "sheet.jpg", failed / "sheet.jpg")
+        save_meta(wdir, meta)
+        register(wdir, meta)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    fails = [f for f in findings if f.get("level") == "fail"]
+    _print({"version": vid, "status": status, "current": meta["current"], "ids_added": added_ids,
+            "guard": {"ok": g["ok"], "violations": g["violations"], "notes": g["notes"]},
+            "failed_checks": fails,
+            "outputs": str(wdir / "out") if ok else str(wdir / "review" / f"failed-{vid}")})
+    return 0 if ok else 1
+
+
+def _reference(wdir: Path, meta: dict):
+    ref = meta.get("reference")
+    if not ref:
+        return None
+    path = _safe_join(wdir, ref)
+    if path is None or not path.is_file():
+        raise UsageError(f"reference measure must be a file inside the work: {ref}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise UsageError(f"reference measure is not readable JSON: {ref} ({exc})") from None
+
+
+def cmd_render(args) -> int:
+    wdir = work_dir_of(args.dir)
+    meta = load_meta(wdir)
+    formats = _parse_formats(args.formats, meta["kind"])
+    root, rel, _ = src_layout(wdir, meta)
+    if args.version:
+        entry = version_entry(meta, args.version)
+        if entry is None:
+            raise UsageError(f"no version {args.version}")
+        if not args.out:
+            raise UsageError("--version needs --out DIR (out/ holds only the current version)")
+        out = Path(args.out).expanduser().resolve()
+        if _inside(out, wdir) and not _inside(out, (wdir / "review").resolve()):
+            raise UsageError("--out must be outside the work folder, or under its review/ folder")
+        src_root = wdir / ".versions" / args.version / "src"
+        rel = entry.get("source", rel)
+        if _safe_join(src_root, rel) is None:
+            raise UsageError(f"version {args.version} names a source outside its snapshot")
+        review = out / "review"
+    else:
+        if args.out:
+            raise UsageError("--out is only for --version")
+        src_root, out, review = root, wdir / "out", wdir / "review"
+    craft = _load_craft()
+    res = work_render.render(src_root, rel, meta["kind"], meta["size"], out, review, formats,
+                             probe_js=craft.PROBE_JS if craft else None, extra_sizes=meta.get("sizes"))
+    if meta["kind"] == "deck" and "pptx" in formats:
+        _export_pptx(meta, out / "slides", out / "deck.pptx", res["findings"], res["outputs"])
+    fails = [f for f in res["findings"] if f.get("level") == "fail"]
+    _print({"out": str(out), "outputs": res["outputs"], "failed_checks": fails})
+    return 1 if fails else 0
+
+
+def cmd_list(args) -> int:
+    reg = load_registry()
+    for w in reg["works"]:
+        w["exists"] = (Path(w["path"]) / "work.json").is_file()
+    _print(reg)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(prog="work.py", description="Pollinate works: versions, guard, renderer.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("init", help="make a new work")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--kind", required=True, choices=KINDS)
+    p.add_argument("--title", required=True)
+    p.add_argument("--style")
+    p.add_argument("--size", help="canvas size, e.g. 1920x1080")
+    p = sub.add_parser("adopt", help="register an existing work in place")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--kind", required=True, choices=KINDS)
+    p.add_argument("--src", help="the existing source file (default src/deck.html or src/index.html)")
+    p.add_argument("--title")
+    p.add_argument("--style")
+    p.add_argument("--size")
+    p = sub.add_parser("open", help="start a revision with a declared scope")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--scope", required=True, help="slide ids that may change, comma separated (may be empty)")
+    p.add_argument("--add", type=int, help="how many slides will be added")
+    p.add_argument("--remove", help="slide ids that may be deleted, comma separated")
+    p.add_argument("--note", help="what this revision does")
+    p.add_argument("--shared", action="store_true",
+                   help="allow changes to shared files and to the deck outside its slides")
+    p = sub.add_parser("cut", help="render, check, guard and store a new version")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--formats", help="comma separated: html,pdf,png,pptx")
+    p = sub.add_parser("render", help="render without making a version")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--formats")
+    p.add_argument("--version", help="render this old version instead of the source on disk")
+    p.add_argument("--out", help="output folder for --version")
+    sub.add_parser("list", help="print the registry")
+    return ap
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    handler = {"init": cmd_init, "adopt": cmd_adopt, "open": cmd_open, "cut": cmd_cut,
+               "render": cmd_render, "list": cmd_list}[args.cmd]
+    try:
+        return handler(args)
+    except (UsageError, work_render.RenderEnvError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - exit 1 means "a check failed", never a crash
+        print(f"error: work.py {args.cmd} stopped: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
