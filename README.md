@@ -171,7 +171,7 @@ cd ../desktop && npm install && npm run tauri:dev
 | **Product gates** | Dangerous or off-machine actions and person-only questions; a gate never blocks normal coding | [code](./backend/core/security_hooks.py) |
 | **Sessions & hooks** | Concurrent isolated tabs, steer into a running turn, between-session hooks so no session starts cold | [code](./backend/core/hook_builder.py) · [store](./desktop/src/stores/MessageStore.ts) |
 | **Eval** | System-level self-evaluation of the deployed system: golden set plus scoring of real sessions | [design](./docs/design/2026-10-26-eval-as-product.md) |
-| **Pollinate** | One message to a multi-format media package, driven by the same Brain | [docs](./docs/Pollinate-Content-Engine.md) |
+| **Pollinate** | Decks, posters, long images, reports and copy you revise many times: each round changes only the agreed slides and never loses your own edits | [docs](./docs/Pollinate-Content-Engine.md) |
 
 ---
 

@@ -24,7 +24,7 @@
 | [DDD Platform Overview](DDD-Platform-Overview.md) | — | One knowledge layer powering multiple delivery engines. Platform thesis, 3-layer architecture, 8 feed channels. |
 | [Autonomous Pipeline Design](Autonomous-Pipeline-Design.md) | — | 9-stage pipeline + Quality Convergence Loop. Push-ready delivery guarantee. |
 | [Goal Loop Design](Goal-Loop-Design.md) | — | Iterative convergence for open-ended objectives. Inline + scheduled modes, DoD-driven cycles, velocity tracking. |
-| [Pollinate v3 Content Engine](Pollinate-Content-Engine.md) | — | Personal content delivery engine. DISCOVER stage + 11 production tracks (A–K) + audience simulation + cross-format consistency. |
+| [Pollinate](Pollinate-Content-Engine.md) | — | Content you revise many times: decks (HTML, PDF, PPTX), posters, pages, copy. Works registered in place, versions, a scope guard that keeps hand edits, measured craft checks, copy-ready delivery. |
 | [Session Observation Layer](Session-Observation-Layer-Design.md) | — | Real-time tool-call recording. ObservationRing + DDD event emission + crash recovery enrichment. |
 | [DDD HLD](DDD-Cultivation-Engine-HLD.md) | — | The complete DDD architecture: what a DDD is (Product Domain Brain), the six sections, the lightweight ontology, recall + cultivation E2E, key design decisions, KEM. |
 

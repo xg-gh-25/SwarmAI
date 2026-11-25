@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1120" width="1200" height="1120" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151528"/>
+      <stop offset="1" stop-color="#0F1020"/>
+    </linearGradient>
+    <marker id="aG" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8894a8"/>
+    </marker>
+    <marker id="aO" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#FF6B35"/>
+    </marker>
+    <marker id="aY" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#FDCB6E"/>
+    </marker>
+    <marker id="aR" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#FF6B6B"/>
+    </marker>
+    <marker id="aP" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#A29BFE"/>
+    </marker>
+    <marker id="aT" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#4ECDC4"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="1120" fill="url(#bg)"/>
+
+<text x="60" y="62" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="34" font-weight="800" fill="#FFFFFF" text-anchor="start">What work.py cut does</text>
+<text x="60" y="96" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" font-weight="400" fill="#9AA5B8" text-anchor="start">One command makes a version. The scripts, not the agent or a reviewer, decide if it can ship.</text>
+<rect x="40" y="140" width="340" height="270" rx="12" fill="#1E2438" stroke="#4ECDC4" stroke-width="1.5"/>
+<text x="64" y="182" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="24" font-weight="800" fill="#FFFFFF" text-anchor="start">1  Render</text>
+<text x="64" y="224" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">Chromium of SwarmAI's pinned</text>
+<text x="64" y="252" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">browser runtime; viewport = size.</text>
+<text x="64" y="280" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">Web fonts are cached once, then</text>
+<text x="64" y="308" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">every network request is blocked.</text>
+<rect x="64" y="356" width="270.0" height="32" rx="16" fill="#2A3350" stroke="#4ECDC4" stroke-width="1.2"/>
+<text x="199.0" y="378" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" font-weight="600" fill="#4ECDC4" text-anchor="middle">deck.html, deck.pdf, PNGs</text>
+<rect x="430" y="140" width="340" height="270" rx="12" fill="#1E2438" stroke="#4ECDC4" stroke-width="1.5"/>
+<text x="454" y="182" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="24" font-weight="800" fill="#FFFFFF" text-anchor="start">2  Measure</text>
+<text x="454" y="224" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">A probe reads each rendered slide:</text>
+<text x="454" y="252" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">texts (role, font px, lines, box),</text>
+<text x="454" y="280" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">blocks, images, colors.</text>
+<text x="454" y="308" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">Stored with every version.</text>
+<rect x="454" y="356" width="145.2" height="32" rx="16" fill="#2A3350" stroke="#4ECDC4" stroke-width="1.2"/>
+<text x="526.6" y="378" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" font-weight="600" fill="#4ECDC4" text-anchor="middle">measure.json</text>
+<rect x="820" y="140" width="340" height="270" rx="12" fill="#1E2438" stroke="#4ECDC4" stroke-width="1.5"/>
+<text x="844" y="182" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="24" font-weight="800" fill="#FFFFFF" text-anchor="start">3  Craft checks</text>
+<text x="844" y="224" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">font_floor · fill · align · nowrap</text>
+<text x="844" y="252" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">density · overflow · overlap</text>
+<text x="844" y="280" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">safe_area · image · reference</text>
+<text x="844" y="308" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">+ blank with JS off, PDF pages</text>
+<rect x="844" y="356" width="135.6" height="32" rx="16" fill="#2A3350" stroke="#4ECDC4" stroke-width="1.2"/>
+<text x="911.8" y="378" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" font-weight="600" fill="#4ECDC4" text-anchor="middle">checks.json</text>
+<rect x="40" y="470" width="340" height="270" rx="12" fill="#1E2438" stroke="#4ECDC4" stroke-width="1.5"/>
+<text x="64" y="512" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="24" font-weight="800" fill="#FFFFFF" text-anchor="start">4  PPTX export</text>
+<text x="64" y="554" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">Only when pptx is asked for.</text>
+<text x="64" y="582" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">One picture per slide; with a</text>
+<text x="64" y="610" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">template, its cover and base</text>
+<text x="64" y="638" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">slides stay exactly as they are.</text>
+<rect x="64" y="686" width="116.39999999999999" height="32" rx="16" fill="#2A3350" stroke="#4ECDC4" stroke-width="1.2"/>
+<text x="122.19999999999999" y="708" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" font-weight="600" fill="#4ECDC4" text-anchor="middle">deck.pptx</text>
+<rect x="430" y="470" width="340" height="270" rx="12" fill="#1E2438" stroke="#4ECDC4" stroke-width="1.5"/>
+<text x="454" y="512" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="24" font-weight="800" fill="#FFFFFF" text-anchor="start">5  Guard</text>
+<text x="454" y="554" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">Each slide vs the base version.</text>
+<text x="454" y="582" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">Outside the scope and modified,</text>
+<text x="454" y="610" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">deleted or moved = violation.</text>
+<text x="454" y="638" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">Shared files need open --shared.</text>
+<rect x="454" y="686" width="126.0" height="32" rx="16" fill="#2A3350" stroke="#4ECDC4" stroke-width="1.2"/>
+<text x="517.0" y="708" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" font-weight="600" fill="#4ECDC4" text-anchor="middle">guard.json</text>
+<rect x="820" y="470" width="340" height="270" rx="12" fill="#1E2438" stroke="#4ECDC4" stroke-width="1.5"/>
+<text x="844" y="512" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="24" font-weight="800" fill="#FFFFFF" text-anchor="start">6  Version</text>
+<text x="844" y="554" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">.versions/vNNN/: a full copy of</text>
+<text x="844" y="582" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">src/ plus the three json files,</text>
+<text x="844" y="610" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">made read-only. Failed versions</text>
+<text x="844" y="638" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">are kept too, marked failed.</text>
+<rect x="844" y="686" width="68.4" height="32" rx="16" fill="#2A3350" stroke="#4ECDC4" stroke-width="1.2"/>
+<text x="878.2" y="708" font-family="'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" font-weight="600" fill="#4ECDC4" text-anchor="middle">vNNN</text>
+<line x1="384" y1="275.0" x2="424" y2="275.0" stroke="#8894a8" stroke-width="2.5" marker-end="url(#aG)"/>
+<line x1="774" y1="275.0" x2="814" y2="275.0" stroke="#8894a8" stroke-width="2.5" marker-end="url(#aG)"/>
+<path d="M990.0 414 V440 H210.0 V464" fill="none" stroke="#8894a8" stroke-width="2.5" marker-end="url(#aG)"/>
+<line x1="384" y1="605.0" x2="424" y2="605.0" stroke="#8894a8" stroke-width="2.5" marker-end="url(#aG)"/>
+<line x1="774" y1="605.0" x2="814" y2="605.0" stroke="#8894a8" stroke-width="2.5" marker-end="url(#aG)"/>
+<rect x="40" y="776" width="1120" height="118" rx="12" fill="#1A2036" stroke="#FDCB6E" stroke-width="1.5"/>
+<text x="64" y="812" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="700" fill="#FDCB6E" text-anchor="start">A version fails only for what it made worse.</text>
+<text x="64" y="842" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">An unchanged slide, or a changed slide with no more findings of a check than the base version had,</text>
+<text x="64" y="868" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">keeps that old problem as a warning. A check that gained findings on a slide fails.</text>
+<rect x="40.0" y="924" width="353.3333333333333" height="150" rx="12" fill="#1E2438" stroke="#7EE787" stroke-width="2"/>
+<text x="62.0" y="962" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" font-weight="800" fill="#7EE787" text-anchor="start">exit 0 · passed</text>
+<text x="62.0" y="996" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">current moves to the new</text>
+<text x="62.0" y="1022" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">version; out/ and review/</text>
+<text x="62.0" y="1048" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">are replaced; scope cleared.</text>
+<rect x="423.3333333333333" y="924" width="353.3333333333333" height="150" rx="12" fill="#1E2438" stroke="#FF6B6B" stroke-width="2"/>
+<text x="445.3333333333333" y="962" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" font-weight="800" fill="#FF6B6B" text-anchor="start">exit 1 · failed</text>
+<text x="445.3333333333333" y="996" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">a check or the guard failed;</text>
+<text x="445.3333333333333" y="1022" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">current does not move; files</text>
+<text x="445.3333333333333" y="1048" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">go to review/failed-vNNN/.</text>
+<rect x="806.6666666666666" y="924" width="353.3333333333333" height="150" rx="12" fill="#1E2438" stroke="#9AA5B8" stroke-width="2"/>
+<text x="828.6666666666666" y="962" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" font-weight="800" fill="#9AA5B8" text-anchor="start">exit 2 · usage, setup</text>
+<text x="828.6666666666666" y="996" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">bad command or the runtime</text>
+<text x="828.6666666666666" y="1022" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">cannot start: fix the setup,</text>
+<text x="828.6666666666666" y="1048" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#C6CEDC" text-anchor="start">not the content.</text>
+</svg>

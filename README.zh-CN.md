@@ -171,7 +171,7 @@ cd ../desktop && npm install && npm run tauri:dev
 | **产品级 gate** | 危险或出机器的操作、只有人能回答的问题；gate 从不阻挡正常的写代码 | [代码](./backend/core/security_hooks.py) |
 | **Session 与 hook** | 并发且互相隔离的 tab，可以往正在跑的回合里追加消息（steer），session 之间的 hook 让每个 session 都不冷启动 | [代码](./backend/core/hook_builder.py) · [store](./desktop/src/stores/MessageStore.ts) |
 | **Eval** | 对已部署系统做系统级自评：golden set，加上对真实 session 的评分 | [设计](./docs/design/2026-10-26-eval-as-product.md) |
-| **Pollinate** | 一条消息生成多格式的媒体内容包，由同一个 Brain 驱动 | [文档](./docs/Pollinate-Content-Engine.md) |
+| **Pollinate** | 做 deck、海报、长图、报告和文案，适合反复修改的内容：每一轮只改说好的页，你自己改过的地方不会丢 | [文档](./docs/Pollinate-Content-Engine.md) |
 
 ---
 
