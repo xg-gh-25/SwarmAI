@@ -85,7 +85,7 @@ where `$SKILL_DIR` is this skill's base directory (shown when the skill loads).
 | `work.py init --dir D --kind K --title T [--style S] [--size 1920x1080]` | Creates the folder, `work.json` and an empty source file, and registers the work |
 | `work.py adopt --dir D --kind K [--src <existing html>]` | Registers an existing work in place; adds missing slide ids; makes v001 (`by: user`) |
 | `work.py open --dir D --scope id,id [--add N] [--remove id,id] [--note "…"]` | Absorbs hand edits first: if the files on disk differ from the current version, saves them as `vNNN-user` (`by: user`) and uses that as the base; records the open scope |
-| `work.py cut --dir D [--formats html,pdf,png,pptx]` | Render → measure → craft checks → guard → write a new version; updates `current` only if all pass; clears the open scope |
+| `work.py cut --dir D [--formats html,pdf,png,pptx] [--template T.pptx --keep-head N --base-index I --keep-tail M] [--reference R]` | Render → measure → craft checks → guard → write a new version; updates `current` only if all pass; clears the open scope |
 | `work.py render --dir D [--formats …]` | Renders the current source to `out/` only; no new version |
 | `work.py list` | Prints the registry |
 
@@ -106,9 +106,8 @@ If Playwright or Chromium is missing, `work.py` exits 2; install them in user sp
 (`python3 -m pip install --user playwright`, then `python3 -m playwright install chromium`),
 never with sudo.
 
-Other scripts you may need: `craft_checks.py` (run by `cut`; run it yourself only to compare
-with a reference deck, kinds/deck.md), `export_pptx.py` (run by `cut`; run it yourself only
-with a .pptx template, kinds/deck.md), `recommend_systems.py` (deck style gallery),
+Other scripts: `craft_checks.py` and `export_pptx.py` are run by `cut` (a reference deck and
+a .pptx template are `cut --reference` and `cut --template`, kinds/deck.md); `recommend_systems.py` (deck style gallery),
 `brand_config.py` (brand signature), `p2_scan.py` and `geo_score.py` (copy checks).
 
 ## 4. The flow

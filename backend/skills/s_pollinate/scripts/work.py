@@ -895,6 +895,7 @@ def cmd_cut(args) -> int:
     formats = _parse_formats(args.formats, meta["kind"])
     if meta.get("versions") and not meta.get("open"):
         raise UsageError("no revision is open; run: work.py open --dir D --scope <ids> first")
+    _apply_cut_options(wdir, meta, args)
     reference = _reference(wdir, meta)
     added_ids = _assign_ids(wdir, meta)
     root, rel, _ = src_layout(wdir, meta)
@@ -918,7 +919,12 @@ def cmd_cut(args) -> int:
         findings = list(res["findings"])
         for m in res["measure"]:
             if craft:
-                found = craft.evaluate(m, meta["size"], meta.get("craft"), reference)
+                try:
+                    found = craft.evaluate(m, meta["size"], meta.get("craft"), reference)
+                except ValueError as exc:
+                    found = [{"slide": m.get("slide", "") if isinstance(m, dict) else "", "check": "craft",
+                              "level": "fail", "msg": f"craft_checks could not judge this slide: {exc}",
+                              "where": ""}]
             else:
                 found = work_render.builtin_evaluate(m, meta["size"])
             findings.extend(found or [])
@@ -961,6 +967,48 @@ def cmd_cut(args) -> int:
             "failed_checks": fails,
             "outputs": str(wdir / "out") if ok else str(wdir / "review" / f"failed-{vid}")})
     return 0 if ok else 1
+
+
+REFERENCE_COPY = ".reference/measure.json"
+
+
+def _apply_cut_options(wdir: Path, meta: dict, args) -> None:
+    """Store cut's --template / --reference choices in work.json so later cuts reuse them.
+
+    --template T.pptx with --keep-head / --base-index / --keep-tail: the PPTX export puts the
+    slides into the person's template (design 13.5). --reference R: R is another work's
+    folder (its current version's measure.json is used) or a measure.json file; it is copied
+    into this work, because a reference must live inside the work it judges.
+    """
+    template = getattr(args, "template", None)
+    if template:
+        tpath = Path(template).expanduser().resolve()
+        if not tpath.is_file() or tpath.suffix.lower() != ".pptx":
+            raise UsageError(f"--template must be an existing .pptx file: {template}")
+        meta["pptx"] = {"template": str(tpath)}
+        for key in ("keep_head", "base_index", "keep_tail"):
+            val = getattr(args, key, None)
+            if val is not None:
+                if val < 0 or (key == "base_index" and val < 1):
+                    raise UsageError(f"--{key.replace('_', '-')} must be {'>= 1' if key == 'base_index' else '>= 0'}")
+                meta["pptx"][key] = val
+    elif any(getattr(args, k, None) is not None for k in ("keep_head", "base_index", "keep_tail")):
+        raise UsageError("--keep-head / --base-index / --keep-tail need --template")
+    ref = getattr(args, "reference", None)
+    if ref:
+        rpath = Path(ref).expanduser().resolve()
+        if rpath.is_dir():
+            rmeta = load_meta(rpath)
+            cur = rmeta.get("current")
+            if not cur:
+                raise UsageError(f"reference work {ref} has no current version; cut it once first")
+            rpath = rpath / ".versions" / cur / "measure.json"
+        if not rpath.is_file():
+            raise UsageError(f"--reference must be a work folder or a measure.json file: {ref}")
+        dest = wdir / REFERENCE_COPY
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(rpath, dest)
+        meta["reference"] = REFERENCE_COPY
 
 
 def _reference(wdir: Path, meta: dict):
@@ -1044,6 +1092,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("cut", help="render, check, guard and store a new version")
     p.add_argument("--dir", required=True)
     p.add_argument("--formats", help="comma separated: html,pdf,png,pptx")
+    p.add_argument("--template", help="the person's .pptx template for the PPTX export (kept for later cuts)")
+    p.add_argument("--keep-head", dest="keep_head", type=int, help="template slides kept at the start")
+    p.add_argument("--base-index", dest="base_index", type=int, help="template slide (1-based) used as the base")
+    p.add_argument("--keep-tail", dest="keep_tail", type=int, help="template slides kept at the end")
+    p.add_argument("--reference", help="a reference work folder or measure.json to match (kept for later cuts)")
     p = sub.add_parser("render", help="render without making a version")
     p.add_argument("--dir", required=True)
     p.add_argument("--formats")

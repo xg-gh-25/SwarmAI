@@ -52,6 +52,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLLINATE_FONT_CACHE", str(tmp_path / "font-cache"))
     fake = FakeHttp()
     monkeypatch.setattr(work_render, "http_get", fake)
+    # The mechanism tests (guard, versions, render) use tiny decks that the real craft
+    # checks rightly call too empty; they pin the built-in probe so they test their own
+    # mechanism. test_work_integration.py runs cut with the real craft_checks.py.
+    monkeypatch.setattr(work, "_load_craft", lambda: None)
     return {"tmp": tmp_path, "http": fake}
 
 

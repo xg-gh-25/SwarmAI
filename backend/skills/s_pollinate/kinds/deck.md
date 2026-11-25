@@ -87,30 +87,32 @@ the images; drop decoration (page numbers, empty shapes). The .pptx is never the
 
 - **No template:** `work.py cut --dir D --formats html,pdf,png,pptx`. Each slide becomes
   one full-size picture in the PPTX.
-- **With the person's template** (cover slides, base slides with a footer): cut first, then
-  export with the template, so the template slides stay exactly as they are:
+- **With the person's template** (cover slides, base slides with a footer): give the template
+  to `cut`, so the template slides stay exactly as they are:
   ```
-  "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/export_pptx.py" --slides D/out/slides --out D/out/deck.pptx --size 1920x1080 --template T.pptx --keep-head N --base-index I --keep-tail M
+  "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/work.py" cut --dir D --formats html,pdf,png,pptx --template T.pptx --keep-head N --base-index I --keep-tail M
   ```
   `--keep-head N`: the first N template slides stay as they are (for example the cover).
   `--keep-tail M`: the last M template slides stay. `--base-index I`: the template slide
   (counted from 1) that each content slide is built on; its footer and logo stay, and the
   slide picture goes into its content area. Never replace or restyle a template slide.
+  The choice is stored in `work.json`; later cuts reuse it without the flags.
 
-PDF pages and PPTX slides must equal the number of source slides; `cut` checks this. After
-a template export, count the content slides yourself (head + content + tail).
+PDF pages and PPTX slides must equal the number of source slides (head + content + tail with
+a template); `cut` and `export_pptx.py` check this.
 
 ## Reference deck
 
 When the person says "match the style of <deck>": register that deck as a work too
-(`adopt`) and cut it once, so it has a `measure.json`. Then compare:
+(`adopt`) and cut it once, so it has a `measure.json`. Then cut this deck against it:
 
 ```
-"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/craft_checks.py" --measure D/.versions/<current>/measure.json --reference R/.versions/<current>/measure.json
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/work.py" cut --dir D --reference R
 ```
 
-Exit 1 lists where this deck's type scale, margins or colors move too far from the
-reference. Fix those, then cut again.
+`R` is the reference work's folder (or a `measure.json`). It is copied into this work and
+kept for later cuts. The `reference` check lists where this deck's type scale, margins or
+colors move too far from it. Fix those, then cut again.
 
 ## Delivery
 
