@@ -296,7 +296,7 @@ def main():
         result["animations_note"] = (
             "Animation injection requires reading each slide XML to extract shape IDs (spid) "
             "and paragraph indices. Agent should read slide XML and construct timing blocks "
-            "manually for slides with bullet lists. See track-e-deck.md Step 3 for XML template."
+            "manually for slides with bullet lists."
         )
 
     # Validate if requested

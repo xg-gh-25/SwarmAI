@@ -92,7 +92,7 @@ def test_project_manager_keeps_the_internal_capability_and_points_to_host_skills
 _POLLINATE_FILES = [
     "brand/identity.yaml", "channels/bilibili.yaml", "channels/youtube.yaml",
     "references/platform-specs.md", "INSTRUCTIONS.md", "scripts/generate_shorts.py",
-    "scripts/check_rpv.py", "tracks/track-a-video.md", "scripts/format_recommend.py",
+    "scripts/check_rpv.py", "kinds/deck.md", "scripts/format_recommend.py",
     "scripts/publish_dashboard.py",
 ]
 

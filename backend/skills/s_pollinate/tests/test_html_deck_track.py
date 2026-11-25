@@ -138,19 +138,22 @@ def test_italic_serif_templates_preserve_italic_axis():
 
 
 def test_track_doc_and_wiring_present():
-    """Track doc exists + INSTRUCTIONS.md dispatches html_deck to it."""
-    track_doc = SKILL / "tracks" / "track-e2-html-deck.md"
-    assert track_doc.is_file() and track_doc.stat().st_size > 500, "track-e2-html-deck.md missing/empty"
+    """The deck kind page exists, points at the bundled design systems, and
+    INSTRUCTIONS.md routes deck requests to it."""
+    kind_doc = SKILL / "kinds" / "deck.md"
+    assert kind_doc.is_file() and kind_doc.stat().st_size > 500, "kinds/deck.md missing/empty"
+    doc = kind_doc.read_text(encoding="utf-8")
+    assert "templates/html-deck/systems/" in doc, "kinds/deck.md does not point to the design systems"
+    assert "recommend_systems.py" in doc, "kinds/deck.md does not use the style recommender"
     instr = (SKILL / "INSTRUCTIONS.md").read_text(encoding="utf-8")
-    assert "html_deck" in instr, "INSTRUCTIONS.md has no html_deck dispatch"
-    assert "track-e2-html-deck.md" in instr, "INSTRUCTIONS.md does not point to the track doc"
+    assert "kinds/deck.md" in instr, "INSTRUCTIONS.md does not route decks to kinds/deck.md"
 
 
 def test_track_doc_is_cdn_based_not_local():
-    """The reversal must have rewritten the recipe: no 'LOCAL FONTS'/'../../fonts/'
-    zero-network language should survive in the track doc (would mislead the agent)."""
-    doc = (SKILL / "tracks" / "track-e2-html-deck.md").read_text(encoding="utf-8")
-    assert "../../fonts/" not in doc, "track doc still references deleted local fonts/"
+    """The deck recipe keeps each design system's CDN font link: no '../../fonts/'
+    local-font path may appear in the deck kind page (would mislead the agent)."""
+    doc = (SKILL / "kinds" / "deck.md").read_text(encoding="utf-8")
+    assert "../../fonts/" not in doc, "kinds/deck.md references deleted local fonts/"
 
 
 @pytest.mark.skipif(
@@ -229,7 +232,7 @@ def test_export_pdf_self_validates():
 # ---------- export-pdf.sh: advisory text-overlap check(Path A) ----------
 # Implements the READ side of the data-om-validate contract that deck-stage.js:56
 # WRITES ('no_overflowing_text,no_overlapping_text,slide_sized_text') but nothing reads.
-# ADVISORY per INSTRUCTIONS.md:801 — warn, never hard-fail.
+# ADVISORY by design (this check class gives false positives) — warn, never hard-fail.
 
 def test_export_pdf_reads_om_validate_contract():
     """The overlap probe MUST read the data-om-validate contract deck-stage.js writes,
@@ -244,7 +247,7 @@ def test_export_pdf_reads_om_validate_contract():
 
 def test_export_pdf_overlap_check_is_advisory():
     """The overlap check MUST be ADVISORY (console.warn, exit 0) — never a hard gate.
-    INSTRUCTIONS.md:801 deliberately keeps this false-positive-prone check class advisory.
+    This false-positive-prone check class is deliberately kept advisory.
     Regression guard: the overlap-warning block must NOT contain a process.exit."""
     s = _export_script_text()
     lines = s.splitlines()
@@ -261,7 +264,7 @@ def test_export_pdf_overlap_check_is_advisory():
     assert "console.warn" in block or "console.error" in block, \
         "advisory overlap block does not warn (no console.warn/error)"
     assert "process.exit" not in block, \
-        "advisory overlap block contains process.exit — it must NOT hard-fail (INSTRUCTIONS.md:801)"
+        "advisory overlap block contains process.exit — it must NOT hard-fail"
 
 
 def _extract_overlap_probe() -> str:

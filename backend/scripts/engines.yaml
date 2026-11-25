@@ -16,7 +16,7 @@ engines:
 
   - name: "Pollinate Content Engine"
     path: "backend/skills/s_pollinate/INSTRUCTIONS.md"
-    description: "Message-first media delivery — transforms ideas into posters, videos, narratives, README"
+    description: "Content creator for work that gets revised: HTML decks (PDF/PPTX export), posters, long images, reports, platform copy"
 
   # GitHub Community Engine moved to its DDD package
   # (Projects/GitHub_Community/skills/s_github_community/) — no longer under this

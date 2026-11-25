@@ -443,7 +443,7 @@ See `Projects/SwarmAI/2-understanding/TECH.md` → "Output Format Protocol" for 
 |--------|------|-------------|
 | DDD Cultivation Engine (event-driven v2) | `backend/core/cultivation_dispatcher.py` | Event-driven DDD maintenance — queued events (git commit, 30-minute timer) run the orchestrator's DDD staleness channel; DDD knowledge itself is written by CDF (core/ingestion/) |
 | Autonomous Pipeline (staged runs) | `backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` | Profile-driven runs (full: EVALUATE→THINK→PLAN→BUILD→REVIEW→TEST→DELIVER→REFLECT) with expert review gates |
-| Pollinate Content Engine | `backend/skills/s_pollinate/INSTRUCTIONS.md` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
+| Pollinate Content Engine | `backend/skills/s_pollinate/INSTRUCTIONS.md` | Content creator for work that gets revised: HTML decks (PDF/PPTX export), posters, long images, reports, platform copy |
 | Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | Deterministic graph traversal for code context retrieval |
 | Session Resume Enrichment | `backend/core/context_injector.py` | Five-layer resume context (checkpoint, git state, conclusions, key tool results, recent conversation) within a model-aware token budget |
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | Socket Mode bot with HTTP polling fallback — responds on the owner's behalf to allowlisted users |
