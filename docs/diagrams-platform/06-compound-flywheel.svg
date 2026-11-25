@@ -25,42 +25,41 @@
   <text x="375" y="293" text-anchor="middle" fill="#8b8ba0" font-size="8">Self-growing</text>
   <text x="375" y="307" text-anchor="middle" fill="#8b8ba0" font-size="8">domain expertise</text>
 
-  <!-- 8 Channels (left arc) -->
-  <rect x="30" y="70" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
-  <text x="105" y="88" text-anchor="middle" fill="#f78166" font-size="8">1. Code Changes</text>
+  <!-- 5 knowledge sources (left) -->
+  <text x="105" y="60" text-anchor="middle" fill="#f78166" font-size="9" font-weight="bold">Five knowledge sources</text>
 
-  <rect x="30" y="108" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
-  <text x="105" y="126" text-anchor="middle" fill="#f78166" font-size="8">2. External Learning</text>
+  <rect x="30" y="70" width="150" height="38" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
+  <text x="105" y="86" text-anchor="middle" fill="#f78166" font-size="8.5" font-weight="bold">Pipeline run report</text>
+  <text x="105" y="99" text-anchor="middle" fill="#8b8ba0" font-size="8">when a run lands</text>
 
-  <rect x="30" y="146" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
-  <text x="105" y="164" text-anchor="middle" fill="#f78166" font-size="8">3. Pipeline Delivery</text>
+  <rect x="30" y="130" width="150" height="38" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
+  <text x="105" y="146" text-anchor="middle" fill="#f78166" font-size="8.5" font-weight="bold">Weekly commit reader</text>
+  <text x="105" y="159" text-anchor="middle" fill="#8b8ba0" font-size="8">weekly, a project's new commits</text>
 
-  <rect x="30" y="184" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
-  <text x="105" y="202" text-anchor="middle" fill="#f78166" font-size="8">4. Industry Signals</text>
+  <rect x="30" y="190" width="150" height="38" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
+  <text x="105" y="206" text-anchor="middle" fill="#f78166" font-size="8.5" font-weight="bold">Saving on purpose</text>
+  <text x="105" y="219" text-anchor="middle" fill="#8b8ba0" font-size="8">when the person asks</text>
 
-  <rect x="30" y="222" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
-  <text x="105" y="240" text-anchor="middle" fill="#f78166" font-size="8">5. Conversation</text>
+  <rect x="30" y="250" width="150" height="38" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
+  <text x="105" y="266" text-anchor="middle" fill="#f78166" font-size="8.5" font-weight="bold">External content</text>
+  <text x="105" y="279" text-anchor="middle" fill="#8b8ba0" font-size="8">Library Inbox, a Brain's jobs</text>
 
-  <rect x="30" y="260" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
-  <text x="105" y="278" text-anchor="middle" fill="#f78166" font-size="8">6. Corrections</text>
+  <rect x="30" y="310" width="150" height="38" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
+  <text x="105" y="326" text-anchor="middle" fill="#f78166" font-size="8.5" font-weight="bold">After-session review</text>
+  <text x="105" y="339" text-anchor="middle" fill="#8b8ba0" font-size="8">about an hour after a session</text>
 
-  <rect x="30" y="298" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
-  <text x="105" y="316" text-anchor="middle" fill="#f78166" font-size="8">7. Code Intelligence</text>
-
-  <!-- Arrows: Channels -> DDD -->
-  <line x1="180" y1="84" x2="295" y2="230" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
-  <line x1="180" y1="122" x2="292" y2="240" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
-  <line x1="180" y1="160" x2="288" y2="252" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
-  <line x1="180" y1="198" x2="285" y2="263" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
-  <line x1="180" y1="236" x2="282" y2="272" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
-  <line x1="180" y1="274" x2="282" y2="278" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
-  <line x1="180" y1="312" x2="285" y2="290" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
+  <!-- Arrows: sources -> DDD -->
+  <line x1="180" y1="99" x2="296" y2="232" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
+  <line x1="180" y1="149" x2="288" y2="252" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
+  <line x1="180" y1="209" x2="283" y2="268" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
+  <line x1="180" y1="269" x2="282" y2="284" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
+  <line x1="180" y1="321" x2="288" y2="302" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr6o)"/>
 
   <!-- Engines (right side) -->
   <rect x="550" y="160" width="170" height="70" rx="8" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="2"/>
   <text x="635" y="185" text-anchor="middle" fill="#d2a8ff" font-size="11" font-weight="bold">Super Builder</text>
   <text x="635" y="202" text-anchor="middle" fill="#e6edf3" font-size="9">Autonomous Pipeline</text>
-  <text x="635" y="218" text-anchor="middle" fill="#8b8ba0" font-size="8">Push-ready code delivery</text>
+  <text x="635" y="218" text-anchor="middle" fill="#8b8ba0" font-size="8">Reviewed, tested local commit</text>
 
   <rect x="550" y="260" width="170" height="70" rx="8" fill="#2d1b4e" stroke="#d2a8ff" stroke-width="2"/>
   <text x="635" y="285" text-anchor="middle" fill="#d2a8ff" font-size="11" font-weight="bold">Super Marketer</text>
@@ -76,9 +75,9 @@
   <line x1="468" y1="275" x2="548" y2="290" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr6)"/>
   <line x1="465" y1="310" x2="548" y2="380" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arr6)"/>
 
-  <!-- Feedback: Engines -> Channel 3 (via REFLECT) -->
-  <path d="M550,220 Q520,220 500,180 Q480,140 400,100 Q320,60 180,155" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr6p)"/>
-  <path d="M550,320 Q520,335 500,348 Q460,362 350,356 Q240,350 180,310" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr6p)"/>
+  <!-- Feedback: Pipeline -> run report; Pollinate -> after-session review -->
+  <path d="M550,220 Q520,220 500,180 Q480,140 400,100 Q320,60 182,80" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr6p)"/>
+  <path d="M550,320 Q520,335 500,348 Q460,362 350,356 Q240,350 182,339" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr6p)"/>
 
   <!-- Cross-engine flow -->
   <rect x="560" y="237" width="150" height="18" rx="4" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
@@ -91,8 +90,7 @@
   <!-- Timeline -->
   <line x1="80" y1="432" x2="470" y2="432" stroke="#555" stroke-width="1"/>
   <text x="80" y="446" fill="#8b8ba0" font-size="8">Session 1</text>
-  <text x="200" y="446" fill="#8b8ba0" font-size="8">Session 10</text>
-  <text x="340" y="446" fill="#8b8ba0" font-size="8">Session 50</text>
+  <text x="275" y="446" text-anchor="middle" fill="#8b8ba0" font-size="8">(an illustration, not a measurement)</text>
   <text x="440" y="446" fill="#8b8ba0" font-size="8">Session 100</text>
 
   <!-- Growth curve -->
@@ -104,8 +102,8 @@
   <text x="468" y="424" text-anchor="end" fill="#f78166" font-size="8">Regular AI (flat)</text>
 
   <!-- Key examples -->
-  <text x="80" y="470" fill="#e6edf3" font-size="9">Pipeline discovers new pattern -> TECH.md -> Pollinate's brief finds it</text>
-  <text x="80" y="488" fill="#e6edf3" font-size="9">Pollinate session learns -> DDD (after-session review) -> Pipeline uses it</text>
-  <text x="80" y="506" fill="#e6edf3" font-size="9">User corrects once -> All future sessions follow correction</text>
+  <text x="80" y="470" fill="#e6edf3" font-size="9">Pipeline lands a change -> DDD -> Pollinate's brief finds it</text>
+  <text x="80" y="488" fill="#e6edf3" font-size="9">A Pollinate session teaches -> after-session review -> DDD -> Pipeline reads it</text>
+  <text x="80" y="506" fill="#e6edf3" font-size="9">The person corrects once -> it is recorded -> later sessions start with it</text>
   <text x="80" y="524" fill="#7ee787" font-size="9" font-weight="bold">Each engine delivery makes EVERY engine smarter -- via shared DDD</text>
 </svg>

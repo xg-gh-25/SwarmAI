@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560" font-family="sans-serif">
+  <defs>
+    <marker id="arr3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#f78166"/>
+    </marker>
+    <marker id="arr3g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#7ee787"/>
+    </marker>
+    <marker id="arr3b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  <rect width="800" height="560" fill="#1a1a2e" rx="12"/>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="bold">Where Knowledge Comes From: Five Sources</text>
+  <text x="400" y="50" text-anchor="middle" fill="#8b8ba0" font-size="10">Every source goes through one flow (CDF) into one place per unit. No approval queue.</text>
+
+  <!-- ============ Sources (left column) ============ -->
+  <rect x="20" y="64" width="310" height="78" rx="8" fill="#2b1810" stroke="#f78166" stroke-width="1.5"/>
+  <circle cx="44" cy="84" r="11" fill="#f78166"/>
+  <text x="44" y="88" text-anchor="middle" fill="#1a1a2e" font-size="11" font-weight="bold">1</text>
+  <text x="64" y="88" fill="#e6edf3" font-size="11" font-weight="bold">After-session review</text>
+  <text x="64" y="106" fill="#8b8ba0" font-size="9">When: about an hour after a session goes quiet</text>
+  <text x="64" y="120" fill="#8b8ba0" font-size="9">(chat, Pipeline or Pollinate; the person wrote in it)</text>
+  <text x="64" y="134" fill="#58a6ff" font-size="9">To: wherever the session's own agent declares</text>
+
+  <rect x="20" y="148" width="310" height="78" rx="8" fill="#2b1810" stroke="#f78166" stroke-width="1.5"/>
+  <circle cx="44" cy="168" r="11" fill="#f78166"/>
+  <text x="44" y="172" text-anchor="middle" fill="#1a1a2e" font-size="11" font-weight="bold">2</text>
+  <text x="64" y="172" fill="#e6edf3" font-size="11" font-weight="bold">Pipeline run report</text>
+  <text x="64" y="190" fill="#8b8ba0" font-size="9">When: a Pipeline run lands (or closes)</text>
+  <text x="64" y="204" fill="#58a6ff" font-size="9">To: TIMELINE (delivered), PROJECT (decisions),</text>
+  <text x="64" y="218" fill="#58a6ff" font-size="9">IMPROVEMENT (lessons, gaps), TECH / PRODUCT</text>
+
+  <rect x="20" y="232" width="310" height="78" rx="8" fill="#2b1810" stroke="#f78166" stroke-width="1.5"/>
+  <circle cx="44" cy="252" r="11" fill="#f78166"/>
+  <text x="44" y="256" text-anchor="middle" fill="#1a1a2e" font-size="11" font-weight="bold">3</text>
+  <text x="64" y="256" fill="#e6edf3" font-size="11" font-weight="bold">Weekly commit reader</text>
+  <text x="64" y="274" fill="#8b8ba0" font-size="9">When: weekly, new commits in each project's repos</text>
+  <text x="64" y="288" fill="#8b8ba0" font-size="9">(commits a Pipeline run landed are skipped)</text>
+  <text x="64" y="302" fill="#58a6ff" font-size="9">To: the project's DDD or the General Brain</text>
+
+  <rect x="20" y="316" width="310" height="78" rx="8" fill="#2b1810" stroke="#f78166" stroke-width="1.5"/>
+  <circle cx="44" cy="336" r="11" fill="#f78166"/>
+  <text x="44" y="340" text-anchor="middle" fill="#1a1a2e" font-size="11" font-weight="bold">4</text>
+  <text x="64" y="340" fill="#e6edf3" font-size="11" font-weight="bold">Saving on purpose</text>
+  <text x="64" y="358" fill="#8b8ba0" font-size="9">When: the person asks in a turn ("remember this",</text>
+  <text x="64" y="372" fill="#8b8ba0" font-size="9">"learn this link"), up to 3 items</text>
+  <text x="64" y="386" fill="#58a6ff" font-size="9">To: the place each unit declares</text>
+
+  <rect x="20" y="400" width="310" height="78" rx="8" fill="#2b1810" stroke="#f78166" stroke-width="1.5"/>
+  <circle cx="44" cy="420" r="11" fill="#f78166"/>
+  <text x="44" y="424" text-anchor="middle" fill="#1a1a2e" font-size="11" font-weight="bold">5</text>
+  <text x="64" y="424" fill="#e6edf3" font-size="11" font-weight="bold">External content</text>
+  <text x="64" y="442" fill="#8b8ba0" font-size="9">When: a file is dropped into the Library Inbox,</text>
+  <text x="64" y="456" fill="#8b8ba0" font-size="9">or a Brain's job brings a fresh result</text>
+  <text x="64" y="470" fill="#58a6ff" font-size="9">To: references in the Library</text>
+
+  <!-- Not sources -->
+  <rect x="20" y="488" width="310" height="60" rx="8" fill="#12122a" stroke="#8b8ba0" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="34" y="506" fill="#e6edf3" font-size="9" font-weight="bold">Not sources</text>
+  <text x="34" y="522" fill="#8b8ba0" font-size="9">Code graph: separate, searched on demand</text>
+  <text x="34" y="538" fill="#8b8ba0" font-size="9">Inbox feeds: reach the Brain only via "learn into Brain"</text>
+
+  <!-- Arrows: sources -> CDF -->
+  <line x1="330" y1="103" x2="378" y2="120" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="330" y1="187" x2="378" y2="170" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="330" y1="271" x2="378" y2="215" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="330" y1="355" x2="378" y2="260" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="330" y1="439" x2="378" y2="305" stroke="#f78166" stroke-width="1.5" marker-end="url(#arr3)"/>
+
+  <!-- ============ CDF (right top) ============ -->
+  <rect x="380" y="64" width="400" height="270" rx="10" fill="#1a2e1a" stroke="#7ee787" stroke-width="2"/>
+  <text x="580" y="86" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">CDF: one flow for every source</text>
+
+  <rect x="395" y="98" width="370" height="52" rx="6" fill="#12221a" stroke="#4e9a5a" stroke-width="1"/>
+  <text x="407" y="115" fill="#e6edf3" font-size="10" font-weight="bold">1. Declare</text>
+  <text x="407" y="130" fill="#8b8ba0" font-size="9">The producing agent names each unit's type, scope and place,</text>
+  <text x="407" y="143" fill="#8b8ba0" font-size="9">and whether it is new, the same, adds to or replaces an entry</text>
+
+  <rect x="395" y="156" width="370" height="52" rx="6" fill="#12221a" stroke="#4e9a5a" stroke-width="1"/>
+  <text x="407" y="173" fill="#e6edf3" font-size="10" font-weight="bold">2. Code checks facts</text>
+  <text x="407" y="188" fill="#8b8ba0" font-size="9">Not empty, cited evidence exists, no credentials or injected</text>
+  <text x="407" y="201" fill="#8b8ba0" font-size="9">instructions; a declared replacement names one live entry</text>
+
+  <rect x="395" y="214" width="370" height="52" rx="6" fill="#12221a" stroke="#4e9a5a" stroke-width="1"/>
+  <text x="407" y="231" fill="#e6edf3" font-size="10" font-weight="bold">3. Files read every session stay clean</text>
+  <text x="407" y="246" fill="#8b8ba0" font-size="9">STEERING, USER, TOOLS: the person's words only. MEMORY, EVOLUTION:</text>
+  <text x="407" y="259" fill="#8b8ba0" font-size="9">also a measurement. Anything else: the project's DDD or the General Brain</text>
+
+  <rect x="395" y="272" width="370" height="52" rx="6" fill="#12221a" stroke="#4e9a5a" stroke-width="1"/>
+  <text x="407" y="289" fill="#e6edf3" font-size="10" font-weight="bold">4. Write</text>
+  <text x="407" y="304" fill="#8b8ba0" font-size="9">The writer adds the whole unit, journaled.</text>
+  <text x="407" y="317" fill="#8b8ba0" font-size="9">No approval queue; nothing leaves on a timer.</text>
+
+  <!-- Arrow: CDF -> destinations -->
+  <line x1="580" y1="334" x2="580" y2="350" stroke="#7ee787" stroke-width="2" marker-end="url(#arr3g)"/>
+
+  <!-- ============ Destinations (right middle) ============ -->
+  <rect x="380" y="352" width="400" height="124" rx="8" fill="#0d2240" stroke="#58a6ff" stroke-width="2"/>
+  <text x="580" y="371" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Each unit lands in one place</text>
+
+  <rect x="395" y="381" width="370" height="24" rx="4" fill="#0a1a35" stroke="#396ea3" stroke-width="1"/>
+  <text x="580" y="397" text-anchor="middle" fill="#58a6ff" font-size="9">The project's DDD: PRODUCT · TECH · IMPROVEMENT · PROJECT</text>
+
+  <rect x="395" y="411" width="180" height="24" rx="4" fill="#0a1a35" stroke="#396ea3" stroke-width="1"/>
+  <text x="485" y="427" text-anchor="middle" fill="#58a6ff" font-size="9">General Brain / Library</text>
+  <rect x="581" y="411" width="89" height="24" rx="4" fill="#0a1a35" stroke="#396ea3" stroke-width="1"/>
+  <text x="625.5" y="427" text-anchor="middle" fill="#58a6ff" font-size="9">MEMORY</text>
+  <rect x="676" y="411" width="89" height="24" rx="4" fill="#0a1a35" stroke="#396ea3" stroke-width="1"/>
+  <text x="720.5" y="427" text-anchor="middle" fill="#58a6ff" font-size="9">EVOLUTION</text>
+
+  <rect x="395" y="441" width="275" height="24" rx="4" fill="#0a1a35" stroke="#396ea3" stroke-width="1"/>
+  <text x="532.5" y="457" text-anchor="middle" fill="#58a6ff" font-size="9">The person's own files: STEERING · USER · TOOLS</text>
+  <rect x="676" y="441" width="89" height="24" rx="4" fill="#0a1a35" stroke="#396ea3" stroke-width="1"/>
+  <text x="720.5" y="457" text-anchor="middle" fill="#58a6ff" font-size="9">TIMELINE</text>
+
+  <!-- Key: evidence trust -->
+  <rect x="380" y="488" width="400" height="60" rx="6" fill="#12122a" stroke="#d2a8ff" stroke-width="1"/>
+  <text x="580" y="512" text-anchor="middle" fill="#d2a8ff" font-size="9" font-weight="bold">No source outranks another. The only order is evidence trust:</text>
+  <text x="580" y="530" text-anchor="middle" fill="#d2a8ff" font-size="9">the person's words &gt; a measurement &gt; the agent's inference &gt; external content</text>
+</svg>

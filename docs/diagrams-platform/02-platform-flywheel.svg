@@ -9,10 +9,9 @@
   <!-- CENTER: DDD (the hub) -->
   <!-- ================================================================== -->
   <ellipse cx="400" cy="250" rx="95" ry="55" fill="#0a1f10" stroke="#7ee787" stroke-width="1.5"/>
-  <text x="400" y="235" fill="#7ee787" font-size="12" font-weight="bold" text-anchor="middle">DDD</text>
-  <text x="400" y="250" fill="#e6edf3" font-size="9" text-anchor="middle">Knowledge Layer</text>
-  <text x="400" y="265" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">4 docs × N projects</text>
-  <text x="400" y="280" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">Health-monitored</text>
+  <text x="400" y="240" fill="#7ee787" font-size="12" font-weight="bold" text-anchor="middle">DDD</text>
+  <text x="400" y="256" fill="#e6edf3" font-size="9" text-anchor="middle">Knowledge Layer</text>
+  <text x="400" y="272" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">4 documents per project</text>
 
   <!-- ================================================================== -->
   <!-- TOP-RIGHT: Delivery Engines (consumers) -->
@@ -36,13 +35,13 @@
   <text x="510" y="188" text-anchor="end" fill="#e6edf3" font-size="7" fill-opacity="0.7">domain context</text>
 
   <!-- ================================================================== -->
-  <!-- BOTTOM-RIGHT: REFLECT (engine output → channels) -->
+  <!-- BOTTOM-RIGHT: LESSONS BACK (engine output → sources) -->
   <!-- ================================================================== -->
   <rect x="590" y="340" width="180" height="70" rx="10" fill="#1a1a2e" stroke="#d2a8ff" stroke-width="1"/>
   <text x="680" y="362" fill="#d2a8ff" font-size="10" font-weight="bold" text-anchor="middle">LESSONS BACK</text>
-  <text x="680" y="378" fill="#e6edf3" font-size="8" text-anchor="middle">Pipeline: REFLECT stage</text>
+  <text x="680" y="378" fill="#e6edf3" font-size="8" text-anchor="middle">Pipeline: run report</text>
   <text x="680" y="392" fill="#e6edf3" font-size="8" text-anchor="middle">Pollinate: after-session review</text>
-  <text x="680" y="404" fill="#e6edf3" font-size="7" text-anchor="middle" fill-opacity="0.6">→ Ch 3a (Pipeline) / Ch 3b (Pollinate)</text>
+  <text x="680" y="404" fill="#e6edf3" font-size="7" text-anchor="middle" fill-opacity="0.6">→ CDF, like every other source</text>
 
   <!-- Arrow: Engines → REFLECT -->
   <path d="M 675 170 L 675 338" fill="none" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arrP)"/>
@@ -50,34 +49,35 @@
   <text x="685" y="272" fill="#d2a8ff" font-size="7.5" fill-opacity="0.8">then learns</text>
 
   <!-- ================================================================== -->
-  <!-- LEFT: 8 Feed Channels (producers) -->
+  <!-- LEFT: 5 knowledge sources (producers) -->
   <!-- ================================================================== -->
   <rect x="30" y="100" width="210" height="300" rx="10" fill="#1a100c" stroke="#f78166" stroke-width="1.2"/>
-  <text x="135" y="120" fill="#f78166" font-size="10" font-weight="bold" text-anchor="middle">8 FEED CHANNELS</text>
+  <text x="135" y="120" fill="#f78166" font-size="10" font-weight="bold" text-anchor="middle">5 KNOWLEDGE SOURCES</text>
   <text x="135" y="134" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.6">(Producers — flywheel fuel)</text>
 
-  <!-- Channel list -->
-  <text x="45" y="158" fill="#58a6ff" font-size="8">Ch 1: Code Changes</text>
-  <text x="45" y="176" fill="#7ee787" font-size="8">Ch 2: External Learning</text>
-  <text x="45" y="194" fill="#d2a8ff" font-size="8" font-weight="bold">Ch 3a: Pipeline REFLECT</text>
-  <text x="45" y="212" fill="#d2a8ff" font-size="8" font-weight="bold">Ch 3b: Pollinate sessions</text>
-  <text x="45" y="230" fill="#7ee787" font-size="8">Ch 4: Industry Signals</text>
-  <text x="45" y="248" fill="#f78166" font-size="8">Ch 5: Conversation</text>
-  <text x="45" y="266" fill="#f78166" font-size="8" font-weight="bold">Ch 6: Corrections</text>
-  <text x="45" y="284" fill="#58a6ff" font-size="8">Ch 7: Code Intelligence</text>
+  <!-- Source list -->
+  <text x="45" y="158" fill="#d2a8ff" font-size="8" font-weight="bold">1: After-session review</text>
+  <text x="45" y="176" fill="#d2a8ff" font-size="8" font-weight="bold">2: Pipeline run report</text>
+  <text x="45" y="194" fill="#58a6ff" font-size="8">3: Weekly commit reader</text>
+  <text x="45" y="212" fill="#f78166" font-size="8" font-weight="bold">4: Saving on purpose</text>
+  <text x="45" y="230" fill="#7ee787" font-size="8">5: External content</text>
 
   <!-- Divider -->
-  <line x1="45" y1="298" x2="225" y2="298" stroke="#e6edf3" stroke-width="0.3" stroke-opacity="0.3"/>
+  <line x1="45" y1="250" x2="225" y2="250" stroke="#e6edf3" stroke-width="0.3" stroke-opacity="0.3"/>
 
-  <text x="135" y="318" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">Zero human maintenance.</text>
-  <text x="135" y="333" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">All extracted from</text>
-  <text x="135" y="348" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">normal work.</text>
+  <text x="135" y="272" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">Mostly automatic: every session</text>
+  <text x="135" y="287" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">and every run is reviewed;</text>
+  <text x="135" y="302" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">you can also save on purpose.</text>
 
-  <!-- Priority indicator -->
-  <text x="135" y="375" fill="#f78166" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Priority: Ch6 (human) > Ch3 (engines) > rest</text>
-  <text x="135" y="390" fill="#7ee787" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Signal: Ch3 (richest) > Ch1 (automated)</text>
+  <!-- Divider -->
+  <line x1="45" y1="322" x2="225" y2="322" stroke="#e6edf3" stroke-width="0.3" stroke-opacity="0.3"/>
 
-  <!-- Arrow: Channels → Cultivation -->
+  <!-- Not sources -->
+  <text x="135" y="345" fill="#f78166" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Not sources: the code graph (separate),</text>
+  <text x="135" y="360" fill="#f78166" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Inbox feeds (only via "learn into Brain")</text>
+  <text x="135" y="382" fill="#7ee787" font-size="7.5" text-anchor="middle" fill-opacity="0.8">No source ranks above another</text>
+
+  <!-- Arrow: Sources → Cultivation -->
   <path d="M 240 250 L 278 250" fill="none" stroke="#f78166" stroke-width="1.2" marker-end="url(#arrO)"/>
 
   <!-- ================================================================== -->
@@ -89,12 +89,12 @@
   <text x="360" y="390" fill="#e6edf3" font-size="8" text-anchor="middle">→ Write to DDD</text>
   <text x="360" y="405" fill="#e6edf3" font-size="7" text-anchor="middle" fill-opacity="0.6">(no approval queue)</text>
 
-  <!-- Arrow: Channels → Cultivation -->
+  <!-- Arrow: Sources → Cultivation -->
   <path d="M 135 400 Q 200 420 280 385" fill="none" stroke="#f78166" stroke-width="1" marker-end="url(#arrO)"/>
 
-  <!-- Arrow: REFLECT → Channels (feedback) -->
+  <!-- Arrow: Lessons back → Cultivation (feedback) -->
   <path d="M 590 390 Q 450 440 440 385" fill="none" stroke="#d2a8ff" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#arrP)"/>
-  <text x="500" y="430" fill="#d2a8ff" font-size="7.5" fill-opacity="0.8">feeds Ch 3a/3b</text>
+  <text x="500" y="430" fill="#d2a8ff" font-size="7.5" fill-opacity="0.8">run report, after-session review</text>
 
   <!-- Arrow: Cultivation → DDD -->
   <path d="M 380 340 Q 390 310 395 305" fill="none" stroke="#7ee787" stroke-width="1.2" marker-end="url(#arrG)"/>
@@ -105,23 +105,26 @@
   <!-- ================================================================== -->
   <rect x="130" y="440" width="540" height="45" rx="8" fill="#0a1420" stroke="#58a6ff" stroke-width="0.6"/>
   <text x="400" y="460" fill="#58a6ff" font-size="9" text-anchor="middle">AGENT HARNESS (Foundation)</text>
-  <text x="400" y="475" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.6">Context System | 4-Tier Memory | Self-Evolution | Hooks | Tools + SDK</text>
+  <text x="400" y="475" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.6">Context System | Memory | Self-Evolution | Hooks | Tools + SDK</text>
 
   <!-- ================================================================== -->
   <!-- CROSS-ENGINE FLOW (subtle) -->
   <!-- ================================================================== -->
-  <rect x="530" y="230" width="150" height="50" rx="6" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.4" stroke-dasharray="3,2"/>
-  <text x="605" y="248" fill="#e6edf3" font-size="7.5" text-anchor="middle" fill-opacity="0.7">Cross-engine compound:</text>
-  <text x="605" y="261" fill="#7ee787" font-size="7" text-anchor="middle" fill-opacity="0.7">Pipeline finds → DDD → Pollinate markets</text>
-  <text x="605" y="273" fill="#d2a8ff" font-size="7" text-anchor="middle" fill-opacity="0.7">Pollinate learns → DDD → Pipeline prioritizes</text>
+  <rect x="500" y="222" width="165" height="85" rx="6" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.4" stroke-dasharray="3,2"/>
+  <text x="582.5" y="237" fill="#e6edf3" font-size="7.5" text-anchor="middle" fill-opacity="0.7">Cross-engine compound:</text>
+  <text x="582.5" y="251" fill="#7ee787" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Pipeline lands a change → DDD</text>
+  <text x="582.5" y="262" fill="#7ee787" font-size="7.5" text-anchor="middle" fill-opacity="0.8">→ Pollinate's brief finds it</text>
+  <text x="582.5" y="277" fill="#d2a8ff" font-size="7.5" text-anchor="middle" fill-opacity="0.8">a Pollinate session teaches</text>
+  <text x="582.5" y="288" fill="#d2a8ff" font-size="7.5" text-anchor="middle" fill-opacity="0.8">→ after-session review → DDD</text>
+  <text x="582.5" y="299" fill="#d2a8ff" font-size="7.5" text-anchor="middle" fill-opacity="0.8">→ Pipeline reads it</text>
 
   <!-- ================================================================== -->
   <!-- COMPOUND INDICATOR (top-left) -->
   <!-- ================================================================== -->
   <rect x="30" y="42" width="200" height="48" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.6"/>
   <text x="130" y="60" fill="#7ee787" font-size="8.5" text-anchor="middle" font-weight="bold">COMPOUND EFFECT</text>
-  <text x="130" y="74" fill="#e6edf3" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Session 1: DDD = sparse</text>
-  <text x="130" y="85" fill="#e6edf3" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Session 100: DDD = 100x richer</text>
+  <text x="130" y="74" fill="#e6edf3" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Session 1: DDD = section headings only</text>
+  <text x="130" y="85" fill="#e6edf3" font-size="7.5" text-anchor="middle" fill-opacity="0.8">Session 100: DDD holds what 100 sessions taught</text>
 
   <!-- Arrow markers (smaller) -->
   <defs>
