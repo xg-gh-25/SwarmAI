@@ -85,9 +85,9 @@
   <!-- ================================================================== -->
   <rect x="280" y="340" width="160" height="75" rx="8" fill="#1a0f0a" stroke="#f78166" stroke-width="1"/>
   <text x="360" y="360" fill="#f78166" font-size="9" font-weight="bold" text-anchor="middle">CULTIVATION</text>
-  <text x="360" y="375" fill="#e6edf3" font-size="8" text-anchor="middle">Propose → Approve</text>
+  <text x="360" y="375" fill="#e6edf3" font-size="8" text-anchor="middle">Declare → Check facts</text>
   <text x="360" y="390" fill="#e6edf3" font-size="8" text-anchor="middle">→ Write to DDD</text>
-  <text x="360" y="405" fill="#e6edf3" font-size="7" text-anchor="middle" fill-opacity="0.6">(30s human approval)</text>
+  <text x="360" y="405" fill="#e6edf3" font-size="7" text-anchor="middle" fill-opacity="0.6">(no approval queue)</text>
 
   <!-- Arrow: Channels → Cultivation -->
   <path d="M 135 400 Q 200 420 280 385" fill="none" stroke="#f78166" stroke-width="1" marker-end="url(#arrO)"/>

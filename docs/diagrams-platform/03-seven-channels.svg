@@ -70,7 +70,7 @@
   <rect x="420" y="180" width="200" height="90" rx="10" fill="#1a2e1a" stroke="#7ee787" stroke-width="2"/>
   <text x="520" y="205" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">Cultivation Engine</text>
   <text x="520" y="225" text-anchor="middle" fill="#e6edf3" font-size="9">Receives signals from all 8 channels</text>
-  <text x="520" y="242" text-anchor="middle" fill="#e6edf3" font-size="9">Generates DDD update proposals</text>
+  <text x="520" y="242" text-anchor="middle" fill="#e6edf3" font-size="9">Checks facts, writes whole units</text>
   <text x="520" y="258" text-anchor="middle" fill="#8b8ba0" font-size="8">Automatic, continuous, incremental</text>
 
   <!-- Arrows from channels to cultivation -->
@@ -84,8 +84,8 @@
 
   <!-- Approval Gate -->
   <rect x="450" y="310" width="140" height="50" rx="8" fill="#2d1b10" stroke="#f78166" stroke-width="1.5" stroke-dasharray="5,3"/>
-  <text x="520" y="332" text-anchor="middle" fill="#f78166" font-size="10" font-weight="bold">Approval Gate</text>
-  <text x="520" y="350" text-anchor="middle" fill="#8b8ba0" font-size="9">30-sec human review</text>
+  <text x="520" y="332" text-anchor="middle" fill="#f78166" font-size="10" font-weight="bold">Facts Check</text>
+  <text x="520" y="350" text-anchor="middle" fill="#8b8ba0" font-size="9">evidence, no secrets</text>
 
   <!-- Arrow: Cultivation -> Approval -->
   <line x1="520" y1="270" x2="520" y2="308" stroke="#7ee787" stroke-width="2" marker-end="url(#arr3g)"/>

@@ -78,7 +78,7 @@ The Harness provides the substrate that makes persistent AI operation possible:
 - **11-File Context System** — CLAUDE.md, STEERING.md, MEMORY.md, and 8 others loaded at session start. The agent begins every session with full operational context.
 - **4-Tier Memory Pipeline** — DailyActivity (raw session logs) flows to MEMORY.md (curated facts) flows to Knowledge/ (structured notes) flows to DDD (domain expertise). Each tier increases in permanence and structure.
 - **Self-Evolution Loop** — EVOLUTION.md captures corrections; recurring patterns promote to STEERING.md as permanent rules. The system learns from its mistakes without human intervention.
-- **Session Hooks** — Pre-session (load context, check DDD health) and post-session (extract activity, propose DDD updates). Every session is bookended by intelligence.
+- **Session Hooks** — Pre-session (load context, check DDD health) and post-session (the after-session review records what is worth keeping into the DDD). Every session is bookended by intelligence.
 - **170+ Skills** — Composable capabilities: from deep-research to browser-agent to code-review. The agent isn't limited to chat — it operates tools.
 - **60+ MCP Tools** — Direct integrations: Slack, Outlook, Sentral, GitHub. The agent doesn't just think — it acts.
 - **Job System** — Background automation via launchd. Tasks run independently of sessions. Signal pipelines feed DDD while no one is watching.
@@ -118,7 +118,7 @@ DDD is not a flat document. It's a three-layer system:
 - Code Graph — Structural relationships extracted from actual codebase, not documentation
 
 **Orchestration Layer:**
-- Cultivation Engine — processes signals into proposals
+- Cultivation (CDF) — checks the facts of each knowledge unit and writes it to its place
 - Entity Index — routes knowledge across projects
 - Feed Channels — 8 sources of continuous input (detailed next)
 
@@ -147,23 +147,20 @@ This means DDD grows even when no engine is running. A git commit triggers Chann
 
 ---
 
-### 4c. Cultivation: Propose, Approve, Grow
+### 4c. Cultivation: Declare, Check Facts, Write
 
-Cultivation is the orchestration mechanism that turns raw signals into structured knowledge:
+Cultivation is the mechanism (CDF, the Cognitive Distillation Flow) that turns what happens in work into structured knowledge. There is no approval queue: nothing waits for a person.
 
 **The flow:**
 
-1. Signal arrives from any of the 8 channels
-2. Cultivation Engine processes the signal — determines relevance, identifies target section, drafts proposed update
-3. Proposal enters the **Approval Gate** — human reviews in ~30 seconds (accept/reject/edit)
-4. Approved content merges into the target DDD document
-5. Next session starts with richer knowledge
+1. A source hands over a unit of knowledge: the after-session review (the session's own agent), a pipeline run's report, a commit reader, a cross-run metric, external content. The agent that produced the unit declares what it means: its type, its project, where it goes, and whether it is new, the same as an existing entry, adds to one, or replaces one.
+2. CDF checks facts only, deterministically: the unit is not empty, the evidence it cites exists, it carries no credentials, and a declared replacement names exactly one live entry. Files read in every session (MEMORY, EVOLUTION, STEERING) take only what the person's own words or a measurement show: the quote must be found word for word in the person's message, and an isolated check that sees only the person's messages confirms that the quote says what the unit claims.
+3. The writer adds the whole unit to its place in the DDD. Every write is journaled.
+4. The next session recalls it.
 
-**Safety guarantee:** DDD never silently changes. Every update is proposed, then approved. This prevents hallucinated knowledge from contaminating the system. The human stays in control of what the system "knows."
+**Why no human approval:** the quality of knowledge is made when it is extracted, by the agent that holds the context, to one standard. A review queue made the person the control loop and still could not judge each entry better than the agent that saw the work. The checks stay light and deterministic.
 
-**Progressive automation:** As sections mature (Sparse -> Growing -> Mature -> Evergreen), approval can shift to auto-approve for low-risk updates. Channel 1 (code changes) updating TECH.md architecture sections can auto-approve once TECH.md reaches Mature status. Channel 6 (corrections) always requires explicit acknowledgment — it's the user overriding the system.
-
-**Batch efficiency:** Proposals accumulate during a session and present at the end. The human doesn't get interrupted mid-flow — they review a batch of 3-8 proposals in one pass. 30 seconds of review powers hours of future intelligence.
+**How the brain stays true:** an entry leaves a main file only in two ways. The context that made a newer decision declares which entry it replaces (the after-session review from the person's words, or a landed pipeline run from its own change), or the person withdraws the entry on the Brain page. Nothing leaves on a timer. What was replaced or withdrawn, when and why, is recorded outside the main files, and a withdrawn entry cannot come back through a later unit.
 
 ---
 
@@ -176,12 +173,12 @@ Cultivation is the orchestration mechanism that turns raw signals into structure
 - Consistency — do sections contradict each other?
 - Usefulness — does the AI actually reference this content?
 
-Health scores drive trust: the AI weighs high-health sections more heavily in decisions. Low-health sections trigger cultivation priority — they get more proposals, more updates.
+Health scores drive trust: the AI weighs high-health sections more heavily in decisions.
 
 **Maturity (graduated autonomy):**
 - **Sparse** — newly created, minimal content. AI asks many questions, low autonomy.
 - **Growing** — actively accumulating. AI references but double-checks. Cultivation is aggressive.
-- **Mature** — comprehensive and validated. AI trusts fully. Some auto-approvals enabled.
+- **Mature** — comprehensive and validated. AI trusts fully.
 - **Evergreen** — self-maintaining with minimal drift. Maximum autonomy. Stable foundation.
 
 **Discovery (Entity Index):**
@@ -396,7 +393,7 @@ Everything together — the architect's complete view:
 | **DDD** | Structured domain expertise | All engines equally | Self-growing, shared, AI-optimized |
 | **8 Channels** | Continuous signal input | DDD (via Cultivation) | Zero human effort, always feeding |
 | **Engines** | Specialized delivery | End users | Domain-correct, checked by scripts (Pipeline gate, Pollinate `cut`) |
-| **Cultivation** | Signal-to-knowledge transformation | DDD growth | Propose-approve-grow safety |
+| **Cultivation** | Signal-to-knowledge transformation | DDD growth | Facts checked, whole units written, every change journaled |
 
 ### Information Flow Summary
 
@@ -404,8 +401,8 @@ Everything together — the architect's complete view:
 SOURCES (external world, codebase, users, signals)
     | (via 8 Channels)
     v
-CULTIVATION ENGINE (propose updates)
-    | (via Approval Gate)
+CULTIVATION / CDF (the producing agent declares, CDF checks facts)
+    | (via the writer, journaled)
     v
 DDD KNOWLEDGE LAYER (structured expertise)
     | (via Progressive Loading)
@@ -459,7 +456,7 @@ It replaces the need for manually-maintained documentation. DDD is documentation
 
 **"What happens if DDD gets something wrong?"**
 
-Channel 6 (Corrections). The user says "that's wrong, actually X." This is the highest-priority channel — it immediately generates a proposal to fix the incorrect knowledge. The Approval Gate ensures the correction is captured accurately. One correction, permanent fix. The system won't make that mistake again.
+Channel 6 (Corrections). The user says "that's wrong, actually X." The after-session review records the correction from the person's own words and declares which entry it replaces; the old entry leaves the main file and the replacement is recorded. If something wrong was written anyway, the person withdraws it on the Brain page, and it cannot come back. One correction, permanent fix.
 
 **"Can this work for a team, not just an individual?"**
 
