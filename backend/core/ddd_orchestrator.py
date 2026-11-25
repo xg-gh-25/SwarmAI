@@ -1,19 +1,22 @@
 """DDD Cultivation Orchestrator — self-contained DDD feed engine.
 
-Orchestrates several independent DDD feed channels. Each channel runs in its own
-try/except — one crash never affects others. Returns merged findings list.
+Runs the DDD check channels. Each channel runs in its own try/except — one crash
+never affects others. Returns merged findings list.
 
 All channel logic lives HERE — no delegation back to context_health_hook.
 context_health_hook calls orchestrator.run(), not the other way around.
 
-Channels (see self.channels in __init__ for the live set):
-    - DDD staleness detection
-    - Knowledge staleness detection
-    - Entity index validation
-    - Entry lifecycle (per-entry decay/reclaim)
+Channels (see self.channels in __init__ for the live set) — one today:
+    - DDD staleness detection (``ddd_staleness``): flags a project's TECH.md /
+      PRODUCT.md older than 14 days while the project has recent commits, and a
+      bound source repo whose HEAD moved past the last-verified anchor. It reports
+      findings only; it writes no DDD content. Subscribed to GIT_COMMIT and
+      TIMER_30MIN events.
+
+After the channels, run() also checks gate promotions (``core.gate_promotion``).
 
 Note: the auto_refresh channels (mechanical/memory/llm content-rewrite) were
-REMOVED (run_781ffbd9) — zero output in production + superseded by R30#4.
+removed: they produced no output in production.
 
 Public symbols:
     - DddCultivationOrchestrator  — main orchestrator class
