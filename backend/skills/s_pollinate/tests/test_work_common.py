@@ -51,6 +51,8 @@ class FakeHttp:
 def env(tmp_path, monkeypatch):
     """A private workspace, font cache and brand file, and no network."""
     monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path / "ws"))
+    # The chat session running the tests is not a work's session (a test sets its own).
+    monkeypatch.delenv("SWARM_APP_SESSION_ID", raising=False)
     monkeypatch.setenv("POLLINATE_FONT_CACHE", str(tmp_path / "font-cache"))
     # Never the machine's own brand file: no signature unless a test writes one here.
     monkeypatch.setenv("POLLINATE_BRAND_FILE", str(tmp_path / "pollinate-brand.yaml"))

@@ -58,7 +58,7 @@ const calls: string[] = [];
 const OBJECT_URLS = ['/ddd/brains', '/jobs/status', '/eval/health', '/eval/golden-set', '/eval/governance',
   '/eval/context-health', '/eval/brain', '/library/native', '/library/recent',
   '/library/mounts', '/attention', '/settings',
-  '/pollinate/assets', '/pipelines/analytics', '/todos/history',
+  '/pollinate/works', '/pollinate/eval', '/pipelines/analytics', '/todos/history',
   '/inbox/counts', '/inbox/sends', '/inbox/trends'];
 function answer(url: string): unknown {
   if (url.startsWith('/ddd/brains')) return { brains: [], pinned: [] };

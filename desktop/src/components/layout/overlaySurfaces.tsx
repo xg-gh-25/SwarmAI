@@ -233,8 +233,10 @@ registerOverlay({
 
 registerOverlay({
   id: 'pollinate',
-  render: ({ close, dispatchPrompt }) => (
-    <PollinateContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
+  // Open session on a work goes back to the chat that is changing it, as Pipeline's does
+  render: ({ close, dispatchPrompt, resumeSession }) => (
+    <PollinateContent onDispatch={dispatchPrompt ?? (() => false)} close={close}
+                      onContinue={(sessionId, prompt) => continueInSession(sessionId, prompt, resumeSession)} />
   ),
 });
 

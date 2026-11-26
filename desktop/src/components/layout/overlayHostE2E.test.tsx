@@ -57,8 +57,8 @@ vi.mock('../../services/pipelines', () => ({
 }));
 vi.mock('../../services/pollinate', () => ({
   pollinateService: {
-    fetchAssets: vi.fn().mockResolvedValue({ cards: [], overall: null }),
     fetchWorks: vi.fn().mockResolvedValue({ works: [], skipped: 0 }),
+    fetchEval: vi.fn().mockResolvedValue(null),
   },
   assetThumbUrl: (p: string) => p,
 }));

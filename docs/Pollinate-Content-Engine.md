@@ -147,7 +147,7 @@ a work, so the next "change the title" is a normal revision.
 | `render --dir D [--formats …] [--version V --out D]` | Renders without making a version; refused while the source differs from the current version and no revision is open |
 | `list` | Prints the registry |
 
-`K` is `deck`, `poster`, `page` or `copy`. Every script uses the same exit codes: **0**
+`K` is `deck`, `poster`, `page` or `copy` (`adopt` also takes `video`: a finished film registered so it is listed; open, cut and render refuse it). Every script uses the same exit codes: **0**
 passed, **1** a check or the guard failed, **2** usage or environment error.
 
 ---
@@ -393,14 +393,31 @@ from the request and does not ask which one:
 | a Word or Excel file | `s_docx` or `s_xlsx` |
 | a video | not Pollinate: an installed video skill takes it; with none, the agent says so and offers a deck or poster |
 
-**In the desktop app.** The Pollinate overlay (WORK zone) shows the registered works first
-(`GET /api/pollinate/works`): one card per work with its cover thumbnail, title, kind,
-current version and date, and one action, **Open in Canvas**. A card is marked "Checks
-failed" when the newest cut failed; the card still shows the last version that passed. A
-work outside the workspace is listed but cannot be opened from the overlay. Below the
-works, **Earlier runs** (`GET /api/pollinate/assets`) still shows the output folders of
-runs made before this redesign. The overlay writes nothing; new work and changes go
-through chat.
+**In the desktop app.** The Pollinate overlay (WORK zone) is laid out like the Pipeline
+overlay, with two tabs and one filter row (kind, Brain):
+
+- **Works** (`GET /api/pollinate/works`). A work with an open revision is a card: cover,
+  title, how long the revision has been open, Brain · kind · size · pages, a **version
+  track** (one dot per version; the person's versions in their own colour, a failed one
+  hollow, the current one ringed, the open revision last) and the revision's scope and note,
+  with **Open in Canvas** and **Open session** (back to the chat that opened it: work.py
+  records `SWARM_APP_SESSION_ID` on the open revision and on each cut). Every other work is
+  a row: thumbnail, title, current version, date and version count.
+- **Eval** (`GET /api/pollinate/eval`). The share of revisions whose first cut passed both
+  the checks and the guard, over the last 15 days against the 15 before; 30 daily bars;
+  works changed, versions per work, versions the person edited by hand and guard blocks;
+  which checks fail most; and what the guard stopped. A revision is the agent versions that
+  share one base.
+
+A click opens the work's big card (`GET /api/pollinate/works/view?path=`, 404 for any path
+not in the registry): the brief and the newest version's checks; Pages, Versions, Checks and
+Outputs (a video: Scenes and Outputs); and the actions its state allows, decided by the
+backend. A failed version or a guard block is the agent's to fix, so it is shown muted,
+never in the attention colour. A video is a fifth kind, listed but not made by Pollinate:
+the video skill registers it with `work.py adopt --kind video`. With no work registered the
+overlay is one empty state. Everything is read from the works' own files (`work.json`,
+`.versions/*/checks.json` and `guard.json`); the overlay writes nothing. The pre-v2 run
+gallery is gone, with no backward compatibility.
 
 ---
 
@@ -437,5 +454,5 @@ mode for multi-kind content packages. These are candidates, to be decided from r
 | Probe, measurement shape, checks and thresholds | `backend/skills/s_pollinate/scripts/craft_checks.py` |
 | PPTX export and its self-check | `backend/skills/s_pollinate/scripts/export_pptx.py` |
 | Content experts | `backend/skills/s_expert-review/CATALOG.md`, `backend/experts/content/` |
-| Overlay and its two reads | `desktop/src/components/layout/PollinateOverlay.tsx`, `backend/routers/pollinate.py` |
+| Overlay, big card and their reads | `desktop/src/components/layout/PollinateOverlay.tsx`, `PollinateWorkCard.tsx`, `backend/routers/pollinate.py`, `backend/core/pollinate_works.py` |
 | Tests | `backend/skills/s_pollinate/tests/` |

@@ -12,10 +12,14 @@ Commands (design section 13.2):
 
   init    make a new work: folder, work.json, empty source, .gitignore, registry entry
   adopt   register a folder that already has a source; add missing slide ids
-          (nothing else in the file changes) and store v001 (by the person)
+          (nothing else in the file changes) and store v001 (by the person).
+          ``--kind video`` registers a finished video (an .mp4 in out/) with no
+          versions: it is listed with the works; open, cut and render refuse it
   open    start a revision: when the source on disk differs from the current
           version (the person edited it), store it first as ``<current>-user``;
-          then record the declared scope (``--scope``, ``--add``, ``--remove``).
+          then record the declared scope (``--scope``, ``--add``, ``--remove``)
+          and the chat session running it (SWARM_APP_SESSION_ID, when set; cut
+          records it on its version too).
           ``--mine`` says those edits are the agent's own: they stay in this
           revision instead, and only if the guard finds them inside the scope
   cut     render, measure, run the craft checks, run the guard, export PPTX and
@@ -61,6 +65,11 @@ import work_render  # noqa: E402
 
 SCHEMA = 1
 KINDS = ("deck", "poster", "page", "copy")
+# A video is registered as a work (adopt --kind video) so it is listed with the others, but
+# Pollinate does not make it: the video skill renders and checks its own film, so open, cut
+# and render refuse it.
+VIDEO = "video"
+ALL_KINDS = KINDS + (VIDEO,)
 # Kinds whose rendered output carries the person's brand signature (kinds/*.md): a deck on
 # its closing slide, a poster and a page in the footer. Copy is text for a platform post.
 SIGNED_KINDS = ("poster",)   # the old brand gate judged posters only; a deck or page is often made for work
@@ -246,7 +255,7 @@ def load_meta(wdir: Path) -> dict:
         meta = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise UsageError(f"{path} is not valid JSON: {exc}") from None
-    if meta.get("schema") != SCHEMA or meta.get("kind") not in KINDS:
+    if meta.get("schema") != SCHEMA or meta.get("kind") not in ALL_KINDS:
         raise UsageError(f"{path} is not a schema {SCHEMA} work.json")
     return meta
 
@@ -659,6 +668,21 @@ def _print(obj) -> None:
     print(json.dumps(obj, indent=1, ensure_ascii=False))
 
 
+def _session() -> str | None:
+    """The chat session running this command (SWARM_APP_SESSION_ID), or None.
+
+    Recorded on the open revision and on each cut, so the overlay can take the person back
+    to the chat that is changing the work."""
+    sid = os.environ.get("SWARM_APP_SESSION_ID", "").strip()
+    return sid or None
+
+
+def _refuse_video(meta: dict) -> None:
+    if meta.get("kind") == VIDEO:
+        raise UsageError("a video is listed as a work but not made by work.py: the video skill "
+                         "renders and checks it; open, cut and render do not apply")
+
+
 def cmd_init(args) -> int:
     wdir = work_dir_of(args.dir)
     if (wdir / "work.json").exists():
@@ -690,12 +714,43 @@ def _title_of(text: str, fallback: str) -> str:
     return " ".join(m.group(1).split()) if m and m.group(1).strip() else fallback
 
 
+def _adopt_video(wdir: Path, args) -> int:
+    """Register a finished video in place: work.json with kind video and no versions.
+
+    Its title, size and style come from the arguments, else from the video's
+    storyboard.json (title, width, height, style), else the folder name."""
+    if not any(p.is_file() for p in (wdir / "out").glob("*.mp4")):
+        raise UsageError(f"no .mp4 in {wdir / 'out'}; render the video first")
+    board = {}
+    try:
+        loaded = json.loads((wdir / "storyboard.json").read_text(encoding="utf-8"))
+        board = loaded if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        board = {}
+    if args.size:
+        size = _size(args.size)
+    elif isinstance(board.get("width"), int) and isinstance(board.get("height"), int):
+        size = {"w": board["width"], "h": board["height"]}
+    else:
+        size = None
+    title = args.title or (board.get("title") if isinstance(board.get("title"), str) else None) or wdir.name
+    style = args.style or (board.get("style") if isinstance(board.get("style"), str) else None)
+    meta = {"schema": SCHEMA, "kind": VIDEO, "title": title, "style": style, "size": size,
+            "src": None, "slides": [], "current": None, "open": None, "versions": []}
+    save_meta(wdir, meta)
+    register(wdir, meta)
+    _print({"work": str(wdir), "kind": VIDEO, "title": title})
+    return 0
+
+
 def cmd_adopt(args) -> int:
     wdir = work_dir_of(args.dir)
     if not wdir.is_dir():
         raise UsageError(f"{wdir} is not a folder")
     if (wdir / "work.json").exists():
         raise UsageError(f"{wdir} is already a work")
+    if args.kind == VIDEO:
+        return _adopt_video(wdir, args)
     if args.src:
         src_path = Path(args.src).expanduser()
         src_path = (src_path if src_path.is_absolute() else wdir / src_path).resolve()
@@ -776,6 +831,7 @@ def _assign_ids(wdir: Path, meta: dict) -> list:
 def cmd_open(args) -> int:
     wdir = work_dir_of(args.dir)
     meta = load_meta(wdir)
+    _refuse_video(meta)
     if args.add is not None and args.add < 0:
         raise UsageError("--add must be 0 or more")
     scope, remove = _parse_ids(args.scope), _parse_ids(args.remove)
@@ -784,6 +840,8 @@ def cmd_open(args) -> int:
         op.update({"scope": scope, "add": args.add if args.add is not None else op.get("add", 0),
                    "remove": remove, "note": args.note if args.note is not None else op.get("note", ""),
                    "shared": _shared_allowed(args), "at": now_iso()})
+        if _session():
+            op["session"] = _session()
         _check_ids(meta, scope + remove, meta.get("slides") or [])
         save_meta(wdir, meta)
         _print({"open": op, "user_version": None, "changed_by_user": [], "changed_by_agent": [],
@@ -839,6 +897,8 @@ def cmd_open(args) -> int:
                   file=sys.stderr)
     meta["open"] = {"scope": scope, "add": args.add or 0, "remove": remove, "note": args.note or "",
                     "shared": _shared_allowed(args), "at": now_iso(), "base": meta.get("current")}
+    if _session():
+        meta["open"]["session"] = _session()
     save_meta(wdir, meta)
     register(wdir, meta)
     _print({"open": meta["open"], "user_version": user_vid,
@@ -1104,6 +1164,7 @@ def _judge_base(wdir: Path, base: dict, meta: dict, craft, reference, formats: l
 def cmd_cut(args) -> int:
     wdir = work_dir_of(args.dir)
     meta = load_meta(wdir)
+    _refuse_video(meta)
     formats = _parse_formats(args.formats, meta["kind"])
     if meta.get("versions") and not meta.get("open"):
         raise UsageError("no revision is open; run: work.py open --dir D --scope <ids> first")
@@ -1145,7 +1206,8 @@ def cmd_cut(args) -> int:
         seal_snapshot(wdir, stage, vid, {"checks.json": checks, "guard.json": g, "measure.json": measure})
         status = "ok" if ok else "failed"
         meta["versions"].append(_entry(vid, "agent", open_.get("scope", []), status, state, rel, outputs,
-                                       base=g["base"], note=open_.get("note") or None))
+                                       base=g["base"], note=open_.get("note") or None,
+                                       session=_session()))
         if ok:
             meta["current"] = vid
             meta["open"] = None
@@ -1233,6 +1295,7 @@ def _reference(wdir: Path, meta: dict):
 def cmd_render(args) -> int:
     wdir = work_dir_of(args.dir)
     meta = load_meta(wdir)
+    _refuse_video(meta)
     formats = _parse_formats(args.formats, meta["kind"])
     root, rel, _ = src_layout(wdir, meta)
     if args.version:
@@ -1292,7 +1355,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--size", help="canvas size, e.g. 1920x1080")
     p = sub.add_parser("adopt", help="register an existing work in place")
     p.add_argument("--dir", required=True)
-    p.add_argument("--kind", required=True, choices=KINDS)
+    p.add_argument("--kind", required=True, choices=ALL_KINDS)
     p.add_argument("--src", help="the existing source file (default src/deck.html or src/index.html)")
     p.add_argument("--title")
     p.add_argument("--style")

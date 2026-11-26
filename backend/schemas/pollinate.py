@@ -1,16 +1,13 @@
-"""Pydantic response models for the Pollinate overlay: the registered works
-(`GET /api/pollinate/works`, Pollinate v2) and the older run gallery
-(`GET /api/pollinate/assets`).
+"""Pydantic response models for the Pollinate overlay (design: the Pollinate overlay
+mockup of 2026-11-26, Knowledge/Mockups/2026-11-26-pollinate-overlay-redesign.html):
 
-The run gallery:
+- ``GET /api/pollinate/works`` — one row per registered work (PollinateWorksResponse);
+- ``GET /api/pollinate/works/view?path=`` — one work's big card (PollinateWorkView);
+- ``GET /api/pollinate/eval`` — the Eval tab (PollinateEval).
 
-Sibling of `schemas/pipeline_run.py`, but ASSET-CENTRIC: the first-class object is a
-produced media asset (a file under a run's `deliver/` tree), not the run. A pollinate
-run's `run.json` is optional metadata — the `deliver/` walk is the source of truth for
-what was actually produced (verified: 5/14 run dirs have run.json, 10/14 have deliver/,
-and `run.json.formats/platforms` are often None on running runs while the deliver/ tree
-holds the real files). See the design doc:
-Knowledge/Designs/2026-08-02-pollinate-content-asset-gallery-navcard-design.md
+All of them are built by ``core/pollinate_works.py`` from the works' own files. Paths are
+workspace-relative for a work inside the workspace (what /api/workspace/file/raw and the
+Canvas open take), absolute otherwise.
 """
 
 from __future__ import annotations
@@ -20,99 +17,179 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class PollinateAsset(BaseModel):
-    """One produced deliverable file under `deliver/[{platform}/]{file}`."""
+class PollinateOpenRevision(BaseModel):
+    """The revision ``work.py open`` started and no passing cut has closed yet."""
 
-    platform: str = Field(description="xiaohongshu / bilibili / github / gongzhonghao / '' (bare)")
-    format: str = Field(description="poster / narrative / video / caption / readme / qr / other")
-    file_path: str = Field(description="workspace-relative path (for /api/workspace/file/raw)")
-    file_name: str
-    is_image: bool = Field(description="True → renderable via <img src=/api/workspace/file/raw>")
-    publish_status: str = Field(
-        default="ready",
-        description="ready (default/unknown) | ready-to-publish | published — from a "
-        "publish-kit.md frontmatter only",
-    )
+    scope: list[str] = Field(default_factory=list, description="slide ids it may change")
+    remove: list[str] = Field(default_factory=list, description="slide ids it may delete")
+    add: int = 0
+    note: Optional[str] = None
+    at: Optional[str] = None
+    base: Optional[str] = Field(default=None, description="the version the revision started from")
+    session: Optional[str] = Field(default=None, description="the chat session that opened it")
 
 
-class PollinateContentCard(BaseModel):
-    """One content topic (one pollinate run) + all the assets it produced."""
+class PollinateVersion(BaseModel):
+    """One entry of work.json ``versions``, in the writer's order."""
 
-    run: str = Field(description="run dir name, e.g. 2026-05-03-memory-is-the-moat")
-    topic: str = Field(description="topic || message || run dir name (fallback chain)")
-    domain: Optional[str] = None
-    status: str = Field(default="unknown", description="run.json status, or 'unknown' if no run.json")
-    created_at: Optional[str] = None
-    has_run_json: bool = Field(default=False, description="False → card synthesized from deliver/ only")
-    asset_count: int = 0
-    platforms: list[str] = Field(default_factory=list)
-    formats: list[str] = Field(default_factory=list)
-    published_count: int = 0
-    ready_count: int = 0
-    assets: list[PollinateAsset] = Field(default_factory=list)
-
-
-class PollinateOverall(BaseModel):
-    """Top-of-gallery rollup across all content cards."""
-
-    card_count: int = 0
-    asset_count: int = 0
-    platform_dist: dict[str, int] = Field(default_factory=dict)
-    format_dist: dict[str, int] = Field(default_factory=dict)
-    domain_dist: dict[str, int] = Field(default_factory=dict)
-    published: int = 0
-    ready: int = 0
-    in_progress: int = Field(default=0, description="cards whose run status is running/review")
-    known_channels: list[str] = Field(
-        default_factory=list,
-        description="The known-channel UNIVERSE (from the server's _KNOWN_PLATFORMS SSOT). "
-        "Lets the Insights by-channel view surface a FULLY-neglected channel (0 assets "
-        "anywhere) that platform_dist alone can never reveal — without the frontend "
-        "hardcoding a drift-prone duplicate list.",
-    )
-
-
-class PollinateAssetsResponse(BaseModel):
-    """`GET /api/pollinate/assets` — newest-first content cards + overall rollup.
-
-    `overall` is computed over the WHOLE corpus (all counts honest). `cards` is the
-    newest-N PAYLOAD slice (the cap bounds only the returned list size, not the
-    rollup) — the frontend renders newest-first, so older cards beyond the cap are
-    reflected in `overall` but not shipped as individual cards.
-    """
-
-    overall: PollinateOverall
-    cards: list[PollinateContentCard] = Field(default_factory=list)
+    id: str
+    by: str = Field(description="user | agent")
+    status: Optional[str] = Field(default=None, description="ok | failed; None for a version with no check")
+    at: Optional[str] = None
+    scope: list[str] = Field(default_factory=list)
+    base: Optional[str] = None
+    note: Optional[str] = None
+    found_on_disk: bool = Field(default=False, description="a hand edit absorbed by work.py open")
+    session: Optional[str] = None
 
 
 class PollinateWork(BaseModel):
-    """One registered work (a folder with a work.json, design §13.1).
-
-    Paths are workspace-relative when the work is inside the workspace (what
-    /api/workspace/file/raw and the Canvas open take), absolute otherwise."""
+    """One registered work (a folder with a work.json)."""
 
     path: str = Field(description="the work folder")
     in_workspace: bool = Field(description="False → Canvas cannot open it; paths are absolute")
-    kind: str = Field(description="deck | poster | page | copy (or what work.json says)")
+    kind: str = Field(description="deck | poster | page | copy | video")
     title: str
-    current: Optional[str] = Field(
-        default=None, description="current version id, e.g. v003 — the last version that passed")
-    latest: Optional[str] = Field(
-        default=None, description="the newest version id (the last cut, passed or not)")
-    status: Optional[str] = Field(
-        default=None,
-        description="ok | failed — the NEWEST version's check result (a failed cut leaves "
-        "`current` on the last passing version); None when unknown")
+    brain: str = Field(description="the project of a work under Projects/<P>/, else General")
+    style: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    slide_count: Optional[int] = Field(default=None, description="a deck's slide count")
+    current: Optional[str] = Field(default=None, description="the last version that passed")
+    latest: Optional[str] = Field(default=None, description="the newest version (the last cut, passed or not)")
+    status: Optional[str] = Field(default=None, description="ok | failed — the newest version's result")
     updated: Optional[str] = Field(default=None, description="ISO time of the last change")
-    thumbnail: Optional[str] = Field(
-        default=None, description="out/slides/01-*.png, out/poster.png or out/page.png when present")
-    main_output: Optional[str] = Field(
-        default=None, description="the file to open: out/deck.html, out/poster.png, … when present")
+    open: Optional[PollinateOpenRevision] = None
+    versions: list[PollinateVersion] = Field(default_factory=list)
+    thumbnail: Optional[str] = Field(default=None, description="the cover image")
+    main_output: Optional[str] = Field(default=None, description="the file to open: out/deck.html, an .mp4, …")
+    duration_s: Optional[float] = Field(default=None, description="a video's length, from its storyboard")
+    scene_count: Optional[int] = Field(default=None, description="a video's scene count")
 
 
 class PollinateWorksResponse(BaseModel):
-    """`GET /api/pollinate/works` — registered works, newest first."""
+    """``GET /api/pollinate/works`` — registered works, newest first."""
 
     works: list[PollinateWork] = Field(default_factory=list)
-    skipped: int = Field(
-        default=0, description="registry entries left out because a file was missing or broken")
+    skipped: int = Field(default=0, description="registry entries left out because a file was missing or broken")
+
+
+class PollinateVersionDetail(PollinateVersion):
+    guard_ok: Optional[bool] = Field(default=None, description="the guard's result for this cut")
+    fail_counts: dict[str, int] = Field(default_factory=dict, description="fail-level findings per check")
+
+
+class PollinateFinding(BaseModel):
+    check: str
+    level: str = Field(description="fail | warn")
+    slide: Optional[str] = None
+    msg: Optional[str] = None
+    carried: bool = Field(default=False, description="the slide already had it before this version")
+
+
+class PollinateGuardViolation(BaseModel):
+    slide: Optional[str] = None
+    kind: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class PollinateGuard(BaseModel):
+    ok: bool
+    violations: list[PollinateGuardViolation] = Field(default_factory=list)
+
+
+class PollinateOutput(BaseModel):
+    path: Optional[str] = None
+    name: str
+    bytes: Optional[int] = None
+    files: Optional[int] = Field(default=None, description="the file count of a folder (out/slides/)")
+
+
+class PollinateSlide(BaseModel):
+    n: int
+    id: str
+    image: Optional[str] = None
+    changed: bool = Field(default=False, description="in the open revision's scope, else the newest version's")
+
+
+class PollinateScene(BaseModel):
+    id: str
+    title: Optional[str] = None
+    start_s: float = 0
+    duration_s: Optional[float] = None
+    image: Optional[str] = None
+
+
+class PollinateAction(BaseModel):
+    key: str = Field(description="open_canvas | open_session | continue_in_chat")
+    primary: bool = False
+    path: Optional[str] = None
+    session: Optional[str] = None
+
+
+class PollinateWorkView(BaseModel):
+    """``GET /api/pollinate/works/view`` — one work's big card."""
+
+    work: PollinateWork
+    versions: list[PollinateVersionDetail] = Field(default_factory=list)
+    findings: list[PollinateFinding] = Field(default_factory=list, description="the newest version's checks")
+    guard: Optional[PollinateGuard] = None
+    brief: Optional[str] = Field(default=None, description="brief.md as written")
+    outputs: list[PollinateOutput] = Field(default_factory=list)
+    slides: list[PollinateSlide] = Field(default_factory=list)
+    scenes: list[PollinateScene] = Field(default_factory=list)
+    session: Optional[str] = None
+    actions: list[PollinateAction] = Field(default_factory=list, description="in order; the first is primary")
+
+
+class PollinateRate(BaseModel):
+    passed: int
+    revisions: int
+    pct: int
+
+
+class PollinatePair(BaseModel):
+    cur: Optional[float] = None
+    prev: Optional[float] = None
+
+
+class PollinateRatePair(BaseModel):
+    cur: Optional[PollinateRate] = None
+    prev: Optional[PollinateRate] = None
+
+
+class PollinateDay(BaseModel):
+    date: str
+    first_pass: int = 0
+    later: int = 0
+    not_passed: int = 0
+
+
+class PollinateCheckHit(BaseModel):
+    check: str
+    count: int
+    top_title: str
+    top_count: int
+
+
+class PollinateGuardBlock(BaseModel):
+    path: str
+    title: str
+    version: str
+    at: Optional[str] = None
+    violations: list[str] = Field(default_factory=list)
+
+
+class PollinateEval(BaseModel):
+    """``GET /api/pollinate/eval`` — the last ``days`` days against the ``days`` before."""
+
+    days: int
+    now: str
+    rate: PollinateRatePair
+    daily: list[PollinateDay] = Field(default_factory=list, description="2×days entries, oldest first")
+    works_changed: PollinatePair
+    versions_median: PollinatePair
+    person_versions: PollinatePair
+    guard_blocks: PollinatePair
+    check_hits: list[PollinateCheckHit] = Field(default_factory=list)
+    guard_list: list[PollinateGuardBlock] = Field(default_factory=list)

@@ -1,54 +1,34 @@
 import type React from 'react';
 /**
- * PollinateOverlay load-error classification (de-mask sweep, run_d6fd2c13).
- * Error-render path had ZERO coverage before. Verifies 4xx vs outage classification
- * replaced the always-"backend may be unavailable" string (WARN-2 from Gate-1).
+ * PollinateOverlay load-error classification: a works load that fails shows the shared
+ * load error, a 4xx as a client error and an outage as "backend may be unavailable".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { PollinateContent } from '../PollinateOverlay';
 import { pollinateService } from '../../../services/pollinate';
 import { ApiError } from '../../../services/api';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
 import { render as __render } from '@testing-library/react';
-// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
-// per render, so no cache carries over between tests.
+
 const renderQ = (ui: React.ReactElement) =>
   __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
 vi.mock('../../../services/pollinate', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../services/pollinate')>();
-  // Faithful mock: mirror the REAL pollinateService surface (fetchWorks + fetchAssets +
-  // fetchAssetBody) so it can't drift out of sync with the service. These tests only
-  // fail fetchAssets (the drawer never opens), but an incomplete mock is a latent
-  // AttributeError for any future drawer test.
-  return {
-    ...actual,
-    pollinateService: {
-      fetchWorks: vi.fn().mockResolvedValue({ works: [], skipped: 0 }),
-      fetchAssets: vi.fn(),
-      fetchAssetBody: vi.fn(),
-    },
-  };
+  // the REAL service surface, every call mocked
+  return { ...actual, pollinateService: { fetchWorks: vi.fn(), fetchWorkView: vi.fn(), fetchEval: vi.fn() } };
 });
 
-function openOverlay() {
-  /* no-op: host-owned open */
-}
-
 describe('PollinateOverlay load-error classification', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    (pollinateService.fetchWorks as ReturnType<typeof vi.fn>).mockResolvedValue({ works: [], skipped: 0 });
-  });
+  beforeEach(() => { vi.clearAllMocks(); });
 
   it('4xx → client-error message, NOT backend-unavailable', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    (pollinateService.fetchAssets as ReturnType<typeof vi.fn>).mockRejectedValue(
+    (pollinateService.fetchWorks as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'VALIDATION_FAILED', message: 'bad' }, 422),
     );
     renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
-    openOverlay();
     const err = await screen.findByTestId('pollinate-load-error');
     expect(err.textContent).toContain('HTTP 422');
     expect(err.textContent).toContain('client error');
@@ -56,11 +36,10 @@ describe('PollinateOverlay load-error classification', () => {
   });
 
   it('5xx/outage → keeps backend-unavailable message', async () => {
-    (pollinateService.fetchAssets as ReturnType<typeof vi.fn>).mockRejectedValue(
+    (pollinateService.fetchWorks as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError({ code: 'SERVICE_UNAVAILABLE', message: 'down' }, 500),
     );
     renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
-    openOverlay();
     const err = await screen.findByTestId('pollinate-load-error');
     expect(err.textContent).toContain('backend may be unavailable');
     expect(err.textContent).not.toContain('client error');

@@ -1,354 +1,214 @@
 import type React from 'react';
 /**
- * Tests for PollinateOverlay — the content-asset gallery.
+ * Tests for PollinateOverlay and PollinateWorkCard (design: the Pollinate overlay mockup of
+ * 2026-11-26).
  *
- * Covers: the works section (Pollinate v2) — thumbnails, Open in Canvas, the mark on
- * a failed version only, works outside the workspace, a works load error that leaves
- * the runs visible; fetch-once on open; the run gallery below it (newest-first cards,
- * newest expanded, client-side search); Gallery⇄Insights toggle (the run rollup strip
- * lives in Insights); Insights renders the publish-funnel with REAL numbers + NO token
- * panel; asset drawer opens with image + copy-caption + open-account and has no
- * mark-published controls any more.
+ * Covers: a work with an open revision is a card (version track, scope, Open in Canvas,
+ * Open session) and every other work a row; a click opens the big card with the backend's
+ * actions; the empty state hides tabs and filters; failed versions and guard blocks never
+ * use the attention or error colour; the kind filter; the Eval tab's numbers; nothing of the
+ * pre-v2 gallery (Insights, publish status, run filters) is rendered or fetched.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 
-const fetchAssets = vi.fn();
 const fetchWorks = vi.fn();
-const fetchAssetBody = vi.fn();
+const fetchWorkView = vi.fn();
+const fetchEval = vi.fn();
 vi.mock('../../services/pollinate', async () => {
   const actual = await vi.importActual<typeof import('../../services/pollinate')>('../../services/pollinate');
   return {
     ...actual,
     pollinateService: {
-      fetchAssets: () => fetchAssets(),
       fetchWorks: () => fetchWorks(),
-      fetchAssetBody: (p: string) => fetchAssetBody(p),
+      fetchWorkView: (p: string) => fetchWorkView(p),
+      fetchEval: () => fetchEval(),
     },
-    assetThumbUrl: (p: string) => `http://x/api/workspace/file/raw?path=${p}`,
+    assetThumbUrl: (p: string) => `http://x/raw?path=${p}`,
   };
 });
 
 import { PollinateContent } from './PollinateOverlay';
+import { workToCamel, type PollinateWork, type PollinateWorkView } from '../../services/pollinate';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
 import { render as __render } from '@testing-library/react';
-// The overlay reads its data through TanStack Query (overlayQueries): a fresh client
-// per render, so no cache carries over between tests.
+
 const renderQ = (ui: React.ReactElement) =>
   __render(<__QCP client={new __QC({ defaultOptions: { queries: { retry: false } } })}>{ui}</__QCP>);
 
-const ASSETS = {
-  overall: {
-    cardCount: 2, assetCount: 4, published: 1, ready: 3, inProgress: 1,
-    platformDist: { xiaohongshu: 2, bilibili: 1 },
-    formatDist: { poster: 3, narrative: 1 },
-    domainDist: { ai_architecture: 1, swarm: 1 },
-    knownChannels: ['bilibili', 'github', 'gongzhonghao', 'linkedin', 'twitter', 'xiaohongshu', 'youtube'],
-  },
-  cards: [
-    {
-      run: '2026-05-03-memory-is-the-moat', topic: 'AI 记忆 > AI 模型', domain: 'ai_architecture',
-      status: 'completed', createdAt: '2026-05-03T18:30:00+08:00', hasRunJson: true,
-      assetCount: 4, platforms: ['xiaohongshu', 'bilibili'], formats: ['poster', 'caption', 'narrative'],
-      publishedCount: 1, readyCount: 2,
-      assets: [
-        { platform: 'xiaohongshu', format: 'poster', filePath: 'Knowledge/Pollinate/m/poster.png',
-          fileName: 'poster.png', isImage: true, publishStatus: 'ready-to-publish' },
-        // sibling caption for the xhs poster — the drawer should lazily fetch THIS body
-        { platform: 'xiaohongshu', format: 'caption', filePath: 'Knowledge/Pollinate/m/caption.txt',
-          fileName: 'caption.txt', isImage: false, publishStatus: 'ready-to-publish' },
-        { platform: 'bilibili', format: 'poster', filePath: 'Knowledge/Pollinate/m/b.png',
-          fileName: 'b.png', isImage: true, publishStatus: 'published' },
-        { platform: 'gongzhonghao', format: 'narrative', filePath: 'Knowledge/Pollinate/m/n.md',
-          fileName: 'narrative_full.md', isImage: false, publishStatus: 'ready' },
-      ],
-    },
-    {
-      run: '2026-04-26-agent-harness', topic: 'Agent Harness 对比', domain: 'ai-agents',
-      status: 'running', createdAt: '2026-04-26T10:00:00+08:00', hasRunJson: true,
-      assetCount: 1, platforms: ['xiaohongshu'], formats: ['poster'],
-      publishedCount: 0, readyCount: 1,
-      assets: [
-        { platform: 'xiaohongshu', format: 'poster', filePath: 'Knowledge/Pollinate/a/p.png',
-          fileName: 'p.png', isImage: true, publishStatus: 'ready' },
-      ],
-    },
-    {
-      // ALL-PUBLISHED card — the to-publish chip must EXCLUDE this one (Gate-2 MED: the
-      // old fixture had no such card, so the filter test couldn't prove exclusion).
-      run: '2026-03-01-all-published', topic: 'Fully Published Topic', domain: 'swarm',
-      status: 'completed', createdAt: '2026-03-01T10:00:00+08:00', hasRunJson: true,
-      assetCount: 1, platforms: ['bilibili'], formats: ['poster'],
-      publishedCount: 1, readyCount: 0,
-      assets: [
-        { platform: 'bilibili', format: 'poster', filePath: 'Knowledge/Pollinate/ap/p.png',
-          fileName: 'p.png', isImage: true, publishStatus: 'published' },
-      ],
-    },
-  ],
-};
+const v = (id: string, extra: Record<string, unknown> = {}) => ({ id, by: 'agent', status: 'ok', at: '2026-11-25T10:00:00Z', scope: [], ...extra });
 
-const WORKS = {
-  skipped: 0,
-  works: [
-    // newest cut v003 failed; current stays on the last passing version (design §13.2)
-    { path: 'Projects/AIDLC/assets/ai-deck', inWorkspace: true, kind: 'deck', title: 'AI Native deck',
-      current: 'v002', latest: 'v003', status: 'failed', updated: '2026-11-25T08:00:00Z',
-      thumbnail: 'Projects/AIDLC/assets/ai-deck/out/slides/01-s-7f3a.png',
-      mainOutput: 'Projects/AIDLC/assets/ai-deck/out/deck.html' },
-    { path: 'Knowledge/Pollinate/2026-11-24-launch', inWorkspace: true, kind: 'poster', title: 'Launch poster',
-      current: 'v001', latest: 'v001', status: 'ok', updated: '2026-11-24T09:00:00Z',
-      thumbnail: 'Knowledge/Pollinate/2026-11-24-launch/out/poster.png',
-      mainOutput: 'Knowledge/Pollinate/2026-11-24-launch/out/poster.png' },
-    { path: '/home/me/Desktop/AI-Native/deck', inWorkspace: false, kind: 'deck', title: 'Outside deck',
-      current: 'v002', latest: 'v002', status: 'ok', updated: '2026-11-20T09:00:00Z',
-      thumbnail: '/home/me/Desktop/AI-Native/deck/out/slides/01-s-1111.png',
-      mainOutput: '/home/me/Desktop/AI-Native/deck/out/deck.html' },
-  ],
-};
-
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
-beforeEach(() => {
-  fetchAssets.mockResolvedValue(ASSETS);
-  fetchWorks.mockResolvedValue(WORKS);
-  fetchAssetBody.mockResolvedValue('小红书文案正文 — 复制我去发布 #AI');
+const DECK: PollinateWork = workToCamel({
+  path: 'Projects/AIDLC/assets/deck', in_workspace: true, kind: 'deck', title: 'AIDLC roadmap', brain: 'AIDLC',
+  width: 1920, height: 1080, slide_count: 31, current: 'v004', latest: 'v005', status: 'failed',
+  updated: '2026-11-26T08:00:00Z',
+  open: { scope: ['s-7f3a', 's-91c0', 's-2c63'], note: 'titles on one line', at: '2026-11-26T08:00:00Z', session: 'S1' },
+  versions: [v('v001', { by: 'user' }), v('v002'), v('v003'), v('v003-user', { by: 'user', found_on_disk: true }),
+    v('v004'), v('v005', { status: 'failed' })],
+  thumbnail: 'Projects/AIDLC/assets/deck/out/slides/01-s-1.png', main_output: 'Projects/AIDLC/assets/deck/out/deck.html',
+});
+const POSTER: PollinateWork = workToCamel({
+  path: 'Knowledge/Pollinate/day30', in_workspace: true, kind: 'poster', title: 'Day 30', brain: 'General',
+  width: 1080, height: 1440, current: 'v003', latest: 'v003', status: 'ok', updated: '2026-11-25T08:00:00Z',
+  versions: [v('v001'), v('v002'), v('v003')], thumbnail: 'Knowledge/Pollinate/day30/out/poster.png',
+  main_output: 'Knowledge/Pollinate/day30/out/poster.png',
+});
+const FILM: PollinateWork = workToCamel({
+  path: 'Services/x/film', in_workspace: true, kind: 'video', title: 'Edge AI', brain: 'General', style: 'anatomy',
+  width: 1920, height: 1080, duration_s: 83, scene_count: 9, versions: [], main_output: 'Services/x/film/out/edge.mp4',
 });
 
-function renderAndOpen(onDispatch = vi.fn().mockReturnValue(true), close = vi.fn()) {
-  // M4: PollinateContent renders immediately (host owns open + fresh mount per open).
-  renderQ(<PollinateContent onDispatch={onDispatch} close={close} />);
-  return { onDispatch, close };
-}
+const VIEW: PollinateWorkView = {
+  work: DECK,
+  versions: DECK.versions.map((x) => ({ ...x, guardOk: x.id === 'v005' ? false : null, failCounts: x.id === 'v005' ? { nowrap: 2 } : {} })),
+  findings: [{ check: 'nowrap', level: 'fail', slide: 's-7f3a', msg: 'wraps', carried: false },
+    { check: 'font_floor', level: 'warn', slide: 's-1', msg: 'small', carried: true }],
+  guard: { ok: false, violations: [{ slide: 's-4e2d', kind: 'modified', detail: 'page 9 changed' }] },
+  brief: '# Brief\nWho: CMHK leadership\nThesis: one line',
+  outputs: [{ path: 'Projects/AIDLC/assets/deck/out/deck.html', name: 'deck.html', bytes: 2_400_000, files: null }],
+  slides: [{ n: 1, id: 's-1', image: 'a.png', changed: false }, { n: 2, id: 's-7f3a', image: 'b.png', changed: true }],
+  scenes: [], session: 'S1',
+  actions: [{ key: 'open_canvas', primary: true, path: 'Projects/AIDLC/assets/deck/out/deck.html', session: null },
+    { key: 'open_session', primary: false, path: null, session: 'S1' }],
+};
+
+const EVAL = {
+  days: 15, rate: { cur: { passed: 17, revisions: 25, pct: 68 }, prev: { passed: 7, revisions: 17, pct: 41 } },
+  daily: Array.from({ length: 30 }, (_, i) => ({ date: `d${i}`, firstPass: i % 3, later: 0, notPassed: 0 })),
+  worksChanged: { cur: 9, prev: 3 }, versionsMedian: { cur: 4, prev: 6 }, personVersions: { cur: 7, prev: 11 },
+  guardBlocks: { cur: 3, prev: 5 },
+  checkHits: [{ check: 'font_floor', count: 11, topTitle: 'AIDLC roadmap', topCount: 5 }],
+  guardList: [{ path: 'Projects/AIDLC/assets/deck', title: 'AIDLC roadmap', version: 'v005', at: null, violations: ['page 9 changed'] }],
+};
+
+const ATTENTION = /status-warning|status-error/;
 
 describe('PollinateOverlay', () => {
-  it('fetches once on open and renders works first, then the newest-first run cards', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeInTheDocument());
-    expect(screen.getByTestId('pollinate-card-2026-04-26-agent-harness')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId('pollinate-work-Projects/AIDLC/assets/ai-deck')).toBeInTheDocument());
-    // works come before the earlier runs in the gallery
-    const gallery = screen.getByTestId('pollinate-gallery');
-    const works = screen.getByTestId('pollinate-works');
-    const runCard = screen.getByTestId('pollinate-card-2026-05-03-memory-is-the-moat');
-    expect(gallery.contains(works)).toBe(true);
-    expect(works.compareDocumentPosition(runCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // the run rollup strip is an Insights detail, not the gallery's headline
-    expect(screen.queryByTestId('pollinate-overall')).toBeNull();
-    expect(fetchAssets).toHaveBeenCalledTimes(1); // no polling
-    expect(fetchWorks).toHaveBeenCalledTimes(1);
+  beforeEach(() => {
+    fetchWorks.mockResolvedValue({ works: [DECK, POSTER, FILM], skipped: 0 });
+    fetchWorkView.mockResolvedValue(VIEW);
+    fetchEval.mockResolvedValue(EVAL);
+  });
+  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+  it('shows a work with an open revision as a card and the others as rows', async () => {
+    const onContinue = vi.fn().mockResolvedValue(true);
+    const close = vi.fn();
+    renderQ(<PollinateContent onDispatch={() => true} close={close} onContinue={onContinue} />);
+    const card = await screen.findByTestId(`pollinate-card-${DECK.path}`);
+    expect(card.textContent).toContain('AIDLC roadmap');
+    expect(card.textContent).toContain('31');
+    expect(within(card).getByTestId('pollinate-card-scope').textContent).toContain('titles on one line');
+    const track = within(card).getByTestId(`pollinate-track-${DECK.path}`);
+    const nodes = track.querySelectorAll('[data-version]');
+    expect(Array.from(nodes).map((n) => n.getAttribute('data-version'))).toEqual(['v001', 'v002', 'v003', 'v003-user', 'v004', 'v005']);
+    expect(track.querySelector('[data-version="v004"]')!.getAttribute('data-state')).toBe('current');
+    expect(track.querySelector('[data-version="v005"]')!.getAttribute('data-state')).toBe('failed');
+    expect(track.querySelector('[data-version="v003-user"]')!.getAttribute('data-by')).toBe('user');
+    expect(track.querySelector('[data-state="open"]')).toBeTruthy();
+    expect(screen.getByTestId(`pollinate-row-${POSTER.path}`)).toBeTruthy();
+    expect(screen.getByTestId(`pollinate-row-${FILM.path}`).textContent).toContain('anatomy');
+    expect(screen.queryByTestId(`pollinate-row-${DECK.path}`)).toBeNull();
+    fireEvent.click(within(card).getByTestId('pollinate-card-session'));
+    await waitFor(() => expect(onContinue).toHaveBeenCalledWith('S1', ''));
+    await waitFor(() => expect(close).toHaveBeenCalled());
   });
 
-  it('expands the newest card by default (asset grid visible)', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeInTheDocument());
-    // newest card's first asset cell is rendered (expanded)
-    expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument();
+  it('Open session on a chat that is gone puts the work in a chat tab instead', async () => {
+    const onContinue = vi.fn().mockResolvedValue(false);
+    const onDispatch = vi.fn().mockReturnValue(true);
+    renderQ(<PollinateContent onDispatch={onDispatch} close={() => {}} onContinue={onContinue} />);
+    fireEvent.click(within(await screen.findByTestId(`pollinate-card-${DECK.path}`)).getByTestId('pollinate-card-session'));
+    await waitFor(() => expect(onDispatch).toHaveBeenCalledTimes(1));
+    expect(onDispatch.mock.calls[0][0]).toContain(DECK.path);
   });
 
-  it('client-side search filters the card list', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-search')).toBeInTheDocument());
-    fireEvent.change(screen.getByTestId('pollinate-search'), { target: { value: 'harness' } });
-    await waitFor(() => {
-      expect(screen.queryByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeNull();
-      expect(screen.getByTestId('pollinate-card-2026-04-26-agent-harness')).toBeInTheDocument();
-    });
-  });
-
-  it('toggles to Insights and shows the publish funnel with real numbers, NO token panel', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-view-insights')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-view-insights'));
-    await waitFor(() => expect(screen.getByTestId('pollinate-insights')).toBeInTheDocument());
-    expect(screen.getByTestId('pollinate-overall').textContent).toContain('4'); // assets
-    const txt = screen.getByTestId('pollinate-insights').textContent || '';
-    expect(txt).toContain('Publish funnel');
-    expect(txt).toContain('By channel');
-    // real numbers: 4 produced, 1 published
-    expect(txt).toContain('Published');
-    // token panel must be ABSENT (pollinate can't attribute per-run tokens)
-    expect(txt.toLowerCase()).not.toContain('token');
-  });
-
-  it('opens the asset drawer with image + copy + open-account (manual publish)', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0'));
-    await waitFor(() => expect(screen.getByTestId('pollinate-asset-drawer')).toBeInTheDocument());
-    expect(screen.getByTestId('pollinate-copy-btn')).toBeInTheDocument();
-    expect(screen.getByTestId('pollinate-open-account-btn')).toBeInTheDocument();
-  });
-
-  // ── Gap 1: caption body lazily fetched + rendered + copied (design moment ②) ──
-  it('lazily fetches + renders the sibling caption body for an image asset', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')); // the xhs poster
-    await waitFor(() => expect(screen.getByTestId('pollinate-caption-body')).toBeInTheDocument());
-    // fetched the SIBLING caption.txt (same platform), NOT the poster png
-    expect(fetchAssetBody).toHaveBeenCalledWith('Knowledge/Pollinate/m/caption.txt');
-    expect(screen.getByTestId('pollinate-caption-body').textContent).toContain('复制我去发布');
-  });
-
-  it('copies the caption BODY text, not the path', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0'));
-    await waitFor(() => expect(screen.getByTestId('pollinate-caption-body')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-copy-btn'));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('小红书文案正文 — 复制我去发布 #AI'));
-  });
-
-  it('prefers a real caption sibling over a publish-kit (Gate-2 HIGH)', async () => {
-    // card whose xhs poster has BOTH a caption.txt and a publish-kit.md sibling
-    fetchAssets.mockResolvedValue({
-      overall: { ...ASSETS.overall },
-      cards: [{
-        run: 'r-kit', topic: 'Kit topic', domain: 'swarm', status: 'completed',
-        createdAt: '2026-05-01T00:00:00+08:00', hasRunJson: true, assetCount: 3,
-        platforms: ['xiaohongshu'], formats: ['poster', 'caption'], publishedCount: 0, readyCount: 3,
-        assets: [
-          { platform: 'xiaohongshu', format: 'poster', filePath: 'K/r-kit/poster.png',
-            fileName: 'poster.png', isImage: true, publishStatus: 'ready' },
-          { platform: 'xiaohongshu', format: 'caption', filePath: 'K/r-kit/publish-kit.md',
-            fileName: 'publish-kit.md', isImage: false, publishStatus: 'ready' },
-          { platform: 'xiaohongshu', format: 'caption', filePath: 'K/r-kit/caption.txt',
-            fileName: 'caption.txt', isImage: false, publishStatus: 'ready' },
-        ],
-      }],
-    });
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-asset-r-kit-0')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-asset-r-kit-0')); // the poster
-    await waitFor(() => expect(screen.getByTestId('pollinate-caption-body')).toBeInTheDocument());
-    // resolved the clean caption.txt, NOT publish-kit.md
-    expect(fetchAssetBody).toHaveBeenCalledWith('K/r-kit/caption.txt');
-    expect(fetchAssetBody).not.toHaveBeenCalledWith('K/r-kit/publish-kit.md');
-  });
-
-  // ── Gap 2: missing-platform produce buttons in the drawer ──
-  it('offers Produce buttons for platforms not yet produced on this topic', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0'));
-    await waitFor(() => expect(screen.getByTestId('pollinate-missing-platforms')).toBeInTheDocument());
-    // card has xhs+bili → youtube/github/etc should be offered, xhs should NOT
-    expect(screen.getByTestId('pollinate-produce-platform-youtube')).toBeInTheDocument();
-    expect(screen.queryByTestId('pollinate-produce-platform-xiaohongshu')).toBeNull();
-  });
-
-  // ── Gap 3: domain chips + to-publish state filter ──
-  it('domain chip filters the card list', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-domain-chip-ai-agents')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-domain-chip-ai-agents'));
-    await waitFor(() => {
-      expect(screen.getByTestId('pollinate-card-2026-04-26-agent-harness')).toBeInTheDocument();
-      expect(screen.queryByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeNull();
-    });
-  });
-
-  it('to-publish chip EXCLUDES a fully-published card', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-card-2026-03-01-all-published')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-chip-to-publish'));
-    await waitFor(() => {
-      // the all-published card disappears; a card with unpublished assets stays
-      expect(screen.queryByTestId('pollinate-card-2026-03-01-all-published')).toBeNull();
-      expect(screen.getByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeInTheDocument();
-    });
-  });
-
-  // ── Gap 4: neglected channel (0 assets) visible in Insights ──
-  it('Insights by-channel surfaces a fully-neglected channel (0 assets)', async () => {
-    renderAndOpen();
-    await waitFor(() => expect(screen.getByTestId('pollinate-view-insights')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('pollinate-view-insights'));
-    await waitFor(() => expect(screen.getByTestId('pollinate-insights')).toBeInTheDocument());
-    // youtube has 0 assets in the fixture but IS a known channel → must appear
-    expect(screen.getByTestId('pollinate-insights').textContent).toContain('youtube');
-  });
-
-  // ── Pollinate v2: the works section ──
-  it('works: each card shows its cover thumbnail, title and version', async () => {
-    renderAndOpen();
-    const card = await screen.findByTestId('pollinate-work-Projects/AIDLC/assets/ai-deck');
-    const img = card.querySelector('img');
-    expect(img?.getAttribute('src')).toBe(
-      'http://x/api/workspace/file/raw?path=Projects/AIDLC/assets/ai-deck/out/slides/01-s-7f3a.png');
-    expect(card.textContent).toContain('AI Native deck');
-    expect(card.textContent).toContain('v002');
-    expect(card.textContent).toContain('2026-11-25');
-  });
-
-  it('works: Open in Canvas closes the overlay and opens the main output', async () => {
-    const { close } = renderAndOpen();
-    const opened: string[] = [];
-    const onOpen = (e: Event) => opened.push((e as CustomEvent<{ path: string }>).detail.path);
+  it('Open in Canvas sends the main output and closes the overlay', async () => {
+    const close = vi.fn();
+    const seen: string[] = [];
+    const onOpen = (e: Event) => seen.push((e as CustomEvent).detail.path);
     document.addEventListener('swarm:open-file', onOpen);
-    try {
-      fireEvent.click(await screen.findByTestId('pollinate-work-open-Projects/AIDLC/assets/ai-deck'));
-      expect(close).toHaveBeenCalledTimes(1);
-      expect(opened).toEqual(['Projects/AIDLC/assets/ai-deck/out/deck.html']);
-    } finally {
-      document.removeEventListener('swarm:open-file', onOpen);
-    }
+    renderQ(<PollinateContent onDispatch={() => true} close={close} />);
+    fireEvent.click(within(await screen.findByTestId(`pollinate-card-${DECK.path}`)).getByTestId('pollinate-card-canvas'));
+    expect(close).toHaveBeenCalled();
+    expect(seen).toEqual([DECK.mainOutput]);
+    document.removeEventListener('swarm:open-file', onOpen);
   });
 
-  it('works: only a card whose newest version failed is marked', async () => {
-    renderAndOpen();
-    const failed = await screen.findByTestId('pollinate-work-Projects/AIDLC/assets/ai-deck');
-    const ok = screen.getByTestId('pollinate-work-Knowledge/Pollinate/2026-11-24-launch');
-    expect(failed.querySelector('[data-testid="pollinate-work-failed"]')).not.toBeNull();
-    expect(ok.querySelector('[data-testid="pollinate-work-failed"]')).toBeNull();
-    expect(screen.getAllByTestId('pollinate-work-failed')).toHaveLength(1);
-    const tip = screen.getByTestId('pollinate-work-failed').getAttribute('title') ?? '';
-    expect(tip).toContain('v003');   // the version that failed
-    expect(tip).toContain('v002');   // the one the card shows
+  it('a click opens the big card with the brief, the checks and the backend actions', async () => {
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    fireEvent.click(await screen.findByTestId(`pollinate-card-${DECK.path}`));
+    const wc = await screen.findByTestId('pollinate-wc');
+    await waitFor(() => expect(fetchWorkView).toHaveBeenCalledWith(DECK.path));
+    const brief = await within(wc).findByTestId('pollinate-wc-brief');
+    expect(brief.textContent).toContain('CMHK leadership');
+    expect(brief.textContent).not.toContain('# Brief');
+    const marks = within(wc).getAllByTestId('pollinate-wc-check');
+    expect(marks.map((m) => m.getAttribute('data-ok'))).toEqual(['false', 'false']);   // guard, nowrap
+    expect(within(wc).getAllByTestId('pollinate-wc-slide').map((s) => s.getAttribute('data-changed'))).toEqual(['false', 'true']);
+    expect(within(wc).getByTestId('pollinate-wc-cmd-open_canvas')).toBeTruthy();
+    expect(within(wc).getByTestId('pollinate-wc-cmd-open_session')).toBeTruthy();
+    fireEvent.click(within(wc).getByTestId('pollinate-wc-tab-checks'));
+    const findings = within(wc).getAllByTestId('pollinate-wc-finding');
+    expect(findings.map((f) => f.getAttribute('data-carried'))).toEqual(['false', 'true']);
+    fireEvent.click(within(wc).getByTestId('pollinate-wc-close'));
+    await waitFor(() => expect(screen.queryByTestId('pollinate-wc')).toBeNull());
   });
 
-  it('works: a work outside the workspace has no Open in Canvas and no thumbnail', async () => {
-    renderAndOpen();
-    const card = await screen.findByTestId('pollinate-work-/home/me/Desktop/AI-Native/deck');
-    expect(screen.queryByTestId('pollinate-work-open-/home/me/Desktop/AI-Native/deck')).toBeNull();
-    expect(card.querySelector('img')).toBeNull();
-    expect(card.textContent).toContain('Outside the workspace');
+  it('never paints a failed version, a failed check or a guard block in the attention or error colour', async () => {
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    const card = await screen.findByTestId(`pollinate-card-${DECK.path}`);
+    expect(card.innerHTML).not.toMatch(ATTENTION);
+    fireEvent.click(card);
+    const wc = await screen.findByTestId('pollinate-wc');
+    await within(wc).findByTestId('pollinate-wc-brief');
+    expect(within(wc).getByTestId('pollinate-wc-brief').innerHTML).not.toMatch(ATTENTION);
+    fireEvent.click(within(wc).getByTestId('pollinate-wc-tab-versions'));
+    expect(within(wc).getByTestId('pollinate-wc-versions').innerHTML).not.toMatch(ATTENTION);
+    fireEvent.click(within(wc).getByTestId('pollinate-wc-close'));
+    fireEvent.click(screen.getByTestId('pollinate-tab-eval'));
+    const guard = await screen.findByTestId('pollinate-eval-guard');
+    expect(guard.innerHTML).not.toMatch(ATTENTION);
   });
 
-  it('no works and no runs: one empty state, no Earlier runs toolbar', async () => {
+  it('the kind filter keeps only that kind', async () => {
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId(`pollinate-card-${DECK.path}`);
+    fireEvent.click(screen.getByTestId('pollinate-kind-video'));
+    expect(screen.queryByTestId(`pollinate-card-${DECK.path}`)).toBeNull();
+    expect(screen.queryByTestId(`pollinate-row-${POSTER.path}`)).toBeNull();
+    expect(screen.getByTestId(`pollinate-row-${FILM.path}`)).toBeTruthy();
+  });
+
+  it('the Eval tab shows the first-pass rate against the days before and four numbers', async () => {
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    fireEvent.click(await screen.findByTestId('pollinate-tab-eval'));
+    const rate = await screen.findByTestId('pollinate-eval-rate');
+    expect(rate.textContent).toContain('68%');
+    expect(rate.textContent).toContain('17 / 25');
+    expect(screen.getByTestId('pollinate-eval').textContent).toContain('41%');
+    expect(screen.getAllByTestId('pollinate-eval-number')).toHaveLength(4);
+    expect(screen.getByTestId('pollinate-eval-hits').textContent).toContain('font_floor');
+  });
+
+  it('with no work registered: one empty state, no tabs, no filters, no eval fetch', async () => {
     fetchWorks.mockResolvedValue({ works: [], skipped: 0 });
-    fetchAssets.mockResolvedValue({ overall: { ...ASSETS.overall, cardCount: 0 }, cards: [] });
-    renderAndOpen();
-    expect(await screen.findByTestId('pollinate-works-empty')).toBeInTheDocument();
-    await waitFor(() => expect(fetchAssets).toHaveBeenCalled());
-    expect(screen.queryByTestId('pollinate-earlier-runs')).toBeNull();
-    expect(screen.queryByTestId('pollinate-search')).toBeNull();
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId('pollinate-empty');
+    expect(screen.queryByTestId('pollinate-tabs')).toBeNull();
+    expect(screen.queryByTestId('pollinate-filter')).toBeNull();
+    expect(fetchEval).not.toHaveBeenCalled();
   });
 
-  it('works: an empty registry says so; skipped entries are counted', async () => {
-    fetchWorks.mockResolvedValue({ works: [], skipped: 2 });
-    renderAndOpen();
-    expect(await screen.findByTestId('pollinate-works-empty')).toBeInTheDocument();
-    expect(screen.getByTestId('pollinate-works-skipped').textContent).toContain('2 registered works');
-  });
-
-  it('works: a failed works fetch shows its own error while the runs still render', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    fetchWorks.mockRejectedValue(new Error('down'));
-    renderAndOpen();
-    expect(await screen.findByTestId('pollinate-works-error')).toBeInTheDocument();
-    expect(screen.getByTestId('pollinate-card-2026-05-03-memory-is-the-moat')).toBeInTheDocument();
-    expect(screen.queryByTestId('pollinate-load-error')).toBeNull();
-  });
-
-  it('the asset drawer has no mark-published controls any more', async () => {
-    renderAndOpen();
-    fireEvent.click(await screen.findByTestId('pollinate-asset-2026-05-03-memory-is-the-moat-0'));
-    await waitFor(() => expect(screen.getByTestId('pollinate-asset-drawer')).toBeInTheDocument());
-    expect(screen.queryByTestId('pollinate-mark-published-btn')).toBeNull();
-    expect(screen.queryByTestId('pollinate-posted-url-input')).toBeNull();
-    expect(screen.queryByTestId('pollinate-unpublish-btn')).toBeNull();
+  it('nothing of the pre-v2 run gallery is rendered', async () => {
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    await screen.findByTestId(`pollinate-card-${DECK.path}`);
+    const text = screen.getByTestId('pollinate-overlay').textContent ?? '';
+    for (const gone of ['Insights', 'Earlier runs', 'publish', 'Publish']) expect(text).not.toContain(gone);
+    for (const id of ['pollinate-view-insights', 'pollinate-search', 'pollinate-asset-drawer', 'pollinate-earlier-runs']) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+    const service = await import('../../services/pollinate');
+    expect(Object.keys(service.pollinateService).sort()).toEqual(['fetchEval', 'fetchWorkView', 'fetchWorks']);
   });
 });

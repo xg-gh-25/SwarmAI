@@ -70,16 +70,17 @@ export const overlayQuery = {
     },
     staleTime: OVERLAY_STALE_MS,
   }),
-  pollinate: () => ({
-    queryKey: ['overlay', 'pollinate'] as const,
-    queryFn: () => pollinateService.fetchAssets(),
-    staleTime: OVERLAY_STALE_MS,
-  }),
-  /** The registered works (Pollinate v2). Under the 'pollinate' key, so
-   *  invalidateOverlay(qc, 'pollinate') refreshes it with the run gallery. */
+  /** The registered works. Under the 'pollinate' key, so invalidateOverlay(qc,
+   *  'pollinate') refreshes them with the eval. */
   pollinateWorks: () => ({
     queryKey: ['overlay', 'pollinate', 'works'] as const,
     queryFn: () => pollinateService.fetchWorks(),
+    staleTime: OVERLAY_STALE_MS,
+  }),
+  /** The Eval tab: 15 days against the 15 before. */
+  pollinateEval: () => ({
+    queryKey: ['overlay', 'pollinate', 'eval'] as const,
+    queryFn: () => pollinateService.fetchEval(15),
     staleTime: OVERLAY_STALE_MS,
   }),
   pipelineAnalytics: (window: '30d') => ({
@@ -252,7 +253,7 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   library: () => [overlayQuery.libraryNative(), overlayQuery.libraryRecent(), overlayQuery.libraryMounts()],
   'brain-hub': () => [brainsWithPinnedQuery()],
   todo: () => [overlayQuery.todo(TODO_DEFAULT_DAYS)],
-  pollinate: () => [overlayQuery.pollinateWorks(), overlayQuery.pollinate()],
+  pollinate: () => [overlayQuery.pollinateWorks()],
   pipeline: () => [overlayQuery.pipelineAnalytics('30d'), overlayQuery.pipelineRunning()],
   jobs: () => [overlayQuery.jobsRoster(), overlayQuery.jobsOverview()],
   capabilities: () => [overlayQuery.capabilitiesApps()],
