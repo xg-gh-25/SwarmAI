@@ -26,8 +26,9 @@
 #      link in the tree can never make root change another file; the service's UMask=0077
 #      (hive/swarmai-hive.service) keeps what it writes later private.
 #   3. sudoers: the Hive user may run commands as swarm-replay (never as root), without a
-#      password, without a pty or a PAM session; the file is checked with visudo before it is put
-#      in place.
+#      password, without a pty or a PAM session (on sudo-rs, which has no pam_session setting,
+#      sudo's PAM session opens no logind session on Ubuntu); the file is checked with visudo
+#      before it is put in place.
 #   4. The network boundary: an nftables table that rejects swarm-replay's traffic to the EC2
 #      instance metadata service (169.254.169.254, fd00:ec2::254), loaded now and at every boot by
 #      its own systemd unit, so a replayed app cannot read the instance role's credentials.
@@ -41,7 +42,8 @@
 # Usage: replay-host.sh                       the steps above (idempotent)
 #        replay-host.sh image                 steps 1-3, for an image build (no firewall)
 #        replay-host.sh render-nft <uid>        print the nftables ruleset for that uid
-#        replay-host.sh render-sudoers <user>   print the sudoers drop-in for the Hive user
+#        replay-host.sh render-sudoers <user> [classic|rs]   print the sudoers drop-in for the
+#                                       Hive user (default: the dialect of the installed sudo)
 #        replay-host.sh render-unit <nft>       print the systemd unit that loads the ruleset
 #        replay-host.sh packages                print the package set
 # Environment: SWARM_USER (the Hive user, default swarm), REPLAY_HOST_DNF_DEADLINE_S (default 200),
@@ -88,15 +90,31 @@ table inet swarmai_replay {
 EOF
 }
 
+# Which sudo this machine has: sudo-rs (the default sudo from Ubuntu 25.10 on) or the classic
+# sudo. Their sudoers files differ in which Defaults they know.
+sudo_dialect() {
+    case "$(sudo --version 2>/dev/null | head -n 1)" in
+        sudo-rs*) echo rs ;;
+        *) echo classic ;;
+    esac
+}
+
 render_sudoers() {
-    local owner="$1"
+    local owner="$1" dialect="${2:-$(sudo_dialect)}" defaults
     case "$owner" in
         ''|*[!a-z0-9_-]*) echo "render-sudoers: not a user name: $owner" >&2; return 2 ;;
+    esac
+    # sudo-rs knows neither requiretty nor pam_session: it never asks for a tty, and its PAM
+    # session on Ubuntu is common-session-noninteractive, which starts no logind session.
+    case "$dialect" in
+        classic) defaults='!use_pty, !requiretty, !pam_session' ;;
+        rs) defaults='!use_pty' ;;
+        *) echo "render-sudoers: not a sudo dialect: $dialect" >&2; return 2 ;;
     esac
     cat <<EOF
 # SwarmAI Feature Map replay (hive/replay-host.sh): $owner starts a replay's processes as
 # $REPLAY_USER, whose traffic to the instance metadata service the firewall rejects.
-Defaults>$REPLAY_USER !use_pty, !requiretty, !pam_session
+Defaults>$REPLAY_USER $defaults
 $owner ALL=($REPLAY_USER) NOPASSWD: ALL
 EOF
 }
@@ -244,11 +262,11 @@ install_firewall() {
 
 case "${1:-setup}" in
     render-nft) render_nft "${2:-}"; exit $? ;;
-    render-sudoers) render_sudoers "${2:-}"; exit $? ;;
+    render-sudoers) render_sudoers "${2:-}" "${3:-}"; exit $? ;;
     render-unit) render_unit "${2:-/usr/sbin/nft}"; exit $? ;;
     packages) echo "$BROWSER_LIBRARIES $BROWSER_FONTS $BOUNDARY_PACKAGES"; exit 0 ;;
     setup|image) ;;
-    *) echo "usage: $0 [setup|image|render-nft <uid>|render-sudoers <user>|render-unit <nft>|packages]" >&2; exit 2 ;;
+    *) echo "usage: $0 [setup|image|render-nft <uid>|render-sudoers <user> [classic|rs]|render-unit <nft>|packages]" >&2; exit 2 ;;
 esac
 
 if [ "$(id -u)" != 0 ]; then

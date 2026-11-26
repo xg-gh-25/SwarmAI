@@ -237,12 +237,22 @@ def test_nft_ruleset_rejects_only_the_replay_uid_to_the_metadata_service():
 
 
 def test_sudoers_lets_only_the_hive_user_become_only_the_replay_user(tmp_path):
-    r = _sh("render-sudoers", "swarm")
-    assert r.returncode == 0, r.stderr
-    rules = [ln for ln in r.stdout.splitlines() if ln and not ln.startswith("#")]
-    assert rules == ["Defaults>swarm-replay !use_pty, !requiretty, !pam_session",
-                     "swarm ALL=(swarm-replay) NOPASSWD: ALL"]
+    def rules_of(r):
+        assert r.returncode == 0, r.stderr
+        return [ln for ln in r.stdout.splitlines() if ln and not ln.startswith("#")]
+
+    assert rules_of(_sh("render-sudoers", "swarm", "classic")) == [
+        "Defaults>swarm-replay !use_pty, !requiretty, !pam_session",
+        "swarm ALL=(swarm-replay) NOPASSWD: ALL"]
+    # sudo-rs (Ubuntu 25.10 on) refuses a file that names requiretty or pam_session
+    assert rules_of(_sh("render-sudoers", "swarm", "rs")) == [
+        "Defaults>swarm-replay !use_pty",
+        "swarm ALL=(swarm-replay) NOPASSWD: ALL"]
     assert _sh("render-sudoers", "x y").returncode == 2
+    assert _sh("render-sudoers", "swarm", "other").returncode == 2
+    # without a dialect: the one of the sudo installed here, which its visudo accepts
+    r = _sh("render-sudoers", "swarm")
+    assert rules_of(r)[1] == "swarm ALL=(swarm-replay) NOPASSWD: ALL"
     visudo = shutil.which("visudo") or ("/usr/sbin/visudo" if Path("/usr/sbin/visudo").exists() else None)
     if visudo:
         f = tmp_path / "sudoers"
