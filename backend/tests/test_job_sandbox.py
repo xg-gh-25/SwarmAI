@@ -78,9 +78,16 @@ def test_declared_builtin_tools_become_tools_flag():
     assert _settings(cmd)["sandbox"]["enabled"] is True  # ... still sandboxed
 
 
-def test_slack_dm_spawn_has_no_builtin_tools():
+def test_slack_dm_spawn_has_no_builtin_tools_and_only_slack_mcp():
     from jobs import executor
     calls: list[list[str]] = []
+    seen: dict = {}
+    real_dump = json.dump
+
+    def capture(obj, fp, *a, **kw):
+        if isinstance(obj, dict) and "mcpServers" in obj:
+            seen["servers"] = sorted(obj["mcpServers"])
+        return real_dump(obj, fp, *a, **kw)
 
     def fake_run(cmd, *a, **kw):
         calls.append(cmd)
@@ -89,14 +96,17 @@ def test_slack_dm_spawn_has_no_builtin_tools():
     with patch("jobs.executor._send_slack_dm_webhook", return_value=False), \
          patch("jobs.executor._send_slack_dm_bot_api", return_value=False), \
          patch("jobs.executor._resolve_claude_cli", return_value="/usr/bin/claude"), \
-         patch("jobs.executor._load_mcp_config", return_value={"mcpServers": {"slack-mcp": {}}}), \
+         patch("jobs.executor._load_mcp_config",
+               return_value={"mcpServers": {"slack-mcp": {}, "builder-mcp": {}}}), \
          patch("jobs.executor._get_slack_dm_channel", return_value="D123"), \
          patch("jobs.executor._cli_version", return_value=(2, 1, 302)), \
          patch("jobs.executor._resolve_job_model", return_value="us.anthropic.claude-opus-5-5[1m]"), \
-         patch("jobs.executor.subprocess.run", side_effect=fake_run):
+         patch("jobs.executor.subprocess.run", side_effect=fake_run), \
+         patch("jobs.executor.json.dump", side_effect=capture):
         executor._send_slack_dm("hello")
     cmd = calls[-1]
     assert _flag(cmd, "--tools") == ""
+    assert seen["servers"] == ["slack-mcp"]  # only the server it may use, never builder-mcp
 
 
 def test_every_agent_task_settings_enable_sandbox():
@@ -237,3 +247,4 @@ def test_executor_comments_name_tools_and_sandbox():
     src = (Path(__file__).resolve().parents[1] / "jobs" / "executor.py").read_text()
     assert "Safety is enforced by --allowedTools" not in src
     assert "Per-job tool restriction via --allowedTools" not in src
+

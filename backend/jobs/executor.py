@@ -1408,6 +1408,10 @@ def _send_slack_dm_bot_api(message: str) -> bool:
         return False
 
 
+#: the only tools the Slack DM fallback run may call
+_SLACK_DM_TOOLS = ["mcp__slack-mcp__post_message", "mcp__slack-mcp__open_dm_channel"]
+
+
 def _send_slack_dm(message: str) -> bool:
     """Send a Slack DM to the user.
 
@@ -1441,7 +1445,9 @@ def _send_slack_dm(message: str) -> bool:
             mode="w", suffix=".json", prefix="swarm-notify-",
             delete=False,
         )
-        json.dump(mcp_config, mcp_config_file)
+        # only slack-mcp: --allowedTools limits nothing in bypassPermissions, and the
+        # message carries job output someone else may have written
+        json.dump(_scoped_mcp_config(mcp_config, _SLACK_DM_TOOLS), mcp_config_file)
         mcp_config_file.close()
 
         # Read owner DM channel from Slack bot config
@@ -1467,7 +1473,7 @@ def _send_slack_dm(message: str) -> bool:
             "--strict-mcp-config",
             # no built-in tool (a message carries job output); the two MCP tools only
             "--tools", "",
-            "--allowedTools", "mcp__slack-mcp__post_message,mcp__slack-mcp__open_dm_channel",
+            "--allowedTools", ",".join(_SLACK_DM_TOOLS),
             *_aws_settings_args(),
             "-p", prompt,
         ]
