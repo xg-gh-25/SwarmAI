@@ -79,7 +79,9 @@ describe('NeedsYouRow', () => {
       expect(screen.queryByTestId('needs-you-row-send')).toBeNull();
       fireEvent.click(screen.getByTestId('needs-you-row-fill'));
       expect(opened).toEqual([{ tab: 'aws-account' }]);
-      expect(onOpened).toHaveBeenCalledTimes(1);
+      // Settings is itself the overlay and takes this one's place: closing after it would
+      // close Settings in the same tick
+      expect(onOpened).not.toHaveBeenCalled();
       expect(onFill).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener('swarm:open-settings', listen);

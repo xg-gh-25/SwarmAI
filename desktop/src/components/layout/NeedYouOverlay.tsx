@@ -19,7 +19,8 @@
  * Actions reuse the existing paths (no /act endpoint): a card or row sends the item's
  * prompt to chat through the overlay ctx's `dispatchPrompt` (or fills the input), or
  * opens the place where it is handled (the Swarm Out tab, a settings page:
- * NeedsYouRow.itemOpener). The overlay closes once the prompt landed.
+ * NeedsYouRow.itemOpener). The overlay closes once the prompt landed or the Swarm Out tab
+ * opened; Settings is itself an overlay and takes this one's place (no close after it).
  *
  * Data: `overlayQuery.needsYou()` (TanStack Query, the same cache as the badge and the
  * Welcome card); first-load states via OverlayState.
@@ -35,7 +36,7 @@ import { CdfHealth } from './CdfHealth';
 import { CognitionLevel } from './CognitionLevel';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError } from './OverlayState';
-import { itemOpener, needsYouPrompt } from './NeedsYouRow';
+import { itemOpener, needsYouPrompt, runOpener } from './NeedsYouRow';
 import { getOverlayCtxBridge } from './overlayRegistry';
 import { chatService } from '../../services/chat';
 import { CARD, MUTED, ZoneLabel, agoText } from './needYouParts';
@@ -232,7 +233,7 @@ function PersonCard({ it, onFill, onSend, onOpened, onOpenSession }: {
         <div className={`flex flex-wrap items-center gap-2 ${why ? 'mt-2.5' : ''}`}>
           {opener ? (
             <button type="button" className="btn-sm btn-primary" data-testid="needs-you-open"
-              onClick={() => { opener.open(); onOpened(); }}>
+              onClick={() => runOpener(opener, onOpened)}>
               {opener.kind === 'settings' ? t('needYou.openSettings') : t('needYou.openSwarmOut')}
             </button>
           ) : (

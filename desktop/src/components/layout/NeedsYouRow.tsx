@@ -12,11 +12,13 @@
  *
  * A Swarm Out item (`dispatch.context.kind` = "swarm_out": a summary of the runs and
  * questions waiting) is not a prompt: either action opens the Swarm Out tab, where each
- * run is handled (design 2026-10-31-swarm-out-run-review §3.7), then `onOpened`.
- * A SwarmAI account item (`kind` = "aws_account": sign in again, Hives short) opens its
- * settings page the same way (design 2026-10-31-swarmai-aws-account §7.1).
+ * run is handled (design 2026-10-31-swarm-out-run-review §3.7), then `onOpened` (the
+ * overlay closes over the tab). A SwarmAI account item (`kind` = "aws_account": sign in
+ * again) opens its settings page the same way (design 2026-10-31-swarmai-aws-account §7.1);
+ * Settings is itself the overlay, so it replaces this one and `onOpened` is not called:
+ * closing after it would close Settings in the same tick.
  *
- * @exports NeedsYouRow, needsYouPrompt, itemOpener
+ * @exports NeedsYouRow, needsYouPrompt, itemOpener, runOpener
  */
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -50,23 +52,37 @@ export interface NeedsYouRowProps {
   lead?: ReactNode;
   /** Draw the divider above this row (every row but the first in a card). */
   divider?: boolean;
-  /** After a Swarm Out item opened the Swarm Out tab (the overlay closes itself). */
+  /** After an item opened the Swarm Out tab (the overlay closes itself); never after an
+   *  opener that replaces the overlay (Settings). */
   onOpened?: () => void;
   testid?: string;
 }
 
-/** Where an item is handled instead of in chat — the App's settings page or the Swarm Out
- *  tab — and how to open it; null for an ordinary prompt. A Swarm Out item whose tab
- *  cannot be reached (no chat page published it) is an ordinary prompt. */
-export function itemOpener(it: AttentionEntry): { kind: 'settings' | 'swarmOut'; open: () => void } | null {
+/** Where an item is handled instead of in chat, and how to open it; null for an ordinary
+ *  prompt. `replacesOverlay`: the opener opens another overlay (Settings), which takes the
+ *  place of the one the item is shown in, so the caller must not close afterwards (that
+ *  would close Settings in the same tick); the Swarm Out tab is a chat tab under the
+ *  overlay, so the caller closes. A Swarm Out item whose tab cannot be reached (no chat
+ *  page published it) is an ordinary prompt. */
+export interface ItemOpener { kind: 'settings' | 'swarmOut'; open: () => void; replacesOverlay: boolean }
+
+export function itemOpener(it: AttentionEntry): ItemOpener | null {
   const settingsTab = opensSettingsTab(it);
   if (settingsTab) {
-    return { kind: 'settings', open: () => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: settingsTab } })) };
+    return { kind: 'settings', replacesOverlay: true,
+      open: () => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: settingsTab } })) };
   }
   // an item about Hives opens the Swarm Out tab on its settings view, where they are set up
   const bridgeShow = getOverlayCtxBridge().showSwarmOut;
   if (!opensSwarmOut(it) || !bridgeShow) return null;
-  return { kind: 'swarmOut', open: it.dispatch?.context?.view === 'settings' ? openSwarmOutSettings : bridgeShow };
+  return { kind: 'swarmOut', replacesOverlay: false, open: it.dispatch?.context?.view === 'settings' ? openSwarmOutSettings : bridgeShow };
+}
+
+/** Run an item's opener, then `onOpened` (close the overlay) unless the opener already put
+ *  another overlay in its place. */
+export function runOpener(opener: ItemOpener, onOpened?: () => void): void {
+  opener.open();
+  if (!opener.replacesOverlay) onOpened?.();
 }
 
 export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testid = 'needs-you-row', onOpened }: NeedsYouRowProps) {
@@ -75,7 +91,7 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
   const opener = itemOpener(item);
   const settingsTab = opener?.kind === 'settings';
   const swarmOut = !!opener;
-  const openSwarmOut = () => { opener?.open(); onOpened?.(); };
+  const openSwarmOut = () => { if (opener) runOpener(opener, onOpened); };
   return (
     <div
       data-testid={testid}

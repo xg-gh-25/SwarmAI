@@ -7,6 +7,8 @@
  *   fetches again and shows the items;
  * - reopening inside the freshness window renders from the cache (no new GET);
  * - prefetchNav(qc, 'needs-you') fetches the queue, so an open after hover is instant.
+ * - a card whose opener is Settings leaves Settings open (Settings replaces this overlay);
+ *   a card that opens the Swarm Out tab closes the overlay over it.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -40,6 +42,9 @@ import { NeedYouContent } from './NeedYouOverlay';
 import { setOverlayCtxBridge } from './overlayRegistry';
 import { chatService } from '../../services/chat';
 import { prefetchNav } from './overlayQueries';
+import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
+import { OPEN_SETTINGS_EVENT } from '../common/settingsEvents';
+import { useEffect } from 'react';
 
 const ITEM = {
   id: 'a1', tier: 'blocking', source: 'job', brain: null, title: 'Job X failed',
@@ -208,5 +213,50 @@ describe('NeedYouOverlay — for you, and what Swarm handles itself', () => {
     const row = await screen.findByTestId('needs-you-swarm-row');
     expect(row.querySelector('b')?.textContent).toBe('Cognitive Distillation has stopped moving');
     expect(row.textContent?.match(/a job waits 16 h/g)).toHaveLength(1);
+  });
+});
+
+// The app's single-overlay authority with the shell's OPEN_SETTINGS_EVENT handler
+// (ThreeColumnLayout: setSettingsTab + openOverlay('settings')), Need You inside it with
+// close = closeOverlay, as the overlay host wires it.
+function Shell() {
+  const { activeOverlay, openOverlay, closeOverlay } = useOverlay();
+  useEffect(() => {
+    const go = () => openOverlay('settings');
+    window.addEventListener(OPEN_SETTINGS_EVENT, go);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, go);
+  }, [openOverlay]);
+  useEffect(() => { openOverlay('needs-you'); }, [openOverlay]);
+  return (<>
+    <span data-testid="active-overlay">{activeOverlay ?? 'none'}</span>
+    <NeedYouContent onDispatch={() => true} close={closeOverlay} />
+  </>);
+}
+
+describe('NeedYouOverlay — cards that open a page', () => {
+  beforeEach(() => { fetchAttention.mockReset(); setOverlayCtxBridge({}); });
+  const ACCOUNT = { ...ITEM, id: 'aws_account:expired', source: 'aws_account', handler: 'person', since: null,
+    title: 'Sign in to your AWS account again', dispatch: { message: 'sign in', context: { kind: 'aws_account', settings_tab: 'aws-account' } } };
+  const SWARM_OUT = { ...ITEM, id: 'swarm_out:decide', source: 'swarm_out', handler: 'person', since: null,
+    title: '2 Swarm Out runs to decide', dispatch: { message: 'open swarm out', context: { kind: 'swarm_out', focus: 'decide' } } };
+
+  it('Open settings leaves Settings open: the overlay is not closed after it', async () => {
+    fetchAttention.mockResolvedValue({ items: [ACCOUNT], counts: { blocking: 1, review: 0, person: 1, agent: 0 } });
+    render(<OverlayProvider><Shell /></OverlayProvider>, { wrapper: wrap(freshQc()) });
+    const open = await screen.findByTestId('needs-you-open');
+    expect(open).toHaveTextContent(en.needYou.openSettings);
+    fireEvent.click(open);
+    await waitFor(() => expect(screen.getByTestId('active-overlay')).toHaveTextContent('settings'));
+  });
+
+  it('Open Swarm Out switches to the tab and closes the overlay over it', async () => {
+    const show = vi.fn();
+    setOverlayCtxBridge({ showSwarmOut: show });
+    fetchAttention.mockResolvedValue({ items: [SWARM_OUT], counts: { blocking: 1, review: 0, person: 1, agent: 0 } });
+    const close = vi.fn();
+    render(<NeedYouContent onDispatch={() => true} close={close} />, { wrapper: wrap(freshQc()) });
+    fireEvent.click(await screen.findByTestId('needs-you-open'));
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });
