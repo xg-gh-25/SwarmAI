@@ -480,6 +480,7 @@ UPDATE_ARMED=0
 UPDATE_PIP_STARTED=0
 UPDATE_RESTARTED=0
 UPDATE_UNIT_PREV=""
+UPDATE_UNIT_NEW=""
 rollback_update() {
     [ "$UPDATE_ARMED" = 1 ] || return 0
     UPDATE_ARMED=0
@@ -512,6 +513,7 @@ rollback_update() {
             && systemctl daemon-reload && rm -f "$UPDATE_UNIT_PREV"; } \
             || echo "ERROR: the previous swarmai-hive.service could not be restored from $UPDATE_UNIT_PREV" | tee /dev/stderr
     fi
+    if [ -n "$UPDATE_UNIT_NEW" ]; then rm -f "$UPDATE_UNIT_NEW"; fi
     rm -rf /opt/swarmai.bak
     # A failure before the restart leaves the old process running on the restored tree.
     if [ "$UPDATE_RESTARTED" = 1 ]; then
@@ -2136,8 +2138,14 @@ REPLAY_HOST_TARBALL=/tmp/hive-update.tar.gz
 
 # The newest installed Node as the default node / npm / npx (design
 # 2026-10-31-swarm-out-single-loop-fixes §2.7). The backend needs no Node, so a Hive whose
-# Node is older than the frontend needs still updates; the reason is in this output.
-bash /opt/swarmai/hive/ensure-node.sh || echo "WARN: the Hive's Node is older than the frontend needs; its frontend tests cannot run"
+# Node is older than the frontend needs still updates; the reason is in this output. Root
+# runs a root-only copy taken from the checked package, never the synced tree's script,
+# which the Hive user owns and could rewrite (during the pip step) before root runs it.
+ensure_node=$(mktemp /run/swarmai-ensure-node.XXXXXX)
+{{ tar xzf /tmp/hive-update.tar.gz --wildcards --no-wildcards-match-slash -O '*/hive/ensure-node.sh' > "$ensure_node" \
+    && [ -s "$ensure_node" ] && bash "$ensure_node"; }} \
+  || echo "WARN: the Hive's Node is older than the frontend needs (or the package's ensure-node.sh could not run); its frontend tests cannot run"
+rm -f "$ensure_node"
 
 # NOTE: /etc/caddy/Caddyfile and /usr/bin/caddy live OUTSIDE /opt/swarmai/ — never touched
 # by rsync. The deployed Caddyfile has inline bcrypt auth written by user_data.py. It changes
@@ -2184,17 +2192,26 @@ fi
 # kept running the old unit: one without EnvironmentFile=/etc/swarmai/hive-auth.env
 # started the backend with an empty HIVE_PASS_HASH, and app-layer auth denied every
 # API request from that update on. Install the package's unit whenever it differs.
-# The unit it replaces is kept for the rollback in a file only root can write.
-if ! cmp -s /opt/swarmai/hive/swarmai-hive.service /etc/systemd/system/swarmai-hive.service; then
+# Root takes it from the checked package itself, never from the synced tree: the Hive user
+# owns that tree and could rewrite the unit there (during the pip step) before root installs
+# it, and the unit says which user and commands the service runs. The unit it replaces is
+# kept for the rollback in a file only root can write.
+UPDATE_UNIT_NEW=$(mktemp /run/swarmai-hive.service.new.XXXXXX)
+unit_new=$UPDATE_UNIT_NEW
+tar xzf /tmp/hive-update.tar.gz --wildcards --no-wildcards-match-slash -O '*/hive/swarmai-hive.service' > "$unit_new"
+[ -s "$unit_new" ]
+if ! cmp -s "$unit_new" /etc/systemd/system/swarmai-hive.service; then
   echo "systemd unit changed — installing the package's swarmai-hive.service"
   if [ -f /etc/systemd/system/swarmai-hive.service ]; then
     unit_prev=$(mktemp /run/swarmai-hive.service.prev.XXXXXX)
     cp /etc/systemd/system/swarmai-hive.service "$unit_prev"
     UPDATE_UNIT_PREV=$unit_prev
   fi
-  install -m 644 /opt/swarmai/hive/swarmai-hive.service /etc/systemd/system/swarmai-hive.service
+  install -m 644 "$unit_new" /etc/systemd/system/swarmai-hive.service
   systemctl daemon-reload
 fi
+rm -f "$unit_new"
+UPDATE_UNIT_NEW=""
 
 # The nightly workspace backup cron is gone: the Hive role never had write access to
 # backups/, so it never succeeded. A Hive provisioned before its removal still has it.

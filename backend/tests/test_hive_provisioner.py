@@ -926,10 +926,8 @@ class TestUpdateInstallsSystemdUnit:
     @pytest.mark.asyncio
     async def test_update_script_installs_changed_unit_before_restart(self):
         lines = [ln.strip() for ln in (await _script_sent_by_update()).splitlines()]
-        cmp_i = lines.index("if ! cmp -s /opt/swarmai/hive/swarmai-hive.service "
-                            "/etc/systemd/system/swarmai-hive.service; then")
-        install_i = lines.index("install -m 644 /opt/swarmai/hive/swarmai-hive.service "
-                                "/etc/systemd/system/swarmai-hive.service")
+        cmp_i = lines.index('if ! cmp -s "$unit_new" /etc/systemd/system/swarmai-hive.service; then')
+        install_i = lines.index('install -m 644 "$unit_new" /etc/systemd/system/swarmai-hive.service')
         reload_i = lines.index("systemctl daemon-reload")
         restart_i = next(i for i, ln in enumerate(lines) if "systemctl restart swarmai-hive && systemctl is-active" in ln)
         assert cmp_i < install_i < reload_i < restart_i
@@ -998,6 +996,9 @@ printf '{"version": "%s"}' "$STUB_HEALTH_VERSION"
 }
 _PIP_STUB = r"""#!/bin/bash
 echo "pip $(cat pyproject.toml)" >> "$STUB_LOG"
+# the Hive user (who runs pip) rewriting the synced tree's unit before root installs it
+if [ -n "${STUB_PIP_WRITES_UNIT:-}" ]; then printf %s "$STUB_PIP_WRITES_UNIT" > ../hive/swarmai-hive.service; fi
+if [ -n "${STUB_PIP_WRITES_ENSURE_NODE:-}" ]; then printf %s "$STUB_PIP_WRITES_ENSURE_NODE" > ../hive/ensure-node.sh; fi
 if [ -n "${STUB_PIP_FAIL_ON:-}" ] && grep -q "$STUB_PIP_FAIL_ON" pyproject.toml; then exit 1; fi
 exit 0
 """
@@ -1014,6 +1015,8 @@ async def _run_update_on_scratch(tmp_path: Path, *, new_pyproject: str = "new",
                                  new_unit: str = "unit-old", old_unit: str = "unit-old",
                                  start: str = "ok", start_polls: int = 0,
                                  pip_fail_on: str = "", health_version: str = "",
+                                 pip_writes_unit: str = "", pip_writes_ensure_node: str = "",
+                                 package_unit: bool = True,
                                  bad_package: bool = False):
     """Run the install part of the update script on a scratch tree; return (process, root, log)."""
     import hashlib
@@ -1052,8 +1055,13 @@ async def _run_update_on_scratch(tmp_path: Path, *, new_pyproject: str = "new",
     name = f"swarmai-hive-v{version}-linux-arm64.tar.gz"
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for rel, text in (("backend/pyproject.toml", new_pyproject), ("backend/app.py", "v-new"),
-                          ("backend/new_only.py", "new"), ("hive/swarmai-hive.service", new_unit)):
+        files = [("backend/pyproject.toml", new_pyproject), ("backend/app.py", "v-new"),
+                 ("backend/new_only.py", "new"),
+                 # the package's ensure-node.sh leaves a mark the test can find
+                 ("hive/ensure-node.sh", 'echo package > "$STUB_DIR/ensure-node.ran"\n')]
+        if package_unit:
+            files.append(("hive/swarmai-hive.service", new_unit))
+        for rel, text in files:
             data = text.encode()
             info = tarfile.TarInfo(f"swarmai-hive-v{version}/{rel}")
             info.size = len(data)
@@ -1073,7 +1081,9 @@ async def _run_update_on_scratch(tmp_path: Path, *, new_pyproject: str = "new",
     env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}", "STUB_LOG": str(log),
            "STUB_DIR": str(stubs), "FAKE_S3": str(tmp_path / "s3"), "HOME": str(tmp_path),
            "STUB_START": start, "STUB_START_POLLS": str(start_polls),
-           "STUB_PIP_FAIL_ON": pip_fail_on, "STUB_HEALTH_VERSION": health_version}
+           "STUB_PIP_FAIL_ON": pip_fail_on, "STUB_HEALTH_VERSION": health_version,
+           "STUB_PIP_WRITES_UNIT": pip_writes_unit,
+           "STUB_PIP_WRITES_ENSURE_NODE": pip_writes_ensure_node}
     env.pop("INSTALL_DIR", None)
     env.pop("REPLAY_HOST_BIN", None)
     path = tmp_path / "update.sh"
@@ -1178,6 +1188,33 @@ class TestUpdateScriptRuns:
         assert not (root / "tmp/hive-new").exists()
         assert not list((root / "run").glob("swarmai-hive.service.prev.*"))
         assert len([ln for ln in log if ln.startswith("systemctl restart")]) == 1
+
+    @pytest.mark.asyncio
+    async def test_installed_unit_is_the_packages_not_the_synced_trees(self, tmp_path):
+        """Root installs the unit from the checked package: the Hive user can rewrite the
+        synced tree's copy (here during pip) before root reads it."""
+        proc, root, log = await _run_update_on_scratch(
+            tmp_path, new_unit="unit-new", pip_writes_unit="unit-written-by-the-hive-user")
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (root / "etc/systemd/system/swarmai-hive.service").read_text() == "unit-new"
+        assert not list((root / "run").glob("swarmai-hive.service.*"))
+
+    @pytest.mark.asyncio
+    async def test_root_runs_the_packages_ensure_node_not_the_synced_trees(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(
+            tmp_path, pip_writes_ensure_node='echo tree > "$STUB_DIR/ensure-node.ran"\n')
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (tmp_path / "stubs/ensure-node.ran").read_text() == "package\n"
+        assert not list((root / "run").glob("swarmai-ensure-node.*"))
+
+    @pytest.mark.asyncio
+    async def test_package_without_its_unit_rolls_back(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(tmp_path, package_unit=False)
+        assert proc.returncode != 0, proc.stdout
+        assert "Rolling back" in proc.stdout
+        _assert_old_tree_with_venv(root)
+        assert (root / "etc/systemd/system/swarmai-hive.service").read_text() == "unit-old"
+        assert not list((root / "run").glob("swarmai-hive.service.*"))
 
     @pytest.mark.asyncio
     async def test_bad_package_leaves_tree_untouched(self, tmp_path):

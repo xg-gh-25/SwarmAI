@@ -82,4 +82,7 @@ def test_provision_and_update_run_it():
     from hive import user_data
     assert 'bash "$INSTALL_DIR/hive/ensure-node.sh"' in Path(user_data.__file__).read_text()
     provisioner = (ROOT / "backend" / "hive" / "provisioner.py").read_text()
-    assert "bash /opt/swarmai/hive/ensure-node.sh ||" in provisioner      # the update warns, never rolls back
+    # the update runs the checked package's copy as root and warns, never rolls back
+    assert "-O '*/hive/ensure-node.sh' > \"$ensure_node\"" in provisioner
+    assert '&& [ -s "$ensure_node" ] && bash "$ensure_node"; }}' in provisioner   # f-string braces
+    assert "bash /opt/swarmai/hive/ensure-node.sh" not in provisioner
