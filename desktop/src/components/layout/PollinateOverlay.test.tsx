@@ -5,7 +5,8 @@ import type React from 'react';
  *
  * Covers: a work with an open revision is a card (version track, scope, Open in Canvas,
  * Open session) and every other work a row; a click opens the big card with the backend's
- * actions; the empty state hides tabs and filters; failed versions and guard blocks never
+ * actions, and its "now" line reads as a sentence (a plural-only key gets its count);
+ * the empty state hides tabs and filters; failed versions and guard blocks never
  * use the attention or error colour; the kind filter; the Eval tab's numbers; nothing of the
  * pre-v2 gallery (Insights, publish status, run filters) is rendered or fetched.
  */
@@ -153,6 +154,16 @@ describe('PollinateOverlay', () => {
     expect(findings.map((f) => f.getAttribute('data-carried'))).toEqual(['false', 'true']);
     fireEvent.click(within(wc).getByTestId('pollinate-wc-close'));
     await waitFor(() => expect(screen.queryByTestId('pollinate-wc')).toBeNull());
+  });
+
+  it('a work with an open revision says so in a sentence on the big card, never as its i18n key', async () => {
+    renderQ(<PollinateContent onDispatch={() => true} close={() => {}} />);
+    fireEvent.click(await screen.findByTestId(`pollinate-card-${DECK.path}`));
+    const wc = await screen.findByTestId('pollinate-wc');
+    const now = await within(wc).findByTestId('pollinate-wc-now');
+    // the key has only plural forms (nowOpen_one / nowOpen_other): without a count it renders as the key
+    expect(now.textContent).toBe('a revision is open on 3 pages');
+    expect(now.textContent).not.toContain('ui.PollinateOverlay');
   });
 
   it('never paints a failed version, a failed check or a guard block in the attention or error colour', async () => {

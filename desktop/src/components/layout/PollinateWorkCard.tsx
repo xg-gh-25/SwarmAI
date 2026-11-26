@@ -138,7 +138,7 @@ export function PollinateWorkCard({ path, order, onSelect, onClose, onCanvas, on
   // what is happening to the work: a revision open, a video still being made (its stage),
   // a document with no passed version yet, a finished video, or nothing
   const nowText = !w ? '' : w.open
-    ? t('ui.PollinateOverlay.nowOpen', { pages: w.open.scope.length })
+    ? t('ui.PollinateOverlay.nowOpen', { count: w.open.scope.length, pages: w.open.scope.length })
     : video
       ? (w.inProgress
         ? (w.progress?.stage ? t('ui.PollinateOverlay.nowMaking', { stage: t(`ui.PollinateOverlay.stage_${w.progress.stage}`) }) : t('ui.PollinateOverlay.nowMakingNone'))
@@ -291,7 +291,7 @@ export function PollinateWorkCard({ path, order, onSelect, onClose, onCanvas, on
               </div>
             </div>
             <div className="p-3.5 bg-[var(--color-bg-chrome)] md:overflow-auto border-t md:border-t-0 border-[var(--color-border)] flex flex-col gap-2" data-testid="pollinate-wc-actions">
-              <div className={`text-small ${muted}`}>{t('ui.PollinateOverlay.now')} <span className="text-[var(--color-text)]">{nowText}</span></div>
+              <div className={`text-small ${muted}`}>{t('ui.PollinateOverlay.now')} <span className="text-[var(--color-text)]" data-testid="pollinate-wc-now">{nowText}</span></div>
               {view.actions.map((a, i) => (
                 <div key={a.key} className="contents">
                   {i === 1 && <div className={`text-meta mt-1 ${muted}`}>{t('ui.PollinateOverlay.also')}</div>}
