@@ -1011,6 +1011,17 @@ def _write(path: Path, text: str, mode: int | None = None) -> None:
         path.chmod(mode)
 
 
+def _gnu_tar() -> bool:
+    """The update script runs on a Linux Hive and extracts with GNU tar options
+    (``--wildcards``); bsdtar (macOS) refuses them, so the script cannot run here."""
+    import subprocess
+    try:
+        out = subprocess.run(["tar", "--version"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "GNU tar" in out
+
+
 async def _run_update_on_scratch(tmp_path: Path, *, new_pyproject: str = "new",
                                  new_unit: str = "unit-old", old_unit: str = "unit-old",
                                  start: str = "ok", start_polls: int = 0,
@@ -1019,6 +1030,8 @@ async def _run_update_on_scratch(tmp_path: Path, *, new_pyproject: str = "new",
                                  package_unit: bool = True,
                                  bad_package: bool = False):
     """Run the install part of the update script on a scratch tree; return (process, root, log)."""
+    if not _gnu_tar():
+        pytest.skip("the Hive update script needs GNU tar (it runs on a Linux Hive)")
     import hashlib
     import io
     import os
