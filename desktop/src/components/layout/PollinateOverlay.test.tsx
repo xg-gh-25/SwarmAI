@@ -41,7 +41,7 @@ const v = (id: string, extra: Record<string, unknown> = {}) => ({ id, by: 'agent
 const DECK: PollinateWork = workToCamel({
   path: 'Projects/AIDLC/assets/deck', in_workspace: true, kind: 'deck', title: 'AIDLC roadmap', brain: 'AIDLC',
   width: 1920, height: 1080, slide_count: 31, current: 'v004', latest: 'v005', status: 'failed',
-  updated: '2026-11-26T08:00:00Z',
+  updated: '2026-11-26T08:00:00Z', in_progress: true,
   open: { scope: ['s-7f3a', 's-91c0', 's-2c63'], note: 'titles on one line', at: '2026-11-26T08:00:00Z', session: 'S1' },
   versions: [v('v001', { by: 'user' }), v('v002'), v('v003'), v('v003-user', { by: 'user', found_on_disk: true }),
     v('v004'), v('v005', { status: 'failed' })],

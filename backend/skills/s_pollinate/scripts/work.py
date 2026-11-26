@@ -13,8 +13,10 @@ Commands (design section 13.2):
   init    make a new work: folder, work.json, empty source, .gitignore, registry entry
   adopt   register a folder that already has a source; add missing slide ids
           (nothing else in the file changes) and store v001 (by the person).
-          ``--kind video`` registers a finished video (an .mp4 in out/) with no
-          versions: it is listed with the works; open, cut and render refuse it
+          ``--kind video`` registers a video project with no versions as soon as
+          it has a brief.md or storyboard.json (or a film in out/*.mp4): it is
+          listed with the works, in progress until the film exists; open, cut
+          and render refuse it
   open    start a revision: when the source on disk differs from the current
           version (the person edited it), store it first as ``<current>-user``;
           then record the declared scope (``--scope``, ``--add``, ``--remove``)
@@ -492,7 +494,7 @@ def register(wdir: Path, meta: dict) -> None:
     try:
         reg = load_registry()
         works = [w for w in reg["works"] if w.get("path") != str(wdir)]
-        works.append({"path": str(wdir), "kind": meta["kind"], "title": meta.get("title", ""),
+        works.append({"path": str(wdir), "kind": meta["kind"], "title": meta.get("title") or wdir.name,
                       "updated": now_iso()})
         reg["works"] = works
         reg["schema"] = 1
@@ -715,12 +717,22 @@ def _title_of(text: str, fallback: str) -> str:
 
 
 def _adopt_video(wdir: Path, args) -> int:
-    """Register a finished video in place: work.json with kind video and no versions.
+    """Register a video project in place: work.json with kind video and no versions.
+
+    It may be registered as soon as it is started: the folder needs a brief.md, a
+    storyboard.json or a film in out/*.mp4 (an empty folder is refused). Until the film
+    exists the overlay shows it in progress, with its stage read from those files. The
+    chat session running adopt (SWARM_APP_SESSION_ID) is recorded as ``session``, so the
+    overlay can open the chat that is making it.
 
     Its title, size and style come from the arguments, else from the video's
-    storyboard.json (title, width, height, style), else the folder name."""
-    if not any(p.is_file() for p in (wdir / "out").glob("*.mp4")):
-        raise UsageError(f"no .mp4 in {wdir / 'out'}; render the video first")
+    storyboard.json (title, width, height, style) when it already has one; otherwise they
+    stay null and the overlay reads them from the storyboard once it is written (a video
+    registered at its brief has none yet), then the folder name."""
+    has_film = any(p.is_file() for p in (wdir / "out").glob("*.mp4"))
+    if not (has_film or (wdir / "brief.md").is_file() or (wdir / "storyboard.json").is_file()):
+        raise UsageError(f"{wdir} has no brief.md, storyboard.json or out/*.mp4; "
+                         "write the brief first, then register the video")
     board = {}
     try:
         loaded = json.loads((wdir / "storyboard.json").read_text(encoding="utf-8"))
@@ -733,13 +745,14 @@ def _adopt_video(wdir: Path, args) -> int:
         size = {"w": board["width"], "h": board["height"]}
     else:
         size = None
-    title = args.title or (board.get("title") if isinstance(board.get("title"), str) else None) or wdir.name
+    title = args.title or (board.get("title") if isinstance(board.get("title"), str) else None)
     style = args.style or (board.get("style") if isinstance(board.get("style"), str) else None)
     meta = {"schema": SCHEMA, "kind": VIDEO, "title": title, "style": style, "size": size,
-            "src": None, "slides": [], "current": None, "open": None, "versions": []}
+            "src": None, "slides": [], "current": None, "open": None, "versions": [],
+            "session": _session()}
     save_meta(wdir, meta)
     register(wdir, meta)
-    _print({"work": str(wdir), "kind": VIDEO, "title": title})
+    _print({"work": str(wdir), "kind": VIDEO, "title": title or wdir.name, "film": has_film})
     return 0
 
 

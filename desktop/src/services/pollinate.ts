@@ -47,6 +47,15 @@ export interface PollinateVersion {
 
 /** One registered work. Paths are workspace-relative when `inWorkspace`, absolute
  *  otherwise (Canvas and the raw-file endpoint cannot open those). */
+/** How far a video has got, read from its files (brief → storyboard → scenes → film). */
+export interface PollinateProgress {
+  stage: 'brief' | 'storyboard' | 'scenes' | 'film' | null;
+  /** The storyboard's scene count. */
+  scenes: number;
+  /** How many of those scenes have a frame. */
+  framed: number;
+}
+
 export interface PollinateWork {
   path: string;
   inWorkspace: boolean;
@@ -70,6 +79,12 @@ export interface PollinateWork {
   mainOutput: string | null;
   durationS: number | null;
   sceneCount: number | null;
+  /** Being made: an open revision or no passed version yet; a video with no film. */
+  inProgress: boolean;
+  /** A video's stage; null for other kinds. */
+  progress: PollinateProgress | null;
+  /** The chat that registered a video. */
+  session: string | null;
 }
 
 export interface PollinateWorksResponse {
@@ -175,7 +190,19 @@ export function workToCamel(w: Raw): PollinateWork {
     mainOutput: str(w.main_output),
     durationS: num(w.duration_s),
     sceneCount: num(w.scene_count),
+    inProgress: Boolean(w.in_progress),
+    progress: progressToCamel(w.progress),
+    session: str(w.session),
   };
+}
+
+const STAGES = ['brief', 'storyboard', 'scenes', 'film'] as const;
+
+function progressToCamel(v: unknown): PollinateProgress | null {
+  if (!v || typeof v !== 'object') return null;
+  const p = v as Raw;
+  const stage = STAGES.find((s) => s === p.stage) ?? null;
+  return { stage, scenes: num(p.scenes) ?? 0, framed: num(p.framed) ?? 0 };
 }
 
 function viewToCamel(d: Raw): PollinateWorkView {

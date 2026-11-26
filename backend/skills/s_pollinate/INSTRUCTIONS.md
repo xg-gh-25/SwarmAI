@@ -89,7 +89,7 @@ where `$SKILL_DIR` is this skill's base directory (shown when the skill loads).
 | `work.py render --dir D [--formats …]` | Renders the current source to `out/` only; no new version. Refused (exit 2) when the source differs from the current version and no revision is open: open first |
 | `work.py list` | Prints the registry |
 
-`K` is `deck`, `poster`, `page` or `copy`. `adopt --kind video` registers a finished video (an .mp4 in `out/`, title and size from its `storyboard.json`) so the overlay lists it; open, cut and render refuse a video. Exit codes for every script: **0** passed,
+`K` is `deck`, `poster`, `page` or `copy`. `adopt --kind video` registers a video project as soon as it has a `brief.md` or `storyboard.json` (title and size from its `storyboard.json`), so the overlay lists it in progress until its film (`out/*.mp4`) exists; open, cut and render refuse a video. Exit codes for every script: **0** passed,
 **1** a check or the guard failed (read the message, fix, cut again), **2** usage or
 environment error (fix the command or the setup; do not "fix" the content).
 

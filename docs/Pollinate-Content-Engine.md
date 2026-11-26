@@ -147,7 +147,7 @@ a work, so the next "change the title" is a normal revision.
 | `render --dir D [--formats …] [--version V --out D]` | Renders without making a version; refused while the source differs from the current version and no revision is open |
 | `list` | Prints the registry |
 
-`K` is `deck`, `poster`, `page` or `copy` (`adopt` also takes `video`: a finished film registered so it is listed; open, cut and render refuse it). Every script uses the same exit codes: **0**
+`K` is `deck`, `poster`, `page` or `copy` (`adopt` also takes `video`: a video project registered as soon as it has a `brief.md` or `storyboard.json`, so it is listed while it is made; open, cut and render refuse it). Every script uses the same exit codes: **0**
 passed, **1** a check or the guard failed, **2** usage or environment error.
 
 ---
@@ -396,8 +396,9 @@ from the request and does not ask which one:
 **In the desktop app.** The Pollinate overlay (WORK zone) is laid out like the Pipeline
 overlay, with two tabs and one filter row (kind, Brain):
 
-- **Works** (`GET /api/pollinate/works`). A work with an open revision is a card: cover,
-  title, how long the revision has been open, Brain · kind · size · pages, a **version
+- **Works** (`GET /api/pollinate/works`). A work in progress (an open revision, no passed
+  version yet, or a video with no film: the row's `in_progress`) is a card: cover, title,
+  how long the revision has been open, Brain · kind · size · pages, a **version
   track** (one dot per version; the person's versions in their own colour, a failed one
   hollow, the current one ringed, the open revision last) and the revision's scope and note,
   with **Open in Canvas** and **Open session** (back to the chat that opened it: work.py
@@ -414,7 +415,9 @@ not in the registry): the brief and the newest version's checks; Pages, Versions
 Outputs (a video: Scenes and Outputs); and the actions its state allows, decided by the
 backend. A failed version or a guard block is the agent's to fix, so it is shown muted,
 never in the attention colour. A video is a fifth kind, listed but not made by Pollinate:
-the video skill registers it with `work.py adopt --kind video`. With no work registered the
+a video skill registers it with `work.py adopt --kind video` as soon as its brief is written, and
+it shows in progress, with its stage (brief, storyboard, scenes with how many have a frame,
+film) read from its files, until its film (`out/*.mp4`) exists. With no work registered the
 overlay is one empty state. Everything is read from the works' own files (`work.json`,
 `.versions/*/checks.json` and `guard.json`); the overlay writes nothing. The pre-v2 run
 gallery is gone, with no backward compatibility.

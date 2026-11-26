@@ -135,9 +135,17 @@ export function PollinateWorkCard({ path, order, onSelect, onClose, onCanvas, on
       { key: 'outputs', label: t('ui.PollinateOverlay.tabOutputs'), count: view?.outputs.length ?? 0 },
     ]).map((x) => ({ ...x, key: x.key as Tab, testid: `pollinate-wc-tab-${x.key}` }));
 
+  // what is happening to the work: a revision open, a video still being made (its stage),
+  // a document with no passed version yet, a finished video, or nothing
   const nowText = !w ? '' : w.open
     ? t('ui.PollinateOverlay.nowOpen', { pages: w.open.scope.length })
-    : video ? t('ui.PollinateOverlay.nowVideo') : t('ui.PollinateOverlay.nowIdle');
+    : video
+      ? (w.inProgress
+        ? (w.progress?.stage ? t('ui.PollinateOverlay.nowMaking', { stage: t(`ui.PollinateOverlay.stage_${w.progress.stage}`) }) : t('ui.PollinateOverlay.nowMakingNone'))
+        : t('ui.PollinateOverlay.nowVideo'))
+      : !w.current
+        ? (w.versions.length ? t('ui.PollinateOverlay.notPassedYet') : t('ui.PollinateOverlay.nowNotCut'))
+        : t('ui.PollinateOverlay.nowIdle');
 
   const openImage = (p: string | null) => { if (p && w?.inWorkspace) onCanvas(p); };
 

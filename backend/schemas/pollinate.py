@@ -43,6 +43,14 @@ class PollinateVersion(BaseModel):
     session: Optional[str] = None
 
 
+class PollinateProgress(BaseModel):
+    """How far a video has got, read from its files."""
+
+    stage: Optional[str] = Field(default=None, description="brief | storyboard | scenes | film; null with none of their files")
+    scenes: int = Field(default=0, description="the storyboard's scene count")
+    framed: int = Field(default=0, description="how many of those scenes have a frame")
+
+
 class PollinateWork(BaseModel):
     """One registered work (a folder with a work.json)."""
 
@@ -65,6 +73,9 @@ class PollinateWork(BaseModel):
     main_output: Optional[str] = Field(default=None, description="the file to open: out/deck.html, an .mp4, …")
     duration_s: Optional[float] = Field(default=None, description="a video's length, from its storyboard")
     scene_count: Optional[int] = Field(default=None, description="a video's scene count")
+    in_progress: bool = Field(default=False, description="being made: an open revision or no passed version yet; a video with no film")
+    progress: Optional[PollinateProgress] = Field(default=None, description="a video's stage; null for other kinds")
+    session: Optional[str] = Field(default=None, description="the chat that registered a video")
 
 
 class PollinateWorksResponse(BaseModel):

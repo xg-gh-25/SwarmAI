@@ -3,12 +3,16 @@
  * (design: Knowledge/Mockups/2026-11-26-pollinate-overlay-redesign.html).
  *
  * Two tabs under one filter row (kind, and a Brain made from the rows; switching tabs keeps it):
- * - **Works** (default): every work with an open revision as a card — cover, title, how long
- *   the revision has been open, Brain · kind · size · pages, the version track (one dot per
- *   version: the person's in their colour and marked, a failed one hollow, the current one
- *   ringed, the open revision last), and the revision's scope and note with Open in Canvas
- *   and Open session. Every other work as a row: thumbnail, title, Brain · kind · size ·
- *   current version, date and version count, Open in Canvas on hover.
+ * - **Works** (default): every work in progress as a card (``inProgress`` from the backend: an
+ *   open revision or no passed version yet, a video with no film) — cover, title, how long
+ *   the revision has been open (else when it last changed), Brain · kind · size · pages,
+ *   then for a document the version track (one dot per version: the person's in their
+ *   colour and marked, a failed one hollow, the current one ringed, the open revision last)
+ *   and the revision's scope and note, or that no version is cut yet; for a video its
+ *   stages (brief → storyboard → scenes → film) and how many scenes have a frame; with
+ *   Open in Canvas and Open session. Every other work as a row: thumbnail, title, Brain ·
+ *   kind · size · current version, date and version count, Open in Canvas on hover. While
+ *   the list loads the overlay says so (never a blank panel).
  * - **Eval**: the share of revisions whose first cut passed, 15 days against the 15 before,
  *   30 daily bars, four numbers, which checks fail most and what the guard stopped.
  * A click on a card or row opens the work's big card (PollinateWorkCard).
@@ -29,7 +33,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { classifyLoadError } from '../../services/api';
-import { assetThumbUrl, type PollinateEval, type PollinateWork } from '../../services/pollinate';
+import { assetThumbUrl, type PollinateEval, type PollinateProgress, type PollinateWork } from '../../services/pollinate';
 import { Tabs } from '../overlay';
 import { OverlayError } from './OverlayState';
 import { PollinateWorkCard, sizeText } from './PollinateWorkCard';
@@ -161,11 +165,46 @@ export function VersionTrack({ w }: { w: PollinateWork }) {
   );
 }
 
+const STAGES = ['brief', 'storyboard', 'scenes', 'film'] as const;
+
+/** A video's stages, the reached ones filled and the one it is at ringed; under Scenes how
+ *  many scenes have a frame. Read from its files, so a stage is never "done" by say-so. */
+export function StageTrack({ p }: { p: PollinateProgress }) {
+  const { t } = useTranslation();
+  const busy = 'var(--color-status-running)';
+  const at = p.stage ? STAGES.indexOf(p.stage) : -1;
+  return (
+    <ol className="flex mt-3.5 m-0 p-0 list-none min-w-0" data-testid="pollinate-stages">
+      {STAGES.map((s, i) => {
+        const state = i < at ? 'done' : i === at ? 'at' : 'todo';
+        return (
+          <li key={s} className="relative pt-5 flex-1 min-w-0 max-w-[120px]" data-stage={s} data-state={state}>
+            {i < STAGES.length - 1 && <span aria-hidden className="absolute top-[5px] left-[14px] right-[2px] h-[2px] rounded-sm"
+              style={{ background: i < at ? `color-mix(in srgb, ${busy} 55%, transparent)` : 'var(--color-border)' }} />}
+            <span aria-hidden className="absolute top-0 left-0 w-3 h-3 rounded-full"
+              style={state === 'at' ? { background: busy, boxShadow: `0 0 0 4px color-mix(in srgb, ${busy} 20%, transparent)` }
+                : state === 'done' ? { background: `color-mix(in srgb, ${busy} 55%, transparent)` }
+                  : { background: 'var(--color-bg)', boxShadow: 'inset 0 0 0 2px var(--color-border)' }} />
+            <div className={`text-meta truncate ${state === 'at' ? 'font-semibold text-[var(--color-text)]' : state === 'done' ? muted : dim}`}>
+              {t(`ui.PollinateOverlay.stage_${s}`)}
+            </div>
+            <div className={`text-meta tabular-nums truncate ${dim}`}>
+              {s === 'scenes' && p.scenes > 0 ? t('ui.PollinateOverlay.stageFramed', { framed: p.framed, total: p.scenes }) : ''}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function WorkCard({ w, now, onOpen, onCanvas, onSession }: {
   w: PollinateWork; now: number; onOpen: () => void; onCanvas: (() => void) | null; onSession: (() => void) | null;
 }) {
   const { t } = useTranslation();
-  const op = w.open!;
+  const op = w.open;
+  const video = w.kind === 'video';
+  const age = op ? since(op.at, now) : since(w.updated, now);
   return (
     <div role="button" tabIndex={0} aria-haspopup="dialog" onClick={onOpen}
       onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
@@ -176,20 +215,28 @@ function WorkCard({ w, now, onOpen, onCanvas, onSession }: {
         <div className="flex items-center gap-2.5 min-w-0">
           <span aria-hidden className="w-2 h-2 rounded-full flex-none" style={{ background: 'var(--color-status-running)' }} />
           <span className="flex-1 min-w-0 truncate text-heading font-semibold" title={w.title}>{w.title}</span>
-          {since(op.at, now) && (
+          {age && (
             <span className={`text-small whitespace-nowrap tabular-nums ${muted}`}>
-              {t('ui.PollinateOverlay.openFor')} <b className="font-semibold text-[var(--color-text-secondary)]">{since(op.at, now)}</b>
+              {op ? t('ui.PollinateOverlay.openFor') : t('ui.PollinateOverlay.lastChange')} <b className="font-semibold text-[var(--color-text-secondary)]">{age}</b>
             </span>
           )}
         </div>
         <div className="mt-1.5"><Meta w={w} /></div>
-        <VersionTrack w={w} />
+        {video ? (w.progress && <StageTrack p={w.progress} />) : <VersionTrack w={w} />}
         <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-body min-w-0"
           style={{ background: 'color-mix(in srgb, var(--color-status-running) 6%, transparent)' }}>
-          <span className="flex-1 min-w-0 truncate text-[var(--color-text-secondary)]" title={op.note ?? undefined} data-testid="pollinate-card-scope">
-            <b className="font-semibold text-[var(--color-text)]">{t('ui.PollinateOverlay.changes', { count: op.scope.length })}</b>
-            {op.note ? ` · ${op.note}` : ''}
-          </span>
+          {op ? (
+            <span className="flex-1 min-w-0 truncate text-[var(--color-text-secondary)]" title={op.note ?? undefined} data-testid="pollinate-card-scope">
+              <b className="font-semibold text-[var(--color-text)]">{t('ui.PollinateOverlay.changes', { count: op.scope.length })}</b>
+              {op.note ? ` · ${op.note}` : ''}
+            </span>
+          ) : (
+            <span className="flex-1 min-w-0 truncate text-[var(--color-text-secondary)]" data-testid="pollinate-card-state">
+              {video
+                ? (w.progress?.stage ? t(`ui.PollinateOverlay.stage_${w.progress.stage}`) : t('ui.PollinateOverlay.nowMakingNone'))
+                : w.versions.length ? t('ui.PollinateOverlay.notPassedYet') : t('ui.PollinateOverlay.notCutYet')}
+            </span>
+          )}
           {onCanvas && <button type="button" className="btn-sm btn-secondary whitespace-nowrap" data-testid="pollinate-card-canvas"
             onClick={(e) => { e.stopPropagation(); onCanvas(); }}>{t('ui.PollinateOverlay.openInCanvas')}</button>}
           {onSession && <button type="button" className="btn-sm btn-ghost whitespace-nowrap" data-testid="pollinate-card-session"
@@ -359,8 +406,8 @@ export function PollinateContent({ onDispatch, close, onContinue }: PollinateCon
   const brains = useMemo(() => Array.from(new Set(works.map((w) => w.brain))).sort(), [works]);
   const kinds = useMemo(() => KINDS.filter((k) => works.some((w) => w.kind === k)), [works]);
   const filtered = useMemo(() => works.filter((w) => (!kind || w.kind === kind) && (!brain || w.brain === brain)), [works, kind, brain]);
-  const revising = filtered.filter((w) => w.open);
-  const rest = filtered.filter((w) => !w.open);
+  const revising = filtered.filter((w) => w.inProgress);
+  const rest = filtered.filter((w) => !w.inProgress);
   const reload = useCallback(() => { void invalidateOverlay(qc, 'pollinate'); }, [qc]);
 
   const canvas = (w: PollinateWork) => (w.inWorkspace && w.mainOutput ? () => openInCanvas(w.mainOutput!, close) : null);
@@ -376,7 +423,7 @@ export function PollinateContent({ onDispatch, close, onContinue }: PollinateCon
     void onContinue(sid, '').then((ok) => { if (ok) close(); else continueInChat(w); });
   };
   const session = (w: PollinateWork) => {
-    const sid = w.open?.session ?? w.versions[w.versions.length - 1]?.session ?? null;
+    const sid = w.open?.session ?? w.versions[w.versions.length - 1]?.session ?? w.session ?? null;
     return sid ? () => openSession(sid, w) : null;
   };
   const order = [...revising, ...rest].map((w) => w.path);
@@ -415,6 +462,9 @@ export function PollinateContent({ onDispatch, close, onContinue }: PollinateCon
         {!!worksErr && (
           <OverlayError testid="pollinate-load-error" retryTestid="pollinate-load-retry"
             message={classifyLoadError(worksErr, 'works')} onRetry={reload} className="mx-auto my-8 max-w-sm" />
+        )}
+        {!worksErr && !worksQ.data && (
+          <div className={`text-small ${dim}`} data-testid="pollinate-loading">{t('ui.PollinateOverlay.loading')}</div>
         )}
         {!worksErr && worksQ.data && !has && (
           <div className={`flex items-center gap-3 px-4 py-4 rounded-xl border border-dashed border-[var(--color-border)] text-body ${muted}`}

@@ -12,6 +12,14 @@ call and no second store (design: the Pollinate overlay mockup of 2026-11-26):
 - ``<work>/brief.md``, ``<work>/out/`` (outputs, ``slides/NN-<id>.png``), and for a video
   ``storyboard.json`` and its scene frames (``out/`` or ``review/``, ``<scene>-*.jpg``).
 
+A work is **in progress** while it is being made: a deck, poster, page or copy with an open
+revision or with no passed version yet, and a video with no film (``out/*.mp4``); a work of
+any other kind never is. A video's stage is read from the same files, in order brief →
+storyboard → scenes → film. A video skill may register a video as soon as its brief is
+written (``work.py adopt --kind video``); one registered after its film is listed as done.
+A video's title, size and style come from work.json, else from its storyboard.json (a
+video registered at its brief has no storyboard yet when work.json is written).
+
 Reads are limited to registered folders: ``work_view`` looks a path up in the registry and
 refuses any other (no file outside a registered work is opened), and every file inside a
 work is resolved and checked to stay inside it (a symlink pointing out is not followed).
@@ -240,6 +248,20 @@ def _size(meta: dict) -> tuple[Optional[int], Optional[int]]:
     return None, None
 
 
+def _seconds(v: object) -> Optional[float]:
+    """A non-negative duration: a number, or a string holding one ("4.533"), else None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, str):
+        try:
+            v = float(v.strip())
+        except ValueError:
+            return None
+    if isinstance(v, (int, float)) and v >= 0 and v == v and v != float("inf"):
+        return float(v)
+    return None
+
+
 def _storyboard(work_dir: Path) -> list[dict]:
     """A video's scenes: id, title, start and duration (seconds), from storyboard.json."""
     board = _work_json(work_dir, "storyboard.json")
@@ -248,8 +270,7 @@ def _storyboard(work_dir: Path) -> list[dict]:
     for s in scenes if isinstance(scenes, list) else []:
         if not isinstance(s, dict) or not _s(s.get("id")) or not SCENE_ID.fullmatch(s["id"]):
             continue
-        dur = s.get("duration")
-        dur = float(dur) if isinstance(dur, (int, float)) and not isinstance(dur, bool) and dur >= 0 else None
+        dur = _seconds(s.get("duration"))
         out.append({"id": s["id"], "title": _s(s.get("title")), "start_s": round(start, 2), "duration_s": dur})
         start += dur or 0.0
     return out
@@ -307,6 +328,43 @@ def _video_thumb(work_dir: Path, scenes: list[dict]) -> Optional[Path]:
     return None
 
 
+def _mtime_iso(p: Optional[Path]) -> Optional[str]:
+    if p is None:
+        return None
+    try:
+        return datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat()
+    except (OSError, ValueError, OverflowError):
+        return None
+
+
+def _newest(*stamps: Optional[str]) -> Optional[str]:
+    """The latest of some ISO stamps (compared as instants; an unreadable one is ignored)."""
+    best, best_at = None, None
+    for st in stamps:
+        at = _when(st)
+        if at is not None and (best_at is None or at > best_at):
+            best, best_at = st, at
+    return best
+
+
+def _video_progress(work_dir: Path, scenes: list[dict], main: Optional[Path]) -> dict:
+    """How far a video has got, from its files: the stage reached (brief, storyboard,
+    scenes, film; None when it has none of them), the storyboard's scene count and how many
+    of those scenes have a frame."""
+    framed = sum(1 for s in scenes if _scene_frame(work_dir, s["id"]) is not None)
+    if main is not None:
+        stage = "film"
+    elif framed:
+        stage = "scenes"
+    elif scenes or _first_file(work_dir, ("storyboard.json",)) is not None:
+        stage = "storyboard"
+    elif _first_file(work_dir, ("brief.md",)) is not None:
+        stage = "brief"
+    else:
+        stage = None
+    return {"stage": stage, "scenes": len(scenes), "framed": framed}
+
+
 def _deck_thumb(work_dir: Path) -> Optional[Path]:
     slides = _inside(work_dir / "out" / "slides", work_dir)
     if slides is None or not slides.is_dir():
@@ -355,7 +413,17 @@ def work_row(work_dir: Path, ws_root: Path, updated: Optional[str] = None) -> Op
     versions = _versions(meta)
     newest = versions[-1] if versions else None
     w, h = _size(meta)
+    title, style = _s(meta.get("title")), _s(meta.get("style"))
     scenes = _storyboard(work_dir) if kind == VIDEO else []
+    if kind == VIDEO:
+        board = _work_json(work_dir, "storyboard.json")
+        board = board if isinstance(board, dict) else {}
+        title = title or _s(board.get("title"))
+        style = style or _s(board.get("style"))
+        if w is None and h is None:
+            bw, bh = board.get("width"), board.get("height")
+            if isinstance(bw, int) and isinstance(bh, int) and not isinstance(bw, bool) and not isinstance(bh, bool):
+                w, h = bw, bh
     if kind == VIDEO:
         main = _video_main(work_dir)
         thumb = _video_thumb(work_dir, scenes)
@@ -365,21 +433,39 @@ def work_row(work_dir: Path, ws_root: Path, updated: Optional[str] = None) -> Op
             _first_file(work_dir, (THUMBNAILS[kind],)) if kind in THUMBNAILS else None)
     slides = _strs(meta.get("slides"))
     duration = sum(s["duration_s"] or 0.0 for s in scenes) if scenes else None
+    op = _open(meta)
+    current = _s(meta.get("current"))
+    if kind == VIDEO:
+        progress: Optional[dict] = _video_progress(work_dir, scenes, main)
+        in_progress = main is None
+        # registered at its brief, a video is changed by its own skill, never by work.py:
+        # the files' own times say when it last moved
+        updated = _newest(updated, *(_mtime_iso(f) for f in (
+            _first_file(work_dir, ("brief.md",)), _first_file(work_dir, ("storyboard.json",)), main)))
+    else:
+        progress = None
+        in_progress = kind in MAIN_OUTPUTS and (op is not None or current is None)
+        updated = updated or (newest["at"] if newest else None)
     return {
         "path": shown.rel_dir.as_posix() if shown.rel_dir is not None else str(work_dir),
         "in_workspace": shown.in_workspace,
         "kind": kind,
-        "title": _s(meta.get("title")) or work_dir.name,
+        "title": title or work_dir.name,
         "brain": _brain(work_dir, ws_root),
-        "style": _s(meta.get("style")),
+        "style": style,
         "width": w,
         "height": h,
         "slide_count": len(slides) if kind == "deck" else None,
-        "current": _s(meta.get("current")),
+        "current": current,
         "latest": newest["id"] if newest else None,
         "status": newest["status"] if newest else None,
-        "updated": updated or (newest["at"] if newest else None),
-        "open": _open(meta),
+        "updated": updated,
+        "open": op,
+        "in_progress": in_progress,
+        "progress": progress,
+        # the chat that registered a video (work.py adopt records it); a document's chats
+        # are on its open revision and versions
+        "session": _s(meta.get("session")),
         "versions": versions,
         "thumbnail": shown(thumb),
         "main_output": shown(main),
@@ -559,7 +645,7 @@ def work_view(ws_root: Path, path: str) -> Optional[dict]:
     if row["kind"] == VIDEO:
         for s in _storyboard(work_dir):
             scenes.append({**s, "image": shown(_scene_frame(work_dir, s["id"]))})
-    session = (op or {}).get("session") or (newest or {}).get("session")
+    session = (op or {}).get("session") or (newest or {}).get("session") or row["session"]
     return {
         "work": row,
         "versions": details,

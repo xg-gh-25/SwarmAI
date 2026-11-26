@@ -2,8 +2,9 @@
 
 - open and cut write SWARM_APP_SESSION_ID (when set) into the open record and the cut's
   version entry, so the overlay can take the person back to that chat;
-- adopt --kind video registers a finished video (an .mp4 in out/) with no versions, and
-  open, cut and render refuse it (exit 2, work.json unchanged).
+- adopt --kind video registers a video (here a finished one, an .mp4 in out/) with no
+  versions, and open, cut and render refuse it (exit 2, work.json unchanged); registering
+  one before its film is in test_work_video_early.py.
 """
 from __future__ import annotations
 
@@ -70,7 +71,7 @@ def test_video_adopt_and_refusals(env, capsys):
     assert (d / "work.json").read_bytes() == before
 
 
-def test_video_adopt_needs_an_mp4(env, capsys):
+def test_video_adopt_refuses_an_empty_folder(env, capsys):
     d = env["tmp"] / "empty"
     (d / "out").mkdir(parents=True)
     capsys.readouterr()
@@ -82,4 +83,7 @@ def test_video_without_storyboard_uses_folder_name(env, capsys):
     d = _video_folder(env["tmp"])
     assert run(["adopt", "--dir", str(d), "--kind", "video"], capsys)[0] == 0
     m = meta(d)
-    assert m["title"] == "film" and m["size"] is None and m["style"] is None
+    # nothing to read them from yet: the overlay falls back to the storyboard, then the folder
+    assert m["title"] is None and m["size"] is None and m["style"] is None
+    reg = json.loads((env["tmp"] / "ws" / ".pollinate" / "works.json").read_text(encoding="utf-8"))
+    assert reg["works"][0]["title"] == "film"
