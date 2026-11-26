@@ -4,7 +4,7 @@ This module was refactored from a multi-workspace model to a single-workspace
 + projects model centred on the ``SwarmWS`` workspace.  It is responsible for:
 
 - ``SwarmWorkspaceManager``          — Main class managing workspace filesystem
-- ``_batch_remove``                  — Sync helper for batched legacy file removal
+- ``_batch_move_to_trash``           — Sync helper moving legacy items into a dated trash folder
 - ``FOLDER_STRUCTURE``               — Minimal folder layout (Knowledge, Projects)
 - ``SYSTEM_MANAGED_*`` constants     — Sets of paths that cannot be deleted/renamed
 - ``PROJECT_SYSTEM_FILES``           — Per-project system files (.project.json)
@@ -879,31 +879,51 @@ PROJECTED_DIRS = (".claude/skills", ".claude/experts")
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _batch_remove(paths_to_remove: list[tuple[Path, str]]) -> list[str]:
-    """Remove all legacy paths in a single synchronous batch.
+def _batch_move_to_trash(
+    root: Path, paths_to_move: list[Path], trash_dir: Path,
+) -> tuple[list[Path], list[str]]:
+    """Move legacy paths into *trash_dir* in a single synchronous batch.
+
+    Nothing is deleted: each path is renamed to ``trash_dir / <its path
+    relative to root>``.  The trash lives inside the workspace, so the rename
+    stays on one filesystem and is atomic; there is no copy-then-delete
+    fallback that could leave a half-moved item.  An item whose rename fails
+    (or whose destination already exists) is left where it is and reported.
+
+    *trash_dir* is made git-ignored (a ``.gitignore`` holding ``*``) before
+    anything moves into it: the workspace is a git repo whose root
+    ``.gitignore`` keeps user-private paths such as ``Projects/<name>/`` out
+    of commits only at their original location, so a moved file would
+    otherwise be staged by the next ``git add -A``.  If that file cannot be
+    written, nothing is moved.
 
     Designed to be called once via ``anyio.to_thread.run_sync()`` so that
     all filesystem I/O happens in a single thread dispatch instead of one
     dispatch per item.
 
-    Args:
-        paths_to_remove: List of ``(path, kind)`` tuples where *kind* is
-            ``"file"`` or ``"dir"``.
-
     Returns:
-        List of error messages for items that failed to remove.  An empty
-        list means every removal succeeded.
+        ``(moved, errors)``: the original paths that were moved, and one
+        message per item that was left in place.
     """
+    moved: list[Path] = []
     errors: list[str] = []
-    for path, kind in paths_to_remove:
+    try:
+        trash_dir.mkdir(parents=True, exist_ok=False)
+        (trash_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+    except OSError as e:
+        return moved, [f"{path.relative_to(root)}: trash folder {trash_dir} unusable: {e}"
+                       for path in paths_to_move]
+    for path in paths_to_move:
+        dest = trash_dir / path.relative_to(root)
         try:
-            if kind == "dir":
-                shutil.rmtree(path, ignore_errors=False)
-            else:
-                path.unlink(missing_ok=True)
+            if dest.exists() or dest.is_symlink():
+                raise FileExistsError(f"destination exists: {dest}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            path.rename(dest)
+            moved.append(path)
         except Exception as e:
-            errors.append(f"{path}: {e}")
-    return errors
+            errors.append(f"{path.relative_to(root)}: {e}")
+    return moved, errors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -921,12 +941,12 @@ class SwarmWorkspaceManager:
     compatibility (e.g. ``SwarmWorkspaceManager.DEFAULT_WORKSPACE_CONFIG``).
 
     Marker files:
-    - ``.legacy_cleaned`` — Written to the workspace root after
-      ``_cleanup_legacy_content()`` finishes its first successful run.
-      Subsequent startups skip the cleanup entirely when this marker
-      exists.  The marker is excluded from idempotence test snapshots
-      because it is created only on the second ``ensure_default_workspace``
-      call (first call creates the workspace, second call triggers cleanup).
+    - ``.legacy_cleaned`` — Written to the workspace root when
+      ``ensure_default_workspace()`` creates the root (a workspace this code
+      creates has no legacy content), or after ``_cleanup_legacy_content()``
+      has run on a pre-existing workspace.  Startups skip the cleanup
+      entirely when this marker exists, so files a user creates under a
+      legacy name are never touched.
     """
 
     # Re-export module-level constants as class attributes for backward compat
@@ -1898,6 +1918,16 @@ class SwarmWorkspaceManager:
         existed) has already been dropped and legacy workspace directories
         removed by the time we reach here, ensuring a clean-slate init.
 
+        **Legacy-content cleanup runs only on a workspace that predates this
+        start.**  Whether the root directory exists is observed once, before
+        either branch.  When it does not (a fresh install, or the seed-DB
+        fast path whose config row exists before the directory does), this
+        call creates it, so it holds no legacy content: the
+        ``.legacy_cleaned`` marker is written and the cleanup never runs on
+        it, not on this start and not on later ones.  When the root already
+        existed, the cleanup runs on this start (either branch), before the
+        user can add files to it, and writes the marker itself.
+
         Args:
             db: Database instance with ``db.workspace_config`` accessor
                 providing ``get_config()`` and ``put()`` methods.
@@ -1912,8 +1942,14 @@ class SwarmWorkspaceManager:
             logger.info("Default workspace config already exists, verifying integrity")
             file_path = existing.get("file_path", DEFAULT_WORKSPACE_CONFIG["file_path"])
             expanded = self.expand_path(file_path)
-            await self._cleanup_legacy_content(expanded)
+            root_existed = await anyio.to_thread.run_sync(Path(expanded).exists)
+            if root_existed:
+                await self._cleanup_legacy_content(expanded)
             await self.verify_integrity(expanded)
+            if not root_existed:
+                # Seed-DB first start: the row came with the seed, the
+                # directory was just created by verify_integrity().
+                await self._write_legacy_marker(Path(expanded))
             return existing
 
         logger.info("Creating default workspace for the first time")
@@ -1927,6 +1963,9 @@ class SwarmWorkspaceManager:
             "created_at": now,
             "updated_at": now,
         }
+
+        expanded = self.expand_path(config["file_path"])
+        root_existed = await anyio.to_thread.run_sync(Path(expanded).exists)
 
         # Persist to database
         await db.workspace_config.put(config)
@@ -1942,30 +1981,47 @@ class SwarmWorkspaceManager:
             )
             raise
 
+        # A root this call created has no legacy content. A directory that
+        # was already there may (a config row lost, old files kept): it is
+        # cleaned now, before the user can create anything in it, and the
+        # cleanup writes the marker.
+        if root_existed:
+            await self._cleanup_legacy_content(expanded)
+        else:
+            await self._write_legacy_marker(Path(expanded))
+
         # Initialize git repo (non-blocking if git not available)
-        expanded = self.expand_path(config["file_path"])
         self._ensure_git_repo(expanded)
 
         return config
 
     async def _cleanup_legacy_content(self, workspace_path: str) -> None:
-        """Remove legacy files and folders from pre-restructure SwarmWS.
+        """Move legacy files and folders from pre-restructure SwarmWS aside.
 
-        Runs once per startup on existing workspaces.  Idempotent — safe to
-        call repeatedly.  Uses a marker file (``.legacy_cleaned``) to skip on
-        subsequent startups once all legacy content has been cleaned.
+        Runs on a workspace that existed before this start and has no
+        ``.legacy_cleaned`` marker; a workspace created by this code gets the
+        marker at creation (``ensure_default_workspace``) and never reaches
+        the moves.  The marker is written after a run, so later startups skip
+        the cleanup.
 
-        All filesystem removals are batched into a **single**
-        ``anyio.to_thread.run_sync()`` call via :func:`_batch_remove` to
-        avoid dispatching one thread call per item.
+        **Nothing is deleted.**  The legacy names below are ordinary names a
+        user can pick, so each item found is moved into
+        ``<workspace>/.trash/legacy-<YYYYmmdd-HHMMSS>-<id>/`` under its own
+        relative path, where the user can restore it.  An item whose move
+        fails is logged and left where it is.  All moves are batched into a
+        **single** ``anyio.to_thread.run_sync()`` call via
+        :func:`_batch_move_to_trash`.
 
         Migrates:
         - Legacy ``Knowledge Base/`` → ``Library/`` (preserves user files)
 
-        Removes:
+        Moves to the dated trash folder:
         - Legacy Knowledge subdirectories (Memory)
-        - Legacy root files (context-L0.md, context-L1.md, system-prompts.md,
+        - Legacy Knowledge-level files (context-L0.md, context-L1.md,
           index.md, knowledge-map.md)
+        - Legacy root files (context-L0.md, context-L1.md, system-prompts.md,
+          index.md, knowledge-map.md, generate_ppt.py,
+          SwarmAI_Capabilities.pptx, gen_news_pdf.py)
         - Legacy per-project context files (context-L0.md, context-L1.md)
         - Legacy root directories (chats/, _tmp_transfer/, ContextFiles/, workspace/)
         """
@@ -1994,14 +2050,14 @@ class SwarmWorkspaceManager:
             logger.info("Migrated Knowledge Base/ → Library/")
 
         # ── Collect ALL legacy paths into a single list ──────────────────
-        paths_to_remove: list[tuple[Path, str]] = []
+        paths_to_move: list[tuple[Path, str]] = []
 
         # Legacy Knowledge subdirectories
         legacy_knowledge_dirs = ["Memory"]
         for dirname in legacy_knowledge_dirs:
             legacy_dir = root / "Knowledge" / dirname
             if legacy_dir.exists():
-                paths_to_remove.append((legacy_dir, "dir"))
+                paths_to_move.append((legacy_dir, "dir"))
 
         # Legacy root-level files
         legacy_root_files = [
@@ -2012,7 +2068,7 @@ class SwarmWorkspaceManager:
         for filename in legacy_root_files:
             legacy_file = root / filename
             if legacy_file.exists():
-                paths_to_remove.append((legacy_file, "file"))
+                paths_to_move.append((legacy_file, "file"))
 
         # Legacy Knowledge-level files
         legacy_knowledge_files = [
@@ -2021,7 +2077,7 @@ class SwarmWorkspaceManager:
         for filename in legacy_knowledge_files:
             legacy_file = root / "Knowledge" / filename
             if legacy_file.exists():
-                paths_to_remove.append((legacy_file, "file"))
+                paths_to_move.append((legacy_file, "file"))
 
         # Legacy per-project context files
         projects_dir = root / "Projects"
@@ -2032,7 +2088,7 @@ class SwarmWorkspaceManager:
                 for filename in ["context-L0.md", "context-L1.md"]:
                     legacy_file = project_dir / filename
                     if legacy_file.exists():
-                        paths_to_remove.append((legacy_file, "file"))
+                        paths_to_move.append((legacy_file, "file"))
 
         # Legacy root-level directories
         legacy_root_dirs = [
@@ -2041,27 +2097,42 @@ class SwarmWorkspaceManager:
         for dirname in legacy_root_dirs:
             legacy_dir = root / dirname
             if legacy_dir.exists():
-                paths_to_remove.append((legacy_dir, "dir"))
+                paths_to_move.append((legacy_dir, "dir"))
 
-        # ── Single batch removal in one thread dispatch ──────────────────
-        if paths_to_remove:
-            errors = await anyio.to_thread.run_sync(
-                lambda: _batch_remove(paths_to_remove)
+        # ── Single batch move into the dated trash folder ────────────────
+        if paths_to_move:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
+            trash_dir = root / ".trash" / f"legacy-{stamp}"
+            moved, errors = await anyio.to_thread.run_sync(
+                lambda: _batch_move_to_trash(
+                    root, [path for path, _kind in paths_to_move], trash_dir,
+                )
             )
-            # Log successful removals
-            for path, kind in paths_to_remove:
-                rel = path.relative_to(root)
-                if not any(str(path) in err for err in errors):
-                    logger.info("Removed legacy %s: %s", kind, rel)
-            # Log any per-item failures
+            moved_set = set(moved)
+            for path, kind in paths_to_move:
+                if path in moved_set:
+                    rel = path.relative_to(root)
+                    logger.info(
+                        "Moved legacy %s %s to %s", kind, rel, trash_dir.relative_to(root),
+                    )
             for err in errors:
-                logger.warning("Legacy cleanup error: %s", err)
+                logger.warning("Legacy cleanup left an item in place: %s", err)
 
         # Mark cleanup as done so we skip on future startups
+        await self._write_legacy_marker(root)
+
+    @staticmethod
+    async def _write_legacy_marker(root: Path) -> None:
+        """Write the ``.legacy_cleaned`` marker that makes startups skip the cleanup.
+
+        A failed write is logged; the next start then runs the cleanup again,
+        which only moves legacy items aside, never deletes them.
+        """
+        marker = root / ".legacy_cleaned"
         try:
-            marker.write_text("done")
-        except OSError:
-            pass  # Non-critical — cleanup will just re-run next time
+            await anyio.to_thread.run_sync(lambda: marker.write_text("done"))
+        except OSError as e:
+            logger.warning("Could not write %s: %s", marker, e)
 
     async def verify_integrity(self, workspace_path: str) -> bool:
         """Verify Knowledge/, Projects/, and all six Knowledge subdirs exist, recreating if missing.

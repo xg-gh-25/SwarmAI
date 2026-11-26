@@ -73,7 +73,7 @@ core/session_state_persistence.py:load_persisted_state  # exempt: session state 
 core/session_state_persistence.py:persist_session_state  # exempt: session state file
 core/session_unit.py:SessionUnit._force_kill  # exempt: via kill_audit.record: kill audit log
 core/session_unit.py:_kill_pids  # exempt: via kill_audit.record: kill audit log
-core/swarm_workspace_manager.py:SwarmWorkspaceManager._cleanup_legacy_content  # exempt: marker-gated one-time legacy cleanup of pre-restructure SwarmWS
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._write_legacy_marker  # exempt: .legacy_cleaned marker at the workspace root, not a governed file
 core/swarm_workspace_manager.py:SwarmWorkspaceManager._cleanup_legacy_content._migrate_kb_to_library  # exempt: marker-gated one-time legacy cleanup of pre-restructure SwarmWS
 core/swarm_workspace_manager.py:SwarmWorkspaceManager._ensure_default_project._provision  # exempt: provisioning; creates DDD files only when absent
 core/swarm_workspace_manager.py:SwarmWorkspaceManager._ensure_git_repo  # exempt: workspace .gitignore
@@ -90,7 +90,7 @@ core/swarm_workspace_manager.py:SwarmWorkspaceManager.migrate_project_to_six_sec
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.provision_project_ddd._create_ddd  # exempt: provisioning; creates DDD files only when absent
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.verify_integrity._append_gitignore  # exempt: workspace .gitignore
 core/swarm_workspace_manager.py:_assert_ai_instruction_sentinels  # exempt: workspace CLAUDE.md / AGENTS.md sentinels
-core/swarm_workspace_manager.py:_batch_remove  # exempt: legacy path removal (one-time cleanup)
+core/swarm_workspace_manager.py:_batch_move_to_trash  # exempt: moves legacy items into the workspace .trash/legacy-<stamp>/ folder (one-time cleanup)
 core/swarm_workspace_manager.py:ensure_project_metadata  # exempt: .project.json
 core/turn_changes.py:_tree  # exempt: temp git index copy
 core/worker_reset.py:set_aside  # exempt: a worker Hive's first start moves (os.replace, never deletes or rewrites) the cognition it wrote as a full SwarmAI into Hive/pre-worker/, and writes its .context/.worker-role marker

@@ -1279,7 +1279,7 @@ class TestInitializationIdempotence:
                     user_file.write_text(content, encoding="utf-8")
 
             # Snapshot state after first init + user files
-            # Exclude .legacy_cleaned marker — created once on second init
+            # Exclude runtime markers (.legacy_cleaned is written when the workspace is created)
             files_after_first = {
                 k: v for k, v in _collect_all_files(root).items()
                 if k not in (".legacy_cleaned", ".swarm_privacy_migrated",
