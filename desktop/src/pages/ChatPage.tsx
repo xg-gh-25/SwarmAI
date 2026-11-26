@@ -2877,9 +2877,13 @@ export default function ChatPage() {
             is the same one every tab uses, so the Swarm Out conversation is a real chat
             session. The dashboard must stay the column's previous sibling: the drag
             ceiling measures it there. */}
-        {/* Kept mounted (hidden on other tabs) so its view choice survives a tab switch. */}
-        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID}
-          onOpenSession={openHiveSession} />
+        {/* Kept mounted (hidden on other tabs) so its view choice survives a tab switch.
+            Its own region boundary: a render error in the dashboard shows one error line
+            where it was (only while its tab is active), never the app's Reload screen. */}
+        <ErrorBoundary variant="region" hidden={activeTabId !== SWARM_OUT_TAB_ID}>
+          <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID}
+            onOpenSession={openHiveSession} />
+        </ErrorBoundary>
 
         {/* Main Chat Area.
             `contain:layout` (run_26172836) SEVERS the layout coupling between this

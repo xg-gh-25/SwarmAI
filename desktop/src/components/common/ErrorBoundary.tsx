@@ -11,6 +11,10 @@ interface Props {
    *  the layout (nav, bars, terminal) · app: the whole app */
   variant?: 'tab' | 'panel' | 'region' | 'app' | 'default';
   fallback?: ReactNode;
+  /** The region is kept mounted but is not on screen (a panel that belongs to another
+   *  tab): a caught error renders nothing while hidden and shows once it is shown, so
+   *  one tab's broken panel never puts its error line on every other tab. */
+  hidden?: boolean;
   onError?: (error: Error, errorInfo: ErrorInfo) => void;
   onRetry?: () => void;
 }
@@ -50,6 +54,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render(): ReactNode {
     if (this.state.hasError) {
+      if (this.props.hidden) return null;
       const variant = this.props.variant ?? 'default';
 
       if (variant === 'tab') {
