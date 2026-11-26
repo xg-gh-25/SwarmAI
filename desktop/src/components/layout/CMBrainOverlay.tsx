@@ -22,7 +22,8 @@
  * count, the north star's every-turn sizes), /eval/governance/pending (only when the
  * count says there is one), /eval/brain-graph, /eval/archive-list and -search (both
  * sources), /recall/knowledge, /ingestion/landed (the Cognition flow's 7-day query).
- * The frontend invents no numbers.
+ * The frontend invents no numbers. While a tab's first load is pending it shows the
+ * shared loading state (OverlayState), never an empty panel.
  *
  * @exports CMBrainContent
  */
@@ -32,7 +33,7 @@ import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-q
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
 import { ingestionService } from '../../services/ingestion';
-import { OverlayError } from './OverlayState';
+import { OverlayError, OverlayLoading } from './OverlayState';
 import { Tabs } from '../overlay';
 import { Big, CARD, Compare, DIM, MUTED, ZoneLabel, useGrown } from './needYouParts';
 import { placeTotals } from './cdfText';
@@ -207,6 +208,7 @@ function ContextTab() {
   const showGov = pending > 0 && (gov.isError || (gov.data?.proposals.length ?? 0) > 0);
   return (
     <div data-testid="cm-panel-context" className="flex flex-col gap-9">
+      {lite.isPending && <OverlayLoading testid="cm-context-loading" />}
       {lite.isError && !lite.data && (
         <OverlayError testid="cm-needs-error" retryTestid="cm-needs-retry"
           message={classifyLoadError(lite.error, t('ui.CMBrainOverlay.theContext'), t('ui.CMBrainOverlay.loadError'))}
@@ -522,7 +524,7 @@ function EntryZone({ source, q, label }: { source: Source; q: ReturnType<typeof 
   return (
     <section data-testid={`cm-zone-${source}`}>
       <ZoneLabel>{label}</ZoneLabel>
-      {q.isError ? (
+      {q.isPending ? <OverlayLoading testid={`cm-${source}-loading`} /> : q.isError ? (
         <OverlayError compact message={classifyLoadError(q.error, t('ui.CMBrainOverlay.theEntries'))} onRetry={() => { void q.refetch(); }} />
       ) : graph && (
         <>
@@ -650,7 +652,8 @@ function KnowledgeTab({ onOpenOverlay, onOpenMemory }: { onOpenOverlay?: (id: CM
   if (q.isError) {
     return <div data-testid="cm-panel-knowledge"><OverlayError message={classifyLoadError(q.error, t('ui.CMBrainOverlay.theRecall'))} onRetry={() => { void q.refetch(); }} /></div>;
   }
-  if (!data) return <div data-testid="cm-panel-knowledge" />;
+  // no data and no error: the first load is pending
+  if (!data) return <div data-testid="cm-panel-knowledge"><OverlayLoading testid="cm-knowledge-loading" /></div>;
   const first = data.contexts.session_prompt;
   const s = data.stores;
   const dash = '—';

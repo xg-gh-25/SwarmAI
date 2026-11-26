@@ -3,7 +3,8 @@
  * 2026-11-24-cm-library-redesign.html): four tabs 上下文 · 记忆 · 知识 · 工作原理.
  *
  * The backend is mocked at the api boundary (services/api); the tests assert the overlay
- * CONSUMES the payloads (files, entries, recall counts) and invents no numbers.
+ * CONSUMES the payloads (files, entries, recall counts) and invents no numbers, and that a
+ * tab whose first load is pending shows the shared loading state, never a blank panel.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, cleanup, waitFor, within, fireEvent } from '@testing-library/react';
@@ -557,5 +558,33 @@ describe('工作原理', () => {
     openTab('how');
     await screen.findByTestId('cm-panel-how');
     expect(screen.queryAllByTestId(/^cm-lc-|^cm-guideline-/)).toHaveLength(0);
+  });
+});
+
+describe('first load pending', () => {
+  it('each tab shows the shared loading state while its query is pending, then its data', async () => {
+    const waits: Array<() => void> = [];
+    const answer = get.getMockImplementation()!;
+    // hold every GET until released, then answer as mockAll does
+    get.mockImplementation((url: string) => new Promise((resolve, reject) => {
+      waits.push(() => { (answer(url) as Promise<unknown>).then(resolve, reject); });
+    }));
+    renderOverlay();
+    const panel = await screen.findByTestId('cm-panel-context');
+    expect(within(panel).getByTestId('cm-context-loading')).toHaveTextContent('Loading');
+    openTab('memory');
+    expect(within(screen.getByTestId('cm-zone-memory')).getByTestId('cm-memory-loading')).toHaveTextContent('Loading');
+    expect(within(screen.getByTestId('cm-zone-evolution')).getByTestId('cm-evolution-loading')).toHaveTextContent('Loading');
+    openTab('knowledge');
+    expect(within(screen.getByTestId('cm-panel-knowledge')).getByTestId('cm-knowledge-loading')).toHaveTextContent('Loading');
+    await act(async () => { while (waits.length) waits.shift()!(); });
+    expect(await screen.findByTestId('cm-recall-big-value')).toHaveTextContent('88%');
+    expect(screen.queryByTestId('cm-knowledge-loading')).toBeNull();
+    openTab('context');
+    await screen.findByTestId('cm-file-row-MEMORY.md');
+    expect(screen.queryByTestId('cm-context-loading')).toBeNull();
+    openTab('memory');
+    await screen.findByTestId('cm-memory-big-value');
+    expect(screen.queryByTestId('cm-memory-loading')).toBeNull();
   });
 });
