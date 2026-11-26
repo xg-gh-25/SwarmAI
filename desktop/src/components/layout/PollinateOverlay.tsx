@@ -108,7 +108,7 @@ function Meta({ w, version }: { w: PollinateWork; version?: boolean }) {
       <span className="truncate"><b className="font-semibold text-[var(--color-text)]">{w.brain}</b> · {t(`ui.PollinateOverlay.kind_${w.kind}`, { defaultValue: w.kind })}</span>
       {bits.map((b) => <span key={b} className="tabular-nums whitespace-nowrap">{b}</span>)}
       {!w.inWorkspace && (
-        <span className="px-1.5 rounded text-[10.5px] leading-[15px] font-semibold whitespace-nowrap text-[var(--color-text-secondary)] bg-[var(--color-bg-chrome)]"
+        <span className="px-1.5 rounded text-meta font-semibold whitespace-nowrap text-[var(--color-text-secondary)] bg-[var(--color-bg-chrome)]"
           style={{ boxShadow: 'inset 0 0 0 1px var(--color-border)' }}>{t('ui.PollinateOverlay.outsideWorkspace')}</span>
       )}
     </div>
@@ -299,7 +299,7 @@ function EvalView({ e, compact, onOpenPath }: { e: PollinateEval; compact: boole
     <div data-testid="pollinate-eval">
       <section className={`${box} px-[18px] py-4`}>
         <div className="flex items-baseline gap-3 flex-wrap">
-          <span className="text-[28px] leading-[34px] font-semibold tabular-nums" data-testid="pollinate-eval-rate">
+          <span className="text-display font-semibold tabular-nums" data-testid="pollinate-eval-rate">
             {cur ? `${cur.pct}%` : '—'}
             {cur && <span className={`text-title font-normal ${dim}`}> · {cur.passed} / {cur.revisions}</span>}
           </span>
@@ -334,7 +334,7 @@ function EvalView({ e, compact, onOpenPath }: { e: PollinateEval; compact: boole
         {four.map(([k, c, p]) => (
           <div key={k} className={`${box} px-3.5 py-3`} data-testid="pollinate-eval-number">
             <div className={`text-small ${muted}`}>{k}</div>
-            <div className="text-[20px] leading-7 font-semibold tabular-nums">{num(c)}</div>
+            <div className="text-title font-semibold tabular-nums">{num(c)}</div>
             <div className={`text-small ${dim}`}>{t('ui.PollinateOverlay.evBefore', { days: e.days })} {num(p)}</div>
           </div>
         ))}
