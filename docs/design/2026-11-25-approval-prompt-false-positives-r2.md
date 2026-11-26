@@ -1,6 +1,7 @@
 ---
 title: 审批弹窗误报 r2 — gate 能证明安全的命令不再问人
 created: 2026-11-25
+updated: 2026-11-25
 project: SwarmAI
 status: 已实现
 follows: docs/design/2026-10-26-approval-prompt-false-positives.md
