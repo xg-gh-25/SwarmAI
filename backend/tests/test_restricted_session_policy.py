@@ -158,7 +158,10 @@ async def test_build_options_confines_only_a_non_owner_channel(tier, restricted,
         assert settings["disableSkillShellExecution"] is True
         assert opts.setting_sources == []  # files in its folder never configure the CLI
     else:
-        assert "permissions" not in settings
+        # an owner session reads freely: its only deny rules are the protected-path
+        # Edit denies every session carries (core/protected_paths)
+        assert not [r for r in settings.get("permissions", {}).get("deny", [])
+                    if not r.startswith("Edit(")]
         assert "Bash" not in opts.disallowed_tools
         assert opts.setting_sources == ["project"]
         assert all(getattr(m.hooks[0], "__name__", "") != "gate"

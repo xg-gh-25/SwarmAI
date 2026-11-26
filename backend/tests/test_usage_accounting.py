@@ -278,7 +278,8 @@ def test_a_failed_agent_job_still_records_what_it_spent(monkeypatch):
     for name, value in {"_resolve_claude_cli": lambda: "claude", "_check_claude_auth": lambda p: None,
                         "_get_aws_credentials": lambda: {}, "_cli_version": lambda p: "2.1.300",
                         "_cli_supports_bare": lambda p, v: False, "cli_too_old_message": lambda v, m: None,
-                        "_load_mcp_config": lambda: {}, "_build_cli_env": lambda c=None: {}}.items():
+                        "_load_mcp_config": lambda: {}, "_build_cli_env": lambda c=None: {},
+                        "_cli_settings_problem": lambda *a: None}.items():
         monkeypatch.setattr(executor, name, value)
     out = {"is_error": True, "total_cost_usd": 0.9,
            "modelUsage": {**mu("opus", 10, 100, 1000, 0, 0.8), **mu("haiku", 50, 5, 0, 0, 0.1)}}

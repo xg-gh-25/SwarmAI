@@ -67,10 +67,15 @@ def load_feeds(config: dict) -> list[Feed]:
 RETIRED_CONFIG_KEYS = ("fallback_script", "fallback_cwd", "output_as_signals")
 
 
-def _warn_retired_config_keys(job_id: str, config: dict) -> None:
-    """Log one warning when a user job's config still carries a retired key; the job
-    loads unchanged otherwise (the key is ignored, never silently dropped)."""
+#: safety keys nothing ever read, removed from JobSafety: ``allow_write`` / ``allow_send``
+RETIRED_SAFETY_KEYS = ("allow_write", "allow_send")
+
+
+def _warn_retired_config_keys(job_id: str, config: dict, safety: "dict | None" = None) -> None:
+    """Log one warning when a user job's config or safety block still carries a retired
+    key; the job loads unchanged otherwise (the key is ignored, never silently dropped)."""
     found = [k for k in RETIRED_CONFIG_KEYS if isinstance(config, dict) and k in config]
+    found += [f"safety.{k}" for k in RETIRED_SAFETY_KEYS if isinstance(safety, dict) and k in safety]
     if found:
         logger.warning(
             "Job '%s': config key(s) %s are no longer supported and are ignored",
@@ -115,7 +120,7 @@ def load_jobs() -> list[Job]:
                     continue
 
                 safety = JobSafety(**jd["safety"]) if "safety" in jd else JobSafety()
-                _warn_retired_config_keys(job_id, jd.get("config") or {})
+                _warn_retired_config_keys(job_id, jd.get("config") or {}, jd.get("safety"))
 
                 all_jobs.append(Job(
                     id=job_id,

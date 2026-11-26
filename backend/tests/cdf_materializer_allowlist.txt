@@ -105,7 +105,8 @@ hooks/context_health_hook.py:ContextHealthHook._run_session_canary  # exempt: .e
 hooks/context_health_hook.py:ContextHealthHook._write_daily_canary_state  # exempt: daily canary state JSON
 hooks/daily_activity_hook.py:DailyActivityExtractionHook._execute_locked  # exempt: crash checkpoint file
 hooks/daily_activity_hook.py:recover_crash_checkpoint  # exempt: crash checkpoint file
-jobs/executor.py:_handle_agent_task  # exempt: temp MCP config file
+jobs/executor.py:_cli_settings_problem  # exempt: temp settings file for the CLI's settings check
+jobs/executor.py:_run_agent_task  # exempt: temp MCP config file
 jobs/executor.py:_handle_maintenance  # exempt: job results JSONL trim
 jobs/executor.py:_purge_terminal_todos  # exempt: todo archive and todo dirs
 jobs/executor.py:_send_slack_dm  # exempt: temp MCP config file

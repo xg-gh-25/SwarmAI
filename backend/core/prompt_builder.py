@@ -526,15 +526,8 @@ def with_app_session_id(session_env: "dict | None", session_context: "dict | Non
 
 
 
-def _rule_path(path: Path) -> str:
-    """A path in Claude Code's permission-rule syntax: ``~/…`` under the home directory,
-    ``//…`` for any other absolute path (a single leading ``/`` would be read relative
-    to the settings' project — measured: such a rule denied nothing)."""
-    path = Path(path).expanduser()
-    try:
-        return "~/" + path.relative_to(Path.home()).as_posix()
-    except ValueError:
-        return "/" + path.as_posix()
+#: Claude Code's permission-rule path syntax; one home for every settings builder
+from core.protected_paths import rule_path as _rule_path  # noqa: E402
 
 
 #: tools a non-owner channel session may use besides the path-checked file tools
@@ -578,13 +571,9 @@ def restricted_session_policy() -> dict:
 
     Returns ``{"deny_read": [paths], "disallow": [tools]}``.
     """
-    from config import get_app_data_dir
-    from core.app_config_manager import AppConfigManager
-    data = Path(get_app_data_dir())
-    secrets = AppConfigManager.instance()._secret_path  # noqa: SLF001
-    deny = [_rule_path(data / "aws") + "/**", "~/.aws/**", "~/.ada/**", "~/.midway/**",
-            "~/.ssh/**", "~/.config/**", "~/.claude/**", "~/.claude.json",
-            _rule_path(Path(secrets))]
+    from core.protected_paths import credential_rules
+    # the shared credential stores, plus what only this session kind keeps out of reach
+    deny = [*credential_rules(), "~/.config/**", "~/.claude/**", "~/.claude.json"]
     return {"deny_read": deny, "disallow": list(PromptBuilder._BASH_TOOLS)}
 
 
@@ -1079,16 +1068,21 @@ class PromptBuilder:
         allow_unsandboxed = cfg.get("sandbox_allow_unsandboxed", False) if cfg else False
         allowed_hosts_raw = cfg.get("sandbox_allowed_hosts", "*") if cfg else "*"
 
+        hosts = [h.strip() for h in allowed_hosts_raw.split(",") if h.strip()] or ["*"]
+        # ``allowedDomains`` is the key the CLI reads (``allowedHosts`` is only its
+        # runtime's internal name, so the old value never applied and the sandbox's
+        # proxy refused every host: measured CONNECT 403 with no list). Known limit,
+        # measured on macOS with CLI 2.1.302: the proxy terminates TLS for listed hosts;
+        # git trusts it, curl fails certificate verification.
+        network: dict = {"allowLocalBinding": True, "allowedDomains": hosts}
         sandbox_settings = {
             "enabled": True,
             "autoAllowBashIfSandboxed": auto_allow_bash,
             "excludedCommands": excluded_commands,
             "allowUnsandboxedCommands": allow_unsandboxed,
-            "network": {
-                "allowLocalBinding": True,
-                "allowedHosts": [h.strip() for h in allowed_hosts_raw.split(",") if h.strip()],
-            },
+            "network": network,
         }
+        # SwarmAI's control files reach the sandbox as Edit deny rules (_chat_cli_settings).
         logger.info(f"Sandbox enabled: {sandbox_settings}")
         return sandbox_settings
 
@@ -2352,10 +2346,19 @@ class PromptBuilder:
             # user's AWS configuration. Empty when there is no resolvable account.
             **_aws_account_cli_settings(self._config),
         }
+        # Protected paths (core/protected_paths). A non-owner channel session writes none
+        # of them. The owner's own session is watched by the owner, who may edit their
+        # dotfiles: only with the sandbox on does it protect SwarmAI's control files, and
+        # then for Bash too (the CLI merges Edit denies into the sandbox's denyWrite).
+        from core.protected_paths import control_rules, deny_rules, protected_write_rules
         if restricted:
             cli_settings.setdefault("permissions", {}).setdefault("deny", []).extend(
-                f"Read({path})" for path in restricted["deny_read"])
+                [*deny_rules(edit=protected_write_rules()),
+                 *(f"Read({path})" for path in restricted["deny_read"])])
             cli_settings["disableSkillShellExecution"] = True
+        elif self.build_sandbox_config().get("enabled"):
+            cli_settings.setdefault("permissions", {}).setdefault("deny", []).extend(
+                deny_rules(edit=control_rules()))
         # Compaction summary rules: a PreCompact COMMAND hook whose stdout the CLI
         # appends to its summary prompt (core/compact_summary.py).
         from .compact_summary import precompact_settings_hooks

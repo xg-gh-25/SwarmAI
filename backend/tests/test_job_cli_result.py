@@ -88,6 +88,7 @@ def _run_agent_task(cli_stdout: dict, *, rc: int = 0, version=(2, 1, 302)):
     with patch("jobs.executor._resolve_claude_cli", return_value="/usr/bin/claude"), \
          patch("jobs.executor._check_claude_auth", return_value=None), \
          patch("jobs.executor._get_aws_credentials", return_value={}), \
+         patch("jobs.executor._cli_settings_problem", return_value=None), \
          patch("jobs.executor._load_mcp_config", return_value={}), \
          patch("jobs.executor._cli_version", return_value=version), \
          patch("jobs.executor._resolve_job_model", return_value="us.anthropic.claude-opus-5-5[1m]"), \

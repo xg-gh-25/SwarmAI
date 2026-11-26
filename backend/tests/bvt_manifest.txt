@@ -114,3 +114,5 @@ test_attention_auto.py  # Swarm's own Needs You items run once each, one at a ti
 test_mount_freshness.py  # a Library mount is re-indexed when its files change, not twice at once, not on lock files or backups
 test_mount_markup_text.py  # a docs mount indexes an HTML/SVG page as the text it shows, slides rendered from script included
 test_mount_document_text.py  # a docs mount indexes pptx (grouped text, tables, notes), docx and pdf as text, untrusted input guarded
+test_job_sandbox.py  # a scheduled agent job has only its declared tools, runs Bash in the CLI sandbox, and never runs on settings the CLI rejected
+test_protected_paths.py  # credential stores, SwarmAI's control files and what a later run executes are denied to whoever must not write them

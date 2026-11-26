@@ -644,10 +644,15 @@ This includes Skills and Agent presets: they are active control input that can d
 model to use tools, so they require a reduced-authority session, explicit tool/file
 bounds and operation-time checks. They are not called non-executable.
 
-App Jobs remain unavailable to third parties until file, network, send and tool fields
-are enforced by the executor; the current `JobSafety.allow_write`, `allow_send` and
-`allow_network` fields are declarations without production readers. An initial disabled
-state is not compensation for missing enforcement.
+App Jobs remain unavailable to third parties until file, network, send and tool limits
+are enforced by the executor. The executor now enforces the built-in tool list
+(`--tools`), starts only the MCP servers a job names, runs Bash in the CLI sandbox (writes
+only to the workspace and the temp dir, never to credential stores, job definitions,
+skills, capability scripts, `.git` or `.context`), hides credential files and variables,
+and applies `allow_network`. Still open: no limit within a named MCP server, no send
+limit (`allow_write` and `allow_send` had no readers and were removed), and a sandboxed
+Bash still reaches the login keychain. An initial disabled state is not compensation for
+missing enforcement.
 
 An App can never request these authorities:
 

@@ -15,9 +15,11 @@ Handlers:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -29,6 +31,7 @@ from pathlib import Path
 from .models import (
     Job,
     JobResult,
+    JobSafety,
     JobState,
     SchedulerDefaults,
     SchedulerState,
@@ -705,7 +708,8 @@ def _cli_version(claude_path: str) -> tuple[int, int, int] | None:
     """``claude --version`` as a tuple (``"2.1.85 (Claude Code)"`` -> (2, 1, 85)).
 
     None when the probe fails or prints something unparseable — callers treat
-    that as "unknown" (never a reason to block a job).
+    that as "unknown": it never stops a job, but a job then runs without Bash, since
+    no sandbox can be assumed (``_sandbox_unavailable``).
     """
     try:
         result = subprocess.run(
@@ -743,11 +747,35 @@ def _load_mcp_config() -> dict:
 
 
 def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
+    """Execute a job via headless Claude CLI subprocess (``_run_agent_task``); a note the
+    run made about its own protection (Bash withheld, and why) leads the summary."""
+    notes: list[str] = []
+    result = _run_agent_task(job, state, notes)
+    if notes:
+        result.summary = " ".join([*notes, result.summary]).strip()
+    return result
+
+
+def _run_agent_task(job: Job, state: SchedulerState, notes: list[str]) -> JobResult:
     """Execute a job via headless Claude CLI subprocess.
 
-    Uses `claude --print` (non-interactive, stdout output).
+    Uses `claude --print` (non-interactive, stdout output) in ``bypassPermissions``, so
+    nobody is asked anything; what limits the job is what the CLI enforces:
+
+    - ``--tools``: the built-in tools the job declares in ``allowed_tools`` are the only
+      ones it has (``--allowedTools`` only pre-approves and limits nothing in this mode;
+      measured: a job allowed only ``Read`` still ran Bash). Only the MCP servers its
+      ``mcp__<server>__…`` entries name are started; every tool of such a server is
+      callable, since nothing in this mode limits within a server.
+    - ``_job_settings``: deny rules for the credential stores, the paths that run later and
+      SwarmAI's protected paths, and the CLI sandbox for Bash (writes confined, credential
+      variables unset, network per ``allow_network``). Where the sandbox cannot run, Bash
+      is withheld and ``notes`` says why. ``_cli_settings_problem`` checks the settings
+      with the CLI first: it drops a whole settings value it cannot parse and runs anyway.
+
+    The sandbox does not hide the login keychain (measured), so a job that reads text
+    someone else wrote should not declare Bash.
     MCP config loaded from SwarmWS .claude/mcps/ (same two-layer merge as chat sessions).
-    Per-job tool restriction via --allowedTools.
     """
     start = datetime.now(timezone.utc)
     safety = job.safety
@@ -811,10 +839,17 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         "--output-format", "json",
         "--no-session-persistence",
         "--model", _resolve_job_model(),
-        # Jobs run headless — bypass permission prompts for allowed tools.
-        # Safety is enforced by --allowedTools (only listed tools are available).
+        # Headless: nobody to ask. The limits are --tools and _job_settings (docstring).
         "--permission-mode", "bypassPermissions",
     ]
+    builtin = _builtin_tools(safety.allowed_tools)
+    if safety.allowed_tools:
+        cmd.extend(["--tools", ",".join(builtin)])  # "" = no built-in tool at all
+    bash_possible = not safety.allowed_tools or "Bash" in builtin
+    no_sandbox = _sandbox_unavailable(cli_version)
+    if no_sandbox and bash_possible:
+        cmd.extend(["--disallowedTools", "Bash"])
+        notes.append(f"Bash withheld: {no_sandbox}.")
 
     # Refuse to start a CLI that is too old for the model it was just given
     # (it may 400 — or hang — instead of running the job).
@@ -833,26 +868,23 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
     mcp_config = _load_mcp_config()
     mcp_config_file = None
 
-    if safety.allowed_tools and mcp_config:
-        # Write consolidated MCP config to temp file
+    # Only the MCP servers the job names (mcp__<server>__<tool>) start: --allowedTools
+    # limits nothing in this mode, so an unnamed server's tools would all be callable,
+    # outside the sandbox. --strict-mcp-config always: no user-level MCP config.
+    scoped = _scoped_mcp_config(mcp_config, safety.allowed_tools)
+    if scoped:
         mcp_config_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", prefix="swarm-mcp-",
             delete=False,
         )
-        json.dump(mcp_config, mcp_config_file)
+        json.dump(scoped, mcp_config_file)
         mcp_config_file.close()
-        cmd.extend([
-            "--mcp-config", mcp_config_file.name,
-            "--strict-mcp-config",
-            "--allowedTools", ",".join(safety.allowed_tools),
-        ])
-    elif safety.allowed_tools:
-        # Job wants tools but no MCP config available
-        logger.warning("Job '%s' requests tools but no MCP config found", job.id)
+        cmd.extend(["--mcp-config", mcp_config_file.name])
+    elif _declared_mcp_servers(safety.allowed_tools):
+        logger.warning("Job '%s' names MCP tools but none of their servers is configured", job.id)
+    cmd.append("--strict-mcp-config")
+    if safety.allowed_tools:
         cmd.extend(["--allowedTools", ",".join(safety.allowed_tools)])
-    else:
-        # No tools needed — skip MCP startup entirely
-        cmd.append("--strict-mcp-config")
 
     # --add-dir grants read access to SwarmWS files if needed
     cmd.extend(["--add-dir", str(SWARMWS)])
@@ -864,13 +896,24 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         f"Time: {start.isoformat()}"
     )
     cmd.extend(["--system-prompt", system])
-    cmd.extend(_aws_settings_args())
+    job_settings = _job_settings(safety, sandboxed=no_sandbox is None)
+    cmd.extend(["--settings", json.dumps(job_settings)])
     cmd.extend(["-p", prompt])
 
     env = _build_cli_env(aws_creds)
     logger.info(f"CLI command: {' '.join(cmd[:6])}... (timeout={safety.timeout_seconds}s)")
 
     try:
+        # The CLI ignores a whole settings value it cannot parse and runs anyway (measured:
+        # no sandbox, no deny rules); so a job runs only on settings the CLI accepted.
+        problem = _cli_settings_problem(claude_path, job_settings, env)
+        if problem:
+            return JobResult(
+                job_id=job.id, timestamp=start, status="failed",
+                summary=f"The CLI rejected the job's protection settings: {problem[:200]}",
+                duration_seconds=(datetime.now(timezone.utc) - start).total_seconds(),
+                error=f"cli_settings_rejected: {problem[:300]}",
+            )
         proc = subprocess.run(
             cmd,
             capture_output=True,
@@ -1422,6 +1465,8 @@ def _send_slack_dm(message: str) -> bool:
             "--permission-mode", "bypassPermissions",
             "--mcp-config", mcp_config_file.name,
             "--strict-mcp-config",
+            # no built-in tool (a message carries job output); the two MCP tools only
+            "--tools", "",
             "--allowedTools", "mcp__slack-mcp__post_message,mcp__slack-mcp__open_dm_channel",
             *_aws_settings_args(),
             "-p", prompt,
@@ -1621,6 +1666,131 @@ def _aws_settings() -> dict:
         return {}
     from core import aws_account
     return aws_account.cli_settings(bedrock=True)  # a job always runs on Bedrock
+
+
+#: the CLI version the job sandbox was measured on; an older CLI ignores the settings
+#: keys it does not know, so its Bash would run with no sandbox at all
+_SANDBOX_MIN_CLI = (2, 1, 301)
+
+
+def _sandbox_unavailable(cli_version: "tuple[int, int, int] | None") -> "str | None":
+    """Why a job's Bash cannot run in the CLI sandbox here, or None when it can."""
+    system = platform.system()
+    if system == "Windows":
+        return "the Claude CLI sandbox does not run on Windows"
+    if system == "Linux" and not (shutil.which("bwrap") and shutil.which("socat")):
+        return "the Claude CLI sandbox needs bubblewrap (bwrap) and socat on Linux"
+    if system not in ("Darwin", "Linux"):
+        return f"the Claude CLI sandbox does not run on {system}"
+    known = isinstance(cli_version, tuple) and all(isinstance(n, int) for n in cli_version)
+    if not known or cli_version < _SANDBOX_MIN_CLI:
+        floor = ".".join(map(str, _SANDBOX_MIN_CLI))
+        return f"the Claude CLI is older than {floor}, or its version is unknown"
+    return None
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _cli_settings_problem(claude_path: str, settings: dict, env: dict) -> "str | None":
+    """What the CLI says is wrong with *settings*, or None when it accepted them.
+
+    ``claude --settings <file> doctor`` (no model call, under a second) lists every
+    settings source it could not load under "Invalid settings", each line naming the
+    file. *settings* go in a temp file of their own, so a problem in the person's own
+    settings files never blocks a job, and only a line naming that file counts. Fail
+    closed: a check that cannot run, exits non-zero or does not print doctor's own
+    heading is a problem too, since the job must not run on settings nobody checked."""
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", prefix="swarm-job-settings-", delete=False) as f:
+            json.dump(settings, f)
+            path = f.name
+        proc = subprocess.run(
+            [claude_path, "--settings", path, "doctor"],
+            capture_output=True, text=True, timeout=60, env=env,
+            stdin=subprocess.DEVNULL, cwd=str(SWARMWS),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"the settings check could not run: {exc}"
+    finally:
+        if path:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+    text = _ANSI.sub("", f"{proc.stdout or ''}\n{proc.stderr or ''}")
+    if proc.returncode != 0:
+        return f"the settings check exited {proc.returncode}: {text.strip()[:200]}"
+    if "Claude Code doctor" not in text:
+        return "the settings check printed nothing it could be read from"
+    name = os.path.basename(path)
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().lower().rstrip(":") == "invalid settings":
+            for item in lines[i + 1:]:
+                if not item.strip():
+                    break
+                if name in item:
+                    return item.strip().lstrip("-").strip()
+    return None
+
+
+def _declared_mcp_servers(allowed: "list[str]") -> "set[str]":
+    """The MCP servers a job's ``mcp__<server>__<tool>`` entries name."""
+    return {t.split("__")[1] for t in allowed if t.startswith("mcp__") and t.count("__") >= 2}
+
+
+def _scoped_mcp_config(mcp_config: "dict | None", allowed: "list[str]") -> dict:
+    """*mcp_config* cut down to the servers the job names; {} when it names none."""
+    servers = (mcp_config or {}).get("mcpServers", {})
+    keep = {name: cfg for name, cfg in servers.items() if name in _declared_mcp_servers(allowed)}
+    return {**mcp_config, "mcpServers": keep} if keep else {}
+
+
+def _builtin_tools(allowed: "list[str]") -> "list[str]":
+    """The built-in tool names in a job's ``allowed_tools`` (``Bash(git *)`` -> ``Bash``),
+    each once; ``mcp__`` tools are not built-in."""
+    names: list[str] = []
+    for tool in allowed:
+        name = tool.split("(", 1)[0].strip()
+        if name and not name.startswith("mcp__") and name not in names:
+            names.append(name)
+    return names
+
+
+def _job_settings(safety: "JobSafety", *, sandboxed: bool) -> dict:
+    """``--settings`` of an agent job: its credentials (``_aws_settings``), deny rules no
+    mode lifts (credential stores unreadable and unwritable; paths that run later and
+    SwarmAI's protected paths unwritable, ``core.protected_paths``) and, when *sandboxed*,
+    the CLI sandbox for Bash: writes only to the workspace and the temp dir (the deny
+    rules carve their exceptions out of those), no credential variable, and
+    no network unless ``allow_network`` (then any host, through the sandbox's proxy)."""
+    from core import protected_paths as pp
+
+    settings = dict(_aws_settings() or {})
+    creds = pp.credential_rules()
+    settings["permissions"] = {"deny": pp.deny_rules(
+        read=creds, edit=[*creds, *pp.runs_later_rules(), *pp.protected_write_rules()])}
+    if sandboxed:
+        sandbox: dict = {
+            "enabled": True,
+            "allowUnsandboxedCommands": False,
+            "autoAllowBashIfSandboxed": True,
+            # not the app data dir: it holds the skill folders an owner session loads
+            # and the run worktrees, which would hand a later run new code
+            "filesystem": {"allowWrite": [str(SWARMWS), tempfile.gettempdir()]},
+            "credentials": {"envVars": [
+                {"name": name, "mode": "deny"} for name in pp.CREDENTIAL_ENV_VARS]},
+        }
+        # The sandbox sends a command's traffic through its own proxy, which refuses a
+        # host not listed (measured: CONNECT 403 with no list). Known limit, measured on
+        # macOS with CLI 2.1.302: for listed hosts the proxy terminates TLS, git trusts it
+        # but curl fails certificate verification.
+        sandbox["network"] = (
+            {"allowedDomains": ["*"]} if safety.allow_network
+            else {"allowedDomains": [], "strictAllowlist": True})
+        settings["sandbox"] = sandbox
+    return settings
 
 
 def _aws_settings_args() -> "list[str]":

@@ -158,7 +158,21 @@ class TestSandboxConfigRegression:
         assert "excludedCommands" in config
         assert "autoAllowBashIfSandboxed" in config
         assert "network" in config
-        assert config["network"]["allowedHosts"] == ["*"]
+        assert config["network"]["allowedDomains"] == ["*"]
+        assert "allowedHosts" not in config["network"]  # never a key the CLI reads
+
+
+def test_sandbox_keeps_reads_and_network_open():
+    """With the sandbox on, an owner session keeps reads and every host; an explicit host
+    list is written under the key the CLI reads; the product default stays off. The
+    protected paths reach the sandbox only as Edit deny rules (test_protected_paths)."""
+    config = _make_builder().build_sandbox_config()
+    assert "filesystem" not in config  # no read or write list of its own: reads stay open
+    assert config["network"]["allowedDomains"] == ["*"]
+    listed = _make_builder({"sandbox_allowed_hosts": "github.com, pypi.org"}).build_sandbox_config()
+    assert listed["network"]["allowedDomains"] == ["github.com", "pypi.org"]
+    assert DEFAULT_CONFIG["sandbox_enabled_default"] is False
+    assert _make_builder({"sandbox_enabled_default": False}).build_sandbox_config() == {"enabled": False}
 
 
 # ---------------------------------------------------------------------------
