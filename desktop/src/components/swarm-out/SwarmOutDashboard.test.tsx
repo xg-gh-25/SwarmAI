@@ -15,7 +15,7 @@
 process.env.TZ = 'Asia/Shanghai';
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { _resetSharedPolls } from './runsPoll';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
 import { sections } from './runReview';
@@ -170,6 +170,15 @@ describe('the run view', () => {
     } finally {
       window.removeEventListener('swarm:open-swarm-out-settings', listen);
     }
+  });
+
+  it('a shortfall the person dismissed adds no pill, as in Needs You', async () => {
+    mockAccount.mockResolvedValue({ state: 'connected', hive: { state: 'short', short: 1, desired: 1, counted: 0, dismissed: true } });
+    render(<SwarmOutDashboard now={NOW} />);
+    await screen.findAllByTestId('so-fleet-pill');
+    await waitFor(() => expect(mockAccount).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });            // the account read has answered
+    expect(screen.queryByTestId('so-fleet-short')).toBeNull();
   });
 
   it('a ready fleet, or an unknown one, adds no pill', async () => {

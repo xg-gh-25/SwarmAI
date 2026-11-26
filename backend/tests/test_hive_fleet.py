@@ -5,8 +5,9 @@ Questions answered:
 1. raising the desired count creates exactly the difference, also for repeated and
    concurrent requests; never above 8; lowering creates and deletes nothing; with more
    than 8 already only lowering is possible.
-2. status: ready / short / over / cannot_build, and an unset count is max(1, counted):
-   an upgrader with no Hive sees "1 short", nothing is created for them.
+2. status: ready / short / over / cannot_build, and an unset count is
+   max(min_desired, counted): an upgrader with no Hive sees "1 short" without Elastic
+   Workers on standby and is not short with it; nothing is created for them.
 3. without Elastic Workers on standby the last Hive can only be replaced; a replacement counts as one Hive, the old one is
    deleted once the new one runs, and kept when the new one fails.
 4. reconcile: an instance EC2 no longer has stops counting (nothing created to make up
@@ -142,6 +143,8 @@ async def test_the_route_needs_the_app_header(client):
 
 @pytest.mark.asyncio
 async def test_status_and_the_upgrade_default(client, monkeypatch):
+    from hive import agentcore_provisioner as ep
+    monkeypatch.setattr(ep, "standby_on", lambda: False)           # no Elastic Workers: a Hive is needed
     assert (await fleet.status(_db()))["state"] == "short"         # unset, no Hive: 1 short
     assert len(await _rows()) == 0                                  # nothing created for them
     await _seed(2)
@@ -162,6 +165,21 @@ async def test_status_and_the_upgrade_default(client, monkeypatch):
     assert st["state"] == "cannot_build" and st["short"] == 2
     monkeypatch.setattr(ha, "swarmai_account", lambda: None)
     assert (await fleet.status(_db()))["state"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_an_unset_count_with_elastic_workers_on_standby_is_not_short(client, monkeypatch):
+    # Elastic Workers on standby is somewhere to run tasks: min_desired is 0, so an install
+    # that never set a count and has no Hive is ready, not "1 Hive short"
+    from hive import agentcore_provisioner as ep
+    monkeypatch.setattr(ep, "standby_on", lambda: True)
+    st = await fleet.status(_db())
+    assert (st["state"], st["desired"], st["counted"]) == ("ready", 0, 0)
+    assert "short" not in st
+    assert len(await _rows()) == 0
+    await _seed(2)                                                   # Hives it has still count
+    st = await fleet.status(_db())
+    assert (st["state"], st["desired"]) == ("ready", 2)
 
 
 @pytest.mark.asyncio

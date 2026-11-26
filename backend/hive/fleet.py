@@ -4,8 +4,10 @@
 - ``hive_fleet`` in config.json (only these routes write it): ``desired_count`` 1..8
   (0..8 while Elastic Workers is on standby: ``min_desired``; a delete lowers it by one),
   ``instance_type`` and ``region`` for new Hives, ``replacing`` (new id -> old id).
-  Missing on an install that never set it: desired = max(1, Hives that count) — an
-  upgrader with no Hive sees "1 short" and one button; nothing is created for them.
+  Missing on an install that never set it: desired = max(``min_desired``, Hives that
+  count) — an upgrader with no Hive and no Elastic Workers on standby sees "1 short" and
+  one button; with Elastic Workers on standby they need no Hive and are not short.
+  Nothing is created for them.
 - ``set_desired``: raising it is the person's consent: under the fleet lock it counts,
   inserts exactly the difference as ``pending`` rows and writes the count in one
   transaction, then starts those deploys. Repeated or concurrent requests only ever
@@ -158,7 +160,7 @@ async def _status(db_path: Path) -> dict:
     counted_now = counted
     desired = fleet.get("desired_count")
     if not isinstance(desired, int):
-        desired = max(1, counted_now)
+        desired = max(min_desired(), counted_now)
     caps = (aws_account.get_record() or {}).get("capabilities") or {}
     hive_cap = caps.get("hive") or {}
     out = {"desired": desired, "counted": counted_now, "counted_all": counted_all,

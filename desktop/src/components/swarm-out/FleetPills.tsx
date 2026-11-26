@@ -4,7 +4,8 @@
  * Workers (AgentCore) and each Hive (EC2), a dot in its tone (./tone.hiveTone; Elastic
  * Workers by its standby state), its state on hover. A place that cannot take a task
  * turns red or amber; a click opens the Swarm Out settings, where it is fixed. When the
- * account holds fewer Hives than the person asked for, one amber pill says so.
+ * account holds fewer Hives than the person asked for, one amber pill says so, unless the
+ * person dismissed it (``dismissed``: the same flag that keeps it out of Needs You).
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,7 +16,8 @@ import { hiveStatusLabel } from './live';
 import { hiveTone, TONE_VAR, type Tone } from './tone';
 import { carrierLabelKey, ELASTIC_NAME } from './where';
 
-/** The account's Hive count, when it is short of what the person asked for. */
+/** The account's Hive count, when it is short of what the person asked for and they have
+ *  not dismissed it. */
 function useShortfall(hidden: boolean): FleetStatus | null {
   const [st, setSt] = useState<FleetStatus | null>(null);
   useEffect(() => {
@@ -24,7 +26,7 @@ function useShortfall(hidden: boolean): FleetStatus | null {
     awsAccountService.get().then((v) => { if (!stop) setSt(v.hive ?? null); }).catch(() => { /* unknown: say nothing */ });
     return () => { stop = true; };
   }, [hidden]);
-  return st && (st.state === 'short' || st.state === 'cannot_build') ? st : null;
+  return st && (st.state === 'short' || st.state === 'cannot_build') && !st.dismissed ? st : null;
 }
 
 function placeOf(h: SwarmOutFleetHive, t: (k: string, o?: Record<string, unknown>) => string): { tone: Tone; tip: string } {
