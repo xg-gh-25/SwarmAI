@@ -1577,13 +1577,15 @@ async def get_workspace_file_raw(
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
-    # Limit to 50 MB
-    file_size = target.stat().st_size
-    if file_size > MAX_PREVIEW_SIZE:
-        raise HTTPException(status_code=413, detail="File too large")
-
     mime_type, _ = mimetypes.guess_type(target.name)
     mime_type = mime_type or "application/octet-stream"
+    # FileResponse streams the file in chunks and answers Range requests, so no size
+    # is ever read into memory here. The 50 MB cap stays for the types a browser runs
+    # as a page; a type it only shows (image, audio, video, PDF) has none, or a long
+    # film or a large PDF cannot open in the viewer at all.
+    file_size = target.stat().st_size
+    if file_size > MAX_PREVIEW_SIZE and not _inert(mime_type):
+        raise HTTPException(status_code=413, detail="File too large")
     # A file opened from here as a page (the browser, a frame without its own sandbox)
     # never gets this origin: it is an opaque origin and cannot call the API with the
     # App's header (ops-registry design §5.5). Every type gets the sandbox except the
