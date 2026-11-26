@@ -366,6 +366,8 @@ def test_cleanup_reminder_counts_from_the_last_change(env, monkeypatch):
     st.annotate([r])
     assert r["cleanup_soon"] is True
     r = _row(sent_at=stamp)                                 # a turn ended since: not soon
+    # its end is now, not the fixed ENDED (which grows older than the reminder by the calendar)
+    r["result"]["ended_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     st.annotate([r])
     assert r["cleanup_soon"] is False
 
