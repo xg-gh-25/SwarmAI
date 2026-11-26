@@ -1,0 +1,1 @@
+{"commands": [{"command": "python -m pytest backend/tests/test_x.py", "cwd": ".", "result": "pass"}], "rationale": "test_x fails before the change", "repo": "repo", "tests_changed": ["backend/tests/test_x.py"]}

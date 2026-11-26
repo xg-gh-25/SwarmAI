@@ -306,6 +306,10 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
                                      or stage not in CONTINUE_ON_EXHAUSTED):
         raise LifecycleError("on_exhausted is \"continue\", only for "
                              f"{sorted(CONTINUE_ON_EXHAUSTED)}")
+    if "roster_version" in event["payload"] and stage in ("land", "deliver"):
+        # land and DELIVER attempts are judged by the fixed sets below, never by a
+        # registry roster version
+        raise LifecycleError("roster_version is only for stages with a registry roster")
     if stage == "land":
         valid_land_sets = {NORMAL_LAND_CHECKS, LG_CHECKS, SKIP_LAND_CHECKS}
         if frozenset(check_ids) not in valid_land_sets:
@@ -316,13 +320,20 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         if ids != RF_CHECKS and not (ids == REPORT_ONLY and report_only):
             raise LifecycleError("DELIVER attempts are RF-1~4, or DV-1 on the not-landed path")
     else:
+        # judged by the roster of the registry version that recorded the attempt, never
+        # today's: a roster change must not strand runs recorded before it (an
+        # unstamped attempt predates the stamp: checks.UNSTAMPED_ROSTER_VERSIONS)
         from core.run_protocol import checks as check_registry
-        expected_ids = {spec.check_id for spec in check_registry.stage_checks(
-            run["profile"], stage
-        )}
-        if set(check_ids) != expected_ids:
+        version = event["payload"].get("roster_version")
+        try:
+            accepted = check_registry.recorded_rosters(run["profile"], stage, version)
+        except check_registry.CheckError as exc:
+            raise LifecycleError(f"stage_attempt {exc}") from exc
+        if frozenset(check_ids) not in accepted:
+            shown = " or ".join(str(sorted(ids)) for ids in accepted)
             raise LifecycleError(
-                f"stage_attempt check_ids must equal registry roster {sorted(expected_ids)}"
+                f"stage_attempt check_ids must equal registry roster {shown}"
+                + (f" (roster_version {version})" if version is not None else "")
             )
     run["stage_attempts"][stage] = expected
     run["open_attempt"] = {

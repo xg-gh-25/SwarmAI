@@ -1,0 +1,84 @@
+{
+  "alternatives": [
+    {
+      "what": "swap"
+    }
+  ],
+  "chosen": "swap",
+  "consumers": [
+    {
+      "contract": "add",
+      "id": "K1",
+      "paths": [
+        "backend/core/mod.py"
+      ],
+      "pattern": "add",
+      "readers": [
+        "backend/tests/test_x.py"
+      ]
+    }
+  ],
+  "design": {
+    "architecture": "module",
+    "flow": "call -> validate; invalid -> error; valid -> sum",
+    "states": [
+      {
+        "created_by": "import",
+        "name": "ready",
+        "removed_by": "exit"
+      }
+    ],
+    "user_workflow": "call add"
+  },
+  "exit_criteria": [
+    {
+      "covers": [
+        "R1.1"
+      ],
+      "id": "X1",
+      "kind": "test",
+      "ref": "backend/tests/test_x.py::test_add"
+    },
+    {
+      "covers": [
+        "U1"
+      ],
+      "id": "X2",
+      "kind": "test",
+      "ref": "backend/tests/test_x.py::test_add"
+    }
+  ],
+  "failure_modes": [
+    {
+      "expected": "error",
+      "id": "F1",
+      "scenario": "bad input",
+      "test": "backend/tests/test_x.py::test_add"
+    }
+  ],
+  "properties": [
+    {
+      "id": "P1",
+      "kind": "example",
+      "statement": "sum is returned",
+      "test": "backend/tests/test_x.py::test_add",
+      "validates": [
+        "R1.1"
+      ]
+    }
+  ],
+  "security_boundaries": [],
+  "tasks": [
+    {
+      "change": "swap the operands",
+      "creates_test_files": [],
+      "depends_on": [],
+      "file": "backend/core/mod.py",
+      "id": "T1",
+      "requirements": [
+        "R1.1"
+      ],
+      "symbol": "add"
+    }
+  ]
+}

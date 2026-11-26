@@ -219,8 +219,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
                            # on_exhausted "continue": a third failed attempt of this
                            # stage degrades it and opens the next one instead of ending
                            # the run (lifecycle.CONTINUE_ON_EXHAUSTED); absent: the
-                           # run ends not_landed(checks_exhausted), as in older logs
-                           {"on_exhausted": str}),
+                           # run ends not_landed(checks_exhausted), as in older logs.
+                           # roster_version: the registry version whose roster
+                           # check_ids is, so replay judges the attempt by that roster
+                           # (checks.ROSTER_VERSION); absent in logs written before it
+                           {"on_exhausted": str, "roster_version": int}),
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),
                    "payload.check_id", {"stage_attempt_event_id": str, "check_id": str,
                    "passed": bool, "detail": str},

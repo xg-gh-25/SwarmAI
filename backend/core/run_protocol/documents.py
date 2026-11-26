@@ -243,7 +243,9 @@ def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str 
     """Open one stage attempt and close it: every declared check gets a result.
 
     *attempt* comes from the lifecycle projection (the one place that numbers
-    attempts). *check_ids* defaults to the registry roster. A check named in *forced*
+    attempts). *check_ids* defaults to the registry roster; an attempt of a registry-
+    rostered stage (not DELIVER) is stamped with ``checks.ROSTER_VERSION``, the roster
+    it is judged by on replay. A check named in *forced*
     is recorded failed with that detail instead of being evaluated (a document the
     schema refused); when anything is forced, the other checks are recorded
     ``not evaluated`` — their inputs were never written."""
@@ -252,6 +254,8 @@ def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str 
     forced = dict(forced or {})
     close_interrupted_attempt(store, at=at)
     payload: dict[str, Any] = {"check_ids": roster}
+    if stage != "deliver":
+        payload["roster_version"] = checks.ROSTER_VERSION
     if stage in lifecycle.CONTINUE_ON_EXHAUSTED:
         # a third refusal degrades this stage and the run goes on to the next one, so
         # REVIEW and TEST still judge the change (the rule is logged with the attempt)

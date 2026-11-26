@@ -1,0 +1,36 @@
+{
+  "baseline_runs": 0,
+  "bound_repos": [],
+  "budget_seconds": null,
+  "budget_tokens": null,
+  "created_at": "2026-11-26T10:36:11.570088+00:00",
+  "decision_cap": 2,
+  "event_authority_id": "sha256-checksum-v1",
+  "expected_repos": [
+    "repo"
+  ],
+  "has_ddd": false,
+  "knowledge": {
+    "ddd": [],
+    "items": [],
+    "purpose": "requirement",
+    "status": "none"
+  },
+  "mode": "isolated",
+  "owner_source": "host",
+  "profile": "bugfix",
+  "project": "P",
+  "protocol_version": 1,
+  "repo_roots": {
+    "repo": "<ROOT>/repo"
+  },
+  "requirement": "Swap the operands of core.mod.add.",
+  "review_answers": "host",
+  "run_id": "run_a134e90d",
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000001",
+  "stage_attempt_cap": 3,
+  "token_baseline_runs": 0,
+  "transcript_ids": [
+    "2c762be5-fa8e-4efe-a025-08bb2b25032f"
+  ]
+}

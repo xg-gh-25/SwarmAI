@@ -1,0 +1,61 @@
+{
+  "agent_after_cap": false,
+  "attempt_base": {},
+  "audit_card": null,
+  "audit_rows": null,
+  "audit_summary": null,
+  "auth_consumed": {},
+  "base_moved_failures": 0,
+  "created_at": "2026-11-26T10:36:11.570088+00:00",
+  "decision_cap": 2,
+  "deliver_reopens": 0,
+  "host_decisions": 0,
+  "human_decisions": 0,
+  "id": "run_a134e90d",
+  "land_requests": {},
+  "landing": null,
+  "last_land_intent": null,
+  "last_report_render": null,
+  "pending_decision": null,
+  "pending_landing": null,
+  "profile": "bugfix",
+  "project": "P",
+  "project_agent": null,
+  "reason": null,
+  "reflect": null,
+  "requirement": "Swap the operands of core.mod.add.",
+  "review_reopened_failures": 0,
+  "review_reopens": 0,
+  "run_id": "run_a134e90d",
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000001",
+  "stage": "deliver",
+  "stage_attempts": {
+    "build": 1,
+    "evaluate": 1,
+    "plan": 1,
+    "review": 1,
+    "test": 1,
+    "think": 1
+  },
+  "stages": {
+    "build": "completed",
+    "deliver": "open",
+    "evaluate": "completed",
+    "plan": "completed",
+    "reflect": "pending",
+    "review": "completed",
+    "test": "completed",
+    "think": "completed"
+  },
+  "status": "active",
+  "updated_at": "2026-11-26T10:36:18.084059+00:00",
+  "worktree_mode": "isolated",
+  "worktrees": [
+    {
+      "main": "<ROOT>/repo",
+      "path": "<ROOT>/wts/run_a134e90d/repo",
+      "repo_name": "repo",
+      "state": "active"
+    }
+  ]
+}

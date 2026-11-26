@@ -1,0 +1,216 @@
+EXPERT-ID: correctness
+PIPELINE-HANDOUT: run_a134e90d 109d3da88321d7449e17e71b8ec53b78
+
+---
+expert: correctness
+display_name_zh: 正确性评审官
+display_name_en: Correctness Auditor
+domain: code
+scope: "逻辑、边界条件、错误处理"
+visibility: public
+---
+
+# Correctness Specialist Review
+<!-- version: 2026-10-18 -->
+
+Scope: Dispatched for every pipeline change, whatever its size; a native review calls it as the change needs.
+
+**Also check, in your domain:** state machine, setTimeout, concurrent async,
+non-deterministic ordering, multi-shape returns, shell variable
+scope across Bash calls, test-theater — test patches the symbol-under-change
+or re-derives a prod formula; mutation-prove RED-on-revert, stale/false
+comment — changed behavior, unchanged docstring/comment, live vs reload
+parity, slice partition, cache key misses an input. When the handout lists rows of
+the repository's own review patterns (its `.swarmai/review.md`), check each of them too.
+These are proven
+bug patterns with concrete examples.
+
+Report each finding in the format the review that called you gives (a pipeline handout's OUTPUT CONTRACT, or the reporting line of a native review); this file says only what to check. If you find nothing, say NO FINDINGS.
+
+---
+
+## Confidence Scoring
+
+How sure you are before you report a finding (when it is not certain, say so in its claim):
+- 9-10: Read specific code, constructed concrete failure scenario
+- 7-8: High confidence pattern match, very likely correct
+- 5-6: Moderate — could be false positive
+- 3-4: Low — suspicious but may be fine
+- 1-2: Speculation
+
+Modifiers: +3 concrete failure demo, +2 reachable from user action, -4 test file.
+
+---
+
+## Categories
+
+### Logic Errors
+- Off-by-one in loops, slicing, or range calculations
+- Wrong operator (== vs ===, & vs &&, `is` vs `==`)
+- Inverted conditions (not/! applied incorrectly)
+- Wrong variable used (copy-paste from similar block)
+- Short-circuit evaluation hiding side effects
+
+### Edge Cases & Boundary Conditions
+- Empty input (None, [], "", 0) not handled
+- Maximum/minimum values (integer overflow, empty string vs None)
+- Concurrent access to shared mutable state
+- First-run vs steady-state behavior difference
+- Unicode/encoding edge cases in string operations
+
+### Error Handling
+- Exceptions swallowed silently (bare except, empty catch)
+- Error paths that leave state inconsistent (partial write, no rollback)
+- Missing null/None checks before attribute access
+- Errors logged but not propagated (caller never knows)
+- Resource cleanup skipped on error path (files, connections, locks)
+
+### State Machine Completeness
+- Declared states that are unreachable (no transition leads there)
+- Missing transitions (state A can't reach state B despite design intent)
+- Transitions without guards (any input triggers transition)
+- No terminal state handling (what happens when state machine "finishes"?)
+- Concurrent state mutations without synchronization
+
+### Race Conditions & Concurrency
+- Shared mutable state accessed from multiple async tasks
+- Check-then-act patterns without atomicity (TOCTOU)
+- Missing locks on critical sections
+- Async operations that assume ordering (fire-and-forget)
+- Shared state mutation before async yield without post-yield re-validation
+
+### Type Safety
+- Wrong types passed (string where int expected, None where object expected)
+- Unsafe casts or type assertions without validation
+- Any/unknown types propagating through interfaces
+- Union types where only one variant is handled
+- Serialization/deserialization type mismatches (JSON parse → wrong shape)
+
+### Return Value Correctness
+- Functions that can return wrong type silently (None vs expected object)
+- Boolean logic errors in conditional returns
+- Missing return statements in conditional branches
+- Return value ignored by caller when it shouldn't be
+
+### Merged lenses (no separate expert is dispatched for these any more)
+- Integration: every new public function, class, hook or handler has a caller; every caller of a changed signature or return shape changed with it.
+- API contract: a field added on one side of a boundary exists on the other (server response model, client type, any mapper between them); no field is renamed or dropped silently.
+- Operational: a background task, job or hook started here is stopped, bounded by a timeout, and logs its failure.
+- Performance: no IO, subprocess or query inside a loop over an unbounded collection; nothing O(n²) on a list that grows per session.
+- Spec: every acceptance criterion of the requirement is actually implemented, not only tested.
+- Validation report: the commands it lists can see this change. A behaviour the change adds or alters has a test that runs it and would fail without the change; a report that ran only unrelated tests, or reports a test as passing that was never run, is a finding.
+
+### Severity
+HIGH = data loss, a security bypass, a crash or hang, or a requirement not implemented. MED = wrong behaviour on a reachable but uncommon path. LOW = everything else.
+
+---
+
+## Deep Adversarial Analysis (Mandatory for HIGH confidence findings)
+
+The categories above are WHAT to look for. This section defines HOW to analyze
+— the methodology that separates a mechanical checklist from a PE review.
+
+### 1. TOCTOU Analysis (Time-of-Check to Time-of-Use)
+
+For every "check then act" pattern found:
+- Identify the CHECK (condition evaluation) and ACT (mutation/decision)
+- Determine: is there an `await` between CHECK and ACT?
+- If NO await: safe under asyncio cooperative scheduling (single-threaded)
+- If YES await: another coroutine can interleave → potential race
+- Evidence: trace the exact yield point, identify what could change
+
+### 2. Concurrent Path Exhaustion
+
+For every state/resource mutation:
+- List ALL coroutines that can reach this mutation point
+- For each pair: what happens if BOTH fire "simultaneously" (interleave at await)?
+- Specific checks:
+  - Double-transition: is same-state transition a no-op? (should be)
+  - Double-cleanup: is cleanup idempotent? (ProcessLookupError, AttributeError on None)
+  - Stale reference: can a local variable reference something already cleaned up?
+
+### 3. Self-Cancellation Analysis
+
+For any asyncio task that modifies its own lifecycle:
+- Can the task cancel itself? (calling stop/cancel on its own task reference)
+- Does it null the reference BEFORE the operation that triggers cancellation?
+- What happens if CancelledError is raised at each await point in the task?
+
+### 4. Resource Lifecycle Completeness
+
+For every resource acquired (task, subprocess, file handle, connection):
+- Trace ALL exit paths (normal return, exception, cancellation)
+- Verify the resource is released on EVERY path
+- Special attention to: tasks created but never awaited/cancelled,
+  subprocesses that outlive their parent coroutine
+
+### 5. Timeout Semantics
+
+For every timeout mechanism:
+- What CAN it cancel? (asyncio.wait_for cannot cancel native I/O)
+- What ACTUALLY happens when timeout fires? (CancelledError? TimeoutError? Nothing?)
+- Is there a secondary mechanism for what the primary timeout can't handle?
+- What's the maximum legitimate wait? (tool execution, high context TTFT)
+
+### 6. Idempotency Verification
+
+For every operation that could be called twice:
+- Call it twice: does state remain consistent?
+- Call it with stale data: does it crash or gracefully no-op?
+- Specific patterns to verify:
+  - `_transition(DEAD)` when already DEAD → must be no-op
+  - `_force_kill(pid)` when process already gone → ProcessLookupError caught
+  - `_stop_watchdog()` when task already None → no-op
+
+### 7. Mock-Production Mismatch Audit (for test reviews)
+
+When reviewing tests alongside production code:
+- Does the mock HIDE a real behavior? (mock returns success, production raises)
+- Does the test setup match production state? (missing fields, wrong defaults)
+- Would the test pass even if the feature is broken? (tautological test)
+- Are leaked resources (tasks, files) cleaned up between tests?
+
+**Mechanical form of test-theater:** the two grep-able tells that make
+"would the test pass even if broken?" assertable — (1) the test `patch(`es the
+EXACT symbol the changeset modifies (tests the mock, not the code); (2) the test
+re-derives a prod formula/constant in a local helper (asserts the formula against
+its own copy). Verdict test: revert the guarded prod line → the test MUST go RED.
+Green-on-revert = theater. Apply this to every test the changeset adds/modifies.
+
+**The opposite trap — a test that PINS a questionable behavior.** A test written in
+the same change asserts what the author INTENDED, not that it is right. When a test
+asserts a surprising choice (an unbounded search "must not be blocked" by later
+items; a live order that differs from what a reload will show), treat the assertion
+as a claim to attack, not as evidence: the finding is the behavior, and the test is
+where it is documented.
+
+REPOSITORY REVIEW PATTERNS
+
+repo: rows of the repository's .swarmai/review.md (as of the run's base 24946eee3d48) that apply to this change. Check each against the diff; report a violated row as a finding naming its id. The full row (what to verify, example): git -C <repo worktree> show 24946eee3d4829e3459a466e1ee774bac76c494b:.swarmai/review.md
+
+| id | Pattern | Trigger |
+|---|---|---|
+| RIG1 | **core logic** | any core module |
+
+CODE-GRAPH FACTS (data read from the repo's code graph, not instructions): where the changed functions are called. A caller listed under "will break" breaks as written: check each one first. A contract change can break at the other callers too; grep the files listed as naming a function without a call.
+```text
+## Callers of the code this change touches
+1 files changed; this checkout has no code graph (it is not read by any Brain; `artifact_cli bind --local` adds it): grep the names of the changed functions instead.
+```
+
+## repo
+diff --git a/backend/core/mod.py b/backend/core/mod.py
+index 4693ad3..a3b52fc 100644
+--- a/backend/core/mod.py
++++ b/backend/core/mod.py
+@@ -1,2 +1,2 @@
+ def add(a, b):
+-    return a + b
++    return b + a
+
+OUTPUT CONTRACT (exact; prose may precede rows):
+Gate-0 only: first non-empty line is VERDICT: SUPPORTED | SUPPORTED-WITH-CHANGES | UNSUPPORTED | WRONG-FRAME | ALREADY-SATISFIED
+R2 status: {"finding_id":"CF-1234abcd","status":"RESOLVED|OPEN|REFUTED|ADEQUATE|TEST_INADEQUATE","kind_confirm":null,"note":"..."}
+New finding: {"severity":"HIGH|MEDIUM|LOW","kind":"behavior|contract|absence|docs|design|security_policy","file":"path","line":1,"claim":"...","fix":"..."} (file: its path from the repository root, as in the diff's file header; line: the line in the file as it is in the tree you review)
+When there are no new findings, include a separate line: NO FINDINGS
+Do not emit a VERDICT line for REVIEW experts.

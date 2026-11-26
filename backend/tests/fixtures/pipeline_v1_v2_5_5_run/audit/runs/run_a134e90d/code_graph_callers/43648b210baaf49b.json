@@ -1,0 +1,1 @@
+{"repo": "repo", "text": "## Callers of the code this change touches\n1 files changed; this checkout has no code graph (it is not read by any Brain; `artifact_cli bind --local` adds it): grep the names of the changed functions instead.", "listed": [], "breaks": 0}

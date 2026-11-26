@@ -5,6 +5,8 @@ Public symbols:
 - ``EXEMPTIONS`` — every non-applicable profile/check pair with a reason.
 - ``stage_checks`` / ``land_checks`` / ``audit_checks`` — effect-specific routing
   (``audit``: a failed result is one line in the audit's Quality cell, never a block).
+- ``ROSTER_VERSION`` / ``roster_at`` / ``recorded_rosters`` — the stage roster each
+  registry version had, so a recorded attempt is judged by the roster that wrote it.
 - ``coverage_errors`` — prove each profile/check pair applies or is exempt.
 - ``evaluate`` — run a check's pure callable against supplied facts.
 """
@@ -223,6 +225,59 @@ def stage_checks(profile: str, stage: str, variant: str | None = None) -> tuple[
         raise CheckError(f"stage {stage!r} is not in profile {profile!r}")
     return tuple(spec for spec in _for(profile, "stage") if stage in _stages_for(spec, profile)
                  and (variant is None or variant in spec.variants))
+
+
+# ── roster versions ─────────────────────────────────────────────────────────────
+# A stage attempt is judged on replay by the roster that recorded it, never by today's
+# (lifecycle._attempt): a run recorded before a roster change must stay readable after
+# it. ``ROSTER_VERSION`` is stamped on every attempt complete_stage writes
+# (``roster_version``); ``_ROSTER_CHANGES[v]`` holds, for each (profile, stage) whose
+# roster changed from version v to v + 1, its roster at version v. Changing any stage
+# roster (a check added, removed, or moved to another stage or profile) therefore
+# means: raise ROSTER_VERSION by one and record the old rosters of the changed stages
+# under the old version. tests/test_pipeline_v1_roster_versions.py freezes the current
+# rosters and fails on a change made without that.
+ROSTER_VERSION = 2
+# Attempts written before the stamp carry none; which version wrote one cannot be told
+# (a run created on one release may reach a stage on the next), so it is accepted
+# against any roster these versions used. 1: v2.4.0-v2.5.5 (every Pipeline v1 release
+# until FM-1); 2: v2.6.0, the first with FM-1 in TEST.
+UNSTAMPED_ROSTER_VERSIONS = (1, 2)
+_ROSTER_CHANGES: dict[int, dict[tuple[str, str], frozenset[str]]] = {
+    1: {("bugfix", "test"): frozenset({"TS-1", "TS-4"}),
+        ("full", "test"): frozenset({"TS-1", "TS-4"}),
+        ("trivial", "test"): frozenset({"TS-1", "TS-4"}),
+        ("direct", "test"): frozenset({"TS-1"})},
+}
+
+
+def roster_at(profile: str, stage: str, version: int) -> frozenset[str]:
+    """The check ids registry *version* listed for this stage (the variant-free roster
+    the fold validates an attempt against). Raises CheckError for a version this code
+    does not know, or a stage the profile does not have."""
+    if isinstance(version, bool) or not isinstance(version, int) \
+            or not 1 <= version <= ROSTER_VERSION:
+        raise CheckError(f"unknown roster_version {version!r} (this code knows 1-"
+                         f"{ROSTER_VERSION})")
+    # the first change after *version* holds the roster it had; none: it is today's
+    for changed_at in range(version, ROSTER_VERSION):
+        old = _ROSTER_CHANGES.get(changed_at, {})
+        if (profile, stage) in old:
+            return old[(profile, stage)]
+    return frozenset(spec.check_id for spec in stage_checks(profile, stage))
+
+
+def recorded_rosters(profile: str, stage: str,
+                     version: "int | None") -> tuple[frozenset[str], ...]:
+    """The rosters a stage attempt stamped with *version* may list: exactly that
+    version's, or for an unstamped attempt any roster of UNSTAMPED_ROSTER_VERSIONS."""
+    versions = UNSTAMPED_ROSTER_VERSIONS if version is None else (version,)
+    out: list[frozenset[str]] = []
+    for each in versions:
+        ids = roster_at(profile, stage, each)
+        if ids not in out:
+            out.append(ids)
+    return tuple(out)
 
 
 def _stages_for(spec: CheckSpec, profile: str) -> tuple[str, ...]:

@@ -1,0 +1,79 @@
+{
+  "analysis": [
+    {
+      "kind": "missing_edge",
+      "note": "none",
+      "refs": [
+        "R1.1"
+      ],
+      "resolution": "rewritten"
+    }
+  ],
+  "bugfix": {
+    "current": [
+      {
+        "condition": "add is called",
+        "id": "C1",
+        "negative": false,
+        "pattern": "event",
+        "response": "it returns the sum",
+        "universal": false
+      }
+    ],
+    "expected": [
+      {
+        "condition": "add is called",
+        "id": "E1",
+        "negative": false,
+        "pattern": "event",
+        "response": "it returns the sum",
+        "universal": false
+      }
+    ],
+    "unchanged": [
+      {
+        "condition": "add is called",
+        "id": "U1",
+        "negative": false,
+        "pattern": "event",
+        "response": "it returns the sum",
+        "universal": false
+      }
+    ]
+  },
+  "clarifications": [
+    {
+      "answer": "core.mod",
+      "answered_by": "evidence",
+      "qid": "Q1",
+      "question": "Which add?"
+    }
+  ],
+  "knowledge_refs": [],
+  "requirements": [
+    {
+      "acceptance": [
+        {
+          "condition": "add is called",
+          "id": "R1.1",
+          "negative": false,
+          "pattern": "event",
+          "response": "it returns the sum",
+          "universal": false
+        }
+      ],
+      "id": "R1",
+      "story": "As a caller"
+    }
+  ],
+  "understanding": {
+    "claim": "swap the operands",
+    "evidence": [
+      "backend/core/mod.py"
+    ],
+    "readings": [
+      "one"
+    ],
+    "root_cause": null
+  }
+}
