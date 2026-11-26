@@ -286,7 +286,9 @@ def test_the_update_checks_the_package_before_it_touches_the_install():
     lines = [ln.strip() for ln in script.splitlines()]
     check = lines.index("verify_hive_package /tmp/hive-update.tar.gz bkt 1.2.3 us-east-1")
     unpack = next(i for i, ln in enumerate(lines) if ln.startswith("tar xzf /tmp/hive-update.tar.gz"))
-    install = next(i for i, ln in enumerate(lines) if ln.startswith("rsync -a --delete"))
+    # the install's rsync (the one that keeps .hive-bucket), not the backup's
+    install = next(i for i, ln in enumerate(lines)
+                   if ln.startswith("rsync -a --delete") and ".hive-bucket" in ln)
     assert check < unpack < install
 
 
@@ -601,7 +603,7 @@ def test_deploy_writes_the_ip_policy_once_the_elastic_ip_exists(vpc_read):
     p._get_ec2_public_dns = AsyncMock(return_value="ec2-3-80-1-2.compute-1.amazonaws.com")
     p._cleanup_resources = AsyncMock()
     with patch("hive.provisioner.aiosqlite.connect", return_value=_db_conn()), \
-         patch("hive.user_data.caddy_hash_password", return_value=FAKE_HASH), \
+         patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", FAKE_HASH, []))), \
          patch("hive.provisioner.asyncio.sleep", new=AsyncMock()), \
          patch("hive.provisioner.hive_network", return_value=(None, VPC if vpc_read else None, vpc_read)), \
          patch("hive.provisioner._put_hive_role_policy",
@@ -636,7 +638,7 @@ def test_a_setup_timeout_after_an_unread_vpc_says_so(vpc_read):
     p._cleanup_resources = AsyncMock()
     p._forget_terminated_instance = AsyncMock()
     with patch("hive.provisioner.aiosqlite.connect", return_value=_db_conn()), \
-         patch("hive.user_data.caddy_hash_password", return_value=FAKE_HASH), \
+         patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", FAKE_HASH, []))), \
          patch("hive.provisioner.asyncio.sleep", new=AsyncMock()), \
          patch("hive.provisioner.hive_network", return_value=(None, VPC if vpc_read else None, vpc_read)), \
          patch("hive.provisioner._put_hive_role_policy"):
@@ -682,7 +684,7 @@ def test_the_first_boot_wait_covers_its_deadlines():
     bounded = ud.TREE_SITTER_SETUP_DEADLINE_S + ud.REPLAY_HOST_DEADLINE_S + ud.BACKEND_HEALTH_WAIT_S
     assert prov.FIRST_BOOT_WAIT_S >= bounded + prov.FIRST_BOOT_UNBOUNDED_S
     assert prov.FIRST_BOOT_WAIT_S == 900
-    script = render_user_data(s3_bucket="b", version="2.5.5", auth_user="admin", auth_hash="$2b$14$x",
+    script = render_user_data(s3_bucket="b", version="2.5.5", auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
                               region="us-east-1")
     assert f"for i in $(seq 1 {ud.BACKEND_HEALTH_WAIT_S}); do" in script
     assert "exec > >(tee -a /var/log/hive-setup.log) 2>&1" in script
@@ -724,7 +726,7 @@ def _timed_out_deploy(console):
     p._cleanup_resources = AsyncMock(side_effect=lambda *a, **kw: events.append("cleanup"))
     p._forget_terminated_instance = AsyncMock()
     with patch("hive.provisioner.aiosqlite.connect", return_value=_db_conn()), \
-         patch("hive.user_data.caddy_hash_password", return_value=FAKE_HASH), \
+         patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", FAKE_HASH, []))), \
          patch("hive.provisioner.asyncio.sleep", new=AsyncMock()), \
          patch("hive.provisioner.hive_network", return_value=(None, VPC, True)), \
          patch("hive.provisioner._put_hive_role_policy"):

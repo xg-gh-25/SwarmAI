@@ -1659,22 +1659,25 @@ class HiveProvisioner:
             # Step 6: Generate user-data. The origin secret is made here, before the
             # launch: the Caddyfile is written from user data on first boot, and the
             # distribution that sends the secret is only created at step 10.
-            from hive.user_data import generate_password, caddy_hash_password, render_user_data
+            # The access list (hive/access.py): the Host's own key, and the person keys the
+            # Host already has for this Hive (a retry keeps them).
+            from hive.access import HOST_USERS, deploy_access
+            from hive.user_data import render_user_data
 
-            password = generate_password()
-            auth_hash = caddy_hash_password(password)
+            host_key, host_hash, person_keys = await deploy_access(str(self.db_path), instance_id)
             origin_secret = secrets.token_urlsafe(32)
             user_data = render_user_data(
                 s3_bucket=bucket,
                 version=version,
-                auth_user="admin",
-                auth_hash=auth_hash,
+                auth_user=HOST_USERS[0],
+                auth_hash=host_hash,
                 region=region,
                 prebaked=bool(custom_ami_id),
                 origin_secret=origin_secret,
+                access=person_keys,
             )
             await self._update_instance(
-                instance_id, auth_user="admin", auth_password=password,
+                instance_id, auth_user=HOST_USERS[0], auth_password=host_key,
                 origin_secret=origin_secret,
             )
 
@@ -2075,10 +2078,11 @@ class HiveProvisioner:
 
             # SSM Run Command
             from hive.user_data import (PACKAGE_CHECK_SH, REPLAY_HOST_SH, TMP_ON_DISK_SH,
-                                        TREE_SITTER_GRAMMARS_SH, caddy_binary_update_sh,
-                                        health_exempt_fix_sh)
+                                        TREE_SITTER_GRAMMARS_SH, access_list_fix_sh,
+                                        caddy_binary_update_sh, health_exempt_fix_sh)
             health_fix_sh = health_exempt_fix_sh()
             caddy_binary_sh = caddy_binary_update_sh()
+            access_fix_sh = access_list_fix_sh()
             update_script = f"""#!/bin/bash
 set -euo pipefail
 echo "=== Updating to v{version} ==="
@@ -2090,6 +2094,11 @@ echo "=== Updating to v{version} ==="
 # Then the Caddy binary: the pinned, checksum-checked release first boot installs, put in
 # only when /usr/bin/caddy is another build (a failure keeps the old one and stops here).
 {caddy_binary_sh}
+
+# Then the access list: the Caddyfile's inline basic-auth line becomes the list both auth
+# layers read (hive/access.py), and hive-auth.env becomes root-only (a failure restores the
+# file and stops here). Prints "Access list: on" when the Hive has the list.
+{access_fix_sh}
 
 # G7: Backup for rollback — exclude .venv (~300MB, never overwritten by rsync; the rollback
 # keeps the one in the install tree). --delete: an exact copy, also over a backup an aborted
@@ -2148,9 +2157,10 @@ ensure_node=$(mktemp /run/swarmai-ensure-node.XXXXXX)
 rm -f "$ensure_node"
 
 # NOTE: /etc/caddy/Caddyfile and /usr/bin/caddy live OUTSIDE /opt/swarmai/ — never touched
-# by rsync. The deployed Caddyfile has inline bcrypt auth written by user_data.py. It changes
-# only through its own edits: the /health step at the top of this script, the origin guard
-# (_origin_guard_script) and update_caddyfile; the binary only through the step after it.
+# by rsync. The Caddyfile imports the access list (/etc/swarmai-auth/hive-users). It changes
+# only through its own edits: the /health and access list steps at the top of this script,
+# the origin guard (_origin_guard_script) and update_caddyfile; the binary only through the
+# step after the /health one; the list only through those steps and hive/access.py.
 
 # ── MIGRATION (idempotent): backfill /etc/swarmai/hive-auth.env for hives provisioned
 # BEFORE app-layer auth existed. Those instances have no env file, so the new
@@ -2179,11 +2189,11 @@ print(m.group(1) if m else '')
     install -m 700 -d /etc/swarmai
     install -m 600 /dev/null /etc/swarmai/hive-auth.env
     printf 'HIVE_USER=%s\\nHIVE_PASS_HASH=%s\\n' 'admin' "$MIG_HASH" > /etc/swarmai/hive-auth.env
-    chown swarm:swarm /etc/swarmai/hive-auth.env
+    chown root:root /etc/swarmai/hive-auth.env
     chmod 600 /etc/swarmai/hive-auth.env
     echo "hive-auth.env backfilled (app-layer auth will match the existing Caddy credential)"
   else
-    echo "WARN: could not extract admin hash from Caddyfile — hive-auth.env NOT written; middleware fail-closed until reset_password"
+    echo "WARN: could not extract admin hash from Caddyfile — hive-auth.env NOT written; the backend reads the access list instead"
   fi
 fi
 
@@ -2304,13 +2314,33 @@ echo "=== Update to v{version} verified ==="
                             origin_note = (f"Updated to v{version}, but limiting the origin to "
                                            f"its CloudFront distribution failed ({reason}); "
                                            f"the next update tries it again.")
+                    # A Hive the update just gave the access list moves to one key per
+                    # person (hive/access.migrate) while the update still holds it. Its
+                    # failure leaves the Host on the shared password, which the Hive still
+                    # accepts, and is retried by the next update.
+                    access_note = None
+                    if ("Access list: off" in (output or "")
+                            and instance.get("auth_user") == "admin"):
+                        access_note = (f"Updated to v{version}, but this Hive's Caddyfile is not "
+                                       f"one the update can move to one key per person; it keeps "
+                                       f"its shared password. Replace the Hive to get it.")
+                    if "Access list: on" in (output or ""):
+                        from hive import access as hive_access
+                        try:
+                            await hive_access.migrate(self, instance_id)
+                        except Exception as e:  # noqa: BLE001 — recorded on the card below
+                            reason = str(e) if isinstance(e, hive_access.AccessError) else type(e).__name__
+                            access_note = (f"Updated to v{version}, but moving it to one key per "
+                                           f"person failed ({reason}); the next update tries "
+                                           f"it again.")
+                    note = origin_note or access_note
                     await self._update_instance(instance_id, version=version, status="running",
-                                                error_message=origin_note)
+                                                error_message=note)
                     _update_succeeded = True
                     logger.info("Hive %s updated to v%s (health verified)", instance["name"], version)
-                    if origin_note:
-                        logger.warning("Hive %s: %s", instance["name"], origin_note)
-                        raise RuntimeError(origin_note)
+                    if note:
+                        logger.warning("Hive %s: %s", instance["name"], note)
+                        raise RuntimeError(note)
                 else:
                     await self._update_instance(
                         instance_id, status="running",
@@ -2341,156 +2371,6 @@ echo "=== Update to v{version} verified ==="
                 except Exception:
                     logger.error("Failed to reset status after update error for %s", instance_id)
             raise
-
-    async def reset_password(self, instance_id: str) -> str:
-        """Reset Hive auth password via SSM.  Returns the new passphrase.
-
-        Steps:
-        1. Generate new passphrase + bcrypt hash locally
-        2. SSM Run Command: overwrite HIVE_PASS_HASH in /etc/caddy/.env
-        3. Reload Caddy (zero-downtime — graceful config reload)
-        4. Update local DB with new plaintext password
-        """
-        from hive.user_data import generate_password, caddy_hash_password
-
-        instance = await self._get_instance(instance_id)
-        account = await self._get_account(instance["account_ref"])
-        session = await self._session(account, instance["region"], "manage")
-        ec2_id = instance.get("ec2_instance_id")
-        region = instance["region"]
-
-        if not ec2_id:
-            raise ValueError("No EC2 instance ID")
-
-        new_password = generate_password()
-        new_hash = caddy_hash_password(new_password)
-
-        # Caddy basicauth hash is inline in Caddyfile:
-        #   basicauth * {
-        #       admin $2b$14$...
-        #   }
-        #
-        # PE-review N1: bcrypt hashes contain $ signs (e.g. $2b$14$...).
-        # If interpolated into a bash script via f-string, bash expands
-        # $2b, $14, etc. as variable references → corrupted hash → auth
-        # permanently broken.
-        #
-        # Fix: base64-encode the hash, decode on the instance. base64
-        # output is [A-Za-z0-9+/=] — no shell-special characters.
-        import base64
-        hash_b64 = base64.b64encode(new_hash.encode()).decode()
-
-        # G9: Use Python for password replacement — avoids sed fragility
-        # and shell escaping issues with bcrypt $ characters
-        reset_script = f"""#!/bin/bash
-set -euo pipefail
-CADDYFILE="/etc/caddy/Caddyfile"
-if [ ! -f "$CADDYFILE" ]; then
-  echo "ERROR: $CADDYFILE not found" >&2
-  exit 1
-fi
-# Decode the bcrypt hash from base64 (avoids $ expansion in bash)
-NEW_HASH=$(echo '{hash_b64}' | base64 -d)
-# Backup current Caddyfile
-cp "$CADDYFILE" "$CADDYFILE.bak"
-# G9: Use Python for precise hash replacement (replaces fragile sed)
-python3 -c "
-import re, sys
-new_hash = sys.argv[1]
-with open('/etc/caddy/Caddyfile') as f:
-    content = f.read()
-# Match 'admin' followed by a bcrypt hash (starts with dollar sign)
-# Anchored to bcrypt format to avoid matching comments or other 'admin' occurrences
-new_content = re.sub(
-    r'(\\s+admin\\s+)(\\$2[abxy]\\$\\S+)',
-    r'\\1' + new_hash,
-    content,
-    count=1,
-)
-if new_content == content:
-    print('ERROR: Could not find admin hash line in Caddyfile', file=sys.stderr)
-    sys.exit(1)
-with open('/etc/caddy/Caddyfile', 'w') as f:
-    f.write(new_content)
-print('Hash replaced successfully')
-" "$NEW_HASH"
-# Validate and reload Caddy
-if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
-  systemctl restart caddy
-  rm -f "$CADDYFILE.bak"
-  echo "Caddy hash replaced"
-else
-  # Rollback on validation failure
-  mv "$CADDYFILE.bak" "$CADDYFILE"
-  echo "ERROR: Caddy validation failed, rolled back" >&2
-  exit 1
-fi
-# R27 two-consumer sync: the backend app-layer auth (middleware/hive_auth.py) reads the
-# SAME credential from /etc/swarmai/hive-auth.env. Rotate the HIVE_PASS_HASH line there
-# too (preserving HIVE_USER) AND restart the backend, or the inner/outer layers drift
-# (Caddy accepts the new password, the backend still verifies the old one -> 401 storm).
-# DRIFT NOTE (accepted, recoverable): if the backend restart below fails while Caddy
-# already reloaded, the layers drift toward a 401 storm — a FAIL-CLOSED degradation (deny,
-# never allow), bounded by systemd Restart=always + StartLimit, and self-heals on the next
-# reset_password. We deliberately do NOT roll Caddy back here (that would trade a bounded,
-# fail-closed lockout for a window where the OLD password still works — the wrong direction).
-AUTHENV="/etc/swarmai/hive-auth.env"
-if [ -f "$AUTHENV" ]; then
-  python3 -c "
-import re, sys
-new_hash = sys.argv[1]
-with open('/etc/swarmai/hive-auth.env') as f:
-    lines = f.read().splitlines()
-out, seen = [], False
-for ln in lines:
-    if ln.startswith('HIVE_PASS_HASH='):
-        out.append('HIVE_PASS_HASH=' + new_hash); seen = True
-    else:
-        out.append(ln)
-if not seen:
-    out.append('HIVE_PASS_HASH=' + new_hash)
-with open('/etc/swarmai/hive-auth.env', 'w') as f:
-    f.write('\\n'.join(out) + '\\n')
-" "$NEW_HASH"
-  chown swarm:swarm "$AUTHENV" || true
-  chmod 600 "$AUTHENV"
-  systemctl restart swarmai-hive || true
-  echo "Backend hive-auth.env rotated + backend restarted"
-fi
-echo "Password reset complete"
-"""
-
-        def _run_command():
-            ssm = session.client("ssm", region_name=region)
-            resp = ssm.send_command(
-                InstanceIds=[ec2_id],
-                DocumentName="AWS-RunShellScript",
-                Parameters={"commands": [reset_script]},
-                TimeoutSeconds=30,
-                Comment=f"SwarmAI Hive password reset for {instance['name']}",
-            )
-            command_id = resp["Command"]["CommandId"]
-
-            import time as _time
-            for _ in range(12):  # 12 × 5s = 60s max
-                result = ssm.get_command_invocation(
-                    CommandId=command_id, InstanceId=ec2_id
-                )
-                status = result["Status"]
-                if status in ("Success", "Failed", "Cancelled", "TimedOut"):
-                    return status, result.get("StandardOutputContent", "")
-                _time.sleep(5)
-            return "TimedOut", ""
-
-        status, output = await asyncio.to_thread(_run_command)
-        if status == "Success":
-            await self._update_instance(
-                instance_id, auth_password=new_password
-            )
-            logger.info("Hive %s password reset", instance["name"])
-            return new_password
-        else:
-            raise RuntimeError(f"Password reset failed: {status}. {output[:200]}")
 
     # ── Caddy config management (G5) ─────────────────────────────
 

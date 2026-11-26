@@ -67,7 +67,6 @@ export interface HiveInstance {
   cloudfrontDomain: string | null;
   s3Bucket: string | null;
   authUser: string | null;
-  authPassword: string | null;
   status: string;
   version: string | null;
   errorMessage: string | null;
@@ -80,6 +79,22 @@ export interface HiveInstance {
   idleStopEffective?: number;
   /** whether it has an idle stop to set: only machines the Host stops when idle (EC2) */
   idleStopSettable?: boolean;
+}
+
+/** One browser key of a Hive. `legacy` is the old shared password (user admin), kept so
+ *  nobody is cut off until it is revoked. */
+export interface HiveAccess {
+  user: string;
+  label: string;
+  createdAt: string | null;
+  legacy: boolean;
+}
+
+/** What adding a browser key returns: the password is shown once and never again. */
+export interface HiveAccessGrant {
+  url: string;
+  user: string;
+  password: string;
 }
 
 /** Transitional statuses that require polling */
@@ -288,9 +303,37 @@ export const hiveService = {
     await api.delete(`/hive/instances/${id}`);
   },
 
-  async getCredentials(id: string): Promise<{ authUser: string | null; authPassword: string | null }> {
-    const { data } = await api.get(`/hive/instances/${id}/credentials`);
-    return toCamel(data) as { authUser: string | null; authPassword: string | null };
+  // ── Who can sign in (each person their own browser key; the Host has its own machine key) ──
+  /** The browser keys of a Hive. No password is ever returned here. */
+  async listAccess(id: string): Promise<HiveAccess[]> {
+    const { data } = await api.get(`/hive/instances/${id}/access`);
+    const rows: unknown[] = Array.isArray(data?.accesses) ? data.accesses : [];
+    return rows.map((r) => {
+      const c = toCamel(r as Record<string, unknown>);
+      return {
+        user: String(c.user ?? ''),
+        label: String(c.label ?? c.user ?? ''),
+        createdAt: typeof c.createdAt === 'string' ? c.createdAt : null,
+        legacy: c.legacy === true,
+      };
+    });
+  },
+
+  /** Creates a browser key for one person. The password comes back this once only. */
+  async addAccess(id: string, name: string): Promise<HiveAccessGrant> {
+    const { data } = await api.post(`/hive/instances/${id}/access`, { name });
+    return toCamel(data) as unknown as HiveAccessGrant;
+  },
+
+  async revokeAccess(id: string, user: string): Promise<{ ok: boolean }> {
+    const { data } = await api.delete(`/hive/instances/${id}/access/${encodeURIComponent(user)}`);
+    return { ok: data?.ok === true };
+  },
+
+  /** Replaces the Host's own machine key (only this app's connection to the Hive). */
+  async rotateHostKey(id: string): Promise<{ ok: boolean }> {
+    const { data } = await api.post(`/hive/instances/${id}/rotate-host-key`);
+    return { ok: data?.ok === true };
   },
 
   /** Redeploys an errored Hive. When its instance still exists the backend refuses unless

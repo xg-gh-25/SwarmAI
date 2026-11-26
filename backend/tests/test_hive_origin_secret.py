@@ -247,7 +247,7 @@ async def test_user_data_and_distribution_carry_secret(caplog):
     p._cleanup_resources = AsyncMock()
 
     with patch("hive.provisioner.aiosqlite.connect", return_value=_db_conn()), \
-         patch("hive.user_data.caddy_hash_password", return_value=FAKE_HASH), \
+         patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", FAKE_HASH, []))), \
          patch("hive.provisioner.asyncio.sleep", new=AsyncMock()):
         await p.deploy("inst-1")
 

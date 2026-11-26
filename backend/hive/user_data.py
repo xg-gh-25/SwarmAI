@@ -7,7 +7,6 @@ it with basic auth, starts services, and tags the instance ready.
 """
 
 import re
-import secrets
 
 _USER_DATA_TEMPLATE = r"""#!/bin/bash
 # SwarmAI Hive — EC2 user-data (runs once on first boot)
@@ -82,7 +81,7 @@ install_caddy /usr/bin/caddy
 mkdir -p /etc/caddy /var/log/caddy
 
 # ── 6. Configure Caddy (HTTP, CloudFront terminates TLS) ──
-echo "[6/9] Configuring Caddy with basic auth..."
+echo "[6/9] Configuring Caddy with basic auth (the access list)..."
 cat > /etc/caddy/Caddyfile << 'CADDY'
 # ORIGIN-GUARD-GLOBAL-BEGIN
 # Only this Hive's CloudFront distribution sends X-Swarm-Origin with this Hive's secret.
@@ -90,6 +89,9 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
 # The default logger (Caddy's error log, in the journal) writes request headers too.
 {
     order respond before basic_auth
+    # No admin API: the agent on the Hive must not be able to load another config (Caddy
+    # runs as root). Every change to Caddy restarts the service, none uses the API.
+    admin off
     log default {
         format filter {
             wrap json
@@ -120,7 +122,7 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
     # ORIGIN-GUARD-RULE-END
     @protected not expression `{http.request.uri} == "/health" || {http.request.uri}.startsWith("/health?")`
     basic_auth @protected {
-        ${auth_user} ${auth_hash}
+        import /etc/swarmai-auth/hive-users
     }
 
     # SSE streaming — MUST be before generic /api/* (first-match)
@@ -180,29 +182,31 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
 }
 CADDY
 
-# ── 6b. Shared Hive auth credential (app-layer defense-in-depth) ──
-# The SAME credential Caddy validates (basic_auth @protected above) is also given to
-# the backend so it can enforce app-layer auth (middleware/hive_auth.py) as the INNER
-# layer of defense-in-depth. Written to a root-only env file that the backend systemd
-# unit reads via EnvironmentFile=. The bcrypt hash is base64-encoded here to avoid ANY
-# shell/systemd `$` expansion of the $2b$.. hash, then decoded when the file is written.
-# ROTATION NOTE: provisioner.reset_password() MUST update BOTH this file AND the
-# Caddyfile inline hash, or the two layers drift (R27 two-consumer credential).
-echo "[6b/9] Writing shared hive-auth credential for the backend..."
-# Pre-create the dir 0700-owned BEFORE the secret file exists (install -d sets the
-# dir mode atomically) so /etc/swarmai is never world-traversable during first boot.
+# ── 6b. The access list (both auth layers) and the backend's fallback credential ──
+# One "<user> <bcrypt hash>" line per key: the Host's own key and one per person. Caddy
+# imports it inside basic_auth @protected (above) and the backend's app-layer auth
+# (middleware/hive_auth.py) reads it, so both layers check the same list. The Hive user can
+# read it (the backend runs as that user and picks up a changed list without a restart)
+# but not write it; only root does (first boot here, then the Host's apply over SSM:
+# hive/access.py). The directory is created with its mode in one step, the file filled in
+# place after it exists at its mode, so the list is never writable by anyone but root.
+echo "[6b/9] Writing the access list..."
+install -m 750 -o root -g "$SWARM_USER" -d /etc/swarmai-auth
+install -m 640 -o root -g "$SWARM_USER" /dev/null /etc/swarmai-auth/hive-users
+echo '${access_b64}' | base64 -d > /etc/swarmai-auth/hive-users
+# The backend's HIVE_USER / HIVE_PASS_HASH: used only by a package that predates the access
+# list (a downgrade), and always the Host's own key. Root-only, in the root-only
+# /etc/swarmai (systemd reads EnvironmentFile= as root). The hash is base64-encoded here
+# to avoid any shell/systemd `$` expansion of the $2b$.. hash.
 install -m 700 -d /etc/swarmai
 HIVE_HASH_DECODED=$(echo '${auth_hash_b64}' | base64 -d)
-# Pre-create the file 0600-owned BEFORE any secret is written — `install -m 600`
-# is atomic re: mode, so there is never a window where the credential exists at a
-# looser permission (belt to umask 077's suspenders). Then fill it in place.
 install -m 600 /dev/null /etc/swarmai/hive-auth.env
 umask 077
 cat > /etc/swarmai/hive-auth.env << HIVEAUTHENV
 HIVE_USER=${auth_user}
 HIVE_PASS_HASH=$HIVE_HASH_DECODED
 HIVEAUTHENV
-chown swarm:swarm /etc/swarmai/hive-auth.env
+chown root:root /etc/swarmai/hive-auth.env
 chmod 600 /etc/swarmai/hive-auth.env
 
 # ── 7. Systemd services ──
@@ -274,55 +278,8 @@ echo "=== Hive Setup Complete — status=$TAG_STATUS — $(date) ==="
 """
 
 
-def generate_password(word_count: int = 4) -> str:
-    """Generate a memorable passphrase for Caddy basic auth.
-
-    Produces a dash-separated passphrase like 'tiger-cloud-seven-lamp'.
-    4 words from a 256-word list = ~32 bits of entropy, sufficient for
-    bcrypt-hashed credentials behind CloudFront + SG restrictions.
-    Much easier to type than random chars like 'hdsgEcX2#SyXyOHs'.
-    """
-    # Compact word list: common, short, unambiguous English words.
-    # 256 words = 8 bits per word, 4 words = 32 bits.
-    _WORDS = [
-        "ace", "air", "ant", "ape", "arc", "arm", "art", "ash",
-        "axe", "bag", "ban", "bar", "bat", "bay", "bed", "bee",
-        "big", "bit", "bow", "box", "bud", "bug", "bus", "cab",
-        "cam", "cap", "car", "cat", "cob", "cod", "cog", "cop",
-        "cow", "cry", "cub", "cup", "cut", "dam", "day", "den",
-        "dew", "dig", "dim", "dip", "dog", "dot", "dry", "dug",
-        "dye", "ear", "eel", "egg", "elk", "elm", "emu", "end",
-        "era", "eve", "eye", "fan", "far", "fat", "fax", "fed",
-        "few", "fig", "fin", "fir", "fit", "fix", "fly", "fog",
-        "fox", "fun", "fur", "gag", "gap", "gas", "gem", "gin",
-        "got", "gum", "gun", "gut", "gym", "ham", "hat", "hay",
-        "hen", "hex", "hid", "him", "hip", "hit", "hog", "hop",
-        "hot", "how", "hub", "hue", "hug", "hum", "hut", "ice",
-        "imp", "ink", "inn", "ion", "ire", "ivy", "jab", "jam",
-        "jar", "jaw", "jay", "jet", "jig", "job", "jog", "joy",
-        "jug", "key", "kid", "kin", "kit", "lab", "lag", "lap",
-        "law", "lay", "leg", "let", "lid", "lip", "lit", "log",
-        "lot", "low", "lug", "map", "mat", "may", "men", "met",
-        "mid", "mix", "mob", "mod", "mop", "mud", "mug", "nap",
-        "net", "new", "nib", "nil", "nip", "nod", "nor", "not",
-        "now", "nut", "oak", "oar", "oat", "odd", "oil", "old",
-        "one", "opt", "orb", "ore", "our", "out", "owe", "owl",
-        "own", "pad", "pan", "paw", "pay", "pea", "peg", "pen",
-        "pet", "pie", "pig", "pin", "pit", "pod", "pop", "pot",
-        "pry", "pub", "pug", "pun", "pup", "put", "rag", "ram",
-        "ran", "rat", "raw", "ray", "red", "rib", "rid", "rig",
-        "rim", "rip", "rod", "rot", "row", "rub", "rug", "rum",
-        "run", "rut", "rye", "sad", "sag", "sap", "sat", "saw",
-        "say", "sea", "set", "shy", "sin", "sip", "sit", "six",
-        "ski", "sky", "sly", "sob", "sod", "son", "soy", "spy",
-        "sum", "sun", "tab", "tag", "tan", "tap", "tar", "tax",
-        "tea", "ten", "the", "tie", "tin", "tip", "toe", "top",
-    ]
-    return "-".join(secrets.choice(_WORDS) for _ in range(word_count))
-
-
 def caddy_hash_password(password: str) -> str:
-    """Generate a bcrypt hash for Caddy basicauth.
+    """Generate a bcrypt hash for Caddy basic_auth and the backend (an access list line).
 
     Caddy's ``basicauth`` directive ONLY accepts bcrypt hashes — SHA-256,
     MD5, and plaintext are all rejected.  bcrypt is therefore a hard
@@ -406,7 +363,9 @@ mode, path = sys.argv[1], sys.argv[2]
 with open(path) as f:
     text = f.read()
 out = MARK.sub("", text)
+ADMIN_ONLY = __ADMIN_ONLY__
 if mode == "apply":
+    out = out.replace(ADMIN_ONLY, "", 1)  # the guard's own global block has admin off
     secret = sys.stdin.read().strip()
     if not re.fullmatch(__SECRET_RE__, secret):
         sys.exit("ERROR: the origin secret has an unexpected shape; Caddyfile not changed")
@@ -418,7 +377,10 @@ if mode == "apply":
                      "goes next to), or redeploy it")
         block = block.replace("${origin_secret}", secret)
         out = out.replace(anchor, block + anchor if where == "before" else anchor + block, 1)
-elif mode != "remove":
+elif mode == "remove":
+    if not re.search(r"^\s*admin off\s*$", out, re.M) and out.count(":80 {\n") == 1:
+        out = out.replace(":80 {\n", ADMIN_ONLY + ":80 {\n", 1)
+else:
     sys.exit("ERROR: unknown mode")
 if out != text:
     tmp = path + ".origin-new"
@@ -436,6 +398,7 @@ def origin_guard_editor_source() -> str:
     return (_GUARD_EDITOR_TEMPLATE
             .replace("__BLOCKS__", repr(_guard_blocks()))
             .replace("__MARK__", repr(_GUARD_MARK_PATTERN))
+            .replace("__ADMIN_ONLY__", repr(ADMIN_OFF_GLOBAL))
             .replace("__SECRET_RE__", repr(ORIGIN_SECRET_PATTERN)))
 
 
@@ -641,6 +604,326 @@ def health_exempt_fix_sh() -> str:
 
 def valid_origin_secret(value) -> bool:
     return isinstance(value, str) and bool(_ORIGIN_SECRET_RE.fullmatch(value))
+
+
+# ── The access list (design 2026-11-26-hive-access-credentials) ──────────────
+# One "<user> <bcrypt hash>" line per key, the Host's own key first. Caddy imports the file
+# inside basic_auth @protected and the backend's app-layer auth (middleware/hive_auth.py)
+# reads it, so both layers check one list. Readable by the Hive user, written only by root:
+# first boot (the template above), the update step access_list_fix_sh() that moves an
+# existing Hive to it, and access_apply_sh(), which the Host runs over SSM for every
+# change (hive/access.py). Every writer replaces the file whole.
+ACCESS_LIST_DIR = "/etc/swarmai-auth"
+ACCESS_LIST_PATH = ACCESS_LIST_DIR + "/hive-users"
+ACCESS_USER_PATTERN = r"[a-z0-9-]{1,32}"
+ACCESS_HASH_PATTERN = r"\$2[abxy]\$[0-9]{2}\$[./A-Za-z0-9]{53}"
+ACCESS_LINE_PATTERN = rf"^({ACCESS_USER_PATTERN}) ({ACCESS_HASH_PATTERN})$"
+_ACCESS_LINE_RE = re.compile(ACCESS_LINE_PATTERN)
+ACCESS_IMPORT_LINE = f"        import {ACCESS_LIST_PATH}\n"
+_ACCESS_BLOCK = "    basic_auth @protected {\n" + ACCESS_IMPORT_LINE + "    }\n"
+# Caddy's admin API off (Caddy runs as root; the agent on the Hive must not be able to load
+# another config). A guarded Caddyfile has it in the origin guard's global block (the
+# template); a Caddyfile without the guard gets this global block of its own instead, so
+# the API is off whether or not the guard is there: render_user_data without a secret, the
+# guard editor's remove (it puts this block back) and apply (it takes it out before adding
+# the guard's own), and the access list update step for a file that has neither.
+ADMIN_OFF_GLOBAL = "{\n    admin off\n}\n"
+
+
+def access_list_text(entries: list[tuple[str, str]]) -> str:
+    """The access list file for *entries* ``[(user, bcrypt hash)]``. Refuses an empty
+    list, a line that is not ``<user> <bcrypt hash>`` and a user listed twice (Caddy
+    refuses a repeated user, and the backend denies everything on such a file)."""
+    if not entries:
+        raise ValueError("the access list needs at least one key")
+    seen: set[str] = set()
+    lines = []
+    for user, hashed in entries:
+        line = f"{user} {hashed}"
+        if not _ACCESS_LINE_RE.match(line) or user in seen:
+            raise ValueError(f"invalid or repeated access list entry for user {user!r}")
+        seen.add(user)
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def _check_access_block() -> None:
+    caddy = _USER_DATA_TEMPLATE.split(_CADDY_HEREDOC_OPEN, 1)[1].split("\nCADDY\n", 1)[0]
+    if caddy.count(_ACCESS_BLOCK) != 1:
+        raise RuntimeError("the basic_auth access list block drifted from the template")
+    if "    admin off\n" not in [m.group(0) for m in _GUARD_MARK_RE.finditer(caddy + "\n")
+                                if m.group(1) == "GLOBAL"][0]:
+        raise RuntimeError("admin off is missing from the template's global block")
+
+
+_check_access_block()
+
+
+# Runs on the instance (python3 3.9, stdlib only, as root), from the update script. argv:
+# <Caddyfile> <access list>. A Caddyfile whose basic_auth @protected block holds one inline
+# "<user> <hash>" line (what every Hive rendered before the access list) gets the template's
+# import block in its place, and that line becomes the access list (root:<Hive user>
+# 0640, its directory 0750). Either way the file gets Caddy's admin API off when it does
+# not have it yet (in its global block, or ADMIN_OFF_GLOBAL). Prints "on" when the file
+# already imports the list and has the API off (the list and its directory get their owner
+# and mode again), "changed" after an edit, "unknown" for any other shape (nothing
+# written). Never prints a hash.
+_ACCESS_FIX_EDITOR_TEMPLATE = r'''
+import grp, os, re, shutil, sys
+INLINE = re.compile(r"^(    basic_auth @protected \{\n)        (__USER__) (__HASH__)\n(    \}\n)", re.M)
+BLOCK, LIST_DIR, ADMIN_ONLY = __BLOCK__, __LIST_DIR__, __ADMIN_ONLY__
+caddyfile, listfile = sys.argv[1], sys.argv[2]
+gid = grp.getgrnam("swarm").gr_gid
+def own(path, mode):
+    os.chown(path, 0, gid)
+    os.chmod(path, mode)
+def admin_off(text):
+    # the admin API off: already there, or in the file's global block, or a block of its own
+    if re.search(r"^\s*admin off\s*$", text, re.M):
+        return text
+    lines = text.splitlines(True)
+    first = next((i for i, l in enumerate(lines) if l.strip() and not l.lstrip().startswith("#")), None)
+    if first is not None and lines[first].strip() == "{":
+        return "".join(lines[:first + 1] + ["    admin off\n"] + lines[first + 1:])
+    if text.count(":80 {\n") == 1:
+        return text.replace(":80 {\n", ADMIN_ONLY + ":80 {\n", 1)
+    return text
+def write(path, out, suffix):
+    tmp = path + suffix
+    with open(tmp, "w") as f:
+        f.write(out)
+    shutil.copymode(path, tmp)
+    os.replace(tmp, path)
+with open(caddyfile) as f:
+    text = f.read()
+auth = len(re.findall(r"^\s*basic_?auth\b", text, re.M))
+if text.count(BLOCK) == 1 and auth == 1:
+    if not os.path.isfile(listfile):
+        sys.exit("ERROR: the Caddyfile imports the access list but the list is missing")
+    own(LIST_DIR, 0o750)
+    own(listfile, 0o640)
+    out = admin_off(text)
+    if out == text:
+        print("on")
+        sys.exit(0)
+    write(caddyfile, out, ".access-new")
+    print("changed")
+    sys.exit(0)
+found = list(INLINE.finditer(text))
+if len(found) != 1 or auth != 1:
+    print("unknown")
+    sys.exit(0)
+m = found[0]
+if not os.path.isdir(LIST_DIR):
+    os.mkdir(LIST_DIR, 0o700)
+own(LIST_DIR, 0o750)
+tmp = listfile + ".fix-new"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write(m.group(2) + " " + m.group(3) + "\n")
+own(tmp, 0o640)
+os.replace(tmp, listfile)
+write(caddyfile, admin_off(text[:m.start()] + BLOCK + text[m.end():]), ".access-new")
+print("changed")
+'''
+
+
+def access_fix_editor_source() -> str:
+    """The Python the update step runs on an existing Hive (see above)."""
+    return (_ACCESS_FIX_EDITOR_TEMPLATE
+            .replace("__USER__", ACCESS_USER_PATTERN)
+            .replace("__HASH__", ACCESS_HASH_PATTERN)
+            .replace("__BLOCK__", repr(_ACCESS_BLOCK))
+            .replace("__LIST_DIR__", repr(ACCESS_LIST_DIR))
+            .replace("__ADMIN_ONLY__", repr(ADMIN_OFF_GLOBAL)))
+
+
+# Shared by the update step and the apply script: the code Caddy answers on *path* once it
+# is up, and the checks both run after a restart: /health is answered, and a protected path
+# without a key is refused (401, or 403 from the origin guard first).
+_ACCESS_CHECK_SH = r"""access_code() {  # $1 path: the code Caddy answers once it is up
+  local code="000" i
+  for i in $(seq 1 15); do
+    code=$(curl --path-as-is -s -o /dev/null -w '%{http_code}' "http://127.0.0.1$1" || true)
+    if [ "$code" != "000" ]; then
+      break
+    fi
+    sleep 1
+  done
+  echo "$code"
+}
+access_checks() {  # prints nothing when Caddy answers as it should, else the reason
+  local code
+  code=$(access_code /health)
+  case "$code" in
+    000|401|403) echo "/health answered $code"; return ;;
+  esac
+  code=$(access_code /api/access-check)
+  case "$code" in
+    401|403) ;;
+    *) echo "a protected path answered $code without a key" ;;
+  esac
+}"""
+
+
+# The update script's step after the /health step, before the install is touched: an
+# existing Hive moves to the access list (editor above), its hive-auth.env becomes
+# root-only, and the step prints "Access list: on" when the Hive has the list (the Host
+# then gives it its own key: hive/access.migrate) or "Access list: off". A failure after the
+# edit restores the Caddyfile and the list as they were and stops the update.
+_ACCESS_FIX_SH_TEMPLATE = r"""# ── Caddy: one access list for both auth layers (hive/user_data.py) ──
+ACCESS_CADDYFILE="/etc/caddy/Caddyfile"
+ACCESS_LIST="__LIST__"
+ACCESS_FIX_PY=$(echo '__EDITOR_B64__' | base64 -d)
+__CHECK_SH__
+access_fix_fail() {
+  cp -p "$ACCESS_CADDYFILE.access-bak" "$ACCESS_CADDYFILE"
+  rm -f "$ACCESS_CADDYFILE.access-bak"
+  if [ "$ACCESS_HAD_LIST" = 1 ]; then
+    cp -p "$ACCESS_LIST.access-bak" "$ACCESS_LIST"
+  else
+    rm -f "$ACCESS_LIST"
+  fi
+  rm -f "$ACCESS_LIST.access-bak"
+  if [ "$1" = restarted ]; then
+    systemctl restart caddy || true
+  fi
+  echo "ERROR: Caddy access list: $2; previous Caddyfile restored, Hive not updated"
+  exit 1
+}
+if [ -f /etc/swarmai/hive-auth.env ]; then
+  chown root:root /etc/swarmai/hive-auth.env
+  chmod 600 /etc/swarmai/hive-auth.env
+fi
+if [ -f "$ACCESS_CADDYFILE" ]; then
+  cp -p "$ACCESS_CADDYFILE" "$ACCESS_CADDYFILE.access-bak"
+  ACCESS_HAD_LIST=0
+  if [ -f "$ACCESS_LIST" ]; then
+    ACCESS_HAD_LIST=1
+    cp -p "$ACCESS_LIST" "$ACCESS_LIST.access-bak"
+  fi
+  ACCESS_FIX=$(python3 -c "$ACCESS_FIX_PY" "$ACCESS_CADDYFILE" "$ACCESS_LIST") || access_fix_fail no "the edit failed"
+  case "$ACCESS_FIX" in
+    on)
+      rm -f "$ACCESS_CADDYFILE.access-bak" "$ACCESS_LIST.access-bak"
+      echo "Access list: on"
+      ;;
+    changed)
+      caddy validate --config "$ACCESS_CADDYFILE" --adapter caddyfile >/dev/null 2>&1 \
+        || access_fix_fail no "caddy validate rejected the edited file"
+      systemctl restart caddy || access_fix_fail restarted "caddy did not restart"
+      ACCESS_WHY=$(access_checks)
+      if [ -n "$ACCESS_WHY" ]; then
+        access_fix_fail restarted "$ACCESS_WHY"
+      fi
+      rm -f "$ACCESS_CADDYFILE.access-bak" "$ACCESS_LIST.access-bak"
+      echo "Access list: on"
+      ;;
+    unknown)
+      rm -f "$ACCESS_CADDYFILE.access-bak" "$ACCESS_LIST.access-bak"
+      echo "WARN: Caddy access list: the basic_auth block of $ACCESS_CADDYFILE is not one this update can move to the access list; left as it is"
+      echo "Access list: off"
+      ;;
+    *)
+      access_fix_fail no "unexpected editor result"
+      ;;
+  esac
+else
+  echo "WARN: no $ACCESS_CADDYFILE; the access list step was skipped"
+  echo "Access list: off"
+fi"""
+
+
+def access_list_fix_sh() -> str:
+    """The update-script step that moves an existing Hive to the access list."""
+    import base64
+    editor_b64 = base64.b64encode(access_fix_editor_source().encode()).decode()
+    return (_ACCESS_FIX_SH_TEMPLATE
+            .replace("__EDITOR_B64__", editor_b64)
+            .replace("__LIST__", ACCESS_LIST_PATH)
+            .replace("__CHECK_SH__", _ACCESS_CHECK_SH))
+
+
+# Runs on the instance (python3 3.9, stdlib only, as root) inside access_apply_sh(). argv:
+# <new list> <host user> <hive-auth.env>. Exits non-zero, naming the reason and never a
+# hash, unless every line is "<user> <bcrypt hash>", no user repeats and the Host's user is
+# listed; then writes the Host's line as hive-auth.env's HIVE_USER / HIVE_PASS_HASH (the
+# fallback a package older than the access list reads).
+_ACCESS_APPLY_CHECK_TEMPLATE = r'''
+import os, re, sys
+LINE = re.compile(__LINE__)
+new, host, envfile = sys.argv[1], sys.argv[2], sys.argv[3]
+users = {}
+with open(new) as f:
+    for line in f.read().splitlines():
+        m = LINE.match(line)
+        if m is None or m.group(1) in users:
+            sys.exit("ERROR: the access list has a malformed or repeated line; nothing changed")
+        users[m.group(1)] = m.group(2)
+if host not in users:
+    sys.exit("ERROR: the access list has no line for the Host's key; nothing changed")
+kept = []
+if os.path.isfile(envfile):
+    with open(envfile) as f:
+        kept = [l for l in f.read().splitlines()
+                if not l.startswith(("HIVE_USER=", "HIVE_PASS_HASH="))]
+tmp = envfile + ".apply-new"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write("\n".join(kept + ["HIVE_USER=" + host, "HIVE_PASS_HASH=" + users[host]]) + "\n")
+os.chown(tmp, 0, 0)
+os.replace(tmp, envfile)
+print(len(users))
+'''
+
+
+def access_apply_sh(entries: list[tuple[str, str]], host_user: str) -> str:
+    """The SSM script the Host runs to make *entries* this Hive's access list. It refuses
+    a Hive that has no list yet (update it first: access_list_fix_sh), checks the list,
+    replaces it atomically, validates and restarts Caddy, and checks it answers as it
+    should; any failure after the replace puts the previous list back. The backend picks
+    the new list up on its next request (no restart). Its output never holds a hash."""
+    import base64
+    list_b64 = base64.b64encode(access_list_text(entries).encode()).decode()
+    if not re.fullmatch(ACCESS_USER_PATTERN, host_user):
+        raise ValueError("invalid host user")
+    check_b64 = base64.b64encode(
+        _ACCESS_APPLY_CHECK_TEMPLATE.replace("__LINE__", repr(ACCESS_LINE_PATTERN)).encode()).decode()
+    return f"""#!/bin/bash
+set -euo pipefail
+ACCESS_LIST="{ACCESS_LIST_PATH}"
+CADDYFILE="/etc/caddy/Caddyfile"
+ENVFILE="/etc/swarmai/hive-auth.env"
+{_ACCESS_CHECK_SH}
+if [ ! -f "$ACCESS_LIST" ] || ! grep -qxF '{ACCESS_IMPORT_LINE.rstrip(chr(10))}' "$CADDYFILE"; then
+  echo "ERROR: this Hive has no access list yet; update it first"
+  exit 3
+fi
+NEW=$(mktemp "{ACCESS_LIST_DIR}/.hive-users.XXXXXX")
+ENV_BAK=$(mktemp /etc/swarmai/.hive-auth.env.XXXXXX)
+cleanup() {{ rm -f "$NEW" "$ACCESS_LIST.apply-bak" "$ENV_BAK"; }}
+trap cleanup EXIT
+echo '{list_b64}' | base64 -d > "$NEW"
+cp -p "$ACCESS_LIST" "$ACCESS_LIST.apply-bak"
+if [ -f "$ENVFILE" ]; then cp -p "$ENVFILE" "$ENV_BAK"; fi
+apply_fail() {{
+  cp -p "$ACCESS_LIST.apply-bak" "$ACCESS_LIST"
+  if [ -s "$ENV_BAK" ]; then cp -p "$ENV_BAK" "$ENVFILE"; fi
+  if [ "$1" = restarted ]; then systemctl restart caddy || true; fi
+  echo "ERROR: access list: $2; the previous list was put back"
+  exit 1
+}}
+COUNT=$(python3 -c "$(echo '{check_b64}' | base64 -d)" "$NEW" '{host_user}' "$ENVFILE")
+chown root:swarm "$NEW"
+chmod 640 "$NEW"
+mv -f "$NEW" "$ACCESS_LIST"
+caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 \\
+  || apply_fail no "caddy validate rejected the list"
+systemctl restart caddy || apply_fail restarted "caddy did not restart"
+WHY=$(access_checks)
+if [ -n "$WHY" ]; then apply_fail restarted "$WHY"; fi
+echo "Access list applied: $COUNT keys"
+"""
 
 
 # ── /tmp on disk ──
@@ -926,6 +1209,7 @@ def render_user_data(
     region: str,
     prebaked: bool = False,
     origin_secret: str | None = None,
+    access: list[tuple[str, str]] | None = None,
 ) -> str:
     """Render the EC2 user-data bash script with parameters.
 
@@ -947,6 +1231,10 @@ def render_user_data(
     then answers 403 to every request but /health whose header does not equal it, before
     basic auth, and its access log drops the header. None renders the Caddyfile without
     the guard (the shape Hives had before it), never a guard nobody can pass.
+
+    auth_user / auth_hash: the Host's own key, the first line of the access list and the
+    backend's fallback pair. access: the other keys of the list, ``(user, bcrypt hash)``
+    (a redeploy keeps the person keys the Host has for this Hive: hive/access.py).
     """
     from string import Template
 
@@ -978,6 +1266,8 @@ def render_user_data(
     # `$` expansion of $2b$.. — same footgun the Caddyfile heredoc dodges via single-quotes).
     import base64
     auth_hash_b64 = base64.b64encode(auth_hash.encode()).decode()
+    access_b64 = base64.b64encode(
+        access_list_text([(auth_user, auth_hash)] + list(access or [])).encode()).decode()
 
     tmpl = Template(_USER_DATA_TEMPLATE)
     values = dict(
@@ -986,6 +1276,7 @@ def render_user_data(
         auth_user=auth_user,
         auth_hash=auth_hash,
         auth_hash_b64=auth_hash_b64,
+        access_b64=access_b64,
         region=region,
         tmp_on_disk=TMP_ON_DISK_SH,
         package_check=PACKAGE_CHECK_SH,
@@ -998,7 +1289,7 @@ def render_user_data(
         values["origin_secret"] = origin_secret
     result = tmpl.safe_substitute(**values)
     if origin_secret is None:
-        result = _GUARD_MARK_RE.sub("", result)
+        result = _GUARD_MARK_RE.sub("", result).replace(":80 {\n", ADMIN_OFF_GLOBAL + ":80 {\n", 1)
 
     # Prebaked AMI: strip the heavy on-machine install segments. Fail LOUD if a
     # segment isn't found verbatim (template drifted) — never silently render a
@@ -1016,7 +1307,8 @@ def render_user_data(
 
     # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
     # Only check for our known template vars (shell vars like ${i}, ${HASH} are expected).
-    _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64", "region",
+    _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "auth_hash_b64",
+                      "access_b64", "region",
                       "origin_secret", "tmp_on_disk", "package_check", "caddy_install",
                       "tree_sitter_grammars", "replay_host", "backend_health_wait_s"}
     for var in _TEMPLATE_VARS:

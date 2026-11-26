@@ -107,11 +107,12 @@ def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
 def test_only_restart_widens_the_agents_hive_rights():
     """The owner agent restarts a Hive only through restart-hive (agent-limited, so a direct
     call stays refused, and the refusal names the command); stopping, creating, deleting
-    and resetting a Hive's password stay the person's, and the person keeps Stop and Start."""
+    and every change to who may log in to a Hive stay the person's, and the person keeps Stop and Start."""
     by_name = {op.name: op for op in swarm_out_ops.ops()}
     restart = by_name["hive.restart"]
     assert OWNER in restart.callers and "hive.restart" in swarm_out_ops.AGENT_LIMITED
-    for name in ("hive.stop", "hive.create", "hive.delete", "hive.reset_password",
+    for name in ("hive.stop", "hive.create", "hive.delete", "hive.access.list",
+                 "hive.access.add", "hive.access.revoke", "hive.access.rotate_host_key",
                  "hive.account.create", "hive.account.delete"):
         assert by_name[name].callers == {PERSON}, name
     assert PERSON in by_name["hive.start"].callers
@@ -137,7 +138,7 @@ def test_only_restart_widens_the_agents_hive_rights():
 _SAMPLE = {"dispatch_id": "so_0123456789ab", "run_id": "run_0123456789ab", "sid": "s-abc123", "hive_id": "hv1",
            "session_id": "s-abc123", "request_id": "req1", "account_id": "acc1",
            "instance_id": "inst1", "location_id": "loc1", "machine_id": "m1", "brain": "SwarmAI", "work_id": "w1", "key": "k1",
-           "seq": "3", "client_id": "c1", "task_id": "t1"}
+           "seq": "3", "client_id": "c1", "task_id": "t1", "user": "alice"}
 
 
 def _concrete(template: str) -> str:
@@ -203,10 +204,10 @@ def test_owner_agent_ops_are_not_denied(op):
 
 
 def test_the_deny_names_the_op_and_reaches_the_hook_decision():
-    cmd = "curl -s http://127.0.0.1:18321/api/hive/instances/inst1/credentials"
+    cmd = "curl -s http://127.0.0.1:18321/api/hive/instances/inst1/access"
     d = _decide("sess-1", cmd, {"command": cmd})
     assert d is not None
-    assert "hive.credentials" in d["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "hive.access.list" in d["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("cmd", [
@@ -247,7 +248,9 @@ def test_a_longer_owner_path_is_not_taken_for_a_shorter_person_path():
 def test_match_finds_the_op_of_a_concrete_request():
     assert swarm_out_ops.match("POST", "/api/swarm-out/runs/so_0123456789ab/discard").name == "run.discard"
     assert swarm_out_ops.match("GET", "/api/swarm-out/runs/so_0123456789ab/discard") is None
-    assert swarm_out_ops.match("GET", "/api/hive/instances/i1/credentials").name == "hive.credentials"
+    assert swarm_out_ops.match("GET", "/api/hive/instances/i1/access").name == "hive.access.list"
+    assert swarm_out_ops.match("DELETE", "/api/hive/instances/i1/access/alice").name == "hive.access.revoke"
+    assert swarm_out_ops.match("GET", "/api/hive/instances/i1/credentials") is None
 
 
 # ── invariant 3: a non-owner channel agent calls none of it ──

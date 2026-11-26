@@ -40,7 +40,7 @@ vi.mock('../../../services/hive', async (orig) => ({
   ...(await orig<typeof import('../../../services/hive')>()),
   hiveService: {
     listInstances: (...a: unknown[]) => mocks.instances(...a), listAccounts: (...a: unknown[]) => mocks.accounts(...a),
-    deleteInstance: (...a: unknown[]) => mocks.del(...a), retryInstance: (...a: unknown[]) => mocks.retry(...a), stopInstance: vi.fn(), startInstance: vi.fn(), getCredentials: vi.fn(),
+    deleteInstance: (...a: unknown[]) => mocks.del(...a), retryInstance: (...a: unknown[]) => mocks.retry(...a), stopInstance: vi.fn(), startInstance: vi.fn(), listAccess: vi.fn(async () => []), addAccess: vi.fn(), revokeAccess: vi.fn(), rotateHostKey: vi.fn(),
   },
 }));
 vi.mock('../../../services/settings', () => ({
@@ -79,7 +79,7 @@ const ELASTIC = (over: Record<string, unknown> = {}) => ({
 const INSTANCE = { id: 'h1', name: 'demo', ownerName: null, hiveType: 'my', accountRef: 'swarmai', region: 'us-east-1',
   instanceType: 'm7g.xlarge', ec2InstanceId: 'i-1', ec2PublicIp: null, elasticIpAllocId: null, securityGroupId: null,
   iamRoleName: null, cloudfrontDistId: null, cloudfrontDomain: 'd.cloudfront.net', s3Bucket: null, authUser: 'admin',
-  authPassword: null, status: 'stopped', version: '2.5.5', errorMessage: null, createdAt: 't', updatedAt: 't' };
+  status: 'stopped', version: '2.5.5', errorMessage: null, createdAt: 't', updatedAt: 't' };
 
 beforeEach(() => {
   forgetSettingsForTests();                 // each case starts from an empty tab

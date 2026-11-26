@@ -32,7 +32,9 @@ def test_instance_mutators_refuse_ssh_rows(tmp_path, monkeypatch):
         "update": lambda: route.update_instance("s1"),
         "delete": lambda: route.delete_instance("s1"),
         "replace": lambda: route.replace_instance("s1"),
-        "reset-password": lambda: route.reset_password("s1"),
+        "add-access": lambda: route.add_access("s1", route.HiveAccessAdd(name="alice")),
+        "revoke-access": lambda: route.revoke_access("s1", "alice"),
+        "rotate-host-key": lambda: route.rotate_host_key("s1"),
         "retry": lambda: route.retry_instance("s1"),
     }
     for what, call in calls.items():

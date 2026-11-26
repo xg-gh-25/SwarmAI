@@ -28,7 +28,7 @@ vi.mock('../../../services/hive', async (orig) => ({
   hiveService: {
     listInstances: (...a: unknown[]) => mocks.instances(...a), listAccounts: (...a: unknown[]) => mocks.accounts(...a),
     listSsh: vi.fn(() => new Promise(() => {})), setIdleStop: vi.fn(),
-    deleteInstance: vi.fn(), retryInstance: vi.fn(), stopInstance: vi.fn(), startInstance: vi.fn(), getCredentials: vi.fn(),
+    deleteInstance: vi.fn(), retryInstance: vi.fn(), stopInstance: vi.fn(), startInstance: vi.fn(), listAccess: vi.fn(async () => []), addAccess: vi.fn(), revokeAccess: vi.fn(), rotateHostKey: vi.fn(),
     brainStatus: vi.fn(() => new Promise(() => {})),
   },
 }));
@@ -47,7 +47,7 @@ const HIVE = {
   id: 'remote-demo', name: 'remote-demo', ownerName: null, hiveType: 'my', accountRef: 'swarmai', region: 'us-east-1',
   instanceType: 'm7g.xlarge', ec2InstanceId: 'i-1', ec2PublicIp: null, elasticIpAllocId: null, securityGroupId: null,
   iamRoleName: null, cloudfrontDistId: null, cloudfrontDomain: 'd.cloudfront.net', s3Bucket: null, authUser: 'admin',
-  authPassword: null, status: 'stopped', version: '2.5.5', errorMessage: null, createdAt: 't', updatedAt: 't',
+  status: 'stopped', version: '2.5.5', errorMessage: null, createdAt: 't', updatedAt: 't',
   idleStopMinutes: 0, idleStopEffective: 0, idleStopSettable: true,
 };
 const ELASTIC = { host_version: '2.5.5', can_enable: true, reason: null, standby: true, standby_last: null, size: null,

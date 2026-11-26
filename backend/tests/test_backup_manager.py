@@ -1042,3 +1042,38 @@ class TestEnabledGate:
         engine.git_add_all.assert_not_called()
         engine.git_commit.assert_not_called()
         engine.git_push.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_export_redacts_hive_auth_password(tmp_path):
+    """The Host's key of a Hive never leaves in a backup; person keys leave as hashes
+    only, and the live store keeps the key (design 2026-11-26-hive-access-credentials)."""
+    import sqlite3
+    from core.backup_manager import L2_TABLES
+    from core.git_sync_engine import GitSyncEngine
+
+    db = tmp_path / "data.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE hive_instances (id TEXT PRIMARY KEY, name TEXT, "
+                 "auth_user TEXT, auth_password TEXT)")
+    conn.execute("INSERT INTO hive_instances VALUES ('h1', 'demo', 'host', 'HOST-KEY-SECRET-123')")
+    conn.execute("CREATE TABLE hive_access (id TEXT PRIMARY KEY, hive_id TEXT, user TEXT, "
+                 "label TEXT, pass_hash TEXT, legacy INTEGER, created_at TEXT)")
+    conn.execute("INSERT INTO hive_access VALUES ('a1', 'h1', 'alice', 'alice', "
+                 "'$2b$14$hashonly', 0, '2026-11-26T00:00:00Z')")
+    conn.commit()
+    conn.close()
+
+    assert "hive_access" in L2_TABLES and "hive_instances" in L2_TABLES
+    export_dir = tmp_path / "db-export"
+    engine = GitSyncEngine(workspace_dir=tmp_path / "ws")
+    exported = await engine.export_db_tables(db_path=db, export_dir=export_dir,
+                                             tables=["hive_instances", "hive_access"])
+    assert exported == 2
+    hives = gzip.open(export_dir / "hive_instances.sql.gz", "rt").read()
+    access = gzip.open(export_dir / "hive_access.sql.gz", "rt").read()
+    assert "HOST-KEY-SECRET-123" not in hives
+    assert "'demo'" in hives
+    assert "$2b$14$hashonly" in access
+    live = sqlite3.connect(db).execute("SELECT auth_password FROM hive_instances").fetchone()[0]
+    assert live == "HOST-KEY-SECRET-123"

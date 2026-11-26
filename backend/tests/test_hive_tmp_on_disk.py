@@ -28,7 +28,7 @@ from hive.user_data import TMP_ON_DISK_SH, render_user_data
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="no bash")
 
 RENDER = dict(s3_bucket="swarmai-hive-releases-us-east-1", version="2.5.2", auth_user="admin",
-              auth_hash="$2a$14$abc123", region="us-east-1")
+              auth_hash="$2b$14$" + "a" * 53, region="us-east-1")
 
 FAKES = {
     # each fake appends its name and arguments to $CALLS, and fails when $FAIL_<NAME> is set
@@ -192,7 +192,8 @@ def _update_script():
 def test_an_update_masks_tmp_mount_before_the_restart_and_never_unmounts_tmp():
     script = _update_script()
     assert script.count(TMP_ON_DISK_SH) == 1
-    assert script.index(TMP_ON_DISK_SH) < script.index("systemctl restart swarmai-hive --no-block")
+    # before the update's own (blocking) restart; "--no-block" is only the rollback's
+    assert script.index(TMP_ON_DISK_SH) < script.index("UPDATE_RESTARTED=1")
     assert "umount -l /tmp" not in script
     assert script.index("rm -rf /tmp/hive-new /tmp/hive-update.tar.gz") < script.index("mkdir -p /tmp/hive-new")
     r = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)

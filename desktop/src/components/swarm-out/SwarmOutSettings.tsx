@@ -22,7 +22,8 @@
  *    one, whether the fleet poll could reach it, and its idle stop in a few words); a row
  *    opens to why it is broken, its own idle stop (PUT /hive/instances/{id}/idle-stop:
  *    always on, its minutes, or the default; only for a machine the Host stops when idle,
- *    idleStopSettable), its sign-in (AuthDisplay), its Brains (HiveBrains: which are out of
+ *    idleStopSettable), who can sign in (HiveAccess: one browser key per person, shown once,
+ *    revocable), its Brains (HiveBrains: which are out of
  *    date, one Sync), restart, retry (a rebuild, after a confirm) and delete; "+ add one"
  *    names the monthly cost before anything is created (when the account cannot build one,
  *    what is missing);
@@ -46,7 +47,7 @@ import ConnectAccount from '../awsAccount/ConnectAccount';
 import { CapabilityLine } from '../awsAccount/HiveFleet';
 import { AWS_REGION_OPTIONS } from '../awsAccount/regions';
 import { HiveBrains } from '../settings/HiveBrains';
-import { AccountCard, AddAccountDialog, AuthDisplay, DeployHiveDialog, retryPrompt } from '../settings/hiveComponents';
+import { AccountCard, AddAccountDialog, DeployHiveDialog, HiveAccess, retryPrompt } from '../settings/hiveComponents';
 import { IDLE_MINUTES, idlePolicyLabel } from './idlePolicy';
 import { hiveStatusLabel } from './live';
 import { TONE_VAR, type Tone } from './tone';
@@ -697,7 +698,7 @@ export function SwarmOutSettings({ fleet = null, onConnected, compact = false }:
                         )}
                         {/* each part names itself (its sign-in, its Brains) */}
                         <div className="flex flex-col gap-2 min-w-0">
-                          <div className="min-w-0" data-testid="so-hive-login"><AuthDisplay instance={h} /></div>
+                          <div className="min-w-0" data-testid="so-hive-login"><HiveAccess instance={h} /></div>
                           {h.status === 'running' && <div className="min-w-0" data-testid="so-hive-brains"><HiveBrains instanceId={h.id} /></div>}
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2">

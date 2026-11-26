@@ -2120,7 +2120,8 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 22 — hive_instances.idle_stop_minutes: each EC2 Hive's own idle stop (2026-11-24)
 # 23 — hive_instances.carrier_config: the SSH-machine carrier's per-machine settings (2026-11-24)
 # 24 — hive_instances.active_at: when an EC2 Hive last came up, for its idle stop (2026-11-25)
-CURRENT_SCHEMA_VERSION = 24
+# 25 — hive_access: one key per person on an EC2 Hive, hash only (2026-11-26)
+CURRENT_SCHEMA_VERSION = 25
 
 #: Inbox tables (v20, core/inbox/store.py, design docs/design/2026-11-20-inbox.md §5). The
 #: person's own messages: never in a backup (core/backup_manager.L2_TABLES lists what is),
@@ -3825,6 +3826,46 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.rollback()
                 raise
             logger.info("Migration v24: hive_instances.active_at")
+
+        if current_version < 25 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 24:
+            # Version 25: hive_access (design docs/design/2026-11-26-hive-access-credentials.md):
+            # the person keys of an EC2 Hive, each a bcrypt hash only (the password is shown
+            # once when the key is made, never stored); hive/access.py reads and writes it.
+            # A key leaves with its Hive: the trigger deletes a Hive's rows when its
+            # hive_instances row is deleted (it is deleted in several places, and
+            # foreign keys are not on for every connection). Additive only.
+            await conn.execute("BEGIN")
+            try:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS hive_access (
+                        id TEXT PRIMARY KEY,
+                        hive_id TEXT NOT NULL,
+                        user TEXT NOT NULL,
+                        label TEXT,
+                        pass_hash TEXT NOT NULL,
+                        legacy INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        UNIQUE (hive_id, user)
+                    )
+                """)
+                has_hives = await (await conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hive_instances'"
+                )).fetchone()
+                if has_hives:
+                    await conn.execute("""
+                    CREATE TRIGGER IF NOT EXISTS hive_access_with_hive
+                    AFTER DELETE ON hive_instances
+                    BEGIN
+                        DELETE FROM hive_access WHERE hive_id = OLD.id;
+                    END
+                """)
+                await conn.execute("PRAGMA user_version = 25")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v25: hive_access")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.

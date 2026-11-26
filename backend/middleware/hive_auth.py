@@ -12,9 +12,11 @@ misconfigured, the routes become unauthenticated-RCE-grade (``/api/jobs`` schedu
 execution; ``/api/workspace`` reads/writes arbitrary files). CloudSec flagged this.
 
 This middleware adds the INNER layer of defense-in-depth: the application validates
-the SAME credential Caddy uses (``HIVE_USER`` / ``HIVE_PASS_HASH``), so a request that
-reaches the app without that credential is rejected regardless of how it got past the
-edge. Caddy stays as the OUTER layer.
+the SAME credentials Caddy uses, so a request that reaches the app without one is
+rejected regardless of how it got past the edge. Caddy stays as the OUTER layer. On an
+EC2 Hive both layers read one access list (``ACCESS_LIST_PATH``: the Host's own key and
+one key per person); elsewhere (SSH machines, AgentCore) the single ``HIVE_USER`` /
+``HIVE_PASS_HASH`` pair.
 
 DESIGN NOTES (each earned — do not "simplify" away)
 ---------------------------------------------------
@@ -33,9 +35,10 @@ DESIGN NOTES (each earned — do not "simplify" away)
   ``X-Swarm-Hive-Auth``, same format, same check: the session endpoint takes
   ``Authorization`` for its SigV4 signature and strips it before forwarding. There,
   ``Authorization`` is never read.
-* **Fail-closed.** Missing header, malformed base64, non-Basic scheme, wrong user,
-  unset ``hive_pass_hash``, or ANY exception during verification → 401. It never
-  fails open to "no auth".
+* **Fail-closed.** Missing header, malformed base64, non-Basic scheme, an unknown user,
+  unset ``hive_pass_hash`` (no access list), an access list that is unreadable, malformed
+  or empty, or ANY exception during verification → 401. It never fails open to "no
+  auth", and an access list that exists is never bypassed by the environment pair.
 * **Public allow-list is tiny + explicit.** ``/health`` (monitors, matches the
   Caddyfile's /health exemption) and ``OPTIONS`` preflight (so browser CORS is not
   broken — the CORS middleware must still see the preflight).
@@ -51,8 +54,9 @@ DESIGN NOTES (each earned — do not "simplify" away)
   one run. Only a successful check is cached (``_VerifiedCache``): at most
   ``_CACHE_MAX_ENTRIES`` entries, each accepted for ``_CACHE_TTL_S`` after its
   verification. The key is an HMAC with a per-process random key over the expected hash,
-  the user and the password, so the cache never holds a fast hash of the password, and a
-  changed ``HIVE_PASS_HASH`` clears the cache and can never match an old entry. A wrong
+  the user and the password, so the cache never holds a fast hash of the password; a
+  changed ``HIVE_PASS_HASH`` or access list clears the cache, and a revoked user is
+  refused before the cache is consulted (it is no longer in the list). A wrong
   password is never cached and runs bcrypt every time, as before. (Caddy, the outer
   layer, also caches its successful checks.)
 * **Bounded admission to bcrypt.** At most ``_MAX_PENDING_CHECKS`` distinct credentials
@@ -74,6 +78,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 import time
 from collections import OrderedDict
@@ -84,6 +89,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from config import settings
 from core import executors
 from core.auth import verify_password
+from hive import user_data as _user_data
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +98,79 @@ logger = logging.getLogger(__name__)
 # /health: liveness/readiness monitors (mirrors the Caddyfile's /health exemption).
 _PUBLIC_PATHS: frozenset[str] = frozenset({"/health"})
 
-# Success cache bounds. A Hive is single-tenant with one credential, so 32 entries is far
-# above real use and only bounds memory. An entry is accepted for 10 minutes after its
+# The access list (design 2026-11-26-hive-access-credentials §2.2): one "<user> <bcrypt hash>"
+# line per key, the Host's own key and one per person. Only root writes it (the Host's
+# apply over SSM, or first boot); Caddy imports it inside basic_auth @protected and this
+# middleware reads it, so the two layers check the same list. Its directory and the file
+# are readable by the Hive user and writable only by root. When the file exists it is the
+# only source; when it does not (SSH machines, AgentCore, a Hive not yet moved to it) the
+# HIVE_USER / HIVE_PASS_HASH pair is used as before.
+ACCESS_LIST_PATH = _user_data.ACCESS_LIST_PATH
+ACCESS_LINE_RE = re.compile(_user_data.ACCESS_LINE_PATTERN)
+
+
+class _AccessList:
+    """The access list file, read again only when its stat changes.
+
+    ``users()`` is None when the file does not exist, else the users it lists (user ->
+    hash). An unreadable file, a line that is not ``<user> <bcrypt hash>``, a user listed
+    twice or a file with no entry gives ``{}``: every request is denied, never a fall back
+    to the environment pair (fail-closed)."""
+
+    def __init__(self, path: str | None = None) -> None:
+        self.path = path or ACCESS_LIST_PATH
+        self._stat: tuple | None = None
+        self._users: dict[str, str] = {}
+        self._fingerprint = ""
+
+    def users(self) -> dict[str, str] | None:
+        try:
+            st = os.stat(self.path)
+        except FileNotFoundError:
+            self._stat = None
+            return None
+        except OSError:
+            logger.error("HiveAuthMiddleware: the access list cannot be read — denying all")
+            return {}
+        stat = (st.st_ino, st.st_size, st.st_mtime_ns)
+        if stat != self._stat:
+            self._users, self._fingerprint, read = self._parse()
+            # a file that could not be read is read again on the next request (a transient
+            # read error must not deny everyone until the list next changes); one that was
+            # read but is malformed or empty stays denied until it changes (read once)
+            self._stat = stat if read else None
+        return self._users
+
+    @property
+    def fingerprint(self) -> str:
+        return self._fingerprint
+
+    def _parse(self) -> tuple[dict[str, str], str, bool]:
+        """(users, fingerprint, whether the file was read). No users: deny all."""
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError):
+            logger.error("HiveAuthMiddleware: the access list cannot be read — denying all")
+            return {}, "", False
+        users: dict[str, str] = {}
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            m = ACCESS_LINE_RE.match(line)
+            if m is None or m.group(1) in users:
+                logger.error("HiveAuthMiddleware: the access list has a malformed or repeated "
+                             "line — denying all")
+                return {}, "", True
+            users[m.group(1)] = m.group(2)
+        if not users:
+            logger.error("HiveAuthMiddleware: the access list is empty — denying all")
+            return {}, "", True
+        return users, hashlib.sha256(text.encode("utf-8")).hexdigest(), True
+
+
+# Success cache bounds. A Hive has a handful of keys (the Host's and one per person), so
+# 32 entries is far above real use and only bounds memory. An entry is accepted for 10 minutes after its
 # bcrypt check (not refreshed on use), which bounds how long the process keeps accepting a
 # credential without re-checking it.
 _CACHE_TTL_S = 600.0
@@ -103,8 +180,8 @@ _CACHE_MAX_ENTRIES = 32
 _BCRYPT_POOL = "hive_auth"
 
 # Distinct credentials being checked or queued at once. With 2 pool threads at about 1 s a
-# check, 8 is a few seconds of queue; a single-tenant Hive has one credential, so the cap
-# is only reached by a flood. A request joining a check already in flight is not counted.
+# check, 8 is a few seconds of queue; a Hive has a handful of keys, each cached once checked,
+# so the cap is only reached by a flood. A request joining a check already in flight is not counted.
 _MAX_PENDING_CHECKS = 8
 
 
@@ -131,11 +208,12 @@ class _VerifiedCache:
     def __len__(self) -> int:
         return len(self._entries)
 
-    def bind(self, expected_hash: str) -> None:
-        """Drop every entry when the expected hash differs from the one they were made for."""
-        if expected_hash != self._bound_hash:
+    def bind(self, fingerprint: str) -> None:
+        """Drop every entry when the credentials (the expected hash, or the access list's
+        content) differ from the ones they were made for."""
+        if fingerprint != self._bound_hash:
             self._entries.clear()
-            self._bound_hash = expected_hash
+            self._bound_hash = fingerprint
 
     def key(self, expected_hash: str, user: str, password: str) -> bytes:
         mac = hmac.new(self._secret, digestmod=hashlib.sha256)
@@ -223,6 +301,7 @@ class HiveAuthMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
         self._cache = _VerifiedCache()
+        self._access = _AccessList()
         # Cache key -> the bcrypt check in progress for it (single-flight).
         self._inflight: dict[bytes, asyncio.Task[bool]] = {}
 
@@ -262,40 +341,46 @@ class HiveAuthMiddleware:
 
         Raises ``_ChecksBusy`` (also a denial; the caller answers 503) when the
         pending-check cap is full and the credential is neither cached nor in flight."""
-        # Unset credential in hive mode → deny everything (never fail open to no-auth).
-        expected_user = settings.hive_user
-        expected_hash = settings.hive_pass_hash
-        if not expected_hash:
-            logger.error(
-                "HiveAuthMiddleware: SWARMAI_MODE=hive but hive_pass_hash is empty — "
-                "denying all non-public requests (fail-closed). Set HIVE_PASS_HASH."
-            )
-            return False
+        # The access list when it exists (deny all when it is malformed or empty), else the
+        # environment pair; an unset credential denies everything (never fail open).
+        listed = self._access.users()
+        if listed is None:
+            if not settings.hive_pass_hash:
+                logger.error(
+                    "HiveAuthMiddleware: SWARMAI_MODE=hive but hive_pass_hash is empty — "
+                    "denying all non-public requests (fail-closed). Set HIVE_PASS_HASH."
+                )
+                return False
+            listed = {settings.hive_user: settings.hive_pass_hash}
+            fingerprint = settings.hive_pass_hash
+        else:
+            fingerprint = self._access.fingerprint
         cred = _extract_basic_credential(scope)
         if cred is None:
             return False
         user, password = cred
         try:
-            # Compare user first (cheap), then verify the password (cache, else bcrypt).
-            # Any exception (malformed hash, encoding, the pool) → deny.
-            # NOTE: the username compare is non-constant-time, which is acceptable —
-            # in HTTP Basic auth the username ("admin") is NOT a secret; only the
-            # password is, and bcrypt.checkpw (verify_password) is constant-time.
-            # For the same reason it is acceptable that only the right username can
-            # reach the pending-check cap (503); the bcrypt time already showed it.
-            if user != expected_user:
+            # Look the user up first (cheap), then verify the password (cache, else one
+            # bcrypt check). Any exception (malformed hash, encoding, the pool) → deny.
+            # NOTE: the lookup is not constant-time, which is acceptable — in HTTP Basic
+            # auth the user name is NOT a secret; only the password is, and bcrypt.checkpw
+            # (verify_password) is constant-time. For the same reason it is acceptable that
+            # only a listed user name can reach the pending-check cap (503).
+            expected_hash = listed.get(user)
+            if not expected_hash:
                 return False
-            return await self._verify(expected_hash, user, password)
+            return await self._verify(expected_hash, user, password, fingerprint)
         except _ChecksBusy:
             raise  # a denial too, answered with 503 by __call__
         except Exception:  # noqa: BLE001 — fail-closed on ANY verification error
             logger.exception("HiveAuthMiddleware: credential verification raised — denying")
             return False
 
-    async def _verify(self, expected_hash: str, user: str, password: str) -> bool:
+    async def _verify(self, expected_hash: str, user: str, password: str,
+                      fingerprint: str = "") -> bool:
         """True from the success cache, else from one bcrypt check shared by every
         concurrent request with the same credential."""
-        self._cache.bind(expected_hash)
+        self._cache.bind(fingerprint or expected_hash)
         key = self._cache.key(expected_hash, user, password)
         if self._cache.hit(key):
             return True

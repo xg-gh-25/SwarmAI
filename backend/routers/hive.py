@@ -345,18 +345,6 @@ class HiveInstanceResponse(BaseModel):
     idle_stop_settable: bool = False
 
 
-class HiveInstanceDetailResponse(HiveInstanceResponse):
-    """Detail response — includes credentials. Only returned by GET /instances/{id}.
-
-    NOTE: auth_password is stored and returned in plaintext. This is acceptable
-    because the SQLite DB is local to the user's machine (~/.swarm-ai/data.db).
-    The password is generated per-deploy and only used for Caddy basic auth
-    (defense-in-depth behind CloudFront). If the DB file is ever shared or
-    backed up, credentials will be exposed — document this for users.
-    """
-    auth_password: Optional[str] = None
-
-
 class VerifyResult(BaseModel):
     success: bool
     account_id: str
@@ -671,15 +659,16 @@ async def create_instance(body: HiveInstanceCreate):
     return HiveInstanceResponse(**_with_idle_stop([row])[0])
 
 
-@router.get("/instances/{instance_id}", response_model=HiveInstanceDetailResponse)
+@router.get("/instances/{instance_id}", response_model=HiveInstanceResponse)
 async def get_instance(instance_id: str):
-    """Get Hive instance details including credentials."""
+    """Get Hive instance details. Never its key: no route returns the Host's own key
+    (hive/access.py)."""
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
         row = await cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Instance not found")
-    return HiveInstanceDetailResponse(**_with_idle_stop([dict(row)])[0])
+    return HiveInstanceResponse(**_with_idle_stop([dict(row)])[0])
 
 
 @router.put("/instances/{instance_id}/idle-stop", response_model=HiveIdleStopResponse)
@@ -911,41 +900,69 @@ async def replace_instance(instance_id: str):
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-@router.post("/instances/{instance_id}/reset-password")
-async def reset_password(instance_id: str):
-    """Reset Hive auth password via SSM. Returns new credentials."""
+# ── Who may log in to an EC2 Hive (hive/access.py) ─────────────────────────
+# The Host's own key is never returned; a person's password only once, by the add.
+
+
+class HiveAccessAdd(BaseModel):
+    name: str
+
+
+def _access_http(e: Exception) -> HTTPException:
+    from hive.access import AccessError
+    if isinstance(e, AccessError):
+        return HTTPException(status_code=e.status, detail=str(e))
+    logger.exception("Hive access change failed")
+    return HTTPException(status_code=500, detail="The access change failed")
+
+
+@router.get("/instances/{instance_id}/access")
+async def list_access(instance_id: str):
+    """The person keys of a Hive (name, label, created_at, legacy), never a password or hash."""
+    _require_desktop()
+    from hive import access
+    try:
+        return {"accesses": await access.list_access(str(db.db_path), instance_id)}
+    except Exception as e:  # noqa: BLE001 — mapped to a status by _access_http
+        raise _access_http(e)
+
+
+@router.post("/instances/{instance_id}/access", status_code=201)
+async def add_access(instance_id: str, body: HiveAccessAdd):
+    """A new key for one person: its password is in this answer only."""
     _require_desktop()
     await _refuse_not_ec2(instance_id)
-    async with _conn() as c:
-        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Instance not found")
-        if dict(row)["status"] != "running":
-            raise HTTPException(status_code=400, detail="Instance must be running to reset password")
-
-    provisioner = _get_provisioner()
+    from hive import access
     try:
-        new_password = await provisioner.reset_password(instance_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"auth_user": "admin", "auth_password": new_password}
+        return await access.add_access(_get_provisioner(), instance_id, body.name)
+    except Exception as e:  # noqa: BLE001 — mapped to a status by _access_http
+        raise _access_http(e)
 
 
-@router.get("/instances/{instance_id}/credentials")
-async def get_instance_credentials(instance_id: str):
-    """Return only the auth credentials for a Hive instance."""
-    _require_desktop()  # G2: prevent Hive from reading its own credentials
-    async with _conn() as c:
-        cursor = await c.execute(
-            "SELECT auth_user, auth_password FROM hive_instances WHERE id = ?",
-            (instance_id,),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Instance not found")
-    row = dict(row)
-    return {"auth_user": row["auth_user"], "auth_password": row["auth_password"]}
+@router.delete("/instances/{instance_id}/access/{user}")
+async def revoke_access(instance_id: str, user: str):
+    """Revoke one person's key: the Hive refuses it from the moment this returns."""
+    _require_desktop()
+    await _refuse_not_ec2(instance_id)
+    from hive import access
+    try:
+        await access.revoke_access(_get_provisioner(), instance_id, user)
+    except Exception as e:  # noqa: BLE001 — mapped to a status by _access_http
+        raise _access_http(e)
+    return {"ok": True}
+
+
+@router.post("/instances/{instance_id}/rotate-host-key")
+async def rotate_host_key(instance_id: str):
+    """A new key for this Host's own connection to the Hive (people's keys unchanged)."""
+    _require_desktop()
+    await _refuse_not_ec2(instance_id)
+    from hive import access
+    try:
+        await access.rotate_host_key(_get_provisioner(), instance_id)
+    except Exception as e:  # noqa: BLE001 — mapped to a status by _access_http
+        raise _access_http(e)
+    return {"ok": True}
 
 
 @router.post("/instances/{instance_id}/retry")

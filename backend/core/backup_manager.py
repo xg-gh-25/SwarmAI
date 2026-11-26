@@ -103,7 +103,7 @@ def _normalize_git_url(url: str | None) -> str | None:
 L2_TABLES = [
     "messages", "sessions", "channel_messages", "channel_sessions",
     "channels", "todos", "token_usage", "usage_ledger", "skill_metrics",
-    "hive_instances", "hive_accounts", "agents", "mcp_servers",
+    "hive_instances", "hive_accounts", "hive_access", "agents", "mcp_servers",
     "app_settings", "workspace_config",
 ]
 

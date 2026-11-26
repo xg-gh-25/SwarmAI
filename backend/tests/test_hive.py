@@ -192,3 +192,48 @@ async def test_cascade_delete_account_removes_instances(client):
 
     resp = await client.get("/api/hive/instances")
     assert all(i["name"] != "cascade-hive" for i in resp.json())
+
+
+@pytest.mark.asyncio
+async def test_no_hive_route_returns_host_key(client):
+    """No /api/hive route gives out the Host's own key of a Hive, nor a person key's hash;
+    the old credentials and reset-password routes are gone, and a Hive's person keys go
+    with its row (design 2026-11-26-hive-access-credentials)."""
+    import aiosqlite
+    from database import db
+    from main import app
+
+    acc = (await client.post("/api/hive/accounts", json={"account_id": "111222333444"})).json()["id"]
+    inst = (await client.post("/api/hive/instances",
+                              json={"name": "key-hive", "account_ref": acc})).json()["id"]
+    key = "-".join(["host", "key", "never", "shown"]) * 2  # a stand-in value
+    person_hash = "$2b$14$" + "p" * 53
+    async with aiosqlite.connect(str(db.db_path)) as conn:
+        await conn.execute("UPDATE hive_instances SET auth_user='host', auth_password=?, "
+                           "status='running', cloudfront_domain='d1.cloudfront.net' WHERE id=?",
+                           (key, inst))
+        await conn.execute("INSERT INTO hive_access (id, hive_id, user, label, pass_hash, legacy, "
+                           "created_at) VALUES ('a1', ?, 'alice', 'alice', ?, 0, '2026-11-26T00:00:00Z')",
+                           (inst, person_hash))
+        await conn.commit()
+
+    paths = {r.path for r in app.routes
+             if getattr(r, "path", "").startswith("/api/hive/instances") and "GET" in getattr(r, "methods", ())
+             and set(r.param_convertors) <= {"instance_id"}}
+    assert {"/api/hive/instances", "/api/hive/instances/{instance_id}",
+            "/api/hive/instances/{instance_id}/access"} <= paths
+    for path in sorted(paths):
+        resp = await client.get(path.replace("{instance_id}", inst))
+        assert key not in resp.text, path
+        assert person_hash not in resp.text, path
+    listed = (await client.get(f"/api/hive/instances/{inst}/access")).json()["accesses"]
+    assert listed == [{"user": "alice", "label": "alice", "created_at": "2026-11-26T00:00:00Z",
+                       "legacy": False}]
+    assert (await client.get(f"/api/hive/instances/{inst}/credentials")).status_code in (404, 405)
+    assert (await client.post(f"/api/hive/instances/{inst}/reset-password")).status_code in (404, 405)
+
+    await client.delete(f"/api/hive/instances/{inst}")
+    async with aiosqlite.connect(str(db.db_path)) as conn:
+        left = await (await conn.execute("SELECT COUNT(*) FROM hive_access WHERE hive_id=?",
+                                         (inst,))).fetchone()
+    assert left[0] == 0

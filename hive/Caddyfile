@@ -20,6 +20,8 @@
 # makes the 403 below come first.
 {
     order respond before basic_auth
+    # No admin API: the agent on the Hive must not be able to load another config.
+    admin off
     # The default logger (Caddy's error log) writes request headers too.
     log default {
         format filter {

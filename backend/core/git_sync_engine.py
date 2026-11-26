@@ -104,6 +104,15 @@ def _export_tables_sync(db_path: Path, export_dir: Path, tables: list[str]) -> i
             ).fetchall()
         }
 
+        # The Host's own key of each EC2 Hive never leaves in a backup (design
+        # 2026-11-26-hive-access-credentials §2.6). Only the snapshot copy is changed; a
+        # restored Host gives the Hive a new key over SSM (hive/access.rotate_host_key).
+        if "hive_instances" in valid_tables:
+            cols = {r[1] for r in snap.execute("PRAGMA table_info(hive_instances)").fetchall()}
+            if "auth_password" in cols:
+                snap.execute("UPDATE hive_instances SET auth_password = NULL")
+                snap.commit()
+
         for table in tables:
             if table not in valid_tables:
                 continue

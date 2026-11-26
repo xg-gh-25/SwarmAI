@@ -449,3 +449,128 @@ def test_checks_left_by_a_closed_loop_do_not_hold_the_cap(fast_hive_env, bcrypt_
         assert mw._inflight == {}
     finally:
         other.close()
+
+
+# ── The access list (design 2026-11-26-hive-access-credentials §2.2) ────────────
+# One "<user> <bcrypt hash>" line per key. When the file exists it is the only source;
+# a malformed or empty one denies everything; without it the HIVE_USER/HIVE_PASS_HASH
+# pair is used as before.
+
+_HOST_PASS = "host-token-AAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+_ALICE_PASS = "alice-token-BBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+
+def _fast_hash(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(4)).decode()
+
+
+@pytest.fixture(autouse=True)
+def _no_access_list_by_default(monkeypatch, tmp_path):
+    """Every test of this file sees no access list unless it writes one: a machine that
+    happens to have the real file must not change what these tests check."""
+    import middleware.hive_auth as ha
+    monkeypatch.setattr(ha, "ACCESS_LIST_PATH", str(tmp_path / "absent" / "hive-users"))
+
+
+@pytest.fixture
+def access_list(monkeypatch, tmp_path, hive_env):
+    import middleware.hive_auth as ha
+    path = tmp_path / "hive-users"
+    monkeypatch.setattr(ha, "ACCESS_LIST_PATH", str(path))
+    return path
+
+
+def test_access_list_file_is_the_only_source(access_list):
+    access_list.write_text(f"host {_fast_hash(_HOST_PASS)}\nalice {_fast_hash(_ALICE_PASS)}\n")
+    client = TestClient(_build_app())
+    assert client.post("/api/jobs/run", headers=_basic_header("host", _HOST_PASS)).status_code == 200
+    assert client.post("/api/jobs/run", headers=_basic_header("alice", _ALICE_PASS)).status_code == 200
+    # a listed user with another user's password, an unlisted user, and the environment
+    # pair (still configured by hive_env) are all refused
+    assert client.post("/api/jobs/run", headers=_basic_header("alice", _HOST_PASS)).status_code == 401
+    assert client.post("/api/jobs/run", headers=_basic_header("bob", _ALICE_PASS)).status_code == 401
+    assert client.post("/api/jobs/run", headers=_basic_header(_TEST_USER, _TEST_PASS)).status_code == 401
+
+
+@pytest.mark.parametrize("content", [
+    "",
+    "\n\n",
+    "alice not-a-hash\n",
+    "Alice $2b$04$" + "a" * 53 + "\n",
+    "host {h}\nhost {h}\n",
+    "host {h} extra\n",
+])
+def test_access_list_malformed_or_empty_denies_all(access_list, content):
+    access_list.write_text(content.replace("{h}", _fast_hash(_HOST_PASS)))
+    client = TestClient(_build_app())
+    for user, password in (("host", _HOST_PASS), (_TEST_USER, _TEST_PASS)):
+        assert client.post("/api/jobs/run", headers=_basic_header(user, password)).status_code == 401
+    assert client.get("/health").status_code == 200
+
+
+def test_access_list_reloads_on_mtime_change(access_list):
+    import os
+    access_list.write_text(f"host {_fast_hash(_HOST_PASS)}\nalice {_fast_hash(_ALICE_PASS)}\n")
+    client = TestClient(_build_app())
+    assert client.post("/api/jobs/run", headers=_basic_header("alice", _ALICE_PASS)).status_code == 200
+    # revoke alice: the next request, with no restart, refuses her (and keeps the host)
+    access_list.write_text(f"host {_fast_hash(_HOST_PASS)}\n")
+    st = os.stat(access_list)
+    os.utime(access_list, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert client.post("/api/jobs/run", headers=_basic_header("alice", _ALICE_PASS)).status_code == 401
+    assert client.post("/api/jobs/run", headers=_basic_header("host", _HOST_PASS)).status_code == 200
+
+
+def test_no_list_file_keeps_env_credential(hive_env):
+    client = TestClient(_build_app())
+    assert client.post("/api/jobs/run", headers=_basic_header(_TEST_USER, _TEST_PASS)).status_code == 200
+    assert client.post("/api/jobs/run", headers=_basic_header("host", _HOST_PASS)).status_code == 401
+
+
+def test_unreadable_access_list_denies_all(access_list, monkeypatch):
+    access_list.write_text(f"host {_fast_hash(_HOST_PASS)}\n")
+    import builtins
+    real_open = builtins.open
+
+    def refuse(path, *a, **k):
+        if str(path) == str(access_list):
+            raise PermissionError("denied")
+        return real_open(path, *a, **k)
+    monkeypatch.setattr(builtins, "open", refuse)
+    client = TestClient(_build_app())
+    assert client.post("/api/jobs/run", headers=_basic_header("host", _HOST_PASS)).status_code == 401
+
+
+def test_a_transient_read_error_does_not_deny_until_the_list_changes(access_list, monkeypatch):
+    access_list.write_text(f"host {_fast_hash(_HOST_PASS)}\n")
+    import builtins
+    real_open = builtins.open
+    fails = [1]
+
+    def flaky(path, *a, **k):
+        if str(path) == str(access_list) and fails:
+            fails.pop()
+            raise OSError("transient")
+        return real_open(path, *a, **k)
+    monkeypatch.setattr(builtins, "open", flaky)
+    client = TestClient(_build_app())
+    assert client.post("/api/jobs/run", headers=_basic_header("host", _HOST_PASS)).status_code == 401
+    # the file did not change, yet the next request reads it again and passes
+    assert client.post("/api/jobs/run", headers=_basic_header("host", _HOST_PASS)).status_code == 200
+
+
+def test_a_malformed_list_is_read_once_until_it_changes(access_list, monkeypatch):
+    access_list.write_text("not a list\n")
+    import builtins
+    real_open = builtins.open
+    reads = []
+
+    def counting(path, *a, **k):
+        if str(path) == str(access_list):
+            reads.append(1)
+        return real_open(path, *a, **k)
+    monkeypatch.setattr(builtins, "open", counting)
+    client = TestClient(_build_app())
+    for _ in range(3):
+        assert client.post("/api/jobs/run", headers=_basic_header("host", _HOST_PASS)).status_code == 401
+    assert len(reads) == 1

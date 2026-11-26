@@ -32,7 +32,7 @@ vi.mock('../../../services/hive', async (orig) => ({
   hiveService: {
     listInstances: (...a: unknown[]) => mocks.instances(...a), listAccounts: (...a: unknown[]) => mocks.accounts(...a),
     setIdleStop: (...a: unknown[]) => mocks.setIdle(...a),
-    deleteInstance: vi.fn(), retryInstance: vi.fn(), stopInstance: vi.fn(), startInstance: vi.fn(), getCredentials: vi.fn(),
+    deleteInstance: vi.fn(), retryInstance: vi.fn(), stopInstance: vi.fn(), startInstance: vi.fn(), listAccess: vi.fn(async () => []), addAccess: vi.fn(), revokeAccess: vi.fn(), rotateHostKey: vi.fn(),
     brainStatus: vi.fn(() => new Promise(() => {})),
   },
 }));
@@ -47,7 +47,7 @@ import { SwarmOutSettings, forgetSettingsForTests } from '../SwarmOutSettings';
 const hive = (id: string, over: Record<string, unknown>) => ({
   id, name: id, ownerName: null, hiveType: 'my', accountRef: 'swarmai', region: 'us-east-1', instanceType: 'm7g.xlarge',
   ec2InstanceId: 'i-1', ec2PublicIp: null, elasticIpAllocId: null, securityGroupId: null, iamRoleName: null, cloudfrontDistId: null,
-  cloudfrontDomain: 'd.cloudfront.net', s3Bucket: null, authUser: 'admin', authPassword: null, status: 'stopped', version: '2.5.5',
+  cloudfrontDomain: 'd.cloudfront.net', s3Bucket: null, authUser: 'admin', status: 'stopped', version: '2.5.5',
   errorMessage: null, createdAt: 't', updatedAt: 't', idleStopMinutes: null, idleStopEffective: 120, idleStopSettable: true, ...over,
 });
 const HIVES = [

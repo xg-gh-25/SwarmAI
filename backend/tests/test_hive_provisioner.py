@@ -27,13 +27,16 @@ class TestUserData:
             s3_bucket="swarmai-hive-releases-us-east-1",
             version="1.9.0",
             auth_user="admin",
-            auth_hash="$2a$14$abc123",
+            auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert "swarmai-hive-releases-us-east-1" in result
         assert "1.9.0" in result
         assert "admin" in result
-        assert "$2a$14$abc123" in result
+        import base64
+        # the hash reaches the Hive inside the base64 access list (and hive-auth.env's)
+        listed = base64.b64encode(("admin $2b$14$" + "a" * 53 + "\n").encode()).decode()
+        assert listed in result
         assert "us-east-1" in result
 
     def test_prebaked_skips_dnf_and_pip(self):
@@ -45,7 +48,7 @@ class TestUserData:
             s3_bucket="test-bucket",
             version="2.0.1",
             auth_user="admin",
-            auth_hash="$2a$14$abc",
+            auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
             prebaked=True,
         )
@@ -70,7 +73,7 @@ class TestUserData:
             pytest.skip("bash not available")
         script = render_user_data(
             s3_bucket="b-2361", version="2.0.1", auth_user="admin",
-            auth_hash="$2a$14$abcdefghijklmnopqrstuv", region="us-east-1",
+            auth_hash="$2b$14$" + "a" * 53, region="us-east-1",
             prebaked=True,
         )
         proc = subprocess.run(
@@ -88,7 +91,7 @@ class TestUserData:
             s3_bucket="test-bucket",
             version="2.0.1",
             auth_user="admin",
-            auth_hash="$2a$14$abc",
+            auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         default_out = render_user_data(**kwargs)
@@ -105,7 +108,7 @@ class TestUserData:
             s3_bucket="test-bucket",
             version="99.99.99",
             auth_user="testuser",
-            auth_hash="testhash",
+            auth_hash="$2b$14$" + "a" * 53,
             region="eu-west-1",
         )
         # Should contain our test values, not any default/hardcoded ones
@@ -123,7 +126,7 @@ class TestUserData:
 
         result = render_user_data(
             s3_bucket="b", version="1.0.0",
-            auth_user="u", auth_hash="h", region="us-east-1",
+            auth_user="u", auth_hash="$2b$14$" + "a" * 53, region="us-east-1",
         )
         assert result.startswith("#!/bin/bash")
         assert "set -euo pipefail" in result
@@ -134,36 +137,10 @@ class TestUserData:
 
         result = render_user_data(
             s3_bucket="b", version="1.0.0",
-            auth_user="u", auth_hash="h", region="us-east-1",
+            auth_user="u", auth_hash="$2b$14$" + "a" * 53, region="us-east-1",
         )
         assert 'Key=HiveStatus,Value="$TAG_STATUS"' in result
         assert 'TAG_STATUS="ready"' in result
-
-    def test_password_generation(self):
-        """Passphrase is dash-separated words, random each time."""
-        from hive.user_data import generate_password
-
-        p1 = generate_password()
-        p2 = generate_password()
-        words = p1.split("-")
-        assert len(words) == 4  # Default 4 words
-        assert all(w.isalpha() for w in words)  # Only letters
-        assert p1 != p2  # Should be random
-
-    def test_password_custom_word_count(self):
-        from hive.user_data import generate_password
-
-        p = generate_password(6)
-        assert len(p.split("-")) == 6
-
-    def test_word_list_exactly_256(self):
-        """256 words = 8 bits per word. More or fewer = comment lies."""
-        import inspect
-        from hive.user_data import generate_password
-        src = inspect.getsource(generate_password)
-        words = re.findall(r'"(\w+)"', src)
-        assert len(words) == 256, f"Expected 256 words, got {len(words)}"
-        assert len(set(words)) == 256, "Duplicate words in list"
 
     def test_bcrypt_hash_survives_base64_roundtrip(self):
         """PE P0-1: bcrypt hash contains $ — must survive base64 encoding for SSM script."""
@@ -172,7 +149,7 @@ class TestUserData:
         pw = "test-pass-phrase"
         h = caddy_hash_password(pw)
         assert "$2b$14$" in h  # bcrypt format
-        # Simulate what reset_password does: base64 encode → decode on instance
+        # What render_user_data does for hive-auth.env: base64 encode → decode on instance
         b64 = base64.b64encode(h.encode()).decode()
         assert "$" not in b64  # No shell-special chars in base64
         roundtrip = base64.b64decode(b64).decode()
@@ -558,105 +535,6 @@ class TestProvisionerHealthCheck:
         assert result is False
 
 
-class TestResetPassword:
-    """Tests for password reset via SSM."""
-
-    @pytest.mark.asyncio
-    async def test_reset_password_generates_new_passphrase(self):
-        """reset_password returns a dash-separated passphrase."""
-        from hive.provisioner import HiveProvisioner
-
-        p = HiveProvisioner(Path("/tmp/test.db"))
-
-        # Mock DB lookups
-        mock_instance = {
-            "id": "inst-1", "name": "test-hive", "account_ref": "acc-1",
-            "region": "us-east-1", "ec2_instance_id": "i-abc123",
-        }
-        mock_account = {
-            "auth_method": "access_keys",
-            "auth_config": '{"access_key_id": "AK", "secret_access_key": "SK"}',
-        }
-
-        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
-             patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
-             patch.object(p, "_update_instance", new_callable=AsyncMock), \
-             patch.object(p, "_get_session") as mock_session_fn:
-
-            # Mock SSM send_command + get_command_invocation
-            mock_ssm = MagicMock()
-            mock_ssm.send_command.return_value = {"Command": {"CommandId": "cmd-1"}}
-            mock_ssm.get_command_invocation.return_value = {
-                "Status": "Success", "StandardOutputContent": "Password reset complete",
-            }
-            mock_session = MagicMock()
-            mock_session.client.return_value = mock_ssm
-            mock_session_fn.return_value = mock_session
-
-            result = await p.reset_password("inst-1")
-
-            # Result is a passphrase
-            words = result.split("-")
-            assert len(words) == 4
-            assert all(w.isalpha() for w in words)
-
-            # DB was updated with new password
-            p._update_instance.assert_called_once()
-            call_kwargs = p._update_instance.call_args
-            assert call_kwargs[0][0] == "inst-1"
-            assert call_kwargs[1]["auth_password"] == result
-
-    @pytest.mark.asyncio
-    async def test_reset_password_bcrypt_hash_survives_base64(self):
-        """The bcrypt hash ($2b$14$...) round-trips through base64 encoding."""
-        from hive.user_data import generate_password, caddy_hash_password
-        import base64
-
-        pw = generate_password()
-        h = caddy_hash_password(pw)
-        # Hash must contain $ signs
-        assert "$" in h
-        # base64 round-trip must be lossless
-        encoded = base64.b64encode(h.encode()).decode()
-        decoded = base64.b64decode(encoded).decode()
-        assert decoded == h
-
-    @pytest.mark.asyncio
-    async def test_reset_password_ssm_failure_raises(self):
-        """SSM failure raises RuntimeError, does NOT update DB."""
-        from hive.provisioner import HiveProvisioner
-
-        p = HiveProvisioner(Path("/tmp/test.db"))
-
-        mock_instance = {
-            "id": "inst-1", "name": "test-hive", "account_ref": "acc-1",
-            "region": "us-east-1", "ec2_instance_id": "i-abc123",
-        }
-        mock_account = {
-            "auth_method": "access_keys",
-            "auth_config": '{"access_key_id": "AK", "secret_access_key": "SK"}',
-        }
-
-        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
-             patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
-             patch.object(p, "_update_instance", new_callable=AsyncMock) as mock_update, \
-             patch.object(p, "_get_session") as mock_session_fn:
-
-            mock_ssm = MagicMock()
-            mock_ssm.send_command.return_value = {"Command": {"CommandId": "cmd-1"}}
-            mock_ssm.get_command_invocation.return_value = {
-                "Status": "Failed", "StandardOutputContent": "Caddy validation failed",
-            }
-            mock_session = MagicMock()
-            mock_session.client.return_value = mock_ssm
-            mock_session_fn.return_value = mock_session
-
-            with pytest.raises(RuntimeError, match="Password reset failed"):
-                await p.reset_password("inst-1")
-
-            # DB must NOT be updated on failure
-            mock_update.assert_not_called()
-
 
 class TestProvisionerCleanupOrder:
     """Tests for resource cleanup order."""
@@ -706,7 +584,7 @@ class TestH4CaddyfileHTTPOnly:
 
         result = render_user_data(
             s3_bucket="b", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test", region="us-east-1",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53, region="us-east-1",
         )
         assert ":80 {" in result, "user_data Caddyfile must use :80"
         assert "{$HIVE_DOMAIN" not in result
@@ -1448,18 +1326,6 @@ class TestG1DeprecateUpdateScript:
         assert "deprecated" in result.stderr.lower()
 
 
-class TestG2CredentialsDesktopGuard:
-    """G2: /credentials endpoint must require desktop mode."""
-
-    def test_credentials_requires_desktop(self):
-        """_require_desktop() must be called in get_instance_credentials."""
-        import inspect
-        from routers.hive import get_instance_credentials
-
-        source = inspect.getsource(get_instance_credentials)
-        assert "_require_desktop()" in source, \
-            "G2: credentials endpoint must check desktop mode"
-
 
 class TestG3CloudFrontStaysEnabled:
     """Stop and start leave the distribution enabled (a distribution with no traffic costs
@@ -1486,7 +1352,7 @@ class TestG4UnifiedCaddyfile:
 
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert "read_timeout 300s" in result  # stream endpoint
@@ -1498,7 +1364,7 @@ class TestG4UnifiedCaddyfile:
 
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert "Referrer-Policy strict-origin-when-cross-origin" in result
@@ -1509,7 +1375,7 @@ class TestG4UnifiedCaddyfile:
 
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert "hive-access.log" in result
@@ -1581,7 +1447,7 @@ class TestG8NoNightlyBackup:
 
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert "swarmai-backup" not in result
@@ -1594,19 +1460,6 @@ class TestG8NoNightlyBackup:
         source = inspect.getsource(HiveProvisioner.update)
         assert "rm -f /etc/cron.daily/swarmai-backup" in source
 
-
-class TestG9PythonPasswordRewrite:
-    """G9: reset_password must use Python, not sed."""
-
-    def test_no_sed_in_reset_script(self):
-        """reset_password script must not use sed for hash replacement."""
-        import inspect
-        from hive.provisioner import HiveProvisioner
-
-        source = inspect.getsource(HiveProvisioner.reset_password)
-        # Should use Python, not sed
-        assert "python3 -c" in source
-        assert "re.sub" in source
 
 
 class TestG10ResourceCleanupStatus:
@@ -1641,7 +1494,7 @@ class TestG11HealthExemptFromAuth:
 
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert HEALTH_PROTECTED_LINE in result, \
@@ -1847,7 +1700,7 @@ class TestM13TemplateVariableCheck:
         from hive.user_data import render_user_data
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         # Should not contain any of our template vars unresolved
@@ -1954,7 +1807,7 @@ class TestM7BucketConfigFile:
         from hive.user_data import render_user_data
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert ".hive-bucket" in result
@@ -1965,7 +1818,7 @@ class TestM7BucketConfigFile:
         from hive.user_data import render_user_data
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
-            auth_user="admin", auth_hash="$2a$14$test",
+            auth_user="admin", auth_hash="$2b$14$" + "a" * 53,
             region="us-east-1",
         )
         assert 'INSTALL_DIR="/opt/swarmai"' in result
@@ -2031,8 +1884,7 @@ class TestDeployFailureCleanup:
         """Successful deploy must NOT call _cleanup_resources."""
         p, mock_conn = self._make_deploy_provisioner()
         with patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.user_data.generate_password", return_value="test-pw"), \
-             patch("hive.user_data.caddy_hash_password", return_value="$2a$14$test"), \
+             patch("hive.access.deploy_access", new=AsyncMock(return_value=("test-key", "$2a$14$test", []))), \
              patch("hive.user_data.render_user_data", return_value="#!/bin/bash\necho ok"):
             await p.deploy("inst-deploy")
         p._cleanup_resources.assert_not_called()
@@ -2083,8 +1935,7 @@ class TestDeployFailureCleanup:
         p, mock_conn = self._make_deploy_provisioner()
         p._launch_ec2 = AsyncMock(side_effect=RuntimeError("EC2 launch failed"))
         with patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.user_data.generate_password", return_value="pw"), \
-             patch("hive.user_data.caddy_hash_password", return_value="$2a$14$h"), \
+             patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", "$2a$14$h", []))), \
              patch("hive.user_data.render_user_data", return_value="#!/bin/bash\necho ok"):
             await p.deploy("inst-deploy")
         # Cleanup called
@@ -2099,8 +1950,7 @@ class TestDeployFailureCleanup:
         p, mock_conn = self._make_deploy_provisioner()
         p._allocate_elastic_ip = AsyncMock(side_effect=RuntimeError("EIP limit"))
         with patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.user_data.generate_password", return_value="pw"), \
-             patch("hive.user_data.caddy_hash_password", return_value="$2a$14$h"), \
+             patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", "$2a$14$h", []))), \
              patch("hive.user_data.render_user_data", return_value="#!/bin/bash\necho ok"):
             await p.deploy("inst-deploy")
         assert p._cleanup_resources.called
@@ -2111,8 +1961,7 @@ class TestDeployFailureCleanup:
         p, mock_conn = self._make_deploy_provisioner()
         p._wait_healthy_via_tag = AsyncMock(return_value=False)
         with patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.user_data.generate_password", return_value="pw"), \
-             patch("hive.user_data.caddy_hash_password", return_value="$2a$14$h"), \
+             patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", "$2a$14$h", []))), \
              patch("hive.user_data.render_user_data", return_value="#!/bin/bash\necho ok"):
             await p.deploy("inst-deploy")
         # Health timeout → cleanup called directly (not via except)
@@ -2128,8 +1977,7 @@ class TestDeployFailureCleanup:
         p._launch_ec2 = AsyncMock(side_effect=RuntimeError("EC2 failed"))
         p._cleanup_resources = AsyncMock(side_effect=RuntimeError("cleanup also failed"))
         with patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.user_data.generate_password", return_value="pw"), \
-             patch("hive.user_data.caddy_hash_password", return_value="$2a$14$h"), \
+             patch("hive.access.deploy_access", new=AsyncMock(return_value=("key", "$2a$14$h", []))), \
              patch("hive.user_data.render_user_data", return_value="#!/bin/bash\necho ok"):
             await p.deploy("inst-deploy")
         update_calls = [str(c) for c in p._update_instance.call_args_list]
@@ -2295,3 +2143,44 @@ class TestZombieStatePrevention:
             error_calls = [c for c in mock_update.call_args_list
                           if c.kwargs.get("status") == "error"]
             assert len(error_calls) >= 1, "start() must rollback to 'error' on failure"
+
+
+_VALID = "$2b$14$" + "a" * 53
+_ALICE = "$2b$14$" + "b" * 53
+
+
+def test_user_data_access_list_and_admin_off():
+    """A new Hive: Caddy imports the access list inside basic_auth @protected (no inline
+    credential), its global options turn the admin API off, the list holds the Host key
+    first and the person keys after it, the list directory and file are root:<Hive user>
+    0750 / 0640 and hive-auth.env is root:root 0600 (design 2026-11-26-hive-access-credentials)."""
+    import base64
+    import re as _re
+    from hive.user_data import ACCESS_LIST_PATH, render_user_data
+
+    result = render_user_data(s3_bucket="b", version="1.0.0", auth_user="host", auth_hash=_VALID,
+                              region="us-east-1", origin_secret="s" * 40,
+                              access=[("alice", _ALICE)])
+    caddy = result.split("cat > /etc/caddy/Caddyfile << 'CADDY'\n", 1)[1].split("\nCADDY\n", 1)[0]
+    assert f"    basic_auth @protected {{\n        import {ACCESS_LIST_PATH}\n    }}\n" in caddy
+    assert _VALID not in caddy and _ALICE not in caddy
+    glob = caddy.split(":80 {", 1)[0]
+    assert _re.search(r"^\s*admin off$", glob, _re.M)
+    listed = base64.b64encode(f"host {_VALID}\nalice {_ALICE}\n".encode()).decode()
+    assert f"echo '{listed}' | base64 -d > {ACCESS_LIST_PATH}" in result
+    assert 'install -m 750 -o root -g "$SWARM_USER" -d /etc/swarmai-auth' in result
+    assert f'install -m 640 -o root -g "$SWARM_USER" /dev/null {ACCESS_LIST_PATH}' in result
+    assert "chown root:root /etc/swarmai/hive-auth.env" in result
+    assert "chown swarm:swarm /etc/swarmai/hive-auth.env" not in result
+    # the list is written before Caddy starts (step 8)
+    assert result.index(ACCESS_LIST_PATH + "\n") < result.index("[8/9] Starting services")
+
+
+@pytest.mark.parametrize("access", [[("host", _ALICE)], [("Bob", _ALICE)], [("bob", "nothash")]])
+def test_user_data_refuses_a_list_both_layers_would_refuse(access):
+    """A repeated user, a user name or hash outside the list's shape would leave the Hive
+    with a list Caddy rejects or the backend denies everything on: refused at render."""
+    from hive.user_data import render_user_data
+    with pytest.raises(ValueError):
+        render_user_data(s3_bucket="b", version="1.0.0", auth_user="host", auth_hash=_VALID,
+                         region="us-east-1", access=access)

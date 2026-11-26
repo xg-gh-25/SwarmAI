@@ -173,11 +173,14 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.start", "POST", f"{_HV}/instances/{{instance_id}}/start", _PO, "off_machine"),
     _op("hive.latest_version", "GET", f"{_HV}/latest-version", _PO, "read"),
     _op("hive.update", "POST", f"{_HV}/instances/{{instance_id}}/update", _PO, "change"),
-    _op("hive.reset_password", "POST", f"{_HV}/instances/{{instance_id}}/reset-password", _P,
-        "irreversible"),
-    # the Hive's login: whoever holds it can act as the person on the Hive (§2.4 ③)
-    _op("hive.credentials", "GET", f"{_HV}/instances/{{instance_id}}/credentials", _P,
-        "off_machine"),
+    # who may log in to a Hive (hive/access.py): a key lets its holder act as the person on
+    # the Hive (§2.4 ③), so making, revoking and rotating keys are the person's
+    _op("hive.access.list", "GET", f"{_HV}/instances/{{instance_id}}/access", _P, "read"),
+    _op("hive.access.add", "POST", f"{_HV}/instances/{{instance_id}}/access", _P, "off_machine"),
+    _op("hive.access.revoke", "DELETE", f"{_HV}/instances/{{instance_id}}/access/{{user}}", _P,
+        "change"),
+    _op("hive.access.rotate_host_key", "POST", f"{_HV}/instances/{{instance_id}}/rotate-host-key",
+        _P, "change"),
     _op("hive.retry", "POST", f"{_HV}/instances/{{instance_id}}/retry", _P, "off_machine"),
     # a new Hive first, then the old one is deleted (§7.3: the last one is only replaced)
     _op("hive.replace", "POST", f"{_HV}/instances/{{instance_id}}/replace", _P, "irreversible"),
