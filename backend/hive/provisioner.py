@@ -456,9 +456,73 @@ UPDATE_STALE_S = 15 * 60
 # (the tree-sitter grammar step's deadline, user_data.TREE_SITTER_SETUP_DEADLINE_S, and the
 # Feature Map replay host step's, user_data.REPLAY_HOST_DEADLINE_S: the first update installs
 # Chromium's packages) must fit well inside it, or a slow step reports a failed update while
-# the script still runs. Below UPDATE_STALE_S, so a waiting update is never taken as stale.
+# the script still runs. The restart's hang guard (UPDATE_START_WAIT_S) is one of those bounded
+# steps. Below UPDATE_STALE_S, so a waiting update is never taken as stale.
 UPDATE_WAIT_POLLS = 150
 UPDATE_WAIT_INTERVAL_S = 5
+# The update script's restart is blocking: `systemctl restart` returns once the old process
+# stopped and the new one passed the unit's ExecStartPost /health check, so the result is the
+# new process's, never the old one still running. This bounds it as a hang guard only: the
+# unit's own limits end a slow restart first (the stop's systemd default TimeoutStopSec of 90 s,
+# the unit sets none, plus TimeoutStartSec=120 in hive/swarmai-hive.service), with a margin.
+# A bound below them rolls back a start the unit would have accepted.
+UPDATE_START_WAIT_S = 240
+
+# The rollback of a failed update (provisioner.update renders it before the rsync into
+# /opt/swarmai). The backup leaves out backend/.venv, so the rollback restores the backup in
+# place and never touches the venv: swapping the whole directory for the backup deleted the
+# only venv, and hive/swarmai-hive.sh then refused to start ("No venv found"). It runs at most
+# once, from whichever fires first: the ERR trap (any failing step from the rsync on), the EXIT
+# trap (an exit ERR does not see, such as an unbound variable), or the start and version
+# checks after the restart.
+_UPDATE_ROLLBACK_SH = r"""# ── Rollback of a failed update ──
+UPDATE_ARMED=0
+UPDATE_PIP_STARTED=0
+UPDATE_RESTARTED=0
+UPDATE_UNIT_PREV=""
+rollback_update() {
+    [ "$UPDATE_ARMED" = 1 ] || return 0
+    UPDATE_ARMED=0
+    trap - ERR
+    set +e
+    echo "Rolling back to previous version..."
+    cd /
+    # The failed update's pip step may have changed the venv: when pyproject.toml changed, the
+    # restored code's dependencies are installed again (compared before the restore).
+    local deps_changed=0
+    if [ "$UPDATE_PIP_STARTED" = 1 ] \
+            && ! cmp -s /opt/swarmai.bak/backend/pyproject.toml /opt/swarmai/backend/pyproject.toml; then
+        deps_changed=1
+    fi
+    if ! rsync -a --delete --exclude='backend/.venv' /opt/swarmai.bak/ /opt/swarmai/; then
+        echo "ERROR: rollback could not restore /opt/swarmai from /opt/swarmai.bak; the backup is kept" | tee /dev/stderr
+        return 1
+    fi
+    if [ "$deps_changed" = 1 ]; then
+        echo "pyproject.toml changed in the failed update: reinstalling the previous version's dependencies"
+        (cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .) \
+            || echo "ERROR: the previous version's dependencies could not be reinstalled" | tee /dev/stderr
+    fi
+    # The systemd unit lives outside the tree: put back the one this update replaced, from the
+    # copy only root can write. Never from the restored tree: the Hive user owns it, and a unit
+    # root installs from there would run whatever that user wrote into it as root.
+    if [ -n "$UPDATE_UNIT_PREV" ]; then
+        echo "Restoring the swarmai-hive.service this update replaced"
+        { install -m 644 "$UPDATE_UNIT_PREV" /etc/systemd/system/swarmai-hive.service \
+            && systemctl daemon-reload && rm -f "$UPDATE_UNIT_PREV"; } \
+            || echo "ERROR: the previous swarmai-hive.service could not be restored from $UPDATE_UNIT_PREV" | tee /dev/stderr
+    fi
+    rm -rf /opt/swarmai.bak
+    # A failure before the restart leaves the old process running on the restored tree.
+    if [ "$UPDATE_RESTARTED" = 1 ]; then
+        systemctl restart swarmai-hive --no-block \
+            || echo "ERROR: swarmai-hive could not be restarted on the previous version" | tee /dev/stderr
+    fi
+    echo "Rolled back to the previous version"
+}
+trap 'echo "ERROR: update step failed (line $LINENO): $BASH_COMMAND" | tee /dev/stderr; rollback_update; exit 1' ERR
+trap 'rollback_update' EXIT"""
+
 # How long deploy() waits for a new instance's first boot to tag it (HiveStatus). A hang
 # guard, not a limit on work: the wait ends at once on ready or error, and it outlasts every
 # bounded step of the boot (their own deadlines) plus FIRST_BOOT_UNBOUNDED_S for the steps
@@ -1962,8 +2026,8 @@ class HiveProvisioner:
         # P0-4: never leave a zombie 'updating' state. Every failure ends 'running' with the
         # reason, never 'error': an errored Hive is offered Retry, which deletes and recreates
         # it. A failure before the SSM command is sent never touched the Hive; after it is
-        # sent the outcome on the box is unknown (the script rolls back only on its own
-        # health check), so the message says which.
+        # sent the outcome on the box is unknown (the script rolls back a failure of its own
+        # steps from the install on, but not one of SSM itself), so the message says which.
         _update_succeeded = False
         _command_sent = [False]
         try:
@@ -2025,10 +2089,11 @@ echo "=== Updating to v{version} ==="
 # only when /usr/bin/caddy is another build (a failure keeps the old one and stops here).
 {caddy_binary_sh}
 
-# G7: Backup for rollback — exclude .venv (~300MB, never overwritten by rsync).
-# Same denylist as deploy: backup what deploy touches, skip what it skips.
+# G7: Backup for rollback — exclude .venv (~300MB, never overwritten by rsync; the rollback
+# keeps the one in the install tree). --delete: an exact copy, also over a backup an aborted
+# update left behind.
 echo "Backing up current installation..."
-rsync -a --exclude='backend/.venv' /opt/swarmai/ /opt/swarmai.bak/
+rsync -a --delete --exclude='backend/.venv' /opt/swarmai/ /opt/swarmai.bak/
 
 # Download and extract new version. A failed update leaves these behind, and /tmp is on
 # disk (user_data.py TMP_ON_DISK_SH), so a reboot no longer clears them: start empty, or
@@ -2042,6 +2107,10 @@ verify_hive_package /tmp/hive-update.tar.gz {bucket} {version} {region}
 mkdir -p /tmp/hive-new
 tar xzf /tmp/hive-update.tar.gz --strip-components=1 -C /tmp/hive-new/
 
+{_UPDATE_ROLLBACK_SH}
+# From here on every failure rolls back.
+UPDATE_ARMED=1
+
 # Single rsync: sync EVERYTHING from tarball, protect ONLY runtime state.
 # Denylist (protect): .venv (installed deps), .hive-bucket (deploy-time config), the
 # code-intel grammars (gitignored, so never in the package; the step below rebuilds them
@@ -2054,6 +2123,7 @@ rsync -a --delete \
   /tmp/hive-new/ /opt/swarmai/
 
 # Re-install Python package (picks up new deps from pyproject.toml)
+UPDATE_PIP_STARTED=1
 cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 
 {TREE_SITTER_GRAMMARS_SH}
@@ -2114,8 +2184,14 @@ fi
 # kept running the old unit: one without EnvironmentFile=/etc/swarmai/hive-auth.env
 # started the backend with an empty HIVE_PASS_HASH, and app-layer auth denied every
 # API request from that update on. Install the package's unit whenever it differs.
+# The unit it replaces is kept for the rollback in a file only root can write.
 if ! cmp -s /opt/swarmai/hive/swarmai-hive.service /etc/systemd/system/swarmai-hive.service; then
   echo "systemd unit changed — installing the package's swarmai-hive.service"
+  if [ -f /etc/systemd/system/swarmai-hive.service ]; then
+    unit_prev=$(mktemp /run/swarmai-hive.service.prev.XXXXXX)
+    cp /etc/systemd/system/swarmai-hive.service "$unit_prev"
+    UPDATE_UNIT_PREV=$unit_prev
+  fi
   install -m 644 /opt/swarmai/hive/swarmai-hive.service /etc/systemd/system/swarmai-hive.service
   systemctl daemon-reload
 fi
@@ -2127,26 +2203,16 @@ rm -f /etc/cron.daily/swarmai-backup /tmp/swarm-backup-*.tar.gz
 # A Hive provisioned with /tmp on tmpfs gets it on disk from its next boot (user_data.py).
 {TMP_ON_DISK_SH}
 
-systemctl restart swarmai-hive --no-block
-echo "Waiting for swarmai-hive to start..."
-for i in $(seq 1 30); do
-  if systemctl is-active --quiet swarmai-hive; then
-    echo "swarmai-hive active after ${{i}}s"
-    break
-  fi
-  sleep 1
-done
-
-if ! systemctl is-active --quiet swarmai-hive; then
-  echo "ERROR: swarmai-hive failed to start within 30s"
+# Blocking restart: it returns once the new process passed the unit's /health check (or its
+# start failed), so what follows sees the new process (UPDATE_START_WAIT_S).
+UPDATE_RESTARTED=1
+echo "Restarting swarmai-hive..."
+if timeout {UPDATE_START_WAIT_S} systemctl restart swarmai-hive && systemctl is-active --quiet swarmai-hive; then
+  echo "swarmai-hive active"
+else
+  echo "ERROR: swarmai-hive did not start (restart failed or took over {UPDATE_START_WAIT_S}s)"
   systemctl status swarmai-hive --no-pager || true
-  # G7: Atomic rollback — mv swap avoids gap where install dir doesn't exist.
-  # If mv fails (disk error), /opt/swarmai still exists with new (broken) code
-  # rather than being deleted entirely.
-  echo "Rolling back to previous version..."
-  mv /opt/swarmai /opt/swarmai.failed && mv /opt/swarmai.bak /opt/swarmai
-  rm -rf /opt/swarmai.failed
-  systemctl restart swarmai-hive --no-block || true
+  rollback_update
   exit 1
 fi
 
@@ -2154,13 +2220,14 @@ fi
 ACTUAL_V=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
 if [ -n "$ACTUAL_V" ] && [ "$ACTUAL_V" != "{version}" ]; then
   echo "ERROR: Expected v{version} but health reports v$ACTUAL_V — rolling back"
-  mv /opt/swarmai /opt/swarmai.failed && mv /opt/swarmai.bak /opt/swarmai
-  rm -rf /opt/swarmai.failed
-  systemctl restart swarmai-hive --no-block || true
+  rollback_update
   exit 1
 fi
 
-# Success — remove backup and temp files
+# Success — nothing to roll back any more; remove backup and temp files
+UPDATE_ARMED=0
+trap - ERR EXIT
+if [ -n "$UPDATE_UNIT_PREV" ]; then rm -f "$UPDATE_UNIT_PREV"; fi
 rm -rf /opt/swarmai.bak /tmp/hive-new /tmp/hive-update.tar.gz
 echo "=== Update to v{version} verified ==="
 """

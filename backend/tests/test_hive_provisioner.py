@@ -783,19 +783,16 @@ class TestRollbackSymmetry:
         assert "backend/.venv" in source, \
             "Backup must exclude .venv (same denylist as deploy)"
 
-    def test_rollback_is_atomic_mv_swap(self):
-        """Rollback must use mv swap (not rm + mv) to avoid install dir gap."""
-        import inspect
-        from hive.provisioner import HiveProvisioner
-
-        source = inspect.getsource(HiveProvisioner.update)
-        assert "mv /opt/swarmai /opt/swarmai.failed" in source, \
-            "Rollback must mv current to .failed first (atomic swap)"
-        assert "mv /opt/swarmai.bak /opt/swarmai" in source, \
-            "Rollback must mv backup to install dir"
-        # Must NOT have rm -rf /opt/swarmai as rollback step
-        assert "rm -rf /opt/swarmai\n" not in source, \
-            "Rollback must not rm -rf install dir (non-atomic)"
+    @pytest.mark.asyncio
+    async def test_rollback_restores_in_place_keeping_venv(self):
+        """The backup has no venv, so the rollback restores it in place and never replaces
+        or removes the install dir (swapping it for the backup deleted the only venv;
+        TestUpdateScriptRuns runs it)."""
+        script = await _script_sent_by_update()
+        assert "rsync -a --delete --exclude='backend/.venv' /opt/swarmai.bak/ /opt/swarmai/" in script
+        assert "mv /opt/swarmai " not in script
+        assert "rm -rf /opt/swarmai\n" not in script
+        assert "rm -rf /opt/swarmai.failed" not in script
 
 
 class TestVersionValidation:
@@ -875,7 +872,7 @@ class TestH5UpdateNeverOverwritesCaddyfile:
             "backfill must source the hash from the deployed Caddyfile"
         # And it runs BEFORE the restart, or the restarted backend still reads empty hash.
         backfill_idx = source.index("if [ ! -f /etc/swarmai/hive-auth.env ]")
-        restart_idx = source.index("systemctl restart swarmai-hive --no-block")
+        restart_idx = source.index("systemctl restart swarmai-hive && systemctl is-active")
         assert backfill_idx < restart_idx, \
             "backfill must precede the backend restart (else migration is a no-op this cycle)"
 
@@ -934,8 +931,280 @@ class TestUpdateInstallsSystemdUnit:
         install_i = lines.index("install -m 644 /opt/swarmai/hive/swarmai-hive.service "
                                 "/etc/systemd/system/swarmai-hive.service")
         reload_i = lines.index("systemctl daemon-reload")
-        restart_i = lines.index("systemctl restart swarmai-hive --no-block")
+        restart_i = next(i for i, ln in enumerate(lines) if "systemctl restart swarmai-hive && systemctl is-active" in ln)
         assert cmp_i < install_i < reload_i < restart_i
+
+
+# ── The update script, run on a scratch tree ──
+# The install part of the generated update script (from the backup on) runs on a directory
+# tree under tmp_path: every absolute path it touches is rewritten under it, and systemctl,
+# sudo, aws, curl, mount, umount, sleep and the venv's pip and python are stubs. Each test
+# drives one outcome (a failing restart, a failing pip, a slow start, ...) and reads the tree
+# the script leaves behind.
+
+_SCRATCH_PATHS = re.compile(
+    r"(?<![\w./])(/opt/swarmai|/tmp/hive-new|/tmp/hive-update\.tar\.gz|/tmp/swarm-backup-"
+    r"|/etc/|/usr/local/libexec/swarmai|/usr/lib/tmpfiles\.d|/run/)")
+# Any absolute system path left (a "${VAR:-/opt/...}" default included) fails the test before
+# the script runs, so it never touches the machine running the tests.
+_UNSCOPED_PATHS = re.compile(r"(?<![\w./@$])/(opt|etc|usr/local|usr/lib|run|var|home|tmp)/")
+
+_STUBS = {
+    # systemd as the update sees it: the old process is active; a blocking restart returns
+    # once the new one passed its /health check (exit 0) or its start failed (exit 1); after a
+    # --no-block restart is-active is false for STUB_START_POLLS polls (the stop and the
+    # /health wait), then true unless the start fails.
+    "systemctl": r"""#!/bin/bash
+echo "systemctl $*" >> "$STUB_LOG"
+state="$STUB_DIR/state"
+case "$1" in
+    restart)
+        case " $* " in *" --no-block "*) blocking=0 ;; *) blocking=1 ;; esac
+        if [ "$STUB_START" = fail ]; then
+            echo failed > "$state"
+            [ "$blocking" = 1 ] && exit 1
+        elif [ "$blocking" = 1 ]; then echo active > "$state"
+        else echo "activating ${STUB_START_POLLS:-0}" > "$state"; fi
+        exit 0 ;;
+    is-active)
+        read -r s n < "$state" 2>/dev/null || s=active
+        if [ "$s" = activating ]; then
+            if [ "${n:-0}" -le 0 ]; then s=active; echo active > "$state"
+            else echo "activating $((n - 1))" > "$state"; fi
+        fi
+        [ "$s" = active ] && exit 0
+        exit 3 ;;
+esac
+exit 0
+""",
+    "sudo": r"""#!/bin/bash
+while [ $# -gt 0 ]; do
+    case "$1" in -u) shift 2 ;; -H) shift ;; *) break ;; esac
+done
+exec "$@"
+""",
+    "aws": r"""#!/bin/bash
+# aws s3 cp s3://<bucket>/<key> <dest|-> --region <region>
+src="$FAKE_S3/${3#s3://}"
+if [ "$4" = - ]; then cat "$src"; else cp "$src" "$4"; fi
+""",
+    "curl": r"""#!/bin/bash
+[ -n "${STUB_HEALTH_VERSION:-}" ] || exit 7
+printf '{"version": "%s"}' "$STUB_HEALTH_VERSION"
+""",
+    "mount": "#!/bin/bash\nexit 1\n",
+    "umount": "#!/bin/bash\nexit 1\n",
+    "sleep": "#!/bin/bash\nexit 0\n",
+}
+_PIP_STUB = r"""#!/bin/bash
+echo "pip $(cat pyproject.toml)" >> "$STUB_LOG"
+if [ -n "${STUB_PIP_FAIL_ON:-}" ] && grep -q "$STUB_PIP_FAIL_ON" pyproject.toml; then exit 1; fi
+exit 0
+"""
+
+
+def _write(path: Path, text: str, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    if mode is not None:
+        path.chmod(mode)
+
+
+async def _run_update_on_scratch(tmp_path: Path, *, new_pyproject: str = "new",
+                                 new_unit: str = "unit-old", old_unit: str = "unit-old",
+                                 start: str = "ok", start_polls: int = 0,
+                                 pip_fail_on: str = "", health_version: str = "",
+                                 bad_package: bool = False):
+    """Run the install part of the update script on a scratch tree; return (process, root, log)."""
+    import hashlib
+    import io
+    import os
+    import shutil
+    import subprocess
+    import tarfile
+
+    for tool in ("bash", "rsync", "sha256sum", "tar", "cmp"):
+        if not shutil.which(tool):
+            pytest.skip(f"needs {tool}")
+    version = "2.3.0"
+    script = await _script_sent_by_update(version)
+    body = script[script.index("# G7: Backup for rollback"):]
+    root = tmp_path / "root"
+    body = _SCRATCH_PATHS.sub(lambda m: f"@ROOT@{m.group(1)}", body)
+    assert not _UNSCOPED_PATHS.search(body), \
+        f"the scratch script still reaches the real system: {_UNSCOPED_PATHS.search(body).group(0)}"
+    body = body.replace("@ROOT@", str(root))
+
+    install = root / "opt/swarmai"
+    _write(install / "backend/pyproject.toml", "old")
+    _write(install / "backend/app.py", "v-old")
+    _write(install / "backend/old_only.py", "old")
+    _write(install / ".hive-bucket", "swarmai-hive-test")
+    _write(install / "hive/swarmai-hive.service", old_unit)
+    _write(install / "backend/.venv/bin/pip", _PIP_STUB, 0o755)
+    _write(install / "backend/.venv/bin/python", "#!/bin/bash\nexit 0\n", 0o755)
+    _write(install / "backend/.venv/marker", "the only venv")
+    _write(root / "etc/systemd/system/swarmai-hive.service", "unit-old")
+    _write(root / "etc/swarmai/hive-auth.env", "HIVE_USER=admin\n")
+    (root / "tmp").mkdir(parents=True)
+    (root / "run").mkdir(parents=True)
+
+    name = f"swarmai-hive-v{version}-linux-arm64.tar.gz"
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel, text in (("backend/pyproject.toml", new_pyproject), ("backend/app.py", "v-new"),
+                          ("backend/new_only.py", "new"), ("hive/swarmai-hive.service", new_unit)):
+            data = text.encode()
+            info = tarfile.TarInfo(f"swarmai-hive-v{version}/{rel}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    package = buf.getvalue()
+    s3 = tmp_path / "s3/swarmai-hive-test" / f"v{version}"
+    s3.mkdir(parents=True)
+    (s3 / name).write_bytes(package)
+    digest = "0" * 64 if bad_package else hashlib.sha256(package).hexdigest()
+    (s3 / "checksums.txt").write_text(f"{digest}  {name}\n")
+
+    stubs = tmp_path / "stubs"
+    for tool, text in _STUBS.items():
+        _write(stubs / tool, text, 0o755)
+    log = tmp_path / "stub.log"
+    log.write_text("")
+    env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}", "STUB_LOG": str(log),
+           "STUB_DIR": str(stubs), "FAKE_S3": str(tmp_path / "s3"), "HOME": str(tmp_path),
+           "STUB_START": start, "STUB_START_POLLS": str(start_polls),
+           "STUB_PIP_FAIL_ON": pip_fail_on, "STUB_HEALTH_VERSION": health_version}
+    env.pop("INSTALL_DIR", None)
+    env.pop("REPLAY_HOST_BIN", None)
+    path = tmp_path / "update.sh"
+    path.write_text("#!/bin/bash\nset -euo pipefail\n" + body)
+    proc = subprocess.run(["bash", str(path)], capture_output=True, text=True, timeout=90,
+                          env=env, cwd=tmp_path)
+    return proc, root, log.read_text().splitlines()
+
+
+def _assert_old_tree_with_venv(root: Path) -> None:
+    install = root / "opt/swarmai"
+    assert (install / "backend/.venv/marker").read_text() == "the only venv"
+    assert (install / "backend/.venv/bin/pip").exists()
+    assert (install / "backend/app.py").read_text() == "v-old"
+    assert (install / "backend/pyproject.toml").read_text() == "old"
+    assert (install / "backend/old_only.py").exists()
+    assert not (install / "backend/new_only.py").exists()
+    assert (install / ".hive-bucket").read_text() == "swarmai-hive-test"
+    assert not (root / "opt/swarmai.bak").exists()
+
+
+class TestUpdateScriptRuns:
+    """A failed Hive update must leave a tree that can start: the old code with the venv
+    (hive/swarmai-hive.sh exits "No venv found" without one, and the unit gives up after
+    StartLimitBurst), and a failure at any step after the install tree is touched rolls back."""
+
+    @pytest.mark.asyncio
+    async def test_failed_restart_restores_old_tree_with_venv(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(tmp_path, start="fail")
+        assert proc.returncode != 0, proc.stdout
+        _assert_old_tree_with_venv(root)
+        # pyproject.toml changed and the failed update's pip ran: the old one is installed again
+        assert [ln for ln in log if ln.startswith("pip ")] == ["pip new", "pip old"]
+        assert log[-1] == "systemctl restart swarmai-hive --no-block"   # the old version restarted
+
+    @pytest.mark.asyncio
+    async def test_failed_pip_restores_old_tree_without_restart(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(
+            tmp_path, new_pyproject="new-fails", pip_fail_on="fails")
+        assert proc.returncode != 0, proc.stdout
+        assert "Rolling back" in proc.stdout
+        _assert_old_tree_with_venv(root)
+        assert [ln for ln in log if ln.startswith("pip ")] == ["pip new-fails", "pip old"]
+        assert not [ln for ln in log if ln.startswith("systemctl restart")]
+
+    @pytest.mark.asyncio
+    async def test_version_mismatch_restores_old_tree_with_venv(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(tmp_path, health_version="2.2.9")
+        assert proc.returncode != 0, proc.stdout
+        _assert_old_tree_with_venv(root)
+
+    @pytest.mark.asyncio
+    async def test_unchanged_dependencies_are_not_reinstalled(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(
+            tmp_path, new_pyproject="old", start="fail")
+        assert proc.returncode != 0, proc.stdout
+        assert (root / "opt/swarmai/backend/app.py").read_text() == "v-old"
+        assert [ln for ln in log if ln.startswith("pip ")] == ["pip old"]
+
+    @pytest.mark.asyncio
+    async def test_rollback_restores_the_unit_it_replaced(self, tmp_path):
+        """The unit put back is the one root replaced, never the restored tree's: the Hive user
+        owns that tree, and a unit it planted there would run as root."""
+        proc, root, log = await _run_update_on_scratch(
+            tmp_path, new_unit="unit-new", old_unit="unit-planted-by-the-hive-user", start="fail")
+        assert proc.returncode != 0, proc.stdout
+        assert (root / "etc/systemd/system/swarmai-hive.service").read_text() == "unit-old"
+        assert log.count("systemctl daemon-reload") == 2
+        assert not list((root / "run").glob("swarmai-hive.service.prev.*"))
+
+    @pytest.mark.asyncio
+    async def test_rollback_leaves_an_unreplaced_unit_alone(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(
+            tmp_path, old_unit="unit-planted-by-the-hive-user", start="fail")
+        assert proc.returncode != 0, proc.stdout
+        assert (root / "etc/systemd/system/swarmai-hive.service").read_text() == "unit-old"
+        assert "systemctl daemon-reload" not in log
+
+    @pytest.mark.asyncio
+    async def test_slow_start_the_unit_accepts_is_kept(self, tmp_path):
+        """A start the unit accepts: the old process stops within the default TimeoutStopSec,
+        the new one passes /health within the ExecStartPost window."""
+        stop_s, _start_s, health_s = _unit_limits_s()
+        proc, root, log = await _run_update_on_scratch(tmp_path, start_polls=stop_s + health_s)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "Rolling back" not in proc.stdout
+        assert (root / "opt/swarmai/backend/app.py").read_text() == "v-new"
+
+    @pytest.mark.asyncio
+    async def test_successful_update_installs_new_tree(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(tmp_path, new_unit="unit-new")
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "Rolling back" not in proc.stdout
+        install = root / "opt/swarmai"
+        assert (install / "backend/app.py").read_text() == "v-new"
+        assert (install / "backend/new_only.py").exists()
+        assert not (install / "backend/old_only.py").exists()
+        assert (install / "backend/.venv/marker").read_text() == "the only venv"
+        assert (install / ".hive-bucket").read_text() == "swarmai-hive-test"
+        assert (root / "etc/systemd/system/swarmai-hive.service").read_text() == "unit-new"
+        assert not (root / "opt/swarmai.bak").exists()
+        assert not (root / "tmp/hive-new").exists()
+        assert not list((root / "run").glob("swarmai-hive.service.prev.*"))
+        assert len([ln for ln in log if ln.startswith("systemctl restart")]) == 1
+
+    @pytest.mark.asyncio
+    async def test_bad_package_leaves_tree_untouched(self, tmp_path):
+        proc, root, log = await _run_update_on_scratch(tmp_path, bad_package=True)
+        assert proc.returncode != 0
+        assert "Rolling back" not in proc.stdout
+        install = root / "opt/swarmai"
+        assert (install / "backend/app.py").read_text() == "v-old"
+        assert (install / "backend/.venv/marker").exists()
+        assert not [ln for ln in log if ln.startswith(("pip ", "systemctl restart"))]
+
+    def test_restart_bound_covers_the_units_own_limits(self):
+        from hive.provisioner import UPDATE_START_WAIT_S
+        stop_s, start_s, health_s = _unit_limits_s()
+        assert health_s < start_s
+        assert UPDATE_START_WAIT_S > stop_s + start_s
+
+
+def _unit_limits_s() -> tuple[int, int, int]:
+    """hive/swarmai-hive.service's stop timeout (systemd's default 90 s when it sets none),
+    TimeoutStartSec, and the seconds its ExecStartPost gives /health."""
+    unit = (Path(__file__).parent.parent.parent / "hive/swarmai-hive.service").read_text()
+    stop = re.search(r"^TimeoutStopSec=(\d+)$", unit, re.M)
+    start = re.search(r"^TimeoutStartSec=(\d+)$", unit, re.M)
+    health = re.search(r"^ExecStartPost=.*\$\(seq 1 (\d+)\)", unit, re.M)
+    assert start and health, "the unit's start limits moved"
+    return (int(stop.group(1)) if stop else 90), int(start.group(1)), int(health.group(1))
 
 
 class TestUpdateBackfillExtractsHash:
@@ -968,16 +1237,15 @@ class TestUpdateBackfillExtractsHash:
 class TestH2SystemctlTimeout:
     """H2: systemctl restart must have a timeout guard."""
 
-    def test_update_script_uses_no_block(self):
-        """systemctl restart uses --no-block + poll."""
-        import inspect
-        from hive.provisioner import HiveProvisioner
+    @pytest.mark.asyncio
+    async def test_update_script_bounds_the_restart(self):
+        """The blocking restart runs under timeout, then is-active decides."""
+        from hive.provisioner import UPDATE_START_WAIT_S
 
-        source = inspect.getsource(HiveProvisioner.update)
-        assert "--no-block" in source, "systemctl restart must use --no-block"
-        assert "is-active --quiet swarmai-hive" in source, \
-            "Must poll systemctl is-active after restart"
-        assert "exit 1" in source, "Must exit 1 if service fails to start"
+        script = await _script_sent_by_update()
+        assert (f"if timeout {UPDATE_START_WAIT_S} systemctl restart swarmai-hive "
+                "&& systemctl is-active --quiet swarmai-hive; then") in script
+        assert "exit 1" in script, "Must exit 1 if service fails to start"
 
 
 class TestH1PostUpdateHealthVerification:
@@ -1250,11 +1518,7 @@ class TestG7PreUpdateBackup:
     @pytest.mark.asyncio
     async def test_update_script_has_rollback(self):
         """SSM update script must rollback full backup on failure."""
-        import inspect
-        from hive.provisioner import HiveProvisioner
-
-        source = inspect.getsource(HiveProvisioner.update)
-        assert "Rolling back" in source or "rolling back" in source
+        assert "Rolling back" in await _script_sent_by_update()
 
 
 class TestG8NoNightlyBackup:

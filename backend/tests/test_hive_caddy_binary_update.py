@@ -260,7 +260,7 @@ async def test_update_script_runs_the_binary_step_before_the_install():
     for pin in (CADDY_VERSION, CADDY_ARM64_SHA512, CADDY_ARM64_BINARY_SHA512):
         assert pin in step
     assert script.index(health_exempt_fix_sh()) < script.index(step)
-    assert script.index(step) < script.index("rsync -a --exclude='backend/.venv' /opt/swarmai/ "
+    assert script.index(step) < script.index("rsync -a --delete --exclude='backend/.venv' /opt/swarmai/ "
                                              "/opt/swarmai.bak/")
     assert "caddyserver.com/api/download" not in script
     r = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)

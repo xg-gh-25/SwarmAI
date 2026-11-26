@@ -573,7 +573,7 @@ def test_update_script_runs_the_step_before_the_install():
     script = _update_script()
     step = health_exempt_fix_sh()
     assert script.count(step) == 1
-    assert script.index(step) < script.index("rsync -a --exclude='backend/.venv' /opt/swarmai/ "
+    assert script.index(step) < script.index("rsync -a --delete --exclude='backend/.venv' /opt/swarmai/ "
                                              "/opt/swarmai.bak/")
     assert script.index("set -euo pipefail") < script.index(step)
     r = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)

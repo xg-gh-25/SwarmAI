@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hive.provisioner import UPDATE_WAIT_INTERVAL_S, UPDATE_WAIT_POLLS
+from hive.provisioner import UPDATE_START_WAIT_S, UPDATE_WAIT_INTERVAL_S, UPDATE_WAIT_POLLS
 from hive.user_data import (REPLAY_HOST_BIN, REPLAY_HOST_DEADLINE_S, REPLAY_HOST_DNF_DEADLINE_S,
                             REPLAY_HOST_SH, TREE_SITTER_GRAMMARS_SH, TREE_SITTER_SETUP_DEADLINE_S,
                             render_user_data)
@@ -86,7 +86,7 @@ def test_every_setup_path_runs_the_step_bounded_and_warn_only(variant):
     assert update.count(REPLAY_HOST_SH) == 1
     at = update.index(REPLAY_HOST_SH)
     assert update.index("/tmp/hive-new/ /opt/swarmai/") < update.index(TREE_SITTER_GRAMMARS_SH) < at
-    assert at < update.index("systemctl restart swarmai-hive --no-block")
+    assert at < update.index("systemctl restart swarmai-hive && systemctl is-active")
     # the update takes the script from the checked package, not from the synced tree
     assert update.index("verify_hive_package /tmp/hive-update.tar.gz") \
         < update.index("REPLAY_HOST_TARBALL=/tmp/hive-update.tar.gz\n") < at
@@ -170,6 +170,8 @@ def test_the_deadlines_fit_inside_the_update_wait():
     assert f"REPLAY_HOST_DNF_DEADLINE_S={REPLAY_HOST_DNF_DEADLINE_S} " in REPLAY_HOST_SH
     wait = UPDATE_WAIT_POLLS * UPDATE_WAIT_INTERVAL_S
     assert 2 * (TREE_SITTER_SETUP_DEADLINE_S + REPLAY_HOST_DEADLINE_S) <= wait
+    # the restart's hang guard is a bounded step of the same script
+    assert TREE_SITTER_SETUP_DEADLINE_S + REPLAY_HOST_DEADLINE_S + UPDATE_START_WAIT_S < wait
 
 
 def test_a_long_update_wait_refreshes_the_row_so_it_never_looks_stale():

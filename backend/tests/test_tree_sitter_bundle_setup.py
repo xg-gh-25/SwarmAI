@@ -163,7 +163,7 @@ def test_the_hive_update_keeps_the_grammar_dir_and_bundles_before_the_restart():
     assert script.count(TREE_SITTER_GRAMMARS_SH) == 1
     at = script.index(TREE_SITTER_GRAMMARS_SH)
     assert script.index(".venv/bin/pip install -q -e .") < at
-    assert at < script.index("systemctl restart swarmai-hive --no-block")
+    assert at < script.index("systemctl restart swarmai-hive && systemctl is-active")
     # the package never holds the directory (gitignored), so the sync's --delete
     # must not remove the one the Hive built
     sync = next(ln for ln in _logical_lines(script)
