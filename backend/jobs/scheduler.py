@@ -745,7 +745,7 @@ def validate_config() -> None:
                     errors.append(f"Job '{job.id}': dependency '{dep_id}' not found")
             else:
                 try:
-                    from cron_utils import is_cron_due
+                    from .cron_utils import is_cron_due
                     is_cron_due(job.schedule, datetime(2020, 1, 1, tzinfo=timezone.utc))
                 except ValueError as e:
                     errors.append(f"Job '{job.id}': invalid cron: {e}")

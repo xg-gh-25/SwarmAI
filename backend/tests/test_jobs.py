@@ -625,3 +625,17 @@ class TestJobRunsEndpoint:
         r = client.get("/api/jobs/..%2E/runs")  # single segment, no real match
         assert r.status_code in (200, 404)
         assert "TOP SECRET" not in r.text
+
+
+def test_scheduler_validate_checks_cron_jobs(monkeypatch, capsys):
+    """`jobs.scheduler --validate` reaches the cron check of a cron job (it once failed
+    on every cron job with an import error before checking anything)."""
+    from jobs import scheduler
+    from jobs.models import Job, SchedulerState
+    monkeypatch.setattr(scheduler, "load_config", lambda: {})
+    monkeypatch.setattr(scheduler, "load_feeds", lambda config: [])
+    monkeypatch.setattr(scheduler, "load_state", lambda: SchedulerState())
+    monkeypatch.setattr(scheduler, "load_jobs", lambda: [Job(id="j", name="J", type="agent_task", schedule="0 * * * *",
+                                                       enabled=True, config={"prompt": "hi"})])
+    scheduler.validate_config()  # exits 1 on any error
+    assert "All configuration valid" in capsys.readouterr().out
