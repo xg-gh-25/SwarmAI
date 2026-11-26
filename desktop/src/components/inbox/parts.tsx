@@ -11,6 +11,12 @@
  *                  move, a choice / Escape (the layer stack, hooks/useLayer) / a click
  *                  outside / Tab close it; a letter or Cmd/Ctrl+Enter typed in it is
  *                  marked handled, so the page's shortcuts never act behind it
+ * - `CategoryRail` the left rail of 需要知道 / 趋势 / 已发: groups of categories with
+ *                  counts; the chosen one is `aria-pressed`, each titled group a
+ *                  `role="group"`. An entry with `link` opens another page (a chevron
+ *                  after it, its label says so). Below 720 px it is one scrolling row of
+ *                  chips above the content, groups apart by a thin rule
+ * - `feedLabel`    a trend item's feed name from its `feed:<type>` source kind
  * - `StatusLine`   the overlay's own short confirmation line ("已发送给 …")
  * - `relTime` / `clockTime` / `dayKey` / `dayLabel` / `intervalLabel`  time text
  * - `daysUntil`    whole local days from today to a YYYY-MM-DD due date
@@ -283,4 +289,80 @@ export function daysUntil(ymd: string | null | undefined, now = new Date()): { d
 export function intervalLabel(seconds: number, t: TFunction): string {
   if (seconds >= 3600 && seconds % 3600 === 0) return t('ui.InboxOverlay.channels.everyHours', { count: seconds / 3600 });
   return t('ui.InboxOverlay.channels.everyMinutes', { count: Math.max(1, Math.round(seconds / 60)) });
+}
+
+
+export interface RailItem<K extends string> {
+  key: K; label: string; count?: number | string; tone?: 'alert'; testid?: string;
+  /** Opens another page instead of narrowing this one: a chevron, and `linkLabel` read out. */
+  link?: boolean; linkLabel?: string;
+}
+export interface RailGroup<K extends string> { title?: string; items: RailItem<K>[] }
+
+/** The left rail of a lane: what part of it the content on the right shows. A row is
+ *  its label and, when given, a count (an alert count in the error colour). */
+export function CategoryRail<K extends string>({ groups, value, onChange, narrow, label, testid }: {
+  groups: RailGroup<K>[]; value: K; onChange: (k: K) => void; narrow: boolean; label: string; testid?: string;
+}) {
+  const shown = groups.map((g) => ({ ...g, items: g.items.filter(Boolean) })).filter((g) => g.items.length);
+  const row = (it: RailItem<K>, chip: boolean) => {
+    const on = it.key === value && !it.link;
+    return (
+      <button key={it.key} type="button" onClick={() => onChange(it.key)}
+        aria-pressed={it.link ? undefined : on} aria-label={it.link ? it.linkLabel : undefined}
+        data-testid={it.testid ?? `inbox-rail-${it.key}`} data-on={on || undefined}
+        className={chip
+          ? `inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3 text-small ${on ? 'bg-[var(--color-card)] font-semibold text-[var(--color-text)] shadow-sm' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'}`
+          : `flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left text-body ${on ? 'bg-[var(--color-card)] font-semibold text-[var(--color-text)] shadow-sm' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-hover)]'}`}>
+        <span className="min-w-0 flex-1 truncate">{it.label}</span>
+        {it.count != null && (
+          <span className={`shrink-0 text-meta tabular-nums ${it.tone === 'alert' ? 'font-semibold text-[var(--color-status-error)]' : 'text-[var(--color-text-dim)]'}`}>
+            {it.count}
+          </span>
+        )}
+        {it.link && <span className="material-symbols-outlined icon-xs shrink-0 text-[var(--color-text-dim)]" aria-hidden>chevron_right</span>}
+      </button>
+    );
+  };
+  if (narrow) {
+    return (
+      <nav aria-label={label} data-testid={testid} data-narrow
+        className="flex shrink-0 gap-1 overflow-x-auto border-b border-[var(--color-border)] px-4 py-2">
+        {shown.map((g, i) => (
+          <div key={g.title ?? i} role={g.title ? 'group' : undefined} aria-label={g.title}
+            className={`flex shrink-0 gap-1 ${i ? 'border-l border-[var(--color-border)] pl-1' : ''}`}>
+            {g.items.map((it) => row(it, true))}
+          </div>
+        ))}
+      </nav>
+    );
+  }
+  return (
+    <nav aria-label={label} data-testid={testid}
+      className="flex w-[220px] shrink-0 flex-col overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-bg)] px-2 pb-4 pt-3">
+      {shown.map((g, i) => (
+        <div key={g.title ?? i} className={i ? 'mt-4' : ''} role={g.title ? 'group' : undefined} aria-label={g.title}>
+          {g.title && <div className="px-3 pb-1 text-meta text-[var(--color-text-dim)]" aria-hidden>{g.title}</div>}
+          <div className="flex flex-col gap-0.5">{g.items.map((it) => row(it, false))}</div>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+const FEED_NAMES: Record<string, string> = {
+  rss: 'RSS', 'hacker-news': 'Hacker News', 'github-releases': 'GitHub Releases',
+  'github-trending': 'GitHub Trending', 'github-community': 'GitHub Community',
+  'github-people': 'GitHub People', 'weibo-trending': 'Weibo', 'eastmoney-market': 'East Money',
+  'web-search': 'Web Search', trending: 'Trending',
+};
+
+/** The feed name of a trend item: `feed:hacker-news` → "Hacker News"; a type the app
+ *  does not know is its words capitalised; a trend item from another channel keeps its
+ *  channel label. */
+export function feedLabel(sourceKind: string, channelLabel: string): string {
+  const k = (sourceKind || '').toLowerCase();
+  if (!k.startsWith('feed:')) return channelLabel || sourceKind;
+  const type = k.slice(5);
+  return FEED_NAMES[type] ?? type.split(/[-_]/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
 }

@@ -641,21 +641,44 @@ describe('Inbox sent lane', () => {
     expect(screen.getByTestId('inbox-need-look')).toBeDisabled();
     fireEvent.click(screen.getByTestId('inbox-tab-trend'));
     await waitFor(() => expect(screen.getAllByTestId('inbox-trend-point')).toHaveLength(2));
-    // one good point; the two folded items with javascript: / file: links offer nothing
-    await waitFor(() => expect(screen.getByTestId('inbox-trend-rest')).toBeInTheDocument());
-    expect(screen.getAllByTestId('inbox-trend-open')).toHaveLength(1);
+    expect(screen.getAllByTestId('inbox-trend-open')).toHaveLength(1);   // one good point
+    // the items with javascript: / file: links offer nothing; their list reads as the feed name, no count again
+    fireEvent.click(within(screen.getByTestId('inbox-trend-rail')).getByTestId('inbox-rail-all'));
+    await waitFor(() => expect(screen.getAllByTestId('inbox-trend-item')).toHaveLength(2));
+    expect(screen.queryAllByTestId('inbox-trend-open')).toHaveLength(0);
+  });
+
+  it('趋势 with no summary yet opens on 全部条目, a feed per rail entry in name order', async () => {
+    svc.trendSummary.mockResolvedValue({ generated_at: null, feeds: 2, watched_repos: 0, points: [] });
+    svc.items.mockImplementation(async (lane) => (lane === 'trend' ? [
+      item('t1', { lane: 'trend', source_kind: 'feed:rss', channel_label: 'Feeds' }),
+      item('t2', { lane: 'trend', source_kind: 'feed:hacker-news', channel_label: 'Feeds' }),
+      item('t3', { lane: 'trend', source_kind: 'feed:hacker-news', channel_label: 'Feeds' }),
+    ] : lane === 'reply' ? REPLY : []));
+    setup();
+    fireEvent.click(await screen.findByTestId('inbox-tab-trend'));
+    await waitFor(() => expect(screen.getAllByTestId('inbox-trend-item')).toHaveLength(3));
+    const rail = screen.getByTestId('inbox-trend-rail');
+    expect(within(rail).getByTestId('inbox-rail-all')).toHaveAttribute('aria-pressed', 'true');
+    const feeds = within(rail).getAllByRole('button').map((b) => b.textContent).slice(2);
+    expect(feeds).toEqual(['Hacker News2', 'RSS1']);
+    fireEvent.click(within(rail).getByTestId('inbox-rail-feed:RSS'));
+    await waitFor(() => expect(screen.getAllByTestId('inbox-trend-item')).toHaveLength(1));
+    expect(screen.getByTestId('inbox-trend-lead')).toHaveTextContent('RSS');
   });
 
   it('待你批准: the drafts are not in 等你回复; 已发 → 去批准 opens them in the two panes, with only 不发了', async () => {
     setup();
     await waitFor(() => expect(screen.getAllByTestId('inbox-item').map((r) => r.getAttribute('data-item-id'))).toEqual(['r1', 'r2']));
     fireEvent.click(screen.getByTestId('inbox-tab-sent'));
-    const line = await screen.findByTestId('inbox-sent-proposed');
-    expect(line).toHaveTextContent('1 comment drafted by github-outreach waits for you');
-    expect(line).toHaveTextContent('nothing is sent until you click');
-    // above 要你处理
-    expect(line.compareDocumentPosition(screen.getAllByTestId('inbox-need-card')[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(screen.getByTestId('inbox-sent-approve'));
+    // the rail's first entry, with the drafts' count
+    const approve = await screen.findByTestId('inbox-sent-approve');
+    expect(approve).toHaveTextContent('To approve');
+    expect(approve).toHaveTextContent('1');
+    // it opens another page: said so, never shown as a pressed filter
+    expect(approve).toHaveAttribute('aria-label', 'Open the drafts to approve (1)');
+    expect(approve).not.toHaveAttribute('aria-pressed');
+    fireEvent.click(approve);
     await waitFor(() => expect(screen.getAllByTestId('inbox-item').map((r) => r.getAttribute('data-item-id'))).toEqual(['p1']));
     expect(screen.getByTestId('inbox-tab-sent')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('inbox-proposed-label')).toHaveTextContent('github-outreach');
@@ -681,12 +704,37 @@ describe('Inbox sent lane', () => {
     await waitFor(() => expect(screen.getByTestId('inbox-sent')).toBeInTheDocument());
   });
 
-  it('no 待你批准 line when no draft waits', async () => {
+  it('no 待你批准 entry when no draft waits', async () => {
     svc.counts.mockResolvedValue(counts({ proposed: 0 }));
     setup();
     fireEvent.click(await screen.findByTestId('inbox-tab-sent'));
     await screen.findAllByTestId('inbox-need-card');
-    expect(screen.queryByTestId('inbox-sent-proposed')).toBeNull();
+    expect(screen.queryByTestId('inbox-sent-approve')).toBeNull();
+  });
+
+  it('the rail: 要你处理 shows the sends that need the person alone; 全部 brings the list back', async () => {
+    setup();
+    fireEvent.click(await screen.findByTestId('inbox-tab-sent'));
+    await screen.findAllByTestId('inbox-sent-row');
+    const need = screen.getByTestId('inbox-sent-need');
+    expect(need).toHaveTextContent(String(SENDS.need_you.length));
+    fireEvent.click(need);
+    await waitFor(() => expect(screen.queryAllByTestId('inbox-sent-row')).toHaveLength(0));
+    expect(screen.getAllByTestId('inbox-need-card')).toHaveLength(SENDS.need_you.length);
+    expect(need).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByTestId('inbox-sent-filter-all'));
+    await waitFor(() => expect(screen.getAllByTestId('inbox-sent-row').length).toBeGreaterThan(0));
+  });
+
+  it('要你处理 emptied: the rail goes back to 全部 and the list shows', async () => {
+    setup();
+    fireEvent.click(await screen.findByTestId('inbox-tab-sent'));
+    fireEvent.click(await screen.findByTestId('inbox-sent-need'));
+    await waitFor(() => expect(screen.queryAllByTestId('inbox-sent-row')).toHaveLength(0));
+    svc.sends.mockResolvedValue({ ...SENDS, need_you: [] });
+    fireEvent.click(screen.getAllByTestId('inbox-need-not-sent')[0]);
+    await waitFor(() => expect(screen.getAllByTestId('inbox-sent-row').length).toBeGreaterThan(0));
+    expect(screen.getByTestId('inbox-sent-filter-all')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('the filter reloads the sends for that filter', async () => {
@@ -795,6 +843,45 @@ describe('Inbox aware lane', () => {
     expect(svc.action).not.toHaveBeenCalled();
   });
 
+  it('the rail counts each part and shows only the chosen one', async () => {
+    await openAware();
+    const rail = screen.getByTestId('inbox-aware-rail');
+    const count = (k: string) => within(rail).getByTestId(`inbox-rail-${k}`).textContent;
+    expect(count('all')).toBe('All');   // the tab carries the total
+    expect(count('act')).toBe('Needs you to act5');
+    expect(count('today')).toBe('Today4');
+    expect(count('yesterday')).toBe('Yesterday2');
+    expect(count('earlier')).toBe('Earlier3');
+    expect(count('ch:slack')).toBe('Slack9');
+    fireEvent.click(within(rail).getByTestId('inbox-rail-yesterday'));
+    await waitFor(() => expect(screen.getAllByTestId('inbox-aware-act-row').map((r) => r.getAttribute('data-item-id'))).toEqual(['x-soon']));
+    expect(screen.getAllByTestId('inbox-aware-row').map((r) => r.getAttribute('data-item-id'))).toEqual(['y1']);
+    expect(screen.getByTestId('inbox-aware-lead')).toHaveTextContent('Yesterday · 2');
+    fireEvent.click(within(rail).getByTestId('inbox-rail-act'));
+    await waitFor(() => expect(screen.queryAllByTestId('inbox-aware-row')).toHaveLength(0));
+    expect(screen.getAllByTestId('inbox-aware-act-row')).toHaveLength(5);
+  });
+
+  it('a channel with no item is not in the rail; an emptied part says so', async () => {
+    svc.items.mockImplementation(async (lane) => (lane === 'aware'
+      ? [item('m1', { lane: 'aware', source_kind: 'mail', channel_label: 'Mail' }), item('s1', { lane: 'aware' })]
+      : lane === 'reply' ? REPLY : []));
+    setup();
+    fireEvent.click(await screen.findByTestId('inbox-tab-aware'));
+    const rail = await screen.findByTestId('inbox-aware-rail');
+    expect(within(rail).queryByTestId('inbox-rail-ch:github')).toBeNull();
+    expect(within(rail).queryByTestId('inbox-rail-act')).toBeNull();
+    // channels in a fixed order: mail before Slack
+    const keys = within(rail).getAllByRole('button').map((b) => b.getAttribute('data-testid'));
+    expect(keys.indexOf('inbox-rail-ch:mail')).toBeLessThan(keys.indexOf('inbox-rail-ch:slack'));
+    fireEvent.click(within(rail).getByTestId('inbox-rail-ch:mail'));
+    await waitFor(() => expect(screen.getAllByTestId('inbox-aware-row').map((r) => r.getAttribute('data-item-id'))).toEqual(['m1']));
+    fireEvent.click(screen.getByTestId('inbox-aware-done'));
+    // the part ran out: back to 全部, not a blank page
+    await waitFor(() => expect(screen.getAllByTestId('inbox-aware-row').map((r) => r.getAttribute('data-item-id'))).toEqual(['s1']));
+    expect(within(rail).getByTestId('inbox-rail-all')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('a failed 这一天的都知道了 hides nothing', async () => {
     await openAware();
     svc.doneMany.mockRejectedValue(new Error('boom'));
@@ -808,6 +895,16 @@ describe('Inbox aware lane', () => {
 
 // ── narrow ───────────────────────────────────────────────────────────────────
 describe('Inbox narrow layout', () => {
+  it('narrow: the rail of 需要知道 / 已发 is a row of chips above the content', async () => {
+    roWidth = 600;
+    svc.items.mockImplementation(async (lane) => (lane === 'aware' ? AWARE : lane === 'reply' ? REPLY : []));
+    setup();
+    fireEvent.click(await screen.findByTestId('inbox-tab-aware'));
+    await waitFor(() => expect(screen.getByTestId('inbox-aware-rail')).toHaveAttribute('data-narrow'));
+    fireEvent.click(screen.getByTestId('inbox-tab-sent'));
+    await waitFor(() => expect(screen.getByTestId('inbox-sent-rail')).toHaveAttribute('data-narrow'));
+  });
+
   it('narrow layout back button: one pane at a time', async () => {
     roWidth = 600;
     setup();

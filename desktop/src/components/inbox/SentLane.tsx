@@ -3,35 +3,46 @@
  * (design docs/design/2026-11-20-inbox.md §7). The data is `inbox_sends` as the API
  * returns it (`GET /api/inbox/sends`), nothing stored apart.
  *
- * 0. 待你批准 (only when GitHub outreach drafted comments): one quiet line, "N 条代拟评论等你
- *    批准 · <producer> 起草，你点了才发", and 去批准, which opens the drafts in the two-pane
- *    reply view (InboxOverlay's `proposed` page). Nothing is sent from here.
- * 1. 要你处理 (only when there is one): a tinted card per send. `unknown` (warning):
- *    去看看 + 确认没发出去; `failed` (error): 再发一次, disabled with 修复渠道 beside it
- *    when the failure is the source's (`blocked_by_source`).
- * 2. 已发, grouped by day: who it went to, the channel, 自动 for an auto send, 有回复
- *    (jumps to that item in 等你回复). Filter 全部 / 我发的 / 自动.
+ * The left rail (`CategoryRail`):
+ * - 待你批准 (only when GitHub outreach drafted comments, with their count), a group of
+ *   its own with a chevron: it opens the drafts in the two-pane reply view (InboxOverlay's
+ *   `proposed` page) rather than narrowing this one. Nothing is sent from here.
+ * - 要你处理 (only when there is one, an alert count): the sends that need the person,
+ *   alone; once none is left, the rail goes back to 全部.
+ * - 已发: 全部 (the default) · 我发的 · 自动, the server's filter of the sent list.
+ * Below 720 px the rail is a row of chips on top.
+ *
+ * Content: 要你处理 cards first (a tinted card per send: `unknown` (warning) 去看看 +
+ * 确认没发出去; `failed` (error) 再发一次, disabled with 修复渠道 beside it when the failure
+ * is the source's, `blocked_by_source`), then the sent list grouped by day: who it went
+ * to, the channel, 自动 for an auto send, 有回复 (jumps to that item in 等你回复).
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Segmented } from '../overlay';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, invalidateOverlay } from '../layout/overlayQueries';
 import { OverlayEmpty, OverlayError, OverlayLoading } from '../layout/OverlayState';
 import { inboxService, type SendOut, type SendsFilter } from '../../services/inbox';
 import { openExternal } from '../../utils/openExternal';
-import { Avatar, ChannelPill, clockTime, dayKey, dayLabel, webUrl } from './parts';
+import { Avatar, CategoryRail, ChannelPill, clockTime, dayKey, dayLabel, webUrl, type RailGroup, type RailItem } from './parts';
 
-export function SentLane({ onGotoItem, onFixChannels, notify, proposedCount = 0, proposedBy = '', onApprove }: {
+type Part = SendsFilter | 'need' | 'approve';
+
+export function SentLane({ onGotoItem, onFixChannels, notify, proposedCount = 0, onApprove, narrow = false }: {
   onGotoItem: (itemId: string) => void; onFixChannels: () => void; notify: (msg: string) => void;
-  /** Drafts waiting on approval (threads), their producers, and the way to them. */
-  proposedCount?: number; proposedBy?: string; onApprove?: () => void;
+  /** Drafts waiting on approval and the way to them (the rail's 待你批准). */
+  proposedCount?: number; onApprove?: () => void; narrow?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
-  const [filter, setFilter] = useState<SendsFilter>('all');
-  const q = useQuery(overlayQuery.inboxSends(filter));
+  const [part, setPart] = useState<Part>('all');
+  const filter: SendsFilter = part === 'mine' || part === 'auto' ? part : 'all';
+  // the previous answer stays while another filter loads, so the rail never blinks out
+  const q = useQuery({ ...overlayQuery.inboxSends(filter), placeholderData: keepPreviousData });
   const [busy, setBusy] = useState<string | null>(null);
+  // 要你处理 emptied (the last one resent or confirmed): back to 全部
+  const needCount = q.data?.need_you.length;
+  useEffect(() => { if (part === 'need' && needCount === 0) setPart('all'); }, [part, needCount]);
 
   const run = async (s: SendOut, fn: () => Promise<unknown>, okMsg: string) => {
     if (busy) return;
@@ -47,15 +58,32 @@ export function SentLane({ onGotoItem, onFixChannels, notify, proposedCount = 0,
     }
   };
 
-  if (q.isPending) return <div className="flex-1"><OverlayLoading /></div>;
-  if (q.isError) {
+  if (q.isPending && !q.data) return <div className="flex-1"><OverlayLoading /></div>;
+  if (q.isError && !q.data) {
     return (
       <div className="flex-1">
         <OverlayError testid="inbox-load-error" retryTestid="inbox-load-retry" message={t('ui.InboxOverlay.loadError')} onRetry={() => void q.refetch()} />
       </div>
     );
   }
-  const { need_you: need, sent, total_7d, auto_7d } = q.data;
+  const { need_you: need, sent: allSent, total_7d, auto_7d } = q.data!;
+  const sent = part === 'need' ? [] : allSent;
+  const approve: RailItem<Part>[] = proposedCount > 0 && onApprove ? [{
+    key: 'approve', label: t('ui.InboxOverlay.sent.railApprove'), count: proposedCount, testid: 'inbox-sent-approve',
+    link: true, linkLabel: t('ui.InboxOverlay.sent.railApproveOpen', { count: proposedCount }),
+  }] : [];
+  const needs: RailItem<Part>[] = need.length
+    ? [{ key: 'need', label: t('ui.InboxOverlay.sent.railNeed'), count: need.length, tone: 'alert', testid: 'inbox-sent-need' }] : [];
+  const rail: RailGroup<Part>[] = [
+    { items: approve },
+    { items: needs },
+    { title: t('ui.InboxOverlay.sent.title'), items: [
+      { key: 'all' as Part, label: t('ui.InboxOverlay.sent.filterAll'), testid: 'inbox-sent-filter-all' },
+      { key: 'mine' as Part, label: t('ui.InboxOverlay.sent.filterMine'), testid: 'inbox-sent-filter-mine' },
+      { key: 'auto' as Part, label: t('ui.InboxOverlay.sent.filterAuto'), testid: 'inbox-sent-filter-auto' },
+    ] },
+  ];
+  const choose = (k: Part) => { if (k === 'approve') onApprove?.(); else setPart(k); };
   const days: string[] = [];
   for (const s of sent) {
     const k = dayKey(s.sent_at ?? s.created_at);
@@ -63,26 +91,16 @@ export function SentLane({ onGotoItem, onFixChannels, notify, proposedCount = 0,
   }
 
   return (
+    <div className={`flex min-h-0 flex-1 ${narrow ? 'flex-col' : ''}`}>
+      <CategoryRail groups={rail} value={part} onChange={choose} narrow={narrow}
+        label={t('ui.InboxOverlay.railLabel')} testid="inbox-sent-rail" />
     <div className="min-h-0 flex-1 overflow-y-auto" data-testid="inbox-sent">
-      <div className="mx-auto max-w-[680px] px-8 pb-14 pt-7">
+      <div className={`mx-auto max-w-[760px] pb-14 pt-7 transition-opacity ${narrow ? 'px-6' : 'px-10'} ${q.isPlaceholderData ? 'opacity-60' : ''}`}
+        aria-busy={q.isPlaceholderData || undefined}>
         <p className="text-display font-semibold text-[var(--color-text)]">
           {need.length ? t('ui.InboxOverlay.sent.leadNeed', { count: need.length }) : t('ui.InboxOverlay.sent.leadAll')}
         </p>
         <p className="mt-1 text-small text-[var(--color-text-dim)]">{t('ui.InboxOverlay.sent.sub', { total: total_7d, auto: auto_7d })}</p>
-
-        {proposedCount > 0 && onApprove && (
-          <div className="mt-5 flex items-center gap-2.5 px-1 text-small text-[var(--color-text-muted)]" data-testid="inbox-sent-proposed">
-            <span className="material-symbols-outlined icon-sm text-[var(--color-zone-system)]" aria-hidden>smart_toy</span>
-            <span className="min-w-0 flex-1">
-              {proposedBy
-                ? t('ui.InboxOverlay.sent.proposed', { count: proposedCount, producer: proposedBy })
-                : t('ui.InboxOverlay.sent.proposedAnon', { count: proposedCount })}
-            </span>
-            <button type="button" className="btn-sm btn-soft" onClick={onApprove} data-testid="inbox-sent-approve">
-              {t('ui.InboxOverlay.sent.approve')}
-            </button>
-          </div>
-        )}
 
         {need.length > 0 && (
           <div className="mt-5 flex flex-col gap-2.5">
@@ -92,20 +110,10 @@ export function SentLane({ onGotoItem, onFixChannels, notify, proposedCount = 0,
           </div>
         )}
 
-        <div className="mt-9 flex items-center">
-          <h2 className="text-heading font-semibold text-[var(--color-text)]">{t('ui.InboxOverlay.sent.title')}</h2>
-          <span className="ml-auto">
-            <Segmented value={filter} onChange={setFilter} options={[
-              { key: 'all', label: t('ui.InboxOverlay.sent.filterAll'), testid: 'inbox-sent-filter-all' },
-              { key: 'mine', label: t('ui.InboxOverlay.sent.filterMine'), testid: 'inbox-sent-filter-mine' },
-              { key: 'auto', label: t('ui.InboxOverlay.sent.filterAuto'), testid: 'inbox-sent-filter-auto' },
-            ]} />
-          </span>
-        </div>
-        {sent.length === 0 && <OverlayEmpty>{t('ui.InboxOverlay.sent.empty')}</OverlayEmpty>}
+        {part !== 'need' && sent.length === 0 && <div className="mt-9"><OverlayEmpty>{t('ui.InboxOverlay.sent.empty')}</OverlayEmpty></div>}
         {days.map((d) => (
           <div key={d}>
-            <div className="mx-3 mb-0.5 mt-[18px] text-meta text-[var(--color-text-dim)]">{dayLabel(d, t, i18n.language)}</div>
+            <div className="mx-3 mb-0.5 mt-7 text-meta font-semibold text-[var(--color-text-muted)]">{dayLabel(d, t, i18n.language)}</div>
             <ul className="flex flex-col gap-1">
               {sent.filter((s) => dayKey(s.sent_at ?? s.created_at) === d).map((s) => (
                 <li key={s.id} data-testid="inbox-sent-row" className="group flex items-center gap-3.5 rounded-xl p-3 hover:bg-[var(--color-hover)]">
@@ -141,6 +149,7 @@ export function SentLane({ onGotoItem, onFixChannels, notify, proposedCount = 0,
           </div>
         ))}
       </div>
+    </div>
     </div>
   );
 }

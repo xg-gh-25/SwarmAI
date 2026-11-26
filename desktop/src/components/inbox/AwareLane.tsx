@@ -16,6 +16,13 @@
  *    marked. Rows show 交给 Swarm and 知道了 on hover / focus.
  * After a row is handled, focus goes to the next row shown (else the previous, else the
  * lane), never to <body>.
+ *
+ * The left rail (`CategoryRail`) narrows what is shown: 全部 · 要你动手; 时间: 今天 · 昨天 ·
+ * 更早; 渠道: one entry per channel the items come from. Each entry carries its count; an
+ * entry with nothing in it is not listed (全部 always is, without a count: the tab has it).
+ * Channels keep a fixed order (mail, Slack, GitHub, other). When the chosen part runs out
+ * (its last item handled), the rail goes back to 全部. The content shows the chosen part
+ * with the same two sections. Below 720 px the rail is a row of chips on top.
  * Rows in a group sit closer together than the groups do; whitespace only, no boxes.
  */
 import { useTranslation } from 'react-i18next';
@@ -23,9 +30,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
 import { invalidateOverlay } from '../layout/overlayQueries';
 import { OverlayEmpty, OverlayError, OverlayLoading } from '../layout/OverlayState';
-import { inboxService, type ItemOut } from '../../services/inbox';
+import { channelKey, inboxService, type ItemOut } from '../../services/inbox';
 import { openExternal } from '../../utils/openExternal';
-import { Avatar, ChannelPill, ThreadMore, dayKey, dayLabel, daysUntil, relTime, webUrl } from './parts';
+import { Avatar, CategoryRail, ChannelPill, ThreadMore, dayKey, dayLabel, daysUntil, relTime, webUrl, type RailItem } from './parts';
 
 /** A due date this many days away (or less) is shown in the warning colour; past, in red. */
 const SOON_DAYS = 3;
@@ -44,14 +51,54 @@ function byDue(a: ItemOut, b: ItemOut): number {
   return stamp(b.received_at) - stamp(a.received_at);
 }
 
-export function AwareLane({ items, loading, error, onRetry, onHandled, onToChat, notify }: {
-  items: ItemOut[]; loading: boolean; error: boolean; onRetry: () => void;
+type When = 'today' | 'yesterday' | 'earlier';
+
+/** Which day an item came in, as the rail counts it (local days). */
+function whenOf(iso: string, now = new Date()): When {
+  const k = dayKey(iso);
+  if (k === dayKey(now.toISOString())) return 'today';
+  if (k === dayKey(new Date(now.getTime() - 86_400_000).toISOString())) return 'yesterday';
+  return 'earlier';
+}
+
+export function AwareLane({ items: all, loading, error, onRetry, onHandled, onToChat, notify, narrow = false }: {
+  items: ItemOut[]; loading: boolean; error: boolean; onRetry: () => void; narrow?: boolean;
   /** Hide a handled row; `focusId` is the row to focus next (null: the lane itself). */
   onHandled: (id: string, focusId?: string | null) => void;
   onToChat: (item: ItemOut) => void; notify: (msg: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
+  /** The rail's choice: all, act, a time (today / yesterday / earlier) or `ch:<channel>`. */
+  const [chosen, setPart] = useState<string>('all');
+  const match = (x: ItemOut, k: string) =>
+    k === 'all' ? true : k === 'act' ? x.needs_action
+      : k.startsWith('ch:') ? channelKey(x.source_kind) === k.slice(3) : whenOf(x.received_at) === k;
+  // a part with nothing left (its last item handled) falls back to 全部, and stays there
+  const part = chosen !== 'all' && !all.some((x) => match(x, chosen)) ? 'all' : chosen;
+  useEffect(() => { if (part !== chosen) setPart(part); }, [part, chosen]);
+  const items = all.filter((x) => match(x, part));
+  const railItem = (key: string, label: string): RailItem<string> | null => {
+    const count = all.filter((x) => match(x, key)).length;
+    return key === 'all' ? { key, label } : count ? { key, label, count } : null;
+  };
+  const channels: RailItem<string>[] = [];
+  for (const x of all) {
+    const k = `ch:${channelKey(x.source_kind)}`;
+    if (!channels.some((c) => c.key === k)) channels.push({ key: k, label: x.channel_label, count: 0 });
+  }
+  channels.forEach((c) => { c.count = all.filter((x) => match(x, c.key)).length; });
+  const ORDER = ['ch:mail', 'ch:slack', 'ch:github'];
+  const rank = (k: string) => (ORDER.indexOf(k) + 1 || ORDER.length + 1);
+  channels.sort((a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label));
+  const rail = [
+    { items: [railItem('all', t('ui.InboxOverlay.aware.railAll')), railItem('act', t('ui.InboxOverlay.aware.actTitle'))] },
+    { title: t('ui.InboxOverlay.aware.railWhen'), items: [
+      railItem('today', t('ui.InboxOverlay.time.today')), railItem('yesterday', t('ui.InboxOverlay.time.yesterday')),
+      railItem('earlier', t('ui.InboxOverlay.aware.railEarlier'))] },
+    { title: t('ui.InboxOverlay.aware.railChannel'), items: channels },
+  ].map((g) => ({ ...g, items: g.items.filter((x): x is RailItem<string> => x != null) }));
+  const partLabel = rail.flatMap((g) => g.items).find((x) => x.key === part)?.label ?? '';
   /** The row id, or `day:<key>`, being written. */
   const [busy, setBusy] = useState<string | null>(null);
   /** The day whose 这一天的都知道了 was clicked once and waits for the confirming click. */
@@ -118,16 +165,26 @@ export function AwareLane({ items, loading, error, onRetry, onHandled, onToChat,
     void doneDay(d, group);
   };
 
+  const showRail = !loading && !error && all.length > 0;
   return (
+    <div className={`flex min-h-0 flex-1 ${narrow ? 'flex-col' : ''}`}>
+      {showRail && (
+        <CategoryRail groups={rail} value={part} onChange={setPart} narrow={narrow}
+          label={t('ui.InboxOverlay.railLabel')} testid="inbox-aware-rail" />
+      )}
     <div className="min-h-0 flex-1 overflow-y-auto" data-testid="inbox-aware">
-      <div className="mx-auto max-w-[680px] px-8 pb-14 pt-7">
+      <div className={`mx-auto max-w-[760px] pb-14 pt-7 ${narrow ? 'px-6' : 'px-10'}`}>
         {loading ? <OverlayLoading /> : error ? (
           <OverlayError testid="inbox-load-error" retryTestid="inbox-load-retry" message={t('ui.InboxOverlay.loadError')} onRetry={onRetry} />
-        ) : items.length === 0 ? (
+        ) : all.length === 0 ? (
           <OverlayEmpty icon="check_circle">{t('ui.InboxOverlay.aware.empty')}</OverlayEmpty>
+        ) : items.length === 0 ? (
+          <OverlayEmpty icon="check_circle">{t('ui.InboxOverlay.aware.emptyPart')}</OverlayEmpty>
         ) : (
           <>
-            <p className="text-display font-semibold text-[var(--color-text)]">{t('ui.InboxOverlay.aware.lead', { count: items.length })}</p>
+            <p className="text-display font-semibold text-[var(--color-text)]" data-testid="inbox-aware-lead">
+              {part === 'all' ? t('ui.InboxOverlay.aware.lead', { count: items.length }) : `${partLabel} · ${items.length}`}
+            </p>
             <p className="mt-1 text-small text-[var(--color-text-dim)]">{t('ui.InboxOverlay.aware.sub')}</p>
 
             {toAct.length > 0 && (
@@ -184,6 +241,7 @@ export function AwareLane({ items, loading, error, onRetry, onHandled, onToChat,
           </>
         )}
       </div>
+    </div>
     </div>
   );
 }

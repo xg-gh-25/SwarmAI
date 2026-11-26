@@ -5667,7 +5667,12 @@
         "dueOverdue": "已过期 · {{date}}",
         "dueToday": "今天到期",
         "dayConfirm_one": "再点一次，标完这一天的 {{count}} 条",
-        "dayConfirm_other": "再点一次，标完这一天的 {{count}} 条"
+        "dayConfirm_other": "再点一次，标完这一天的 {{count}} 条",
+        "railAll": "全部",
+        "railWhen": "时间",
+        "railEarlier": "更早",
+        "railChannel": "渠道",
+        "emptyPart": "这一类现在没有了。"
       },
       "trend": {
         "lead_one": "今天值得看的 {{count}} 件事",
@@ -5676,8 +5681,10 @@
         "empty": "还没有趋势。",
         "open": "读原文",
         "learn": "学进 Brain",
-        "rest_one": "其余 {{count}} 条",
-        "rest_other": "其余 {{count}} 条"
+        "railSummary": "今日小结",
+        "railAll": "全部条目",
+        "noSummary": "今天的小结还没生成，先看看全部条目。",
+        "emptyPart": "这一类现在没有了。"
       },
       "sent": {
         "leadNeed_one": "{{count}} 条要你处理",
@@ -5703,11 +5710,9 @@
         "hasReply": "有回复",
         "openAt": "在原处查看",
         "empty": "还没有发过。",
-        "proposed_one": "{{count}} 条代拟评论等你批准 · {{producer}} 起草，你点了才发",
-        "proposed_other": "{{count}} 条代拟评论等你批准 · {{producer}} 起草，你点了才发",
-        "proposedAnon_one": "{{count}} 条代拟评论等你批准 · 你点了才发",
-        "proposedAnon_other": "{{count}} 条代拟评论等你批准 · 你点了才发",
-        "approve": "去批准"
+        "railApprove": "待你批准",
+        "railNeed": "要你处理",
+        "railApproveOpen": "打开待你批准（{{count}} 条）"
       },
       "channels": {
         "title": "渠道",
@@ -5815,7 +5820,8 @@
       },
       "toChatHint": "在新的 chat 里处理，先不发送",
       "threadMore_one": "同一对话还有 {{count}} 条",
-      "threadMore_other": "同一对话还有 {{count}} 条"
+      "threadMore_other": "同一对话还有 {{count}} 条",
+      "railLabel": "分类"
     },
     "api": {
       "cannotConnect": "无法连接到后端服务",

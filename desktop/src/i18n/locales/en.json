@@ -5667,7 +5667,12 @@
         "dueOverdue": "Overdue · {{date}}",
         "dueToday": "Due today",
         "dayConfirm_one": "Click again to mark this {{count}} as seen",
-        "dayConfirm_other": "Click again to mark these {{count}} as seen"
+        "dayConfirm_other": "Click again to mark these {{count}} as seen",
+        "railAll": "All",
+        "railWhen": "When",
+        "railEarlier": "Earlier",
+        "railChannel": "Channel",
+        "emptyPart": "Nothing here right now."
       },
       "trend": {
         "lead_one": "{{count}} thing worth a look today",
@@ -5676,8 +5681,10 @@
         "empty": "No trends yet.",
         "open": "Read the original",
         "learn": "Learn into the Brain",
-        "rest_one": "{{count}} more",
-        "rest_other": "{{count}} more"
+        "railSummary": "Today's picks",
+        "railAll": "All items",
+        "noSummary": "Today's picks are not ready yet. See all items.",
+        "emptyPart": "Nothing here right now."
       },
       "sent": {
         "leadNeed_one": "{{count}} send needs you",
@@ -5703,11 +5710,9 @@
         "hasReply": "Replied",
         "openAt": "Open where it was sent",
         "empty": "Nothing sent yet.",
-        "proposed_one": "{{count}} comment drafted by {{producer}} waits for you · nothing is sent until you click",
-        "proposed_other": "{{count}} comments drafted by {{producer}} wait for you · nothing is sent until you click",
-        "proposedAnon_one": "{{count}} drafted comment waits for you · nothing is sent until you click",
-        "proposedAnon_other": "{{count}} drafted comments wait for you · nothing is sent until you click",
-        "approve": "Review"
+        "railApprove": "To approve",
+        "railNeed": "Needs you",
+        "railApproveOpen": "Open the drafts to approve ({{count}})"
       },
       "channels": {
         "title": "Channels",
@@ -5815,7 +5820,8 @@
       },
       "toChatHint": "Work on it in a new chat. Nothing is sent.",
       "threadMore_one": "{{count}} more in this conversation",
-      "threadMore_other": "{{count}} more in this conversation"
+      "threadMore_other": "{{count}} more in this conversation",
+      "railLabel": "Categories"
     },
     "api": {
       "cannotConnect": "Unable to connect to backend service",

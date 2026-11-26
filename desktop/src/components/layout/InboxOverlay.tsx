@@ -100,10 +100,6 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
   const proposedItems = useMemo<ItemOut[]>(() => (proposedQ.data ?? []).filter((x) => !gone.has(x.id)), [proposedQ.data, gone]);
   // the two-pane lane on screen: 等你回复, or 待你批准
   const queue = view === 'proposed' ? proposedItems : replyItems;
-  const producers = useMemo(
-    () => [...new Set((proposedQ.data ?? []).map((x) => x.producer).filter(Boolean))].join(' · '),
-    [proposedQ.data],
-  );
   const awareItems = useMemo(() => (awareQ.data ?? []).filter((x) => !gone.has(x.id)), [awareQ.data, gone]);
 
   // the selection follows the list: a missing or handled id falls to the first item
@@ -254,12 +250,12 @@ export function InboxContent({ close, onDispatch }: InboxContentProps) {
         {view === 'aware' && (
           <AwareLane items={awareItems} loading={awareQ.isPending} error={awareQ.isError && awareQ.data === undefined}
             onRetry={() => void awareQ.refetch()} onHandled={onAwareHandled}
-            onToChat={toChat} notify={notify} />
+            onToChat={toChat} notify={notify} narrow={narrow} />
         )}
-        {view === 'trend' && <TrendLane items={(trendQ.data ?? []).filter((x) => !gone.has(x.id))} onLearn={learn} />}
+        {view === 'trend' && <TrendLane items={(trendQ.data ?? []).filter((x) => !gone.has(x.id))} onLearn={learn} narrow={narrow} />}
         {view === 'sent' && (
           <SentLane onGotoItem={gotoItem} onFixChannels={() => setView('channels')} notify={notify}
-            proposedCount={c?.proposed ?? 0} proposedBy={producers} onApprove={openProposed} />
+            proposedCount={c?.proposed ?? 0} onApprove={openProposed} narrow={narrow} />
         )}
         {view === 'channels' && <ChannelSettings onBack={() => setView(lastTab)} notify={notify} />}
       </div>
