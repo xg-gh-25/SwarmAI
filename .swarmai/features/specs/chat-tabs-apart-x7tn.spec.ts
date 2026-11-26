@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { freshTab, view } from './chat-helpers';
+import { freshTab, newTabButton, view } from './chat-helpers';
 
 // The MessageStore isolation invariant, from the user's side: two tabs streaming at the
 // same time never show each other's reply.
@@ -8,8 +8,10 @@ test('two tabs stream at once, each keeps its own reply', { tag: '@start:chat' }
   const shown = view(page);
   const { input, tabs } = await freshTab(page);
   const panel = page.getByTestId('chat-panel');
-  const newTab = page.getByRole('button', { name: 'New Session' }).last();
+  const newTab = newTabButton(page);
   const before = await tabs.count();
+  // two tabs at once need two slots; under memory pressure the limit allows one
+  await expect(newTab, 'the tab limit leaves room for a second tab').toHaveAttribute('aria-disabled', 'false');
   await input.fill('first tab [fm:slow-a]');
   await input.press('Enter');
   await expect(shown('turn-answer').last()).toContainText('alpha', { timeout: 60_000 });
