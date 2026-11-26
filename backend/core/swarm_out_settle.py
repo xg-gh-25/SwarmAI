@@ -265,7 +265,12 @@ def set_landed_by_hand(dispatch_id: str, commits: list[str], dropped: list[str],
     kind ``by_hand`` in the decision record: the run is landed by hand and passes, like
     the person's ``set_manual_landed``, with no judgment after it (the agent landed and
     tested it itself); a return-land of another repository of the run still waits for
-    the agent's accept (core/swarm_out_record.judgment_pending). Which agent may (the session that answers for the run, never on a
+    the agent's accept (core/swarm_out_record.judgment_pending). The check refuses the
+    person-only paths (core/hive_return ``PERSON_ONLY``: CI pipelines, git hooks and
+    filters, coding-agent configuration) as the agent's ``return-land`` does: a run that
+    returned one is refused with nothing written, whatever the agent names ``dropped``, and
+    stays the person's to land (``set_manual_landed``, the run card's button, checks none
+    of this) unless the agent re-runs it asking the Hive to leave them out. Which agent may (the session that answers for the run, never on a
     Swarm Run's child) is the route's (core/swarm_out_actor)."""
     from core import hive_bundle, hive_return, swarm_out_record
     row = _row(dispatch_id)

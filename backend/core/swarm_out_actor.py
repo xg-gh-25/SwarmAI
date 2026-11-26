@@ -27,7 +27,7 @@ agent the routes refuse what is the person's to decide:
   agent lands commits with ``return_land``; when that answers a conflict it lands them
   itself and records it with ``landed_by_hand``, which git here checks first (the named
   commits on the prepared branch, after the base, carrying the run's change to the
-  returned files:
+  returned files, none of them a person-only path:
   core/swarm_out_settle.set_landed_by_hand), only where the run offers landing and never
   over a check that errored (``land_blocker``), as for ``return_land``;
 - re-sending with a correction more than ``MAX_AGENT_RERUNS`` times (``reserve_rerun``
@@ -52,9 +52,10 @@ host or re-runs, never hands unlanded work to the person); the land entry keeps 
 paths and its reason. The person-only paths (core/hive_return ``PERSON_ONLY``: git hooks,
 filters and submodules, which make this machine run code on their own, and CI pipelines and
 coding-agent configuration such as ``.github/workflows/``, ``.claude/``, ``.mcp.json`` and
-AGENTS.md / CLAUDE.md at any depth) an agent never lands: it re-runs the task asking the
-Hive to leave them out, or makes the change itself in its own session; the person may land
-them. A repository's ``[hive_return]`` adds protected paths, it never removes these.
+AGENTS.md / CLAUDE.md at any depth) an agent never lands, by ``return_land`` or by hand
+(``landed_by_hand`` refuses a run that returned one, whatever it names dropped): it re-runs
+the task asking the Hive to leave them out, or makes the change itself in its own session;
+only the person lands them from the run. A repository's ``[hive_return]`` adds protected paths, it never removes these.
 
 Every command, the agent's and the person's, is one entry of the run's decision record
 (core/swarm_out_record: by, session, time, decision, reason, and the facts this host saw),

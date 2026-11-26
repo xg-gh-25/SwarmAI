@@ -320,7 +320,7 @@ async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     unlanded work to the person; the land entry keeps the paths and the reason), but
     never the person-only paths (``hive_return.PERSON_ONLY``: git hooks and filters, CI
     pipelines, coding-agent configuration; ``allow_git_exec`` False: it re-runs without
-    them, or makes the change itself)."""
+    them, or makes the change itself; ``landed-by-hand`` refuses them too)."""
     _require_desktop()
     import asyncio
     from core import hive_return

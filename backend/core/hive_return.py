@@ -81,6 +81,9 @@ deploy) is the repository's own process and the person's, after this.
 change larger than the review shows), the dispatching agent lands the change itself and
 names the commits; git here checks they are on the prepared branch, after the base, and
 carry the run's change to the returned files (core/swarm_out_settle.set_landed_by_hand records it).
+It refuses a run that returned a person-only path as the agent's ``land`` does, whole and
+whatever the agent says it dropped; only a person lands it (the run card's Land or Landed by
+hand, core/swarm_out_settle.set_manual_landed).
 """
 from __future__ import annotations
 
@@ -617,6 +620,13 @@ def person_only_reason(paths: list[str]) -> str:
     return ("these commits change files that make code run on their own, here or on push, or that "
             "configure the coding agents (git hooks and filters, submodules, CI pipelines, agent "
             "settings and instructions): " + ", ".join(paths[:10]) + more)
+
+
+def person_only_refusal(paths: list[str]) -> str:
+    """The refusal of an agent's landing of *paths* (from ``person_only``), by ``land`` or by
+    hand (``verify_hand_landing``): only a person lands them."""
+    return (person_only_reason(paths) + "; only a person lands them, from the run's card: an agent "
+            "re-runs the task asking the Hive to leave them out, or leaves the run to the person")
 _BAD_CHARS = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 
@@ -1107,7 +1117,8 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     (``PERSON_ONLY``): git hooks and filters, which make git run code on this machine on
     its own, and CI pipelines and coding-agent configuration, which run code on push or
     steer an agent on this machine; the person may land them (``allow_git_exec`` decides
-    the whole ``PERSON_ONLY`` set; the name is from when it held git hooks only). A
+    the whole ``PERSON_ONLY`` set; the name is from when it held git hooks only), and the
+    agent's hand landing refuses them as well (``verify_hand_landing``). A
     repository's own protected globs the agent lands once reviewed. The commit is built from objects only
     (``merge-tree --write-tree`` of the branch and the tip over the reviewed base, then
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
@@ -1122,11 +1133,13 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     # PERSON_ONLY did not mark it
     held = person_only(sorted({*state["protected_files"], *(f["path"] for f in state["files"])}))
     if held and not allow_git_exec:
-        raise ReturnError(person_only_reason(held)
-                          + "; an agent does not land them: re-run asking the Hive to leave them out")
+        raise ReturnError(person_only_refusal(held))
+    # an agent's hand landing refuses the person-only files too (``verify_hand_landing``):
+    # the review may not show them all (capped, or prepared before a path joined PERSON_ONLY)
+    by_hand = "" if allow_git_exec else "; only a person lands the person-only files among them"
     if state["files_total"] > len(state["files"]):
         raise ReturnError(f"the commits change {state['files_total']} files, more than the review shows; "
-                          f"land them by hand from {state['ref']}")
+                          f"land them by hand from {state['ref']}{by_hand}")
     branch = _target_branch(repo, state["branch"].replace("refs/heads/", ""))
     head = _out(repo, "rev-parse", "--verify", f"{branch}^{{commit}}")
     mt = _git(repo, *_SAFE, "merge-tree", "--write-tree", "--no-messages", f"--merge-base={state['base']}",
@@ -1134,7 +1147,7 @@ def land(dispatch_id: str, key: str, tip: str, allow_git_exec: bool = True,
     tree = mt.stdout.decode().strip().splitlines()[0] if mt.stdout else ""
     if mt.returncode == 1:
         raise ReturnError(f"the commits do not apply onto {branch.replace('refs/heads/', '')} (a conflict); "
-                          f"land them by hand from {state['ref']}")
+                          f"land them by hand from {state['ref']}{by_hand}")
     if mt.returncode != 0 or not _SHA_RE.fullmatch(tree):
         raise ReturnError("git merge-tree failed (git 2.40 or newer is needed)")
     if tree == _out(repo, "rev-parse", f"{head}^{{tree}}"):
@@ -1299,7 +1312,17 @@ def verify_hand_landing(states: list[dict], commits: list[str], dropped: list[st
     - for every returned file but those the agent names in *dropped* (left out on
       purpose, kept in the record: ``_drops``), one named commit leaves the file holding
       the run's whole change, so a commit unrelated to the run, or one that lands only
-      part of it unsaid, cannot settle it; every repository needs a commit.
+      part of it unsaid, cannot settle it; every repository needs a commit;
+    - no file the run returned is person-only (``person_only``, over the whole
+      ``base..tip``, not the capped review), checked before any commit is read: the agent's
+      ``land`` refuses such a run whole (``allow_git_exec`` False), so cherry-picking it and
+      recording that here would put those files on the branch with no person involved.
+      ``dropped`` does not lift it: which commit on the branch carries a file's bytes (one
+      not named, a resolution that changed a line) is not something git here can tell, so
+      the run is the person's to land (the run card's Land, or Landed by hand:
+      core/swarm_out_settle.set_manual_landed, which this does not check), or the agent
+      re-runs it asking the Hive to leave them out. Every caller is the agent's: the route
+      refuses the person.
 
     Raises ReturnError naming what does not hold; returns per repository its url, key,
     the full commit ids and the dropped paths."""
@@ -1318,6 +1341,11 @@ def verify_hand_landing(states: list[dict], commits: list[str], dropped: list[st
         raise ReturnError("no repository of this run waits to land")
     returned = [_changed(Path(s["repo"]), s["base"], s["tip"]) for s in states]
     drops = _drops(states, returned, dropped)
+    for s, files in zip(states, returned):
+        held = person_only(sorted(files))
+        if held:
+            raise ReturnError(f"in {s['url']}, " + person_only_refusal(held)
+                              + " (naming them --dropped does not change that)")
     per: list[list[str]] = [[] for _ in states]
     for c in wanted:
         hits, seen = [], set()

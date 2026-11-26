@@ -282,7 +282,8 @@ numbered text options ("reply with a number"). Only this question.
      `Jenkinsfile`; coding-agent settings and rules such as `.claude/`, `.mcp.json`,
      `.cursor/`, `.kiro/`, `.gemini/`, `.codex/`, `.swarmai/`, `.vscode/tasks.json`,
      `.devcontainer/`; and `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` at any depth (the
-     refusal names the files it holds, the first ten and how many more). `return-land` refuses them: `rerun` asking the
+     refusal names the files it holds, the first ten and how many more). `return-land` refuses them, and so
+     does `landed-by-hand` for a run that returned one, `--dropped` or not: `rerun` asking the
      Hive to leave them out, or make that change yourself in this session, with its own
      tests and review. The person may land them from the run's card; never send a landing
      in the person's name. A repository's `[hive_return] protected` adds paths to read

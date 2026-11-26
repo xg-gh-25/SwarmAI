@@ -13,6 +13,10 @@ repositories:
   the base, a commit touching none of the returned files, a returned file left uncovered
   (unless the agent names it dropped), a repository left out, a run not prepared here, a
   Swarm Run's child, another session, the person, an errored check, a malformed commit id;
+- is a run whose returned files hold a person-only path (CI, git hooks, agent configuration)
+  refused to the agent's hand landing as return-land refuses it, whether the agent names the
+  path dropped, lands it in a commit it does not name, or the capped review does not show
+  it, while the person's button still settles it;
 - does the person's manual-landed button still settle what it settled before.
 """
 from __future__ import annotations
@@ -534,6 +538,90 @@ def test_no_commit_named_is_refused(world):
     r = _post(world, [])
     assert r.status_code == 400 and "--commit" in r.json()["detail"]
     _nothing_recorded()
+
+
+# ── person-only files ───────────────────────────────────────────────────────
+
+CI = ".github/workflows/ci.yml"
+
+
+def _ci_run(world) -> str:
+    """The run's change also writes a CI pipeline (hive_return.PERSON_ONLY), and its
+    return-prepare state lists it as protected, as ``prepare`` does."""
+    tip = _new_run_change(world, {"src/a.py": RUN_A, "src/c.py": "c = 1\n", CI: "on: push\n"})
+    key = world["lib"]["key"]
+    state = hive_return.load(DID, key)
+    hive_return._save(DID, key, {**state, "files_total": 3, "protected_files": [CI],
+                                 "files": [*state["files"], {"path": CI, "added": 1, "deleted": 0,
+                                                             "protected": True}]})
+    return tip
+
+
+def test_an_agent_may_not_land_person_only_files_by_hand_after_return_land_refused_them(world):
+    # the release check's reproduction: the agent's land refuses the CI file, the agent
+    # cherry-picks the run's commit onto main itself and records it as landed by hand
+    tip = _ci_run(world)
+    with pytest.raises(hive_return.ReturnError, match=r"\.github/workflows/ci\.yml"):
+        hive_return.land(DID, world["lib"]["key"], tip, allow_git_exec=False)
+    sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n", CI: "on: push\n"})
+    r = _post(world, [sha])
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert CI in detail and "only a person" in detail and "land them by hand" not in detail
+    _nothing_recorded()
+    assert _derived(world)["code"] == "waiting"                    # still the person's to land
+
+
+def test_declaring_a_landed_person_only_file_dropped_does_not_let_the_agent_land_it(world):
+    _ci_run(world)
+    sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n", CI: "on: push\n"})
+    r = _post(world, [sha], dropped=[CI])
+    assert r.status_code == 400 and CI in r.json()["detail"] and "only a person" in r.json()["detail"], r.text
+    _nothing_recorded()
+
+
+def test_a_person_only_file_landed_in_a_commit_not_named_is_still_refused(world):
+    # the CI file goes on main in a commit of its own the agent does not name, the run's
+    # other files in the one it names, and it says it dropped the CI file
+    _ci_run(world)
+    _hand_land(world, {CI: "on: push\n"})
+    sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
+    r = _post(world, [sha], dropped=[CI])
+    assert r.status_code == 400 and CI in r.json()["detail"] and "only a person" in r.json()["detail"], r.text
+    _nothing_recorded()
+
+
+def test_a_person_only_file_left_out_on_purpose_still_leaves_the_run_to_the_person(world):
+    # the agent lands only the ordinary files and drops the CI one: the run returned it, so
+    # the run is still the person's to land (or a re-run without it), as return-land holds it
+    _ci_run(world)
+    sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n"})
+    r = _post(world, [sha], dropped=[CI])
+    assert r.status_code == 400 and CI in r.json()["detail"] and "only a person" in r.json()["detail"], r.text
+    _nothing_recorded()
+
+
+def test_a_person_only_file_the_capped_review_does_not_show_is_still_refused(world):
+    # the review lists fewer files than the commits change (and this one is not marked):
+    # the hand landing reads base..tip whole
+    _ci_run(world)
+    key = world["lib"]["key"]
+    state = hive_return.load(DID, key)
+    hive_return._save(DID, key, {**state, "protected_files": [],
+                                 "files": [f for f in state["files"] if f["path"] != CI]})
+    sha = _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n", CI: "on: push\n"})
+    r = _post(world, [sha])
+    assert r.status_code == 400 and CI in r.json()["detail"] and "only a person" in r.json()["detail"], r.text
+    _nothing_recorded()
+
+
+def test_the_person_lands_the_person_only_files_by_hand_from_the_run_card(world):
+    _ci_run(world)
+    _hand_land(world, {"src/a.py": HAND_A, "src/c.py": "c = 1\n", CI: "on: push\n"})
+    r = world["client"].post(f"/api/swarm-out/runs/{DID}/manual-landed", json={"by": "person"})
+    assert r.status_code == 200, r.text
+    assert st.load(DID)["manual_landed_at"]
+    assert _derived(world)["code"] == "landed"
 
 
 # ── the person's button ─────────────────────────────────────────────────────
