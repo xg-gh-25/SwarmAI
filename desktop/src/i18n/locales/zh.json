@@ -2204,7 +2204,7 @@
       "renewStartedShell": "下面的终端已经连上这台机器：在那里刷新它的 SSH 证书。拿到新证书后半分钟内，这一行会自己变绿。",
       "hintSet": "设置它的续证书命令",
       "hintLabel": "在机器上刷新 SSH 证书的命令",
-      "hintPlaceholder": "在机器上运行的命令，例如 mwinit -o",
+      "hintPlaceholder": "在机器上运行、用来续证书的那条命令",
       "hintSave": "保存",
       "deleteNote": "移除 {{name}}？会把 Hive 从机器上卸掉，它的数据留在机器上。"
     },

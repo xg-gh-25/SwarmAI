@@ -2204,7 +2204,7 @@
       "renewStartedShell": "A terminal on the machine is ready below: renew its SSH certificate there. This row turns green by itself within about half a minute of the new certificate.",
       "hintSet": "Set its renew command",
       "hintLabel": "The command that renews the machine's SSH certificate",
-      "hintPlaceholder": "the command run on the machine, e.g. mwinit -o",
+      "hintPlaceholder": "the command you run on the machine to renew it",
       "hintSave": "Save",
       "deleteNote": "Remove {{name}}? The Hive is taken off the machine; its data stays there."
     },
