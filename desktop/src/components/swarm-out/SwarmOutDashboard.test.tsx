@@ -8,7 +8,8 @@
  * needs the person marked and answered on its own card; does every card name its Brain ·
  * Project Agent, where it ran (EC2 or AgentCore) and its start time with its duration;
  * does the header say what each place reports; is no TBD or sample left anywhere; does
- * the history count the range and list its runs (history.test.tsx goes further).
+ * the history count the range and list its runs (history.test.tsx goes further); does the
+ * Settings view get the narrow layout on a narrow panel, like the other views?
  */
 // Local-day bucketing is only tested if local time is not UTC.
 process.env.TZ = 'Asia/Shanghai';
@@ -279,5 +280,25 @@ describe('the runs poll', () => {
     await waitFor(() => expect(result.current.data?.runs[0].dispatch_id).toBe('new'));
     await act(async () => { resolveOld({ runs: [run('old', 'running')], asks: [], errors: [] }); });
     expect(result.current.data?.runs[0].dispatch_id).toBe('new');
+  });
+
+  it('on a narrow panel the Settings view is narrow too, like the other views', async () => {
+    const Real = globalThis.ResizeObserver;
+    class Narrow {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() { this.cb([{ contentRect: { width: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = Narrow as unknown as typeof ResizeObserver;
+    try {
+      mockAccount.mockReturnValue(new Promise(() => {}));
+      render(<SwarmOutDashboard now={NOW} />);
+      expect(screen.getByTestId('swarm-out-dashboard').dataset.compact).toBe('true');
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('swarmOut.view.settings') }));
+      expect((await screen.findByTestId('swarm-out-settings')).dataset.compact).toBe('true');
+    } finally {
+      globalThis.ResizeObserver = Real;
+    }
   });
 });

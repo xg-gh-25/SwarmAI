@@ -2196,6 +2196,16 @@
       "certUntil": "SSH certificate valid until {{time}}",
       "renew": "Its SSH certificate expired: renew it on the machine to send it tasks again.",
       "renewWith": "Its SSH certificate expired: on the machine, run {{hint}}",
+      "renewInTerminal": "Renew in the terminal",
+      "openTerminal": "Open a terminal on the machine",
+      "renewCopy": "Copy the command",
+      "checkAgain": "Check again",
+      "renewStarted": "The command is typed into the terminal below: press Enter and answer its prompts there. This row turns green by itself within about half a minute of the new certificate.",
+      "renewStartedShell": "A terminal on the machine is ready below: renew its SSH certificate there. This row turns green by itself within about half a minute of the new certificate.",
+      "hintSet": "Set its renew command",
+      "hintLabel": "The command that renews the machine's SSH certificate",
+      "hintPlaceholder": "the command run on the machine, e.g. mwinit -o",
+      "hintSave": "Save",
       "deleteNote": "Remove {{name}}? The Hive is taken off the machine; its data stays there."
     },
     "board": {

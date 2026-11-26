@@ -16,7 +16,8 @@
  *    the person's), in the old multi-account mode the account it uses, its state, size,
  *    cost and version;
  *  ②b SSH machines: machines of the person's own reached over SSH, each with a Hive the Host
- *    installed in a container (SshMachinesSection; design 2026-11-24-swarm-out-ssh-machine §8);
+ *    installed in a container, an expired certificate renewed from the App's terminal
+ *    (SshMachinesSection; design 2026-11-24-swarm-out-ssh-machine §8);
  *  ③ resident Hives (EC2): one row per Hive (its state, from its record and, for a running
  *    one, whether the fleet poll could reach it, and its idle stop in a few words); a row
  *    opens to why it is broken, its own idle stop (PUT /hive/instances/{id}/idle-stop:
@@ -32,7 +33,7 @@
  * Restart is stop then start (the person's routes): the one way out of a Hive that hangs
  * while it holds a run, which the agent's restart refuses.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { awsAccountService, problemOf, type AwsAccountView, type ElasticStatus } from '../../services/awsAccount';
 import { hiveService, hiveAccountView, type HiveAccount, type HiveInstance, type SshMachine } from '../../services/hive';
@@ -40,6 +41,7 @@ import { settingsService } from '../../services/settings';
 import type { SwarmOutFleet } from '../../services/swarmOut';
 import { isDesktop } from '../../services/tauri';
 import { copyToClipboard } from '../../utils/clipboard';
+import { runInTerminal } from '../common/settingsEvents';
 import ConnectAccount from '../awsAccount/ConnectAccount';
 import { CapabilityLine } from '../awsAccount/HiveFleet';
 import { AWS_REGION_OPTIONS } from '../awsAccount/regions';
@@ -72,6 +74,13 @@ export function forgetSettingsForTests(): void {
   Object.assign(last, { view: null, elastic: null, instances: null, accounts: null, idle: null, read: {}, machines: null });
 }
 
+/** Whether the panel is narrow (the dashboard's `compact`, below COMPACT_BELOW): a row then
+ *  puts its label above its value, and the opened parts of a row lose their deep indent. */
+const Compact = createContext(false);
+
+/** How far an opened machine's details are indented: under its name, or flush when narrow. */
+const detailPad = (compact: boolean) => (compact ? 'pl-[18px]' : 'pl-[44px]');
+
 /** A card's head: a small mark, the title (and its kind), one line under it, an action. */
 function Head({ mark, markStyle, title, kind, lead, children }: {
   mark: string; markStyle: React.CSSProperties; title: string; kind?: React.ReactNode; lead?: React.ReactNode; children?: React.ReactNode;
@@ -89,10 +98,12 @@ function Head({ mark, markStyle, title, kind, lead, children }: {
 }
 
 function Row({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }) {
+  const compact = useContext(Compact);
   return (
-    <div className="flex items-center gap-3 px-[18px] py-2.5 min-h-[42px] border-t border-[var(--color-border)] text-body" data-testid={testId}>
-      <span className={`w-[150px] flex-none ${muted}`}>{label}</span>
-      <span className="flex-1 min-w-0 text-[var(--color-text-secondary)]">{children}</span>
+    <div className={`flex ${compact ? 'flex-col items-start gap-0.5' : 'items-center gap-3 min-h-[42px]'} px-[18px] py-2.5 border-t border-[var(--color-border)] text-body`}
+      data-testid={testId} data-compact={compact || undefined}>
+      <span className={`${compact ? 'text-small' : 'w-[150px] flex-none'} ${muted}`}>{label}</span>
+      <span className={`${compact ? 'w-full' : 'flex-1'} min-w-0 text-[var(--color-text-secondary)]`}>{children}</span>
     </div>
   );
 }
@@ -225,15 +236,36 @@ const clock = (s: number) => {
   return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 };
 
+/** One shell word: kept as it is when it holds only safe characters, else single-quoted. */
+const shellWord = (s: string) => (/^[A-Za-z0-9@%_+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/** The command that renews an SSH machine's certificate from this computer's terminal: ssh to
+ *  the machine with a terminal (`-t`: the renewal asks for a PIN or a code) and run the
+ *  machine's own renew command (`cert_renew_hint`, the person's setting: `mwinit -o` on an
+ *  Amazon Cloud Desktop). With no renew command set, a shell on the machine. It is typed into
+ *  the terminal and not run: the person reads it and presses Enter. */
+export function renewCommand(host: string, hint: string | null | undefined): string {
+  const h = (hint ?? '').trim();
+  return h ? `ssh -t ${shellWord(host)} ${shellWord(h)}` : `ssh ${shellWord(host)}`;
+}
+
+/** How long the rows are read again every few seconds after a renewal was started here. */
+const RENEW_WATCH_MS = 10 * 60_000;
+
 /** ③ SSH machines: machines of the person's own, reached over SSH (a Cloud Desktop), each
  *  running a Hive in a container that the Host installed. A row says whether it takes tasks
- *  now and, when not, the one thing to do (renew its certificate, look at ssh's error); it
+ *  now and, when not, the one thing to do (renew its certificate, look at ssh's error). An
+ *  expired certificate is renewed from here: one button types `ssh -t <host> <renew command>`
+ *  into the App's terminal (a shell on the machine when it has no renew command, which can be
+ *  set right there; the command copied where there is no terminal), and the rows are read
+ *  every few seconds until the new certificate shows (RENEW_WATCH_MS at most). It
  *  opens to its host, its own AWS identity, Brains, the "tasks that need no private network"
  *  switch, retry and delete. "+ add" asks only for the SSH host, and says that tasks there run
  *  with the person's identity. It starts from what it read last; a running machine not probed
  *  yet reads as checking and is asked again every few seconds until its probe answers. */
 export function SshMachinesSection({ onError }: { onError: (message: string | null) => void }) {
   const { t } = useTranslation();
+  const compact = useContext(Compact);
   const [machines, setMachines] = useState<SshMachine[] | null>(last.machines);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -242,6 +274,11 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
   const [adding, setAdding] = useState(false);
   const [host, setHost] = useState('');
   const [now, setNow] = useState(() => Date.now());
+  // machines whose renewal was started here (id -> when): read again until it shows
+  const [renewing, setRenewing] = useState<Record<string, number>>({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  // the renew command being set for a machine that has none (id -> the text typed)
+  const [hintFor, setHintFor] = useState<{ id: string; text: string } | null>(null);
 
   const load = useCallback(async () => {
     try { const got = await hiveService.listSsh(); last.machines = got; setMachines(got); setFailed(false); } catch { setFailed(true); }
@@ -251,11 +288,25 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
   const changing = (machines ?? []).some((m) => CHANGING.includes(m.status) || (m.status === 'running' && m.reachable === false));
   // a running machine whose probe has not answered yet: its answer comes within seconds
   const unknown = (machines ?? []).some((m) => m.status === 'running' && m.reachable == null);
+  const isExpired = (m: SshMachine) => typeof m.cert_valid_until === 'number' && m.cert_valid_until * 1000 <= now;
+  // a renewal started here and not seen yet: the machine's next probe (within about half a
+  // minute) shows the new certificate, so the rows are read every few seconds for a while
+  const watching = (machines ?? []).some((m) => renewing[m.id] != null && isExpired(m) && now - renewing[m.id] < RENEW_WATCH_MS);
   useEffect(() => {
-    if (!changing && !unknown) return undefined;
-    const timer = setInterval(() => { void load(); }, unknown ? 3000 : 10000);
+    if (!changing && !unknown && !watching) return undefined;
+    const timer = setInterval(() => { void load(); }, unknown || watching ? 3000 : 10000);
     return () => clearInterval(timer);
-  }, [changing, unknown, load]);
+  }, [changing, unknown, watching, load]);
+  const startRenew = (m: SshMachine) => {
+    if (!m.config.ssh_host) return;
+    const command = renewCommand(m.config.ssh_host, m.config.cert_renew_hint);
+    if (!isDesktop()) {               // no terminal here: the command to run, copied
+      void copyToClipboard(command).then((ok) => { if (ok) { setCopiedId(m.id); window.setTimeout(() => setCopiedId(null), 1500); } });
+      return;
+    }
+    runInTerminal(command, m.name);
+    setRenewing((r) => ({ ...r, [m.id]: Date.now() }));
+  };
 
   const act = async (run: () => Promise<unknown>) => {
     setBusy(true); onError(null);
@@ -298,14 +349,47 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
               <span className="text-small whitespace-nowrap" style={st.tone === 'error' || st.tone === 'attention' ? { color: TONE_VAR[st.tone] } : undefined}
                 data-testid="so-ssh-state">{st.word}</span>
             </div>
-            {/* the one thing to do, without opening the row */}
-            {expired && (
-              <div className="pl-[44px] pr-[18px] pb-2.5 -mt-1 text-small" style={{ color: TONE_VAR.error }} data-testid="so-ssh-renew">
-                {m.config.cert_renew_hint ? t('swarmOut.ssh.renewWith', { hint: m.config.cert_renew_hint }) : t('swarmOut.ssh.renew')}
-              </div>
-            )}
+            {/* the one thing to do, without opening the row, and the way to do it from here */}
+            {expired && (() => {
+              const hint = (m.config.cert_renew_hint ?? '').trim();
+              const started = renewing[m.id] != null;
+              return (
+                <div className={`${detailPad(compact)} pr-[18px] pb-3 -mt-1 text-small flex flex-col gap-2`} data-testid="so-ssh-renew-box">
+                  <div style={{ color: TONE_VAR.error }} data-testid="so-ssh-renew">
+                    {hint ? t('swarmOut.ssh.renewWith', { hint }) : t('swarmOut.ssh.renew')}
+                  </div>
+                  {m.config.ssh_host && <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                    <button type="button" className={started ? 'btn-sm border border-[var(--color-border)] hover:bg-[var(--color-hover)]' : 'btn-sm btn-primary'}
+                      data-testid="so-ssh-renew-go" title={renewCommand(m.config.ssh_host, hint)} onClick={() => startRenew(m)}>
+                      {!isDesktop() ? (copiedId === m.id ? t('swarmOut.setup.copied') : t('swarmOut.ssh.renewCopy'))
+                        : hint ? t('swarmOut.ssh.renewInTerminal') : t('swarmOut.ssh.openTerminal')}
+                    </button>
+                    {started && (
+                      <button type="button" className="btn-sm btn-primary" data-testid="so-ssh-renew-check" onClick={() => void load()}>
+                        {t('swarmOut.ssh.checkAgain')}</button>
+                    )}
+                    {!hint && hintFor?.id !== m.id && (
+                      <button type="button" className={`text-small ${link}`} data-testid="so-ssh-hint-set"
+                        onClick={() => setHintFor({ id: m.id, text: '' })}>{t('swarmOut.ssh.hintSet')}</button>
+                    )}
+                  </div>}
+                  {started && <div className={muted} data-testid="so-ssh-renew-started">{hint ? t('swarmOut.ssh.renewStarted') : t('swarmOut.ssh.renewStartedShell')}</div>}
+                  {hintFor?.id === m.id && (
+                    <div className="flex flex-wrap items-center gap-2 max-w-[520px]" data-testid="so-ssh-hint-form">
+                      <input className={`${input} flex-1 min-w-[180px] font-mono`} value={hintFor.text} maxLength={120} autoFocus
+                        placeholder={t('swarmOut.ssh.hintPlaceholder')} aria-label={t('swarmOut.ssh.hintLabel')} data-testid="so-ssh-hint"
+                        onChange={(ev) => setHintFor({ id: m.id, text: ev.target.value })} />
+                      <button type="button" className="btn-sm btn-primary disabled:opacity-50" disabled={busy || !hintFor.text.trim()} data-testid="so-ssh-hint-save"
+                        onClick={() => void act(async () => { await hiveService.setSshOptions(m.id, { cert_renew_hint: hintFor.text.trim() }); setHintFor(null); })}>
+                        {t('swarmOut.ssh.hintSave')}</button>
+                      <button type="button" className={link} onClick={() => setHintFor(null)}>{t('swarmOut.setup.cancel')}</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {isOpen && (
-              <div className="pl-[44px] pr-[18px] pb-3.5 pt-0.5 text-small flex flex-col gap-2" data-testid="so-ssh-detail">
+              <div className={`${detailPad(compact)} pr-[18px] pb-3.5 pt-0.5 text-small flex flex-col gap-2`} data-testid="so-ssh-detail">
                 {(m.status === 'error' && m.error_message) && (
                   <div className="px-2.5 py-2 rounded-md break-words" style={{ color: TONE_VAR.error, background: `color-mix(in srgb, ${TONE_VAR.error} 7%, transparent)` }}
                     data-testid="so-ssh-error">{m.error_message}</div>
@@ -390,8 +474,10 @@ export function SshMachinesSection({ onError }: { onError: (message: string | nu
   );
 }
 
-export function SwarmOutSettings({ fleet = null, onConnected }: {
+export function SwarmOutSettings({ fleet = null, onConnected, compact = false }: {
   fleet?: SwarmOutFleet | null;
+  /** the panel is narrow (the dashboard's `compact`, as its other views get it) */
+  compact?: boolean;
   /** the account was connected or changed here (the panel's run view follows it) */
   onConnected?: (view: AwsAccountView) => void;
 }) {
@@ -475,7 +561,9 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
   const minutesWord = (m: number) => (m === 0 ? t('swarmOut.settings.never') : t('swarmOut.settings.minutes', { count: m }));
 
   return (
-    <div className="max-w-[760px] flex flex-col gap-8" data-testid="swarm-out-settings">
+    <Compact.Provider value={compact}>
+    {/* as wide as the panel, like the Runs and History views */}
+    <div className={`flex flex-col ${compact ? 'gap-6' : 'gap-8'}`} data-testid="swarm-out-settings" data-compact={compact || undefined}>
       {/* what failed, at the top: every action here is one click away from this line */}
       {error && (
         <div className="flex items-start gap-3 px-4 py-2.5 rounded-lg text-body break-words" role="alert" data-testid="so-settings-error"
@@ -580,7 +668,7 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
                 <div className="so-expand" data-open={isOpen}>
                   <div>
                     {isOpen && (
-                      <div className="pl-[44px] pr-[18px] pb-3.5 pt-0.5 text-small" data-testid="so-hive-detail">
+                      <div className={`${detailPad(compact)} pr-[18px] pb-3.5 pt-0.5 text-small`} data-testid="so-hive-detail">
                         {/* why it is broken, so the person can choose retry (rebuild) or delete */}
                         {broken && h.errorMessage && (
                           <div className="mb-2.5 px-2.5 py-2 rounded-md break-words"
@@ -729,5 +817,6 @@ export function SwarmOutSettings({ fleet = null, onConnected }: {
         <AddAccountDialog onClose={() => setAddingAccount(false)} onSaved={() => { setAddingAccount(false); void load(); }} />
       )}
     </div>
+    </Compact.Provider>
   );
 }

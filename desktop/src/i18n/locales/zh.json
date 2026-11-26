@@ -2196,6 +2196,16 @@
       "certUntil": "SSH 证书有效期到 {{time}}",
       "renew": "它的 SSH 证书已过期：在机器上刷新后，才会再派任务给它。",
       "renewWith": "它的 SSH 证书已过期：在机器上运行 {{hint}}",
+      "renewInTerminal": "在终端里续证书",
+      "openTerminal": "在终端里连上这台机器",
+      "renewCopy": "复制命令",
+      "checkAgain": "再查一次",
+      "renewStarted": "命令已经敲在下面的终端里：按回车，按提示输入即可。拿到新证书后半分钟内，这一行会自己变绿。",
+      "renewStartedShell": "下面的终端已经连上这台机器：在那里刷新它的 SSH 证书。拿到新证书后半分钟内，这一行会自己变绿。",
+      "hintSet": "设置它的续证书命令",
+      "hintLabel": "在机器上刷新 SSH 证书的命令",
+      "hintPlaceholder": "在机器上运行的命令，例如 mwinit -o",
+      "hintSave": "保存",
       "deleteNote": "移除 {{name}}？会把 Hive 从机器上卸掉，它的数据留在机器上。"
     },
     "board": {

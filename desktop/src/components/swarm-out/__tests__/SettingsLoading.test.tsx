@@ -7,7 +7,9 @@
  * account view has not answered, is the button that adds an EC2 Hive disabled, and once a
  * request failed, does its section say it could not be read (never Loading for good) without
  * locking that button; (3) does a reopened tab show the data read last time at once, before
- * any request answers again, including a default the person just changed?
+ * any request answers again, including a default the person just changed; (4) is the tab as wide
+ * as the panel like the other views, and on a narrow panel does each row put its label above its
+ * value instead of keeping a fixed label column?
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
@@ -124,5 +126,19 @@ describe('the Settings tab shows what it has at once', () => {
     first.unmount();
     render(<SwarmOutSettings />);
     expect((screen.getByTestId('so-idle') as HTMLSelectElement).value).toBe('30');
+  });
+
+  it('fills the panel, and on a narrow panel each row stacks its label above its value', async () => {
+    const { unmount } = render(<SwarmOutSettings />);
+    const wide = await screen.findByTestId('so-account-id');
+    expect(screen.getByTestId('swarm-out-settings').className).not.toMatch(/max-w-/);
+    expect(wide.dataset.compact).toBeUndefined();
+    expect(wide.firstElementChild!.className).toMatch(/w-\[150px\]/);
+    unmount();
+    render(<SwarmOutSettings compact />);
+    const narrow = await screen.findByTestId('so-account-id');
+    expect(narrow.dataset.compact).toBe('true');
+    expect(narrow.className).toMatch(/flex-col/);
+    expect(narrow.firstElementChild!.className).not.toMatch(/w-\[150px\]/);
   });
 });

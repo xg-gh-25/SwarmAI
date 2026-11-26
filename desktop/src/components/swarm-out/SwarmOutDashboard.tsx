@@ -126,7 +126,7 @@ export function SwarmOutDashboard({ hidden = false, onOpenSession, now }: {
       </div>
       <div key={view} className={`so-view-in flex-1 overflow-y-auto overflow-x-hidden ${padX} ${compact ? 'pt-4 pb-6' : 'pt-5 pb-8'}`}
         data-testid="swarm-out-view" data-view={view}>
-        {view === 'settings' ? <SwarmOutSettings fleet={fleet} onConnected={(v) => setConnected(v.state !== 'unconnected')} />
+        {view === 'settings' ? <SwarmOutSettings fleet={fleet} compact={compact} onConnected={(v) => setConnected(v.state !== 'unconnected')} />
           : view === 'run'
           ? (connected === false
             ? <HiveGuide onConnected={(v) => setConnected(v.state !== 'unconnected')} />
