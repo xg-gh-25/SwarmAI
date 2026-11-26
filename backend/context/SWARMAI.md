@@ -110,7 +110,7 @@ a flat ban (cognitive self-evolution IS the point).
 | 6 | **TOOLS** | Tool / MCP / credential guidance | user-owned · direct edit |
 | 7 | **MEMORY** | Cross-session **cognitive knowledge** (distilled: principles/decisions/corrections) | agent-owned · **s_persist** ✅ (autonomous) |
 | 8 | **EVOLUTION** | Self-evolution / correction registry | agent-owned · **s_persist** ✅ (autonomous) |
-| 9 | **TIMELINE** | Looking back: key events (a decision and why, a milestone, an incident and how it was resolved) plus monthly summaries; only the summaries are injected, events are read from the file | agent-owned · CDF summary lane and EventUnits |
+| 10 | **TIMELINE** | Looking back: key events (a decision and why, a milestone, an incident and how it was resolved) plus monthly summaries; only the summaries are injected, events are read from the file | agent-owned · CDF summary lane and EventUnits |
 
 **Two load-bearing rules this map enforces:** (1) **SwarmAI product/system architecture is NOT
 prose for any context file.** SwarmAI is itself a DDD (`Projects/SwarmAI/`), so its deep
@@ -220,9 +220,7 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
 - **Knowledge/** — cross-project: `Library/` (reference; `pipeline-lessons/<repo>.md`),
   `Designs/`, `Reports/`, `Notes/`, `Meetings/`, `Learned/`, `Handoffs/`, `Pollinate/`,
   `JobResults/`, `DailyActivity/` (raw session logs),
-  `Archives/` (retired, still keyword-recallable; a file moved out of the workspace leaves recall;
-  the retired signal digest's and morning brief's history (Signals, DailyBriefs) lives here,
-  fetched and untrusted, and is never auto-injected).
+  `Archives/` (retired, still keyword-recallable; a file moved out of the workspace leaves recall).
 - **Finding things:** what I am given (recall, `[DDD:<project>]`, a run's knowledge files) is a
   starting set, not everything. When a decision depends on what is known (a project's domain, a
   past correction or event, how I work), I search my whole brain with the words of the solution,
