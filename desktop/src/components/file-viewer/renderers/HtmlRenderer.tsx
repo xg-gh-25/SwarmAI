@@ -17,14 +17,17 @@
  * (width:1140/1180/1200px, wide tables) that force a HORIZONTAL scrollbar inside
  * the narrow Canvas panel (~320-900px). The rendered view has a Fit/Actual toggle
  * (default Fit):
- *   - FIT: the iframe sits in a SIZER div laid out at a fixed LOGICAL_WIDTH (1200px),
- *     which is transform:scale(s) where s = min(1, wrapperClientWidth / 1200). The
+ *   - FIT: the iframe sits in a SIZER div laid out at layoutW = max(LOGICAL_WIDTH,
+ *     wrapperClientWidth) and transform:scale(s) where s = W / layoutW (= min(1, W/1200)).
+ *     A panel narrower than 1200 scales a 1200px layout down; a panel wider than 1200
+ *     lays the iframe out at the panel's own width at scale 1, so it fills the panel
+ *     (a fixed 1200px sizer left a blank strip on the right of a widened Canvas). The
  *     sizer is position:absolute (out of flow, so its transform cannot feed back into
  *     the wrapper size — no ResizeObserver thrash) with an EXPLICIT height = H/s (H =
  *     wrapperClientHeight), so after scaling the visible box is exactly W × H and fills
- *     the panel; the iframe document lays out at 1200px and scrolls VERTICALLY inside
- *     (normal), with NO horizontal scroll. Content wider than 1200 still scrolls → use
- *     Actual / Open-in-browser.
+ *     the panel; the iframe document lays out at layoutW and scrolls VERTICALLY inside
+ *     (normal). Content wider than layoutW still scrolls horizontally → widen the
+ *     panel, or use Open-in-browser.
  *   - ACTUAL: no transform, iframe width:100% height:100% (prior behavior — responsive
  *     reports reflow; fixed-width ones scroll as before).
  *
@@ -40,8 +43,9 @@ import { useTranslation } from 'react-i18next';
 import { openExternal } from '../../../utils/openExternal';
 import { rawFileUrl, contentFileUrl } from '../utils/rawFileUrl';
 
-/** Logical desktop layout width the Fit mode lays the iframe out at, before scaling
- *  down to the panel. 1200 covers the observed report containers (1140/1180/1200). */
+/** Minimum layout width the Fit mode lays the iframe out at, before scaling down to a
+ *  narrower panel. 1200 covers the observed report containers (1140/1180/1200). A wider
+ *  panel lays the iframe out at the panel's own width (scale 1). */
 const LOGICAL_WIDTH = 1200;
 
 interface RendererProps {
@@ -106,7 +110,11 @@ export default function HtmlRenderer({
   const [fitMode, setFitMode] = useState(true);
   // Wrapper (measured) + the computed scale and the explicit sizer height (H/s).
   const wrapperRef = useRef<HTMLDivElement | null>(null);
-  const [fit, setFit] = useState<{ scale: number; frameH: number }>({ scale: 1, frameH: 0 });
+  const [fit, setFit] = useState<{ scale: number; frameW: number; frameH: number }>({
+    scale: 1,
+    frameW: LOGICAL_WIDTH,
+    frameH: 0,
+  });
 
   useEffect(() => {
     onStatusInfo?.({ customInfo: formatFileSize(fileSize) });
@@ -129,7 +137,10 @@ export default function HtmlRenderer({
       // 0-width trap (mid width-reveal animation / pre-layout): keep the last good
       // scale rather than collapsing to scale(0) which would vanish the iframe.
       if (W < 1) return;
-      const s = Math.min(1, W / LOGICAL_WIDTH); // W>=1 ⇒ s ≥ 1/1200 > 0 (never 0)
+      // Lay out at least LOGICAL_WIDTH wide; a wider panel uses its own width at
+      // scale 1 so the frame fills it (no blank strip on the right).
+      const frameW = Math.max(LOGICAL_WIDTH, W);
+      const s = W / frameW; // = min(1, W/1200); W>=1 ⇒ s ≥ 1/1200 > 0 (never 0)
       // Explicit sizer height = H/s so that after scale(s) the visible box is exactly
       // W × H and fills the panel; the iframe document scrolls vertically inside.
       const frameH = H / s;
@@ -137,7 +148,11 @@ export default function HtmlRenderer({
       // alive so `fit` is already-correct on an Actual→Fit toggle-back — no observer
       // teardown per toggle). Bail on an unchanged measurement so a same-size resize
       // event (or an Actual-mode resize the sizer doesn't consume) does NOT rerender.
-      setFit((prev) => (prev.scale === s && prev.frameH === frameH ? prev : { scale: s, frameH }));
+      setFit((prev) =>
+        prev.scale === s && prev.frameW === frameW && prev.frameH === frameH
+          ? prev
+          : { scale: s, frameW, frameH },
+      );
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -220,8 +235,8 @@ export default function HtmlRenderer({
            BLANK frame in the packaged Tauri WKWebView (two prior fixes falsified,
            commit 496bbd7c). An 'Open in browser' fallback stays bottom-right.
 
-           FIT mode wraps the iframe in a SIZER div laid out at LOGICAL_WIDTH and
-           transform:scale(s)-ed down to the measured panel width (see file docstring).
+           FIT mode wraps the iframe in a SIZER div laid out at max(LOGICAL_WIDTH, panel
+           width) and transform:scale(s)-ed to the measured panel width (see file docstring).
            The wrapper (measured, overflow-hidden) clips the scaled box; the sizer is
            position:absolute so its transform can't feed back into the wrapper size. */
         <div
@@ -242,7 +257,7 @@ export default function HtmlRenderer({
               data-testid="html-fit-sizer"
               className="absolute top-0 left-0"
               style={{
-                width: `${LOGICAL_WIDTH}px`,
+                width: `${fit.frameW}px`,
                 height: `${fit.frameH}px`,
                 transform: `scale(${fit.scale})`,
                 transformOrigin: 'top left',

@@ -194,6 +194,10 @@ describe('HtmlRenderer Fit-width mode', () => {
     const sizer = container.querySelector('[data-testid="html-fit-sizer"]') as HTMLElement;
     // 2000/1200 = 1.67 → capped to 1 → scale(1)
     expect(sizer.style.transform).toMatch(/scale\(1\)/);
+    // the sizer lays out at the PANEL width, not the 1200 minimum — a fixed 1200px
+    // sizer left a blank strip on the right of a widened Canvas
+    expect(sizer.style.width).toBe('2000px');
+    expect(sizer.style.height).toBe('800px');
   });
 
   it('W<1 is skipped (0-width trap): a zero-width measurement does NOT set scale(0)', () => {
