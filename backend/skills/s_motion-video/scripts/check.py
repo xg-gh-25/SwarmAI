@@ -4,13 +4,18 @@
   check.py --project P                 all scenes + film-level storyboard checks -> review/check.json
   check.py --project P --scene S03     one scene (scene-level checks only)       -> review/check-S03.json
   --no-render                          skip the 3 preview stills (static + storyboard only)
+  check.py --project P --storyboard    storyboard only, before any scene is written (no scene files needed):
+                                       field checks + late cue words              -> review/check-storyboard.json
 
 (a) static scan of scenes/<id>.html and scenes/shared.css: network/URLs, Math.random, wall clock, timers,
     CSS animation/transition, gsap.to/from (fromTo/set only), infinite repeat, missing runtime or MV.register;
 (b) 3 preview stills per scene (via render.py): page errors, missing files, blocked network, blank frames
-    (pixel std < 4), visible author text inside the caption band or outside the safe area;
+    (pixel std < 4), visible author text inside the caption band or outside the safe area; from the registered
+    timeline itself: move length, settle time, and how long each key text block stays readable before the scene ends;
 (c) storyboard: schema (schemas/storyboard.schema.json when jsonschema is installed), ids in order, durations,
-    sfx limits, title length, narration estimate vs duration and vs target_seconds (warn +10 %, fail +20 %).
+    sfx limits, title length, narration estimate vs duration and vs target_seconds (warn +10 %, fail +20 %);
+    with --storyboard also every `'label' <- cue` in a scene's visual whose cue word is spoken too late (from
+    audio/voice/<id>.words.json) for the label to stay readable (warning).
 Exit codes: 0 no failure (warnings allowed), 1 at least one failure, 2 usage/env error.
 """
 import argparse
@@ -18,6 +23,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True     # do not leave __pycache__ in the skill
@@ -30,6 +36,15 @@ ZH_CHARS_PER_S, EN_WORDS_PER_S = 4.5, 2.6
 VOICE_PAD, MIN_SCENE = 0.4, 2.0
 SFX_PER_SCENE, SFX_PER_FILM = 2, 8
 TITLE_CJK, TITLE_WORDS = 10, 5
+# Key text hold (project-contract.md, "key text hold"): the one place these numbers live in the scripts.
+# A key text block stays readable at least CJK chars / 4.5 + other chars / 15 + 1.5 s before the scene ends,
+# and no key text block lands in the last 1.2 s of a scene. Before scenes exist (--storyboard), a label is taken to
+# land 0.5 s after its cue word starts (0.1 s lead, an entrance of about 0.6 s).
+HOLD_CJK_PER_S = ZH_CHARS_PER_S        # the narration speed
+HOLD_OTHER_PER_S = 15.0
+HOLD_BASE_S = 1.5
+LAST_LAND_S = 1.2
+CUE_LAND_S = 0.5
 
 # ---------------------------------------------------------------- (a) static scan
 
@@ -124,7 +139,8 @@ def title_ok(title):
     return len(t.split()) <= TITLE_WORDS
 
 
-def storyboard_checks(project, sb, only):
+def storyboard_checks(project, sb, only, need_scenes=True):
+    """need_scenes=False (--storyboard): the scene pages are not written yet, so a missing one is not a failure."""
     items = []
 
     def add(level, where, msg):
@@ -192,7 +208,7 @@ def storyboard_checks(project, sb, only):
             add("fail", sid, f"transition '{tr}' must be cut or fade")
         if tr == "fade" and i == len(scenes) - 1:
             add("warn", sid, "fade on the last scene has nothing to fade into (treated as cut)")
-        if not os.path.isfile(os.path.join(project, "scenes", f"{sid}.html")):
+        if need_scenes and not os.path.isfile(os.path.join(project, "scenes", f"{sid}.html")):
             add("fail", sid, f"scenes/{sid}.html does not exist")
         nar = s.get("narration") or ""
         if nar and isinstance(d, (int, float)):
@@ -211,6 +227,186 @@ def storyboard_checks(project, sb, only):
                 elif over > 0.1:
                     add("warn", "storyboard", f"{name} {val:.1f}s is {over:.0%} over target_seconds {tgt}s (warn at +10 %)")
     return items
+
+
+# ---------------------------------------------------------------- key text hold (scene time and storyboard time)
+
+CJK_CHAR = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f]")
+
+
+def text_counts(text):
+    """(CJK characters, other characters) a reader has to read; spaces and punctuation do not count"""
+    cjk = other = 0
+    for ch in str(text or ""):
+        if CJK_CHAR.match(ch):
+            cjk += 1
+        elif not ch.isspace() and not unicodedata.category(ch).startswith("P"):
+            other += 1
+    return cjk, other
+
+
+def required_hold(text):
+    """seconds a text block must stay readable before the scene ends: CJK / 4.5 + other / 15 + 1.5"""
+    cjk, other = text_counts(text)
+    return cjk / HOLD_CJK_PER_S + other / HOLD_OTHER_PER_S + HOLD_BASE_S, cjk, other
+
+
+def short(text, n=24):
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    return t if len(t) <= n else t[:n - 1] + "…"
+
+
+def hold_formula(cjk, other):
+    return f"{cjk} CJK / {HOLD_CJK_PER_S:g} + {other} other / {HOLD_OTHER_PER_S:g} + {HOLD_BASE_S:g} s"
+
+
+def text_hold_checks(sid, tweens, duration, add):
+    """Each key text block the timeline reveals (runtime: __mvTweens()[i].reveals, measured by seeking the timeline:
+    when the block's last revealing tween lands, and its visible text at the scene end) must stay readable for
+    required_hold(text) before the scene ends, and must not land in the last LAST_LAND_S seconds. Captions, text
+    that ends dimmed or hidden, and text on screen from frame 0 without a reveal are not reported by the runtime.
+    A block revealed piece by piece (words or items in their own elements) is judged per piece: the viewer reads
+    each piece as it lands, so the last piece is the one that must still hold."""
+    if not duration:
+        return
+    for tw in tweens:
+        for rv in tw.get("reveals") or []:
+            text, at = rv.get("text") or "", rv.get("at")
+            if not isinstance(at, (int, float)):
+                continue
+            need, cjk, other = required_hold(text)
+            if not cjk + other:
+                continue
+            hold = duration - at
+            late = at > duration - LAST_LAND_S + 1e-6
+            if hold + 1e-6 >= need and not late:
+                continue
+            msg = (f"key text '{short(text)}' ({rv.get('el', '?')}) is readable from {at:.2f}s and holds {hold:.2f}s "
+                   f"to the scene end ({duration:.2f}s); it needs {need:.2f}s ({hold_formula(cjk, other)})")
+            if late:
+                msg += f" and lands in the last {LAST_LAND_S:g} s"
+            by = duration - max(need, LAST_LAND_S)
+            add("fail", sid, msg + f": it must be readable by {by:.2f}s; name it earlier in the narration, "
+                                   "or say less after it")
+
+
+# '<label>' <- cue  in a storyboard visual. A label is any quoted text left of the arrow; the cue is the (quoted or
+# bare) word right of it, up to a separator. A quote preceded/followed by a Latin letter or digit is an apostrophe.
+CUE_ARROW = re.compile(r"<-|←")
+CLAUSE_SEP = re.compile(r"[;；\n|。]")
+_Q = [("'", "'"), ('"', '"'), ("“", "”"), ("‘", "’"), ("「", "」"), ("『", "』")]
+QUOTED = re.compile("|".join(f"(?<![A-Za-z0-9]){re.escape(a)}([^{re.escape(b)}\n]+){re.escape(b)}(?![A-Za-z0-9])" for a, b in _Q))
+CUE_STOP = re.compile(r"[,，、+()（）\[\]{}'\"“”‘’「」『』]|\s+(?:then|and|with)\s")
+# MV.cue's normalisation (runtime/scene-runtime.js norm): lower case, no spaces or punctuation
+CUE_NORM = re.compile(r"[\s\u3000.,!?;:'\"()\[\]{}<>\-_/\\|`~@#$%^&*+=，。！？；：、“”‘’（）《》【】…—·]")
+
+
+def cue_norm(s):
+    return CUE_NORM.sub("", str(s).lower())
+
+
+def parse_cues(visual):
+    """[(labels, cue)] for every arrow in a visual; cue is '' when nothing follows the arrow, labels [] when no
+    quoted text precedes it."""
+    out = []
+    for clause in CLAUSE_SEP.split(str(visual or "")):
+        pos = 0
+        for m in CUE_ARROW.finditer(clause):
+            if m.start() < pos:
+                continue
+            labels = [next(g for g in q.groups() if g is not None).strip() for q in QUOTED.finditer(clause, pos, m.start())]
+            rest = clause[m.end():]
+            lead = len(rest) - len(rest.lstrip())
+            q = QUOTED.match(rest, lead) if rest[lead:lead + 1] in "'\"“‘「『" and rest[lead:lead + 1] else None
+            if q:
+                cue, pos = next(g for g in q.groups() if g is not None), m.end() + q.end()
+            else:
+                stop = CUE_STOP.search(rest, lead)
+                arrow = CUE_ARROW.search(rest, lead)
+                end = min(x.start() for x in (stop, arrow) if x) if (stop or arrow) else len(rest)
+                cue, pos = rest[lead:end], m.end() + end
+            out.append(([x for x in labels if x], cue.strip()))
+    return out
+
+
+def spoken_start(items, cue):
+    """start of the first word/caption whose normalised text contains the cue (phrases may span items), as MV.cue"""
+    kw = cue_norm(cue)
+    if not kw:
+        return None
+    joined, owner = "", []
+    for i, w in enumerate(items):
+        t = cue_norm(w.get("text", "") if isinstance(w, dict) else "")
+        joined += t
+        owner += [i] * len(t)
+    at = joined.find(kw)
+    if at < 0:
+        return None
+    st = items[owner[at]].get("start")
+    return float(st) if isinstance(st, (int, float)) else None
+
+
+def read_list(path):
+    try:
+        v = json.load(open(path, encoding="utf-8"))
+        return v if isinstance(v, list) else None
+    except (OSError, ValueError):
+        return None
+
+
+def cue_hold_checks(project, sb, only):
+    """Storyboard time (before scenes exist): warn for each `'label' <- cue` whose cue word is spoken too late for
+    the label, landing CUE_LAND_S after the word starts, to hold required_hold(label) before the scene ends.
+    Returns (items, counts)."""
+    items, n = [], {"checked": 0, "late": 0, "no_label": 0, "unparsed": 0, "not_spoken": 0, "no_timings": 0}
+    vdir = os.path.join(project, "audio", "voice")
+    for i, s in enumerate(sb.get("scenes") if isinstance(sb.get("scenes"), list) else []):
+        if not isinstance(s, dict) or (only is not None and i != only):
+            continue
+        sid, d = s.get("id", f"#{i + 1}"), s.get("duration")
+        cues = parse_cues(s.get("visual"))
+        if not cues:
+            continue
+        words = read_list(os.path.join(vdir, f"{sid}.words.json")) or []
+        caps = read_list(os.path.join(vdir, f"{sid}.captions.json")) or []
+        if not words and not caps or not isinstance(d, (int, float)):
+            n["no_timings"] += len(cues)
+            continue
+        for labels, cue in cues:
+            if not cue_norm(cue):
+                n["unparsed"] += 1
+                continue
+            if not labels:
+                n["no_label"] += 1
+                continue
+            st = spoken_start(words, cue)
+            if st is None:
+                st = spoken_start(caps, cue)
+            if st is None:
+                n["not_spoken"] += 1
+                continue
+            n["checked"] += 1
+            label = " ".join(labels)
+            need, cjk, other = required_hold(label)
+            land = st + CUE_LAND_S
+            hold = d - land
+            late = land > d - LAST_LAND_S + 1e-6
+            if hold + 1e-6 >= need and not late:
+                continue
+            n["late"] += 1
+            msg = (f"cue '{short(cue, 16)}' for '{short(label)}' is spoken at {st:.2f}s, so the label lands about "
+                   f"{land:.2f}s and holds {hold:.2f}s to the scene end ({d:.2f}s); it needs {need:.2f}s "
+                   f"({hold_formula(cjk, other)})")
+            if late:
+                msg += f" and would land in the last {LAST_LAND_S:g} s"
+            items.append({"level": "warn", "where": sid, "msg": msg + ": name it earlier in the narration (then re-run tts.py)"})
+    skipped = n["no_label"] + n["unparsed"] + n["not_spoken"] + n["no_timings"]
+    if n["checked"] or skipped:
+        items.append({"level": "info", "where": "storyboard",
+                      "msg": f"cue words: {n['checked']} checked, {n['late']} late; {skipped} skipped "
+                             f"({n['no_label']} without a quoted label, {n['unparsed']} with no cue word, "
+                             f"{n['not_spoken']} not spoken, {n['no_timings']} in scenes without word timings or duration)"})
+    return items, n
 
 
 # ---------------------------------------------------------------- (b) stills
@@ -257,6 +453,7 @@ def still_checks(project, previews, faded_in=frozenset(), durations=None, fps=30
 
     for sid, r in previews.items():
         tween_checks(sid, r.get("tweens", []), durations.get(sid) or 0, fps, add)
+        text_hold_checks(sid, r.get("tweens", []), durations.get(sid) or 0, add)
         for e in r["errors"]:
             add("fail", sid, e)
         for m in r["missing"]:
@@ -288,6 +485,8 @@ def main(argv=None):
     ap.add_argument("--project", required=True)
     ap.add_argument("--scene", help="check one scene, e.g. S03")
     ap.add_argument("--no-render", action="store_true", help="skip the preview stills")
+    ap.add_argument("--storyboard", action="store_true",
+                    help="storyboard only (before scenes are written): field checks and late cue words, no scene files")
     ap.add_argument("--jobs", type=int, default=3)
     a = ap.parse_args(argv)
     proj = os.path.abspath(a.project)
@@ -312,15 +511,18 @@ def main(argv=None):
                 print(f"error: scene {a.scene} is not in storyboard.json (have: {', '.join(map(str, ids))})", file=sys.stderr)
                 return 2
             only = ids.index(a.scene)
-        report["storyboard"] = storyboard_checks(proj, sb, only)
-        targets = [a.scene] if a.scene else [i for i in ids if i]
+        report["storyboard"] = storyboard_checks(proj, sb, only, need_scenes=not a.storyboard)
+        if a.storyboard:
+            cue_items, report["cues"] = cue_hold_checks(proj, sb, only)
+            report["storyboard"] += cue_items
+        targets = [] if a.storyboard else [a.scene] if a.scene else [i for i in ids if i]
         # (a) static
         for sid in targets:
             p = os.path.join(proj, "scenes", f"{sid}.html")
             if os.path.isfile(p):
                 report["static"] += scan_file(p, f"scenes/{sid}.html", True)
         shared = os.path.join(proj, "scenes", "shared.css")
-        if os.path.isfile(shared):
+        if os.path.isfile(shared) and not a.storyboard:
             report["static"] += scan_file(shared, "scenes/shared.css", False)
         # (b) stills
         renderable = [sid for sid in targets if os.path.isfile(os.path.join(proj, "scenes", f"{sid}.html"))]
@@ -342,7 +544,8 @@ def main(argv=None):
     report["ok"] = not fails
     report["fails"], report["warnings"] = len(fails), len(warns)
     os.makedirs(os.path.join(proj, "review"), exist_ok=True)
-    out = os.path.join(proj, "review", f"check-{a.scene}.json" if a.scene else "check.json")
+    name = "check-storyboard" if a.storyboard else "check"
+    out = os.path.join(proj, "review", f"{name}-{a.scene}.json" if a.scene else f"{name}.json")
     json.dump(report, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     for kind, x in all_items:
         loc = f"{x['file']}:{x['line']}" if "file" in x else x["where"]

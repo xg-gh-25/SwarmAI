@@ -163,15 +163,124 @@
     return nextFrame();
   };
 
+  function nameOf(el) {
+    if (!el || el.nodeType !== 1) return "object";
+    var cls = typeof el.className === "string" ? el.className : (el.getAttribute("class") || "");   // SVG: SVGAnimatedString
+    return el.id ? "#" + el.id : (el.tagName.toLowerCase() + (cls.trim() ? "." + cls.trim().split(/\s+/)[0] : ""));
+  }
+
   // Every tween of the registered timeline, for check.py's move-length and settle checks (exact, not pixel-guessed).
+  // A tween whose landing makes a block of author text readable also carries
+  //   reveals: [{el, text, at}]   at = seconds at which the block is readable (the last tween that reveals it, on the
+  //                               block or on an ancestor, has landed); text = the block's visible text at the scene end
+  // for check.py's key-text hold check. Measured by seeking this timeline; the playhead is put back at 0 afterwards.
   window.__mvTweens = function () {
     if (!tl) return [];
-    return tl.getChildren(true, true, false).map(function (x) {
-      var tg = (x.targets && x.targets()) || [], el = tg[0], name = "object";
-      if (el && el.nodeType === 1) name = el.id ? "#" + el.id : (el.tagName.toLowerCase() + (el.className ? "." + String(el.className).split(" ")[0] : ""));
-      return { start: +x.startTime().toFixed(3), duration: +x.duration().toFixed(3), target: name, count: tg.length };
+    var kids = tl.getChildren(true, true, false);
+    var recs = kids.map(function (x) {
+      var tg = (x.targets && x.targets()) || [];
+      return { start: +x.startTime().toFixed(3), duration: +x.duration().toFixed(3), target: nameOf(tg[0]), count: tg.length };
     });
+    try { textReveals(kids, recs); }
+    catch (e) { console.warn("MV: key-text hold not measured: " + (e && e.message)); }
+    finally { tl.seek(0, false); }
+    return recs;
   };
+
+  // ---- key text reveals (read by check.py through __mvTweens)
+  var READABLE = 0.5;   // effective opacity from which text counts as readable; dimmed / ghost states stay below it
+  var VIS_KEY = /^(opacity|autoAlpha|visibility|display|clipPath|webkitClipPath|clip-path)$/;
+  function touchesVisibility(v) {
+    if (!v) return false;
+    return [v, v.startAt, v.css].some(function (o) {
+      return o && typeof o === "object" && Object.keys(o).some(function (k) { return VIS_KEY.test(k); });
+    });
+  }
+  function absStart(x) {   // start in the registered timeline's time, also for a tween inside a nested timeline
+    var t = x.startTime(), p = x.parent;
+    while (p && p !== tl) { t += p.startTime(); p = p.parent; }
+    return t;
+  }
+  function clipHidden(el, cs) {   // true when clip-path hides at least half of the box on one axis
+    var c = cs.clipPath || cs.webkitClipPath || "none";
+    var m = /^inset\(([^)]*)\)/.exec(c);
+    if (m) {
+      var p = m[1].split(/\s+round\s+/)[0].trim().split(/\s+/);
+      var side = [p[0], p[1] || p[0], p[2] || p[0], p[3] || p[1] || p[0]];   // top right bottom left
+      var r = el.getBoundingClientRect(), w = el.offsetWidth || r.width || 1, h = el.offsetHeight || r.height || 1;
+      var f = side.map(function (s, i) { var n = parseFloat(s) || 0; return /%$/.test(s) ? n / 100 : n / (i % 2 ? w : h); });
+      return f[0] + f[2] >= 0.5 || f[1] + f[3] >= 0.5;
+    }
+    m = /^circle\(\s*([\d.]+)/.exec(c);
+    return !!(m && parseFloat(m[1]) === 0);
+  }
+  function visibility(el) {   // effective opacity: the element's and every ancestor's opacity, display and clip
+    if (getComputedStyle(el).visibility !== "visible") return 0;
+    var op = 1;
+    for (var e = el; e && e.nodeType === 1; e = e.parentElement) {
+      var cs = getComputedStyle(e);
+      if (cs.display === "none" || clipHidden(e, cs)) return 0;
+      op *= parseFloat(cs.opacity);
+    }
+    return op;
+  }
+  function blockText(block, owners) {   // visible on-screen text of a block, without the text of a nested block
+    var out = [], walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT), n;
+    while ((n = walker.nextNode())) {
+      var txt = n.textContent.replace(/\s+/g, " ").trim(), el = n.parentElement;
+      if (!txt || !el || el.closest("#mv-caption, script, style")) continue;
+      var own = el;
+      while (own && own !== block && !owners.has(own)) own = own.parentElement;
+      if (own !== block || visibility(el) < READABLE) continue;
+      var rg = document.createRange();
+      rg.selectNodeContents(n);
+      var on = Array.prototype.some.call(rg.getClientRects(), function (b) {
+        return b.width >= 1 && b.height >= 1 && b.right > 0 && b.left < W && b.bottom > 0 && b.top < H;
+      });
+      if (on) out.push(txt);
+    }
+    return out.join(" ");
+  }
+  function textReveals(kids, recs) {
+    var events = [];   // {el, start, end, rec}: one per element target of a tween that touches visibility
+    kids.forEach(function (x, i) {
+      if (!x.targets || !touchesVisibility(x.vars)) return;
+      var s = absStart(x), subs = x.timeline ? x.timeline.getChildren(true, true, false) : [];   // stagger: a child per target
+      var parts = subs.length ? subs.map(function (c) { return [c, s + c.startTime()]; }) : [[x, s]];
+      parts.forEach(function (p) {
+        ((p[0].targets && p[0].targets()) || []).forEach(function (el) {
+          if (el && el.nodeType === 1 && el.isConnected) events.push({ el: el, start: p[1], end: p[1] + p[0].duration(), rec: i });
+        });
+      });
+    });
+    if (!events.length) return;
+    // visibility just before each tween starts and just after it lands: one seek per distinct time
+    var at = {};
+    events.forEach(function (ev) {
+      var t0 = Math.max(0, ev.start - 1e-3), t1 = ev.end + 1e-4;
+      (at[t0] = at[t0] || []).push([ev, "v0"]);
+      (at[t1] = at[t1] || []).push([ev, "v1"]);
+    });
+    Object.keys(at).map(Number).sort(function (a, b) { return a - b; }).forEach(function (t) {
+      tl.seek(Math.min(t, tl.duration()), false);
+      at[t].forEach(function (q) { q[0][q[1]] = visibility(q[0].el); });
+    });
+    var reveals = events.filter(function (ev) { return ev.v0 < READABLE && ev.v1 >= READABLE; });
+    if (!reveals.length) return;
+    var owners = new Set(reveals.map(function (ev) { return ev.el; }));
+    tl.seek(Math.min(DUR, tl.duration()), false);   // the scene end: what is still on screen, with its final text
+    owners.forEach(function (block) {
+      if (visibility(block) < READABLE) return;
+      var text = blockText(block, owners);
+      if (!text) return;
+      var last = null;   // the latest reveal of the block or of an ancestor decides when it is readable
+      reveals.forEach(function (ev) {
+        if ((ev.el === block || ev.el.contains(block)) && (!last || ev.end > last.end)) last = ev;
+      });
+      var rec = recs[last.rec];
+      (rec.reveals = rec.reveals || []).push({ el: nameOf(block), text: text.slice(0, 400), at: +last.end.toFixed(3) });
+    });
+  }
 
   // ---- readiness: DOM loaded, fonts ready, all <img> decoded
   window.__mvReady = false;

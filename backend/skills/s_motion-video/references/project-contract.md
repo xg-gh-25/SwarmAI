@@ -64,6 +64,11 @@ Rules:
   - narration estimate before TTS: zh 4.5 chars/s; en about 2.6 words/s (estimate only; TTS is the truth)
   - elements appear about 0.1 s before their keyword is spoken; last motion settles 0.3 s before scene end
   - every move lasts at least 0.25 s; the whole frame is never fully still for more than 2 s (except end-card hold)
+  - key text hold: every text block the timeline reveals (not captions, not dimmed text) stays readable at least
+    `CJK chars / 4.5 + other chars / 15 + 1.5` s before the scene ends (spaces and punctuation do not count), and
+    no new text block lands in the last 1.2 s of a scene (`check.py` fails the scene; after `tts.py`,
+    `check.py --storyboard` warns on a `'label' <- cue` whose label, landing about 0.5 s after its cue word starts,
+    would hold too briefly)
   - SFX: at most 2 per scene, 8 per film, at 0.22 of voice level (max 0.35)
   - loudness: -14 LUFS integrated, -1 dBTP; music pre-levelled to -20 LUFS, then x volume (default 0.32), ducked under voice
   - captions: break at punctuation or 16 chars (12 in portrait); a line lasts until the next starts
