@@ -82,7 +82,7 @@
   }
   function film() {
     var F = window.MV_FILM;
-    if (!F || !F.scenes || !F.layer) fail("no film data: run python3 scripts/film.py --project <project> and load " +
+    if (!F || !F.scenes || !F.layer) fail("no film data: run \"$SWARM_BACKEND_BIN\" py \"$SKILL_DIR/scripts/film.py\" --project <project> and load " +
       "/project/scenes/film-data.js in the page's <head>");
     return F;
   }

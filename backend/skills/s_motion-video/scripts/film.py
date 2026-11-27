@@ -349,7 +349,7 @@ def main(argv=None):
             if is_current(proj):
                 print("film-data.js is current")
                 return 0
-            print(f"film-data.js is missing or stale: run python3 scripts/film.py --project {a.project}", file=sys.stderr)
+            print(f'film-data.js is missing or stale: run "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/film.py" --project {a.project}', file=sys.stderr)
             return 1
         data = write(proj)
     except UsageError as e:

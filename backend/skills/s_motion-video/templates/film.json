@@ -1,6 +1,6 @@
 {
-  "_about": "The film layer's settings for this project (copy to <project>/film.json and keep only what you change; every key is optional). Turn on what the style file asks for (exec-dark: kicker, progress, plate, mask, vignette). Re-run scripts/film.py after changing this file. Scenes may pick another mask side, switch a part off or change plate class/drift in FL.setup(tl, opts); kicker and progress can only be switched on here.",
-  "plate": {"image": "assets/plate.jpg", "images": {}, "class": "", "drift": 0.09},
+  "_about": "The film layer's settings for this project (copy to <project>/film.json and keep only what you change; every key is optional). Turn on what the style file asks for (exec-dark: kicker, progress, plate, mask, vignette). Re-run scripts/film.py after changing this file. Scenes may pick another mask side, switch a part off or change plate class/drift in FL.setup(tl, opts); kicker and progress can only be switched on here. A plate may name a local picture: \"image\": \"assets/<file>\" for every scene, \"images\": {\"S03\": \"assets/<file>\"} per scene; without one the plate is drawn by the style.",
+  "plate": {"class": "", "drift": 0.09},
   "mask": "left",
   "vignette": true,
   "kicker": true,

@@ -309,3 +309,11 @@ def test_template_keeps_late_stat_text_readable(tmp_path):
     open(page, "w", encoding="utf-8").write(html.replace('FL.at("quarter", 0.84, "90 days")', 'FL.at("quarter", 0.84)'))
     assert check.main(["--project", p, "--scene", "S02"]) == 1
     assert "key text" in open(os.path.join(p, "review", "check-S02.json"), encoding="utf-8").read()
+
+
+def test_template_film_json_works_as_copied(tmp_path):
+    """templates/film.json copied as is into a fresh project: film.py accepts it (no file the project lacks)"""
+    p = template_project(tmp_path)
+    shutil.copyfile(os.path.join(SKILL, "templates", "film.json"), os.path.join(p, "film.json"))
+    assert film.main(["--project", p]) == 0
+    assert os.path.isfile(os.path.join(p, "scenes", "film-data.js"))
