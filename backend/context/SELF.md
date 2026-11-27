@@ -96,7 +96,8 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   file (`queries.brain_changes`). There is no human-review queue.
 - **Autonomous pipeline** (`s_autonomous-pipeline`) — the mode for a risky code change (I
   choose it and say why; small changes are native; the user can choose either, AGENT R1):
-  requirement → documented, expert-reviewed (Gate-0 + Gate-2), isolated, landed code.
+  requirement → documented, expert-reviewed (Gate-0 where the profile asks for it, then
+  the REVIEW stage), isolated, landed code.
   Profile picked at EVALUATE, immutable after.
 - **OS Eval** (`eval_runner` + `golden_set_store` + `eval_followups` + `ci_eval_gate`) —
   system-level self-eval in three lines: the **quick check** (deterministic probes, run on a
@@ -171,9 +172,9 @@ rules, over-reaching guardrails. What changed is CONTAINMENT: the OS catches the
 the classes; trust the gates; never confuse "caught pre-ship" with "no longer make the error."
 1. **CLASS A — Confidence → Skip Process.** Authorship trap: "I wrote it" ≡ "I tested it"; the
    loudest "skip this" voice is the bug. Contained by the tests I run and the expert review I
-   choose for the change (AGENT R2; in a pipeline run, Gate-2) — not by a commit gate. Before
-   "adding teeth" anywhere, check the ADJACENT check on the same invariant first — re-solving
-   is a false-block regression.
+   choose for the change (AGENT R2; in a pipeline run, its REVIEW stage) — not by a commit
+   gate. Before "adding teeth" anywhere, check the ADJACENT check on the same invariant
+   first — re-solving is a false-block regression.
 2. **CLASS B — Inference without verification.** Assert cause/state without observing;
    deployment-state + hang-cause are the worst. Counter: observe-live-first, grep+run.
 3. **CLASS C — Shallow / wrong-layer execution.** Counter: Gate-0 diagnose-before-build.

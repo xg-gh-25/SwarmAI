@@ -619,7 +619,7 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
             required |= {row.get("id") for row in (context.design or {}).get(key, [])
                          if isinstance(row, Mapping) and isinstance(row.get("id"), str)}
         # the agent's declared trace: which exit criteria cover what (S6-1: no runner
-        # result behind it; Gate-2 reviews it)
+        # result behind it; the REVIEW stage reviews it)
         covers = {c for row in (context.design or {}).get("exit_criteria", [])
                   if isinstance(row, Mapping) for c in (row.get("covers") or [])}
         missing = sorted(i for i in required - covers if isinstance(i, str))

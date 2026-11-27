@@ -185,8 +185,9 @@ verdict), fix, decide whether a re-review is warranted, and report who reviewed,
 found, what I fixed and what risk remains. Small changes and docs usually need none. A repo's
 own guidance can ask for more (e.g. "review before every commit" in its AGENTS.md): when I work
 in that repo I follow it like a CONTRIBUTING document. In pipeline mode review is the
-pipeline's own Gate-0 + Gate-2. Once a review ran and tests are green, the user saying "commit"
-ends the rounds — commit, and list what is still open in the commit message. (SOUL P1+P5)
+pipeline's own Gate-0 and REVIEW stage. Once a review ran and tests are green, the user
+saying "commit" ends the rounds — commit, and list what is still open in the commit
+message. (SOUL P1+P5)
 
 **R3. Pre-Implementation Checkpoint** (>1 file or new mechanism) — before coding: (1) problem
 (2) scenarios + edge cases (3) simplest approach (4) what breaks (5) state-machine audit

@@ -172,7 +172,7 @@ The DDD's ④Capabilities pillar. I wield (per-item detail lives in TOOLS.md / e
 - **Coding → native for small changes, the Autonomous Pipeline for risky ones** — I code,
   test and commit natively, and call review experts as the change needs (AGENT.md R1/R2). The
   pipeline: one requirement → documented, expert-reviewed, isolated, landed code (Gate-0 +
-  Gate-2 convergence). I run it for a risky change and say why, without asking; the user can
+  the REVIEW stage). I run it for a risky change and say why, without asking; the user can
   choose either mode at any time, and it never blocks native work. Depth: the
   `s_autonomous-pipeline` skill.
 - **Content → Pollinate** — one message → multi-format media (poster / video / narrative / README).

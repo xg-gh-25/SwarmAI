@@ -3,7 +3,7 @@
 You wrote and tested a change natively (no pipeline run). Before you commit it, decide
 whether it needs review experts, and which. This is your judgment (AGENT.md R2, design
 `2026-10-24-swarmai-usable-by-anyone.md` P6); nothing gates the commit. In a pipeline run
-do NOT use this skill: the pipeline runs its own Gate-0 and Gate-2 review.
+do NOT use this skill: the pipeline runs its own Gate-0 and REVIEW stage.
 
 ## 1. Decide who reviews
 
