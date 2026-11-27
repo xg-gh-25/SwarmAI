@@ -322,7 +322,7 @@ def test_driver_env_is_an_allowlist(monkeypatch, tmp_path):
     """no credential and no Node/Playwright behaviour variable reaches the process that runs scene pages; what Node
     and Chromium need does, whatever case the OS stores it in (Windows: SYSTEMROOT, WINDIR)"""
     monkeypatch.setattr(R.os, "environ", {
-        "PATH": "/usr/bin", "HOME": "/home/u", "LANG": "en_US.UTF-8", "FONTCONFIG_FILE": "/etc/fonts.conf",
+        "PATH": "/usr/bin", "HOME": "/home/user", "LANG": "en_US.UTF-8", "FONTCONFIG_FILE": "/etc/fonts.conf",
         "SYSTEMROOT": r"C:\Windows", "WINDIR": r"C:\Windows",
         "AWS_SECRET_ACCESS_KEY": DUMMY, "AWS_SESSION_TOKEN": DUMMY, "ANTHROPIC_API_KEY": DUMMY,
         "NODE_OPTIONS": "--require /tmp/evil.js", "NODE_PATH": "/tmp", "PLAYWRIGHT_BROWSERS_PATH": "/elsewhere",
