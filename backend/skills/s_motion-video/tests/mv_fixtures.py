@@ -1,7 +1,6 @@
 """Small synthetic motion-video projects for the film-layer and derive tests (no voice service, no network)."""
 import json
 import os
-import shutil
 import sys
 
 import pytest
@@ -104,21 +103,8 @@ def save_sb(project, sb):
     json.dump(sb, open(os.path.join(project, "storyboard.json"), "w"), indent=1)
 
 
-_BROWSER = {}
-
-
 def need_browser():
-    """skip unless python playwright with a cached Chromium and ffmpeg are available"""
-    if "why" not in _BROWSER:
-        why = None
-        try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as p:
-                p.chromium.launch(headless=True).close()
-        except Exception as e:   # not installed, no browser, driver cannot start
-            why = f"headless Chromium not available: {str(e).splitlines()[0][:160] if str(e) else type(e).__name__}"
-        if not why and not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
-            why = "ffmpeg/ffprobe not on PATH"
-        _BROWSER["why"] = why
-    if _BROWSER["why"]:
-        pytest.skip(_BROWSER["why"])
+    """skip (or with MV_REQUIRE_BROWSER=1 fail) unless SwarmAI's pinned browser runtime and ffmpeg are available:
+    the same gate as every other browser test of the skill (conftest.require_browser)"""
+    from conftest import require_browser
+    require_browser(ffmpeg=True)
